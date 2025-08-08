@@ -21,12 +21,6 @@ export const agentJudgmentEnum = pgEnum('agent_judgment', [
   'unsure',
 ])
 
-export const answeredStateEnum = pgEnum('answered_state', [
-  'yes',
-  'no',
-  'unsure',
-])
-
 export const publicationStatusEnum = pgEnum('publication_status_enum', [
   'preprint',
   'submitted',
@@ -177,8 +171,8 @@ export const judgments = pgTable('judgments', {
       },
       {onDelete: 'cascade'},
     ),
-  answeredOriginal: answeredStateEnum('answered_original').notNull(),
-  answeredTransformed: answeredStateEnum('answered_transformed').notNull(),
+  answeredOriginal: text('answered_original').notNull(),
+  answeredTransformed: text('answered_transformed'),
   confidenceOriginal: integer('confidence_original'),
   explanation: text('explanation'),
   quotes: jsonb('quotes'),
