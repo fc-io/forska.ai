@@ -8,38 +8,37 @@ import * as schema from './schema.ts'
 const main = async () => {
   const db = drizzle(env.DATABASE_URL)
 
-  await seed(db, {...schema, ...authSchema}).refine((funcs) => {
+  // Clear existing data first in correct order (respecting foreign keys)
+  console.log('🗑️  Clearing existing data...')
+  await db.delete(schema.tokenUse)
+  await db.delete(schema.judgments)
+  await db.delete(schema.articles)
+  await db.delete(schema.prompts)
+  await db.delete(schema.projectMembers)
+  await db.delete(schema.projects)
+  await db.delete(schema.profiles)
+  await db.delete(authSchema.session)
+  await db.delete(authSchema.verification)
+  await db.delete(authSchema.user)
+  await db.delete(schema.models)
+
+  console.log('🌱 Seeding database...')
+
+  // Seed the database - exclude tables with complex relationships for now
+  await seed(db, {
+    user: authSchema.user,
+    models: schema.models,
+    articles: schema.articles,
+  }).refine((funcs) => {
     return {
-      user: {count: 5, with: {session: {count: [1, 2]}}},
-      profiles: {
+      user: {
         count: 5,
         columns: {
-          fullName: funcs.fullName(),
-          avatarUrl: funcs.loremIpsum({sentencesCount: 0}),
-          isAdmin: funcs.weightedRandom([
-            {weight: 0.2, value: funcs.default({defaultValue: true})},
-            {weight: 0.8, value: funcs.default({defaultValue: false})},
-          ]),
-        },
-        with: {projects: {count: [1, 3]}},
-      },
-      projects: {
-        columns: {
-          name: funcs.companyName(),
-          description: funcs.loremIpsum({sentencesCount: 2}),
-        },
-        with: {prompts: {count: [2, 5]}, projectMembers: {count: [1, 3]}},
-      },
-      prompts: {
-        columns: {
-          originalText: funcs.loremIpsum({sentencesCount: 3}),
-          transformedText: funcs.loremIpsum({sentencesCount: 3}),
-          promptHeading: funcs.loremIpsum({sentencesCount: 1}),
-          order: funcs.int({minValue: 1, maxValue: 10}),
-          archived: funcs.weightedRandom([
-            {weight: 0.1, value: funcs.default({defaultValue: true})},
-            {weight: 0.9, value: funcs.default({defaultValue: false})},
-          ]),
+          id: funcs.string(),
+          name: funcs.fullName(),
+          email: funcs.email(),
+          emailVerified: funcs.boolean(),
+          image: funcs.loremIpsum({sentencesCount: 0}),
         },
       },
       models: {
@@ -130,40 +129,95 @@ const main = async () => {
             ],
           }),
         },
-        with: {judgments: {count: [3, 8]}},
-      },
-      judgments: {
-        columns: {
-          answeredOriginal: funcs.valuesFromArray({
-            values: ['yes', 'no', 'unsure'],
-          }),
-          answeredTransformed: funcs.valuesFromArray({
-            values: ['yes', 'no', 'unsure'],
-          }),
-          confidenceOriginal: funcs.int({minValue: 1, maxValue: 100}),
-          explanation: funcs.loremIpsum({sentencesCount: 3}),
-          quotes: funcs.default({
-            defaultValue: {quotes: ['Sample quote text']},
-          }),
-        },
-      },
-      tokenUse: {
-        count: 50,
-        columns: {
-          requests: funcs.int({minValue: 1, maxValue: 10}),
-          totalPromptTokens: funcs.int({minValue: 100, maxValue: 5000}),
-          totalCompletionTokens: funcs.int({minValue: 50, maxValue: 2000}),
-          totalTokens: funcs.int({minValue: 150, maxValue: 7000}),
-          startedAt: funcs.date({minDate: '2024-01-01', maxDate: '2024-12-31'}),
-          finishedAt: funcs.date({
-            minDate: '2024-01-01',
-            maxDate: '2024-12-31',
-          }),
-          duration: funcs.int({minValue: 100, maxValue: 10000}),
-        },
       },
     }
   })
+
+  // Now manually add profiles linked to users
+  const users = await db.select().from(authSchema.user)
+  console.log(`Creating profiles for ${users.length} users...`)
+  
+  for (const user of users) {
+    await db
+      .insert(schema.profiles)
+      .values({
+        userId: user.id,
+        fullName: user.name,
+        avatarUrl: `https://avatar.placeholder.com/${user.id}`,
+        isAdmin: Math.random() < 0.2,
+      })
+  }
+
+  // Add some projects
+  const profiles = await db.select().from(schema.profiles)
+  console.log(`Creating projects for ${profiles.length} profiles...`)
+  
+  for (const profile of profiles) {
+    const projectCount = Math.floor(Math.random() * 3) + 1
+    for (let i = 0; i < projectCount; i++) {
+      const projectId = await db
+        .insert(schema.projects)
+        .values({
+          name: `Project ${i + 1} for ${profile.fullName}`,
+          description: `Description for project ${i + 1}`,
+          ownerId: profile.id,
+        })
+        .returning({id: schema.projects.id})
+
+      // Add prompts to each project
+      const promptCount = Math.floor(Math.random() * 4) + 2
+      for (let j = 0; j < promptCount; j++) {
+        await db
+          .insert(schema.prompts)
+          .values({
+            projectId: projectId[0].id,
+            originalText: `Original text for prompt ${j + 1}`,
+            transformedText: `Transformed text for prompt ${j + 1}`,
+            promptHeading: `Prompt ${j + 1}`,
+            order: j + 1,
+            archived: Math.random() < 0.1,
+          })
+      }
+    }
+  }
+
+  // Add judgments to articles
+  const articles = await db.select().from(schema.articles)
+  const prompts = await db.select().from(schema.prompts)
+  const models = await db.select().from(schema.models)
+  
+  console.log(`Creating judgments for ${articles.length} articles...`)
+  
+  for (const article of articles) {
+    if (prompts.length === 0 || models.length === 0 || profiles.length === 0) {
+      console.log('Skipping judgments - missing required data')
+      break
+    }
+    const judgmentCount = Math.floor(Math.random() * 6) + 3
+    for (let i = 0; i < judgmentCount; i++) {
+      const prompt = prompts[Math.floor(Math.random() * prompts.length)]
+      const model = models[Math.floor(Math.random() * models.length)]
+      const profile = profiles[Math.floor(Math.random() * profiles.length)]
+
+      await db
+        .insert(schema.judgments)
+        .values({
+          articleId: article.id!,
+          promptId: prompt.id!,
+          modelId: model.id!,
+          profileId: profile.id!,
+          answeredOriginal: ['yes', 'no', 'unsure'][
+            Math.floor(Math.random() * 3)
+          ] as 'yes' | 'no' | 'unsure',
+          answeredTransformed: ['yes', 'no', 'unsure'][
+            Math.floor(Math.random() * 3)
+          ] as 'yes' | 'no' | 'unsure',
+          confidenceOriginal: Math.floor(Math.random() * 100) + 1,
+          explanation: `Explanation for judgment ${i + 1}`,
+          quotes: {quotes: [`Quote ${i + 1} from article`]},
+        })
+    }
+  }
 
   console.log('✅ Database seeded successfully')
 }
