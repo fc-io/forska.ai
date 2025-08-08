@@ -1,23 +1,14 @@
 // import {eq} from 'drizzle-orm'
 import {drizzle} from 'drizzle-orm/node-postgres'
-// import {usersTable} from './db/schema'
 
-const getDatabaseUrl = (): string => {
-  // if (typeof import.meta?.env?.VITE_DATABASE_URL === 'string') {
-  //   console.log(
-  //     'import.meta.env.VITE_DATABASE_URL',
-  //     import.meta.env.VITE_DATABASE_URL,
-  //   )
-  //   return import.meta.env.VITE_DATABASE_URL
-  // } else
-  if (typeof process.env.DATABASE_URL === 'string') {
-    console.log('process.env.VITE_DATABASE_URL', process.env.VITE_DATABASE_URL)
-    return process.env.DATABASE_URL
-  } else {
-    throw new Error('getDatabaseUrl: DATABASE_URL is not set')
-  }
-}
-const db = drizzle(getDatabaseUrl())
+import * as authSchema from '../../../auth-schema.ts'
+import {testElysiaTable} from '../../db/schema.ts'
+import {env} from './env.ts'
+
+const db = drizzle(env.DATABASE_URL, {
+  schema: {testElysiaTable, ...authSchema},
+  logger: true,
+})
 
 export const getDatabase = () => {
   return db

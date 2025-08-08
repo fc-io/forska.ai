@@ -2,7 +2,7 @@
 alwaysApply: true
 ---
 ## Important
-there is an .env.local file in the project, you just can't read it beacuse of secuity concerns. Always assume the .env files are correct.
+there is an .env.local file in the project, you just can't read it beacuse of secuity concerns. Always assume the .env files are correct unless the env.ts file throws an error. Use process.env instead of buns env functionaltiy to stay compatible with ordinary node.
 
 ## File structure
 

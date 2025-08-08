@@ -1,8 +1,8 @@
 import {betterAuth} from 'better-auth'
 import {drizzleAdapter} from 'better-auth/adapters/drizzle'
 
-import {getDatabase} from './getDatabase'
-
+// import {Pool} from 'pg'
+import {getDatabase} from './server/utils/getDatabase'
 const db = getDatabase()
 
 export const auth = betterAuth({
