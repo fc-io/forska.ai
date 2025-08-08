@@ -67,37 +67,15 @@ export const models = pgTable('models', {
   apiKeyVariable: text('api_key_variable'),
 })
 
-export const profiles = pgTable('profiles', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  userId: text('user_id')
-    .notNull()
-    .references(
-      () => {
-        return user.id
-      },
-      {onDelete: 'cascade'},
-    )
-    .unique(),
-  fullName: text('full_name'),
-  avatarUrl: text('avatar_url'),
-  isAdmin: boolean('is_admin').default(false).notNull(),
-  createdAt: timestamp('created_at', {withTimezone: true})
-    .defaultNow()
-    .notNull(),
-  updatedAt: timestamp('updated_at', {withTimezone: true})
-    .defaultNow()
-    .notNull(),
-})
-
 export const projects = pgTable('projects', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: text('name').notNull(),
   description: text('description'),
-  ownerId: uuid('owner_id')
+  ownerId: text('owner_id')
     .notNull()
     .references(
       () => {
-        return profiles.id
+        return user.id
       },
       {onDelete: 'cascade'},
     ),
@@ -132,31 +110,31 @@ export const prompts = pgTable('prompts', {
   archived: boolean('archived').default(false).notNull(),
 })
 
-export const projectMembers = pgTable(
-  'project_members',
-  {
-    projectId: uuid('project_id')
-      .notNull()
-      .references(
-        () => {
-          return projects.id
-        },
-        {onDelete: 'cascade'},
-      ),
-    userId: uuid('user_id')
-      .notNull()
-      .references(
-        () => {
-          return profiles.id
-        },
-        {onDelete: 'cascade'},
-      ),
-    role: text('role'),
-  },
-  (table) => {
-    return {pk: primaryKey({columns: [table.projectId, table.userId]})}
-  },
-)
+// export const projectMembers = pgTable(
+//   'project_members',
+//   {
+//     projectId: uuid('project_id')
+//       .notNull()
+//       .references(
+//         () => {
+//           return projects.id
+//         },
+//         {onDelete: 'cascade'},
+//       ),
+//     userId: uuid('user_id')
+//       .notNull()
+//       .references(
+//         () => {
+//           return user.id
+//         },
+//         {onDelete: 'cascade'},
+//       ),
+//     role: text('role'),
+//   },
+//   (table) => {
+//     return {pk: primaryKey({columns: [table.projectId, table.userId]})}
+//   },
+// )
 
 export const judgments = pgTable('judgments', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -206,9 +184,9 @@ export const tokenUse = pgTable('token_use', {
   updatedAt: timestamp('updated_at', {withTimezone: true})
     .defaultNow()
     .notNull(),
-  userId: uuid('user_id').references(
+  userId: text('user_id').references(
     () => {
-      return profiles.id
+      return user.id
     },
     {onDelete: 'set null'},
   ),
