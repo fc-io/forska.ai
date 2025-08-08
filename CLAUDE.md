@@ -70,9 +70,7 @@ We use "eslint-plugin-prettier" so no need to run prettier seperatly.
 
 ## Testing
 
-When writing tests try to use the exact boundary condition.
-
-Use `bun test` to run tests.
+When writing tests try to use the exact boundary condition. Use `bun test` to run tests.
 
 ```ts
 import {test, expect} from "bun:test";
