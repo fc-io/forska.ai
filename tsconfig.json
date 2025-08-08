@@ -1,8 +1,9 @@
 {
   "include": [
     "src",
+    "drizzle.config.ts",
     "eslint.config.ts",
-    "drizzle.config.ts"
+    "vite.config.ts"
   ],
   "compilerOptions": {
     "typeRoots": ["./src/types", "./node_modules/@types"],
