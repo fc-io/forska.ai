@@ -33,7 +33,9 @@ export const articles = pgTable('articles', {
   createdAt: timestamp('created_at', {withTimezone: true})
     .defaultNow()
     .notNull(),
-  updatedAt: timestamp('updated_at', {withTimezone: true}),
+  updatedAt: timestamp('updated_at', {withTimezone: true})
+    .defaultNow()
+    .notNull(),
   articleTitle: text('article_title').notNull(),
   articleAuthors: text('article_authors').array(),
   articleCreatedAt: timestamp('article_created_at', {withTimezone: true}),
@@ -54,10 +56,12 @@ export const models = pgTable('models', {
   createdAt: timestamp('created_at', {withTimezone: true})
     .defaultNow()
     .notNull(),
-  updatedAt: timestamp('updated_at', {withTimezone: true}),
+  updatedAt: timestamp('updated_at', {withTimezone: true})
+    .defaultNow()
+    .notNull(),
   name: text('name').notNull(),
   provider: text('provider'),
-  baseURL: text('baseURL'),
+  baseURL: text('base_url'),
   modelName: text('model_name'),
   version: text('version'),
   apiKeyVariable: text('api_key_variable'),
@@ -77,8 +81,12 @@ export const profiles = pgTable('profiles', {
   fullName: text('full_name'),
   avatarUrl: text('avatar_url'),
   isAdmin: boolean('is_admin').default(false).notNull(),
-  createdAt: timestamp('created_at', {withTimezone: true}),
-  updatedAt: timestamp('updated_at', {withTimezone: true}),
+  createdAt: timestamp('created_at', {withTimezone: true})
+    .defaultNow()
+    .notNull(),
+  updatedAt: timestamp('updated_at', {withTimezone: true})
+    .defaultNow()
+    .notNull(),
 })
 
 export const projects = pgTable('projects', {
@@ -93,8 +101,12 @@ export const projects = pgTable('projects', {
       },
       {onDelete: 'cascade'},
     ),
-  insertedAt: timestamp('inserted_at', {withTimezone: true}),
-  updatedAt: timestamp('updated_at', {withTimezone: true}),
+  createdAt: timestamp('created_at', {withTimezone: true})
+    .defaultNow()
+    .notNull(),
+  updatedAt: timestamp('updated_at', {withTimezone: true})
+    .defaultNow()
+    .notNull(),
 })
 
 export const prompts = pgTable('prompts', {
@@ -102,7 +114,9 @@ export const prompts = pgTable('prompts', {
   createdAt: timestamp('created_at', {withTimezone: true})
     .defaultNow()
     .notNull(),
-  updatedAt: timestamp('updated_at', {withTimezone: true}),
+  updatedAt: timestamp('updated_at', {withTimezone: true})
+    .defaultNow()
+    .notNull(),
   projectId: uuid('project_id')
     .notNull()
     .references(
@@ -149,7 +163,9 @@ export const judgments = pgTable('judgments', {
   createdAt: timestamp('created_at', {withTimezone: true})
     .defaultNow()
     .notNull(),
-  updatedAt: timestamp('updated_at', {withTimezone: true}),
+  updatedAt: timestamp('updated_at', {withTimezone: true})
+    .defaultNow()
+    .notNull(),
   articleId: uuid('article_id')
     .notNull()
     .references(
@@ -187,7 +203,9 @@ export const tokenUse = pgTable('token_use', {
   createdAt: timestamp('created_at', {withTimezone: true})
     .defaultNow()
     .notNull(),
-  updatedAt: timestamp('updated_at', {withTimezone: true}),
+  updatedAt: timestamp('updated_at', {withTimezone: true})
+    .defaultNow()
+    .notNull(),
   userId: uuid('user_id').references(
     () => {
       return profiles.id
