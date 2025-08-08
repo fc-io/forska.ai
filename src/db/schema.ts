@@ -13,7 +13,6 @@ import {
 
 import {session, user} from '../../auth-schema.ts'
 
-// Enums
 export const agentJudgmentEnum = pgEnum('agent_judgment', [
   'yes',
   'no',
@@ -29,12 +28,12 @@ export const publicationStatusEnum = pgEnum('publication_status_enum', [
   'retracted',
 ])
 
-// Tables
 export const articles = pgTable('articles', {
   id: uuid('id').primaryKey().defaultRandom(),
   createdAt: timestamp('created_at', {withTimezone: true})
     .defaultNow()
     .notNull(),
+  updatedAt: timestamp('updated_at', {withTimezone: true}),
   articleTitle: text('article_title').notNull(),
   articleAuthors: text('article_authors').array(),
   articleCreatedAt: timestamp('article_created_at', {withTimezone: true}),
@@ -55,6 +54,7 @@ export const models = pgTable('models', {
   createdAt: timestamp('created_at', {withTimezone: true})
     .defaultNow()
     .notNull(),
+  updatedAt: timestamp('updated_at', {withTimezone: true}),
   name: text('name').notNull(),
   provider: text('provider'),
   baseURL: text('baseURL'),
@@ -78,6 +78,7 @@ export const profiles = pgTable('profiles', {
   avatarUrl: text('avatar_url'),
   isAdmin: boolean('is_admin').default(false).notNull(),
   createdAt: timestamp('created_at', {withTimezone: true}),
+  updatedAt: timestamp('updated_at', {withTimezone: true}),
 })
 
 export const projects = pgTable('projects', {
@@ -101,6 +102,7 @@ export const prompts = pgTable('prompts', {
   createdAt: timestamp('created_at', {withTimezone: true})
     .defaultNow()
     .notNull(),
+  updatedAt: timestamp('updated_at', {withTimezone: true}),
   projectId: uuid('project_id')
     .notNull()
     .references(
@@ -147,6 +149,7 @@ export const judgments = pgTable('judgments', {
   createdAt: timestamp('created_at', {withTimezone: true})
     .defaultNow()
     .notNull(),
+  updatedAt: timestamp('updated_at', {withTimezone: true}),
   articleId: uuid('article_id')
     .notNull()
     .references(
@@ -184,6 +187,7 @@ export const tokenUse = pgTable('token_use', {
   createdAt: timestamp('created_at', {withTimezone: true})
     .defaultNow()
     .notNull(),
+  updatedAt: timestamp('updated_at', {withTimezone: true}),
   userId: uuid('user_id').references(
     () => {
       return profiles.id

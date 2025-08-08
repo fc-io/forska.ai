@@ -8,6 +8,13 @@
       "when": 1754657084940,
       "tag": "0000_windy_lethal_legion",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1754657885878,
+      "tag": "0001_pale_living_tribunal",
+      "breakpoints": true
     }
   ]
 }
