@@ -17,10 +17,7 @@ const RouteComponent = () => {
     setIsLoading(true)
 
     try {
-      await authClient.signIn.email({
-        email: email(),
-        password: password(),
-      })
+      await authClient.signIn.email({email: email(), password: password()})
     } catch (err) {
       setError(
         err instanceof Error ? err.message : 'An error occurred during signin',
@@ -34,7 +31,7 @@ const RouteComponent = () => {
     <div class="min-h-screen bg-gray-50 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
       <div class="sm:mx-auto sm:w-full sm:max-w-md">
         <div class="text-center">
-          <h2 class="text-3xl font-bold text-gray-900">Sign In to Forska.ai</h2>
+          <h2 class="text-3xl font-bold text-gray-900">Sign In</h2>
         </div>
       </div>
 

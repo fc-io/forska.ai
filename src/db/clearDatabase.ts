@@ -51,7 +51,9 @@ const clearDatabase = async () => {
     await db.execute(sql`DROP TYPE IF EXISTS publication_status_enum CASCADE`)
     console.log('✅ Dropped enum types')
 
-    console.log('✅ Database cleared successfully! All tables and types removed.')
+    console.log(
+      '✅ Database cleared successfully! All tables and types removed.',
+    )
     process.exit(0)
   } catch (error) {
     console.error('❌ Error clearing database:', error)
