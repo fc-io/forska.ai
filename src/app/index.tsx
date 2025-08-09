@@ -1,5 +1,6 @@
 import {render} from 'solid-js/web'
 
+import './index.css'
 import {Router} from './router'
 
 const rootElement = document.getElementById('root')
