@@ -4,10 +4,8 @@ import {createSignal, Show} from 'solid-js'
 import {authClient} from '../../lib/auth-client'
 
 const RouteComponent = () => {
-  const [name, setName] = createSignal('')
   const [email, setEmail] = createSignal('')
   const [password, setPassword] = createSignal('')
-  const [acceptTerms, setAcceptTerms] = createSignal(false)
   const [showPassword, setShowPassword] = createSignal(false)
   const [isLoading, setIsLoading] = createSignal(false)
   const [error, setError] = createSignal('')
@@ -16,22 +14,16 @@ const RouteComponent = () => {
     e.preventDefault()
     setError('')
 
-    if (!acceptTerms()) {
-      setError('Please accept the terms and conditions')
-      return
-    }
-
     setIsLoading(true)
 
     try {
-      await authClient.signUp.email({
+      await authClient.signIn.email({
         email: email(),
         password: password(),
-        name: name() || '',
       })
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : 'An error occurred during signup',
+        err instanceof Error ? err.message : 'An error occurred during signin',
       )
     } finally {
       setIsLoading(false)
@@ -42,7 +34,7 @@ const RouteComponent = () => {
     <div class="min-h-screen bg-gray-50 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
       <div class="sm:mx-auto sm:w-full sm:max-w-md">
         <div class="text-center">
-          <h2 class="text-3xl font-bold text-gray-900">Sign Up</h2>
+          <h2 class="text-3xl font-bold text-gray-900">Sign In to Forska.ai</h2>
         </div>
       </div>
 
@@ -54,20 +46,6 @@ const RouteComponent = () => {
             }}
             class="space-y-6"
           >
-            <div>
-              <input
-                type="text"
-                id="name"
-                value={name()}
-                onInput={(e) => {
-                  return setName(e.currentTarget.value)
-                }}
-                placeholder="Full name"
-                required
-                class="appearance-none block w-full px-3 py-3 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-              />
-            </div>
-
             <div>
               <input
                 type="email"
@@ -135,25 +113,17 @@ const RouteComponent = () => {
               </button>
             </div>
 
-            <div class="flex items-center">
-              <input
-                id="accept-terms"
-                type="checkbox"
-                checked={acceptTerms()}
-                onChange={(e) => {
-                  return setAcceptTerms(e.currentTarget.checked)
-                }}
-                class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-              />
-              <label
-                for="accept-terms"
-                class="ml-2 block text-sm text-gray-900"
-              >
-                I accept the{' '}
-                <a href="#" class="text-blue-600 hover:text-blue-500">
-                  terms and conditions
+            <div class="flex items-center justify-between">
+              <div class="text-sm">
+                <a href="/signup" class="text-blue-600 hover:text-blue-500">
+                  Need an account? Sign up
                 </a>
-              </label>
+              </div>
+              <div class="text-sm">
+                <a href="#" class="text-blue-600 hover:text-blue-500">
+                  Forgot password?
+                </a>
+              </div>
             </div>
 
             <Show when={error()}>
@@ -166,7 +136,7 @@ const RouteComponent = () => {
                 disabled={isLoading()}
                 class="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {isLoading() ? 'Signing up...' : 'Sign up'}
+                {isLoading() ? 'Signing in...' : 'Sign in'}
               </button>
             </div>
           </form>
@@ -176,4 +146,4 @@ const RouteComponent = () => {
   )
 }
 
-export const Route = createFileRoute('/signup/')({component: RouteComponent})
+export const Route = createFileRoute('/signin/')({component: RouteComponent})
