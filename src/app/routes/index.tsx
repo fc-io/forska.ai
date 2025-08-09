@@ -6,16 +6,6 @@ const Index = () => {
   return (
     <div class="p-2">
       <h3>Welcome Home!</h3>
-      <button
-        onClick={() => {
-          return void authClient.signIn.email({
-            email: 'test@test.com',
-            password: 'test',
-          })
-        }}
-      >
-        Sign In
-      </button>
     </div>
   )
 }
