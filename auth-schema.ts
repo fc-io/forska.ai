@@ -1,4 +1,4 @@
-import {boolean, integer, pgTable, text, timestamp} from 'drizzle-orm/pg-core'
+import {boolean, pgTable, text, timestamp} from 'drizzle-orm/pg-core'
 
 export const user = pgTable('user', {
   id: text('id').primaryKey(),
@@ -20,6 +20,10 @@ export const user = pgTable('user', {
       return new Date()
     })
     .notNull(),
+  role: text('role'),
+  banned: boolean('banned'),
+  banReason: text('ban_reason'),
+  banExpires: timestamp('ban_expires'),
 })
 
 export const session = pgTable('session', {
@@ -38,6 +42,7 @@ export const session = pgTable('session', {
       },
       {onDelete: 'cascade'},
     ),
+  impersonatedBy: text('impersonated_by'),
 })
 
 export const account = pgTable('account', {
