@@ -5,7 +5,6 @@ import {
   pgEnum,
   pgTable,
   pgView,
-  primaryKey,
   text,
   timestamp,
   uuid,
