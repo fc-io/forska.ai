@@ -1,7 +1,7 @@
 import {type} from 'arktype'
 
-import {getDatabase} from '../server/utils/getDatabase'
 import {user} from '../../auth-schema'
+import {getDatabase} from '../server/utils/getDatabase'
 
 // Arktype schema for Profile validation
 export const profileSchema = type({

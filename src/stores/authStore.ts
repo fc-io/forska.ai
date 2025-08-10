@@ -5,14 +5,17 @@ import {authClient} from '../app/lib/auth-client'
 
 // Auth state signals
 const [user, setUser] = createSignal<User | null>(null)
-const [session, setSession] = createSignal<{user: User; session: {id: string; userId: string; expiresAt: Date}} | null>(null)
+const [session, setSession] = createSignal<{
+  user: User
+  session: {id: string; userId: string; expiresAt: Date}
+} | null>(null)
 const [isLoading, setIsLoading] = createSignal(true)
 
 // Initialize auth state
 const initializeAuth = async () => {
   try {
     const {data, error} = await authClient.getSession()
-    
+
     if (error) {
       console.error('Error getting session:', error)
       setSession(null)

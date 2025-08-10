@@ -19,5 +19,6 @@ const getDatabaseUrl = (): string => {
 const db = drizzle(getDatabaseUrl())
 
 export const getDatabase = () => {
+  console.log('getDatabase')
   return db
 }

@@ -1,8 +1,8 @@
 import {type} from 'arktype'
 import {eq} from 'drizzle-orm'
 
+import {projects, projectStats, prompts} from '../db/schema'
 import {getDatabase} from '../server/utils/getDatabase'
-import {projects, prompts, projectStats} from '../db/schema'
 
 // Arktype schema for Project validation
 export const projectSchema = type({

@@ -1,23 +1,19 @@
 import {cors} from '@elysiajs/cors'
-import {type Context, Elysia} from 'elysia'
+import {Elysia} from 'elysia'
 
-import {auth} from '../auth.ts'
-
-const betterAuthView = (context: Context) => {
-  const BETTER_AUTH_ACCEPT_METHODS = ['POST', 'GET']
-  // validate request method
-  if (BETTER_AUTH_ACCEPT_METHODS.includes(context.request.method)) {
-    return auth.handler(context.request)
-  } else {
-    context.error(405)
-  }
-}
+import {articlesRoutes} from './routes/ArticlesRoutes.ts'
+import {authRoutes} from './routes/AuthRoutes.ts'
+import {tokensRoutes} from './routes/TokensRoutes.ts'
 
 const app = new Elysia()
   .use(cors())
-  .all('/api/auth/*', betterAuthView)
+  .use(authRoutes)
+  .use(articlesRoutes)
+  .use(tokensRoutes)
   .listen(3000)
 
 console.log(
   `🦊 Elysia is running at ${app.server?.hostname}:${app.server?.port}`,
 )
+
+export type App = typeof app

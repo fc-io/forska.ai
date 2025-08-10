@@ -1,19 +1,27 @@
-import {getSupabaseClient} from '../../../utils/getSupabaseClient.ts'
+import {treaty} from '@elysiajs/eden'
+
+import type {App} from '../../../server/index.ts'
 import {Tokens} from './unassessedArticlesTypes.ts'
+
+const client = treaty<App>('http://localhost:3000')
 
 export const fetchTokensAllTime = async (): Promise<string> => {
   try {
-    const supabase = getSupabaseClient()
+    const response = await client.api.tokens['all-time'].get()
 
-    const {data} = await supabase
-      .from('2025_july_token_use')
-      .select(
-        'totalPromptTokens:total_prompt_tokens.sum(),'
-          + 'totalCompletionTokens:total_completion_tokens.sum()',
-      )
-      .single()
+    if (response.error) {
+      console.error('Error fetching all-time token usage:', response.error)
+      return ''
+    }
 
-    const {totalPromptTokens, totalCompletionTokens} = Tokens.assert(data)
+    if (response.data?.error) {
+      console.error('Server error:', response.data.error)
+      return ''
+    }
+
+    const {totalPromptTokens, totalCompletionTokens} = Tokens.assert(
+      response.data,
+    )
 
     return `Total tokens (all time): input ${totalPromptTokens || 0}, output ${totalCompletionTokens || 0}`
   } catch (err) {

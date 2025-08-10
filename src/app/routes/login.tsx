@@ -30,7 +30,7 @@ const Login = (): JSX.Element => {
           email: email(),
           password: password(),
         })
-        
+
         if (signInError) throw signInError
         // Navigate to home on successful login
         void navigate({to: '/'})
