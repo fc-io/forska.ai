@@ -15,28 +15,13 @@ const handleFetchUnassessedCount = async () => {
   }
 }
 
-// const handleFetchTokenUseToday = async () => {
-//   const msg = await fetchTokenUseToday()
-//   setInfoState('tokenUseToday', msg)
-// }
-
-// const handleFetchTokenUseLast10Minutes = async () => {
-//   const msg = await fetchTokenUseLast10Minutes()
-//   setInfoState('tokenUseLast10Minutes', msg)
-// }
-
 const handleFetchTokensAllTime = async () => {
   const msg = await fetchTokensAllTime()
   setInfoState('tokenUseLifetime', msg)
 }
 
 const updateAllInfo = async () => {
-  await Promise.all([
-    handleFetchUnassessedCount(),
-    // handleFetchTokenUseToday(),
-    // handleFetchTokenUseLast10Minutes(),
-    handleFetchTokensAllTime(),
-  ])
+  await Promise.all([handleFetchUnassessedCount(), handleFetchTokensAllTime()])
 }
 
 export const startInfoUpdater = () => {
@@ -57,10 +42,4 @@ export const stopInfoUpdater = () => {
 }
 
 // Export individual fetch functions in case they're needed elsewhere
-export {
-  handleFetchTokensAllTime,
-  // handleFetchTokenUseLast10Minutes,
-  // handleFetchTokenUseToday,
-  handleFetchUnassessedCount,
-  updateAllInfo,
-}
+export {handleFetchTokensAllTime, handleFetchUnassessedCount, updateAllInfo}

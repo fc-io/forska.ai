@@ -7,7 +7,7 @@ const client = treaty<App>('http://localhost:3000')
 
 export const fetchTokensAllTime = async (): Promise<string> => {
   try {
-    const response = await client.api.tokens['all-time'].get()
+    const response = await client.api.tokens.get()
 
     if (response.error) {
       console.error('Error fetching all-time token usage:', response.error)
@@ -22,6 +22,8 @@ export const fetchTokensAllTime = async (): Promise<string> => {
     const {totalPromptTokens, totalCompletionTokens} = Tokens.assert(
       response.data,
     )
+    // return `Total tokens (last 10m): input ${totalPromptTokens || 0}, output ${totalCompletionTokens || 0}`
+    // return `Total tokens (today): input ${totalPromptTokens || 0}, output ${totalCompletionTokens || 0}`
 
     return `Total tokens (all time): input ${totalPromptTokens || 0}, output ${totalCompletionTokens || 0}`
   } catch (err) {
