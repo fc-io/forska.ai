@@ -9,8 +9,10 @@ export const Route = createRootRoute({
     const [session] = createResource(() => {
       return authClient.getSession()
     })
-    const [isAdmin] = createResource(() => {
-      return authClient.admin.isAdmin()
+    const [isAdmin] = createResource(async () => {
+      const session = await authClient.getSession()
+      console.log(session, session.data?.session?.user?.role)
+      return session.data?.session?.user?.role === 'admin'
     })
 
     const handleSignOut = async () => {
