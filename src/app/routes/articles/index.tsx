@@ -1,14 +1,11 @@
-import '../index.css'
-
 import {createFileRoute} from '@tanstack/solid-router'
-import {type JSX, Show} from 'solid-js'
+import {Show} from 'solid-js'
 
-import {Subheader} from '../../components/main/subheader'
-import {UnassessedArticles} from '../../components/main/unassessedArticles'
-import {AccessRequired} from '../../components/ui/access-required'
-import {authStore} from '../../stores/authStore'
+import {ArticlesTable} from '../../../components/main/articlesTable'
+import {AccessRequired} from '../../../components/ui/access-required'
+import {authStore} from '../../../stores/authStore'
 
-const Index = (): JSX.Element => {
+const Articles = () => {
   console.log('import.meta.env.DEV', import.meta.env.DEV)
   return (
     <Show
@@ -17,9 +14,8 @@ const Index = (): JSX.Element => {
     >
       <div class="min-h-screen bg-background text-foreground flex justify-center p-4">
         <div class="w-full space-y-8">
-          <Subheader />
           <div class="bg-card text-card-foreground rounded-sm border shadow-lg p-8">
-            <UnassessedArticles />
+            <ArticlesTable />
           </div>
         </div>
       </div>
@@ -27,4 +23,4 @@ const Index = (): JSX.Element => {
   )
 }
 
-export const Route = createFileRoute('/')({component: Index})
+export const Route = createFileRoute('/articles/')({component: Articles})

@@ -1,76 +1,104 @@
 import {createRootRoute, Link, Outlet} from '@tanstack/solid-router'
 import {TanStackRouterDevtools} from '@tanstack/solid-router-devtools'
-import {createResource, Show} from 'solid-js'
+import {createEffect, onCleanup} from 'solid-js'
 
-import {authClient} from '../lib/auth-client'
+import {startInfoUpdater, stopInfoUpdater} from '../../services/infoUpdater'
+import {authStore} from '../../stores/authStore'
 
-export const Route = createRootRoute({
-  component: () => {
-    const [session] = createResource(() => {
-      return authClient.getSession()
-    })
-    const [isAdmin] = createResource(async () => {
-      const session = await authClient.getSession()
-      console.log(session, session.data?.session?.user?.role)
-      return session.data?.session?.user?.role === 'admin'
-    })
+const RootComponent = () => {
+  // Initialize auth on app mount
+  createEffect(() => {
+    authStore.initialize()
+  })
 
-    const handleSignOut = async () => {
-      await authClient.signOut()
-      window.location.href = '/'
-    }
+  // Initialize info updater
+  createEffect(() => {
+    startInfoUpdater()
+  })
 
-    return (
-      <>
-        <div class="p-2 flex justify-between">
-          <div class="flex gap-2">
-            <Show when={!session()?.data?.session}>
+  // Cleanup auth subscription and info updater on unmount
+  onCleanup(() => {
+    authStore.cleanup()
+    stopInfoUpdater()
+  })
+
+  return (
+    <>
+      {authStore.isLoading() ? (
+        <div class="min-h-screen bg-background text-foreground flex items-center justify-center">
+          <div class="flex items-center space-x-2">
+            <svg class="animate-spin h-6 w-6" viewBox="0 0 24 24">
+              <circle
+                class="opacity-25"
+                cx="12"
+                cy="12"
+                r="10"
+                stroke="currentColor"
+                stroke-width="4"
+                fill="none"
+              />
+              <path
+                class="opacity-75"
+                fill="currentColor"
+                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+              />
+            </svg>
+            <span>Loading...</span>
+          </div>
+        </div>
+      ) : (
+        <>
+          {authStore.isAuthenticated() && (
+            <div class="p-2 flex gap-2">
               <Link to="/" class="[&.active]:font-bold">
                 Home
               </Link>{' '}
-              <Link to="/about" class="[&.active]:font-bold">
-                About
+              <Link to="/articles" class="[&.active]:font-bold">
+                Articles
               </Link>
-            </Show>
-            <Show when={session()?.data?.session}>
               <Link to="/projects" class="[&.active]:font-bold">
                 Projects
               </Link>
-            </Show>
-            <Show when={isAdmin()}>
-              <Link to="/users" class="[&.active]:font-bold">
-                Users
+              <Link to="/about" class="[&.active]:font-bold">
+                About
               </Link>
-            </Show>
-          </div>
-          <div class="flex gap-2">
-            <Show
-              when={session()?.data?.session}
-              fallback={
-                <>
-                  <Link to="/signup" class="[&.active]:font-bold">
-                    Sign up
-                  </Link>
-                  <Link to="/signin" class="[&.active]:font-bold">
-                    Sign in
-                  </Link>
-                </>
-              }
-            >
-              <span class="text-gray-600">{session()?.data?.user?.email}</span>
-              <button
-                onClick={handleSignOut}
-                class="text-red-600 hover:text-red-800"
-              >
-                Sign out
-              </button>
-            </Show>
-          </div>
-        </div>
-        <hr />
-        <Outlet />
-        <TanStackRouterDevtools />
-      </>
-    )
-  },
-})
+              <div class="flex items-center space-x-4 ml-auto">
+                <Link
+                  to="/settings"
+                  class="text-sm text-primary hover:text-primary/80 font-medium"
+                >
+                  Settings
+                </Link>
+                {/* Admin-only link - in a real app, check user role */}
+                <Link
+                  to="/admin/users"
+                  class="text-sm text-primary hover:text-primary/80 font-medium"
+                >
+                  Admin
+                </Link>
+                {authStore.user() && (
+                  <span class="text-sm text-muted-foreground">
+                    {authStore.user()?.email}
+                  </span>
+                )}
+                <button
+                  onClick={() => {
+                    void authStore.signOut()
+                  }}
+                  class="text-primary hover:text-primary/80 text-sm font-medium cursor-pointer"
+                >
+                  Sign Out
+                </button>
+              </div>
+            </div>
+          )}
+          {authStore.isAuthenticated() && <hr />}
+          <Outlet />
+          <TanStackRouterDevtools />
+        </>
+      )}
+    </>
+  )
+}
+
+export const Route = createRootRoute({component: RootComponent})
