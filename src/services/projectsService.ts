@@ -1,8 +1,18 @@
 import {apiClient} from './apiClient.ts'
 
+// type ProjectStats = {
+//   projectId: string | null
+//   lastJudgmentAt: Date | null
+//   totalJudgments: number | null
+//   originalYes: number | null
+//   originalNo: number | null
+//   originalUnsure: number | null
+// }
+
 export const fetchProjects = async () => {
   try {
     const response = await apiClient.api.projects.get()
+
     if (response.error) {
       console.error('Error fetching projects:', response.error)
       throw new Error('Failed to fetch projects')
@@ -19,7 +29,7 @@ export const fetchProjects = async () => {
   }
 }
 
-export const fetchProjectStats = async (): Promise<any[]> => {
+export const fetchProjectStats = async () => {
   try {
     const response = await apiClient.api.projects.stats.get()
 
