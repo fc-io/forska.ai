@@ -1,64 +1,31 @@
-import {type} from 'arktype'
-import {createSignal, type JSX, onMount, Show} from 'solid-js'
+import {useQuery} from '@tanstack/solid-query'
+import {type JSX, Show} from 'solid-js'
 
 import {apiClient} from '../../services/apiClient.ts'
-import {ArticlesTableArticlesTable} from './articlesTable/articlesTableTable.tsx'
+import {ArticlesTableTable} from './articlesTable/articlesTableTable.tsx'
 
-// Arktype schema for the exact row structure requested
-const ArticleRow = type({
-  id: 'string',
-  article_id: 'string',
-  article_title: 'string',
-  article_authors: 'string',
-  article_created: 'string',
-  article_judged_as_ai: "'yes' | 'unsure' | 'no' | 'undecided'",
-  article_judged_as_ai_agent: "'yes' | 'unsure' | 'no' | 'undecided'",
-  article_judged_as_healthcare: "'yes' | 'unsure' | 'no' | 'undecided'",
-  // source: 'string | null | undefined',
-})
+const fetchLatestArticles = async () => {
+  const response = await apiClient.api.articles.latest.get()
 
-export const ArticleRows = type(ArticleRow.array())
-
-export const ArticlesTable = (): JSX.Element => {
-  const [articles, setArticles] = createSignal<typeof ArticleRows.infer>([])
-  const [isLoadingArticles, setIsLoadingArticles] = createSignal<boolean>(false)
-  const [articlesError, setArticlesError] = createSignal<string | null>(null)
-
-  const fetchLatestArticles = async () => {
-    setIsLoadingArticles(true)
-    setArticlesError(null)
-    try {
-      const response = await apiClient.api.articles.latest.get()
-
-      if (response.error) {
-        throw new Error('Failed to fetch articles')
-      }
-
-      if (response.data?.error) {
-        throw new Error(response.data.error)
-      }
-
-      const rows = response.data?.data || []
-      const asserted = ArticleRows.assert(rows)
-      setArticles(asserted)
-    } catch (err) {
-      console.error('Failed to fetch latest articles', err)
-      setArticlesError('Failed to load latest articles')
-      setArticles([])
-    } finally {
-      setIsLoadingArticles(false)
-    }
+  if (response.error) {
+    throw new Error('Failed to fetch articles')
   }
 
-  onMount(() => {
-    void fetchLatestArticles()
-    // const interval = setInterval(() => {
-    //   void fetchLatestArticles()
-    // }, 60 * 1000)
+  if (response.data?.error) {
+    throw new Error(response.data.error)
+  }
 
-    // onCleanup(() => {
-    //   clearInterval(interval)
-    // })
+  return response.data?.data || []
+}
+
+export const ArticlesTable = (): JSX.Element => {
+  const articlesQuery = useQuery(() => {
+    return {
+      queryKey: ['articles', 'latest'],
+      queryFn: fetchLatestArticles,
+      refetchInterval: 30 * 1000, // Refetch every minute
+      refetchIntervalInBackground: true,
+    }
   })
 
   return (
@@ -67,14 +34,14 @@ export const ArticlesTable = (): JSX.Element => {
         <h2 class="text-2xl font-bold tracking-tight">Articles</h2>
       </div>
 
-      <Show when={isLoadingArticles()}>
+      <Show when={articlesQuery.isLoading}>
         <p class="text-muted-foreground">Loading articles...</p>
       </Show>
-      <Show when={articlesError()}>
-        <p class="text-red-600">{articlesError()}</p>
+      <Show when={articlesQuery.isError}>
+        <p class="text-red-600">Failed to load latest articles</p>
       </Show>
 
-      <ArticlesTableArticlesTable articles={articles()} />
+      <ArticlesTableTable articles={articlesQuery.data || []} />
     </div>
   )
 }

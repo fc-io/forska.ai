@@ -13,7 +13,7 @@ import {
 } from '../../ui/table.tsx'
 import {ArticleRows} from '../articlesTable.tsx'
 
-export const ArticlesTableArticlesTable = (props: {
+export const ArticlesTableTable = (props: {
   articles: typeof ArticleRows.infer
 }): JSX.Element => {
   return (

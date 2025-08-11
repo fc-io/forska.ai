@@ -48,9 +48,7 @@ export const UnassessedArticlesTable = (props: any): JSX.Element => {
                   {article.article_title ?? article.title ?? String(article.id)}
                 </TableCell>
                 <TableCell>{authors}</TableCell>
-                <TableCell>
-                  {String(article.article_id ?? article.id)}
-                </TableCell>
+                <TableCell>{article.article_id}</TableCell>
                 <TableCell class="text-right">
                   {format(article.created_at, 'yyyy-MM-dd HH:mm')}
                 </TableCell>
