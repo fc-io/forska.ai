@@ -115,7 +115,7 @@ const Projects = () => {
                       Active
                     </span>
                     <span class="text-sm text-muted-foreground">
-                      Created {formatDate(project.inserted_at)}
+                      Created {formatDate(project.createdAt, 'yyyy-MM-dd')}
                     </span>
                   </div>
                   <div class="flex gap-2">

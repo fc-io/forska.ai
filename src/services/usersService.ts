@@ -1,6 +1,6 @@
 import {apiClient} from './apiClient.ts'
 
-export const fetchProfiles = async () => {
+export const fetchUsers = async () => {
   try {
     const response = await apiClient.api.users.get()
 

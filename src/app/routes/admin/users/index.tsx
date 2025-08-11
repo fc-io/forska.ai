@@ -2,13 +2,12 @@ import {createFileRoute} from '@tanstack/solid-router'
 import {formatDate} from 'date-fns'
 import {createSignal, For, onMount} from 'solid-js'
 
-import {
-  fetchProfiles,
-  type Profile,
-} from '../../../../services/profileService.ts'
+import {fetchUsers} from '../../../../services/usersService.ts'
 
 const AdminUsers = () => {
-  const [users, setUsers] = createSignal<Profile[]>([])
+  const [users, setUsers] = createSignal<
+    Awaited<ReturnType<typeof fetchUsers>>
+  >([])
   const [isLoadingUsers, setIsLoadingUsers] = createSignal<boolean>(false)
   const [usersError, setUsersError] = createSignal<string | null>(null)
 
@@ -16,8 +15,8 @@ const AdminUsers = () => {
     setIsLoadingUsers(true)
     setUsersError(null)
     try {
-      const profiles = await fetchProfiles()
-      setUsers(profiles)
+      const dataUsers = await fetchUsers()
+      setUsers(dataUsers)
     } catch (err) {
       console.error('Failed to fetch users:', err)
       setUsersError('Failed to load users')
@@ -38,18 +37,20 @@ const AdminUsers = () => {
     return users().filter((user) => {
       const term = searchTerm().toLowerCase()
       const matchesSearch =
-        (term === '' || user.full_name?.toLowerCase().includes(term)) ?? false
+        (term === '' || user.name?.toLowerCase().includes(term)) ?? false
       const matchesRole =
         selectedRole() === 'all'
-        || (selectedRole() === 'admin' && user.is_admin)
-        || (selectedRole() === 'user' && !user.is_admin)
+        || (selectedRole() === 'admin' && user.role === 'admin')
+        || (selectedRole() === 'user' && user.role !== 'admin')
 
       return matchesSearch && matchesRole
     })
   }
 
-  const getRoleColor = (isAdmin: boolean) => {
-    return isAdmin ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'
+  const getRoleColor = (role: string | null) => {
+    return role === 'admin'
+      ? 'bg-red-100 text-red-800'
+      : 'bg-green-100 text-green-800'
   }
 
   return (
@@ -124,7 +125,7 @@ const AdminUsers = () => {
           <div class="text-2xl font-bold text-red-600">
             {
               users().filter((u) => {
-                return u.is_admin
+                return u.role === 'admin'
               }).length
             }
           </div>
@@ -134,7 +135,7 @@ const AdminUsers = () => {
           <div class="text-2xl font-bold text-green-600">
             {
               users().filter((u) => {
-                return !u.is_admin
+                return u.role !== 'admin'
               }).length
             }
           </div>
@@ -170,7 +171,7 @@ const AdminUsers = () => {
                       <td class="px-6 py-4">
                         <div>
                           <div class="font-medium">
-                            {user.full_name || 'No name set'}
+                            {user.name || 'No name set'}
                           </div>
                           <div class="text-sm text-muted-foreground">
                             ID: {user.id}
@@ -179,14 +180,14 @@ const AdminUsers = () => {
                       </td>
                       <td class="px-6 py-4">
                         <span
-                          class={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${getRoleColor(user.is_admin)}`}
+                          class={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${getRoleColor(user.role)}`}
                         >
-                          {user.is_admin ? 'Admin' : 'User'}
+                          {user.role === 'admin' ? 'Admin' : 'User'}
                         </span>
                       </td>
                       <td class="px-6 py-4 text-sm text-muted-foreground">
-                        {user.created_at
-                          ? formatDate(new Date(user.created_at), 'yyyy-MM-dd')
+                        {user.createdAt
+                          ? formatDate(new Date(user.createdAt), 'yyyy-MM-dd')
                           : 'Unknown'}
                       </td>
                       <td class="px-6 py-4">
@@ -195,7 +196,9 @@ const AdminUsers = () => {
                             Edit
                           </button>
                           <button class="text-sm text-destructive hover:text-destructive/80">
-                            {user.is_admin ? 'Remove Admin' : 'Make Admin'}
+                            {user.role === 'admin'
+                              ? 'Remove Admin'
+                              : 'Make Admin'}
                           </button>
                         </div>
                       </td>
