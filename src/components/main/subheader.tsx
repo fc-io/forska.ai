@@ -50,16 +50,16 @@ export const Subheader = (): JSX.Element => {
       return
     }
     setIsRunning(true)
-    // try {
-    //   await startArxivHarvest({
-    //     ...CONFIG,
-    //     fromDate: state.fromDate.toISOString(),
-    //     toDate: state.toDate.toISOString(),
-    //     maxResults: state.batchSize,
-    //   })
-    // } finally {
-    //   setIsRunning(false)
-    // }
+    try {
+      await startArxivHarvest({
+        ...CONFIG,
+        fromDate: state.fromDate.toISOString(),
+        toDate: state.toDate.toISOString(),
+        maxResults: state.batchSize,
+      })
+    } finally {
+      setIsRunning(false)
+    }
   }
 
   const handleRunAgent = async () => {
@@ -67,16 +67,16 @@ export const Subheader = (): JSX.Element => {
       return
     }
     setIsAgentRunning(true)
-    // try {
-    //   await run(state.batchSize, state.fromDate, state.toDate)
-    // } finally {
-    //   setIsAgentRunning(false)
-    // }
+    try {
+      await run(state.batchSize, state.fromDate, state.toDate)
+    } finally {
+      setIsAgentRunning(false)
+    }
   }
   return (
     <div class="space-y-4">
       <div class="flex justify-end space-x-2">
-        <button class="bg-primary text-primary-foreground hover:bg-primary/90 inline-flex h-10 items-center justify-center whitespace-nowrap rounded-md px-4 py-2 text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50">
+        <button class="bg-blue-600 text-white hover:bg-blue-700 px-4 py-2 rounded-md text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed">
           Harvest PubMed Articles
         </button>
         <button
@@ -84,7 +84,7 @@ export const Subheader = (): JSX.Element => {
             void handleArxivHarvest()
           }}
           disabled={isRunning()}
-          class="relative bg-primary text-primary-foreground hover:bg-primary/90 inline-flex h-10 items-center justify-center whitespace-nowrap rounded-md px-4 py-2 text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50"
+          class="relative bg-blue-600 text-white hover:bg-blue-700 inline-flex items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <span classList={{'opacity-0': isRunning()}}>
             Harvest Arxiv Articles
@@ -119,7 +119,7 @@ export const Subheader = (): JSX.Element => {
             void handleRunAgent()
           }}
           disabled={isAgentRunning()}
-          class="relative bg-green-600 text-white hover:bg-green-700 inline-flex h-10 items-center justify-center whitespace-nowrap rounded-md px-4 py-2 text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50"
+          class="relative bg-green-600 text-white hover:bg-green-700 inline-flex items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <span classList={{'opacity-0': isAgentRunning()}}>Run Agent</span>
           <Show when={isAgentRunning()}>
@@ -151,7 +151,7 @@ export const Subheader = (): JSX.Element => {
           onClick={() => {
             setIsSettingsOpen(!isSettingsOpen())
           }}
-          class="border-input bg-background hover:bg-accent hover:text-accent-foreground inline-flex h-10 items-center justify-center whitespace-nowrap rounded-md border px-4 py-2 text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50"
+          class="border border-gray-300 bg-white hover:bg-gray-50 text-gray-900 inline-flex items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Settings
           <svg
