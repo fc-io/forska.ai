@@ -1,32 +1,44 @@
+import {useQuery} from '@tanstack/solid-query'
 import {createRootRoute, Link, Outlet} from '@tanstack/solid-router'
 import {TanStackRouterDevtools} from '@tanstack/solid-router-devtools'
 import {Show} from 'solid-js'
 
-import {authStore} from '../../stores/authStore'
+import {AccessRequired} from '../../components/ui/access-required'
+import {fetchSession} from '../../services/fetchSession'
+import {authClient} from '../lib/auth-client'
+// type SessionInfo = {
+//   user: User
+//   session: {id: string; userId: string; expiresAt: Date}
+// }
 
+const signOut = async () => {
+  try {
+    await authClient.signOut()
+    // queryClient.setQueryData(['session'], null)
+    // await queryClient.invalidateQueries({queryKey: ['session']})
+  } catch (error) {
+    console.error('Error signing out:', error)
+    throw error
+  }
+}
 const RootComponent = () => {
   console.log('import.meta.env.DEV', import.meta.env.DEV)
-
-  // const useInfoQuery = () => {
-  //   return useQuery(() => {
-  //     return {
-  //       queryKey: ['info'],
-  //       queryFn: fetchInfo,
-  //       refetchInterval: 60 * 1000, // Refetch every minute
-  //       refetchIntervalInBackground: true,
-  //     }
-  //   })
-  // }
-
-  // Cleanup auth subscription on unmount
-  // onCleanup(() => {
-  //   authStore.cleanup()
-  // })
+  const sessionQuery = useQuery(() => {
+    return {
+      queryKey: ['session'],
+      queryFn: fetchSession,
+      staleTime: 1000 * 60 * 5, // Consider data fresh for 5 minutes
+      refetchInterval: 1000 * 60 * 5, // Refetch every 5 minutes
+      refetchIntervalInBackground: true,
+      refetchOnWindowFocus: true,
+    }
+  })
+  // const {user, isLoading, isAuthenticated, isAdmin, signOut} = useSession()
 
   return (
     <>
       <Show
-        when={!authStore.isLoading()}
+        when={!sessionQuery.isLoading}
         fallback={
           <div class="min-h-screen bg-background text-foreground flex items-center justify-center">
             <div class="flex items-center space-x-2">
@@ -51,7 +63,7 @@ const RootComponent = () => {
           </div>
         }
       >
-        <Show when={authStore.isAuthenticated()}>
+        <Show when={!!sessionQuery.data?.user} fallback={<AccessRequired />}>
           <div class="p-2 flex gap-2">
             <Link to="/" class="[&.active]:font-bold">
               Home
@@ -73,7 +85,7 @@ const RootComponent = () => {
                 Settings
               </Link>
               {/* Admin-only link */}
-              <Show when={authStore.isAdmin()}>
+              <Show when={sessionQuery.data?.user?.role === 'admin'}>
                 <Link
                   to="/admin/users"
                   class="text-sm text-primary hover:text-primary/80 font-medium"
@@ -81,14 +93,15 @@ const RootComponent = () => {
                   Users
                 </Link>
               </Show>
-              <Show when={authStore.user()}>
+              <Show when={sessionQuery.data?.user}>
                 <span class="text-sm text-muted-foreground">
-                  {authStore.user()?.email}
+                  {sessionQuery.data?.user?.email}
                 </span>
               </Show>
               <button
                 onClick={() => {
-                  void authStore.signOut()
+                  void signOut()
+                  // void sessionQuery.refetch()
                 }}
                 class="text-primary hover:text-primary/80 text-sm font-medium cursor-pointer"
               >

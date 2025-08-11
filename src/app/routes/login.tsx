@@ -1,7 +1,8 @@
+import {useQueryClient} from '@tanstack/solid-query'
 import {createFileRoute, useNavigate} from '@tanstack/solid-router'
 import {createSignal, type JSX, Show} from 'solid-js'
 
-import {authStore} from '../../stores/authStore'
+import {useSession} from '../../hooks/useSession'
 import {authClient} from '../lib/auth-client'
 
 const Login = (): JSX.Element => {
@@ -14,6 +15,8 @@ const Login = (): JSX.Element => {
   const [isSignUp, setIsSignUp] = createSignal(false)
   const [acceptTerms, setAcceptTerms] = createSignal(false)
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const {isLoading: isSessionLoading, isAuthenticated} = useSession()
 
   const handleSubmit = async (e: Event) => {
     e.preventDefault()
@@ -42,6 +45,8 @@ const Login = (): JSX.Element => {
         })
 
         if (signInError) throw signInError
+        // Invalidate session query to trigger refetch
+        await queryClient.invalidateQueries({queryKey: ['session']})
         // Navigate to home on successful login
         void navigate({to: '/'})
       } else {
@@ -51,25 +56,32 @@ const Login = (): JSX.Element => {
         })
 
         if (error) throw error
+        // Invalidate session query to trigger refetch
+        await queryClient.invalidateQueries({queryKey: ['session']})
         // Navigate to home on successful login
         void navigate({to: '/'})
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Authentication failed')
     } finally {
+      debugger
       setIsLoading(false)
     }
   }
 
   return (
     <Show
-      when={!authStore.isLoading() && !authStore.isAuthenticated()}
+      when={!isSessionLoading && !isAuthenticated()}
       fallback={
         <div class="min-h-screen bg-gray-50 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
           <div class="sm:mx-auto sm:w-full sm:max-w-md">
             <div class="text-center">
-              <h2 class="text-3xl font-bold text-gray-900">Already Logged In</h2>
-              <p class="mt-2 text-sm text-gray-600">You are already authenticated.</p>
+              <h2 class="text-3xl font-bold text-gray-900">
+                Already Logged In
+              </h2>
+              <p class="mt-2 text-sm text-gray-600">
+                You are already authenticated.
+              </p>
             </div>
           </div>
           <div class="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
@@ -98,7 +110,6 @@ const Login = (): JSX.Element => {
 
         <div class="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
           <div class="bg-white py-8 px-4 shadow-sm rounded-lg sm:px-10">
-
             <form
               onSubmit={(e) => {
                 void handleSubmit(e)

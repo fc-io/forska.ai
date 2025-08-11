@@ -96,7 +96,9 @@ const AdminUsers = () => {
       {/* Stats */}
       <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <div class="bg-card border rounded-lg p-4 text-center">
-          <div class="text-2xl font-bold text-primary">{(users() ?? []).length}</div>
+          <div class="text-2xl font-bold text-primary">
+            {(users() ?? []).length}
+          </div>
           <div class="text-sm text-muted-foreground">Total Users</div>
         </div>
         <div class="bg-card border rounded-lg p-4 text-center">

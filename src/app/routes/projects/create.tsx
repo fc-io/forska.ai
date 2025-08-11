@@ -3,13 +3,14 @@ import {createSignal, For, Show} from 'solid-js'
 import {createStore} from 'solid-js/store'
 
 import {Button} from '../../../components/ui/button'
+import {useSession} from '../../../hooks/useSession'
 import {apiClient} from '../../../services/apiClient'
-import {authStore} from '../../../stores/authStore'
 
 type PromptItem = {id: string; content: string}
 
 const CreateProject = () => {
   const navigate = useNavigate()
+  const {user} = useSession()
   const [projectName, setProjectName] = createSignal('')
   const [description, setDescription] = createSignal('')
   const [prompts, setPrompts] = createStore<PromptItem[]>([
@@ -46,8 +47,8 @@ const CreateProject = () => {
     description: string,
     promptItems: PromptItem[],
   ) => {
-    const user = authStore.user()
-    if (!user) {
+    const currentUser = user()
+    if (!currentUser) {
       throw new Error('User must be authenticated to create a project')
     }
 
@@ -63,7 +64,7 @@ const CreateProject = () => {
     const response = await apiClient.api.projects.post({
       name,
       description: description.trim() || undefined,
-      ownerId: user.id,
+      ownerId: currentUser.id,
       prompts: validPrompts,
     })
 
