@@ -33,14 +33,12 @@ export const ArticlesTable = (): JSX.Element => {
       <div>
         <h2 class="text-2xl font-bold tracking-tight">Articles</h2>
       </div>
-
       <Show when={articlesQuery.isLoading}>
         <p class="text-muted-foreground">Loading articles...</p>
       </Show>
       <Show when={articlesQuery.isError}>
         <p class="text-red-600">Failed to load latest articles</p>
       </Show>
-
       <ArticlesTableTable articles={articlesQuery.data || []} />
     </div>
   )
