@@ -8,7 +8,11 @@ import {authStore} from '../../stores/authStore'
 const RootComponent = () => {
   // Initialize auth on app mount
   createEffect(() => {
-    void authStore.initialize()
+    try {
+      void authStore.initialize()
+    } catch (error) {
+      console.error('Error initializing auth:', error)
+    }
   })
 
   // Initialize info updater

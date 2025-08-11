@@ -6,7 +6,7 @@ const envShape = arktype({
 })
 
 const loadEnv = (): typeof envShape.infer => {
-  return envShape.assert(process.env)
+  return envShape.assert(import.meta.env)
 }
 
 export const env = loadEnv()

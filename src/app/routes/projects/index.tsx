@@ -5,12 +5,12 @@ import {Button} from '../../../components/ui/button'
 import {
   deleteProject,
   fetchProjects,
-  fetchProjectStats,
+  // fetchProjectStats,
 } from '../../../services/projectsService'
 
 const Projects = () => {
   const [projects, {refetch}] = createResource(fetchProjects)
-  const [projectStats] = createResource(fetchProjectStats)
+  // const [projectStats] = createResource(fetchProjectStats)
   const [deletingProject, setDeletingProject] = createSignal<string | null>(
     null,
   )
@@ -44,15 +44,15 @@ const Projects = () => {
   const totalActiveProjects = () => {
     return projects()?.length || 0
   }
-  const totalJudgments = () => {
-    const stats = projectStats()
-    if (!stats) return 0
-    return stats.reduce((sum, stat) => {
-      const judgments =
-        typeof stat.total_judgments === 'number' ? stat.total_judgments : 0
-      return sum + judgments
-    }, 0)
-  }
+  // const totalJudgments = () => {
+  //   const stats = projectStats()
+  //   if (!stats) return 0
+  //   return stats.reduce((sum, stat) => {
+  //     const judgments =
+  //       typeof stat.total_judgments === 'number' ? stat.total_judgments : 0
+  //     return sum + judgments
+  //   }, 0)
+  // }
 
   const formatDate = (dateString: string | null) => {
     if (!dateString) return 'Never'
@@ -165,7 +165,7 @@ const Projects = () => {
             </div>
             <div class="text-center">
               <div class="text-2xl font-bold text-primary">
-                {totalJudgments()}
+                {/* {totalJudgments()} */}
               </div>
               <div class="text-sm text-muted-foreground">Total Judgments</div>
             </div>

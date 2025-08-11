@@ -27,7 +27,11 @@ const initializeAuth = async () => {
   } catch (error) {
     console.error('Error initializing auth:', error)
   } finally {
-    setIsLoading(false)
+    try {
+      setIsLoading(false)
+    } catch (error) {
+      console.error('Error getting session:', error)
+    }
   }
 }
 
