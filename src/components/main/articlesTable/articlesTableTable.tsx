@@ -1,7 +1,10 @@
 import {format} from 'date-fns'
 import type {JSX} from 'solid-js'
-import {For} from 'solid-js'
+import {For, Show} from 'solid-js'
 
+import {formatAuthors} from '../../../app/utils/formatAuthors.ts'
+import {getArticleUrl} from '../../../app/utils/getArticleUrl.ts'
+import type {apiClient} from '../../../services/apiClient.ts'
 import {
   Table,
   TableBody,
@@ -11,10 +14,14 @@ import {
   TableHeader,
   TableRow,
 } from '../../ui/table.tsx'
-import {ArticleRows} from '../articlesTable.tsx'
+
+type ArticlesResponse = Awaited<
+  ReturnType<typeof apiClient.api.articles.latest.get>
+>
+type Article = NonNullable<ArticlesResponse['data']>['data'][number]
 
 export const ArticlesTableTable = (props: {
-  articles: typeof ArticleRows.infer
+  articles: Article[]
 }): JSX.Element => {
   return (
     <Table>
@@ -22,26 +29,41 @@ export const ArticlesTableTable = (props: {
       <TableHeader>
         <TableRow>
           <TableHead class="w-[140px]">Article ID</TableHead>
-          <TableHead class="w-[160px]">Article Title</TableHead>
-          <TableHead>Authors</TableHead>
+          <TableHead>Article Title</TableHead>
+          <TableHead class="w-[160px]">Authors</TableHead>
           <TableHead class="text-right w-[140px]">Article Created</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
         <For each={props.articles}>
-          {(article): JSX.Element => {
-            const {article_authors, article_created} = article
+          {({
+            articleId,
+            articleTitle,
+            articleAuthors,
+            articleCreatedAt,
+          }): JSX.Element => {
+            const createdAt = articleCreatedAt
+              ? format(articleCreatedAt, 'yyyy-MM-dd HH:mm')
+              : ''
+            const url = getArticleUrl(articleId)
 
             return (
               <TableRow>
-                <TableCell>{article.article_id}</TableCell>
-                <TableCell class="font-medium">
-                  {article.article_title}
+                <TableCell>
+                  <Show when={url} fallback={articleId}>
+                    <a
+                      href={url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="text-blue-600 hover:underline"
+                    >
+                      {articleId}
+                    </a>
+                  </Show>
                 </TableCell>
-                <TableCell>{article_authors}</TableCell>
-                <TableCell class="text-right">
-                  {format(article_created, 'yyyy-MM-dd')}
-                </TableCell>
+                <TableCell class="font-medium">{articleTitle}</TableCell>
+                <TableCell>{formatAuthors(articleAuthors)}</TableCell>
+                <TableCell class="text-right">{createdAt}</TableCell>
               </TableRow>
             )
           }}
