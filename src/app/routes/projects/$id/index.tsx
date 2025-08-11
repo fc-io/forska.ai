@@ -124,6 +124,14 @@ const ProjectDetail = () => {
                                   <span class="inline-flex items-center justify-center w-6 h-6 rounded-full bg-primary text-primary-foreground text-xs font-medium">
                                     {prompt.order}
                                   </span>
+                                  <Show when={prompt.promptHeading}>
+                                    <span class="font-medium">{prompt.promptHeading}</span>
+                                  </Show>
+                                  <Show when={prompt.type}>
+                                    <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                                      {prompt.type}
+                                    </span>
+                                  </Show>
                                   <span class="text-sm text-muted-foreground">
                                     Created {formatDate(prompt.created_at)}
                                   </span>

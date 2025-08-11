@@ -107,6 +107,7 @@ export const prompts = pgTable('prompts', {
   promptHeading: text('prompt_heading'),
   order: integer('order'),
   archived: boolean('archived').default(false).notNull(),
+  type: text('type'),
 })
 
 // export const projectMembers = pgTable(

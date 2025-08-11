@@ -10,6 +10,8 @@ type PromptItem = {
   id: string
   project_id: string
   original_text: string
+  prompt_heading: string
+  type: string
   isExisting: boolean // Track if this is an existing prompt or new one
   originalId?: string // Store the database ID for existing prompts
   order: number
@@ -24,6 +26,8 @@ type PromptData = Pick<
   | 'id'
   | 'original_text'
   | 'transformed_text'
+  | 'prompt_heading'
+  | 'type'
   | 'project_id'
   | 'archived'
   | 'created_at'
@@ -64,11 +68,13 @@ const EditProject = () => {
 
     if (existingPrompts && existingPrompts.length > 0) {
       const formattedPrompts: PromptItem[] = existingPrompts.map((prompt) => {
-        const {original_text} = prompt
+        const {original_text, prompt_heading, type} = prompt
 
         return {
           id: crypto.randomUUID(),
           original_text,
+          prompt_heading: prompt_heading || '',
+          type: type || '',
           isExisting: true,
           originalId: prompt.id,
           order: prompt.order,
@@ -82,6 +88,8 @@ const EditProject = () => {
         {
           id: crypto.randomUUID(),
           original_text: '',
+          prompt_heading: '',
+          type: '',
           isExisting: false,
           order: 1,
           project_id: projectId,
@@ -104,6 +112,8 @@ const EditProject = () => {
       {
         id: crypto.randomUUID(),
         original_text: '',
+        prompt_heading: '',
+        type: '',
         isExisting: false,
         order: newOrder,
         project_id: projectId,
@@ -121,12 +131,12 @@ const EditProject = () => {
     }
   }
 
-  const updatePromptInput = (id: string, value: string) => {
+  const updatePromptInput = (id: string, field: 'original_text' | 'prompt_heading' | 'type', value: string) => {
     const idx = prompts.findIndex((p) => {
       return p.id === id
     })
     if (idx >= 0) {
-      setPrompts(idx, 'original_text', value)
+      setPrompts(idx, field, value)
     }
   }
 
@@ -238,12 +248,39 @@ const EditProject = () => {
                   {(promptItem, index) => {
                     return (
                       <div class="flex gap-2">
-                        <div class="flex-1">
+                        <div class="flex-1 space-y-2">
+                          <input
+                            type="text"
+                            value={promptItem.prompt_heading}
+                            onInput={(e) => {
+                              return updatePromptInput(
+                                promptItem.id,
+                                'prompt_heading',
+                                e.currentTarget.value,
+                              )
+                            }}
+                            placeholder={`Prompt ${index() + 1} heading (optional)...`}
+                            class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+                          />
+                          <input
+                            type="text"
+                            value={promptItem.type}
+                            onInput={(e) => {
+                              return updatePromptInput(
+                                promptItem.id,
+                                'type',
+                                e.currentTarget.value,
+                              )
+                            }}
+                            placeholder={`Prompt ${index() + 1} type (optional)...`}
+                            class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+                          />
                           <textarea
                             value={promptItem.original_text}
                             onInput={(e) => {
                               return updatePromptInput(
                                 promptItem.id,
+                                'original_text',
                                 e.currentTarget.value,
                               )
                             }}
@@ -338,6 +375,8 @@ const fetchProjectPrompts = async (
       id: p.id,
       original_text: p.originalText,
       transformed_text: p.transformedText,
+      prompt_heading: p.promptHeading,
+      type: p.type,
       project_id: p.projectId,
       archived: p.archived,
       created_at: p.createdAt,
