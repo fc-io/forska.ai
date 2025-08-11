@@ -1,5 +1,7 @@
+import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
-import {createResource, createSignal, For, Show} from 'solid-js'
+import {format} from 'date-fns'
+import {createSignal, For, Show} from 'solid-js'
 
 import {Button} from '../../../components/ui/button'
 import {
@@ -9,7 +11,9 @@ import {
 } from '../../../services/projectsService'
 
 const Projects = () => {
-  const [projects, {refetch}] = createResource(fetchProjects)
+  const projects = useQuery(() => {
+    return {queryKey: ['projects'], queryFn: fetchProjects}
+  })
   // const [projectStats] = createResource(fetchProjectStats)
   const [deletingProject, setDeletingProject] = createSignal<string | null>(
     null,
@@ -30,7 +34,7 @@ const Projects = () => {
     setDeletingProject(projectId)
     try {
       await deleteProject(projectId)
-      await refetch()
+      await projects.refetch()
     } catch (error) {
       console.error('Failed to delete project:', error)
       alert(
@@ -41,9 +45,6 @@ const Projects = () => {
     }
   }
 
-  const totalActiveProjects = () => {
-    return projects()?.length || 0
-  }
   // const totalJudgments = () => {
   //   const stats = projectStats()
   //   if (!stats) return 0
@@ -54,11 +55,6 @@ const Projects = () => {
   //   }, 0)
   // }
 
-  const formatDate = (dateString: string | null) => {
-    if (!dateString) return 'Never'
-    return new Date(dateString).toLocaleString()
-  }
-
   return (
     <div class="p-6 max-w-6xl mx-auto">
       <div class="flex justify-between items-center mb-6">
@@ -68,11 +64,11 @@ const Projects = () => {
         </Button>
       </div>
 
-      <Show when={projects.loading}>
+      <Show when={projects.isLoading}>
         <div class="text-center py-8">Loading projects...</div>
       </Show>
 
-      <Show when={projects.error}>
+      <Show when={projects.isError}>
         <div class="text-center py-8 text-red-600">
           Error loading projects:{' '}
           {projects.error instanceof Error
@@ -81,7 +77,7 @@ const Projects = () => {
         </div>
       </Show>
 
-      <Show when={projects() && projects()?.length === 0}>
+      <Show when={projects.data && projects.data?.length === 0}>
         <div class="text-center py-12">
           <h2 class="text-xl font-semibold mb-4">No projects found</h2>
           <p class="text-muted-foreground mb-6">
@@ -95,14 +91,14 @@ const Projects = () => {
 
       <Show
         when={
-          projects()
-          && Array.isArray(projects())
-          && (projects()?.length ?? 0) > 0
+          projects.data
+          && Array.isArray(projects.data)
+          && (projects.data?.length ?? 0) > 0
         }
       >
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
           {}
-          <For each={projects()}>
+          <For each={projects.data}>
             {(project) => {
               return (
                 <div class="bg-card border rounded-lg p-6 shadow-sm">
@@ -115,7 +111,7 @@ const Projects = () => {
                       Active
                     </span>
                     <span class="text-sm text-muted-foreground">
-                      Created {formatDate(project.createdAt, 'yyyy-MM-dd')}
+                      Created: {format(project.createdAt, 'yyyy-MM-dd HH:mm')}
                     </span>
                   </div>
                   <div class="flex gap-2">
@@ -159,7 +155,7 @@ const Projects = () => {
           <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div class="text-center">
               <div class="text-2xl font-bold text-primary">
-                {totalActiveProjects()}
+                {projects.data?.length || 0}
               </div>
               <div class="text-sm text-muted-foreground">Active Projects</div>
             </div>
