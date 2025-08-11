@@ -1,40 +1,18 @@
 import {createFileRoute} from '@tanstack/solid-router'
 import {formatDate} from 'date-fns'
-import {createSignal, For, onMount} from 'solid-js'
+import {createResource, createSignal, For} from 'solid-js'
 
 import {fetchUsers} from '../../../../services/usersService.ts'
 
 const AdminUsers = () => {
-  const [users, setUsers] = createSignal<
-    Awaited<ReturnType<typeof fetchUsers>>
-  >([])
-  const [isLoadingUsers, setIsLoadingUsers] = createSignal<boolean>(false)
-  const [usersError, setUsersError] = createSignal<string | null>(null)
-
-  const fetchUsersData = async () => {
-    setIsLoadingUsers(true)
-    setUsersError(null)
-    try {
-      const dataUsers = await fetchUsers()
-      setUsers(dataUsers)
-    } catch (err) {
-      console.error('Failed to fetch users:', err)
-      setUsersError('Failed to load users')
-      setUsers([])
-    } finally {
-      setIsLoadingUsers(false)
-    }
-  }
-
-  onMount(() => {
-    void fetchUsersData()
-  })
+  const [users, {refetch}] = createResource(fetchUsers)
 
   const [searchTerm, setSearchTerm] = createSignal('')
   const [selectedRole, setSelectedRole] = createSignal('all')
 
   const filteredUsers = () => {
-    return users().filter((user) => {
+    const usersList = users() ?? []
+    return usersList.filter((user) => {
       const term = searchTerm().toLowerCase()
       const matchesSearch =
         (term === '' || user.name?.toLowerCase().includes(term)) ?? false
@@ -96,17 +74,17 @@ const AdminUsers = () => {
       </div>
 
       {/* Loading and Error States */}
-      {isLoadingUsers() && (
+      {users.loading && (
         <div class="bg-card border rounded-lg p-6 text-center mb-6">
           <p class="text-muted-foreground">Loading users...</p>
         </div>
       )}
-      {usersError() && (
+      {users.error && (
         <div class="bg-destructive/10 border border-destructive rounded-lg p-4 mb-6">
-          <p class="text-destructive">{usersError()}</p>
+          <p class="text-destructive">Failed to load users</p>
           <button
             onClick={() => {
-              return void fetchUsersData()
+              return void refetch()
             }}
             class="mt-2 px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
           >
@@ -118,13 +96,13 @@ const AdminUsers = () => {
       {/* Stats */}
       <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <div class="bg-card border rounded-lg p-4 text-center">
-          <div class="text-2xl font-bold text-primary">{users().length}</div>
+          <div class="text-2xl font-bold text-primary">{(users() ?? []).length}</div>
           <div class="text-sm text-muted-foreground">Total Users</div>
         </div>
         <div class="bg-card border rounded-lg p-4 text-center">
           <div class="text-2xl font-bold text-red-600">
             {
-              users().filter((u) => {
+              (users() ?? []).filter((u) => {
                 return u.role === 'admin'
               }).length
             }
@@ -134,7 +112,7 @@ const AdminUsers = () => {
         <div class="bg-card border rounded-lg p-4 text-center">
           <div class="text-2xl font-bold text-green-600">
             {
-              users().filter((u) => {
+              (users() ?? []).filter((u) => {
                 return u.role !== 'admin'
               }).length
             }
