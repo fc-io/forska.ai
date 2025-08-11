@@ -5,6 +5,8 @@ import {Show} from 'solid-js'
 import {authStore} from '../../stores/authStore'
 
 const RootComponent = () => {
+  console.log('import.meta.env.DEV', import.meta.env.DEV)
+
   // const useInfoQuery = () => {
   //   return useQuery(() => {
   //     return {
@@ -71,14 +73,14 @@ const RootComponent = () => {
                 Settings
               </Link>
               {/* Admin-only link */}
-              {authStore.isAdmin() && (
+              <Show when={authStore.isAdmin()}>
                 <Link
                   to="/admin/users"
                   class="text-sm text-primary hover:text-primary/80 font-medium"
                 >
                   Users
                 </Link>
-              )}
+              </Show>
               <Show when={authStore.user()}>
                 <span class="text-sm text-muted-foreground">
                   {authStore.user()?.email}

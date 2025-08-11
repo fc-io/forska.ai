@@ -1,4 +1,4 @@
-import {createSignal, type JSX} from 'solid-js'
+import {createSignal, type JSX, Show} from 'solid-js'
 import {produce} from 'solid-js/store'
 
 // import {run} from '../../agent.ts'
@@ -89,7 +89,7 @@ export const Subheader = (): JSX.Element => {
           <span classList={{'opacity-0': isRunning()}}>
             Harvest Arxiv Articles
           </span>
-          {isRunning() && (
+          <Show when={isRunning()}>
             <div class="absolute inset-0 flex items-center justify-center">
               <svg
                 class="animate-spin h-5 w-5 text-white"
@@ -112,7 +112,7 @@ export const Subheader = (): JSX.Element => {
                 />
               </svg>
             </div>
-          )}
+          </Show>
         </button>
         <button
           onClick={() => {
@@ -122,7 +122,7 @@ export const Subheader = (): JSX.Element => {
           class="relative bg-green-600 text-white hover:bg-green-700 inline-flex h-10 items-center justify-center whitespace-nowrap rounded-md px-4 py-2 text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50"
         >
           <span classList={{'opacity-0': isAgentRunning()}}>Run Agent</span>
-          {isAgentRunning() && (
+          <Show when={isAgentRunning()}>
             <div class="absolute inset-0 flex items-center justify-center">
               <svg
                 class="animate-spin h-5 w-5 text-white"
@@ -145,7 +145,7 @@ export const Subheader = (): JSX.Element => {
                 />
               </svg>
             </div>
-          )}
+          </Show>
         </button>
         <button
           onClick={() => {

@@ -1,5 +1,5 @@
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
-import {createSignal, For} from 'solid-js'
+import {createSignal, For, Show} from 'solid-js'
 import {createStore} from 'solid-js/store'
 
 import {Button} from '../../../components/ui/button'
@@ -112,11 +112,11 @@ const CreateProject = () => {
       </div>
 
       <div class="bg-card border rounded-lg p-6">
-        {error() && (
+        <Show when={error()}>
           <div class="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm">
             {error()}
           </div>
-        )}
+        </Show>
         <form
           onSubmit={(e) => {
             return void handleSubmit(e)
@@ -185,7 +185,7 @@ const CreateProject = () => {
                         rows="4"
                         class="flex-1 px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent resize-none"
                       />
-                      {prompts.length > 1 && (
+                      <Show when={prompts.length > 1}>
                         <Button
                           type="button"
                           variant="outline"
@@ -197,7 +197,7 @@ const CreateProject = () => {
                         >
                           ×
                         </Button>
-                      )}
+                      </Show>
                     </div>
                   )
                 }}

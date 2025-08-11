@@ -169,11 +169,11 @@ const EditProject = () => {
 
       <Show when={projectData() && !projectData.loading}>
         <div class="bg-card border rounded-lg p-6">
-          {error() && (
+          <Show when={error()}>
             <div class="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm">
               {error()}
             </div>
-          )}
+          </Show>
 
           <form
             onSubmit={(e) => {
@@ -252,7 +252,7 @@ const EditProject = () => {
                             class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent resize-none"
                           />
                         </div>
-                        {prompts.length > 1 && (
+                        <Show when={prompts.length > 1}>
                           <Button
                             type="button"
                             variant="outline"
@@ -264,7 +264,7 @@ const EditProject = () => {
                           >
                             ×
                           </Button>
-                        )}
+                        </Show>
                       </div>
                     )
                   }}

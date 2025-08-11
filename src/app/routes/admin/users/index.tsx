@@ -1,6 +1,6 @@
 import {createFileRoute} from '@tanstack/solid-router'
 import {formatDate} from 'date-fns'
-import {createResource, createSignal, For} from 'solid-js'
+import {createResource, createSignal, For, Show} from 'solid-js'
 
 import {fetchUsers} from '../../../../services/usersService.ts'
 
@@ -74,12 +74,12 @@ const AdminUsers = () => {
       </div>
 
       {/* Loading and Error States */}
-      {users.loading && (
+      <Show when={users.loading}>
         <div class="bg-card border rounded-lg p-6 text-center mb-6">
           <p class="text-muted-foreground">Loading users...</p>
         </div>
-      )}
-      {users.error && (
+      </Show>
+      <Show when={users.error}>
         <div class="bg-destructive/10 border border-destructive rounded-lg p-4 mb-6">
           <p class="text-destructive">Failed to load users</p>
           <button
@@ -91,7 +91,7 @@ const AdminUsers = () => {
             Retry
           </button>
         </div>
-      )}
+      </Show>
 
       {/* Stats */}
       <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">

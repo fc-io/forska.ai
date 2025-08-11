@@ -125,9 +125,9 @@ const Login = (): JSX.Element => {
               />
             </div>
 
-            {error() && (
+            <Show when={error()}>
               <div class="text-destructive text-sm font-medium">{error()}</div>
-            )}
+            </Show>
 
             <button
               type="submit"

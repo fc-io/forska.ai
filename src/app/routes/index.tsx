@@ -9,7 +9,6 @@ import {AccessRequired} from '../../components/ui/access-required'
 import {authStore} from '../../stores/authStore'
 
 const Index = (): JSX.Element => {
-  console.log('import.meta.env.DEV', import.meta.env.DEV)
   return (
     <Show
       when={!authStore.isLoading() && authStore.isAuthenticated()}

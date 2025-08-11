@@ -1,5 +1,5 @@
 import {type} from 'arktype'
-import {createSignal, type JSX, onMount} from 'solid-js'
+import {createSignal, type JSX, onMount, Show} from 'solid-js'
 
 import {apiClient} from '../../services/apiClient.ts'
 import {ArticlesTableArticlesTable} from './articlesTable/articlesTableTable.tsx'
@@ -67,10 +67,12 @@ export const ArticlesTable = (): JSX.Element => {
         <h2 class="text-2xl font-bold tracking-tight">Articles</h2>
       </div>
 
-      {isLoadingArticles() && (
+      <Show when={isLoadingArticles()}>
         <p class="text-muted-foreground">Loading articles...</p>
-      )}
-      {articlesError() && <p class="text-red-600">{articlesError()}</p>}
+      </Show>
+      <Show when={articlesError()}>
+        <p class="text-red-600">{articlesError()}</p>
+      </Show>
 
       <ArticlesTableArticlesTable articles={articles()} />
     </div>
