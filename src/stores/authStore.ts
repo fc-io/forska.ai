@@ -1,5 +1,5 @@
 import type {User} from 'better-auth'
-import {createSignal} from 'solid-js'
+import {createSignal, onCleanup} from 'solid-js'
 
 import {authClient} from '../app/lib/auth-client'
 
@@ -29,18 +29,6 @@ const initializeAuth = async () => {
   } finally {
     setIsLoading(false)
   }
-
-  // Listen for auth changes using the useSession hook
-  authClient.$subscribe('sessionUpdate', (ctx) => {
-    if (ctx.session) {
-      setSession({user: ctx.session.user, session: ctx.session.session})
-      setUser(ctx.session.user)
-    } else {
-      setSession(null)
-      setUser(null)
-    }
-    setIsLoading(false)
-  })
 }
 
 // Auth actions
