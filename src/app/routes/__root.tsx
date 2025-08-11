@@ -1,15 +1,13 @@
 import {useQuery} from '@tanstack/solid-query'
-import {createRootRoute, Link, Outlet} from '@tanstack/solid-router'
+import {createRootRoute, Outlet} from '@tanstack/solid-router'
 import {TanStackRouterDevtools} from '@tanstack/solid-router-devtools'
 import {Show} from 'solid-js'
 
-import {AccessRequired} from '../../components/ui/access-required'
+import {Login} from '../../components/login'
+import {Navigation} from '../../components/Navigation'
+// import {AccessRequired} from '../../components/ui/access-required'
 import {fetchSession} from '../../services/fetchSession'
 import {authClient} from '../lib/auth-client'
-// type SessionInfo = {
-//   user: User
-//   session: {id: string; userId: string; expiresAt: Date}
-// }
 
 const signOut = async () => {
   try {
@@ -33,7 +31,6 @@ const RootComponent = () => {
       refetchOnWindowFocus: true,
     }
   })
-  // const {user, isLoading, isAuthenticated, isAdmin, signOut} = useSession()
 
   return (
     <>
@@ -63,53 +60,16 @@ const RootComponent = () => {
           </div>
         }
       >
-        <Show when={!!sessionQuery.data?.user} fallback={<AccessRequired />}>
-          <div class="p-2 flex gap-2">
-            <Link to="/" class="[&.active]:font-bold">
-              Home
-            </Link>{' '}
-            <Link to="/articles" class="[&.active]:font-bold">
-              Articles
-            </Link>
-            <Link to="/projects" class="[&.active]:font-bold">
-              Projects
-            </Link>
-            <Link to="/about" class="[&.active]:font-bold">
-              About
-            </Link>
-            <div class="flex items-center space-x-4 ml-auto">
-              <Link
-                to="/settings"
-                class="text-sm text-primary hover:text-primary/80 font-medium"
-              >
-                Settings
-              </Link>
-              {/* Admin-only link */}
-              <Show when={sessionQuery.data?.user?.role === 'admin'}>
-                <Link
-                  to="/admin/users"
-                  class="text-sm text-primary hover:text-primary/80 font-medium"
-                >
-                  Users
-                </Link>
-              </Show>
-              <Show when={sessionQuery.data?.user}>
-                <span class="text-sm text-muted-foreground">
-                  {sessionQuery.data?.user?.email}
-                </span>
-              </Show>
-              <button
-                onClick={() => {
-                  void signOut()
-                  // void sessionQuery.refetch()
-                }}
-                class="text-primary hover:text-primary/80 text-sm font-medium cursor-pointer"
-              >
-                Sign Out
-              </button>
-            </div>
-          </div>
-          <hr />
+        <Show
+          when={!!sessionQuery.data?.user && location.pathname !== '/login'}
+          fallback={<Login />}
+        >
+          <Navigation
+            user={sessionQuery.data?.user}
+            onSignOut={() => {
+              return void signOut()
+            }}
+          />
         </Show>
         <Outlet />
         <TanStackRouterDevtools />

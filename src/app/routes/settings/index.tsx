@@ -1,13 +1,16 @@
+import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute} from '@tanstack/solid-router'
 import {createSignal} from 'solid-js'
 
-import {useSession} from '../../../hooks/useSession'
+import {fetchSession} from '../../../services/fetchSession'
 
 const Settings = () => {
   const [notifications, setNotifications] = createSignal(true)
   const [autoProcess, setAutoProcess] = createSignal(false)
   const [theme, setTheme] = createSignal('system')
-  const {user} = useSession()
+  const sessionQuery = useQuery(() => {
+    return {queryKey: ['session'], queryFn: fetchSession}
+  })
 
   return (
     <div class="p-6 max-w-4xl mx-auto">
@@ -22,7 +25,7 @@ const Settings = () => {
               <label class="block text-sm font-medium mb-2">Email</label>
               <input
                 type="email"
-                value={user()?.email || ''}
+                value={sessionQuery.data?.user?.email || ''}
                 readonly
                 class="w-full px-3 py-2 border rounded-md bg-muted text-muted-foreground"
               />
