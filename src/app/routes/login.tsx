@@ -5,23 +5,33 @@ import {authStore} from '../../stores/authStore'
 import {authClient} from '../lib/auth-client'
 
 const Login = (): JSX.Element => {
+  const [name, setName] = createSignal('')
   const [email, setEmail] = createSignal('')
   const [password, setPassword] = createSignal('')
+  const [showPassword, setShowPassword] = createSignal(false)
   const [isLoading, setIsLoading] = createSignal(false)
   const [error, setError] = createSignal('')
   const [isSignUp, setIsSignUp] = createSignal(false)
+  const [acceptTerms, setAcceptTerms] = createSignal(false)
   const navigate = useNavigate()
 
   const handleSubmit = async (e: Event) => {
     e.preventDefault()
-    setIsLoading(true)
     setError('')
+
+    if (isSignUp() && !acceptTerms()) {
+      setError('Please accept the terms and conditions')
+      return
+    }
+
+    setIsLoading(true)
 
     try {
       if (isSignUp()) {
         const {error} = await authClient.signUp.email({
           email: email(),
           password: password(),
+          name: name() || '',
         })
 
         if (error) throw error
@@ -55,128 +65,188 @@ const Login = (): JSX.Element => {
     <Show
       when={!authStore.isLoading() && !authStore.isAuthenticated()}
       fallback={
-        <div class="min-h-screen bg-background text-foreground flex items-center justify-center p-4">
-          <div class="w-full max-w-md space-y-8 text-center">
-            <h1 class="text-3xl font-bold tracking-tight">Already Logged In</h1>
-            <p class="text-muted-foreground">You are already authenticated.</p>
-            <button
-              onClick={() => {
-                void navigate({to: '/'})
-              }}
-              class="w-full bg-primary text-primary-foreground hover:bg-primary/90 inline-flex h-10 items-center justify-center whitespace-nowrap rounded-md px-4 py-2 text-sm font-medium"
-            >
-              Go to Dashboard
-            </button>
+        <div class="min-h-screen bg-gray-50 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
+          <div class="sm:mx-auto sm:w-full sm:max-w-md">
+            <div class="text-center">
+              <h2 class="text-3xl font-bold text-gray-900">Already Logged In</h2>
+              <p class="mt-2 text-sm text-gray-600">You are already authenticated.</p>
+            </div>
+          </div>
+          <div class="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
+            <div class="bg-white py-8 px-4 shadow-sm rounded-lg sm:px-10">
+              <button
+                onClick={() => {
+                  void navigate({to: '/'})
+                }}
+                class="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+              >
+                Go to Dashboard
+              </button>
+            </div>
           </div>
         </div>
       }
     >
-      <div class="min-h-screen bg-background text-foreground flex items-center justify-center p-4">
-        <div class="w-full max-w-md space-y-8">
+      <div class="min-h-screen bg-gray-50 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
+        <div class="sm:mx-auto sm:w-full sm:max-w-md">
           <div class="text-center">
-            <h1 class="text-3xl font-bold tracking-tight">
-              {isSignUp() ? 'Create Account' : 'Sign In'}
-            </h1>
-            <p class="text-muted-foreground mt-2">
-              {isSignUp()
-                ? 'Create an account to access Paper Agent'
-                : 'Sign in to your Paper Agent account'}
-            </p>
+            <h2 class="text-3xl font-bold text-gray-900">
+              {isSignUp() ? 'Sign Up' : 'Sign In'}
+            </h2>
           </div>
+        </div>
 
-          <form
-            onSubmit={(e) => {
-              e.preventDefault()
-              void handleSubmit(e)
-            }}
-            class="space-y-6"
-          >
-            <div>
-              <label for="email" class="block text-sm font-medium mb-2">
-                Email address
-              </label>
-              <input
-                id="email"
-                type="email"
-                required
-                value={email()}
-                onInput={(e) => {
-                  return setEmail(e.currentTarget.value)
-                }}
-                class="w-full px-3 py-2 border border-input rounded-md bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
-                placeholder="Enter your email"
-              />
-            </div>
+        <div class="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
+          <div class="bg-white py-8 px-4 shadow-sm rounded-lg sm:px-10">
 
-            <div>
-              <label for="password" class="block text-sm font-medium mb-2">
-                Password
-              </label>
-              <input
-                id="password"
-                type="password"
-                required
-                value={password()}
-                onInput={(e) => {
-                  return setPassword(e.currentTarget.value)
-                }}
-                class="w-full px-3 py-2 border border-input rounded-md bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
-                placeholder="Enter your password"
-              />
-            </div>
-
-            <Show when={error()}>
-              <div class="text-destructive text-sm font-medium">{error()}</div>
-            </Show>
-
-            <button
-              type="submit"
-              disabled={isLoading()}
-              class="w-full bg-primary text-primary-foreground hover:bg-primary/90 inline-flex h-10 items-center justify-center whitespace-nowrap rounded-md px-4 py-2 text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50"
+            <form
+              onSubmit={(e) => {
+                void handleSubmit(e)
+              }}
+              class="space-y-6"
             >
-              {isLoading() ? (
-                <div class="flex items-center space-x-2">
-                  <svg class="animate-spin h-4 w-4" viewBox="0 0 24 24">
-                    <circle
-                      class="opacity-25"
-                      cx="12"
-                      cy="12"
-                      r="10"
-                      stroke="currentColor"
-                      stroke-width="4"
-                      fill="none"
-                    />
+              <Show when={isSignUp()}>
+                <div>
+                  <input
+                    type="text"
+                    id="name"
+                    value={name()}
+                    onInput={(e) => {
+                      return setName(e.currentTarget.value)
+                    }}
+                    placeholder="Full name"
+                    required
+                    class="appearance-none block w-full px-3 py-3 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                  />
+                </div>
+              </Show>
+
+              <div>
+                <input
+                  type="email"
+                  id="email"
+                  value={email()}
+                  onInput={(e) => {
+                    return setEmail(e.currentTarget.value)
+                  }}
+                  placeholder="Email address"
+                  required
+                  class="appearance-none block w-full px-3 py-3 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                />
+              </div>
+
+              <div class="relative">
+                <input
+                  type={showPassword() ? 'text' : 'password'}
+                  id="password"
+                  value={password()}
+                  onInput={(e) => {
+                    return setPassword(e.currentTarget.value)
+                  }}
+                  placeholder="Password"
+                  required
+                  class="appearance-none block w-full px-3 py-3 pr-10 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    return setShowPassword(!showPassword())
+                  }}
+                  class="absolute inset-y-0 right-0 pr-3 flex items-center"
+                >
+                  <svg
+                    class="h-5 w-5 text-gray-400"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <Show
+                      when={showPassword()}
+                      fallback={
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          stroke-width={2}
+                          d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+                        />
+                      }
+                    >
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        stroke-width={2}
+                        d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"
+                      />
+                    </Show>
                     <path
-                      class="opacity-75"
-                      fill="currentColor"
-                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width={2}
+                      d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
                     />
                   </svg>
-                  <span>
-                    {isSignUp() ? 'Creating account...' : 'Signing in...'}
-                  </span>
-                </div>
-              ) : isSignUp() ? (
-                'Create Account'
-              ) : (
-                'Sign In'
-              )}
-            </button>
-          </form>
+                </button>
+              </div>
 
-          <div class="text-center">
-            <button
-              type="button"
-              onClick={() => {
-                setIsSignUp(!isSignUp())
-                setError('')
-              }}
-              class="text-primary hover:text-primary/80 text-sm font-medium"
-            >
-              {isSignUp()
-                ? 'Already have an account? Sign in'
-                : "Don't have an account? Sign up"}
-            </button>
+              <Show when={isSignUp()}>
+                <div class="flex items-center">
+                  <input
+                    id="accept-terms"
+                    type="checkbox"
+                    checked={acceptTerms()}
+                    onChange={(e) => {
+                      return setAcceptTerms(e.currentTarget.checked)
+                    }}
+                    class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                  />
+                  <label
+                    for="accept-terms"
+                    class="ml-2 block text-sm text-gray-900"
+                  >
+                    I accept the{' '}
+                    <a href="#" class="text-blue-600 hover:text-blue-500">
+                      terms and conditions
+                    </a>
+                  </label>
+                </div>
+              </Show>
+
+              <Show when={error()}>
+                <div class="text-red-600 text-sm text-center">{error()}</div>
+              </Show>
+
+              <div>
+                <button
+                  type="submit"
+                  disabled={isLoading()}
+                  class="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isLoading()
+                    ? isSignUp()
+                      ? 'Signing up...'
+                      : 'Signing in...'
+                    : isSignUp()
+                      ? 'Sign up'
+                      : 'Sign in'}
+                </button>
+              </div>
+            </form>
+
+            <div class="text-center mt-6">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsSignUp(!isSignUp())
+                  setError('')
+                  setAcceptTerms(false)
+                }}
+                class="text-blue-600 hover:text-blue-500 text-sm font-medium"
+              >
+                {isSignUp()
+                  ? 'Already have an account? Sign in'
+                  : "Don't have an account? Sign up"}
+              </button>
+            </div>
           </div>
         </div>
       </div>
