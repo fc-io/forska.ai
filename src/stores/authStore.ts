@@ -1,7 +1,14 @@
 import type {User} from 'better-auth'
-import {createSignal, onCleanup} from 'solid-js'
+import type {Accessor} from 'solid-js'
+import {createSignal} from 'solid-js'
 
 import {authClient} from '../app/lib/auth-client'
+
+type UserWithRole = User & {role?: string | null}
+
+const hasRole = (value: User | null): value is UserWithRole => {
+  return !!value && 'role' in value
+}
 
 // Auth state signals
 const [user, setUser] = createSignal<User | null>(null)
@@ -52,8 +59,24 @@ const cleanup = () => {
   // The subscription is handled internally by authClient
 }
 
+type SessionInfo = {
+  user: User
+  session: {id: string; userId: string; expiresAt: Date}
+}
+
+type AuthStore = {
+  user: Accessor<User | null>
+  session: Accessor<SessionInfo | null>
+  isLoading: Accessor<boolean>
+  isAuthenticated: () => boolean
+  isAdmin: () => boolean
+  initialize: () => Promise<void>
+  signOut: () => Promise<void>
+  cleanup: () => void
+}
+
 // Export auth store
-export const authStore = {
+export const authStore: AuthStore = {
   // State
   user,
   session,
@@ -62,6 +85,10 @@ export const authStore = {
   // Computed
   isAuthenticated: () => {
     return !!user()
+  },
+  isAdmin: () => {
+    const currentUser = user()
+    return hasRole(currentUser) && currentUser.role === 'admin'
   },
 
   // Actions

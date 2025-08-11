@@ -75,13 +75,15 @@ const RootComponent = () => {
               >
                 Settings
               </Link>
-              {/* Admin-only link - in a real app, check user role */}
-              <Link
-                to="/admin/users"
-                class="text-sm text-primary hover:text-primary/80 font-medium"
-              >
-                Admin
-              </Link>
+              {/* Admin-only link */}
+              {authStore.isAdmin() && (
+                <Link
+                  to="/admin/users"
+                  class="text-sm text-primary hover:text-primary/80 font-medium"
+                >
+                  Users
+                </Link>
+              )}
               <Show when={authStore.user()}>
                 <span class="text-sm text-muted-foreground">
                   {authStore.user()?.email}
