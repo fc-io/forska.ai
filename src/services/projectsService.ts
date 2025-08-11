@@ -1,47 +1,8 @@
-import {type} from 'arktype'
-
 import {apiClient} from './apiClient.ts'
 
-// Arktype schema for Project validation
-export const projectSchema = type({
-  id: 'string',
-  name: 'string',
-  description: 'string | null',
-  ownerId: 'string',
-  createdAt: 'Date',
-  updatedAt: 'Date',
-})
-
-// Arktype schema for Prompt validation
-export const promptSchema = type({
-  id: 'string',
-  originalText: 'string',
-  transformedText: 'string | null',
-  projectId: 'string',
-  order: 'number | null',
-  archived: 'boolean',
-  createdAt: 'Date',
-  updatedAt: 'Date',
-  promptHeading: 'string | null',
-})
-
-const projectsArraySchema = type(projectSchema, '[]')
-const promptsArraySchema = type(promptSchema, '[]')
-
-// Schema for project with prompts
-export const projectWithPromptsSchema = type({
-  project: projectSchema,
-  prompts: promptsArraySchema,
-})
-
-export type Project = typeof projectSchema.infer
-export type Prompt = typeof promptSchema.infer
-export type ProjectWithPrompts = typeof projectWithPromptsSchema.infer
-
-export const fetchProjects = async (): Promise<Project[]> => {
+export const fetchProjects = async () => {
   try {
     const response = await apiClient.api.projects.get()
-    debugger
     if (response.error) {
       console.error('Error fetching projects:', response.error)
       throw new Error('Failed to fetch projects')
@@ -51,16 +12,7 @@ export const fetchProjects = async (): Promise<Project[]> => {
       return []
     }
 
-    // Validate response using arktype
-    const validation = projectsArraySchema(response.data.data)
-    if (validation instanceof type.errors) {
-      console.error('Project validation errors:', validation.summary)
-      throw new Error(
-        `Invalid project data received from API: ${validation.summary}`,
-      )
-    }
-
-    return validation
+    return response.data.data
   } catch (err) {
     console.error('Error fetching projects:', err)
     throw err
@@ -102,7 +54,7 @@ export const createProject = async (
   description: string | null,
   ownerId: string,
   promptTexts: string[],
-): Promise<Project> => {
+) => {
   try {
     const response = await apiClient.api.projects.post({
       name,
@@ -116,14 +68,7 @@ export const createProject = async (
       throw new Error('Failed to create project')
     }
 
-    // Validate and return the project
-    const validation = projectSchema(response.data.data)
-    if (validation instanceof type.errors) {
-      console.error('Project validation errors:', validation.summary)
-      throw new Error(`Invalid project data created: ${validation.summary}`)
-    }
-
-    return validation
+    return response.data.data
   } catch (err) {
     console.error('Error creating project:', err)
     throw err
@@ -136,7 +81,7 @@ export const createProject = async (
 export const updateProject = async (
   projectId: string,
   updates: Partial<{name: string; description: string | null}>,
-): Promise<Project> => {
+) => {
   try {
     const response = await apiClient.api
       .projects({id: projectId})
@@ -147,24 +92,14 @@ export const updateProject = async (
       throw new Error('Project not found or update failed')
     }
 
-    const validation = projectSchema(response.data.data)
-    if (validation instanceof type.errors) {
-      console.error('Project validation errors:', validation.summary)
-      throw new Error(
-        `Invalid project data after update: ${validation.summary}`,
-      )
-    }
-
-    return validation
+    return response.data.data
   } catch (err) {
     console.error('Error updating project:', err)
     throw err
   }
 }
 
-export const fetchProjectWithPrompts = async (
-  projectId: string,
-): Promise<ProjectWithPrompts> => {
+export const fetchProjectWithPrompts = async (projectId: string) => {
   try {
     const response = await apiClient.api.projects({id: projectId}).get()
 
@@ -173,19 +108,7 @@ export const fetchProjectWithPrompts = async (
       throw new Error('Project not found')
     }
 
-    // Validate the combined result
-    const resultValidation = projectWithPromptsSchema(response.data.data)
-    if (resultValidation instanceof type.errors) {
-      console.error(
-        'Project with prompts validation errors:',
-        resultValidation.summary,
-      )
-      throw new Error(
-        `Invalid project with prompts data: ${resultValidation.summary}`,
-      )
-    }
-
-    return resultValidation
+    return response.data.data
   } catch (err) {
     console.error('Error fetching project with prompts:', err)
     throw err
