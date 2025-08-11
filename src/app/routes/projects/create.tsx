@@ -3,8 +3,8 @@ import {createSignal, For} from 'solid-js'
 import {createStore} from 'solid-js/store'
 
 import {Button} from '../../../components/ui/button'
+import {apiClient} from '../../../services/apiClient'
 import {authStore} from '../../../stores/authStore'
-import {getSupabaseClient} from '../../../utils/getSupabaseClient'
 
 type PromptItem = {id: string; content: string}
 
@@ -51,46 +51,35 @@ const CreateProject = () => {
       throw new Error('User must be authenticated to create a project')
     }
 
-    const supabase = getSupabaseClient()
-
-    // Create the project first
-    const {data: projectData, error: projectError} = await supabase
-      .from('projects')
-      .insert({
-        name,
-        description: description.trim() || null,
-        owner_id: user.id,
+    // Filter valid prompts
+    const validPrompts = promptItems
+      .filter((prompt) => {
+        return prompt.content.trim()
       })
-      .select()
-      .single()
+      .map((prompt) => {
+        return prompt.content.trim()
+      })
 
-    if (projectError) {
-      throw new Error(`Failed to create project: ${projectError.message}`)
-    }
-
-    // Create prompt entries for each non-whitespace prompt
-    const validPrompts = promptItems.filter((prompt) => {
-      return prompt.content.trim()
+    const response = await apiClient.api.projects.post({
+      name,
+      description: description.trim() || undefined,
+      ownerId: user.id,
+      prompts: validPrompts,
     })
 
-    if (validPrompts.length > 0) {
-      const promptInserts = validPrompts.map((prompt) => {
-        return {
-          original_text: prompt.content.trim(),
-          project_id: projectData.id,
-        }
-      })
-
-      const {error: promptError} = await supabase
-        .from('prompts')
-        .insert(promptInserts)
-
-      if (promptError) {
-        throw new Error(`Failed to create prompts: ${promptError.message}`)
-      }
+    if (response.error) {
+      throw new Error('Failed to create project')
     }
 
-    return projectData
+    if (response.data?.error) {
+      throw new Error(response.data.error)
+    }
+
+    if (!response.data?.data) {
+      throw new Error('Failed to create project: No data returned')
+    }
+
+    return response.data.data
   }
 
   const handleSubmit = async (e: Event) => {

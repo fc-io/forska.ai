@@ -1,23 +1,29 @@
-import {getSupabaseClient} from '../../../utils/getSupabaseClient.ts'
-import {Tokens} from './unassessedArticlesTypes.ts'
+import {apiClient} from '../../../services/apiClient.ts'
 
 export const fetchTokenUseLast10Minutes = async (): Promise<string> => {
   try {
-    const supabase = getSupabaseClient()
     const now = new Date()
     const tenMinutesAgo = new Date(now.getTime() - 10 * 60 * 1000)
 
-    const {data} = await supabase
-      .from('2025_july_token_use')
-      .select(
-        'totalPromptTokens:total_prompt_tokens.sum(),'
-          + 'totalCompletionTokens:total_completion_tokens.sum()',
-      )
-      .gte('created_at', tenMinutesAgo.toISOString())
-      .lt('created_at', now.toISOString())
-      .single()
+    const response = await apiClient.api.tokens.get({
+      query: {
+        startTime: tenMinutesAgo.toISOString(),
+        endTime: now.toISOString(),
+      },
+    })
 
-    const {totalPromptTokens, totalCompletionTokens} = Tokens.assert(data)
+    if (response.error || response.data?.error) {
+      console.error(
+        'Error fetching last 10 minutes token use:',
+        response.error || response.data?.error,
+      )
+      return ''
+    }
+
+    const {totalPromptTokens, totalCompletionTokens} = response.data || {
+      totalPromptTokens: 0,
+      totalCompletionTokens: 0,
+    }
 
     return `Total tokens (last 10m): input ${totalPromptTokens || 0}, output ${totalCompletionTokens || 0}`
   } catch (err) {

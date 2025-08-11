@@ -87,6 +87,134 @@ export const deleteProject = async (projectId: string): Promise<void> => {
   }
 }
 
+export const createProject = async (
+  name: string,
+  description: string | null,
+  ownerId: string,
+  promptTexts: string[],
+): Promise<Project> => {
+  try {
+    const db = getDatabase()
+
+    // Create the project
+    const projectData = await db
+      .insert(projects)
+      .values({name, description, ownerId})
+      .returning()
+
+    if (!projectData || projectData.length === 0) {
+      throw new Error('Failed to create project')
+    }
+
+    const project = projectData[0]
+
+    // Create prompts if provided
+    if (promptTexts.length > 0) {
+      const promptInserts = promptTexts.map((text, index) => {
+        return {originalText: text, projectId: project.id, order: index}
+      })
+
+      await db.insert(prompts).values(promptInserts)
+    }
+
+    // Validate and return the project
+    const validation = projectSchema(project)
+    if (validation instanceof type.errors) {
+      console.error('Project validation errors:', validation.summary)
+      throw new Error(`Invalid project data created: ${validation.summary}`)
+    }
+
+    return validation
+  } catch (err) {
+    console.error('Error creating project:', err)
+    throw err
+  }
+}
+
+export const updatePrompts = async (
+  projectId: string,
+  promptUpdates: Array<{
+    id?: string
+    originalText: string
+    order: number
+    isNew?: boolean
+  }>,
+): Promise<void> => {
+  try {
+    const db = getDatabase()
+
+    // Get existing prompts
+    const existingPrompts = await db
+      .select()
+      .from(prompts)
+      .where(eq(prompts.projectId, projectId))
+
+    // Archive prompts that were removed or changed
+    const toArchive = existingPrompts.filter((existing) => {
+      const update = promptUpdates.find((u) => {
+        return u.id === existing.id
+      })
+      return !update || update.originalText !== existing.originalText
+    })
+
+    if (toArchive.length > 0) {
+      await db
+        .update(prompts)
+        .set({archived: true, updatedAt: new Date()})
+        .where(eq(prompts.projectId, projectId))
+    }
+
+    // Insert new and updated prompts
+    const toInsert = promptUpdates.map((p) => {
+      return {
+        originalText: p.originalText,
+        projectId,
+        order: p.order,
+        archived: false,
+      }
+    })
+
+    if (toInsert.length > 0) {
+      await db.insert(prompts).values(toInsert)
+    }
+  } catch (err) {
+    console.error('Error updating prompts:', err)
+    throw err
+  }
+}
+
+export const updateProject = async (
+  projectId: string,
+  updates: Partial<{name: string; description: string | null}>,
+): Promise<Project> => {
+  try {
+    const db = getDatabase()
+
+    const updatedData = await db
+      .update(projects)
+      .set({...updates, updatedAt: new Date()})
+      .where(eq(projects.id, projectId))
+      .returning()
+
+    if (!updatedData || updatedData.length === 0) {
+      throw new Error('Project not found or update failed')
+    }
+
+    const validation = projectSchema(updatedData[0])
+    if (validation instanceof type.errors) {
+      console.error('Project validation errors:', validation.summary)
+      throw new Error(
+        `Invalid project data after update: ${validation.summary}`,
+      )
+    }
+
+    return validation
+  } catch (err) {
+    console.error('Error updating project:', err)
+    throw err
+  }
+}
+
 export const fetchProjectWithPrompts = async (
   projectId: string,
 ): Promise<ProjectWithPrompts> => {

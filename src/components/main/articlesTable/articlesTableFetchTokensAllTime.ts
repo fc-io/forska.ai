@@ -1,19 +1,21 @@
-import {getSupabaseClient} from '../../../utils/getSupabaseClient.ts'
-import {Tokens} from './unassessedArticlesTypes.ts'
+import {apiClient} from '../../../services/apiClient.ts'
 
 export const fetchTokensAllTime = async (): Promise<string> => {
   try {
-    const supabase = getSupabaseClient()
+    const response = await apiClient.api.tokens.get()
 
-    const {data} = await supabase
-      .from('2025_july_token_use')
-      .select(
-        'totalPromptTokens:total_prompt_tokens.sum(),'
-          + 'totalCompletionTokens:total_completion_tokens.sum()',
+    if (response.error || response.data?.error) {
+      console.error(
+        'Error fetching lifetime token use:',
+        response.error || response.data?.error,
       )
-      .single()
+      return ''
+    }
 
-    const {totalPromptTokens, totalCompletionTokens} = Tokens.assert(data)
+    const {totalPromptTokens, totalCompletionTokens} = response.data || {
+      totalPromptTokens: 0,
+      totalCompletionTokens: 0,
+    }
 
     return `Total tokens (all time): input ${totalPromptTokens || 0}, output ${totalCompletionTokens || 0}`
   } catch (err) {

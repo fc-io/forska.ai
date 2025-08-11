@@ -3,12 +3,14 @@ import {Elysia} from 'elysia'
 
 import {articlesRoutes} from './routes/ArticlesRoutes.ts'
 import {authRoutes} from './routes/AuthRoutes.ts'
+import {projectsRoutes} from './routes/ProjectsRoutes.ts'
 import {tokensRoutes} from './routes/TokensRoutes.ts'
 
 const app = new Elysia()
   .use(cors())
   .use(authRoutes)
   .use(articlesRoutes)
+  .use(projectsRoutes)
   .use(tokensRoutes)
   .listen(3000)
 

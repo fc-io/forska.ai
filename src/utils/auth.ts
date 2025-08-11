@@ -1,7 +1,7 @@
 import {betterAuth} from 'better-auth'
 import {drizzleAdapter} from 'better-auth/adapters/drizzle'
 
-import {getDatabase} from './getDatabase'
+import {getDatabase} from '../server/utils/getDatabase.ts'
 
 const db = getDatabase()
 
