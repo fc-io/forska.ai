@@ -20,16 +20,16 @@ export default defineConfig({
   server: {
     port: env.VITE_PORT,
     strictPort: false,
-    // proxy: {
-    //   '/api/arxiv': {
-    //     target: 'https://oaipmh.arxiv.org',
-    //     changeOrigin: true,
-    //     rewrite: (path) => {
-    //       return path.replace(/^\/api\/arxiv/, '')
-    //     },
-    //     secure: true,
-    //   },
-    // },
+    proxy: {
+      '/api/arxiv': {
+        target: 'https://oaipmh.arxiv.org',
+        changeOrigin: true,
+        rewrite: (path) => {
+          return path.replace(/^\/api\/arxiv/, '')
+        },
+        secure: true,
+      },
+    },
   },
   build: {target: 'esnext'},
 })

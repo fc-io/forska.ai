@@ -39,7 +39,10 @@ const RootComponent = () => {
         fallback={
           <div class="min-h-screen bg-gray-50 flex items-center justify-center">
             <div class="flex items-center space-x-2">
-              <svg class="animate-spin h-6 w-6 text-blue-600" viewBox="0 0 24 24">
+              <svg
+                class="animate-spin h-6 w-6 text-blue-600"
+                viewBox="0 0 24 24"
+              >
                 <circle
                   class="opacity-25"
                   cx="12"

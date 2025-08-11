@@ -1,5 +1,6 @@
 import {Link} from '@tanstack/solid-router'
 import {Show} from 'solid-js'
+
 import type {User} from '../types/user'
 
 interface NavigationProps {
@@ -13,16 +14,28 @@ export const Navigation = (props: NavigationProps) => {
       <div class="px-4 sm:px-6 lg:px-8">
         <div class="flex justify-between h-16">
           <div class="flex items-center space-x-8">
-            <Link to="/" class="text-gray-900 hover:text-blue-600 px-3 py-2 text-sm font-medium [&.active]:text-blue-600 [&.active]:font-semibold">
+            <Link
+              to="/"
+              class="text-gray-900 hover:text-blue-600 px-3 py-2 text-sm font-medium [&.active]:text-blue-600 [&.active]:font-semibold"
+            >
               Home
             </Link>
-            <Link to="/articles" class="text-gray-900 hover:text-blue-600 px-3 py-2 text-sm font-medium [&.active]:text-blue-600 [&.active]:font-semibold">
+            <Link
+              to="/articles"
+              class="text-gray-900 hover:text-blue-600 px-3 py-2 text-sm font-medium [&.active]:text-blue-600 [&.active]:font-semibold"
+            >
               Articles
             </Link>
-            <Link to="/projects" class="text-gray-900 hover:text-blue-600 px-3 py-2 text-sm font-medium [&.active]:text-blue-600 [&.active]:font-semibold">
+            <Link
+              to="/projects"
+              class="text-gray-900 hover:text-blue-600 px-3 py-2 text-sm font-medium [&.active]:text-blue-600 [&.active]:font-semibold"
+            >
               Projects
             </Link>
-            <Link to="/about" class="text-gray-900 hover:text-blue-600 px-3 py-2 text-sm font-medium [&.active]:text-blue-600 [&.active]:font-semibold">
+            <Link
+              to="/about"
+              class="text-gray-900 hover:text-blue-600 px-3 py-2 text-sm font-medium [&.active]:text-blue-600 [&.active]:font-semibold"
+            >
               About
             </Link>
           </div>
@@ -42,13 +55,11 @@ export const Navigation = (props: NavigationProps) => {
               </Link>
             </Show>
             <Show when={props.user}>
-              <span class="text-sm text-gray-500">
-                {props.user?.email}
-              </span>
+              <span class="text-sm text-gray-500">{props.user?.email}</span>
             </Show>
             <button
               onClick={() => {
-                void props.onSignOut()
+                props.onSignOut()
               }}
               class="text-gray-600 hover:text-blue-600 text-sm font-medium"
             >

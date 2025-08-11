@@ -40,7 +40,7 @@ const setNumberOfRequests = (batchSize: number) => {
     }),
   )
 }
-export const Subheader = (): JSX.Element => {
+export const CommandPanel = (): JSX.Element => {
   const [isRunning, setIsRunning] = createSignal(false)
   const [isAgentRunning, setIsAgentRunning] = createSignal(false)
   const [isSettingsOpen, setIsSettingsOpen] = createSignal(false)

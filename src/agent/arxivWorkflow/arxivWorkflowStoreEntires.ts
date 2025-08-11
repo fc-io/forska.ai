@@ -1,6 +1,6 @@
 import {type} from 'arktype'
 
-import {getSupabaseClient} from '../../utils/getSupabaseClient'
+import {apiClient} from '../../services/apiClient'
 
 // Define the ArxivEntry type to match the transformed record structure
 const arxivEntry = type({
@@ -72,20 +72,26 @@ const batchEntries = <T>(records: T[], batchSize: number): T[][] => {
   return batches
 }
 
-// Store a batch of records to Supabase
+// Store a batch of records to server
 const storeBatch = async (
   batch: (typeof DatabaseItem.infer)[],
 ): Promise<void> => {
-  const supabase = getSupabaseClient()
-  // const user = await supabase.auth.getUser()
-  // console.log('test', user.data.user.id)
-  // debugger
-  const {error} = await supabase
-    .from('articles')
-    .upsert(batch, {onConflict: 'article_id', ignoreDuplicates: false})
+  const response = await apiClient.api.articles['batch-upsert'].post({
+    entries: batch,
+  })
 
-  if (error) {
-    throw new Error(`Failed to store batch: ${error.message}`)
+  if (response.error) {
+    const errorMessage =
+      typeof response.error.value === 'string'
+        ? response.error.value
+        : JSON.stringify(response.error.value)
+    throw new Error(`Failed to store batch: ${errorMessage}`)
+  }
+
+  if (!response.data?.success) {
+    throw new Error(
+      `Failed to store batch: ${response.data?.error || 'Unknown error'}`,
+    )
   }
 }
 
@@ -137,7 +143,7 @@ const arxivWorkflowStoreEntires = async (
     }
 
     globalThis.console.log(
-      `Successfully stored ${records.length} records to Supabase`,
+      `Successfully stored ${records.length} records to server`,
     )
   } catch (error) {
     globalThis.console.error('Error storing records:', error)

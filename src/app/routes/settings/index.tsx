@@ -22,7 +22,9 @@ const Settings = () => {
           <h2 class="text-xl font-semibold text-gray-900 mb-4">Profile</h2>
           <div class="space-y-4">
             <div>
-              <label class="block text-sm font-medium text-gray-700 mb-2">Email</label>
+              <label class="block text-sm font-medium text-gray-700 mb-2">
+                Email
+              </label>
               <input
                 type="email"
                 value={sessionQuery.data?.user?.email || ''}
@@ -31,7 +33,9 @@ const Settings = () => {
               />
             </div>
             <div>
-              <label class="block text-sm font-medium text-gray-700 mb-2">Display Name</label>
+              <label class="block text-sm font-medium text-gray-700 mb-2">
+                Display Name
+              </label>
               <input
                 type="text"
                 placeholder="Enter your display name"
@@ -39,7 +43,9 @@ const Settings = () => {
               />
             </div>
             <div>
-              <label class="block text-sm font-medium text-gray-700 mb-2">Organization</label>
+              <label class="block text-sm font-medium text-gray-700 mb-2">
+                Organization
+              </label>
               <input
                 type="text"
                 placeholder="Your organization or institution"
@@ -98,7 +104,9 @@ const Settings = () => {
             </div>
 
             <div>
-              <label class="block text-sm font-medium text-gray-700 mb-2">Theme</label>
+              <label class="block text-sm font-medium text-gray-700 mb-2">
+                Theme
+              </label>
               <select
                 value={theme()}
                 onChange={(e) => {

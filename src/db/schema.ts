@@ -39,7 +39,7 @@ export const articles = pgTable('articles', {
   articleAuthors: text('article_authors').array(),
   articleCreatedAt: timestamp('article_created_at', {withTimezone: true}),
   articleUpdatedAt: timestamp('article_updated_at', {withTimezone: true}),
-  articleId: text('article_id'),
+  articleId: text('article_id').unique(),
   articleSummary: text('article_summary'),
   articleVersion: integer('article_version'),
   arxivId: text('arxiv_id'),

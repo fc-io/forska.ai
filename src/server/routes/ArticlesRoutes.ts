@@ -1,5 +1,5 @@
-import {count, desc, eq, isNull} from 'drizzle-orm'
-import {Elysia} from 'elysia'
+import {count, desc, eq, isNull, sql} from 'drizzle-orm'
+import {Elysia, t} from 'elysia'
 
 import {articles, judgments} from '../../db/schema.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
@@ -61,3 +61,68 @@ export const articlesRoutes = new Elysia()
       return {data: [], error: 'Failed to fetch latest articles'}
     }
   })
+  .post(
+    '/api/articles/batch-upsert',
+    async ({body}) => {
+      try {
+        const db = getDatabase()
+        const {entries} = body
+
+        const articlesToUpsert = entries.map((entry) => {
+          return {
+            articleId: entry.article_id,
+            articleTitle: entry.article_title,
+            articleSummary: entry.article_summary,
+            articleAuthors: entry.article_authors,
+            articleUpdatedAt: new Date(entry.article_updated_at),
+            articleCreatedAt: new Date(entry.article_created_at),
+            articleVersion: parseInt(entry.article_version),
+            arxivId: entry.arxiv_id,
+          }
+        })
+
+        await db
+          .insert(articles)
+          .values(articlesToUpsert)
+          .onConflictDoUpdate({
+            target: articles.articleId,
+            set: {
+              articleTitle: sql`EXCLUDED.article_title`,
+              articleSummary: sql`EXCLUDED.article_summary`,
+              articleAuthors: sql`EXCLUDED.article_authors`,
+              articleUpdatedAt: sql`EXCLUDED.article_updated_at`,
+              articleVersion: sql`EXCLUDED.article_version`,
+              arxivId: sql`EXCLUDED.arxiv_id`,
+              updatedAt: sql`CURRENT_TIMESTAMP`,
+            },
+          })
+
+        return {success: true, count: entries.length}
+      } catch (error) {
+        console.error('Error upserting articles:', error)
+        return {
+          success: false,
+          error:
+            error instanceof Error
+              ? error.message
+              : 'Failed to upsert articles',
+        }
+      }
+    },
+    {
+      body: t.Object({
+        entries: t.Array(
+          t.Object({
+            article_id: t.String(),
+            article_title: t.String(),
+            article_summary: t.String(),
+            article_authors: t.Array(t.String()),
+            article_updated_at: t.String(),
+            article_created_at: t.String(),
+            article_version: t.String(),
+            arxiv_id: t.String(),
+          }),
+        ),
+      }),
+    },
+  )

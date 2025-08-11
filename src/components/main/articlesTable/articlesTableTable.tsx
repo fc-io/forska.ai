@@ -1,3 +1,4 @@
+import {format} from 'date-fns'
 import type {JSX} from 'solid-js'
 import {For} from 'solid-js'
 
@@ -23,22 +24,13 @@ export const ArticlesTableArticlesTable = (props: {
           <TableHead class="w-[140px]">Article ID</TableHead>
           <TableHead class="w-[160px]">Article Title</TableHead>
           <TableHead>Authors</TableHead>
-          <TableHead class="text-right w-[140px]">Created</TableHead>
-          <TableHead class="w-[110px]">Judged AI</TableHead>
-          <TableHead class="w-[150px]">Judged AI Agent</TableHead>
-          <TableHead class="w-[170px]">Judged Healthcare</TableHead>
+          <TableHead class="text-right w-[140px]">Article Created</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
         <For each={props.articles}>
           {(article): JSX.Element => {
-            const {
-              article_authors,
-              article_created,
-              article_judged_as_ai,
-              article_judged_as_ai_agent,
-              article_judged_as_healthcare,
-            } = article
+            const {article_authors, article_created} = article
 
             return (
               <TableRow>
@@ -47,10 +39,9 @@ export const ArticlesTableArticlesTable = (props: {
                   {article.article_title}
                 </TableCell>
                 <TableCell>{article_authors}</TableCell>
-                <TableCell class="text-right">{article_created}</TableCell>
-                <TableCell>{article_judged_as_ai}</TableCell>
-                <TableCell>{article_judged_as_ai_agent}</TableCell>
-                <TableCell>{article_judged_as_healthcare}</TableCell>
+                <TableCell class="text-right">
+                  {format(article_created, 'yyyy-MM-dd')}
+                </TableCell>
               </TableRow>
             )
           }}
