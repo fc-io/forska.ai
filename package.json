@@ -32,6 +32,7 @@
     "@internationalized/date": "^3.8.2",
     "@kobalte/core": "^0.13.11",
     "@tailwindcss/vite": "^4.1.11",
+    "@tanstack/solid-query": "^5.83.1",
     "@tanstack/solid-router": "^1.130.12",
     "@tanstack/solid-router-devtools": "^1.130.13",
     "@typescript-eslint/eslint-plugin": "^8.39.0",

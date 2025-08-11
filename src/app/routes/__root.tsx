@@ -1,30 +1,25 @@
 import {createRootRoute, Link, Outlet} from '@tanstack/solid-router'
 import {TanStackRouterDevtools} from '@tanstack/solid-router-devtools'
-import {createEffect, onCleanup, Show} from 'solid-js'
+import {Show} from 'solid-js'
 
-import {startInfoUpdater, stopInfoUpdater} from '../../services/infoUpdater'
 import {authStore} from '../../stores/authStore'
 
 const RootComponent = () => {
-  // Initialize auth on app mount
-  createEffect(() => {
-    try {
-      void authStore.initialize()
-    } catch (error) {
-      console.error('Error initializing auth:', error)
-    }
-  })
+  // const useInfoQuery = () => {
+  //   return useQuery(() => {
+  //     return {
+  //       queryKey: ['info'],
+  //       queryFn: fetchInfo,
+  //       refetchInterval: 60 * 1000, // Refetch every minute
+  //       refetchIntervalInBackground: true,
+  //     }
+  //   })
+  // }
 
-  // Initialize info updater
-  createEffect(() => {
-    startInfoUpdater()
-  })
-
-  // Cleanup auth subscription and info updater on unmount
-  onCleanup(() => {
-    authStore.cleanup()
-    stopInfoUpdater()
-  })
+  // Cleanup auth subscription on unmount
+  // onCleanup(() => {
+  //   authStore.cleanup()
+  // })
 
   return (
     <>
