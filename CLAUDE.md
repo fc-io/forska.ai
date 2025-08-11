@@ -3,7 +3,7 @@ alwaysApply: true
 ---
 ## Important
 
-IMPORTANT: prefer drizzle orm over executing pure sql commands
+IMPORTANT: on the server – prefer drizzle orm over executing pure sql commands
 IMPORTANT: Keep filenames pascal case. Even for tsx/jsx react components.
 there is an .env.local file in the project, you just can't read it beacuse of secuity concerns. Always assume the .env files are correct unless the env.ts file throws an error. Use process.env instead of buns env functionaltiy to stay compatible with ordinary node.
 
@@ -49,7 +49,7 @@ src
 
 ## Platform and tools
 
-Stack built on drizzle with postgres (in docker), Bun, Vite, solid, tailwind, tanstack-router.
+* IMPORTANT: Stack built on drizzle with postgres (in docker), Bun, Vite, solid, tailwind, tanstack-router, @tanstack/solid-query.
 
 Default to using Bun instead of Node.js.
 

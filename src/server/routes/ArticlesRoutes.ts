@@ -61,20 +61,3 @@ export const articlesRoutes = new Elysia()
       return {data: [], error: 'Failed to fetch latest articles'}
     }
   })
-  .get('/api/articles/unassessed-count-2025-july', async () => {
-    try {
-      const db = getDatabase()
-      // This mimics the Supabase query for '2025_July' table
-      // Assuming we're filtering for undecided judgments
-      const result = await db
-        .select({count: count()})
-        .from(articles)
-        .leftJoin(judgments, eq(articles.id, judgments.articleId))
-        .where(isNull(judgments.id))
-
-      return {count: result[0]?.count || 0}
-    } catch (error) {
-      console.error('Error fetching unassessed count:', error)
-      return {count: null, error: 'Failed to fetch unassessed count'}
-    }
-  })
