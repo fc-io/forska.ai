@@ -1,7 +1,7 @@
 import {createOpenAI} from '@ai-sdk/openai'
 import {generateText} from 'ai'
 
-import type {ExtendedDatabaseItemType} from './getNewestArticles.ts'
+import type {getNewestArticlesToJudge} from '../components/main/projectsGrid/projectsGridGetNewestArticlesToJudge.ts'
 import {judgeGetPrompt} from './judge/judgeGetPrompt.ts'
 import {parseJudgment} from './judge/judgeParseJudgment.ts'
 import {
@@ -49,11 +49,13 @@ ${lastResponse}
 Please try again, ensuring you respond ONLY with valid JSON matching the schema.`
 }
 
+type ArticlesType = Awaited<ReturnType<typeof getNewestArticlesToJudge>>
+
 export const judge = async ({
   articles,
   sessionId,
 }: {
-  articles: ExtendedDatabaseItemType[]
+  articles: ArticlesType
   sessionId: string
 }): Promise<void> => {
   let tokenUse: {
@@ -66,6 +68,7 @@ export const judge = async ({
 
   await Promise.all(
     articles.map(async (article) => {
+      debugger
       const basePrompt = judgeGetPrompt(article)
       debugger
       let prompt = basePrompt
@@ -86,7 +89,7 @@ export const judge = async ({
           // console.log('modelResponse', modelResponse)
           lastResponse = modelResponse.text
           const judgment = parseJudgment(lastResponse)
-          await judgeStoreJudgment(article.id, article.article_title, judgment)
+          await judgeStoreJudgment(article.id, article.articleTitle, judgment)
 
           return judgment
         } catch (error: unknown) {

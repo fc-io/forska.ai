@@ -1,6 +1,6 @@
-import type {ExtendedDatabaseItemType} from '../getNewestArticles.ts'
+import type {getNewestArticlesToJudge} from '../../components/main/projectsGrid/projectsGridGetNewestArticlesToJudge.ts'
 
-const getSortedArticle = (data: ExtendedDatabaseItemType) => {
+const getSortedArticle = (data: any) => {
   const sortKey = (s: string) => {
     return s.replace(/_(quote|explanation)$/, '')
   }
@@ -62,17 +62,19 @@ Judge if the article is about "${topicName}". Can you find out anything about th
     .join('')
 }
 
-export const judgeGetPrompt = (data: ExtendedDatabaseItemType): string => {
+type ArticleType = Awaited<ReturnType<typeof getNewestArticlesToJudge>>[number]
+
+export const judgeGetPrompt = (data: ArticleType): string => {
   const judgedAsKeys = getSortedArticle(data)
   const sections = getSections(judgedAsKeys)
 
-  return `# id: ${data.article_id}
+  return `# id: ${data.articleId}
 
 ## article_title
-${data.article_title}
+${data.articleTitle}
 
 ## article_summary
-${data.article_summary}
+${data.articleSummary}
 
 ${sections}`
 }
