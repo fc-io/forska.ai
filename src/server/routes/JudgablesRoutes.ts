@@ -19,7 +19,8 @@ export const judgablesRoutes = new Elysia().post(
 
       if (!project) {
         return {
-          data: [] as (typeof articles.$inferSelect)[],
+          articles: [] as (typeof articles.$inferSelect)[],
+          prompts: [] as (typeof prompts.$inferSelect)[],
           error: 'Project not found',
         }
       }
@@ -37,11 +38,7 @@ export const judgablesRoutes = new Elysia().post(
           .orderBy(desc(articles.articleUpdatedAt))
           .limit(body.numberOfArticlesToGet)
 
-        return {
-          data: latestArticles.map((data) => {
-            return {...data, prompts: projectPrompts}
-          }),
-        }
+        return {articles: latestArticles, prompts: projectPrompts}
       }
 
       // Get all judgments for all prompts in this project
@@ -91,15 +88,12 @@ export const judgablesRoutes = new Elysia().post(
 
       const articlesToJudge = await query
 
-      return {
-        data: articlesToJudge.map((data) => {
-          return {...data, prompts: projectPrompts}
-        }),
-      }
+      return {articles: articlesToJudge, prompts: projectPrompts}
     } catch (error) {
       console.error('Error fetching articles to judge:', error)
       return {
-        data: [] as (typeof articles.$inferSelect)[],
+        articles: [] as (typeof articles.$inferSelect)[],
+        prompts: [] as (typeof prompts.$inferSelect)[],
         error: 'Failed to fetch articles to judge',
       }
     }
