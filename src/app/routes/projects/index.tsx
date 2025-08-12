@@ -53,14 +53,7 @@ const Projects = () => {
           && (projects.data?.length ?? 0) > 0
         }
       >
-        <ProjectsGrid
-          projects={projects.data || []}
-          refetch={() => {
-            return projects.refetch().then(() => {
-              return void 0
-            })
-          }}
-        />
+        <ProjectsGrid projects={projects.data || []} />
         <ProjectStatistics projectCount={projects.data?.length || 0} />
       </Show>
     </div>

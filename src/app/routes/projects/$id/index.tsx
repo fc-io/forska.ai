@@ -1,12 +1,17 @@
-import {createFileRoute, Link} from '@tanstack/solid-router'
-import {createResource, For, Match, Show, Switch} from 'solid-js'
+import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
+import {createResource, createSignal, For, Match, Show, Switch} from 'solid-js'
 
 import {Button} from '../../../../components/ui/button'
-import {fetchProjectWithPrompts} from '../../../../services/projectsService'
+import {
+  deleteProject,
+  fetchProjectWithPrompts,
+} from '../../../../services/projectsService'
 
 const ProjectDetail = () => {
   const params = Route.useParams()
   const projectId = (params() as {id: string}).id
+  const navigate = useNavigate()
+  const [deletingProject, setDeletingProject] = createSignal(false)
   const [projectData] = createResource(() => {
     return fetchProjectWithPrompts(projectId)
   })
@@ -14,6 +19,30 @@ const ProjectDetail = () => {
   const formatDate = (dateString: string | null) => {
     if (!dateString) return 'Never'
     return new Date(dateString).toLocaleString()
+  }
+
+  const handleDeleteProject = async () => {
+    const projectName = projectData()?.project.name
+    if (
+      !confirm(
+        `Are you sure you want to delete the project "${projectName}"? This action cannot be undone.`,
+      )
+    ) {
+      return
+    }
+
+    setDeletingProject(true)
+    try {
+      await deleteProject(projectId)
+      navigate({to: '/projects'})
+    } catch (error) {
+      console.error('Failed to delete project:', error)
+      alert(
+        `Failed to delete project: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      )
+    } finally {
+      setDeletingProject(false)
+    }
   }
 
   return (
@@ -26,9 +55,18 @@ const ProjectDetail = () => {
           <h1 class="text-3xl font-bold">Project Details</h1>
         </div>
         <Show when={projectData.state === 'ready'}>
-          <Button as={Link} href={`/projects/${projectId}/edit`}>
-            Edit Project
-          </Button>
+          <div class="flex gap-2">
+            <Button as={Link} href={`/projects/${projectId}/edit`}>
+              Edit Project
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleDeleteProject}
+              disabled={deletingProject()}
+            >
+              {deletingProject() ? 'Deleting...' : 'Delete Project'}
+            </Button>
+          </div>
         </Show>
       </div>
 

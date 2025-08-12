@@ -1,8 +1,7 @@
 import {Link} from '@tanstack/solid-router'
 import {format} from 'date-fns'
-import {createSignal, For} from 'solid-js'
+import {For} from 'solid-js'
 
-import {deleteProject} from '../../services/projectsService'
 import {Button} from '../ui/button'
 
 interface Project {
@@ -14,39 +13,9 @@ interface Project {
 
 interface IndexProjectsGridProps {
   projects: Project[]
-  refetch: () => Promise<void>
 }
 
 export const ProjectsGrid = (props: IndexProjectsGridProps) => {
-  const [deletingProject, setDeletingProject] = createSignal<string | null>(
-    null,
-  )
-
-  const handleDeleteProject = async (
-    projectId: string,
-    projectName: string,
-  ) => {
-    if (
-      !confirm(
-        `Are you sure you want to delete the project "${projectName}"? This action cannot be undone.`,
-      )
-    ) {
-      return
-    }
-
-    setDeletingProject(projectId)
-    try {
-      await deleteProject(projectId)
-      await props.refetch()
-    } catch (error) {
-      console.error('Failed to delete project:', error)
-      alert(
-        `Failed to delete project: ${error instanceof Error ? error.message : 'Unknown error'}`,
-      )
-    } finally {
-      setDeletingProject(null)
-    }
-  }
   return (
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
       {}
@@ -94,15 +63,6 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
                 >
                   Run agent
                 </Button>
-                <button
-                  class="px-3 py-1 text-sm border border-red-200 text-red-600 rounded hover:bg-red-50 hover:border-red-300 disabled:opacity-50 disabled:cursor-not-allowed"
-                  disabled={deletingProject() === project.id}
-                  onClick={() => {
-                    void handleDeleteProject(project.id, project.name)
-                  }}
-                >
-                  {deletingProject() === project.id ? 'Deleting...' : 'Delete'}
-                </button>
               </div>
             </div>
           )
