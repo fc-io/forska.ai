@@ -39,6 +39,7 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
                 <Button
                   as={Link}
                   href={`/projects/${project.id}`}
+                  variant="outline"
                   size="sm"
                   class="px-3 py-1 text-sm"
                 >
@@ -47,14 +48,13 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
                 <Button
                   as={Link}
                   href={`/projects/${project.id}/edit`}
-                  variant="outline"
                   size="sm"
+                  variant="outline"
                   class="px-3 py-1 text-sm"
                 >
                   Edit
                 </Button>
                 <Button
-                  variant="outline"
                   size="sm"
                   class="px-3 py-1 text-sm"
                   onClick={() => {
