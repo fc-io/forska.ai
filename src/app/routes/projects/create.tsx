@@ -1,16 +1,23 @@
+import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
 import {createSignal, For, Show} from 'solid-js'
 import {createStore} from 'solid-js/store'
 
 import {Button} from '../../../components/ui/button'
-import {useSession} from '../../../hooks/useSession'
 import {apiClient} from '../../../services/apiClient'
+import {fetchSession} from '../../../services/fetchSession'
 
 type PromptItem = {id: string; content: string}
 
 const CreateProject = () => {
+  const sessionQuery = useQuery(() => {
+    return {
+      queryKey: ['session'],
+      queryFn: fetchSession,
+      staleTime: 1000 * 60 * 5, // Consider data fresh for 5 minutes
+    }
+  })
   const navigate = useNavigate()
-  const {user} = useSession()
   const [projectName, setProjectName] = createSignal('')
   const [description, setDescription] = createSignal('')
   const [prompts, setPrompts] = createStore<PromptItem[]>([
@@ -47,11 +54,6 @@ const CreateProject = () => {
     description: string,
     promptItems: PromptItem[],
   ) => {
-    const currentUser = user()
-    if (!currentUser) {
-      throw new Error('User must be authenticated to create a project')
-    }
-
     // Filter valid prompts
     const validPrompts = promptItems
       .filter((prompt) => {
@@ -61,10 +63,14 @@ const CreateProject = () => {
         return prompt.content.trim()
       })
 
+    if (!sessionQuery.data?.user.id) {
+      throw new Error('User must be authenticated to create a project')
+    }
+
     const response = await apiClient.api.projects.post({
       name,
       description: description.trim() || undefined,
-      ownerId: currentUser.id,
+      ownerId: sessionQuery.data.user.id,
       prompts: validPrompts,
     })
 

@@ -21,7 +21,7 @@
     "db:clear": "bun src/db/clearDatabase.ts",
     "db:seed": "bun src/db/seed.ts",
     "db:seed-auth": "bun src/seedAuth.ts",
-    "cc": "bunx ccusage"
+    "cc": "bunx ccusage blocks -b --color "
   },
   "dependencies": {
     "@ai-sdk/openai": "^2.0.9",

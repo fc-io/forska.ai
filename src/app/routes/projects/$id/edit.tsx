@@ -1,5 +1,5 @@
 import {useQuery} from '@tanstack/solid-query'
-import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
+import {createFileRoute, Link} from '@tanstack/solid-router'
 import {createEffect, createSignal, For, Show} from 'solid-js'
 import {createStore} from 'solid-js/store'
 
@@ -17,7 +17,6 @@ type PromptItem = {
 }
 
 const EditProject = () => {
-  const navigate = useNavigate()
   const params = Route.useParams()
   const projectId = (params() as {id: string}).id
 
