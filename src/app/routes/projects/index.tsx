@@ -1,11 +1,11 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
-import {format} from 'date-fns'
-import {createSignal, For, Show} from 'solid-js'
+import {createSignal, Show} from 'solid-js'
 
-import {Button} from '../../../components/ui/button'
 import {ProjectStatistics} from '../../../components/main/ProjectStatistics'
+import {Button} from '../../../components/ui/button'
 import {deleteProject, fetchProjects} from '../../../services/projectsService'
+import {ProjectsGrid} from './index/ProjectsGrid'
 
 const Projects = () => {
   const projects = useQuery(() => {
@@ -82,59 +82,11 @@ const Projects = () => {
           && (projects.data?.length ?? 0) > 0
         }
       >
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
-          {}
-          <For each={projects.data}>
-            {(project) => {
-              return (
-                <div class="bg-card border rounded-lg p-6 shadow-sm">
-                  <h3 class="text-xl font-semibold mb-3">{project.name}</h3>
-                  <p class="text-muted-foreground mb-4">
-                    {project.description || 'No description provided'}
-                  </p>
-                  <div class="flex items-center gap-2 mb-3">
-                    <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                      Active
-                    </span>
-                    <span class="text-sm text-muted-foreground">
-                      Created: {format(project.createdAt, 'yyyy-MM-dd HH:mm')}
-                    </span>
-                  </div>
-                  <div class="flex gap-2">
-                    <Button
-                      as={Link}
-                      href={`/projects/${project.id}`}
-                      size="sm"
-                      class="px-3 py-1 text-sm"
-                    >
-                      View Details
-                    </Button>
-                    <Button
-                      as={Link}
-                      href={`/projects/${project.id}/edit`}
-                      variant="outline"
-                      size="sm"
-                      class="px-3 py-1 text-sm"
-                    >
-                      Edit
-                    </Button>
-                    <button
-                      class="px-3 py-1 text-sm border border-red-200 text-red-600 rounded hover:bg-red-50 hover:border-red-300 disabled:opacity-50 disabled:cursor-not-allowed"
-                      disabled={deletingProject() === project.id}
-                      onClick={() => {
-                        void handleDeleteProject(project.id, project.name)
-                      }}
-                    >
-                      {deletingProject() === project.id
-                        ? 'Deleting...'
-                        : 'Delete'}
-                    </button>
-                  </div>
-                </div>
-              )
-            }}
-          </For>
-        </div>
+        <ProjectsGrid
+          projects={projects.data || []}
+          deletingProject={deletingProject}
+          handleDeleteProject={handleDeleteProject}
+        />
 
         <ProjectStatistics projectCount={projects.data?.length || 0} />
       </Show>

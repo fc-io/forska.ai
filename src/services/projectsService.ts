@@ -1,6 +1,5 @@
 import {apiClient} from './apiClient.ts'
 
-
 export const fetchProjects = async () => {
   try {
     const response = await apiClient.api.projects.get()
