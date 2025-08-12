@@ -6,7 +6,10 @@ type PromptsType = Awaited<
 >['prompts']
 
 export const getBaseHeading = (prompt: PromptsType[number]): string => {
-  return prompt.promptHeading ?? `${prompt.order ?? 0}-${getShortId()}`
+  return (
+    (prompt.promptHeading ?? `${prompt.order ?? 0}-${getShortId()}`)
+    + `^^^${prompt.id}`
+  )
 }
 
 const getSections = (prompts: PromptsType): string => {

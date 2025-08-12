@@ -48,6 +48,8 @@ export const judgmentsRoutes = new Elysia()
   .post(
     '/api/judgments/store',
     async ({body}) => {
+      console.log('/api/judgments/store')
+
       try {
         const db = getDatabase()
 
@@ -81,6 +83,7 @@ export const judgmentsRoutes = new Elysia()
 
           return {success: true, data: updatedJudgment}
         } else {
+          console.log('no existing judgment')
           // Insert new judgment
           const [newJudgment] = await db
             .insert(judgments)

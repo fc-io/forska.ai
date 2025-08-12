@@ -14,7 +14,6 @@ export const judgeStoreJudgment = async (
   try {
     // If we don't have modelId/promptIds, just log for now
     // This maintains backward compatibility while we transition
-
     if (!modelId || !promptIds || promptIds.length === 0) {
       const logMessage = `${articleId} | ${articleTitle}, ai: ${colorizeJudgment(judgment.article_judged_as_ai as string)}, ai agent: ${colorizeJudgment(judgment.article_judged_as_ai_agent as string)}, healthcare: ${colorizeJudgment(judgment.article_judged_as_healthcare as string)}`
       console.log(colorizeLogMessage(logMessage, judgment))
@@ -23,33 +22,36 @@ export const judgeStoreJudgment = async (
       )
       return
     }
-
     // Store judgment for each prompt
     const storePromises = promptIds.map(async (promptId) => {
-      const answeredTransformed = judgment.article_judged_as_ai_agent as
-        | string
-        | undefined
-      const confidenceOriginal = judgment.confidence as number | undefined
-      const explanation = judgment.article_judged_as_ai_explanation as
-        | string
-        | undefined
-      // debugger
+      const answers = Object.entries(judgment).filter(([key]) => {
+        return key.includes(promptId)
+      })
+      const answeredOriginal = answers.find(([key]) => {
+        //TODO: this is a hack to get the original answer
+        return key.includes('---question')
+      })[1] as string
+      const answeredExplanation = answers.find(([key]) => {
+        //TODO: this is a hack to get the original answer
+        return key.includes('---explanation')
+      })[1] as string
+      const answeredQuotes: string[] = answers.find(([key]) => {
+        //TODO: this is a hack to get the original answer
+        return key.includes('---quotes')
+      })[1] as string[]
+      // ('test^^^a7aa21e8-d4e6-4e60-b39e-732085c56b00---explanation')
+      // "test^^^a7aa21e8-d4e6-4e60-b39e-732085c56b00---quotes"
 
       // Using post request through Eden/Elysia RPC
       const response = await apiClient.api.judgments.store.post({
         articleId,
         modelId,
         promptId,
-        answeredOriginal:
-          (judgment.article_judged_as_ai as string) || 'undecided',
-        answeredTransformed: answeredTransformed || undefined,
-        confidenceOriginal: confidenceOriginal || undefined,
-        explanation: explanation || undefined,
-        quotes: {
-          ai: judgment.article_judged_as_ai_quote || null,
-          ai_agent: judgment.article_judged_as_ai_agent_quote || null,
-          healthcare: judgment.article_judged_as_healthcare_quote || null,
-        },
+        answeredOriginal,
+        answeredTransformed: undefined,
+        confidenceOriginal: 0.5,
+        explanation: answeredExplanation,
+        quotes: answeredQuotes,
       })
 
       // Type guard for error checking
@@ -59,7 +61,8 @@ export const judgeStoreJudgment = async (
 
       return response.data
     })
-
+    debugger
+    // why is this here?
     const results = await Promise.allSettled(storePromises)
 
     const failedResults = results.filter((r): r is PromiseRejectedResult => {
