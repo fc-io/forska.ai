@@ -84,6 +84,16 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
                 >
                   Edit
                 </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  class="px-3 py-1 text-sm"
+                  onClick={() => {
+                    console.log('Run agent for project:', project.id)
+                  }}
+                >
+                  Run agent
+                </Button>
                 <button
                   class="px-3 py-1 text-sm border border-red-200 text-red-600 rounded hover:bg-red-50 hover:border-red-300 disabled:opacity-50 disabled:cursor-not-allowed"
                   disabled={deletingProject() === project.id}
