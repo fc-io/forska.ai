@@ -1,45 +1,16 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
-import {createSignal, Show} from 'solid-js'
+import {Show} from 'solid-js'
 
 import {ProjectsGrid} from '../../../components/main/ProjectsGrid'
 import {ProjectStatistics} from '../../../components/main/ProjectStatistics'
 import {Button} from '../../../components/ui/button'
-import {deleteProject, fetchProjects} from '../../../services/projectsService'
+import {fetchProjects} from '../../../services/projectsService'
 
 const Projects = () => {
   const projects = useQuery(() => {
     return {queryKey: ['projects'], queryFn: fetchProjects}
   })
-  const [deletingProject, setDeletingProject] = createSignal<string | null>(
-    null,
-  )
-
-  const handleDeleteProject = async (
-    projectId: string,
-    projectName: string,
-  ) => {
-    if (
-      !confirm(
-        `Are you sure you want to delete the project "${projectName}"? This action cannot be undone.`,
-      )
-    ) {
-      return
-    }
-
-    setDeletingProject(projectId)
-    try {
-      await deleteProject(projectId)
-      await projects.refetch()
-    } catch (error) {
-      console.error('Failed to delete project:', error)
-      alert(
-        `Failed to delete project: ${error instanceof Error ? error.message : 'Unknown error'}`,
-      )
-    } finally {
-      setDeletingProject(null)
-    }
-  }
 
   return (
     <div class="p-6 max-w-6xl mx-auto">
@@ -84,10 +55,12 @@ const Projects = () => {
       >
         <ProjectsGrid
           projects={projects.data || []}
-          deletingProject={deletingProject}
-          handleDeleteProject={handleDeleteProject}
+          refetch={() => {
+            return projects.refetch().then(() => {
+              return void 0
+            })
+          }}
         />
-
         <ProjectStatistics projectCount={projects.data?.length || 0} />
       </Show>
     </div>
