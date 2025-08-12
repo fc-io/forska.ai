@@ -7,7 +7,7 @@ export const getNewestArticlesToJudge = async ({
   numberOfArticlesToGet: number
   projectId: string
 }) => {
-  const response = await apiClient.api.projects.judgables.post({
+  const response = await apiClient.api.judgeable.post({
     numberOfArticlesToGet,
     projectId,
   })
@@ -26,5 +26,5 @@ export const getNewestArticlesToJudge = async ({
   //   throw new Error('Failed to populate articles to judge')
   // }
 
-  return response.data.data
+  return response.data
 }

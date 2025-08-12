@@ -5,7 +5,7 @@ import {articles, judgments, projects, prompts} from '../../db/schema.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 
 export const judgablesRoutes = new Elysia().post(
-  '/api/projects/judgables',
+  '/api/judgeable',
   async ({body}) => {
     try {
       const db = getDatabase()

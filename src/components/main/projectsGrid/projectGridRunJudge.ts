@@ -25,12 +25,22 @@ const runJudge = async ({
       numberOfArticlesToGet,
     })
 
-    if (newestArticlesToJudge.length === 0) {
+    if (newestArticlesToJudge.articles.length === 0) {
       break
     }
 
-    await judge({articles: newestArticlesToJudge, sessionId})
-    console.log('judged', newestArticlesToJudge.length, 'articles')
+    await judge({
+      articles: newestArticlesToJudge.articles,
+      prompts: newestArticlesToJudge.prompts,
+      sessionId,
+    })
+    console.log(
+      'judged',
+      newestArticlesToJudge.articles.length,
+      'articles, with ',
+      newestArticlesToJudge.prompts.length,
+      'prompts',
+    )
   }
 
   console.log('end workflow')

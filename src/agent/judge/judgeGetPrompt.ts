@@ -1,5 +1,5 @@
 import type {getNewestArticlesToJudge} from '../../components/main/projectsGrid/projectsGridGetNewestArticlesToJudge.ts'
-import type {prompts} from '../../db/schema.ts'
+import {getShortId} from '../../utils/getShortId.ts'
 // const getSortedArticle = (data: any) => {
 //   const sortKey = (s: string) => {
 //     return s.replace(/_(quote|explanation)$/, '')
@@ -28,46 +28,65 @@ import type {prompts} from '../../db/schema.ts'
 //   return judgedAsKeys
 // }
 
-const getSections = (judgedAsKeys: (typeof prompts.$inferSelect)[]): string => {
-  debugger
-  return judgedAsKeys
-    .map((key) => {
-      if (key.indexOf('explanation') > -1) {
-        return `## ${key}
+type PromptsType = Awaited<
+  ReturnType<typeof getNewestArticlesToJudge>
+>['prompts']
 
-Provide the reason why you judged it that way.
+const getSections = (prompts: PromptsType): string => {
+  return prompts.reduce((acc, key) => {
+    const baseHeading =
+      key.promptHeading ?? `${key.order}-${getShortId()}` ?? getShortId()
 
-`
-      }
-      if (key.indexOf('quote') > -1) {
-        return `## ${key}
+    return `Below will be a number of questions from the user for you to answer about the title and summary provided above.
+### judged_as_${baseHeading}
 
-Provide verbatim quotes (a maximum of 3 quotes) that highlight the reasoning behind your explanation. Only do this if the explanation tries to make case for why it judged that the topic was in the info.
+output_key: ${baseHeading}-questions
+questions: ${key.originalText}
+output_type:
 
-`
-      }
-      const topicName =
-        key
-          .split('article_judged_as_')[1]
-          ?.split('_')
-          .filter((part) => {
-            return part !== '_'
-          })
-          .join(' ') ?? 'unknown topic'
-      return `## ${key}
 
-Judge if the article is about "${topicName}". Can you find out anything about this from the provided title or summary.
+    `
+    //       `## ${key.promptHeading}
 
-`
-    })
-    .join('')
+    // Provide the reason why you judged it that way.
+
+    // `
+    //       }
+    //       if (key.promptHeading?.indexOf('quote') > -1) {
+    //         return `## ${key.promptHeading}
+
+    // Provide verbatim quotes (a maximum of 3 quotes) that highlight the reasoning behind your explanation. Only do this if the explanation tries to make case for why it judged that the topic was in the info.
+
+    // `
+    //       }
+    //       const topicName =
+    //         key.promptHeading
+    //           ?.split('article_judged_as_')[1]
+    //           ?.split('_')
+    //           .filter((part) => {
+    //             return part !== '_'
+    //           })
+    //           .join(' ') ?? 'unknown topic'
+    //       return `## ${key.promptHeading}
+
+    // Judge if the article is about "${topicName}". Can you find out anything about this from the provided title or summary.
+
+    // `
+    //       }
+    return acc
+  }, '')
 }
 
-type ArticleType = Awaited<ReturnType<typeof getNewestArticlesToJudge>>[number]
+type ArticleType = Awaited<
+  ReturnType<typeof getNewestArticlesToJudge>
+>['articles'][number]
 
-export const judgeGetPrompt = (data: ArticleType): string => {
-  // const judgedAsKeys = getSortedArticle(data)
-  const sections = data.prompts ? getSections(data.prompts) : ''
+export const judgeGetPrompt = (
+  data: ArticleType,
+  prompts: PromptsType,
+): string => {
+  // const prompts = getSortedArticle(data)
+  const sections = getSections(prompts)
 
   return `# id: ${data.articleId}
 

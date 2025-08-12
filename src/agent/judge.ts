@@ -49,13 +49,21 @@ ${lastResponse}
 Please try again, ensuring you respond ONLY with valid JSON matching the schema.`
 }
 
-type ArticlesType = Awaited<ReturnType<typeof getNewestArticlesToJudge>>
+type ArticlesType = Awaited<
+  ReturnType<typeof getNewestArticlesToJudge>
+>['articles']
+
+type PromptsType = Awaited<
+  ReturnType<typeof getNewestArticlesToJudge>
+>['prompts']
 
 export const judge = async ({
   articles,
+  prompts,
   sessionId,
 }: {
   articles: ArticlesType
+  prompts: PromptsType
   sessionId: string
 }): Promise<void> => {
   let tokenUse: {
@@ -68,7 +76,7 @@ export const judge = async ({
 
   await Promise.all(
     articles.map(async (article) => {
-      const basePrompt = judgeGetPrompt(article)
+      const basePrompt = judgeGetPrompt(article, prompts)
       debugger
       let prompt = basePrompt
       let attempts = 0
