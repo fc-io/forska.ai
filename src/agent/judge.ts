@@ -68,7 +68,6 @@ export const judge = async ({
 
   await Promise.all(
     articles.map(async (article) => {
-      debugger
       const basePrompt = judgeGetPrompt(article)
       debugger
       let prompt = basePrompt
