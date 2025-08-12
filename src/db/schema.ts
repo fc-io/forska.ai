@@ -12,12 +12,12 @@ import {
 
 import {session, user} from '../../auth-schema.ts'
 
-export const agentJudgmentEnum = pgEnum('agent_judgment', [
-  'yes',
-  'no',
-  'undecided',
-  'unsure',
-])
+// export const agentJudgmentEnum = pgEnum('agent_judgment', [
+//   'yes',
+//   'no',
+//   'undecided',
+//   'unsure',
+// ])
 
 export const publicationStatusEnum = pgEnum('publication_status_enum', [
   'preprint',
