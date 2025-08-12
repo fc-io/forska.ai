@@ -125,7 +125,9 @@ const ProjectDetail = () => {
                                     {prompt.order}
                                   </span>
                                   <Show when={prompt.promptHeading}>
-                                    <span class="font-medium">{prompt.promptHeading}</span>
+                                    <span class="font-medium">
+                                      {prompt.promptHeading}
+                                    </span>
                                   </Show>
                                   <Show when={prompt.type}>
                                     <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">

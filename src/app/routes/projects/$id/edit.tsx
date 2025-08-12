@@ -1,38 +1,20 @@
+import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
-import {createEffect, createResource, createSignal, For, Show} from 'solid-js'
+import {createEffect, createSignal, For, Show} from 'solid-js'
 import {createStore} from 'solid-js/store'
 
 import {Button} from '../../../../components/ui/button'
 import {apiClient} from '../../../../services/apiClient'
-import type {Tables} from '../../../../types/database.types'
 
 type PromptItem = {
   id: string
-  project_id: string
-  original_text: string
-  prompt_heading: string
+  originalText: string
+  promptHeading: string
   type: string
-  isExisting: boolean // Track if this is an existing prompt or new one
-  originalId?: string // Store the database ID for existing prompts
+  isExisting: boolean
+  originalId?: string
   order: number
 }
-
-type ProjectData = Pick<
-  Tables<'projects'>,
-  'id' | 'name' | 'description' | 'owner_id'
->
-type PromptData = Pick<
-  Tables<'prompts'>,
-  | 'id'
-  | 'original_text'
-  | 'transformed_text'
-  | 'prompt_heading'
-  | 'type'
-  | 'project_id'
-  | 'archived'
-  | 'created_at'
-  | 'order'
->
 
 const EditProject = () => {
   const navigate = useNavigate()
@@ -40,13 +22,27 @@ const EditProject = () => {
   const projectId = (params() as {id: string}).id
 
   // Fetch project data and prompts simultaneously
-  const [projectData] = createResource(() => {
-    return Promise.all([
-      fetchProject(projectId),
-      fetchProjectPrompts(projectId),
-    ]).then(([project, prompts]) => {
-      return {project, prompts}
-    })
+  const projectData = useQuery(() => {
+    return {
+      queryKey: ['project', projectId, 'with-prompts'],
+      queryFn: async () => {
+        const response = await apiClient.api.projects({id: projectId}).get()
+
+        if (response.error) {
+          throw new Error('Failed to fetch project')
+        }
+
+        if (response.data?.error) {
+          throw new Error(response.data.error)
+        }
+
+        if (!response.data?.data) {
+          throw new Error('Project not found')
+        }
+
+        return response.data.data
+      },
+    }
   })
 
   const [projectName, setProjectName] = createSignal('')
@@ -56,7 +52,7 @@ const EditProject = () => {
   const [error, setError] = createSignal<string | null>(null)
 
   createEffect(() => {
-    const data = projectData()
+    const data = projectData.data
     if (!data) return
 
     const {project, prompts: existingPrompts} = data
@@ -68,17 +64,14 @@ const EditProject = () => {
 
     if (existingPrompts && existingPrompts.length > 0) {
       const formattedPrompts: PromptItem[] = existingPrompts.map((prompt) => {
-        const {original_text, prompt_heading, type} = prompt
-
         return {
           id: crypto.randomUUID(),
-          original_text,
-          prompt_heading: prompt_heading || '',
-          type: type || '',
+          originalText: prompt.originalText,
+          promptHeading: prompt.promptHeading || '',
+          type: prompt.type || '',
           isExisting: true,
           originalId: prompt.id,
-          order: prompt.order,
-          project_id: prompt.project_id,
+          order: prompt.order || 0,
         }
       })
       setPrompts(formattedPrompts)
@@ -87,12 +80,11 @@ const EditProject = () => {
       setPrompts([
         {
           id: crypto.randomUUID(),
-          original_text: '',
-          prompt_heading: '',
+          originalText: '',
+          promptHeading: '',
           type: '',
           isExisting: false,
           order: 1,
-          project_id: projectId,
         },
       ])
     }
@@ -111,12 +103,11 @@ const EditProject = () => {
       ...prompts,
       {
         id: crypto.randomUUID(),
-        original_text: '',
-        prompt_heading: '',
+        originalText: '',
+        promptHeading: '',
         type: '',
         isExisting: false,
         order: newOrder,
-        project_id: projectId,
       },
     ])
   }
@@ -131,7 +122,11 @@ const EditProject = () => {
     }
   }
 
-  const updatePromptInput = (id: string, field: 'original_text' | 'prompt_heading' | 'type', value: string) => {
+  const updatePromptInput = (
+    id: string,
+    field: 'originalText' | 'promptHeading' | 'type',
+    value: string,
+  ) => {
     const idx = prompts.findIndex((p) => {
       return p.id === id
     })
@@ -146,8 +141,39 @@ const EditProject = () => {
     setIsLoading(true)
 
     try {
-      await updateProject(projectId, projectName(), description(), prompts)
-      void navigate({to: '/projects'})
+      // Prepare prompts data for the API
+      const promptsData = prompts
+        .filter((p: PromptItem) => {
+          return p.originalText || p.isExisting
+        }) // Include existing prompts even if empty
+        .map((p: PromptItem) => {
+          return {
+            originalId: p.originalId,
+            originalText: p.originalText,
+            promptHeading: p.promptHeading || undefined,
+            type: p.type || undefined,
+            order: p.order,
+          }
+        })
+
+      // Update project and prompts in a single request
+      const response = await apiClient.api
+        .projects({id: projectId})
+        .edit.patch({
+          name: projectName(),
+          description: description() || null,
+          prompts: promptsData,
+        })
+
+      if (response.error || response.data?.error) {
+        console.error(
+          'Error updating project:',
+          response.error || response.data?.error,
+        )
+        throw new Error(response.data?.error || 'Failed to update project')
+      }
+
+      // void navigate({to: '/projects'})
     } catch (err) {
       const errorMessage =
         err instanceof Error ? err.message : 'An unexpected error occurred'
@@ -166,7 +192,7 @@ const EditProject = () => {
         <h1 class="text-3xl font-bold">Edit Project</h1>
       </div>
 
-      <Show when={projectData.loading}>
+      <Show when={projectData.isLoading}>
         <div class="text-center py-8">Loading project data...</div>
       </Show>
 
@@ -177,7 +203,7 @@ const EditProject = () => {
         </div>
       </Show>
 
-      <Show when={projectData() && !projectData.loading}>
+      <Show when={projectData.data && !projectData.isLoading}>
         <div class="bg-card border rounded-lg p-6">
           <Show when={error()}>
             <div class="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm">
@@ -251,11 +277,11 @@ const EditProject = () => {
                         <div class="flex-1 space-y-2">
                           <input
                             type="text"
-                            value={promptItem.prompt_heading}
+                            value={promptItem.promptHeading}
                             onInput={(e) => {
                               return updatePromptInput(
                                 promptItem.id,
-                                'prompt_heading',
+                                'promptHeading',
                                 e.currentTarget.value,
                               )
                             }}
@@ -276,11 +302,11 @@ const EditProject = () => {
                             class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
                           />
                           <textarea
-                            value={promptItem.original_text}
+                            value={promptItem.originalText}
                             onInput={(e) => {
                               return updatePromptInput(
                                 promptItem.id,
-                                'original_text',
+                                'originalText',
                                 e.currentTarget.value,
                               )
                             }}
@@ -325,94 +351,6 @@ const EditProject = () => {
       </Show>
     </div>
   )
-}
-
-const fetchProject = async (id: string): Promise<ProjectData> => {
-  const response = await apiClient.api.projects[id].get()
-
-  if (response.error) {
-    console.error('Error fetching project:', response.error)
-    throw new Error('Failed to fetch project')
-  }
-
-  if (response.data?.error) {
-    throw new Error(response.data.error)
-  }
-
-  if (!response.data?.data?.project) {
-    throw new Error('Project not found')
-  }
-
-  const project = response.data.data.project
-  return {
-    id: project.id,
-    name: project.name,
-    description: project.description,
-    owner_id: project.ownerId,
-  }
-}
-
-const fetchProjectPrompts = async (
-  projectId: string,
-): Promise<PromptData[]> => {
-  const response = await apiClient.api.projects[projectId].get()
-
-  if (response.error) {
-    console.error('Error fetching project prompts:', response.error)
-    throw new Error('Failed to fetch project prompts')
-  }
-
-  if (response.data?.error) {
-    throw new Error(response.data.error)
-  }
-
-  if (!response.data?.data?.prompts) {
-    return []
-  }
-
-  return response.data.data.prompts.map((p) => {
-    return {
-      id: p.id,
-      original_text: p.originalText,
-      transformed_text: p.transformedText,
-      prompt_heading: p.promptHeading,
-      type: p.type,
-      project_id: p.projectId,
-      archived: p.archived,
-      created_at: p.createdAt,
-      order: p.order || 0,
-    }
-  })
-}
-
-const updateProject = async (
-  projectId: string,
-  name: string,
-  description: string,
-  promptItems: PromptItem[],
-): Promise<void> => {
-  try {
-    // Update project details
-    const projectResponse = await apiClient.api.projects[projectId].patch({
-      name,
-      description: description || null,
-    })
-
-    if (projectResponse.error || projectResponse.data?.error) {
-      console.error(
-        'Error updating project:',
-        projectResponse.error || projectResponse.data?.error,
-      )
-      throw new Error('Failed to update project')
-    }
-
-    // For now, we'll handle prompts updates separately
-    // This would ideally be handled in a single transaction on the server
-    // You can extend the server route to handle prompt updates along with project updates
-  } catch (err) {
-    console.error('Error updating project:', err)
-    throw err
-  }
 }
 
 export const Route = createFileRoute('/projects/$id/edit')({
