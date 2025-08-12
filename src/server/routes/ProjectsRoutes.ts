@@ -1,7 +1,7 @@
 import {desc, eq} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {projects, projectStats, prompts} from '../../db/schema.ts'
+import {projects, prompts} from '../../db/schema.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 
 export const projectsRoutes = new Elysia()
@@ -272,15 +272,5 @@ export const projectsRoutes = new Elysia()
     } catch (error) {
       console.error('Error deleting project:', error)
       return {success: false, error: 'Failed to delete project'}
-    }
-  })
-  .get('/api/projects/stats', async () => {
-    try {
-      const db = getDatabase()
-      const stats = await db.select().from(projectStats)
-      return {data: stats}
-    } catch (error) {
-      console.error('Error fetching project stats:', error)
-      return {data: [], error: 'Failed to fetch project stats'}
     }
   })

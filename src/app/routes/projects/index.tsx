@@ -4,17 +4,13 @@ import {format} from 'date-fns'
 import {createSignal, For, Show} from 'solid-js'
 
 import {Button} from '../../../components/ui/button'
-import {
-  deleteProject,
-  fetchProjects,
-  // fetchProjectStats,
-} from '../../../services/projectsService'
+import {ProjectStatistics} from '../../../components/main/ProjectStatistics'
+import {deleteProject, fetchProjects} from '../../../services/projectsService'
 
 const Projects = () => {
   const projects = useQuery(() => {
     return {queryKey: ['projects'], queryFn: fetchProjects}
   })
-  // const [projectStats] = createResource(fetchProjectStats)
   const [deletingProject, setDeletingProject] = createSignal<string | null>(
     null,
   )
@@ -44,16 +40,6 @@ const Projects = () => {
       setDeletingProject(null)
     }
   }
-
-  // const totalJudgments = () => {
-  //   const stats = projectStats()
-  //   if (!stats) return 0
-  //   return stats.reduce((sum, stat) => {
-  //     const judgments =
-  //       typeof stat.total_judgments === 'number' ? stat.total_judgments : 0
-  //     return sum + judgments
-  //   }, 0)
-  // }
 
   return (
     <div class="p-6 max-w-6xl mx-auto">
@@ -150,31 +136,7 @@ const Projects = () => {
           </For>
         </div>
 
-        <div class="bg-card border rounded-lg p-6">
-          <h2 class="text-2xl font-semibold mb-4">Project Statistics</h2>
-          <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div class="text-center">
-              <div class="text-2xl font-bold text-primary">
-                {projects.data?.length || 0}
-              </div>
-              <div class="text-sm text-muted-foreground">Active Projects</div>
-            </div>
-            <div class="text-center">
-              <div class="text-2xl font-bold text-primary">
-                {/* {totalJudgments()} */}
-              </div>
-              <div class="text-sm text-muted-foreground">Total Judgments</div>
-            </div>
-            <div class="text-center">
-              <div class="text-2xl font-bold text-primary">-</div>
-              <div class="text-sm text-muted-foreground">In Queue</div>
-            </div>
-            <div class="text-center">
-              <div class="text-2xl font-bold text-primary">-</div>
-              <div class="text-sm text-muted-foreground">Success Rate</div>
-            </div>
-          </div>
-        </div>
+        <ProjectStatistics projectCount={projects.data?.length || 0} />
       </Show>
     </div>
   )
