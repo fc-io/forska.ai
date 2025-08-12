@@ -310,7 +310,11 @@ export const projectsRoutes = new Elysia()
             .orderBy(desc(articles.articleUpdatedAt))
             .limit(body.numberOfArticlesToGet)
 
-          return {data: latestArticles}
+          return {
+            data: latestArticles.map((data) => {
+              return {...data, prompts: projectPrompts}
+            }),
+          }
         }
 
         // Get all judgments for all prompts in this project
@@ -363,7 +367,11 @@ export const projectsRoutes = new Elysia()
 
         const articlesToJudge = await query
 
-        return {data: articlesToJudge}
+        return {
+          data: articlesToJudge.map((data) => {
+            return {...data, prompts: projectPrompts}
+          }),
+        }
       } catch (error) {
         console.error('Error fetching articles to judge:', error)
         return {
