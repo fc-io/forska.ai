@@ -1,61 +1,117 @@
-import {and, gte, lte, sum} from 'drizzle-orm'
+import {and, eq, gte, lte, sum} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
+import {session} from '../../../auth-schema.ts'
 import {tokenUse} from '../../db/schema.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 
-export const tokensRoutes = new Elysia().get(
-  '/api/tokens',
-  async ({query}) => {
-    try {
-      const db = getDatabase()
+export const tokensRoutes = new Elysia()
+  .post(
+    '/api/tokens/usage',
+    async ({body}) => {
+      try {
+        const db = getDatabase()
 
-      // Build where conditions based on query params
-      const conditions = []
+        // Get userId from sessionId
+        const [sessionData] = await db
+          .select({userId: session.userId})
+          .from(session)
+          .where(eq(session.id, body.sessionId))
+          .limit(1)
 
-      if (query.startTime) {
-        conditions.push(gte(tokenUse.createdAt, new Date(query.startTime)))
+        const [result] = await db
+          .insert(tokenUse)
+          .values({
+            userId: sessionData?.userId ?? null,
+            sessionId: body.sessionId,
+            requests: body.requests,
+            totalPromptTokens: body.totalPromptTokens,
+            totalCompletionTokens: body.totalCompletionTokens,
+            totalTokens: body.totalTokens,
+            startedAt: body.startedAt ? new Date(body.startedAt) : undefined,
+            finishedAt: body.finishedAt ? new Date(body.finishedAt) : undefined,
+            duration: body.duration,
+          })
+          .returning()
+
+        return {success: true, data: result}
+      } catch (error) {
+        console.error('Error storing token usage:', error)
+        return {
+          success: false,
+          error:
+            error instanceof Error
+              ? error.message
+              : 'Failed to store token usage',
+        }
       }
+    },
+    {
+      body: t.Object({
+        sessionId: t.String(),
+        requests: t.Number(),
+        totalPromptTokens: t.Number(),
+        totalCompletionTokens: t.Number(),
+        totalTokens: t.Number(),
+        startedAt: t.String(),
+        finishedAt: t.String(),
+        duration: t.Number(),
+      }),
+    },
+  )
+  .get(
+    '/api/tokens',
+    async ({query}) => {
+      try {
+        const db = getDatabase()
 
-      if (query.endTime) {
-        conditions.push(lte(tokenUse.createdAt, new Date(query.endTime)))
+        // Build where conditions based on query params
+        const conditions = []
+
+        if (query.startTime) {
+          conditions.push(gte(tokenUse.createdAt, new Date(query.startTime)))
+        }
+
+        if (query.endTime) {
+          conditions.push(lte(tokenUse.createdAt, new Date(query.endTime)))
+        }
+
+        const whereClause =
+          conditions.length > 0 ? and(...conditions) : undefined
+
+        const result = await db
+          .select({
+            totalPromptTokens: sum(tokenUse.totalPromptTokens),
+            totalCompletionTokens: sum(tokenUse.totalCompletionTokens),
+            totalTokens: sum(tokenUse.totalTokens),
+          })
+          .from(tokenUse)
+          .where(whereClause)
+
+        const row = result[0]
+        return {
+          totalPromptTokens: row?.totalPromptTokens
+            ? Number(row.totalPromptTokens)
+            : 0,
+          totalCompletionTokens: row?.totalCompletionTokens
+            ? Number(row.totalCompletionTokens)
+            : 0,
+          totalTokens: row?.totalTokens ? Number(row.totalTokens) : 0,
+        }
+      } catch (error) {
+        console.error('Error fetching token usage:', error)
+        return {
+          totalPromptTokens: 0,
+          totalCompletionTokens: 0,
+          totalTokens: 0,
+          error: 'Failed to fetch token usage',
+        }
       }
-
-      const whereClause = conditions.length > 0 ? and(...conditions) : undefined
-
-      const result = await db
-        .select({
-          totalPromptTokens: sum(tokenUse.totalPromptTokens),
-          totalCompletionTokens: sum(tokenUse.totalCompletionTokens),
-          totalTokens: sum(tokenUse.totalTokens),
-        })
-        .from(tokenUse)
-        .where(whereClause)
-
-      const row = result[0]
-      return {
-        totalPromptTokens: row?.totalPromptTokens
-          ? Number(row.totalPromptTokens)
-          : 0,
-        totalCompletionTokens: row?.totalCompletionTokens
-          ? Number(row.totalCompletionTokens)
-          : 0,
-        totalTokens: row?.totalTokens ? Number(row.totalTokens) : 0,
-      }
-    } catch (error) {
-      console.error('Error fetching token usage:', error)
-      return {
-        totalPromptTokens: 0,
-        totalCompletionTokens: 0,
-        totalTokens: 0,
-        error: 'Failed to fetch token usage',
-      }
-    }
-  },
-  {
-    query: t.Object({
-      startTime: t.Optional(t.String()),
-      endTime: t.Optional(t.String()),
-    }),
-  },
-)
+    },
+    {
+      query: t.Object({
+        startTime: t.Optional(t.String()),
+        endTime: t.Optional(t.String()),
+      }),
+    },
+  )

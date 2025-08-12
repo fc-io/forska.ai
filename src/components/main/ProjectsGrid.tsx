@@ -1,7 +1,9 @@
+import {useQuery} from '@tanstack/solid-query'
 import {Link} from '@tanstack/solid-router'
 import {format} from 'date-fns'
 import {For} from 'solid-js'
 
+import {fetchSession} from '../../services/fetchSession'
 import {Button} from '../ui/button'
 import {runJudge} from './projectsGrid/projectGridRunJudge'
 
@@ -17,6 +19,20 @@ interface IndexProjectsGridProps {
 }
 
 export const ProjectsGrid = (props: IndexProjectsGridProps) => {
+  const sessionQuery = useQuery(() => {
+    return {
+      queryKey: ['session'],
+      queryFn: fetchSession,
+      staleTime: 1000 * 60 * 1, // Consider data fresh for 5 minutes
+      // refetchInterval: 1000 * 60 * 5, // Refetch every 5 minutes
+      // refetchIntervalInBackground: true,
+      // refetchOnWindowFocus: true,
+    }
+  })
+  // const t = () => {
+  //   return console.log('sessionQuery.data', sessionQuery.data.session.id)
+  // }
+
   return (
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
       {}
@@ -63,6 +79,7 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
                     void runJudge({
                       numberOfArticlesToGet: 1,
                       projectId: project.id,
+                      sessionId: sessionQuery.data.session.id,
                     })
                   }}
                 >

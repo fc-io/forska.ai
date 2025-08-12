@@ -1,4 +1,4 @@
-import {getSupabaseClient} from '../../utils/getSupabaseClient.ts'
+import {apiClient} from '../../services/apiClient.ts'
 
 export const judgeStoreTokenUse = async (
   tokenUse: {
@@ -24,23 +24,28 @@ export const judgeStoreTokenUse = async (
     },
     {totalPromptTokens: 0, totalCompletionTokens: 0, totalTokens: 0},
   )
+  const response = await apiClient.api.tokens.usage.post({
+    sessionId,
+    requests: totalArticles,
+    totalPromptTokens: totalTokenUse.totalPromptTokens,
+    totalCompletionTokens: totalTokenUse.totalCompletionTokens,
+    totalTokens: totalTokenUse.totalTokens,
+    startedAt,
+    finishedAt,
+    duration: Math.round(duration),
+  })
 
-  const supabase = getSupabaseClient()
-  const {error} = await supabase
-    .from('2025_july_token_use')
-    .insert({
-      session_id: sessionId,
-      requests: totalArticles,
-      total_prompt_tokens: totalTokenUse.totalPromptTokens,
-      total_completion_tokens: totalTokenUse.totalCompletionTokens,
-      total_tokens: totalTokenUse.totalTokens,
-      started_at: startedAt,
-      finished_at: finishedAt,
-      duration: Math.round(duration),
-    })
+  if (response.error || response.data?.error) {
+    const errorMessage = 'Failed to store token use: API request failed'
+    console.error(new Error(errorMessage))
+    throw new Error(errorMessage)
+  }
 
-  if (error) {
-    console.error(new Error(`Failed to store token use: ${error.message}`))
-    throw new Error(`Failed to store token use: ${error.message}`)
+  const data = response.data as {success: boolean; error?: string} | undefined
+
+  if (!data?.success) {
+    const errorMessage = data?.error || 'Failed to store token use'
+    console.error(new Error(errorMessage))
+    throw new Error(errorMessage)
   }
 }

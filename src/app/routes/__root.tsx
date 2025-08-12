@@ -31,7 +31,6 @@ const RootComponent = () => {
       refetchOnWindowFocus: true,
     }
   })
-
   return (
     <>
       <Show

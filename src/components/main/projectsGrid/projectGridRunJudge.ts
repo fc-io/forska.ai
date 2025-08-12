@@ -6,9 +6,11 @@ import {getNewestArticlesToJudge} from './projectsGridGetNewestArticlesToJudge.t
 const runJudge = async ({
   numberOfArticlesToGet = 100,
   projectId,
+  sessionId,
 }: {
   numberOfArticlesToGet: number
   projectId: string
+  sessionId: string
 }) => {
   console.log('start runJudge', projectId, numberOfArticlesToGet)
   //   if (fromDate) {
@@ -17,7 +19,7 @@ const runJudge = async ({
   //   if (toDate) {
   //     console.log('toDate:', toDate.toISOString())
   //   }
-  const sessionId = crypto.randomUUID()
+  // const sessionId = crypto.randomUUID()
   // debugger
   while (true) {
     const newestArticlesToJudge = await getNewestArticlesToJudge({
