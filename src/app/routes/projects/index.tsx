@@ -2,10 +2,10 @@ import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
 import {createSignal, Show} from 'solid-js'
 
+import {ProjectsGrid} from '../../../components/main/ProjectsGrid'
 import {ProjectStatistics} from '../../../components/main/ProjectStatistics'
 import {Button} from '../../../components/ui/button'
 import {deleteProject, fetchProjects} from '../../../services/projectsService'
-import {ProjectsGrid} from './index/ProjectsGrid'
 
 const Projects = () => {
   const projects = useQuery(() => {
