@@ -48,6 +48,7 @@
     "drizzle-orm": "^0.44.4",
     "elysia": "latest",
     "fast-xml-parser": "^5.2.5",
+    "openai": "^5.12.2",
     "pg": "^8.16.3",
     "prettier": "^3.6.2",
     "tailwind-merge": "^3.3.1",

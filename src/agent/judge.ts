@@ -1,34 +1,91 @@
-import {createOpenAI} from '@ai-sdk/openai'
-import {generateText} from 'ai'
+import OpenAI from 'openai'
 
 import type {getNewestArticlesToJudge} from '../components/main/projectsGrid/projectsGridGetNewestArticlesToJudge.ts'
 import {judgeGetPrompt} from './judge/judgeGetPrompt.ts'
 import {parseJudgment} from './judge/judgeParseJudgment.ts'
-import {
-  AIResponseType,
-  parseModelResponse,
-} from './judge/judgeParseModelResponse.ts'
+import {AIResponseType} from './judge/judgeParseModelResponse.ts'
 import {judgeStoreJudgment} from './judge/judgeStoreJudgment.ts'
 import {judgeStoreTokenUse} from './judge/judgeStoreTokenUse.ts'
 import {SYSTEM_PROMPT} from './judge/judgeSystemPrompt.ts'
 
-// Configure OpenAI to use local endpoint and create the model in one step
-const model = createOpenAI({
+// Configure OpenAI client for local vLLM server
+const openaiClient = new OpenAI({
   apiKey: 'fake_key',
+  dangerouslyAllowBrowser: true,
   baseURL: 'http://localhost:8000/v1',
-})('./models/Qwen3-32B-FP8')
+})
 
 // How many times we should ask the model to retry if the response is invalid
 const MAX_RETRIES = 3
 
-// Helper that calls the language model and returns raw text
-const generateModelResponse = async (
+// Helper that calls the language model using OpenAI client directly
+const generateModelResponseDirect = async (
   prompt: string,
 ): Promise<typeof AIResponseType.infer> => {
-  const response = await generateText({model, system: SYSTEM_PROMPT, prompt})
+  try {
+    const response = await openaiClient.chat.completions.create({
+      model: './models/Qwen3-32B-FP8',
+      messages: [
+        {role: 'system', content: SYSTEM_PROMPT},
+        {role: 'user', content: prompt},
+      ],
+      max_tokens: 4000,
+      temperature: 0.7,
+    })
 
-  return parseModelResponse(response)
+    // Extract content - handle both content and reasoning_content
+    const message = response.choices[0]?.message
+    if (!message) throw new Error('No message in response')
+    const content = message.content || (message as any).reasoning_content || ''
+
+    // Convert OpenAI response to AI SDK format
+    const aiResponse = {
+      text: content,
+      files: [],
+      reasoningDetails: [],
+      toolCalls: [],
+      toolResults: [],
+      finishReason: response.choices[0]?.finish_reason || 'stop',
+      usage: {
+        promptTokens: response.usage?.prompt_tokens || 0,
+        completionTokens: response.usage?.completion_tokens || 0,
+        totalTokens: response.usage?.total_tokens || 0,
+      },
+      warnings: [],
+      request: {
+        body: JSON.stringify({
+          model: './models/Qwen3-32B-FP8',
+          messages: [
+            {role: 'system', content: SYSTEM_PROMPT},
+            {role: 'user', content: prompt},
+          ],
+        }),
+      },
+      response: {
+        id: response.id,
+        timestamp: new Date(response.created * 1000),
+        modelId: response.model,
+        headers: {'content-length': '0', 'content-type': 'application/json'},
+        body: response as any,
+        messages: [
+          {role: 'assistant' as const, content: content, id: response.id},
+        ],
+      },
+      steps: [],
+      experimental_providerMetadata: {openai: {}},
+      providerMetadata: {openai: {}},
+      sources: [],
+    }
+
+    return aiResponse
+  } catch (error) {
+    console.error('Error calling OpenAI client:', error)
+    throw error
+  }
 }
+
+// Use the direct OpenAI client implementation
+const generateModelResponse = generateModelResponseDirect
 
 // Helper to build a retry prompt given the base prompt, last error and response
 const buildRetryPrompt = (
@@ -66,6 +123,22 @@ export const judge = async ({
   prompts: PromptsType
   sessionId: string
 }): Promise<void> => {
+  // Get or create model ID for the vLLM model
+  let modelId: string | undefined
+  try {
+    const modelResponse = await fetch(
+      'http://localhost:3000/api/judgments/model?name=Qwen3-32B-FP8&provider=vLLM',
+    )
+    const modelResult = (await modelResponse.json()) as {
+      success: boolean
+      data?: {id: string}
+    }
+    if (modelResult.success && modelResult.data) {
+      modelId = modelResult.data.id
+    }
+  } catch (error) {
+    console.error('Failed to get model ID:', error)
+  }
   let tokenUse: {
     promptTokens: number
     completionTokens: number
@@ -77,7 +150,6 @@ export const judge = async ({
   await Promise.all(
     articles.map(async (article) => {
       const basePrompt = judgeGetPrompt(article, prompts)
-      debugger
       let prompt = basePrompt
       let attempts = 0
       let lastError: string | null = null
@@ -95,8 +167,17 @@ export const judge = async ({
           })
           // console.log('modelResponse', modelResponse)
           lastResponse = modelResponse.text
-          const judgment = parseJudgment(lastResponse)
-          await judgeStoreJudgment(article.id, article.articleTitle, judgment)
+          const judgment = parseJudgment(lastResponse, prompts)
+          const promptIds = prompts.map((p) => {
+            return p.id
+          })
+          await judgeStoreJudgment(
+            article.id,
+            article.articleTitle,
+            judgment,
+            modelId,
+            promptIds,
+          )
 
           return judgment
         } catch (error: unknown) {

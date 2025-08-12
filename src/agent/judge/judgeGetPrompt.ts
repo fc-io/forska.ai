@@ -5,10 +5,13 @@ type PromptsType = Awaited<
   ReturnType<typeof getNewestArticlesToJudge>
 >['prompts']
 
+export const getBaseHeading = (prompt: PromptsType[number]): string => {
+  return prompt.promptHeading ?? `${prompt.order ?? 0}-${getShortId()}`
+}
+
 const getSections = (prompts: PromptsType): string => {
   return prompts.reduce((acc, prompt) => {
-    const baseHeading =
-      prompt.promptHeading ?? `${prompt.order ?? 0}-${getShortId()}`
+    const baseHeading = getBaseHeading(prompt)
 
     return `${acc}
 ### ${baseHeading}---question
