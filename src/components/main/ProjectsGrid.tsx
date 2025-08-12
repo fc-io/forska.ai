@@ -77,7 +77,7 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
                   onClick={() => {
                     console.log('Run agent for project:', project.id)
                     void runJudge({
-                      numberOfArticlesToGet: 1,
+                      numberOfArticlesToGet: 10,
                       projectId: project.id,
                       sessionId: sessionQuery.data.session.id,
                     })

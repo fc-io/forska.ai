@@ -49,7 +49,7 @@ export const judgeStoreJudgment = async (
         promptId,
         answeredOriginal,
         answeredTransformed: undefined,
-        confidenceOriginal: 0.5,
+        confidenceOriginal: 50,
         explanation: answeredExplanation,
         quotes: answeredQuotes,
       })
@@ -61,7 +61,6 @@ export const judgeStoreJudgment = async (
 
       return response.data
     })
-    debugger
     // why is this here?
     const results = await Promise.allSettled(storePromises)
 
