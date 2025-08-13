@@ -1,4 +1,5 @@
 import {Link, useNavigate} from '@tanstack/solid-router'
+import {format} from 'date-fns'
 import {createResource, createSignal, For, Match, Show, Switch} from 'solid-js'
 
 import {
@@ -16,7 +17,7 @@ export const ProjectDetails = (props: {projectId: string}) => {
 
   const formatDate = (dateString: string | null) => {
     if (!dateString) return 'Never'
-    return new Date(dateString).toLocaleString()
+    return format(dateString, 'PPpp')
   }
 
   const handleDeleteProject = async () => {

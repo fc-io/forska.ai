@@ -1,5 +1,6 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
+import {format} from 'date-fns'
 import {createSignal, Match, Show, Switch} from 'solid-js'
 
 import {ProjectDetailsArticles} from '../../../../components/main/projectDetailsArticles'
@@ -26,7 +27,7 @@ const ProjectDetail = () => {
 
   const formatDate = (dateString: string | null) => {
     if (!dateString) return 'Never'
-    return new Date(dateString).toLocaleString()
+    return format(new Date(dateString), 'PPpp')
   }
 
   const handleDeleteProject = async () => {
