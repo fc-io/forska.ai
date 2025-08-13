@@ -8,6 +8,7 @@ import {judgmentsRoutes} from './routes/JudgmentsRoutes.ts'
 import {projectsRoutes} from './routes/ProjectsRoutes.ts'
 import {tokensRoutes} from './routes/TokensRoutes.ts'
 import {usersRoutes} from './routes/UsersRoutes.ts'
+import {env} from './utils/env.ts'
 
 const app = new Elysia()
   .use(cors())
@@ -18,7 +19,7 @@ const app = new Elysia()
   .use(projectsRoutes)
   .use(tokensRoutes)
   .use(usersRoutes)
-  .listen(3000)
+  .listen(env.SERVER_PORT)
 
 console.log(
   `🦊 Elysia is running at ${app.server?.hostname}:${app.server?.port}`,
