@@ -209,10 +209,14 @@ const EditProject = () => {
               <div class="flex items-start gap-3">
                 <span class="text-amber-600 text-xl mt-0.5">⚠️</span>
                 <div>
-                  <h3 class="font-semibold text-amber-900 mb-1">Project Locked for Editing</h3>
+                  <h3 class="font-semibold text-amber-900 mb-1">
+                    Project Locked for Editing
+                  </h3>
                   <p class="text-amber-800 text-sm">
-                    This project cannot be modified because articles have already been judged based on its prompts.
-                    All fields and buttons have been disabled to preserve the integrity of existing assessments.
+                    This project cannot be modified because articles have
+                    already been judged based on its prompts. All fields and
+                    buttons have been disabled to preserve the integrity of
+                    existing assessments.
                   </p>
                 </div>
               </div>
@@ -284,7 +288,11 @@ const EditProject = () => {
                   size="sm"
                   onClick={addPromptInput}
                   disabled={projectData.data?.hasJudgedArticles}
-                  class={projectData.data?.hasJudgedArticles ? 'opacity-50 cursor-not-allowed' : ''}
+                  class={
+                    projectData.data?.hasJudgedArticles
+                      ? 'opacity-50 cursor-not-allowed'
+                      : ''
+                  }
                 >
                   + Add Prompt
                 </Button>
@@ -379,9 +387,21 @@ const EditProject = () => {
             <div class="flex gap-3 pt-4">
               <Button
                 type="submit"
-                disabled={!projectName().trim() || isLoading() || projectData.data?.hasJudgedArticles}
-                title={projectData.data?.hasJudgedArticles ? 'Cannot update: articles have been judged based on this project' : undefined}
-                class={projectData.data?.hasJudgedArticles ? 'opacity-50 cursor-not-allowed' : ''}
+                disabled={
+                  !projectName().trim()
+                  || isLoading()
+                  || projectData.data?.hasJudgedArticles
+                }
+                title={
+                  projectData.data?.hasJudgedArticles
+                    ? 'Cannot update: articles have been judged based on this project'
+                    : undefined
+                }
+                class={
+                  projectData.data?.hasJudgedArticles
+                    ? 'opacity-50 cursor-not-allowed'
+                    : ''
+                }
               >
                 {isLoading() ? 'Updating...' : 'Update Project'}
               </Button>

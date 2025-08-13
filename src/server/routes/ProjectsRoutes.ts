@@ -45,13 +45,15 @@ export const projectsRoutes = new Elysia()
       // Check if any judgments exist for these prompts
       let hasJudgedArticles = false
       if (projectPrompts.length > 0) {
-        const promptIds = projectPrompts.map(p => p.id)
+        const promptIds = projectPrompts.map((p) => {
+          return p.id
+        })
         const existingJudgments = await db
           .select({id: judgments.id})
           .from(judgments)
           .where(inArray(judgments.promptId, promptIds))
           .limit(1)
-        
+
         hasJudgedArticles = existingJudgments.length > 0
       }
 
