@@ -1,4 +1,5 @@
 import {useQuery} from '@tanstack/solid-query'
+import {format} from 'date-fns'
 import {createSignal, For, Show} from 'solid-js'
 
 import {getArticleUrl} from '../../app/utils/getArticleUrl.ts'
@@ -120,6 +121,11 @@ export const ProjectDetailsArticles = (props: {projectId: string}) => {
                             <h4 class="font-semibold text-lg">
                               {article.articleTitle}
                             </h4>
+                            <p class="text-sm text-gray-600">
+                              {article.articleCreatedAt
+                                ? format(article.articleCreatedAt, 'yyyy-MM-dd')
+                                : 'No date provided'}
+                            </p>
                             <a
                               href={getArticleUrl(article.articleId)}
                               target="_blank"
