@@ -2,6 +2,7 @@ import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
 import {createSignal, Match, Show, Switch} from 'solid-js'
 
+import {ProjectDetailsArticles} from '../../../../components/main/projectDetailsArticles'
 import {ProjectDetailsPrompts} from '../../../../components/main/projects/projectDetailsPrompts'
 import {Button} from '../../../../components/ui/button'
 import {
@@ -71,7 +72,8 @@ const ProjectDetail = () => {
               onClick={() => {
                 return void handleDeleteProject()
               }}
-              disabled={deletingProject()}
+              // eslint-disable-next-line solid/no-constant-condition
+              disabled={true || deletingProject()}
             >
               {deletingProject() ? 'Deleting...' : 'Delete Project'}
             </Button>
@@ -179,6 +181,7 @@ const ProjectDetail = () => {
           }}
         </Match>
       </Switch>
+      <ProjectDetailsArticles projectId={projectId} />
     </div>
   )
 }
