@@ -3,6 +3,37 @@ import type {ExtendedDatabaseItemType} from '../getNewestArticles.ts'
 import {colorizeJudgment, colorizeLogMessage} from './colorize.ts'
 // import type {JudgmentResultType} from './judgeParseJudgment.ts'
 
+const printLogMessage = (
+  articleId: ExtendedDatabaseItemType['id'],
+  articleTitle: string,
+  judgment: Record<string, unknown>,
+  promptIds: string[],
+) => {
+  try {
+    const prompts = promptIds.map((promptId) => {
+      const answers = Object.entries(judgment).filter(([key]) => {
+        return key.includes(promptId)
+      })
+      const answeredOriginal = answers.find(([key]) => {
+        //TODO: this is a hack to get the original answer
+        return key.includes('---question')
+      })[1] as string
+
+      const question = answers[0][0].split('^^^')[0]
+
+      return {question, answeredOriginal}
+    })
+
+    const logMessage = `${articleId} | ${articleTitle}, ${prompts
+      .map((p) => {
+        return `${p.question}: ${colorizeJudgment(p.answeredOriginal)}`
+      })
+      .join(', ')}`
+    console.log(colorizeLogMessage(logMessage, judgment))
+  } catch (error) {
+    console.error(error)
+  }
+}
 // Helper that stores a validated judgment via RPC to our server and logs the outcome
 export const judgeStoreJudgment = async (
   articleId: ExtendedDatabaseItemType['id'],
@@ -12,14 +43,17 @@ export const judgeStoreJudgment = async (
   promptIds?: string[],
 ): Promise<void> => {
   try {
+    const modelId = 'eabfc8ec-7530-4979-b14b-7428179493c9'
+    // eabfc8ec-7530-4979-b14b-7428179493c9
     // If we don't have modelId/promptIds, just log for now
     // This maintains backward compatibility while we transition
+
     if (!modelId || !promptIds || promptIds.length === 0) {
-      const logMessage = `${articleId} | ${articleTitle}, ai: ${colorizeJudgment(judgment.article_judged_as_ai as string)}, ai agent: ${colorizeJudgment(judgment.article_judged_as_ai_agent as string)}, healthcare: ${colorizeJudgment(judgment.article_judged_as_healthcare as string)}`
-      console.log(colorizeLogMessage(logMessage, judgment))
+      // console.log(colorizeLogMessage(logMessage, judgment))
       console.warn(
         'Warning: No modelId/promptIds provided, judgment not stored to database',
       )
+      // debugger
       return
     }
     // Store judgment for each prompt
@@ -74,8 +108,7 @@ export const judgeStoreJudgment = async (
         failedResults[0]?.reason,
       )
     } else {
-      const logMessage = `${articleId} | ${articleTitle}, ai: ${colorizeJudgment(judgment.article_judged_as_ai as string)}, ai agent: ${colorizeJudgment(judgment.article_judged_as_ai_agent as string)}, healthcare: ${colorizeJudgment(judgment.article_judged_as_healthcare as string)}`
-      console.log(colorizeLogMessage(logMessage, judgment))
+      printLogMessage(articleId, articleTitle, judgment, promptIds)
     }
   } catch (error) {
     console.error(

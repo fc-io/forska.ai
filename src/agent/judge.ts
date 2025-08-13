@@ -127,7 +127,7 @@ export const judge = async ({
   let modelId: string | undefined
   try {
     const modelResponse = await fetch(
-      'http://localhost:3000/api/judgments/model?name=Qwen3-32B-FP8&provider=vLLM',
+      `${import.meta.env.VITE_SERVER_URL}/api/judgments/model?name=Qwen3-32B-FP8&provider=vLLM`,
     )
     const modelResult = (await modelResponse.json()) as {
       success: boolean

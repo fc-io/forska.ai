@@ -12,7 +12,12 @@ export const auth = betterAuth({
     // forceAllowId: process.env.NODE_ENV === 'development' || process.env.SEED === 'true',
   }),
   emailAndPassword: {enabled: true},
-  trustedOrigins: ['http://localhost:5173', 'http://localhost:3000'],
+  trustedOrigins: [
+    'http://localhost:5173',
+    'http://localhost:3000',
+    'http://localhost:4173',
+    'http://localhost:3001',
+  ],
   //   socialProviders: {
   //     google: {
   //       clientId: process.env.GOOGLE_CLIENT_ID!,
