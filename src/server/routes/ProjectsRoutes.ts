@@ -1,7 +1,7 @@
-import {desc, eq} from 'drizzle-orm'
+import {desc, eq, inArray} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {projects, prompts} from '../../db/schema.ts'
+import {judgments, projects, prompts} from '../../db/schema.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {projectsRoutesGetArticlesWithJudgments} from './projectsRoutes/projectsRoutesGetArticlesWithJudgments.ts'
 
@@ -42,7 +42,20 @@ export const projectsRoutes = new Elysia()
         .where(eq(prompts.projectId, params.id))
         .orderBy(prompts.order)
 
-      return {data: {project, prompts: projectPrompts}}
+      // Check if any judgments exist for these prompts
+      let hasJudgedArticles = false
+      if (projectPrompts.length > 0) {
+        const promptIds = projectPrompts.map(p => p.id)
+        const existingJudgments = await db
+          .select({id: judgments.id})
+          .from(judgments)
+          .where(inArray(judgments.promptId, promptIds))
+          .limit(1)
+        
+        hasJudgedArticles = existingJudgments.length > 0
+      }
+
+      return {data: {project, prompts: projectPrompts, hasJudgedArticles}}
     } catch (error) {
       console.error('Error fetching project:', error)
       return {data: null, error: 'Failed to fetch project'}

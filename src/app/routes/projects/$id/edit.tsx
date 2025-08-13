@@ -54,7 +54,7 @@ const EditProject = () => {
     const data = projectData.data
     if (!data) return
 
-    const {project, prompts: existingPrompts} = data
+    const {project, prompts: existingPrompts, hasJudgedArticles} = data
 
     if (project) {
       setProjectName(project.name)
@@ -204,6 +204,20 @@ const EditProject = () => {
 
       <Show when={projectData.data && !projectData.isLoading}>
         <div class="bg-card border rounded-lg p-6">
+          <Show when={projectData.data?.hasJudgedArticles}>
+            <div class="mb-6 p-4 bg-amber-50 border-2 border-amber-300 rounded-lg">
+              <div class="flex items-start gap-3">
+                <span class="text-amber-600 text-xl mt-0.5">⚠️</span>
+                <div>
+                  <h3 class="font-semibold text-amber-900 mb-1">Project Locked for Editing</h3>
+                  <p class="text-amber-800 text-sm">
+                    This project cannot be modified because articles have already been judged based on its prompts.
+                    All fields and buttons have been disabled to preserve the integrity of existing assessments.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </Show>
           <Show when={error()}>
             <div class="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm">
               {error()}
@@ -228,8 +242,13 @@ const EditProject = () => {
                   return setProjectName(e.currentTarget.value)
                 }}
                 placeholder="Enter project name"
-                class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+                class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${
+                  projectData.data?.hasJudgedArticles
+                    ? 'bg-gray-100 border-gray-300 text-gray-500 cursor-not-allowed opacity-60'
+                    : 'border-input'
+                }`}
                 required
+                disabled={projectData.data?.hasJudgedArticles}
               />
             </div>
 
@@ -245,7 +264,12 @@ const EditProject = () => {
                 }}
                 placeholder="Describe your project..."
                 rows="4"
-                class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent resize-none"
+                class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent resize-none ${
+                  projectData.data?.hasJudgedArticles
+                    ? 'bg-gray-100 border-gray-300 text-gray-500 cursor-not-allowed opacity-60'
+                    : 'border-input'
+                }`}
+                disabled={projectData.data?.hasJudgedArticles}
               />
             </div>
 
@@ -259,6 +283,8 @@ const EditProject = () => {
                   variant="outline"
                   size="sm"
                   onClick={addPromptInput}
+                  disabled={projectData.data?.hasJudgedArticles}
+                  class={projectData.data?.hasJudgedArticles ? 'opacity-50 cursor-not-allowed' : ''}
                 >
                   + Add Prompt
                 </Button>
@@ -285,7 +311,12 @@ const EditProject = () => {
                               )
                             }}
                             placeholder={`Prompt ${index() + 1} heading (optional)...`}
-                            class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+                            class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${
+                              projectData.data?.hasJudgedArticles
+                                ? 'bg-gray-100 border-gray-300 text-gray-500 cursor-not-allowed opacity-60'
+                                : 'border-input'
+                            }`}
+                            disabled={projectData.data?.hasJudgedArticles}
                           />
                           <input
                             type="text"
@@ -298,7 +329,12 @@ const EditProject = () => {
                               )
                             }}
                             placeholder={`Prompt ${index() + 1} type (optional)...`}
-                            class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+                            class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${
+                              projectData.data?.hasJudgedArticles
+                                ? 'bg-gray-100 border-gray-300 text-gray-500 cursor-not-allowed opacity-60'
+                                : 'border-input'
+                            }`}
+                            disabled={projectData.data?.hasJudgedArticles}
                           />
                           <textarea
                             value={promptItem.originalText}
@@ -311,7 +347,12 @@ const EditProject = () => {
                             }}
                             placeholder={`Enter prompt ${index() + 1} content...`}
                             rows="4"
-                            class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent resize-none"
+                            class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent resize-none ${
+                              projectData.data?.hasJudgedArticles
+                                ? 'bg-gray-100 border-gray-300 text-gray-500 cursor-not-allowed opacity-60'
+                                : 'border-input'
+                            }`}
+                            disabled={projectData.data?.hasJudgedArticles}
                           />
                         </div>
                         <Show when={prompts.length > 1}>
@@ -322,7 +363,8 @@ const EditProject = () => {
                             onClick={() => {
                               return removePromptInput(promptItem.id)
                             }}
-                            class="self-start mt-1"
+                            class={`self-start mt-1 ${projectData.data?.hasJudgedArticles ? 'opacity-50 cursor-not-allowed' : ''}`}
+                            disabled={projectData.data?.hasJudgedArticles}
                           >
                             ×
                           </Button>
@@ -337,7 +379,9 @@ const EditProject = () => {
             <div class="flex gap-3 pt-4">
               <Button
                 type="submit"
-                disabled={!projectName().trim() || isLoading()}
+                disabled={!projectName().trim() || isLoading() || projectData.data?.hasJudgedArticles}
+                title={projectData.data?.hasJudgedArticles ? 'Cannot update: articles have been judged based on this project' : undefined}
+                class={projectData.data?.hasJudgedArticles ? 'opacity-50 cursor-not-allowed' : ''}
               >
                 {isLoading() ? 'Updating...' : 'Update Project'}
               </Button>
