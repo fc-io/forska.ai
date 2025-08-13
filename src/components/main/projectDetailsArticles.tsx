@@ -1,6 +1,7 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createSignal, For, Show} from 'solid-js'
 
+import {getArticleUrl} from '../../app/utils/getArticleUrl.ts'
 import type {articles, judgments} from '../../db/schema'
 import {apiClient} from '../../services/apiClient'
 
@@ -119,13 +120,21 @@ export const ProjectDetailsArticles = (props: {projectId: string}) => {
                             <h4 class="font-semibold text-lg">
                               {article.articleTitle}
                             </h4>
+                            <a
+                              href={getArticleUrl(article.articleId)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              class="text-blue-600 hover:underline"
+                            >
+                              {article.articleId}
+                            </a>
                             <p class="text-sm text-gray-600">
                               ID: {article.id}
                             </p>
                           </div>
 
                           <Show when={article.articleSummary}>
-                            <p class="text-gray-700 mb-3 line-clamp-3">
+                            <p class="text-gray-700 mb-3">
                               {article.articleSummary}
                             </p>
                           </Show>
