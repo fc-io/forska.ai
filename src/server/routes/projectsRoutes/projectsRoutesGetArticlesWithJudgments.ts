@@ -33,10 +33,16 @@ export const projectsRoutesGetArticlesWithJudgments = new Elysia().get(
         const answeredOriginalValue =
           query.answered_original === 'true' ? 'yes' : 'no'
         conditions.push(
-          sql`EXISTS (
+          sql`NOT EXISTS (
             SELECT 1 FROM ${judgments}
             WHERE ${judgments.articleId} = ${articles.id}
-            AND ${judgments.answeredOriginal} = ${answeredOriginalValue}
+            AND ${judgments.promptId} = ANY(ARRAY[${sql.join(
+              promptIds.map((id) => {
+                return sql`${id}::uuid`
+              }),
+              sql`,`,
+            )}])
+            AND ${judgments.answeredOriginal} != ${answeredOriginalValue}
           )`,
         )
       }
@@ -121,11 +127,8 @@ export const projectsRoutesGetArticlesWithJudgments = new Elysia().get(
       // Group judgments by article
       const judgmentsByArticle = allJudgments.reduce(
         (acc, judgment) => {
-          if (!acc[judgment.articleId]) {
-            acc[judgment.articleId] = []
-          }
-          acc[judgment.articleId].push(judgment)
-          return acc
+          const articleJudgments = acc[judgment.articleId] ?? []
+          return {...acc, [judgment.articleId]: [...articleJudgments, judgment]}
         },
         {} as Record<string, typeof allJudgments>,
       )
