@@ -126,7 +126,7 @@ const Reviews = () => {
 
                 <Show when={totalPages > 1}>
                   <ReviewsPaginationControls
-                    page={page}
+                    page={currentPage()}
                     totalPages={totalPages}
                     setCurrentPage={setCurrentPage}
                   />
@@ -154,7 +154,7 @@ const Reviews = () => {
 
                 <Show when={totalPages > 1}>
                   <ReviewsPaginationControls
-                    page={page}
+                    page={currentPage()}
                     totalPages={totalPages}
                     setCurrentPage={setCurrentPage}
                   />
