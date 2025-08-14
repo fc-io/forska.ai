@@ -12,7 +12,7 @@ import {getArticleUrl} from '../../../../app/utils/getArticleUrl.ts'
 import type {articles, judgments} from '../../../../db/schema.ts'
 
 declare module '@tanstack/solid-table' {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars, no-unused-vars
   interface TableMeta<TData> {
     projectId?: () => string
   }
@@ -34,7 +34,6 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
     accessorKey: 'articleTitle',
     header: 'Title',
     cell: (info) => {
-      debugger
       return (
         <Link
           to="/projects/$id/reviews/$articleId"
