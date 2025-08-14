@@ -7,7 +7,12 @@ import {Button} from '../../../components/ui/button'
 import {apiClient} from '../../../services/apiClient'
 import {fetchSession} from '../../../services/fetchSession'
 
-type PromptItem = {id: string; content: string}
+type PromptItem = {
+  id: string
+  content: string
+  promptHeading: string
+  type: string
+}
 
 const CreateProject = () => {
   const sessionQuery = useQuery(() => {
@@ -21,13 +26,16 @@ const CreateProject = () => {
   const [projectName, setProjectName] = createSignal('')
   const [description, setDescription] = createSignal('')
   const [prompts, setPrompts] = createStore<PromptItem[]>([
-    {id: crypto.randomUUID(), content: ''},
+    {id: crypto.randomUUID(), content: '', promptHeading: '', type: ''},
   ])
   const [isLoading, setIsLoading] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
 
   const addPromptInput = () => {
-    setPrompts([...prompts, {id: crypto.randomUUID(), content: ''}])
+    setPrompts([
+      ...prompts,
+      {id: crypto.randomUUID(), content: '', promptHeading: '', type: ''},
+    ])
   }
 
   const removePromptInput = (id: string) => {
@@ -40,12 +48,16 @@ const CreateProject = () => {
     }
   }
 
-  const updatePromptInput = (id: string, value: string) => {
+  const updatePromptInput = (
+    id: string,
+    field: 'content' | 'promptHeading' | 'type',
+    value: string,
+  ) => {
     const idx = prompts.findIndex((p) => {
       return p.id === id
     })
     if (idx >= 0) {
-      setPrompts(idx, 'content', value)
+      setPrompts(idx, field, value)
     }
   }
 
@@ -59,8 +71,13 @@ const CreateProject = () => {
       .filter((prompt) => {
         return prompt.content.trim()
       })
-      .map((prompt) => {
-        return prompt.content.trim()
+      .map((prompt, index) => {
+        return {
+          content: prompt.content.trim(),
+          promptHeading: prompt.promptHeading.trim() || undefined,
+          type: prompt.type.trim() || undefined,
+          order: index,
+        }
       })
 
     if (!sessionQuery.data?.user.id) {
@@ -180,18 +197,47 @@ const CreateProject = () => {
                 {(promptItem, index) => {
                   return (
                     <div class="flex gap-2">
-                      <textarea
-                        value={promptItem.content}
-                        onInput={(e) => {
-                          return updatePromptInput(
-                            promptItem.id,
-                            e.currentTarget.value,
-                          )
-                        }}
-                        placeholder={`Enter prompt ${index() + 1} content...`}
-                        rows="4"
-                        class="flex-1 px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent resize-none"
-                      />
+                      <div class="flex-1 space-y-2">
+                        <input
+                          type="text"
+                          value={promptItem.promptHeading}
+                          onInput={(e) => {
+                            return updatePromptInput(
+                              promptItem.id,
+                              'promptHeading',
+                              e.currentTarget.value,
+                            )
+                          }}
+                          placeholder={`Prompt ${index() + 1} heading (optional)...`}
+                          class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+                        />
+                        <input
+                          type="text"
+                          value={promptItem.type}
+                          onInput={(e) => {
+                            return updatePromptInput(
+                              promptItem.id,
+                              'type',
+                              e.currentTarget.value,
+                            )
+                          }}
+                          placeholder={`Prompt ${index() + 1} type (optional)...`}
+                          class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+                        />
+                        <textarea
+                          value={promptItem.content}
+                          onInput={(e) => {
+                            return updatePromptInput(
+                              promptItem.id,
+                              'content',
+                              e.currentTarget.value,
+                            )
+                          }}
+                          placeholder={`Enter prompt ${index() + 1} content...`}
+                          rows="4"
+                          class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent resize-none"
+                        />
+                      </div>
                       <Show when={prompts.length > 1}>
                         <Button
                           type="button"

@@ -82,13 +82,34 @@ export const projectsRoutes = new Elysia()
         // Create prompts if provided
         if (newProject && body.prompts && body.prompts.length > 0) {
           await db.insert(prompts).values(
-            body.prompts.map((promptText: string, index: number) => {
-              return {
-                projectId: newProject.id,
-                originalText: promptText,
-                order: index,
-              }
-            }),
+            body.prompts.map(
+              (
+                prompt:
+                  | string
+                  | {
+                      content: string
+                      promptHeading?: string
+                      type?: string
+                      order: number
+                    },
+                index: number,
+              ) => {
+                return {
+                  projectId: newProject.id,
+                  originalText:
+                    typeof prompt === 'string' ? prompt : prompt.content,
+                  promptHeading:
+                    typeof prompt === 'object'
+                      ? prompt.promptHeading || null
+                      : null,
+                  type: typeof prompt === 'object' ? prompt.type || null : null,
+                  order:
+                    typeof prompt === 'object' && prompt.order !== undefined
+                      ? prompt.order
+                      : index,
+                }
+              },
+            ),
           )
         }
 
@@ -103,7 +124,19 @@ export const projectsRoutes = new Elysia()
         name: t.String(),
         description: t.Optional(t.String()),
         ownerId: t.String(),
-        prompts: t.Optional(t.Array(t.String())),
+        prompts: t.Optional(
+          t.Union([
+            t.Array(t.String()),
+            t.Array(
+              t.Object({
+                content: t.String(),
+                promptHeading: t.Optional(t.String()),
+                type: t.Optional(t.String()),
+                order: t.Number(),
+              }),
+            ),
+          ]),
+        ),
       }),
     },
   )

@@ -124,7 +124,7 @@ const ProjectDetail = () => {
               }
             })
             return (
-              <div class="space-y-8">
+              <div class="space-y-4">
                 {/* Project Information */}
                 <ProjectDetailsInformation project={project} />
                 {/* Prompts Section */}
@@ -132,12 +132,12 @@ const ProjectDetail = () => {
                   prompts={prompts}
                   formatDate={formatDate}
                 />
+                <ProjectDetailsArticles projectId={projectId} />
               </div>
             )
           }}
         </Match>
       </Switch>
-      <ProjectDetailsArticles projectId={projectId} />
     </div>
   )
 }
