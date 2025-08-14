@@ -9,42 +9,42 @@ export const ProjectDetailsInformation = (props: {
   }
 }) => {
   const formatDate = (date: Date) => {
-    return format(date, 'PPpp')
+    return format(date, 'yyyy-MM-dd HH:mm:ss')
   }
 
   return (
-    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
-      <h2 class="text-1xl font-semibold mb-4">Project Information</h2>
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div>
+    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+      {/* <h2 class="text-1xl font-semibold mb-4">Project Information</h2> */}
+      <div class="grid grid-cols-1 md:grid-cols-2 md:grid-flow-col md:grid-rows-3 gap-1">
+        <div class="flex gap-2">
           <label class="text-sm font-medium text-muted-foreground">
-            Project Name
+            Project Name:
           </label>
-          <p class="text-lg">{props.project.name}</p>
+          <p class="text-sm">{props.project.name}</p>
         </div>
-        <div>
+        <div class="flex gap-2">
           <label class="text-sm font-medium text-muted-foreground">
-            Created
+            Created:
           </label>
-          <p class="text-lg">{formatDate(props.project.createdAt)}</p>
+          <p class="text-sm">{formatDate(props.project.createdAt)}</p>
         </div>
-        <div class="md:col-span-2">
+        <div class="flex gap-2">
           <label class="text-sm font-medium text-muted-foreground">
-            Description
+            Description:
           </label>
-          <p class="text-lg">
+          <p class="text-sm">
             {props.project.description || 'No description provided'}
           </p>
         </div>
-        <div>
+        <div class="flex gap-2">
           <label class="text-sm font-medium text-muted-foreground">
-            Last Updated
+            Last Updated:
           </label>
-          <p class="text-lg">{formatDate(props.project.updatedAt)}</p>
+          <p class="text-sm">{formatDate(props.project.updatedAt)}</p>
         </div>
-        <div>
+        <div class="flex gap-2 items-center">
           <label class="text-sm font-medium text-muted-foreground">
-            Status
+            Status:
           </label>
           <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
             Active
