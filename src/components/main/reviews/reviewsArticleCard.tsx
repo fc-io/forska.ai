@@ -16,15 +16,10 @@ export const ReviewsArticleCard = (props: ReviewsArticleCardProps) => {
   return (
     <div class="p-4 bg-white rounded-lg shadow hover:shadow-md transition-shadow">
       <div class="mb-2">
-        <h4 class="font-semibold text-lg">
-          {props.article.articleTitle}
-        </h4>
+        <h4 class="font-semibold text-lg">{props.article.articleTitle}</h4>
         <p class="text-sm text-gray-600">
           {props.article.articleCreatedAt
-            ? format(
-                props.article.articleCreatedAt,
-                'yyyy-MM-dd',
-              )
+            ? format(props.article.articleCreatedAt, 'yyyy-MM-dd')
             : 'No date provided'}
         </p>
         <a
@@ -35,16 +30,7 @@ export const ReviewsArticleCard = (props: ReviewsArticleCardProps) => {
         >
           {props.article.articleId}
         </a>
-        <p class="text-sm text-gray-600">
-          ID: {props.article.id}
-        </p>
       </div>
-
-      <Show when={props.article.articleSummary}>
-        <p class="text-gray-700 mb-3">
-          {props.article.articleSummary}
-        </p>
-      </Show>
 
       <div class="flex gap-4 text-sm">
         <Show when={props.article.doi}>
@@ -75,10 +61,7 @@ export const ReviewsArticleCard = (props: ReviewsArticleCardProps) => {
           Judgments: {props.article.judgments?.length || 0}
         </p>
         <Show
-          when={
-            props.article.judgments
-            && props.article.judgments.length > 0
-          }
+          when={props.article.judgments && props.article.judgments.length > 0}
         >
           <div class="mt-2 flex flex-wrap gap-2">
             <For each={props.article.judgments}>
@@ -91,9 +74,7 @@ export const ReviewsArticleCard = (props: ReviewsArticleCardProps) => {
                         : 'bg-red-100 text-red-800'
                     }`}
                   >
-                    {judgment.answeredOriginal
-                      ? 'Original'
-                      : 'Not Original'}
+                    {judgment.answeredOriginal ? 'Original' : 'Not Original'}
                   </span>
                 )
               }}
