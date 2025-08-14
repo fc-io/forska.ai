@@ -1,44 +1,35 @@
 import {and, desc, eq, inArray, sql} from 'drizzle-orm'
-import {Elysia} from 'elysia'
+import {Elysia, t} from 'elysia'
 
 import {articles, judgments, prompts} from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
-export const projectsRoutesGetArticlesReviews = new Elysia().get(
+export const projectsRoutesGetArticlesReviews = new Elysia().post(
   '/api/articlesreviews',
-  async ({
-    query,
-  }: {
-    query: {
-      from: string
-      limit: string
-      page: string
-      projectId: string
-      prompts: string
-      to: string
-    }
-  }) => {
+  async ({body}) => {
     console.log('--------------------------------')
     console.log('--------------------------------')
     console.log('--------------------------------')
     console.log('--------------------------------')
     console.log('--------------------------------')
     console.log('--------------------------------')
-    console.log('articlesreviews', query)
+    console.log('articlesreviews body:', body)
+    console.log('body.prompts:', body.prompts)
+    console.log('typeof body.prompts:', typeof body.prompts)
     console.log('--------------------------------')
     try {
       const db = getDatabase()
 
       // Parse pagination params with defaults
-      const page = parseInt(query?.page || '1', 10)
-      const limit = parseInt(query?.limit || '100', 10)
+      const page = parseInt(body?.page || '1', 10)
+      const limit = parseInt(body?.limit || '100', 10)
       const offset = (page - 1) * limit
 
       // First get all prompts for this project
       const projectPrompts = await db
         .select()
         .from(prompts)
-        .where(eq(prompts.projectId, query.projectId))
+        .where(eq(prompts.projectId, body.projectId))
 
       if (projectPrompts.length === 0) {
         return {data: [], totalCount: 0, page, limit, totalPages: 0}
@@ -53,8 +44,7 @@ export const projectsRoutesGetArticlesReviews = new Elysia().get(
       const conditions = []
 
       // Add filters for each prompt's answered_original if provided
-      const parsedPrompts = JSON.parse(query.prompts) as Record<string, string>
-      const promptFilters = Object.entries(parsedPrompts).map(
+      const promptFilters = Object.entries(body.prompts || {}).map(
         ([key, value]) => {
           return [key, value] as const
         },
@@ -196,5 +186,15 @@ export const projectsRoutesGetArticlesReviews = new Elysia().get(
           : 'Failed to fetch articles reviews',
       )
     }
+  },
+  {
+    body: t.Object({
+      from: t.String(),
+      limit: t.String(),
+      page: t.String(),
+      projectId: t.String(),
+      prompts: t.Record(t.String(), t.String()),
+      to: t.String(),
+    }),
   },
 )

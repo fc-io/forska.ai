@@ -50,7 +50,7 @@ const Reviews = () => {
         toDate(),
       ],
       queryFn: async () => {
-        const query = {
+        const body = {
           page: String(currentPage()),
           limit: String(pageLimit()),
           projectId,
@@ -67,7 +67,7 @@ const Reviews = () => {
           ),
         }
 
-        const response = await apiClient.api.articlesreviews.get({query})
+        const response = await apiClient.api.articlesreviews.post(body)
 
         if (!response.data) {
           throw new Error('Failed to fetch articles')
