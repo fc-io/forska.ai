@@ -55,7 +55,7 @@ const ProjectDetail = () => {
   }
 
   return (
-    <div class="p-6 bg-gray-50 mx-auto">
+    <div class="min-h-screen bg-gray-50 p-6 mx-auto">
       <div class="flex justify-between items-center mb-6">
         <div class="flex items-center gap-4">
           <Button as={Link} href="/projects" variant="outline" size="sm">

@@ -1,11 +1,12 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute} from '@tanstack/solid-router'
-import {format} from 'date-fns'
 import {createSignal, For, Show} from 'solid-js'
 
+import {ReviewsArticleCard} from '../../../../components/main/reviews/reviewsArticleCard.tsx'
+import {ReviewsFilterControls} from '../../../../components/main/reviews/reviewsFilterControls.tsx'
+import {ReviewsPaginationControls} from '../../../../components/main/reviews/reviewsPaginationControls.tsx'
 import type {articles, judgments} from '../../../../db/schema.ts'
 import {apiClient} from '../../../../services/apiClient.ts'
-import {getArticleUrl} from '../../../utils/getArticleUrl.ts'
 
 type ArticleWithJudgments = typeof articles.$inferSelect & {
   judgments: Array<typeof judgments.$inferSelect>
@@ -23,7 +24,7 @@ const Reviews = () => {
   const articlesQuery = useQuery(() => {
     return {
       queryKey: [
-        'project-articles-with-judgments',
+        'project-articles-reviews',
         projectId,
         filterAnsweredOriginal(),
         currentPage(),
@@ -41,7 +42,7 @@ const Reviews = () => {
         }
         const response = await apiClient.api
           .projects({id: projectId})
-          ['articles-with-judgments'].get({query: queryParams})
+          ['articles-reviews'].get({query: queryParams})
 
         if (response.error || !response.data) {
           throw new Error(
@@ -62,53 +63,17 @@ const Reviews = () => {
     }
   })
 
-  const handlePageChange = (newPage: number) => {
-    setCurrentPage(newPage)
-  }
-
-  const handleLimitChange = (newLimit: number) => {
-    setPageLimit(newLimit)
-    setCurrentPage(1)
-  }
-
   return (
-    <div class="container mx-auto p-6">
+    <div class="min-h-screen bg-gray-50 p-6 mx-auto">
       <h1 class="text-3xl font-bold mb-6">Project Reviews</h1>
 
-      <div class="flex items-center gap-4 p-4 bg-white rounded-lg shadow mb-6">
-        <label class="font-medium">Filter by answered_original:</label>
-        <select
-          class="px-3 py-2 border rounded-md"
-          value={
-            filterAnsweredOriginal() === null
-              ? 'all'
-              : String(filterAnsweredOriginal())
-          }
-          onChange={(e) => {
-            const value = e.target.value
-            setFilterAnsweredOriginal(value === 'all' ? null : value === 'true')
-            setCurrentPage(1)
-          }}
-        >
-          <option value="all">All</option>
-          <option value="true">Yes (Original)</option>
-          <option value="false">No (Not Original)</option>
-        </select>
-
-        <label class="font-medium ml-auto">Items per page:</label>
-        <select
-          class="px-3 py-2 border rounded-md"
-          value={String(pageLimit())}
-          onChange={(e) => {
-            return handleLimitChange(parseInt(e.target.value))
-          }}
-        >
-          <option value="50">50</option>
-          <option value="100">100</option>
-          <option value="200">200</option>
-          <option value="500">500</option>
-        </select>
-      </div>
+      <ReviewsFilterControls
+        filterAnsweredOriginal={filterAnsweredOriginal}
+        setFilterAnsweredOriginal={setFilterAnsweredOriginal}
+        pageLimit={pageLimit}
+        setPageLimit={setPageLimit}
+        setCurrentPage={setCurrentPage}
+      />
 
       <div class="space-y-4">
         <Show when={articlesQuery.isPending}>
@@ -159,48 +124,11 @@ const Reviews = () => {
                 </div>
 
                 <Show when={totalPages > 1}>
-                  <div class="flex items-center justify-center gap-2 p-4 bg-white rounded-lg shadow">
-                    <button
-                      class="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 border border-gray-300 rounded-md hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                      disabled={page <= 1}
-                      onClick={() => {
-                        return handlePageChange(page - 1)
-                      }}
-                    >
-                      Previous
-                    </button>
-
-                    <span class="mx-4 text-sm text-gray-700">
-                      Page {page} of {totalPages}
-                    </span>
-
-                    <button
-                      class="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 border border-gray-300 rounded-md hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                      disabled={page >= totalPages}
-                      onClick={() => {
-                        return handlePageChange(page + 1)
-                      }}
-                    >
-                      Next
-                    </button>
-
-                    <div class="ml-4 flex items-center gap-2">
-                      <label class="text-sm text-gray-700">Go to page:</label>
-                      <input
-                        type="number"
-                        min="1"
-                        max={totalPages}
-                        value={page}
-                        class="w-16 px-2 py-1 text-sm border rounded-md"
-                        onInput={(e) => {
-                          const newPage = parseInt(e.target.value)
-                          if (newPage >= 1 && newPage <= totalPages) {
-                            handlePageChange(newPage)
-                          }
-                        }}
-                      />
-                    </div>
-                  </div>
+                  <ReviewsPaginationControls
+                    page={page}
+                    totalPages={totalPages}
+                    setCurrentPage={setCurrentPage}
+                  />
                 </Show>
 
                 <Show
@@ -215,127 +143,18 @@ const Reviews = () => {
                   <div class="grid gap-4">
                     <For each={articles}>
                       {(article) => {
-                        return (
-                          <div class="p-4 bg-white rounded-lg shadow hover:shadow-md transition-shadow">
-                            <div class="mb-2">
-                              <h4 class="font-semibold text-lg">
-                                {article.articleTitle}
-                              </h4>
-                              <p class="text-sm text-gray-600">
-                                {article.articleCreatedAt
-                                  ? format(
-                                      article.articleCreatedAt,
-                                      'yyyy-MM-dd',
-                                    )
-                                  : 'No date provided'}
-                              </p>
-                              <a
-                                href={getArticleUrl(article.articleId)}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                class="text-blue-600 hover:underline"
-                              >
-                                {article.articleId}
-                              </a>
-                              <p class="text-sm text-gray-600">
-                                ID: {article.id}
-                              </p>
-                            </div>
-
-                            <Show when={article.articleSummary}>
-                              <p class="text-gray-700 mb-3">
-                                {article.articleSummary}
-                              </p>
-                            </Show>
-
-                            <div class="flex gap-4 text-sm">
-                              <Show when={article.doi}>
-                                <a
-                                  href={`https://doi.org/${article.doi}`}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  class="text-blue-600 hover:underline"
-                                >
-                                  DOI: {article.doi}
-                                </a>
-                              </Show>
-
-                              <Show when={article.pubmedId}>
-                                <a
-                                  href={`https://pubmed.ncbi.nlm.nih.gov/${article.pubmedId}`}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  class="text-blue-600 hover:underline"
-                                >
-                                  PMID: {article.pubmedId}
-                                </a>
-                              </Show>
-                            </div>
-
-                            <div class="mt-3 pt-3 border-t">
-                              <p class="text-sm text-gray-600">
-                                Judgments: {article.judgments?.length || 0}
-                              </p>
-                              <Show
-                                when={
-                                  article.judgments
-                                  && article.judgments.length > 0
-                                }
-                              >
-                                <div class="mt-2 flex flex-wrap gap-2">
-                                  <For each={article.judgments}>
-                                    {(judgment) => {
-                                      return (
-                                        <span
-                                          class={`px-2 py-1 text-xs rounded ${
-                                            judgment.answeredOriginal
-                                              ? 'bg-green-100 text-green-800'
-                                              : 'bg-red-100 text-red-800'
-                                          }`}
-                                        >
-                                          {judgment.answeredOriginal
-                                            ? 'Original'
-                                            : 'Not Original'}
-                                        </span>
-                                      )
-                                    }}
-                                  </For>
-                                </div>
-                              </Show>
-                            </div>
-                          </div>
-                        )
+                        return <ReviewsArticleCard article={article} />
                       }}
                     </For>
                   </div>
                 </Show>
 
                 <Show when={totalPages > 1}>
-                  <div class="flex items-center justify-center gap-2 p-4 bg-white rounded-lg shadow">
-                    <button
-                      class="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 border border-gray-300 rounded-md hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                      disabled={page <= 1}
-                      onClick={() => {
-                        return handlePageChange(page - 1)
-                      }}
-                    >
-                      Previous
-                    </button>
-
-                    <span class="mx-4 text-sm text-gray-700">
-                      Page {page} of {totalPages}
-                    </span>
-
-                    <button
-                      class="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 border border-gray-300 rounded-md hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                      disabled={page >= totalPages}
-                      onClick={() => {
-                        return handlePageChange(page + 1)
-                      }}
-                    >
-                      Next
-                    </button>
-                  </div>
+                  <ReviewsPaginationControls
+                    page={page}
+                    totalPages={totalPages}
+                    setCurrentPage={setCurrentPage}
+                  />
                 </Show>
               </div>
             )
