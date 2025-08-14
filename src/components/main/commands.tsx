@@ -5,7 +5,7 @@ import {run} from '../../agent.ts'
 import {startArxivHarvest} from '../../agent/startArxivHarvest.ts'
 import {runAgentHarvest} from '../../agent_harvest.ts'
 import {setState, state} from '../../stores/settingsStore.ts'
-import {SettingsPanel} from './subheader/subheaderSettingsPanel.tsx'
+import {SettingsPanel} from './commands/subheaderSettingsPanel.tsx'
 
 const CONFIG = {
   searchTerm: 'agent', // the arxiv oai api don't support search terms

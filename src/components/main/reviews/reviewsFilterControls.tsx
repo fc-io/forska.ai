@@ -1,9 +1,9 @@
-import {createSignal, For, onMount, Show} from 'solid-js'
-import type {Setter} from 'solid-js'
-
 import {useQuery} from '@tanstack/solid-query'
+import type {Setter} from 'solid-js'
+import {For, Show} from 'solid-js'
 
 import {apiClient} from '../../../services/apiClient.ts'
+import {DateRangePicker} from '../commands/subheaderSettingsPanel/subheaderSettingsPanelDateRangePicker.tsx'
 
 interface ReviewsFilterControlsProps {
   projectId: string
@@ -14,7 +14,30 @@ interface ReviewsFilterControlsProps {
   setCurrentPage: Setter<number>
 }
 
+const setFromDate = (date: Date) => {
+  console.log('setFromDate', date)
+
+  // setState(
+  //   produce((s) => {
+  //     s.fromDate = date
+  //   }),
+  // )
+}
+
+const setToDate = (date: Date) => {
+  console.log('setToDate', date)
+
+  // setState(
+  //   produce((s) => {
+  //     s.toDate = date
+  //   }),
+  // )
+}
+
 export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
+  const fromDate = new Date()
+  const toDate = new Date()
+
   const handleLimitChange = (newLimit: number) => {
     props.setPageLimit(newLimit)
     props.setCurrentPage(1)
@@ -66,12 +89,23 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
                   {(promptFilter) => {
                     return (
                       <div class="flex flex-col gap-2">
-                        <label class="font-medium text-sm truncate" title={promptFilter.promptName || `Prompt ${promptFilter.promptId}`}>
-                          {promptFilter.promptName || `Prompt ${promptFilter.promptId}`}:
+                        <label
+                          class="font-medium text-sm truncate"
+                          title={
+                            promptFilter.promptName
+                            || `Prompt ${promptFilter.promptId}`
+                          }
+                        >
+                          {promptFilter.promptName
+                            || `Prompt ${promptFilter.promptId}`}
+                          :
                         </label>
                         <select
                           class="px-3 py-2 border rounded-md"
-                          value={props.promptFilters()[promptFilter.promptId] || 'all'}
+                          value={
+                            props.promptFilters()[promptFilter.promptId]
+                            || 'all'
+                          }
                           onChange={(e) => {
                             return handlePromptFilterChange(
                               promptFilter.promptId,
@@ -92,7 +126,16 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
                 </For>
               </div>
               <div class="flex items-center gap-4 pt-4 border-t">
-
+                <div>
+                  <DateRangePicker
+                    defaultStart={fromDate}
+                    defaultEnd={toDate}
+                    onValueChange={([start, end]) => {
+                      setFromDate(start)
+                      setToDate(end)
+                    }}
+                  />
+                </div>
                 <label class="font-medium">Items per page:</label>
                 <select
                   class="px-3 py-2 border rounded-md"

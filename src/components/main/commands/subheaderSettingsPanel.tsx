@@ -10,28 +10,6 @@ import {
 } from '../../ui/slider'
 import {DateRangePicker} from './subheaderSettingsPanel/subheaderSettingsPanelDateRangePicker'
 
-interface DateRangeDemoProps {
-  fromDate: Date
-  toDate: Date
-  // eslint-disable-next-line no-unused-vars
-  setFromDate: (date: Date) => void
-  // eslint-disable-next-line no-unused-vars
-  setToDate: (date: Date) => void
-}
-
-const DateRangeDemo = (props: DateRangeDemoProps): JSX.Element => {
-  return (
-    <DateRangePicker
-      defaultStart={props.fromDate}
-      defaultEnd={props.toDate}
-      onValueChange={([start, end]) => {
-        props.setFromDate(start)
-        props.setToDate(end)
-      }}
-    />
-  )
-}
-
 interface SettingsPanelProps {
   isOpen: boolean
   onClose: () => void
@@ -56,11 +34,13 @@ const SettingsPanel = (props: SettingsPanelProps): JSX.Element => {
               The date range affects both harvest and agent runs.
             </p>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <DateRangeDemo
-                fromDate={props.fromDate}
-                toDate={props.toDate}
-                setFromDate={props.setFromDate}
-                setToDate={props.setToDate}
+              <DateRangePicker
+                defaultStart={props.fromDate}
+                defaultEnd={props.toDate}
+                onValueChange={([start, end]) => {
+                  props.setFromDate(start)
+                  props.setToDate(end)
+                }}
               />
             </div>
             <div>
@@ -104,4 +84,4 @@ const SettingsPanel = (props: SettingsPanelProps): JSX.Element => {
   )
 }
 
-export {DateRangeDemo, SettingsPanel, type SettingsPanelProps}
+export {SettingsPanel, type SettingsPanelProps}

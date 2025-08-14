@@ -31,7 +31,7 @@ export interface DateRangePickerProps {
   numOfMonths?: number
   maxDate?: Date
   defaultStart: Date
-  defaultEnd: Date
+  defaultEnd: defaultFocusedValue
   // eslint-disable-next-line no-unused-vars
   onValueChange?: (dates: [Date, Date]) => void
 }
@@ -64,13 +64,13 @@ export const DateRangePicker = (props: DateRangePickerProps): JSX.Element => {
       }}
     >
       <DatePickerControl>
-        <DatePickerInput index={0} />
-        <DatePickerInput index={1} />
-        <DatePickerTrigger />
+        <DatePickerInput index={0} class="bg-white" />
+        <DatePickerInput index={1} class="bg-white" />
+        <DatePickerTrigger class="bg-white" />
       </DatePickerControl>
       <Portal>
         <DatePickerPositioner>
-          <DatePickerContent>
+          <DatePickerContent class="bg-white">
             <DatePickerView view="day">
               <DatePickerContext>
                 {(api) => {
