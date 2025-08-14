@@ -36,6 +36,7 @@
     "@tanstack/solid-query": "^5.83.1",
     "@tanstack/solid-router": "^1.130.12",
     "@tanstack/solid-router-devtools": "^1.130.13",
+    "@tanstack/solid-table": "^8.21.3",
     "@typescript-eslint/eslint-plugin": "^8.39.0",
     "@typescript-eslint/parser": "^8.39.0",
     "ai": "^5.0.9",

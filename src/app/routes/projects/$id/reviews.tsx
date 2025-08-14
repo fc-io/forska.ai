@@ -1,8 +1,8 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute} from '@tanstack/solid-router'
-import {createSignal, For, Show} from 'solid-js'
+import {createSignal, Show} from 'solid-js'
 
-import {ReviewsArticleCard} from '../../../../components/main/reviews/reviewsArticleCard.tsx'
+import {ReviewsArticlesTable} from '../../../../components/main/reviews/reviewsArticlesTable/reviewsArticlesTable.tsx'
 import {ReviewsFilterControls} from '../../../../components/main/reviews/reviewsFilterControls.tsx'
 import {ReviewsPaginationControls} from '../../../../components/main/reviews/reviewsPaginationControls.tsx'
 import type {articles, judgments} from '../../../../db/schema.ts'
@@ -143,13 +143,7 @@ const Reviews = () => {
                     </div>
                   }
                 >
-                  <div class="grid gap-4">
-                    <For each={articles}>
-                      {(article) => {
-                        return <ReviewsArticleCard article={article} />
-                      }}
-                    </For>
-                  </div>
+                  <ReviewsArticlesTable articles={articles} />
                 </Show>
 
                 <Show when={totalPages > 1}>

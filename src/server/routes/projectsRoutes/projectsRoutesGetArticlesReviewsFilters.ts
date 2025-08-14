@@ -44,10 +44,7 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
         }),
       )
 
-      return {
-        data: promptFilters,
-        error: null,
-      }
+      return {data: promptFilters, error: null}
     } catch (error) {
       console.error('Error fetching articles reviews filters:', error)
       return {
@@ -59,7 +56,5 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
       }
     }
   },
-  {
-    params: t.Object({id: t.String()}),
-  },
+  {params: t.Object({id: t.String()})},
 )

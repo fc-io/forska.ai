@@ -6,7 +6,13 @@ import {getDatabase} from '../../utils/getDatabase.ts'
 
 export const projectsRoutesGetArticlesReviews = new Elysia().get(
   '/api/projects/:id/articles-reviews',
-  async ({params, query}: {params: {id: string}; query?: Record<string, string | undefined>}) => {
+  async ({
+    params,
+    query,
+  }: {
+    params: {id: string}
+    query?: Record<string, string | undefined>
+  }) => {
     try {
       const db = getDatabase()
 
