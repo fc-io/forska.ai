@@ -18,6 +18,7 @@ import { Route as AboutIndexRouteImport } from './routes/about/index'
 import { Route as ProjectsCreateRouteImport } from './routes/projects/create'
 import { Route as ProjectsIdIndexRouteImport } from './routes/projects/$id/index'
 import { Route as AdminUsersIndexRouteImport } from './routes/admin/users/index'
+import { Route as ProjectsIdReviewsRouteImport } from './routes/projects/$id/reviews'
 import { Route as ProjectsIdEditRouteImport } from './routes/projects/$id/edit'
 
 const IndexRoute = IndexRouteImport.update({
@@ -65,6 +66,11 @@ const AdminUsersIndexRoute = AdminUsersIndexRouteImport.update({
   path: '/admin/users/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ProjectsIdReviewsRoute = ProjectsIdReviewsRouteImport.update({
+  id: '/projects/$id/reviews',
+  path: '/projects/$id/reviews',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ProjectsIdEditRoute = ProjectsIdEditRouteImport.update({
   id: '/projects/$id/edit',
   path: '/projects/$id/edit',
@@ -80,6 +86,7 @@ export interface FileRoutesByFullPath {
   '/projects': typeof ProjectsIndexRoute
   '/settings': typeof SettingsIndexRoute
   '/projects/$id/edit': typeof ProjectsIdEditRoute
+  '/projects/$id/reviews': typeof ProjectsIdReviewsRoute
   '/admin/users': typeof AdminUsersIndexRoute
   '/projects/$id': typeof ProjectsIdIndexRoute
 }
@@ -92,6 +99,7 @@ export interface FileRoutesByTo {
   '/projects': typeof ProjectsIndexRoute
   '/settings': typeof SettingsIndexRoute
   '/projects/$id/edit': typeof ProjectsIdEditRoute
+  '/projects/$id/reviews': typeof ProjectsIdReviewsRoute
   '/admin/users': typeof AdminUsersIndexRoute
   '/projects/$id': typeof ProjectsIdIndexRoute
 }
@@ -105,6 +113,7 @@ export interface FileRoutesById {
   '/projects/': typeof ProjectsIndexRoute
   '/settings/': typeof SettingsIndexRoute
   '/projects/$id/edit': typeof ProjectsIdEditRoute
+  '/projects/$id/reviews': typeof ProjectsIdReviewsRoute
   '/admin/users/': typeof AdminUsersIndexRoute
   '/projects/$id/': typeof ProjectsIdIndexRoute
 }
@@ -119,6 +128,7 @@ export interface FileRouteTypes {
     | '/projects'
     | '/settings'
     | '/projects/$id/edit'
+    | '/projects/$id/reviews'
     | '/admin/users'
     | '/projects/$id'
   fileRoutesByTo: FileRoutesByTo
@@ -131,6 +141,7 @@ export interface FileRouteTypes {
     | '/projects'
     | '/settings'
     | '/projects/$id/edit'
+    | '/projects/$id/reviews'
     | '/admin/users'
     | '/projects/$id'
   id:
@@ -143,6 +154,7 @@ export interface FileRouteTypes {
     | '/projects/'
     | '/settings/'
     | '/projects/$id/edit'
+    | '/projects/$id/reviews'
     | '/admin/users/'
     | '/projects/$id/'
   fileRoutesById: FileRoutesById
@@ -156,6 +168,7 @@ export interface RootRouteChildren {
   ProjectsIndexRoute: typeof ProjectsIndexRoute
   SettingsIndexRoute: typeof SettingsIndexRoute
   ProjectsIdEditRoute: typeof ProjectsIdEditRoute
+  ProjectsIdReviewsRoute: typeof ProjectsIdReviewsRoute
   AdminUsersIndexRoute: typeof AdminUsersIndexRoute
   ProjectsIdIndexRoute: typeof ProjectsIdIndexRoute
 }
@@ -225,6 +238,13 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof AdminUsersIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/projects/$id/reviews': {
+      id: '/projects/$id/reviews'
+      path: '/projects/$id/reviews'
+      fullPath: '/projects/$id/reviews'
+      preLoaderRoute: typeof ProjectsIdReviewsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/projects/$id/edit': {
       id: '/projects/$id/edit'
       path: '/projects/$id/edit'
@@ -244,6 +264,7 @@ const rootRouteChildren: RootRouteChildren = {
   ProjectsIndexRoute: ProjectsIndexRoute,
   SettingsIndexRoute: SettingsIndexRoute,
   ProjectsIdEditRoute: ProjectsIdEditRoute,
+  ProjectsIdReviewsRoute: ProjectsIdReviewsRoute,
   AdminUsersIndexRoute: AdminUsersIndexRoute,
   ProjectsIdIndexRoute: ProjectsIdIndexRoute,
 }

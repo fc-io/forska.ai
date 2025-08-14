@@ -47,7 +47,7 @@ export const ProjectDetailsInformation = (props: {
         <label class="text-sm font-medium text-muted-foreground">
           Description:
         </label>
-        <p class="text-sm">
+        <p class="text-sm max-w-[580px]">
           {props.project.description || 'No description provided'}
         </p>
       </div>
