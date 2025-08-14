@@ -15,9 +15,9 @@ type ArticleWithJudgments = typeof articles.$inferSelect & {
 const Reviews = () => {
   const params = Route.useParams()
   const projectId = (params() as {id: string}).id
-  const [filterAnsweredOriginal, setFilterAnsweredOriginal] = createSignal<
-    boolean | null
-  >(null)
+  const [promptFilters, setPromptFilters] = createSignal<
+    Record<string, string | null>
+  >({})
   const [currentPage, setCurrentPage] = createSignal(1)
   const [pageLimit, setPageLimit] = createSignal(100)
 
@@ -26,20 +26,24 @@ const Reviews = () => {
       queryKey: [
         'project-articles-reviews',
         projectId,
-        filterAnsweredOriginal(),
+        promptFilters(),
         currentPage(),
         pageLimit(),
       ],
       queryFn: async () => {
-        const queryParams: {
-          answered_original?: string
-          page?: string
-          limit?: string
-        } = {page: String(currentPage()), limit: String(pageLimit())}
-
-        if (filterAnsweredOriginal() !== null) {
-          queryParams.answered_original = String(filterAnsweredOriginal())
+        const queryParams: Record<string, string> = {
+          page: String(currentPage()),
+          limit: String(pageLimit()),
         }
+
+        // Add prompt filters to query params
+        const filters = promptFilters()
+        Object.entries(filters).forEach(([promptId, value]) => {
+          if (value !== null) {
+            queryParams[`prompt_${promptId}`] = value
+          }
+        })
+
         const response = await apiClient.api
           .projects({id: projectId})
           ['articles-reviews'].get({query: queryParams})
@@ -68,8 +72,9 @@ const Reviews = () => {
       <h1 class="text-3xl font-bold mb-6">Project Reviews</h1>
 
       <ReviewsFilterControls
-        filterAnsweredOriginal={filterAnsweredOriginal}
-        setFilterAnsweredOriginal={setFilterAnsweredOriginal}
+        projectId={projectId}
+        promptFilters={promptFilters}
+        setPromptFilters={setPromptFilters}
         pageLimit={pageLimit}
         setPageLimit={setPageLimit}
         setCurrentPage={setCurrentPage}
@@ -113,12 +118,8 @@ const Reviews = () => {
                   <p class="text-sm text-gray-600">
                     Showing articles that have judgments for all prompts in this
                     project
-                    {filterAnsweredOriginal() !== null && (
-                      <span>
-                        {' '}
-                        (filtered by answered_original ={' '}
-                        {filterAnsweredOriginal() ? 'Yes' : 'No'})
-                      </span>
+                    {Object.keys(promptFilters()).length > 0 && (
+                      <span> (with filters applied)</span>
                     )}
                   </p>
                 </div>
@@ -136,7 +137,9 @@ const Reviews = () => {
                   fallback={
                     <div class="p-8 text-center text-gray-500">
                       No articles found with complete judgments
-                      {filterAnsweredOriginal() !== null && ' for this filter'}
+                      {Object.keys(promptFilters()).some((k) => {
+                        return promptFilters()[k] !== null
+                      }) && ' for the selected filters'}
                     </div>
                   }
                 >

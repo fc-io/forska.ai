@@ -4,11 +4,13 @@ import {Elysia, t} from 'elysia'
 import {judgments, projects, prompts} from '../../db/schema.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {projectsRoutesGetArticlesReviews} from './projectsRoutes/projectsRoutesGetArticlesReviews.ts'
+import {projectsRoutesGetArticlesReviewsFilters} from './projectsRoutes/projectsRoutesGetArticlesReviewsFilters.ts'
 import {projectsRoutesGetArticlesWithJudgments} from './projectsRoutes/projectsRoutesGetArticlesWithJudgments.ts'
 
 export const projectsRoutes = new Elysia()
   .use(projectsRoutesGetArticlesWithJudgments)
   .use(projectsRoutesGetArticlesReviews)
+  .use(projectsRoutesGetArticlesReviewsFilters)
   .get('/api/projects', async () => {
     try {
       const db = getDatabase()

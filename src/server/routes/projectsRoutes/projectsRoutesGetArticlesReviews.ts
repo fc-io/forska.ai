@@ -1,18 +1,18 @@
 import {and, desc, eq, sql} from 'drizzle-orm'
-import {Elysia, t} from 'elysia'
+import {Elysia} from 'elysia'
 
 import {articles, judgments, prompts} from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
 export const projectsRoutesGetArticlesReviews = new Elysia().get(
   '/api/projects/:id/articles-reviews',
-  async ({params, query}) => {
+  async ({params, query}: {params: {id: string}; query?: Record<string, string | undefined>}) => {
     try {
       const db = getDatabase()
 
       // Parse pagination params with defaults
-      const page = parseInt(query.page || '1', 10)
-      const limit = parseInt(query.limit || '100', 10)
+      const page = parseInt(query?.page || '1', 10)
+      const limit = parseInt(query?.limit || '100', 10)
       const offset = (page - 1) * limit
 
       // First get all prompts for this project
@@ -33,21 +33,25 @@ export const projectsRoutesGetArticlesReviews = new Elysia().get(
       // Build the base query conditions
       const conditions = []
 
-      // Add filter for answered_original if provided
-      if (query.answered_original !== undefined) {
-        const answeredOriginalValue =
-          query.answered_original === 'true' ? 'yes' : 'no'
+      // Add filters for each prompt's answered_original if provided
+      const promptFilters: Record<string, string> = {}
+      if (query) {
+        for (const [key, value] of Object.entries(query)) {
+          if (key.startsWith('prompt_') && value) {
+            const promptId = key.replace('prompt_', '')
+            promptFilters[promptId] = value
+          }
+        }
+      }
+
+      // Apply prompt-specific filters
+      for (const [promptId, answeredValue] of Object.entries(promptFilters)) {
         conditions.push(
-          sql`NOT EXISTS (
+          sql`EXISTS (
             SELECT 1 FROM ${judgments}
             WHERE ${judgments.articleId} = ${articles.id}
-            AND ${judgments.promptId} = ANY(ARRAY[${sql.join(
-              promptIds.map((id) => {
-                return sql`${id}::uuid`
-              }),
-              sql`,`,
-            )}])
-            AND ${judgments.answeredOriginal} != ${answeredOriginalValue}
+            AND ${judgments.promptId} = ${promptId}::uuid
+            AND ${judgments.answeredOriginal} = ${answeredValue}
           )`,
         )
       }
@@ -206,13 +210,5 @@ export const projectsRoutesGetArticlesReviews = new Elysia().get(
             : 'Failed to fetch articles reviews',
       }
     }
-  },
-  {
-    params: t.Object({id: t.String()}),
-    query: t.Object({
-      answered_original: t.Optional(t.String()),
-      page: t.Optional(t.String()),
-      limit: t.Optional(t.String()),
-    }),
   },
 )
