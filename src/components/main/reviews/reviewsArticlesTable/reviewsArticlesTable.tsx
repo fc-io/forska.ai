@@ -10,11 +10,18 @@ import {For, Show} from 'solid-js'
 
 import {getArticleUrl} from '../../../../app/utils/getArticleUrl.ts'
 import type {articles, judgments} from '../../../../db/schema.ts'
+
+declare module '@tanstack/solid-table' {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  interface TableMeta<TData> {
+    projectId?: () => string
+  }
+}
+
 type JudgmentType = typeof judgments.$inferSelect
 
 type ArticleWithJudgments = Omit<typeof articles.$inferSelect, 'judgments'> & {
   judgments: Array<JudgmentType>
-  id: string
 }
 
 interface ReviewsArticlesTableProps {
@@ -22,7 +29,7 @@ interface ReviewsArticlesTableProps {
   projectId: string
 }
 
-const columns: ColumnDef<ArticleWithJudgments>[] = [
+const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
   {
     accessorKey: 'articleTitle',
     header: 'Title',
@@ -32,12 +39,12 @@ const columns: ColumnDef<ArticleWithJudgments>[] = [
         <Link
           to="/projects/$id/reviews/$articleId"
           params={{
-            id: info.table.options.meta?.projectId(),
+            id: info.table.options.meta?.projectId?.() || '',
             articleId: info.row.original.id,
           }}
           class="text-blue-600 hover:underline"
         >
-          {info.getValue() || 'Untitled'}
+          {(info.getValue() as string) || 'Untitled'}
         </Link>
       )
     },
