@@ -47,6 +47,30 @@ src
 * IMPORTANT: Do not remove debugger statements nor console.log unless explicitly asked (no matter what the linter says).
 * IMPORTANT: don't add comments, unless asked to. Instead split out complicated code into seperate functions with clear function names.
 
+## TypeScript conventions
+
+* IMPORTANT: Prefer `type` over `interface` for type definitions
+* Use explicit return types for functions when the return type is not immediately obvious
+* Prefer type unions and intersections over complex inheritance patterns
+
+## Import organization
+
+* Order imports as follows (automatically handled by eslint-plugin-simple-import-sort):
+  1. Node/Bun built-in modules
+  2. External packages
+  3. Internal aliases and absolute imports
+  4. Relative imports from parent directories
+  5. Relative imports from the same directory
+
+## Component patterns (SolidJS)
+
+* Use `splitProps` when destructuring component props to maintain reactivity
+* Prefer `createSignal` for simple local state, `createStore` for complex nested state
+* Use `createMemo` for expensive computed values
+* Prefer `Show` and `Switch`/`Match` over ternary operators in JSX
+* Use `For` and `Index` components for lists instead of `.map()`
+* When a component or its related utilities exceed 100 lines, extract them into a subfolder following the file structure conventions
+
 ## Platform and tools
 
 * IMPORTANT: Stack built on drizzle with postgres on the server, Bun, Vite, solid, tailwind, tanstack-router, @tanstack/solid-query, date-fns.
@@ -77,6 +101,21 @@ We use "eslint-plugin-prettier" so no need to run prettier separately.
 * Route files should be named in camelCase like `[resource]Routes.ts` (e.g., `projectsRoutes.ts`, `authRoutes.ts`)
 * Complex route logic should be extracted to separate files in a subfolder (e.g., `projectsRoutes/projectsRoutesGetArticlesReviews.ts`). In general any route logic over 15 lines should be in a seperate file.
 * Use Elysia framework patterns for route definitions.
+
+## Database patterns
+
+* IMPORTANT: Always use Drizzle ORM query builder methods instead of raw SQL
+* Use transactions for operations affecting multiple tables
+* Prefer `db.select()`, `db.insert()`, `db.update()`, `db.delete()` over `db.execute()`
+* Use prepared statements for frequently executed queries
+* Handle database errors with proper logging and user-friendly messages
+
+## Data validation
+
+* Use ArkType for runtime type validation at API boundaries when working above the Eden/RPC/Elysia stack
+* Validate all incoming request data before processing
+* Use ArkType's composable type definitions to ensure consistency across the codebase
+* Define validation schemas close to where they're used
 
 ## Testing
 
