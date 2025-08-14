@@ -2,11 +2,11 @@ import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute} from '@tanstack/solid-router'
 import {createSignal, Show} from 'solid-js'
 
-import {ReviewsArticlesTable} from '../../../../components/main/reviews/reviewsArticlesTable/reviewsArticlesTable.tsx'
-import {ReviewsFilterControls} from '../../../../components/main/reviews/reviewsFilterControls.tsx'
-import {ReviewsPaginationControls} from '../../../../components/main/reviews/reviewsPaginationControls.tsx'
-import type {articles, judgments} from '../../../../db/schema.ts'
-import {apiClient} from '../../../../services/apiClient.ts'
+import {ReviewsArticlesTable} from '../../../../../components/main/reviews/reviewsArticlesTable/reviewsArticlesTable.tsx'
+import {ReviewsFilterControls} from '../../../../../components/main/reviews/reviewsFilterControls.tsx'
+import {ReviewsPaginationControls} from '../../../../../components/main/reviews/reviewsPaginationControls.tsx'
+import type {articles, judgments} from '../../../../../db/schema.ts'
+import {apiClient} from '../../../../../services/apiClient.ts'
 
 type ArticleWithJudgments = typeof articles.$inferSelect & {
   judgments: Array<typeof judgments.$inferSelect>
@@ -69,7 +69,7 @@ const Reviews = () => {
 
   return (
     <div class="min-h-screen bg-gray-50 p-6 mx-auto">
-      <h1 class="text-3xl font-bold mb-6">Project Reviews</h1>
+      <h1 class="text-1xl font-bold mb-6">Project Reviews</h1>
 
       <ReviewsFilterControls
         projectId={projectId}
@@ -138,7 +138,10 @@ const Reviews = () => {
                     </div>
                   }
                 >
-                  <ReviewsArticlesTable articles={response().data} />
+                  <ReviewsArticlesTable
+                    projectId={projectId}
+                    articles={response().data}
+                  />
                 </Show>
 
                 <Show when={response().totalPages > 1}>
@@ -156,6 +159,6 @@ const Reviews = () => {
     </div>
   )
 }
-export const Route = createFileRoute('/projects/$id/reviews')({
+export const Route = createFileRoute('/projects/$id/reviews/')({
   component: Reviews,
 })

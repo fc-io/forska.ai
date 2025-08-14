@@ -18,8 +18,9 @@ import { Route as AboutIndexRouteImport } from './routes/about/index'
 import { Route as ProjectsCreateRouteImport } from './routes/projects/create'
 import { Route as ProjectsIdIndexRouteImport } from './routes/projects/$id/index'
 import { Route as AdminUsersIndexRouteImport } from './routes/admin/users/index'
-import { Route as ProjectsIdReviewsRouteImport } from './routes/projects/$id/reviews'
 import { Route as ProjectsIdEditRouteImport } from './routes/projects/$id/edit'
+import { Route as ProjectsIdReviewsIndexRouteImport } from './routes/projects/$id/reviews/index'
+import { Route as ProjectsIdReviewsArticleIdIndexRouteImport } from './routes/projects/$id/reviews/$articleId/index'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -66,16 +67,22 @@ const AdminUsersIndexRoute = AdminUsersIndexRouteImport.update({
   path: '/admin/users/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ProjectsIdReviewsRoute = ProjectsIdReviewsRouteImport.update({
-  id: '/projects/$id/reviews',
-  path: '/projects/$id/reviews',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const ProjectsIdEditRoute = ProjectsIdEditRouteImport.update({
   id: '/projects/$id/edit',
   path: '/projects/$id/edit',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ProjectsIdReviewsIndexRoute = ProjectsIdReviewsIndexRouteImport.update({
+  id: '/projects/$id/reviews/',
+  path: '/projects/$id/reviews/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProjectsIdReviewsArticleIdIndexRoute =
+  ProjectsIdReviewsArticleIdIndexRouteImport.update({
+    id: '/projects/$id/reviews/$articleId/',
+    path: '/projects/$id/reviews/$articleId/',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -86,9 +93,10 @@ export interface FileRoutesByFullPath {
   '/projects': typeof ProjectsIndexRoute
   '/settings': typeof SettingsIndexRoute
   '/projects/$id/edit': typeof ProjectsIdEditRoute
-  '/projects/$id/reviews': typeof ProjectsIdReviewsRoute
   '/admin/users': typeof AdminUsersIndexRoute
   '/projects/$id': typeof ProjectsIdIndexRoute
+  '/projects/$id/reviews': typeof ProjectsIdReviewsIndexRoute
+  '/projects/$id/reviews/$articleId': typeof ProjectsIdReviewsArticleIdIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -99,9 +107,10 @@ export interface FileRoutesByTo {
   '/projects': typeof ProjectsIndexRoute
   '/settings': typeof SettingsIndexRoute
   '/projects/$id/edit': typeof ProjectsIdEditRoute
-  '/projects/$id/reviews': typeof ProjectsIdReviewsRoute
   '/admin/users': typeof AdminUsersIndexRoute
   '/projects/$id': typeof ProjectsIdIndexRoute
+  '/projects/$id/reviews': typeof ProjectsIdReviewsIndexRoute
+  '/projects/$id/reviews/$articleId': typeof ProjectsIdReviewsArticleIdIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -113,9 +122,10 @@ export interface FileRoutesById {
   '/projects/': typeof ProjectsIndexRoute
   '/settings/': typeof SettingsIndexRoute
   '/projects/$id/edit': typeof ProjectsIdEditRoute
-  '/projects/$id/reviews': typeof ProjectsIdReviewsRoute
   '/admin/users/': typeof AdminUsersIndexRoute
   '/projects/$id/': typeof ProjectsIdIndexRoute
+  '/projects/$id/reviews/': typeof ProjectsIdReviewsIndexRoute
+  '/projects/$id/reviews/$articleId/': typeof ProjectsIdReviewsArticleIdIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -128,9 +138,10 @@ export interface FileRouteTypes {
     | '/projects'
     | '/settings'
     | '/projects/$id/edit'
-    | '/projects/$id/reviews'
     | '/admin/users'
     | '/projects/$id'
+    | '/projects/$id/reviews'
+    | '/projects/$id/reviews/$articleId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -141,9 +152,10 @@ export interface FileRouteTypes {
     | '/projects'
     | '/settings'
     | '/projects/$id/edit'
-    | '/projects/$id/reviews'
     | '/admin/users'
     | '/projects/$id'
+    | '/projects/$id/reviews'
+    | '/projects/$id/reviews/$articleId'
   id:
     | '__root__'
     | '/'
@@ -154,9 +166,10 @@ export interface FileRouteTypes {
     | '/projects/'
     | '/settings/'
     | '/projects/$id/edit'
-    | '/projects/$id/reviews'
     | '/admin/users/'
     | '/projects/$id/'
+    | '/projects/$id/reviews/'
+    | '/projects/$id/reviews/$articleId/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -168,9 +181,10 @@ export interface RootRouteChildren {
   ProjectsIndexRoute: typeof ProjectsIndexRoute
   SettingsIndexRoute: typeof SettingsIndexRoute
   ProjectsIdEditRoute: typeof ProjectsIdEditRoute
-  ProjectsIdReviewsRoute: typeof ProjectsIdReviewsRoute
   AdminUsersIndexRoute: typeof AdminUsersIndexRoute
   ProjectsIdIndexRoute: typeof ProjectsIdIndexRoute
+  ProjectsIdReviewsIndexRoute: typeof ProjectsIdReviewsIndexRoute
+  ProjectsIdReviewsArticleIdIndexRoute: typeof ProjectsIdReviewsArticleIdIndexRoute
 }
 
 declare module '@tanstack/solid-router' {
@@ -238,18 +252,25 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof AdminUsersIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/projects/$id/reviews': {
-      id: '/projects/$id/reviews'
-      path: '/projects/$id/reviews'
-      fullPath: '/projects/$id/reviews'
-      preLoaderRoute: typeof ProjectsIdReviewsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/projects/$id/edit': {
       id: '/projects/$id/edit'
       path: '/projects/$id/edit'
       fullPath: '/projects/$id/edit'
       preLoaderRoute: typeof ProjectsIdEditRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/projects/$id/reviews/': {
+      id: '/projects/$id/reviews/'
+      path: '/projects/$id/reviews'
+      fullPath: '/projects/$id/reviews'
+      preLoaderRoute: typeof ProjectsIdReviewsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/projects/$id/reviews/$articleId/': {
+      id: '/projects/$id/reviews/$articleId/'
+      path: '/projects/$id/reviews/$articleId'
+      fullPath: '/projects/$id/reviews/$articleId'
+      preLoaderRoute: typeof ProjectsIdReviewsArticleIdIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
   }
@@ -264,9 +285,10 @@ const rootRouteChildren: RootRouteChildren = {
   ProjectsIndexRoute: ProjectsIndexRoute,
   SettingsIndexRoute: SettingsIndexRoute,
   ProjectsIdEditRoute: ProjectsIdEditRoute,
-  ProjectsIdReviewsRoute: ProjectsIdReviewsRoute,
   AdminUsersIndexRoute: AdminUsersIndexRoute,
   ProjectsIdIndexRoute: ProjectsIdIndexRoute,
+  ProjectsIdReviewsIndexRoute: ProjectsIdReviewsIndexRoute,
+  ProjectsIdReviewsArticleIdIndexRoute: ProjectsIdReviewsArticleIdIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

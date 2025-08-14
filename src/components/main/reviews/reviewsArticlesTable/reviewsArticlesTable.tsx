@@ -1,3 +1,4 @@
+import {Link} from '@tanstack/solid-router'
 import {
   type ColumnDef,
   createSolidTable,
@@ -7,17 +8,18 @@ import {
 import {format} from 'date-fns'
 import {For, Show} from 'solid-js'
 
-import type {articles, judgments} from '../../../../../db/schema.ts'
 import {getArticleUrl} from '../../../../app/utils/getArticleUrl.ts'
-
+import type {articles, judgments} from '../../../../db/schema.ts'
 type JudgmentType = typeof judgments.$inferSelect
 
 type ArticleWithJudgments = Omit<typeof articles.$inferSelect, 'judgments'> & {
   judgments: Array<JudgmentType>
+  id: string
 }
 
 interface ReviewsArticlesTableProps {
   articles: ArticleWithJudgments[]
+  projectId: string
 }
 
 const columns: ColumnDef<ArticleWithJudgments>[] = [
@@ -25,7 +27,19 @@ const columns: ColumnDef<ArticleWithJudgments>[] = [
     accessorKey: 'articleTitle',
     header: 'Title',
     cell: (info) => {
-      return info.getValue() || 'Untitled'
+      debugger
+      return (
+        <Link
+          to="/projects/$id/reviews/$articleId"
+          params={{
+            id: info.table.options.meta?.projectId(),
+            articleId: info.row.original.id,
+          }}
+          class="text-blue-600 hover:underline"
+        >
+          {info.getValue() || 'Untitled'}
+        </Link>
+      )
     },
   },
   {
@@ -50,44 +64,6 @@ const columns: ColumnDef<ArticleWithJudgments>[] = [
         >
           {articleId}
         </a>
-      )
-    },
-  },
-  {
-    accessorKey: 'doi',
-    header: 'DOI',
-    cell: (info) => {
-      const doi = info.getValue() as string | null
-      return (
-        <Show when={doi} fallback="-">
-          <a
-            href={`https://doi.org/${doi}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            class="text-blue-600 hover:underline"
-          >
-            {doi}
-          </a>
-        </Show>
-      )
-    },
-  },
-  {
-    accessorKey: 'pubmedId',
-    header: 'PMID',
-    cell: (info) => {
-      const pubmedId = info.getValue() as string | null
-      return (
-        <Show when={pubmedId} fallback="-">
-          <a
-            href={`https://pubmed.ncbi.nlm.nih.gov/${pubmedId}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            class="text-blue-600 hover:underline"
-          >
-            {pubmedId}
-          </a>
-        </Show>
       )
     },
   },
@@ -135,12 +111,19 @@ const columns: ColumnDef<ArticleWithJudgments>[] = [
 ]
 
 export const ReviewsArticlesTable = (props: ReviewsArticlesTableProps) => {
+  const projectId = () => {
+    return props.projectId
+  }
   const table = createSolidTable({
     get data() {
       return props.articles
     },
     columns,
     getCoreRowModel: getCoreRowModel(),
+    meta: {
+      projectId,
+      // formatMoney,    // function
+    },
   })
 
   return (
