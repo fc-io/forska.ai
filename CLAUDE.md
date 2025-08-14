@@ -6,7 +6,7 @@ alwaysApply: true
 IMPORTANT: on the server – prefer drizzle orm over executing pure sql commands
 IMPORTANT: on the client/app - use import {useQuery} from '@tanstack/solid-query' over createQuery
 IMPORTANT: Keep filenames pascal case. Even for tsx/jsx react components.
-there is an .env.local file in the project, you just can't read it beacuse of secuity concerns. Always assume the .env files are correct unless the env.ts file throws an error. Use process.env instead of buns env functionaltiy to stay compatible with ordinary node.
+there is an .env.local file in the project, you just can't read it because of security concerns. Always assume the .env files are correct unless the env.ts file throws an error. Use process.env instead of buns env functionaltiy to stay compatible with ordinary node.
 
 ## File structure
 
@@ -37,11 +37,10 @@ src
 * IMPORTANT: Prefer function expressions using arrow functions.
 * IMPORTANT: Prefer named module exports (no `export default ...`)
 * IMPORTANT: Prefer const instead of let. If you reach for let some other assumption is probably wrong.
-* IMPORTANT: Prefer recursive functions over while/for loops. Bun uses proper‑tail‑call implementation, so the recursion never grows the stack – use that do code recursive functions and not while/for loops.
-* IMPORTANT: Prefer to use named exports.
-* IMPORTANT: Prefer to use `export const Subheader = () => {...` over `const Subheader = () => {...; export {Subheader}`
+* IMPORTANT: Prefer recursive functions over while/for loops. Bun uses proper-tail-call implementation, so the recursion never grows the stack – use that do code recursive functions and not while/for loops.
+* IMPORTANT: Prefer to use named exports in this format `export const Subheader = () => {...` over `const Subheader = () => {...; export {Subheader}`.
 * IMPORTANT: Prefer to not declare functions inside components unless you have to.
-* IMPORTANT: Prefer tp only have one return statement per functions
+* IMPORTANT: Prefer to only have one return statement per function
 * Prefer to handle all errors and throws gracefully if easily possible.
 * Try to keep code succinct and DRY – simplify code if possible.
 
@@ -64,12 +63,20 @@ Default to using Bun instead of Node.js.
 
 ## Linting/formating
 
-Don't try to fix liniting issues unrelated to the task you are trying to accomplish. Don't remove debugger statements or console.log unless explicitly asked (no matter what the linter says).
+Don't try to fix linting issues unrelated to the task you are trying to accomplish. Don't remove debugger statements or console.log unless explicitly asked (no matter what the linter says).
 
-We use "eslint-plugin-prettier" so no need to run prettier seperatly.
+We use "eslint-plugin-prettier" so no need to run prettier separately.
 
 - Use `bun run lint` to see linting errors
 - Use `bun run lint:fix` to fix linting issues
+
+## API/Route naming conventions
+
+* Server routes use `/api/` prefix followed by resource name in plural (e.g., `/api/projects`, `/api/users`)
+* Use RESTful conventions: GET for reading, POST for creating, PUT/PATCH for updating, DELETE for removing
+* Route files should be named in camelCase like `[resource]Routes.ts` (e.g., `projectsRoutes.ts`, `authRoutes.ts`)
+* Complex route logic should be extracted to separate files in a subfolder (e.g., `projectsRoutes/projectsRoutesGetArticlesReviews.ts`). In general any route logic over 15 lines should be in a seperate file.
+* Use Elysia framework patterns for route definitions.
 
 ## Testing
 
