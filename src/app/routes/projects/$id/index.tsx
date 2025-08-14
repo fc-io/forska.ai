@@ -73,8 +73,8 @@ const ProjectDetail = () => {
               onClick={() => {
                 return void handleDeleteProject()
               }}
-              // eslint-disable-next-line solid/no-constant-condition
-              disabled={true || deletingProject()}
+              // TODO: makke this check on the server side as well
+              disabled={projectData.data?.hasJudgedArticles}
             >
               {deletingProject() ? 'Deleting...' : 'Delete Project'}
             </Button>
