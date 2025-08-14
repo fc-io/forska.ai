@@ -1,4 +1,4 @@
-import {and, desc, eq, sql} from 'drizzle-orm'
+import {and, desc, eq, inArray, sql} from 'drizzle-orm'
 import {Elysia} from 'elysia'
 
 import {articles, judgments, prompts} from '../../../db/schema.ts'
@@ -15,7 +15,7 @@ export const projectsRoutesGetArticlesReviews = new Elysia().get(
       to: string
       page: string
       limit: string
-      prompts: Record<string, string>
+      prompts: string
     }
   }) => {
     console.log('--------------------------------')
@@ -53,26 +53,49 @@ export const projectsRoutesGetArticlesReviews = new Elysia().get(
       const conditions = []
 
       // Add filters for each prompt's answered_original if provided
-      const promptFilters: Record<string, string> = {}
+      const parsedPrompts = JSON.parse(query.prompts) as Record<string, string>
+      const promptFilters = Object.entries(parsedPrompts)
+        .filter(([key, value]) => {
+          return key.startsWith('prompt_') && value
+        })
+        .map(([key, value]) => {
+          return [key.replace('prompt_', ''), value] as const
+        })
 
-      for (const [key, value] of Object.entries(query.prompts)) {
-        if (key.startsWith('prompt_') && value) {
-          const promptId = key.replace('prompt_', '')
-          promptFilters[promptId] = value
-        }
+      console.log('--------------------------------')
+      console.log('--------------------------------')
+      console.log('promptFilters', promptFilters)
+      console.log('--------------------------------')
+
+      // Apply prompt-specific filters using Drizzle subqueries
+      for (const [promptId, answeredValue] of promptFilters) {
+        const subquery = db
+          .select({exists: sql`1`})
+          .from(judgments)
+          .where(
+            and(
+              eq(judgments.articleId, articles.id),
+              eq(judgments.promptId, promptId),
+              eq(judgments.answeredOriginal, answeredValue),
+            ),
+          )
+          .limit(1)
+
+        conditions.push(sql`EXISTS (${subquery})`)
       }
 
-      // Apply prompt-specific filters
-      for (const [promptId, answeredValue] of Object.entries(promptFilters)) {
-        conditions.push(
-          sql`EXISTS (
-            SELECT 1 FROM ${judgments}
-            WHERE ${judgments.articleId} = ${articles.id}
-            AND ${judgments.promptId} = ${promptId}::uuid
-            AND ${judgments.answeredOriginal} = ${answeredValue}
-          )`,
-        )
-      }
+      // Build the base exists condition using Drizzle
+      const baseExistsCondition = sql`EXISTS (
+        ${db
+          .select({exists: sql`1`})
+          .from(judgments)
+          .where(
+            and(
+              eq(judgments.articleId, articles.id),
+              inArray(judgments.promptId, promptIds),
+            ),
+          )}
+      )`
 
       // First, get the total count
       const countQuery = await db
@@ -80,30 +103,12 @@ export const projectsRoutesGetArticlesReviews = new Elysia().get(
           count: sql<number>`COUNT(DISTINCT ${articles.id})`.as('count'),
         })
         .from(articles)
-        .where(
-          conditions.length > 0
-            ? and(...conditions)
-            : sql`EXISTS (
-                SELECT 1 FROM ${judgments}
-                WHERE ${judgments.articleId} = ${articles.id}
-                AND ${judgments.promptId} = ANY(ARRAY[${sql.join(
-                  promptIds.map((id) => {
-                    return sql`${id}::uuid`
-                  }),
-                  sql`,`,
-                )}])
-              )`,
-        )
+        .where(conditions.length > 0 ? and(...conditions) : baseExistsCondition)
         .innerJoin(
           judgments,
           and(
             eq(judgments.articleId, articles.id),
-            sql`${judgments.promptId} = ANY(ARRAY[${sql.join(
-              promptIds.map((id) => {
-                return sql`${id}::uuid`
-              }),
-              sql`,`,
-            )}])`,
+            inArray(judgments.promptId, promptIds),
           ),
         )
         .groupBy(articles.id)
@@ -118,32 +123,19 @@ export const projectsRoutesGetArticlesReviews = new Elysia().get(
         .select({
           article: articles,
           judgmentCount: sql<number>`(
-            SELECT COUNT(DISTINCT ${judgments.promptId})
-            FROM ${judgments}
-            WHERE ${judgments.articleId} = ${articles.id}
-            AND ${judgments.promptId} = ANY(ARRAY[${sql.join(
-              promptIds.map((id) => {
-                return sql`${id}::uuid`
-              }),
-              sql`,`,
-            )}])
+            ${db
+              .select({count: sql`COUNT(DISTINCT ${judgments.promptId})`})
+              .from(judgments)
+              .where(
+                and(
+                  eq(judgments.articleId, articles.id),
+                  inArray(judgments.promptId, promptIds),
+                ),
+              )}
           )`.as('judgment_count'),
         })
         .from(articles)
-        .where(
-          conditions.length > 0
-            ? and(...conditions)
-            : sql`EXISTS (
-                SELECT 1 FROM ${judgments}
-                WHERE ${judgments.articleId} = ${articles.id}
-                AND ${judgments.promptId} = ANY(ARRAY[${sql.join(
-                  promptIds.map((id) => {
-                    return sql`${id}::uuid`
-                  }),
-                  sql`,`,
-                )}])
-              )`,
-        )
+        .where(conditions.length > 0 ? and(...conditions) : baseExistsCondition)
         .having(
           sql`COUNT(DISTINCT ${judgments.promptId}) = ${promptIds.length}`,
         )
@@ -151,12 +143,7 @@ export const projectsRoutesGetArticlesReviews = new Elysia().get(
           judgments,
           and(
             eq(judgments.articleId, articles.id),
-            sql`${judgments.promptId} = ANY(ARRAY[${sql.join(
-              promptIds.map((id) => {
-                return sql`${id}::uuid`
-              }),
-              sql`,`,
-            )}])`,
+            inArray(judgments.promptId, promptIds),
           ),
         )
         .groupBy(articles.id)
@@ -176,18 +163,8 @@ export const projectsRoutesGetArticlesReviews = new Elysia().get(
               .from(judgments)
               .where(
                 and(
-                  sql`${judgments.articleId} = ANY(ARRAY[${sql.join(
-                    articleIds.map((id) => {
-                      return sql`${id}::uuid`
-                    }),
-                    sql`,`,
-                  )}])`,
-                  sql`${judgments.promptId} = ANY(ARRAY[${sql.join(
-                    promptIds.map((id) => {
-                      return sql`${id}::uuid`
-                    }),
-                    sql`,`,
-                  )}])`,
+                  inArray(judgments.articleId, articleIds),
+                  inArray(judgments.promptId, promptIds),
                 ),
               )
           : []
