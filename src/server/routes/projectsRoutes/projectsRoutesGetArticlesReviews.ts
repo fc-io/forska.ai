@@ -5,14 +5,27 @@ import {articles, judgments, prompts} from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
 export const projectsRoutesGetArticlesReviews = new Elysia().get(
-  '/api/projects/:id/articles-reviews',
+  '/api/articlesreviews',
   async ({
-    params,
     query,
   }: {
-    params: {id: string}
-    query?: Record<string, string | undefined>
+    query: {
+      projectId: string
+      from: string
+      to: string
+      page: string
+      limit: string
+      prompts: Record<string, string>
+    }
   }) => {
+    console.log('--------------------------------')
+    console.log('--------------------------------')
+    console.log('--------------------------------')
+    console.log('--------------------------------')
+    console.log('--------------------------------')
+    console.log('--------------------------------')
+    console.log('articlesreviews', query)
+    console.log('--------------------------------')
     try {
       const db = getDatabase()
 
@@ -25,10 +38,10 @@ export const projectsRoutesGetArticlesReviews = new Elysia().get(
       const projectPrompts = await db
         .select()
         .from(prompts)
-        .where(eq(prompts.projectId, params.id))
+        .where(eq(prompts.projectId, query.projectId))
 
       if (projectPrompts.length === 0) {
-        return {data: [], totalCount: 0, page, limit, error: null}
+        return {data: [], totalCount: 0, page, limit, totalPages: 0}
       }
 
       // Get articles that have judgments for ALL prompts of the project
@@ -41,12 +54,11 @@ export const projectsRoutesGetArticlesReviews = new Elysia().get(
 
       // Add filters for each prompt's answered_original if provided
       const promptFilters: Record<string, string> = {}
-      if (query) {
-        for (const [key, value] of Object.entries(query)) {
-          if (key.startsWith('prompt_') && value) {
-            const promptId = key.replace('prompt_', '')
-            promptFilters[promptId] = value
-          }
+
+      for (const [key, value] of Object.entries(query.prompts)) {
+        if (key.startsWith('prompt_') && value) {
+          const promptId = key.replace('prompt_', '')
+          promptFilters[promptId] = value
         }
       }
 
@@ -200,21 +212,14 @@ export const projectsRoutesGetArticlesReviews = new Elysia().get(
         page,
         limit,
         totalPages: Math.ceil(totalCount / limit),
-        error: null,
       }
     } catch (error) {
       console.error('Error fetching articles reviews:', error)
-      return {
-        data: [],
-        totalCount: 0,
-        page: 1,
-        limit: 100,
-        totalPages: 0,
-        error:
-          error instanceof Error
-            ? error.message
-            : 'Failed to fetch articles reviews',
-      }
+      throw new Error(
+        error instanceof Error
+          ? error.message
+          : 'Failed to fetch articles reviews',
+      )
     }
   },
 )

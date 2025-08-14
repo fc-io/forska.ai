@@ -1,16 +1,12 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute} from '@tanstack/solid-router'
+import {format} from 'date-fns'
 import {createSignal, Show} from 'solid-js'
 
 import {ReviewsArticlesTable} from '../../../../../components/main/reviews/reviewsArticlesTable/reviewsArticlesTable.tsx'
 import {ReviewsFilterControls} from '../../../../../components/main/reviews/reviewsFilterControls.tsx'
 import {ReviewsPaginationControls} from '../../../../../components/main/reviews/reviewsPaginationControls.tsx'
-import type {articles, judgments} from '../../../../../db/schema.ts'
 import {apiClient} from '../../../../../services/apiClient.ts'
-
-type ArticleWithJudgments = typeof articles.$inferSelect & {
-  judgments: Array<typeof judgments.$inferSelect>
-}
 // const setFromDate = (date: Date) => {
 //   console.log('setFromDate', date)
 
@@ -45,45 +41,37 @@ const Reviews = () => {
   const articlesQuery = useQuery(() => {
     return {
       queryKey: [
-        'project-articles-reviews',
+        'project-articles-reviews-filters',
         projectId,
         promptFilters(),
         currentPage(),
         pageLimit(),
+        fromDate(),
+        toDate(),
       ],
       queryFn: async () => {
-        const queryParams: Record<string, string> = {
+        const query = {
           page: String(currentPage()),
           limit: String(pageLimit()),
+          projectId,
+          from: format(fromDate(), 'yyyy-MM-dd'),
+          to: format(toDate(), 'yyyy-MM-dd'),
+          prompts: {} as Record<string, string>,
         }
 
-        // Add prompt filters to query params
-        const filters = promptFilters()
-        Object.entries(filters).forEach(([promptId, value]) => {
+        Object.entries(promptFilters()).forEach(([promptId, value]) => {
           if (value !== null) {
-            queryParams[`prompt_${promptId}`] = value
+            query.prompts[`prompt_${promptId}`] = value
           }
         })
 
-        const response = await apiClient.api
-          .projects({id: projectId})
-          ['articles-reviews'].get({query: queryParams})
+        const response = await apiClient.api.articlesreviews.get({query})
 
-        if (response.error || !response.data) {
-          throw new Error(
-            response.error && typeof response.error === 'string'
-              ? response.error
-              : 'Failed to fetch articles',
-          )
+        if (!response.data) {
+          throw new Error('Failed to fetch articles')
         }
 
-        return response.data as {
-          data: ArticleWithJudgments[]
-          totalCount: number
-          page: number
-          limit: number
-          totalPages: number
-        }
+        return response.data
       },
     }
   })

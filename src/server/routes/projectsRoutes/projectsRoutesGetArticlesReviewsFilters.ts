@@ -5,10 +5,23 @@ import {judgments, prompts} from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
 export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
-  '/api/projects/:id/articles-reviews-filters',
-  async ({params}) => {
+  '/api/articlesreviewsfilters',
+  async ({query, set}) => {
+    console.log('--------------------------------')
+    console.log('--------------------------------')
+    console.log('--------------------------------')
+    console.log('--------------------------------')
+    console.log('--------------------------------')
+    console.log('--------------------------------')
+    console.log('articlesreviewsfilters', query)
+    console.log('--------------------------------')
     try {
       const db = getDatabase()
+
+      if (!query?.projectId) {
+        set.status = 400
+        throw new Error('Project ID is required')
+      }
 
       // Get all prompts for this project
       const projectPrompts = await db
@@ -18,19 +31,19 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
           originalText: prompts.originalText,
         })
         .from(prompts)
-        .where(eq(prompts.projectId, params.id))
+        .where(eq(prompts.projectId, query.projectId))
 
       if (projectPrompts.length === 0) {
-        return {data: [], error: null}
+        return []
       }
 
       // For each prompt, get unique answered_original values
       const promptFilters = await Promise.all(
         projectPrompts.map(async (prompt) => {
           const uniqueValues = await db.execute<{answered_original: string}>(
-            sql`SELECT DISTINCT answered_original 
-                FROM ${judgments} 
-                WHERE prompt_id = ${prompt.id}::uuid 
+            sql`SELECT DISTINCT answered_original
+                FROM ${judgments}
+                WHERE prompt_id = ${prompt.id}::uuid
                 ORDER BY answered_original`,
           )
 
@@ -44,17 +57,16 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
         }),
       )
 
-      return {data: promptFilters, error: null}
+      return promptFilters
     } catch (error) {
       console.error('Error fetching articles reviews filters:', error)
-      return {
-        data: [],
-        error:
-          error instanceof Error
-            ? error.message
-            : 'Failed to fetch articles reviews filters',
-      }
+      set.status = 500
+      throw new Error(
+        error instanceof Error
+          ? error.message
+          : 'Failed to fetch articles reviews filters',
+      )
     }
   },
-  {params: t.Object({id: t.String()})},
+  {query: t.Object({projectId: t.String()})},
 )

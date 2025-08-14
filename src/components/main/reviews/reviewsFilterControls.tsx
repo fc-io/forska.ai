@@ -28,25 +28,19 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
     return {
       queryKey: ['project-articles-reviews-filters', props.projectId],
       queryFn: async () => {
-        const response = await apiClient.api
-          .projects({id: props.projectId})
-          ['articles-reviews-filters'].get()
+        const response = await apiClient.api.articlesreviewsfilters.get({
+          query: {projectId: props.projectId},
+        })
 
-        if (response.error || !response.data) {
-          throw new Error(
-            response.error && typeof response.error === 'string'
-              ? response.error
-              : 'Failed to fetch filters',
-          )
+        if (!response.data) {
+          throw new Error('Failed to fetch filters')
         }
 
-        return response.data as {
-          data: Array<{
-            promptId: string
-            promptName: string
-            answeredOriginalValues: string[]
-          }>
-        }
+        return response.data as Array<{
+          promptId: string
+          promptName: string
+          answeredOriginalValues: string[]
+        }>
       },
     }
   })
@@ -62,7 +56,7 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
     <div class="p-4 bg-white rounded-lg shadow mb-6">
       <Show when={filtersQuery.data}>
         {(data) => {
-          const filters = data().data
+          const filters = data()
           return (
             <div class="space-y-4">
               <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
