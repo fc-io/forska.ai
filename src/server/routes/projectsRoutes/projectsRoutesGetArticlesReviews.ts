@@ -10,12 +10,12 @@ export const projectsRoutesGetArticlesReviews = new Elysia().get(
     query,
   }: {
     query: {
-      projectId: string
       from: string
-      to: string
-      page: string
       limit: string
+      page: string
+      projectId: string
       prompts: string
+      to: string
     }
   }) => {
     console.log('--------------------------------')
@@ -54,13 +54,11 @@ export const projectsRoutesGetArticlesReviews = new Elysia().get(
 
       // Add filters for each prompt's answered_original if provided
       const parsedPrompts = JSON.parse(query.prompts) as Record<string, string>
-      const promptFilters = Object.entries(parsedPrompts)
-        .filter(([key, value]) => {
-          return key.startsWith('prompt_') && value
-        })
-        .map(([key, value]) => {
-          return [key.replace('prompt_', ''), value] as const
-        })
+      const promptFilters = Object.entries(parsedPrompts).map(
+        ([key, value]) => {
+          return [key, value] as const
+        },
+      )
 
       console.log('--------------------------------')
       console.log('--------------------------------')

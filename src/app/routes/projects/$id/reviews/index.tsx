@@ -56,14 +56,16 @@ const Reviews = () => {
           projectId,
           from: format(fromDate(), 'yyyy-MM-dd'),
           to: format(toDate(), 'yyyy-MM-dd'),
-          prompts: {} as Record<string, string>,
+          prompts: Object.entries(promptFilters()).reduce(
+            (acc, [promptId, value]) => {
+              if (value !== null) {
+                acc[promptId] = value
+              }
+              return acc
+            },
+            {} as Record<string, string>,
+          ),
         }
-
-        Object.entries(promptFilters()).forEach(([promptId, value]) => {
-          if (value !== null) {
-            query.prompts[`prompt_${promptId}`] = value
-          }
-        })
 
         const response = await apiClient.api.articlesreviews.get({query})
 
