@@ -11,8 +11,29 @@ import {apiClient} from '../../../../../services/apiClient.ts'
 type ArticleWithJudgments = typeof articles.$inferSelect & {
   judgments: Array<typeof judgments.$inferSelect>
 }
+// const setFromDate = (date: Date) => {
+//   console.log('setFromDate', date)
+
+//   // setState(
+//   //   produce((s) => {
+//   //     s.fromDate = date
+//   //   }),
+//   // )
+// }
+
+// const setToDate = (date: Date) => {
+//   console.log('setToDate', date)
+
+//   // setState(
+//   //   produce((s) => {
+//   //     s.toDate = date
+//   //   }),
+//   // )
+// }
 
 const Reviews = () => {
+  const [fromDate, setFromDate] = createSignal(new Date())
+  const [toDate, setToDate] = createSignal(new Date())
   const params = Route.useParams()
   const projectId = (params() as {id: string}).id
   const [promptFilters, setPromptFilters] = createSignal<
@@ -78,6 +99,10 @@ const Reviews = () => {
         pageLimit={pageLimit}
         setPageLimit={setPageLimit}
         setCurrentPage={setCurrentPage}
+        fromDate={fromDate()}
+        toDate={toDate()}
+        setFromDate={setFromDate}
+        setToDate={setToDate}
       />
 
       <div class="space-y-4">

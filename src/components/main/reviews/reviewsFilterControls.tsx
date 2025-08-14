@@ -12,32 +12,13 @@ interface ReviewsFilterControlsProps {
   pageLimit: () => number
   setPageLimit: Setter<number>
   setCurrentPage: Setter<number>
-}
-
-const setFromDate = (date: Date) => {
-  console.log('setFromDate', date)
-
-  // setState(
-  //   produce((s) => {
-  //     s.fromDate = date
-  //   }),
-  // )
-}
-
-const setToDate = (date: Date) => {
-  console.log('setToDate', date)
-
-  // setState(
-  //   produce((s) => {
-  //     s.toDate = date
-  //   }),
-  // )
+  fromDate: Date
+  toDate: Date
+  setFromDate: Setter<Date>
+  setToDate: Setter<Date>
 }
 
 export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
-  const fromDate = new Date()
-  const toDate = new Date()
-
   const handleLimitChange = (newLimit: number) => {
     props.setPageLimit(newLimit)
     props.setCurrentPage(1)
@@ -128,11 +109,11 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
               <div class="flex items-center gap-4 pt-4 border-t">
                 <div>
                   <DateRangePicker
-                    defaultStart={fromDate}
-                    defaultEnd={toDate}
+                    defaultStart={props.fromDate}
+                    defaultEnd={props.toDate}
                     onValueChange={([start, end]) => {
-                      setFromDate(start)
-                      setToDate(end)
+                      props.setFromDate(start)
+                      props.setToDate(end)
                     }}
                   />
                 </div>
