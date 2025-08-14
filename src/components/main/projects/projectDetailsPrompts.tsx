@@ -17,7 +17,7 @@ interface ProjectDetailsPromptsProps {
 
 export const ProjectDetailsPrompts = (props: ProjectDetailsPromptsProps) => {
   return (
-    <div class="bg-card border rounded-lg p-6">
+    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
       <div class="flex justify-between items-center mb-4">
         <h2 class="text-2xl font-semibold">Prompts ({props.prompts.length})</h2>
       </div>

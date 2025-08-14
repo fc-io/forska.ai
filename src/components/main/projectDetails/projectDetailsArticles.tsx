@@ -2,9 +2,9 @@ import {useQuery} from '@tanstack/solid-query'
 import {format} from 'date-fns'
 import {createSignal, For, Show} from 'solid-js'
 
-import {getArticleUrl} from '../../app/utils/getArticleUrl.ts'
-import type {articles, judgments} from '../../db/schema'
-import {apiClient} from '../../services/apiClient'
+import {getArticleUrl} from '../../../app/utils/getArticleUrl.ts'
+import type {articles, judgments} from '../../../db/schema.ts'
+import {apiClient} from '../../../services/apiClient.ts'
 
 type ArticleWithJudgments = typeof articles.$inferSelect & {
   judgments: Array<typeof judgments.$inferSelect>

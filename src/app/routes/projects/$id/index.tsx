@@ -3,14 +3,14 @@ import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
 import {format} from 'date-fns'
 import {createSignal, Match, Show, Switch} from 'solid-js'
 
-import {ProjectDetailsArticles} from '../../../../components/main/projectDetailsArticles'
+import {ProjectDetailsArticles} from '../../../../components/main/projectDetails/projectDetailsArticles'
+import {ProjectDetailsInformation} from '../../../../components/main/projectDetails/projectDetailsInformation'
 import {ProjectDetailsPrompts} from '../../../../components/main/projects/projectDetailsPrompts'
 import {Button} from '../../../../components/ui/button'
 import {
   deleteProject,
   fetchProjectWithPrompts,
 } from '../../../../services/projectsService'
-
 const ProjectDetail = () => {
   const params = Route.useParams()
   const projectId = (params() as {id: string}).id
@@ -55,7 +55,7 @@ const ProjectDetail = () => {
   }
 
   return (
-    <div class="p-6 max-w-4xl mx-auto">
+    <div class="p-6 bg-gray-50 mx-auto">
       <div class="flex justify-between items-center mb-6">
         <div class="flex items-center gap-4">
           <Button as={Link} href="/projects" variant="outline" size="sm">
@@ -126,52 +126,7 @@ const ProjectDetail = () => {
             return (
               <div class="space-y-8">
                 {/* Project Information */}
-                <div class="bg-card border rounded-lg p-6">
-                  <h2 class="text-2xl font-semibold mb-4">
-                    Project Information
-                  </h2>
-                  <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <label class="text-sm font-medium text-muted-foreground">
-                        Name
-                      </label>
-                      <p class="text-lg">{project.name}</p>
-                    </div>
-                    <div>
-                      <label class="text-sm font-medium text-muted-foreground">
-                        Created
-                      </label>
-                      <p class="text-lg">
-                        {formatDate(project.createdAt?.toString())}
-                      </p>
-                    </div>
-                    <div class="md:col-span-2">
-                      <label class="text-sm font-medium text-muted-foreground">
-                        Description
-                      </label>
-                      <p class="text-lg">
-                        {project.description || 'No description provided'}
-                      </p>
-                    </div>
-                    <div>
-                      <label class="text-sm font-medium text-muted-foreground">
-                        Last Updated
-                      </label>
-                      <p class="text-lg">
-                        {formatDate(project.updatedAt?.toString())}
-                      </p>
-                    </div>
-                    <div>
-                      <label class="text-sm font-medium text-muted-foreground">
-                        Status
-                      </label>
-                      <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                        Active
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
+                <ProjectDetailsInformation project={project} />
                 {/* Prompts Section */}
                 <ProjectDetailsPrompts
                   prompts={prompts}
