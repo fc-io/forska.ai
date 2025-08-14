@@ -14,10 +14,12 @@ export const ProjectDetailsInformation = (props: {
 
   return (
     <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
-      <h2 class="text-2xl font-semibold mb-4">Project Information</h2>
+      <h2 class="text-1xl font-semibold mb-4">Project Information</h2>
       <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div>
-          <label class="text-sm font-medium text-muted-foreground">Name</label>
+          <label class="text-sm font-medium text-muted-foreground">
+            Project Name
+          </label>
           <p class="text-lg">{props.project.name}</p>
         </div>
         <div>

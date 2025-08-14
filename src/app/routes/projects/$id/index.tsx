@@ -61,7 +61,7 @@ const ProjectDetail = () => {
           <Button as={Link} href="/projects" variant="outline" size="sm">
             ← Back to Projects
           </Button>
-          <h1 class="text-3xl font-bold">Project Details</h1>
+          <h1 class="text-2xl font-bold">Project Details</h1>
         </div>
         <Show when={projectData.isSuccess}>
           <div class="flex gap-2">
