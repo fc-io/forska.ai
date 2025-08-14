@@ -97,21 +97,16 @@ const Reviews = () => {
 
         <Show when={articlesQuery.data}>
           {(response) => {
-            const articles = response().data
-            const totalCount = response().totalCount
-            const totalPages = response().totalPages
-            const page = response().page
-
             return (
               <div class="space-y-4">
                 <div class="p-4 bg-white rounded-lg shadow">
                   <h3 class="text-lg font-semibold mb-2">
                     Articles with Complete Judgments (
-                    {totalCount > 0
+                    {response().totalCount > 0
                       ? `Showing ${Math.min(
-                          (page - 1) * pageLimit() + 1,
-                          totalCount,
-                        )}-${Math.min(page * pageLimit(), totalCount)} of ${totalCount}`
+                          (response().page - 1) * pageLimit() + 1,
+                          response().totalCount,
+                        )}-${Math.min(response().page * pageLimit(), response().totalCount)} of ${response().totalCount}`
                       : '0'}
                     )
                   </h3>
@@ -124,16 +119,16 @@ const Reviews = () => {
                   </p>
                 </div>
 
-                <Show when={totalPages > 1}>
+                <Show when={response().totalPages > 1}>
                   <ReviewsPaginationControls
                     page={currentPage()}
-                    totalPages={totalPages}
+                    totalPages={response().totalPages}
                     setCurrentPage={setCurrentPage}
                   />
                 </Show>
 
                 <Show
-                  when={articles.length > 0}
+                  when={response().data.length > 0}
                   fallback={
                     <div class="p-8 text-center text-gray-500">
                       No articles found with complete judgments
@@ -143,13 +138,13 @@ const Reviews = () => {
                     </div>
                   }
                 >
-                  <ReviewsArticlesTable articles={articles} />
+                  <ReviewsArticlesTable articles={response().data} />
                 </Show>
 
-                <Show when={totalPages > 1}>
+                <Show when={response().totalPages > 1}>
                   <ReviewsPaginationControls
                     page={currentPage()}
-                    totalPages={totalPages}
+                    totalPages={response().totalPages}
                     setCurrentPage={setCurrentPage}
                   />
                 </Show>
