@@ -15,7 +15,7 @@ const Projects = () => {
   return (
     <div class="p-6 max-w-6xl mx-auto">
       <div class="flex justify-between items-center mb-6">
-        <h1 class="text-3xl font-bold">Projects</h1>
+        <h1 class="text-2xl font-bold">Projects</h1>
         <Button as={Link} href="/projects/create">
           Create New Project
         </Button>

@@ -1,6 +1,6 @@
 export const ProjectStatistics = (props: {projectCount: number}) => {
   return (
-    <div class="bg-card border rounded-lg p-6">
+    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
       <h2 class="text-2xl font-semibold mb-4">Project Statistics</h2>
       <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div class="text-center">
