@@ -48,7 +48,7 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
               </Link>
               <p class="text-muted-foreground mb-4">
                 {(project.description && project.description.length > 100
-                  ? `${project.description?.slice(0, 100).trim()}…`
+                  ? `${project.description?.slice(0, 100).trim()}`
                   : project.description) || 'No description provided'}
               </p>
               <div class="flex items-center gap-2 mb-3">
