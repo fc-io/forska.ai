@@ -168,6 +168,12 @@ export const judgments = pgTable('judgments', {
       },
       {onDelete: 'cascade'},
     ),
+  reviewId: uuid('review_id').references(
+    () => {
+      return reviews.id
+    },
+    {onDelete: 'cascade'},
+  ),
   answeredOriginal: text('answered_original').notNull(),
   answeredTransformed: text('answered_transformed'),
   confidenceOriginal: integer('confidence_original'),
@@ -205,6 +211,89 @@ export const tokenUse = pgTable('token_use', {
   startedAt: timestamp('started_at', {withTimezone: true}),
   finishedAt: timestamp('finished_at', {withTimezone: true}),
   duration: integer('duration'),
+})
+
+// Reviews table
+export const reviews = pgTable('reviews', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  articleId: uuid('article_id')
+    .notNull()
+    .references(
+      () => {
+        return articles.id
+      },
+      {onDelete: 'cascade'},
+    ),
+  projectId: uuid('project_id')
+    .notNull()
+    .references(
+      () => {
+        return projects.id
+      },
+      {onDelete: 'cascade'},
+    ),
+  reviewerId: text('reviewer_id')
+    .notNull()
+    .references(
+      () => {
+        return user.id
+      },
+      {onDelete: 'cascade'},
+    ),
+  opened: boolean('opened').default(false).notNull(),
+  reviewedTitle: boolean('reviewed_title').default(false).notNull(),
+  reviewedTitleComment: text('reviewed_title_comment'),
+  reviewedAbstract: boolean('reviewed_abstract').default(false).notNull(),
+  reviewedAbstractComment: text('reviewed_abstract_comment'),
+  reviewedIntro: boolean('reviewed_intro').default(false).notNull(),
+  reviewedIntroComment: text('reviewed_intro_comment'),
+  reviewedMethod: boolean('reviewed_method').default(false).notNull(),
+  reviewedMethodComment: text('reviewed_method_comment'),
+  reviewedResults: boolean('reviewed_results').default(false).notNull(),
+  reviewedResultsComment: text('reviewed_results_comment'),
+  reviewedDiscussion: boolean('reviewed_discussion').default(false).notNull(),
+  reviewedDiscussionComment: text('reviewed_discussion_comment'),
+  reviewedConclusion: boolean('reviewed_conclusion').default(false).notNull(),
+  reviewedConclusionComment: text('reviewed_conclusion_comment'),
+  reviewedAppendix: boolean('reviewed_appendix').default(false).notNull(),
+  reviewedAppendixComment: text('reviewed_appendix_comment'),
+  reviewedOther: boolean('reviewed_other').default(false).notNull(),
+  reviewedOtherComment: text('reviewed_other_comment'),
+  createdAt: timestamp('created_at', {withTimezone: true})
+    .defaultNow()
+    .notNull(),
+  updatedAt: timestamp('updated_at', {withTimezone: true})
+    .defaultNow()
+    .notNull(),
+})
+
+// Judgment assessments table
+export const judgmentAssessments = pgTable('judgment_assessments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  judgmentId: uuid('judgment_id')
+    .notNull()
+    .references(
+      () => {
+        return judgments.id
+      },
+      {onDelete: 'cascade'},
+    ),
+  assessedBy: text('assessed_by')
+    .notNull()
+    .references(
+      () => {
+        return user.id
+      },
+      {onDelete: 'cascade'},
+    ),
+  assessmentIsCorrect: boolean('assessment_is_correct').notNull(),
+  assessmentComment: text('assessment_comment'),
+  createdAt: timestamp('created_at', {withTimezone: true})
+    .defaultNow()
+    .notNull(),
+  updatedAt: timestamp('updated_at', {withTimezone: true})
+    .defaultNow()
+    .notNull(),
 })
 
 // Views

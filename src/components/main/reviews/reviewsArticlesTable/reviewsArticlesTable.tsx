@@ -77,15 +77,15 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
     accessorKey: 'judgments',
     header: 'Judgments',
     cell: (info) => {
-      const judgementsData = info.getValue() as JudgmentType[]
+      const judgmentsData = info.getValue() as JudgmentType[]
       return (
         <div class="flex items-center gap-2">
           <span class="text-sm text-gray-600">
-            {judgementsData?.length || 0}
+            {judgmentsData?.length || 0}
           </span>
-          <Show when={judgementsData && judgementsData.length > 0}>
+          <Show when={judgmentsData && judgmentsData.length > 0}>
             <div class="flex gap-1">
-              <For each={judgementsData.slice(0, 3)}>
+              <For each={judgmentsData.slice(0, 3)}>
                 {(judgment) => {
                   return (
                     <span
@@ -103,9 +103,9 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
                   )
                 }}
               </For>
-              <Show when={judgementsData.length > 3}>
+              <Show when={judgmentsData.length > 3}>
                 <span class="text-xs text-gray-500">
-                  +{judgementsData.length - 3}
+                  +{judgmentsData.length - 3}
                 </span>
               </Show>
             </div>

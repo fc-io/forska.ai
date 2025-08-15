@@ -3,11 +3,13 @@ import {Client} from 'pg'
 const tablesWithUpdatedAt = [
   'articles',
   'models',
-  'profiles',
   'projects',
   'prompts',
   'judgments',
   'token_use',
+  // Review-related tables
+  'reviews',
+  'judgment_assessments',
   // Auth tables
   'user',
   'session',

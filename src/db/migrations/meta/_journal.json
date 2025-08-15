@@ -8,6 +8,13 @@
       "when": 1754751927207,
       "tag": "0000_mixed_shaman",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1755257378502,
+      "tag": "0001_workable_hex",
+      "breakpoints": true
     }
   ]
 }
