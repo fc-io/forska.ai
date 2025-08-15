@@ -21,7 +21,6 @@ const ReviewDetail = () => {
         if (!response.data) {
           throw new Error('Failed to fetch apiClient.api.projectsreview.pos')
         }
-
         return response.data
       },
     }
@@ -216,6 +215,22 @@ const ReviewDetail = () => {
                                   <p class="text-sm text-gray-600 mt-1">
                                     {judgment.explanation}
                                   </p>
+                                </div>
+                              </Show>
+                              <Show when={judgment.quotes}>
+                                <div class="mt-2">
+                                  <span class="font-semibold text-sm">
+                                    Quotes:{' '}
+                                  </span>
+                                  <For each={judgment.quotes as string[]}>
+                                    {(quote) => {
+                                      return (
+                                        <p class="text-sm text-gray-600 mt-1">
+                                          "{quote}"
+                                        </p>
+                                      )
+                                    }}
+                                  </For>
                                 </div>
                               </Show>
 
