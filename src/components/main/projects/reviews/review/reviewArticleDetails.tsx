@@ -16,14 +16,14 @@ type ReviewArticleDetailsProps = {
   }
   judgment?: Judgment
 }
-import {reviewArticleDetailsGetHighlightedText} from './reviewArticleDetails/reviewArticleDetailsGetHighlightedText'
+import {reviewArticleDetailsGetHighlightedText} from './reviewArticleDetails/reviewArticleDetailsGetHighlightedText.ts'
 
 const getHighlightedText = (text: string, judgment: Judgment) => {
   const pieces = reviewArticleDetailsGetHighlightedText(
     text,
-    judgment.quotes || [],
+    new Array(...judgment.quotes) || [],
   )
-  // debugger
+  debugger
   return pieces.map(([text, isHit]) => {
     return isHit ? <span class="text-red-500 underline">{text}</span> : text
   })
