@@ -5,12 +5,12 @@ import {reviewArticleDetailsGetHighlightedText} from './reviewArticleDetailsGetH
 
 type Piece = [string, boolean]
 
-describe('splitByTokens (functional versions)', () => {
-  it('matches your example exactly (trim trailing space before first hit)', () => {
+describe('reviewArticleDetailsGetHighlightedText', () => {
+  it('split correctly, preserver order, off multiple keys', () => {
     const s = 'asdf lasdfk asdfk 123 321mkk 432'
     const keys = ['123', 'mkk', '32']
     const expected: Piece[] = [
-      ['asdf lasdfk asdfk', false],
+      ['asdf lasdfk asdfk ', false],
       ['123', true],
       [' 321', false],
       ['mkk', true],
@@ -20,22 +20,18 @@ describe('splitByTokens (functional versions)', () => {
     expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys))
   })
 
-  it('preserves order and allows non-boundary at start but requires boundary after token', () => {
-    // '32' after 'x' is fine (start not required to be boundary) – ends with space → hit
-    // '32' inside '321' is NOT a hit (next char is '1')
-    // trailing '32' at end of string is a hit
+  it('should not match on repetition of the same token', () => {
     const s = 'x32 y321 z432'
     const keys = ['32']
     const expected: Piece[] = [
       ['x', false],
       ['32', true],
-      [' y321 z4', false],
-      ['32', true],
+      [' y321 z432', false],
     ]
     expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys))
   })
 
-  it('prefers longer overlapping tokens (longest-first)', () => {
+  it('prefers longer overlapping tokens, order of keys does not matter', () => {
     const s = '321mkk 321mk 321m'
     const keys = ['m', 'mk', 'mkk']
     const expected: Piece[] = [
@@ -55,9 +51,7 @@ describe('splitByTokens (functional versions)', () => {
     const expected: Piece[] = [
       ['foo', false],
       ['123', true],
-      [' bar ', false],
-      ['123', true],
-      [' baz', false],
+      [' bar 123 baz', false],
     ]
     expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys))
   })
@@ -97,13 +91,12 @@ describe('splitByTokens (functional versions)', () => {
     // Use a case where the first chunk ends cleanly so join(pieces) === original.
     const s = 'abc123 def'
     const keys = ['123']
-    const join = (pieces: Piece[]) => {
-      return pieces
-        .map(([t]) => {
-          return t
-        })
-        .join('')
-    }
-    expect(join(reviewArticleDetailsGetHighlightedText(s, keys))).toBe(s)
+    const expected: Piece[] = [
+      ['abc', true],
+      ['123', true],
+      [' def', false],
+    ]
+
+    expect(expected).toBe(reviewArticleDetailsGetHighlightedText(s, keys))
   })
 })
