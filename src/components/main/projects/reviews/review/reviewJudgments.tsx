@@ -2,8 +2,11 @@ import {For, Show} from 'solid-js'
 
 import {ReviewJudgmentItem} from './reviewJudgmentItem.tsx'
 
+type SetArticleViewToShow = (articleViewToShow: string | undefined) => void
+
 type ReviewJudgmentsProps = {
   judgments?: Array<{
+    id: string
     prompt: {originalText: string}
     answeredOriginal?: string | null
     confidenceOriginal?: number | null
@@ -14,6 +17,7 @@ type ReviewJudgmentsProps = {
       assessmentComment?: string | null
     }>
   }>
+  setArticleViewToShow: SetArticleViewToShow
 }
 
 export const ReviewJudgments = (props: ReviewJudgmentsProps) => {
@@ -27,7 +31,12 @@ export const ReviewJudgments = (props: ReviewJudgmentsProps) => {
         <div class="space-y-4">
           <For each={props.judgments}>
             {(judgment) => {
-              return <ReviewJudgmentItem judgment={judgment} />
+              return (
+                <ReviewJudgmentItem
+                  judgment={judgment}
+                  setArticleViewToShow={props.setArticleViewToShow}
+                />
+              )
             }}
           </For>
         </div>
@@ -35,4 +44,3 @@ export const ReviewJudgments = (props: ReviewJudgmentsProps) => {
     </div>
   )
 }
-

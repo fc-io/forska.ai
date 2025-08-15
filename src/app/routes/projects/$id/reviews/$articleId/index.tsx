@@ -1,6 +1,6 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute} from '@tanstack/solid-router'
-import {Show} from 'solid-js'
+import {createSignal, For, Show} from 'solid-js'
 
 import {ReviewArticleDetails} from '../../../../../../components/main/projects/reviews/review/reviewArticleDetails.tsx'
 import {ReviewJudgments} from '../../../../../../components/main/projects/reviews/review/reviewJudgments.tsx'
@@ -11,6 +11,9 @@ const ReviewDetail = () => {
   const params = Route.useParams()
   const projectId = (params() as {id: string; articleId: string}).id
   const articleId = (params() as {id: string; articleId: string}).articleId
+  const [articleViewToShow, setArticleViewToShow] = createSignal<
+    string | undefined
+  >(undefined)
 
   const articleQuery = useQuery(() => {
     return {
@@ -50,11 +53,29 @@ const ReviewDetail = () => {
           {(data) => {
             return (
               <>
-                <ReviewArticleDetails article={data().article} />
+                <Show when={articleViewToShow() === undefined}>
+                  <ReviewArticleDetails article={data().article} />
+                </Show>
+                <For each={data().judgments}>
+                  {(judgment) => {
+                    console.log(judgment.id)
+                    return (
+                      <Show when={articleViewToShow() === judgment.id}>
+                        <ReviewArticleDetails
+                          article={data().article}
+                          judgment={judgment}
+                        />
+                      </Show>
+                    )
+                  }}
+                </For>
                 <Show when={data().review}>
                   <ReviewStatus review={data().review} />
                 </Show>
-                <ReviewJudgments judgments={data().judgments} />
+                <ReviewJudgments
+                  judgments={data().judgments}
+                  setArticleViewToShow={setArticleViewToShow}
+                />
               </>
             )
           }}

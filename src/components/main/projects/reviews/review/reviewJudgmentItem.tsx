@@ -2,8 +2,11 @@ import {For, Show} from 'solid-js'
 
 import {ReviewJudgmentAssessments} from './reviewJudgmentAssessments.tsx'
 
+type SetArticleViewToShow = (articleViewToShow: string | undefined) => void
+
 type ReviewJudgmentItemProps = {
   judgment: {
+    id: string
     prompt: {originalText: string}
     answeredOriginal?: string | null
     confidenceOriginal?: number | null
@@ -14,11 +17,20 @@ type ReviewJudgmentItemProps = {
       assessmentComment?: string | null
     }>
   }
+  setArticleViewToShow: SetArticleViewToShow
 }
 
 export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
   return (
-    <div class="border rounded-lg p-4">
+    <div
+      class="border rounded-lg p-4"
+      onPointerOver={() => {
+        props.setArticleViewToShow(props.judgment.id)
+      }}
+      onPointerLeave={() => {
+        props.setArticleViewToShow(undefined)
+      }}
+    >
       <div class="mb-2">
         <span class="font-semibold">Prompt: </span>
         <span class="text-gray-700">{props.judgment.prompt.originalText}</span>
@@ -73,4 +85,3 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
     </div>
   )
 }
-
