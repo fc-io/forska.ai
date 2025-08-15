@@ -25,7 +25,7 @@ const getHighlightedText = (text: string, judgment: Judgment) => {
   )
   // debugger
   return pieces.map(([text, isHit]) => {
-    return isHit ? <span class="text-red-500">{text}</span> : text
+    return isHit ? <span class="text-red-500 underline">{text}</span> : text
   })
   // const splitText = (judgment.quotes || [])
   //   .reduce((acc, quote) => {
@@ -46,9 +46,7 @@ const getHighlightedText = (text: string, judgment: Judgment) => {
 export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
   return (
     <div class="p-6 bg-white rounded-lg shadow">
-      <h1 class="text-2xl font-bold mb-4">
-        {props.judgment ? 'Judgment Details' : 'Article Details'}
-      </h1>
+      <h1 class="text-2xl font-bold mb-4">Article Details</h1>
       <div class="space-y-2">
         <p class="text-lg font-semibold">
           {props.judgment
