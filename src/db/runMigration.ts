@@ -1,6 +1,6 @@
-import {Client} from 'pg'
 import {readFileSync} from 'fs'
 import {join} from 'path'
+import {Client} from 'pg'
 
 const runMigration = async (): Promise<void> => {
   const databaseUrl = process.env.DATABASE_URL
@@ -18,12 +18,16 @@ const runMigration = async (): Promise<void> => {
       '0002_fix_judgments_tables.sql',
     )
     const migrationSQL = readFileSync(migrationPath, 'utf8')
-    
+
     // Split by statement-breakpoint and execute each statement
-    const statements = migrationSQL.split('--> statement-breakpoint').filter(s => s.trim())
-    
+    const statements = migrationSQL
+      .split('--> statement-breakpoint')
+      .filter((s) => {
+        return s.trim()
+      })
+
     await client.query('BEGIN')
-    
+
     for (const statement of statements) {
       const trimmedStatement = statement.trim()
       if (trimmedStatement) {
@@ -31,7 +35,7 @@ const runMigration = async (): Promise<void> => {
         await client.query(trimmedStatement)
       }
     }
-    
+
     await client.query('COMMIT')
     console.log('Migration completed successfully!')
   } catch (error) {

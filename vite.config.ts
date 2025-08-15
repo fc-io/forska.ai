@@ -29,6 +29,10 @@ export default defineConfig({
         },
         secure: true,
       },
+      '/api': {
+        target: `http://localhost:${env.SERVER_PORT}`,
+        changeOrigin: true,
+      },
     },
   },
   build: {target: 'esnext'},
