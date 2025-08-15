@@ -149,7 +149,7 @@ describe('handle multiple spaces', () => {
       'Non-Stationary Restless Multi-Armed Bandits with Provable Guarantee'
     const keys = ['Non-Stationary  Restless']
     const expected: Piece[] = [
-      ['Non-Stationary  Restless', true],
+      ['Non-Stationary Restless', true],
       [' Multi-Armed Bandits with Provable Guarantee', false],
     ]
 
@@ -688,7 +688,7 @@ describe('global fuzzy substring (spaces are characters)', () => {
     ).toEqual(expected)
   })
 
-  it('first occurrence only per key (left-to-right), even across whitespace', () => {
+  it('first occurrence', () => {
     const s = 'X 32 Y 3 2 Z'
     const keys = ['32']
     const expected: Piece[] = [
