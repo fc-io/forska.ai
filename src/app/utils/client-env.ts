@@ -6,6 +6,7 @@ const envShape = arktype({
 })
 
 const loadEnv = (): typeof envShape.infer => {
+  console.log(import.meta.env.VITE_SERVER_API)
   return envShape.assert(import.meta.env)
 }
 

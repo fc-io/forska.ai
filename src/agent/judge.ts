@@ -1,6 +1,7 @@
 import OpenAI from 'openai'
 
 import type {getNewestArticlesToJudge} from '../components/main/projectsGrid/projectsGridGetNewestArticlesToJudge.ts'
+import {apiClient} from '../services/apiClient.ts'
 import {judgeGetPrompt} from './judge/judgeGetPrompt.ts'
 import {parseJudgment} from './judge/judgeParseJudgment.ts'
 import {AIResponseType} from './judge/judgeParseModelResponse.ts'
@@ -126,15 +127,11 @@ export const judge = async ({
   // Get or create model ID for the vLLM model
   let modelId: string | undefined
   try {
-    const modelResponse = await fetch(
-      `${import.meta.env.VITE_SERVER_URL}/api/judgments/model?name=Qwen3-32B-FP8&provider=vLLM`,
-    )
-    const modelResult = (await modelResponse.json()) as {
-      success: boolean
-      data?: {id: string}
-    }
-    if (modelResult.success && modelResult.data) {
-      modelId = modelResult.data.id
+    const modelResult = await apiClient.api.judgments.model.get({
+      query: {name: 'Qwen3-32B-FP8', provider: 'vLLM'},
+    })
+    if (modelResult.data?.success && modelResult.data?.data) {
+      modelId = modelResult.data.data.id
     }
   } catch (error) {
     console.error('Failed to get model ID:', error)

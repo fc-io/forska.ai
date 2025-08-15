@@ -6,7 +6,6 @@ export const fetchTokenUseToday = async (): Promise<string> => {
   try {
     const start = startOfDay(new Date())
     const end = startOfDay(addDays(new Date(), 1)) // there is an arguments for why this is better than endOfDay
-
     const response = await apiClient.api.tokens.get({
       query: {startTime: start.toISOString(), endTime: end.toISOString()},
     })
