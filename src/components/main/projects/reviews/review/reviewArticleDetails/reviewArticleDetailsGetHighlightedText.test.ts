@@ -586,7 +586,7 @@ describe('reviewArticleDetailsGetHighlightedText - Fuzzy Matching Tests', () => 
       )
     })
 
-    it('works with programming terms and typos', () => {
+    it('works with programming terms and typos and spaces between words', () => {
       const s = 'function calculateAverage implementation'
       const keys = ['fucntion', 'calculatAverage'] // Common programming typos
       const expected: Piece[] = [
