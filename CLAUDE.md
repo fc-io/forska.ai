@@ -3,6 +3,7 @@ alwaysApply: true
 ---
 ## Important
 
+IMPORTANT: if there only is one export in a file, than the filename should match the name of the exported function
 IMPORTANT: on the server – prefer drizzle orm over executing pure sql commands
 IMPORTANT: on the client/app - use import {useQuery} from '@tanstack/solid-query' over createQuery
 IMPORTANT: Keep filenames pascal case. Even for tsx/jsx react components.
@@ -101,6 +102,9 @@ We use "eslint-plugin-prettier" so no need to run prettier separately.
 * Route files should be named in camelCase like `[resource]Routes.ts` (e.g., `projectsRoutes.ts`, `authRoutes.ts`)
 * Complex route logic should be extracted to separate files in a subfolder (e.g., `projectsRoutes/projectsRoutesGetArticlesReviews.ts`). In general any route logic over 15 lines should be in a seperate file.
 * Use Elysia framework patterns for route definitions.
+* IMPORTANT: Do not nest routes - prefer flat route structures with POST requests and body parameters over nested URL paths
+* IMPORTANT: Always use Eden/RPC on the client, never use fetch directly
+* IMPORTANT: Prefer POST with request body over complex nested URL parameters
 
 ## Database patterns
 

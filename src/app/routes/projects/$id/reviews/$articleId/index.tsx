@@ -2,66 +2,7 @@ import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute} from '@tanstack/solid-router'
 import {For, Show} from 'solid-js'
 
-type ReviewDetailsResponse = {
-  article: {
-    id: string
-    articleTitle: string
-    articleAuthors: string[] | null
-    articleSummary: string | null
-    articleCreatedAt: string | null
-    articleUpdatedAt: string | null
-    createdAt: string
-    updatedAt: string
-  }
-  review: {
-    id: string
-    articleId: string
-    projectId: string
-    reviewedTitle: boolean | null
-    reviewedAbstract: boolean | null
-    reviewedIntro: boolean | null
-    reviewedMethod: boolean | null
-    reviewedResults: boolean | null
-    reviewedDiscussion: boolean | null
-    createdAt: string
-    updatedAt: string
-  } | null
-  prompts: Array<{
-    id: string
-    projectId: string
-    originalText: string
-    order: number
-    createdAt: string
-    updatedAt: string
-  }>
-  judgments: Array<{
-    id: string
-    articleId: string
-    promptId: string
-    answeredOriginal: string | null
-    confidenceOriginal: number | null
-    explanation: string | null
-    createdAt: string
-    updatedAt: string
-    prompt: {
-      id: string
-      projectId: string
-      originalText: string
-      order: number
-      createdAt: string
-      updatedAt: string
-    }
-    assessments: Array<{
-      id: string
-      judgmentId: string
-      assessmentIsCorrect: boolean | null
-      assessmentComment: string | null
-      assessedBy: string | null
-      createdAt: string
-      updatedAt: string
-    }>
-  }>
-}
+import {apiClient} from '../../../../../../services/apiClient.ts'
 
 const ReviewDetail = () => {
   const params = Route.useParams()
@@ -72,27 +13,16 @@ const ReviewDetail = () => {
     return {
       queryKey: ['article-review-details', projectId, articleId],
       queryFn: async () => {
-        // Use POST with body to send IDs
-        const response = await fetch('/api/projectsreview', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({projectId, articleId}),
+        const response = await apiClient.api.projectsreview.post({
+          projectId,
+          articleId,
         })
 
-        if (!response.ok) {
-          throw new Error('Failed to fetch article review details')
+        if (!response.data) {
+          throw new Error('Failed to fetch apiClient.api.projectsreview.pos')
         }
 
-        const result = (await response.json()) as {
-          data: ReviewDetailsResponse | null
-          error?: string
-        }
-
-        if (result.error) {
-          throw new Error(result.error)
-        }
-
-        return result.data
+        return response.data
       },
     }
   })
