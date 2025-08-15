@@ -45,11 +45,11 @@ describe('reviewArticleDetailsGetHighlightedText', () => {
     expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys))
   })
 
-  it('handles multiple occurrences of the same token', () => {
+  it('handles multiple occurrences of the same token by only matching the first', () => {
     const s = 'foo 123 bar 123 baz'
     const keys = ['123']
     const expected: Piece[] = [
-      ['foo', false],
+      ['foo ', false],
       ['123', true],
       [' bar 123 baz', false],
     ]
@@ -92,11 +92,11 @@ describe('reviewArticleDetailsGetHighlightedText', () => {
     const s = 'abc123 def'
     const keys = ['123']
     const expected: Piece[] = [
-      ['abc', true],
+      ['abc', false],
       ['123', true],
       [' def', false],
     ]
 
-    expect(expected).toBe(reviewArticleDetailsGetHighlightedText(s, keys))
+    expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys))
   })
 })
