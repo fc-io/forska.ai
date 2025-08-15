@@ -25,4 +25,5 @@ export const auth = betterAuth({
   //     },
   //   },
   plugins: [admin()],
+  telemetry: {enabled: false},
 })
