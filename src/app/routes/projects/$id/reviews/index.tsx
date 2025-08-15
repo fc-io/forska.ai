@@ -1,12 +1,11 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute} from '@tanstack/solid-router'
-import {format} from 'date-fns'
 import {createSignal, Show} from 'solid-js'
 
+import {createArticlesReviewsQueryOptions} from '../../../../../components/main/projects/projectsArticlesReviewsQuery.ts'
 import {ReviewsArticlesTable} from '../../../../../components/main/reviews/reviewsArticlesTable/reviewsArticlesTable.tsx'
 import {ReviewsFilterControls} from '../../../../../components/main/reviews/reviewsFilterControls.tsx'
 import {ReviewsPaginationControls} from '../../../../../components/main/reviews/reviewsPaginationControls.tsx'
-import {apiClient} from '../../../../../services/apiClient.ts'
 // const setFromDate = (date: Date) => {
 //   console.log('setFromDate', date)
 
@@ -39,43 +38,14 @@ const Reviews = () => {
   const [pageLimit, setPageLimit] = createSignal(100)
 
   const articlesQuery = useQuery(() => {
-    return {
-      queryKey: [
-        'project-articles-reviews-filters',
-        projectId,
-        promptFilters(),
-        currentPage(),
-        pageLimit(),
-        fromDate(),
-        toDate(),
-      ],
-      queryFn: async () => {
-        const body = {
-          page: String(currentPage()),
-          limit: String(pageLimit()),
-          projectId,
-          from: format(fromDate(), 'yyyy-MM-dd'),
-          to: format(toDate(), 'yyyy-MM-dd'),
-          prompts: Object.entries(promptFilters()).reduce(
-            (acc, [promptId, value]) => {
-              if (value !== null) {
-                acc[promptId] = value
-              }
-              return acc
-            },
-            {} as Record<string, string>,
-          ),
-        }
-
-        const response = await apiClient.api.articlesreviews.post(body)
-
-        if (!response.data) {
-          throw new Error('Failed to fetch articles')
-        }
-
-        return response.data
-      },
-    }
+    return createArticlesReviewsQueryOptions(
+      projectId,
+      promptFilters,
+      currentPage,
+      pageLimit,
+      fromDate,
+      toDate,
+    )
   })
 
   return (
