@@ -7,7 +7,7 @@ import {ReviewJudgments} from '../../../../../../components/main/projects/review
 import {ReviewStatus} from '../../../../../../components/main/projects/reviews/review/reviewStatus.tsx'
 import {apiClient} from '../../../../../../services/apiClient.ts'
 
-const ReviewDetail = () => {
+export const ReviewDetail = () => {
   const params = Route.useParams()
   const projectId = (params() as {id: string; articleId: string}).id
   const articleId = (params() as {id: string; articleId: string}).articleId

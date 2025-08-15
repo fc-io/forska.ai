@@ -54,7 +54,7 @@ export const reviewArticleDetailsGetHighlightedText = (
 
   // Damerau–Levenshtein with early exit.
   // Optimal String Alignment variant (adjacent transpositions).
-  function damerauLevenshtein(a: string, b: string, limit: number): number {
+  const damerauLevenshtein = (a: string, b: string, limit: number): number => {
     const n = a.length
     const m = b.length
     if (Math.abs(n - m) > limit) return limit + 1 // quick fail
@@ -62,7 +62,7 @@ export const reviewArticleDetailsGetHighlightedText = (
     if (m === 0) return Math.min(n, limit + 1)
 
     const dp: number[][] = Array.from({length: n + 1}, () => {
-      return new Array(m + 1).fill(0)
+      return new Array(m + 1).fill(0) as number[]
     })
     for (let i = 0; i <= n; i++) dp[i][0] = i
     for (let j = 0; j <= m; j++) dp[0][j] = j
@@ -95,10 +95,10 @@ export const reviewArticleDetailsGetHighlightedText = (
 
   // Find the best fuzzy match of `key` inside `token` within maxDistance.
   // Returns {start, end, dist, matched} or null.
-  function bestMatchInToken(
+  const bestMatchInToken = (
     token: string,
     key: string,
-  ): null | {start: number; end: number; dist: number; matched: string} {
+  ): null | {start: number; end: number; dist: number; matched: string} => {
     if (!token || !key) return null
 
     const tokenN = norm(token)
