@@ -72,10 +72,12 @@ const ReviewDetail = () => {
     return {
       queryKey: ['article-review-details', projectId, articleId],
       queryFn: async () => {
-        // Use direct fetch as Eden treaty has issues with multiple path parameters
-        const response = await fetch(
-          `/api/projectsreview/${projectId}/${articleId}`,
-        )
+        // Use POST with body to send IDs
+        const response = await fetch('/api/projectsreview', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({projectId, articleId}),
+        })
 
         if (!response.ok) {
           throw new Error('Failed to fetch article review details')
