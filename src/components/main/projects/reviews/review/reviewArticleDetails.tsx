@@ -23,7 +23,7 @@ const getHighlightedText = (text: string, judgment: Judgment) => {
     text,
     new Array(...judgment.quotes) || [],
   )
-  debugger
+  // debugger
   return pieces.map(([text, isHit]) => {
     return isHit ? <span class="text-red-500 underline">{text}</span> : text
   })

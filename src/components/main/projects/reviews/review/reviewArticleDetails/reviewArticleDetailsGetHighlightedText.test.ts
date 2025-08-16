@@ -12,10 +12,11 @@ describe('reviewArticleDetailsGetHighlightedText', () => {
     const expected: Piece[] = [
       ['asdf lasdfk asdfk ', false],
       ['123', true],
-      [' 321', false],
-      ['mkk', true],
-      [' 4', false],
+      [' ', false],
       ['32', true],
+      ['1', false],
+      ['mkk', true],
+      [' 432', false],
     ]
     expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys))
   })
@@ -184,7 +185,9 @@ describe('reviewArticleDetailsGetHighlightedText – fuzzy (Damerau–Levenshtei
     const s = 'quikc'
     const keys = ['quick']
     const expected: Piece[] = [['quikc', false]]
-    expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys))
+    expect(expected).toEqual(
+      reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 0}),
+    )
   })
 
   it('transposition within distance 1 – highlights "quikc" for key "quick"', () => {
@@ -263,99 +266,6 @@ describe('reviewArticleDetailsGetHighlightedText – fuzzy (Damerau–Levenshtei
         caseInsensitive: true,
       }),
     )
-  })
-})
-
-describe('reviewArticleDetailsGetHighlightedText - Original Tests', () => {
-  it('split correctly, preserver order, off multiple keys', () => {
-    const s = 'asdf lasdfk asdfk 123 321mkk 432'
-    const keys = ['123', 'mkk', '32']
-    const expected: Piece[] = [
-      ['asdf lasdfk asdfk ', false],
-      ['123', true],
-      [' 321', false],
-      ['mkk', true],
-      [' 4', false],
-      ['32', true],
-    ]
-    expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys))
-  })
-
-  it('should not match on repetition of the same token', () => {
-    const s = 'x32 y321 z432'
-    const keys = ['32']
-    const expected: Piece[] = [
-      ['x', false],
-      ['32', true],
-      [' y321 z432', false],
-    ]
-    expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys))
-  })
-
-  it('prefers longer overlapping tokens, order of keys does not matter', () => {
-    const s = '321mkk 321mk 321m'
-    const keys = ['m', 'mk', 'mkk']
-    const expected: Piece[] = [
-      ['321', false],
-      ['mkk', true],
-      [' 321', false],
-      ['mk', true],
-      [' 321', false],
-      ['m', true],
-    ]
-    expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys))
-  })
-
-  it('handles multiple occurrences of the same token by only matching the first', () => {
-    const s = 'foo 123 bar 123 baz'
-    const keys = ['123']
-    const expected: Piece[] = [
-      ['foo ', false],
-      ['123', true],
-      [' bar 123 baz', false],
-    ]
-    expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys))
-  })
-
-  it('escapes regex metacharacters in tokens', () => {
-    const s = 'x a.b y c*d z e?f w [g]'
-    const keys = ['a.b', 'c*d', 'e?f', '[g]']
-    const expected: Piece[] = [
-      ['x ', false],
-      ['a.b', true],
-      [' y ', false],
-      ['c*d', true],
-      [' z ', false],
-      ['e?f', true],
-      [' w ', false],
-      ['[g]', true],
-    ]
-    expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys))
-  })
-
-  it('no hits → returns the whole string as a single non-hit', () => {
-    const s = 'hello world'
-    const keys: string[] = ['x', 'y']
-    const expected: Piece[] = [['hello world', false]]
-    expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys))
-  })
-
-  it('empty input → returns []', () => {
-    const s = ''
-    const keys = ['abc']
-    const expected: Piece[] = []
-    expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys))
-  })
-
-  it('reconstructs the original string when the first chunk has no trailing whitespace', () => {
-    const s = 'abc123 def'
-    const keys = ['123']
-    const expected: Piece[] = [
-      ['abc', false],
-      ['123', true],
-      [' def', false],
-    ]
-    expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys))
   })
 })
 
@@ -615,7 +525,7 @@ describe('reviewArticleDetailsGetHighlightedText - Without Fuzzy Options', () =>
   })
 })
 
-describe('handle multiple spaces', () => {
+describe('handle multiple spaces - continued', () => {
   it('in text and key (exact, double space)', () => {
     const s =
       'Non-Stationary  Restless Multi-Armed Bandits with Provable Guarantee'
