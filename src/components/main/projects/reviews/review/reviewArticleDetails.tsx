@@ -21,7 +21,9 @@ import {reviewArticleDetailsGetHighlightedText} from './reviewArticleDetails/rev
 const getHighlightedText = (text: string, judgment: Judgment) => {
   const pieces = reviewArticleDetailsGetHighlightedText(
     text,
-    new Array(...judgment.quotes) || [],
+    new Array(...(judgment.quotes || [])).map((quote) => {
+      return quote.replace(/^\.{3}|\.{3}$/g, '')
+    }),
   )
   // debugger
   return pieces.map(([text, isHit]) => {

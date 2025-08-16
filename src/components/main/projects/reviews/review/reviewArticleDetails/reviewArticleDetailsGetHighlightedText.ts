@@ -25,7 +25,7 @@ export const reviewArticleDetailsGetHighlightedText = (
   const norm = (t: string) => {
     return caseInsensitive ? t.toLowerCase() : t
   }
-  
+
   const keysN = keys.map(norm)
   const used = new Array(keys.length).fill(false)
   const pieces: Piece[] = []
@@ -65,10 +65,10 @@ export const reviewArticleDetailsGetHighlightedText = (
           dp[i - 1]![j - 1]! + cost, // substitution
         )
         if (
-          i > 1 &&
-          j > 1 &&
-          a.charCodeAt(i - 1) === b.charCodeAt(j - 2) &&
-          a.charCodeAt(i - 2) === b.charCodeAt(j - 1)
+          i > 1
+          && j > 1
+          && a.charCodeAt(i - 1) === b.charCodeAt(j - 2)
+          && a.charCodeAt(i - 2) === b.charCodeAt(j - 1)
         ) {
           v = Math.min(v, dp[i - 2]![j - 2]! + 1) // transposition
         }
@@ -80,9 +80,9 @@ export const reviewArticleDetailsGetHighlightedText = (
     return dp[n]![m]!
   }
 
-// Process the string globally
+  // Process the string globally
   let idx = 0
-  
+
   while (idx < s.length) {
     // Find the best match among unused keys starting from idx
     let bestMatch: null | {
@@ -94,14 +94,14 @@ export const reviewArticleDetailsGetHighlightedText = (
 
     for (let k = 0; k < keys.length; k++) {
       if (used[k]) continue
-      
+
       const keyN = keysN[k]!
       const keyRaw = keys[k]!
-      
+
       // Try exact match first
       const sN = norm(s)
       const exactIdx = sN.indexOf(keyN, idx)
-      
+
       if (exactIdx >= 0) {
         const candidate = {
           keyIdx: k,
@@ -109,11 +109,12 @@ export const reviewArticleDetailsGetHighlightedText = (
           end: exactIdx + keyRaw.length,
           dist: 0,
         }
-        
+
         if (
-          !bestMatch ||
-          candidate.start < bestMatch.start ||
-          (candidate.start === bestMatch.start && keyRaw.length > keys[bestMatch.keyIdx]!.length)
+          !bestMatch
+          || candidate.start < bestMatch.start
+          || (candidate.start === bestMatch.start
+            && keyRaw.length > keys[bestMatch.keyIdx]!.length)
         ) {
           bestMatch = candidate
         }
@@ -122,31 +123,28 @@ export const reviewArticleDetailsGetHighlightedText = (
         const L = keyN.length
         const minLen = Math.max(1, L - maxDistance)
         const maxLen = Math.min(s.length - idx, L + maxDistance)
-        
+
         for (let start = idx; start < s.length && start < idx + 100; start++) {
           if (start + minLen > s.length) break
-          
+
           for (let len = minLen; len <= maxLen; len++) {
             const end = start + len
             if (end > s.length) break
-            
+
             const sub = sN.slice(start, end)
             const d = dlOSA(keyN, sub, maxDistance)
-            
+
             if (d <= maxDistance) {
-              const candidate = {
-                keyIdx: k,
-                start,
-                end,
-                dist: d,
-              }
-              
+              const candidate = {keyIdx: k, start, end, dist: d}
+
               if (
-                !bestMatch ||
-                candidate.dist < bestMatch.dist ||
-                (candidate.dist === bestMatch.dist && candidate.start < bestMatch.start) ||
-                (candidate.dist === bestMatch.dist && candidate.start === bestMatch.start && 
-                 end - start > bestMatch.end - bestMatch.start)
+                !bestMatch
+                || candidate.dist < bestMatch.dist
+                || (candidate.dist === bestMatch.dist
+                  && candidate.start < bestMatch.start)
+                || (candidate.dist === bestMatch.dist
+                  && candidate.start === bestMatch.start
+                  && end - start > bestMatch.end - bestMatch.start)
               ) {
                 bestMatch = candidate
               }
