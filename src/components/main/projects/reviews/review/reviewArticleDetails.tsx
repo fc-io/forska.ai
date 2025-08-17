@@ -22,6 +22,7 @@ const getHighlightedText = (text: string, judgment: Judgment) => {
   const pieces = reviewArticleDetailsGetHighlightedText(
     text,
     new Array(...(judgment.quotes || [])).map((quote) => {
+      // replace leading ... and trailing ..., should be better stored in the database
       return quote.replace(/^\.{3}|\.{3}$/g, '')
     }),
   )
