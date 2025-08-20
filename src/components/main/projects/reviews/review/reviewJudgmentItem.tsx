@@ -23,7 +23,7 @@ type ReviewJudgmentItemProps = {
 export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
   return (
     <div
-      class="border rounded-lg p-4"
+      class="border-b last:border-b-0 p-3 hover:bg-gray-50 cursor-pointer transition-colors"
       onPointerOver={() => {
         props.setArticleViewToShow(props.judgment.id)
       }}
@@ -32,45 +32,43 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
       }}
     >
       <div class="mb-2">
-        <span class="font-semibold">Prompt: </span>
-        <span class="text-gray-700">{props.judgment.prompt.originalText}</span>
+        <p class="text-sm font-medium text-gray-900 line-clamp-2">
+          {props.judgment.prompt.originalText}
+        </p>
       </div>
-      <div class="grid grid-cols-2 gap-2 text-sm">
-        <div>
-          <span class="font-semibold">Answer: </span>
+      <div class="flex items-center justify-between text-xs">
+        <div class="flex items-center gap-2">
+          <span class="font-medium">Answer:</span>
           <span
             class={
               props.judgment.answeredOriginal === 'yes'
-                ? 'text-green-600'
+                ? 'text-green-600 font-semibold'
                 : props.judgment.answeredOriginal === 'no'
-                  ? 'text-red-600'
-                  : 'text-yellow-600'
+                  ? 'text-red-600 font-semibold'
+                  : 'text-yellow-600 font-semibold'
             }
           >
-            {props.judgment.answeredOriginal}
+            {props.judgment.answeredOriginal?.toUpperCase()}
           </span>
         </div>
         <Show when={props.judgment.confidenceOriginal}>
-          <div>
-            <span class="font-semibold">Confidence: </span>
-            <span>{props.judgment.confidenceOriginal}%</span>
+          <div class="text-gray-500">
+            {props.judgment.confidenceOriginal}%
           </div>
         </Show>
       </div>
       <Show when={props.judgment.explanation}>
-        <div class="mt-2">
-          <span class="font-semibold text-sm">Explanation: </span>
-          <p class="text-sm text-gray-600 mt-1">{props.judgment.explanation}</p>
-        </div>
+        <p class="text-xs text-gray-600 mt-2">
+          {props.judgment.explanation}
+        </p>
       </Show>
       <Show
-        when={props.judgment.quotes && Array.isArray(props.judgment.quotes)}
+        when={props.judgment.quotes && Array.isArray(props.judgment.quotes) && (props.judgment.quotes as string[]).length > 0}
       >
-        <div class="mt-2">
-          <span class="font-semibold text-sm">Quotes: </span>
+        <div class="mt-2 space-y-1">
           <For each={props.judgment.quotes as string[]}>
             {(quote) => {
-              return <p class="text-sm text-gray-600 mt-1">"{quote}"</p>
+              return <p class="text-xs text-gray-500 italic">"{quote}"</p>
             }}
           </For>
         </div>
@@ -80,7 +78,9 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
           props.judgment.assessments && props.judgment.assessments.length > 0
         }
       >
-        <ReviewJudgmentAssessments assessments={props.judgment.assessments} />
+        <div class="mt-2 text-xs">
+          <ReviewJudgmentAssessments assessments={props.judgment.assessments!} />
+        </div>
       </Show>
     </div>
   )

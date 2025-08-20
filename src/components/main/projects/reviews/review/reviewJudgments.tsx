@@ -22,13 +22,15 @@ type ReviewJudgmentsProps = {
 
 export const ReviewJudgments = (props: ReviewJudgmentsProps) => {
   return (
-    <div class="p-6 bg-white rounded-lg shadow">
-      <h2 class="text-xl font-bold mb-4">Judgments</h2>
+    <div class="sticky top-6 bg-white rounded-lg shadow h-fit">
+      <div class="p-4 border-b">
+        <h2 class="text-lg font-bold">Judgments</h2>
+      </div>
       <Show
         when={props.judgments && props.judgments.length > 0}
-        fallback={<p class="text-gray-500">No judgments available</p>}
+        fallback={<p class="text-gray-500 p-4">No judgments available</p>}
       >
-        <div class="space-y-4">
+        <div class="p-2">
           <For each={props.judgments}>
             {(judgment) => {
               return (

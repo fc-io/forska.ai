@@ -52,31 +52,35 @@ export const ReviewDetail = () => {
         <Show when={articleQuery.data}>
           {(data) => {
             return (
-              <>
-                <Show when={articleViewToShow() === undefined}>
-                  <ReviewArticleDetails article={data().article} />
-                </Show>
-                <For each={data().judgments}>
-                  {(judgment) => {
-                    console.log(judgment.id)
-                    return (
-                      <Show when={articleViewToShow() === judgment.id}>
-                        <ReviewArticleDetails
-                          article={data().article}
-                          judgment={judgment}
-                        />
-                      </Show>
-                    )
-                  }}
-                </For>
-                <Show when={data().review}>
-                  <ReviewStatus review={data().review} />
-                </Show>
-                <ReviewJudgments
-                  judgments={data().judgments}
-                  setArticleViewToShow={setArticleViewToShow}
-                />
-              </>
+              <div class="flex gap-6">
+                <div class="flex-1 space-y-6">
+                  <Show when={articleViewToShow() === undefined}>
+                    <ReviewArticleDetails article={data().article} />
+                  </Show>
+                  <For each={data().judgments}>
+                    {(judgment) => {
+                      console.log(judgment.id)
+                      return (
+                        <Show when={articleViewToShow() === judgment.id}>
+                          <ReviewArticleDetails
+                            article={data().article}
+                            judgment={judgment}
+                          />
+                        </Show>
+                      )
+                    }}
+                  </For>
+                  <Show when={data().review}>
+                    <ReviewStatus review={data().review} />
+                  </Show>
+                </div>
+                <div class="w-96">
+                  <ReviewJudgments
+                    judgments={data().judgments}
+                    setArticleViewToShow={setArticleViewToShow}
+                  />
+                </div>
+              </div>
             )
           }}
         </Show>
