@@ -4,12 +4,22 @@ looked at demographics
 metric
 
 is healthcare a focus for the article or just something that is mentioned in passing or as a possible future use?
+yes, a focus | only in passing | healthcare not mentioned | unsure
 
 is it evaluating AI agents on clinical tasks?
+yes | no | unsure
 
 is it about something performed at a hospital?
+yes | no | unsure
 
 is it about agentic AI?
+yes | no | unsure
+
+what categori of agentic AI would you say this is? (only answer to this if the question fits the article, otherwise return null)
+string | null
+
+what to call the task/tasks the aI was instructed to do in this study? (only answer to this if the question fits the article, otherwise return null)
+string | null
 
 does it compare agentic AI with other forms of AI, like an AI agent vs a plain LLM?
 
