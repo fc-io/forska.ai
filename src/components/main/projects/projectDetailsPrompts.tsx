@@ -1,6 +1,6 @@
 import {For, Show} from 'solid-js'
 
-interface Prompt {
+type Prompt = {
   order: number
   promptHeading?: string
   type?: string
@@ -10,7 +10,7 @@ interface Prompt {
   transformed_text?: string
 }
 
-interface ProjectDetailsPromptsProps {
+type ProjectDetailsPromptsProps = {
   prompts: Prompt[]
   formatDate: (dateString: string | null) => string
 }

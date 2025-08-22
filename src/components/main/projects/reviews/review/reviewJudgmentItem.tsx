@@ -52,18 +52,18 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
           </span>
         </div>
         <Show when={props.judgment.confidenceOriginal}>
-          <div class="text-gray-500">
-            {props.judgment.confidenceOriginal}%
-          </div>
+          <div class="text-gray-500">{props.judgment.confidenceOriginal}%</div>
         </Show>
       </div>
       <Show when={props.judgment.explanation}>
-        <p class="text-xs text-gray-600 mt-2">
-          {props.judgment.explanation}
-        </p>
+        <p class="text-xs text-gray-600 mt-2">{props.judgment.explanation}</p>
       </Show>
       <Show
-        when={props.judgment.quotes && Array.isArray(props.judgment.quotes) && (props.judgment.quotes as string[]).length > 0}
+        when={
+          props.judgment.quotes
+          && Array.isArray(props.judgment.quotes)
+          && (props.judgment.quotes as string[]).length > 0
+        }
       >
         <div class="mt-2 space-y-1">
           <For each={props.judgment.quotes as string[]}>
@@ -79,7 +79,9 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
         }
       >
         <div class="mt-2 text-xs">
-          <ReviewJudgmentAssessments assessments={props.judgment.assessments!} />
+          <ReviewJudgmentAssessments
+            assessments={props.judgment.assessments!}
+          />
         </div>
       </Show>
     </div>

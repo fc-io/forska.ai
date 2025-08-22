@@ -13,9 +13,11 @@ type ReviewArticleDetailsProps = {
     articleTitle: string
     articleAuthors?: string[] | null
     articleSummary?: string | null
+    articleId: string
   }
   judgment?: Judgment
 }
+import {getArticleUrl} from '../../../../../app/utils/getArticleUrl.ts'
 import {reviewArticleDetailsGetHighlightedText} from './reviewArticleDetails/reviewArticleDetailsGetHighlightedText.ts'
 
 const getHighlightedText = (text: string, judgment: Judgment) => {
@@ -26,24 +28,9 @@ const getHighlightedText = (text: string, judgment: Judgment) => {
       return quote.replace(/^\.{3}|\.{3}$/g, '')
     }),
   )
-  // debugger
   return pieces.map(([text, isHit]) => {
     return isHit ? <span class="text-red-500 underline">{text}</span> : text
   })
-  // const splitText = (judgment.quotes || [])
-  //   .reduce((acc, quote) => {
-  //     console.log(quote)
-  //     return acc.replace(quote, `^^^^^^${quote}¢¢¢¢¢¢`)
-  //   }, text)
-  //   .split('^^^^^^')
-
-  // return splitText
-  //   .filter((text) => {
-  //     return text !== '^^^^^^'
-  //   })
-  //   .map((text) => {
-  //     return <span class="text-red-500">{text}</span>
-  //   })
 }
 
 export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
@@ -55,6 +42,16 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
           {props.judgment
             ? getHighlightedText(props.article.articleTitle, props.judgment)
             : props.article.articleTitle}
+        </p>
+        <p class="text-gray-600">
+          <a
+            href={getArticleUrl(props.article.articleId)}
+            target="_blank"
+            rel="noopener noreferrer"
+            class="text-blue-600 hover:underline"
+          >
+            {props.article.articleId}
+          </a>
         </p>
         <Show when={props.article.articleAuthors}>
           <p class="text-gray-600">
