@@ -4,21 +4,37 @@ looked at demographics
 metric
 
 is healthcare a focus for the article or just something that is mentioned in passing or as a possible future use?
+
 yes, a focus | only in passing | healthcare not mentioned | unsure
 
+how relevant is the healthcare angle of this article – 1-100 (100 being the best)?
+
+0 = has no healthcare aspect
+10 = a system that could potentially have a clinical aspect, like basic reserach of ai systems
+20 = system that has not actually been tried on clinical healthcare problems, but that could be relevant to healthcare
+20-90 = different aspects, make your own judgment
+100 = a clinical trial or RCT involving the ai system and an aspect of clinical care
+
+
+
 is it evaluating AI agents on clinical tasks?
+
 yes | no | unsure
 
 is it about something performed at a hospital?
+
 yes | no | unsure
 
 is it about agentic AI?
+
 yes | no | unsure
 
 what categori of agentic AI would you say this is? (only answer to this if the question fits the article, otherwise return null)
+
 string | null
 
 what to call the task/tasks the aI was instructed to do in this study? (only answer to this if the question fits the article, otherwise return null)
+
 string | null
 
 does it compare agentic AI with other forms of AI, like an AI agent vs a plain LLM?
