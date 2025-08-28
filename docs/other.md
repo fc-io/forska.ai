@@ -7,12 +7,13 @@ is healthcare a focus for the article or just something that is mentioned in pas
 
 yes, a focus | only in passing | healthcare not mentioned | unsure
 
-how relevant is the healthcare angle of this article – 1-100 (100 being the best)?
+how relevant is the clinical healthcare angle of this article – 1-100 (100 being the best)?
 
 0 = has no healthcare aspect
-10 = a system that could potentially have a clinical aspect, like basic reserach of ai systems
-20 = system that has not actually been tried on clinical healthcare problems, but that could be relevant to healthcare
-20-90 = different aspects, make your own judgment
+10 = research that could potentially, in the long run, affect healthcare, like basic reserach of ai systems
+20 = research that has not actually been tried on healthcare problems, but that deals with a relevant healthcare problem
+30 =
+40-90 = different aspects, make your own judgment
 100 = a clinical trial or RCT involving the ai system and an aspect of clinical care
 
 

@@ -101,3 +101,4 @@ Preventive medicine
 Stomatology
 Tropical medicine
 Venereology
+Other – not matching any other category
