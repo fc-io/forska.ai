@@ -1,4 +1,5 @@
 import {apiClient} from '../../../services/apiClient.ts'
+import {formatNumber} from '../../../utils/formatNumber.ts'
 
 export const fetchTokensAllTime = async (): Promise<string> => {
   try {
@@ -17,7 +18,7 @@ export const fetchTokensAllTime = async (): Promise<string> => {
       totalCompletionTokens: 0,
     }
 
-    return `Total tokens (all time): input ${totalPromptTokens || 0}, output ${totalCompletionTokens || 0}`
+    return `Total tokens (all time): input ${formatNumber(totalPromptTokens || 0)}, output ${formatNumber(totalCompletionTokens || 0)}`
   } catch (err) {
     console.error('Error fetching lifetime token use:', err)
     return ''

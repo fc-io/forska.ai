@@ -241,6 +241,7 @@ const fetchRecords = async (
     const result = transformOaiResponse(validated)
 
     console.log('fetched, # entries:', result.records.length)
+    // debugger
     return result
   } catch (error) {
     throw new Error(`Schema validation failed: ${String(error)}`)

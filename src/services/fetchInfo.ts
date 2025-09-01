@@ -1,5 +1,6 @@
 import {addDays, startOfDay} from 'date-fns'
 
+import {formatNumber} from '../utils/formatNumber.ts'
 import {apiClient} from './apiClient.ts'
 
 export const fetchTokenUseToday = async (): Promise<string> => {
@@ -23,7 +24,7 @@ export const fetchTokenUseToday = async (): Promise<string> => {
       totalCompletionTokens: 0,
     }
 
-    return `Total tokens (today): input ${totalPromptTokens || 0}, output ${totalCompletionTokens || 0}`
+    return `Total tokens (today): input ${formatNumber(totalPromptTokens || 0)}, output ${formatNumber(totalCompletionTokens || 0)}`
   } catch (err) {
     console.error('Error fetching token use:', err)
     return ''
@@ -46,7 +47,7 @@ export const fetchTokensAllTime = async (): Promise<string> => {
     // return `Total tokens (last 10m): input ${totalPromptTokens || 0}, output ${totalCompletionTokens || 0}`
     // return `Total tokens (today): input ${totalPromptTokens || 0}, output ${totalCompletionTokens || 0}`
 
-    return `Total tokens (all time): input ${response.data?.totalPromptTokens || 0}, output ${response.data?.totalCompletionTokens || 0}`
+    return `Total tokens (all time): input ${formatNumber(response.data?.totalPromptTokens || 0)}, output ${formatNumber(response.data?.totalCompletionTokens || 0)}`
   } catch (err) {
     console.error('Error fetching lifetime token use:', err)
     return ''

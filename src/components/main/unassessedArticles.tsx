@@ -6,6 +6,7 @@ import {apiClient} from '../../services/apiClient.ts'
 // import {fetchLatestArticles} from '../../services/articlesService.ts'
 import {fetchInfo} from '../../services/fetchInfo'
 import {infoState} from '../../stores/info.ts'
+import {formatNumber} from '../../utils/formatNumber.ts'
 import {UnassessedArticlesTable} from './unassessedArticles/unassessedArticlesTable.tsx'
 
 const fetchLatestArticles = async () => {
@@ -60,7 +61,7 @@ export const UnassessedArticles = (): JSX.Element => {
             }
           >
             <p class="text-muted-foreground">
-              {`${infoQuery.data?.unassessedCount} unassessed articles`}
+              {`${formatNumber(infoQuery.data?.unassessedCount)} unassessed articles`}
             </p>
           </Show>
           {/* <p class="text-muted-foreground">

@@ -1,4 +1,5 @@
 import {apiClient} from '../../../services/apiClient.ts'
+import {formatNumber} from '../../../utils/formatNumber.ts'
 
 export const fetchTokenUseLast10Minutes = async (): Promise<string> => {
   try {
@@ -25,7 +26,7 @@ export const fetchTokenUseLast10Minutes = async (): Promise<string> => {
       totalCompletionTokens: 0,
     }
 
-    return `Total tokens (last 10m): input ${totalPromptTokens || 0}, output ${totalCompletionTokens || 0}`
+    return `Total tokens (last 10m): input ${formatNumber(totalPromptTokens || 0)}, output ${formatNumber(totalCompletionTokens || 0)}`
   } catch (err) {
     console.error('Error fetching last 10 minutes token use:', err)
     return ''
