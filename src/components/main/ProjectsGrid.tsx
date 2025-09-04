@@ -1,8 +1,9 @@
 import {useQuery} from '@tanstack/solid-query'
 import {Link} from '@tanstack/solid-router'
 import {format} from 'date-fns'
-import {For} from 'solid-js'
+import {createSignal, For} from 'solid-js'
 
+import {createAgentJob} from '../../services/agentJobsService'
 import {fetchSession} from '../../services/fetchSession'
 import {Button} from '../ui/button'
 import {runJudge} from './projectsGrid/projectGridRunJudge'
@@ -19,6 +20,7 @@ interface IndexProjectsGridProps {
 }
 
 export const ProjectsGrid = (props: IndexProjectsGridProps) => {
+  const [creatingJobs, setCreatingJobs] = createSignal<Set<string>>(new Set())
   const sessionQuery = useQuery(() => {
     return {
       queryKey: ['session'],
@@ -32,6 +34,25 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
   // const t = () => {
   //   return console.log('sessionQuery.data', sessionQuery.data.session.id)
   // }
+  const handleCreateAgentJob = async (projectId: string) => {
+    setCreatingJobs((prev) => {
+      return new Set([...prev, projectId])
+    })
+    try {
+      const job = await createAgentJob(projectId)
+      console.log('Agent job created:', job)
+      alert(`Agent job created with ID: ${job.jobId}`)
+    } catch (error) {
+      console.error('Failed to create agent job:', error)
+      alert('Failed to create agent job')
+    } finally {
+      setCreatingJobs((prev) => {
+        const next = new Set(prev)
+        next.delete(projectId)
+        return next
+      })
+    }
+  }
 
   return (
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
@@ -41,7 +62,7 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
           return (
             <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
               <Link
-                href={`/projects/${project.id}/reviews`}
+                to={`/projects/${project.id}/reviews`}
                 class="text-xl font-semibold mb-3 block text-blue-600 hover:text-blue-800 underline decoration-2 underline-offset-2 transition-colors"
               >
                 {project.name}
@@ -59,39 +80,56 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
                   Created: {format(project.createdAt, 'yyyy-MM-dd HH:mm')}
                 </span>
               </div>
-              <div class="flex gap-2">
-                <Button
-                  as={Link}
-                  href={`/projects/${project.id}`}
-                  variant="outline"
-                  size="sm"
-                  class="px-3 py-1 text-sm"
-                >
-                  View Details
-                </Button>
-                <Button
-                  as={Link}
-                  href={`/projects/${project.id}/edit`}
-                  size="sm"
-                  variant="outline"
-                  class="px-3 py-1 text-sm"
-                >
-                  Edit
-                </Button>
-                <Button
-                  size="sm"
-                  class="px-3 py-1 text-sm"
-                  onClick={() => {
-                    console.log('Run agent for project:', project.id)
-                    void runJudge({
-                      numberOfArticlesToGet: 100,
-                      projectId: project.id,
-                      sessionId: sessionQuery.data.session.id,
-                    })
-                  }}
-                >
-                  Run agent
-                </Button>
+              <div class="flex flex-col gap-2">
+                <div class="flex gap-2">
+                  <Button
+                    as={Link}
+                    href={`/projects/${project.id}`}
+                    variant="outline"
+                    size="sm"
+                    class="px-3 py-1 text-sm"
+                  >
+                    View Details
+                  </Button>
+                  <Button
+                    as={Link}
+                    href={`/projects/${project.id}/edit`}
+                    size="sm"
+                    variant="outline"
+                    class="px-3 py-1 text-sm"
+                  >
+                    Edit
+                  </Button>
+                </div>
+                <div class="flex gap-2">
+                  <Button
+                    size="sm"
+                    class="px-3 py-1 text-sm"
+                    onClick={() => {
+                      console.log('Run agent for project:', project.id)
+                      void runJudge({
+                        numberOfArticlesToGet: 100,
+                        projectId: project.id,
+                        sessionId: sessionQuery.data?.session?.id,
+                      })
+                    }}
+                  >
+                    Run agent
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    class="px-3 py-1 text-sm"
+                    disabled={creatingJobs().has(project.id)}
+                    onClick={() => {
+                      void handleCreateAgentJob(project.id)
+                    }}
+                  >
+                    {creatingJobs().has(project.id)
+                      ? 'Creating...'
+                      : 'Create Agent Job'}
+                  </Button>
+                </div>
               </div>
             </div>
           )
