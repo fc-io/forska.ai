@@ -27,6 +27,17 @@ export const publicationStatusEnum = pgEnum('publication_status_enum', [
   'retracted',
 ])
 
+export const agentJobStatusEnum = pgEnum('agent_job_status_enum', [
+  'pending',
+  'running',
+  'completed',
+  'failed',
+  'cancelled',
+  'paused',
+  'on_hold',
+  'not_started',
+])
+
 export const articles = pgTable('articles', {
   id: uuid('id').primaryKey().defaultRandom(),
   createdAt: timestamp('created_at', {withTimezone: true})
@@ -78,12 +89,38 @@ export const projects = pgTable('projects', {
       },
       {onDelete: 'cascade'},
     ),
+  modelId: uuid('model_id').references(
+    () => {
+      return models.id
+    },
+    {onDelete: 'set null'},
+  ),
   createdAt: timestamp('created_at', {withTimezone: true})
     .defaultNow()
     .notNull(),
   updatedAt: timestamp('updated_at', {withTimezone: true})
     .defaultNow()
     .notNull(),
+})
+
+export const agentJobs = pgTable('agent_jobs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  createdAt: timestamp('created_at', {withTimezone: true})
+    .defaultNow()
+    .notNull(),
+  updatedAt: timestamp('updated_at', {withTimezone: true})
+    .defaultNow()
+    .notNull(),
+  projectId: uuid('project_id')
+    .notNull()
+    .references(
+      () => {
+        return projects.id
+      },
+      {onDelete: 'cascade'},
+    ),
+  status: agentJobStatusEnum('status').default('not_started').notNull(),
+  error: text('error').array(),
 })
 
 export const prompts = pgTable('prompts', {
@@ -204,6 +241,12 @@ export const tokenUse = pgTable('token_use', {
       },
       {onDelete: 'cascade'},
     ),
+  agentJobId: uuid('agent_job_id').references(
+    () => {
+      return agentJobs.id
+    },
+    {onDelete: 'set null'},
+  ),
   requests: integer('requests').notNull(),
   totalPromptTokens: integer('total_prompt_tokens').notNull(),
   totalCompletionTokens: integer('total_completion_tokens').notNull(),
