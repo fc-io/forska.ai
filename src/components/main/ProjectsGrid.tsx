@@ -118,7 +118,6 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
                   </Button>
                   <Button
                     size="sm"
-                    variant="secondary"
                     class="px-3 py-1 text-sm"
                     disabled={creatingJobs().has(project.id)}
                     onClick={() => {
