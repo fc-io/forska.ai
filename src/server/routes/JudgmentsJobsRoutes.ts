@@ -4,48 +4,71 @@ import {Elysia, t} from 'elysia'
 import {judgmentsJobs, projects} from '../../db/schema'
 import {getDatabase} from '../utils/getDatabase'
 
-type JobState = 'pending' | 'processing' | 'completed' | 'failed'
-
-type JudgmentsJob = {
-  id: string
-  state: JobState
-  createdAt: Date
-  projectId: string
-  agentConfig?: unknown
-}
-
-const generateJobId = () => {
-  return `job_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
-}
-
 export const judgmentsJobsRoutes = new Elysia()
   .post(
     '/api/judgmentsjobs',
     async ({body}) => {
-      const jobId = generateJobId()
-      const job: JudgmentsJob = {
-        id: jobId,
-        state: 'processing',
-        createdAt: new Date(),
-        projectId: body.projectId,
-        agentConfig: body.agentConfig,
+      const db = getDatabase()
+
+      const [job] = await db
+        .insert(judgmentsJobs)
+        .values({projectId: body.projectId, status: 'running'})
+        .returning()
+
+      if (!job) {
+        throw new Error('Failed to create judgments job')
       }
 
-      console.log('Creating judgments job:', job)
+      console.log('Created judgments job:', job)
 
-      return {jobId: job.id, state: job.state}
+      return {
+        data: {
+          jobId: job.id,
+          status: job.status,
+          createdAt: job.createdAt,
+          projectId: job.projectId,
+        },
+        error: null,
+      }
     },
     {body: t.Object({projectId: t.String(), agentConfig: t.Optional(t.Any())})},
   )
   .get(
     '/api/judgmentsjobs/:id',
     async ({params}) => {
-      console.log('Checking job state for:', params.id)
+      const db = getDatabase()
+      console.log('Fetching job state for:', params.id)
+
+      const [job] = await db
+        .select({
+          id: judgmentsJobs.id,
+          createdAt: judgmentsJobs.createdAt,
+          updatedAt: judgmentsJobs.updatedAt,
+          projectId: judgmentsJobs.projectId,
+          status: judgmentsJobs.status,
+          error: judgmentsJobs.error,
+          projectName: projects.name,
+        })
+        .from(judgmentsJobs)
+        .leftJoin(projects, eq(judgmentsJobs.projectId, projects.id))
+        .where(eq(judgmentsJobs.id, params.id))
+        .limit(1)
+
+      if (!job) {
+        return {error: 'Job not found', data: null}
+      }
 
       return {
-        jobId: params.id,
-        state: 'processing' as JobState,
-        createdAt: new Date(),
+        data: {
+          jobId: job.id,
+          status: job.status,
+          createdAt: job.createdAt,
+          updatedAt: job.updatedAt,
+          projectId: job.projectId,
+          projectName: job.projectName,
+          error: job.error,
+        },
+        error: null,
       }
     },
     {params: t.Object({id: t.String()})},
@@ -54,9 +77,6 @@ export const judgmentsJobsRoutes = new Elysia()
     try {
       const db = getDatabase()
 
-      // No authentication check needed for now
-
-      // Fetch all judgment jobs with project information
       const jobs = await db
         .select({
           id: judgmentsJobs.id,
@@ -77,3 +97,85 @@ export const judgmentsJobsRoutes = new Elysia()
       return {error: 'Failed to fetch judgment jobs', data: null}
     }
   })
+  .patch(
+    '/api/judgmentsjobs/:id',
+    async ({params, body}) => {
+      try {
+        const db = getDatabase()
+
+        const [updatedJob] = await db
+          .update(judgmentsJobs)
+          .set({status: body.status, error: body.error, updatedAt: new Date()})
+          .where(eq(judgmentsJobs.id, params.id))
+          .returning()
+
+        if (!updatedJob) {
+          return {error: 'Job not found', data: null}
+        }
+
+        console.log(
+          'Updated judgments job:',
+          updatedJob.id,
+          'to status:',
+          updatedJob.status,
+        )
+
+        return {
+          data: {
+            jobId: updatedJob.id,
+            status: updatedJob.status,
+            updatedAt: updatedJob.updatedAt,
+            error: updatedJob.error,
+          },
+          error: null,
+        }
+      } catch (error) {
+        console.error('Error updating judgment job:', error)
+        return {error: 'Failed to update judgment job', data: null}
+      }
+    },
+    {
+      params: t.Object({id: t.String()}),
+      body: t.Object({
+        status: t.Optional(
+          t.Union([
+            t.Literal('not_started'),
+            t.Literal('waiting_on_llm_connection'),
+            t.Literal('waiting_on_db_connection'),
+            t.Literal('running'),
+            t.Literal('paused_by_user'),
+            t.Literal('paused_by_admin'),
+            t.Literal('failed'),
+            t.Literal('completed'),
+            t.Literal('project_removed'),
+          ]),
+        ),
+        error: t.Optional(t.Array(t.String())),
+      }),
+    },
+  )
+  .delete(
+    '/api/judgmentsjobs/:id',
+    async ({params}) => {
+      try {
+        const db = getDatabase()
+
+        const [deletedJob] = await db
+          .delete(judgmentsJobs)
+          .where(eq(judgmentsJobs.id, params.id))
+          .returning({id: judgmentsJobs.id})
+
+        if (!deletedJob) {
+          return {error: 'Job not found', data: null}
+        }
+
+        console.log('Deleted judgments job:', deletedJob.id)
+
+        return {data: {jobId: deletedJob.id}, error: null}
+      } catch (error) {
+        console.error('Error deleting judgment job:', error)
+        return {error: 'Failed to delete judgment job', data: null}
+      }
+    },
+    {params: t.Object({id: t.String()})},
+  )

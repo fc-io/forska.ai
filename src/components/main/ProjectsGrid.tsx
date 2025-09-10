@@ -41,10 +41,8 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
     try {
       const job = await createJudgmentsJob(projectId)
       console.log('Judgments job created:', job)
-      alert(`Judgments job created with ID: ${job.jobId}`)
     } catch (error) {
       console.error('Failed to create judgments job:', error)
-      alert('Failed to create judgments job')
     } finally {
       setCreatingJobs((prev) => {
         const next = new Set(prev)
