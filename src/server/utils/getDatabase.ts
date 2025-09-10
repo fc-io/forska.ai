@@ -7,7 +7,7 @@ import {env} from './env.ts'
 
 const db = drizzle(env.DATABASE_URL, {
   schema: {...schema, ...authSchema},
-  logger: true,
+  logger: false,
 })
 
 export const getDatabase = () => {

@@ -23,7 +23,6 @@ export const judgmentsJobsRoutes = new Elysia()
     '/api/judgmentsjobs',
     async ({body}) => {
       const jobId = generateJobId()
-
       const job: JudgmentsJob = {
         id: jobId,
         state: 'processing',
@@ -51,33 +50,30 @@ export const judgmentsJobsRoutes = new Elysia()
     },
     {params: t.Object({id: t.String()})},
   )
-  .get(
-    '/api/judgmentsjobs',
-    async () => {
-      try {
-        const db = getDatabase()
+  .get('/api/judgmentsjobs', async () => {
+    try {
+      const db = getDatabase()
 
-        // No authentication check needed for now
+      // No authentication check needed for now
 
-        // Fetch all judgment jobs with project information
-        const jobs = await db
-          .select({
-            id: judgmentsJobs.id,
-            createdAt: judgmentsJobs.createdAt,
-            updatedAt: judgmentsJobs.updatedAt,
-            projectId: judgmentsJobs.projectId,
-            status: judgmentsJobs.status,
-            error: judgmentsJobs.error,
-            projectName: projects.name,
-          })
-          .from(judgmentsJobs)
-          .leftJoin(projects, eq(judgmentsJobs.projectId, projects.id))
-          .orderBy(judgmentsJobs.createdAt)
+      // Fetch all judgment jobs with project information
+      const jobs = await db
+        .select({
+          id: judgmentsJobs.id,
+          createdAt: judgmentsJobs.createdAt,
+          updatedAt: judgmentsJobs.updatedAt,
+          projectId: judgmentsJobs.projectId,
+          status: judgmentsJobs.status,
+          error: judgmentsJobs.error,
+          projectName: projects.name,
+        })
+        .from(judgmentsJobs)
+        .leftJoin(projects, eq(judgmentsJobs.projectId, projects.id))
+        .orderBy(judgmentsJobs.createdAt)
 
-        return {data: jobs, error: null}
-      } catch (error) {
-        console.error('Error fetching judgment jobs:', error)
-        return {error: 'Failed to fetch judgment jobs', data: null}
-      }
-    },
-  )
+      return {data: jobs, error: null}
+    } catch (error) {
+      console.error('Error fetching judgment jobs:', error)
+      return {error: 'Failed to fetch judgment jobs', data: null}
+    }
+  })
