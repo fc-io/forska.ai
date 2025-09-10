@@ -10,6 +10,17 @@ export const judgmentsJobsRoutes = new Elysia()
     async ({body}) => {
       const db = getDatabase()
 
+      // Check if a job already exists for this project
+      const existingJob = await db
+        .select()
+        .from(judgmentsJobs)
+        .where(eq(judgmentsJobs.projectId, body.projectId))
+        .limit(1)
+
+      if (existingJob.length > 0) {
+        return {error: 'A job already exists for this project', data: null}
+      }
+
       const [job] = await db
         .insert(judgmentsJobs)
         .values({projectId: body.projectId, status: 'running'})
