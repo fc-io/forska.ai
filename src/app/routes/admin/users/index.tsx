@@ -1,17 +1,20 @@
+import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute} from '@tanstack/solid-router'
 import {formatDate} from 'date-fns'
-import {createResource, createSignal, For, Show} from 'solid-js'
+import {createSignal, For, Show} from 'solid-js'
 
 import {fetchUsers} from '../../../../services/usersService.ts'
 
 const AdminUsers = () => {
-  const [users, {refetch}] = createResource(fetchUsers)
+  const users = useQuery(() => {
+    return {queryKey: ['users'], queryFn: fetchUsers}
+  })
 
   const [searchTerm, setSearchTerm] = createSignal('')
   const [selectedRole, setSelectedRole] = createSignal('all')
 
   const filteredUsers = () => {
-    const usersList = users() ?? []
+    const usersList = users.data ?? []
     return usersList.filter((user) => {
       const term = searchTerm().toLowerCase()
       const matchesSearch =
@@ -75,15 +78,15 @@ const AdminUsers = () => {
         </div>
 
         {/* Loading and Error States */}
-        <Show when={users.loading}>
+        <Show when={users.isLoading}>
           <p class="text-muted-foreground">Loading users...</p>
         </Show>
-        <Show when={users.error}>
+        <Show when={users.isError}>
           <div class="p-4 rounded-md bg-red-50 border border-red-200">
             <p class="text-red-600">Failed to load users</p>
             <button
               onClick={() => {
-                return void refetch()
+                return void users.refetch()
               }}
               class="mt-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
             >
@@ -97,14 +100,14 @@ const AdminUsers = () => {
           <div class="flex gap-6 text-sm text-gray-600">
             <span>
               <span class="font-semibold text-gray-900">
-                {(users() ?? []).length}
+                {(users.data ?? []).length}
               </span>{' '}
               users
             </span>
             <span>
               <span class="font-semibold text-red-600">
                 {
-                  (users() ?? []).filter((u) => {
+                  (users.data ?? []).filter((u) => {
                     return u.role === 'admin'
                   }).length
                 }
@@ -114,7 +117,7 @@ const AdminUsers = () => {
             <span>
               <span class="font-semibold text-green-600">
                 {
-                  (users() ?? []).filter((u) => {
+                  (users.data ?? []).filter((u) => {
                     return u.role !== 'admin'
                   }).length
                 }
