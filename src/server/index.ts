@@ -1,10 +1,10 @@
 import {cors} from '@elysiajs/cors'
 import {Elysia} from 'elysia'
 
-import {agentJobsRoutes} from './routes/AgentJobsRoutes.ts'
 import {articlesRoutes} from './routes/ArticlesRoutes.ts'
 import {authRoutes} from './routes/AuthRoutes.ts'
 import {judgablesRoutes} from './routes/JudgablesRoutes.ts'
+import {judgmentsJobsRoutes} from './routes/JudgmentsJobsRoutes.ts'
 import {judgmentsRoutes} from './routes/JudgmentsRoutes.ts'
 import {projectsRoutes} from './routes/ProjectsRoutes.ts'
 import {tokensRoutes} from './routes/TokensRoutes.ts'
@@ -14,7 +14,7 @@ import {env} from './utils/env.ts'
 const app = new Elysia()
   .use(cors())
   .use(authRoutes)
-  .use(agentJobsRoutes)
+  .use(judgmentsJobsRoutes)
   .use(articlesRoutes)
   .use(judgablesRoutes)
   .use(judgmentsRoutes)

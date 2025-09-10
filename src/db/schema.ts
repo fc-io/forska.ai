@@ -20,7 +20,7 @@ export const publicationStatusEnum = pgEnum('publication_status_enum', [
   'retracted',
 ])
 
-export const agentJobStatusEnum = pgEnum('agent_job_status_enum', [
+export const judgmentsJobStatusEnum = pgEnum('judgments_job_status_enum', [
   'not_started',
   'waiting_on_llm_connection',
   'waiting_on_db_connection',
@@ -97,7 +97,7 @@ export const projects = pgTable('projects', {
     .notNull(),
 })
 
-export const agentJobs = pgTable('agent_jobs', {
+export const judgmentsJobs = pgTable('judgments_jobs', {
   id: uuid('id').primaryKey().defaultRandom(),
   createdAt: timestamp('created_at', {withTimezone: true})
     .defaultNow()
@@ -113,7 +113,7 @@ export const agentJobs = pgTable('agent_jobs', {
       },
       {onDelete: 'cascade'},
     ),
-  status: agentJobStatusEnum('status').default('not_started').notNull(),
+  status: judgmentsJobStatusEnum('status').default('not_started').notNull(),
   error: text('error').array(),
 })
 
@@ -235,9 +235,9 @@ export const tokenUse = pgTable('token_use', {
       },
       {onDelete: 'cascade'},
     ),
-  agentJobId: uuid('agent_job_id').references(
+  judgmentsJobId: uuid('judgments_job_id').references(
     () => {
-      return agentJobs.id
+      return judgmentsJobs.id
     },
     {onDelete: 'set null'},
   ),

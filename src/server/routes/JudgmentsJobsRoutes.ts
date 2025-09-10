@@ -2,7 +2,7 @@ import {Elysia, t} from 'elysia'
 
 type JobState = 'pending' | 'processing' | 'completed' | 'failed'
 
-type AgentJob = {
+type JudgmentsJob = {
   id: string
   state: JobState
   createdAt: Date
@@ -14,13 +14,13 @@ const generateJobId = () => {
   return `job_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
 }
 
-export const agentJobsRoutes = new Elysia()
+export const judgmentsJobsRoutes = new Elysia()
   .post(
-    '/api/agentjobs',
+    '/api/judgmentsjobs',
     async ({body}) => {
       const jobId = generateJobId()
 
-      const job: AgentJob = {
+      const job: JudgmentsJob = {
         id: jobId,
         state: 'processing',
         createdAt: new Date(),
@@ -28,14 +28,14 @@ export const agentJobsRoutes = new Elysia()
         agentConfig: body.agentConfig,
       }
 
-      console.log('Creating agent job:', job)
+      console.log('Creating judgments job:', job)
 
       return {jobId: job.id, state: job.state}
     },
     {body: t.Object({projectId: t.String(), agentConfig: t.Optional(t.Any())})},
   )
   .get(
-    '/api/agentjobs/:id',
+    '/api/judgmentsjobs/:id',
     async ({params}) => {
       console.log('Checking job state for:', params.id)
 

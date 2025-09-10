@@ -3,8 +3,8 @@ import {Link} from '@tanstack/solid-router'
 import {format} from 'date-fns'
 import {createSignal, For} from 'solid-js'
 
-import {createAgentJob} from '../../services/agentJobsService'
 import {fetchSession} from '../../services/fetchSession'
+import {createJudgmentsJob} from '../../services/judgmentsJobsService'
 import {Button} from '../ui/button'
 import {runJudge} from './projectsGrid/projectGridRunJudge'
 
@@ -34,17 +34,17 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
   // const t = () => {
   //   return console.log('sessionQuery.data', sessionQuery.data.session.id)
   // }
-  const handleCreateAgentJob = async (projectId: string) => {
+  const handleCreateJudgmentsJob = async (projectId: string) => {
     setCreatingJobs((prev) => {
       return new Set([...prev, projectId])
     })
     try {
-      const job = await createAgentJob(projectId)
-      console.log('Agent job created:', job)
-      alert(`Agent job created with ID: ${job.jobId}`)
+      const job = await createJudgmentsJob(projectId)
+      console.log('Judgments job created:', job)
+      alert(`Judgments job created with ID: ${job.jobId}`)
     } catch (error) {
-      console.error('Failed to create agent job:', error)
-      alert('Failed to create agent job')
+      console.error('Failed to create judgments job:', error)
+      alert('Failed to create judgments job')
     } finally {
       setCreatingJobs((prev) => {
         const next = new Set(prev)
@@ -121,12 +121,12 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
                     class="px-3 py-1 text-sm"
                     disabled={creatingJobs().has(project.id)}
                     onClick={() => {
-                      void handleCreateAgentJob(project.id)
+                      void handleCreateJudgmentsJob(project.id)
                     }}
                   >
                     {creatingJobs().has(project.id)
                       ? 'Creating...'
-                      : 'Create Agent Job'}
+                      : 'Create Judgments Job'}
                   </Button>
                 </div>
               </div>
