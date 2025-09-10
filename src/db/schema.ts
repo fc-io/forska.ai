@@ -12,13 +12,6 @@ import {
 
 import {session, user} from '../../auth-schema.ts'
 
-// export const agentJudgmentEnum = pgEnum('agent_judgment', [
-//   'yes',
-//   'no',
-//   'undecided',
-//   'unsure',
-// ])
-
 export const publicationStatusEnum = pgEnum('publication_status_enum', [
   'preprint',
   'submitted',
@@ -28,14 +21,15 @@ export const publicationStatusEnum = pgEnum('publication_status_enum', [
 ])
 
 export const agentJobStatusEnum = pgEnum('agent_job_status_enum', [
-  'pending',
-  'running',
-  'completed',
-  'failed',
-  'cancelled',
-  'paused',
-  'on_hold',
   'not_started',
+  'waiting_on_llm_connection',
+  'waiting_on_db_connection',
+  'running',
+  'paused_by_user',
+  'paused_by_admin',
+  'failed',
+  'completed', // only for projects with a fixed end date
+  'project_removed',
 ])
 
 export const articles = pgTable('articles', {

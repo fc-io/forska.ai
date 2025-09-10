@@ -44,3 +44,25 @@ export const getAgentJobState = async (jobId: string) => {
     throw err
   }
 }
+
+export const getAllAgentJobs = async (projectId?: string) => {
+  try {
+    const response = await apiClient.api.agentjobs.get({
+      query: projectId ? {projectId} : undefined,
+    })
+
+    if (response.error) {
+      console.error('Error fetching all jobs:', response.error)
+      throw new Error('Failed to fetch all jobs')
+    }
+
+    if (!response.data) {
+      throw new Error('No jobs data returned')
+    }
+
+    return response.data
+  } catch (err) {
+    console.error('Error fetching all jobs:', err)
+    throw err
+  }
+}
