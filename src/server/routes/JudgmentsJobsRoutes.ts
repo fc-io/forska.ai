@@ -1,4 +1,8 @@
+import {eq} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
+
+import {judgmentsJobs, projects} from '../../db/schema'
+import {getDatabase} from '../utils/getDatabase'
 
 type JobState = 'pending' | 'processing' | 'completed' | 'failed'
 
@@ -46,4 +50,34 @@ export const judgmentsJobsRoutes = new Elysia()
       }
     },
     {params: t.Object({id: t.String()})},
+  )
+  .get(
+    '/api/judgmentsjobs',
+    async () => {
+      try {
+        const db = getDatabase()
+
+        // No authentication check needed for now
+
+        // Fetch all judgment jobs with project information
+        const jobs = await db
+          .select({
+            id: judgmentsJobs.id,
+            createdAt: judgmentsJobs.createdAt,
+            updatedAt: judgmentsJobs.updatedAt,
+            projectId: judgmentsJobs.projectId,
+            status: judgmentsJobs.status,
+            error: judgmentsJobs.error,
+            projectName: projects.name,
+          })
+          .from(judgmentsJobs)
+          .leftJoin(projects, eq(judgmentsJobs.projectId, projects.id))
+          .orderBy(judgmentsJobs.createdAt)
+
+        return {data: jobs, error: null}
+      } catch (error) {
+        console.error('Error fetching judgment jobs:', error)
+        return {error: 'Failed to fetch judgment jobs', data: null}
+      }
+    },
   )

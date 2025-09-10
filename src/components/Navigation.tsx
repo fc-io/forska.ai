@@ -53,6 +53,12 @@ export const Navigation = (props: NavigationProps) => {
               >
                 Users
               </Link>
+              <Link
+                to="/admin/jobs"
+                class="text-gray-600 hover:text-blue-600 text-sm font-medium"
+              >
+                Jobs
+              </Link>
             </Show>
             <Show when={props.user}>
               <span class="text-sm text-gray-500">{props.user?.email}</span>

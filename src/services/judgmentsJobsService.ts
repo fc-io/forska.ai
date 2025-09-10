@@ -25,6 +25,22 @@ export const createJudgmentsJob = async (
   }
 }
 
+export const fetchJudgmentsJobs = async () => {
+  try {
+    const response = await apiClient.api.judgmentsjobs.get({query: {}})
+
+    if (response.error) {
+      console.error('Error fetching judgment jobs:', response.error)
+      throw new Error('failed to fetchJudgmentsJobs')
+    }
+
+    return response.data?.data ?? []
+  } catch (err) {
+    console.error('Failed to fetch judgment jobs:', err)
+    throw err
+  }
+}
+
 export const getJudgmentsJobState = async (jobId: string) => {
   try {
     const response = await apiClient.api.judgmentsjobs({id: jobId}).get()
@@ -45,11 +61,9 @@ export const getJudgmentsJobState = async (jobId: string) => {
   }
 }
 
-export const getAllJudgmentsJobs = async (projectId?: string) => {
+export const getAllJudgmentsJobs = async () => {
   try {
-    const response = await apiClient.api.judgmentsjobs.get({
-      query: projectId ? {projectId} : undefined,
-    })
+    const response = await apiClient.api.judgmentsjobs.get()
 
     if (response.error) {
       console.error('Error fetching all jobs:', response.error)

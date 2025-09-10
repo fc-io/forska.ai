@@ -3,7 +3,7 @@ import {drizzle} from 'drizzle-orm/node-postgres'
 import * as authSchema from '../auth-schema.ts'
 import {env} from './server/utils/env.ts'
 
-const db = drizzle(env.DATABASE_URL, {schema: authSchema, logger: true})
+const db = drizzle(env.DATABASE_URL, {schema: authSchema, logger: false})
 
 const seedAuthData = async () => {
   console.log('🗑️  Clearing existing auth data...')

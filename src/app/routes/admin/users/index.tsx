@@ -42,7 +42,7 @@ const AdminUsers = () => {
           Invite User
         </button>
       </div>
-      
+
       <div class="space-y-4">
         {/* Filters */}
         <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
@@ -96,17 +96,30 @@ const AdminUsers = () => {
         <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
           <div class="flex gap-6 text-sm text-gray-600">
             <span>
-              <span class="font-semibold text-gray-900">{(users() ?? []).length}</span> users
+              <span class="font-semibold text-gray-900">
+                {(users() ?? []).length}
+              </span>{' '}
+              users
             </span>
             <span>
               <span class="font-semibold text-red-600">
-                {(users() ?? []).filter((u) => u.role === 'admin').length}
-              </span> admins
+                {
+                  (users() ?? []).filter((u) => {
+                    return u.role === 'admin'
+                  }).length
+                }
+              </span>{' '}
+              admins
             </span>
             <span>
               <span class="font-semibold text-green-600">
-                {(users() ?? []).filter((u) => u.role !== 'admin').length}
-              </span> regular
+                {
+                  (users() ?? []).filter((u) => {
+                    return u.role !== 'admin'
+                  }).length
+                }
+              </span>{' '}
+              regular
             </span>
           </div>
         </div>
@@ -140,9 +153,7 @@ const AdminUsers = () => {
                           <div class="font-medium text-gray-900">
                             {user.name || 'No name set'}
                           </div>
-                          <div class="text-sm text-gray-500">
-                            ID: {user.id}
-                          </div>
+                          <div class="text-sm text-gray-500">ID: {user.id}</div>
                         </div>
                       </td>
                       <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">

@@ -18,6 +18,7 @@ import { Route as AboutIndexRouteImport } from './routes/about/index'
 import { Route as ProjectsCreateRouteImport } from './routes/projects/create'
 import { Route as ProjectsIdIndexRouteImport } from './routes/projects/$id/index'
 import { Route as AdminUsersIndexRouteImport } from './routes/admin/users/index'
+import { Route as AdminJobsIndexRouteImport } from './routes/admin/jobs/index'
 import { Route as ProjectsIdEditRouteImport } from './routes/projects/$id/edit'
 import { Route as ProjectsIdReviewsIndexRouteImport } from './routes/projects/$id/reviews/index'
 import { Route as ProjectsIdReviewsArticleIdIndexRouteImport } from './routes/projects/$id/reviews/$articleId/index'
@@ -67,6 +68,11 @@ const AdminUsersIndexRoute = AdminUsersIndexRouteImport.update({
   path: '/admin/users/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminJobsIndexRoute = AdminJobsIndexRouteImport.update({
+  id: '/admin/jobs/',
+  path: '/admin/jobs/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ProjectsIdEditRoute = ProjectsIdEditRouteImport.update({
   id: '/projects/$id/edit',
   path: '/projects/$id/edit',
@@ -93,6 +99,7 @@ export interface FileRoutesByFullPath {
   '/projects': typeof ProjectsIndexRoute
   '/settings': typeof SettingsIndexRoute
   '/projects/$id/edit': typeof ProjectsIdEditRoute
+  '/admin/jobs': typeof AdminJobsIndexRoute
   '/admin/users': typeof AdminUsersIndexRoute
   '/projects/$id': typeof ProjectsIdIndexRoute
   '/projects/$id/reviews': typeof ProjectsIdReviewsIndexRoute
@@ -107,6 +114,7 @@ export interface FileRoutesByTo {
   '/projects': typeof ProjectsIndexRoute
   '/settings': typeof SettingsIndexRoute
   '/projects/$id/edit': typeof ProjectsIdEditRoute
+  '/admin/jobs': typeof AdminJobsIndexRoute
   '/admin/users': typeof AdminUsersIndexRoute
   '/projects/$id': typeof ProjectsIdIndexRoute
   '/projects/$id/reviews': typeof ProjectsIdReviewsIndexRoute
@@ -122,6 +130,7 @@ export interface FileRoutesById {
   '/projects/': typeof ProjectsIndexRoute
   '/settings/': typeof SettingsIndexRoute
   '/projects/$id/edit': typeof ProjectsIdEditRoute
+  '/admin/jobs/': typeof AdminJobsIndexRoute
   '/admin/users/': typeof AdminUsersIndexRoute
   '/projects/$id/': typeof ProjectsIdIndexRoute
   '/projects/$id/reviews/': typeof ProjectsIdReviewsIndexRoute
@@ -138,6 +147,7 @@ export interface FileRouteTypes {
     | '/projects'
     | '/settings'
     | '/projects/$id/edit'
+    | '/admin/jobs'
     | '/admin/users'
     | '/projects/$id'
     | '/projects/$id/reviews'
@@ -152,6 +162,7 @@ export interface FileRouteTypes {
     | '/projects'
     | '/settings'
     | '/projects/$id/edit'
+    | '/admin/jobs'
     | '/admin/users'
     | '/projects/$id'
     | '/projects/$id/reviews'
@@ -166,6 +177,7 @@ export interface FileRouteTypes {
     | '/projects/'
     | '/settings/'
     | '/projects/$id/edit'
+    | '/admin/jobs/'
     | '/admin/users/'
     | '/projects/$id/'
     | '/projects/$id/reviews/'
@@ -181,6 +193,7 @@ export interface RootRouteChildren {
   ProjectsIndexRoute: typeof ProjectsIndexRoute
   SettingsIndexRoute: typeof SettingsIndexRoute
   ProjectsIdEditRoute: typeof ProjectsIdEditRoute
+  AdminJobsIndexRoute: typeof AdminJobsIndexRoute
   AdminUsersIndexRoute: typeof AdminUsersIndexRoute
   ProjectsIdIndexRoute: typeof ProjectsIdIndexRoute
   ProjectsIdReviewsIndexRoute: typeof ProjectsIdReviewsIndexRoute
@@ -252,6 +265,13 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof AdminUsersIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/jobs/': {
+      id: '/admin/jobs/'
+      path: '/admin/jobs'
+      fullPath: '/admin/jobs'
+      preLoaderRoute: typeof AdminJobsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/projects/$id/edit': {
       id: '/projects/$id/edit'
       path: '/projects/$id/edit'
@@ -285,6 +305,7 @@ const rootRouteChildren: RootRouteChildren = {
   ProjectsIndexRoute: ProjectsIndexRoute,
   SettingsIndexRoute: SettingsIndexRoute,
   ProjectsIdEditRoute: ProjectsIdEditRoute,
+  AdminJobsIndexRoute: AdminJobsIndexRoute,
   AdminUsersIndexRoute: AdminUsersIndexRoute,
   ProjectsIdIndexRoute: ProjectsIdIndexRoute,
   ProjectsIdReviewsIndexRoute: ProjectsIdReviewsIndexRoute,
