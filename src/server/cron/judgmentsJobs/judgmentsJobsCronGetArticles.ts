@@ -44,6 +44,55 @@ const getFullyJudgedArticleIds = (
     })
 }
 
+const getArticlesToJudge = async ({
+  db,
+  excludeIds,
+  numberOfArticlesToGet,
+}: {
+  db: PostgresJsDatabase<typeof schema>
+  excludeIds: string[]
+  numberOfArticlesToGet: number
+}) => {
+  const query = db.select().from(schema.articles)
+
+  if (excludeIds.length > 0) {
+    return await query
+      .where(notInArray(schema.articles.id, excludeIds))
+      .orderBy(desc(schema.articles.articleUpdatedAt))
+      .limit(numberOfArticlesToGet)
+  }
+
+  return await query.orderBy(desc(schema.articles.articleUpdatedAt)).limit(numberOfArticlesToGet)
+}
+
+const getArticleIdsToJudge = async ({
+  db,
+  projectPrompts,
+  numberOfArticlesToGet,
+  articlesAlreadyProccessing,
+}: {
+  db: PostgresJsDatabase<typeof schema>
+  projectPrompts: (typeof schema.prompts.$inferSelect)[]
+  numberOfArticlesToGet: number
+  articlesAlreadyProccessing: string[]
+}) => {
+  const promptIds = getPromptIds(projectPrompts)
+  console.log('promptIds length', promptIds.length)
+  const allJudgments = await getProjectJudgments({db, promptIds})
+  console.log('allJudgments', allJudgments.length)
+  // Find articles that have been judged by ALL prompts
+  const fullyJudgedArticleIds = getFullyJudgedArticleIds(allJudgments, promptIds.length)
+  console.log('fullyJudgedArticleIds length', fullyJudgedArticleIds.length)
+  console.log('articlesAlreadyProccessing length', articlesAlreadyProccessing.length)
+  const excludeIds = [...fullyJudgedArticleIds, ...articlesAlreadyProccessing]
+  const articlesToJudge = await getArticlesToJudge({db, excludeIds, numberOfArticlesToGet})
+
+  // return {articles: articlesToJudge, prompts: projectPrompts}
+  return articlesToJudge.map((article) => {
+    return article.id
+  })
+}
+
 export const judgmentsJobsCronGetArticles = async ({
   projectId,
   numberOfArticlesToGet,
@@ -58,39 +107,9 @@ export const judgmentsJobsCronGetArticles = async ({
   const [project] = await db.select().from(schema.projects).where(eq(schema.projects.id, projectId)).limit(1)
   const projectPrompts = await db.select().from(schema.prompts).where(eq(schema.prompts.projectId, projectId))
 
-  if (!project || projectPrompts.length === 0) {
-    // No project, return nothing.
-    // No prompts, return nothing cause there is no idea to judge when there are no prompts.
-    return []
-  }
-  const promptIds = getPromptIds(projectPrompts)
-  console.log('promptIds length', promptIds.length)
-  const allJudgments = await getProjectJudgments({db, promptIds})
-  console.log('allJudgments', allJudgments.length)
-  // Find articles that have been judged by ALL prompts
-  const fullyJudgedArticleIds = getFullyJudgedArticleIds(allJudgments, promptIds.length)
-  console.log('fullyJudgedArticleIds length', fullyJudgedArticleIds.length)
-  console.log('articlesAlreadyProccessing length', articlesAlreadyProccessing.length)
-
-  // Get latest articles excluding those already judged by all prompts and those currently processing
-  const excludeIds = [...fullyJudgedArticleIds, ...articlesAlreadyProccessing]
-
-  const articlesToJudge =
-    excludeIds.length > 0
-      ? await db
-          .select()
-          .from(schema.articles)
-          .where(notInArray(schema.articles.id, excludeIds))
-          .orderBy(desc(schema.articles.articleUpdatedAt))
-          .limit(numberOfArticlesToGet)
-      : await db
-          .select()
-          .from(schema.articles)
-          .orderBy(desc(schema.articles.articleUpdatedAt))
-          .limit(numberOfArticlesToGet)
-
-  // return {articles: articlesToJudge, prompts: projectPrompts}
-  return articlesToJudge.map((article) => {
-    return article.id
-  })
+  // No project, return nothing.
+  // No prompts, return nothing cause there is no idea to judge when there are no prompts.
+  return !project || projectPrompts.length === 0
+    ? []
+    : await getArticleIdsToJudge({db, projectPrompts, numberOfArticlesToGet, articlesAlreadyProccessing})
 }
