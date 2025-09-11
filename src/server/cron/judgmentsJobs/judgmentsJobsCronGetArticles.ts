@@ -78,15 +78,11 @@ const getArticleIdsToJudge = async ({
   })
 }
 
-export const judgmentsJobsCronGetArticles = async ({
-  projectId,
-  numberOfArticlesToGet,
-  articlesAlreadyProccessing = [],
-}: {
-  numberOfArticlesToGet: number
-  projectId: string
-  articlesAlreadyProccessing: string[]
-}) => {
+export const judgmentsJobsCronGetArticles = async (
+  projectId: string,
+  numberOfArticlesToGet: number,
+  articlesAlreadyProccessing: string[] = [],
+) => {
   const db = getDatabase()
 
   const [project] = await db.select().from(schema.projects).where(eq(schema.projects.id, projectId)).limit(1)

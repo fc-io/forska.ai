@@ -8,10 +8,35 @@ import {judgmentsJobsCronGetArticles} from './judgmentsJobs/judgmentsJobsCronGet
 
 const articlesAlreadyProccessing = new Map<string, string[]>()
 let waitingOnNewArticles = false
+
+const getNewArticlesInProcess = async ({
+  allJobs,
+  articlesAlreadyProccessing,
+}: {
+  allJobs: {jobId: string; projectName: string; jobStatus: string; projectId: string}[]
+  articlesAlreadyProccessing: Map<string, string[]>
+}): Promise<[string, string[]][]> => {
+  const numberOfArticlesToGet = 10
+
+  return await Promise.all(
+    allJobs.map(async (job) => {
+      const {jobId, projectName, jobStatus, projectId} = job
+      console.log(`- Project: "${projectName}" | Status: ${jobStatus} | Job ID: ${jobId} | projectId: ${projectId}`)
+      console.log('prev articlesAlreadyProccessing least', (articlesAlreadyProccessing.get(jobId) || []).length)
+      const articles = await judgmentsJobsCronGetArticles(
+        projectId,
+        numberOfArticlesToGet,
+        articlesAlreadyProccessing.get(jobId) || [],
+      )
+      // console.log('articles', articles.join(', '))
+      return [`${jobId}`, articles]
+    }),
+  )
+}
 export const judgmentsJobsCron = new Elysia().use(
   cron({
     name: 'judgments-jobs-cron',
-    pattern: '*/5 * * * * *',
+    pattern: '*/10 * * * * *',
     async run() {
       const db = getDatabase()
       const allJobs = await db
@@ -28,20 +53,8 @@ export const judgmentsJobsCron = new Elysia().use(
         return
       }
       waitingOnNewArticles = true
-      const newArticlesInProcess = await Promise.all(
-        allJobs.map(async (job) => {
-          const {jobId, projectName, jobStatus, projectId} = job
-          console.log(`- Project: "${projectName}" | Status: ${jobStatus} | Job ID: ${jobId} | projectId: ${projectId}`)
-          console.log('prev articlesAlreadyProccessing least', (articlesAlreadyProccessing.get(jobId) || []).length)
-          const articles = await judgmentsJobsCronGetArticles({
-            projectId,
-            numberOfArticlesToGet: 10,
-            articlesAlreadyProccessing: articlesAlreadyProccessing.get(jobId) || [],
-          })
-          // console.log('articles', articles.join(', '))
-          return [`${jobId}`, articles]
-        }),
-      )
+      const newArticlesInProcess = await getNewArticlesInProcess({allJobs, articlesAlreadyProccessing})
+
       newArticlesInProcess.forEach(([jobId, articles]) => {
         // console.log(jobId, articles)
         if (jobId && typeof jobId === 'string') {
