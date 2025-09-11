@@ -39,7 +39,7 @@ export const judgmentsJobsCron = new Elysia().use(
             // articlesAlreadyProccessing: articlesAlreadyProccessing.get(jobId) || [],
             articlesAlreadyProccessing: [],
           })
-          console.log('articles', articles.join(', '))
+          // console.log('articles', articles.join(', '))
           return [`${jobId}_${articles.join(', ')}`, articles]
         }),
       )
@@ -49,7 +49,7 @@ export const judgmentsJobsCron = new Elysia().use(
           articlesAlreadyProccessing.set(jobId, articles as string[])
         }
       })
-      console.log('articlesAlreadyProccessing', articlesAlreadyProccessing.size)
+      console.log('articlesAlreadyProccessing size:', articlesAlreadyProccessing.size)
       waitingOnNewArticles = false
     },
   }),

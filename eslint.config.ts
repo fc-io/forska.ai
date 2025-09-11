@@ -21,11 +21,7 @@ const config = [
       sourceType: 'module',
       parser: typescriptParser,
       globals: {...globals.browser, ...globals.node},
-      parserOptions: {
-        ecmaFeatures: {jsx: true},
-        project: './tsconfig.json',
-        tsconfigRootDir: import.meta.dirname,
-      },
+      parserOptions: {ecmaFeatures: {jsx: true}, project: './tsconfig.json', tsconfigRootDir: import.meta.dirname},
     },
     settings: {
       // Configure import resolver for TypeScript with Bun
@@ -42,10 +38,7 @@ const config = [
     rules: {
       // eslint-plugin-solid rules with default values
       'solid/components-return-once': 'error',
-      'solid/event-handlers': [
-        'error',
-        {ignoreCase: false, warnOnSpread: false},
-      ],
+      'solid/event-handlers': ['error', {ignoreCase: false, warnOnSpread: false}],
       'solid/imports': 'error',
       'solid/jsx-no-duplicate-props': 'error',
       'solid/jsx-no-script-url': 'error',
@@ -401,7 +394,7 @@ const config = [
       'no-unused-expressions': 'off',
       'no-unused-labels': 'error',
       'no-unused-private-class-members': 'off',
-      'no-unused-vars': 'error',
+      'no-unused-vars': 'off', // TypeScript ESLint handles this
       'no-use-before-define': 'off',
       'no-useless-backreference': 'error',
       'no-useless-call': 'off',
@@ -461,10 +454,7 @@ const config = [
   // Allow default exports and non-null assertions in Drizzle config
   {
     files: ['drizzle.config.ts'],
-    rules: {
-      'import/no-default-export': 'off',
-      '@typescript-eslint/no-non-null-assertion': 'off',
-    },
+    rules: {'import/no-default-export': 'off', '@typescript-eslint/no-non-null-assertion': 'off'},
   },
 ]
 
