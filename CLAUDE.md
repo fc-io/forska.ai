@@ -74,7 +74,7 @@ src
 
 ## Platform and tools
 
-* IMPORTANT: Stack built on drizzle with postgres on the server, Bun, Vite, solid, tailwind, tanstack-router, @tanstack/solid-query, date-fns.
+* IMPORTANT: Stack built on drizzle with postgres on the server, Bun, Vite, solid, tailwind, tanstack-router, @tanstack/solid-query, date-fns, elysia (for server) with @elysiajs/cron installed.
 
 Default to using Bun instead of Node.js.
 

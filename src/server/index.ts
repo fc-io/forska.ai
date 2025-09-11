@@ -1,6 +1,7 @@
 import {cors} from '@elysiajs/cors'
 import {Elysia} from 'elysia'
 
+import {judgmentsJobsCron} from './cron/JudgmentsJobsCron.ts'
 import {articlesRoutes} from './routes/ArticlesRoutes.ts'
 import {authRoutes} from './routes/AuthRoutes.ts'
 import {judgablesRoutes} from './routes/JudgablesRoutes.ts'
@@ -13,6 +14,7 @@ import {env} from './utils/env.ts'
 
 const app = new Elysia()
   .use(cors())
+  .use(judgmentsJobsCron)
   .use(authRoutes)
   .use(judgmentsJobsRoutes)
   .use(articlesRoutes)
