@@ -10,7 +10,7 @@ const getPromptIds = (projectPrompts: (typeof schema.prompts.$inferSelect)[]) =>
   })
 }
 
-const getProjectJudgments = async ({db, promptIds}: {db: PostgresJsDatabase<typeof schema>; promptIds: string[]}) => {
+const getAllJudgments = async ({db, promptIds}: {db: PostgresJsDatabase<typeof schema>; promptIds: string[]}) => {
   // Get all judgments for all prompts in this project
   return await db
     .select({articleId: schema.judgments.articleId, promptId: schema.judgments.promptId})
@@ -75,7 +75,7 @@ const getArticleIdsToJudge = async ({
 }) => {
   const promptIds = getPromptIds(projectPrompts)
   console.log('promptIds length', promptIds.length)
-  const allJudgments = await getProjectJudgments({db, promptIds})
+  const allJudgments = await getAllJudgments({db, promptIds})
   console.log('allJudgments', allJudgments.length)
   // Find articles that have been judged by ALL prompts
   const fullyJudgedArticleIds = getFullyJudgedArticleIds(allJudgments, promptIds.length)
