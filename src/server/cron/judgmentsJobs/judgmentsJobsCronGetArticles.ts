@@ -58,8 +58,8 @@ const getArticleIdsToJudge = async ({
   articlesAlreadyProccessing: string[]
 }) => {
   const promptIds = getPromptIds(projectPrompts)
-  console.log('promptIds length', promptIds.length)
-  console.log('articlesAlreadyProccessing length', articlesAlreadyProccessing.length)
+  // console.log('promptIds length', promptIds.length)
+  // console.log('articlesAlreadyProccessing length', articlesAlreadyProccessing.length)
   const queryConditions = getQueryConditions({articlesAlreadyProccessing, promptIds})
 
   const query = db
@@ -71,11 +71,17 @@ const getArticleIdsToJudge = async ({
 
   const articlesToJudge = await query
 
-  console.log('articlesToJudge length', articlesToJudge.length)
+  // console.log('articlesToJudge length', articlesToJudge.length)
+  // console.log('articlesToJudge', articlesToJudge)
+  // console.log('projectPrompts', projectPrompts)
 
-  return articlesToJudge.map((article) => {
-    return article.id
-  })
+  return {
+    articlesToJudgeIds: articlesToJudge.map((article) => {
+      return article.id
+    }),
+    articlesToJudge,
+    projectPrompts,
+  }
 }
 
 export const judgmentsJobsCronGetArticles = async (
@@ -91,6 +97,6 @@ export const judgmentsJobsCronGetArticles = async (
   // No project, return nothing.
   // No prompts, return nothing cause there is no idea to judge when there are no prompts.
   return !project || projectPrompts.length === 0
-    ? []
+    ? {articlesToJudgeIds: [], articlesToJudge: [], projectPrompts: []}
     : await getArticleIdsToJudge({db, projectPrompts, numberOfArticlesToGet, articlesAlreadyProccessing})
 }
