@@ -3,8 +3,10 @@ import {Elysia, t} from 'elysia'
 
 import {judgmentsJobs, projects} from '../../db/schema'
 import {getDatabase} from '../utils/getDatabase'
+import {withErrorHandler} from '../utils/routeErrorHandler'
 
 export const judgmentsJobsRoutes = new Elysia()
+  .use(withErrorHandler())
   .post(
     '/api/judgmentsjobs',
     async ({body}) => {
@@ -85,64 +87,54 @@ export const judgmentsJobsRoutes = new Elysia()
     {params: t.Object({id: t.String()})},
   )
   .get('/api/judgmentsjobs', async () => {
-    try {
-      const db = getDatabase()
+    const db = getDatabase()
 
-      const jobs = await db
-        .select({
-          id: judgmentsJobs.id,
-          createdAt: judgmentsJobs.createdAt,
-          updatedAt: judgmentsJobs.updatedAt,
-          projectId: judgmentsJobs.projectId,
-          status: judgmentsJobs.status,
-          error: judgmentsJobs.error,
-          projectName: projects.name,
-        })
-        .from(judgmentsJobs)
-        .leftJoin(projects, eq(judgmentsJobs.projectId, projects.id))
-        .orderBy(judgmentsJobs.createdAt)
+    const jobs = await db
+      .select({
+        id: judgmentsJobs.id,
+        createdAt: judgmentsJobs.createdAt,
+        updatedAt: judgmentsJobs.updatedAt,
+        projectId: judgmentsJobs.projectId,
+        status: judgmentsJobs.status,
+        error: judgmentsJobs.error,
+        projectName: projects.name,
+      })
+      .from(judgmentsJobs)
+      .leftJoin(projects, eq(judgmentsJobs.projectId, projects.id))
+      .orderBy(judgmentsJobs.createdAt)
 
-      return {data: jobs, error: null}
-    } catch (error) {
-      console.error('Error fetching judgment jobs:', error)
-      return {error: 'Failed to fetch judgment jobs', data: null}
-    }
+    return {data: jobs, error: null}
   })
   .patch(
     '/api/judgmentsjobs/:id',
     async ({params, body}) => {
-      try {
-        const db = getDatabase()
+      const db = getDatabase()
 
-        const [updatedJob] = await db
-          .update(judgmentsJobs)
-          .set({status: body.status, error: body.error, updatedAt: new Date()})
-          .where(eq(judgmentsJobs.id, params.id))
-          .returning()
+      const [updatedJob] = await db
+        .update(judgmentsJobs)
+        .set({status: body.status, error: body.error, updatedAt: new Date()})
+        .where(eq(judgmentsJobs.id, params.id))
+        .returning()
 
-        if (!updatedJob) {
-          return {error: 'Job not found', data: null}
-        }
+      if (!updatedJob) {
+        throw new Error('Job not found')
+      }
 
-        console.log(
-          'Updated judgments job:',
-          updatedJob.id,
-          'to status:',
-          updatedJob.status,
-        )
+      console.log(
+        'Updated judgments job:',
+        updatedJob.id,
+        'to status:',
+        updatedJob.status,
+      )
 
-        return {
-          data: {
-            jobId: updatedJob.id,
-            status: updatedJob.status,
-            updatedAt: updatedJob.updatedAt,
-            error: updatedJob.error,
-          },
-          error: null,
-        }
-      } catch (error) {
-        console.error('Error updating judgment job:', error)
-        return {error: 'Failed to update judgment job', data: null}
+      return {
+        data: {
+          jobId: updatedJob.id,
+          status: updatedJob.status,
+          updatedAt: updatedJob.updatedAt,
+          error: updatedJob.error,
+        },
+        error: null,
       }
     },
     {
@@ -168,25 +160,20 @@ export const judgmentsJobsRoutes = new Elysia()
   .delete(
     '/api/judgmentsjobs/:id',
     async ({params}) => {
-      try {
-        const db = getDatabase()
+      const db = getDatabase()
 
-        const [deletedJob] = await db
-          .delete(judgmentsJobs)
-          .where(eq(judgmentsJobs.id, params.id))
-          .returning({id: judgmentsJobs.id})
+      const [deletedJob] = await db
+        .delete(judgmentsJobs)
+        .where(eq(judgmentsJobs.id, params.id))
+        .returning({id: judgmentsJobs.id})
 
-        if (!deletedJob) {
-          return {error: 'Job not found', data: null}
-        }
-
-        console.log('Deleted judgments job:', deletedJob.id)
-
-        return {data: {jobId: deletedJob.id}, error: null}
-      } catch (error) {
-        console.error('Error deleting judgment job:', error)
-        return {error: 'Failed to delete judgment job', data: null}
+      if (!deletedJob) {
+        throw new Error('Job not found')
       }
+
+      console.log('Deleted judgments job:', deletedJob.id)
+
+      return {data: {jobId: deletedJob.id}, error: null}
     },
     {params: t.Object({id: t.String()})},
   )
