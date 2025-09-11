@@ -55,14 +55,11 @@ const getArticlesToJudge = async ({
 }) => {
   const query = db.select().from(schema.articles)
 
-  if (excludeIds.length > 0) {
-    return await query
-      .where(notInArray(schema.articles.id, excludeIds))
-      .orderBy(desc(schema.articles.articleUpdatedAt))
-      .limit(numberOfArticlesToGet)
-  }
-
-  return await query.orderBy(desc(schema.articles.articleUpdatedAt)).limit(numberOfArticlesToGet)
+  return excludeIds.length > 0
+    ? await query
+        .where(notInArray(schema.articles.id, excludeIds))
+        .orderBy(desc(schema.articles.articleUpdatedAt), desc(schema.articles.id))
+    : await query.orderBy(desc(schema.articles.articleUpdatedAt), desc(schema.articles.id)).limit(numberOfArticlesToGet)
 }
 
 const getArticleIdsToJudge = async ({
