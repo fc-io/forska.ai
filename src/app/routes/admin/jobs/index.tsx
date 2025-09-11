@@ -1,6 +1,6 @@
 import {useQuery} from '@tanstack/solid-query'
-import {createFileRoute} from '@tanstack/solid-router'
-import {formatDate} from 'date-fns'
+import {createFileRoute, Link} from '@tanstack/solid-router'
+import {formatDate, formatDistanceToNow} from 'date-fns'
 import {For, Show} from 'solid-js'
 
 import {fetchJudgmentsJobs} from '../../../../services/judgmentsJobsService'
@@ -40,21 +40,17 @@ const formatStatus = (status: string | null) => {
 
 const AdminJobs = () => {
   const jobs = useQuery(() => {
-    return {queryKey: ['judgments-jobs'], queryFn: fetchJudgmentsJobs}
+    return {
+      queryKey: ['judgments-jobs'],
+      queryFn: fetchJudgmentsJobs,
+      refetchInterval: 30000, // Refresh every 30 seconds
+    }
   })
 
   return (
     <div class="min-h-screen bg-gray-50 p-6 mx-auto">
       <div class="flex justify-between items-center mb-6">
         <h1 class="text-2xl font-bold">Judgment Jobs</h1>
-        <button
-          onClick={() => {
-            return void jobs.refetch()
-          }}
-          class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
-        >
-          Refresh
-        </button>
       </div>
 
       <div class="space-y-4">
@@ -138,6 +134,9 @@ const AdminJobs = () => {
 
         {/* Jobs Table */}
         <Show when={jobs.data && jobs.data.length > 0}>
+          <div class="text-sm text-gray-500 mb-2">
+            Last updated: {formatDistanceToNow(jobs.dataUpdatedAt)} ago
+          </div>
           <div class="overflow-x-auto bg-white rounded-lg shadow">
             <table class="min-w-full divide-y divide-gray-200">
               <thead class="bg-gray-50">
@@ -164,7 +163,12 @@ const AdminJobs = () => {
                     return (
                       <tr class="hover:bg-gray-50">
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                          <div class="font-mono text-xs">{job.id.slice(0, 8)}...</div>
+                          <Link
+                            href={`/admin/judgments/${job.id}`}
+                            class="font-mono text-xs text-blue-600 hover:text-blue-800 hover:underline"
+                          >
+                            {job.id.slice(0, 8)}...
+                          </Link>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                           {job.projectName || 'Unknown Project'}
@@ -186,12 +190,13 @@ const AdminJobs = () => {
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                           <div class="flex gap-2">
-                            <button
+                            <Link
+                              href={`/admin/judgments/${job.id}`}
                               class="text-sm text-blue-600 hover:text-blue-800"
                               title={job.error ? `Errors: ${job.error.join(', ')}` : 'No errors'}
                             >
                               View Details
-                            </button>
+                            </Link>
                             <Show when={job.status === 'running'}>
                               <button class="text-sm text-yellow-600 hover:text-yellow-800">Pause</button>
                             </Show>

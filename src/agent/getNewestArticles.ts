@@ -1,6 +1,6 @@
 import {type} from 'arktype'
 
-import {getSupabaseClient} from '../utils/getSupabaseClient'
+// import {getSupabaseClient} from '../utils/getSupabaseClient'
 
 // Extended database item type that includes judged_as fields
 const ExtendedDatabaseItem = type({
