@@ -5,6 +5,7 @@ import {createStore} from 'solid-js/store'
 
 import {Button} from '../../../../components/ui/button'
 import {apiClient} from '../../../../services/apiClient'
+import {handleApiResponse} from '../../../../services/utils/handleApiResponse'
 
 type PromptItem = {
   id: string
@@ -26,20 +27,11 @@ const EditProject = () => {
       queryKey: ['project', projectId, 'with-prompts'],
       queryFn: async () => {
         const response = await apiClient.api.projects({id: projectId}).get()
-
-        if (response.error) {
-          throw new Error('Failed to fetch project')
-        }
-
-        if (response.data?.error) {
-          throw new Error(response.data.error)
-        }
-
-        if (!response.data?.data) {
+        const data = handleApiResponse(response, 'Failed to fetch project')
+        if (!data.data) {
           throw new Error('Project not found')
         }
-
-        return response.data.data
+        return data.data
       },
     }
   })
@@ -164,13 +156,7 @@ const EditProject = () => {
           prompts: promptsData,
         })
 
-      if (response.error || response.data?.error) {
-        console.error(
-          'Error updating project:',
-          response.error || response.data?.error,
-        )
-        throw new Error(response.data?.error || 'Failed to update project')
-      }
+      handleApiResponse(response, 'Failed to update project')
 
       // void navigate({to: '/projects'})
     } catch (err) {

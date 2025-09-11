@@ -2,20 +2,13 @@ import {useQuery} from '@tanstack/solid-query'
 import {type JSX, Show} from 'solid-js'
 
 import {apiClient} from '../../services/apiClient.ts'
+import {handleApiResponse} from '../../services/utils/handleApiResponse'
 import {ArticlesTableTable} from './articlesTable/articlesTableTable.tsx'
 
 const fetchLatestArticles = async () => {
   const response = await apiClient.api.articles.latest.get()
-
-  if (response.error) {
-    throw new Error('Failed to fetch articles')
-  }
-
-  if (response.data?.error) {
-    throw new Error(response.data.error)
-  }
-
-  return response.data?.data || []
+  const result = handleApiResponse(response, 'Failed to fetch articles')
+  return result?.data || []
 }
 
 export const ArticlesTable = (): JSX.Element => {

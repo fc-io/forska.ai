@@ -5,22 +5,15 @@ import {type JSX, Show} from 'solid-js'
 import {apiClient} from '../../services/apiClient.ts'
 // import {fetchLatestArticles} from '../../services/articlesService.ts'
 import {fetchInfo} from '../../services/fetchInfo'
+import {handleApiResponse} from '../../services/utils/handleApiResponse'
 import {infoState} from '../../stores/info.ts'
 import {formatNumber} from '../../utils/formatNumber.ts'
 import {UnassessedArticlesTable} from './unassessedArticles/unassessedArticlesTable.tsx'
 
 const fetchLatestArticles = async () => {
   const response = await apiClient.api.articles.latest.get()
-
-  if (response.error) {
-    throw new Error('Failed to fetch articles')
-  }
-
-  if (response.data?.error) {
-    throw new Error(response.data.error)
-  }
-
-  return response.data?.data || []
+  const result = handleApiResponse(response, 'Failed to fetch articles')
+  return result?.data || []
 }
 
 export const UnassessedArticles = (): JSX.Element => {

@@ -2,6 +2,7 @@ import {addDays, startOfDay} from 'date-fns'
 
 import {formatNumber} from '../utils/formatNumber.ts'
 import {apiClient} from './apiClient.ts'
+import {handleApiResponse} from './utils/handleApiResponse'
 
 export const fetchTokenUseToday = async (): Promise<string> => {
   try {
@@ -11,15 +12,8 @@ export const fetchTokenUseToday = async (): Promise<string> => {
       query: {startTime: start.toISOString(), endTime: end.toISOString()},
     })
 
-    if (response.error || response.data?.error) {
-      console.error(
-        'Error fetching token use:',
-        response.error || response.data?.error,
-      )
-      return ''
-    }
-
-    const {totalPromptTokens, totalCompletionTokens} = response.data || {
+    const data = handleApiResponse(response, 'Failed to fetch token use')
+    const {totalPromptTokens, totalCompletionTokens} = data || {
       totalPromptTokens: 0,
       totalCompletionTokens: 0,
     }
@@ -34,20 +28,15 @@ export const fetchTokenUseToday = async (): Promise<string> => {
 export const fetchTokensAllTime = async (): Promise<string> => {
   try {
     const response = await apiClient.api.tokens.get({query: {}})
+    const data = handleApiResponse(
+      response,
+      'Failed to fetch all-time token usage',
+    )
 
-    if (response.error) {
-      console.error('Error fetching all-time token usage:', response.error)
-      return ''
-    }
-
-    if (response.data?.error) {
-      console.error('Server error:', response.data.error)
-      return ''
-    }
     // return `Total tokens (last 10m): input ${totalPromptTokens || 0}, output ${totalCompletionTokens || 0}`
     // return `Total tokens (today): input ${totalPromptTokens || 0}, output ${totalCompletionTokens || 0}`
 
-    return `Total tokens (all time): input ${formatNumber(response.data?.totalPromptTokens || 0)}, output ${formatNumber(response.data?.totalCompletionTokens || 0)}`
+    return `Total tokens (all time): input ${formatNumber(data?.totalPromptTokens || 0)}, output ${formatNumber(data?.totalCompletionTokens || 0)}`
   } catch (err) {
     console.error('Error fetching lifetime token use:', err)
     return ''
@@ -57,18 +46,8 @@ export const fetchTokensAllTime = async (): Promise<string> => {
 export const fetchUnassessedCount = async (): Promise<number | null> => {
   try {
     const response = await apiClient.api['unassessed-count'].get()
-
-    if (response.error) {
-      console.error('Error fetching unassessed count:', response.error)
-      return null
-    }
-
-    if (response.data?.error) {
-      console.error('Server error:', response.data.error)
-      return null
-    }
-
-    return response.data?.count ?? null
+    const data = handleApiResponse(response, 'Failed to fetch unassessed count')
+    return data?.count ?? null
   } catch (err) {
     console.error('Error fetching unassessed articles count:', err)
     return null

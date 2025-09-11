@@ -1,82 +1,29 @@
 import {apiClient} from './apiClient.ts'
+import {handleApiResponse} from './utils/handleApiResponse'
 
 export const createJudgmentsJob = async (
   projectId: string,
   agentConfig?: unknown,
 ) => {
-  try {
-    const response = await apiClient.api.judgmentsjobs.post({
-      projectId,
-      agentConfig,
-    })
-    if (response.error) {
-      console.error('Error creating judgments job:', response.error)
-      throw new Error('Failed to create judgments job')
-    }
-
-    if (!response.data) {
-      throw new Error('No job data returned')
-    }
-
-    return response.data
-  } catch (err) {
-    console.error('Error creating judgments job:', err)
-    throw err
-  }
+  const response = await apiClient.api.judgmentsjobs.post({
+    projectId,
+    agentConfig,
+  })
+  return handleApiResponse(response, 'Failed to create judgments job')
 }
 
 export const fetchJudgmentsJobs = async () => {
-  try {
-    const response = await apiClient.api.judgmentsjobs.get({query: {}})
-
-    if (response.error) {
-      console.error('Error fetching judgment jobs:', response.error)
-      throw new Error('failed to fetchJudgmentsJobs')
-    }
-
-    return response.data?.data ?? []
-  } catch (err) {
-    console.error('Failed to fetch judgment jobs:', err)
-    throw err
-  }
+  const response = await apiClient.api.judgmentsjobs.get({query: {}})
+  const result = handleApiResponse(response, 'Failed to fetch judgment jobs')
+  return result.data ?? []
 }
 
 export const getJudgmentsJobState = async (jobId: string) => {
-  try {
-    const response = await apiClient.api.judgmentsjobs({id: jobId}).get()
-
-    if (response.error) {
-      console.error('Error fetching job state:', response.error)
-      throw new Error('Failed to fetch job state')
-    }
-
-    if (!response.data) {
-      throw new Error('No job data returned')
-    }
-
-    return response.data
-  } catch (err) {
-    console.error('Error fetching job state:', err)
-    throw err
-  }
+  const response = await apiClient.api.judgmentsjobs({id: jobId}).get()
+  return handleApiResponse(response, 'Failed to fetch job state')
 }
 
 export const getAllJudgmentsJobs = async () => {
-  try {
-    const response = await apiClient.api.judgmentsjobs.get()
-
-    if (response.error) {
-      console.error('Error fetching all jobs:', response.error)
-      throw new Error('Failed to fetch all jobs')
-    }
-
-    if (!response.data) {
-      throw new Error('No jobs data returned')
-    }
-
-    return response.data
-  } catch (err) {
-    console.error('Error fetching all jobs:', err)
-    throw err
-  }
+  const response = await apiClient.api.judgmentsjobs.get()
+  return handleApiResponse(response, 'Failed to fetch all jobs')
 }

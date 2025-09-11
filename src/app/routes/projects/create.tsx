@@ -6,6 +6,7 @@ import {createStore} from 'solid-js/store'
 import {Button} from '../../../components/ui/button'
 import {apiClient} from '../../../services/apiClient'
 import {fetchSession} from '../../../services/fetchSession'
+import {handleApiResponse} from '../../../services/utils/handleApiResponse'
 
 type PromptItem = {
   id: string
@@ -91,19 +92,11 @@ const CreateProject = () => {
       prompts: validPrompts,
     })
 
-    if (response.error) {
-      throw new Error('Failed to create project')
-    }
-
-    if (response.data?.error) {
-      throw new Error(response.data.error)
-    }
-
-    if (!response.data?.data) {
+    const result = handleApiResponse(response, 'Failed to create project')
+    if (!result.data) {
       throw new Error('Failed to create project: No data returned')
     }
-
-    return response.data.data
+    return result.data
   }
 
   const handleSubmit = async (e: Event) => {

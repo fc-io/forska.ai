@@ -5,6 +5,7 @@ import {createSignal, For, Show} from 'solid-js'
 import {getArticleUrl} from '../../../app/utils/getArticleUrl.ts'
 import type {articles, judgments} from '../../../db/schema.ts'
 import {apiClient} from '../../../services/apiClient.ts'
+import {handleApiResponse} from '../../../services/utils/handleApiResponse'
 
 type ArticleWithJudgments = typeof articles.$inferSelect & {
   judgments: Array<typeof judgments.$inferSelect>
@@ -40,15 +41,8 @@ export const ProjectDetailsArticles = (props: {projectId: string}) => {
           .projects({id: props.projectId})
           ['articles-with-judgments'].get({query: queryParams})
 
-        if (response.error || !response.data) {
-          throw new Error(
-            response.error && typeof response.error === 'string'
-              ? response.error
-              : 'Failed to fetch articles',
-          )
-        }
-
-        return response.data as {
+        const data = handleApiResponse(response, 'Failed to fetch articles')
+        return data as {
           data: ArticleWithJudgments[]
           totalCount: number
           page: number
