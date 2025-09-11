@@ -122,9 +122,7 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
                       void handleCreateJudgmentsJob(project.id)
                     }}
                   >
-                    {creatingJobs().has(project.id)
-                      ? 'Creating...'
-                      : 'Create Judgments Job'}
+                    {creatingJobs().has(project.id) ? 'Creating...' : 'Create Judgments Job'}
                   </Button>
                 </div>
               </div>

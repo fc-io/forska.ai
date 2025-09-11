@@ -8,12 +8,7 @@ import {apiClient} from '../../../services/apiClient'
 import {fetchSession} from '../../../services/fetchSession'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse'
 
-type PromptItem = {
-  id: string
-  content: string
-  promptHeading: string
-  type: string
-}
+type PromptItem = {id: string; content: string; promptHeading: string; type: string}
 
 const CreateProject = () => {
   const sessionQuery = useQuery(() => {
@@ -33,10 +28,7 @@ const CreateProject = () => {
   const [error, setError] = createSignal<string | null>(null)
 
   const addPromptInput = () => {
-    setPrompts([
-      ...prompts,
-      {id: crypto.randomUUID(), content: '', promptHeading: '', type: ''},
-    ])
+    setPrompts([...prompts, {id: crypto.randomUUID(), content: '', promptHeading: '', type: ''}])
   }
 
   const removePromptInput = (id: string) => {
@@ -49,11 +41,7 @@ const CreateProject = () => {
     }
   }
 
-  const updatePromptInput = (
-    id: string,
-    field: 'content' | 'promptHeading' | 'type',
-    value: string,
-  ) => {
+  const updatePromptInput = (id: string, field: 'content' | 'promptHeading' | 'type', value: string) => {
     const idx = prompts.findIndex((p) => {
       return p.id === id
     })
@@ -62,11 +50,7 @@ const CreateProject = () => {
     }
   }
 
-  const createProject = async (
-    name: string,
-    description: string,
-    promptItems: PromptItem[],
-  ) => {
+  const createProject = async (name: string, description: string, promptItems: PromptItem[]) => {
     // Filter valid prompts
     const validPrompts = promptItems
       .filter((prompt) => {
@@ -111,8 +95,7 @@ const CreateProject = () => {
       // Navigate back to projects page on success
       void navigate({to: '/projects'})
     } catch (err) {
-      const errorMessage =
-        err instanceof Error ? err.message : 'An unexpected error occurred'
+      const errorMessage = err instanceof Error ? err.message : 'An unexpected error occurred'
       setError(errorMessage)
     } finally {
       setIsLoading(false)
@@ -130,9 +113,7 @@ const CreateProject = () => {
 
       <div class="bg-card border rounded-lg p-6">
         <Show when={error()}>
-          <div class="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm">
-            {error()}
-          </div>
+          <div class="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm">{error()}</div>
         </Show>
         <form
           onSubmit={(e) => {
@@ -176,12 +157,7 @@ const CreateProject = () => {
           <div>
             <div class="flex items-center justify-between mb-2">
               <label class="block text-sm font-medium">Prompts</label>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={addPromptInput}
-              >
+              <Button type="button" variant="outline" size="sm" onClick={addPromptInput}>
                 + Add Prompt
               </Button>
             </div>
@@ -195,11 +171,7 @@ const CreateProject = () => {
                           type="text"
                           value={promptItem.promptHeading}
                           onInput={(e) => {
-                            return updatePromptInput(
-                              promptItem.id,
-                              'promptHeading',
-                              e.currentTarget.value,
-                            )
+                            return updatePromptInput(promptItem.id, 'promptHeading', e.currentTarget.value)
                           }}
                           placeholder={`Prompt ${index() + 1} heading (optional)...`}
                           class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
@@ -208,11 +180,7 @@ const CreateProject = () => {
                           type="text"
                           value={promptItem.type}
                           onInput={(e) => {
-                            return updatePromptInput(
-                              promptItem.id,
-                              'type',
-                              e.currentTarget.value,
-                            )
+                            return updatePromptInput(promptItem.id, 'type', e.currentTarget.value)
                           }}
                           placeholder={`Prompt ${index() + 1} type (optional)...`}
                           class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
@@ -220,11 +188,7 @@ const CreateProject = () => {
                         <textarea
                           value={promptItem.content}
                           onInput={(e) => {
-                            return updatePromptInput(
-                              promptItem.id,
-                              'content',
-                              e.currentTarget.value,
-                            )
+                            return updatePromptInput(promptItem.id, 'content', e.currentTarget.value)
                           }}
                           placeholder={`Enter prompt ${index() + 1} content...`}
                           rows="4"
@@ -252,10 +216,7 @@ const CreateProject = () => {
           </div>
 
           <div class="flex gap-3 pt-4">
-            <Button
-              type="submit"
-              disabled={!projectName().trim() || isLoading()}
-            >
+            <Button type="submit" disabled={!projectName().trim() || isLoading()}>
               {isLoading() ? 'Creating...' : 'Create Project'}
             </Button>
             <Button as={Link} href="/projects" variant="outline">
@@ -268,6 +229,4 @@ const CreateProject = () => {
   )
 }
 
-export const Route = createFileRoute('/projects/create')({
-  component: CreateProject,
-})
+export const Route = createFileRoute('/projects/create')({component: CreateProject})

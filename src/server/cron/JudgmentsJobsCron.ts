@@ -32,21 +32,22 @@ export const judgmentsJobsCron = new Elysia().use(
         allJobs.map(async (job) => {
           const {jobId, projectName, jobStatus, projectId} = job
           console.log(`- Project: "${projectName}" | Status: ${jobStatus} | Job ID: ${jobId} | projectId: ${projectId}`)
-
+          console.log('prev articlesAlreadyProccessing least', (articlesAlreadyProccessing.get(jobId) || []).length)
           const articles = await judgmentsJobsCronGetArticles({
             projectId,
             numberOfArticlesToGet: 10,
-            // articlesAlreadyProccessing: articlesAlreadyProccessing.get(jobId) || [],
-            articlesAlreadyProccessing: [],
+            articlesAlreadyProccessing: articlesAlreadyProccessing.get(jobId) || [],
           })
           // console.log('articles', articles.join(', '))
-          return [`${jobId}_${articles.join(', ')}`, articles]
+          return [`${jobId}`, articles]
         }),
       )
       newArticlesInProcess.forEach(([jobId, articles]) => {
         // console.log(jobId, articles)
         if (jobId && typeof jobId === 'string') {
-          articlesAlreadyProccessing.set(jobId, articles as string[])
+          const previousArticles = articlesAlreadyProccessing.get(jobId)
+          // console.log('articles', articles)
+          articlesAlreadyProccessing.set(jobId, [...(previousArticles || []), ...articles] as string[])
         }
       })
       console.log('articlesAlreadyProccessing size:', articlesAlreadyProccessing.size)

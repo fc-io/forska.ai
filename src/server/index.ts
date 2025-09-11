@@ -25,8 +25,6 @@ const app = new Elysia()
   .use(usersRoutes)
   .listen(env.SERVER_PORT)
 
-console.log(
-  `🦊 Elysia is running at ${app.server?.hostname}:${app.server?.port}`,
-)
+console.log(`🦊 Elysia is running at ${app.server?.hostname}:${app.server?.port}`)
 
 export type App = typeof app

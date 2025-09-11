@@ -16,10 +16,7 @@ export const projectsRoutesGetArticlesWithJudgments = new Elysia().get(
       const offset = (page - 1) * limit
 
       // First get all prompts for this project
-      const projectPrompts = await db
-        .select()
-        .from(prompts)
-        .where(eq(prompts.projectId, params.id))
+      const projectPrompts = await db.select().from(prompts).where(eq(prompts.projectId, params.id))
 
       if (projectPrompts.length === 0) {
         return {data: [], totalCount: 0, page, limit, error: null}
@@ -35,8 +32,7 @@ export const projectsRoutesGetArticlesWithJudgments = new Elysia().get(
 
       // Add filter for answered_original if provided
       if (query.answered_original !== undefined) {
-        const answeredOriginalValue =
-          query.answered_original === 'true' ? 'yes' : 'no'
+        const answeredOriginalValue = query.answered_original === 'true' ? 'yes' : 'no'
         conditions.push(
           sql`NOT EXISTS (
             SELECT 1 FROM ${judgments}
@@ -54,9 +50,7 @@ export const projectsRoutesGetArticlesWithJudgments = new Elysia().get(
 
       // First, get the total count
       const countQuery = await db
-        .select({
-          count: sql<number>`COUNT(DISTINCT ${articles.id})`.as('count'),
-        })
+        .select({count: sql<number>`COUNT(DISTINCT ${articles.id})`.as('count')})
         .from(articles)
         .where(
           conditions.length > 0
@@ -85,9 +79,7 @@ export const projectsRoutesGetArticlesWithJudgments = new Elysia().get(
           ),
         )
         .groupBy(articles.id)
-        .having(
-          sql`COUNT(DISTINCT ${judgments.promptId}) = ${promptIds.length}`,
-        )
+        .having(sql`COUNT(DISTINCT ${judgments.promptId}) = ${promptIds.length}`)
 
       const totalCount = countQuery.length
 
@@ -122,9 +114,7 @@ export const projectsRoutesGetArticlesWithJudgments = new Elysia().get(
                 )}])
               )`,
         )
-        .having(
-          sql`COUNT(DISTINCT ${judgments.promptId}) = ${promptIds.length}`,
-        )
+        .having(sql`COUNT(DISTINCT ${judgments.promptId}) = ${promptIds.length}`)
         .innerJoin(
           judgments,
           and(
@@ -184,14 +174,7 @@ export const projectsRoutesGetArticlesWithJudgments = new Elysia().get(
         return {...article, judgments: judgmentsByArticle[article.id] || []}
       })
 
-      return {
-        data: result,
-        totalCount,
-        page,
-        limit,
-        totalPages: Math.ceil(totalCount / limit),
-        error: null,
-      }
+      return {data: result, totalCount, page, limit, totalPages: Math.ceil(totalCount / limit), error: null}
     } catch (error) {
       console.error('Error fetching articles with judgments:', error)
       return {
@@ -200,10 +183,7 @@ export const projectsRoutesGetArticlesWithJudgments = new Elysia().get(
         page: 1,
         limit: 100,
         totalPages: 0,
-        error:
-          error instanceof Error
-            ? error.message
-            : 'Failed to fetch articles with judgments',
+        error: error instanceof Error ? error.message : 'Failed to fetch articles with judgments',
       }
     }
   },

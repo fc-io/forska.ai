@@ -20,9 +20,7 @@ const IdParams = type({
   }),
 })
 
-export const pubmedHarvestGetIdParams = (
-  input: InputData,
-): typeof IdParams.infer => {
+export const pubmedHarvestGetIdParams = (input: InputData): typeof IdParams.infer => {
   const {fromDate, toDate} = input
   const from = format(fromDate, 'yyyy/MM/dd')
   const to = format(toDate, 'yyyy/MM/dd')

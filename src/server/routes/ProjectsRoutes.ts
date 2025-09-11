@@ -17,19 +17,12 @@ export const projectsRoutes = new Elysia()
   .use(projectsRoutesPostArticleReviewDetails)
   .get('/api/projects', async () => {
     const db = getDatabase()
-    const projectsList = await db
-      .select()
-      .from(projects)
-      .orderBy(desc(projects.createdAt))
+    const projectsList = await db.select().from(projects).orderBy(desc(projects.createdAt))
     return {data: projectsList}
   })
   .get('/api/projects/:id', async ({params}) => {
     const db = getDatabase()
-    const [project] = await db
-      .select()
-      .from(projects)
-      .where(eq(projects.id, params.id))
-      .limit(1)
+    const [project] = await db.select().from(projects).where(eq(projects.id, params.id)).limit(1)
 
     if (!project) {
       throw new Error('Project not found')
@@ -66,11 +59,7 @@ export const projectsRoutes = new Elysia()
       // Create project
       const [newProject] = await db
         .insert(projects)
-        .values({
-          name: body.name,
-          description: body.description || null,
-          ownerId: body.ownerId,
-        })
+        .values({name: body.name, description: body.description || null, ownerId: body.ownerId})
         .returning()
 
       // Create prompts if provided
@@ -78,29 +67,15 @@ export const projectsRoutes = new Elysia()
         await db.insert(prompts).values(
           body.prompts.map(
             (
-              prompt:
-                | string
-                | {
-                    content: string
-                    promptHeading?: string
-                    type?: string
-                    order: number
-                  },
+              prompt: string | {content: string; promptHeading?: string; type?: string; order: number},
               index: number,
             ) => {
               return {
                 projectId: newProject.id,
-                originalText:
-                  typeof prompt === 'string' ? prompt : prompt.content,
-                promptHeading:
-                  typeof prompt === 'object'
-                    ? prompt.promptHeading || null
-                    : null,
+                originalText: typeof prompt === 'string' ? prompt : prompt.content,
+                promptHeading: typeof prompt === 'object' ? prompt.promptHeading || null : null,
                 type: typeof prompt === 'object' ? prompt.type || null : null,
-                order:
-                  typeof prompt === 'object' && prompt.order !== undefined
-                    ? prompt.order
-                    : index,
+                order: typeof prompt === 'object' && prompt.order !== undefined ? prompt.order : index,
               }
             },
           ),
@@ -135,18 +110,11 @@ export const projectsRoutes = new Elysia()
     async ({params, body}) => {
       const db = getDatabase()
 
-      const updateData: Partial<typeof projects.$inferInsert> = {
-        updatedAt: new Date(),
-      }
+      const updateData: Partial<typeof projects.$inferInsert> = {updatedAt: new Date()}
       if (body.name !== undefined) updateData.name = body.name
-      if (body.description !== undefined)
-        updateData.description = body.description
+      if (body.description !== undefined) updateData.description = body.description
 
-      const [updatedProject] = await db
-        .update(projects)
-        .set(updateData)
-        .where(eq(projects.id, params.id))
-        .returning()
+      const [updatedProject] = await db.update(projects).set(updateData).where(eq(projects.id, params.id)).returning()
 
       if (!updatedProject) {
         throw new Error('Project not found')
@@ -154,12 +122,7 @@ export const projectsRoutes = new Elysia()
 
       return {data: updatedProject}
     },
-    {
-      body: t.Object({
-        name: t.Optional(t.String()),
-        description: t.Optional(t.Union([t.String(), t.Null()])),
-      }),
-    },
+    {body: t.Object({name: t.Optional(t.String()), description: t.Optional(t.Union([t.String(), t.Null()]))})},
   )
   .patch(
     '/api/projects/:id/edit',
@@ -169,18 +132,11 @@ export const projectsRoutes = new Elysia()
       // Start a transaction to ensure data consistency
       const result = await db.transaction(async (tx) => {
         // Update project details
-        const updateData: Partial<typeof projects.$inferInsert> = {
-          updatedAt: new Date(),
-        }
+        const updateData: Partial<typeof projects.$inferInsert> = {updatedAt: new Date()}
         if (body.name !== undefined) updateData.name = body.name
-        if (body.description !== undefined)
-          updateData.description = body.description
+        if (body.description !== undefined) updateData.description = body.description
 
-        const [updatedProject] = await tx
-          .update(projects)
-          .set(updateData)
-          .where(eq(projects.id, params.id))
-          .returning()
+        const [updatedProject] = await tx.update(projects).set(updateData).where(eq(projects.id, params.id)).returning()
 
         if (!updatedProject) {
           throw new Error('Project not found')
@@ -189,10 +145,7 @@ export const projectsRoutes = new Elysia()
         // Handle prompts updates
         if (body.prompts !== undefined) {
           // Get existing prompts
-          const existingPrompts = await tx
-            .select()
-            .from(prompts)
-            .where(eq(prompts.projectId, params.id))
+          const existingPrompts = await tx.select().from(prompts).where(eq(prompts.projectId, params.id))
 
           const existingPromptIds = new Set(
             existingPrompts.map((p) => {
@@ -284,10 +237,7 @@ export const projectsRoutes = new Elysia()
   .delete('/api/projects/:id', async ({params}) => {
     const db = getDatabase()
 
-    const result = await db
-      .delete(projects)
-      .where(eq(projects.id, params.id))
-      .returning()
+    const result = await db.delete(projects).where(eq(projects.id, params.id)).returning()
 
     if (result.length === 0) {
       throw new Error('Project not found')

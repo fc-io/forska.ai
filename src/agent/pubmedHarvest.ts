@@ -6,11 +6,7 @@ import {pubmedHarvestGetArticlesParams} from './pubmedHarvest/pubmedHarvestGetAr
 import {pubmedHarvestGetIdParams} from './pubmedHarvest/pubmedHarvestGetIdParams.ts'
 import {pubmedHarvestGetParsedXML} from './pubmedHarvest/pubmedHarvestGetParsedXML.ts'
 
-const ESearchResultInner = type({
-  count: 'string.integer.parse',
-  webenv: 'string',
-  querykey: 'string',
-})
+const ESearchResultInner = type({count: 'string.integer.parse', webenv: 'string', querykey: 'string'})
 
 const Essearchresult = type({esearchresult: ESearchResultInner})
 
@@ -29,17 +25,11 @@ const getEssearchresult = async (response: Response) => {
 
 const RETMAX = 2
 
-const pubmedHarvestArticles = async (
-  esearchresult: typeof ESearchResultInner.infer,
-): Promise<void> => {
+const pubmedHarvestArticles = async (esearchresult: typeof ESearchResultInner.infer): Promise<void> => {
   console.log('pubmedHarvestArticles', esearchresult)
   let retstart = 0
   while (true) {
-    const articleParams = pubmedHarvestGetArticlesParams(
-      esearchresult,
-      RETMAX,
-      retstart,
-    )
+    const articleParams = pubmedHarvestGetArticlesParams(esearchresult, RETMAX, retstart)
     console.log('fetch, with articleParams', articleParams)
     const response = await fetch(articleParams.baseUrl, {
       method: 'POST',

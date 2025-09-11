@@ -55,11 +55,7 @@ const run = async (): Promise<void> => {
     }
 
     await client.query('COMMIT')
-    console.log(
-      `Installed/updated updated_at triggers for: ${tablesWithUpdatedAt.join(
-        ', ',
-      )}`,
-    )
+    console.log(`Installed/updated updated_at triggers for: ${tablesWithUpdatedAt.join(', ')}`)
   } catch (error) {
     await client.query('ROLLBACK')
     console.error('Failed to install triggers:', error)

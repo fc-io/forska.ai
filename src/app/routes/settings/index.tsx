@@ -22,9 +22,7 @@ const Settings = () => {
           <h2 class="text-xl font-semibold text-gray-900 mb-4">Profile</h2>
           <div class="space-y-4">
             <div>
-              <label class="block text-sm font-medium text-gray-700 mb-2">
-                Email
-              </label>
+              <label class="block text-sm font-medium text-gray-700 mb-2">Email</label>
               <input
                 type="email"
                 value={sessionQuery.data?.user?.email || ''}
@@ -33,9 +31,7 @@ const Settings = () => {
               />
             </div>
             <div>
-              <label class="block text-sm font-medium text-gray-700 mb-2">
-                Display Name
-              </label>
+              <label class="block text-sm font-medium text-gray-700 mb-2">Display Name</label>
               <input
                 type="text"
                 placeholder="Enter your display name"
@@ -43,9 +39,7 @@ const Settings = () => {
               />
             </div>
             <div>
-              <label class="block text-sm font-medium text-gray-700 mb-2">
-                Organization
-              </label>
+              <label class="block text-sm font-medium text-gray-700 mb-2">Organization</label>
               <input
                 type="text"
                 placeholder="Your organization or institution"
@@ -61,12 +55,8 @@ const Settings = () => {
           <div class="space-y-4">
             <div class="flex items-center justify-between">
               <div>
-                <label class="block text-sm font-medium text-gray-700">
-                  Email Notifications
-                </label>
-                <p class="text-sm text-gray-500">
-                  Receive updates about new articles and processing status
-                </p>
+                <label class="block text-sm font-medium text-gray-700">Email Notifications</label>
+                <p class="text-sm text-gray-500">Receive updates about new articles and processing status</p>
               </div>
               <label class="relative inline-flex items-center cursor-pointer">
                 <input
@@ -83,12 +73,8 @@ const Settings = () => {
 
             <div class="flex items-center justify-between">
               <div>
-                <label class="block text-sm font-medium text-gray-700">
-                  Auto-process Articles
-                </label>
-                <p class="text-sm text-gray-500">
-                  Automatically assess new articles with AI
-                </p>
+                <label class="block text-sm font-medium text-gray-700">Auto-process Articles</label>
+                <p class="text-sm text-gray-500">Automatically assess new articles with AI</p>
               </div>
               <label class="relative inline-flex items-center cursor-pointer">
                 <input
@@ -104,9 +90,7 @@ const Settings = () => {
             </div>
 
             <div>
-              <label class="block text-sm font-medium text-gray-700 mb-2">
-                Theme
-              </label>
+              <label class="block text-sm font-medium text-gray-700 mb-2">Theme</label>
               <select
                 value={theme()}
                 onChange={(e) => {
@@ -127,9 +111,7 @@ const Settings = () => {
           <h2 class="text-xl font-semibold text-gray-900 mb-4">API Settings</h2>
           <div class="space-y-4">
             <div>
-              <label class="block text-sm font-medium text-gray-700 mb-2">
-                API Rate Limit
-              </label>
+              <label class="block text-sm font-medium text-gray-700 mb-2">API Rate Limit</label>
               <select class="w-full px-3 py-3 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
                 <option value="low">Low (100 requests/hour)</option>
                 <option value="medium">Medium (500 requests/hour)</option>
@@ -137,9 +119,7 @@ const Settings = () => {
               </select>
             </div>
             <div>
-              <label class="block text-sm font-medium text-gray-700 mb-2">
-                Default Search Filters
-              </label>
+              <label class="block text-sm font-medium text-gray-700 mb-2">Default Search Filters</label>
               <textarea
                 placeholder="Enter default search parameters..."
                 rows="3"

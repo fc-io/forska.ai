@@ -20,9 +20,7 @@ const openaiClient = new OpenAI({
 const MAX_RETRIES = 3
 
 // Helper that calls the language model using OpenAI client directly
-const generateModelResponseDirect = async (
-  prompt: string,
-): Promise<typeof AIResponseType.infer> => {
+const generateModelResponseDirect = async (prompt: string): Promise<typeof AIResponseType.infer> => {
   try {
     const response = await openaiClient.chat.completions.create({
       model: './models/Qwen3-32B-FP8',
@@ -68,9 +66,7 @@ const generateModelResponseDirect = async (
         modelId: response.model,
         headers: {'content-length': '0', 'content-type': 'application/json'},
         body: response as any,
-        messages: [
-          {role: 'assistant' as const, content: content, id: response.id},
-        ],
+        messages: [{role: 'assistant' as const, content: content, id: response.id}],
       },
       steps: [],
       experimental_providerMetadata: {openai: {}},
@@ -89,11 +85,7 @@ const generateModelResponseDirect = async (
 const generateModelResponse = generateModelResponseDirect
 
 // Helper to build a retry prompt given the base prompt, last error and response
-const buildRetryPrompt = (
-  basePrompt: string,
-  lastError: string,
-  lastResponse: string,
-): string => {
+const buildRetryPrompt = (basePrompt: string, lastError: string, lastResponse: string): string => {
   return `${basePrompt}
 
 ---
@@ -107,13 +99,9 @@ ${lastResponse}
 Please try again, ensuring you respond ONLY with valid JSON matching the schema.`
 }
 
-type ArticlesType = Awaited<
-  ReturnType<typeof getNewestArticlesToJudge>
->['articles']
+type ArticlesType = Awaited<ReturnType<typeof getNewestArticlesToJudge>>['articles']
 
-type PromptsType = Awaited<
-  ReturnType<typeof getNewestArticlesToJudge>
->['prompts']
+type PromptsType = Awaited<ReturnType<typeof getNewestArticlesToJudge>>['prompts']
 
 export const judge = async ({
   articles,
@@ -127,20 +115,14 @@ export const judge = async ({
   // Get or create model ID for the vLLM model
   let modelId: string | undefined
   try {
-    const modelResult = await apiClient.api.judgments.model.get({
-      query: {name: 'Qwen3-32B-FP8', provider: 'vLLM'},
-    })
+    const modelResult = await apiClient.api.judgments.model.get({query: {name: 'Qwen3-32B-FP8', provider: 'vLLM'}})
     if (modelResult.data?.success && modelResult.data?.data) {
       modelId = modelResult.data.data.id
     }
   } catch (error) {
     console.error('Failed to get model ID:', error)
   }
-  let tokenUse: {
-    promptTokens: number
-    completionTokens: number
-    totalTokens: number
-  }[] = []
+  let tokenUse: {promptTokens: number; completionTokens: number; totalTokens: number}[] = []
   const startedAt = new Date().toISOString()
   const startDuration = performance.now()
 
@@ -168,20 +150,12 @@ export const judge = async ({
           const promptIds = prompts.map((p) => {
             return p.id
           })
-          await judgeStoreJudgment(
-            article.id,
-            article.articleTitle,
-            judgment,
-            modelId,
-            promptIds,
-          )
+          await judgeStoreJudgment(article.id, article.articleTitle, judgment, modelId, promptIds)
 
           return judgment
         } catch (error: unknown) {
           lastError = error instanceof Error ? error.message : 'Unknown error'
-          console.error(
-            `${article.id} | Attempt ${attempts} failed schema validation: ${lastError}`,
-          )
+          console.error(`${article.id} | Attempt ${attempts} failed schema validation: ${lastError}`)
 
           // Prepare prompt for next retry (memory + error context)
           if (attempts < MAX_RETRIES) {
@@ -200,9 +174,5 @@ export const judge = async ({
   )
   const duration = performance.now() - startDuration
   const finishedAt = new Date().toISOString()
-  await judgeStoreTokenUse(tokenUse, sessionId, {
-    startedAt,
-    finishedAt,
-    duration,
-  })
+  await judgeStoreTokenUse(tokenUse, sessionId, {startedAt, finishedAt, duration})
 }

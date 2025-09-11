@@ -7,10 +7,7 @@ import {ProjectDetailsArticles} from '../../../../components/main/projectDetails
 import {ProjectDetailsInformation} from '../../../../components/main/projectDetails/projectDetailsInformation'
 import {ProjectDetailsPrompts} from '../../../../components/main/projects/projectDetailsPrompts'
 import {Button} from '../../../../components/ui/button'
-import {
-  deleteProject,
-  fetchProjectWithPrompts,
-} from '../../../../services/projectsService'
+import {deleteProject, fetchProjectWithPrompts} from '../../../../services/projectsService'
 const ProjectDetail = () => {
   const params = Route.useParams()
   const projectId = (params() as {id: string}).id
@@ -32,11 +29,7 @@ const ProjectDetail = () => {
 
   const handleDeleteProject = async () => {
     const projectName = projectData.data?.project.name
-    if (
-      !confirm(
-        `Are you sure you want to delete the project "${projectName}"? This action cannot be undone.`,
-      )
-    ) {
+    if (!confirm(`Are you sure you want to delete the project "${projectName}"? This action cannot be undone.`)) {
       return
     }
 
@@ -46,9 +39,7 @@ const ProjectDetail = () => {
       void navigate({to: '/projects'})
     } catch (error) {
       console.error('Failed to delete project:', error)
-      alert(
-        `Failed to delete project: ${error instanceof Error ? error.message : 'Unknown error'}`,
-      )
+      alert(`Failed to delete project: ${error instanceof Error ? error.message : 'Unknown error'}`)
     } finally {
       setDeletingProject(false)
     }
@@ -89,9 +80,7 @@ const ProjectDetail = () => {
         <Match when={projectData.isError}>
           <div class="text-center py-8 text-red-600">
             Error loading project:{' '}
-            {projectData.error instanceof Error
-              ? projectData.error.message
-              : String(projectData.error)}
+            {projectData.error instanceof Error ? projectData.error.message : String(projectData.error)}
           </div>
         </Match>
         <Match when={projectData.data}>
@@ -128,10 +117,7 @@ const ProjectDetail = () => {
                 {/* Project Information */}
                 <ProjectDetailsInformation project={project} />
                 {/* Prompts Section */}
-                <ProjectDetailsPrompts
-                  prompts={prompts}
-                  formatDate={formatDate}
-                />
+                <ProjectDetailsPrompts prompts={prompts} formatDate={formatDate} />
                 <ProjectDetailsArticles projectId={projectId} />
               </div>
             )
@@ -142,6 +128,4 @@ const ProjectDetail = () => {
   )
 }
 
-export const Route = createFileRoute('/projects/$id/')({
-  component: ProjectDetail,
-})
+export const Route = createFileRoute('/projects/$id/')({component: ProjectDetail})

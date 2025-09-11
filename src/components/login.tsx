@@ -29,18 +29,11 @@ export const Login = (): JSX.Element => {
 
     try {
       if (isSignUp()) {
-        const {error} = await authClient.signUp.email({
-          email: email(),
-          password: password(),
-          name: name() || '',
-        })
+        const {error} = await authClient.signUp.email({email: email(), password: password(), name: name() || ''})
 
         if (error) throw error
         // After signup, automatically sign in
-        const {error: signInError} = await authClient.signIn.email({
-          email: email(),
-          password: password(),
-        })
+        const {error: signInError} = await authClient.signIn.email({email: email(), password: password()})
 
         if (signInError) throw signInError
         // Invalidate session query to trigger refetch
@@ -48,10 +41,7 @@ export const Login = (): JSX.Element => {
         // Navigate to home on successful login
         void navigate({to: '/'})
       } else {
-        const {error} = await authClient.signIn.email({
-          email: email(),
-          password: password(),
-        })
+        const {error} = await authClient.signIn.email({email: email(), password: password()})
 
         if (error) throw error
         // Invalidate session query to trigger refetch
@@ -71,9 +61,7 @@ export const Login = (): JSX.Element => {
     <div class="min-h-screen bg-gray-50 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
       <div class="sm:mx-auto sm:w-full sm:max-w-md">
         <div class="text-center">
-          <h2 class="text-3xl font-bold text-gray-900">
-            {isSignUp() ? 'Sign Up' : 'Sign In'}
-          </h2>
+          <h2 class="text-3xl font-bold text-gray-900">{isSignUp() ? 'Sign Up' : 'Sign In'}</h2>
         </div>
       </div>
 
@@ -134,12 +122,7 @@ export const Login = (): JSX.Element => {
                 }}
                 class="absolute inset-y-0 right-0 pr-3 flex items-center"
               >
-                <svg
-                  class="h-5 w-5 text-gray-400"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
+                <svg class="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <Show
                     when={showPassword()}
                     fallback={
@@ -179,10 +162,7 @@ export const Login = (): JSX.Element => {
                   }}
                   class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
                 />
-                <label
-                  for="accept-terms"
-                  class="ml-2 block text-sm text-gray-900"
-                >
+                <label for="accept-terms" class="ml-2 block text-sm text-gray-900">
                   I accept the{' '}
                   <a href="#" class="text-blue-600 hover:text-blue-500">
                     terms and conditions
@@ -201,13 +181,7 @@ export const Login = (): JSX.Element => {
                 disabled={isLoading()}
                 class="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {isLoading()
-                  ? isSignUp()
-                    ? 'Signing up...'
-                    : 'Signing in...'
-                  : isSignUp()
-                    ? 'Sign up'
-                    : 'Sign in'}
+                {isLoading() ? (isSignUp() ? 'Signing up...' : 'Signing in...') : isSignUp() ? 'Sign up' : 'Sign in'}
               </button>
             </div>
           </form>
@@ -222,9 +196,7 @@ export const Login = (): JSX.Element => {
               }}
               class="text-blue-600 hover:text-blue-500 text-sm font-medium"
             >
-              {isSignUp()
-                ? 'Already have an account? Sign in'
-                : "Don't have an account? Sign up"}
+              {isSignUp() ? 'Already have an account? Sign in' : "Don't have an account? Sign up"}
             </button>
           </div>
         </div>

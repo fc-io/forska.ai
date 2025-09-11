@@ -6,9 +6,7 @@ interface ReviewsPaginationControlsProps {
   setCurrentPage: Setter<number>
 }
 
-export const ReviewsPaginationControls = (
-  props: ReviewsPaginationControlsProps,
-) => {
+export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps) => {
   const handlePageChange = (newPage: number) => {
     props.setCurrentPage(newPage)
   }

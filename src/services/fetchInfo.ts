@@ -13,10 +13,7 @@ export const fetchTokenUseToday = async (): Promise<string> => {
     })
 
     const data = handleApiResponse(response, 'Failed to fetch token use')
-    const {totalPromptTokens, totalCompletionTokens} = data || {
-      totalPromptTokens: 0,
-      totalCompletionTokens: 0,
-    }
+    const {totalPromptTokens, totalCompletionTokens} = data || {totalPromptTokens: 0, totalCompletionTokens: 0}
 
     return `Total tokens (today): input ${formatNumber(totalPromptTokens || 0)}, output ${formatNumber(totalCompletionTokens || 0)}`
   } catch (err) {
@@ -28,10 +25,7 @@ export const fetchTokenUseToday = async (): Promise<string> => {
 export const fetchTokensAllTime = async (): Promise<string> => {
   try {
     const response = await apiClient.api.tokens.get({query: {}})
-    const data = handleApiResponse(
-      response,
-      'Failed to fetch all-time token usage',
-    )
+    const data = handleApiResponse(response, 'Failed to fetch all-time token usage')
 
     // return `Total tokens (last 10m): input ${totalPromptTokens || 0}, output ${totalCompletionTokens || 0}`
     // return `Total tokens (today): input ${totalPromptTokens || 0}, output ${totalCompletionTokens || 0}`
@@ -70,10 +64,5 @@ export const fetchInfo = async () => {
 
   // setInfoState('tokenUseLifetime', tokenUseLifetime)
 
-  return {
-    unassessedCount,
-    tokenUseLifetime,
-    tokenUseToday,
-    lastUpdated: new Date(),
-  }
+  return {unassessedCount, tokenUseLifetime, tokenUseToday, lastUpdated: new Date()}
 }

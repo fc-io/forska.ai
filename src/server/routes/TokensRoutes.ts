@@ -37,13 +37,7 @@ export const tokensRoutes = new Elysia()
         return {success: true, data: result}
       } catch (error) {
         console.error('Error storing token usage:', error)
-        return {
-          success: false,
-          error:
-            error instanceof Error
-              ? error.message
-              : 'Failed to store token usage',
-        }
+        return {success: false, error: error instanceof Error ? error.message : 'Failed to store token usage'}
       }
     },
     {
@@ -76,8 +70,7 @@ export const tokensRoutes = new Elysia()
           conditions.push(lte(tokenUse.createdAt, new Date(query.endTime)))
         }
 
-        const whereClause =
-          conditions.length > 0 ? and(...conditions) : undefined
+        const whereClause = conditions.length > 0 ? and(...conditions) : undefined
 
         const result = await db
           .select({
@@ -90,28 +83,14 @@ export const tokensRoutes = new Elysia()
 
         const row = result[0]
         return {
-          totalPromptTokens: row?.totalPromptTokens
-            ? Number(row.totalPromptTokens)
-            : 0,
-          totalCompletionTokens: row?.totalCompletionTokens
-            ? Number(row.totalCompletionTokens)
-            : 0,
+          totalPromptTokens: row?.totalPromptTokens ? Number(row.totalPromptTokens) : 0,
+          totalCompletionTokens: row?.totalCompletionTokens ? Number(row.totalCompletionTokens) : 0,
           totalTokens: row?.totalTokens ? Number(row.totalTokens) : 0,
         }
       } catch (error) {
         console.error('Error fetching token usage:', error)
-        return {
-          totalPromptTokens: 0,
-          totalCompletionTokens: 0,
-          totalTokens: 0,
-          error: 'Failed to fetch token usage',
-        }
+        return {totalPromptTokens: 0, totalCompletionTokens: 0, totalTokens: 0, error: 'Failed to fetch token usage'}
       }
     },
-    {
-      query: t.Object({
-        startTime: t.Optional(t.String()),
-        endTime: t.Optional(t.String()),
-      }),
-    },
+    {query: t.Object({startTime: t.Optional(t.String()), endTime: t.Optional(t.String())})},
   )

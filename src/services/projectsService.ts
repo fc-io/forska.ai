@@ -68,9 +68,7 @@ export const updateProject = async (
   updates: Partial<{name: string; description: string | null}>,
 ) => {
   try {
-    const response = await apiClient.api
-      .projects({id: projectId})
-      .patch(updates)
+    const response = await apiClient.api.projects({id: projectId}).patch(updates)
 
     if (response.error || !response.data?.data) {
       console.error('Error updating project:', response.error)

@@ -7,12 +7,7 @@ const PubDate = type({Year: 'number', Month: 'string', Day: 'number'})
 
 const JournalIssue = type({Volume: 'number', Issue: 'number', PubDate: PubDate})
 
-const Journal = type({
-  ISSN: 'string',
-  JournalIssue: JournalIssue,
-  Title: 'string',
-  ISOAbbreviation: 'string',
-})
+const Journal = type({ISSN: 'string', JournalIssue: JournalIssue, Title: 'string', ISOAbbreviation: 'string'})
 
 const Pagination = type({StartPage: 'number', MedlinePgn: 'number'})
 
@@ -20,12 +15,7 @@ const Abstract = type({AbstractText: 'string', CopyrightInformation: 'string'})
 
 const AffiliationInfo = type({Affiliation: 'string'})
 
-const Author = type({
-  LastName: 'string',
-  ForeName: 'string',
-  Initials: 'string',
-  AffiliationInfo: AffiliationInfo,
-})
+const Author = type({LastName: 'string', ForeName: 'string', Initials: 'string', AffiliationInfo: AffiliationInfo})
 
 const AuthorList = type({Author: Author.array()})
 
@@ -45,12 +35,7 @@ const Article = type({
   ArticleDate: ArticleDate,
 })
 
-const MedlineJournalInfo = type({
-  Country: 'string',
-  MedlineTA: 'string',
-  NlmUniqueID: 'number',
-  ISSNLinking: 'string',
-})
+const MedlineJournalInfo = type({Country: 'string', MedlineTA: 'string', NlmUniqueID: 'number', ISSNLinking: 'string'})
 
 const KeywordList = type({Keyword: 'string[]'})
 
@@ -64,13 +49,7 @@ const MedlineCitation = type({
   CoiStatement: 'string',
 })
 
-const PubMedPubDate = type({
-  Year: 'number',
-  Month: 'number',
-  Day: 'number',
-  'Hour?': 'number',
-  'Minute?': 'number',
-})
+const PubMedPubDate = type({Year: 'number', Month: 'number', Day: 'number', 'Hour?': 'number', 'Minute?': 'number'})
 
 const History = type({PubMedPubDate: PubMedPubDate.array()})
 
@@ -89,17 +68,11 @@ const PubmedData = type({
   ReferenceList: ReferenceList,
 })
 
-const PubmedArticle = type({
-  MedlineCitation: MedlineCitation,
-  PubmedData: PubmedData,
-})
+const PubmedArticle = type({MedlineCitation: MedlineCitation, PubmedData: PubmedData})
 
 const PubmedArticleSet = type({PubmedArticle: PubmedArticle})
 
-const PubmedDocument = type({
-  '?xml': 'string',
-  PubmedArticleSet: PubmedArticleSet,
-})
+const PubmedDocument = type({'?xml': 'string', PubmedArticleSet: PubmedArticleSet})
 
 type PubmedDocumentType = typeof PubmedDocument.infer
 

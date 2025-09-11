@@ -1,26 +1,19 @@
 import {type JSX, Show} from 'solid-js'
 
-import {
-  Slider,
-  SliderFill,
-  SliderLabel,
-  SliderThumb,
-  SliderTrack,
-  SliderValueLabel,
-} from '../../ui/slider'
+import {Slider, SliderFill, SliderLabel, SliderThumb, SliderTrack, SliderValueLabel} from '../../ui/slider'
 import {DateRangePicker} from './subheaderSettingsPanel/subheaderSettingsPanelDateRangePicker'
 
 interface SettingsPanelProps {
   isOpen: boolean
   onClose: () => void
   numberOfRequests: number
-  // eslint-disable-next-line no-unused-vars
+
   setNumberOfRequests: (count: number) => void
   fromDate: Date
-  // eslint-disable-next-line no-unused-vars
+
   setFromDate: (date: Date) => void
   toDate: Date
-  // eslint-disable-next-line no-unused-vars
+
   setToDate: (date: Date) => void
 }
 
@@ -30,9 +23,7 @@ const SettingsPanel = (props: SettingsPanelProps): JSX.Element => {
       <div class="mt-4 border border-gray-200 rounded-lg bg-gray-50 overflow-hidden transition-all duration-200">
         <div class="flex p-4">
           <div class="space-y-4">
-            <p class="text-xs text-gray-500 mt-1">
-              The date range affects both harvest and agent runs.
-            </p>
+            <p class="text-xs text-gray-500 mt-1">The date range affects both harvest and agent runs.</p>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
               <DateRangePicker
                 defaultStart={props.fromDate}
@@ -73,9 +64,7 @@ const SettingsPanel = (props: SettingsPanelProps): JSX.Element => {
                   </SliderTrack>
                 </Slider>
               </div>
-              <p class="text-xs text-gray-500 mt-1">
-                Controls how many articles to send in each agent run
-              </p>
+              <p class="text-xs text-gray-500 mt-1">Controls how many articles to send in each agent run</p>
             </div>
           </div>
         </div>

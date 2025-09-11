@@ -47,11 +47,7 @@ export const UnassessedArticles = (): JSX.Element => {
         <div class="border-t border-gray-400 md:border-t-0 md:border-l border-l-gray-400 p-4 mt-4">
           <Show
             when={!infoQuery.isLoading}
-            fallback={
-              <p class="text-muted-foreground">
-                'Loading unassessed articles count...'
-              </p>
-            }
+            fallback={<p class="text-muted-foreground">'Loading unassessed articles count...'</p>}
           >
             <p class="text-muted-foreground">
               {`${formatNumber(infoQuery.data?.unassessedCount)} unassessed articles`}
@@ -61,13 +57,9 @@ export const UnassessedArticles = (): JSX.Element => {
             {infoQuery.data?.tokenUseLast10Minutes}
           </p> */}
           <p class="text-muted-foreground">{infoQuery.data?.tokenUseToday}</p>
+          <p class="text-muted-foreground">{infoQuery.data?.tokenUseLifetime}</p>
           <p class="text-muted-foreground">
-            {infoQuery.data?.tokenUseLifetime}
-          </p>
-          <p class="text-muted-foreground">
-            {infoState.lastUpdated
-              ? `Last updated: ${formatTimestamp(infoState.lastUpdated)}`
-              : ''}
+            {infoState.lastUpdated ? `Last updated: ${formatTimestamp(infoState.lastUpdated)}` : ''}
           </p>
         </div>
       </div>

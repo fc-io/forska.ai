@@ -18,10 +18,7 @@ const fxp = new XMLParser({
 const fetchArxivQueryStepSchema = type({arxivQueryUrl: 'string'})
 
 // Export the feed schema that's expected by other files
-const arxivFeedSchema = type({
-  'resumptionToken?': 'string',
-  records: arxivEntry.array(),
-})
+const arxivFeedSchema = type({'resumptionToken?': 'string', records: arxivEntry.array()})
 
 // OAI-PMH response structure
 const OaiPmhResponseSchema = type({
@@ -29,37 +26,25 @@ const OaiPmhResponseSchema = type({
   'OAI-PMH': {
     responseDate: 'string',
     request: 'string | object',
-    'ListRecords?': {
-      'record?': 'object | object[]',
-      'resumptionToken?': 'string | object',
-    },
+    'ListRecords?': {'record?': 'object | object[]', 'resumptionToken?': 'string | object'},
     'error?': 'object | object[]',
     '@_schemaLocation?': 'string',
   },
 })
 
 // Transform OAI-PMH response to match the expected format
-const transformOaiResponse = (
-  oaiResponse: typeof OaiPmhResponseSchema.infer,
-): typeof arxivFeedSchema.infer => {
+const transformOaiResponse = (oaiResponse: typeof OaiPmhResponseSchema.infer): typeof arxivFeedSchema.infer => {
   const records = oaiResponse['OAI-PMH']?.ListRecords?.record || []
   const recordArray = Array.isArray(records) ? records : [records]
-  const resumptionTokenRaw =
-    oaiResponse['OAI-PMH']?.ListRecords?.resumptionToken
+  const resumptionTokenRaw = oaiResponse['OAI-PMH']?.ListRecords?.resumptionToken
 
   // Extract resumption token text if it's an object
   let resumptionToken: string | undefined
   if (resumptionTokenRaw) {
     if (typeof resumptionTokenRaw === 'string') {
       resumptionToken = resumptionTokenRaw
-    } else if (
-      typeof resumptionTokenRaw === 'object'
-      && resumptionTokenRaw !== null
-      && '#text' in resumptionTokenRaw
-    ) {
-      resumptionToken = safeString(
-        (resumptionTokenRaw as Record<string, unknown>)['#text'],
-      )
+    } else if (typeof resumptionTokenRaw === 'object' && resumptionTokenRaw !== null && '#text' in resumptionTokenRaw) {
+      resumptionToken = safeString((resumptionTokenRaw as Record<string, unknown>)['#text'])
     }
   }
 
@@ -102,8 +87,7 @@ const transformRecord = (oaiRecord: unknown) => {
 
   const record = oaiRecord as Record<string, unknown>
   const header = (record.header as Record<string, unknown>) || {}
-  const metadata =
-    (record.metadata as Record<string, unknown>)?.arXiv || record.metadata || {}
+  const metadata = (record.metadata as Record<string, unknown>)?.arXiv || record.metadata || {}
   const metadataObj = metadata as Record<string, unknown>
 
   const identifier = safeString(header.identifier)
@@ -118,9 +102,7 @@ const transformRecord = (oaiRecord: unknown) => {
     link: [`http://arxiv.org/abs/${extractArxivId(identifier)}`],
     primary_category: extractPrimaryCategory(metadataObj.categories),
     category: extractCategories(metadataObj.categories),
-    comment: metadataObj.comments
-      ? safeString(metadataObj.comments)
-      : undefined,
+    comment: metadataObj.comments ? safeString(metadataObj.comments) : undefined,
   }
 }
 
@@ -220,9 +202,7 @@ const extractCategories = (categories: unknown): string | string[] => {
   return catString ? [catString] : []
 }
 
-const fetchRecords = async (
-  arxivQueryUrl: string,
-): Promise<typeof arxivFeedSchema.infer> => {
+const fetchRecords = async (arxivQueryUrl: string): Promise<typeof arxivFeedSchema.infer> => {
   console.log('fetching', arxivQueryUrl)
   const response = await fetch(arxivQueryUrl)
   const xml = await response.text()
@@ -233,9 +213,7 @@ const fetchRecords = async (
 
     // Check for errors in OAI-PMH response
     if (validated['OAI-PMH'].error) {
-      throw new Error(
-        `OAI-PMH Error: ${JSON.stringify(validated['OAI-PMH'].error)}`,
-      )
+      throw new Error(`OAI-PMH Error: ${JSON.stringify(validated['OAI-PMH'].error)}`)
     }
 
     const result = transformOaiResponse(validated)
@@ -248,10 +226,7 @@ const fetchRecords = async (
   }
 }
 
-const arxivWorkflowHarvest = async (
-  input: InputData,
-  resumptionToken?: string,
-): Promise<void> => {
+const arxivWorkflowHarvest = async (input: InputData, resumptionToken?: string): Promise<void> => {
   const arxivQueryUrl = arxivWorkflowGetQuery(input, resumptionToken)
   const result = await fetchRecords(arxivQueryUrl)
   await arxivWorkflowStoreEntires(result.records)
@@ -262,9 +237,4 @@ const arxivWorkflowHarvest = async (
   }
 }
 
-export {
-  arxivFeedSchema,
-  arxivWorkflowHarvest,
-  fetchArxivQueryStepSchema,
-  OaiPmhResponseSchema,
-}
+export {arxivFeedSchema, arxivWorkflowHarvest, fetchArxivQueryStepSchema, OaiPmhResponseSchema}

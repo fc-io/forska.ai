@@ -1,14 +1,4 @@
-import {
-  boolean,
-  integer,
-  jsonb,
-  pgEnum,
-  pgTable,
-  pgView,
-  text,
-  timestamp,
-  uuid,
-} from 'drizzle-orm/pg-core'
+import {boolean, integer, jsonb, pgEnum, pgTable, pgView, text, timestamp, uuid} from 'drizzle-orm/pg-core'
 
 import {session, user} from '../../auth-schema.ts'
 
@@ -34,12 +24,8 @@ export const judgmentsJobStatusEnum = pgEnum('judgments_job_status_enum', [
 
 export const articles = pgTable('articles', {
   id: uuid('id').primaryKey().defaultRandom(),
-  createdAt: timestamp('created_at', {withTimezone: true})
-    .defaultNow()
-    .notNull(),
-  updatedAt: timestamp('updated_at', {withTimezone: true})
-    .defaultNow()
-    .notNull(),
+  createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
   articleTitle: text('article_title').notNull(),
   articleAuthors: text('article_authors').array(),
   articleCreatedAt: timestamp('article_created_at', {withTimezone: true}),
@@ -57,12 +43,8 @@ export const articles = pgTable('articles', {
 
 export const models = pgTable('models', {
   id: uuid('id').primaryKey().defaultRandom(),
-  createdAt: timestamp('created_at', {withTimezone: true})
-    .defaultNow()
-    .notNull(),
-  updatedAt: timestamp('updated_at', {withTimezone: true})
-    .defaultNow()
-    .notNull(),
+  createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
   name: text('name').notNull(),
   provider: text('provider'),
   baseURL: text('base_url'),
@@ -89,22 +71,14 @@ export const projects = pgTable('projects', {
     },
     {onDelete: 'set null'},
   ),
-  createdAt: timestamp('created_at', {withTimezone: true})
-    .defaultNow()
-    .notNull(),
-  updatedAt: timestamp('updated_at', {withTimezone: true})
-    .defaultNow()
-    .notNull(),
+  createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
 })
 
 export const judgmentsJobs = pgTable('judgments_jobs', {
   id: uuid('id').primaryKey().defaultRandom(),
-  createdAt: timestamp('created_at', {withTimezone: true})
-    .defaultNow()
-    .notNull(),
-  updatedAt: timestamp('updated_at', {withTimezone: true})
-    .defaultNow()
-    .notNull(),
+  createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
   projectId: uuid('project_id')
     .notNull()
     .references(
@@ -119,12 +93,8 @@ export const judgmentsJobs = pgTable('judgments_jobs', {
 
 export const prompts = pgTable('prompts', {
   id: uuid('id').primaryKey().defaultRandom(),
-  createdAt: timestamp('created_at', {withTimezone: true})
-    .defaultNow()
-    .notNull(),
-  updatedAt: timestamp('updated_at', {withTimezone: true})
-    .defaultNow()
-    .notNull(),
+  createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
   projectId: uuid('project_id')
     .notNull()
     .references(
@@ -169,12 +139,8 @@ export const prompts = pgTable('prompts', {
 
 export const judgments = pgTable('judgments', {
   id: uuid('id').primaryKey().defaultRandom(),
-  createdAt: timestamp('created_at', {withTimezone: true})
-    .defaultNow()
-    .notNull(),
-  updatedAt: timestamp('updated_at', {withTimezone: true})
-    .defaultNow()
-    .notNull(),
+  createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
   articleId: uuid('article_id')
     .notNull()
     .references(
@@ -215,12 +181,8 @@ export const judgments = pgTable('judgments', {
 // Time-series token usage
 export const tokenUse = pgTable('token_use', {
   id: uuid('id').primaryKey().defaultRandom(),
-  createdAt: timestamp('created_at', {withTimezone: true})
-    .defaultNow()
-    .notNull(),
-  updatedAt: timestamp('updated_at', {withTimezone: true})
-    .defaultNow()
-    .notNull(),
+  createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
   userId: text('user_id').references(
     () => {
       return user.id
@@ -296,12 +258,8 @@ export const reviews = pgTable('reviews', {
   reviewedAppendixComment: text('reviewed_appendix_comment'),
   reviewedOther: boolean('reviewed_other').default(false).notNull(),
   reviewedOtherComment: text('reviewed_other_comment'),
-  createdAt: timestamp('created_at', {withTimezone: true})
-    .defaultNow()
-    .notNull(),
-  updatedAt: timestamp('updated_at', {withTimezone: true})
-    .defaultNow()
-    .notNull(),
+  createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
 })
 
 // Judgment assessments table
@@ -325,12 +283,8 @@ export const judgmentAssessments = pgTable('judgment_assessments', {
     ),
   assessmentIsCorrect: boolean('assessment_is_correct').notNull(),
   assessmentComment: text('assessment_comment'),
-  createdAt: timestamp('created_at', {withTimezone: true})
-    .defaultNow()
-    .notNull(),
-  updatedAt: timestamp('updated_at', {withTimezone: true})
-    .defaultNow()
-    .notNull(),
+  createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
 })
 
 // Views

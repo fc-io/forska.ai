@@ -104,79 +104,50 @@ describe('reviewArticleDetailsGetHighlightedText', () => {
   it('real use case', () => {
     // Our implementations trim trailing whitespace from the very first non-hit chunk.
     // Use a case where the first chunk ends cleanly so join(pieces) === original.
-    const s =
-      'Non-Stationary Restless Multi-Armed Bandits with Provable Guarantee'
+    const s = 'Non-Stationary Restless Multi-Armed Bandits with Provable Guarantee'
     const keys = [
       'Non-Stationary Restless Multi-Armed Bandits with Provable Guarantee',
       'Our proposed \\rmab\\; algorithm integrates sliding …with an upper confidence bound (UCB) mechanism...',
       'providing a foundational theoretical framework for non-stationary RMAB problems',
     ]
-    const expected: Piece[] = [
-      [
-        'Non-Stationary Restless Multi-Armed Bandits with Provable Guarantee',
-        true,
-      ],
-    ]
+    const expected: Piece[] = [['Non-Stationary Restless Multi-Armed Bandits with Provable Guarantee', true]]
 
-    expect(expected).toEqual(
-      reviewArticleDetailsGetHighlightedText(s, keys, {
-        maxDistance: 2,
-        caseInsensitive: true,
-      }),
-    )
+    expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 2, caseInsensitive: true}))
   })
 })
 
 describe('handle multiple spaces', () => {
   it('in text and key', () => {
-    const s =
-      'Non-Stationary  Restless Multi-Armed Bandits with Provable Guarantee'
+    const s = 'Non-Stationary  Restless Multi-Armed Bandits with Provable Guarantee'
     const keys = ['Non-Stationary  Restless']
     const expected: Piece[] = [
       ['Non-Stationary  Restless', true],
       [' Multi-Armed Bandits with Provable Guarantee', false],
     ]
 
-    expect(expected).toEqual(
-      reviewArticleDetailsGetHighlightedText(s, keys, {
-        maxDistance: 2,
-        caseInsensitive: true,
-      }),
-    )
+    expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 2, caseInsensitive: true}))
   })
 
   it('in keys', () => {
-    const s =
-      'Non-Stationary Restless Multi-Armed Bandits with Provable Guarantee'
+    const s = 'Non-Stationary Restless Multi-Armed Bandits with Provable Guarantee'
     const keys = ['Non-Stationary  Restless']
     const expected: Piece[] = [
       ['Non-Stationary Restless', true],
       [' Multi-Armed Bandits with Provable Guarantee', false],
     ]
 
-    expect(expected).toEqual(
-      reviewArticleDetailsGetHighlightedText(s, keys, {
-        maxDistance: 2,
-        caseInsensitive: true,
-      }),
-    )
+    expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 2, caseInsensitive: true}))
   })
 
   it('in text', () => {
-    const s =
-      'Non-Stationary  Restless Multi-Armed Bandits with Provable Guarantee'
+    const s = 'Non-Stationary  Restless Multi-Armed Bandits with Provable Guarantee'
     const keys = ['Non-Stationary Restless']
     const expected: Piece[] = [
       ['Non-Stationary  Restless', true],
       [' Multi-Armed Bandits with Provable Guarantee', false],
     ]
 
-    expect(expected).toEqual(
-      reviewArticleDetailsGetHighlightedText(s, keys, {
-        maxDistance: 2,
-        caseInsensitive: true,
-      }),
-    )
+    expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 2, caseInsensitive: true}))
   })
 })
 
@@ -185,9 +156,7 @@ describe('reviewArticleDetailsGetHighlightedText – fuzzy (Damerau–Levenshtei
     const s = 'quikc'
     const keys = ['quick']
     const expected: Piece[] = [['quikc', false]]
-    expect(expected).toEqual(
-      reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 0}),
-    )
+    expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 0}))
   })
 
   it('transposition within distance 1 – highlights "quikc" for key "quick"', () => {
@@ -198,9 +167,7 @@ describe('reviewArticleDetailsGetHighlightedText – fuzzy (Damerau–Levenshtei
       ['quikc', true], // transposition of c/k
       [' brown fox', false],
     ]
-    expect(expected).toEqual(
-      reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 1}),
-    )
+    expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 1}))
   })
 
   it('single deletion within distance 1 – highlights "speling" for key "spelling"', () => {
@@ -211,9 +178,7 @@ describe('reviewArticleDetailsGetHighlightedText – fuzzy (Damerau–Levenshtei
       ['speling', true],
       [' please', false],
     ]
-    expect(expected).toEqual(
-      reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 1}),
-    )
+    expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 1}))
   })
 
   it('prefers exact over fuzzy when both are present in the same token', () => {
@@ -224,9 +189,7 @@ describe('reviewArticleDetailsGetHighlightedText – fuzzy (Damerau–Levenshtei
       ['quick', true],
       ['yy', false],
     ]
-    expect(expected).toEqual(
-      reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 1}),
-    )
+    expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 1}))
   })
 
   it('one match per key across the whole string even with fuzzy enabled', () => {
@@ -236,9 +199,7 @@ describe('reviewArticleDetailsGetHighlightedText – fuzzy (Damerau–Levenshtei
       [' speling ', false],
       ['spelling', true],
     ]
-    expect(expected).toEqual(
-      reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 1}),
-    )
+    expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 1}))
   })
 
   it('inside one token with multiple candidate keys – chooses smaller distance, then longer key', () => {
@@ -246,9 +207,7 @@ describe('reviewArticleDetailsGetHighlightedText – fuzzy (Damerau–Levenshtei
     const keys = ['color', 'colour']
     // "colour" is exact (dist 0) vs "color" is fuzzy (dist 1) – exact should win.
     const expected: Piece[] = [['colour', true]]
-    expect(expected).toEqual(
-      reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 1}),
-    )
+    expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 1}))
   })
 
   it('case-insensitive fuzzy match when option set', () => {
@@ -259,12 +218,7 @@ describe('reviewArticleDetailsGetHighlightedText – fuzzy (Damerau–Levenshtei
       [' ', false],
       ['quikc', true], // transposition; also case-insensitive for "foo"
     ]
-    expect(expected).toEqual(
-      reviewArticleDetailsGetHighlightedText(s, keys, {
-        maxDistance: 1,
-        caseInsensitive: true,
-      }),
-    )
+    expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 1, caseInsensitive: true}))
   })
 })
 
@@ -278,9 +232,7 @@ describe('reviewArticleDetailsGetHighlightedText - Fuzzy Matching Tests', () => 
         ['quick', true],
         [' brown fox jumps', false],
       ]
-      expect(expected).toEqual(
-        reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 2}),
-      )
+      expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 2}))
     })
 
     it('matches with character deletion', () => {
@@ -290,9 +242,7 @@ describe('reviewArticleDetailsGetHighlightedText - Fuzzy Matching Tests', () => 
         ['programming', true],
         [' is fun', false],
       ]
-      expect(expected).toEqual(
-        reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 1}),
-      )
+      expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 1}))
     })
 
     it('matches with character insertion', () => {
@@ -303,9 +253,7 @@ describe('reviewArticleDetailsGetHighlightedText - Fuzzy Matching Tests', () => 
         ['cat', true],
         [' sat on the mat', false],
       ]
-      expect(expected).toEqual(
-        reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 1}),
-      )
+      expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 1}))
     })
 
     it('matches with transposition (Damerau-Levenshtein specific)', () => {
@@ -315,9 +263,7 @@ describe('reviewArticleDetailsGetHighlightedText - Fuzzy Matching Tests', () => 
         ['receive', true],
         [' the package', false],
       ]
-      expect(expected).toEqual(
-        reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 1}),
-      )
+      expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 1}))
     })
   })
 
@@ -329,12 +275,7 @@ describe('reviewArticleDetailsGetHighlightedText - Fuzzy Matching Tests', () => 
         ['JavaScript', true],
         [' is awesome', false],
       ]
-      expect(expected).toEqual(
-        reviewArticleDetailsGetHighlightedText(s, keys, {
-          maxDistance: 1,
-          caseInsensitive: true,
-        }),
-      )
+      expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 1, caseInsensitive: true}))
     })
   })
 
@@ -351,9 +292,7 @@ describe('reviewArticleDetailsGetHighlightedText - Fuzzy Matching Tests', () => 
         ['gray', true],
         [' wolf', false],
       ]
-      expect(expected).toEqual(
-        reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 2}),
-      )
+      expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 2}))
     })
 
     it('only matches first occurrence with fuzzy matching', () => {
@@ -363,9 +302,7 @@ describe('reviewArticleDetailsGetHighlightedText - Fuzzy Matching Tests', () => 
         ['test', true],
         [' testing test again', false],
       ]
-      expect(expected).toEqual(
-        reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 2}),
-      )
+      expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 2}))
     })
   })
 
@@ -374,9 +311,7 @@ describe('reviewArticleDetailsGetHighlightedText - Fuzzy Matching Tests', () => 
       const s = 'completely different text'
       const keys = ['xyz123'] // Too different
       const expected: Piece[] = [['completely different text', false]]
-      expect(expected).toEqual(
-        reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 1}),
-      )
+      expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 1}))
     })
 
     it('uses default distance threshold when not specified', () => {
@@ -387,18 +322,14 @@ describe('reviewArticleDetailsGetHighlightedText - Fuzzy Matching Tests', () => 
         ['algorithm', true],
         [' implementation', false],
       ]
-      expect(expected).toEqual(
-        reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 2}),
-      )
+      expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 2}))
     })
 
     it('matches exactly when maxDistance is 0', () => {
       const s = 'exact match only'
       const keys = ['exakt'] // Will not match with distance 0
       const expected: Piece[] = [['exact match only', false]]
-      expect(expected).toEqual(
-        reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 0}),
-      )
+      expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 0}))
     })
   })
 
@@ -414,9 +345,7 @@ describe('reviewArticleDetailsGetHighlightedText - Fuzzy Matching Tests', () => 
         ['text', true],
         [' with test', false],
       ]
-      expect(expected).toEqual(
-        reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 2}),
-      )
+      expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 2}))
     })
 
     it('falls back to fuzzy when no exact match exists', () => {
@@ -427,9 +356,7 @@ describe('reviewArticleDetailsGetHighlightedText - Fuzzy Matching Tests', () => 
         ['aproximate', true],
         [' matches here', false],
       ]
-      expect(expected).toEqual(
-        reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 1}),
-      )
+      expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 1}))
     })
   })
 
@@ -438,18 +365,14 @@ describe('reviewArticleDetailsGetHighlightedText - Fuzzy Matching Tests', () => 
       const s = 'some text'
       const keys: string[] = []
       const expected: Piece[] = [['some text', false]]
-      expect(expected).toEqual(
-        reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 2}),
-      )
+      expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 2}))
     })
 
     it('handles single character fuzzy matching', () => {
       const s = 'a b c d e'
       const keys = ['x'] // Single char, won't match even with fuzzy
       const expected: Piece[] = [['a b c d e', false]]
-      expect(expected).toEqual(
-        reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 1}),
-      )
+      expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 1}))
     })
 
     it('matches short words with appropriate threshold', () => {
@@ -459,9 +382,7 @@ describe('reviewArticleDetailsGetHighlightedText - Fuzzy Matching Tests', () => 
         ['the', true],
         [' cat and dog', false],
       ]
-      expect(expected).toEqual(
-        reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 2}),
-      )
+      expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 2}))
     })
 
     // eslint-disable-next-line vitest/no-commented-out-tests
@@ -494,9 +415,7 @@ describe('reviewArticleDetailsGetHighlightedText - Fuzzy Matching Tests', () => 
         ['lazy', true],
         [' dog', false],
       ]
-      expect(expected).toEqual(
-        reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 2}),
-      )
+      expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 2}))
     })
 
     it('works with programming terms and typos and spaces between words', () => {
@@ -508,9 +427,7 @@ describe('reviewArticleDetailsGetHighlightedText - Fuzzy Matching Tests', () => 
         ['calculateAverage', true],
         [' implementation', false],
       ]
-      expect(expected).toEqual(
-        reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 2}),
-      )
+      expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 2}))
     })
   })
 })
@@ -530,52 +447,34 @@ describe('reviewArticleDetailsGetHighlightedText - Without Fuzzy Options', () =>
 
 describe('handle multiple spaces - continued', () => {
   it('in text and key (exact, double space)', () => {
-    const s =
-      'Non-Stationary  Restless Multi-Armed Bandits with Provable Guarantee'
+    const s = 'Non-Stationary  Restless Multi-Armed Bandits with Provable Guarantee'
     const keys = ['Non-Stationary  Restless']
     const expected: Piece[] = [
       ['Non-Stationary  Restless', true],
       [' Multi-Armed Bandits with Provable Guarantee', false],
     ]
-    expect(
-      reviewArticleDetailsGetHighlightedText(s, keys, {
-        maxDistance: 2,
-        caseInsensitive: true,
-      }),
-    ).toEqual(expected)
+    expect(reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 2, caseInsensitive: true})).toEqual(expected)
   })
 
   it('in keys (double space in key, single space in text) – fuzzy insertion', () => {
-    const s =
-      'Non-Stationary Restless Multi-Armed Bandits with Provable Guarantee'
+    const s = 'Non-Stationary Restless Multi-Armed Bandits with Provable Guarantee'
     const keys = ['Non-Stationary  Restless']
     // ✅ Corrected: highlighted piece must come from the original text `s` (single space)
     const expected: Piece[] = [
       ['Non-Stationary Restless', true],
       [' Multi-Armed Bandits with Provable Guarantee', false],
     ]
-    expect(
-      reviewArticleDetailsGetHighlightedText(s, keys, {
-        maxDistance: 2,
-        caseInsensitive: true,
-      }),
-    ).toEqual(expected)
+    expect(reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 2, caseInsensitive: true})).toEqual(expected)
   })
 
   it('in text (double space in text, single space in key) – fuzzy deletion', () => {
-    const s =
-      'Non-Stationary  Restless Multi-Armed Bandits with Provable Guarantee'
+    const s = 'Non-Stationary  Restless Multi-Armed Bandits with Provable Guarantee'
     const keys = ['Non-Stationary Restless']
     const expected: Piece[] = [
       ['Non-Stationary  Restless', true],
       [' Multi-Armed Bandits with Provable Guarantee', false],
     ]
-    expect(
-      reviewArticleDetailsGetHighlightedText(s, keys, {
-        maxDistance: 2,
-        caseInsensitive: true,
-      }),
-    ).toEqual(expected)
+    expect(reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 2, caseInsensitive: true})).toEqual(expected)
   })
 })
 
@@ -584,21 +483,14 @@ describe('global fuzzy substring (spaces are characters)', () => {
     const s = 'A  B'
     const keys = ['A B']
     const expected: Piece[] = [['A  B', true]]
-    expect(
-      reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 1}),
-    ).toEqual(expected)
+    expect(reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 1})).toEqual(expected)
   })
 
   it('case-insensitive, hyphen vs space difference counts as substitution', () => {
     const s = 'Non Stationary'
     const keys = ['non-stationary']
     const expected: Piece[] = [['Non Stationary', true]]
-    expect(
-      reviewArticleDetailsGetHighlightedText(s, keys, {
-        maxDistance: 1,
-        caseInsensitive: true,
-      }),
-    ).toEqual(expected)
+    expect(reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 1, caseInsensitive: true})).toEqual(expected)
   })
 
   it('first occurrence', () => {
@@ -609,17 +501,13 @@ describe('global fuzzy substring (spaces are characters)', () => {
       ['32', true],
       [' Y 3 2 Z', false],
     ]
-    expect(
-      reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 1}),
-    ).toEqual(expected)
+    expect(reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 1})).toEqual(expected)
   })
 
   it('does not fuzzily match 1-char keys by default (noise guard)', () => {
     const s = 'a b c'
     const keys = ['x']
     const expected: Piece[] = [['a b c', false]]
-    expect(
-      reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 1}),
-    ).toEqual(expected)
+    expect(reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 1})).toEqual(expected)
   })
 })

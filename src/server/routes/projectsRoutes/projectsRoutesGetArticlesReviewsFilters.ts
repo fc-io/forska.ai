@@ -25,11 +25,7 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
 
       // Get all prompts for this project
       const projectPrompts = await db
-        .select({
-          id: prompts.id,
-          promptHeading: prompts.promptHeading,
-          originalText: prompts.originalText,
-        })
+        .select({id: prompts.id, promptHeading: prompts.promptHeading, originalText: prompts.originalText})
         .from(prompts)
         .where(eq(prompts.projectId, query.projectId))
 
@@ -61,11 +57,7 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
     } catch (error) {
       console.error('Error fetching articles reviews filters:', error)
       set.status = 500
-      throw new Error(
-        error instanceof Error
-          ? error.message
-          : 'Failed to fetch articles reviews filters',
-      )
+      throw new Error(error instanceof Error ? error.message : 'Failed to fetch articles reviews filters')
     }
   },
   {query: t.Object({projectId: t.String()})},

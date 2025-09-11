@@ -7,14 +7,10 @@ import type {articles, judgments} from '../../../db/schema.ts'
 import {apiClient} from '../../../services/apiClient.ts'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse'
 
-type ArticleWithJudgments = typeof articles.$inferSelect & {
-  judgments: Array<typeof judgments.$inferSelect>
-}
+type ArticleWithJudgments = typeof articles.$inferSelect & {judgments: Array<typeof judgments.$inferSelect>}
 
 export const ProjectDetailsArticles = (props: {projectId: string}) => {
-  const [filterAnsweredOriginal, setFilterAnsweredOriginal] = createSignal<
-    boolean | null
-  >(null)
+  const [filterAnsweredOriginal, setFilterAnsweredOriginal] = createSignal<boolean | null>(null)
   const [currentPage, setCurrentPage] = createSignal(1)
   const [pageLimit, setPageLimit] = createSignal(100)
 
@@ -28,11 +24,10 @@ export const ProjectDetailsArticles = (props: {projectId: string}) => {
         pageLimit(),
       ],
       queryFn: async () => {
-        const queryParams: {
-          answered_original?: string
-          page?: string
-          limit?: string
-        } = {page: String(currentPage()), limit: String(pageLimit())}
+        const queryParams: {answered_original?: string; page?: string; limit?: string} = {
+          page: String(currentPage()),
+          limit: String(pageLimit()),
+        }
 
         if (filterAnsweredOriginal() !== null) {
           queryParams.answered_original = String(filterAnsweredOriginal())
@@ -68,11 +63,7 @@ export const ProjectDetailsArticles = (props: {projectId: string}) => {
         <label class="font-medium">Filter by answered_original:</label>
         <select
           class="px-3 py-2 border rounded-md"
-          value={
-            filterAnsweredOriginal() === null
-              ? 'all'
-              : String(filterAnsweredOriginal())
-          }
+          value={filterAnsweredOriginal() === null ? 'all' : String(filterAnsweredOriginal())}
           onChange={(e) => {
             const value = e.target.value
             setFilterAnsweredOriginal(value === 'all' ? null : value === 'true')
@@ -107,9 +98,7 @@ export const ProjectDetailsArticles = (props: {projectId: string}) => {
 
         <Show when={articlesQuery.error}>
           <div class="p-4 bg-red-50 border border-red-200 rounded-lg">
-            <p class="text-red-600">
-              Error loading articles: {articlesQuery.error?.message}
-            </p>
+            <p class="text-red-600">Error loading articles: {articlesQuery.error?.message}</p>
           </div>
         </Show>
 
@@ -134,14 +123,9 @@ export const ProjectDetailsArticles = (props: {projectId: string}) => {
                     )
                   </h3>
                   <p class="text-sm text-gray-600">
-                    Showing articles that have judgments for all prompts in this
-                    project
+                    Showing articles that have judgments for all prompts in this project
                     {filterAnsweredOriginal() !== null && (
-                      <span>
-                        {' '}
-                        (filtered by answered_original ={' '}
-                        {filterAnsweredOriginal() ? 'Yes' : 'No'})
-                      </span>
+                      <span> (filtered by answered_original = {filterAnsweredOriginal() ? 'Yes' : 'No'})</span>
                     )}
                   </p>
                 </div>
@@ -206,15 +190,10 @@ export const ProjectDetailsArticles = (props: {projectId: string}) => {
                         return (
                           <div class="p-4 bg-white rounded-lg shadow hover:shadow-md transition-shadow">
                             <div class="mb-2">
-                              <h4 class="font-semibold text-lg">
-                                {article.articleTitle}
-                              </h4>
+                              <h4 class="font-semibold text-lg">{article.articleTitle}</h4>
                               <p class="text-sm text-gray-600">
                                 {article.articleCreatedAt
-                                  ? format(
-                                      article.articleCreatedAt,
-                                      'yyyy-MM-dd',
-                                    )
+                                  ? format(article.articleCreatedAt, 'yyyy-MM-dd')
                                   : 'No date provided'}
                               </p>
                               <a
@@ -225,15 +204,11 @@ export const ProjectDetailsArticles = (props: {projectId: string}) => {
                               >
                                 {article.articleId}
                               </a>
-                              <p class="text-sm text-gray-600">
-                                ID: {article.id}
-                              </p>
+                              <p class="text-sm text-gray-600">ID: {article.id}</p>
                             </div>
 
                             <Show when={article.articleSummary}>
-                              <p class="text-gray-700 mb-3">
-                                {article.articleSummary}
-                              </p>
+                              <p class="text-gray-700 mb-3">{article.articleSummary}</p>
                             </Show>
 
                             <div class="flex gap-4 text-sm">
@@ -261,15 +236,8 @@ export const ProjectDetailsArticles = (props: {projectId: string}) => {
                             </div>
 
                             <div class="mt-3 pt-3 border-t">
-                              <p class="text-sm text-gray-600">
-                                Judgments: {article.judgments?.length || 0}
-                              </p>
-                              <Show
-                                when={
-                                  article.judgments
-                                  && article.judgments.length > 0
-                                }
-                              >
+                              <p class="text-sm text-gray-600">Judgments: {article.judgments?.length || 0}</p>
+                              <Show when={article.judgments && article.judgments.length > 0}>
                                 <div class="mt-2 flex flex-wrap gap-2">
                                   <For each={article.judgments}>
                                     {(judgment) => {
@@ -281,9 +249,7 @@ export const ProjectDetailsArticles = (props: {projectId: string}) => {
                                               : 'bg-red-100 text-red-800'
                                           }`}
                                         >
-                                          {judgment.answeredOriginal
-                                            ? 'Original'
-                                            : 'Not Original'}
+                                          {judgment.answeredOriginal ? 'Original' : 'Not Original'}
                                         </span>
                                       )
                                     }}

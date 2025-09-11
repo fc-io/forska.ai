@@ -1,4 +1,4 @@
-import {desc, eq, inArray, notInArray} from 'drizzle-orm'
+import {desc, eq, notInArray, sql} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../db/schema.ts'
@@ -10,56 +10,40 @@ const getPromptIds = (projectPrompts: (typeof schema.prompts.$inferSelect)[]) =>
   })
 }
 
-const getAllJudgments = async ({db, promptIds}: {db: PostgresJsDatabase<typeof schema>; promptIds: string[]}) => {
-  // Get all judgments for all prompts in this project
-  return await db
-    .select({articleId: schema.judgments.articleId, promptId: schema.judgments.promptId})
-    .from(schema.judgments)
-    .where(inArray(schema.judgments.promptId, promptIds))
-}
-
-const getFullyJudgedArticleIds = (
-  allJudgments: {articleId: string; promptId: string}[],
-  projectPromptsLength: number,
-) => {
-  const articleJudgmentCounts = allJudgments.reduce(
-    (acc, judgment) => {
-      const articleId = judgment.articleId
-      if (!acc[articleId]) {
-        acc[articleId] = new Set()
-      }
-      acc[articleId].add(judgment.promptId)
-      return acc
-    },
-    {} as Record<string, Set<string>>,
-  )
-  console.log('articleJudgmentCounts', Object.keys(articleJudgmentCounts).length)
-
-  return Object.entries(articleJudgmentCounts)
-    .filter(([_, promptIds]) => {
-      return promptIds.size === projectPromptsLength
-    })
-    .map(([articleId]) => {
-      return articleId
-    })
-}
-
-const getArticlesToJudge = async ({
-  db,
-  excludeIds,
-  numberOfArticlesToGet,
+const getQueryConditions = ({
+  articlesAlreadyProccessing,
+  promptIds,
 }: {
-  db: PostgresJsDatabase<typeof schema>
-  excludeIds: string[]
-  numberOfArticlesToGet: number
+  articlesAlreadyProccessing: string[]
+  promptIds: string[]
 }) => {
-  const query = db.select().from(schema.articles)
+  const conditions = []
 
-  return excludeIds.length > 0
-    ? await query
-        .where(notInArray(schema.articles.id, excludeIds))
-        .orderBy(desc(schema.articles.articleUpdatedAt), desc(schema.articles.id))
-    : await query.orderBy(desc(schema.articles.articleUpdatedAt), desc(schema.articles.id)).limit(numberOfArticlesToGet)
+  // Exclude articles already being processed
+  if (articlesAlreadyProccessing.length > 0) {
+    conditions.push(notInArray(schema.articles.id, articlesAlreadyProccessing))
+  }
+
+  // Use EXISTS to find articles that haven't been judged by ALL prompts
+  // This checks if there's at least one prompt that doesn't have a judgment for the article
+  conditions.push(
+    sql`EXISTS (
+      SELECT 1 FROM ${schema.prompts} p
+      WHERE p.id = ANY(ARRAY[${sql.join(
+        promptIds.map((id) => {
+          return sql`${id}::uuid`
+        }),
+        sql`,`,
+      )}])
+      AND NOT EXISTS (
+        SELECT 1 FROM ${schema.judgments} j
+        WHERE j."article_id" = ${schema.articles.id}
+        AND j."prompt_id" = p.id
+      )
+    )`,
+  )
+
+  return conditions
 }
 
 const getArticleIdsToJudge = async ({
@@ -75,16 +59,20 @@ const getArticleIdsToJudge = async ({
 }) => {
   const promptIds = getPromptIds(projectPrompts)
   console.log('promptIds length', promptIds.length)
-  const allJudgments = await getAllJudgments({db, promptIds})
-  console.log('allJudgments', allJudgments.length)
-  // Find articles that have been judged by ALL prompts
-  const fullyJudgedArticleIds = getFullyJudgedArticleIds(allJudgments, promptIds.length)
-  console.log('fullyJudgedArticleIds length', fullyJudgedArticleIds.length)
   console.log('articlesAlreadyProccessing length', articlesAlreadyProccessing.length)
-  const excludeIds = [...fullyJudgedArticleIds, ...articlesAlreadyProccessing]
-  const articlesToJudge = await getArticlesToJudge({db, excludeIds, numberOfArticlesToGet})
+  const queryConditions = getQueryConditions({articlesAlreadyProccessing, promptIds})
 
-  // return {articles: articlesToJudge, prompts: projectPrompts}
+  const query = db
+    .select()
+    .from(schema.articles)
+    .where(queryConditions.length > 0 ? sql`${sql.join(queryConditions, sql` AND `)}` : undefined)
+    .orderBy(desc(schema.articles.articleUpdatedAt), desc(schema.articles.id))
+    .limit(numberOfArticlesToGet)
+
+  const articlesToJudge = await query
+
+  console.log('articlesToJudge length', articlesToJudge.length)
+
   return articlesToJudge.map((article) => {
     return article.id
   })

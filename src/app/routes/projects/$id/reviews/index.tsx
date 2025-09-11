@@ -31,21 +31,12 @@ const Reviews = () => {
   const [toDate, setToDate] = createSignal(new Date())
   const params = Route.useParams()
   const projectId = (params() as {id: string}).id
-  const [promptFilters, setPromptFilters] = createSignal<
-    Record<string, string | null>
-  >({})
+  const [promptFilters, setPromptFilters] = createSignal<Record<string, string | null>>({})
   const [currentPage, setCurrentPage] = createSignal(1)
   const [pageLimit, setPageLimit] = createSignal(100)
 
   const articlesQuery = useQuery(() => {
-    return createArticlesReviewsQueryOptions(
-      projectId,
-      promptFilters,
-      currentPage,
-      pageLimit,
-      fromDate,
-      toDate,
-    )
+    return createArticlesReviewsQueryOptions(projectId, promptFilters, currentPage, pageLimit, fromDate, toDate)
   })
 
   return (
@@ -74,9 +65,7 @@ const Reviews = () => {
 
         <Show when={articlesQuery.error}>
           <div class="p-4 bg-red-50 border border-red-200 rounded-lg">
-            <p class="text-red-600">
-              Error loading articles: {articlesQuery.error?.message}
-            </p>
+            <p class="text-red-600">Error loading articles: {articlesQuery.error?.message}</p>
           </div>
         </Show>
 
@@ -96,11 +85,8 @@ const Reviews = () => {
                     )
                   </h3>
                   <p class="text-sm text-gray-600">
-                    Showing articles that have judgments for all prompts in this
-                    project
-                    {Object.keys(promptFilters()).length > 0 && (
-                      <span> (with filters applied)</span>
-                    )}
+                    Showing articles that have judgments for all prompts in this project
+                    {Object.keys(promptFilters()).length > 0 && <span> (with filters applied)</span>}
                   </p>
                 </div>
 
@@ -123,10 +109,7 @@ const Reviews = () => {
                     </div>
                   }
                 >
-                  <ReviewsArticlesTable
-                    projectId={projectId}
-                    articles={response().data}
-                  />
+                  <ReviewsArticlesTable projectId={projectId} articles={response().data} />
                 </Show>
 
                 <Show when={response().totalPages > 1}>
@@ -144,6 +127,4 @@ const Reviews = () => {
     </div>
   )
 }
-export const Route = createFileRoute('/projects/$id/reviews/')({
-  component: Reviews,
-})
+export const Route = createFileRoute('/projects/$id/reviews/')({component: Reviews})

@@ -26,10 +26,7 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
       const offset = (page - 1) * limit
 
       // First get all prompts for this project
-      const projectPrompts = await db
-        .select()
-        .from(prompts)
-        .where(eq(prompts.projectId, body.projectId))
+      const projectPrompts = await db.select().from(prompts).where(eq(prompts.projectId, body.projectId))
 
       if (projectPrompts.length === 0) {
         return {data: [], totalCount: 0, page, limit, totalPages: 0}
@@ -44,11 +41,9 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
       const conditions = []
 
       // Add filters for each prompt's answered_original if provided
-      const promptFilters = Object.entries(body.prompts || {}).map(
-        ([key, value]) => {
-          return [key, value] as const
-        },
-      )
+      const promptFilters = Object.entries(body.prompts || {}).map(([key, value]) => {
+        return [key, value] as const
+      })
 
       console.log('--------------------------------')
       console.log('--------------------------------')
@@ -77,32 +72,17 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
         ${db
           .select({exists: sql`1`})
           .from(judgments)
-          .where(
-            and(
-              eq(judgments.articleId, articles.id),
-              inArray(judgments.promptId, promptIds),
-            ),
-          )}
+          .where(and(eq(judgments.articleId, articles.id), inArray(judgments.promptId, promptIds)))}
       )`
 
       // First, get the total count
       const countQuery = await db
-        .select({
-          count: sql<number>`COUNT(DISTINCT ${articles.id})`.as('count'),
-        })
+        .select({count: sql<number>`COUNT(DISTINCT ${articles.id})`.as('count')})
         .from(articles)
         .where(conditions.length > 0 ? and(...conditions) : baseExistsCondition)
-        .innerJoin(
-          judgments,
-          and(
-            eq(judgments.articleId, articles.id),
-            inArray(judgments.promptId, promptIds),
-          ),
-        )
+        .innerJoin(judgments, and(eq(judgments.articleId, articles.id), inArray(judgments.promptId, promptIds)))
         .groupBy(articles.id)
-        .having(
-          sql`COUNT(DISTINCT ${judgments.promptId}) = ${promptIds.length}`,
-        )
+        .having(sql`COUNT(DISTINCT ${judgments.promptId}) = ${promptIds.length}`)
 
       const totalCount = countQuery.length
 
@@ -114,26 +94,13 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
             ${db
               .select({count: sql`COUNT(DISTINCT ${judgments.promptId})`})
               .from(judgments)
-              .where(
-                and(
-                  eq(judgments.articleId, articles.id),
-                  inArray(judgments.promptId, promptIds),
-                ),
-              )}
+              .where(and(eq(judgments.articleId, articles.id), inArray(judgments.promptId, promptIds)))}
           )`.as('judgment_count'),
         })
         .from(articles)
         .where(conditions.length > 0 ? and(...conditions) : baseExistsCondition)
-        .having(
-          sql`COUNT(DISTINCT ${judgments.promptId}) = ${promptIds.length}`,
-        )
-        .innerJoin(
-          judgments,
-          and(
-            eq(judgments.articleId, articles.id),
-            inArray(judgments.promptId, promptIds),
-          ),
-        )
+        .having(sql`COUNT(DISTINCT ${judgments.promptId}) = ${promptIds.length}`)
+        .innerJoin(judgments, and(eq(judgments.articleId, articles.id), inArray(judgments.promptId, promptIds)))
         .groupBy(articles.id)
         .orderBy(desc(articles.createdAt))
         .limit(limit)
@@ -149,12 +116,7 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
           ? await db
               .select()
               .from(judgments)
-              .where(
-                and(
-                  inArray(judgments.articleId, articleIds),
-                  inArray(judgments.promptId, promptIds),
-                ),
-              )
+              .where(and(inArray(judgments.articleId, articleIds), inArray(judgments.promptId, promptIds)))
           : []
 
       // Group judgments by article
@@ -171,20 +133,10 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
         return {...article, judgments: judgmentsByArticle[article.id] || []}
       })
 
-      return {
-        data: result,
-        totalCount,
-        page,
-        limit,
-        totalPages: Math.ceil(totalCount / limit),
-      }
+      return {data: result, totalCount, page, limit, totalPages: Math.ceil(totalCount / limit)}
     } catch (error) {
       console.error('Error fetching articles reviews:', error)
-      throw new Error(
-        error instanceof Error
-          ? error.message
-          : 'Failed to fetch articles reviews',
-      )
+      throw new Error(error instanceof Error ? error.message : 'Failed to fetch articles reviews')
     }
   },
   {

@@ -12,19 +12,13 @@ const runMigration = async (): Promise<void> => {
   await client.connect()
 
   try {
-    const migrationPath = join(
-      import.meta.dir,
-      'migrations',
-      '0002_fix_judgments_tables.sql',
-    )
+    const migrationPath = join(import.meta.dir, 'migrations', '0002_fix_judgments_tables.sql')
     const migrationSQL = readFileSync(migrationPath, 'utf8')
 
     // Split by statement-breakpoint and execute each statement
-    const statements = migrationSQL
-      .split('--> statement-breakpoint')
-      .filter((s) => {
-        return s.trim()
-      })
+    const statements = migrationSQL.split('--> statement-breakpoint').filter((s) => {
+      return s.trim()
+    })
 
     await client.query('BEGIN')
 

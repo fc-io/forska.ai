@@ -33,12 +33,7 @@ const AssistantMessageType = type({
 // Choice structure from completion response
 const ChoiceType = type({
   index: 'number',
-  message: {
-    role: "'assistant'",
-    content: 'string',
-    'tool_calls?': 'unknown[]',
-    'reasoning_content?': 'string',
-  },
+  message: {role: "'assistant'", content: 'string', 'tool_calls?': 'unknown[]', 'reasoning_content?': 'string'},
   'logprobs?': 'null',
   finish_reason: 'string',
   'stop_reason?': 'null',

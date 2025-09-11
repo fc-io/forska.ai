@@ -69,14 +69,7 @@ const EditProject = () => {
     } else {
       // Add one empty prompt if no existing prompts
       setPrompts([
-        {
-          id: crypto.randomUUID(),
-          originalText: '',
-          promptHeading: '',
-          type: '',
-          isExisting: false,
-          order: 1,
-        },
+        {id: crypto.randomUUID(), originalText: '', promptHeading: '', type: '', isExisting: false, order: 1},
       ])
     }
   })
@@ -92,14 +85,7 @@ const EditProject = () => {
         : 1
     setPrompts([
       ...prompts,
-      {
-        id: crypto.randomUUID(),
-        originalText: '',
-        promptHeading: '',
-        type: '',
-        isExisting: false,
-        order: newOrder,
-      },
+      {id: crypto.randomUUID(), originalText: '', promptHeading: '', type: '', isExisting: false, order: newOrder},
     ])
   }
 
@@ -113,11 +99,7 @@ const EditProject = () => {
     }
   }
 
-  const updatePromptInput = (
-    id: string,
-    field: 'originalText' | 'promptHeading' | 'type',
-    value: string,
-  ) => {
+  const updatePromptInput = (id: string, field: 'originalText' | 'promptHeading' | 'type', value: string) => {
     const idx = prompts.findIndex((p) => {
       return p.id === id
     })
@@ -150,18 +132,13 @@ const EditProject = () => {
       // Update project and prompts in a single request
       const response = await apiClient.api
         .projects({id: projectId})
-        .edit.patch({
-          name: projectName(),
-          description: description() || null,
-          prompts: promptsData,
-        })
+        .edit.patch({name: projectName(), description: description() || null, prompts: promptsData})
 
       handleApiResponse(response, 'Failed to update project')
 
       // void navigate({to: '/projects'})
     } catch (err) {
-      const errorMessage =
-        err instanceof Error ? err.message : 'An unexpected error occurred'
+      const errorMessage = err instanceof Error ? err.message : 'An unexpected error occurred'
       setError(errorMessage)
     } finally {
       setIsLoading(false)
@@ -183,8 +160,7 @@ const EditProject = () => {
 
       <Show when={Boolean(projectData.error)}>
         <div class="text-center py-8 text-red-600">
-          Error loading project:{' '}
-          {(projectData.error as Error)?.message || 'Unknown error'}
+          Error loading project: {(projectData.error as Error)?.message || 'Unknown error'}
         </div>
       </Show>
 
@@ -195,23 +171,17 @@ const EditProject = () => {
               <div class="flex items-start gap-3">
                 <span class="text-amber-600 text-xl mt-0.5">⚠️</span>
                 <div>
-                  <h3 class="font-semibold text-amber-900 mb-1">
-                    Project Locked for Editing
-                  </h3>
+                  <h3 class="font-semibold text-amber-900 mb-1">Project Locked for Editing</h3>
                   <p class="text-amber-800 text-sm">
-                    This project cannot be modified because articles have
-                    already been judged based on its prompts. All fields and
-                    buttons have been disabled to preserve the integrity of
-                    existing assessments.
+                    This project cannot be modified because articles have already been judged based on its prompts. All
+                    fields and buttons have been disabled to preserve the integrity of existing assessments.
                   </p>
                 </div>
               </div>
             </div>
           </Show>
           <Show when={error()}>
-            <div class="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm">
-              {error()}
-            </div>
+            <div class="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm">{error()}</div>
           </Show>
 
           <form
@@ -265,20 +235,14 @@ const EditProject = () => {
 
             <div>
               <div class="flex items-center justify-between mb-2">
-                <label class="block text-sm font-medium">
-                  Your questions about the article
-                </label>
+                <label class="block text-sm font-medium">Your questions about the article</label>
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
                   onClick={addPromptInput}
                   disabled={projectData.data?.hasJudgedArticles}
-                  class={
-                    projectData.data?.hasJudgedArticles
-                      ? 'opacity-50 cursor-not-allowed'
-                      : ''
-                  }
+                  class={projectData.data?.hasJudgedArticles ? 'opacity-50 cursor-not-allowed' : ''}
                 >
                   + Add Prompt
                 </Button>
@@ -298,11 +262,7 @@ const EditProject = () => {
                             type="text"
                             value={promptItem.promptHeading}
                             onInput={(e) => {
-                              return updatePromptInput(
-                                promptItem.id,
-                                'promptHeading',
-                                e.currentTarget.value,
-                              )
+                              return updatePromptInput(promptItem.id, 'promptHeading', e.currentTarget.value)
                             }}
                             placeholder={`Prompt ${index() + 1} heading (optional)...`}
                             class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${
@@ -316,11 +276,7 @@ const EditProject = () => {
                             type="text"
                             value={promptItem.type}
                             onInput={(e) => {
-                              return updatePromptInput(
-                                promptItem.id,
-                                'type',
-                                e.currentTarget.value,
-                              )
+                              return updatePromptInput(promptItem.id, 'type', e.currentTarget.value)
                             }}
                             placeholder={`Prompt ${index() + 1} type (optional)...`}
                             class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${
@@ -333,11 +289,7 @@ const EditProject = () => {
                           <textarea
                             value={promptItem.originalText}
                             onInput={(e) => {
-                              return updatePromptInput(
-                                promptItem.id,
-                                'originalText',
-                                e.currentTarget.value,
-                              )
+                              return updatePromptInput(promptItem.id, 'originalText', e.currentTarget.value)
                             }}
                             placeholder={`Enter prompt ${index() + 1} content...`}
                             rows="4"
@@ -373,21 +325,13 @@ const EditProject = () => {
             <div class="flex gap-3 pt-4">
               <Button
                 type="submit"
-                disabled={
-                  !projectName().trim()
-                  || isLoading()
-                  || projectData.data?.hasJudgedArticles
-                }
+                disabled={!projectName().trim() || isLoading() || projectData.data?.hasJudgedArticles}
                 title={
                   projectData.data?.hasJudgedArticles
                     ? 'Cannot update: articles have been judged based on this project'
                     : undefined
                 }
-                class={
-                  projectData.data?.hasJudgedArticles
-                    ? 'opacity-50 cursor-not-allowed'
-                    : ''
-                }
+                class={projectData.data?.hasJudgedArticles ? 'opacity-50 cursor-not-allowed' : ''}
               >
                 {isLoading() ? 'Updating...' : 'Update Project'}
               </Button>
@@ -402,6 +346,4 @@ const EditProject = () => {
   )
 }
 
-export const Route = createFileRoute('/projects/$id/edit')({
-  component: EditProject,
-})
+export const Route = createFileRoute('/projects/$id/edit')({component: EditProject})

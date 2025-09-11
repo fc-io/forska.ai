@@ -1,17 +1,9 @@
 import {apiClient} from '../../services/apiClient.ts'
 
 export const judgeStoreTokenUse = async (
-  tokenUse: {
-    promptTokens: number
-    completionTokens: number
-    totalTokens: number
-  }[],
+  tokenUse: {promptTokens: number; completionTokens: number; totalTokens: number}[],
   sessionId: string,
-  {
-    startedAt,
-    finishedAt,
-    duration,
-  }: {startedAt: string; finishedAt: string; duration: number},
+  {startedAt, finishedAt, duration}: {startedAt: string; finishedAt: string; duration: number},
 ): Promise<void> => {
   const totalArticles = tokenUse.length
   const totalTokenUse = tokenUse.reduce(

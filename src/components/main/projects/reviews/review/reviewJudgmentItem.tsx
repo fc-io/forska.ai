@@ -12,10 +12,7 @@ type ReviewJudgmentItemProps = {
     confidenceOriginal?: number | null
     explanation?: string | null
     quotes?: unknown
-    assessments?: Array<{
-      assessmentIsCorrect?: boolean | null
-      assessmentComment?: string | null
-    }>
+    assessments?: Array<{assessmentIsCorrect?: boolean | null; assessmentComment?: string | null}>
   }
   setArticleViewToShow: SetArticleViewToShow
 }
@@ -32,9 +29,7 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
       }}
     >
       <div class="mb-2">
-        <p class="text-sm font-medium text-gray-900 line-clamp-2">
-          {props.judgment.prompt.originalText}
-        </p>
+        <p class="text-sm font-medium text-gray-900 line-clamp-2">{props.judgment.prompt.originalText}</p>
       </div>
       <div class="flex items-center justify-between text-xs">
         <div class="flex items-center gap-2">
@@ -73,15 +68,9 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
           </For>
         </div>
       </Show>
-      <Show
-        when={
-          props.judgment.assessments && props.judgment.assessments.length > 0
-        }
-      >
+      <Show when={props.judgment.assessments && props.judgment.assessments.length > 0}>
         <div class="mt-2 text-xs">
-          <ReviewJudgmentAssessments
-            assessments={props.judgment.assessments!}
-          />
+          <ReviewJudgmentAssessments assessments={props.judgment.assessments!} />
         </div>
       </Show>
     </div>

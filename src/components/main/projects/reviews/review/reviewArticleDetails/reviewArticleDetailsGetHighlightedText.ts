@@ -85,12 +85,7 @@ export const reviewArticleDetailsGetHighlightedText = (
 
   while (idx < s.length) {
     // Find the best match among unused keys starting from idx
-    let bestMatch: null | {
-      keyIdx: number
-      start: number
-      end: number
-      dist: number
-    } = null
+    let bestMatch: null | {keyIdx: number; start: number; end: number; dist: number} = null
 
     for (let k = 0; k < keys.length; k++) {
       if (used[k]) continue
@@ -103,18 +98,12 @@ export const reviewArticleDetailsGetHighlightedText = (
       const exactIdx = sN.indexOf(keyN, idx)
 
       if (exactIdx >= 0) {
-        const candidate = {
-          keyIdx: k,
-          start: exactIdx,
-          end: exactIdx + keyRaw.length,
-          dist: 0,
-        }
+        const candidate = {keyIdx: k, start: exactIdx, end: exactIdx + keyRaw.length, dist: 0}
 
         if (
           !bestMatch
           || candidate.start < bestMatch.start
-          || (candidate.start === bestMatch.start
-            && keyRaw.length > keys[bestMatch.keyIdx]!.length)
+          || (candidate.start === bestMatch.start && keyRaw.length > keys[bestMatch.keyIdx]!.length)
         ) {
           bestMatch = candidate
         }
@@ -140,8 +129,7 @@ export const reviewArticleDetailsGetHighlightedText = (
               if (
                 !bestMatch
                 || candidate.dist < bestMatch.dist
-                || (candidate.dist === bestMatch.dist
-                  && candidate.start < bestMatch.start)
+                || (candidate.dist === bestMatch.dist && candidate.start < bestMatch.start)
                 || (candidate.dist === bestMatch.dist
                   && candidate.start === bestMatch.start
                   && end - start > bestMatch.end - bestMatch.start)

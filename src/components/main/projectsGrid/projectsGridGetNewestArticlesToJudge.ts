@@ -7,10 +7,7 @@ export const getNewestArticlesToJudge = async ({
   numberOfArticlesToGet: number
   projectId: string
 }) => {
-  const response = await apiClient.api.judgeable.post({
-    numberOfArticlesToGet,
-    projectId,
-  })
+  const response = await apiClient.api.judgeable.post({numberOfArticlesToGet, projectId})
 
   if (response.error) {
     const errorMessage =

@@ -1,15 +1,10 @@
 import type {getNewestArticlesToJudge} from '../../components/main/projectsGrid/projectsGridGetNewestArticlesToJudge.ts'
 import {getShortId} from '../../utils/getShortId.ts'
 
-type PromptsType = Awaited<
-  ReturnType<typeof getNewestArticlesToJudge>
->['prompts']
+type PromptsType = Awaited<ReturnType<typeof getNewestArticlesToJudge>>['prompts']
 
 export const getBaseHeading = (prompt: PromptsType[number]): string => {
-  return (
-    (prompt.promptHeading ?? `${prompt.order ?? 0}-${getShortId()}`)
-    + `^^^${prompt.id}`
-  )
+  return (prompt.promptHeading ?? `${prompt.order ?? 0}-${getShortId()}`) + `^^^${prompt.id}`
 }
 
 const getSections = (prompts: PromptsType): string => {
@@ -26,14 +21,9 @@ output_type: ${prompt.type}
   }, '')
 }
 
-type ArticleType = Awaited<
-  ReturnType<typeof getNewestArticlesToJudge>
->['articles'][number]
+type ArticleType = Awaited<ReturnType<typeof getNewestArticlesToJudge>>['articles'][number]
 
-export const judgeGetPrompt = (
-  article: ArticleType,
-  prompts: PromptsType,
-): string => {
+export const judgeGetPrompt = (article: ArticleType, prompts: PromptsType): string => {
   // const prompts = getSortedArticle(article)
   const sections = getSections(prompts)
 

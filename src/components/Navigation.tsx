@@ -40,23 +40,14 @@ export const Navigation = (props: NavigationProps) => {
             </Link>
           </div>
           <div class="flex items-center space-x-4">
-            <Link
-              to="/settings"
-              class="text-gray-600 hover:text-blue-600 text-sm font-medium"
-            >
+            <Link to="/settings" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
               Settings
             </Link>
             <Show when={props.user?.role === 'admin'}>
-              <Link
-                to="/admin/users"
-                class="text-gray-600 hover:text-blue-600 text-sm font-medium"
-              >
+              <Link to="/admin/users" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
                 Users
               </Link>
-              <Link
-                to="/admin/jobs"
-                class="text-gray-600 hover:text-blue-600 text-sm font-medium"
-              >
+              <Link to="/admin/jobs" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
                 Jobs
               </Link>
             </Show>

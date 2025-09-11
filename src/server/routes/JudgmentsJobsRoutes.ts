@@ -23,10 +23,7 @@ export const judgmentsJobsRoutes = new Elysia()
         return {error: 'A job already exists for this project', data: null}
       }
 
-      const [job] = await db
-        .insert(judgmentsJobs)
-        .values({projectId: body.projectId, status: 'running'})
-        .returning()
+      const [job] = await db.insert(judgmentsJobs).values({projectId: body.projectId, status: 'running'}).returning()
 
       if (!job) {
         throw new Error('Failed to create judgments job')
@@ -35,12 +32,7 @@ export const judgmentsJobsRoutes = new Elysia()
       console.log('Created judgments job:', job)
 
       return {
-        data: {
-          jobId: job.id,
-          status: job.status,
-          createdAt: job.createdAt,
-          projectId: job.projectId,
-        },
+        data: {jobId: job.id, status: job.status, createdAt: job.createdAt, projectId: job.projectId},
         error: null,
       }
     },
@@ -120,12 +112,7 @@ export const judgmentsJobsRoutes = new Elysia()
         throw new Error('Job not found')
       }
 
-      console.log(
-        'Updated judgments job:',
-        updatedJob.id,
-        'to status:',
-        updatedJob.status,
-      )
+      console.log('Updated judgments job:', updatedJob.id, 'to status:', updatedJob.status)
 
       return {
         data: {

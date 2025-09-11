@@ -13,17 +13,11 @@ export const fetchTokenUseToday = async (): Promise<string> => {
     })
 
     if (response.error || response.data?.error) {
-      console.error(
-        'Error fetching token use:',
-        response.error || response.data?.error,
-      )
+      console.error('Error fetching token use:', response.error || response.data?.error)
       return ''
     }
 
-    const {totalPromptTokens, totalCompletionTokens} = response.data || {
-      totalPromptTokens: 0,
-      totalCompletionTokens: 0,
-    }
+    const {totalPromptTokens, totalCompletionTokens} = response.data || {totalPromptTokens: 0, totalCompletionTokens: 0}
 
     return `Total tokens (today): input ${formatNumber(totalPromptTokens || 0)}, output ${formatNumber(totalCompletionTokens || 0)}`
   } catch (err) {

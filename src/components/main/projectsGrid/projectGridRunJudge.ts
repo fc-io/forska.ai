@@ -22,20 +22,13 @@ const runJudge = async ({
   // const sessionId = crypto.randomUUID()
   // debugger
   while (true) {
-    const newestArticlesToJudge = await getNewestArticlesToJudge({
-      projectId,
-      numberOfArticlesToGet,
-    })
+    const newestArticlesToJudge = await getNewestArticlesToJudge({projectId, numberOfArticlesToGet})
 
     if (newestArticlesToJudge.articles.length === 0) {
       break
     }
 
-    await judge({
-      articles: newestArticlesToJudge.articles,
-      prompts: newestArticlesToJudge.prompts,
-      sessionId,
-    })
+    await judge({articles: newestArticlesToJudge.articles, prompts: newestArticlesToJudge.prompts, sessionId})
     console.log(
       'judged',
       newestArticlesToJudge.articles.length,

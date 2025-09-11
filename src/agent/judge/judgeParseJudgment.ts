@@ -22,9 +22,7 @@ import {getBaseHeading} from './judgeGetPrompt.ts'
 // type JudgmentResultType = typeof JudgmentResult.infer
 
 // Helper that parses and validates the model response against the JudgmentResult schema
-type PromptsType = Awaited<
-  ReturnType<typeof getNewestArticlesToJudge>
->['prompts']
+type PromptsType = Awaited<ReturnType<typeof getNewestArticlesToJudge>>['prompts']
 
 export const parseJudgment = (response: string, prompts: PromptsType) => {
   const parsed: unknown = JSON.parse(response)
@@ -34,12 +32,7 @@ export const parseJudgment = (response: string, prompts: PromptsType) => {
     const keyExplanation = `${baseHeading}---explanation`
     const keyQuotes = `${baseHeading}---quotes`
 
-    return {
-      ...acc,
-      [keyQuestion]: prompt.type || 'string',
-      [keyExplanation]: 'string',
-      [keyQuotes]: 'string[] | null',
-    }
+    return {...acc, [keyQuestion]: prompt.type || 'string', [keyExplanation]: 'string', [keyQuotes]: 'string[] | null'}
   }, {})
   const Types = arktype(typeDefs)
   Types.assert(parsed)

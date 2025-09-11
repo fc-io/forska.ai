@@ -28,19 +28,13 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
     return {
       queryKey: ['project-articles-reviews-filters', props.projectId],
       queryFn: async () => {
-        const response = await apiClient.api.articlesreviewsfilters.get({
-          query: {projectId: props.projectId},
-        })
+        const response = await apiClient.api.articlesreviewsfilters.get({query: {projectId: props.projectId}})
 
         if (!response.data) {
           throw new Error('Failed to fetch filters')
         }
 
-        return response.data as Array<{
-          promptId: string
-          promptName: string
-          answeredOriginalValues: string[]
-        }>
+        return response.data as Array<{promptId: string; promptName: string; answeredOriginalValues: string[]}>
       },
     }
   })
@@ -66,26 +60,15 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
                       <div class="flex flex-col gap-2">
                         <label
                           class="font-medium text-sm truncate"
-                          title={
-                            promptFilter.promptName
-                            || `Prompt ${promptFilter.promptId}`
-                          }
+                          title={promptFilter.promptName || `Prompt ${promptFilter.promptId}`}
                         >
-                          {promptFilter.promptName
-                            || `Prompt ${promptFilter.promptId}`}
-                          :
+                          {promptFilter.promptName || `Prompt ${promptFilter.promptId}`}:
                         </label>
                         <select
                           class="px-3 py-2 border rounded-md"
-                          value={
-                            props.promptFilters()[promptFilter.promptId]
-                            || 'all'
-                          }
+                          value={props.promptFilters()[promptFilter.promptId] || 'all'}
                           onChange={(e) => {
-                            return handlePromptFilterChange(
-                              promptFilter.promptId,
-                              e.target.value,
-                            )
+                            return handlePromptFilterChange(promptFilter.promptId, e.target.value)
                           }}
                         >
                           <option value="all">All</option>

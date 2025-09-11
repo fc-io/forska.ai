@@ -10,10 +10,7 @@ type Prompt = {
   transformed_text?: string
 }
 
-type ProjectDetailsPromptsProps = {
-  prompts: Prompt[]
-  formatDate: (dateString: string | null) => string
-}
+type ProjectDetailsPromptsProps = {prompts: Prompt[]; formatDate: (dateString: string | null) => string}
 
 export const ProjectDetailsPrompts = (props: ProjectDetailsPromptsProps) => {
   return (
@@ -48,9 +45,7 @@ export const ProjectDetailsPrompts = (props: ProjectDetailsPromptsProps) => {
                           {prompt.type}
                         </span>
                       </Show>
-                      <span class="text-sm text-muted-foreground">
-                        Created {props.formatDate(prompt.created_at)}
-                      </span>
+                      <span class="text-sm text-muted-foreground">Created {props.formatDate(prompt.created_at)}</span>
                       <Show when={prompt.archived}>
                         <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
                           Archived
@@ -61,9 +56,7 @@ export const ProjectDetailsPrompts = (props: ProjectDetailsPromptsProps) => {
 
                   <div class="space-y-3">
                     <div>
-                      <label class="text-sm font-medium text-muted-foreground block mb-1">
-                        Original Text
-                      </label>
+                      <label class="text-sm font-medium text-muted-foreground block mb-1">Original Text</label>
                       <div class="bg-gray-50 rounded p-3 text-sm font-mono whitespace-pre-wrap">
                         {prompt.original_text}
                       </div>
@@ -71,9 +64,7 @@ export const ProjectDetailsPrompts = (props: ProjectDetailsPromptsProps) => {
 
                     <Show when={prompt.transformed_text}>
                       <div>
-                        <label class="text-sm font-medium text-muted-foreground block mb-1">
-                          Transformed Text
-                        </label>
+                        <label class="text-sm font-medium text-muted-foreground block mb-1">Transformed Text</label>
                         <div class="bg-blue-50 rounded p-3 text-sm font-mono whitespace-pre-wrap">
                           {prompt.transformed_text}
                         </div>

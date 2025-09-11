@@ -32,7 +32,7 @@ export interface DateRangePickerProps {
   maxDate?: Date
   defaultStart: Date
   defaultEnd: defaultFocusedValue
-  // eslint-disable-next-line no-unused-vars
+
   onValueChange?: (dates: [Date, Date]) => void
 }
 
@@ -48,10 +48,7 @@ export const DateRangePicker = (props: DateRangePickerProps): JSX.Element => {
       locale={props.locale ?? 'sv-SE'}
       numOfMonths={props.numOfMonths ?? 2}
       selectionMode="range"
-      defaultValue={[
-        fromDate(props.defaultStart, tz),
-        fromDate(props.defaultEnd, tz),
-      ]}
+      defaultValue={[fromDate(props.defaultStart, tz), fromDate(props.defaultEnd, tz)]}
       onValueChange={(details) => {
         if (props.onValueChange && details.value.length === 2) {
           const [start, end] = details.value.map((date) => {
@@ -92,11 +89,7 @@ export const DateRangePicker = (props: DateRangePickerProps): JSX.Element => {
                             <DatePickerTableRow>
                               <Index each={api().weekDays}>
                                 {(weekDay) => {
-                                  return (
-                                    <DatePickerTableHeader>
-                                      {weekDay().short}
-                                    </DatePickerTableHeader>
-                                  )
+                                  return <DatePickerTableHeader>{weekDay().short}</DatePickerTableHeader>
                                 }}
                               </Index>
                             </DatePickerTableRow>
@@ -110,9 +103,7 @@ export const DateRangePicker = (props: DateRangePickerProps): JSX.Element => {
                                       {(day) => {
                                         return (
                                           <DatePickerTableCell value={day()}>
-                                            <DatePickerTableCellTrigger>
-                                              {day().day}
-                                            </DatePickerTableCellTrigger>
+                                            <DatePickerTableCellTrigger>{day().day}</DatePickerTableCellTrigger>
                                           </DatePickerTableCell>
                                         )
                                       }}
@@ -129,11 +120,7 @@ export const DateRangePicker = (props: DateRangePickerProps): JSX.Element => {
                             <DatePickerTableRow>
                               <Index each={api().weekDays}>
                                 {(weekDay) => {
-                                  return (
-                                    <DatePickerTableHeader>
-                                      {weekDay().short}
-                                    </DatePickerTableHeader>
-                                  )
+                                  return <DatePickerTableHeader>{weekDay().short}</DatePickerTableHeader>
                                 }}
                               </Index>
                             </DatePickerTableRow>
@@ -146,13 +133,8 @@ export const DateRangePicker = (props: DateRangePickerProps): JSX.Element => {
                                     <Index each={week()}>
                                       {(day) => {
                                         return (
-                                          <DatePickerTableCell
-                                            value={day()}
-                                            visibleRange={offset().visibleRange}
-                                          >
-                                            <DatePickerTableCellTrigger>
-                                              {day().day}
-                                            </DatePickerTableCellTrigger>
+                                          <DatePickerTableCell value={day()} visibleRange={offset().visibleRange}>
+                                            <DatePickerTableCellTrigger>{day().day}</DatePickerTableCellTrigger>
                                           </DatePickerTableCell>
                                         )
                                       }}
@@ -184,24 +166,15 @@ export const DateRangePicker = (props: DateRangePickerProps): JSX.Element => {
                       </DatePickerViewControl>
                       <DatePickerTable>
                         <DatePickerTableBody>
-                          <Index
-                            each={api().getMonthsGrid({
-                              columns: 4,
-                              format: 'short',
-                            })}
-                          >
+                          <Index each={api().getMonthsGrid({columns: 4, format: 'short'})}>
                             {(months) => {
                               return (
                                 <DatePickerTableRow>
                                   <Index each={months()}>
                                     {(month) => {
                                       return (
-                                        <DatePickerTableCell
-                                          value={month().value}
-                                        >
-                                          <DatePickerTableCellTrigger>
-                                            {month().label}
-                                          </DatePickerTableCellTrigger>
+                                        <DatePickerTableCell value={month().value}>
+                                          <DatePickerTableCellTrigger>{month().label}</DatePickerTableCellTrigger>
                                         </DatePickerTableCell>
                                       )
                                     }}
@@ -239,12 +212,8 @@ export const DateRangePicker = (props: DateRangePickerProps): JSX.Element => {
                                   <Index each={years()}>
                                     {(year) => {
                                       return (
-                                        <DatePickerTableCell
-                                          value={year().value}
-                                        >
-                                          <DatePickerTableCellTrigger>
-                                            {year().label}
-                                          </DatePickerTableCellTrigger>
+                                        <DatePickerTableCell value={year().value}>
+                                          <DatePickerTableCellTrigger>{year().label}</DatePickerTableCellTrigger>
                                         </DatePickerTableCell>
                                       )
                                     }}

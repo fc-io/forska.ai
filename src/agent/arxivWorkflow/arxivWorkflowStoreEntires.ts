@@ -31,9 +31,7 @@ const DatabaseItem = type({
 })
 
 // Transform ArxivEntry to DatabaseItem
-const transformEntry = (
-  entry: typeof arxivEntry.infer,
-): typeof DatabaseItem.infer => {
+const transformEntry = (entry: typeof arxivEntry.infer): typeof DatabaseItem.infer => {
   // Safely extract authors
   const authors = Array.isArray(entry.author)
     ? entry.author.map((author) => {
@@ -43,9 +41,7 @@ const transformEntry = (
     : [entry.author]
 
   // Extract arXiv ID from the full ID
-  const arxivId = entry.id.includes('arxiv.org')
-    ? (entry.id.split('/').pop() ?? entry.id)
-    : entry.id
+  const arxivId = entry.id.includes('arxiv.org') ? (entry.id.split('/').pop() ?? entry.id) : entry.id
 
   // Extract version number, default to '1' if not found
   const versionMatch = arxivId.match(/v(\d+)$/)
@@ -73,32 +69,22 @@ const batchEntries = <T>(records: T[], batchSize: number): T[][] => {
 }
 
 // Store a batch of records to server
-const storeBatch = async (
-  batch: (typeof DatabaseItem.infer)[],
-): Promise<void> => {
-  const response = await apiClient.api.articles['batch-upsert'].post({
-    entries: batch,
-  })
+const storeBatch = async (batch: (typeof DatabaseItem.infer)[]): Promise<void> => {
+  const response = await apiClient.api.articles['batch-upsert'].post({entries: batch})
 
   if (response.error) {
     const errorMessage =
-      typeof response.error.value === 'string'
-        ? response.error.value
-        : JSON.stringify(response.error.value)
+      typeof response.error.value === 'string' ? response.error.value : JSON.stringify(response.error.value)
     throw new Error(`Failed to store batch: ${errorMessage}`)
   }
 
   if (!response.data?.success) {
-    throw new Error(
-      `Failed to store batch: ${response.data?.error || 'Unknown error'}`,
-    )
+    throw new Error(`Failed to store batch: ${response.data?.error || 'Unknown error'}`)
   }
 }
 
 // Main function to store records with batching
-const arxivWorkflowStoreEntires = async (
-  records: (typeof arxivEntry.infer)[],
-): Promise<void> => {
+const arxivWorkflowStoreEntires = async (records: (typeof arxivEntry.infer)[]): Promise<void> => {
   try {
     // Transform records to database format
     const transformedEntries = records.map(transformEntry)
@@ -108,18 +94,14 @@ const arxivWorkflowStoreEntires = async (
       try {
         DatabaseItem.assert(entry)
       } catch (error) {
-        throw new Error(
-          `Validation failed for entry ${index}: ${String(error)}`,
-        )
+        throw new Error(`Validation failed for entry ${index}: ${String(error)}`)
       }
     })
 
     // Batch records (max 500 at a time)
     const batches = batchEntries(transformedEntries, 500)
 
-    globalThis.console.log(
-      `Storing ${records.length} records in ${batches.length} batches`,
-    )
+    globalThis.console.log(`Storing ${records.length} records in ${batches.length} batches`)
 
     // Store each batch
     for (let i = 0; i < batches.length; i++) {
@@ -128,9 +110,7 @@ const arxivWorkflowStoreEntires = async (
         continue
       }
 
-      globalThis.console.log(
-        `Storing batch ${i + 1}/${batches.length} (${batch.length} records)`,
-      )
+      globalThis.console.log(`Storing batch ${i + 1}/${batches.length} (${batch.length} records)`)
 
       await storeBatch(batch)
 
@@ -142,9 +122,7 @@ const arxivWorkflowStoreEntires = async (
       }
     }
 
-    globalThis.console.log(
-      `Successfully stored ${records.length} records to server`,
-    )
+    globalThis.console.log(`Successfully stored ${records.length} records to server`)
   } catch (error) {
     globalThis.console.error('Error storing records:', error)
     throw error

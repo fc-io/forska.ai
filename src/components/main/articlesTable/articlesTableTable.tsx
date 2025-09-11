@@ -5,24 +5,12 @@ import {For, Show} from 'solid-js'
 import {formatAuthors} from '../../../app/utils/formatAuthors.ts'
 import {getArticleUrl} from '../../../app/utils/getArticleUrl.ts'
 import type {apiClient} from '../../../services/apiClient.ts'
-import {
-  Table,
-  TableBody,
-  TableCaption,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '../../ui/table.tsx'
+import {Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow} from '../../ui/table.tsx'
 
-type ArticlesResponse = Awaited<
-  ReturnType<typeof apiClient.api.articles.latest.get>
->
+type ArticlesResponse = Awaited<ReturnType<typeof apiClient.api.articles.latest.get>>
 type Article = NonNullable<ArticlesResponse['data']>['data'][number]
 
-export const ArticlesTableTable = (props: {
-  articles: Article[]
-}): JSX.Element => {
+export const ArticlesTableTable = (props: {articles: Article[]}): JSX.Element => {
   return (
     <Table>
       <TableCaption>A list of your matched articles.</TableCaption>
@@ -36,27 +24,15 @@ export const ArticlesTableTable = (props: {
       </TableHeader>
       <TableBody>
         <For each={props.articles}>
-          {({
-            articleId,
-            articleTitle,
-            articleAuthors,
-            articleCreatedAt,
-          }): JSX.Element => {
-            const createdAt = articleCreatedAt
-              ? format(articleCreatedAt, 'yyyy-MM-dd HH:mm')
-              : ''
+          {({articleId, articleTitle, articleAuthors, articleCreatedAt}): JSX.Element => {
+            const createdAt = articleCreatedAt ? format(articleCreatedAt, 'yyyy-MM-dd HH:mm') : ''
             const url = getArticleUrl(articleId)
 
             return (
               <TableRow>
                 <TableCell>
                   <Show when={url} fallback={articleId}>
-                    <a
-                      href={url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      class="text-blue-600 hover:underline"
-                    >
+                    <a href={url} target="_blank" rel="noopener noreferrer" class="text-blue-600 hover:underline">
                       {articleId}
                     </a>
                   </Show>

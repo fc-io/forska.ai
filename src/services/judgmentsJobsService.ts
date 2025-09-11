@@ -1,14 +1,8 @@
 import {apiClient} from './apiClient.ts'
 import {handleApiResponse} from './utils/handleApiResponse'
 
-export const createJudgmentsJob = async (
-  projectId: string,
-  agentConfig?: unknown,
-) => {
-  const response = await apiClient.api.judgmentsjobs.post({
-    projectId,
-    agentConfig,
-  })
+export const createJudgmentsJob = async (projectId: string, agentConfig?: unknown) => {
+  const response = await apiClient.api.judgmentsjobs.post({projectId, agentConfig})
   return handleApiResponse(response, 'Failed to create judgments job')
 }
 

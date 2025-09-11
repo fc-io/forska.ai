@@ -11,18 +11,13 @@ export const ReviewDetail = () => {
   const params = Route.useParams()
   const projectId = (params() as {id: string; articleId: string}).id
   const articleId = (params() as {id: string; articleId: string}).articleId
-  const [articleViewToShow, setArticleViewToShow] = createSignal<
-    string | undefined
-  >(undefined)
+  const [articleViewToShow, setArticleViewToShow] = createSignal<string | undefined>(undefined)
 
   const articleQuery = useQuery(() => {
     return {
       queryKey: ['article-review-details', projectId, articleId],
       queryFn: async () => {
-        const response = await apiClient.api.projectsreview.post({
-          projectId,
-          articleId,
-        })
+        const response = await apiClient.api.projectsreview.post({projectId, articleId})
 
         if (!response.data) {
           throw new Error('Failed to fetch apiClient.api.projectsreview.pos')
@@ -43,9 +38,7 @@ export const ReviewDetail = () => {
 
         <Show when={articleQuery.error}>
           <div class="p-4 bg-red-50 rounded-lg shadow">
-            <p class="text-red-600">
-              Error loading article: {articleQuery.error?.message}
-            </p>
+            <p class="text-red-600">Error loading article: {articleQuery.error?.message}</p>
           </div>
         </Show>
 
@@ -62,10 +55,7 @@ export const ReviewDetail = () => {
                       console.log(judgment.id)
                       return (
                         <Show when={articleViewToShow() === judgment.id}>
-                          <ReviewArticleDetails
-                            article={data().article}
-                            judgment={judgment}
-                          />
+                          <ReviewArticleDetails article={data().article} judgment={judgment} />
                         </Show>
                       )
                     }}
@@ -75,10 +65,7 @@ export const ReviewDetail = () => {
                   </Show>
                 </div>
                 <div class="w-96">
-                  <ReviewJudgments
-                    judgments={data().judgments}
-                    setArticleViewToShow={setArticleViewToShow}
-                  />
+                  <ReviewJudgments judgments={data().judgments} setArticleViewToShow={setArticleViewToShow} />
                 </div>
               </div>
             )
@@ -89,6 +76,4 @@ export const ReviewDetail = () => {
   )
 }
 
-export const Route = createFileRoute('/projects/$id/reviews/$articleId/')({
-  component: ReviewDetail,
-})
+export const Route = createFileRoute('/projects/$id/reviews/$articleId/')({component: ReviewDetail})

@@ -4,17 +4,11 @@ import type {InputData} from '../../agent.ts'
 
 const MAX_ITEMS_PER_PAGE = 2000
 
-const getArxivIdsQueryUrl = (
-  fromDate: Date,
-  toDate: Date,
-  resumptionToken?: string,
-): string => {
+const getArxivIdsQueryUrl = (fromDate: Date, toDate: Date, resumptionToken?: string): string => {
   const from = format(fromDate, 'yyyy-MM-dd')
   const to = format(toDate, 'yyyy-MM-dd')
 
-  const baseUrl = import.meta.env.DEV
-    ? '/api/arxiv'
-    : 'https://oaipmh.arxiv.org'
+  const baseUrl = import.meta.env.DEV ? '/api/arxiv' : 'https://oaipmh.arxiv.org'
 
   // Add set parameter if searchTerm maps to a specific arXiv category
   // For general search terms, we'll need to filter results after fetching
@@ -56,10 +50,7 @@ const getArxivIdsQueryUrl = (
 //   })
 // }
 
-const arxivWorkflowGetQuery = (
-  inputData: InputData,
-  resumptionToken?: string,
-) => {
+const arxivWorkflowGetQuery = (inputData: InputData, resumptionToken?: string) => {
   const {fromDate: fromDateString, toDate: toDateString} = inputData
   const fromDate = new Date(fromDateString)
   const toDate = new Date(toDateString)

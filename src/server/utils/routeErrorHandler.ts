@@ -28,10 +28,7 @@ export const withErrorHandler = () => {
 
       // Default error response
       set.status = 500
-      return {
-        data: null,
-        error: error.message || 'An unexpected error occurred',
-      }
+      return {data: null, error: error.message || 'An unexpected error occurred'}
     }
 
     // Fallback for unknown errors

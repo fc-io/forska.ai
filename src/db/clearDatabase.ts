@@ -5,10 +5,7 @@ import * as authSchema from '../../auth-schema.ts'
 import {env} from '../server/utils/env.ts'
 import * as schema from './schema.ts'
 
-const db = drizzle(env.DATABASE_URL, {
-  schema: {...schema, ...authSchema},
-  logger: true,
-})
+const db = drizzle(env.DATABASE_URL, {schema: {...schema, ...authSchema}, logger: true})
 
 const clearDatabase = async () => {
   try {
@@ -51,9 +48,7 @@ const clearDatabase = async () => {
     await db.execute(sql`DROP TYPE IF EXISTS publication_status_enum CASCADE`)
     console.log('✅ Dropped enum types')
 
-    console.log(
-      '✅ Database cleared successfully! All tables and types removed.',
-    )
+    console.log('✅ Database cleared successfully! All tables and types removed.')
     process.exit(0)
   } catch (error) {
     console.error('❌ Error clearing database:', error)

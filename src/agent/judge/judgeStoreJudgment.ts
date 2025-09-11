@@ -50,9 +50,7 @@ export const judgeStoreJudgment = async (
 
     if (!modelId || !promptIds || promptIds.length === 0) {
       // console.log(colorizeLogMessage(logMessage, judgment))
-      console.warn(
-        'Warning: No modelId/promptIds provided, judgment not stored to database',
-      )
+      console.warn('Warning: No modelId/promptIds provided, judgment not stored to database')
       // debugger
       return
     }

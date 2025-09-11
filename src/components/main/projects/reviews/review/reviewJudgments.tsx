@@ -12,10 +12,7 @@ type ReviewJudgmentsProps = {
     confidenceOriginal?: number | null
     explanation?: string | null
     quotes?: unknown
-    assessments?: Array<{
-      assessmentIsCorrect?: boolean | null
-      assessmentComment?: string | null
-    }>
+    assessments?: Array<{assessmentIsCorrect?: boolean | null; assessmentComment?: string | null}>
   }>
   setArticleViewToShow: SetArticleViewToShow
 }
@@ -33,12 +30,7 @@ export const ReviewJudgments = (props: ReviewJudgmentsProps) => {
         <div class="p-2">
           <For each={props.judgments}>
             {(judgment) => {
-              return (
-                <ReviewJudgmentItem
-                  judgment={judgment}
-                  setArticleViewToShow={props.setArticleViewToShow}
-                />
-              )
+              return <ReviewJudgmentItem judgment={judgment} setArticleViewToShow={props.setArticleViewToShow} />
             }}
           </For>
         </div>

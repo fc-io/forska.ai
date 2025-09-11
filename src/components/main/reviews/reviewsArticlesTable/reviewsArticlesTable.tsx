@@ -1,10 +1,5 @@
 import {Link} from '@tanstack/solid-router'
-import {
-  type ColumnDef,
-  createSolidTable,
-  flexRender,
-  getCoreRowModel,
-} from '@tanstack/solid-table'
+import {type ColumnDef, createSolidTable, flexRender, getCoreRowModel} from '@tanstack/solid-table'
 import {format} from 'date-fns'
 import {For, Show} from 'solid-js'
 
@@ -12,7 +7,7 @@ import {getArticleUrl} from '../../../../app/utils/getArticleUrl.ts'
 import type {articles, judgments} from '../../../../db/schema.ts'
 
 declare module '@tanstack/solid-table' {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars, no-unused-vars
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   interface TableMeta<TData> {
     projectId?: () => string
   }
@@ -20,9 +15,7 @@ declare module '@tanstack/solid-table' {
 
 type JudgmentType = typeof judgments.$inferSelect
 
-type ArticleWithJudgments = Omit<typeof articles.$inferSelect, 'judgments'> & {
-  judgments: Array<JudgmentType>
-}
+type ArticleWithJudgments = Omit<typeof articles.$inferSelect, 'judgments'> & {judgments: Array<JudgmentType>}
 
 interface ReviewsArticlesTableProps {
   articles: ArticleWithJudgments[]
@@ -37,10 +30,7 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
       return (
         <Link
           to="/projects/$id/reviews/$articleId"
-          params={{
-            id: info.table.options.meta?.projectId?.() || '',
-            articleId: info.row.original.id,
-          }}
+          params={{id: info.table.options.meta?.projectId?.() || '', articleId: info.row.original.id}}
           class="text-blue-600 hover:underline"
         >
           {(info.getValue() as string) || 'Untitled'}
@@ -80,9 +70,7 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
       const judgmentsData = info.getValue() as JudgmentType[]
       return (
         <div class="flex items-center gap-2">
-          <span class="text-sm text-gray-600">
-            {judgmentsData?.length || 0}
-          </span>
+          <span class="text-sm text-gray-600">{judgmentsData?.length || 0}</span>
           <Show when={judgmentsData && judgmentsData.length > 0}>
             <div class="flex gap-1">
               <For each={judgmentsData.slice(0, 3)}>
@@ -90,13 +78,9 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
                   return (
                     <span
                       class={`px-1.5 py-0.5 text-xs rounded ${
-                        judgment.answeredOriginal
-                          ? 'bg-green-100 text-green-800'
-                          : 'bg-red-100 text-red-800'
+                        judgment.answeredOriginal ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
                       }`}
-                      title={
-                        judgment.answeredOriginal ? 'Original' : 'Not Original'
-                      }
+                      title={judgment.answeredOriginal ? 'Original' : 'Not Original'}
                     >
                       {judgment.answeredOriginal ? 'O' : 'N'}
                     </span>
@@ -104,9 +88,7 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
                 }}
               </For>
               <Show when={judgmentsData.length > 3}>
-                <span class="text-xs text-gray-500">
-                  +{judgmentsData.length - 3}
-                </span>
+                <span class="text-xs text-gray-500">+{judgmentsData.length - 3}</span>
               </Show>
             </div>
           </Show>
@@ -146,10 +128,7 @@ export const ReviewsArticlesTable = (props: ReviewsArticlesTableProps) => {
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                           {header.isPlaceholder
                             ? null
-                            : flexRender(
-                                header.column.columnDef.header,
-                                header.getContext(),
-                              )}
+                            : flexRender(header.column.columnDef.header, header.getContext())}
                         </th>
                       )
                     }}
@@ -168,10 +147,7 @@ export const ReviewsArticlesTable = (props: ReviewsArticlesTableProps) => {
                     {(cell) => {
                       return (
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                          {flexRender(
-                            cell.column.columnDef.cell,
-                            cell.getContext(),
-                          )}
+                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
                         </td>
                       )
                     }}

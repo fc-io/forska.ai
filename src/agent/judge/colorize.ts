@@ -17,20 +17,9 @@ const colorizeJudgment = (value: string): string => {
 }
 
 // Helper to colorize the entire log message based on judgment values
-const colorizeLogMessage = (
-  message: string,
-  judgment: JudgmentResultType,
-): string => {
-  const {
-    article_judged_as_ai,
-    article_judged_as_ai_agent,
-    article_judged_as_healthcare,
-  } = judgment
-  const judgments = [
-    article_judged_as_ai,
-    article_judged_as_ai_agent,
-    article_judged_as_healthcare,
-  ]
+const colorizeLogMessage = (message: string, judgment: JudgmentResultType): string => {
+  const {article_judged_as_ai, article_judged_as_ai_agent, article_judged_as_healthcare} = judgment
+  const judgments = [article_judged_as_ai, article_judged_as_ai_agent, article_judged_as_healthcare]
 
   const allYes = judgments.every((j) => {
     return j === 'yes'

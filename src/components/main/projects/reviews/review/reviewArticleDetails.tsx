@@ -9,12 +9,7 @@ type Judgment = {
 }
 
 type ReviewArticleDetailsProps = {
-  article: {
-    articleTitle: string
-    articleAuthors?: string[] | null
-    articleSummary?: string | null
-    articleId: string
-  }
+  article: {articleTitle: string; articleAuthors?: string[] | null; articleSummary?: string | null; articleId: string}
   judgment?: Judgment
 }
 import {getArticleUrl} from '../../../../../app/utils/getArticleUrl.ts'
@@ -39,9 +34,7 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
       <h1 class="text-2xl font-bold mb-4">Article Details</h1>
       <div class="space-y-2">
         <p class="text-lg font-semibold">
-          {props.judgment
-            ? getHighlightedText(props.article.articleTitle, props.judgment)
-            : props.article.articleTitle}
+          {props.judgment ? getHighlightedText(props.article.articleTitle, props.judgment) : props.article.articleTitle}
         </p>
         <p class="text-gray-600">
           <a
@@ -54,19 +47,14 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
           </a>
         </p>
         <Show when={props.article.articleAuthors}>
-          <p class="text-gray-600">
-            Authors: {props.article.articleAuthors?.join(', ')}
-          </p>
+          <p class="text-gray-600">Authors: {props.article.articleAuthors?.join(', ')}</p>
         </Show>
         <Show when={props.article.articleSummary}>
           <div class="mt-4">
             <h3 class="font-semibold mb-2">Summary</h3>
             <p class="text-gray-700">
               {props.judgment && props.article.articleSummary
-                ? getHighlightedText(
-                    props.article.articleSummary,
-                    props.judgment,
-                  )
+                ? getHighlightedText(props.article.articleSummary, props.judgment)
                 : props.article.articleSummary}
             </p>
           </div>

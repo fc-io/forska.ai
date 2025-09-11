@@ -1,13 +1,7 @@
 import {and, eq, inArray} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {
-  articles,
-  judgmentAssessments,
-  judgments,
-  prompts,
-  reviews,
-} from '../../../db/schema.ts'
+import {articles, judgmentAssessments, judgments, prompts, reviews} from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
 export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
@@ -18,11 +12,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
       const {projectId, articleId} = body
 
       // Get the article
-      const [article] = await db
-        .select()
-        .from(articles)
-        .where(eq(articles.id, articleId))
-        .limit(1)
+      const [article] = await db.select().from(articles).where(eq(articles.id, articleId)).limit(1)
 
       if (!article) {
         throw new Error('Article not found')
@@ -32,12 +22,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
       const [review] = await db
         .select()
         .from(reviews)
-        .where(
-          and(
-            eq(reviews.articleId, articleId),
-            eq(reviews.projectId, projectId),
-          ),
-        )
+        .where(and(eq(reviews.articleId, articleId), eq(reviews.projectId, projectId)))
         .limit(1)
 
       // Get all prompts for this project
@@ -57,12 +42,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
               .select({judgment: judgments, prompt: prompts})
               .from(judgments)
               .innerJoin(prompts, eq(judgments.promptId, prompts.id))
-              .where(
-                and(
-                  eq(judgments.articleId, articleId),
-                  eq(prompts.projectId, projectId),
-                ),
-              )
+              .where(and(eq(judgments.articleId, articleId), eq(prompts.projectId, projectId)))
               .orderBy(prompts.order)
           : []
 
@@ -72,48 +52,27 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
       })
       const assessments =
         judgmentIds.length > 0
-          ? await db
-              .select()
-              .from(judgmentAssessments)
-              .where(inArray(judgmentAssessments.judgmentId, judgmentIds))
+          ? await db.select().from(judgmentAssessments).where(inArray(judgmentAssessments.judgmentId, judgmentIds))
           : []
 
       // Group assessments by judgment ID
       const assessmentsByJudgment = assessments.reduce(
         (acc, assessment) => {
           const judgmentAssessments = acc[assessment.judgmentId] ?? []
-          return {
-            ...acc,
-            [assessment.judgmentId]: [...judgmentAssessments, assessment],
-          }
+          return {...acc, [assessment.judgmentId]: [...judgmentAssessments, assessment]}
         },
         {} as Record<string, typeof assessments>,
       )
 
       // Combine judgments with their assessments and prompts
-      const judgmentsWithDetails = articleJudgments.map(
-        ({judgment, prompt}) => {
-          return {
-            ...judgment,
-            prompt,
-            assessments: assessmentsByJudgment[judgment.id] || [],
-          }
-        },
-      )
+      const judgmentsWithDetails = articleJudgments.map(({judgment, prompt}) => {
+        return {...judgment, prompt, assessments: assessmentsByJudgment[judgment.id] || []}
+      })
 
-      return {
-        article,
-        review,
-        prompts: projectPrompts,
-        judgments: judgmentsWithDetails,
-      }
+      return {article, review, prompts: projectPrompts, judgments: judgmentsWithDetails}
     } catch (error) {
       console.error('Error fetching article review details:', error)
-      throw new Error(
-        error instanceof Error
-          ? error.message
-          : 'Failed to fetch article review details',
-      )
+      throw new Error(error instanceof Error ? error.message : 'Failed to fetch article review details')
     }
   },
   {body: t.Object({projectId: t.String(), articleId: t.String()})},

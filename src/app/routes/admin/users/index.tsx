@@ -17,8 +17,7 @@ const AdminUsers = () => {
     const usersList = users.data ?? []
     return usersList.filter((user) => {
       const term = searchTerm().toLowerCase()
-      const matchesSearch =
-        (term === '' || user.name?.toLowerCase().includes(term)) ?? false
+      const matchesSearch = (term === '' || user.name?.toLowerCase().includes(term)) ?? false
       const matchesRole =
         selectedRole() === 'all'
         || (selectedRole() === 'admin' && user.role === 'admin')
@@ -29,19 +28,14 @@ const AdminUsers = () => {
   }
 
   const getRoleColor = (role: string | null) => {
-    return role === 'admin'
-      ? 'bg-red-100 text-red-800'
-      : 'bg-green-100 text-green-800'
+    return role === 'admin' ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'
   }
 
   return (
     <div class="min-h-screen bg-gray-50 p-6 mx-auto">
       <div class="flex justify-between items-center mb-6">
         <h1 class="text-2xl font-bold">User Management</h1>
-        <button
-          class="px-4 py-2 bg-gray-100 text-gray-400 rounded-md cursor-not-allowed"
-          disabled
-        >
+        <button class="px-4 py-2 bg-gray-100 text-gray-400 rounded-md cursor-not-allowed" disabled>
           Invite User
         </button>
       </div>
@@ -99,10 +93,7 @@ const AdminUsers = () => {
         <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
           <div class="flex gap-6 text-sm text-gray-600">
             <span>
-              <span class="font-semibold text-gray-900">
-                {(users.data ?? []).length}
-              </span>{' '}
-              users
+              <span class="font-semibold text-gray-900">{(users.data ?? []).length}</span> users
             </span>
             <span>
               <span class="font-semibold text-red-600">
@@ -132,18 +123,12 @@ const AdminUsers = () => {
           <table class="min-w-full divide-y divide-gray-200">
             <thead class="bg-gray-50">
               <tr>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  User
-                </th>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Role
-                </th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">User</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Role</th>
                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Created At
                 </th>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Actions
-                </th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
               </tr>
             </thead>
             <tbody class="bg-white divide-y divide-gray-200">
@@ -153,9 +138,7 @@ const AdminUsers = () => {
                     <tr class="hover:bg-gray-50">
                       <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                         <div>
-                          <div class="font-medium text-gray-900">
-                            {user.name || 'No name set'}
-                          </div>
+                          <div class="font-medium text-gray-900">{user.name || 'No name set'}</div>
                           <div class="text-sm text-gray-500">ID: {user.id}</div>
                         </div>
                       </td>
@@ -167,19 +150,13 @@ const AdminUsers = () => {
                         </span>
                       </td>
                       <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {user.createdAt
-                          ? formatDate(new Date(user.createdAt), 'yyyy-MM-dd')
-                          : 'Unknown'}
+                        {user.createdAt ? formatDate(new Date(user.createdAt), 'yyyy-MM-dd') : 'Unknown'}
                       </td>
                       <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                         <div class="flex gap-2">
-                          <button class="text-sm text-blue-600 hover:text-blue-800">
-                            Edit
-                          </button>
+                          <button class="text-sm text-blue-600 hover:text-blue-800">Edit</button>
                           <button class="text-sm text-red-600 hover:text-red-800">
-                            {user.role === 'admin'
-                              ? 'Remove Admin'
-                              : 'Make Admin'}
+                            {user.role === 'admin' ? 'Remove Admin' : 'Make Admin'}
                           </button>
                         </div>
                       </td>
