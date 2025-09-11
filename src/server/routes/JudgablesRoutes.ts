@@ -11,11 +11,7 @@ export const judgablesRoutes = new Elysia().post(
       const db = getDatabase()
 
       // Get project and its prompts
-      const [project] = await db
-        .select()
-        .from(projects)
-        .where(eq(projects.id, body.projectId))
-        .limit(1)
+      const [project] = await db.select().from(projects).where(eq(projects.id, body.projectId)).limit(1)
 
       if (!project) {
         return {
@@ -25,10 +21,7 @@ export const judgablesRoutes = new Elysia().post(
         }
       }
 
-      const projectPrompts = await db
-        .select()
-        .from(prompts)
-        .where(eq(prompts.projectId, body.projectId))
+      const projectPrompts = await db.select().from(prompts).where(eq(prompts.projectId, body.projectId))
 
       if (projectPrompts.length === 0) {
         // No prompts, return latest articles
@@ -76,11 +69,7 @@ export const judgablesRoutes = new Elysia().post(
         })
 
       // Get latest articles excluding those already judged by all prompts
-      let query = db
-        .select()
-        .from(articles)
-        .orderBy(desc(articles.articleUpdatedAt))
-        .limit(body.numberOfArticlesToGet)
+      let query = db.select().from(articles).orderBy(desc(articles.articleUpdatedAt)).limit(body.numberOfArticlesToGet)
 
       if (fullyJudgedArticleIds.length > 0) {
         query = query.where(notInArray(articles.id, fullyJudgedArticleIds))
