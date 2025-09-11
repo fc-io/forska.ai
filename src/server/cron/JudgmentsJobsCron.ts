@@ -1,13 +1,26 @@
 import {cron} from '@elysiajs/cron'
 import {eq} from 'drizzle-orm'
+import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 import {Elysia} from 'elysia'
 
-import {judgmentsJobs, projects} from '../../db/schema.ts'
+import * as schema from '../../db/schema.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {judgmentsJobsCronGetArticles} from './judgmentsJobs/judgmentsJobsCronGetArticles.ts'
 
 const articlesAlreadyProccessing = new Map<string, string[]>()
 let waitingOnNewArticles = false
+
+const getAllJobs = async (db: PostgresJsDatabase<typeof schema>) => {
+  return await db
+    .select({
+      jobId: schema.judgmentsJobs.id,
+      jobStatus: schema.judgmentsJobs.status,
+      projectId: schema.judgmentsJobs.projectId,
+      projectName: schema.projects.name,
+    })
+    .from(schema.judgmentsJobs)
+    .innerJoin(schema.projects, eq(schema.judgmentsJobs.projectId, schema.projects.id))
+}
 
 const getNewArticlesInProcess = async ({
   allJobs,
@@ -33,22 +46,14 @@ const getNewArticlesInProcess = async ({
     }),
   )
 }
+
 export const judgmentsJobsCron = new Elysia().use(
   cron({
     name: 'judgments-jobs-cron',
     pattern: '*/10 * * * * *',
     async run() {
       const db = getDatabase()
-      const allJobs = await db
-        .select({
-          jobId: judgmentsJobs.id,
-          jobStatus: judgmentsJobs.status,
-          projectId: judgmentsJobs.projectId,
-          projectName: projects.name,
-        })
-        .from(judgmentsJobs)
-        .innerJoin(projects, eq(judgmentsJobs.projectId, projects.id))
-
+      const allJobs = await getAllJobs(db)
       if (waitingOnNewArticles) {
         return
       }
