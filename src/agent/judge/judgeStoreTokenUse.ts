@@ -11,17 +11,15 @@ const isServerEnvironment = (): boolean => {
 const storeTokenUseDirectly = async (
   totalArticles: number,
   totalTokenUse: {totalPromptTokens: number; totalCompletionTokens: number; totalTokens: number},
-  sessionId: string,
+  sessionId: string | null,
   {startedAt, finishedAt, duration}: {startedAt: string; finishedAt: string; duration: number},
 ): Promise<void> => {
   const {getDatabase} = await import('../../server/utils/getDatabase.ts')
   const db = getDatabase()
 
-  const [sessionData] = await db
-    .select({userId: session.userId})
-    .from(session)
-    .where(eq(session.id, sessionId))
-    .limit(1)
+  const [sessionData] = sessionId
+    ? await db.select({userId: session.userId}).from(session).where(eq(session.id, sessionId)).limit(1)
+    : [null]
 
   const [result] = await db
     .insert(tokenUse)
@@ -77,7 +75,7 @@ const storeTokenUseViaAPI = async (
 
 export const judgeStoreTokenUse = async (
   tokenUse: {promptTokens: number; completionTokens: number; totalTokens: number}[],
-  sessionId: string,
+  sessionId: string | null,
   {startedAt, finishedAt, duration}: {startedAt: string; finishedAt: string; duration: number},
 ): Promise<void> => {
   const totalArticles = tokenUse.length
@@ -96,6 +94,9 @@ export const judgeStoreTokenUse = async (
   if (isServerEnvironment()) {
     await storeTokenUseDirectly(totalArticles, totalTokenUse, sessionId, {startedAt, finishedAt, duration})
   } else {
+    if (!sessionId) {
+      throw new Error('sessionId is required when running in client environment')
+    }
     await storeTokenUseViaAPI(totalArticles, totalTokenUse, sessionId, {startedAt, finishedAt, duration})
   }
 }

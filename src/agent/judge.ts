@@ -110,7 +110,7 @@ export const judge = async ({
 }: {
   articles: ArticlesType
   prompts: PromptsType
-  sessionId: string
+  sessionId: string | null
 }): Promise<void> => {
   // Get or create model ID for the vLLM model
   let modelId: string | undefined

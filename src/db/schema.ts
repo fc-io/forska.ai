@@ -189,14 +189,12 @@ export const tokenUse = pgTable('token_use', {
     },
     {onDelete: 'set null'},
   ),
-  sessionId: text('session_id')
-    .notNull()
-    .references(
-      () => {
-        return session.id
-      },
-      {onDelete: 'cascade'},
-    ),
+  sessionId: text('session_id').references(
+    () => {
+      return session.id
+    },
+    {onDelete: 'cascade'},
+  ),
   judgmentsJobId: uuid('judgments_job_id').references(
     () => {
       return judgmentsJobs.id

@@ -119,7 +119,7 @@ export const judgmentsJobsCron = new Elysia()
         if (waitingOnNewArticles === false && waitingOnLLM === false) {
           waitingOnLLM = true
 
-          const sessionId = 'cron' + crypto.randomUUID()
+          const sessionId = null
 
           const jobIds = allJobs.map((job) => {
             return job.jobId
