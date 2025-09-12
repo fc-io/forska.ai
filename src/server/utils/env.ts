@@ -6,6 +6,9 @@ const envShape = arktype({
   BETTER_AUTH_URL: 'string',
   VITE_PORT: 'string.integer.parse',
   SERVER_PORT: 'string.integer.parse',
+  RUN_SERVER_JUDGING: arktype('string').pipe((s) => {
+    return s === 'true'
+  }),
 })
 
 const loadEnv = (): typeof envShape.infer => {
