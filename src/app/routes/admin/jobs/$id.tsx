@@ -98,7 +98,7 @@ const AdminJudgmentJobDetail = () => {
                 <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
                   <div class="flex justify-between items-start mb-4">
                     <div>
-                      <h1 class="text-2xl font-bold text-gray-900">Judgment Job Details</h1>
+                      <h1 class="text-2xl font-bold text-gray-900">Job</h1>
                       <p class="text-sm text-gray-500 mt-1 font-mono">{data.id}</p>
                     </div>
                     <span class={`px-3 py-1 rounded-full text-sm font-medium border ${getStatusColor(data.status)}`}>
@@ -156,67 +156,6 @@ const AdminJudgmentJobDetail = () => {
                         <p class="text-xs text-green-600 mt-1">Articles completed</p>
                       </div>
                     </div>
-                    <Show when={'articleStats' in data && data.articleStats}>
-                      <div class="mt-4 pt-4 border-t border-gray-200">
-                        <div class="flex justify-between items-center">
-                          <p class="text-sm text-gray-600">Total Articles</p>
-                          <p class="text-lg font-semibold">
-                            {'articleStats' in data
-                              ? (data.articleStats?.ready || 0)
-                                + (data.articleStats?.sent || 0)
-                                + (data.articleStats?.judged || 0)
-                              : 0}
-                          </p>
-                        </div>
-                        <Show
-                          when={
-                            'articleStats' in data
-                            && (data.articleStats?.ready || 0)
-                              + (data.articleStats?.sent || 0)
-                              + (data.articleStats?.judged || 0)
-                              > 0
-                          }
-                        >
-                          <div class="mt-3">
-                            <div class="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
-                              <div class="h-full flex">
-                                <div
-                                  class="bg-green-500 h-full transition-all duration-300"
-                                  style={{
-                                    width:
-                                      'articleStats' in data
-                                        ? `${((data.articleStats?.judged || 0) / ((data.articleStats?.ready || 0) + (data.articleStats?.sent || 0) + (data.articleStats?.judged || 0))) * 100}%`
-                                        : '0%',
-                                  }}
-                                />
-                                <div
-                                  class="bg-blue-500 h-full transition-all duration-300"
-                                  style={{
-                                    width:
-                                      'articleStats' in data
-                                        ? `${((data.articleStats?.sent || 0) / ((data.articleStats?.ready || 0) + (data.articleStats?.sent || 0) + (data.articleStats?.judged || 0))) * 100}%`
-                                        : '0%',
-                                  }}
-                                />
-                              </div>
-                            </div>
-                            <p class="text-xs text-gray-500 mt-1">
-                              Progress:{' '}
-                              {'articleStats' in data
-                                ? Math.round(
-                                    ((data.articleStats?.judged || 0)
-                                      / ((data.articleStats?.ready || 0)
-                                        + (data.articleStats?.sent || 0)
-                                        + (data.articleStats?.judged || 0)))
-                                      * 100,
-                                  )
-                                : 0}
-                              % complete
-                            </p>
-                          </div>
-                        </Show>
-                      </div>
-                    </Show>
                   </div>
                 </Show>
 
