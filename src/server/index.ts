@@ -1,7 +1,7 @@
 import {cors} from '@elysiajs/cors'
 import {Elysia} from 'elysia'
 
-import {judgmentsJobsCron} from './cron/JudgmentsJobsCron.ts'
+import {judgmentsJobsCron} from './cron/judgmentsJobs.ts'
 import {articlesRoutes} from './routes/ArticlesRoutes.ts'
 import {authRoutes} from './routes/AuthRoutes.ts'
 import {judgablesRoutes} from './routes/JudgablesRoutes.ts'
