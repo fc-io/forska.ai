@@ -20,14 +20,11 @@ const fetchNewArticlesCronJob = async (): Promise<void> => {
   if (waitingOnNewArticles || waitingOnLLM) return
 
   waitingOnNewArticles = true
-  try {
-    const db = getDatabase()
-    const allJobs = await getAllJobs(db)
-    const newArticlesInProcess = await fetchNewArticlesForAllJobs(allJobs, articlesAlreadyProcessing)
-    updateProcessingMap(articlesAlreadyProcessing, newArticlesInProcess)
-  } finally {
-    waitingOnNewArticles = false
-  }
+  const db = getDatabase()
+  const allJobs = await getAllJobs(db)
+  const newArticlesInProcess = await fetchNewArticlesForAllJobs(allJobs, articlesAlreadyProcessing)
+  updateProcessingMap(articlesAlreadyProcessing, newArticlesInProcess)
+  waitingOnNewArticles = false
 }
 
 const sendToLLMCronJob = async (): Promise<void> => {
@@ -35,16 +32,13 @@ const sendToLLMCronJob = async (): Promise<void> => {
   if (waitingOnNewArticles || waitingOnLLM) return
 
   waitingOnLLM = true
-  try {
-    const db = getDatabase()
-    const allJobs = await getAllJobs(db)
-    const jobIds = allJobs.map((job) => {
-      return job.jobId
-    })
-    await sendArticlesToLLM(jobIds, articlesAlreadyProcessing)
-  } finally {
-    waitingOnLLM = false
-  }
+  const db = getDatabase()
+  const allJobs = await getAllJobs(db)
+  const jobIds = allJobs.map((job) => {
+    return job.jobId
+  })
+  await sendArticlesToLLM(jobIds, articlesAlreadyProcessing)
+  waitingOnLLM = false
 }
 
 export const judgmentsJobsCron = new Elysia()

@@ -22,6 +22,12 @@ export const judgmentsJobStatusEnum = pgEnum('judgments_job_status_enum', [
   'project_removed',
 ])
 
+export const judgmentsJobsArticlesStatusEnum = pgEnum('judgments_jobs_articles_status_enum', [
+  'ready',
+  'sent',
+  'judged',
+])
+
 export const articles = pgTable('articles', {
   id: uuid('id').primaryKey().defaultRandom(),
   createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
@@ -89,6 +95,30 @@ export const judgmentsJobs = pgTable('judgments_jobs', {
     ),
   status: judgmentsJobStatusEnum('status').default('not_started').notNull(),
   error: text('error').array(),
+})
+
+export const judgmentsJobsArticles = pgTable('judgments_jobs_articles', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
+  jobId: uuid('job_id')
+    .notNull()
+    .references(
+      () => {
+        return judgmentsJobs.id
+      },
+      {onDelete: 'cascade'},
+    ),
+  articleId: uuid('article_id')
+    .notNull()
+    .references(
+      () => {
+        return articles.id
+      },
+      {onDelete: 'cascade'},
+    ),
+  serverId: text('server_id'),
+  status: judgmentsJobsArticlesStatusEnum('status').default('ready').notNull(),
 })
 
 export const prompts = pgTable('prompts', {

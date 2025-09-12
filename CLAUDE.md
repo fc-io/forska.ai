@@ -3,6 +3,7 @@ alwaysApply: true
 ---
 ## Important
 
+IMPORTANT: I don't like try, catch, finally, throw. Only use when absolutely necessary.
 IMPORTANT: if there only is one export in a file, than the filename should match the name of the exported function
 IMPORTANT: on the server – prefer drizzle orm over executing pure sql commands
 IMPORTANT: on the client/app - use import {useQuery} from '@tanstack/solid-query' over createQuery
