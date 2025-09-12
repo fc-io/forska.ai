@@ -1,7 +1,7 @@
-import {and, count, eq, inArray, isNull, sql} from 'drizzle-orm'
+import {count, eq, isNull, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {articles, judgments, judgmentsJobs, judgmentsJobsArticles, projects, reviews} from '../../db/schema'
+import {articles, judgments, judgmentsJobs, judgmentsJobsArticles, projects, tokenUse} from '../../db/schema'
 import {getDatabase} from '../utils/getDatabase'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
@@ -86,7 +86,41 @@ export const judgmentsJobsRoutes = new Elysia()
 
       const unassessedCount = result[0]?.count || 0
 
-      return {...job, articleStats: stats, unassessedArticlesCount: unassessedCount}
+      // Get total token usage for this job
+      const totalTokenUsage = await db
+        .select({
+          totalTokens: sql<number>`COALESCE(SUM(total_tokens), 0)::int`,
+          totalPromptTokens: sql<number>`COALESCE(SUM(total_prompt_tokens), 0)::int`,
+          totalCompletionTokens: sql<number>`COALESCE(SUM(total_completion_tokens), 0)::int`,
+        })
+        .from(tokenUse)
+        .where(eq(tokenUse.judgmentsJobId, params.id))
+
+      // Get token usage per day for this job
+      const tokenUsagePerDay = await db
+        .select({
+          date: sql<string>`DATE(created_at AT TIME ZONE 'UTC')`,
+          dailyTokens: sql<number>`SUM(total_tokens)::int`,
+          dailyPromptTokens: sql<number>`SUM(total_prompt_tokens)::int`,
+          dailyCompletionTokens: sql<number>`SUM(total_completion_tokens)::int`,
+          requests: sql<number>`SUM(requests)::int`,
+        })
+        .from(tokenUse)
+        .where(eq(tokenUse.judgmentsJobId, params.id))
+        .groupBy(sql`DATE(created_at AT TIME ZONE 'UTC')`)
+        .orderBy(sql`DATE(created_at AT TIME ZONE 'UTC')`)
+
+      return {
+        ...job,
+        articleStats: stats,
+        unassessedArticlesCount: unassessedCount,
+        totalTokenUsage: {
+          totalTokens: totalTokenUsage[0]?.totalTokens || 0,
+          totalPromptTokens: totalTokenUsage[0]?.totalPromptTokens || 0,
+          totalCompletionTokens: totalTokenUsage[0]?.totalCompletionTokens || 0,
+        },
+        tokenUsagePerDay,
+      }
     },
     {params: t.Object({id: t.String()})},
   )

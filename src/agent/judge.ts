@@ -107,10 +107,12 @@ export const judge = async ({
   articles,
   prompts,
   sessionId,
+  judgmentsJobId,
 }: {
   articles: ArticlesType
   prompts: PromptsType
   sessionId: string | null
+  judgmentsJobId?: string
 }): Promise<void> => {
   // Get or create model ID for the vLLM model
   let modelId: string | undefined
@@ -176,5 +178,5 @@ export const judge = async ({
   const finishedAt = new Date().toISOString()
   // console.log('tokenUse length:', tokenUse.length)
   console.log('tokenUse:', tokenUse)
-  await judgeStoreTokenUse(tokenUse, sessionId, {startedAt, finishedAt, duration})
+  await judgeStoreTokenUse(tokenUse, sessionId, {startedAt, finishedAt, duration}, judgmentsJobId)
 }

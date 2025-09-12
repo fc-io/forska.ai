@@ -13,6 +13,7 @@ const storeTokenUseDirectly = async (
   totalTokenUse: {totalPromptTokens: number; totalCompletionTokens: number; totalTokens: number},
   sessionId: string | null,
   {startedAt, finishedAt, duration}: {startedAt: string; finishedAt: string; duration: number},
+  judgmentsJobId?: string,
 ): Promise<void> => {
   const {getDatabase} = await import('../../server/utils/getDatabase.ts')
   const db = getDatabase()
@@ -26,6 +27,7 @@ const storeTokenUseDirectly = async (
     .values({
       userId: sessionData?.userId ?? null,
       sessionId,
+      judgmentsJobId: judgmentsJobId ?? null,
       requests: totalArticles,
       totalPromptTokens: totalTokenUse.totalPromptTokens,
       totalCompletionTokens: totalTokenUse.totalCompletionTokens,
@@ -77,6 +79,7 @@ export const judgeStoreTokenUse = async (
   tokenUse: {promptTokens: number; completionTokens: number; totalTokens: number}[],
   sessionId: string | null,
   {startedAt, finishedAt, duration}: {startedAt: string; finishedAt: string; duration: number},
+  judgmentsJobId?: string,
 ): Promise<void> => {
   const totalArticles = tokenUse.length
   const totalTokenUse = tokenUse.reduce(
@@ -91,7 +94,13 @@ export const judgeStoreTokenUse = async (
   )
 
   if (isServerEnvironment()) {
-    await storeTokenUseDirectly(totalArticles, totalTokenUse, sessionId, {startedAt, finishedAt, duration})
+    await storeTokenUseDirectly(
+      totalArticles,
+      totalTokenUse,
+      sessionId,
+      {startedAt, finishedAt, duration},
+      judgmentsJobId,
+    )
   } else {
     if (!sessionId) {
       throw new Error('sessionId is required when running in client environment')

@@ -182,6 +182,92 @@ const AdminJudgmentJobDetail = () => {
                   </div>
                 </Show>
 
+                <Show when={'totalTokenUsage' in data && data.totalTokenUsage}>
+                  <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
+                    <h2 class="text-lg font-semibold mb-4">Token Usage</h2>
+                    <div class="grid grid-cols-3 gap-4 mb-6">
+                      <div class="bg-blue-50 rounded-lg p-4">
+                        <p class="text-sm text-blue-600 mb-1">Total Tokens</p>
+                        <p class="text-2xl font-bold text-blue-900">
+                          {'totalTokenUsage' in data ? data.totalTokenUsage?.totalTokens?.toLocaleString() || '0' : '0'}
+                        </p>
+                      </div>
+                      <div class="bg-green-50 rounded-lg p-4">
+                        <p class="text-sm text-green-600 mb-1">Prompt Tokens</p>
+                        <p class="text-2xl font-bold text-green-900">
+                          {'totalTokenUsage' in data
+                            ? data.totalTokenUsage?.totalPromptTokens?.toLocaleString() || '0'
+                            : '0'}
+                        </p>
+                      </div>
+                      <div class="bg-purple-50 rounded-lg p-4">
+                        <p class="text-sm text-purple-600 mb-1">Completion Tokens</p>
+                        <p class="text-2xl font-bold text-purple-900">
+                          {'totalTokenUsage' in data
+                            ? data.totalTokenUsage?.totalCompletionTokens?.toLocaleString() || '0'
+                            : '0'}
+                        </p>
+                      </div>
+                    </div>
+
+                    <Show
+                      when={'tokenUsagePerDay' in data && data.tokenUsagePerDay && data.tokenUsagePerDay.length > 0}
+                    >
+                      <div>
+                        <h3 class="text-md font-medium mb-3">Daily Usage</h3>
+                        <div class="overflow-x-auto">
+                          <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50">
+                              <tr>
+                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                  Date
+                                </th>
+                                <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                  Total
+                                </th>
+                                <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                  Prompt
+                                </th>
+                                <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                  Completion
+                                </th>
+                                <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                  Requests
+                                </th>
+                              </tr>
+                            </thead>
+                            <tbody class="bg-white divide-y divide-gray-200">
+                              <For each={'tokenUsagePerDay' in data ? data.tokenUsagePerDay : []}>
+                                {(day) => {
+                                  return (
+                                    <tr>
+                                      <td class="px-4 py-2 text-sm text-gray-900">
+                                        {day.date ? formatDate(new Date(day.date), 'yyyy-MM-dd') : 'N/A'}
+                                      </td>
+                                      <td class="px-4 py-2 text-sm text-gray-900 text-right">
+                                        {day.dailyTokens?.toLocaleString() || '0'}
+                                      </td>
+                                      <td class="px-4 py-2 text-sm text-gray-900 text-right">
+                                        {day.dailyPromptTokens?.toLocaleString() || '0'}
+                                      </td>
+                                      <td class="px-4 py-2 text-sm text-gray-900 text-right">
+                                        {day.dailyCompletionTokens?.toLocaleString() || '0'}
+                                      </td>
+                                      <td class="px-4 py-2 text-sm text-gray-900 text-right">
+                                        {day.requests?.toLocaleString() || '0'}
+                                      </td>
+                                    </tr>
+                                  )
+                                }}
+                              </For>
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </Show>
+                  </div>
+                </Show>
+
                 <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
                   <h2 class="text-lg font-semibold mb-4">Actions</h2>
                   <div class="flex gap-3">

@@ -59,7 +59,7 @@ const processArticleWithLLM = async (
       .where(eq(schema.prompts.projectId, articleToProcess.projectId))
 
     if (article && prompts.length > 0) {
-      await judge({articles: [article], prompts, sessionId})
+      await judge({articles: [article], prompts, sessionId, judgmentsJobId: articleToProcess.jobId})
       await markArticlesAsJudged(db, articleToProcess.jobId, [articleToProcess.articleId])
     }
   } catch (error) {

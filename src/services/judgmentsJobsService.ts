@@ -25,11 +25,7 @@ export const getJudgmentsJobById = async (jobId: string) => {
       status: '',
       error: '',
       projectName: '',
-      articleStats: {
-        ready: 0,
-        sent: 0,
-        judged: 0,
-      },
+      articleStats: {ready: 0, sent: 0, judged: 0},
       unassessedArticlesCount: 0,
     }
   )
