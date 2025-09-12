@@ -1,34 +1,43 @@
-import {eq} from 'drizzle-orm'
+import {and, eq} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import {judge} from '../../../agent/judge.ts'
 import * as schema from '../../../db/schema.ts'
-import {getReadyArticles, markArticlesAsJudged, markArticlesAsSent} from './judgmentsJobsArticlesRepository.ts'
-import type {JobData} from './judgmentsJobsTypes.ts'
+import {markArticlesAsJudged} from './judgmentsJobsArticlesRepository.ts'
 
 type ArticleToProcess = {jobId: string; articleId: string; recordId: string; projectId: string}
 
-const getUnsentArticlesForJobs = async (
+const getAndUpdateReadyArticles = async (
   db: PostgresJsDatabase<typeof schema>,
-  jobs: JobData[],
+  serverJobId: string,
 ): Promise<ArticleToProcess[]> => {
-  const articlesToProcess: ArticleToProcess[] = []
+  const articlesWithJobs = await db
+    .update(schema.judgmentsJobsArticles)
+    .set({status: 'sent', updatedAt: new Date()})
+    .where(
+      and(eq(schema.judgmentsJobsArticles.status, 'ready'), eq(schema.judgmentsJobsArticles.serverId, serverJobId)),
+    )
+    .returning({
+      recordId: schema.judgmentsJobsArticles.id,
+      articleId: schema.judgmentsJobsArticles.articleId,
+      jobId: schema.judgmentsJobsArticles.jobId,
+    })
 
-  await Promise.all(
-    jobs.map(async (job) => {
-      const readyArticles = await getReadyArticles(db, job.jobId)
-      readyArticles.forEach((article) => {
-        articlesToProcess.push({
-          jobId: job.jobId,
-          articleId: article.articleId,
-          recordId: article.id,
-          projectId: job.projectId,
-        })
-      })
+  const articlesWithProjects = await Promise.all(
+    articlesWithJobs.map(async (article) => {
+      const [job] = await db
+        .select({projectId: schema.judgmentsJobs.projectId})
+        .from(schema.judgmentsJobs)
+        .where(eq(schema.judgmentsJobs.id, article.jobId))
+        .limit(1)
+
+      return {...article, projectId: job?.projectId || ''}
     }),
   )
 
-  return articlesToProcess
+  return articlesWithProjects.filter((article) => {
+    return article.projectId
+  })
 }
 
 const processArticleWithLLM = async (
@@ -58,29 +67,19 @@ const processArticleWithLLM = async (
   }
 }
 
-export const sendArticlesToLLM = async (db: PostgresJsDatabase<typeof schema>, allJobs: JobData[]): Promise<void> => {
+export const judgmentsJobsSendToLLM = async (
+  db: PostgresJsDatabase<typeof schema>,
+  serverJobId: string,
+): Promise<void> => {
   console.log('send to LLM')
 
-  const articlesToProcess = await getUnsentArticlesForJobs(db, allJobs)
+  const articlesToProcess = await getAndUpdateReadyArticles(db, serverJobId)
   console.log('articlesToProcess length:', articlesToProcess.length)
 
   if (articlesToProcess.length === 0) {
     console.log('No articles to process')
     return
   }
-
-  const jobArticleMap = new Map<string, string[]>()
-
-  articlesToProcess.forEach((article) => {
-    const existingIds = jobArticleMap.get(article.jobId) || []
-    jobArticleMap.set(article.jobId, [...existingIds, article.articleId])
-  })
-
-  await Promise.all(
-    Array.from(jobArticleMap.entries()).map(async ([jobId, ids]) => {
-      await markArticlesAsSent(db, jobId, ids)
-    }),
-  )
 
   await Promise.all(
     articlesToProcess.map(async (article) => {

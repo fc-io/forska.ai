@@ -8,15 +8,15 @@ import {getDatabase} from '../utils/getDatabase.ts'
 import {judgmentsJobsAddToJobsQueue} from './judgmentsJobs/judgmentsJobsAddToJobsQueue.ts'
 import {judgmentsJobsGetJobs} from './judgmentsJobs/judgmentsJobsGetJobs.ts'
 import {judgmentsJobsGetNewArticles} from './judgmentsJobs/judgmentsJobsGetNewArticles.ts'
-import {sendArticlesToLLM} from './judgmentsJobs/judgmentsJobsLLMProcessor.ts'
+import {judgmentsJobsSendToLLM} from './judgmentsJobs/judgmentsJobsSendToLLM.ts'
 
 const serverJobId = `server-job-${crypto.randomUUID()}`
 
 const NEW_ARTICLES_INTERVAL = '*/5 * * * * *' // Every 5 seconds
 const LLM_PROCESSING_INTERVAL = '*/15 * * * * *' // Every 15 seconds
 
-const fetchNewArticlesCronJob = async (): Promise<void> => {
-  // if (!env.RUN_SERVER_JUDGING) return
+const getNewArticlesForJobs = async (): Promise<void> => {
+  if (!env.RUN_SERVER_JUDGING) return
   const db = getDatabase()
   const allJobs = await judgmentsJobsGetJobs(db)
   const newArticlesToProcess = await judgmentsJobsGetNewArticles(db, allJobs)
@@ -27,10 +27,9 @@ const sendToLLMCronJob = async (): Promise<void> => {
   if (!env.RUN_SERVER_JUDGING) return
 
   const db = getDatabase()
-  const allJobs = await judgmentsJobsGetJobs(db)
-  await sendArticlesToLLM(db, allJobs)
+  await judgmentsJobsSendToLLM(db, serverJobId)
 }
 
 export const judgmentsJobsCron = new Elysia()
-  .use(cron({name: 'judgments-jobs-fetch-articles', pattern: NEW_ARTICLES_INTERVAL, run: fetchNewArticlesCronJob}))
+  .use(cron({name: 'judgments-jobs-fetch-articles', pattern: NEW_ARTICLES_INTERVAL, run: getNewArticlesForJobs}))
   .use(cron({name: 'judgments-jobs-send-to-llm', pattern: LLM_PROCESSING_INTERVAL, run: sendToLLMCronJob}))
