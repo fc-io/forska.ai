@@ -52,6 +52,7 @@ const AdminJudgmentJobDetail = () => {
         console.log('id:', id())
         return getJudgmentsJobById(id())
       },
+      refetchInterval: 1000 * 30, // Refresh every 30 seconds
     }
   })
   // console.log('job.data:', job)
@@ -129,11 +130,101 @@ const AdminJudgmentJobDetail = () => {
                   </div>
                 </div>
 
-                <Show when={data.error && data.error.length > 0}>
+                <Show when={'articleStats' in data && data.articleStats}>
+                  <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
+                    <h2 class="text-lg font-semibold mb-4">Job Queue</h2>
+                    <div class="grid grid-cols-3 gap-4">
+                      <div class="bg-gray-50 rounded-lg p-4">
+                        <p class="text-sm text-gray-500 mb-1">Ready</p>
+                        <p class="text-2xl font-bold text-gray-900">
+                          {'articleStats' in data ? data.articleStats?.ready || 0 : 0}
+                        </p>
+                        <p class="text-xs text-gray-500 mt-1">Articles ready to process</p>
+                      </div>
+                      <div class="bg-blue-50 rounded-lg p-4">
+                        <p class="text-sm text-blue-600 mb-1">Sent</p>
+                        <p class="text-2xl font-bold text-blue-900">
+                          {'articleStats' in data ? data.articleStats?.sent || 0 : 0}
+                        </p>
+                        <p class="text-xs text-blue-600 mt-1">Articles sent for judgment</p>
+                      </div>
+                      <div class="bg-green-50 rounded-lg p-4">
+                        <p class="text-sm text-green-600 mb-1">Judged</p>
+                        <p class="text-2xl font-bold text-green-900">
+                          {'articleStats' in data ? data.articleStats?.judged || 0 : 0}
+                        </p>
+                        <p class="text-xs text-green-600 mt-1">Articles completed</p>
+                      </div>
+                    </div>
+                    <Show when={'articleStats' in data && data.articleStats}>
+                      <div class="mt-4 pt-4 border-t border-gray-200">
+                        <div class="flex justify-between items-center">
+                          <p class="text-sm text-gray-600">Total Articles</p>
+                          <p class="text-lg font-semibold">
+                            {'articleStats' in data
+                              ? (data.articleStats?.ready || 0)
+                                + (data.articleStats?.sent || 0)
+                                + (data.articleStats?.judged || 0)
+                              : 0}
+                          </p>
+                        </div>
+                        <Show
+                          when={
+                            'articleStats' in data
+                            && (data.articleStats?.ready || 0)
+                              + (data.articleStats?.sent || 0)
+                              + (data.articleStats?.judged || 0)
+                              > 0
+                          }
+                        >
+                          <div class="mt-3">
+                            <div class="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+                              <div class="h-full flex">
+                                <div
+                                  class="bg-green-500 h-full transition-all duration-300"
+                                  style={{
+                                    width:
+                                      'articleStats' in data
+                                        ? `${((data.articleStats?.judged || 0) / ((data.articleStats?.ready || 0) + (data.articleStats?.sent || 0) + (data.articleStats?.judged || 0))) * 100}%`
+                                        : '0%',
+                                  }}
+                                />
+                                <div
+                                  class="bg-blue-500 h-full transition-all duration-300"
+                                  style={{
+                                    width:
+                                      'articleStats' in data
+                                        ? `${((data.articleStats?.sent || 0) / ((data.articleStats?.ready || 0) + (data.articleStats?.sent || 0) + (data.articleStats?.judged || 0))) * 100}%`
+                                        : '0%',
+                                  }}
+                                />
+                              </div>
+                            </div>
+                            <p class="text-xs text-gray-500 mt-1">
+                              Progress:{' '}
+                              {'articleStats' in data
+                                ? Math.round(
+                                    ((data.articleStats?.judged || 0)
+                                      / ((data.articleStats?.ready || 0)
+                                        + (data.articleStats?.sent || 0)
+                                        + (data.articleStats?.judged || 0)))
+                                      * 100,
+                                  )
+                                : 0}
+                              % complete
+                            </p>
+                          </div>
+                        </Show>
+                      </div>
+                    </Show>
+                  </div>
+                </Show>
+
+                <Show when={Array.isArray(data.error) && data.error.length > 0}>
                   <div class="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
                     <h2 class="text-lg font-semibold text-red-900 mb-2">Errors</h2>
                     <ul class="list-disc list-inside space-y-1">
-                      <For each={data.error}>
+                      <For each={Array.isArray(data.error) ? data.error : []}>
                         {(err) => {
                           return <li class="text-red-700">{err}</li>
                         }}

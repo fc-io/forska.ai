@@ -1,7 +1,7 @@
-import {eq} from 'drizzle-orm'
+import {eq, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {judgmentsJobs, projects} from '../../db/schema'
+import {judgmentsJobs, judgmentsJobsArticles, projects} from '../../db/schema'
 import {getDatabase} from '../utils/getDatabase'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
@@ -31,8 +31,6 @@ export const judgmentsJobsRoutes = new Elysia()
         throw new Error('Failed to create judgments job')
       }
 
-      console.log('Created judgments job:', job)
-
       return {
         data: {jobId: job.id, status: job.status, createdAt: job.createdAt, projectId: job.projectId},
         error: null,
@@ -44,7 +42,6 @@ export const judgmentsJobsRoutes = new Elysia()
     '/api/judgmentsjobs/:id',
     async ({params}) => {
       const db = getDatabase()
-      console.log('Fetching job state for:', params.id)
 
       const [job] = await db
         .select({
@@ -60,12 +57,28 @@ export const judgmentsJobsRoutes = new Elysia()
         .leftJoin(projects, eq(judgmentsJobs.projectId, projects.id))
         .where(eq(judgmentsJobs.id, params.id))
         .limit(1)
-      console.log('job:', job)
 
       if (!job) {
         throw new Error('Job not found')
       }
-      return job
+
+      // Get article statistics
+      const articleStats = await db
+        .select({status: judgmentsJobsArticles.status, count: sql<number>`count(*)::int`})
+        .from(judgmentsJobsArticles)
+        .where(eq(judgmentsJobsArticles.jobId, params.id))
+        .groupBy(judgmentsJobsArticles.status)
+
+      // Transform stats into a more usable format
+      const stats = {ready: 0, sent: 0, judged: 0}
+
+      articleStats.forEach((stat) => {
+        if (stat.status === 'ready') stats.ready = stat.count
+        if (stat.status === 'sent') stats.sent = stat.count
+        if (stat.status === 'judged') stats.judged = stat.count
+      })
+
+      return {...job, articleStats: stats}
     },
     {params: t.Object({id: t.String()})},
   )
@@ -102,8 +115,6 @@ export const judgmentsJobsRoutes = new Elysia()
       if (!updatedJob) {
         throw new Error('Job not found')
       }
-
-      console.log('Updated judgments job:', updatedJob.id, 'to status:', updatedJob.status)
 
       return {
         data: {
@@ -148,8 +159,6 @@ export const judgmentsJobsRoutes = new Elysia()
       if (!deletedJob) {
         throw new Error('Job not found')
       }
-
-      console.log('Deleted judgments job:', deletedJob.id)
 
       return {data: {jobId: deletedJob.id}, error: null}
     },
