@@ -1,199 +1,49 @@
 import {cron} from '@elysiajs/cron'
-import {eq} from 'drizzle-orm'
-import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 import {Elysia} from 'elysia'
 
-import {judge} from '../../agent/judge.ts'
-import * as schema from '../../db/schema.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
-import {judgmentsJobsCronGetArticles} from './judgmentsJobs/judgmentsJobsCronGetArticles.ts'
+import {fetchNewArticlesForAllJobs, updateProcessingMap} from './judgmentsJobs/judgmentsJobsArticleProcessor.ts'
+import {sendArticlesToLLM} from './judgmentsJobs/judgmentsJobsLLMProcessor.ts'
+import {getAllJobs} from './judgmentsJobs/judgmentsJobsRepository.ts'
+import type {ArticleProcessingData} from './judgmentsJobs/judgmentsJobsTypes.ts'
 
-const articlesAlreadyProccessing = new Map<
-  string,
-  {
-    articlesToJudgeIds: string[]
-    articlesToJudge: (typeof schema.articles.$inferSelect)[]
-    projectPrompts: (typeof schema.prompts.$inferSelect)[]
-    isSentToLLM?: boolean
-    jobId?: string
-  }[]
->()
+const articlesAlreadyProcessing = new Map<string, ArticleProcessingData[]>()
 let waitingOnNewArticles = false
 let waitingOnLLM = false
 
-const getAllJobs = async (db: PostgresJsDatabase<typeof schema>) => {
-  return await db
-    .select({
-      jobId: schema.judgmentsJobs.id,
-      jobStatus: schema.judgmentsJobs.status,
-      projectId: schema.judgmentsJobs.projectId,
-      projectName: schema.projects.name,
-    })
-    .from(schema.judgmentsJobs)
-    .innerJoin(schema.projects, eq(schema.judgmentsJobs.projectId, schema.projects.id))
+const NEW_ARTICLES_INTERVAL = '*/5 * * * * *' // Every 5 seconds
+const LLM_PROCESSING_INTERVAL = '*/15 * * * * *' // Every 15 seconds
+
+const fetchNewArticlesCronJob = async (): Promise<void> => {
+  if (waitingOnNewArticles || waitingOnLLM) return
+
+  waitingOnNewArticles = true
+  try {
+    const db = getDatabase()
+    const allJobs = await getAllJobs(db)
+    const newArticlesInProcess = await fetchNewArticlesForAllJobs(allJobs, articlesAlreadyProcessing)
+    updateProcessingMap(articlesAlreadyProcessing, newArticlesInProcess)
+  } finally {
+    waitingOnNewArticles = false
+  }
 }
 
-const getNewArticlesInProcess = async ({
-  allJobs,
-  articlesAlreadyProccessing,
-}: {
-  allJobs: {jobId: string; projectName: string; jobStatus: string; projectId: string}[]
-  articlesAlreadyProccessing: Map<
-    string,
-    {
-      articlesToJudgeIds: string[]
-      articlesToJudge: (typeof schema.articles.$inferSelect)[]
-      projectPrompts: (typeof schema.prompts.$inferSelect)[]
-    }[]
-  >
-}): Promise<
-  [
-    string,
-    {
-      articlesToJudgeIds: string[]
-      articlesToJudge: (typeof schema.articles.$inferSelect)[]
-      projectPrompts: (typeof schema.prompts.$inferSelect)[]
-    },
-  ][]
-> => {
-  const numberOfArticlesToGet = 1
+const sendToLLMCronJob = async (): Promise<void> => {
+  if (waitingOnNewArticles || waitingOnLLM) return
 
-  return await Promise.all(
-    allJobs.map(async (job) => {
-      const {jobId, projectName, jobStatus, projectId} = job
-      // console.log(`- Project: "${projectName}" | Status: ${jobStatus} | Job ID: ${jobId} | projectId: ${projectId}`)
-      // console.log('prev articlesAlreadyProccessing least', (articlesAlreadyProccessing.get(jobId) || []).length)
-      const {articlesToJudgeIds, articlesToJudge, projectPrompts} = await judgmentsJobsCronGetArticles(
-        projectId,
-        numberOfArticlesToGet,
-        (articlesAlreadyProccessing.get(jobId) || [{articlesToJudgeIds: []}]).reduce(
-          (acc: string[], {articlesToJudgeIds}) => {
-            return [...acc, ...articlesToJudgeIds]
-          },
-          [],
-        ),
-      )
-      // console.log('articles', articles.join(', '))
-      return [jobId, {articlesToJudgeIds, articlesToJudge, projectPrompts}]
-    }),
-  )
+  waitingOnLLM = true
+  try {
+    const db = getDatabase()
+    const allJobs = await getAllJobs(db)
+    const jobIds = allJobs.map((job) => {
+      return job.jobId
+    })
+    await sendArticlesToLLM(jobIds, articlesAlreadyProcessing)
+  } finally {
+    waitingOnLLM = false
+  }
 }
 
 export const judgmentsJobsCron = new Elysia()
-  .use(
-    cron({
-      name: 'judgments-jobs-cron',
-      pattern: '*/5 * * * * *',
-      async run() {
-        const db = getDatabase()
-        const allJobs = await getAllJobs(db)
-        // console.log('allJobs size:', allJobs.length)
-        if (waitingOnNewArticles === false && waitingOnLLM === false) {
-          waitingOnNewArticles = true
-          const newArticlesInProcess = await getNewArticlesInProcess({allJobs, articlesAlreadyProccessing})
-          // console.log('newArticlesInProcess size:', newArticlesInProcess.length)
-          newArticlesInProcess.forEach(([jobId, data]) => {
-            // console.log(jobId, articlesToJudgeIds)
-            if (jobId && typeof jobId === 'string') {
-              const previousArticles = articlesAlreadyProccessing.get(jobId) || []
-              // console.log('articlesToJudgeIds', articlesToJudgeIds)
-              articlesAlreadyProccessing.set(jobId, [...previousArticles, data])
-            }
-            // console.log('articlesAlreadyProccessing size:', articlesAlreadyProccessing.size)
-            // console.log('in -> size:', (articlesAlreadyProccessing.get(jobId) || []).length)
-          })
-          waitingOnNewArticles = false
-        }
-      },
-    }),
-  )
-  .use(
-    cron({
-      name: 'judgments-jobs-cron-send-to-llm',
-      pattern: '*/15 * * * * *',
-      async run() {
-        console.log('send to LLM')
-        const db = getDatabase()
-        const allJobs = await getAllJobs(db)
-        // console.log('allJobs size:', allJobs.length)
-        if (waitingOnNewArticles === false && waitingOnLLM === false) {
-          waitingOnLLM = true
-
-          const sessionId = null
-
-          const jobIds = allJobs.map((job) => {
-            return job.jobId
-          })
-
-          const toJudgeData = jobIds.map((jobId) => {
-            return {data: articlesAlreadyProccessing.get(jobId), jobId}
-          })
-          // console.log('toJudgeData:', toJudgeData)
-          const filteredToJudgeData = toJudgeData.reduce<
-            {
-              articlesToJudgeIds: string[]
-              articlesToJudge: (typeof schema.articles.$inferSelect)[]
-              projectPrompts: (typeof schema.prompts.$inferSelect)[]
-              isSentToLLM?: boolean
-              jobId: string
-            }[]
-          >((acc, {data = [], jobId}) => {
-            const a = data
-              .filter(({isSentToLLM}) => {
-                return isSentToLLM === undefined
-              })
-              .map((d) => {
-                return {...d, jobId}
-              })
-            return [...acc, ...a]
-          }, [])
-
-          // console.log('filteredToJudgeData:', filteredToJudgeData)
-
-          toJudgeData.forEach(({data = [], jobId}) => {
-            articlesAlreadyProccessing.set(
-              jobId,
-              data.map((d) => {
-                return {...d, isSentToLLM: true}
-              }),
-            )
-          })
-          console.log('filteredToJudgeData length:', filteredToJudgeData.length)
-          await Promise.all(
-            filteredToJudgeData.map(
-              async (data: {
-                articlesToJudgeIds: string[]
-                articlesToJudge: (typeof schema.articles.$inferSelect)[]
-                projectPrompts: (typeof schema.prompts.$inferSelect)[]
-                isSentToLLM?: boolean
-                jobId: string
-              }) => {
-                // console.log('data:', data.articlesToJudge)
-                const {articlesToJudgeIds, articlesToJudge, projectPrompts, jobId} = data
-                // console.log(' filteredToJudgeData to send data', data.articlesToJudge.length)
-                // console.log('data:', data)
-                try {
-                  await judge({articles: articlesToJudge, prompts: projectPrompts, sessionId})
-                } catch (error) {
-                  console.error('Error sending to LLM:', error)
-                }
-                const currentProcessingList = articlesAlreadyProccessing.get(jobId) || []
-                articlesAlreadyProccessing.set(
-                  jobId,
-                  currentProcessingList.filter((item) => {
-                    return (
-                      item.articlesToJudgeIds.some((id) => {
-                        return articlesToJudgeIds.includes(id)
-                      }) === false
-                    )
-                  }),
-                )
-              },
-            ),
-          )
-          waitingOnLLM = false
-          console.log('end send to LLM')
-        }
-      },
-    }),
-  )
+  .use(cron({name: 'judgments-jobs-fetch-articles', pattern: NEW_ARTICLES_INTERVAL, run: fetchNewArticlesCronJob}))
+  .use(cron({name: 'judgments-jobs-send-to-llm', pattern: LLM_PROCESSING_INTERVAL, run: sendToLLMCronJob}))
