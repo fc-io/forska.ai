@@ -3,7 +3,7 @@ import {createFileRoute, Link} from '@tanstack/solid-router'
 import {formatDate} from 'date-fns'
 import {For, Show} from 'solid-js'
 
-import {getJudgmentsJobState} from '../../../../services/judgmentsJobsService'
+import {getJudgmentsJobById} from '../../../../services/judgmentsJobsService'
 
 const getStatusColor = (status: string | null) => {
   switch (status) {
@@ -50,7 +50,7 @@ const AdminJudgmentJobDetail = () => {
       queryKey: ['judgments-job', id()],
       queryFn: () => {
         console.log('id:', id())
-        return getJudgmentsJobState(id())
+        return getJudgmentsJobById(id())
       },
     }
   })

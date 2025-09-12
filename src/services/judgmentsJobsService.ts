@@ -12,7 +12,7 @@ export const fetchJudgmentsJobs = async () => {
   return result.data ?? []
 }
 
-export const getJudgmentsJobState = async (jobId: string) => {
+export const getJudgmentsJobById = async (jobId: string) => {
   const response = await apiClient.api.judgmentsjobs({id: jobId}).get()
   const result = handleApiResponse(response, 'Failed to fetch job state')
 
