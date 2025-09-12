@@ -10,6 +10,8 @@ export const judgmentsJobsRoutes = new Elysia()
   .post(
     '/api/judgmentsjobs',
     async ({body}) => {
+      console.log('Fetching judgmentsjobs')
+
       const db = getDatabase()
 
       // Check if a job already exists for this project
@@ -58,23 +60,12 @@ export const judgmentsJobsRoutes = new Elysia()
         .leftJoin(projects, eq(judgmentsJobs.projectId, projects.id))
         .where(eq(judgmentsJobs.id, params.id))
         .limit(1)
+      console.log('job:', job)
 
       if (!job) {
-        return {error: 'Job not found', data: null}
+        throw new Error('Job not found')
       }
-
-      return {
-        data: {
-          jobId: job.id,
-          status: job.status,
-          createdAt: job.createdAt,
-          updatedAt: job.updatedAt,
-          projectId: job.projectId,
-          projectName: job.projectName,
-          error: job.error,
-        },
-        error: null,
-      }
+      return job
     },
     {params: t.Object({id: t.String()})},
   )

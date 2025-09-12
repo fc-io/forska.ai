@@ -14,7 +14,19 @@ export const fetchJudgmentsJobs = async () => {
 
 export const getJudgmentsJobState = async (jobId: string) => {
   const response = await apiClient.api.judgmentsjobs({id: jobId}).get()
-  return handleApiResponse(response, 'Failed to fetch job state')
+  const result = handleApiResponse(response, 'Failed to fetch job state')
+
+  return (
+    result ?? {
+      id: 'not found',
+      createdAt: '',
+      updatedAt: '',
+      projectId: 'not found',
+      status: '',
+      error: '',
+      projectName: '',
+    }
+  )
 }
 
 export const getAllJudgmentsJobs = async () => {

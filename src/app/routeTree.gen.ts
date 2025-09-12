@@ -20,7 +20,7 @@ import { Route as ProjectsIdIndexRouteImport } from './routes/projects/$id/index
 import { Route as AdminUsersIndexRouteImport } from './routes/admin/users/index'
 import { Route as AdminJobsIndexRouteImport } from './routes/admin/jobs/index'
 import { Route as ProjectsIdEditRouteImport } from './routes/projects/$id/edit'
-import { Route as AdminJudgmentsIdRouteImport } from './routes/admin/judgments/$id'
+import { Route as AdminJobsIdRouteImport } from './routes/admin/jobs/$id'
 import { Route as ProjectsIdReviewsIndexRouteImport } from './routes/projects/$id/reviews/index'
 import { Route as ProjectsIdReviewsArticleIdIndexRouteImport } from './routes/projects/$id/reviews/$articleId/index'
 
@@ -79,9 +79,9 @@ const ProjectsIdEditRoute = ProjectsIdEditRouteImport.update({
   path: '/projects/$id/edit',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AdminJudgmentsIdRoute = AdminJudgmentsIdRouteImport.update({
-  id: '/admin/judgments/$id',
-  path: '/admin/judgments/$id',
+const AdminJobsIdRoute = AdminJobsIdRouteImport.update({
+  id: '/admin/jobs/$id',
+  path: '/admin/jobs/$id',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ProjectsIdReviewsIndexRoute = ProjectsIdReviewsIndexRouteImport.update({
@@ -104,7 +104,7 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginIndexRoute
   '/projects': typeof ProjectsIndexRoute
   '/settings': typeof SettingsIndexRoute
-  '/admin/judgments/$id': typeof AdminJudgmentsIdRoute
+  '/admin/jobs/$id': typeof AdminJobsIdRoute
   '/projects/$id/edit': typeof ProjectsIdEditRoute
   '/admin/jobs': typeof AdminJobsIndexRoute
   '/admin/users': typeof AdminUsersIndexRoute
@@ -120,7 +120,7 @@ export interface FileRoutesByTo {
   '/login': typeof LoginIndexRoute
   '/projects': typeof ProjectsIndexRoute
   '/settings': typeof SettingsIndexRoute
-  '/admin/judgments/$id': typeof AdminJudgmentsIdRoute
+  '/admin/jobs/$id': typeof AdminJobsIdRoute
   '/projects/$id/edit': typeof ProjectsIdEditRoute
   '/admin/jobs': typeof AdminJobsIndexRoute
   '/admin/users': typeof AdminUsersIndexRoute
@@ -137,7 +137,7 @@ export interface FileRoutesById {
   '/login/': typeof LoginIndexRoute
   '/projects/': typeof ProjectsIndexRoute
   '/settings/': typeof SettingsIndexRoute
-  '/admin/judgments/$id': typeof AdminJudgmentsIdRoute
+  '/admin/jobs/$id': typeof AdminJobsIdRoute
   '/projects/$id/edit': typeof ProjectsIdEditRoute
   '/admin/jobs/': typeof AdminJobsIndexRoute
   '/admin/users/': typeof AdminUsersIndexRoute
@@ -155,7 +155,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/projects'
     | '/settings'
-    | '/admin/judgments/$id'
+    | '/admin/jobs/$id'
     | '/projects/$id/edit'
     | '/admin/jobs'
     | '/admin/users'
@@ -171,7 +171,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/projects'
     | '/settings'
-    | '/admin/judgments/$id'
+    | '/admin/jobs/$id'
     | '/projects/$id/edit'
     | '/admin/jobs'
     | '/admin/users'
@@ -187,7 +187,7 @@ export interface FileRouteTypes {
     | '/login/'
     | '/projects/'
     | '/settings/'
-    | '/admin/judgments/$id'
+    | '/admin/jobs/$id'
     | '/projects/$id/edit'
     | '/admin/jobs/'
     | '/admin/users/'
@@ -204,7 +204,7 @@ export interface RootRouteChildren {
   LoginIndexRoute: typeof LoginIndexRoute
   ProjectsIndexRoute: typeof ProjectsIndexRoute
   SettingsIndexRoute: typeof SettingsIndexRoute
-  AdminJudgmentsIdRoute: typeof AdminJudgmentsIdRoute
+  AdminJobsIdRoute: typeof AdminJobsIdRoute
   ProjectsIdEditRoute: typeof ProjectsIdEditRoute
   AdminJobsIndexRoute: typeof AdminJobsIndexRoute
   AdminUsersIndexRoute: typeof AdminUsersIndexRoute
@@ -292,11 +292,11 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof ProjectsIdEditRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/admin/judgments/$id': {
-      id: '/admin/judgments/$id'
-      path: '/admin/judgments/$id'
-      fullPath: '/admin/judgments/$id'
-      preLoaderRoute: typeof AdminJudgmentsIdRouteImport
+    '/admin/jobs/$id': {
+      id: '/admin/jobs/$id'
+      path: '/admin/jobs/$id'
+      fullPath: '/admin/jobs/$id'
+      preLoaderRoute: typeof AdminJobsIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/projects/$id/reviews/': {
@@ -324,7 +324,7 @@ const rootRouteChildren: RootRouteChildren = {
   LoginIndexRoute: LoginIndexRoute,
   ProjectsIndexRoute: ProjectsIndexRoute,
   SettingsIndexRoute: SettingsIndexRoute,
-  AdminJudgmentsIdRoute: AdminJudgmentsIdRoute,
+  AdminJobsIdRoute: AdminJobsIdRoute,
   ProjectsIdEditRoute: ProjectsIdEditRoute,
   AdminJobsIndexRoute: AdminJobsIndexRoute,
   AdminUsersIndexRoute: AdminUsersIndexRoute,

@@ -39,22 +39,29 @@ const formatStatus = (status: string | null) => {
 }
 
 const AdminJudgmentJobDetail = () => {
-  const {id} = Route.useParams()
+  const params = Route.useParams()
+
+  const id = () => {
+    return params().id
+  }
 
   const job = useQuery(() => {
     return {
-      queryKey: ['judgments-job', id],
+      queryKey: ['judgments-job', id()],
       queryFn: () => {
-        return getJudgmentsJobState(id)
+        console.log('id:', id())
+        return getJudgmentsJobState(id())
       },
     }
   })
+  // console.log('job.data:', job)
+  // console.log('job.data type:', typeof job, Array.isArray(job))
 
   return (
     <div class="min-h-screen bg-gray-50 p-6">
       <div class="max-w-4xl mx-auto">
         <div class="mb-6">
-          <Link href="/admin/jobs" class="text-blue-600 hover:text-blue-800 text-sm flex items-center gap-1">
+          <Link to="/admin/jobs" class="text-blue-600 hover:text-blue-800 text-sm flex items-center gap-1">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width={2} d="M15 19l-7-7 7-7" />
             </svg>
@@ -91,7 +98,7 @@ const AdminJudgmentJobDetail = () => {
                   <div class="flex justify-between items-start mb-4">
                     <div>
                       <h1 class="text-2xl font-bold text-gray-900">Judgment Job Details</h1>
-                      <p class="text-sm text-gray-500 mt-1 font-mono">{data.jobId}</p>
+                      <p class="text-sm text-gray-500 mt-1 font-mono">{data.id}</p>
                     </div>
                     <span class={`px-3 py-1 rounded-full text-sm font-medium border ${getStatusColor(data.status)}`}>
                       {formatStatus(data.status)}
@@ -170,4 +177,4 @@ const AdminJudgmentJobDetail = () => {
   )
 }
 
-export const Route = createFileRoute('/admin/judgments/$id')({component: AdminJudgmentJobDetail})
+export const Route = createFileRoute('/admin/jobs/$id')({component: AdminJudgmentJobDetail})

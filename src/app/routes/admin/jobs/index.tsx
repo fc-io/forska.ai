@@ -134,9 +134,7 @@ const AdminJobs = () => {
 
         {/* Jobs Table */}
         <Show when={jobs.data && jobs.data.length > 0}>
-          <div class="text-sm text-gray-500 mb-2">
-            Last updated: {formatDistanceToNow(jobs.dataUpdatedAt)} ago
-          </div>
+          <div class="text-sm text-gray-500 mb-2">Last updated: {formatDistanceToNow(jobs.dataUpdatedAt)} ago</div>
           <div class="overflow-x-auto bg-white rounded-lg shadow">
             <table class="min-w-full divide-y divide-gray-200">
               <thead class="bg-gray-50">
@@ -164,7 +162,7 @@ const AdminJobs = () => {
                       <tr class="hover:bg-gray-50">
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                           <Link
-                            href={`/admin/judgments/${job.id}`}
+                            href={`/admin/jobs/${job.id}`}
                             class="font-mono text-xs text-blue-600 hover:text-blue-800 hover:underline"
                           >
                             {job.id.slice(0, 8)}...
@@ -190,13 +188,6 @@ const AdminJobs = () => {
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                           <div class="flex gap-2">
-                            <Link
-                              href={`/admin/judgments/${job.id}`}
-                              class="text-sm text-blue-600 hover:text-blue-800"
-                              title={job.error ? `Errors: ${job.error.join(', ')}` : 'No errors'}
-                            >
-                              View Details
-                            </Link>
                             <Show when={job.status === 'running'}>
                               <button class="text-sm text-yellow-600 hover:text-yellow-800">Pause</button>
                             </Show>

@@ -127,7 +127,7 @@ export const judgmentsJobsCron = new Elysia()
           const toJudgeData = jobIds.map((jobId) => {
             return {data: articlesAlreadyProccessing.get(jobId), jobId}
           })
-          console.log('toJudgeData:', toJudgeData)
+          // console.log('toJudgeData:', toJudgeData)
           const filteredToJudgeData = toJudgeData.reduce<
             {
               articlesToJudgeIds: string[]
@@ -142,7 +142,7 @@ export const judgmentsJobsCron = new Elysia()
             return [...acc, ...a]
           }, [])
 
-          console.log('filteredToJudgeData:', filteredToJudgeData)
+          // console.log('filteredToJudgeData:', filteredToJudgeData)
 
           toJudgeData.forEach(({data = [], jobId}) => {
             articlesAlreadyProccessing.set(
@@ -152,7 +152,7 @@ export const judgmentsJobsCron = new Elysia()
               }),
             )
           })
-          console.log('filteredToJudgeData length:', filteredToJudgeData.length)
+          // console.log('filteredToJudgeData length:', filteredToJudgeData.length)
           filteredToJudgeData.map(
             (data: {
               articlesToJudgeIds: string[]
