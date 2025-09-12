@@ -1,6 +1,7 @@
 import {cron} from '@elysiajs/cron'
 import {Elysia} from 'elysia'
 
+import {env} from '../utils/env.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {fetchNewArticlesForAllJobs, updateProcessingMap} from './judgmentsJobs/judgmentsJobsArticleProcessor.ts'
 import {sendArticlesToLLM} from './judgmentsJobs/judgmentsJobsLLMProcessor.ts'
@@ -15,6 +16,7 @@ const NEW_ARTICLES_INTERVAL = '*/5 * * * * *' // Every 5 seconds
 const LLM_PROCESSING_INTERVAL = '*/15 * * * * *' // Every 15 seconds
 
 const fetchNewArticlesCronJob = async (): Promise<void> => {
+  if (!env.RUN_SERVER_JUDGING) return
   if (waitingOnNewArticles || waitingOnLLM) return
 
   waitingOnNewArticles = true
@@ -29,6 +31,7 @@ const fetchNewArticlesCronJob = async (): Promise<void> => {
 }
 
 const sendToLLMCronJob = async (): Promise<void> => {
+  if (!env.RUN_SERVER_JUDGING) return
   if (waitingOnNewArticles || waitingOnLLM) return
 
   waitingOnLLM = true
