@@ -4,7 +4,7 @@ import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 import * as schema from '../../../db/schema.ts'
 import type {JobData} from './judgmentsJobsTypes.ts'
 
-export const getAllJobs = async (db: PostgresJsDatabase<typeof schema>): Promise<JobData[]> => {
+export const judgmentsJobsGetJobs = async (db: PostgresJsDatabase<typeof schema>): Promise<JobData[]> => {
   return await db
     .select({
       jobId: schema.judgmentsJobs.id,

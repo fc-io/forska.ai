@@ -8,12 +8,7 @@ export type ArticleProcessingData = {
   jobId?: string
 }
 
-export type JobData = {
-  jobId: string
-  jobStatus: string
-  projectId: string
-  projectName: string
-}
+export type JobData = {jobId: string; jobStatus: string; projectId: string; projectName: string}
 
 export type ProcessingState = {
   articlesAlreadyProcessing: Map<string, ArticleProcessingData[]>

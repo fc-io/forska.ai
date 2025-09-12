@@ -1,44 +1,34 @@
 import {cron} from '@elysiajs/cron'
+// import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 import {Elysia} from 'elysia'
 
+// import * as schema from '../../db/schema.ts'
 import {env} from '../utils/env.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
-import {fetchNewArticlesForAllJobs, updateProcessingMap} from './judgmentsJobs/judgmentsJobsArticleProcessor.ts'
+import {judgmentsJobsAddToJobsQueue} from './judgmentsJobs/judgmentsJobsAddToJobsQueue.ts'
+import {judgmentsJobsGetJobs} from './judgmentsJobs/judgmentsJobsGetJobs.ts'
+import {judgmentsJobsGetNewArticles} from './judgmentsJobs/judgmentsJobsGetNewArticles.ts'
 import {sendArticlesToLLM} from './judgmentsJobs/judgmentsJobsLLMProcessor.ts'
-import {getAllJobs} from './judgmentsJobs/judgmentsJobsRepository.ts'
-import type {ArticleProcessingData} from './judgmentsJobs/judgmentsJobsTypes.ts'
 
-const articlesAlreadyProcessing = new Map<string, ArticleProcessingData[]>()
-let waitingOnNewArticles = false
-let waitingOnLLM = false
+const serverJobId = `server-job-${crypto.randomUUID()}`
 
 const NEW_ARTICLES_INTERVAL = '*/5 * * * * *' // Every 5 seconds
 const LLM_PROCESSING_INTERVAL = '*/15 * * * * *' // Every 15 seconds
 
 const fetchNewArticlesCronJob = async (): Promise<void> => {
-  if (!env.RUN_SERVER_JUDGING) return
-  if (waitingOnNewArticles || waitingOnLLM) return
-
-  waitingOnNewArticles = true
+  // if (!env.RUN_SERVER_JUDGING) return
   const db = getDatabase()
-  const allJobs = await getAllJobs(db)
-  const newArticlesInProcess = await fetchNewArticlesForAllJobs(allJobs, articlesAlreadyProcessing)
-  updateProcessingMap(articlesAlreadyProcessing, newArticlesInProcess)
-  waitingOnNewArticles = false
+  const allJobs = await judgmentsJobsGetJobs(db)
+  const newArticlesToProcess = await judgmentsJobsGetNewArticles(db, allJobs)
+  await judgmentsJobsAddToJobsQueue(db, newArticlesToProcess, serverJobId)
 }
 
 const sendToLLMCronJob = async (): Promise<void> => {
   if (!env.RUN_SERVER_JUDGING) return
-  if (waitingOnNewArticles || waitingOnLLM) return
 
-  waitingOnLLM = true
   const db = getDatabase()
-  const allJobs = await getAllJobs(db)
-  const jobIds = allJobs.map((job) => {
-    return job.jobId
-  })
-  await sendArticlesToLLM(jobIds, articlesAlreadyProcessing)
-  waitingOnLLM = false
+  const allJobs = await judgmentsJobsGetJobs(db)
+  await sendArticlesToLLM(db, allJobs)
 }
 
 export const judgmentsJobsCron = new Elysia()
