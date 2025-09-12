@@ -129,7 +129,17 @@ const AdminJudgmentJobDetail = () => {
                     </div>
                   </div>
                 </div>
-
+                <Show when={'unassessedArticlesCount' in data}>
+                  <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
+                    <div class="bg-orange-50 rounded-lg p-4">
+                      <p class="text-sm text-orange-600 mb-1">Unassessed</p>
+                      <p class="text-2xl font-bold text-orange-900">
+                        {'unassessedArticlesCount' in data ? data.unassessedArticlesCount || 0 : 0}
+                      </p>
+                      <p class="text-xs text-orange-600 mt-1">Total articles in project without judgments</p>
+                    </div>
+                  </div>
+                </Show>
                 <Show when={'articleStats' in data && data.articleStats}>
                   <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
                     <h2 class="text-lg font-semibold mb-4">Job Queue</h2>

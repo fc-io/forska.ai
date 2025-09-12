@@ -1,7 +1,7 @@
-import {eq, sql} from 'drizzle-orm'
+import {and, count, eq, inArray, isNull, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {judgmentsJobs, judgmentsJobsArticles, projects} from '../../db/schema'
+import {articles, judgments, judgmentsJobs, judgmentsJobsArticles, projects, reviews} from '../../db/schema'
 import {getDatabase} from '../utils/getDatabase'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
@@ -78,7 +78,15 @@ export const judgmentsJobsRoutes = new Elysia()
         if (stat.status === 'judged') stats.judged = stat.count
       })
 
-      return {...job, articleStats: stats}
+      const result = await db
+        .select({count: count()})
+        .from(articles)
+        .leftJoin(judgments, eq(articles.id, judgments.articleId))
+        .where(isNull(judgments.id))
+
+      const unassessedCount = result[0]?.count || 0
+
+      return {...job, articleStats: stats, unassessedArticlesCount: unassessedCount}
     },
     {params: t.Object({id: t.String()})},
   )

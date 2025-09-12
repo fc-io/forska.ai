@@ -30,6 +30,7 @@ export const getJudgmentsJobById = async (jobId: string) => {
         sent: 0,
         judged: 0,
       },
+      unassessedArticlesCount: 0,
     }
   )
 }
