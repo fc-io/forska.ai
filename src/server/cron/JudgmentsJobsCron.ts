@@ -135,10 +135,14 @@ export const judgmentsJobsCron = new Elysia()
               projectPrompts: (typeof schema.prompts.$inferSelect)[]
               isSentToLLM?: boolean
             }[]
-          >((acc, {data = []}) => {
-            const a = data.filter(({isSentToLLM}) => {
-              return isSentToLLM === undefined
-            })
+          >((acc, {data = [], jobId}) => {
+            const a = data
+              .filter(({isSentToLLM}) => {
+                return isSentToLLM === undefined
+              })
+              .map((d) => {
+                return {...d, jobId}
+              })
             return [...acc, ...a]
           }, [])
 
@@ -153,18 +157,28 @@ export const judgmentsJobsCron = new Elysia()
             )
           })
           // console.log('filteredToJudgeData length:', filteredToJudgeData.length)
-          filteredToJudgeData.map(
-            (data: {
-              articlesToJudgeIds: string[]
-              articlesToJudge: (typeof schema.articles.$inferSelect)[]
-              projectPrompts: (typeof schema.prompts.$inferSelect)[]
-              isSentToLLM?: boolean
-            }) => {
-              // console.log('data:', data.articlesToJudge)
-              const {articlesToJudge, projectPrompts} = data
-              // console.log(' filteredToJudgeData to send data', data.articlesToJudge.length)
-              // await judge({articles: articlesToJudge, prompts: projectPrompts, sessionId})
-            },
+          await Promise.all(
+            filteredToJudgeData.map(
+              async (data: {
+                articlesToJudgeIds: string[]
+                articlesToJudge: (typeof schema.articles.$inferSelect)[]
+                projectPrompts: (typeof schema.prompts.$inferSelect)[]
+                isSentToLLM?: boolean
+                jobId: string
+              }) => {
+                // console.log('data:', data.articlesToJudge)
+                const {articlesToJudge, projectPrompts, articlesToJudgeIds, jobId} = data
+                // console.log(' filteredToJudgeData to send data', data.articlesToJudge.length)
+                console.log('data:', data)
+                // await judge({articles: articlesToJudge, prompts: projectPrompts, sessionId})
+                articlesAlreadyProccessing.set(
+                  jobId,
+                  data.filter((d: {id: string}) => {
+                    return articlesToJudgeIds.includes(d.id) === false
+                  }),
+                )
+              },
+            ),
           )
           waitingOnLLM = false
           console.log('end send to LLM')
