@@ -16,6 +16,7 @@ export const judgeStoreTokenUse = async (
     },
     {totalPromptTokens: 0, totalCompletionTokens: 0, totalTokens: 0},
   )
+  debugger
   const response = await apiClient.api.tokens.usage.post({
     sessionId,
     requests: totalArticles,

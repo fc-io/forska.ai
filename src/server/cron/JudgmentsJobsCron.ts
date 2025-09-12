@@ -15,6 +15,7 @@ const articlesAlreadyProccessing = new Map<
     articlesToJudge: (typeof schema.articles.$inferSelect)[]
     projectPrompts: (typeof schema.prompts.$inferSelect)[]
     isSentToLLM?: boolean
+    jobId?: string
   }[]
 >()
 let waitingOnNewArticles = false
@@ -134,6 +135,7 @@ export const judgmentsJobsCron = new Elysia()
               articlesToJudge: (typeof schema.articles.$inferSelect)[]
               projectPrompts: (typeof schema.prompts.$inferSelect)[]
               isSentToLLM?: boolean
+              jobId: string
             }[]
           >((acc, {data = [], jobId}) => {
             const a = data
@@ -156,7 +158,7 @@ export const judgmentsJobsCron = new Elysia()
               }),
             )
           })
-          // console.log('filteredToJudgeData length:', filteredToJudgeData.length)
+          console.log('filteredToJudgeData length:', filteredToJudgeData.length)
           await Promise.all(
             filteredToJudgeData.map(
               async (data: {
@@ -167,14 +169,19 @@ export const judgmentsJobsCron = new Elysia()
                 jobId: string
               }) => {
                 // console.log('data:', data.articlesToJudge)
-                const {articlesToJudge, projectPrompts, articlesToJudgeIds, jobId} = data
+                const {articlesToJudgeIds, articlesToJudge, projectPrompts, jobId} = data
                 // console.log(' filteredToJudgeData to send data', data.articlesToJudge.length)
-                console.log('data:', data)
-                // await judge({articles: articlesToJudge, prompts: projectPrompts, sessionId})
+                // console.log('data:', data)
+                await judge({articles: articlesToJudge, prompts: projectPrompts, sessionId})
+                const currentProcessingList = articlesAlreadyProccessing.get(jobId) || []
                 articlesAlreadyProccessing.set(
                   jobId,
-                  data.filter((d: {id: string}) => {
-                    return articlesToJudgeIds.includes(d.id) === false
+                  currentProcessingList.filter((item) => {
+                    return (
+                      item.articlesToJudgeIds.some((id) => {
+                        return articlesToJudgeIds.includes(id)
+                      }) === false
+                    )
                   }),
                 )
               },
