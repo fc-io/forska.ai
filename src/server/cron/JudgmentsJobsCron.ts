@@ -172,7 +172,11 @@ export const judgmentsJobsCron = new Elysia()
                 const {articlesToJudgeIds, articlesToJudge, projectPrompts, jobId} = data
                 // console.log(' filteredToJudgeData to send data', data.articlesToJudge.length)
                 // console.log('data:', data)
-                await judge({articles: articlesToJudge, prompts: projectPrompts, sessionId})
+                try {
+                  await judge({articles: articlesToJudge, prompts: projectPrompts, sessionId})
+                } catch (error) {
+                  console.error('Error sending to LLM:', error)
+                }
                 const currentProcessingList = articlesAlreadyProccessing.get(jobId) || []
                 articlesAlreadyProccessing.set(
                   jobId,
