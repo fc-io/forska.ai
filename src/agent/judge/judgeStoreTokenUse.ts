@@ -89,7 +89,6 @@ export const judgeStoreTokenUse = async (
     },
     {totalPromptTokens: 0, totalCompletionTokens: 0, totalTokens: 0},
   )
-  debugger
 
   if (isServerEnvironment()) {
     await storeTokenUseDirectly(totalArticles, totalTokenUse, sessionId, {startedAt, finishedAt, duration})
