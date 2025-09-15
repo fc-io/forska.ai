@@ -159,13 +159,13 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
             const end = new Date(start.getTime() + intervalMs[selectedInterval()])
             const startStr = format(start, 'MMM d HH:mm')
             const endStr = format(end, 'MMM d HH:mm')
-            return `${startStr} – ${endStr} (${intervalLabels[selectedInterval()]})`
+
+            return `${startStr} – ${endStr}`
           },
           label: (context: {dataset: {label?: string}; parsed: {y: number}}) => {
-            console.log('label!!!')
-
-            const label = context.dataset.label || ''
+            const label = (context.dataset.label || '').replace(' Tokens', '')
             const value = context.parsed.y.toLocaleString()
+
             return `${label}: ${value}`
           },
           footer: (tooltipItems: {dataIndex: number; parsed: {y: number}}[]) => {
@@ -179,7 +179,7 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
               ?? tooltipItems.reduce((sum, item) => {
                 return sum + item.parsed.y
               }, 0)
-            return `Total Tokens: ${total.toLocaleString()}`
+            return `Total: ${total.toLocaleString()}`
           },
         },
       },
