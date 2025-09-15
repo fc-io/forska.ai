@@ -1,10 +1,12 @@
-import {Tooltip} from '@ark-ui/solid'
 import {useQuery} from '@tanstack/solid-query'
+import {BarController, BarElement, CategoryScale, Chart, Legend, LinearScale, Tooltip} from 'chart.js'
 import {format} from 'date-fns'
 import {Bar} from 'solid-chartjs'
 import {createMemo, createSignal, onMount, Show} from 'solid-js'
 
 import {apiClient} from '../services/apiClient.ts'
+
+const [chartReady, setChartReady] = createSignal(false)
 
 type TimeInterval = '5min' | '15min' | '1h' | '24h' | '1w' | '1m'
 
@@ -129,7 +131,7 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
     responsive: true,
     maintainAspectRatio: false,
     interaction: {mode: 'index' as const, intersect: false},
-    animation: {duration: 0},
+    animation: {duration: 0.4},
     plugins: {
       legend: {
         display: true,
@@ -139,16 +141,45 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
       },
       tooltip: {
         callbacks: {
+          title: (tooltipItems: {dataIndex: number}[]) => {
+            console.log('tooltipItems!!!')
+            const idx = tooltipItems?.[0]?.dataIndex
+            const data = tokenData.data as TokenTimelineData[] | undefined
+            if (idx == null || !data || !data[idx]) return ''
+
+            const start = new Date(data[idx].timestamp)
+            const intervalMs: Record<TimeInterval, number> = {
+              '5min': 5 * 60 * 1000,
+              '15min': 15 * 60 * 1000,
+              '1h': 60 * 60 * 1000,
+              '24h': 24 * 60 * 60 * 1000,
+              '1w': 7 * 24 * 60 * 60 * 1000,
+              '1m': 30 * 24 * 60 * 60 * 1000,
+            }
+            const end = new Date(start.getTime() + intervalMs[selectedInterval()])
+            const startStr = format(start, 'MMM d HH:mm')
+            const endStr = format(end, 'MMM d HH:mm')
+            return `${startStr} – ${endStr} (${intervalLabels[selectedInterval()]})`
+          },
           label: (context: {dataset: {label?: string}; parsed: {y: number}}) => {
+            console.log('label!!!')
+
             const label = context.dataset.label || ''
             const value = context.parsed.y.toLocaleString()
             return `${label}: ${value}`
           },
-          footer: (tooltipItems: {parsed: {y: number}}[]) => {
-            const total = tooltipItems.reduce((sum, item) => {
-              return sum + item.parsed.y
-            }, 0)
-            return `Total: ${total.toLocaleString()}`
+          footer: (tooltipItems: {dataIndex: number; parsed: {y: number}}[]) => {
+            console.log('footer!!!')
+
+            const idx = tooltipItems?.[0]?.dataIndex
+            const data = tokenData.data as TokenTimelineData[] | undefined
+            if (idx == null || !data || !data[idx]) return ''
+            const total =
+              data[idx].totalTokens
+              ?? tooltipItems.reduce((sum, item) => {
+                return sum + item.parsed.y
+              }, 0)
+            return `Total Tokens: ${total.toLocaleString()}`
           },
         },
       },
@@ -169,7 +200,8 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
   }
 
   onMount(() => {
-    void import('chart.js/auto')
+    Chart.register(BarController, BarElement, CategoryScale, LinearScale, Tooltip, Legend)
+    setChartReady(true)
   })
 
   return (
@@ -179,37 +211,6 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
           <div>
             <div class="flex items-center gap-2">
               <h2 class="text-lg font-semibold text-gray-900">Token Usage Timeline</h2>
-              <Tooltip.Root>
-                <Tooltip.Trigger
-                  aria-label="About this chart"
-                  class="inline-flex items-center justify-center text-gray-400 hover:text-gray-600 focus-visible:outline-none"
-                >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    class="size-4"
-                  >
-                    <circle cx="12" cy="12" r="9" />
-                    <path d="M12 17v-4" />
-                    <path d="M12 8h.01" />
-                    <title>About</title>
-                  </svg>
-                </Tooltip.Trigger>
-                <Tooltip.Positioner>
-                  <Tooltip.Content class="z-50 max-w-xs rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 shadow-md">
-                    <div class="font-medium text-gray-900 mb-1">How to read</div>
-                    <p>
-                      Aggregated by {intervalLabels[selectedInterval()]}. Stacked bars show prompt and completion
-                      tokens. Hover a bar for exact values and total. Times use your local timezone.
-                    </p>
-                  </Tooltip.Content>
-                </Tooltip.Positioner>
-              </Tooltip.Root>
             </div>
             <p class="text-sm text-gray-500 mt-1">
               {selectedInterval() === '24h'
@@ -260,11 +261,11 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
           </div>
         </Show>
 
-        <Show when={chartData()}>
-          <div class="h-64">
+        <div class="h-64">
+          <Show when={chartReady() && chartData()}>
             <Bar data={chartData() || {labels: [], datasets: []}} options={chartOptions} />
-          </div>
-        </Show>
+          </Show>
+        </div>
 
         <Show when={tokenData.data && (tokenData.data as TokenTimelineData[]).length === 0}>
           <div class="h-64 flex items-center justify-center">

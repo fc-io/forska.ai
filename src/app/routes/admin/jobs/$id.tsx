@@ -50,9 +50,8 @@ const AdminJudgmentJobDetail = () => {
     return {
       queryKey: ['judgments-job', id()],
       queryFn: async () => {
-        console.log('id:', id())
         const response = await getJudgmentsJobById(id())
-        console.log('response:', response?.unassessedArticlesCount)
+
         return response
       },
       refetchInterval: 1000 * 15, // Refresh every 30 seconds
