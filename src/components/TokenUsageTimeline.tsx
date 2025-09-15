@@ -59,8 +59,6 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
   
   const [dateRange, setDateRange] = createSignal(getDateRangeForInterval(selectedInterval()))
 
-  let chartRef: HTMLCanvasElement | undefined
-
   const tokenData = useQuery(() => {
     return {
       queryKey: ['token-timeline', props.projectId, selectedInterval(), dateRange().start, dateRange().end],
@@ -72,7 +70,7 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
           endDate: dateRange().end.toISOString(),
         })
 
-        if (!response.data.success) {
+        if (!response.data || !response.data.success) {
           throw new Error('Failed to fetch token timeline')
         }
 
@@ -89,7 +87,7 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
     }
 
     return {
-      labels: data.map((d) => {
+      labels: data.map((d: any) => {
         const date = new Date(d.timestamp)
         return selectedInterval() === '5min' || selectedInterval() === '15min'
           ? format(date, 'HH:mm')
@@ -99,12 +97,22 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
       }),
       datasets: [
         {
-          label: 'Token Usage',
-          data: data.map((d) => {
-            return d.totalTokens
+          label: 'Prompt Tokens',
+          data: data.map((d: any) => {
+            return d.totalPromptTokens
           }),
           backgroundColor: 'rgb(59, 130, 246)',
           borderColor: 'rgb(59, 130, 246)',
+          borderWidth: 0,
+          barThickness: selectedInterval() === '5min' ? 4 : selectedInterval() === '15min' ? 6 : 8,
+        },
+        {
+          label: 'Completion Tokens',
+          data: data.map((d: any) => {
+            return d.totalCompletionTokens
+          }),
+          backgroundColor: 'rgb(147, 197, 253)',
+          borderColor: 'rgb(147, 197, 253)',
           borderWidth: 0,
           barThickness: selectedInterval() === '5min' ? 4 : selectedInterval() === '15min' ? 6 : 8,
         },
@@ -119,17 +127,40 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
       duration: 0,
     },
     plugins: {
-      legend: {display: false},
+      legend: {
+        display: true,
+        position: 'top' as const,
+        align: 'end' as const,
+        labels: {
+          boxWidth: 12,
+          padding: 10,
+          font: {
+            size: 11,
+          },
+        },
+      },
       tooltip: {
         callbacks: {
           label: (context: any) => {
-            return `Tokens: ${context.parsed.y.toLocaleString()}`
+            const label = context.dataset.label || ''
+            const value = context.parsed.y.toLocaleString()
+            return `${label}: ${value}`
+          },
+          footer: (tooltipItems: any) => {
+            const total = tooltipItems.reduce((sum: number, item: any) => {
+              return sum + item.parsed.y
+            }, 0)
+            return `Total: ${total.toLocaleString()}`
           },
         },
       },
     },
     scales: {
-      x: {grid: {display: false}, ticks: {maxRotation: 0, autoSkip: true, maxTicksLimit: 20}},
+      x: {
+        grid: {display: false},
+        ticks: {maxRotation: 0, autoSkip: true, maxTicksLimit: 20},
+        stacked: true,
+      },
       y: {
         beginAtZero: true,
         grid: {color: 'rgba(0, 0, 0, 0.05)'},
@@ -138,12 +169,13 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
             return value.toLocaleString()
           },
         },
+        stacked: true,
       },
     },
   }
 
   onMount(() => {
-    import('chart.js/auto')
+    void import('chart.js/auto')
   })
 
   return (
@@ -203,11 +235,11 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
 
         <Show when={chartData()}>
           <div class="h-64">
-            <Bar data={chartData()!} options={chartOptions} />
+            <Bar data={chartData() || {labels: [], datasets: []}} options={chartOptions} />
           </div>
         </Show>
 
-        <Show when={tokenData.data && tokenData.data.length === 0}>
+        <Show when={tokenData.data && (tokenData.data as any[]).length === 0}>
           <div class="h-64 flex items-center justify-center">
             <p class="text-gray-500">No token usage data available for this period</p>
           </div>
