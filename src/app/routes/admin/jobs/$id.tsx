@@ -48,14 +48,16 @@ const AdminJudgmentJobDetail = () => {
   const job = useQuery(() => {
     return {
       queryKey: ['judgments-job', id()],
-      queryFn: () => {
+      queryFn: async () => {
         console.log('id:', id())
-        return getJudgmentsJobById(id())
+        const response = await getJudgmentsJobById(id())
+        console.log('response:', response?.unassessedArticlesCount)
+        return response
       },
-      refetchInterval: 1000 * 30, // Refresh every 30 seconds
+      refetchInterval: 1000 * 15, // Refresh every 30 seconds
     }
   })
-  // console.log('job.data:', job)
+  // console.log('job.data:', job.data?.unassessedArticlesCount)
   // console.log('job.data type:', typeof job, Array.isArray(job))
 
   return (
@@ -92,74 +94,81 @@ const AdminJudgmentJobDetail = () => {
 
         <Show when={job.data}>
           {(jobData) => {
-            const data = jobData()
+            // Keep as accessor to preserve Solid reactivity
+            const data = jobData
             return (
               <>
                 <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
                   <div class="flex justify-between items-start mb-4">
                     <div>
                       <h1 class="text-2xl font-bold text-gray-900">Job</h1>
-                      <p class="text-sm text-gray-500 mt-1 font-mono">{data.id}</p>
+                      <p class="text-sm text-gray-500 mt-1 font-mono">{data()?.id}</p>
                     </div>
-                    <span class={`px-3 py-1 rounded-full text-sm font-medium border ${getStatusColor(data.status)}`}>
-                      {formatStatus(data.status)}
+                    <span
+                      class={`px-3 py-1 rounded-full text-sm font-medium border ${getStatusColor(data()?.status ?? null)}`}
+                    >
+                      {formatStatus(data()?.status ?? null)}
                     </span>
                   </div>
 
                   <div class="grid grid-cols-2 gap-4 mt-6">
                     <div>
                       <p class="text-sm text-gray-500">Project</p>
-                      <p class="font-medium">{data.projectName || 'Unknown Project'}</p>
+                      <p class="font-medium">{data()?.projectName || 'Unknown Project'}</p>
                     </div>
                     <div>
                       <p class="text-sm text-gray-500">Project ID</p>
-                      <p class="font-mono text-sm">{data.projectId}</p>
+                      <p class="font-mono text-sm">{data()?.projectId}</p>
                     </div>
                     <div>
                       <p class="text-sm text-gray-500">Created</p>
                       <p class="font-medium">
-                        {data.createdAt ? formatDate(new Date(data.createdAt), 'yyyy-MM-dd HH:mm:ss') : 'N/A'}
+                        {data()?.createdAt ? formatDate(new Date(data().createdAt), 'yyyy-MM-dd HH:mm:ss') : 'N/A'}
                       </p>
                     </div>
                     <div>
                       <p class="text-sm text-gray-500">Last Updated</p>
                       <p class="font-medium">
-                        {data.updatedAt ? formatDate(new Date(data.updatedAt), 'yyyy-MM-dd HH:mm:ss') : 'N/A'}
+                        {data()?.updatedAt ? formatDate(new Date(data().updatedAt), 'yyyy-MM-dd HH:mm:ss') : 'N/A'}
                       </p>
                     </div>
                   </div>
-                  
+
                   <div class="mt-6 pt-6 border-t border-gray-200">
                     <h3 class="text-sm font-medium text-gray-900 mb-3">Project</h3>
-                    <Show when={'unassessedArticlesCount' in data}>
+                    <Show when={data() && 'unassessedArticlesCount' in (data() as any)}>
                       <div class="mb-4">
                         <p class="text-sm text-gray-500">Unassessed Articles</p>
                         <p class="font-medium">
-                          {'unassessedArticlesCount' in data ? data.unassessedArticlesCount?.toLocaleString() || '0' : '0'}
+                          {data() && 'unassessedArticlesCount' in (data() as any)
+                            ? (data() as any).unassessedArticlesCount?.toLocaleString() || '0'
+                            : '0'}
                         </p>
                       </div>
                     </Show>
-                    <Show when={'totalTokenUsage' in data && data.totalTokenUsage}>
+                    <Show when={data() && 'totalTokenUsage' in (data() as any) && (data() as any).totalTokenUsage}>
                       <div class="grid grid-cols-3 gap-4">
                         <div>
                           <p class="text-sm text-gray-500">Total Tokens</p>
                           <p class="font-medium">
-                            {'totalTokenUsage' in data ? data.totalTokenUsage?.totalTokens?.toLocaleString() || '0' : '0'}
+                            {data() && 'totalTokenUsage' in (data() as any)
+                              ? (data() as any).totalTokenUsage?.totalTokens?.toLocaleString() || '0'
+                              : '0'}
                           </p>
                         </div>
                         <div>
                           <p class="text-sm text-gray-500">Prompt Tokens</p>
                           <p class="font-medium">
-                            {'totalTokenUsage' in data
-                              ? data.totalTokenUsage?.totalPromptTokens?.toLocaleString() || '0'
+                            {data() && 'totalTokenUsage' in (data() as any)
+                              ? (data() as any).totalTokenUsage?.totalPromptTokens?.toLocaleString() || '0'
                               : '0'}
                           </p>
                         </div>
                         <div>
                           <p class="text-sm text-gray-500">Completion Tokens</p>
                           <p class="font-medium">
-                            {'totalTokenUsage' in data
-                              ? data.totalTokenUsage?.totalCompletionTokens?.toLocaleString() || '0'
+                            {data() && 'totalTokenUsage' in (data() as any)
+                              ? (data() as any).totalTokenUsage?.totalCompletionTokens?.toLocaleString() || '0'
                               : '0'}
                           </p>
                         </div>
@@ -167,28 +176,28 @@ const AdminJudgmentJobDetail = () => {
                     </Show>
                   </div>
                 </div>
-                <Show when={'articleStats' in data && data.articleStats}>
+                <Show when={data() && 'articleStats' in (data() as any) && (data() as any).articleStats}>
                   <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
                     <h2 class="text-lg font-semibold mb-4">Job Queue</h2>
                     <div class="grid grid-cols-3 gap-4">
                       <div class="bg-gray-50 rounded-lg p-4">
                         <p class="text-sm text-gray-500 mb-1">Ready</p>
                         <p class="text-2xl font-bold text-gray-900">
-                          {'articleStats' in data ? data.articleStats?.ready || 0 : 0}
+                          {data() && 'articleStats' in (data() as any) ? (data() as any).articleStats?.ready || 0 : 0}
                         </p>
                         <p class="text-xs text-gray-500 mt-1">Articles ready to process</p>
                       </div>
                       <div class="bg-blue-50 rounded-lg p-4">
                         <p class="text-sm text-blue-600 mb-1">Sent</p>
                         <p class="text-2xl font-bold text-blue-900">
-                          {'articleStats' in data ? data.articleStats?.sent || 0 : 0}
+                          {data() && 'articleStats' in (data() as any) ? (data() as any).articleStats?.sent || 0 : 0}
                         </p>
                         <p class="text-xs text-blue-600 mt-1">Articles sent for judgment</p>
                       </div>
                       <div class="bg-green-50 rounded-lg p-4">
                         <p class="text-sm text-green-600 mb-1">Judged</p>
                         <p class="text-2xl font-bold text-green-900">
-                          {'articleStats' in data ? data.articleStats?.judged || 0 : 0}
+                          {data() && 'articleStats' in (data() as any) ? (data() as any).articleStats?.judged || 0 : 0}
                         </p>
                         <p class="text-xs text-green-600 mt-1">Articles completed</p>
                       </div>
@@ -196,11 +205,11 @@ const AdminJudgmentJobDetail = () => {
                   </div>
                 </Show>
 
-                <Show when={Array.isArray(data.error) && data.error.length > 0}>
+                <Show when={Array.isArray((data() as any)?.error) && (data() as any).error.length > 0}>
                   <div class="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
                     <h2 class="text-lg font-semibold text-red-900 mb-2">Errors</h2>
                     <ul class="list-disc list-inside space-y-1">
-                      <For each={Array.isArray(data.error) ? data.error : []}>
+                      <For each={Array.isArray((data() as any)?.error) ? (data() as any).error : []}>
                         {(err) => {
                           return <li class="text-red-700">{err}</li>
                         }}
@@ -212,17 +221,17 @@ const AdminJudgmentJobDetail = () => {
                 <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
                   <h2 class="text-lg font-semibold mb-4">Actions</h2>
                   <div class="flex gap-3">
-                    <Show when={data.status === 'running'}>
+                    <Show when={data()?.status === 'running'}>
                       <button class="px-4 py-2 bg-yellow-600 text-white rounded-md hover:bg-yellow-700">
                         Pause Job
                       </button>
                     </Show>
-                    <Show when={data.status === 'paused_by_admin' || data.status === 'paused_by_user'}>
+                    <Show when={data()?.status === 'paused_by_admin' || data()?.status === 'paused_by_user'}>
                       <button class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700">
                         Resume Job
                       </button>
                     </Show>
-                    <Show when={data.status === 'failed'}>
+                    <Show when={data()?.status === 'failed'}>
                       <button class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">Retry Job</button>
                     </Show>
                     <button

@@ -9,6 +9,7 @@ const inputData = type({searchTerm: 'string', fromDate: 'string.date', toDate: '
 type InputData = typeof inputData.infer
 
 const run = async (numberOfArticlesToGet = 100, fromDate?: Date, toDate?: Date) => {
+  console.log('This code is deprecated, use the judgmentsJobsRoutes instead')
   console.log('start workflow', 'import.meta.env.DEV', import.meta.env.DEV, numberOfArticlesToGet)
   if (fromDate) {
     console.log('fromDate:', fromDate.toISOString())
