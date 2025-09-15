@@ -5,13 +5,14 @@ import {getDatabase} from '../../utils/getDatabase.ts'
 
 type TimelineParams = {
   projectId: string
-  interval: '5min' | '15min' | '1h' | '24h' | '1w' | '1m'
+  interval: '1min' | '5min' | '15min' | '1h' | '24h' | '1w' | '1m'
   startDate: string
   endDate: string
 }
 
 const getIntervalSeconds = (interval: TimelineParams['interval']): number => {
   const intervals = {
+    '1min': 60,
     '5min': 5 * 60,
     '15min': 15 * 60,
     '1h': 60 * 60,

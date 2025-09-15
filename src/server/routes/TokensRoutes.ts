@@ -104,6 +104,7 @@ export const tokensRoutes = new Elysia()
       body: t.Object({
         projectId: t.String(),
         interval: t.Union([
+          t.Literal('1min'),
           t.Literal('5min'),
           t.Literal('15min'),
           t.Literal('1h'),

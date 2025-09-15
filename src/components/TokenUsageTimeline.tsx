@@ -6,7 +6,7 @@ import {createMemo, createSignal, onMount, Show} from 'solid-js'
 
 import {apiClient} from '../services/apiClient.ts'
 
-type TimeInterval = '5min' | '15min' | '1h' | '24h' | '1w' | '1m'
+type TimeInterval = '1min' | '5min' | '15min' | '1h' | '24h' | '1w' | '1m'
 
 type TokenTimelineData = {
   timestamp: string
@@ -44,6 +44,11 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
     }
 
     switch (interval) {
+      case '1min': {
+        // Last 10 minutes, aligned to 1-minute boundaries
+        const end = alignToInterval(now, 1)
+        return {start: new Date(end.getTime() - 10 * 60 * 1000), end}
+      }
       case '5min': {
         // Last 1 hour, aligned to 5-minute boundaries
         const end = alignToInterval(now, 5)
@@ -101,6 +106,7 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
       },
       refetchInterval: (() => {
         const map: Record<TimeInterval, number> = {
+          '1min': 10_000, // refresh very fast for 1 minute windows
           '5min': 15_000, // refresh faster for short windows
           '15min': 30_000,
           '1h': 60_000,
@@ -114,6 +120,7 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
       refetchOnWindowFocus: true,
       staleTime: (() => {
         const map: Record<TimeInterval, number> = {
+          '1min': 10_000,
           '5min': 15_000,
           '15min': 30_000,
           '1h': 60_000,
@@ -139,7 +146,7 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
     return {
       labels: data.map((d) => {
         const date = new Date(d.timestamp)
-        return selectedInterval() === '5min' || selectedInterval() === '15min'
+        return selectedInterval() === '1min' || selectedInterval() === '5min' || selectedInterval() === '15min'
           ? format(date, 'HH:mm')
           : selectedInterval() === '1h'
             ? format(date, 'MMM d HH:mm')
@@ -154,7 +161,14 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
           backgroundColor: 'rgb(59, 130, 246)',
           borderColor: 'rgb(59, 130, 246)',
           borderWidth: 0,
-          barThickness: selectedInterval() === '5min' ? 4 : selectedInterval() === '15min' ? 6 : 8,
+          barThickness:
+            selectedInterval() === '1min'
+              ? 3
+              : selectedInterval() === '5min'
+                ? 4
+                : selectedInterval() === '15min'
+                  ? 6
+                  : 8,
         },
         {
           label: 'Completion Tokens',
@@ -164,7 +178,14 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
           backgroundColor: 'rgb(147, 197, 253)',
           borderColor: 'rgb(147, 197, 253)',
           borderWidth: 0,
-          barThickness: selectedInterval() === '5min' ? 4 : selectedInterval() === '15min' ? 6 : 8,
+          barThickness:
+            selectedInterval() === '1min'
+              ? 3
+              : selectedInterval() === '5min'
+                ? 4
+                : selectedInterval() === '15min'
+                  ? 6
+                  : 8,
         },
       ],
     }
@@ -192,6 +213,7 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
 
             const start = new Date(data[idx].timestamp)
             const intervalMs: Record<TimeInterval, number> = {
+              '1min': 60 * 1000,
               '5min': 5 * 60 * 1000,
               '15min': 15 * 60 * 1000,
               '1h': 60 * 60 * 1000,
@@ -256,6 +278,7 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
               <h2 class="text-lg font-semibold text-gray-900">Token Usage Timeline</h2>
             </div>
             <p class="text-sm text-gray-500 mt-1">
+              <Show when={selectedInterval() === '1min'}>Last 10 minutes</Show>
               <Show when={selectedInterval() === '5min'}>Last hour</Show>
               <Show when={selectedInterval() === '15min'}>Last 8 hours</Show>
               <Show when={selectedInterval() === '1h'}>Last 24 hours</Show>
@@ -274,6 +297,7 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
               }}
               class="px-3 py-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
+              <option value="1min">1 minute</option>
               <option value="5min">5 minutes</option>
               <option value="15min">15 minutes</option>
               <option value="1h">1 hour</option>
