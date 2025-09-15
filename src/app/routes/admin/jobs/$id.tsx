@@ -3,6 +3,7 @@ import {createFileRoute, Link} from '@tanstack/solid-router'
 import {formatDate} from 'date-fns'
 import {For, Show} from 'solid-js'
 
+import {TokenUsageTimeline} from '../../../../components/TokenUsageTimeline'
 import {getJudgmentsJobById} from '../../../../services/judgmentsJobsService'
 
 const getStatusColor = (status: string | null) => {
@@ -215,6 +216,12 @@ const AdminJudgmentJobDetail = () => {
                         }}
                       </For>
                     </ul>
+                  </div>
+                </Show>
+
+                <Show when={data()?.projectId}>
+                  <div class="mb-6">
+                    <TokenUsageTimeline projectId={data().projectId} />
                   </div>
                 </Show>
 

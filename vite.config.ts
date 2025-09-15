@@ -1,5 +1,6 @@
 import tailwindcss from '@tailwindcss/vite'
 import {tanstackRouter} from '@tanstack/router-plugin/vite'
+import path from 'path'
 import {defineConfig} from 'vite'
 import solid from 'vite-plugin-solid'
 
@@ -17,6 +18,7 @@ export default defineConfig({
     }),
     tailwindcss(),
   ],
+  resolve: {alias: {'~': path.resolve(__dirname, './src')}},
   server: {
     port: env.VITE_PORT,
     strictPort: false,
@@ -29,10 +31,7 @@ export default defineConfig({
         },
         secure: true,
       },
-      '/api': {
-        target: `http://localhost:${env.SERVER_PORT}`,
-        changeOrigin: true,
-      },
+      '/api': {target: `http://localhost:${env.SERVER_PORT}`, changeOrigin: true},
     },
   },
   build: {target: 'esnext'},

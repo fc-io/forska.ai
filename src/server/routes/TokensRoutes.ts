@@ -4,6 +4,7 @@ import {Elysia, t} from 'elysia'
 import {session} from '../../../auth-schema.ts'
 import {tokenUse} from '../../db/schema.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
+import {tokensRoutesGetTimeline} from './tokensRoutes/tokensRoutesGetTimeline.ts'
 
 export const tokensRoutes = new Elysia()
   .post(
@@ -93,4 +94,18 @@ export const tokensRoutes = new Elysia()
       }
     },
     {query: t.Object({startTime: t.Optional(t.String()), endTime: t.Optional(t.String())})},
+  )
+  .post(
+    '/api/tokens/timeline',
+    async ({body}) => {
+      return await tokensRoutesGetTimeline(body)
+    },
+    {
+      body: t.Object({
+        projectId: t.String(),
+        interval: t.Union([t.Literal('5min'), t.Literal('15min'), t.Literal('1h'), t.Literal('24h'), t.Literal('1w'), t.Literal('1m')]),
+        startDate: t.String(),
+        endDate: t.String(),
+      }),
+    },
   )
