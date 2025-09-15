@@ -94,13 +94,7 @@ export const judgeStoreTokenUse = async (
   )
 
   if (isServerEnvironment()) {
-    await storeTokenUseDirectly(
-      totalArticles,
-      totalTokenUse,
-      sessionId,
-      {startedAt, finishedAt, duration},
-      judgmentsJobId,
-    )
+    await storeTokenUseDirectly(totalArticles, totalTokenUse, null, {startedAt, finishedAt, duration}, judgmentsJobId)
   } else {
     if (!sessionId) {
       throw new Error('sessionId is required when running in client environment')

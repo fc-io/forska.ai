@@ -223,7 +223,7 @@ export const tokenUse = pgTable('token_use', {
     () => {
       return session.id
     },
-    {onDelete: 'cascade'},
+    {onDelete: 'set null'},
   ),
   judgmentsJobId: uuid('judgments_job_id').references(
     () => {
