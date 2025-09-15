@@ -12,12 +12,12 @@ type TimelineParams = {
 
 const getIntervalSeconds = (interval: TimelineParams['interval']): number => {
   const intervals = {
-    '5min': 5 * 60, 
-    '15min': 15 * 60, 
-    '1h': 60 * 60, 
+    '5min': 5 * 60,
+    '15min': 15 * 60,
+    '1h': 60 * 60,
     '24h': 24 * 60 * 60,
     '1w': 7 * 24 * 60 * 60,
-    '1m': 30 * 24 * 60 * 60
+    '1m': 30 * 24 * 60 * 60,
   }
   return intervals[interval]
 }

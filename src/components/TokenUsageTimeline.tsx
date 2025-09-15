@@ -20,15 +20,6 @@ type TokenTimelineData = {
 
 type TokenUsageTimelineProps = {projectId: string}
 
-const intervalLabels: Record<TimeInterval, string> = {
-  '5min': '5 minutes',
-  '15min': '15 minutes',
-  '1h': '1 hour',
-  '24h': '24 hours',
-  '1w': '1 week',
-  '1m': '1 month',
-}
-
 export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
   const [selectedInterval, setSelectedInterval] = createSignal<TimeInterval>('24h')
 
@@ -44,27 +35,41 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
     }
 
     switch (interval) {
+      case '5min': {
+        // Last 1 hour
+        return {start: new Date(now.getTime() - 60 * 60 * 1000), end: now}
+      }
+      case '15min': {
+        // Last 8 hours
+        return {start: new Date(now.getTime() - 8 * 60 * 60 * 1000), end: now}
+      }
+      case '1h': {
+        // Last 24 hours
+        return {start: new Date(now.getTime() - 24 * 60 * 60 * 1000), end: now}
+      }
       case '24h': {
         // For daily buckets, show the last 30 days, aligned to local midnight
         return {start: startOfNDaysAgo(29), end: now}
       }
-      case '5min':
-      case '15min':
-      case '1h': {
-        const ranges = {'5min': 5 * 60 * 1000, '15min': 15 * 60 * 1000, '1h': 60 * 60 * 1000}
-        return {start: new Date(now.getTime() - ranges[interval]), end: now}
-      }
       case '1w': {
-        return {start: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000), end: now}
+        // Last 30 weeks
+        return {start: new Date(now.getTime() - 30 * 7 * 24 * 60 * 60 * 1000), end: now}
       }
-      case '1m':
+      case '1m': {
+        // Last 24 months
+        const d = new Date()
+        d.setMonth(d.getMonth() - 24)
+        return {start: d, end: now}
+      }
       default: {
         return {start: new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000), end: now}
       }
     }
   }
 
-  const [dateRange, setDateRange] = createSignal(getDateRangeForInterval(selectedInterval()))
+  const dateRange = createMemo(() => {
+    return getDateRangeForInterval(selectedInterval())
+  })
 
   const tokenData = useQuery(() => {
     return {
@@ -213,9 +218,12 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
               <h2 class="text-lg font-semibold text-gray-900">Token Usage Timeline</h2>
             </div>
             <p class="text-sm text-gray-500 mt-1">
-              {selectedInterval() === '24h'
-                ? 'Showing daily token usage for the last 30 days'
-                : `Showing token usage for the last ${intervalLabels[selectedInterval()]}`}
+              <Show when={selectedInterval() === '5min'}>Last hour</Show>
+              <Show when={selectedInterval() === '15min'}>Last 8 hours</Show>
+              <Show when={selectedInterval() === '1h'}>Last 24 hours</Show>
+              <Show when={selectedInterval() === '24h'}>Last 30 days</Show>
+              <Show when={selectedInterval() === '1w'}>Last 30 weeks</Show>
+              <Show when={selectedInterval() === '1m'}>Last 24 months</Show>
             </p>
           </div>
 
@@ -224,8 +232,7 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
               value={selectedInterval()}
               onChange={(e) => {
                 const newInterval = e.target.value as TimeInterval
-                setSelectedInterval(newInterval)
-                return setDateRange(getDateRangeForInterval(newInterval))
+                return setSelectedInterval(newInterval)
               }}
               class="px-3 py-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
