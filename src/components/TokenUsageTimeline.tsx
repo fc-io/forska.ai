@@ -6,8 +6,6 @@ import {createMemo, createSignal, onMount, Show} from 'solid-js'
 
 import {apiClient} from '../services/apiClient.ts'
 
-const [chartReady, setChartReady] = createSignal(false)
-
 type TimeInterval = '5min' | '15min' | '1h' | '24h' | '1w' | '1m'
 
 type TokenTimelineData = {
@@ -22,6 +20,8 @@ type TokenUsageTimelineProps = {projectId: string}
 
 export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
   const [selectedInterval, setSelectedInterval] = createSignal<TimeInterval>('24h')
+  // Keep chart readiness local to this component instance
+  const [chartReady, setChartReady] = createSignal(false)
 
   const getDateRangeForInterval = (interval: TimeInterval) => {
     const now = new Date()
@@ -78,19 +78,19 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
     }
   }
 
-  const dateRange = createMemo(() => {
-    return getDateRangeForInterval(selectedInterval())
-  })
+  // Compute date range at fetch time to avoid stale windows
 
   const tokenData = useQuery(() => {
     return {
-      queryKey: ['token-timeline', props.projectId, selectedInterval(), dateRange().start, dateRange().end],
+      // Keep key stable for a given project + interval; time window advances via refetch
+      queryKey: ['token-timeline', props.projectId, selectedInterval()],
       queryFn: async () => {
+        const {start, end} = getDateRangeForInterval(selectedInterval())
         const response = await apiClient.api.tokens.timeline.post({
           projectId: props.projectId,
           interval: selectedInterval(),
-          startDate: dateRange().start.toISOString(),
-          endDate: dateRange().end.toISOString(),
+          startDate: start.toISOString(),
+          endDate: end.toISOString(),
         })
 
         if (!response.data || !response.data.success) {
@@ -99,7 +99,34 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
 
         return response.data.data
       },
-      refetchInterval: 30000, // Refresh every 30 seconds
+      refetchInterval: (() => {
+        const map: Record<TimeInterval, number> = {
+          '5min': 15_000, // refresh faster for short windows
+          '15min': 30_000,
+          '1h': 60_000,
+          '24h': 5 * 60_000,
+          '1w': 10 * 60_000,
+          '1m': 30 * 60_000,
+        }
+        return map[selectedInterval()]
+      })(),
+      // Avoid extra refetch on focus when data is fresh; still refetch if stale
+      refetchOnWindowFocus: true,
+      staleTime: (() => {
+        const map: Record<TimeInterval, number> = {
+          '5min': 15_000,
+          '15min': 30_000,
+          '1h': 60_000,
+          '24h': 5 * 60_000,
+          '1w': 10 * 60_000,
+          '1m': 30 * 60_000,
+        }
+        return map[selectedInterval()]
+      })(),
+      // TanStack Query v5 replacement for keepPreviousData
+      placeholderData: (prev) => {
+        return prev
+      },
     }
   })
 
