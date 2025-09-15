@@ -34,14 +34,25 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
       return d
     }
 
+    // Helper to align time to nearest interval boundary
+    const alignToInterval = (date: Date, minutes: number) => {
+      const aligned = new Date(date)
+      const currentMinutes = aligned.getMinutes()
+      const alignedMinutes = Math.floor(currentMinutes / minutes) * minutes
+      aligned.setMinutes(alignedMinutes, 0, 0)
+      return aligned
+    }
+
     switch (interval) {
       case '5min': {
-        // Last 1 hour
-        return {start: new Date(now.getTime() - 60 * 60 * 1000), end: now}
+        // Last 1 hour, aligned to 5-minute boundaries
+        const end = alignToInterval(now, 5)
+        return {start: new Date(end.getTime() - 60 * 60 * 1000), end}
       }
       case '15min': {
-        // Last 8 hours
-        return {start: new Date(now.getTime() - 8 * 60 * 60 * 1000), end: now}
+        // Last 8 hours, aligned to 15-minute boundaries
+        const end = alignToInterval(now, 15)
+        return {start: new Date(end.getTime() - 8 * 60 * 60 * 1000), end}
       }
       case '1h': {
         // Last 24 hours
