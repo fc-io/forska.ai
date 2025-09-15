@@ -129,9 +129,17 @@ const AdminJudgmentJobDetail = () => {
                     </div>
                   </div>
                   
-                  <Show when={'totalTokenUsage' in data && data.totalTokenUsage}>
-                    <div class="mt-6 pt-6 border-t border-gray-200">
-                      <h3 class="text-sm font-medium text-gray-900 mb-3">Token Usage</h3>
+                  <div class="mt-6 pt-6 border-t border-gray-200">
+                    <h3 class="text-sm font-medium text-gray-900 mb-3">Project</h3>
+                    <Show when={'unassessedArticlesCount' in data}>
+                      <div class="mb-4">
+                        <p class="text-sm text-gray-500">Unassessed Articles</p>
+                        <p class="font-medium">
+                          {'unassessedArticlesCount' in data ? data.unassessedArticlesCount?.toLocaleString() || '0' : '0'}
+                        </p>
+                      </div>
+                    </Show>
+                    <Show when={'totalTokenUsage' in data && data.totalTokenUsage}>
                       <div class="grid grid-cols-3 gap-4">
                         <div>
                           <p class="text-sm text-gray-500">Total Tokens</p>
@@ -156,20 +164,9 @@ const AdminJudgmentJobDetail = () => {
                           </p>
                         </div>
                       </div>
-                    </div>
-                  </Show>
-                </div>
-                <Show when={'unassessedArticlesCount' in data}>
-                  <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
-                    <div class="bg-orange-50 rounded-lg p-4">
-                      <p class="text-sm text-orange-600 mb-1">Unassessed</p>
-                      <p class="text-2xl font-bold text-orange-900">
-                        {'unassessedArticlesCount' in data ? data.unassessedArticlesCount || 0 : 0}
-                      </p>
-                      <p class="text-xs text-orange-600 mt-1">Total articles in project without judgments</p>
-                    </div>
+                    </Show>
                   </div>
-                </Show>
+                </div>
                 <Show when={'articleStats' in data && data.articleStats}>
                   <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
                     <h2 class="text-lg font-semibold mb-4">Job Queue</h2>
