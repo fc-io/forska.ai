@@ -50,13 +50,28 @@ src
 * IMPORTANT: Do not remove debugger statements nor console.log unless explicitly asked (no matter what the linter says).
 * IMPORTANT: don't add comments, unless asked to. Instead split out complicated code into seperate functions with clear function names.
 
-## TypeScript conventions
+### Ternary With Helpers
+
+* Use-case: Exactly two mutually exclusive paths with no shared tail logic.
+* Rule: Prefer ending a function via ternary: `return cond ? pathA(optionalArg) : pathB(optionalArg)`
+* Rationale: Keeps a single return, flattens control flow, and makes intent self-documenting through function names.
+* Requirements: Extract each branch into small, named helpers; both branches must return the same type; precompute shared inputs before the ternary.
+* Avoid: More than two branches, large inline expressions, or branches that share significant post-branch logic.
+* Avoid: anonymous functions/arrow functions in the ternary.
+* Avoid: avoid nested (local) functions (instead create named functions on the root level – i.e top-level helpers)
+* Avoid: creating anonymous functions inside functions if the body of the anonymous functions is more than 3 rows
+
+#### Example
+
+`return cond ? buildA(x) : buildB(x)`
+
+### TypeScript conventions
 
 * IMPORTANT: Prefer `type` over `interface` for type definitions
 * Use explicit return types for functions when the return type is not immediately obvious
 * Prefer type unions and intersections over complex inheritance patterns
 
-## Import organization
+### Import organization
 
 * Order imports as follows (automatically handled by eslint-plugin-simple-import-sort):
   1. Node/Bun built-in modules
@@ -65,7 +80,7 @@ src
   4. Relative imports from parent directories
   5. Relative imports from the same directory
 
-## Component patterns (SolidJS)
+### Component patterns (SolidJS)
 
 * Use `splitProps` when destructuring component props to maintain reactivity
 * Prefer `createSignal` for simple local state, `createStore` for complex nested state
