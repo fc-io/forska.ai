@@ -289,7 +289,9 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
           ? format(date, 'HH:mm')
           : selectedInterval() === '1h'
             ? format(date, 'MMM d HH:mm')
-            : format(date, 'MMM d')
+            : selectedInterval() === '1m'
+              ? format(new Date(date.getFullYear(), date.getMonth(), 1), 'MMM yyyy')
+              : format(date, 'MMM d')
       }),
       datasets: [
         {
@@ -345,23 +347,31 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
       tooltip: {
         callbacks: {
           title: (tooltipItems: {dataIndex: number}[]) => {
-            console.log('tooltipItems!!!')
             const idx = tooltipItems?.[0]?.dataIndex
             const data = tokenData.data as TokenTimelineData[] | undefined
             if (idx == null || !data || !data[idx]) return ''
 
-            const start = new Date(data[idx].timestamp)
-            const intervalMs: Record<TimeInterval, number> = {
+            const bucketTs = new Date(data[idx].timestamp)
+
+            if (selectedInterval() === '1m') {
+              // Snap to calendar month boundaries for display
+              const monthStart = new Date(bucketTs.getFullYear(), bucketTs.getMonth(), 1, 0, 0, 0, 0)
+              const monthEnd = new Date(bucketTs.getFullYear(), bucketTs.getMonth() + 1, 0, 23, 59, 59, 999)
+              const startStr = format(monthStart, 'MMM d')
+              const endStr = format(monthEnd, 'MMM d')
+              return `${startStr} – ${endStr}`
+            }
+
+            const intervalMs: Record<Exclude<TimeInterval, '1m'>, number> = {
               '1min': 60 * 1000,
               '5min': 5 * 60 * 1000,
               '15min': 15 * 60 * 1000,
               '1h': 60 * 60 * 1000,
               '24h': 24 * 60 * 60 * 1000,
               '1w': 7 * 24 * 60 * 60 * 1000,
-              '1m': 30 * 24 * 60 * 60 * 1000,
             }
-            const end = new Date(start.getTime() + intervalMs[selectedInterval()])
-            const startStr = format(start, 'MMM d HH:mm')
+            const end = new Date(bucketTs.getTime() + intervalMs[selectedInterval() as Exclude<TimeInterval, '1m'>])
+            const startStr = format(bucketTs, 'MMM d HH:mm')
             const endStr = format(end, 'MMM d HH:mm')
 
             return `${startStr} – ${endStr}`
@@ -373,8 +383,6 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
             return `${label}: ${value}`
           },
           footer: (tooltipItems: {dataIndex: number; parsed: {y: number}}[]) => {
-            console.log('footer!!!')
-
             const idx = tooltipItems?.[0]?.dataIndex
             const data = tokenData.data as TokenTimelineData[] | undefined
             if (idx == null || !data || !data[idx]) return ''

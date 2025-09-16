@@ -1,4 +1,4 @@
-import {and, desc, eq, gte, lte, sql, sum} from 'drizzle-orm'
+import {and, desc, eq, gte, lt, sql, sum} from 'drizzle-orm'
 
 import {judgmentsJobs, tokenUse} from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
@@ -10,7 +10,7 @@ type TimelineParams = {
   endDate: string
 }
 
-const getIntervalSeconds = (interval: TimelineParams['interval']): number => {
+const getIntervalSeconds = (interval: Exclude<TimelineParams['interval'], '1m'>): number => {
   const intervals = {
     '1min': 60,
     '5min': 5 * 60,
@@ -18,7 +18,6 @@ const getIntervalSeconds = (interval: TimelineParams['interval']): number => {
     '1h': 60 * 60,
     '24h': 24 * 60 * 60,
     '1w': 7 * 24 * 60 * 60,
-    '1m': 30 * 24 * 60 * 60,
   }
   return intervals[interval]
 }
@@ -26,7 +25,9 @@ const getIntervalSeconds = (interval: TimelineParams['interval']): number => {
 export const tokensRoutesGetTimeline = async ({projectId, interval, startDate, endDate}: TimelineParams) => {
   const db = getDatabase()
 
-  const intervalSeconds = getIntervalSeconds(interval)
+  // Use fixed-second binning for non-month intervals
+  const isMonthly = interval === '1m'
+  const intervalSeconds = isMonthly ? undefined : getIntervalSeconds(interval as Exclude<typeof interval, '1m'>)
 
   // Get all job IDs for this project
   const projectJobs = await db
@@ -42,9 +43,11 @@ export const tokensRoutesGetTimeline = async ({projectId, interval, startDate, e
     return {success: true, data: []}
   }
 
-  // Build time bucket query using raw SQL for PostgreSQL date_bin function
-  const timeBucket = sql`date_bin(
-    interval '${sql.raw(intervalSeconds.toString())} seconds',
+  // Build time bucket expression
+  const timeBucket = isMonthly
+    ? sql`date_trunc('month', ${tokenUse.createdAt})`
+    : sql`date_bin(
+    interval '${sql.raw((intervalSeconds as number).toString())} seconds',
     ${tokenUse.createdAt},
     timestamptz '${sql.raw(startDate)}'
   )`
@@ -62,20 +65,31 @@ export const tokensRoutesGetTimeline = async ({projectId, interval, startDate, e
       and(
         sql`${tokenUse.judgmentsJobId} = ANY(ARRAY[${sql.join(jobIds, sql`, `)}]::uuid[])`,
         gte(tokenUse.createdAt, new Date(startDate)),
-        lte(tokenUse.createdAt, new Date(endDate)),
+        // end-exclusive to avoid partial current bucket
+        lt(tokenUse.createdAt, new Date(endDate)),
       ),
     )
     .groupBy(timeBucket)
     .orderBy(desc(timeBucket))
 
   // Transform the result to include all time buckets, even empty ones
-  const startTime = new Date(startDate).getTime()
-  const endTime = new Date(endDate).getTime()
-  const intervalMs = intervalSeconds * 1000
+  const startTime = new Date(startDate)
+  const endTime = new Date(endDate)
 
-  const allBuckets = []
-  for (let time = startTime; time <= endTime; time += intervalMs) {
-    allBuckets.push(new Date(time))
+  const allBuckets: Date[] = []
+  if (isMonthly) {
+    // Align to first-of-month boundaries
+    const startMonth = new Date(startTime.getFullYear(), startTime.getMonth(), 1, 0, 0, 0, 0)
+    const endMonth = new Date(endTime.getFullYear(), endTime.getMonth(), 1, 0, 0, 0, 0)
+
+    for (let d = new Date(startMonth); d < endMonth; d.setMonth(d.getMonth() + 1)) {
+      allBuckets.push(new Date(d))
+    }
+  } else {
+    const intervalMs = (intervalSeconds as number) * 1000
+    for (let t = startTime.getTime(); t < endTime.getTime(); t += intervalMs) {
+      allBuckets.push(new Date(t))
+    }
   }
 
   // Create a map of existing data
