@@ -68,38 +68,38 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
 
     switch (interval) {
       case '1min': {
-        // Last 10 minutes, include current in-progress minute
-        const alignedEnd = alignToInterval(now, 1)
-        return {start: new Date(alignedEnd.getTime() - 10 * 60 * 1000), end: now}
+        // Last 10 minutes (10 buckets), include current minute so far
+        const currentBucketStart = alignToInterval(now, 1)
+        return {start: new Date(currentBucketStart.getTime() - 9 * 60 * 1000), end: now}
       }
       case '5min': {
-        // Last 1 hour, include current in-progress 5-min bucket
-        const alignedEnd = alignToInterval(now, 5)
-        return {start: new Date(alignedEnd.getTime() - 60 * 60 * 1000), end: now}
+        // Last 1 hour (12 buckets of 5 minutes), include current 5-min bucket so far
+        const currentBucketStart = alignToInterval(now, 5)
+        return {start: new Date(currentBucketStart.getTime() - 11 * 5 * 60 * 1000), end: now}
       }
       case '15min': {
-        // Last 8 hours, include current in-progress 15-min bucket
-        const alignedEnd = alignToInterval(now, 15)
-        return {start: new Date(alignedEnd.getTime() - 8 * 60 * 60 * 1000), end: now}
+        // Last 8 hours (32 buckets of 15 minutes), include current 15-min bucket so far
+        const currentBucketStart = alignToInterval(now, 15)
+        return {start: new Date(currentBucketStart.getTime() - 31 * 15 * 60 * 1000), end: now}
       }
       case '1h': {
-        // Last 24 hours, include current in-progress hour
-        const alignedEnd = alignToHour(now)
-        return {start: new Date(alignedEnd.getTime() - 24 * 60 * 60 * 1000), end: now}
+        // Last 24 hours (24 buckets of 1 hour), include current hour so far
+        const currentBucketStart = alignToHour(now)
+        return {start: new Date(currentBucketStart.getTime() - 23 * 60 * 60 * 1000), end: now}
       }
       case '24h': {
-        // For daily buckets, include today's in-progress day
+        // Last 30 days (30 buckets), include today so far
         return {start: startOfNDaysAgo(29), end: now}
       }
       case '1w': {
-        // Last 30 weeks, include current in-progress week (Monday-aligned)
+        // Last 30 weeks (30 buckets), include current week so far (Monday-aligned)
         const startOfThisWeek = startOfWeekMonday(now)
-        return {start: new Date(startOfThisWeek.getTime() - 30 * 7 * 24 * 60 * 60 * 1000), end: now}
+        return {start: new Date(startOfThisWeek.getTime() - 29 * 7 * 24 * 60 * 60 * 1000), end: now}
       }
       case '1m': {
-        // Last 24 months, include current in-progress month
+        // Last 24 months (24 buckets), include current month so far
         const start = startOfMonth(now)
-        start.setMonth(start.getMonth() - 24)
+        start.setMonth(start.getMonth() - 23)
         return {start, end: now}
       }
       default: {
@@ -344,13 +344,17 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
             if (idx == null || !data || !data[idx]) return ''
 
             const bucketTs = new Date(data[idx].timestamp)
+            const nowTs = new Date()
 
             if (selectedInterval() === '1m') {
-              // Snap to calendar month boundaries for display
+              // Calendar month boundaries; clamp end to now for current month
               const monthStart = new Date(bucketTs.getFullYear(), bucketTs.getMonth(), 1, 0, 0, 0, 0)
-              const monthEnd = new Date(bucketTs.getFullYear(), bucketTs.getMonth() + 1, 0, 23, 59, 59, 999)
+              const nominalMonthEnd = new Date(bucketTs.getFullYear(), bucketTs.getMonth() + 1, 0, 23, 59, 59, 999)
+              const isCurrentMonth =
+                monthStart.getMonth() === nowTs.getMonth() && monthStart.getFullYear() === nowTs.getFullYear()
+              const monthEnd = isCurrentMonth ? nowTs : nominalMonthEnd
               const startStr = format(monthStart, 'MMM d')
-              const endStr = format(monthEnd, 'MMM d')
+              const endStr = format(monthEnd, 'MMM d HH:mm')
               return `${startStr} – ${endStr}`
             }
 
@@ -362,7 +366,11 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
               '24h': 24 * 60 * 60 * 1000,
               '1w': 7 * 24 * 60 * 60 * 1000,
             }
-            const end = new Date(bucketTs.getTime() + intervalMs[selectedInterval() as Exclude<TimeInterval, '1m'>])
+            const nominalEnd = new Date(
+              bucketTs.getTime() + intervalMs[selectedInterval() as Exclude<TimeInterval, '1m'>],
+            )
+            const isLastBucket = idx === (data?.length ?? 0) - 1
+            const end = isLastBucket && nominalEnd > nowTs ? nowTs : nominalEnd
             const startStr = format(bucketTs, 'MMM d HH:mm')
             const endStr = format(end, 'MMM d HH:mm')
 
