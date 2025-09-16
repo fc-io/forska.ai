@@ -42,7 +42,8 @@ src
 * IMPORTANT: Prefer recursive functions over while/for loops. Bun uses proper-tail-call implementation, so the recursion never grows the stack – use that do code recursive functions and not while/for loops.
 * IMPORTANT: Prefer to use named exports in this format `export const Subheader = () => {...` over `const Subheader = () => {...; export {Subheader}`.
 * IMPORTANT: Prefer to not declare functions inside components unless you have to.
-* IMPORTANT: Prefer to only have one return statement per function
+* IMPORTANT: Prefer to only have one return statement per function. Often a good way to achive this is by using a return at the end of the function with a ternary and calling a different function for each path of the ternary.
+* IMPORTANT: Avoid nested if/else in a function. Instead seperate code into more functions.
 * Prefer to handle all errors and throws gracefully if easily possible.
 * Try to keep code succinct and DRY – simplify code if possible.
 
