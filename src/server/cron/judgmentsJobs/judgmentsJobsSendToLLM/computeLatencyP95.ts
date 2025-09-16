@@ -3,10 +3,6 @@ import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../../db/schema.ts'
 
-const percentileEmpty = (): number => {
-  return 0
-}
-
 const percentileCompute = (values: number[], p: number): number => {
   const sorted = [...values].sort((a, b) => {
     return a - b
@@ -17,7 +13,7 @@ const percentileCompute = (values: number[], p: number): number => {
 
 const percentile = (values: number[], p: number): number => {
   const isEmpty = values.length === 0
-  return isEmpty ? percentileEmpty() : percentileCompute(values, p)
+  return isEmpty ? 0 : percentileCompute(values, p)
 }
 
 export const computeLatencyP95 = async (

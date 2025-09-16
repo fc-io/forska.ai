@@ -4,10 +4,6 @@ import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 import * as schema from '../../../../db/schema.ts'
 import type {ArticleToProcess} from './types.ts'
 
-const onNoReadyArticles = async (): Promise<ArticleToProcess[]> => {
-  return []
-}
-
 const getProjectIdForJob = async (db: PostgresJsDatabase<typeof schema>, jobId: string): Promise<string> => {
   const [job] = await db
     .select({projectId: schema.judgmentsJobs.projectId})
@@ -74,5 +70,5 @@ export const getAndUpdateReadyArticles = async (
     .limit(limit)
 
   const isEmpty = readyRows.length === 0
-  return isEmpty ? onNoReadyArticles() : processReadyRows(db, serverJobId, readyRows)
+  return isEmpty ? Promise.resolve([] as ArticleToProcess[]) : processReadyRows(db, serverJobId, readyRows)
 }
