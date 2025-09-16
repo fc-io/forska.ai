@@ -26,6 +26,7 @@ export const judgmentsJobsArticlesStatusEnum = pgEnum('judgments_jobs_articles_s
   'ready',
   'sent',
   'judged',
+  'judged_and_ready_to_remove_from_queue',
 ])
 
 export const articles = pgTable('articles', {

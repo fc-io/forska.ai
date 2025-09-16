@@ -1,5 +1,6 @@
-import {and, desc, eq, isNotNull} from 'drizzle-orm'
+import {and, desc, eq} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
+import {status} from 'elysia'
 
 import * as schema from '../../../../db/schema.ts'
 
@@ -18,17 +19,32 @@ const percentile = (values: number[], p: number): number => {
 
 export const computeLatencyP95 = async (
   db: PostgresJsDatabase<typeof schema>,
+  serverJobId: string,
 ): Promise<{p95Ms: number | null; sampleSize: number}> => {
   const rows = await db
-    .select({duration: schema.tokenUse.duration})
-    .from(schema.tokenUse)
-    .where(and(eq(schema.tokenUse.requests, 1), isNotNull(schema.tokenUse.judgmentsJobId)))
-    .orderBy(desc(schema.tokenUse.createdAt))
+    .select({
+      createdAt: schema.judgmentsJobsArticles.createdAt,
+      updatedAt: schema.judgmentsJobsArticles.updatedAt,
+      status: schema.judgmentsJobsArticles.status,
+    })
+    .from(schema.judgmentsJobsArticles)
+    .where(and(eq(schema.judgmentsJobsArticles.status, 'sent'), eq(schema.judgmentsJobsArticles.serverId, serverJobId)))
+    .orderBy(desc(schema.judgmentsJobsArticles.updatedAt))
     .limit(100)
-
+  console.log('rows')
+  console.log(rows)
   const durations = rows
     .map((r) => {
-      return typeof r.duration === 'number' ? r.duration : null
+      const start =
+        r.createdAt instanceof Date
+          ? r.createdAt.getTime()
+          : new Date((r.createdAt as unknown as string) ?? '').getTime()
+      const end =
+        r.updatedAt instanceof Date
+          ? r.updatedAt.getTime()
+          : new Date((r.updatedAt as unknown as string) ?? '').getTime()
+      const diff = end - start
+      return Number.isFinite(diff) && diff >= 0 ? diff : null
     })
     .filter((v): v is number => {
       return v !== null && Number.isFinite(v)

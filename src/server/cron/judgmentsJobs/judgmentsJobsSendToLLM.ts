@@ -29,7 +29,10 @@ const decideBatchAction = (p95Ms: number | null, backlogSent: number, currentBat
   const highGate = 2 * currentBatch
   const hardGate = 3 * currentBatch
   const severeLatency = isFiniteNumber(p95Ms) && p95Ms >= 2 * P95_TARGET_MS
-
+  console.log('p95Ms', p95Ms)
+  console.log('currentBatch', currentBatch)
+  console.log('backlogSent', backlogSent)
+  console.log('severeLatency', severeLatency)
   if (backlogSent >= hardGate || severeLatency) {
     const base = isFiniteNumber(p95Ms) ? p95Ms : P95_TARGET_MS
     const cooldownMs = Math.min(2 * base, 2 * CRON_INTERVAL_MS)
@@ -117,14 +120,15 @@ const proceedWithDecisionAndEnd = async (
 
 const sendToLLM = async (db: PostgresJsDatabase<typeof schema>, serverJobId: string, now: number): Promise<void> => {
   const [{p95Ms, sampleSize}, backlogSent] = await Promise.all([
-    computeLatencyP95(db),
+    computeLatencyP95(db, serverJobId),
     getBacklogSentCount(db, serverJobId),
   ])
 
   const currentBatch = getCurrentBatch()
   const decision = decideBatchAction(p95Ms, backlogSent, currentBatch)
   const context = {p95Ms, sampleSize, backlogSent, currentBatch}
-
+  console.log('sampleSize', sampleSize)
+  console.log('decision', decision)
   if (decision.kind === 'cooldown') {
     await applyCooldown(now, decision.cooldownMs, context)
   } else {
@@ -147,4 +151,5 @@ export const judgmentsJobsSendToLLM = async (
     await sendToLLM(db, serverJobId, now)
   }
   console.log('2 end send to LLM')
+  console.log('---------------------------')
 }
