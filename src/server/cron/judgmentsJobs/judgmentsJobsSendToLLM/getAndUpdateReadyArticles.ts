@@ -24,7 +24,7 @@ const processReadyRows = async (
 
   const articlesWithJobs = await db
     .update(schema.judgmentsJobsArticles)
-    .set({status: 'sent', updatedAt: new Date()})
+    .set({status: 'sent', sentAt: new Date(), updatedAt: new Date()})
     .where(
       and(eq(schema.judgmentsJobsArticles.serverId, serverJobId), inArray(schema.judgmentsJobsArticles.id, readyIds)),
     )

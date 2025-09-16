@@ -65,7 +65,7 @@ export const tokensRoutesGetTimeline = async ({projectId, interval, startDate, e
       and(
         sql`${tokenUse.judgmentsJobId} = ANY(ARRAY[${sql.join(jobIds, sql`, `)}]::uuid[])`,
         gte(tokenUse.createdAt, new Date(startDate)),
-        // end-exclusive to avoid partial current bucket
+        // end-exclusive boundary; if endDate is now, the current bucket is included
         lt(tokenUse.createdAt, new Date(endDate)),
       ),
     )
@@ -78,11 +78,11 @@ export const tokensRoutesGetTimeline = async ({projectId, interval, startDate, e
 
   const allBuckets: Date[] = []
   if (isMonthly) {
-    // Align to first-of-month boundaries
+    // Align to first-of-month boundaries and include current month (progress-to-date)
     const startMonth = new Date(startTime.getFullYear(), startTime.getMonth(), 1, 0, 0, 0, 0)
     const endMonth = new Date(endTime.getFullYear(), endTime.getMonth(), 1, 0, 0, 0, 0)
 
-    for (let d = new Date(startMonth); d < endMonth; d.setMonth(d.getMonth() + 1)) {
+    for (let d = new Date(startMonth); d <= endMonth; d.setMonth(d.getMonth() + 1)) {
       allBuckets.push(new Date(d))
     }
   } else {

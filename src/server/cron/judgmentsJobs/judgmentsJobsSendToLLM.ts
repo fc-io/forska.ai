@@ -6,7 +6,6 @@ import {getAndUpdateReadyArticles} from './judgmentsJobsSendToLLM/getAndUpdateRe
 import {getBacklogSentCount} from './judgmentsJobsSendToLLM/getBacklogSentCount.ts'
 import {processArticleWithLLM} from './judgmentsJobsSendToLLM/processArticleWithLLM.ts'
 import {
-  CRON_INTERVAL_MS,
   getCurrentBatch,
   getNextAllowedRunAt,
   MAX_BATCH,
@@ -28,14 +27,14 @@ const isFiniteNumber = (v: unknown): v is number => {
 const decideBatchAction = (p95Ms: number | null, backlogSent: number, currentBatch: number): DecisionResult => {
   const highGate = 2 * currentBatch
   const hardGate = 3 * currentBatch
-  const severeLatency = isFiniteNumber(p95Ms) && p95Ms >= 2 * P95_TARGET_MS
+  const severeLatency = isFiniteNumber(p95Ms) && p95Ms >= P95_TARGET_MS
   console.log('p95Ms', p95Ms)
   console.log('currentBatch', currentBatch)
   console.log('backlogSent', backlogSent)
   console.log('severeLatency', severeLatency)
   if (backlogSent >= hardGate || severeLatency) {
     const base = isFiniteNumber(p95Ms) ? p95Ms : P95_TARGET_MS
-    const cooldownMs = Math.min(2 * base, 2 * CRON_INTERVAL_MS)
+    const cooldownMs = Math.min(2 * base, 2 * 15 * 1000)
     return {kind: 'cooldown', cooldownMs, newBatch: currentBatch}
   }
 

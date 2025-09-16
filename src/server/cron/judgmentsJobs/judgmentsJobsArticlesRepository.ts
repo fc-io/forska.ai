@@ -33,7 +33,7 @@ export const markArticlesAsSent = async (
 
   await db
     .update(schema.judgmentsJobsArticles)
-    .set({status: 'sent', updatedAt: new Date()})
+    .set({status: 'sent', sentAt: new Date(), updatedAt: new Date()})
     .where(
       and(eq(schema.judgmentsJobsArticles.jobId, jobId), inArray(schema.judgmentsJobsArticles.articleId, articleIds)),
     )
@@ -48,7 +48,7 @@ export const markArticlesAsJudged = async (
 
   await db
     .update(schema.judgmentsJobsArticles)
-    .set({status: 'judged', updatedAt: new Date()})
+    .set({status: 'judged', judgedAt: new Date(), updatedAt: new Date()})
     .where(
       and(eq(schema.judgmentsJobsArticles.jobId, jobId), inArray(schema.judgmentsJobsArticles.articleId, articleIds)),
     )

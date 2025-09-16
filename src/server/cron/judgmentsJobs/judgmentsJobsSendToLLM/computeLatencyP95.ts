@@ -1,6 +1,5 @@
-import {and, desc, eq} from 'drizzle-orm'
+import {and, desc, eq, isNotNull} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
-import {status} from 'elysia'
 
 import * as schema from '../../../../db/schema.ts'
 
@@ -22,27 +21,28 @@ export const computeLatencyP95 = async (
   serverJobId: string,
 ): Promise<{p95Ms: number | null; sampleSize: number}> => {
   const rows = await db
-    .select({
-      createdAt: schema.judgmentsJobsArticles.createdAt,
-      updatedAt: schema.judgmentsJobsArticles.updatedAt,
-      status: schema.judgmentsJobsArticles.status,
-    })
+    .select({sentAt: schema.judgmentsJobsArticles.sentAt, judgedAt: schema.judgmentsJobsArticles.judgedAt})
     .from(schema.judgmentsJobsArticles)
-    .where(and(eq(schema.judgmentsJobsArticles.status, 'sent'), eq(schema.judgmentsJobsArticles.serverId, serverJobId)))
-    .orderBy(desc(schema.judgmentsJobsArticles.updatedAt))
+    .where(
+      and(
+        eq(schema.judgmentsJobsArticles.status, 'judged'),
+        eq(schema.judgmentsJobsArticles.serverId, serverJobId),
+        isNotNull(schema.judgmentsJobsArticles.sentAt),
+        isNotNull(schema.judgmentsJobsArticles.judgedAt),
+      ),
+    )
+    .orderBy(desc(schema.judgmentsJobsArticles.judgedAt))
     .limit(100)
+
   console.log('rows')
   console.log(rows)
+
   const durations = rows
     .map((r) => {
       const start =
-        r.createdAt instanceof Date
-          ? r.createdAt.getTime()
-          : new Date((r.createdAt as unknown as string) ?? '').getTime()
+        r.sentAt instanceof Date ? r.sentAt.getTime() : new Date((r.sentAt as unknown as string) ?? '').getTime()
       const end =
-        r.updatedAt instanceof Date
-          ? r.updatedAt.getTime()
-          : new Date((r.updatedAt as unknown as string) ?? '').getTime()
+        r.judgedAt instanceof Date ? r.judgedAt.getTime() : new Date((r.judgedAt as unknown as string) ?? '').getTime()
       const diff = end - start
       return Number.isFinite(diff) && diff >= 0 ? diff : null
     })
@@ -51,15 +51,9 @@ export const computeLatencyP95 = async (
     })
 
   const sampleSize = durations.length
+  console.log('durations', durations)
 
   const insufficient = sampleSize < 5
-  return insufficient ? computeInsufficientSample(sampleSize) : computeFromDurations(durations, sampleSize)
-}
-
-const computeInsufficientSample = (n: number): {p95Ms: number | null; sampleSize: number} => {
-  return {p95Ms: null, sampleSize: n}
-}
-
-const computeFromDurations = (values: number[], n: number): {p95Ms: number | null; sampleSize: number} => {
-  return {p95Ms: percentile(values, 95), sampleSize: n}
+  console.log('insufficient', insufficient)
+  return insufficient ? {p95Ms: null, sampleSize} : {p95Ms: percentile(durations, 95), sampleSize}
 }

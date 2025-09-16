@@ -49,12 +49,6 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
       return d
     }
 
-    const startOfToday = () => {
-      const d = new Date()
-      d.setHours(0, 0, 0, 0)
-      return d
-    }
-
     const startOfWeekMonday = (date: Date) => {
       const d = new Date(date)
       d.setHours(0, 0, 0, 0)
@@ -74,41 +68,39 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
 
     switch (interval) {
       case '1min': {
-        // Last 10 minutes, aligned to 1-minute boundaries
-        const end = alignToInterval(now, 1)
-        return {start: new Date(end.getTime() - 10 * 60 * 1000), end}
+        // Last 10 minutes, include current in-progress minute
+        const alignedEnd = alignToInterval(now, 1)
+        return {start: new Date(alignedEnd.getTime() - 10 * 60 * 1000), end: now}
       }
       case '5min': {
-        // Last 1 hour, aligned to 5-minute boundaries
-        const end = alignToInterval(now, 5)
-        return {start: new Date(end.getTime() - 60 * 60 * 1000), end}
+        // Last 1 hour, include current in-progress 5-min bucket
+        const alignedEnd = alignToInterval(now, 5)
+        return {start: new Date(alignedEnd.getTime() - 60 * 60 * 1000), end: now}
       }
       case '15min': {
-        // Last 8 hours, aligned to 15-minute boundaries
-        const end = alignToInterval(now, 15)
-        return {start: new Date(end.getTime() - 8 * 60 * 60 * 1000), end}
+        // Last 8 hours, include current in-progress 15-min bucket
+        const alignedEnd = alignToInterval(now, 15)
+        return {start: new Date(alignedEnd.getTime() - 8 * 60 * 60 * 1000), end: now}
       }
       case '1h': {
-        // Last 24 hours, aligned to top-of-hour
-        const end = alignToHour(now)
-        return {start: new Date(end.getTime() - 24 * 60 * 60 * 1000), end}
+        // Last 24 hours, include current in-progress hour
+        const alignedEnd = alignToHour(now)
+        return {start: new Date(alignedEnd.getTime() - 24 * 60 * 60 * 1000), end: now}
       }
       case '24h': {
-        // For daily buckets, show the last 30 completed days, aligned to local midnight
-        const end = startOfToday()
-        return {start: startOfNDaysAgo(29), end}
+        // For daily buckets, include today's in-progress day
+        return {start: startOfNDaysAgo(29), end: now}
       }
       case '1w': {
-        // Last 30 completed weeks, aligned to start-of-week (Monday)
-        const end = startOfWeekMonday(now)
-        return {start: new Date(end.getTime() - 30 * 7 * 24 * 60 * 60 * 1000), end}
+        // Last 30 weeks, include current in-progress week (Monday-aligned)
+        const startOfThisWeek = startOfWeekMonday(now)
+        return {start: new Date(startOfThisWeek.getTime() - 30 * 7 * 24 * 60 * 60 * 1000), end: now}
       }
       case '1m': {
-        // Last 24 completed months, aligned to first-of-month
-        const end = startOfMonth(now)
-        const start = startOfMonth(new Date(end))
+        // Last 24 months, include current in-progress month
+        const start = startOfMonth(now)
         start.setMonth(start.getMonth() - 24)
-        return {start, end}
+        return {start, end: now}
       }
       default: {
         return {start: new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000), end: now}

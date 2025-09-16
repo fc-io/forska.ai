@@ -117,8 +117,10 @@ export const judgmentsJobsArticles = pgTable('judgments_jobs_articles', {
         return articles.id
       },
       {onDelete: 'cascade'},
-    ),
+  ),
   serverId: text('server_id'),
+  sentAt: timestamp('sent_at', {withTimezone: true}),
+  judgedAt: timestamp('judged_at', {withTimezone: true}),
   status: judgmentsJobsArticlesStatusEnum('status').default('ready').notNull(),
 })
 
