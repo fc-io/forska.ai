@@ -22,8 +22,8 @@ export const createJudgmentsJob = async (projectId: string, agentConfig?: unknow
 
 export const fetchJudgmentsJobs = async () => {
   const response = await apiClient.api.judgmentsjobs.get({query: {}})
-  const data = handleApiResponse(response, 'Failed to fetch judgment jobs')
-  return data ? data : []
+  const result = handleApiResponse(response, 'Failed to fetch judgment jobs')
+  return result && result.data ? result.data : []
 }
 
 export const getJudgmentsJobById = async (jobId: string) => {

@@ -115,27 +115,7 @@ const proceedWithDecisionAndEnd = async (
   console.log('end send to LLM')
 }
 
-export const judgmentsJobsSendToLLM = async (
-  db: PostgresJsDatabase<typeof schema>,
-  serverJobId: string,
-): Promise<void> => {
-  const now = Date.now()
-  const cooldownUntil = getNextAllowedRunAt()
-  const inCooldown = Boolean(cooldownUntil && now < cooldownUntil)
-
-  if (inCooldown) {
-    console.log('send to LLM: skipped due to cooldown until', new Date(cooldownUntil as number).toISOString())
-    console.log('end send to LLM')
-  } else {
-    await proceedWhenAllowed(db, serverJobId, now)
-  }
-}
-
-const proceedWhenAllowed = async (
-  db: PostgresJsDatabase<typeof schema>,
-  serverJobId: string,
-  now: number,
-): Promise<void> => {
+const sendToLLM = async (db: PostgresJsDatabase<typeof schema>, serverJobId: string, now: number): Promise<void> => {
   const [{p95Ms, sampleSize}, backlogSent] = await Promise.all([
     computeLatencyP95(db),
     getBacklogSentCount(db, serverJobId),
@@ -150,4 +130,21 @@ const proceedWhenAllowed = async (
   } else {
     await proceedWithDecisionAndEnd(db, serverJobId, currentBatch, decision, context)
   }
+}
+
+export const judgmentsJobsSendToLLM = async (
+  db: PostgresJsDatabase<typeof schema>,
+  serverJobId: string,
+): Promise<void> => {
+  const now = Date.now()
+  const cooldownUntil = getNextAllowedRunAt()
+  const inCooldown = Boolean(cooldownUntil && now < cooldownUntil)
+
+  if (inCooldown) {
+    console.log('0 send to LLM: skipped due to cooldown until', new Date(cooldownUntil as number).toISOString())
+  } else {
+    console.log('1 send to LLM')
+    await sendToLLM(db, serverJobId, now)
+  }
+  console.log('2 end send to LLM')
 }
