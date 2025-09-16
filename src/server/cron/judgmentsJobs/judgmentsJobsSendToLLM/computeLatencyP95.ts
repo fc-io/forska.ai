@@ -3,13 +3,21 @@ import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../../db/schema.ts'
 
-const percentile = (values: number[], p: number): number => {
-  if (values.length === 0) return 0
+const percentileEmpty = (): number => {
+  return 0
+}
+
+const percentileCompute = (values: number[], p: number): number => {
   const sorted = [...values].sort((a, b) => {
     return a - b
   })
   const idx = Math.max(0, Math.ceil((p / 100) * sorted.length) - 1)
   return sorted[idx]
+}
+
+const percentile = (values: number[], p: number): number => {
+  const isEmpty = values.length === 0
+  return isEmpty ? percentileEmpty() : percentileCompute(values, p)
 }
 
 export const computeLatencyP95 = async (
@@ -31,6 +39,15 @@ export const computeLatencyP95 = async (
     })
 
   const sampleSize = durations.length
-  if (sampleSize < 5) return {p95Ms: null, sampleSize}
-  return {p95Ms: percentile(durations, 95), sampleSize}
+
+  const insufficient = sampleSize < 5
+  return insufficient ? computeInsufficientSample(sampleSize) : computeFromDurations(durations, sampleSize)
+}
+
+const computeInsufficientSample = (n: number): {p95Ms: number | null; sampleSize: number} => {
+  return {p95Ms: null, sampleSize: n}
+}
+
+const computeFromDurations = (values: number[], n: number): {p95Ms: number | null; sampleSize: number} => {
+  return {p95Ms: percentile(values, 95), sampleSize: n}
 }

@@ -53,17 +53,40 @@ src
 ### Ternary With Helpers
 
 * Use-case: Exactly two mutually exclusive paths with no shared tail logic.
-* Rule: Prefer ending a function via ternary: `return cond ? pathA(optionalArg) : pathB(optionalArg)`
+* Rule: Prefer ending a function via ternary: `return cond ? pathA(optionalArg) : pathB(optionalArg)` or `return cond ? value : pathB(optionalArg)`
 * Rationale: Keeps a single return, flattens control flow, and makes intent self-documenting through function names.
 * Requirements: Extract each branch into small, named helpers; both branches must return the same type; precompute shared inputs before the ternary.
 * Avoid: More than two branches, large inline expressions, or branches that share significant post-branch logic.
 * Avoid: anonymous functions/arrow functions in the ternary.
 * Avoid: avoid nested (local) functions (instead create named functions on the root level – i.e top-level helpers)
 * Avoid: creating anonymous functions inside functions if the body of the anonymous functions is more than 3 rows
+* Avoid: excesive function creation – i.e. calling other functions from functions that don't have a ternary/branching path or functions that don't do anything by themselves
 
-#### Example
+#### Example – Do
+
+Do:
 
 `return cond ? buildA(x) : buildB(x)`
+
+or
+
+`return cond ? value : buildB(x)`
+
+
+#### Example – Don't
+
+Don't create functions from functions that don't do anything. This functions has a log statement, but that
+could easily be placed in the function that called applyCooldownAndEnd or in the applyCooldown function. Other than the
+log there is no need to have this `applyCooldownAndEnd` function at all.
+
+```
+const applyCooldownAndEnd = async (
+  now: number,
+): Promise<void> => {
+  applyCooldown(now)
+  console.log('end send to LLM')
+}
+```
 
 ### TypeScript conventions
 

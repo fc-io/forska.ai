@@ -4,26 +4,24 @@ import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 import * as schema from '../../../../db/schema.ts'
 import type {ArticleToProcess} from './types.ts'
 
-export const getAndUpdateReadyArticles = async (
+const onNoReadyArticles = async (): Promise<ArticleToProcess[]> => {
+  return []
+}
+
+const getProjectIdForJob = async (db: PostgresJsDatabase<typeof schema>, jobId: string): Promise<string> => {
+  const [job] = await db
+    .select({projectId: schema.judgmentsJobs.projectId})
+    .from(schema.judgmentsJobs)
+    .where(eq(schema.judgmentsJobs.id, jobId))
+    .limit(1)
+  return job?.projectId || ''
+}
+
+const processReadyRows = async (
   db: PostgresJsDatabase<typeof schema>,
   serverJobId: string,
-  limit: number,
+  readyRows: {id: string; articleId: string; jobId: string}[],
 ): Promise<ArticleToProcess[]> => {
-  const readyRows = await db
-    .select({
-      id: schema.judgmentsJobsArticles.id,
-      articleId: schema.judgmentsJobsArticles.articleId,
-      jobId: schema.judgmentsJobsArticles.jobId,
-    })
-    .from(schema.judgmentsJobsArticles)
-    .where(
-      and(eq(schema.judgmentsJobsArticles.status, 'ready'), eq(schema.judgmentsJobsArticles.serverId, serverJobId)),
-    )
-    .orderBy(schema.judgmentsJobsArticles.createdAt)
-    .limit(limit)
-
-  if (readyRows.length === 0) return []
-
   const readyIds = readyRows.map((r) => {
     return r.id
   })
@@ -47,17 +45,34 @@ export const getAndUpdateReadyArticles = async (
 
   const articlesWithProjects = await Promise.all(
     selectedArticles.map(async (article) => {
-      const [job] = await db
-        .select({projectId: schema.judgmentsJobs.projectId})
-        .from(schema.judgmentsJobs)
-        .where(eq(schema.judgmentsJobs.id, article.jobId))
-        .limit(1)
-
-      return {...article, projectId: job?.projectId || ''}
+      const projectId = await getProjectIdForJob(db, article.jobId)
+      return {...article, projectId}
     }),
   )
 
   return articlesWithProjects.filter((article) => {
     return article.projectId
   })
+}
+
+export const getAndUpdateReadyArticles = async (
+  db: PostgresJsDatabase<typeof schema>,
+  serverJobId: string,
+  limit: number,
+): Promise<ArticleToProcess[]> => {
+  const readyRows = await db
+    .select({
+      id: schema.judgmentsJobsArticles.id,
+      articleId: schema.judgmentsJobsArticles.articleId,
+      jobId: schema.judgmentsJobsArticles.jobId,
+    })
+    .from(schema.judgmentsJobsArticles)
+    .where(
+      and(eq(schema.judgmentsJobsArticles.status, 'ready'), eq(schema.judgmentsJobsArticles.serverId, serverJobId)),
+    )
+    .orderBy(schema.judgmentsJobsArticles.createdAt)
+    .limit(limit)
+
+  const isEmpty = readyRows.length === 0
+  return isEmpty ? onNoReadyArticles() : processReadyRows(db, serverJobId, readyRows)
 }
