@@ -56,13 +56,16 @@ src
 * Rule: Prefer ending a function via ternary: `return cond ? pathA(optionalArg) : pathB(optionalArg)` or `return cond ? value : pathB(optionalArg)`
 * Rationale: Keeps a single return, flattens control flow, and makes intent self-documenting through function names.
 * Requirements: Extract each branch into small, named helpers; both branches must return the same type; precompute shared inputs before the ternary.
+* Shortcuts for ternaries are encouraged, like having `return data ?? []` instead of `return data ? data : []`
 * Avoid: More than two branches, large inline expressions, or branches that share significant post-branch logic.
 * Avoid: anonymous functions/arrow functions in the ternary.
 * Avoid: avoid nested (local) functions (instead create named functions on the root level – i.e top-level helpers)
 * Avoid: creating anonymous functions inside functions if the body of the anonymous functions is more than 3 rows
 * Avoid: excesive function creation – i.e. calling other functions from functions that don't have a ternary/branching path or functions that don't do anything by themselves
 * Avoid: having a return when only returning void/undefined
-* Avoid: having a ternary when one part of the path returns void/undefined, instead have a normal if like `if (value) {return doThing(value)}`
+* Avoid: having a ternary when one path returns void/undefined, instead have a normal if like `if (value) {return doThing(value)}`
+* Avoid: having a ternary when both pathes returns void/undefined, instead have a normal if else like `if (value) {console.log(value)} else {doThing()}`
+* Avoid: having any statements or function calls after a return
 
 #### Example – Do
 
@@ -95,12 +98,22 @@ have a return if there is nothing to return (void). Here instead do a normal `if
 and skip the return.
 
 ```
-export const doThing = async (
-  value
-): Promise<void> => {
+const doThing = async (value): Promise<void> => {
   const prompts = await doSomething()
 
   return value ? doSomethingElse(value) : Promise.resolve()
+}
+```
+
+Another don't. Don't have statements or function calls after a return.
+
+```
+const doThing = async (value): Promise<void> => {
+  if (!value) {
+    console.log('No value')
+    return
+  }
+  await processValue(value)
 }
 ```
 

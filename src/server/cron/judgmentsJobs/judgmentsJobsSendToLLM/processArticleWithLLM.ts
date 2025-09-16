@@ -29,6 +29,7 @@ export const processArticleWithLLM = async (
 
   const prompts = await db.select().from(schema.prompts).where(eq(schema.prompts.projectId, articleToProcess.projectId))
 
-  const shouldJudge = Boolean(article && prompts.length > 0)
-  return shouldJudge && article ? judgeAndMark(db, articleToProcess, article, prompts) : Promise.resolve()
+  if (article && prompts.length > 0) {
+    await judgeAndMark(db, articleToProcess, article, prompts)
+  }
 }

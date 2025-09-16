@@ -49,13 +49,14 @@ const decideBatchAction = (p95Ms: number | null, backlogSent: number, currentBat
   return {kind: 'hold', newBatch: currentBatch}
 }
 
-const applyCooldown = (
+const applyCooldown = async (
   now: number,
   cooldownMs: number,
   context: {p95Ms: number | null; sampleSize: number; backlogSent: number; currentBatch: number},
-): void => {
+): Promise<void> => {
   setNextAllowedRunAt(now + cooldownMs)
   console.log('send to LLM: cooldown engaged', JSON.stringify({...context, cooldownMs}))
+  console.log('end send to LLM')
 }
 
 const processArticles = async (db: PostgresJsDatabase<typeof schema>, articles: ArticleToProcess[]): Promise<void> => {
@@ -78,12 +79,15 @@ const processArticlesBatch = async (
   batch: number,
 ): Promise<void> => {
   const articlesToProcess = await getAndUpdateReadyArticles(db, serverJobId, batch)
+  const hasNoArticles = articlesToProcess.length === 0
+
   console.log('articlesToProcess length:', articlesToProcess.length, 'batch:', batch)
 
-  const hasNoArticles = articlesToProcess.length === 0
-  return hasNoArticles
-    ? (console.log('No articles to process'), Promise.resolve())
-    : processArticles(db, articlesToProcess)
+  if (hasNoArticles) {
+    console.log('No articles to process')
+  } else {
+    await processArticles(db, articlesToProcess)
+  }
 }
 
 const proceedWithDecisionAndEnd = async (
@@ -119,11 +123,12 @@ export const judgmentsJobsSendToLLM = async (
   const cooldownUntil = getNextAllowedRunAt()
   const inCooldown = Boolean(cooldownUntil && now < cooldownUntil)
 
-  return inCooldown
-    ? (console.log('send to LLM: skipped due to cooldown until', new Date(cooldownUntil as number).toISOString()),
-      console.log('end send to LLM'),
-      Promise.resolve())
-    : proceedWhenAllowed(db, serverJobId, now)
+  if (inCooldown) {
+    console.log('send to LLM: skipped due to cooldown until', new Date(cooldownUntil as number).toISOString())
+    console.log('end send to LLM')
+  } else {
+    await proceedWhenAllowed(db, serverJobId, now)
+  }
 }
 
 const proceedWhenAllowed = async (
@@ -140,7 +145,9 @@ const proceedWhenAllowed = async (
   const decision = decideBatchAction(p95Ms, backlogSent, currentBatch)
   const context = {p95Ms, sampleSize, backlogSent, currentBatch}
 
-  return decision.kind === 'cooldown'
-    ? (applyCooldown(now, decision.cooldownMs, context), console.log('end send to LLM'), Promise.resolve())
-    : proceedWithDecisionAndEnd(db, serverJobId, currentBatch, decision, context)
+  if (decision.kind === 'cooldown') {
+    await applyCooldown(now, decision.cooldownMs, context)
+  } else {
+    await proceedWithDecisionAndEnd(db, serverJobId, currentBatch, decision, context)
+  }
 }
