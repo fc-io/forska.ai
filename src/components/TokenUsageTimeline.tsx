@@ -68,19 +68,19 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
 
     switch (interval) {
       case '1min': {
-        // Last 10 minutes (10 buckets), include current minute so far
+        // Last 20 minutes (20 buckets), include current minute so far
         const currentBucketStart = alignToInterval(now, 1)
-        return {start: new Date(currentBucketStart.getTime() - 9 * 60 * 1000), end: now}
+        return {start: new Date(currentBucketStart.getTime() - 19 * 60 * 1000), end: now}
       }
       case '5min': {
-        // Last 1 hour (12 buckets of 5 minutes), include current 5-min bucket so far
+        // Last 2 hours (24 buckets of 5 minutes), include current 5-min bucket so far
         const currentBucketStart = alignToInterval(now, 5)
-        return {start: new Date(currentBucketStart.getTime() - 11 * 5 * 60 * 1000), end: now}
+        return {start: new Date(currentBucketStart.getTime() - 23 * 5 * 60 * 1000), end: now}
       }
       case '15min': {
-        // Last 8 hours (32 buckets of 15 minutes), include current 15-min bucket so far
+        // Last 16 hours (64 buckets of 15 minutes), include current 15-min bucket so far
         const currentBucketStart = alignToInterval(now, 15)
-        return {start: new Date(currentBucketStart.getTime() - 31 * 15 * 60 * 1000), end: now}
+        return {start: new Date(currentBucketStart.getTime() - 63 * 15 * 60 * 1000), end: now}
       }
       case '1h': {
         // Last 24 hours (24 buckets of 1 hour), include current hour so far
@@ -425,9 +425,9 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
               <h2 class="text-lg font-semibold text-gray-900">Token Usage Timeline</h2>
             </div>
             <p class="text-sm text-gray-500 mt-1">
-              <Show when={selectedInterval() === '1min'}>Last 10 minutes</Show>
-              <Show when={selectedInterval() === '5min'}>Last hour</Show>
-              <Show when={selectedInterval() === '15min'}>Last 8 hours</Show>
+              <Show when={selectedInterval() === '1min'}>Last 20 minutes</Show>
+              <Show when={selectedInterval() === '5min'}>Last 2 hours</Show>
+              <Show when={selectedInterval() === '15min'}>Last 16 hours</Show>
               <Show when={selectedInterval() === '1h'}>Last 24 hours</Show>
               <Show when={selectedInterval() === '24h'}>Last 30 days</Show>
               <Show when={selectedInterval() === '1w'}>Last 30 weeks</Show>
