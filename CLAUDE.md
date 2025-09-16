@@ -61,6 +61,8 @@ src
 * Avoid: avoid nested (local) functions (instead create named functions on the root level – i.e top-level helpers)
 * Avoid: creating anonymous functions inside functions if the body of the anonymous functions is more than 3 rows
 * Avoid: excesive function creation – i.e. calling other functions from functions that don't have a ternary/branching path or functions that don't do anything by themselves
+* Avoid: having a return when only returning void/undefined
+* Avoid: having a ternary when one part of the path returns void/undefined, instead have a normal if like `if (value) {return doThing(value)}`
 
 #### Example – Do
 
@@ -85,6 +87,20 @@ const applyCooldownAndEnd = async (
 ): Promise<void> => {
   applyCooldown(now)
   console.log('end send to LLM')
+}
+```
+
+Another don't. Don't use ternary if there is only one path and nothing will happen in the other path. Also no need to
+have a return if there is nothing to return (void). Here instead do a normal `if (value) {await doSomethingElse(value)}`
+and skip the return.
+
+```
+export const doThing = async (
+  value
+): Promise<void> => {
+  const prompts = await doSomething()
+
+  return value ? doSomethingElse(value) : Promise.resolve()
 }
 ```
 
