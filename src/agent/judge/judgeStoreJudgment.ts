@@ -105,9 +105,10 @@ export const judgeStoreJudgment = async (
         `${articleId} | Failed to store ${failedResults.length} judgment(s) for article ${articleTitle}`,
         failedResults[0]?.reason,
       )
-    } else {
-      printLogMessage(articleId, articleTitle, judgment, promptIds)
     }
+    // else {
+    //   printLogMessage(articleId, articleTitle, judgment, promptIds)
+    // }
   } catch (error) {
     console.error(
       `${articleId} | Failed to store judgment for article ${articleTitle}`,
