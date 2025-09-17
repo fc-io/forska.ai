@@ -27,7 +27,7 @@ export const tokensRoutesGetTimeline = async ({projectId, interval, startDate, e
 
   // Use fixed-second binning for non-month intervals
   const isMonthly = interval === '1m'
-  const intervalSeconds = isMonthly ? undefined : getIntervalSeconds(interval as Exclude<typeof interval, '1m'>)
+  const intervalSeconds = isMonthly ? undefined : getIntervalSeconds(interval)
 
   // Get all job IDs for this project
   const projectJobs = await db
@@ -105,13 +105,10 @@ export const tokensRoutesGetTimeline = async ({projectId, interval, startDate, e
     return isMonthly ? monthKey(d) : d.getTime().toString()
   }
 
-  const dataMap = new Map<string, {
-    timestamp: string
-    totalPromptTokens: number
-    totalCompletionTokens: number
-    totalTokens: number
-    count: number
-  }>(
+  const dataMap = new Map<
+    string,
+    {timestamp: string; totalPromptTokens: number; totalCompletionTokens: number; totalTokens: number; count: number}
+  >(
     result.map((row) => {
       const d = new Date(row.timeBucket as string)
       const key = toKey(d)
@@ -160,10 +157,7 @@ export const tokensRoutesGetTimeline = async ({projectId, interval, startDate, e
 
   // Get highest usage for the appropriate period
   const highestUsageResult = await db
-    .select({
-      timeBucket: timeBucket,
-      totalTokens: sum(tokenUse.totalTokens),
-    })
+    .select({timeBucket: timeBucket, totalTokens: sum(tokenUse.totalTokens)})
     .from(tokenUse)
     .where(
       and(
