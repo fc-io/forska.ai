@@ -58,6 +58,7 @@ export const tokensRoutesGetTimeline = async ({projectId, interval, startDate, e
       totalPromptTokens: sum(tokenUse.totalPromptTokens),
       totalCompletionTokens: sum(tokenUse.totalCompletionTokens),
       totalTokens: sum(tokenUse.totalTokens),
+      totalRequests: sum(tokenUse.requests),
       count: sql<number>`count(*)::int`,
     })
     .from(tokenUse)
@@ -107,7 +108,14 @@ export const tokensRoutesGetTimeline = async ({projectId, interval, startDate, e
 
   const dataMap = new Map<
     string,
-    {timestamp: string; totalPromptTokens: number; totalCompletionTokens: number; totalTokens: number; count: number}
+    {
+      timestamp: string
+      totalPromptTokens: number
+      totalCompletionTokens: number
+      totalTokens: number
+      totalRequests: number
+      count: number
+    }
   >(
     result.map((row) => {
       const d = new Date(row.timeBucket as string)
@@ -119,6 +127,7 @@ export const tokensRoutesGetTimeline = async ({projectId, interval, startDate, e
           totalPromptTokens: Number(row.totalPromptTokens || 0),
           totalCompletionTokens: Number(row.totalCompletionTokens || 0),
           totalTokens: Number(row.totalTokens || 0),
+          totalRequests: Number((row as any).totalRequests || 0),
           count: row.count,
         },
       ]
@@ -135,6 +144,7 @@ export const tokensRoutesGetTimeline = async ({projectId, interval, startDate, e
         totalPromptTokens: 0,
         totalCompletionTokens: 0,
         totalTokens: 0,
+        totalRequests: 0,
         count: 0,
       }
     )

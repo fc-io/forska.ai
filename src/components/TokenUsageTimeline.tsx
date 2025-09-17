@@ -13,6 +13,7 @@ type TokenTimelineData = {
   totalPromptTokens: number
   totalCompletionTokens: number
   totalTokens: number
+  totalRequests: number
   count: number
 }
 
@@ -315,7 +316,8 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
               ?? tooltipItems.reduce((sum, item) => {
                 return sum + item.parsed.y
               }, 0)
-            return `Total: ${total.toLocaleString()}`
+            const requests = data[idx].totalRequests ?? 0
+            return `Total: ${total.toLocaleString()}\nArticles Judged: ${requests.toLocaleString()}`
           },
         },
       },
