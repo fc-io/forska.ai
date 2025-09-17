@@ -125,7 +125,7 @@ export const judge = async ({
   const startedAt = new Date().toISOString()
   const startDuration = performance.now()
 
-  await Promise.all(
+  await Promise.allSettled(
     articles.map(async (article) => {
       const basePrompt = judgeGetPrompt(article, prompts)
       let prompt = basePrompt
@@ -137,12 +137,6 @@ export const judge = async ({
         attempts += 1
         try {
           const modelResponse = await generateModelResponse(prompt)
-          tokenUse.push({
-            // articleId: article.id,
-            promptTokens: modelResponse.usage.promptTokens,
-            completionTokens: modelResponse.usage.completionTokens,
-            totalTokens: modelResponse.usage.totalTokens,
-          })
           // console.log('modelResponse', modelResponse)
           lastResponse = modelResponse.text
           const judgment = parseJudgment(lastResponse, prompts)
@@ -150,7 +144,12 @@ export const judge = async ({
             return p.id
           })
           await judgeStoreJudgment(article.id, article.articleTitle, judgment, modelId, promptIds)
-
+          tokenUse.push({
+            // articleId: article.id,
+            promptTokens: modelResponse.usage.promptTokens,
+            completionTokens: modelResponse.usage.completionTokens,
+            totalTokens: modelResponse.usage.totalTokens,
+          })
           return judgment
         } catch (error: unknown) {
           lastError = error instanceof Error ? error.message : 'Unknown error'
