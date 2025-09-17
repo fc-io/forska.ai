@@ -4,6 +4,7 @@ import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 import * as schema from '../../../../db/schema.ts'
 export const P95_TARGET_MS = 3 * 60 * 1000
 import {env} from '../../../utils/env.ts'
+export const SLOPE_THRESHOLD_MS_PER_MIN = 10_000
 
 const countOfArticles = async (
   db: PostgresJsDatabase<typeof schema>,
@@ -31,38 +32,30 @@ const isLLMServerResponding = async (): Promise<boolean> => {
   }
 }
 
-const isBacklogToLarge = async (
+const isLatencyIncreasingToMuch = async (
   db: PostgresJsDatabase<typeof schema>,
   serverJobId: string,
   judged: number,
 ): Promise<boolean> => {
   const t = schema.judgmentsJobsArticles
   const maxRowsToCountDurationFor = Math.min(Math.round(judged / 2), 200)
-  const [first] = await db.select({totalMs: sql<number>`SUM(duration_ms)`, avgMs: sql<number>`AVG(duration_ms)`})
-    .from(sql`
-    (SELECT EXTRACT(EPOCH FROM (${t.judgedAt} - ${t.sentAt})) * 1000 AS duration_ms
-     FROM ${t}
-     WHERE ${and(eq(t.serverId, serverJobId), eq(t.status, 'judged'), isNotNull(t.sentAt), isNotNull(t.judgedAt))}
-     ORDER BY ${t.sentAt}
-     LIMIT ${maxRowsToCountDurationFor}) AS s
-  `)
-  const [last] = await db.select({totalMs: sql<number>`SUM(duration_ms)`, avgMs: sql<number>`AVG(duration_ms)`})
-    .from(sql`
-  (SELECT EXTRACT(EPOCH FROM (${t.judgedAt} - ${t.sentAt})) * 1000 AS duration_ms
-   FROM ${t}
-   WHERE ${and(eq(t.serverId, serverJobId), eq(t.status, 'judged'), isNotNull(t.sentAt), isNotNull(t.judgedAt))}
-   ORDER BY ${t.sentAt} DESC
-   LIMIT ${maxRowsToCountDurationFor}) AS s
-`)
-  const firstAvgMs = Number(first?.avgMs ?? 0)
-  const lastAvgMs = Number(last?.avgMs ?? 0)
+  const [row] = await db.select({slopeMsPerMin: sql<number>`regr_slope(duration_ms, sent_min)`}).from(sql`
+      (SELECT
+         EXTRACT(EPOCH FROM (${t.judgedAt} - ${t.sentAt})) * 1000 AS duration_ms,
+         EXTRACT(EPOCH FROM ${t.sentAt}) / 60 AS sent_min
+       FROM ${t}
+       WHERE ${and(eq(t.serverId, serverJobId), eq(t.status, 'judged'), isNotNull(t.sentAt), isNotNull(t.judgedAt))}
+       ORDER BY ${t.sentAt} DESC
+       LIMIT ${maxRowsToCountDurationFor}
+      ) AS s
+    `)
+  const slopeMsPerMin = Number(row?.slopeMsPerMin ?? 0)
+  const isTooLarge = slopeMsPerMin > SLOPE_THRESHOLD_MS_PER_MIN
   console.log('maxRowsToCountDurationFor', maxRowsToCountDurationFor)
-  console.log('firstAvgMs', firstAvgMs)
-  console.log('firstAvgMs * 1.1', firstAvgMs * 1.1)
-  console.log('lastAvgMs', lastAvgMs)
-  console.log('lastAvgMs > firstAvgMs * 1.1', lastAvgMs > firstAvgMs * 1.1)
+  console.log('slopeMsPerMin', slopeMsPerMin)
+  console.log('isLatencyIncreasingToMuch', isTooLarge)
 
-  return lastAvgMs > firstAvgMs * 1.1
+  return isTooLarge
 }
 
 const hasEnoughArticlesInBacklog = (sent: number): boolean => {
@@ -81,7 +74,7 @@ const isQueueFull = async (db: PostgresJsDatabase<typeof schema>, serverJobId: s
   return (
     hasSuccessfullyJudgedArticles(judged)
     && hasEnoughArticlesInBacklog(sent)
-    && (await isBacklogToLarge(db, serverJobId, judged))
+    && (await isLatencyIncreasingToMuch(db, serverJobId, judged))
   )
 }
 
