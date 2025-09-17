@@ -58,12 +58,12 @@ const isBacklogToLarge = async (
   const lastAvgMs = Number(last?.avgMs ?? 0)
   console.log('maxRowsToCountDurationFor', maxRowsToCountDurationFor)
   console.log('firstAvgMs', firstAvgMs)
+  console.log('firstAvgMs * 1.1', firstAvgMs * 1.1)
   console.log('lastAvgMs', lastAvgMs)
   // Check if last 30 average is 20% higher than first 30
-  console.log('lastAvgMs > firstAvgMs * 1.2', lastAvgMs > firstAvgMs * 1.2)
+  console.log('lastAvgMs > firstAvgMs * 1.2', lastAvgMs > firstAvgMs * 1.1)
 
-  return lastAvgMs > firstAvgMs * 1.2
-  // return avgLast30 > avgFirst30 * 1.2
+  return lastAvgMs > firstAvgMs * 1.1
 }
 
 const hasEnoughArticlesInBacklog = (sent: number): boolean => {
