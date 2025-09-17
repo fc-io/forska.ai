@@ -60,8 +60,7 @@ const isBacklogToLarge = async (
   console.log('firstAvgMs', firstAvgMs)
   console.log('firstAvgMs * 1.1', firstAvgMs * 1.1)
   console.log('lastAvgMs', lastAvgMs)
-  // Check if last 30 average is 20% higher than first 30
-  console.log('lastAvgMs > firstAvgMs * 1.2', lastAvgMs > firstAvgMs * 1.1)
+  console.log('lastAvgMs > firstAvgMs * 1.1', lastAvgMs > firstAvgMs * 1.1)
 
   return lastAvgMs > firstAvgMs * 1.1
 }
