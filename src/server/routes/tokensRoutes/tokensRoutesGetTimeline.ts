@@ -122,5 +122,46 @@ export const tokensRoutesGetTimeline = async ({projectId, interval, startDate, e
     )
   })
 
-  return {success: true, data: completeData}
+  // Calculate highest total token usage based on interval
+  const getHighestUsagePeriod = () => {
+    const now = new Date()
+    const periods = {
+      '1min': new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000), // Last month
+      '5min': new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000), // Last month
+      '15min': new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000), // Last month
+      '1h': new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000), // Last month
+      '24h': new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000), // Last month
+      '1w': new Date(now.getTime() - 30 * 7 * 24 * 60 * 60 * 1000), // Last 30 weeks
+      '1m': new Date(now.getTime() - 730 * 24 * 60 * 60 * 1000), // Last 2 years
+    }
+    return periods[interval]
+  }
+
+  // Get highest usage for the appropriate period
+  const highestUsageResult = await db
+    .select({
+      timeBucket: timeBucket,
+      totalTokens: sum(tokenUse.totalTokens),
+    })
+    .from(tokenUse)
+    .where(
+      and(
+        sql`${tokenUse.judgmentsJobId} = ANY(ARRAY[${sql.join(jobIds, sql`, `)}]::uuid[])`,
+        gte(tokenUse.createdAt, getHighestUsagePeriod()),
+        lt(tokenUse.createdAt, new Date()),
+      ),
+    )
+    .groupBy(timeBucket)
+    .orderBy(desc(sum(tokenUse.totalTokens)))
+    .limit(1)
+
+  const highestUsage =
+    highestUsageResult.length > 0
+      ? {
+          timestamp: highestUsageResult[0].timeBucket as string,
+          totalTokens: Number(highestUsageResult[0].totalTokens || 0),
+        }
+      : null
+
+  return {success: true, data: completeData, highestUsage}
 }
