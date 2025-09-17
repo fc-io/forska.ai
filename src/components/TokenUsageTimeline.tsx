@@ -133,18 +133,7 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
       refetchInterval: false,
       // Avoid extra refetch on focus when data is fresh; still refetch if stale
       refetchOnWindowFocus: true,
-      staleTime: (() => {
-        const map: Record<TimeInterval, number> = {
-          '1min': 10_000,
-          '5min': 15_000,
-          '15min': 30_000,
-          '1h': 60_000,
-          '24h': 5 * 60_000,
-          '1w': 10 * 60_000,
-          '1m': 30 * 60_000,
-        }
-        return map[selectedInterval()]
-      })(),
+      staleTime: 10_000,
       // TanStack Query v5 replacement for keepPreviousData
       placeholderData: (prev) => {
         return prev
@@ -164,97 +153,23 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
 
   const scheduleBoundaryRefetch = () => {
     clearBoundaryTimer()
-    const interval = selectedInterval()
     const now = new Date()
 
-    const alignEnd = (d: Date) => {
-      switch (interval) {
-        case '1min':
-          return (() => {
-            const aligned = new Date(d)
-            aligned.setSeconds(0, 0)
-            return aligned
-          })()
-        case '5min':
-          return (() => {
-            const aligned = new Date(d)
-            const m = aligned.getMinutes()
-            aligned.setMinutes(Math.floor(m / 5) * 5, 0, 0)
-            return aligned
-          })()
-        case '15min':
-          return (() => {
-            const aligned = new Date(d)
-            const m = aligned.getMinutes()
-            aligned.setMinutes(Math.floor(m / 15) * 15, 0, 0)
-            return aligned
-          })()
-        case '1h': {
-          const aligned = new Date(d)
-          aligned.setMinutes(0, 0, 0)
-          return aligned
-        }
-        case '24h': {
-          const aligned = new Date(d)
-          aligned.setHours(0, 0, 0, 0)
-          return aligned
-        }
-        case '1w': {
-          const aligned = new Date(d)
-          aligned.setHours(0, 0, 0, 0)
-          const day = aligned.getDay()
-          const diffToMonday = (day + 6) % 7
-          aligned.setDate(aligned.getDate() - diffToMonday)
-          return aligned
-        }
-        case '1m': {
-          const aligned = new Date(d)
-          aligned.setDate(1)
-          aligned.setHours(0, 0, 0, 0)
-          return aligned
-        }
-      }
-    }
+    // Always align to the next minute boundary for fetching
+    const alignedToMinute = new Date(now)
+    alignedToMinute.setSeconds(0, 0)
 
-    const currentAlignedEnd = alignEnd(now)
+    // Calculate the next minute boundary
+    const nextMinuteBoundary = new Date(alignedToMinute)
+    nextMinuteBoundary.setMinutes(nextMinuteBoundary.getMinutes() + 1)
 
-    // Compute next boundary by adding one interval to the aligned end
-    const nextBoundary = (() => {
-      const t = new Date(currentAlignedEnd)
-      switch (interval) {
-        case '1min':
-          t.setMinutes(t.getMinutes() + 1)
-          return t
-        case '5min':
-          t.setMinutes(t.getMinutes() + 5)
-          return t
-        case '15min':
-          t.setMinutes(t.getMinutes() + 15)
-          return t
-        case '1h':
-          t.setHours(t.getHours() + 1)
-          return t
-        case '24h':
-          t.setDate(t.getDate() + 1)
-          return t
-        case '1w':
-          t.setDate(t.getDate() + 7)
-          return t
-        case '1m':
-          t.setMonth(t.getMonth() + 1)
-          return t
-      }
-    })()
+    // Calculate delay until next minute with slight buffer
+    const delay = Math.max(0, nextMinuteBoundary.getTime() - now.getTime() + 10)
 
-    const delay = Math.max(0, nextBoundary.getTime() - now.getTime() + 10) // slight buffer
-
-    boundaryTimer = setTimeout(async () => {
-      try {
-        await tokenData.refetch()
-      } finally {
-        // Schedule the next boundary after this one
-        scheduleBoundaryRefetch()
-      }
+    boundaryTimer = setTimeout(() => {
+      void tokenData.refetch()
+      // Schedule the next boundary after this one
+      scheduleBoundaryRefetch()
     }, delay)
   }
 
@@ -274,8 +189,11 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
       return null
     }
 
+    // For 1min interval, skip the last (incomplete) bar
+    const filteredData = selectedInterval() === '1min' ? data.slice(0, -1) : data
+
     return {
-      labels: data.map((d) => {
+      labels: filteredData.map((d) => {
         const date = new Date(d.timestamp)
         return selectedInterval() === '1min' || selectedInterval() === '5min' || selectedInterval() === '15min'
           ? format(date, 'HH:mm')
@@ -288,7 +206,7 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
       datasets: [
         {
           label: 'Prompt Tokens',
-          data: data.map((d) => {
+          data: filteredData.map((d) => {
             return d.totalPromptTokens
           }),
           backgroundColor: 'rgb(59, 130, 246)',
@@ -305,7 +223,7 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
         },
         {
           label: 'Completion Tokens',
-          data: data.map((d) => {
+          data: filteredData.map((d) => {
             return d.totalCompletionTokens
           }),
           backgroundColor: 'rgb(147, 197, 253)',
