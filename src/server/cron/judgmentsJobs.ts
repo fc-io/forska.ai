@@ -9,7 +9,7 @@ import {judgmentsJobsGetJobs} from './judgmentsJobs/judgmentsJobsGetJobs.ts'
 import {judgmentsJobsGetNewArticles} from './judgmentsJobs/judgmentsJobsGetNewArticles.ts'
 import {judgmentsJobsSendToLLM} from './judgmentsJobs/judgmentsJobsSendToLLM.ts'
 
-export const MAX_ARTICLES_BATCH_SIZE = 1
+export const MAX_ARTICLES_BATCH_SIZE = 5
 const serverJobId = `server-job-${crypto.randomUUID()}`
 
 const NEW_ARTICLES_INTERVAL = '*/5 * * * * *' // Every 5 seconds
