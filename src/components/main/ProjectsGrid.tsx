@@ -6,7 +6,7 @@ import {createSignal, For} from 'solid-js'
 import {fetchSession} from '../../services/fetchSession'
 import {createJudgmentsJob} from '../../services/judgmentsJobsService'
 import {Button} from '../ui/button'
-import {runJudge} from './projectsGrid/projectGridRunJudge'
+// import {runJudge} from './projectsGrid/projectGridRunJudge'
 
 interface Project {
   id: string
@@ -105,11 +105,11 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
                     class="px-3 py-1 text-sm"
                     onClick={() => {
                       console.log('Run agent for project:', project.id)
-                      void runJudge({
-                        numberOfArticlesToGet: 100,
-                        projectId: project.id,
-                        sessionId: sessionQuery.data?.session?.id,
-                      })
+                      // void runJudge({
+                      //   numberOfArticlesToGet: 100,
+                      //   projectId: project.id,
+                      //   sessionId: sessionQuery.data?.session?.id,
+                      // })
                     }}
                   >
                     Run agent

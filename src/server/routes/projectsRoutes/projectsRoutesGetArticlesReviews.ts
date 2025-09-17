@@ -7,16 +7,6 @@ import {getDatabase} from '../../utils/getDatabase.ts'
 export const projectsRoutesGetArticlesReviews = new Elysia().post(
   '/api/articlesreviews',
   async ({body}) => {
-    console.log('--------------------------------')
-    console.log('--------------------------------')
-    console.log('--------------------------------')
-    console.log('--------------------------------')
-    console.log('--------------------------------')
-    console.log('--------------------------------')
-    console.log('articlesreviews body:', body)
-    console.log('body.prompts:', body.prompts)
-    console.log('typeof body.prompts:', typeof body.prompts)
-    console.log('--------------------------------')
     try {
       const db = getDatabase()
 
