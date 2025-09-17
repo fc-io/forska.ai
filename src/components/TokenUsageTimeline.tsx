@@ -16,10 +16,7 @@ type TokenTimelineData = {
   count: number
 }
 
-type HighestUsage = {
-  timestamp: string
-  totalTokens: number
-}
+type HighestUsage = {timestamp: string; totalTokens: number}
 
 type TokenUsageTimelineProps = {projectId: string}
 
@@ -351,8 +348,8 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
             <div class="flex items-center gap-2">
               <h2 class="text-lg font-semibold text-gray-900">Token Usage Timeline</h2>
             </div>
-            <div class="flex items-center gap-4 mt-1">
-              <p class="text-sm text-gray-500">
+            <div>
+              <p class="text-sm text-gray-500 mt-1">
                 <Show when={selectedInterval() === '1min'}>Last 20 minutes</Show>
                 <Show when={selectedInterval() === '5min'}>Last 2 hours</Show>
                 <Show when={selectedInterval() === '15min'}>Last 16 hours</Show>
@@ -362,23 +359,25 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
                 <Show when={selectedInterval() === '1m'}>Last 24 months</Show>
               </p>
               <Show when={tokenData.data?.highestUsage}>
-                <div class="text-sm text-gray-600">
+                <div class="text-sm text-gray-600 mt-1">
                   <span class="font-medium">
-                    Highest per {selectedInterval() === '1m' ? 'month' : selectedInterval() === '1w' ? 'week' : selectedInterval()}:{' '}
+                    Highest per{' '}
+                    {selectedInterval() === '1m' ? 'month' : selectedInterval() === '1w' ? 'week' : selectedInterval()}
+                    :{' '}
                   </span>
-                  <span>
-                    {(tokenData.data?.highestUsage as HighestUsage)?.totalTokens.toLocaleString()} tokens
-                  </span>
+                  <span>{(tokenData.data?.highestUsage as HighestUsage)?.totalTokens.toLocaleString()} tokens</span>
                   <span class="text-gray-400 ml-1">
-                    ({
-                      selectedInterval() === '1min' || selectedInterval() === '5min' || 
-                      selectedInterval() === '15min' || selectedInterval() === '1h' || 
-                      selectedInterval() === '24h'
-                        ? 'since last month'
-                        : selectedInterval() === '1w'
-                          ? 'since last 30 weeks'
-                          : 'since last 2 years'
-                    })
+                    (
+                    {selectedInterval() === '1min'
+                    || selectedInterval() === '5min'
+                    || selectedInterval() === '15min'
+                    || selectedInterval() === '1h'
+                    || selectedInterval() === '24h'
+                      ? 'last 30 days'
+                      : selectedInterval() === '1w'
+                        ? 'last 30 weeks'
+                        : 'last 24 months'}
+                    )
                   </span>
                 </div>
               </Show>
