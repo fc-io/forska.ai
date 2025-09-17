@@ -9,6 +9,7 @@ const envShape = arktype({
   RUN_SERVER_JUDGING: arktype('"true" | "false" | boolean').pipe((v) => {
     return typeof v === 'string' ? v.toLowerCase() === 'true' : v
   }),
+  VITE_LLM_SERVER_URL: 'string',
 })
 
 const loadEnv = (): typeof envShape.infer => {

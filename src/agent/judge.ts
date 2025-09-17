@@ -1,6 +1,7 @@
 import OpenAI from 'openai'
 
 import type {getNewestArticlesToJudge} from '../components/main/projectsGrid/projectsGridGetNewestArticlesToJudge.ts'
+import {env} from '../server/utils/env.ts'
 import {apiClient} from '../services/apiClient.ts'
 import {judgeGetPrompt} from './judge/judgeGetPrompt.ts'
 import {parseJudgment} from './judge/judgeParseJudgment.ts'
@@ -10,11 +11,7 @@ import {judgeStoreTokenUse} from './judge/judgeStoreTokenUse.ts'
 import {SYSTEM_PROMPT} from './judge/judgeSystemPrompt.ts'
 
 // Configure OpenAI client for local vLLM server
-const openaiClient = new OpenAI({
-  apiKey: 'fake_key',
-  dangerouslyAllowBrowser: true,
-  baseURL: 'http://localhost:8000/v1',
-})
+const openaiClient = new OpenAI({apiKey: 'fake_key', dangerouslyAllowBrowser: true, baseURL: env.VITE_LLM_SERVER_URL})
 
 // How many times we should ask the model to retry if the response is invalid
 const MAX_RETRIES = 3
