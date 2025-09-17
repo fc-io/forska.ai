@@ -1,22 +1,10 @@
-import {and, count, eq, inArray, isNotNull, sql} from 'drizzle-orm'
+import {and, eq, inArray, isNotNull, sql} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../../db/schema.ts'
 export const P95_TARGET_MS = 3 * 60 * 1000
 import {env} from '../../../utils/env.ts'
-import {MAX_ARTICLES_BATCH_SIZE} from '../../judgmentsJobs.ts'
-// const percentileCompute = (values: number[], p: number): number => {
-//   const sorted = [...values].sort((a, b) => {
-//     return a - b
-//   })
-//   const idx = Math.max(0, Math.ceil((p / 100) * sorted.length) - 1)
-//   return sorted[idx]
-// }
 
-// const percentile = (values: number[], p: number): number => {
-//   const isEmpty = values.length === 0
-//   return isEmpty ? 0 : percentileCompute(values, p)
-// }
 const countOfArticles = async (
   db: PostgresJsDatabase<typeof schema>,
   serverJobId: string,
@@ -33,49 +21,6 @@ const countOfArticles = async (
 
   return result[0] ?? {judged: 0, sent: 0}
 }
-// const hasSevereLatency = async (
-//   db: PostgresJsDatabase<typeof schema>,
-//   serverJobId: string,
-// ): Promise<{p95Ms: number | null; sampleSize: number}> => {
-//   const top = db
-//     .select({total: count().mapWith(Number)}) // -> number
-//     .from(schema.judgmentsJobsArticles)
-//     .where(
-//       and(
-//         eq(schema.judgmentsJobsArticles.status, 'judged'),
-//         eq(schema.judgmentsJobsArticles.serverId, serverJobId),
-//         isNotNull(schema.judgmentsJobsArticles.sentAt),
-//         isNotNull(schema.judgmentsJobsArticles.judgedAt),
-//       ),
-//     )
-
-//   console.log('rows')
-//   console.log(rows)
-
-//   const durations = rows
-//     .map((r) => {
-//       const start =
-//         r.sentAt instanceof Date ? r.sentAt.getTime() : new Date((r.sentAt as unknown as string) ?? '').getTime()
-//       const end =
-//         r.judgedAt instanceof Date ? r.judgedAt.getTime() : new Date((r.judgedAt as unknown as string) ?? '').getTime()
-//       const diff = end - start
-//       return Number.isFinite(diff) && diff >= 0 ? diff : null
-//     })
-//     .filter((v): v is number => {
-//       return v !== null && Number.isFinite(v)
-//     })
-
-//   const sampleSize = durations.length
-//   console.log('durations', durations)
-
-//   const insufficient = sampleSize < 5
-//   console.log('insufficient', insufficient)
-//   return insufficient ? {p95Ms: null, sampleSize} : {p95Ms: percentile(durations, 95), sampleSize}
-// }
-
-// const isFiniteNumber = (v: unknown): v is number => {
-//   return typeof v === 'number' && Number.isFinite(v)
-// }
 
 const isLLMServerResponding = async (): Promise<boolean> => {
   try {
@@ -86,23 +31,59 @@ const isLLMServerResponding = async (): Promise<boolean> => {
   }
 }
 
-const isBacklogToLarge = ({judged, sent}: {judged: number; sent: number}): boolean => {
-  return sent > judged * 4
+const isBacklogToLarge = async (
+  db: PostgresJsDatabase<typeof schema>,
+  serverJobId: string,
+  judged: number,
+): Promise<boolean> => {
+  const t = schema.judgmentsJobsArticles
+  const maxRowsToCountDurationFor = Math.min(Math.round(judged / 2), 200)
+  const [first] = await db.select({totalMs: sql<number>`SUM(duration_ms)`, avgMs: sql<number>`AVG(duration_ms)`})
+    .from(sql`
+    (SELECT EXTRACT(EPOCH FROM (${t.judgedAt} - ${t.sentAt})) * 1000 AS duration_ms
+     FROM ${t}
+     WHERE ${and(eq(t.serverId, serverJobId), eq(t.status, 'judged'), isNotNull(t.sentAt), isNotNull(t.judgedAt))}
+     ORDER BY ${t.sentAt}
+     LIMIT ${maxRowsToCountDurationFor}) AS s
+  `)
+  const [last] = await db.select({totalMs: sql<number>`SUM(duration_ms)`, avgMs: sql<number>`AVG(duration_ms)`})
+    .from(sql`
+  (SELECT EXTRACT(EPOCH FROM (${t.judgedAt} - ${t.sentAt})) * 1000 AS duration_ms
+   FROM ${t}
+   WHERE ${and(eq(t.serverId, serverJobId), eq(t.status, 'judged'), isNotNull(t.sentAt), isNotNull(t.judgedAt))}
+   ORDER BY ${t.sentAt} DESC
+   LIMIT ${maxRowsToCountDurationFor}) AS s
+`)
+  const firstAvgMs = Number(first?.avgMs ?? 0)
+  const lastAvgMs = Number(last?.avgMs ?? 0)
+  console.log('maxRowsToCountDurationFor', maxRowsToCountDurationFor)
+  console.log('firstAvgMs', firstAvgMs)
+  console.log('lastAvgMs', lastAvgMs)
+  // Check if last 30 average is 20% higher than first 30
+  console.log('lastAvgMs > firstAvgMs * 1.2', lastAvgMs > firstAvgMs * 1.2)
+
+  return lastAvgMs > firstAvgMs * 1.2
+  // return avgLast30 > avgFirst30 * 1.2
 }
 
 const hasEnoughArticlesInBacklog = (sent: number): boolean => {
-  return sent > 100
+  // a meassly a100 fat should at least be able batch 80 articles in vllm
+  // but of course multiple instances could be running
+  return sent > 1
 }
 
 const hasSuccessfullyJudgedArticles = (judged: number): boolean => {
-  // why not just look for > 0?
-  return judged > Math.ceil(MAX_ARTICLES_BATCH_SIZE / 2)
+  return judged > 2
 }
 
 const isQueueFull = async (db: PostgresJsDatabase<typeof schema>, serverJobId: string): Promise<boolean> => {
   const {judged, sent} = await countOfArticles(db, serverJobId)
   console.log('sent', sent, 'judged', judged)
-  return hasSuccessfullyJudgedArticles(judged) && hasEnoughArticlesInBacklog(sent) && isBacklogToLarge({judged, sent})
+  return (
+    hasSuccessfullyJudgedArticles(judged)
+    && hasEnoughArticlesInBacklog(sent)
+    && (await isBacklogToLarge(db, serverJobId, judged))
+  )
 }
 
 export const getReadyToSendMoreStatus = async (
