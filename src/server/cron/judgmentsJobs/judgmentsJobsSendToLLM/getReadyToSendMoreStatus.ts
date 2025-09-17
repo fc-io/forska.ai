@@ -78,8 +78,13 @@ const countOfArticles = async (
 // }
 
 const isLLMServerResponding = async (): Promise<boolean> => {
-  const response = await fetch(`${env.VITE_LLM_SERVER_URL}/models`)
-  return response.ok
+  try {
+    const response = await fetch(`${env.VITE_LLM_SERVER_URL}/models`)
+    console.log('response', response)
+    return response.ok
+  } catch (_error) {
+    return false
+  }
 }
 
 const isBacklogToLarge = ({judged, sent}: {judged: number; sent: number}): boolean => {
