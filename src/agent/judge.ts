@@ -173,7 +173,6 @@ export const judge = async ({
   )
   const duration = performance.now() - startDuration
   const finishedAt = new Date().toISOString()
-  // console.log('tokenUse length:', tokenUse.length)
-  console.log('tokenUse:', tokenUse)
+  // console.log('tokenUse:', tokenUse)
   await judgeStoreTokenUse(tokenUse, sessionId, {startedAt, finishedAt, duration}, judgmentsJobId)
 }

@@ -80,7 +80,6 @@ const countOfArticles = async (
 const isLLMServerResponding = async (): Promise<boolean> => {
   try {
     const response = await fetch(`${env.VITE_LLM_SERVER_URL}/models`)
-    console.log('response', response)
     return response.ok
   } catch (_error) {
     return false
@@ -102,8 +101,7 @@ const hasSuccessfullyJudgedArticles = (judged: number): boolean => {
 
 const isQueueFull = async (db: PostgresJsDatabase<typeof schema>, serverJobId: string): Promise<boolean> => {
   const {judged, sent} = await countOfArticles(db, serverJobId)
-  console.log('judged', judged)
-  console.log('sent', sent)
+  console.log('sent', sent, 'judged', judged)
   return hasSuccessfullyJudgedArticles(judged) && hasEnoughArticlesInBacklog(sent) && isBacklogToLarge({judged, sent})
 }
 

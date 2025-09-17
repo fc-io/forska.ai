@@ -22,7 +22,9 @@ const processArticles = async (db: PostgresJsDatabase<typeof schema>, articles: 
 }
 
 const sendToLLM = async (db: PostgresJsDatabase<typeof schema>, serverJobId: string): Promise<void> => {
-  const ARTICLES_BATH_MULTIPLIER = 3 // basically LLM_PROCESSING_INTERVAL / NEW_ARTICLES_INTERVAL (this could be nicer)
+  // ARTICLES_BATH_MULTIPLIER  = basically LLM_PROCESSING_INTERVAL / NEW_ARTICLES_INTERVAL (this could be nicer)
+  // this is a bit helpful when there are a lot of ready articles but non has been sent to the LLM yet
+  const ARTICLES_BATH_MULTIPLIER = 3
   const articlesToProcess = await getAndUpdateReadyArticles(
     db,
     serverJobId,
