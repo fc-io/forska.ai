@@ -3,18 +3,18 @@ alwaysApply: true
 ---
 ## Important
 
-IMPORTANT: I don't like try, catch, finally, throw. Only use when absolutely necessary.
-IMPORTANT: if there only is one export in a file, than the filename should match the name of the exported function
-IMPORTANT: on the server – prefer drizzle orm over executing pure sql commands
-IMPORTANT: on the client/app - use import {useQuery} from '@tanstack/solid-query' over createQuery
-IMPORTANT: Keep filenames pascal case. Even for tsx/jsx react components.
-there is an .env.local file in the project, you just can't read it because of security concerns. Always assume the .env files are correct unless the env.ts file throws an error. Use process.env instead of buns env functionaltiy to stay compatible with ordinary node.
+IMPORTANT: Avoid `try`, `catch`, `finally`, and `throw` unless absolutely necessary.
+IMPORTANT: If there is only one export in a file, the filename must match the exported function's name.
+IMPORTANT: On the server, prefer Drizzle ORM over executing plain SQL commands.
+IMPORTANT: On the client/app, import `useQuery` from `@tanstack/solid-query` instead of using `createQuery`.
+IMPORTANT: Keep filenames in PascalCase, including TSX/JSX React components.
+IMPORTANT: Do not remove `debugger` statements or `console.log` unless explicitly asked (no matter what the linter says).
+
+There is a `.env.local` file in the project, but you cannot read it because of security concerns. Always assume the `.env` files are correct unless `env.ts` throws an error. Use `process.env` instead of Bun's env functionality to stay compatible with ordinary Node.
 
 ## File structure
 
-* IMPORTANT: Keep filenames pascal case. Even for tsx/jsx react components.
-
-Components and other util functions that are only used in one file should be saved into a subfolder with the same name as the file its owned by. The subfolder should be in the same folder as the file (only the folder that holds the routes are an exemption). The components in subfolder should inherit as a prefix the name of the folder. Example:
+Components and other utility functions that are only used in one file should live in a subfolder with the same name as the parent file. Place the subfolder alongside the parent file (the routes folder is the only exception). Components in the subfolder should inherit the folder name as a prefix. Example:
 
 ```
 src
@@ -53,7 +53,7 @@ src
 ### Ternary With Helpers
 
 * Use-case: Exactly two mutually exclusive paths with no shared tail logic.
-* Rule: Prefer ending a function via ternary: `return cond ? pathA(optionalArg) : pathB(optionalArg)` or `return cond ? value : pathB(optionalArg)`
+* Rule: Prefer ending a function via ternary: `return cond ? pathA(optionalArg) : pathB(optionalArg)` or `return cond ? value :pathB(optionalArg)`
 * Rationale: Keeps a single return, flattens control flow, and makes intent self-documenting through function names.
 * Requirements: Extract each branch into small, named helpers; both branches must return the same type; precompute shared inputs before the ternary.
 * Shortcuts for ternaries are encouraged, like having `return data ?? []` instead of `return data ? data : []`
@@ -119,9 +119,9 @@ const doThing = async (value): Promise<void> => {
 
 ### TypeScript conventions
 
-* IMPORTANT: Prefer `type` over `interface` for type definitions
-* Use explicit return types for functions when the return type is not immediately obvious
-* Prefer type unions and intersections over complex inheritance patterns
+* IMPORTANT: Prefer `type` over `interface` for type definitions.
+* Use explicit return types for functions when the return type is not immediately obvious.
+* Prefer type unions and intersections over complex inheritance patterns.
 
 ### Import organization
 
@@ -134,16 +134,16 @@ const doThing = async (value): Promise<void> => {
 
 ### Component patterns (SolidJS)
 
-* Use `splitProps` when destructuring component props to maintain reactivity
-* Prefer `createSignal` for simple local state, `createStore` for complex nested state
-* Use `createMemo` for expensive computed values
-* Prefer `Show` and `Switch`/`Match` over ternary operators in JSX
-* Use `For` and `Index` components for lists instead of `.map()`
-* When a component or its related utilities exceed 100 lines, extract them into a subfolder following the file structure conventions
+* Use `splitProps` when destructuring component props to maintain reactivity.
+* Prefer `createSignal` for simple local state, `createStore` for complex nested state.
+* Use `createMemo` for expensive computed values.
+* Prefer `Show` and `Switch`/`Match` over ternary operators in JSX.
+* Use `For` and `Index` components for lists instead of `.map()`.
+* When a component or its related utilities exceed 100 lines, extract them into a subfolder following the file structure conventions.
 
 ## Platform and tools
 
-* IMPORTANT: Stack built on drizzle with postgres on the server, Bun, Vite, solid, tailwind, tanstack-router, @tanstack/solid-query, date-fns, elysia (for server) with @elysiajs/cron installed.
+* IMPORTANT: Stack built on Drizzle with Postgres on the server, Bun, Vite, Solid, Tailwind, TanStack Router, `@tanstack/solid-query`, `date-fns`, and Elysia (with `@elysiajs/cron`).
 
 Default to using Bun instead of Node.js.
 
@@ -155,44 +155,44 @@ Default to using Bun instead of Node.js.
 - Use `bun run <script>` instead of `npm run <script>` or `yarn run <script>` or `pnpm run <script>`
 - Bun automatically loads .env, so don't use dotenv.
 
-## Linting/formating
+## Linting/formatting
 
-Don't try to fix linting issues unrelated to the task you are trying to accomplish. Don't remove debugger statements or console.log unless explicitly asked (no matter what the linter says).
+Don't try to fix linting issues unrelated to the task at hand. Remember the earlier rule: do not remove `debugger` statements or `console.log` unless explicitly asked (no matter what the linter says).
 
-We use "eslint-plugin-prettier" so no need to run prettier separately.
+We use `eslint-plugin-prettier`, so there is no need to run Prettier separately.
 
-- Use `bun run lint` to see linting errors
-- Use `bun run lint:fix` to fix linting issues
+- Use `bun run lint` to see linting errors.
+- Use `bun run lint:fix` to fix linting issues.
 
 ## API/Route naming conventions
 
-* Server routes use `/api/` prefix followed by resource name in plural (e.g., `/api/projects`, `/api/users`)
-* Use RESTful conventions: GET for reading, POST for creating, PUT/PATCH for updating, DELETE for removing
-* Route files should be named in camelCase like `[resource]Routes.ts` (e.g., `projectsRoutes.ts`, `authRoutes.ts`)
-* Complex route logic should be extracted to separate files in a subfolder (e.g., `projectsRoutes/projectsRoutesGetArticlesReviews.ts`). In general any route logic over 15 lines should be in a seperate file.
+* Server routes use the `/api/` prefix followed by the resource name in plural (e.g., `/api/projects`, `/api/users`).
+* Use RESTful conventions: GET for reading, POST for creating, PUT/PATCH for updating, DELETE for removing.
+* Route files should be named in camelCase, like `[resource]Routes.ts` (e.g., `projectsRoutes.ts`, `authRoutes.ts`).
+* Complex route logic should be extracted to separate files in a subfolder (e.g., `projectsRoutes/projectsRoutesGetArticlesReviews.ts`). In general, any route logic over 15 lines should be in a separate file.
 * Use Elysia framework patterns for route definitions.
-* IMPORTANT: Do not nest routes - prefer flat route structures with POST requests and body parameters over nested URL paths
-* IMPORTANT: Always use Eden/RPC on the client, never use fetch directly
-* IMPORTANT: Prefer POST with request body over complex nested URL parameters
+* IMPORTANT: Do not nest routes—prefer flat route structures with POST requests and body parameters over nested URL paths.
+* IMPORTANT: Always use Eden/RPC on the client; never use `fetch` directly.
+* IMPORTANT: Prefer POST requests with a body over complex nested URL parameters.
 
 ## Database patterns
 
-* IMPORTANT: Always use Drizzle ORM query builder methods instead of raw SQL
-* Use transactions for operations affecting multiple tables
-* Prefer `db.select()`, `db.insert()`, `db.update()`, `db.delete()` over `db.execute()`
-* Use prepared statements for frequently executed queries
-* Handle database errors with proper logging and user-friendly messages
+* IMPORTANT: Always use Drizzle ORM query builder methods instead of raw SQL.
+* Use transactions for operations affecting multiple tables.
+* Prefer `db.select()`, `db.insert()`, `db.update()`, `db.delete()` over `db.execute()`.
+* Use prepared statements for frequently executed queries.
+* Handle database errors with proper logging and user-friendly messages.
 
 ## Data validation
 
-* Use ArkType for runtime type validation at API boundaries when working above the Eden/RPC/Elysia stack
-* Validate all incoming request data before processing
-* Use ArkType's composable type definitions to ensure consistency across the codebase
-* Define validation schemas close to where they're used
+* Use ArkType for runtime type validation at API boundaries when working above the Eden/RPC/Elysia stack.
+* Validate all incoming request data before processing.
+* Use ArkType's composable type definitions to ensure consistency across the codebase.
+* Define validation schemas close to where they're used.
 
 ## Testing
 
-When writing tests try to use the exact boundary condition. Use `bun test` to run tests.
+When writing tests, try to target exact boundary conditions. Use `bun test` to run tests.
 
 ```ts
 import {test, expect} from "bun:test";
