@@ -93,10 +93,30 @@ export const tokensRoutesGetTimeline = async ({projectId, interval, startDate, e
   }
 
   // Create a map of existing data
-  const dataMap = new Map(
+  // Use a stable key to avoid timezone-induced mismatches between
+  // server-returned buckets (UTC) and locally constructed buckets.
+  const monthKey = (d: Date) => {
+    const y = d.getFullYear()
+    const m = (d.getMonth() + 1).toString().padStart(2, '0')
+    return `${y}-${m}`
+  }
+
+  const toKey = (d: Date) => {
+    return isMonthly ? monthKey(d) : d.getTime().toString()
+  }
+
+  const dataMap = new Map<string, {
+    timestamp: string
+    totalPromptTokens: number
+    totalCompletionTokens: number
+    totalTokens: number
+    count: number
+  }>(
     result.map((row) => {
+      const d = new Date(row.timeBucket as string)
+      const key = toKey(d)
       return [
-        new Date(row.timeBucket as string).getTime(),
+        key,
         {
           timestamp: row.timeBucket as string,
           totalPromptTokens: Number(row.totalPromptTokens || 0),
@@ -110,7 +130,8 @@ export const tokensRoutesGetTimeline = async ({projectId, interval, startDate, e
 
   // Fill in missing buckets with zeros
   const completeData = allBuckets.map((bucket) => {
-    const existing = dataMap.get(bucket.getTime())
+    const key = toKey(bucket)
+    const existing = dataMap.get(key)
     return (
       existing || {
         timestamp: bucket.toISOString(),
