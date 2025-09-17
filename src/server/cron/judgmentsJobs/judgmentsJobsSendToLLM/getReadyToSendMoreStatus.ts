@@ -90,10 +90,10 @@ export const getReadyToSendMoreStatus = async (
   db: PostgresJsDatabase<typeof schema>,
   serverJobId: string,
 ): Promise<{isReady: boolean; state: string}> => {
-  const isServerResonding = await isLLMServerResponding()
-  console.log('isServerResonding', isServerResonding)
+  const isServerResponding = await isLLMServerResponding()
+  console.log('isServerResponding', isServerResponding)
 
-  if (!isServerResonding) {
+  if (!isServerResponding) {
     return {isReady: false, state: 'server not responding'}
   } else if (await isQueueFull(db, serverJobId)) {
     return {isReady: false, state: 'severe latency'}
