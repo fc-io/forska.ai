@@ -4,10 +4,12 @@ import * as schema from '../../../db/schema.ts'
 import {MAX_ARTICLES_BATCH_SIZE} from '../judgmentsJobs.ts'
 import {getProcessingArticleIds} from './judgmentsJobsArticlesRepository.ts'
 import {judgmentsJobsCronGetArticles} from './judgmentsJobsCronGetArticles.ts'
-import type {JobData} from './judgmentsJobsTypes.ts'
+import type {judgmentsJobsGetJobs} from './judgmentsJobsGetJobs.ts'
 
-const fetchArticlesForJob = async (db: PostgresJsDatabase<typeof schema>, job: JobData) => {
-  const existingArticleIds = await getProcessingArticleIds(db, job.jobId)
+type Job = Awaited<ReturnType<typeof judgmentsJobsGetJobs>>[number]
+
+const fetchArticlesForJob = async (db: PostgresJsDatabase<typeof schema>, job: Job) => {
+  const existingArticleIds = await getProcessingArticleIds(db, job.id)
 
   const {articlesToJudgeIds} = await judgmentsJobsCronGetArticles(
     job.projectId,
@@ -15,10 +17,15 @@ const fetchArticlesForJob = async (db: PostgresJsDatabase<typeof schema>, job: J
     existingArticleIds,
   )
 
-  return {jobId: job.jobId, articlesToJudgeIds}
+  return {
+    jobId: job.id,
+    articlesToJudgeIds,
+    sendToLLMBatchSize: job.sendToLLMBatchSize,
+    sendToLLMInterval: job.sendToLLMInterval,
+  }
 }
 
-export const judgmentsJobsGetNewArticles = async (db: PostgresJsDatabase<typeof schema>, allJobs: JobData[]) => {
+export const judgmentsJobsGetNewArticles = async (db: PostgresJsDatabase<typeof schema>, allJobs: Job[]) => {
   const articlesData = await Promise.all(
     allJobs.map((job) => {
       return fetchArticlesForJob(db, job)

@@ -20,7 +20,9 @@ const getNewArticlesForJobs = async (): Promise<void> => {
   if (!env.RUN_SERVER_JUDGING) return
   const db = getDatabase()
   const allJobs = await judgmentsJobsGetJobs(db)
+  console.log('allJobs', allJobs)
   const newArticlesToProcess = await judgmentsJobsGetNewArticles(db, allJobs)
+  console.log('newArticlesToProcess', newArticlesToProcess)
   await judgmentsJobsAddToJobsQueue(db, newArticlesToProcess, serverJobId)
 }
 
