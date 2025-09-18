@@ -28,11 +28,38 @@ type ResolvedAdjustment = Exclude<Adjustment, 'none'>
 const SNAPSHOT_LOG_LIMIT = 20
 const MIN_BATCH_SIZE = 1
 const MAX_BATCH_SIZE = 100
+const COOLDOWN_STATES = new Set(['severe latency', 'cooldown'])
 
 let lastChange: ChangeDirection = 'none'
 let currentSnapshot: Snapshot | null = null
 let previousSnapshot: Snapshot | null = null
 const snapshotsLog: Snapshot[] = []
+let cooldownEventsSinceLastBatchUpdate = 0
+
+const isCooldownState = (state: string): boolean => {
+  return COOLDOWN_STATES.has(state)
+}
+
+export const registerCooldownEvent = (state: string): void => {
+  if (!isCooldownState(state)) {
+    return
+  }
+  cooldownEventsSinceLastBatchUpdate += 1
+}
+
+const resetCooldownEvents = (): void => {
+  cooldownEventsSinceLastBatchUpdate = 0
+}
+
+const resolveCooldownOverride = (adjustment: Adjustment): Adjustment => {
+  if (cooldownEventsSinceLastBatchUpdate <= 1) {
+    return adjustment
+  }
+  if (adjustment === 'decrease') {
+    return adjustment
+  }
+  return 'decrease'
+}
 
 const emptyTotals = (): TokenTotals => {
   return {totalTokens: 0, totalPromptTokens: 0, totalCompletionTokens: 0, requests: 0}
@@ -278,7 +305,8 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
   }
 
   const faster = isFasterThanPrevious(totalsCurrentMinute, totalsPreviousMinute)
-  const adjustment = determineAdjustment(faster, previousSnapshot !== null)
+  const plannedAdjustment = determineAdjustment(faster, previousSnapshot !== null)
+  const adjustment = resolveCooldownOverride(plannedAdjustment)
   console.log('isFasterThanPrevious', faster)
   console.log('adjustment', adjustment)
   if (adjustment === 'none') {
@@ -297,6 +325,7 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
   }
 
   await applyUpdates(db, updates)
+  resetCooldownEvents()
 
   if (adjustment === 'revert' && previousSnapshot) {
     updateStateAfterRevert(previousSnapshot)
