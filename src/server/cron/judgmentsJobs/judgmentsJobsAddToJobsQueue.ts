@@ -20,12 +20,12 @@ const addArticlesToProcessing = async (
 
 export const judgmentsJobsAddToJobsQueue = (
   db: PostgresJsDatabase<typeof schema>,
-  articlesData: Array<{jobId: string; articlesToJudgeIds: string[]}>,
+  articlesData: Array<{job: {id: string}; articlesToJudgeIds: string[]}>,
   serverJobId: string,
 ) => {
   return Promise.all(
-    articlesData.map(({jobId, articlesToJudgeIds}) => {
-      return addArticlesToProcessing(db, jobId, articlesToJudgeIds, serverJobId)
+    articlesData.map(({job, articlesToJudgeIds}) => {
+      return addArticlesToProcessing(db, job.id, articlesToJudgeIds, serverJobId)
     }),
   )
 }

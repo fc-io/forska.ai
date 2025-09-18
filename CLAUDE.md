@@ -121,11 +121,11 @@ const doThing = async (value): Promise<void> => {
 ### TypeScript conventions
 
 * IMPORTANT: Prefer `type` over `interface` for type definitions
-* Use explicit return types for functions when the return type is not immediately obvious
+* IMPORTANT: Prefer inferred/derived types over explicit ones – do not define a type when it can be derived. Especially try to infer types from the drizzle src/db/schema.ts.
+* Use explicit return types for functions when the return type is not immediately obvious (but only do this for pure functions, and functions that don't call the db)
 * Prefer type unions and intersections over complex inheritance patterns
 
 * IMPORTANT: Avoid shared type definition files – try to keep type definitions local.
-* IMPORTANT: Prefer inferred/derived types over explicit ones – do not define a type when it can be derived. Especially try to infer types from the drizzle src/db/schema.ts.
 
 ### Import organization
 

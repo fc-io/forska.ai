@@ -4,6 +4,14 @@ import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 import * as schema from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
+export type ArticleProcessingData = {
+  articlesToJudgeIds: string[]
+  articlesToJudge: (typeof schema.articles.$inferSelect)[]
+  projectPrompts: (typeof schema.prompts.$inferSelect)[]
+  isSentToLLM?: boolean
+  jobId?: string
+}
+
 const getPromptIds = (projectPrompts: (typeof schema.prompts.$inferSelect)[]) => {
   return projectPrompts.map((p) => {
     return p.id
@@ -56,7 +64,7 @@ const getArticleIdsToJudge = async ({
   projectPrompts: (typeof schema.prompts.$inferSelect)[]
   numberOfArticlesToGet: number
   articlesAlreadyProccessing: string[]
-}) => {
+}): Promise<ArticleProcessingData> => {
   const promptIds = getPromptIds(projectPrompts)
   // console.log('promptIds length', promptIds.length)
   // console.log('articlesAlreadyProccessing length', articlesAlreadyProccessing.length)
@@ -88,7 +96,7 @@ export const judgmentsJobsCronGetArticles = async (
   projectId: string,
   numberOfArticlesToGet: number,
   articlesAlreadyProccessing: string[] = [],
-) => {
+): Promise<ArticleProcessingData> => {
   const db = getDatabase()
 
   const [project] = await db.select().from(schema.projects).where(eq(schema.projects.id, projectId)).limit(1)
