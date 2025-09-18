@@ -6,25 +6,10 @@ import {getProcessingArticleIds} from './judgmentsJobsArticlesRepository.ts'
 import {judgmentsJobsCronGetArticles} from './judgmentsJobsCronGetArticles.ts'
 import type {judgmentsJobsGetJobs} from './judgmentsJobsGetJobs.ts'
 
-type ArticleProcessingData = {
-  articlesToJudgeIds: string[]
-  articlesToJudge: (typeof schema.articles.$inferSelect)[]
-  projectPrompts: (typeof schema.prompts.$inferSelect)[]
-  isSentToLLM?: boolean
-  jobId?: string
-}
-
-export type ProcessingState = {
-  articlesAlreadyProcessing: Map<string, ArticleProcessingData[]>
-  waitingOnNewArticles: boolean
-  waitingOnLLM: boolean
-}
-
 type Job = Awaited<ReturnType<typeof judgmentsJobsGetJobs>>[number]
 
 const fetchArticlesForJob = async (db: PostgresJsDatabase<typeof schema>, job: Job) => {
   const existingArticleIds = await getProcessingArticleIds(db, job.id)
-
   const articleData = await judgmentsJobsCronGetArticles(job.projectId, MAX_ARTICLES_BATCH_SIZE, existingArticleIds)
 
   return {...articleData, job}
