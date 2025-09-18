@@ -52,13 +52,7 @@ const resetCooldownEvents = (): void => {
 }
 
 const resolveCooldownOverride = (adjustment: Adjustment): Adjustment => {
-  if (cooldownEventsSinceLastBatchUpdate <= 1) {
-    return adjustment
-  }
-  if (adjustment === 'decrease') {
-    return adjustment
-  }
-  return 'decrease'
+  return cooldownEventsSinceLastBatchUpdate < 1 ? adjustment : 'decrease'
 }
 
 const emptyTotals = (): TokenTotals => {
