@@ -96,6 +96,8 @@ export const judgmentsJobs = pgTable('judgments_jobs', {
     ),
   status: judgmentsJobStatusEnum('status').default('not_started').notNull(),
   error: text('error').array(),
+  sendToLLMBatchSize: integer('send_to_llm_batch_size').default(5),
+  sendToLLMInterval: integer('send_to_llm_interval').default(15),
 })
 
 export const judgmentsJobsArticles = pgTable('judgments_jobs_articles', {
@@ -117,7 +119,7 @@ export const judgmentsJobsArticles = pgTable('judgments_jobs_articles', {
         return articles.id
       },
       {onDelete: 'cascade'},
-  ),
+    ),
   serverId: text('server_id'),
   sentAt: timestamp('sent_at', {withTimezone: true}),
   judgedAt: timestamp('judged_at', {withTimezone: true}),
