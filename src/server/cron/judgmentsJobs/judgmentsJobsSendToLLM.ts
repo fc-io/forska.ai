@@ -50,7 +50,7 @@ export const judgmentsJobsSendToLLM = async (
     console.log('1 send to LLM')
     await sendToLLM(db, serverJobId)
   } else {
-    console.log('waiting for cooldown', sendMoreStatus.state)
+    console.log('waiting for cooldown:', sendMoreStatus.state)
   }
   console.log('2 end send to LLM')
   console.log('---------------------------')
