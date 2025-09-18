@@ -17,7 +17,7 @@ const serverJobId = `server-job-${crypto.randomUUID()}`
 
 const NEW_ARTICLES_INTERVAL = '*/5 * * * * *' // Every 5 seconds
 const LLM_PROCESSING_INTERVAL = '*/15 * * * * *' // Every 15 seconds
-const ADJUST_BATCH_SIZE_INTERVAL = '*/1 * * * * *' // Every 1 second
+const ADJUST_BATCH_SIZE_INTERVAL = '0 */1 * * * *' // Every 1 minutes
 const CLEANUP_STALE_INTERVAL = '0 */5 * * * *' // Every 5 minutes
 
 const getNewArticlesForJobs = async (): Promise<void> => {

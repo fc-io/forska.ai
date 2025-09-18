@@ -43,11 +43,11 @@ export const judgmentsJobsSendToLLM = async (
   allJobs: Awaited<ReturnType<typeof judgmentsJobsGetJobs>>,
   serverJobId: string,
 ): Promise<void> => {
-  console.log('0')
+  // console.log('0')
   const sendMoreStatus = await getReadyToSendMoreStatus(db, serverJobId)
 
   if (sendMoreStatus.isReady) {
-    console.log('0 loop jobs')
+    // console.log('0 loop jobs')
     await Promise.allSettled(
       allJobs.map((job) => {
         return sendToLLM(db, serverJobId, job.id, job.sendToLLMBatchSize)
@@ -56,6 +56,6 @@ export const judgmentsJobsSendToLLM = async (
   } else {
     console.log('waiting for cooldown:', sendMoreStatus.state)
   }
-  console.log('2 end send to LLM')
-  console.log('---------------------------')
+  // console.log('2 end send to LLM')
+  // console.log('---------------------------')
 }

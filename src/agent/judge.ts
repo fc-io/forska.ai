@@ -153,7 +153,7 @@ export const judge = async ({
           return judgment
         } catch (error: unknown) {
           lastError = error instanceof Error ? error.message : 'Unknown error'
-          console.error(`${article.id} | Attempt ${attempts} failed schema validation: ${lastError}`)
+          // console.error(`${article.id} | Attempt ${attempts} failed schema validation: ${lastError}`)
 
           // Prepare prompt for next retry (memory + error context)
           if (attempts < MAX_RETRIES) {

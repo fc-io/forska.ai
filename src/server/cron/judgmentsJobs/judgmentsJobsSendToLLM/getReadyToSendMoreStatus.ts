@@ -70,7 +70,7 @@ const hasSuccessfullyJudgedArticles = (judged: number): boolean => {
 
 const isQueueFull = async (db: PostgresJsDatabase<typeof schema>, serverJobId: string): Promise<boolean> => {
   const {judged, sent} = await countOfArticles(db, serverJobId)
-  console.log('sent', sent, 'judged', judged)
+  // console.log('sent', sent, 'judged', judged)
   return (
     hasSuccessfullyJudgedArticles(judged)
     && hasEnoughArticlesInBacklog(sent)
