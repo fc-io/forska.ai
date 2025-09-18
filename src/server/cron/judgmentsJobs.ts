@@ -35,7 +35,8 @@ const sendToLLMCronJob = async (): Promise<void> => {
   if (!env.RUN_SERVER_JUDGING) return
 
   const db = getDatabase()
-  await judgmentsJobsSendToLLM(db, serverJobId)
+  const allJobs = await judgmentsJobsGetJobs(db)
+  await judgmentsJobsSendToLLM(db, allJobs, serverJobId)
 }
 
 const cleanupStaleQueueCronJob = async (): Promise<void> => {

@@ -54,6 +54,7 @@ const processReadyRows = async (
 export const getAndUpdateReadyArticles = async (
   db: PostgresJsDatabase<typeof schema>,
   serverJobId: string,
+  jobId: string,
   limit: number,
 ): Promise<ArticleToProcess[]> => {
   const readyRows = await db
@@ -64,7 +65,11 @@ export const getAndUpdateReadyArticles = async (
     })
     .from(schema.judgmentsJobsArticles)
     .where(
-      and(eq(schema.judgmentsJobsArticles.status, 'ready'), eq(schema.judgmentsJobsArticles.serverId, serverJobId)),
+      and(
+        eq(schema.judgmentsJobsArticles.serverId, serverJobId),
+        eq(schema.judgmentsJobsArticles.jobId, jobId),
+        eq(schema.judgmentsJobsArticles.status, 'ready'),
+      ),
     )
     .orderBy(schema.judgmentsJobsArticles.createdAt)
     .limit(limit)
