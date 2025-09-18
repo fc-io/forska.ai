@@ -1,4 +1,5 @@
 import {boolean, integer, jsonb, pgEnum, pgTable, pgView, text, timestamp, uuid} from 'drizzle-orm/pg-core'
+import {index} from 'drizzle-orm/pg-core/indexes'
 
 import {session, user} from '../../auth-schema.ts'
 
@@ -172,46 +173,54 @@ export const prompts = pgTable('prompts', {
 //   },
 // )
 
-export const judgments = pgTable('judgments', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
-  updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
-  articleId: uuid('article_id')
-    .notNull()
-    .references(
+export const judgments = pgTable(
+  'judgments',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
+    articleId: uuid('article_id')
+      .notNull()
+      .references(
+        () => {
+          return articles.id
+        },
+        {onDelete: 'cascade'},
+      ),
+    modelId: uuid('model_id')
+      .notNull()
+      .references(
+        () => {
+          return models.id
+        },
+        {onDelete: 'cascade'},
+      ),
+    promptId: uuid('prompt_id')
+      .notNull()
+      .references(
+        () => {
+          return prompts.id
+        },
+        {onDelete: 'cascade'},
+      ),
+    reviewId: uuid('review_id').references(
       () => {
-        return articles.id
+        return reviews.id
       },
       {onDelete: 'cascade'},
     ),
-  modelId: uuid('model_id')
-    .notNull()
-    .references(
-      () => {
-        return models.id
-      },
-      {onDelete: 'cascade'},
-    ),
-  promptId: uuid('prompt_id')
-    .notNull()
-    .references(
-      () => {
-        return prompts.id
-      },
-      {onDelete: 'cascade'},
-    ),
-  reviewId: uuid('review_id').references(
-    () => {
-      return reviews.id
-    },
-    {onDelete: 'cascade'},
-  ),
-  answeredOriginal: text('answered_original').notNull(),
-  answeredTransformed: text('answered_transformed'),
-  confidenceOriginal: integer('confidence_original'),
-  explanation: text('explanation'),
-  quotes: jsonb('quotes'),
-})
+    answeredOriginal: text('answered_original').notNull(),
+    answeredTransformed: text('answered_transformed'),
+    confidenceOriginal: integer('confidence_original'),
+    explanation: text('explanation'),
+    quotes: jsonb('quotes'),
+  },
+  (table) => {
+    return {
+      articlePromptIndex: index('judgments_article_prompt_idx').on(table.articleId, table.promptId),
+    }
+  },
+)
 
 // Time-series token usage
 export const tokenUse = pgTable('token_use', {
