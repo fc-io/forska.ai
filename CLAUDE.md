@@ -10,6 +10,7 @@ IMPORTANT: on the client/app - use import {useQuery} from '@tanstack/solid-query
 IMPORTANT: Keep filenames pascal case. Even for tsx/jsx react components.
 there is an .env.local file in the project, you just can't read it because of security concerns. Always assume the .env files are correct unless the env.ts file throws an error. Use process.env instead of buns env functionaltiy to stay compatible with ordinary node.
 
+
 ## File structure
 
 * IMPORTANT: Keep filenames pascal case. Even for tsx/jsx react components.
@@ -122,6 +123,9 @@ const doThing = async (value): Promise<void> => {
 * IMPORTANT: Prefer `type` over `interface` for type definitions
 * Use explicit return types for functions when the return type is not immediately obvious
 * Prefer type unions and intersections over complex inheritance patterns
+
+* IMPORTANT: Avoid shared type definition files – try to keep type definitions local.
+* IMPORTANT: Prefer inferred/derived types over explicit ones – do not define a type when it can be derived. Especially try to infer types from the drizzle src/db/schema.ts.
 
 ### Import organization
 
