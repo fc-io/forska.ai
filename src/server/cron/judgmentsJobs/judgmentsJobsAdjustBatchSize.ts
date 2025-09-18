@@ -22,10 +22,12 @@ type Snapshot = {
 type JobRow = {id: string; sendToLLMBatchSize: number; sendToLLMInterval: number}
 
 type Adjustment = 'increase' | 'decrease' | 'revert' | 'none'
+type DirectionalAdjustment = Extract<Adjustment, 'increase' | 'decrease'>
+type ResolvedAdjustment = Exclude<Adjustment, 'none'>
 
 const SNAPSHOT_LOG_LIMIT = 20
 const MIN_BATCH_SIZE = 1
-const MAX_BATCH_SIZE = 15
+const MAX_BATCH_SIZE = 100
 
 let lastChange: ChangeDirection = 'none'
 let currentSnapshot: Snapshot | null = null
@@ -57,13 +59,7 @@ const logSnapshot = (snapshot: Snapshot): void => {
 }
 
 const getRowTimestamp = (row: {finishedAt: Date | null; startedAt: Date | null}): Date => {
-  if (row.finishedAt) {
-    return row.finishedAt
-  }
-  if (row.startedAt) {
-    return row.startedAt
-  }
-  return new Date(0)
+  return row.finishedAt ?? row.startedAt ?? new Date(0)
 }
 
 const collectTotals = (
@@ -103,20 +99,21 @@ const isFasterThanPrevious = (currentTotals: TokenTotals, previousTotals: TokenT
   return currentTotals.totalTokens > previousTotals.totalTokens
 }
 
+const nextAdjustmentWhenFaster = (): Adjustment => {
+  const fastAdjustments: Record<ChangeDirection, Adjustment> = {
+    increase: 'increase',
+    decrease: 'decrease',
+    none: 'increase',
+  }
+  return fastAdjustments[lastChange]
+}
+
+const nextAdjustmentWhenSlower = (hasBaseline: boolean): Adjustment => {
+  return hasBaseline ? 'revert' : 'increase'
+}
+
 const determineAdjustment = (isFaster: boolean, hasBaseline: boolean): Adjustment => {
-  if (isFaster) {
-    if (lastChange === 'increase') {
-      return 'increase'
-    }
-    if (lastChange === 'decrease') {
-      return 'decrease'
-    }
-    return 'increase'
-  }
-  if (hasBaseline) {
-    return 'revert'
-  }
-  return 'increase'
+  return isFaster ? nextAdjustmentWhenFaster() : nextAdjustmentWhenSlower(hasBaseline)
 }
 
 const resolveIncrease = (job: JobRow): JobRow => {
@@ -127,43 +124,58 @@ const resolveDecrease = (job: JobRow): JobRow => {
   return {...job, sendToLLMBatchSize: Math.max(MIN_BATCH_SIZE, job.sendToLLMBatchSize - 1)}
 }
 
-const buildJobUpdates = (jobs: JobRow[], adjustment: Adjustment, baseline: Snapshot | null): JobRow[] => {
-  if (adjustment === 'none') {
-    return []
-  }
-  if (adjustment === 'revert' && baseline) {
-    const baselineMap = new Map(
-      baseline.jobSettings.map((setting) => {
-        return [setting.id, setting]
-      }),
-    )
-    return jobs.reduce<JobRow[]>((acc, job) => {
-      const target = baselineMap.get(job.id)
-      if (!target) {
-        return acc
-      }
-      const updated: JobRow = {
-        ...job,
-        sendToLLMBatchSize: target.sendToLLMBatchSize,
-        sendToLLMInterval: target.sendToLLMInterval,
-      }
-      if (
-        job.sendToLLMBatchSize === updated.sendToLLMBatchSize
-        && job.sendToLLMInterval === updated.sendToLLMInterval
-      ) {
-        return acc
-      }
-      return acc.concat(updated)
-    }, [])
-  }
-  const resolver = adjustment === 'increase' ? resolveIncrease : resolveDecrease
+const collectRevertUpdatesForBaseline = (jobs: JobRow[], baseline: Snapshot): JobRow[] => {
+  const baselineMap = new Map(
+    baseline.jobSettings.map((setting) => {
+      return [setting.id, setting]
+    }),
+  )
   return jobs.reduce<JobRow[]>((acc, job) => {
-    const updated = resolver(job)
+    const target = baselineMap.get(job.id)
+    if (!target) {
+      return acc
+    }
+    const updated: JobRow = {
+      ...job,
+      sendToLLMBatchSize: target.sendToLLMBatchSize,
+      sendToLLMInterval: target.sendToLLMInterval,
+    }
     if (job.sendToLLMBatchSize === updated.sendToLLMBatchSize && job.sendToLLMInterval === updated.sendToLLMInterval) {
       return acc
     }
     return acc.concat(updated)
   }, [])
+}
+
+const collectRevertUpdates = (jobs: JobRow[], baseline: Snapshot | null): JobRow[] => {
+  return baseline ? collectRevertUpdatesForBaseline(jobs, baseline) : []
+}
+
+const resolveDirectionalUpdate = (job: JobRow, adjustment: DirectionalAdjustment): JobRow => {
+  const resolver = adjustment === 'increase' ? resolveIncrease : resolveDecrease
+  return resolver(job)
+}
+
+const collectDirectionalUpdates = (jobs: JobRow[], adjustment: DirectionalAdjustment): JobRow[] => {
+  return jobs.reduce<JobRow[]>((acc, job) => {
+    const updated = resolveDirectionalUpdate(job, adjustment)
+    if (job.sendToLLMBatchSize === updated.sendToLLMBatchSize && job.sendToLLMInterval === updated.sendToLLMInterval) {
+      return acc
+    }
+    return acc.concat(updated)
+  }, [])
+}
+
+const collectUpdatesForResolvedAdjustment = (
+  jobs: JobRow[],
+  adjustment: ResolvedAdjustment,
+  baseline: Snapshot | null,
+): JobRow[] => {
+  return adjustment === 'revert' ? collectRevertUpdates(jobs, baseline) : collectDirectionalUpdates(jobs, adjustment)
+}
+
+const buildJobUpdates = (jobs: JobRow[], adjustment: Adjustment, baseline: Snapshot | null): JobRow[] => {
+  return adjustment === 'none' ? [] : collectUpdatesForResolvedAdjustment(jobs, adjustment, baseline)
 }
 
 const mergeJobSettings = (jobs: JobRow[]): JobSnapshot[] => {
@@ -267,14 +279,15 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
 
   const faster = isFasterThanPrevious(totalsCurrentMinute, totalsPreviousMinute)
   const adjustment = determineAdjustment(faster, previousSnapshot !== null)
-
+  console.log('isFasterThanPrevious', faster)
+  console.log('adjustment', adjustment)
   if (adjustment === 'none') {
     lastChange = 'none'
     return
   }
 
   const updates = buildJobUpdates(jobs, adjustment, previousSnapshot)
-
+  console.log('updates', updates)
   if (updates.length === 0) {
     lastChange = 'none'
     if (adjustment === 'revert' && previousSnapshot) {
