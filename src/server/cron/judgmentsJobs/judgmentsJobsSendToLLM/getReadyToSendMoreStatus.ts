@@ -83,7 +83,7 @@ export const getReadyToSendMoreStatus = async (
   serverJobId: string,
 ): Promise<{isReady: boolean; state: string}> => {
   const isServerResponding = await isLLMServerResponding()
-  console.log('isServerResponding', isServerResponding)
+  // console.log('isServerResponding', isServerResponding)
 
   if (!isServerResponding) {
     return {isReady: false, state: 'server not responding'}
