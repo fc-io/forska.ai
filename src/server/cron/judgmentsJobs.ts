@@ -23,6 +23,8 @@ const getNewArticlesForJobs = async (): Promise<void> => {
   const db = getDatabase()
   const numberOfArticlesInReadyQueue = await getNumberOfArticlesInReadyQueue(db, serverJobId)
   const allJobs = await judgmentsJobsGetJobs(db)
+  console.log('isReadyToGetMoreArticles', isReadyToGetMoreArticles(numberOfArticlesInReadyQueue, allJobs))
+
   if (isReadyToGetMoreArticles(numberOfArticlesInReadyQueue, allJobs)) {
     console.log('allJobs', allJobs)
     const newArticlesToProcess = await judgmentsJobsGetNewArticles(db, allJobs)
