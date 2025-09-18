@@ -31,7 +31,7 @@ const sendToLLM = async (
   const hasArticles = articlesToProcess.length > 0
 
   if (hasArticles) {
-    console.log('1 send to LLM')
+    // console.log('1 send to LLM')
     await processArticles(db, articlesToProcess)
   } else {
     console.log('No articles to proces – this should not happen, prob bug if it does')
