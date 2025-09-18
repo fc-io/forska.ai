@@ -3,6 +3,8 @@ import {Elysia} from 'elysia'
 
 import {env} from '../utils/env.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
+import {getNumberOfArticlesInReadyQueue} from './judgmentsJobs/getNumberOfArticlesInReadyQueue.ts'
+import {isReadyToGetMoreArticles} from './judgmentsJobs/isReadyToGetMoreArticles.ts'
 import {judgmentsJobsAddToJobsQueue} from './judgmentsJobs/judgmentsJobsAddToJobsQueue.ts'
 import {judgmentsJobsCleanupStale} from './judgmentsJobs/judgmentsJobsCleanupStale.ts'
 import {judgmentsJobsGetJobs} from './judgmentsJobs/judgmentsJobsGetJobs.ts'
@@ -19,11 +21,14 @@ const CLEANUP_STALE_INTERVAL = '0 */5 * * * *' // Every 5 minutes
 const getNewArticlesForJobs = async (): Promise<void> => {
   if (!env.RUN_SERVER_JUDGING) return
   const db = getDatabase()
+  const numberOfArticlesInReadyQueue = await getNumberOfArticlesInReadyQueue(db, serverJobId)
   const allJobs = await judgmentsJobsGetJobs(db)
-  console.log('allJobs', allJobs)
-  const newArticlesToProcess = await judgmentsJobsGetNewArticles(db, allJobs)
-  console.log('newArticlesToProcess', newArticlesToProcess)
-  await judgmentsJobsAddToJobsQueue(db, newArticlesToProcess, serverJobId)
+  if (isReadyToGetMoreArticles(numberOfArticlesInReadyQueue, allJobs)) {
+    console.log('allJobs', allJobs)
+    const newArticlesToProcess = await judgmentsJobsGetNewArticles(db, allJobs)
+    console.log('newArticlesToProcess', newArticlesToProcess)
+    await judgmentsJobsAddToJobsQueue(db, newArticlesToProcess, serverJobId)
+  }
 }
 
 const sendToLLMCronJob = async (): Promise<void> => {
