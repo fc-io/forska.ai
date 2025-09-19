@@ -35,6 +35,7 @@ let currentSnapshot: Snapshot | null = null
 let previousSnapshot: Snapshot | null = null
 const snapshotsLog: Snapshot[] = []
 let cooldownEventsSinceLastBatchUpdate = 0
+let updatesLogCount = 0
 
 const isCooldownState = (state: string): boolean => {
   return COOLDOWN_STATES.has(state)
@@ -309,7 +310,9 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
   }
 
   const updates = buildJobUpdates(jobs, adjustment, previousSnapshot)
+  updatesLogCount += 1
   console.log('updates', updates)
+  console.log('updates log count', updatesLogCount)
   if (updates.length === 0) {
     lastChange = 'none'
     if (adjustment === 'revert' && previousSnapshot) {
