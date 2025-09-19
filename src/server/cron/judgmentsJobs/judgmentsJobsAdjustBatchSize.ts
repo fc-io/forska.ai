@@ -25,7 +25,9 @@ type Adjustment = 'increase' | 'decrease' | 'revert' | 'none'
 type DirectionalAdjustment = Extract<Adjustment, 'increase' | 'decrease'>
 type ResolvedAdjustment = Exclude<Adjustment, 'none'>
 
-const SNAPSHOT_LOG_LIMIT = 20
+const SNAPSHOT_LOG_LIMIT = 50
+const SNAPSHOT_LOG_AVERAGE_CONSIDERATION_THRESHOLD = 25
+const SNAPSHOT_PERFORMANCE_WINDOW = 5
 const MIN_BATCH_SIZE = 1
 const MAX_BATCH_SIZE = 100
 const COOLDOWN_STATES = new Set(['severe latency', 'cooldown'])
@@ -34,6 +36,13 @@ let lastChange: ChangeDirection = 'none'
 let currentSnapshot: Snapshot | null = null
 let previousSnapshot: Snapshot | null = null
 const snapshotsLog: Snapshot[] = []
+
+const clearSnapshotsState = (): void => {
+  snapshotsLog.length = 0
+  currentSnapshot = null
+  previousSnapshot = null
+  lastChange = 'none'
+}
 let cooldownEventsSinceLastBatchUpdate = 0
 let updatesLogCount = 0
 
@@ -44,6 +53,9 @@ const isCooldownState = (state: string): boolean => {
 export const registerCooldownEvent = (state: string): void => {
   if (!isCooldownState(state)) {
     return
+  }
+  if (snapshotsLog.length === SNAPSHOT_LOG_AVERAGE_CONSIDERATION_THRESHOLD) {
+    clearSnapshotsState()
   }
   cooldownEventsSinceLastBatchUpdate += 1
 }
@@ -78,6 +90,66 @@ const logSnapshot = (snapshot: Snapshot): void => {
   if (snapshotsLog.length > SNAPSHOT_LOG_LIMIT) {
     snapshotsLog.shift()
   }
+}
+
+const collectBatchSizesForSnapshot = (snapshot: Snapshot): number[] => {
+  return Array.from(
+    new Set(
+      snapshot.jobSettings.map((job) => {
+        return job.sendToLLMBatchSize
+      }),
+    ),
+  )
+}
+
+const collectUsageByBatchSize = (): Map<number, number[]> => {
+  return snapshotsLog.reduce((acc, snapshot) => {
+    const usage = snapshot.totalsCurrentMinute.totalTokens
+    const batchSizes = collectBatchSizesForSnapshot(snapshot)
+    return batchSizes.reduce((map, batchSize) => {
+      const existing = map.get(batchSize) ?? []
+      const windowed = existing.concat(usage).slice(-SNAPSHOT_PERFORMANCE_WINDOW)
+      map.set(batchSize, windowed)
+      return map
+    }, acc)
+  }, new Map<number, number[]>())
+}
+
+const averageTokens = (values: number[]): number => {
+  const total = values.reduce((acc, value) => {
+    return acc + value
+  }, 0)
+  return total / values.length
+}
+
+const resolveBestBatchSizeFromSnapshots = (): number | null => {
+  if (snapshotsLog.length < SNAPSHOT_LOG_AVERAGE_CONSIDERATION_THRESHOLD) {
+    return null
+  }
+  const usageByBatchSize = collectUsageByBatchSize()
+  const entries = Array.from(usageByBatchSize.entries()).filter(([, values]) => {
+    return values.length === SNAPSHOT_PERFORMANCE_WINDOW
+  })
+  if (entries.length < 2) {
+    return null
+  }
+  const best = entries.reduce<{batchSize: number; average: number} | null>((acc, [batchSize, values]) => {
+    const average = averageTokens(values)
+    if (!acc) {
+      return {batchSize, average}
+    }
+    if (average > acc.average) {
+      return {batchSize, average}
+    }
+    if (average < acc.average) {
+      return acc
+    }
+    return batchSize > acc.batchSize ? {batchSize, average} : acc
+  }, null)
+  if (!best) {
+    return null
+  }
+  return best.batchSize
 }
 
 const getRowTimestamp = (row: {finishedAt: Date | null; startedAt: Date | null}): Date => {
@@ -188,6 +260,15 @@ const collectDirectionalUpdates = (jobs: JobRow[], adjustment: DirectionalAdjust
   }, [])
 }
 
+const buildBestBatchSizeUpdates = (jobs: JobRow[], batchSize: number): JobRow[] => {
+  return jobs.reduce<JobRow[]>((acc, job) => {
+    if (job.sendToLLMBatchSize === batchSize) {
+      return acc
+    }
+    return acc.concat({...job, sendToLLMBatchSize: batchSize})
+  }, [])
+}
+
 const collectUpdatesForResolvedAdjustment = (
   jobs: JobRow[],
   adjustment: ResolvedAdjustment,
@@ -240,6 +321,32 @@ const applyUpdates = async (db: PostgresJsDatabase<typeof schema>, updates: JobR
         .where(eq(schema.judgmentsJobs.id, job.id))
     }),
   )
+}
+
+const applyBestBatchSizeWhenLogFull = async (
+  db: PostgresJsDatabase<typeof schema>,
+  jobs: JobRow[],
+): Promise<boolean> => {
+  if (snapshotsLog.length < SNAPSHOT_LOG_AVERAGE_CONSIDERATION_THRESHOLD) {
+    return false
+  }
+  const bestBatchSize = resolveBestBatchSizeFromSnapshots()
+  if (bestBatchSize === null) {
+    return false
+  }
+  console.log('best batch size candidate', bestBatchSize)
+  const updates = buildBestBatchSizeUpdates(jobs, bestBatchSize)
+  if (updates.length === 0) {
+    lastChange = 'none'
+    return true
+  }
+  await applyUpdates(db, updates)
+  updatesLogCount += 1
+  console.log('updates', updates)
+  console.log('updates log count', updatesLogCount)
+  clearSnapshotsState()
+  resetCooldownEvents()
+  return true
 }
 
 const updateStateAfterRevert = (baseline: Snapshot): void => {
@@ -296,6 +403,10 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
   logSnapshot(snapshot)
 
   if (jobs.length === 0) {
+    return
+  }
+
+  if (await applyBestBatchSizeWhenLogFull(db, jobs)) {
     return
   }
 
