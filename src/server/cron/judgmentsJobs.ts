@@ -30,6 +30,7 @@ const getNewArticlesForJobs = async (): Promise<void> => {
 
   if (isReadyToGetMoreArticles(numberOfArticlesInReadyQueue, allJobs)) {
     const newArticlesToProcess = await judgmentsJobsGetNewArticles(db, allJobs)
+    console.log('newArticlesToProcess', newArticlesToProcess[0]?.articlesToJudgeIds.length)
     await judgmentsJobsAddToJobsQueue(db, newArticlesToProcess, serverJobId)
   }
 }
