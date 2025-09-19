@@ -83,23 +83,29 @@ export const projects = pgTable('projects', {
   updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
 })
 
-export const judgmentsJobs = pgTable('judgments_jobs', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
-  updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
-  projectId: uuid('project_id')
-    .notNull()
-    .references(
-      () => {
-        return projects.id
-      },
-      {onDelete: 'cascade'},
-    ),
-  status: judgmentsJobStatusEnum('status').default('not_started').notNull(),
-  error: text('error').array(),
-  sendToLLMBatchSize: integer('send_to_llm_batch_size').default(5).notNull(),
-  sendToLLMInterval: integer('send_to_llm_interval').default(15).notNull(),
-})
+export const judgmentsJobs = pgTable(
+  'judgments_jobs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
+    projectId: uuid('project_id')
+      .notNull()
+      .references(
+        () => {
+          return projects.id
+        },
+        {onDelete: 'cascade'},
+      ),
+    status: judgmentsJobStatusEnum('status').default('not_started').notNull(),
+    error: text('error').array(),
+    sendToLLMBatchSize: integer('send_to_llm_batch_size').default(5).notNull(),
+    sendToLLMInterval: integer('send_to_llm_interval').default(15).notNull(),
+  },
+  (table) => {
+    return [index('judgments_jobs_project_idx').on(table.projectId)]
+  },
+)
 
 export const judgmentsJobsArticles = pgTable('judgments_jobs_articles', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -224,36 +230,42 @@ export const judgments = pgTable(
 )
 
 // Time-series token usage
-export const tokenUse = pgTable('token_use', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
-  updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
-  userId: text('user_id').references(
-    () => {
-      return user.id
-    },
-    {onDelete: 'set null'},
-  ),
-  sessionId: text('session_id').references(
-    () => {
-      return session.id
-    },
-    {onDelete: 'set null'},
-  ),
-  judgmentsJobId: uuid('judgments_job_id').references(
-    () => {
-      return judgmentsJobs.id
-    },
-    {onDelete: 'set null'},
-  ),
-  requests: integer('requests').notNull(),
-  totalPromptTokens: integer('total_prompt_tokens').notNull(),
-  totalCompletionTokens: integer('total_completion_tokens').notNull(),
-  totalTokens: integer('total_tokens').notNull(),
-  startedAt: timestamp('started_at', {withTimezone: true}),
-  finishedAt: timestamp('finished_at', {withTimezone: true}),
-  duration: integer('duration'),
-})
+export const tokenUse = pgTable(
+  'token_use',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
+    userId: text('user_id').references(
+      () => {
+        return user.id
+      },
+      {onDelete: 'set null'},
+    ),
+    sessionId: text('session_id').references(
+      () => {
+        return session.id
+      },
+      {onDelete: 'set null'},
+    ),
+    judgmentsJobId: uuid('judgments_job_id').references(
+      () => {
+        return judgmentsJobs.id
+      },
+      {onDelete: 'set null'},
+    ),
+    requests: integer('requests').notNull(),
+    totalPromptTokens: integer('total_prompt_tokens').notNull(),
+    totalCompletionTokens: integer('total_completion_tokens').notNull(),
+    totalTokens: integer('total_tokens').notNull(),
+    startedAt: timestamp('started_at', {withTimezone: true}),
+    finishedAt: timestamp('finished_at', {withTimezone: true}),
+    duration: integer('duration'),
+  },
+  (table) => {
+    return [index('token_use_job_created_idx').on(table.judgmentsJobId, table.createdAt)]
+  },
+)
 
 // Reviews table
 export const reviews = pgTable('reviews', {
