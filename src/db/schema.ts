@@ -216,7 +216,10 @@ export const judgments = pgTable(
     quotes: jsonb('quotes'),
   },
   (table) => {
-    return [index('judgments_article_prompt_idx').on(table.articleId, table.promptId)]
+    return [
+      index('judgments_article_prompt_idx').on(table.articleId, table.promptId),
+      index('judgments_article_prompt_answered_idx').on(table.articleId, table.promptId, table.answeredOriginal),
+    ]
   },
 )
 
