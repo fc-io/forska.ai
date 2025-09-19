@@ -55,6 +55,7 @@ export const registerCooldownEvent = (state: string): void => {
     return
   }
   if (snapshotsLog.length === SNAPSHOT_LOG_AVERAGE_CONSIDERATION_THRESHOLD) {
+    console.log('clearing snapshots state')
     clearSnapshotsState()
   }
   cooldownEventsSinceLastBatchUpdate += 1
@@ -342,8 +343,8 @@ const applyBestBatchSizeWhenLogFull = async (
   }
   await applyUpdates(db, updates)
   updatesLogCount += 1
-  console.log('updates', updates)
-  console.log('updates log count', updatesLogCount)
+  console.log('applyBestBatchSizeWhenLogFull update', updates)
+  console.log('applyBestBatchSizeWhenLogFull update log count', updatesLogCount)
   clearSnapshotsState()
   resetCooldownEvents()
   return true
