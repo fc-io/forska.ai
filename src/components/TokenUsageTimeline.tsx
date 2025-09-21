@@ -189,6 +189,25 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
     return interval === '1w' ? 'last 30 weeks' : interval === '1m' ? 'last 24 months' : 'last 30 days'
   })
 
+  const activeRange = createMemo(() => {
+    const range = customRange()
+    if (range) {
+      return {start: new Date(range.start), end: new Date(range.end)}
+    }
+    const interval = selectedInterval()
+    return getDateRangeForInterval(interval)
+  })
+
+  const formattedActiveRange = createMemo(() => {
+    const range = activeRange()
+    if (!range) {
+      return ''
+    }
+    const start = format(range.start, 'MMM d, yyyy HH:mm')
+    const end = format(range.end, 'MMM d, yyyy HH:mm')
+    return `${start} – ${end}`
+  })
+
   const highestUsageStat = createMemo(() => {
     return (tokenData.data?.highestUsage ?? null) as UsageStat | null
   })
@@ -433,28 +452,6 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
               <h2 class="text-lg font-semibold text-gray-900">Token Usage Timeline</h2>
             </div>
             <div>
-              <Show
-                when={customRange()}
-                fallback={
-                  <p class="text-sm text-gray-500 mt-1">
-                    <Show when={selectedInterval() === '1min'}>Last 20 minutes</Show>
-                    <Show when={selectedInterval() === '5min'}>Last 2 hours</Show>
-                    <Show when={selectedInterval() === '15min'}>Last 16 hours</Show>
-                    <Show when={selectedInterval() === '1h'}>Last 24 hours</Show>
-                    <Show when={selectedInterval() === '24h'}>Last 30 days</Show>
-                    <Show when={selectedInterval() === '1w'}>Last 30 weeks</Show>
-                    <Show when={selectedInterval() === '1m'}>Last 24 months</Show>
-                  </p>
-                }
-              >
-                {(range) => {
-                  return (
-                    <p class="text-sm text-gray-500 mt-1">
-                      {format(range().start, 'MMM d HH:mm')} – {format(range().end, 'MMM d HH:mm')}
-                    </p>
-                  )
-                }}
-              </Show>
               <Show when={highestUsageStat()}>
                 <div class="text-sm text-gray-600 mt-1">
                   <span class="font-medium">Highest per {intervalBucketLabel()}: </span>
@@ -472,34 +469,39 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
             </div>
           </div>
 
-          <div class="flex gap-2">
-            <Show when={customRange()}>
-              <button
-                onClick={() => {
-                  setCustomRange(null)
-                }}
-                class="px-3 py-1.5 border border-gray-300 rounded-md text-sm text-gray-700 hover:bg-gray-50"
-              >
-                Reset range
-              </button>
+          <div class="flex flex-col items-end gap-2">
+            <Show when={formattedActiveRange()}>
+              <p class="text-xs text-gray-500">{formattedActiveRange()}</p>
             </Show>
-            <select
-              value={selectedInterval()}
-              onChange={(e) => {
-                const newInterval = e.target.value as TimeInterval
-                setCustomRange(null)
-                return setSelectedInterval(newInterval)
-              }}
-              class="px-3 py-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="1min">1 minute</option>
-              <option value="5min">5 minutes</option>
-              <option value="15min">15 minutes</option>
-              <option value="1h">1 hour</option>
-              <option value="24h">24 hours</option>
-              <option value="1w">1 week</option>
-              <option value="1m">1 month</option>
-            </select>
+            <div class="flex gap-2">
+              <Show when={customRange()}>
+                <button
+                  onClick={() => {
+                    setCustomRange(null)
+                  }}
+                  class="px-3 py-1.5 border border-gray-300 rounded-md text-sm text-gray-700 hover:bg-gray-50"
+                >
+                  Reset range
+                </button>
+              </Show>
+              <select
+                value={selectedInterval()}
+                onChange={(e) => {
+                  const newInterval = e.target.value as TimeInterval
+                  setCustomRange(null)
+                  return setSelectedInterval(newInterval)
+                }}
+                class="px-3 py-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="1min">1 minute</option>
+                <option value="5min">5 minutes</option>
+                <option value="15min">15 minutes</option>
+                <option value="1h">1 hour</option>
+                <option value="24h">24 hours</option>
+                <option value="1w">1 week</option>
+                <option value="1m">1 month</option>
+              </select>
+            </div>
           </div>
         </div>
 
