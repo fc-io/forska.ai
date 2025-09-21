@@ -240,14 +240,6 @@ const AdminJudgmentJobDetail = () => {
                     <Show when={data()?.status === 'failed'}>
                       <button class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">Retry Job</button>
                     </Show>
-                    <button
-                      onClick={() => {
-                        return void job.refetch()
-                      }}
-                      class="px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700"
-                    >
-                      Refresh
-                    </button>
                   </div>
                 </div>
               </>
