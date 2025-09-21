@@ -1,3 +1,4 @@
+import {type DateValue, fromDate} from '@internationalized/date'
 import {useQuery} from '@tanstack/solid-query'
 import {
   type ActiveElement,
@@ -14,6 +15,12 @@ import {Bar} from 'solid-chartjs'
 import {createEffect, createMemo, createSignal, onCleanup, onMount, Show} from 'solid-js'
 
 import {apiClient} from '../services/apiClient.ts'
+import {TokenUsageTimelineDatePicker} from './TokenUsageTimeline/TokenUsageTimelineDatePicker.tsx'
+import {
+  getTokenUsageTimelineEndOfDay,
+  getTokenUsageTimelinePickerValues,
+  type TokenUsageTimelineDateRange,
+} from './TokenUsageTimeline/TokenUsageTimelineDateRange.ts'
 
 type TimeInterval = '1min' | '5min' | '15min' | '1h' | '24h' | '1w' | '1m'
 
@@ -32,9 +39,15 @@ type TokenUsageTimelineProps = {projectId: string}
 
 export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
   const [selectedInterval, setSelectedInterval] = createSignal<TimeInterval>('24h')
-  const [customRange, setCustomRange] = createSignal<{start: Date; end: Date} | null>(null)
+  const [customRange, setCustomRange] = createSignal<TokenUsageTimelineDateRange | null>(null)
   // Keep chart readiness local to this component instance
   const [chartReady, setChartReady] = createSignal(false)
+  const [pendingPickerValues, setPendingPickerValues] = createSignal<DateValue[] | undefined>(undefined)
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
+  const hasCustomRange = createMemo(() => {
+    return customRange() !== null
+  })
+  const maxSelectableDate = fromDate(getTokenUsageTimelineEndOfDay(new Date()), timeZone)
 
   const lowerIntervalMap: Record<Exclude<TimeInterval, '1min'>, TimeInterval> = {
     '5min': '1min',
@@ -52,6 +65,14 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
     '1h': 60 * 60 * 1000,
     '24h': 24 * 60 * 60 * 1000,
     '1w': 7 * 24 * 60 * 60 * 1000,
+  }
+
+  const clearCustomRange = (params: {
+    setCustomRange: (range: TokenUsageTimelineDateRange | null) => void
+    setPendingPickerValues: (values: DateValue[] | undefined) => void
+  }) => {
+    params.setCustomRange(null)
+    params.setPendingPickerValues(undefined)
   }
 
   const getDateRangeForInterval = (interval: TimeInterval) => {
@@ -198,6 +219,21 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
     return getDateRangeForInterval(interval)
   })
 
+  const datePickerRange = createMemo(() => {
+    return getTokenUsageTimelinePickerValues({range: activeRange(), timeZone})
+  })
+
+  const pickerValue = createMemo(() => {
+    const pending = pendingPickerValues()
+    if (pending && pending.length > 0) {
+      return pending
+    }
+    if (hasCustomRange()) {
+      return datePickerRange()
+    }
+    return undefined
+  })
+
   const formattedActiveRange = createMemo(() => {
     const range = activeRange()
     if (!range) {
@@ -247,6 +283,14 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
       scheduleBoundaryRefetch()
     }, delay)
   }
+
+  createEffect(() => {
+    customRange()
+    const pending = pendingPickerValues()
+    if (pending && pending.length > 0) {
+      setPendingPickerValues(undefined)
+    }
+  })
 
   createEffect(() => {
     const range = customRange()
@@ -473,22 +517,24 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
             <Show when={formattedActiveRange()}>
               <p class="text-xs text-gray-500">{formattedActiveRange()}</p>
             </Show>
-            <div class="flex gap-2">
-              <Show when={customRange()}>
-                <button
-                  onClick={() => {
-                    setCustomRange(null)
-                  }}
-                  class="px-3 py-1.5 border border-gray-300 rounded-md text-sm text-gray-700 hover:bg-gray-50"
-                >
-                  Reset range
-                </button>
-              </Show>
+            <div class="flex items-center gap-2">
+              <TokenUsageTimelineDatePicker
+                hasCustomRange={hasCustomRange}
+                maxSelectableDate={maxSelectableDate}
+                onPendingChange={setPendingPickerValues}
+                onRangeCommit={setCustomRange}
+                onReset={() => {
+                  clearCustomRange({setCustomRange, setPendingPickerValues})
+                }}
+                pickerValue={pickerValue}
+                timeZone={timeZone}
+              />
               <select
                 value={selectedInterval()}
                 onChange={(e) => {
                   const newInterval = e.target.value as TimeInterval
                   setCustomRange(null)
+                  setPendingPickerValues(undefined)
                   return setSelectedInterval(newInterval)
                 }}
                 class="px-3 py-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
