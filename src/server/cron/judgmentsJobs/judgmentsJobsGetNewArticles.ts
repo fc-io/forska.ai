@@ -8,7 +8,7 @@ import type {judgmentsJobsGetJobs} from './judgmentsJobsGetJobs.ts'
 type Job = Awaited<ReturnType<typeof judgmentsJobsGetJobs>>[number]
 
 const fetchArticlesForJob = async (db: PostgresJsDatabase<typeof schema>, job: Job) => {
-  const batchSize = Math.max(Math.floor(job.sendToLLMBatchSize / 3), 1)
+  const batchSize = Math.max(Math.ceil(job.sendToLLMBatchSize / 3), 1)
   const existingArticleIds = await getProcessingArticleIds(db, job.id)
   const articleData = await judgmentsJobsCronGetArticles(job.projectId, batchSize, existingArticleIds)
 
