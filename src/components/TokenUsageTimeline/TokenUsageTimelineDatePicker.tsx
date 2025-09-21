@@ -4,9 +4,9 @@ import {Portal} from 'solid-js/web'
 
 import {
   DatePicker,
-  DatePickerControl,
   DatePickerContent,
   DatePickerContext,
+  DatePickerControl,
   DatePickerNextTrigger,
   DatePickerPositioner,
   DatePickerPrevTrigger,
@@ -57,11 +57,19 @@ type ValueChangeParams = {
   values: DateValue[]
 }
 
-const getTriggerClass = (hasCustomRange: boolean) => {
-  return hasCustomRange
-    ? 'border-blue-500 bg-blue-50 text-blue-600 hover:bg-blue-100'
-    : 'border-gray-300 text-gray-600 hover:bg-gray-50'
+const getTriggerClass = (params: {hasCustomRange: boolean}) => {
+  const openStateClass =
+    'data-[state=open]:border-blue-500 data-[state=open]:bg-blue-50 data-[state=open]:text-blue-600'
+  return params.hasCustomRange
+    ? `${openStateClass} border-blue-500 bg-blue-50 text-blue-600 hover:bg-blue-100`
+    : `${openStateClass} border-gray-300 text-gray-600 hover:bg-gray-50`
 }
+
+const dayCellClass =
+  'has-[[data-in-range]]:!bg-blue-100 has-[[data-in-range]]:!text-blue-700 has-[[data-in-range]]:first-of-type:rounded-l-md has-[[data-in-range]]:last-of-type:rounded-r-md has-[[data-selected]]:!bg-blue-600 has-[[data-selected]]:!text-white has-[[data-disabled]]:!bg-gray-50 has-[[data-disabled]]:!text-gray-400'
+
+const dayTriggerClass =
+  'font-medium transition-colors data-[today]:!border data-[today]:!border-emerald-500 data-[today]:!bg-emerald-50 data-[today]:!text-emerald-700 data-[today]:font-semibold data-[range-start]:ring-2 data-[range-start]:ring-blue-300 data-[range-start]:ring-offset-1 data-[range-end]:ring-2 data-[range-end]:ring-blue-300 data-[range-end]:ring-offset-1 data-[selected]:!bg-blue-600 data-[selected]:!text-white data-[selected]:hover:!bg-blue-600 data-[selected]:hover:!text-white data-[in-range]:!bg-blue-50 data-[in-range]:!text-blue-700 data-[in-range]:hover:!bg-blue-50 data-[disabled]:!bg-gray-100 data-[disabled]:!text-gray-400 data-[disabled]:!opacity-100 data-[disabled]:!cursor-not-allowed data-[disabled]:hover:!bg-gray-100 data-[disabled]:hover:!text-gray-400'
 
 const resetSelection = (params: ResetParams) => {
   params.onReset()
@@ -98,7 +106,7 @@ export const TokenUsageTimelineDatePicker = (props: TokenUsageTimelineDatePicker
       <DatePickerControl>
         <DatePickerTrigger
           aria-label="Select custom date range"
-          class={getTriggerClass(props.hasCustomRange())}
+          class={getTriggerClass({hasCustomRange: props.hasCustomRange()})}
           title="Select custom date range"
         />
       </DatePickerControl>
@@ -139,8 +147,10 @@ export const TokenUsageTimelineDatePicker = (props: TokenUsageTimelineDatePicker
                                     <Index each={week()}>
                                       {(day) => {
                                         return (
-                                          <DatePickerTableCell value={day()}>
-                                            <DatePickerTableCellTrigger>{day().day}</DatePickerTableCellTrigger>
+                                          <DatePickerTableCell class={dayCellClass} value={day()}>
+                                            <DatePickerTableCellTrigger class={dayTriggerClass}>
+                                              {day().day}
+                                            </DatePickerTableCellTrigger>
                                           </DatePickerTableCell>
                                         )
                                       }}
@@ -169,8 +179,14 @@ export const TokenUsageTimelineDatePicker = (props: TokenUsageTimelineDatePicker
                                     <Index each={week()}>
                                       {(day) => {
                                         return (
-                                          <DatePickerTableCell value={day()} visibleRange={offset().visibleRange}>
-                                            <DatePickerTableCellTrigger>{day().day}</DatePickerTableCellTrigger>
+                                          <DatePickerTableCell
+                                            class={dayCellClass}
+                                            value={day()}
+                                            visibleRange={offset().visibleRange}
+                                          >
+                                            <DatePickerTableCellTrigger class={dayTriggerClass}>
+                                              {day().day}
+                                            </DatePickerTableCellTrigger>
                                           </DatePickerTableCell>
                                         )
                                       }}
