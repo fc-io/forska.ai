@@ -1,7 +1,6 @@
 import {createSignal, type JSX, Show} from 'solid-js'
 import {produce} from 'solid-js/store'
 
-import {run} from '../../agent.ts'
 import {startArxivHarvest} from '../../agent/startArxivHarvest.ts'
 import {runAgentHarvest} from '../../agent_harvest.ts'
 import {setState, state} from '../../stores/settingsStore.ts'
