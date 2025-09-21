@@ -1,5 +1,14 @@
 import {useQuery} from '@tanstack/solid-query'
-import {BarController, BarElement, CategoryScale, Chart, Legend, LinearScale, Tooltip} from 'chart.js'
+import {
+  type ActiveElement,
+  BarController,
+  BarElement,
+  CategoryScale,
+  Chart,
+  Legend,
+  LinearScale,
+  Tooltip,
+} from 'chart.js'
 import {format} from 'date-fns'
 import {Bar} from 'solid-chartjs'
 import {createEffect, createMemo, createSignal, onCleanup, onMount, Show} from 'solid-js'
@@ -23,8 +32,27 @@ type TokenUsageTimelineProps = {projectId: string}
 
 export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
   const [selectedInterval, setSelectedInterval] = createSignal<TimeInterval>('24h')
+  const [customRange, setCustomRange] = createSignal<{start: Date; end: Date} | null>(null)
   // Keep chart readiness local to this component instance
   const [chartReady, setChartReady] = createSignal(false)
+
+  const lowerIntervalMap: Record<Exclude<TimeInterval, '1min'>, TimeInterval> = {
+    '5min': '1min',
+    '15min': '5min',
+    '1h': '15min',
+    '24h': '1h',
+    '1w': '24h',
+    '1m': '1w',
+  }
+
+  const intervalDurations: Record<Exclude<TimeInterval, '1m'>, number> = {
+    '1min': 60 * 1000,
+    '5min': 5 * 60 * 1000,
+    '15min': 15 * 60 * 1000,
+    '1h': 60 * 60 * 1000,
+    '24h': 24 * 60 * 60 * 1000,
+    '1w': 7 * 24 * 60 * 60 * 1000,
+  }
 
   const getDateRangeForInterval = (interval: TimeInterval) => {
     const now = new Date()
@@ -114,16 +142,23 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
   // Compute date range at fetch time to avoid stale windows
 
   const tokenData = useQuery(() => {
+    const range = customRange()
     return {
       // Keep key stable for a given project + interval; time window advances via refetch
-      queryKey: ['token-timeline', props.projectId, selectedInterval()],
+      queryKey: [
+        'token-timeline',
+        props.projectId,
+        selectedInterval(),
+        range ? range.start.toISOString() : null,
+        range ? range.end.toISOString() : null,
+      ],
       queryFn: async () => {
-        const {start, end} = getDateRangeForInterval(selectedInterval())
+        const activeRange = range ?? getDateRangeForInterval(selectedInterval())
         const response = await apiClient.api.tokens.timeline.post({
           projectId: props.projectId,
           interval: selectedInterval(),
-          startDate: start.toISOString(),
-          endDate: end.toISOString(),
+          startDate: activeRange.start.toISOString(),
+          endDate: activeRange.end.toISOString(),
         })
 
         if (!response.data || !response.data.success) {
@@ -195,28 +230,55 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
   }
 
   createEffect(() => {
-    // Re-schedule when the selected interval changes
+    const range = customRange()
     selectedInterval()
-    scheduleBoundaryRefetch()
+    clearBoundaryTimer()
+    if (!range) {
+      scheduleBoundaryRefetch()
+    }
   })
 
   onCleanup(() => {
     clearBoundaryTimer()
   })
 
-  const chartData = createMemo(() => {
+  const filteredTimelineData = createMemo(() => {
     const responseData = tokenData.data
-    if (!responseData) return null
-    const data = responseData.data as TokenTimelineData[]
+    const data = responseData?.data as TokenTimelineData[] | undefined
     if (!data || data.length === 0) {
+      return []
+    }
+    if (selectedInterval() === '1min') {
+      return data.length > 1 ? data.slice(0, -1) : []
+    }
+    return data
+  })
+
+  const computeBucketRange = (params: {interval: TimeInterval; timestamp: string; index: number; total: number}) => {
+    const now = new Date()
+    if (params.interval === '1m') {
+      const bucketTs = new Date(params.timestamp)
+      const monthStart = new Date(bucketTs.getFullYear(), bucketTs.getMonth(), 1, 0, 0, 0, 0)
+      const nextMonthStart = new Date(bucketTs.getFullYear(), bucketTs.getMonth() + 1, 1, 0, 0, 0, 0)
+      const monthEnd = nextMonthStart > now ? now : nextMonthStart
+      return {start: monthStart, end: monthEnd}
+    }
+    const bucketStart = new Date(params.timestamp)
+    const duration = intervalDurations[params.interval]
+    const nominalEnd = new Date(bucketStart.getTime() + duration)
+    const isLastBucket = params.index === params.total - 1
+    const bucketEnd = isLastBucket && nominalEnd > now ? now : nominalEnd
+    return {start: bucketStart, end: bucketEnd}
+  }
+
+  const chartData = createMemo(() => {
+    const data = filteredTimelineData()
+    if (data.length === 0) {
       return null
     }
 
-    // For 1min interval, skip the last (incomplete) bar
-    const filteredData = selectedInterval() === '1min' ? data.slice(0, -1) : data
-
     return {
-      labels: filteredData.map((d) => {
+      labels: data.map((d) => {
         const date = new Date(d.timestamp)
         return selectedInterval() === '1min' || selectedInterval() === '5min' || selectedInterval() === '15min'
           ? format(date, 'HH:mm')
@@ -229,7 +291,7 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
       datasets: [
         {
           label: 'Prompt Tokens',
-          data: filteredData.map((d) => {
+          data: data.map((d) => {
             return d.totalPromptTokens
           }),
           backgroundColor: 'rgb(59, 130, 246)',
@@ -246,7 +308,7 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
         },
         {
           label: 'Completion Tokens',
-          data: filteredData.map((d) => {
+          data: data.map((d) => {
             return d.totalCompletionTokens
           }),
           backgroundColor: 'rgb(147, 197, 253)',
@@ -270,6 +332,33 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
     maintainAspectRatio: false,
     interaction: {mode: 'index' as const, intersect: false},
     animation: {duration: 0.4},
+    onClick: (_event: unknown, elements: ActiveElement[]) => {
+      const element = elements?.[0]
+      if (!element) {
+        return
+      }
+      const currentInterval = selectedInterval()
+      if (currentInterval === '1min') {
+        return
+      }
+      const data = filteredTimelineData()
+      const dataIndex = element.index
+      if (dataIndex == null || !data[dataIndex]) {
+        return
+      }
+      const drillDownInterval = lowerIntervalMap[currentInterval]
+      if (!drillDownInterval) {
+        return
+      }
+      const range = computeBucketRange({
+        interval: currentInterval,
+        timestamp: data[dataIndex].timestamp,
+        index: dataIndex,
+        total: data.length,
+      })
+      setCustomRange({start: new Date(range.start), end: new Date(range.end)})
+      setSelectedInterval(drillDownInterval)
+    },
     plugins: {
       legend: {
         display: true,
@@ -281,41 +370,17 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
         callbacks: {
           title: (tooltipItems: {dataIndex: number}[]) => {
             const idx = tooltipItems?.[0]?.dataIndex
-            const responseData = tokenData.data
-            const data = responseData?.data as TokenTimelineData[] | undefined
-            if (idx == null || !data || !data[idx]) return ''
-
-            const bucketTs = new Date(data[idx].timestamp)
-            const nowTs = new Date()
-
-            if (selectedInterval() === '1m') {
-              // Calendar month boundaries; clamp end to now for current month
-              const monthStart = new Date(bucketTs.getFullYear(), bucketTs.getMonth(), 1, 0, 0, 0, 0)
-              const nominalMonthEnd = new Date(bucketTs.getFullYear(), bucketTs.getMonth() + 1, 0, 23, 59, 59, 999)
-              const isCurrentMonth =
-                monthStart.getMonth() === nowTs.getMonth() && monthStart.getFullYear() === nowTs.getFullYear()
-              const monthEnd = isCurrentMonth ? nowTs : nominalMonthEnd
-              const startStr = format(monthStart, 'MMM d')
-              const endStr = format(monthEnd, 'MMM d HH:mm')
+            const data = filteredTimelineData()
+            if (idx == null || !data[idx]) return ''
+            const interval = selectedInterval()
+            const range = computeBucketRange({interval, timestamp: data[idx].timestamp, index: idx, total: data.length})
+            if (interval === '1m') {
+              const startStr = format(range.start, 'MMM d')
+              const endStr = format(range.end, 'MMM d HH:mm')
               return `${startStr} – ${endStr}`
             }
-
-            const intervalMs: Record<Exclude<TimeInterval, '1m'>, number> = {
-              '1min': 60 * 1000,
-              '5min': 5 * 60 * 1000,
-              '15min': 15 * 60 * 1000,
-              '1h': 60 * 60 * 1000,
-              '24h': 24 * 60 * 60 * 1000,
-              '1w': 7 * 24 * 60 * 60 * 1000,
-            }
-            const nominalEnd = new Date(
-              bucketTs.getTime() + intervalMs[selectedInterval() as Exclude<TimeInterval, '1m'>],
-            )
-            const isLastBucket = idx === (data?.length ?? 0) - 1
-            const end = isLastBucket && nominalEnd > nowTs ? nowTs : nominalEnd
-            const startStr = format(bucketTs, 'MMM d HH:mm')
-            const endStr = format(end, 'MMM d HH:mm')
-
+            const startStr = format(range.start, 'MMM d HH:mm')
+            const endStr = format(range.end, 'MMM d HH:mm')
             return `${startStr} – ${endStr}`
           },
           label: (context: {dataset: {label?: string}; parsed: {y: number}}) => {
@@ -326,9 +391,8 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
           },
           footer: (tooltipItems: {dataIndex: number; parsed: {y: number}}[]) => {
             const idx = tooltipItems?.[0]?.dataIndex
-            const responseData = tokenData.data
-            const data = responseData?.data as TokenTimelineData[] | undefined
-            if (idx == null || !data || !data[idx]) return ''
+            const data = filteredTimelineData()
+            if (idx == null || !data[idx]) return ''
             const total =
               data[idx].totalTokens
               ?? tooltipItems.reduce((sum, item) => {
@@ -369,15 +433,28 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
               <h2 class="text-lg font-semibold text-gray-900">Token Usage Timeline</h2>
             </div>
             <div>
-              <p class="text-sm text-gray-500 mt-1">
-                <Show when={selectedInterval() === '1min'}>Last 20 minutes</Show>
-                <Show when={selectedInterval() === '5min'}>Last 2 hours</Show>
-                <Show when={selectedInterval() === '15min'}>Last 16 hours</Show>
-                <Show when={selectedInterval() === '1h'}>Last 24 hours</Show>
-                <Show when={selectedInterval() === '24h'}>Last 30 days</Show>
-                <Show when={selectedInterval() === '1w'}>Last 30 weeks</Show>
-                <Show when={selectedInterval() === '1m'}>Last 24 months</Show>
-              </p>
+              <Show
+                when={customRange()}
+                fallback={
+                  <p class="text-sm text-gray-500 mt-1">
+                    <Show when={selectedInterval() === '1min'}>Last 20 minutes</Show>
+                    <Show when={selectedInterval() === '5min'}>Last 2 hours</Show>
+                    <Show when={selectedInterval() === '15min'}>Last 16 hours</Show>
+                    <Show when={selectedInterval() === '1h'}>Last 24 hours</Show>
+                    <Show when={selectedInterval() === '24h'}>Last 30 days</Show>
+                    <Show when={selectedInterval() === '1w'}>Last 30 weeks</Show>
+                    <Show when={selectedInterval() === '1m'}>Last 24 months</Show>
+                  </p>
+                }
+              >
+                {(range) => {
+                  return (
+                    <p class="text-sm text-gray-500 mt-1">
+                      {format(range().start, 'MMM d HH:mm')} – {format(range().end, 'MMM d HH:mm')}
+                    </p>
+                  )
+                }}
+              </Show>
               <Show when={highestUsageStat()}>
                 <div class="text-sm text-gray-600 mt-1">
                   <span class="font-medium">Highest per {intervalBucketLabel()}: </span>
@@ -396,10 +473,21 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
           </div>
 
           <div class="flex gap-2">
+            <Show when={customRange()}>
+              <button
+                onClick={() => {
+                  setCustomRange(null)
+                }}
+                class="px-3 py-1.5 border border-gray-300 rounded-md text-sm text-gray-700 hover:bg-gray-50"
+              >
+                Reset range
+              </button>
+            </Show>
             <select
               value={selectedInterval()}
               onChange={(e) => {
                 const newInterval = e.target.value as TimeInterval
+                setCustomRange(null)
                 return setSelectedInterval(newInterval)
               }}
               class="px-3 py-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
