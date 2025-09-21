@@ -228,7 +228,10 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
     if (pending && pending.length > 0) {
       return pending
     }
-    return datePickerRange()
+    if (hasCustomRange()) {
+      return datePickerRange()
+    }
+    return undefined
   })
 
   const formattedActiveRange = createMemo(() => {
