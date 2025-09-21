@@ -17,7 +17,7 @@ type TokenTimelineData = {
   count: number
 }
 
-type HighestUsage = {timestamp: string; totalTokens: number}
+type UsageStat = {timestamp: string; totalTokens: number}
 
 type TokenUsageTimelineProps = {projectId: string}
 
@@ -142,6 +142,24 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
         return prev
       },
     }
+  })
+
+  const intervalBucketLabel = createMemo(() => {
+    const interval = selectedInterval()
+    return interval === '1m' ? 'month' : interval === '1w' ? 'week' : interval
+  })
+
+  const intervalHistoryLabel = createMemo(() => {
+    const interval = selectedInterval()
+    return interval === '1w' ? 'last 30 weeks' : interval === '1m' ? 'last 24 months' : 'last 30 days'
+  })
+
+  const highestUsageStat = createMemo(() => {
+    return (tokenData.data?.highestUsage ?? null) as UsageStat | null
+  })
+
+  const p90UsageStat = createMemo(() => {
+    return (tokenData.data?.p90Usage ?? null) as UsageStat | null
   })
 
   // Boundary-aligned refetching to sync with system clock
@@ -360,27 +378,18 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
                 <Show when={selectedInterval() === '1w'}>Last 30 weeks</Show>
                 <Show when={selectedInterval() === '1m'}>Last 24 months</Show>
               </p>
-              <Show when={tokenData.data?.highestUsage}>
+              <Show when={highestUsageStat()}>
                 <div class="text-sm text-gray-600 mt-1">
-                  <span class="font-medium">
-                    Highest per{' '}
-                    {selectedInterval() === '1m' ? 'month' : selectedInterval() === '1w' ? 'week' : selectedInterval()}
-                    :{' '}
-                  </span>
-                  <span>{(tokenData.data?.highestUsage as HighestUsage)?.totalTokens.toLocaleString()} tokens</span>
-                  <span class="text-gray-400 ml-1">
-                    (
-                    {selectedInterval() === '1min'
-                    || selectedInterval() === '5min'
-                    || selectedInterval() === '15min'
-                    || selectedInterval() === '1h'
-                    || selectedInterval() === '24h'
-                      ? 'last 30 days'
-                      : selectedInterval() === '1w'
-                        ? 'last 30 weeks'
-                        : 'last 24 months'}
-                    )
-                  </span>
+                  <span class="font-medium">Highest per {intervalBucketLabel()}: </span>
+                  <span>{highestUsageStat()?.totalTokens.toLocaleString()} tokens</span>
+                  <span class="text-gray-400 ml-1">({intervalHistoryLabel()})</span>
+                </div>
+              </Show>
+              <Show when={p90UsageStat()}>
+                <div class="text-sm text-gray-600 mt-1">
+                  <span class="font-medium">90th percentile per {intervalBucketLabel()}: </span>
+                  <span>{p90UsageStat()?.totalTokens.toLocaleString()} tokens</span>
+                  <span class="text-gray-400 ml-1">({intervalHistoryLabel()})</span>
                 </div>
               </Show>
             </div>

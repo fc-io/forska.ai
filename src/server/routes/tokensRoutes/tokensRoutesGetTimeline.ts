@@ -10,6 +10,10 @@ type TimelineParams = {
   endDate: string
 }
 
+type UsageBucket = {timestamp: string; totalTokens: number}
+
+type UsageStats = {highestUsage: UsageBucket | null; p90Usage: UsageBucket | null}
+
 const getIntervalSeconds = (interval: Exclude<TimelineParams['interval'], '1m'>): number => {
   const intervals = {
     '1min': 60,
@@ -20,6 +24,23 @@ const getIntervalSeconds = (interval: Exclude<TimelineParams['interval'], '1m'>)
     '1w': 7 * 24 * 60 * 60,
   }
   return intervals[interval]
+}
+
+const calculateUsageStats = (buckets: UsageBucket[]): UsageStats => {
+  if (buckets.length === 0) {
+    return {highestUsage: null, p90Usage: null}
+  }
+
+  const sortedBuckets = [...buckets].sort((a, b) => {
+    return a.totalTokens - b.totalTokens
+  })
+
+  const percentileIndex = Math.min(sortedBuckets.length - 1, Math.max(0, Math.ceil(sortedBuckets.length * 0.9) - 1))
+
+  return {
+    highestUsage: sortedBuckets[sortedBuckets.length - 1] ?? null,
+    p90Usage: sortedBuckets[percentileIndex] ?? null,
+  }
 }
 
 export const tokensRoutesGetTimeline = async ({projectId, interval, startDate, endDate}: TimelineParams) => {
@@ -127,7 +148,7 @@ export const tokensRoutesGetTimeline = async ({projectId, interval, startDate, e
           totalPromptTokens: Number(row.totalPromptTokens || 0),
           totalCompletionTokens: Number(row.totalCompletionTokens || 0),
           totalTokens: Number(row.totalTokens || 0),
-          totalRequests: Number((row as any).totalRequests || 0),
+          totalRequests: Number(row.totalRequests || 0),
           count: row.count,
         },
       ]
@@ -166,8 +187,10 @@ export const tokensRoutesGetTimeline = async ({projectId, interval, startDate, e
   }
 
   // Get highest usage for the appropriate period
-  const highestUsageResult = await db
-    .select({timeBucket: timeBucket, totalTokens: sum(tokenUse.totalTokens)})
+  const totalTokensSum = sum(tokenUse.totalTokens).as('totalTokens')
+
+  const usageDistribution = await db
+    .select({timeBucket: timeBucket, totalTokens: totalTokensSum})
     .from(tokenUse)
     .where(
       and(
@@ -177,16 +200,13 @@ export const tokensRoutesGetTimeline = async ({projectId, interval, startDate, e
       ),
     )
     .groupBy(timeBucket)
-    .orderBy(desc(sum(tokenUse.totalTokens)))
-    .limit(1)
+    .orderBy(desc(totalTokensSum))
 
-  const highestUsage =
-    highestUsageResult.length > 0
-      ? {
-          timestamp: highestUsageResult[0].timeBucket as string,
-          totalTokens: Number(highestUsageResult[0].totalTokens || 0),
-        }
-      : null
+  const usageStatsInput = usageDistribution.map((row) => {
+    return {timestamp: row.timeBucket as string, totalTokens: Number(row.totalTokens ?? 0)}
+  })
 
-  return {success: true, data: completeData, highestUsage}
+  const {highestUsage, p90Usage} = calculateUsageStats(usageStatsInput)
+
+  return {success: true, data: completeData, highestUsage, p90Usage}
 }
