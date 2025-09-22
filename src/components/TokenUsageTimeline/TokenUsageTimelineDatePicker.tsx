@@ -2,6 +2,7 @@ import {type DateValue} from '@internationalized/date'
 import {type Accessor, createMemo, Index} from 'solid-js'
 import {Portal} from 'solid-js/web'
 
+import {getWeekNumberLabel} from '../../utils/getWeekNumber'
 import {
   DatePicker,
   DatePickerContent,
@@ -70,6 +71,10 @@ const dayCellClass =
 
 const dayTriggerClass =
   'font-medium transition-colors data-[today]:!border data-[today]:!border-emerald-500 data-[today]:!bg-emerald-50 data-[today]:!text-emerald-700 data-[today]:font-semibold data-[range-start]:ring-2 data-[range-start]:ring-blue-300 data-[range-start]:ring-offset-1 data-[range-end]:ring-2 data-[range-end]:ring-blue-300 data-[range-end]:ring-offset-1 data-[selected]:!bg-blue-600 data-[selected]:!text-white data-[selected]:hover:!bg-blue-600 data-[selected]:hover:!text-white data-[in-range]:!bg-blue-50 data-[in-range]:!text-blue-700 data-[in-range]:hover:!bg-blue-50 data-[disabled]:!bg-gray-100 data-[disabled]:!text-gray-400 data-[disabled]:!opacity-100 data-[disabled]:!cursor-not-allowed data-[disabled]:hover:!bg-gray-100 data-[disabled]:hover:!text-gray-400'
+
+const weekHeaderClass = 'flex w-8 flex-none items-center justify-center text-[0.65rem] font-medium text-gray-400'
+
+const weekCellClass = 'flex w-8 flex-none items-center justify-center text-[0.65rem] font-medium text-gray-400'
 
 const resetSelection = (params: ResetParams) => {
   params.onReset()
@@ -141,6 +146,9 @@ export const TokenUsageTimelineDatePicker = (props: TokenUsageTimelineDatePicker
                         <DatePickerTable>
                           <DatePickerTableHead>
                             <DatePickerTableRow>
+                              <th class={weekHeaderClass}>
+                                <span class="sr-only">Week</span>
+                              </th>
                               <Index each={api().weekDays}>
                                 {(weekDay) => {
                                   return <DatePickerTableHeader>{weekDay().short}</DatePickerTableHeader>
@@ -151,9 +159,16 @@ export const TokenUsageTimelineDatePicker = (props: TokenUsageTimelineDatePicker
                           <DatePickerTableBody>
                             <Index each={api().weeks}>
                               {(week) => {
+                                const days = createMemo(() => {
+                                  return week()
+                                })
+                                const weekLabel = createMemo(() => {
+                                  return getWeekNumberLabel(days(), props.timeZone)
+                                })
                                 return (
                                   <DatePickerTableRow>
-                                    <Index each={week()}>
+                                    <td class={weekCellClass}>{weekLabel()}</td>
+                                    <Index each={days()}>
                                       {(day) => {
                                         return (
                                           <DatePickerTableCell class={dayCellClass} value={day()}>
@@ -173,6 +188,9 @@ export const TokenUsageTimelineDatePicker = (props: TokenUsageTimelineDatePicker
                         <DatePickerTable>
                           <DatePickerTableHead>
                             <DatePickerTableRow>
+                              <th class={weekHeaderClass}>
+                                <span class="sr-only">Week</span>
+                              </th>
                               <Index each={api().weekDays}>
                                 {(weekDay) => {
                                   return <DatePickerTableHeader>{weekDay().short}</DatePickerTableHeader>
@@ -183,9 +201,16 @@ export const TokenUsageTimelineDatePicker = (props: TokenUsageTimelineDatePicker
                           <DatePickerTableBody>
                             <Index each={offset().weeks}>
                               {(week) => {
+                                const days = createMemo(() => {
+                                  return week()
+                                })
+                                const weekLabel = createMemo(() => {
+                                  return getWeekNumberLabel(days(), props.timeZone)
+                                })
                                 return (
                                   <DatePickerTableRow>
-                                    <Index each={week()}>
+                                    <td class={weekCellClass}>{weekLabel()}</td>
+                                    <Index each={days()}>
                                       {(day) => {
                                         return (
                                           <DatePickerTableCell

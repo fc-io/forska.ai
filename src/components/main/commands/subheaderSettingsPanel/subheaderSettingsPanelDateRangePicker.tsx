@@ -1,8 +1,8 @@
 import {fromDate} from '@internationalized/date'
-import {type JSX} from 'solid-js'
-import {createMemo, Index} from 'solid-js'
+import {createMemo, Index, type JSX} from 'solid-js'
 import {Portal} from 'solid-js/web'
 
+import {getWeekNumberLabel} from '../../../../utils/getWeekNumber'
 import {
   DatePicker,
   DatePickerContent,
@@ -31,7 +31,7 @@ export interface DateRangePickerProps {
   numOfMonths?: number
   maxDate?: Date
   defaultStart: Date
-  defaultEnd: defaultFocusedValue
+  defaultEnd: Date
 
   onValueChange?: (dates: [Date, Date]) => void
 }
@@ -87,6 +87,9 @@ export const DateRangePicker = (props: DateRangePickerProps): JSX.Element => {
                         <DatePickerTable>
                           <DatePickerTableHead>
                             <DatePickerTableRow>
+                              <th class="flex w-8 flex-none items-center justify-center text-[0.8rem] font-normal text-muted-foreground">
+                                <span class="sr-only">Week</span>
+                              </th>
                               <Index each={api().weekDays}>
                                 {(weekDay) => {
                                   return <DatePickerTableHeader>{weekDay().short}</DatePickerTableHeader>
@@ -97,9 +100,18 @@ export const DateRangePicker = (props: DateRangePickerProps): JSX.Element => {
                           <DatePickerTableBody>
                             <Index each={api().weeks}>
                               {(week) => {
+                                const days = createMemo(() => {
+                                  return week()
+                                })
+                                const weekLabel = createMemo(() => {
+                                  return getWeekNumberLabel(days(), tz)
+                                })
                                 return (
                                   <DatePickerTableRow>
-                                    <Index each={week()}>
+                                    <td class="flex w-8 flex-none items-center justify-center text-xs font-medium text-muted-foreground">
+                                      {weekLabel()}
+                                    </td>
+                                    <Index each={days()}>
                                       {(day) => {
                                         return (
                                           <DatePickerTableCell value={day()}>
@@ -118,6 +130,9 @@ export const DateRangePicker = (props: DateRangePickerProps): JSX.Element => {
                         <DatePickerTable>
                           <DatePickerTableHead>
                             <DatePickerTableRow>
+                              <th class="flex w-8 flex-none items-center justify-center text-[0.8rem] font-normal text-muted-foreground">
+                                <span class="sr-only">Week</span>
+                              </th>
                               <Index each={api().weekDays}>
                                 {(weekDay) => {
                                   return <DatePickerTableHeader>{weekDay().short}</DatePickerTableHeader>
@@ -128,9 +143,18 @@ export const DateRangePicker = (props: DateRangePickerProps): JSX.Element => {
                           <DatePickerTableBody>
                             <Index each={offset().weeks}>
                               {(week) => {
+                                const days = createMemo(() => {
+                                  return week()
+                                })
+                                const weekLabel = createMemo(() => {
+                                  return getWeekNumberLabel(days(), tz)
+                                })
                                 return (
                                   <DatePickerTableRow>
-                                    <Index each={week()}>
+                                    <td class="flex w-8 flex-none items-center justify-center text-xs font-medium text-muted-foreground">
+                                      {weekLabel()}
+                                    </td>
+                                    <Index each={days()}>
                                       {(day) => {
                                         return (
                                           <DatePickerTableCell value={day()} visibleRange={offset().visibleRange}>
