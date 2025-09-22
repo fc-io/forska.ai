@@ -238,8 +238,8 @@ const DatePickerTableCellTrigger = (props: DatePickerPrimitive.TableCellTriggerP
         '[&:is([data-today][data-selected])]:bg-primary [&:is([data-today][data-selected])]:text-primary-foreground',
         'data-[selected]:bg-primary data-[selected]:text-primary-foreground data-[selected]:hover:bg-primary data-[selected]:hover:text-primary-foreground',
         'data-[disabled]:text-muted-foreground data-[disabled]:opacity-50',
-        // remove muted/opacity for outside-range so they look enabled and clickable
-        // 'data-[outside-range]:text-muted-foreground data-[outside-range]:opacity-50',
+        'data-[outside-range]:text-muted-foreground data-[outside-range]:opacity-70 data-[outside-range]:hover:text-foreground data-[outside-range]:hover:bg-muted/40 data-[outside-range]:hover:opacity-100',
+        '[&:is([data-outside-range][data-selected])]:opacity-100 [&:is([data-outside-range][data-selected])]:text-primary-foreground',
         '[&:is([data-outside-range][data-in-range])]:bg-accent/50 [&:is([data-outside-range][data-in-range])]:text-muted-foreground [&:is([data-outside-range][data-in-range])]:opacity-30',
         local.class,
       )}

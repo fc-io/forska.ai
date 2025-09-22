@@ -70,7 +70,7 @@ const dayCellClass =
   'has-[[data-in-range]]:!bg-blue-100 has-[[data-in-range]]:!text-blue-700 has-[[data-in-range]]:first-of-type:rounded-l-md has-[[data-in-range]]:last-of-type:rounded-r-md has-[[data-selected]]:!bg-blue-600 has-[[data-selected]]:!text-white has-[[data-disabled]]:!bg-gray-50 has-[[data-disabled]]:!text-gray-400'
 
 const dayTriggerClass =
-  'font-medium transition-colors data-[today]:!border data-[today]:!border-emerald-500 data-[today]:!bg-emerald-50 data-[today]:!text-emerald-700 data-[today]:font-semibold data-[range-start]:ring-2 data-[range-start]:ring-blue-300 data-[range-start]:ring-offset-1 data-[range-end]:ring-2 data-[range-end]:ring-blue-300 data-[range-end]:ring-offset-1 data-[selected]:!bg-blue-600 data-[selected]:!text-white data-[selected]:hover:!bg-blue-600 data-[selected]:hover:!text-white data-[in-range]:!bg-blue-50 data-[in-range]:!text-blue-700 data-[in-range]:hover:!bg-blue-50 data-[disabled]:!bg-gray-100 data-[disabled]:!text-gray-400 data-[disabled]:!opacity-100 data-[disabled]:!cursor-not-allowed data-[disabled]:hover:!bg-gray-100 data-[disabled]:hover:!text-gray-400'
+  'font-medium transition-colors data-[today]:!border data-[today]:!border-emerald-500 data-[today]:!bg-emerald-50 data-[today]:!text-emerald-700 data-[today]:font-semibold data-[range-start]:ring-2 data-[range-start]:ring-blue-300 data-[range-start]:ring-offset-1 data-[range-end]:ring-2 data-[range-end]:ring-blue-300 data-[range-end]:ring-offset-1 data-[selected]:!bg-blue-600 data-[selected]:!text-white data-[selected]:hover:!bg-blue-600 data-[selected]:hover:!text-white data-[in-range]:!bg-blue-50 data-[in-range]:!text-blue-700 data-[in-range]:hover:!bg-blue-50 data-[disabled]:!bg-gray-100 data-[disabled]:!text-gray-400 data-[disabled]:!opacity-100 data-[disabled]:!cursor-not-allowed data-[disabled]:hover:!bg-gray-100 data-[disabled]:hover:!text-gray-400 data-[outside-range]:text-gray-400 data-[outside-range]:opacity-80 data-[outside-range]:hover:text-gray-600 data-[outside-range]:hover:bg-gray-100 data-[outside-range]:hover:opacity-100 [&:is([data-outside-range][data-selected])]:opacity-100 [&:is([data-outside-range][data-selected])]:text-white'
 
 const weekHeaderClass = 'flex w-8 flex-none items-center justify-center text-[0.65rem] font-medium text-gray-400'
 
@@ -106,6 +106,7 @@ export const TokenUsageTimelineDatePicker = (props: TokenUsageTimelineDatePicker
       locale="sv-SE"
       max={props.maxSelectableDate}
       numOfMonths={2}
+      outsideDaySelectable
       selectionMode="range"
       value={props.pickerValue()}
       onValueChange={(details) => {

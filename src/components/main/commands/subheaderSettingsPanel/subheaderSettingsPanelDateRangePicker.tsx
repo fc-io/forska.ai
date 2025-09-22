@@ -47,6 +47,7 @@ export const DateRangePicker = (props: DateRangePickerProps): JSX.Element => {
       max={max()}
       locale={props.locale ?? 'sv-SE'}
       numOfMonths={props.numOfMonths ?? 2}
+      outsideDaySelectable
       selectionMode="range"
       defaultValue={[fromDate(props.defaultStart, tz), fromDate(props.defaultEnd, tz)]}
       onValueChange={(details) => {
