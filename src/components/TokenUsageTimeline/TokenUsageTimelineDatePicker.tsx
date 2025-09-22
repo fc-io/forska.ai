@@ -54,7 +54,7 @@ type ValueChangeParams = {
   onPendingChange: (values: DateValue[] | undefined) => void
   onRangeCommit: (range: TokenUsageTimelineDateRange) => void
   timeZone: string
-  values: DateValue[]
+  values: DateValue[] | undefined
 }
 
 const getTriggerClass = (params: {hasCustomRange: boolean}) => {
@@ -78,8 +78,17 @@ const resetSelection = (params: ResetParams) => {
 }
 
 const updateRangeFromValues = (params: ValueChangeParams) => {
-  params.onPendingChange(params.values)
-  const range = getTokenUsageTimelineDateRange({values: params.values, timeZone: params.timeZone})
+  const values = params.values
+  if (!values || values.length === 0) {
+    params.onPendingChange(undefined)
+    return
+  }
+  if (values.length < 2) {
+    params.onPendingChange(values)
+    return
+  }
+  params.onPendingChange(values)
+  const range = getTokenUsageTimelineDateRange({values, timeZone: params.timeZone})
   if (!range) {
     return
   }

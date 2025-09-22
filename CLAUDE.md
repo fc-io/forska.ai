@@ -207,3 +207,67 @@ test("hello world", () => {
 ```
 
 For more information, read the Bun API docs in `node_modules/bun-types/docs/**.md`.
+
+## Solid.js stale data
+
+Here’s the short, practical way to think about stale data in solid.js:
+
+### How to *describe* stale data in SolidJS
+
+A stale read is a non-tracked snapshot of a reactive value – the code doesn’t re-run on change, so the UI shows old data until you read the reactive source inside a tracking context.
+
+**“Stale data” in SolidJS** = your UI or computation shows an out-of-date value because the read wasn’t *reactively tracked* or you broke the connection to the reactive source. Solid’s updates flow only to code that *reads* reactive values (signals, memos, stores, resources) inside a tracking context (effects, memos, JSX). If you read them the “wrong” way, you get a snapshot that never updates – i.e., stale. ([solidjs.com][1])
+
+### The common ways you get stale data (and the fixes)
+
+1. **Reading outside a tracking context**
+   If you pull a signal value in plain code (module scope, untracked function, inside a later async callback) Solid won’t know to re-run that code. Read inside `createEffect`, a `createMemo`, or JSX – or explicitly track with helpers. ([solidjs.com][1])
+
+```ts
+
+// Stale
+const v = count(); setInterval(() => console.log(v), 1000);
+
+// Fresh
+setInterval(() => console.log(count()), 1000); // read accessor at use time
+createEffect(() => console.log(count()));      // tracked
+```
+
+2. **Destructuring props / stores** (breaks reactivity)
+   `props` and stores are proxies. Destructuring extracts plain values and severs reactivity – you’ll hold an old snapshot. Use `props.x` directly, wrap in an accessor, or `splitProps`. ([docs.solidjs.com][2])
+
+```ts
+// Stale
+function User(p:{user:{name:string}}){ const { user } = p; return <span>{user.name}</span> }
+
+// Fresh
+function User(props){ return <span>{props.user.name}</span> }
+// or
+function User(props){ const user = () => props.user; return <span>{user().name}</span> }
+// or
+const [local] = splitProps(props, ["user"]); <span>{local.user.name}</span>
+```
+
+3. **Capturing values instead of accessors** (stale closures)
+   Solid’s setters are safe, but if you *store the value* (`const n = count()`) and reuse it later, it won’t change. Keep and call the accessor (`count`) when you need the current value. ([DEV Community][3])
+
+4. **Async reads not tracked**
+   Dependencies are collected during the synchronous run of an effect/memo. Reads that happen later in a Promise/timeout aren’t added as deps – the effect won’t re-run when they change. Ensure the signals are read during the effect’s sync run or restructure with `on(...)` / separate effects. ([solidjs.com][1])
+
+5. **Intentional “stale-while-revalidate” resource data**
+   With `createResource` (and router queries), you can *show the previous data while new data loads* – this is *expected* staleness. Use `resource.loading` and `resource.latest` to manage it. ([docs.solidjs.com][4])
+
+
+### What to look for (quick debugging checklist)
+
+* **UI doesn’t change but `console.log(signal())` shows the new value** – likely read happened outside an effect/memo/JSX. Add a `createEffect(() => console.log(signal()))` nearby; if it never logs again, you’re not tracking. ([solidjs.com][1])
+* **You destructured `props` or a store** – revert to `props.x`, `splitProps`, or wrap in an accessor. ([docs.solidjs.com][2])
+* **Intervals/timeouts/promises hold old numbers/objects** – don’t cache values; call the accessor inside the callback. ([DEV Community][3])
+* **Server/loader data shows previous result during refetch** – check `data.loading` and `data.latest`; that’s SWR by design. ([docs.solidjs.com][4])
+
+If you paste a snippet that’s acting “stale”, I’ll point to the exact read that lost tracking and show the minimal fix.
+
+[1]: https://www.solidjs.com/guides/reactivity?utm_source=chatgpt.com "Guides:Reactivity"
+[2]: https://docs.solidjs.com/concepts/components/props?utm_source=chatgpt.com "Props"
+[3]: https://dev.to/aderchox/lets-learn-solidjs-quickly-by-creating-a-usedebounce-hook-3hf0?utm_source=chatgpt.com "Let's learn Solid.js quickly, by creating a useDebounce hook"
+[4]: https://docs.solidjs.com/reference/basic-reactivity/create-resource?utm_source=chatgpt.com "createResource"

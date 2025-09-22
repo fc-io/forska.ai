@@ -285,9 +285,9 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
   }
 
   createEffect(() => {
-    customRange()
+    const range = customRange()
     const pending = pendingPickerValues()
-    if (pending && pending.length > 0) {
+    if (range && pending && pending.length === 2) {
       setPendingPickerValues(undefined)
     }
   })
