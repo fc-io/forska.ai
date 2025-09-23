@@ -13,6 +13,11 @@ const judgeAndMark = async (
   prompts: (typeof schema.prompts.$inferSelect)[],
 ): Promise<void> => {
   const sessionId = null
+  const randomDelay = Math.floor(Math.random() * (300 - 100 + 1)) + 100
+  await new Promise((resolve) => {
+    return setTimeout(resolve, randomDelay)
+  })
+  console.log(`send to LLM with randomDelay of: ${randomDelay}ms`)
   await judge({articles: [article], prompts, sessionId, judgmentsJobId: articleToProcess.jobId})
   await markArticlesAsJudged(db, articleToProcess.jobId, [articleToProcess.articleId])
 }
