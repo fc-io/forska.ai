@@ -17,7 +17,6 @@ const judgeAndMark = async (
   await new Promise((resolve) => {
     return setTimeout(resolve, randomDelay)
   })
-  console.log(`send to LLM with randomDelay of: ${randomDelay}ms`)
   await judge({articles: [article], prompts, sessionId, judgmentsJobId: articleToProcess.jobId})
   await markArticlesAsJudged(db, articleToProcess.jobId, [articleToProcess.articleId])
 }
