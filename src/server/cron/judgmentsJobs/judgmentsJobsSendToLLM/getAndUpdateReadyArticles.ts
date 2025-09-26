@@ -79,12 +79,9 @@ const processReadyRows = async (
     }
   })
 
-  const filteredArticlesWithProjects = articlesWithProjects.filter((article) => {
+  return articlesWithProjects.filter((article) => {
     return article.projectId
   })
-  console.log('filteredArticlesWithProjects', filteredArticlesWithProjects.length)
-  console.log(filteredArticlesWithProjects[0])
-  return filteredArticlesWithProjects
 }
 
 export const getAndUpdateReadyArticles = async (

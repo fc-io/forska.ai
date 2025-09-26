@@ -51,9 +51,10 @@ const isLatencyIncreasingToMuch = async (
     `)
   const slopeMsPerMin = Number(row?.slopeMsPerMin ?? 0)
   const isTooLarge = slopeMsPerMin > SLOPE_THRESHOLD_MS_PER_MIN
-  console.log('maxRowsToCountDurationFor', maxRowsToCountDurationFor)
-  console.log('slopeMsPerMin', slopeMsPerMin)
-  console.log('isLatencyIncreasingToMuch', isTooLarge)
+  if (maxRowsToCountDurationFor % 50 === 0) {
+    console.log('maxRowsToCountDurationFor', maxRowsToCountDurationFor)
+  }
+  console.log(`isLatencyIncreasingToMuch ${isTooLarge} (${slopeMsPerMin}))
 
   return isTooLarge
 }
