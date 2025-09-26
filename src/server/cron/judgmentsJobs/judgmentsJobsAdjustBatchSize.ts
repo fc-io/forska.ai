@@ -370,8 +370,9 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
     .from(schema.judgmentsJobs)
 
   const now = new Date()
-  const previousWindowStart = new Date(now.getTime() - 2 * 60 * 1000)
-  const currentWindowStart = new Date(now.getTime() - 60 * 1000)
+  const windowDurationMs = 3 * 60 * 1000
+  const previousWindowStart = new Date(now.getTime() - 2 * windowDurationMs)
+  const currentWindowStart = new Date(now.getTime() - windowDurationMs)
 
   const tokenRows = await db
     .select({
