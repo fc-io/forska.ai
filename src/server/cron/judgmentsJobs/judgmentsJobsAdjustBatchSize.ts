@@ -216,7 +216,7 @@ const resolveIncrease = (job: JobRow): JobRow => {
 }
 
 const resolveDecrease = (job: JobRow): JobRow => {
-  return {...job, sendToLLMBatchSize: Math.max(MIN_BATCH_SIZE, job.sendToLLMBatchSize - 1)}
+  return {...job, sendToLLMBatchSize: Math.max(MIN_BATCH_SIZE, job.sendToLLMBatchSize - 2)}
 }
 
 const collectRevertUpdatesForBaseline = (jobs: JobRow[], baseline: Snapshot): JobRow[] => {
