@@ -4,7 +4,7 @@ import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 import {judge} from '../../../../agent/judge.ts'
 import * as schema from '../../../../db/schema.ts'
 import {markArticlesAsJudged} from '../judgmentsJobsArticlesRepository.ts'
-import type {ArticleToProcess} from './types.ts'
+import type {ArticleToProcess} from './getAndUpdateReadyArticles.ts'
 
 const judgeAndMark = async (
   db: PostgresJsDatabase<typeof schema>,
@@ -17,7 +17,17 @@ const judgeAndMark = async (
   await new Promise((resolve) => {
     return setTimeout(resolve, randomDelay)
   })
-  await judge({articles: [article], prompts, sessionId, judgmentsJobId: articleToProcess.jobId})
+  await judge({
+    articles: [article],
+    prompts,
+    sessionId,
+    judgmentsJobId: articleToProcess.jobId,
+    modelConfig: {
+      modelId: articleToProcess.modelId,
+      modelName: articleToProcess.modelName,
+      baseURL: articleToProcess.modelBaseUrl,
+    },
+  })
   await markArticlesAsJudged(db, articleToProcess.jobId, [articleToProcess.articleId])
 }
 

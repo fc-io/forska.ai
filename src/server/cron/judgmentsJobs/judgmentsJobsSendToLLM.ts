@@ -3,10 +3,9 @@ import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 import * as schema from '../../../db/schema.ts'
 import {registerCooldownEvent} from './judgmentsJobsAdjustBatchSize.ts'
 import type {judgmentsJobsGetJobs} from './judgmentsJobsGetJobs.ts'
-import {getAndUpdateReadyArticles} from './judgmentsJobsSendToLLM/getAndUpdateReadyArticles.ts'
+import {type ArticleToProcess, getAndUpdateReadyArticles} from './judgmentsJobsSendToLLM/getAndUpdateReadyArticles.ts'
 import {getReadyToSendMoreStatus} from './judgmentsJobsSendToLLM/getReadyToSendMoreStatus.ts'
 import {processArticleWithLLM} from './judgmentsJobsSendToLLM/processArticleWithLLM.ts'
-import type {ArticleToProcess} from './judgmentsJobsSendToLLM/types.ts'
 
 const processArticles = async (db: PostgresJsDatabase<typeof schema>, articles: ArticleToProcess[]): Promise<void> => {
   const results = await Promise.allSettled(

@@ -2,15 +2,15 @@ import {and, eq, inArray} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../../db/schema.ts'
-import type {ArticleToProcess} from './types.ts'
 
-const getProjectIdForJob = async (db: PostgresJsDatabase<typeof schema>, jobId: string): Promise<string> => {
-  const [job] = await db
-    .select({projectId: schema.judgmentsJobs.projectId})
-    .from(schema.judgmentsJobs)
-    .where(eq(schema.judgmentsJobs.id, jobId))
-    .limit(1)
-  return job?.projectId || ''
+export type ArticleToProcess = {
+  jobId: string
+  articleId: string
+  recordId: string
+  projectId: string
+  modelId: string | null
+  modelName: string | null
+  modelBaseUrl: string | null
 }
 
 const processReadyRows = async (
@@ -39,16 +39,52 @@ const processReadyRows = async (
     return selectedMap.has(row.recordId)
   })
 
-  const articlesWithProjects = await Promise.all(
-    selectedArticles.map(async (article) => {
-      const projectId = await getProjectIdForJob(db, article.jobId)
-      return {...article, projectId}
-    }),
-  )
+  const uniqueJobIds = [
+    ...new Set(
+      selectedArticles.map((article) => {
+        return article.jobId
+      }),
+    ),
+  ]
 
-  return articlesWithProjects.filter((article) => {
+  const jobConfigs =
+    uniqueJobIds.length === 0
+      ? []
+      : await db
+          .select({
+            jobId: schema.judgmentsJobs.id,
+            projectId: schema.judgmentsJobs.projectId,
+            modelId: schema.projects.modelId,
+            modelName: schema.models.modelName,
+            modelBaseUrl: schema.models.baseURL,
+          })
+          .from(schema.judgmentsJobs)
+          .leftJoin(schema.projects, eq(schema.projects.id, schema.judgmentsJobs.projectId))
+          .leftJoin(schema.models, eq(schema.models.id, schema.projects.modelId))
+          .where(inArray(schema.judgmentsJobs.id, uniqueJobIds))
+
+  const jobConfigPairs = jobConfigs.map((config) => {
+    return [config.jobId, config] as const
+  })
+  const jobConfigMap = new Map(jobConfigPairs)
+
+  const articlesWithProjects = selectedArticles.map((article) => {
+    const config = jobConfigMap.get(article.jobId)
+    return {
+      ...article,
+      projectId: config?.projectId || '',
+      modelId: config?.modelId ?? null,
+      modelName: config?.modelName ?? null,
+      modelBaseUrl: config?.modelBaseUrl ?? null,
+    }
+  })
+
+  const filteredArticlesWithProjects = articlesWithProjects.filter((article) => {
     return article.projectId
   })
+  console.log('filteredArticlesWithProjects', filteredArticlesWithProjects.length)
+  console.log(filteredArticlesWithProjects[0])
+  return filteredArticlesWithProjects
 }
 
 export const getAndUpdateReadyArticles = async (

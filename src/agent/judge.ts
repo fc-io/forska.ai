@@ -1,4 +1,5 @@
 import OpenAI from 'openai'
+import type {ChatCompletion, ChatCompletionMessage} from 'openai/resources/chat/completions'
 
 import type {getNewestArticlesToJudge} from '../components/main/projectsGrid/projectsGridGetNewestArticlesToJudge.ts'
 import {env} from '../server/utils/env.ts'
@@ -10,38 +11,123 @@ import {judgeStoreJudgment} from './judge/judgeStoreJudgment.ts'
 import {judgeStoreTokenUse} from './judge/judgeStoreTokenUse.ts'
 import {SYSTEM_PROMPT} from './judge/judgeSystemPrompt.ts'
 
-// Configure OpenAI client for local vLLM server
-const openaiClient = new OpenAI({apiKey: 'fake_key', dangerouslyAllowBrowser: true, baseURL: env.VITE_LLM_SERVER_URL})
+const openAIClients = new Map<string, OpenAI>()
+const DEFAULT_MODEL_LOOKUP = 'Qwen3-32B-FP8'
+const DEFAULT_MODEL_NAME = './models/Qwen3-32B-FP8'
+
+type ModelConfigInput = {modelId?: string | null; modelName?: string | null; baseURL?: string | null}
+
+type AssistantMessageShape = {
+  role: 'assistant'
+  content: string
+  tool_calls?: ChatCompletionMessage['tool_calls']
+  reasoning_content?: string
+}
+
+const getOpenAIClient = (baseURL: string): OpenAI => {
+  const existingClient = openAIClients.get(baseURL)
+  if (existingClient) {
+    return existingClient
+  }
+  const client = new OpenAI({apiKey: 'fake_key', dangerouslyAllowBrowser: true, baseURL})
+  openAIClients.set(baseURL, client)
+  return client
+}
+
+const hasReasoningContent = (
+  message: ChatCompletionMessage,
+): message is ChatCompletionMessage & {reasoning_content: string} => {
+  return typeof (message as {reasoning_content?: unknown}).reasoning_content === 'string'
+}
+
+const formatAssistantMessage = (message: ChatCompletionMessage): AssistantMessageShape => {
+  const reasoningContent = hasReasoningContent(message) ? message.reasoning_content : null
+  const textContent = typeof message.content === 'string' ? message.content : ''
+  const content = textContent || reasoningContent || ''
+  const toolCalls = message.tool_calls && message.tool_calls.length > 0 ? message.tool_calls : undefined
+
+  return {
+    role: 'assistant',
+    content,
+    ...(toolCalls ? {tool_calls: toolCalls} : {}),
+    ...(reasoningContent ? {reasoning_content: reasoningContent} : {}),
+  }
+}
+
+const toChoice = (choice: ChatCompletion['choices'][number]) => {
+  return {
+    index: choice.index,
+    message: formatAssistantMessage(choice.message),
+    logprobs: null,
+    finish_reason: choice.finish_reason,
+    stop_reason: null,
+  }
+}
+
+const buildResponseBody = (response: ChatCompletion, choices: ReturnType<typeof toChoice>[]) => {
+  const usage = response.usage
+    ? {
+        prompt_tokens: response.usage.prompt_tokens,
+        completion_tokens: response.usage.completion_tokens,
+        total_tokens: response.usage.total_tokens,
+        prompt_tokens_details: null,
+      }
+    : {prompt_tokens: 0, completion_tokens: 0, total_tokens: 0, prompt_tokens_details: null}
+
+  return {
+    id: response.id,
+    object: response.object,
+    created: response.created,
+    model: response.model,
+    choices,
+    usage,
+    prompt_logprobs: null,
+    kv_transfer_params: null,
+  }
+}
 
 // How many times we should ask the model to retry if the response is invalid
-const MAX_RETRIES = 3
+const MAX_RETRIES = 2
 
 // Helper that calls the language model using OpenAI client directly
-const generateModelResponseDirect = async (prompt: string): Promise<typeof AIResponseType.infer> => {
+const generateModelResponse = async ({
+  prompt,
+  baseURL,
+  modelName,
+}: {
+  prompt: string
+  baseURL: string
+  modelName: string
+}): Promise<typeof AIResponseType.infer> => {
+  const client = getOpenAIClient(baseURL)
   try {
-    const response = await openaiClient.chat.completions.create({
-      model: './models/Qwen3-32B-FP8',
+    const response = await client.chat.completions.create({
+      model: modelName,
       messages: [
         {role: 'system', content: SYSTEM_PROMPT},
         {role: 'user', content: prompt},
       ],
-      max_tokens: 4000,
-      temperature: 0.7,
+      max_tokens: 2048,
+      temperature: 0,
     })
 
-    // Extract content - handle both content and reasoning_content
     const message = response.choices[0]?.message
     if (!message) throw new Error('No message in response')
-    const content = message.content || (message as any).reasoning_content || ''
+    const assistantMessage = formatAssistantMessage(message)
+    const content = assistantMessage.content
+    const normalizedChoices = response.choices.map((choice) => {
+      return toChoice(choice)
+    })
+    const finishReason = normalizedChoices[0]?.finish_reason || 'stop'
+    const responseBody = buildResponseBody(response, normalizedChoices)
 
-    // Convert OpenAI response to AI SDK format
     const aiResponse = {
       text: content,
       files: [],
       reasoningDetails: [],
       toolCalls: [],
       toolResults: [],
-      finishReason: response.choices[0]?.finish_reason || 'stop',
+      finishReason,
       usage: {
         promptTokens: response.usage?.prompt_tokens || 0,
         completionTokens: response.usage?.completion_tokens || 0,
@@ -50,7 +136,7 @@ const generateModelResponseDirect = async (prompt: string): Promise<typeof AIRes
       warnings: [],
       request: {
         body: JSON.stringify({
-          model: './models/Qwen3-32B-FP8',
+          model: modelName,
           messages: [
             {role: 'system', content: SYSTEM_PROMPT},
             {role: 'user', content: prompt},
@@ -62,8 +148,8 @@ const generateModelResponseDirect = async (prompt: string): Promise<typeof AIRes
         timestamp: new Date(response.created * 1000),
         modelId: response.model,
         headers: {'content-length': '0', 'content-type': 'application/json'},
-        body: response as any,
-        messages: [{role: 'assistant' as const, content: content, id: response.id}],
+        body: responseBody,
+        messages: [{...assistantMessage, id: response.id}],
       },
       steps: [],
       experimental_providerMetadata: {openai: {}},
@@ -77,9 +163,6 @@ const generateModelResponseDirect = async (prompt: string): Promise<typeof AIRes
     throw error
   }
 }
-
-// Use the direct OpenAI client implementation
-const generateModelResponse = generateModelResponseDirect
 
 // Helper to build a retry prompt given the base prompt, last error and response
 const buildRetryPrompt = (basePrompt: string, lastError: string, lastResponse: string): string => {
@@ -105,23 +188,32 @@ export const judge = async ({
   prompts,
   sessionId,
   judgmentsJobId,
+  modelConfig,
 }: {
   articles: ArticlesType
   prompts: PromptsType
   sessionId: string | null
   judgmentsJobId?: string
+  modelConfig?: ModelConfigInput
 }): Promise<void> => {
-  // Get or create model ID for the vLLM model
-  let modelId: string | undefined
-  try {
-    const modelResult = await apiClient.api.judgments.model.get({query: {name: 'Qwen3-32B-FP8', provider: 'vLLM'}})
-    if (modelResult.data?.success && modelResult.data?.data) {
-      modelId = modelResult.data.data.id
+  const baseURL = modelConfig?.baseURL || env.VITE_LLM_SERVER_URL
+  const modelName = modelConfig?.modelName || DEFAULT_MODEL_NAME
+  const modelLookupName = modelConfig?.modelName || DEFAULT_MODEL_LOOKUP
+
+  let modelId: string | undefined = modelConfig?.modelId ?? undefined
+  if (!modelId) {
+    try {
+      const modelResult = await apiClient.api.judgments.model.get({
+        query: {name: modelLookupName, provider: 'vLLM', baseURL},
+      })
+      if (modelResult.data?.success && modelResult.data?.data) {
+        modelId = modelResult.data.data.id
+      }
+    } catch (error) {
+      console.error('Failed to get model ID:', error)
     }
-  } catch (error) {
-    console.error('Failed to get model ID:', error)
   }
-  let tokenUse: {promptTokens: number; completionTokens: number; totalTokens: number}[] = []
+  const tokenUse: {promptTokens: number; completionTokens: number; totalTokens: number}[] = []
   const startedAt = new Date().toISOString()
   const startDuration = performance.now()
 
@@ -136,7 +228,7 @@ export const judge = async ({
       while (attempts < MAX_RETRIES) {
         attempts += 1
         try {
-          const modelResponse = await generateModelResponse(prompt)
+          const modelResponse = await generateModelResponse({prompt, baseURL, modelName})
           // console.log('modelResponse', modelResponse)
           lastResponse = modelResponse.text
           const judgment = parseJudgment(lastResponse, prompts)

@@ -29,7 +29,6 @@ src
 │   │   └── unassessedArticles.tsx
 │   └── ui
 ├── lib
-├── types
 └── utils
 ```
 
