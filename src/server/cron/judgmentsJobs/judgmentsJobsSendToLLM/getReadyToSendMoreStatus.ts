@@ -54,7 +54,7 @@ const isLatencyIncreasingToMuch = async (
   if (maxRowsToCountDurationFor % 50 === 0) {
     console.log('maxRowsToCountDurationFor', maxRowsToCountDurationFor)
   }
-  console.log(`isLatencyIncreasingToMuch ${isTooLarge} (${slopeMsPerMin}))
+  console.log(`isLatencyIncreasingToMuch ${isTooLarge} (${slopeMsPerMin})`)
 
   return isTooLarge
 }
