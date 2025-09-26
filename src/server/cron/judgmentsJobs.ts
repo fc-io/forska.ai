@@ -15,8 +15,8 @@ import {judgmentsJobsSendToLLM} from './judgmentsJobs/judgmentsJobsSendToLLM.ts'
 export const MAX_ARTICLES_BATCH_SIZE = 15
 const serverJobId = `server-job-${crypto.randomUUID()}`
 
-const NEW_ARTICLES_INTERVAL = '*/5 * * * * *' // Every 5 seconds
-const LLM_PROCESSING_INTERVAL = '*/8 * * * * *' // Every 15 seconds
+const NEW_ARTICLES_INTERVAL = '*/2 * * * * *' // Every 5 seconds
+const LLM_PROCESSING_INTERVAL = '*/6 * * * * *' // Every 15 seconds
 const ADJUST_BATCH_SIZE_INTERVAL = '0 */1 * * * *' // Every 1 minutes
 const CLEANUP_STALE_INTERVAL = '0 */5 * * * *' // Every 5 minutes
 

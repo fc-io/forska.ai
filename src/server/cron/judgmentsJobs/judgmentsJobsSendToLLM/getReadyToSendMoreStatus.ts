@@ -4,7 +4,7 @@ import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 import * as schema from '../../../../db/schema.ts'
 export const P95_TARGET_MS = 3 * 60 * 1000
 import {env} from '../../../utils/env.ts'
-export const SLOPE_THRESHOLD_MS_PER_MIN = 10_000
+export const SLOPE_THRESHOLD_MS_PER_MIN = 20_000
 
 const countOfArticles = async (
   db: PostgresJsDatabase<typeof schema>,
