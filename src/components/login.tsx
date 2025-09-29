@@ -52,7 +52,6 @@ export const Login = (): JSX.Element => {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Authentication failed')
     } finally {
-      debugger
       setIsLoading(false)
     }
   }
