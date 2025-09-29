@@ -1,7 +1,6 @@
 import {type} from 'arktype'
 
 import {apiClient} from '../../services/apiClient.ts'
-import {colorizeJudgment, colorizeLogMessage} from './colorize.ts'
 
 // Extended database item type that includes judged_as fields
 const _ExtendedDatabaseItem = type({
@@ -37,55 +36,29 @@ const _ExtendedDatabaseItem = type({
 
 type ExtendedDatabaseItemType = typeof _ExtendedDatabaseItem.infer
 
-const printLogMessage = (
-  articleId: ExtendedDatabaseItemType['id'],
-  articleTitle: string,
-  judgment: Record<string, unknown>,
-  promptIds: string[],
-) => {
-  try {
-    const prompts = promptIds.map((promptId) => {
-      const answers = Object.entries(judgment).filter(([key]) => {
-        return key.includes(promptId)
-      })
-      const answeredOriginal = answers.find(([key]) => {
-        //TODO: this is a hack to get the original answer
-        return key.includes('---question')
-      })[1] as string
+const findAnswer = <T>(entries: [string, unknown][], fragment: string): T => {
+  const match = entries.find(([key]) => {
+    return key.includes(fragment)
+  })
 
-      const question = answers[0][0].split('^^^')[0]
-
-      return {question, answeredOriginal}
-    })
-
-    const logMessage = `${articleId} | ${articleTitle}, ${prompts
-      .map((p) => {
-        return `${p.question}: ${colorizeJudgment(p.answeredOriginal)}`
-      })
-      .join(', ')}`
-    console.log(colorizeLogMessage(logMessage, judgment))
-  } catch (error) {
-    console.error(error)
+  if (!match) {
+    throw new Error(`Missing ${fragment} answer`)
   }
+
+  return match[1] as T
 }
+
 // Helper that stores a validated judgment via RPC to our server and logs the outcome
 export const judgeStoreJudgment = async (
   articleId: ExtendedDatabaseItemType['id'],
   articleTitle: string,
   judgment: Record<string, unknown>,
-  modelId?: string,
+  modelId: string,
   promptIds?: string[],
 ): Promise<void> => {
   try {
-    const modelId = 'eabfc8ec-7530-4979-b14b-7428179493c9'
-    // eabfc8ec-7530-4979-b14b-7428179493c9
-    // If we don't have modelId/promptIds, just log for now
-    // This maintains backward compatibility while we transition
-
     if (!modelId || !promptIds || promptIds.length === 0) {
-      // console.log(colorizeLogMessage(logMessage, judgment))
-      console.warn('Warning: No modelId/promptIds provided, judgment not stored to database')
-      // debugger
+      console.error('Warning: No modelId/promptIds provided, judgment not stored to database')
       return
     }
     // Store judgment for each prompt
@@ -93,18 +66,9 @@ export const judgeStoreJudgment = async (
       const answers = Object.entries(judgment).filter(([key]) => {
         return key.includes(promptId)
       })
-      const answeredOriginal = answers.find(([key]) => {
-        //TODO: this is a hack to get the original answer
-        return key.includes('---question')
-      })[1] as string
-      const answeredExplanation = answers.find(([key]) => {
-        //TODO: this is a hack to get the original answer
-        return key.includes('---explanation')
-      })[1] as string
-      const answeredQuotes: string[] = answers.find(([key]) => {
-        //TODO: this is a hack to get the original answer
-        return key.includes('---quotes')
-      })[1] as string[]
+      const answeredOriginal = findAnswer<string>(answers, '---question')
+      const answeredExplanation = findAnswer<string>(answers, '---explanation')
+      const answeredQuotes = findAnswer<string[]>(answers, '---quotes')
       // ('test^^^a7aa21e8-d4e6-4e60-b39e-732085c56b00---explanation')
       // "test^^^a7aa21e8-d4e6-4e60-b39e-732085c56b00---quotes"
 
@@ -122,7 +86,7 @@ export const judgeStoreJudgment = async (
 
       // Type guard for error checking
       if ('error' in response && response.error) {
-        throw new Error(`API request failed: ${String(response.error)}`)
+        throw new Error(`API request failed: ${JSON.stringify(response.error)}`)
       }
 
       return response.data
@@ -140,9 +104,6 @@ export const judgeStoreJudgment = async (
         failedResults[0]?.reason,
       )
     }
-    // else {
-    //   printLogMessage(articleId, articleTitle, judgment, promptIds)
-    // }
   } catch (error) {
     console.error(
       `${articleId} | Failed to store judgment for article ${articleTitle}`,
