@@ -227,6 +227,9 @@ export const judge = async ({
 
       while (attempts < MAX_RETRIES) {
         attempts += 1
+        if (attempts > 1) {
+          console.log(`${article.id} | Attempt ${attempts} of ${MAX_RETRIES}`)
+        }
         try {
           const modelResponse = await generateModelResponse({prompt, baseURL, modelName})
           // console.log('modelResponse', modelResponse)
