@@ -1,6 +1,6 @@
 import type {QueryClient} from '@tanstack/solid-query'
 import {useQuery, useQueryClient} from '@tanstack/solid-query'
-import {createRootRoute, Outlet} from '@tanstack/solid-router'
+import {createRootRoute, Outlet, useLocation} from '@tanstack/solid-router'
 import {TanStackRouterDevtools} from '@tanstack/solid-router-devtools'
 import {Show} from 'solid-js'
 
@@ -23,6 +23,7 @@ const signOut = async (queryClient: QueryClient) => {
 const RootComponent = () => {
   console.log('import.meta.env.DEV', import.meta.env.DEV)
   const queryClient = useQueryClient()
+  const location = useLocation()
   const sessionQuery = useQuery(() => {
     return {
       queryKey: ['session'],
@@ -53,7 +54,7 @@ const RootComponent = () => {
           </div>
         }
       >
-        <Show when={!!sessionQuery.data?.user && location.pathname !== '/login'} fallback={<Login />}>
+        <Show when={!!sessionQuery.data?.user && location().pathname !== '/login'} fallback={<Login />}>
           <Navigation
             user={sessionQuery.data?.user}
             onSignOut={() => {
