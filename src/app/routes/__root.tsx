@@ -1,4 +1,5 @@
-import {useQuery} from '@tanstack/solid-query'
+import type {QueryClient} from '@tanstack/solid-query'
+import {useQuery, useQueryClient} from '@tanstack/solid-query'
 import {createRootRoute, Outlet} from '@tanstack/solid-router'
 import {TanStackRouterDevtools} from '@tanstack/solid-router-devtools'
 import {Show} from 'solid-js'
@@ -9,11 +10,11 @@ import {Navigation} from '../../components/Navigation'
 import {fetchSession} from '../../services/fetchSession'
 import {authClient} from '../lib/auth-client'
 
-const signOut = async () => {
+const signOut = async (queryClient: QueryClient) => {
   try {
     await authClient.signOut()
-    // queryClient.setQueryData(['session'], null)
-    // await queryClient.invalidateQueries({queryKey: ['session']})
+    queryClient.setQueryData(['session'], null)
+    await queryClient.invalidateQueries({queryKey: ['session']})
   } catch (error) {
     console.error('Error signing out:', error)
     throw error
@@ -21,6 +22,7 @@ const signOut = async () => {
 }
 const RootComponent = () => {
   console.log('import.meta.env.DEV', import.meta.env.DEV)
+  const queryClient = useQueryClient()
   const sessionQuery = useQuery(() => {
     return {
       queryKey: ['session'],
@@ -55,7 +57,7 @@ const RootComponent = () => {
           <Navigation
             user={sessionQuery.data?.user}
             onSignOut={() => {
-              return void signOut()
+              return void signOut(queryClient)
             }}
           />
         </Show>
