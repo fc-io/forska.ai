@@ -49,17 +49,32 @@ export const articles = pgTable('articles', {
   publicationStatus: publicationStatusEnum('publication_status'),
 })
 
-export const models = pgTable('models', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
-  updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
-  name: text('name').notNull(),
-  provider: text('provider'),
-  baseURL: text('base_url'),
-  modelName: text('model_name'),
-  version: text('version'),
-  apiKeyVariable: text('api_key_variable'),
-})
+export const models = pgTable(
+  'models',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
+    name: text('name').notNull(),
+    provider: text('provider'),
+    baseURL: text('base_url'),
+    modelName: text('model_name'),
+    version: text('version'),
+    apiKeyVariable: text('api_key_variable'),
+    ownerId: text('owner_id')
+      .default('uv2Idd2BF6VNSNjwY5IKmIeoYMKq6zXw')
+      .notNull()
+      .references(
+        () => {
+          return user.id
+        },
+        {onDelete: 'cascade'},
+      ),
+  },
+  (table) => {
+    return [index('models_owner_idx').on(table.ownerId)]
+  },
+)
 
 export const dataSource = pgTable(
   'datasource',
@@ -112,6 +127,34 @@ export const dataSourceAccess = pgTable(
       index('datasource_access_datasource_idx').on(table.dataSourceId),
       index('datasource_access_user_idx').on(table.userId),
     ]
+  },
+)
+
+export const modelAccess = pgTable(
+  'model_access',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
+    modelId: uuid('model_id')
+      .notNull()
+      .references(
+        () => {
+          return models.id
+        },
+        {onDelete: 'cascade'},
+      ),
+    userId: text('user_id')
+      .notNull()
+      .references(
+        () => {
+          return user.id
+        },
+        {onDelete: 'cascade'},
+      ),
+  },
+  (table) => {
+    return [index('model_access_model_idx').on(table.modelId), index('model_access_user_idx').on(table.userId)]
   },
 )
 
