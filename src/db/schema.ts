@@ -176,6 +176,8 @@ export const projects = pgTable('projects', {
     },
     {onDelete: 'set null'},
   ),
+  dateFrom: timestamp('date_from', {withTimezone: true}),
+  dateTo: timestamp('date_to', {withTimezone: true}),
   createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
 })
