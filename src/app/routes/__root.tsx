@@ -1,8 +1,8 @@
 import type {QueryClient} from '@tanstack/solid-query'
 import {useQuery, useQueryClient} from '@tanstack/solid-query'
-import {createRootRoute, Outlet, useLocation} from '@tanstack/solid-router'
+import {createRootRoute, Outlet, useLocation, useNavigate} from '@tanstack/solid-router'
 import {TanStackRouterDevtools} from '@tanstack/solid-router-devtools'
-import {Show} from 'solid-js'
+import {Show, createEffect} from 'solid-js'
 
 import {Login} from '../../components/login'
 import {Navigation} from '../../components/Navigation'
@@ -24,6 +24,7 @@ const RootComponent = () => {
   console.log('import.meta.env.DEV', import.meta.env.DEV)
   const queryClient = useQueryClient()
   const location = useLocation()
+  const navigate = useNavigate()
   const sessionQuery = useQuery(() => {
     return {
       queryKey: ['session'],
@@ -32,6 +33,13 @@ const RootComponent = () => {
       refetchInterval: 1000 * 60 * 5, // Refetch every 5 minutes
       refetchIntervalInBackground: true,
       refetchOnWindowFocus: true,
+    }
+  })
+  createEffect(() => {
+    const user = sessionQuery.data?.user
+    const pathname = location().pathname
+    if (user && pathname === '/login') {
+      void navigate({to: '/'})
     }
   })
   return (
