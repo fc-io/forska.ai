@@ -1,3 +1,4 @@
+import {Menu} from '@ark-ui/solid'
 import {Link} from '@tanstack/solid-router'
 import {Show} from 'solid-js'
 
@@ -6,6 +7,32 @@ import type {User} from '../types/user'
 interface NavigationProps {
   user: User | undefined
   onSignOut: () => void
+}
+
+const getAvatarLabel = (user: User | undefined) => {
+  const defaultLabel = 'U'
+  if (!user) {
+    return defaultLabel
+  }
+  const trimmedName = user.name?.trim()
+  if (trimmedName) {
+    return trimmedName
+      .split(/\s+/)
+      .filter((part) => {
+        return part.length > 0
+      })
+      .map((part) => {
+        return part[0] ?? ''
+      })
+      .join('')
+      .slice(0, 2)
+      .toUpperCase()
+  }
+  const trimmedEmail = user.email?.trim()
+  if (trimmedEmail) {
+    return trimmedEmail.slice(0, 2).toUpperCase()
+  }
+  return defaultLabel
 }
 
 export const Navigation = (props: NavigationProps) => {
@@ -34,9 +61,6 @@ export const Navigation = (props: NavigationProps) => {
             </Link>
           </div>
           <div class="flex items-center space-x-4">
-            <Link to="/settings" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
-              Settings
-            </Link>
             <Show when={props.user?.role === 'admin'}>
               <Link to="/admin/datasources" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
                 Data Sources
@@ -51,14 +75,37 @@ export const Navigation = (props: NavigationProps) => {
             <Show when={props.user}>
               <span class="text-sm text-gray-500">{props.user?.email}</span>
             </Show>
-            <button
-              onClick={() => {
-                props.onSignOut()
-              }}
-              class="text-gray-600 hover:text-blue-600 text-sm font-medium"
-            >
-              Sign Out
-            </button>
+            <Show when={props.user}>
+              <Menu.Root positioning={{placement: 'bottom-end'}}>
+                <Menu.Trigger class="inline-flex items-center justify-center w-9 h-9 rounded-full bg-gray-200 text-sm font-semibold text-gray-700 hover:bg-gray-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">
+                  <span aria-hidden="true">{getAvatarLabel(props.user)}</span>
+                  <span class="sr-only">Open user menu</span>
+                </Menu.Trigger>
+                <Menu.Positioner>
+                  <Menu.Content class="mt-2 w-40 rounded-md bg-white py-2 shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none">
+                    <Menu.Item id="settings" class="p-0">
+                      <Link
+                        to="/settings"
+                        class="block w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"
+                      >
+                        Settings
+                      </Link>
+                    </Menu.Item>
+                    <Menu.Item id="sign-out" class="p-0">
+                      <Link
+                        to="/login"
+                        class="block w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"
+                        onClick={() => {
+                          props.onSignOut()
+                        }}
+                      >
+                        Sign Out
+                      </Link>
+                    </Menu.Item>
+                  </Menu.Content>
+                </Menu.Positioner>
+              </Menu.Root>
+            </Show>
           </div>
         </div>
       </div>
