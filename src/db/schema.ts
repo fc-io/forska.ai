@@ -61,6 +61,60 @@ export const models = pgTable('models', {
   apiKeyVariable: text('api_key_variable'),
 })
 
+export const dataSource = pgTable(
+  'datasource',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
+    title: text('title').notNull(),
+    description: text('description'),
+    ownerId: text('owner_id')
+      .default('uv2Idd2BF6VNSNjwY5IKmIeoYMKq6zXw')
+      .notNull()
+      .references(
+        () => {
+          return user.id
+        },
+        {onDelete: 'cascade'},
+      ),
+  },
+  (table) => {
+    return [index('datasource_owner_idx').on(table.ownerId)]
+  },
+)
+
+export const dataSourceAccess = pgTable(
+  'datasource_access',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
+    dataSourceId: uuid('datasource_id')
+      .notNull()
+      .references(
+        () => {
+          return dataSource.id
+        },
+        {onDelete: 'cascade'},
+      ),
+    userId: text('user_id')
+      .notNull()
+      .references(
+        () => {
+          return user.id
+        },
+        {onDelete: 'cascade'},
+      ),
+  },
+  (table) => {
+    return [
+      index('datasource_access_datasource_idx').on(table.dataSourceId),
+      index('datasource_access_user_idx').on(table.userId),
+    ]
+  },
+)
+
 export const projects = pgTable('projects', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: text('name').notNull(),

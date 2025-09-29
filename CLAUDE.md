@@ -46,7 +46,7 @@ src
 * IMPORTANT: Avoid nested if/else in a function. Instead, separate code into more functions.
 * Prefer to handle all errors and throws gracefully if it is easily possible.
 * Try to keep code succinct and DRY – simplify code if possible.
-
+* IMPORTANT: Use singular table names when creating new database tables.
 * IMPORTANT: Do not remove debugger statements nor console.log unless explicitly asked (no matter what the linter says).
 * IMPORTANT: Don't add comments unless asked to. Instead, split out complicated code into separate functions with clear function names.
 
