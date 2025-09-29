@@ -7,7 +7,7 @@ import {ProjectStatistics} from '../../../components/main/ProjectStatistics'
 import {Button} from '../../../components/ui/button'
 import {fetchProjects} from '../../../services/projectsService'
 
-const Projects = () => {
+export const ProjectsPage = () => {
   const projects = useQuery(() => {
     return {queryKey: ['projects'], queryFn: fetchProjects}
   })
@@ -49,4 +49,4 @@ const Projects = () => {
   )
 }
 
-export const Route = createFileRoute('/projects/')({component: Projects})
+export const Route = createFileRoute('/projects/')({component: ProjectsPage})

@@ -48,6 +48,12 @@ export const Navigation = (props: NavigationProps) => {
               Home
             </Link>
             <Link
+              to="/latest-articles"
+              class="text-gray-900 hover:text-blue-600 px-3 py-2 text-sm font-medium [&.active]:text-blue-600 [&.active]:font-semibold"
+            >
+              Latest Articles
+            </Link>
+            <Link
               to="/projects"
               class="text-gray-900 hover:text-blue-600 px-3 py-2 text-sm font-medium [&.active]:text-blue-600 [&.active]:font-semibold"
             >
