@@ -4,6 +4,7 @@ import {Elysia} from 'elysia'
 import {judgmentsJobsCron} from './cron/judgmentsJobs.ts'
 import {articlesRoutes} from './routes/ArticlesRoutes.ts'
 import {authRoutes} from './routes/AuthRoutes.ts'
+import {dataSourcesRoutes} from './routes/DataSourcesRoutes.ts'
 import {judgablesRoutes} from './routes/JudgablesRoutes.ts'
 import {judgmentsJobsRoutes} from './routes/JudgmentsJobsRoutes.ts'
 import {judgmentsRoutes} from './routes/JudgmentsRoutes.ts'
@@ -21,6 +22,7 @@ const app = new Elysia()
   .use(judgablesRoutes)
   .use(judgmentsRoutes)
   .use(projectsRoutes)
+  .use(dataSourcesRoutes)
   .use(tokensRoutes)
   .use(usersRoutes)
   .listen(env.SERVER_PORT)

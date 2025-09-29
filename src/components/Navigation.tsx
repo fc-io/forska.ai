@@ -38,6 +38,9 @@ export const Navigation = (props: NavigationProps) => {
               Settings
             </Link>
             <Show when={props.user?.role === 'admin'}>
+              <Link to="/admin/datasources" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
+                Data Sources
+              </Link>
               <Link to="/admin/users" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
                 Users
               </Link>
