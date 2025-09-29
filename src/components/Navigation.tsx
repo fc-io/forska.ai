@@ -71,15 +71,12 @@ export const Navigation = (props: NavigationProps) => {
               <Link to="/admin/datasources" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
                 Data Sources
               </Link>
-              <Link to="/admin/users" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
-                Users
-              </Link>
               <Link to="/admin/jobs" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
                 Jobs
               </Link>
-            </Show>
-            <Show when={props.user}>
-              <span class="text-sm text-gray-500">{props.user?.email}</span>
+              <Link to="/admin/users" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
+                Users
+              </Link>
             </Show>
             <Show when={props.user}>
               <Menu.Root positioning={{placement: 'bottom-end'}}>
