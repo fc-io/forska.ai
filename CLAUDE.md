@@ -7,7 +7,7 @@ IMPORTANT: I don't like try, catch, finally, throw. Only use when absolutely nec
 IMPORTANT: If there is only one export in a file, then the filename should match the name of the exported function
 IMPORTANT: On the server – prefer Drizzle ORM over executing pure SQL commands
 IMPORTANT: On the client/app – use import {useQuery} from '@tanstack/solid-query' over createQuery
-IMPORTANT: Keep filenames Pascal case, even for TSX/JSX React components.
+IMPORTANT: Keep filenames camelCase, even for TSX/JSX React components.
 There is an .env.local file in the project; you just can't read it because of security concerns. Always assume the .env files are correct unless the env.ts file throws an error. Use process.env instead of Bun's env functionality to stay compatible with ordinary Node.
 
 
@@ -176,7 +176,7 @@ We use "eslint-plugin-prettier" so there is no need to run prettier separately.
 * Use Elysia framework patterns for route definitions.
 * IMPORTANT: Do not nest routes – prefer flat route structures with POST requests and body parameters over nested URL paths
 * IMPORTANT: Always use Eden/RPC on the client; never use fetch directly
-* Try to keep fetch logic local (in the same file) to the tanstack useQuery. Avoid creating services files for the fetch logic. 
+* Try to keep fetch logic local (in the same file) to the tanstack useQuery. Avoid creating services files for the fetch logic.
 * IMPORTANT: Prefer POST with request body over complex nested URL parameters
 
 ## Database patterns

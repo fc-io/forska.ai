@@ -14,19 +14,11 @@
 3. When changing schema or seed data, prefer Drizzle commands (`bun run db:gen`, `bun run db:mig`, `bun run db:seed`). Do not hand-write SQL migrations.
 
 ## Quality gates
-- Run `bun run lint` and `bun test` after changes. Add additional targeted checks (e.g., `bun run build`) when touching build or deploy paths.
-- Database-dependent tests may require the Postgres container (`docker compose up postgres`).
-- Keep console/debug statements unless explicitly instructed otherwise (per `CLAUDE.md`).
+- Run `bun run lint` and `bun test` after changes.
 
 ## Code organization tips
-- Create new route files under `src/server/routes` using PascalCase filenames ending in `Routes.ts`.
-- Client components should live alongside related helpers in a same-named folder (PascalCase) when they grow beyond ~100 lines.
+- Create new route files under `src/server/routes` using CamelCase filenames ending in `Routes.ts`.
 - Prefer Eden/RPC clients over raw `fetch` calls, and keep data validation near request boundaries using ArkType.
-
-## Documentation & coordination
-- Update `docs/` when business logic or terminology changes.
-- If you introduce migrations or notable config tweaks, mention them explicitly in the PR summary.
-- When a change alters the user-facing UI, capture a screenshot via the provided browser tooling once the dev server is running.
 
 ## PR / final message expectations
 - Summaries should call out whether the server, client, database, or docs were touched.
