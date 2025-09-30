@@ -1,7 +1,7 @@
 import {desc, eq, inArray} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {judgments, projects, prompts} from '../../db/schema.ts'
+import {dataSource, judgments, projectDataSourceLink, projects, prompts} from '../../db/schema.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {projectsRoutesGetArticlesReviews} from './projectsRoutes/projectsRoutesGetArticlesReviews.ts'
@@ -28,6 +28,18 @@ export const projectsRoutes = new Elysia()
       throw new Error('Project not found')
     }
 
+    const projectDataSources = await db
+      .select({
+        id: dataSource.id,
+        title: dataSource.title,
+        description: dataSource.description,
+        createdAt: dataSource.createdAt,
+        updatedAt: dataSource.updatedAt,
+      })
+      .from(projectDataSourceLink)
+      .innerJoin(dataSource, eq(projectDataSourceLink.dataSourceId, dataSource.id))
+      .where(eq(projectDataSourceLink.projectId, params.id))
+
     const projectPrompts = await db
       .select()
       .from(prompts)
@@ -49,7 +61,7 @@ export const projectsRoutes = new Elysia()
       hasJudgedArticles = existingJudgments.length > 0
     }
 
-    return {data: {project, prompts: projectPrompts, hasJudgedArticles}}
+    return {data: {project, prompts: projectPrompts, dataSources: projectDataSources, hasJudgedArticles}}
   })
   .post(
     '/api/projects',
