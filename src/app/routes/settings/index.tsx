@@ -6,9 +6,6 @@ import {fetchSession} from '../../../services/fetchSession'
 import {updateUserProfile} from '../../../services/usersService'
 
 const Settings = () => {
-  const [notifications, setNotifications] = createSignal(true)
-  const [autoProcess, setAutoProcess] = createSignal(false)
-  const [theme, setTheme] = createSignal('system')
   const [displayName, setDisplayName] = createSignal('')
   const [isSavingProfile, setIsSavingProfile] = createSignal(false)
   const [saveError, setSaveError] = createSignal('')
@@ -62,13 +59,6 @@ const Settings = () => {
     setIsSavingProfile(false)
   }
 
-  const handleResetProfile = () => {
-    const originalName = sessionQuery.data?.user?.name ?? ''
-    setDisplayName(originalName)
-    setSaveError('')
-    setSaveSuccess('')
-  }
-
   const isSaveDisabled = () => {
     const currentName = sessionQuery.data?.user?.name ?? ''
     return isSavingProfile() || !displayName().trim() || displayName().trim() === currentName
@@ -108,63 +98,6 @@ const Settings = () => {
           </div>
         </div>
 
-        {/* Preferences Section */}
-        <div class="bg-white border border-gray-200 rounded-lg shadow-sm p-6">
-          <h2 class="text-xl font-semibold text-gray-900 mb-4">Preferences</h2>
-          <div class="space-y-4">
-            <div class="flex items-center justify-between">
-              <div>
-                <label class="block text-sm font-medium text-gray-700">Email Notifications</label>
-                <p class="text-sm text-gray-500">Receive updates about new articles and processing status</p>
-              </div>
-              <label class="relative inline-flex items-center cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={notifications()}
-                  onChange={(e) => {
-                    return setNotifications(e.currentTarget.checked)
-                  }}
-                  class="sr-only peer"
-                />
-                <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600" />
-              </label>
-            </div>
-
-            <div class="flex items-center justify-between">
-              <div>
-                <label class="block text-sm font-medium text-gray-700">Auto-process Articles</label>
-                <p class="text-sm text-gray-500">Automatically assess new articles with AI</p>
-              </div>
-              <label class="relative inline-flex items-center cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={autoProcess()}
-                  onChange={(e) => {
-                    return setAutoProcess(e.currentTarget.checked)
-                  }}
-                  class="sr-only peer"
-                />
-                <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600" />
-              </label>
-            </div>
-
-            <div>
-              <label class="block text-sm font-medium text-gray-700 mb-2">Theme</label>
-              <select
-                value={theme()}
-                onChange={(e) => {
-                  return setTheme(e.currentTarget.value)
-                }}
-                class="w-full px-3 py-3 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-              >
-                <option value="system">System</option>
-                <option value="light">Light</option>
-                <option value="dark">Dark</option>
-              </select>
-            </div>
-          </div>
-        </div>
-
         {/* Actions */}
         <div class="flex gap-4">
           <button
@@ -175,12 +108,6 @@ const Settings = () => {
             }}
           >
             {isSavingProfile() ? 'Saving...' : 'Save Changes'}
-          </button>
-          <button
-            class="px-4 py-3 border border-gray-300 bg-white text-gray-900 rounded-md shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 text-sm font-medium"
-            onClick={handleResetProfile}
-          >
-            Reset to Defaults
           </button>
         </div>
       </div>
