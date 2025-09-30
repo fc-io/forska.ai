@@ -53,12 +53,6 @@ export const Navigation = (props: NavigationProps) => {
             >
               Latest Articles
             </Link>
-            <Link
-              to="/about"
-              class="text-gray-900 hover:text-blue-600 px-3 py-2 text-sm font-medium [&.active]:text-blue-600 [&.active]:font-semibold"
-            >
-              About
-            </Link>
           </div>
           <div class="flex items-center space-x-4">
             <Show when={props.user?.role === 'admin'}>

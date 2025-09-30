@@ -14,7 +14,6 @@ import { Route as SettingsIndexRouteImport } from './routes/settings/index'
 import { Route as ProjectsIndexRouteImport } from './routes/projects/index'
 import { Route as LoginIndexRouteImport } from './routes/login/index'
 import { Route as LatestArticlesIndexRouteImport } from './routes/latest-articles/index'
-import { Route as AboutIndexRouteImport } from './routes/about/index'
 import { Route as ProjectsCreateRouteImport } from './routes/projects/create'
 import { Route as ProjectsIdIndexRouteImport } from './routes/projects/$id/index'
 import { Route as AdminUsersIndexRouteImport } from './routes/admin/users/index'
@@ -48,11 +47,6 @@ const LoginIndexRoute = LoginIndexRouteImport.update({
 const LatestArticlesIndexRoute = LatestArticlesIndexRouteImport.update({
   id: '/latest-articles/',
   path: '/latest-articles/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AboutIndexRoute = AboutIndexRouteImport.update({
-  id: '/about/',
-  path: '/about/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ProjectsCreateRoute = ProjectsCreateRouteImport.update({
@@ -105,7 +99,6 @@ const ProjectsIdReviewsArticleIdIndexRoute =
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/projects/create': typeof ProjectsCreateRoute
-  '/about': typeof AboutIndexRoute
   '/latest-articles': typeof LatestArticlesIndexRoute
   '/login': typeof LoginIndexRoute
   '/projects': typeof ProjectsIndexRoute
@@ -122,7 +115,6 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/projects/create': typeof ProjectsCreateRoute
-  '/about': typeof AboutIndexRoute
   '/latest-articles': typeof LatestArticlesIndexRoute
   '/login': typeof LoginIndexRoute
   '/projects': typeof ProjectsIndexRoute
@@ -140,7 +132,6 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/projects/create': typeof ProjectsCreateRoute
-  '/about/': typeof AboutIndexRoute
   '/latest-articles/': typeof LatestArticlesIndexRoute
   '/login/': typeof LoginIndexRoute
   '/projects/': typeof ProjectsIndexRoute
@@ -159,7 +150,6 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/projects/create'
-    | '/about'
     | '/latest-articles'
     | '/login'
     | '/projects'
@@ -176,7 +166,6 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/projects/create'
-    | '/about'
     | '/latest-articles'
     | '/login'
     | '/projects'
@@ -193,7 +182,6 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/projects/create'
-    | '/about/'
     | '/latest-articles/'
     | '/login/'
     | '/projects/'
@@ -211,7 +199,6 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ProjectsCreateRoute: typeof ProjectsCreateRoute
-  AboutIndexRoute: typeof AboutIndexRoute
   LatestArticlesIndexRoute: typeof LatestArticlesIndexRoute
   LoginIndexRoute: typeof LoginIndexRoute
   ProjectsIndexRoute: typeof ProjectsIndexRoute
@@ -261,13 +248,6 @@ declare module '@tanstack/solid-router' {
       path: '/latest-articles'
       fullPath: '/latest-articles'
       preLoaderRoute: typeof LatestArticlesIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/about/': {
-      id: '/about/'
-      path: '/about'
-      fullPath: '/about'
-      preLoaderRoute: typeof AboutIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/projects/create': {
@@ -339,7 +319,6 @@ declare module '@tanstack/solid-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ProjectsCreateRoute: ProjectsCreateRoute,
-  AboutIndexRoute: AboutIndexRoute,
   LatestArticlesIndexRoute: LatestArticlesIndexRoute,
   LoginIndexRoute: LoginIndexRoute,
   ProjectsIndexRoute: ProjectsIndexRoute,
