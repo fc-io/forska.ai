@@ -176,6 +176,7 @@ We use "eslint-plugin-prettier" so there is no need to run prettier separately.
 * Use Elysia framework patterns for route definitions.
 * IMPORTANT: Do not nest routes – prefer flat route structures with POST requests and body parameters over nested URL paths
 * IMPORTANT: Always use Eden/RPC on the client; never use fetch directly
+* Try to keep fetch logic local (in the same file) to the tanstack useQuery. Avoid creating services files for the fetch logic. 
 * IMPORTANT: Prefer POST with request body over complex nested URL parameters
 
 ## Database patterns
