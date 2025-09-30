@@ -12,6 +12,10 @@ type PromptItem = {id: string; content: string; promptHeading: string; type: str
 
 type ParsedDateResult = {date: Date | null; normalized: string | null; error: string | null}
 
+type DataSourceOption = {id: string; title: string; description: string | null}
+
+type DataSourcesResponse = {data: DataSourceOption[]}
+
 const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/
 
 const parseDateInput = (value: string): ParsedDateResult => {
@@ -38,6 +42,17 @@ const CreateProject = () => {
       staleTime: 1000 * 60 * 5, // Consider data fresh for 5 minutes
     }
   })
+  const dataSourcesQuery = useQuery(() => {
+    return {
+      queryKey: ['datasources'],
+      queryFn: async () => {
+        const response = await apiClient.api.datasources.get()
+        const result = handleApiResponse<DataSourcesResponse>(response, 'Failed to load data sources')
+        return result.data ?? []
+      },
+      staleTime: 1000 * 60 * 5,
+    }
+  })
   const navigate = useNavigate()
   const [projectName, setProjectName] = createSignal('')
   const [description, setDescription] = createSignal('')
@@ -46,8 +61,13 @@ const CreateProject = () => {
   const [prompts, setPrompts] = createStore<PromptItem[]>([
     {id: crypto.randomUUID(), content: '', promptHeading: '', type: ''},
   ])
+  const [selectedDataSourceIds, setSelectedDataSourceIds] = createSignal<string[]>([])
   const [isLoading, setIsLoading] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
+
+  const availableDataSources = () => {
+    return dataSourcesQuery.data ?? []
+  }
 
   const addPromptInput = () => {
     setPrompts([...prompts, {id: crypto.randomUUID(), content: '', promptHeading: '', type: ''}])
@@ -72,10 +92,22 @@ const CreateProject = () => {
     }
   }
 
+  const toggleDataSourceSelection = (id: string) => {
+    setSelectedDataSourceIds((current) => {
+      const hasId = current.includes(id)
+      return hasId
+        ? current.filter((value) => {
+            return value !== id
+          })
+        : [...current, id]
+    })
+  }
+
   const createProject = async (
     name: string,
     description: string,
     promptItems: PromptItem[],
+    dataSourceIds: string[],
     startDate?: string,
     endDate?: string,
   ) => {
@@ -97,6 +129,8 @@ const CreateProject = () => {
       throw new Error('User must be authenticated to create a project')
     }
 
+    const uniqueDataSourceIds = [...new Set(dataSourceIds)]
+
     const response = await apiClient.api.projects.post({
       name,
       description: description.trim() || undefined,
@@ -104,6 +138,7 @@ const CreateProject = () => {
       prompts: validPrompts,
       dateFrom: startDate,
       dateTo: endDate,
+      dataSourceIds: uniqueDataSourceIds.length > 0 ? uniqueDataSourceIds : undefined,
     })
 
     const result = handleApiResponse(response, 'Failed to create project')
@@ -142,6 +177,7 @@ const CreateProject = () => {
         projectName(),
         description(),
         prompts,
+        selectedDataSourceIds(),
         startDateResult.normalized ?? undefined,
         endDateResult.normalized ?? undefined,
       )
@@ -235,6 +271,55 @@ const CreateProject = () => {
                 />
               </label>
             </div>
+          </div>
+
+          <div>
+            <p class="block text-sm font-medium mb-2">Data Sources</p>
+            <Show when={dataSourcesQuery.isLoading}>
+              <p class="text-sm text-muted-foreground">Loading data sources...</p>
+            </Show>
+            <Show when={dataSourcesQuery.isError}>
+              <p class="text-sm text-red-600">
+                {dataSourcesQuery.error instanceof Error
+                  ? dataSourcesQuery.error.message
+                  : 'Failed to load data sources'}
+              </p>
+            </Show>
+            <Show
+              when={!dataSourcesQuery.isLoading && !dataSourcesQuery.isError && availableDataSources().length === 0}
+            >
+              <p class="text-sm text-muted-foreground">No data sources available.</p>
+            </Show>
+            <Show
+              when={!dataSourcesQuery.isLoading && !dataSourcesQuery.isError && availableDataSources().length > 0}
+            >
+              <div class="space-y-2">
+                <For each={availableDataSources()}>
+                  {(source) => {
+                    return (
+                      <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          class="mt-1"
+                          checked={selectedDataSourceIds().includes(source.id)}
+                          onChange={() => {
+                            return toggleDataSourceSelection(source.id)
+                          }}
+                        />
+                        <div class="flex-1">
+                          <p class="text-sm font-medium text-gray-900">{source.title}</p>
+                          <Show when={source.description}>
+                            {(descriptionText) => {
+                              return <p class="text-sm text-muted-foreground">{descriptionText()}</p>
+                            }}
+                          </Show>
+                        </div>
+                      </label>
+                    )
+                  }}
+                </For>
+              </div>
+            </Show>
           </div>
 
           <div>

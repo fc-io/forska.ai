@@ -118,6 +118,26 @@ export const projectsRoutes = new Elysia()
         )
       }
 
+      if (newProject && body.dataSourceIds && body.dataSourceIds.length > 0) {
+        const uniqueIds = [...new Set(body.dataSourceIds)]
+        if (uniqueIds.length > 0) {
+          const validDataSources = await db
+            .select({id: dataSource.id})
+            .from(dataSource)
+            .where(inArray(dataSource.id, uniqueIds))
+
+          if (validDataSources.length !== uniqueIds.length) {
+            throw new Error('One or more selected data sources do not exist')
+          }
+
+          await db.insert(projectDataSourceLink).values(
+            validDataSources.map((entry) => {
+              return {projectId: newProject.id, dataSourceId: entry.id}
+            }),
+          )
+        }
+      }
+
       return {data: newProject}
     },
     {
@@ -127,6 +147,7 @@ export const projectsRoutes = new Elysia()
         ownerId: t.String(),
         dateFrom: t.Optional(t.String()),
         dateTo: t.Optional(t.String()),
+        dataSourceIds: t.Optional(t.Array(t.String())),
         prompts: t.Optional(
           t.Union([
             t.Array(t.String()),
