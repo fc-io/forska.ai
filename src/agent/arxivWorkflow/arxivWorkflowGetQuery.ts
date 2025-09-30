@@ -1,6 +1,6 @@
 import {format} from 'date-fns'
 
-import type {InputData} from '../../agent.ts'
+import type {InputData} from './arxivWorkflowHarvest.ts'
 
 const MAX_ITEMS_PER_PAGE = 2000
 
