@@ -130,6 +130,37 @@ export const dataSourceAccess = pgTable(
   },
 )
 
+export const projectDataSourceLink = pgTable(
+  'project_datasource_link',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
+    projectId: uuid('project_id')
+      .notNull()
+      .references(
+        () => {
+          return projects.id
+        },
+        {onDelete: 'cascade'},
+      ),
+    dataSourceId: uuid('datasource_id')
+      .notNull()
+      .references(
+        () => {
+          return dataSource.id
+        },
+        {onDelete: 'cascade'},
+      ),
+  },
+  (table) => {
+    return [
+      index('project_datasource_link_project_idx').on(table.projectId),
+      index('project_datasource_link_datasource_idx').on(table.dataSourceId),
+    ]
+  },
+)
+
 export const modelAccess = pgTable(
   'model_access',
   {
