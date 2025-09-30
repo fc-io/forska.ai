@@ -47,7 +47,7 @@ export const dataSourcesImportRoutesPostArxiv = async (body: {id: string}) => {
   const db = getDatabase()
   const record = await fetchDataSourceById(db, body.id)
 
-  await startArxivHarvest({fromDate: '2025-09-23', toDate: format(new Date(), 'yyyy-MM-dd'), maxResults: 100})
+  await startArxivHarvest({fromDate: '2025-09-22', toDate: '2025-09-22', maxResults: 100})
 
   const importedCount = await countArticles(db)
   const updatedDataSource = await updateDataSourceAfterImport(db, record.id, importedCount)
