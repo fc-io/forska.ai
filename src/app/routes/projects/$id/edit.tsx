@@ -1,10 +1,12 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
-import {createEffect, createSignal, For, Show} from 'solid-js'
+import type {JSX} from 'solid-js'
+import {createEffect, createMemo, createSignal, For, Show} from 'solid-js'
 import {createStore} from 'solid-js/store'
 
 import {Button} from '../../../../components/ui/button'
 import {apiClient} from '../../../../services/apiClient'
+import {fetchProjectWithPrompts} from '../../../../services/projectsService'
 import {handleApiResponse} from '../../../../services/utils/handleApiResponse'
 
 type PromptItem = {
@@ -17,21 +19,132 @@ type PromptItem = {
   order: number
 }
 
-const EditProject = () => {
+type ProjectPromptResponse = {
+  id: string
+  originalText: string
+  promptHeading: string | null
+  type: string | null
+  order: number | null
+}
+
+type ProjectSummary = {name: string; description: string | null}
+
+type ProjectDetailsResponse = {project: ProjectSummary; prompts: ProjectPromptResponse[]; hasJudgedArticles: boolean}
+
+type ProjectUpdateResponse = {project: ProjectSummary; prompts: ProjectPromptResponse[]}
+
+type PromptPayload = {originalId?: string; originalText: string; promptHeading?: string; type?: string; order: number}
+
+const isNullableString = (value: unknown): value is string | null => {
+  return value === null || typeof value === 'string'
+}
+
+const isProjectSummary = (value: unknown): value is ProjectSummary => {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+  const summary = value as Record<string, unknown>
+  const name = summary.name
+  const description = summary.description
+  return typeof name === 'string' && isNullableString(description)
+}
+
+const isProjectPromptResponse = (value: unknown): value is ProjectPromptResponse => {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+  const prompt = value as Record<string, unknown>
+  const id = prompt.id
+  const originalText = prompt.originalText
+  const promptHeading = prompt.promptHeading
+  const type = prompt.type
+  const order = prompt.order
+  const hasRequiredFields = typeof id === 'string' && typeof originalText === 'string'
+  const hasOptionalFields =
+    (promptHeading === null || typeof promptHeading === 'string')
+    && (type === null || typeof type === 'string')
+    && (order === null || typeof order === 'number')
+  return hasRequiredFields && hasOptionalFields
+}
+
+const isProjectDetailsResponse = (value: unknown): value is ProjectDetailsResponse => {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+  const details = value as Record<string, unknown>
+  const project = details.project
+  const prompts = details.prompts
+  const hasJudgedArticles = details.hasJudgedArticles
+  if (!isProjectSummary(project)) {
+    return false
+  }
+  if (!Array.isArray(prompts) || !prompts.every(isProjectPromptResponse)) {
+    return false
+  }
+  return typeof hasJudgedArticles === 'boolean'
+}
+
+const buildExistingPrompt = (prompt: ProjectPromptResponse): PromptItem => {
+  return {
+    id: crypto.randomUUID(),
+    originalText: prompt.originalText,
+    promptHeading: prompt.promptHeading ?? '',
+    type: prompt.type ?? '',
+    isExisting: true,
+    originalId: prompt.id,
+    order: prompt.order ?? 0,
+  }
+}
+
+const buildEmptyPrompt = (order: number): PromptItem => {
+  return {id: crypto.randomUUID(), originalText: '', promptHeading: '', type: '', isExisting: false, order}
+}
+
+const mapPromptsFromResponse = (promptList: ProjectPromptResponse[]): PromptItem[] => {
+  return promptList.length === 0
+    ? [buildEmptyPrompt(1)]
+    : promptList.map((prompt) => {
+        return buildExistingPrompt(prompt)
+      })
+}
+
+const getHighestOrder = (items: PromptItem[], index = 0, currentMax = 0): number => {
+  if (index >= items.length) {
+    return currentMax
+  }
+  const nextMax = items[index].order > currentMax ? items[index].order : currentMax
+  return getHighestOrder(items, index + 1, nextMax)
+}
+
+const getNextOrder = (items: PromptItem[]): number => {
+  return getHighestOrder(items) + 1
+}
+
+const buildPromptsPayload = (items: PromptItem[]): PromptPayload[] => {
+  return items
+    .filter((prompt) => {
+      return prompt.originalText.length > 0 || prompt.isExisting
+    })
+    .map((prompt) => {
+      return {
+        originalId: prompt.originalId,
+        originalText: prompt.originalText,
+        promptHeading: prompt.promptHeading || undefined,
+        type: prompt.type || undefined,
+        order: prompt.order,
+      }
+    })
+}
+
+const EditProject = (): JSX.Element => {
   const params = Route.useParams()
   const projectId = (params() as {id: string}).id
 
-  // Fetch project data and prompts simultaneously
   const projectData = useQuery(() => {
     return {
       queryKey: ['project', projectId, 'with-prompts'],
-      queryFn: async () => {
-        const response = await apiClient.api.projects({id: projectId}).get()
-        const data = handleApiResponse(response, 'Failed to fetch project')
-        if (!data.data) {
-          throw new Error('Project not found')
-        }
-        return data.data
+      queryFn: () => {
+        return fetchProjectWithPrompts(projectId)
       },
     }
   })
@@ -40,109 +153,94 @@ const EditProject = () => {
   const [description, setDescription] = createSignal('')
   const [prompts, setPrompts] = createStore<PromptItem[]>([])
   const [isLoading, setIsLoading] = createSignal(false)
-  const [error, setError] = createSignal<string | null>(null)
+  const [errorMessage, setErrorMessage] = createSignal<string | null>(null)
+
+  const projectDetails = createMemo(() => {
+    const data = projectData.data
+    return isProjectDetailsResponse(data) ? data : undefined
+  })
+
+  const isLocked = createMemo(() => {
+    return Boolean(projectDetails()?.hasJudgedArticles)
+  })
+
+  const fieldStateClass = createMemo(() => {
+    return isLocked() ? 'bg-gray-100 border-gray-300 text-gray-500 cursor-not-allowed opacity-60' : 'border-input'
+  })
+
+  const actionStateClass = createMemo(() => {
+    return isLocked() ? 'opacity-50 cursor-not-allowed' : ''
+  })
+
+  const sortedPrompts = createMemo(() => {
+    return [...prompts].sort((a, b) => {
+      return a.order - b.order
+    })
+  })
 
   createEffect(() => {
-    const data = projectData.data
-    if (!data) return
-
-    const {project, prompts: existingPrompts, hasJudgedArticles} = data
-
-    if (project) {
-      setProjectName(project.name)
-      setDescription(project.description || '')
-    }
-
-    if (existingPrompts && existingPrompts.length > 0) {
-      const formattedPrompts: PromptItem[] = existingPrompts.map((prompt) => {
-        return {
-          id: crypto.randomUUID(),
-          originalText: prompt.originalText,
-          promptHeading: prompt.promptHeading || '',
-          type: prompt.type || '',
-          isExisting: true,
-          originalId: prompt.id,
-          order: prompt.order || 0,
-        }
-      })
-      setPrompts(formattedPrompts)
-    } else {
-      // Add one empty prompt if no existing prompts
-      setPrompts([
-        {id: crypto.randomUUID(), originalText: '', promptHeading: '', type: '', isExisting: false, order: 1},
-      ])
+    const details = projectDetails()
+    if (details) {
+      setProjectName(details.project.name)
+      setDescription(details.project.description ?? '')
+      setPrompts(mapPromptsFromResponse(details.prompts))
+    } else if (projectData.isSuccess) {
+      setPrompts([buildEmptyPrompt(1)])
     }
   })
 
   const addPromptInput = () => {
-    const newOrder =
-      prompts.length > 0
-        ? Math.max(
-            ...prompts.map((p) => {
-              return p.order
-            }),
-          ) + 1
-        : 1
-    setPrompts([
-      ...prompts,
-      {id: crypto.randomUUID(), originalText: '', promptHeading: '', type: '', isExisting: false, order: newOrder},
-    ])
+    setPrompts([...prompts, buildEmptyPrompt(prompts.length === 0 ? 1 : getNextOrder(prompts))])
   }
 
-  const removePromptInput = (id: string) => {
+  const removePromptInput = (promptId: string) => {
     if (prompts.length > 1) {
       setPrompts(
         prompts.filter((prompt) => {
-          return prompt.id !== id
+          return prompt.id !== promptId
         }),
       )
     }
   }
 
-  const updatePromptInput = (id: string, field: 'originalText' | 'promptHeading' | 'type', value: string) => {
-    const idx = prompts.findIndex((p) => {
-      return p.id === id
-    })
-    if (idx >= 0) {
-      setPrompts(idx, field, value)
-    }
+  const updatePromptInput = (promptId: string, field: 'originalText' | 'promptHeading' | 'type', value: string) => {
+    setPrompts(
+      (prompt) => {
+        return prompt.id === promptId
+      },
+      field,
+      value,
+    )
   }
 
-  const handleSubmit = async (e: Event) => {
-    e.preventDefault()
-    setError(null)
+  const sendUpdateRequest = async (): Promise<void> => {
+    const promptsPayload = buildPromptsPayload(prompts)
+    const response = await apiClient.api
+      .projects({id: projectId})
+      .edit.patch({name: projectName(), description: description() || null, prompts: promptsPayload})
+    const result = handleApiResponse<ProjectUpdateResponse>(response, 'Failed to update project')
+    setProjectName(result.project.name)
+    setDescription(result.project.description ?? '')
+    setPrompts(mapPromptsFromResponse(result.prompts))
+  }
+
+  const handleSubmit = (event: SubmitEvent) => {
+    event.preventDefault()
+    setErrorMessage(null)
     setIsLoading(true)
 
-    try {
-      // Prepare prompts data for the API
-      const promptsData = prompts
-        .filter((p: PromptItem) => {
-          return p.originalText || p.isExisting
-        }) // Include existing prompts even if empty
-        .map((p: PromptItem) => {
-          return {
-            originalId: p.originalId,
-            originalText: p.originalText,
-            promptHeading: p.promptHeading || undefined,
-            type: p.type || undefined,
-            order: p.order,
-          }
-        })
+    const onFulfilled = () => {
+      setIsLoading(false)
+      void projectData.refetch()
+    }
 
-      // Update project and prompts in a single request
-      const response = await apiClient.api
-        .projects({id: projectId})
-        .edit.patch({name: projectName(), description: description() || null, prompts: promptsData})
-
-      handleApiResponse(response, 'Failed to update project')
-
-      // void navigate({to: '/projects'})
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'An unexpected error occurred'
-      setError(errorMessage)
-    } finally {
+    const onRejected = (error: unknown) => {
+      const message = error instanceof Error ? error.message : 'An unexpected error occurred'
+      setErrorMessage(message)
       setIsLoading(false)
     }
+
+    void sendUpdateRequest().then(onFulfilled, onRejected)
   }
 
   return (
@@ -160,13 +258,13 @@ const EditProject = () => {
 
       <Show when={Boolean(projectData.error)}>
         <div class="text-center py-8 text-red-600">
-          Error loading project: {(projectData.error as Error)?.message || 'Unknown error'}
+          Error loading project: {projectData.error instanceof Error ? projectData.error.message : 'Unknown error'}
         </div>
       </Show>
 
-      <Show when={projectData.data && !projectData.isLoading}>
+      <Show when={projectDetails()}>
         <div class="bg-card border rounded-lg p-6">
-          <Show when={projectData.data?.hasJudgedArticles}>
+          <Show when={isLocked()}>
             <div class="mb-6 p-4 bg-amber-50 border-2 border-amber-300 rounded-lg">
               <div class="flex items-start gap-3">
                 <span class="text-amber-600 text-xl mt-0.5">⚠️</span>
@@ -180,16 +278,11 @@ const EditProject = () => {
               </div>
             </div>
           </Show>
-          <Show when={error()}>
-            <div class="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm">{error()}</div>
+          <Show when={errorMessage()}>
+            <div class="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm">{errorMessage()}</div>
           </Show>
 
-          <form
-            onSubmit={(e) => {
-              return void handleSubmit(e)
-            }}
-            class="space-y-6"
-          >
+          <form onSubmit={handleSubmit} class="space-y-6">
             <div>
               <label for="project-name" class="block text-sm font-medium mb-2">
                 Project Name *
@@ -198,17 +291,13 @@ const EditProject = () => {
                 id="project-name"
                 type="text"
                 value={projectName()}
-                onInput={(e) => {
-                  return setProjectName(e.currentTarget.value)
+                onInput={(event) => {
+                  return setProjectName(event.currentTarget.value)
                 }}
                 placeholder="Enter project name"
-                class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${
-                  projectData.data?.hasJudgedArticles
-                    ? 'bg-gray-100 border-gray-300 text-gray-500 cursor-not-allowed opacity-60'
-                    : 'border-input'
-                }`}
+                class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
                 required
-                disabled={projectData.data?.hasJudgedArticles}
+                disabled={isLocked()}
               />
             </div>
 
@@ -219,17 +308,13 @@ const EditProject = () => {
               <textarea
                 id="description"
                 value={description()}
-                onInput={(e) => {
-                  return setDescription(e.currentTarget.value)
+                onInput={(event) => {
+                  return setDescription(event.currentTarget.value)
                 }}
                 placeholder="Describe your project..."
                 rows="4"
-                class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent resize-none ${
-                  projectData.data?.hasJudgedArticles
-                    ? 'bg-gray-100 border-gray-300 text-gray-500 cursor-not-allowed opacity-60'
-                    : 'border-input'
-                }`}
-                disabled={projectData.data?.hasJudgedArticles}
+                class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent resize-none ${fieldStateClass()}`}
+                disabled={isLocked()}
               />
             </div>
 
@@ -241,19 +326,14 @@ const EditProject = () => {
                   variant="outline"
                   size="sm"
                   onClick={addPromptInput}
-                  disabled={projectData.data?.hasJudgedArticles}
-                  class={projectData.data?.hasJudgedArticles ? 'opacity-50 cursor-not-allowed' : ''}
+                  disabled={isLocked()}
+                  class={actionStateClass()}
                 >
                   + Add Prompt
                 </Button>
               </div>
               <div class="space-y-3">
-                <For
-                  each={[...prompts].sort((a, b) => {
-                    return a.order - b.order
-                  })}
-                  fallback={<div>No prompts</div>}
-                >
+                <For each={sortedPrompts()} fallback={<div>No prompts</div>}>
                   {(promptItem, index) => {
                     return (
                       <div class="flex gap-2">
@@ -261,44 +341,32 @@ const EditProject = () => {
                           <input
                             type="text"
                             value={promptItem.promptHeading}
-                            onInput={(e) => {
-                              return updatePromptInput(promptItem.id, 'promptHeading', e.currentTarget.value)
+                            onInput={(event) => {
+                              return updatePromptInput(promptItem.id, 'promptHeading', event.currentTarget.value)
                             }}
                             placeholder={`Prompt ${index() + 1} heading (optional)...`}
-                            class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${
-                              projectData.data?.hasJudgedArticles
-                                ? 'bg-gray-100 border-gray-300 text-gray-500 cursor-not-allowed opacity-60'
-                                : 'border-input'
-                            }`}
-                            disabled={projectData.data?.hasJudgedArticles}
+                            class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
+                            disabled={isLocked()}
                           />
                           <input
                             type="text"
                             value={promptItem.type}
-                            onInput={(e) => {
-                              return updatePromptInput(promptItem.id, 'type', e.currentTarget.value)
+                            onInput={(event) => {
+                              return updatePromptInput(promptItem.id, 'type', event.currentTarget.value)
                             }}
                             placeholder={`Prompt ${index() + 1} type (optional)...`}
-                            class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${
-                              projectData.data?.hasJudgedArticles
-                                ? 'bg-gray-100 border-gray-300 text-gray-500 cursor-not-allowed opacity-60'
-                                : 'border-input'
-                            }`}
-                            disabled={projectData.data?.hasJudgedArticles}
+                            class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
+                            disabled={isLocked()}
                           />
                           <textarea
                             value={promptItem.originalText}
-                            onInput={(e) => {
-                              return updatePromptInput(promptItem.id, 'originalText', e.currentTarget.value)
+                            onInput={(event) => {
+                              return updatePromptInput(promptItem.id, 'originalText', event.currentTarget.value)
                             }}
                             placeholder={`Enter prompt ${index() + 1} content...`}
                             rows="4"
-                            class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent resize-none ${
-                              projectData.data?.hasJudgedArticles
-                                ? 'bg-gray-100 border-gray-300 text-gray-500 cursor-not-allowed opacity-60'
-                                : 'border-input'
-                            }`}
-                            disabled={projectData.data?.hasJudgedArticles}
+                            class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent resize-none ${fieldStateClass()}`}
+                            disabled={isLocked()}
                           />
                         </div>
                         <Show when={prompts.length > 1}>
@@ -309,8 +377,8 @@ const EditProject = () => {
                             onClick={() => {
                               return removePromptInput(promptItem.id)
                             }}
-                            class={`self-start mt-1 ${projectData.data?.hasJudgedArticles ? 'opacity-50 cursor-not-allowed' : ''}`}
-                            disabled={projectData.data?.hasJudgedArticles}
+                            class={`self-start mt-1 ${actionStateClass()}`}
+                            disabled={isLocked()}
                           >
                             ×
                           </Button>
@@ -325,13 +393,9 @@ const EditProject = () => {
             <div class="flex gap-3 pt-4">
               <Button
                 type="submit"
-                disabled={!projectName().trim() || isLoading() || projectData.data?.hasJudgedArticles}
-                title={
-                  projectData.data?.hasJudgedArticles
-                    ? 'Cannot update: articles have been judged based on this project'
-                    : undefined
-                }
-                class={projectData.data?.hasJudgedArticles ? 'opacity-50 cursor-not-allowed' : ''}
+                disabled={!projectName().trim() || isLoading() || isLocked()}
+                title={isLocked() ? 'Cannot update: articles have been judged based on this project' : undefined}
+                class={actionStateClass()}
               >
                 {isLoading() ? 'Updating...' : 'Update Project'}
               </Button>
