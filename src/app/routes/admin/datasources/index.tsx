@@ -6,6 +6,10 @@ import {createSignal, For, Show} from 'solid-js'
 import {fetchDataSources} from '../../../../services/dataSourcesService.ts'
 import {fetchSession} from '../../../../services/fetchSession'
 
+const formatImportTimestamp = (value: string | null) => {
+  return value ? formatDate(new Date(value), 'yyyy-MM-dd HH:mm') : 'Never imported'
+}
+
 const AdminDataSources = () => {
   const sessionQuery = useQuery(() => {
     return {queryKey: ['session'], queryFn: fetchSession}
@@ -201,6 +205,12 @@ const AdminDataSources = () => {
                       <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                         Access Grants
                       </th>
+                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Import Details
+                      </th>
+                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Actions
+                      </th>
                     </tr>
                   </thead>
                   <tbody class="bg-white divide-y divide-gray-200">
@@ -227,14 +237,53 @@ const AdminDataSources = () => {
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                               {entry.createdAt ? formatDate(new Date(entry.createdAt), 'yyyy-MM-dd') : 'Unknown'}
                             </td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                              <span class="inline-flex items-center px-2 py-1 rounded-full bg-blue-50 text-blue-700 text-xs font-medium">
-                                {entry.accessCount}
-                              </span>
-                            </td>
-                          </tr>
-                        )
-                      }}
+                          <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            <span class="inline-flex items-center px-2 py-1 rounded-full bg-blue-50 text-blue-700 text-xs font-medium">
+                              {entry.accessCount}
+                            </span>
+                          </td>
+                          <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            <div class="space-y-1">
+                              <div class="text-sm text-gray-500">
+                                <span class="font-medium text-gray-700">Last Import:</span>{' '}
+                                {formatImportTimestamp(entry.lastImportAt)}
+                              </div>
+                              <div class="text-sm text-gray-500">
+                                <span class="font-medium text-gray-700">Items After Import:</span>{' '}
+                                {entry.itemsAfterLastImport.toLocaleString()}
+                              </div>
+                              <div class="text-sm text-gray-500">
+                                <span class="font-medium text-gray-700">Route:</span>{' '}
+                                <span class="font-mono">
+                                  {entry.importRoute ?? 'Not configured'}
+                                </span>
+                              </div>
+                            </div>
+                          </td>
+                          <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            <div class="flex items-center gap-3">
+                              <Show when={entry.importRoute}>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    alert('importing')
+                                  }}
+                                  class="px-3 py-1.5 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+                                >
+                                  New Import
+                                </button>
+                              </Show>
+                              <Link
+                                to={`/admin/datasources/${entry.id}/edit`}
+                                class="px-3 py-1.5 rounded-md border border-gray-200 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+                              >
+                                Edit
+                              </Link>
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    }}
                     </For>
                   </tbody>
                 </table>
