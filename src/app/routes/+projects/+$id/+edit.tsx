@@ -7,7 +7,6 @@ import {createStore} from 'solid-js/store'
 import {Button} from '../../../../components/ui/button'
 import {apiClient} from '../../../../services/apiClient'
 import {fetchProjectWithPrompts} from '../../../../services/projectsService'
-import {handleApiResponse} from '../../../../services/utils/handleApiResponse'
 
 type PromptItem = {
   id: string
@@ -30,13 +29,11 @@ type ProjectPromptResponse = {
 type ProjectSummary = {
   name: string
   description: string | null
-  dateFrom: string | null
-  dateTo: string | null
+  dateFrom: string | Date | null
+  dateTo: string | Date | null
 }
 
 type ProjectDetailsResponse = {project: ProjectSummary; prompts: ProjectPromptResponse[]; hasJudgedArticles: boolean}
-
-type ProjectUpdateResponse = {project: ProjectSummary; prompts: ProjectPromptResponse[]}
 
 type ParsedDateResult = {date: Date | null; normalized: string | null; error: string | null}
 
@@ -122,7 +119,11 @@ const getHighestOrder = (items: PromptItem[], index = 0, currentMax = 0): number
   if (index >= items.length) {
     return currentMax
   }
-  const nextMax = items[index].order > currentMax ? items[index].order : currentMax
+  const item = items[index]
+  if (!item) {
+    return currentMax
+  }
+  const nextMax = item.order > currentMax ? item.order : currentMax
   return getHighestOrder(items, index + 1, nextMax)
 }
 
@@ -164,15 +165,16 @@ const parseDateInput = (value: string): ParsedDateResult => {
   return {date: parsedDate, normalized: trimmedValue, error: null}
 }
 
-const formatDateForInput = (value: string | null): string => {
+const formatDateForInput = (value: string | Date | null): string => {
   if (!value) {
     return ''
   }
-  const isoDateMatch = isoDatePattern.exec(value)
+  const stringValue = value instanceof Date ? value.toISOString() : value
+  const isoDateMatch = isoDatePattern.exec(stringValue)
   if (isoDateMatch) {
     return isoDateMatch[0]
   }
-  const parsedDate = new Date(value)
+  const parsedDate = new Date(stringValue)
   if (Number.isNaN(parsedDate.getTime())) {
     return ''
   }
@@ -273,7 +275,12 @@ const EditProject = (): JSX.Element => {
         dateFrom: startDate,
         dateTo: endDate,
       })
-    const result = handleApiResponse<ProjectUpdateResponse>(response, 'Failed to update project')
+
+    if (response.error || !response.data?.data) {
+      throw new Error('Failed to update project')
+    }
+
+    const result = response.data.data
     setProjectName(result.project.name)
     setDescription(result.project.description ?? '')
     setDateFrom(formatDateForInput(result.project.dateFrom))
@@ -315,7 +322,10 @@ const EditProject = (): JSX.Element => {
       setIsLoading(false)
     }
 
-    void sendUpdateRequest(startDateResult.normalized ?? null, endDateResult.normalized ?? null).then(onFulfilled, onRejected)
+    void sendUpdateRequest(startDateResult.normalized ?? null, endDateResult.normalized ?? null).then(
+      onFulfilled,
+      onRejected,
+    )
   }
 
   return (
@@ -354,7 +364,9 @@ const EditProject = (): JSX.Element => {
             </div>
           </Show>
           <Show when={errorMessage()}>
-            <div class="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm">{errorMessage()}</div>
+            <div id="test" class="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm">
+              {errorMessage()}
+            </div>
           </Show>
 
           <form onSubmit={handleSubmit} class="space-y-6">
