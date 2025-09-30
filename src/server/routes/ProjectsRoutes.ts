@@ -9,6 +9,24 @@ import {projectsRoutesGetArticlesReviewsFilters} from './projectsRoutes/projects
 import {projectsRoutesGetArticlesWithJudgments} from './projectsRoutes/projectsRoutesGetArticlesWithJudgments.ts'
 import {projectsRoutesPostArticleReviewDetails} from './projectsRoutes/projectsRoutesPostArticleReviewDetails.ts'
 
+const parseOptionalDate = (value?: string | null) => {
+  if (!value) {
+    return null
+  }
+  const trimmedValue = value.trim()
+  if (!trimmedValue) {
+    return null
+  }
+  const isoDateOnlyPattern = /^\d{4}-\d{2}-\d{2}$/
+  const hasIsoDateOnlyMatch = isoDateOnlyPattern.exec(trimmedValue)
+  const normalizedValue = hasIsoDateOnlyMatch ? `${trimmedValue}T00:00:00.000Z` : trimmedValue
+  const parsedDate = new Date(normalizedValue)
+  if (Number.isNaN(parsedDate.getTime())) {
+    throw new Error('Invalid date value provided')
+  }
+  return parsedDate
+}
+
 export const projectsRoutes = new Elysia()
   .use(withErrorHandler())
   .use(projectsRoutesGetArticlesWithJudgments)
@@ -68,10 +86,16 @@ export const projectsRoutes = new Elysia()
     async ({body}) => {
       const db = getDatabase()
 
+      const dateFrom = parseOptionalDate(body.dateFrom)
+      const dateTo = parseOptionalDate(body.dateTo)
+      if (dateFrom && dateTo && dateFrom > dateTo) {
+        throw new Error('date_from must be on or before date_to')
+      }
+
       // Create project
       const [newProject] = await db
         .insert(projects)
-        .values({name: body.name, description: body.description || null, ownerId: body.ownerId})
+        .values({name: body.name, description: body.description || null, ownerId: body.ownerId, dateFrom, dateTo})
         .returning()
 
       // Create prompts if provided
@@ -101,6 +125,8 @@ export const projectsRoutes = new Elysia()
         name: t.String(),
         description: t.Optional(t.String()),
         ownerId: t.String(),
+        dateFrom: t.Optional(t.String()),
+        dateTo: t.Optional(t.String()),
         prompts: t.Optional(
           t.Union([
             t.Array(t.String()),

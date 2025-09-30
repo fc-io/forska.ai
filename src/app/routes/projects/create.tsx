@@ -10,6 +10,26 @@ import {handleApiResponse} from '../../../services/utils/handleApiResponse'
 
 type PromptItem = {id: string; content: string; promptHeading: string; type: string}
 
+type ParsedDateResult = {date: Date | null; normalized: string | null; error: string | null}
+
+const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/
+
+const parseDateInput = (value: string): ParsedDateResult => {
+  const trimmedValue = value.trim()
+  if (!trimmedValue) {
+    return {date: null, normalized: null, error: null}
+  }
+  const matchesPattern = isoDatePattern.exec(trimmedValue)
+  if (!matchesPattern) {
+    return {date: null, normalized: null, error: 'Dates must use the YYYY-MM-DD format'}
+  }
+  const parsedDate = new Date(`${trimmedValue}T00:00:00.000Z`)
+  if (Number.isNaN(parsedDate.getTime())) {
+    return {date: null, normalized: null, error: 'Invalid date provided'}
+  }
+  return {date: parsedDate, normalized: trimmedValue, error: null}
+}
+
 const CreateProject = () => {
   const sessionQuery = useQuery(() => {
     return {
@@ -21,6 +41,8 @@ const CreateProject = () => {
   const navigate = useNavigate()
   const [projectName, setProjectName] = createSignal('')
   const [description, setDescription] = createSignal('')
+  const [dateFrom, setDateFrom] = createSignal('')
+  const [dateTo, setDateTo] = createSignal('')
   const [prompts, setPrompts] = createStore<PromptItem[]>([
     {id: crypto.randomUUID(), content: '', promptHeading: '', type: ''},
   ])
@@ -50,7 +72,13 @@ const CreateProject = () => {
     }
   }
 
-  const createProject = async (name: string, description: string, promptItems: PromptItem[]) => {
+  const createProject = async (
+    name: string,
+    description: string,
+    promptItems: PromptItem[],
+    startDate?: string,
+    endDate?: string,
+  ) => {
     // Filter valid prompts
     const validPrompts = promptItems
       .filter((prompt) => {
@@ -74,6 +102,8 @@ const CreateProject = () => {
       description: description.trim() || undefined,
       ownerId: sessionQuery.data.user.id,
       prompts: validPrompts,
+      dateFrom: startDate,
+      dateTo: endDate,
     })
 
     const result = handleApiResponse(response, 'Failed to create project')
@@ -86,12 +116,35 @@ const CreateProject = () => {
   const handleSubmit = async (e: Event) => {
     e.preventDefault()
 
-    // Clear any previous errors
     setError(null)
+
+    const startDateResult = parseDateInput(dateFrom())
+    if (startDateResult.error) {
+      setError(startDateResult.error)
+      return
+    }
+
+    const endDateResult = parseDateInput(dateTo())
+    if (endDateResult.error) {
+      setError(endDateResult.error)
+      return
+    }
+
+    if (startDateResult.date && endDateResult.date && startDateResult.date > endDateResult.date) {
+      setError('Start date must be on or before the end date')
+      return
+    }
+
     setIsLoading(true)
 
     try {
-      await createProject(projectName(), description(), prompts)
+      await createProject(
+        projectName(),
+        description(),
+        prompts,
+        startDateResult.normalized ?? undefined,
+        endDateResult.normalized ?? undefined,
+      )
       // Navigate back to projects page on success
       void navigate({to: '/projects'})
     } catch (err) {
@@ -152,6 +205,36 @@ const CreateProject = () => {
               rows="4"
               class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent resize-none"
             />
+          </div>
+
+          <div>
+            <p class="block text-sm font-medium mb-2">Project Timeline</p>
+            <div class="grid grid-cols-2 gap-4">
+              <label class="flex flex-col text-sm font-medium gap-1">
+                <span>Start Date</span>
+                <input
+                  type="text"
+                  value={dateFrom()}
+                  onInput={(e) => {
+                    return setDateFrom(e.currentTarget.value)
+                  }}
+                  placeholder="YYYY-MM-DD"
+                  class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+                />
+              </label>
+              <label class="flex flex-col text-sm font-medium gap-1">
+                <span>End Date</span>
+                <input
+                  type="text"
+                  value={dateTo()}
+                  onInput={(e) => {
+                    return setDateTo(e.currentTarget.value)
+                  }}
+                  placeholder="YYYY-MM-DD"
+                  class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+                />
+              </label>
+            </div>
           </div>
 
           <div>
