@@ -6,22 +6,7 @@ import {createSignal, For, Show} from 'solid-js'
 import {apiClient} from '../../../../services/apiClient.ts'
 import {fetchSession} from '../../../../services/fetchSession'
 
-type AdminDataSource = {
-  id: string
-  title: string
-  description: string | null
-  createdAt: string
-  updatedAt: string
-  lastImportAt: string | null
-  itemsAfterLastImport: number
-  importRoute: string | null
-  ownerId: string
-  ownerName: string | null
-  ownerEmail: string | null
-  accessCount: number
-}
-
-const fetchDataSources = async (): Promise<AdminDataSource[]> => {
+const fetchDataSources = async () => {
   const response = await apiClient.api.datasources.get()
 
   if (response.error) {

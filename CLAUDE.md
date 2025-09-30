@@ -3,6 +3,8 @@ alwaysApply: true
 ---
 ## Important
 
+
+IMPORTANT: We use Eden/RPC so derive the types from the API when possible and don't make up new types.
 IMPORTANT: I don't like try, catch, finally, throw. Only use when absolutely necessary.
 IMPORTANT: If there is only one export in a file, then the filename should match the name of the exported function
 IMPORTANT: On the server – prefer Drizzle ORM over executing pure SQL commands
