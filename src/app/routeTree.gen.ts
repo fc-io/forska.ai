@@ -8,26 +8,31 @@
 // You should NOT make any changes in this file as it will be overwritten.
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
-import { Route as rootRouteImport } from './routes/__root'
-import { Route as IndexRouteImport } from './routes/index'
-import { Route as SettingsIndexRouteImport } from './routes/settings/index'
-import { Route as ProjectsIndexRouteImport } from './routes/projects/index'
-import { Route as LoginIndexRouteImport } from './routes/login/index'
-import { Route as LatestArticlesIndexRouteImport } from './routes/latest-articles/index'
-import { Route as ProjectsCreateRouteImport } from './routes/projects/create'
-import { Route as ProjectsIdIndexRouteImport } from './routes/projects/$id/index'
-import { Route as AdminUsersIndexRouteImport } from './routes/admin/users/index'
-import { Route as AdminJobsIndexRouteImport } from './routes/admin/jobs/index'
-import { Route as AdminDatasourcesIndexRouteImport } from './routes/admin/datasources/index'
-import { Route as ProjectsIdEditRouteImport } from './routes/projects/$id/edit'
-import { Route as AdminJobsIdRouteImport } from './routes/admin/jobs/$id'
-import { Route as ProjectsIdReviewsIndexRouteImport } from './routes/projects/$id/reviews/index'
-import { Route as AdminDatasourcesIdEditRouteImport } from './routes/admin/datasources/$id/edit'
-import { Route as ProjectsIdReviewsArticleIdIndexRouteImport } from './routes/projects/$id/reviews/$articleId/index'
+import { Route as rootRouteImport } from './routes/+__root'
+import { Route as IndexRouteImport } from './routes/+index'
+import { Route as ProjectsCreateRouteImport } from './routes/+projects/+create'
+import { Route as SettingsIndexRouteImport } from './routes/+settings/+index'
+import { Route as ProjectsIndexRouteImport } from './routes/+projects/+index'
+import { Route as LoginIndexRouteImport } from './routes/+login/+index'
+import { Route as LatestArticlesIndexRouteImport } from './routes/+latest-articles/+index'
+import { Route as ProjectsIdEditRouteImport } from './routes/+projects/+$id/+edit'
+import { Route as AdminJobsIdRouteImport } from './routes/+admin/+jobs/+$id'
+import { Route as ProjectsIdIndexRouteImport } from './routes/+projects/+$id/+index'
+import { Route as AdminUsersIndexRouteImport } from './routes/+admin/+users/+index'
+import { Route as AdminJobsIndexRouteImport } from './routes/+admin/+jobs/+index'
+import { Route as AdminDatasourcesIndexRouteImport } from './routes/+admin/+datasources/+index'
+import { Route as AdminDatasourcesIdEditRouteImport } from './routes/+admin/+datasources/+$id/+edit'
+import { Route as ProjectsIdReviewsIndexRouteImport } from './routes/+projects/+$id/+reviews/+index'
+import { Route as ProjectsIdReviewsArticleIdIndexRouteImport } from './routes/+projects/+$id/+reviews/+$articleId/+index'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProjectsCreateRoute = ProjectsCreateRouteImport.update({
+  id: '/projects/create',
+  path: '/projects/create',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SettingsIndexRoute = SettingsIndexRouteImport.update({
@@ -50,9 +55,14 @@ const LatestArticlesIndexRoute = LatestArticlesIndexRouteImport.update({
   path: '/latest-articles/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ProjectsCreateRoute = ProjectsCreateRouteImport.update({
-  id: '/projects/create',
-  path: '/projects/create',
+const ProjectsIdEditRoute = ProjectsIdEditRouteImport.update({
+  id: '/projects/$id/edit',
+  path: '/projects/$id/edit',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminJobsIdRoute = AdminJobsIdRouteImport.update({
+  id: '/admin/jobs/$id',
+  path: '/admin/jobs/$id',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ProjectsIdIndexRoute = ProjectsIdIndexRouteImport.update({
@@ -75,24 +85,14 @@ const AdminDatasourcesIndexRoute = AdminDatasourcesIndexRouteImport.update({
   path: '/admin/datasources/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ProjectsIdEditRoute = ProjectsIdEditRouteImport.update({
-  id: '/projects/$id/edit',
-  path: '/projects/$id/edit',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AdminJobsIdRoute = AdminJobsIdRouteImport.update({
-  id: '/admin/jobs/$id',
-  path: '/admin/jobs/$id',
+const AdminDatasourcesIdEditRoute = AdminDatasourcesIdEditRouteImport.update({
+  id: '/admin/datasources/$id/edit',
+  path: '/admin/datasources/$id/edit',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ProjectsIdReviewsIndexRoute = ProjectsIdReviewsIndexRouteImport.update({
   id: '/projects/$id/reviews/',
   path: '/projects/$id/reviews/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AdminDatasourcesIdEditRoute = AdminDatasourcesIdEditRouteImport.update({
-  id: '/admin/datasources/$id/edit',
-  path: '/admin/datasources/$id/edit',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ProjectsIdReviewsArticleIdIndexRoute =
@@ -104,125 +104,125 @@ const ProjectsIdReviewsArticleIdIndexRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/projects/create': typeof ProjectsCreateRoute
   '/latest-articles': typeof LatestArticlesIndexRoute
   '/login': typeof LoginIndexRoute
   '/projects': typeof ProjectsIndexRoute
   '/settings': typeof SettingsIndexRoute
-  '/admin/jobs/$id': typeof AdminJobsIdRoute
-  '/projects/$id/edit': typeof ProjectsIdEditRoute
+  '/projects/create': typeof ProjectsCreateRoute
   '/admin/datasources': typeof AdminDatasourcesIndexRoute
   '/admin/jobs': typeof AdminJobsIndexRoute
   '/admin/users': typeof AdminUsersIndexRoute
   '/projects/$id': typeof ProjectsIdIndexRoute
-  '/admin/datasources/$id/edit': typeof AdminDatasourcesIdEditRoute
+  '/admin/jobs/$id': typeof AdminJobsIdRoute
+  '/projects/$id/edit': typeof ProjectsIdEditRoute
   '/projects/$id/reviews': typeof ProjectsIdReviewsIndexRoute
+  '/admin/datasources/$id/edit': typeof AdminDatasourcesIdEditRoute
   '/projects/$id/reviews/$articleId': typeof ProjectsIdReviewsArticleIdIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/projects/create': typeof ProjectsCreateRoute
   '/latest-articles': typeof LatestArticlesIndexRoute
   '/login': typeof LoginIndexRoute
   '/projects': typeof ProjectsIndexRoute
   '/settings': typeof SettingsIndexRoute
-  '/admin/jobs/$id': typeof AdminJobsIdRoute
-  '/projects/$id/edit': typeof ProjectsIdEditRoute
+  '/projects/create': typeof ProjectsCreateRoute
   '/admin/datasources': typeof AdminDatasourcesIndexRoute
   '/admin/jobs': typeof AdminJobsIndexRoute
   '/admin/users': typeof AdminUsersIndexRoute
   '/projects/$id': typeof ProjectsIdIndexRoute
-  '/admin/datasources/$id/edit': typeof AdminDatasourcesIdEditRoute
+  '/admin/jobs/$id': typeof AdminJobsIdRoute
+  '/projects/$id/edit': typeof ProjectsIdEditRoute
   '/projects/$id/reviews': typeof ProjectsIdReviewsIndexRoute
+  '/admin/datasources/$id/edit': typeof AdminDatasourcesIdEditRoute
   '/projects/$id/reviews/$articleId': typeof ProjectsIdReviewsArticleIdIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/projects/create': typeof ProjectsCreateRoute
   '/latest-articles/': typeof LatestArticlesIndexRoute
   '/login/': typeof LoginIndexRoute
   '/projects/': typeof ProjectsIndexRoute
   '/settings/': typeof SettingsIndexRoute
-  '/admin/jobs/$id': typeof AdminJobsIdRoute
-  '/projects/$id/edit': typeof ProjectsIdEditRoute
+  '/projects/create': typeof ProjectsCreateRoute
   '/admin/datasources/': typeof AdminDatasourcesIndexRoute
   '/admin/jobs/': typeof AdminJobsIndexRoute
   '/admin/users/': typeof AdminUsersIndexRoute
   '/projects/$id/': typeof ProjectsIdIndexRoute
-  '/admin/datasources/$id/edit': typeof AdminDatasourcesIdEditRoute
+  '/admin/jobs/$id': typeof AdminJobsIdRoute
+  '/projects/$id/edit': typeof ProjectsIdEditRoute
   '/projects/$id/reviews/': typeof ProjectsIdReviewsIndexRoute
+  '/admin/datasources/$id/edit': typeof AdminDatasourcesIdEditRoute
   '/projects/$id/reviews/$articleId/': typeof ProjectsIdReviewsArticleIdIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
-    | '/projects/create'
     | '/latest-articles'
     | '/login'
     | '/projects'
     | '/settings'
-    | '/admin/jobs/$id'
-    | '/projects/$id/edit'
+    | '/projects/create'
     | '/admin/datasources'
     | '/admin/jobs'
     | '/admin/users'
     | '/projects/$id'
-    | '/admin/datasources/$id/edit'
+    | '/admin/jobs/$id'
+    | '/projects/$id/edit'
     | '/projects/$id/reviews'
+    | '/admin/datasources/$id/edit'
     | '/projects/$id/reviews/$articleId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
-    | '/projects/create'
     | '/latest-articles'
     | '/login'
     | '/projects'
     | '/settings'
-    | '/admin/jobs/$id'
-    | '/projects/$id/edit'
+    | '/projects/create'
     | '/admin/datasources'
     | '/admin/jobs'
     | '/admin/users'
     | '/projects/$id'
-    | '/admin/datasources/$id/edit'
+    | '/admin/jobs/$id'
+    | '/projects/$id/edit'
     | '/projects/$id/reviews'
+    | '/admin/datasources/$id/edit'
     | '/projects/$id/reviews/$articleId'
   id:
     | '__root__'
     | '/'
-    | '/projects/create'
     | '/latest-articles/'
     | '/login/'
     | '/projects/'
     | '/settings/'
-    | '/admin/jobs/$id'
-    | '/projects/$id/edit'
+    | '/projects/create'
     | '/admin/datasources/'
     | '/admin/jobs/'
     | '/admin/users/'
     | '/projects/$id/'
-    | '/admin/datasources/$id/edit'
+    | '/admin/jobs/$id'
+    | '/projects/$id/edit'
     | '/projects/$id/reviews/'
+    | '/admin/datasources/$id/edit'
     | '/projects/$id/reviews/$articleId/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  ProjectsCreateRoute: typeof ProjectsCreateRoute
   LatestArticlesIndexRoute: typeof LatestArticlesIndexRoute
   LoginIndexRoute: typeof LoginIndexRoute
   ProjectsIndexRoute: typeof ProjectsIndexRoute
   SettingsIndexRoute: typeof SettingsIndexRoute
-  AdminJobsIdRoute: typeof AdminJobsIdRoute
-  ProjectsIdEditRoute: typeof ProjectsIdEditRoute
+  ProjectsCreateRoute: typeof ProjectsCreateRoute
   AdminDatasourcesIndexRoute: typeof AdminDatasourcesIndexRoute
   AdminJobsIndexRoute: typeof AdminJobsIndexRoute
   AdminUsersIndexRoute: typeof AdminUsersIndexRoute
   ProjectsIdIndexRoute: typeof ProjectsIdIndexRoute
-  AdminDatasourcesIdEditRoute: typeof AdminDatasourcesIdEditRoute
+  AdminJobsIdRoute: typeof AdminJobsIdRoute
+  ProjectsIdEditRoute: typeof ProjectsIdEditRoute
   ProjectsIdReviewsIndexRoute: typeof ProjectsIdReviewsIndexRoute
+  AdminDatasourcesIdEditRoute: typeof AdminDatasourcesIdEditRoute
   ProjectsIdReviewsArticleIdIndexRoute: typeof ProjectsIdReviewsArticleIdIndexRoute
 }
 
@@ -233,6 +233,13 @@ declare module '@tanstack/solid-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/projects/create': {
+      id: '/projects/create'
+      path: '/projects/create'
+      fullPath: '/projects/create'
+      preLoaderRoute: typeof ProjectsCreateRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/settings/': {
@@ -263,11 +270,18 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof LatestArticlesIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/projects/create': {
-      id: '/projects/create'
-      path: '/projects/create'
-      fullPath: '/projects/create'
-      preLoaderRoute: typeof ProjectsCreateRouteImport
+    '/projects/$id/edit': {
+      id: '/projects/$id/edit'
+      path: '/projects/$id/edit'
+      fullPath: '/projects/$id/edit'
+      preLoaderRoute: typeof ProjectsIdEditRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/jobs/$id': {
+      id: '/admin/jobs/$id'
+      path: '/admin/jobs/$id'
+      fullPath: '/admin/jobs/$id'
+      preLoaderRoute: typeof AdminJobsIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/projects/$id/': {
@@ -298,18 +312,11 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof AdminDatasourcesIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/projects/$id/edit': {
-      id: '/projects/$id/edit'
-      path: '/projects/$id/edit'
-      fullPath: '/projects/$id/edit'
-      preLoaderRoute: typeof ProjectsIdEditRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/admin/jobs/$id': {
-      id: '/admin/jobs/$id'
-      path: '/admin/jobs/$id'
-      fullPath: '/admin/jobs/$id'
-      preLoaderRoute: typeof AdminJobsIdRouteImport
+    '/admin/datasources/$id/edit': {
+      id: '/admin/datasources/$id/edit'
+      path: '/admin/datasources/$id/edit'
+      fullPath: '/admin/datasources/$id/edit'
+      preLoaderRoute: typeof AdminDatasourcesIdEditRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/projects/$id/reviews/': {
@@ -317,13 +324,6 @@ declare module '@tanstack/solid-router' {
       path: '/projects/$id/reviews'
       fullPath: '/projects/$id/reviews'
       preLoaderRoute: typeof ProjectsIdReviewsIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/admin/datasources/$id/edit': {
-      id: '/admin/datasources/$id/edit'
-      path: '/admin/datasources/$id/edit'
-      fullPath: '/admin/datasources/$id/edit'
-      preLoaderRoute: typeof AdminDatasourcesIdEditRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/projects/$id/reviews/$articleId/': {
@@ -338,19 +338,19 @@ declare module '@tanstack/solid-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  ProjectsCreateRoute: ProjectsCreateRoute,
   LatestArticlesIndexRoute: LatestArticlesIndexRoute,
   LoginIndexRoute: LoginIndexRoute,
   ProjectsIndexRoute: ProjectsIndexRoute,
   SettingsIndexRoute: SettingsIndexRoute,
-  AdminJobsIdRoute: AdminJobsIdRoute,
-  ProjectsIdEditRoute: ProjectsIdEditRoute,
+  ProjectsCreateRoute: ProjectsCreateRoute,
   AdminDatasourcesIndexRoute: AdminDatasourcesIndexRoute,
   AdminJobsIndexRoute: AdminJobsIndexRoute,
   AdminUsersIndexRoute: AdminUsersIndexRoute,
   ProjectsIdIndexRoute: ProjectsIdIndexRoute,
-  AdminDatasourcesIdEditRoute: AdminDatasourcesIdEditRoute,
+  AdminJobsIdRoute: AdminJobsIdRoute,
+  ProjectsIdEditRoute: ProjectsIdEditRoute,
   ProjectsIdReviewsIndexRoute: ProjectsIdReviewsIndexRoute,
+  AdminDatasourcesIdEditRoute: AdminDatasourcesIdEditRoute,
   ProjectsIdReviewsArticleIdIndexRoute: ProjectsIdReviewsArticleIdIndexRoute,
 }
 export const routeTree = rootRouteImport

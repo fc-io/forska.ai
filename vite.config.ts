@@ -14,6 +14,7 @@ export default defineConfig({
       target: 'solid',
       autoCodeSplitting: true,
       routesDirectory: './src/app/routes',
+      routeFilePrefix: '+',
       generatedRouteTree: './src/app/routeTree.gen.ts',
     }),
     tailwindcss(),

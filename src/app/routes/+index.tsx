@@ -5,8 +5,8 @@ import {createFileRoute} from '@tanstack/solid-router'
 import {type JSX} from 'solid-js'
 
 import {fetchSession} from '../../services/fetchSession'
-import {LatestArticlesPage} from './latest-articles'
-import {ProjectsPage} from './projects'
+import {LatestArticlesPage} from './+latest-articles/+index'
+import {ProjectsPage} from './+projects/+index'
 
 const renderProjects = (): JSX.Element => {
   return <ProjectsPage />

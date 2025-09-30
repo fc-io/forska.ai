@@ -4,7 +4,7 @@ import {formatDate} from 'date-fns'
 import {createSignal, For, Show} from 'solid-js'
 
 import {apiClient} from '../../../../services/apiClient.ts'
-import {fetchSession} from '../../../../services/fetchSession'
+import {fetchSession} from '../../../../services/fetchSession.ts'
 
 const fetchDataSources = async () => {
   const response = await apiClient.api.datasources.get()
