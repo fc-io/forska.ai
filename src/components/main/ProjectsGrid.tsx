@@ -86,7 +86,7 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
                     size="sm"
                     class="px-3 py-1 text-sm"
                   >
-                    View Details
+                    Project Details
                   </Button>
                   <Button
                     as={Link}
