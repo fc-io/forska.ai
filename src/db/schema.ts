@@ -84,6 +84,9 @@ export const dataSource = pgTable(
     updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
     title: text('title').notNull(),
     description: text('description'),
+    lastImportAt: timestamp('last_import_at', {withTimezone: true}),
+    itemsAfterLastImport: integer('items_after_last_import').default(0),
+    importRoute: text('import_route'),
     ownerId: text('owner_id')
       .default('uv2Idd2BF6VNSNjwY5IKmIeoYMKq6zXw')
       .notNull()
