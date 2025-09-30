@@ -27,11 +27,18 @@ type ProjectPromptResponse = {
   order: number | null
 }
 
-type ProjectSummary = {name: string; description: string | null}
+type ProjectSummary = {
+  name: string
+  description: string | null
+  dateFrom: string | null
+  dateTo: string | null
+}
 
 type ProjectDetailsResponse = {project: ProjectSummary; prompts: ProjectPromptResponse[]; hasJudgedArticles: boolean}
 
 type ProjectUpdateResponse = {project: ProjectSummary; prompts: ProjectPromptResponse[]}
+
+type ParsedDateResult = {date: Date | null; normalized: string | null; error: string | null}
 
 type PromptPayload = {originalId?: string; originalText: string; promptHeading?: string; type?: string; order: number}
 
@@ -46,7 +53,10 @@ const isProjectSummary = (value: unknown): value is ProjectSummary => {
   const summary = value as Record<string, unknown>
   const name = summary.name
   const description = summary.description
-  return typeof name === 'string' && isNullableString(description)
+  const dateFrom = summary.dateFrom
+  const dateTo = summary.dateTo
+  const hasValidDates = isNullableString(dateFrom) && isNullableString(dateTo)
+  return typeof name === 'string' && isNullableString(description) && hasValidDates
 }
 
 const isProjectPromptResponse = (value: unknown): value is ProjectPromptResponse => {
@@ -136,6 +146,39 @@ const buildPromptsPayload = (items: PromptItem[]): PromptPayload[] => {
     })
 }
 
+const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/
+
+const parseDateInput = (value: string): ParsedDateResult => {
+  const trimmedValue = value.trim()
+  if (!trimmedValue) {
+    return {date: null, normalized: null, error: null}
+  }
+  const matchesPattern = isoDatePattern.exec(trimmedValue)
+  if (!matchesPattern) {
+    return {date: null, normalized: null, error: 'Dates must use the YYYY-MM-DD format'}
+  }
+  const parsedDate = new Date(`${trimmedValue}T00:00:00.000Z`)
+  if (Number.isNaN(parsedDate.getTime())) {
+    return {date: null, normalized: null, error: 'Invalid date provided'}
+  }
+  return {date: parsedDate, normalized: trimmedValue, error: null}
+}
+
+const formatDateForInput = (value: string | null): string => {
+  if (!value) {
+    return ''
+  }
+  const isoDateMatch = isoDatePattern.exec(value)
+  if (isoDateMatch) {
+    return isoDateMatch[0]
+  }
+  const parsedDate = new Date(value)
+  if (Number.isNaN(parsedDate.getTime())) {
+    return ''
+  }
+  return parsedDate.toISOString().slice(0, 10)
+}
+
 const EditProject = (): JSX.Element => {
   const params = Route.useParams()
   const projectId = (params() as {id: string}).id
@@ -152,6 +195,8 @@ const EditProject = (): JSX.Element => {
   const [projectName, setProjectName] = createSignal('')
   const [description, setDescription] = createSignal('')
   const [prompts, setPrompts] = createStore<PromptItem[]>([])
+  const [dateFrom, setDateFrom] = createSignal('')
+  const [dateTo, setDateTo] = createSignal('')
   const [isLoading, setIsLoading] = createSignal(false)
   const [errorMessage, setErrorMessage] = createSignal<string | null>(null)
 
@@ -183,9 +228,13 @@ const EditProject = (): JSX.Element => {
     if (details) {
       setProjectName(details.project.name)
       setDescription(details.project.description ?? '')
+      setDateFrom(formatDateForInput(details.project.dateFrom))
+      setDateTo(formatDateForInput(details.project.dateTo))
       setPrompts(mapPromptsFromResponse(details.prompts))
     } else if (projectData.isSuccess) {
       setPrompts([buildEmptyPrompt(1)])
+      setDateFrom('')
+      setDateTo('')
     }
   })
 
@@ -213,20 +262,46 @@ const EditProject = (): JSX.Element => {
     )
   }
 
-  const sendUpdateRequest = async (): Promise<void> => {
+  const sendUpdateRequest = async (startDate: string | null, endDate: string | null): Promise<void> => {
     const promptsPayload = buildPromptsPayload(prompts)
     const response = await apiClient.api
       .projects({id: projectId})
-      .edit.patch({name: projectName(), description: description() || null, prompts: promptsPayload})
+      .edit.patch({
+        name: projectName(),
+        description: description() || null,
+        prompts: promptsPayload,
+        dateFrom: startDate,
+        dateTo: endDate,
+      })
     const result = handleApiResponse<ProjectUpdateResponse>(response, 'Failed to update project')
     setProjectName(result.project.name)
     setDescription(result.project.description ?? '')
+    setDateFrom(formatDateForInput(result.project.dateFrom))
+    setDateTo(formatDateForInput(result.project.dateTo))
     setPrompts(mapPromptsFromResponse(result.prompts))
   }
 
   const handleSubmit = (event: SubmitEvent) => {
     event.preventDefault()
     setErrorMessage(null)
+
+    const startDateResult = parseDateInput(dateFrom())
+    if (startDateResult.error) {
+      setErrorMessage(startDateResult.error)
+      return
+    }
+
+    const endDateResult = parseDateInput(dateTo())
+    if (endDateResult.error) {
+      setErrorMessage(endDateResult.error)
+      return
+    }
+
+    if (startDateResult.date && endDateResult.date && startDateResult.date > endDateResult.date) {
+      setErrorMessage('Start date must be on or before the end date')
+      return
+    }
+
     setIsLoading(true)
 
     const onFulfilled = () => {
@@ -240,7 +315,7 @@ const EditProject = (): JSX.Element => {
       setIsLoading(false)
     }
 
-    void sendUpdateRequest().then(onFulfilled, onRejected)
+    void sendUpdateRequest(startDateResult.normalized ?? null, endDateResult.normalized ?? null).then(onFulfilled, onRejected)
   }
 
   return (
@@ -316,6 +391,38 @@ const EditProject = (): JSX.Element => {
                 class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent resize-none ${fieldStateClass()}`}
                 disabled={isLocked()}
               />
+            </div>
+
+            <div>
+              <p class="block text-sm font-medium mb-2">Project Timeline</p>
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <label class={`flex flex-col text-sm font-medium gap-1 ${isLocked() ? 'opacity-60' : ''}`}>
+                  <span>Start Date</span>
+                  <input
+                    type="text"
+                    value={dateFrom()}
+                    onInput={(event) => {
+                      return setDateFrom(event.currentTarget.value)
+                    }}
+                    placeholder="YYYY-MM-DD"
+                    class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
+                    disabled={isLocked()}
+                  />
+                </label>
+                <label class={`flex flex-col text-sm font-medium gap-1 ${isLocked() ? 'opacity-60' : ''}`}>
+                  <span>End Date</span>
+                  <input
+                    type="text"
+                    value={dateTo()}
+                    onInput={(event) => {
+                      return setDateTo(event.currentTarget.value)
+                    }}
+                    placeholder="YYYY-MM-DD"
+                    class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
+                    disabled={isLocked()}
+                  />
+                </label>
+              </div>
             </div>
 
             <div>

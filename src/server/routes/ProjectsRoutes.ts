@@ -188,12 +188,20 @@ export const projectsRoutes = new Elysia()
     async ({params, body}) => {
       const db = getDatabase()
 
+      const parsedDateFrom = body.dateFrom === undefined ? undefined : parseOptionalDate(body.dateFrom)
+      const parsedDateTo = body.dateTo === undefined ? undefined : parseOptionalDate(body.dateTo)
+      if (parsedDateFrom && parsedDateTo && parsedDateFrom > parsedDateTo) {
+        throw new Error('date_from must be on or before date_to')
+      }
+
       // Start a transaction to ensure data consistency
       const result = await db.transaction(async (tx) => {
         // Update project details
         const updateData: Partial<typeof projects.$inferInsert> = {updatedAt: new Date()}
         if (body.name !== undefined) updateData.name = body.name
         if (body.description !== undefined) updateData.description = body.description
+        if (parsedDateFrom !== undefined) updateData.dateFrom = parsedDateFrom
+        if (parsedDateTo !== undefined) updateData.dateTo = parsedDateTo
 
         const [updatedProject] = await tx.update(projects).set(updateData).where(eq(projects.id, params.id)).returning()
 
@@ -279,6 +287,8 @@ export const projectsRoutes = new Elysia()
       body: t.Object({
         name: t.Optional(t.String()),
         description: t.Optional(t.Union([t.String(), t.Null()])),
+        dateFrom: t.Optional(t.Union([t.String(), t.Null()])),
+        dateTo: t.Optional(t.Union([t.String(), t.Null()])),
         prompts: t.Optional(
           t.Array(
             t.Object({
