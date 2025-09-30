@@ -3,8 +3,51 @@ import {createFileRoute, Link} from '@tanstack/solid-router'
 import {formatDate} from 'date-fns'
 import {createSignal, For, Show} from 'solid-js'
 
-import {fetchDataSources} from '../../../../services/dataSourcesService.ts'
+import {apiClient} from '../../../../services/apiClient.ts'
 import {fetchSession} from '../../../../services/fetchSession'
+
+type AdminDataSource = {
+  id: string
+  title: string
+  description: string | null
+  createdAt: string
+  updatedAt: string
+  lastImportAt: string | null
+  itemsAfterLastImport: number
+  importRoute: string | null
+  ownerId: string
+  ownerName: string | null
+  ownerEmail: string | null
+  accessCount: number
+}
+
+const fetchDataSources = async (): Promise<AdminDataSource[]> => {
+  const response = await apiClient.api.datasources.get()
+
+  if (response.error) {
+    console.error('Error fetching data sources:', response.error)
+    throw new Error('Failed to fetch data sources')
+  }
+
+  const entries = response.data?.data ?? []
+
+  return entries.map((entry) => {
+    return {
+      id: entry.id,
+      title: entry.title,
+      description: entry.description ?? null,
+      createdAt: String(entry.createdAt),
+      updatedAt: String(entry.updatedAt),
+      ownerId: entry.ownerId,
+      ownerName: entry.ownerName ?? null,
+      ownerEmail: entry.ownerEmail ?? null,
+      accessCount: entry.accessCount ?? 0,
+      lastImportAt: entry.lastImportAt ? String(entry.lastImportAt) : null,
+      itemsAfterLastImport: entry.itemsAfterLastImport ?? 0,
+      importRoute: entry.importRoute ?? null,
+    }
+  })
+}
 
 const formatImportTimestamp = (value: string | null) => {
   return value ? formatDate(new Date(value), 'yyyy-MM-dd HH:mm') : 'Never imported'
@@ -16,7 +59,13 @@ const AdminDataSources = () => {
   })
 
   const dataSourcesQuery = useQuery(() => {
-    return {queryKey: ['datasources'], queryFn: fetchDataSources}
+    return {
+      queryKey: ['datasources'],
+      queryFn: fetchDataSources,
+      refetchInterval: 30 * 1000,
+      refetchOnWindowFocus: true,
+      refetchOnReconnect: true,
+    }
   })
 
   const [searchTerm, setSearchTerm] = createSignal('')
@@ -237,53 +286,52 @@ const AdminDataSources = () => {
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                               {entry.createdAt ? formatDate(new Date(entry.createdAt), 'yyyy-MM-dd') : 'Unknown'}
                             </td>
-                          <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                            <span class="inline-flex items-center px-2 py-1 rounded-full bg-blue-50 text-blue-700 text-xs font-medium">
-                              {entry.accessCount}
-                            </span>
-                          </td>
-                          <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                            <div class="space-y-1">
-                              <div class="text-sm text-gray-500">
-                                <span class="font-medium text-gray-700">Last Import:</span>{' '}
-                                {formatImportTimestamp(entry.lastImportAt)}
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                              <span class="inline-flex items-center px-2 py-1 rounded-full bg-blue-50 text-blue-700 text-xs font-medium">
+                                {entry.accessCount}
+                              </span>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                              <div class="space-y-1">
+                                <div class="text-sm text-gray-500">
+                                  <span class="font-medium text-gray-700">Last Import:</span>{' '}
+                                  {formatImportTimestamp(entry.lastImportAt)}
+                                </div>
+                                <div class="text-sm text-gray-500">
+                                  <span class="font-medium text-gray-700">Items After Import:</span>{' '}
+                                  {entry.itemsAfterLastImport.toLocaleString()}
+                                </div>
+                                <div class="text-sm text-gray-500">
+                                  <span class="font-medium text-gray-700">Route:</span>{' '}
+                                  <span class="font-mono">{entry.importRoute ?? 'Not configured'}</span>
+                                </div>
                               </div>
-                              <div class="text-sm text-gray-500">
-                                <span class="font-medium text-gray-700">Items After Import:</span>{' '}
-                                {entry.itemsAfterLastImport.toLocaleString()}
-                              </div>
-                              <div class="text-sm text-gray-500">
-                                <span class="font-medium text-gray-700">Route:</span>{' '}
-                                <span class="font-mono">
-                                  {entry.importRoute ?? 'Not configured'}
-                                </span>
-                              </div>
-                            </div>
-                          </td>
-                          <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                            <div class="flex items-center gap-3">
-                              <Show when={entry.importRoute}>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    alert('importing')
-                                  }}
-                                  class="px-3 py-1.5 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                              <div class="flex items-center gap-3">
+                                <Show when={entry.importRoute}>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      alert('importing')
+                                    }}
+                                    class="px-3 py-1.5 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+                                  >
+                                    New Import
+                                  </button>
+                                </Show>
+                                <Link
+                                  to="/admin/datasources/$id/edit"
+                                  params={{id: entry.id}}
+                                  class="px-3 py-1.5 rounded-md border border-gray-200 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
                                 >
-                                  New Import
-                                </button>
-                              </Show>
-                              <Link
-                                to={`/admin/datasources/${entry.id}/edit`}
-                                class="px-3 py-1.5 rounded-md border border-gray-200 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
-                              >
-                                Edit
-                              </Link>
-                            </div>
-                          </td>
-                        </tr>
-                      )
-                    }}
+                                  Edit
+                                </Link>
+                              </div>
+                            </td>
+                          </tr>
+                        )
+                      }}
                     </For>
                   </tbody>
                 </table>

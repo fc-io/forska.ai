@@ -2,7 +2,73 @@ import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
 import {createEffect, createSignal, Show} from 'solid-js'
 
-import {fetchDataSourceById, updateDataSource} from '../../../../../services/dataSourcesService.ts'
+import {apiClient} from '../../../../../services/apiClient.ts'
+
+type AdminDataSourceDetail = {
+  id: string
+  title: string
+  description: string | null
+  importRoute: string | null
+  lastImportAt: string | null
+  itemsAfterLastImport: number
+  createdAt: string
+  updatedAt: string
+}
+
+const fetchDataSourceById = async (id: string): Promise<AdminDataSourceDetail> => {
+  const response = await apiClient.api.datasources({id}).get()
+
+  if (response.error) {
+    console.error('Error fetching data source:', response.error)
+    throw new Error('Failed to fetch data source')
+  }
+
+  if (!response.data?.data) {
+    throw new Error('Data source not found')
+  }
+
+  const entry = response.data.data
+
+  return {
+    id: entry.id,
+    title: entry.title,
+    description: entry.description ?? null,
+    importRoute: entry.importRoute ?? null,
+    lastImportAt: entry.lastImportAt ? String(entry.lastImportAt) : null,
+    itemsAfterLastImport: entry.itemsAfterLastImport ?? 0,
+    createdAt: String(entry.createdAt),
+    updatedAt: String(entry.updatedAt),
+  }
+}
+
+const updateDataSource = async (
+  id: string,
+  payload: Partial<{title: string; description: string | null; importRoute: string | null}>,
+): Promise<AdminDataSourceDetail> => {
+  const response = await apiClient.api.datasources({id}).patch(payload)
+
+  if (response.error) {
+    console.error('Error updating data source:', response.error)
+    throw new Error('Failed to update data source')
+  }
+
+  if (!response.data?.data) {
+    throw new Error('Data source update failed')
+  }
+
+  const entry = response.data.data
+
+  return {
+    id: entry.id,
+    title: entry.title,
+    description: entry.description ?? null,
+    importRoute: entry.importRoute ?? null,
+    lastImportAt: entry.lastImportAt ? String(entry.lastImportAt) : null,
+    itemsAfterLastImport: entry.itemsAfterLastImport ?? 0,
+    createdAt: String(entry.createdAt),
+    updatedAt: String(entry.updatedAt),
+  }
+}
 
 const AdminEditDataSource = () => {
   const params = Route.useParams()
