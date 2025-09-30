@@ -45,7 +45,7 @@ const AdminDataSources = () => {
       const matchesFilter =
         selectedFilter() === 'all'
         || (selectedFilter() === 'owned' && entry.ownerId === userId)
-        || (selectedFilter() === 'shared' && entry.accessCount > 1)
+        || (selectedFilter() === 'shared' && Number(entry.accessCount) > 1)
 
       return matchesSearch && matchesFilter
     })
@@ -60,13 +60,13 @@ const AdminDataSources = () => {
 
   const sharedCount = () => {
     return dataSources().filter((entry) => {
-      return entry.accessCount > 1
+      return Number(entry.accessCount) > 1
     }).length
   }
 
   const totalAccessGrants = () => {
     return dataSources().reduce((sum, entry) => {
-      return sum + entry.accessCount
+      return sum + Number(entry.accessCount)
     }, 0)
   }
 

@@ -87,7 +87,7 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
                     class="px-3 py-1 text-sm"
                   >
                     Project Details
-                  </Button>
+                </Button>
                   <Button
                     as={Link}
                     href={`/projects/${project.id}/edit`}
