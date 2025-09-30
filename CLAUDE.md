@@ -49,6 +49,7 @@ src
 * IMPORTANT: Use singular table names when creating new database tables.
 * IMPORTANT: Do not remove debugger statements nor console.log unless explicitly asked (no matter what the linter says).
 * IMPORTANT: Don't add comments unless asked to. Instead, split out complicated code into separate functions with clear function names.
+* Avoid writing one line comments. Instead restructure any complicated code into its own function/component and name the function in a way that helps explain the intent of the code.
 
 ### Ternary With Helpers
 
