@@ -58,12 +58,9 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
         {(project) => {
           return (
             <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-              <Link
-                to={`/projects/${project.id}/reviews`}
-                class="text-xl font-semibold mb-3 block text-blue-600 hover:text-blue-800 underline decoration-2 underline-offset-2 transition-colors"
-              >
+              <h2 class="text-xl font-semibold mb-3">
                 {project.name}
-              </Link>
+              </h2>
               <p class="text-muted-foreground mb-4">
                 {(project.description && project.description.length > 100
                   ? `${project.description?.slice(0, 100).trim()}…`
@@ -87,7 +84,16 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
                     class="px-3 py-1 text-sm"
                   >
                     Project Details
-                </Button>
+                  </Button>
+                  <Button
+                    as={Link}
+                    href={`/projects/${project.id}/reviews`}
+                    variant="outline"
+                    size="sm"
+                    class="px-3 py-1 text-sm"
+                  >
+                    Project Reviews
+                  </Button>
                   <Button
                     as={Link}
                     href={`/projects/${project.id}/edit`}
