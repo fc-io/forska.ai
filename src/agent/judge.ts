@@ -229,6 +229,7 @@ export const judge = async ({
         attempts += 1
         if (attempts > 1) {
           console.log(`${article.id} | Attempt ${attempts} of ${MAX_RETRIES}`)
+          // console.log(prompt)
         }
         try {
           const modelResponse = await generateModelResponse({prompt, baseURL, modelName})
@@ -238,7 +239,9 @@ export const judge = async ({
           const promptIds = prompts.map((p) => {
             return p.id
           })
-          await judgeStoreJudgment(article.id, article.articleTitle, judgment, modelId, promptIds)
+          if (modelId) {
+            await judgeStoreJudgment(article.id, article.articleTitle, judgment, modelId, promptIds)
+          }
           tokenUse.push({
             // articleId: article.id,
             promptTokens: modelResponse.usage.promptTokens,

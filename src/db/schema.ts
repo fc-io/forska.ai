@@ -348,7 +348,7 @@ export const judgments = pgTable(
       },
       {onDelete: 'cascade'},
     ),
-    answeredOriginal: text('answered_original').notNull(),
+    answeredOriginal: text('answered_original'),
     answeredTransformed: text('answered_transformed'),
     confidenceOriginal: integer('confidence_original'),
     explanation: text('explanation'),

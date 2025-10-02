@@ -1,40 +1,6 @@
-import {type} from 'arktype'
+import {and, eq} from 'drizzle-orm'
 
-import {apiClient} from '../../services/apiClient.ts'
-
-// Extended database item type that includes judged_as fields
-const _ExtendedDatabaseItem = type({
-  id: 'string',
-
-  article_authors: 'string',
-  article_created: 'string',
-  article_id: 'string',
-
-  article_judged_as_ai_agent_explanation: 'string | null',
-  article_judged_as_ai_agent_quote: 'string | null',
-  article_judged_as_ai_agent: 'string',
-
-  article_judged_as_ai_explanation: 'string | null',
-  article_judged_as_ai_quote: 'string | null',
-  article_judged_as_ai: 'string',
-
-  article_judged_as_healthcare_explanation: 'string | null',
-  article_judged_as_healthcare_quote: 'string[] | null',
-  article_judged_as_healthcare: 'string',
-  article_summary: 'string',
-  article_title: 'string',
-  article_updated: 'string',
-  article_url: 'string | null',
-  article_version: 'string',
-  arxiv_id: 'string',
-  created_at: 'string',
-  doi: 'string | null',
-  publication_status: 'string | null',
-  pubmed_id: 'string | null',
-  updated_at: 'string',
-})
-
-type ExtendedDatabaseItemType = typeof _ExtendedDatabaseItem.infer
+import {judgments} from '../../db/schema.ts'
 
 const findAnswer = <T>(entries: [string, unknown][], fragment: string): T => {
   const match = entries.find(([key]) => {
@@ -50,7 +16,7 @@ const findAnswer = <T>(entries: [string, unknown][], fragment: string): T => {
 
 // Helper that stores a validated judgment via RPC to our server and logs the outcome
 export const judgeStoreJudgment = async (
-  articleId: ExtendedDatabaseItemType['id'],
+  articleId: string,
   articleTitle: string,
   judgment: Record<string, unknown>,
   modelId: string,
@@ -61,6 +27,8 @@ export const judgeStoreJudgment = async (
       console.error('Warning: No modelId/promptIds provided, judgment not stored to database')
       return
     }
+    const {getDatabase} = await import('../../server/utils/getDatabase.ts')
+    const db = getDatabase()
     // Store judgment for each prompt
     const storePromises = promptIds.map(async (promptId) => {
       const answers = Object.entries(judgment).filter(([key]) => {
@@ -71,25 +39,44 @@ export const judgeStoreJudgment = async (
       const answeredQuotes = findAnswer<string[]>(answers, '---quotes')
       // ('test^^^a7aa21e8-d4e6-4e60-b39e-732085c56b00---explanation')
       // "test^^^a7aa21e8-d4e6-4e60-b39e-732085c56b00---quotes"
+      const existing = await db
+        .select({id: judgments.id})
+        .from(judgments)
+        .where(
+          and(eq(judgments.articleId, articleId), eq(judgments.modelId, modelId), eq(judgments.promptId, promptId)),
+        )
+        .limit(1)
 
-      // Using post request through Eden/Elysia RPC
-      const response = await apiClient.api.judgments.store.post({
-        articleId,
-        modelId,
-        promptId,
-        answeredOriginal,
-        answeredTransformed: undefined,
-        confidenceOriginal: 50,
-        explanation: answeredExplanation,
-        quotes: answeredQuotes,
-      })
-
-      // Type guard for error checking
-      if ('error' in response && response.error) {
-        throw new Error(`API request failed: ${JSON.stringify(response.error)}`)
+      if (existing.length > 0) {
+        const [updated] = await db
+          .update(judgments)
+          .set({
+            answeredOriginal,
+            answeredTransformed: null,
+            confidenceOriginal: 50,
+            explanation: answeredExplanation || null,
+            quotes: answeredQuotes || null,
+            updatedAt: new Date(),
+          })
+          .where(eq(judgments.id, existing[0].id))
+          .returning()
+        return updated
       }
 
-      return response.data
+      const [inserted] = await db
+        .insert(judgments)
+        .values({
+          articleId,
+          modelId,
+          promptId,
+          answeredOriginal,
+          answeredTransformed: null,
+          confidenceOriginal: 50,
+          explanation: answeredExplanation || null,
+          quotes: answeredQuotes || null,
+        })
+        .returning()
+      return inserted
     })
     // why is this here?
     const results = await Promise.allSettled(storePromises)

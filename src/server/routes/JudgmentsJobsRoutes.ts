@@ -1,9 +1,79 @@
-import {count, eq, isNull, sql} from 'drizzle-orm'
+import {count, eq, gte, lte, sql} from 'drizzle-orm'
+import type {SQL} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {articles, judgments, judgmentsJobs, judgmentsJobsArticles, projects, tokenUse} from '../../db/schema'
+import {articles, judgments, judgmentsJobs, judgmentsJobsArticles, projects, prompts, tokenUse} from '../../db/schema'
 import {getDatabase} from '../utils/getDatabase'
 import {withErrorHandler} from '../utils/routeErrorHandler'
+
+type Database = ReturnType<typeof getDatabase>
+
+const buildProjectDateConditions = ({
+  projectDateFrom,
+  projectDateTo,
+}: {
+  projectDateFrom: Date | null | undefined
+  projectDateTo: Date | null | undefined
+}): SQL[] => {
+  const conditions: SQL[] = []
+
+  if (projectDateFrom) {
+    conditions.push(gte(articles.articleUpdatedAt, projectDateFrom))
+  }
+
+  if (projectDateTo) {
+    conditions.push(lte(articles.articleUpdatedAt, projectDateTo))
+  }
+
+  return conditions
+}
+
+const buildProjectPromptCondition = (promptIds: string[]): SQL => {
+  const promptArray = sql.join(
+    promptIds.map((promptId) => {
+      return sql`${promptId}::uuid`
+    }),
+    sql`,`,
+  )
+
+  return sql`EXISTS (
+    SELECT 1 FROM ${prompts} p
+    WHERE p.id = ANY(ARRAY[${promptArray}])
+    AND NOT EXISTS (
+      SELECT 1 FROM ${judgments} j
+      WHERE j."article_id" = ${articles.id}
+      AND j."prompt_id" = p.id
+    )
+  )`
+}
+
+const getUnassessedArticlesCount = async ({
+  db,
+  promptIds,
+  projectDateFrom,
+  projectDateTo,
+}: {
+  db: Database
+  promptIds: string[]
+  projectDateFrom: Date | null | undefined
+  projectDateTo: Date | null | undefined
+}): Promise<number> => {
+  if (promptIds.length === 0) {
+    return 0
+  }
+
+  const whereClauses = [
+    ...buildProjectDateConditions({projectDateFrom, projectDateTo}),
+    buildProjectPromptCondition(promptIds),
+  ]
+
+  const [{count: unassessedCount = 0} = {count: 0}] = await db
+    .select({count: count()})
+    .from(articles)
+    .where(sql`${sql.join(whereClauses, sql` AND `)}`)
+
+  return unassessedCount
+}
 
 export const judgmentsJobsRoutes = new Elysia()
   .use(withErrorHandler())
@@ -43,7 +113,7 @@ export const judgmentsJobsRoutes = new Elysia()
     async ({params}) => {
       const db = getDatabase()
 
-      const [job] = await db
+      const [jobWithProject] = await db
         .select({
           id: judgmentsJobs.id,
           createdAt: judgmentsJobs.createdAt,
@@ -52,15 +122,24 @@ export const judgmentsJobsRoutes = new Elysia()
           status: judgmentsJobs.status,
           error: judgmentsJobs.error,
           projectName: projects.name,
+          projectDateFrom: projects.dateFrom,
+          projectDateTo: projects.dateTo,
         })
         .from(judgmentsJobs)
         .leftJoin(projects, eq(judgmentsJobs.projectId, projects.id))
         .where(eq(judgmentsJobs.id, params.id))
         .limit(1)
 
-      if (!job) {
+      if (!jobWithProject) {
         throw new Error('Job not found')
       }
+
+      const {projectDateFrom, projectDateTo, ...job} = jobWithProject
+
+      const projectPrompts = await db
+        .select({id: prompts.id})
+        .from(prompts)
+        .where(eq(prompts.projectId, job.projectId))
 
       // Get article statistics
       const articleStats = await db
@@ -78,13 +157,14 @@ export const judgmentsJobsRoutes = new Elysia()
         if (stat.status === 'judged') stats.judged = stat.count
       })
 
-      const result = await db
-        .select({count: count()})
-        .from(articles)
-        .leftJoin(judgments, eq(articles.id, judgments.articleId))
-        .where(isNull(judgments.id))
-
-      const unassessedCount = result[0]?.count || 0
+      const unassessedCount = await getUnassessedArticlesCount({
+        db,
+        promptIds: projectPrompts.map((prompt) => {
+          return prompt.id
+        }),
+        projectDateFrom,
+        projectDateTo,
+      })
 
       // Get total token usage for this job
       const totalTokenUsage = await db
