@@ -294,6 +294,13 @@ const AdminDataSources = () => {
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                               <div class="flex items-center gap-3">
+                                <Link
+                                  to="/admin/datasources/$id/edit"
+                                  params={{id: entry.id}}
+                                  class="px-3 py-1.5 rounded-md border border-gray-200 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+                                >
+                                  Edit
+                                </Link>
                                 <Show when={entry.importRoute}>
                                   <button
                                     type="button"
@@ -314,13 +321,6 @@ const AdminDataSources = () => {
                                     New Import
                                   </button>
                                 </Show>
-                                <Link
-                                  to="/admin/datasources/$id/edit"
-                                  params={{id: entry.id}}
-                                  class="px-3 py-1.5 rounded-md border border-gray-200 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
-                                >
-                                  Edit
-                                </Link>
                               </div>
                             </td>
                           </tr>
