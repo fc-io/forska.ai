@@ -7,14 +7,7 @@ import {getDatabase} from '../../utils/getDatabase.ts'
 export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
   '/api/articlesreviewsfilters',
   async ({query, set}) => {
-    console.log('--------------------------------')
-    console.log('--------------------------------')
-    console.log('--------------------------------')
-    console.log('--------------------------------')
-    console.log('--------------------------------')
-    console.log('--------------------------------')
     console.log('articlesreviewsfilters', query)
-    console.log('--------------------------------')
     try {
       const db = getDatabase()
 

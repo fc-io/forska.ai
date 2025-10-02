@@ -35,10 +35,7 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
         return [key, value] as const
       })
 
-      console.log('--------------------------------')
-      console.log('--------------------------------')
       console.log('promptFilters', promptFilters)
-      console.log('--------------------------------')
 
       // Apply prompt-specific filters using Drizzle subqueries
       for (const [promptId, answeredValue] of promptFilters) {
