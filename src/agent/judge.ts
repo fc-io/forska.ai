@@ -1,7 +1,7 @@
 import OpenAI from 'openai'
 import type {ChatCompletion, ChatCompletionMessage} from 'openai/resources/chat/completions'
 
-import type {getNewestArticlesToJudge} from '../components/main/projectsGrid/projectsGridGetNewestArticlesToJudge.ts'
+import * as schema from '../db/schema.ts'
 import {env} from '../server/utils/env.ts'
 import {apiClient} from '../services/apiClient.ts'
 import {judgeGetPrompt} from './judge/judgeGetPrompt.ts'
@@ -179,9 +179,9 @@ ${lastResponse}
 Please try again, ensuring you respond ONLY with valid JSON matching the schema.`
 }
 
-type ArticlesType = Awaited<ReturnType<typeof getNewestArticlesToJudge>>['articles']
+type ArticlesType = (typeof schema.articles.$inferSelect)[]
 
-type PromptsType = Awaited<ReturnType<typeof getNewestArticlesToJudge>>['prompts']
+type PromptsType = (typeof schema.prompts.$inferSelect)[]
 
 export const judge = async ({
   articles,

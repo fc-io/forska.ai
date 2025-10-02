@@ -1,4 +1,4 @@
-import {desc, eq, notInArray, sql} from 'drizzle-orm'
+import {desc, eq, gte, lte, notInArray, sql} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../db/schema.ts'
@@ -21,15 +21,26 @@ const getPromptIds = (projectPrompts: (typeof schema.prompts.$inferSelect)[]) =>
 const getQueryConditions = ({
   articlesAlreadyProccessing,
   promptIds,
+  project,
 }: {
   articlesAlreadyProccessing: string[]
   promptIds: string[]
+  project: typeof schema.projects.$inferSelect
 }) => {
   const conditions = []
 
   // Exclude articles already being processed
   if (articlesAlreadyProccessing.length > 0) {
     conditions.push(notInArray(schema.articles.id, articlesAlreadyProccessing))
+  }
+
+  // Filter by project date range
+  if (project.dateFrom) {
+    conditions.push(gte(schema.articles.articleUpdatedAt, project.dateFrom))
+  }
+
+  if (project.dateTo) {
+    conditions.push(lte(schema.articles.articleUpdatedAt, project.dateTo))
   }
 
   // Use EXISTS to find articles that haven't been judged by ALL prompts
@@ -56,19 +67,19 @@ const getQueryConditions = ({
 
 const getArticleIdsToJudge = async ({
   db,
+  project,
   projectPrompts,
   numberOfArticlesToGet,
   articlesAlreadyProccessing,
 }: {
   db: PostgresJsDatabase<typeof schema>
+  project: typeof schema.projects.$inferSelect
   projectPrompts: (typeof schema.prompts.$inferSelect)[]
   numberOfArticlesToGet: number
   articlesAlreadyProccessing: string[]
 }): Promise<ArticleProcessingData> => {
   const promptIds = getPromptIds(projectPrompts)
-  // console.log('promptIds length', promptIds.length)
-  // console.log('articlesAlreadyProccessing length', articlesAlreadyProccessing.length)
-  const queryConditions = getQueryConditions({articlesAlreadyProccessing, promptIds})
+  const queryConditions = getQueryConditions({articlesAlreadyProccessing, promptIds, project})
 
   const query = db
     .select()
@@ -78,10 +89,6 @@ const getArticleIdsToJudge = async ({
     .limit(numberOfArticlesToGet)
 
   const articlesToJudge = await query
-
-  // console.log('articlesToJudge length', articlesToJudge.length)
-  // console.log('articlesToJudge', articlesToJudge)
-  // console.log('projectPrompts', projectPrompts)
 
   return {
     articlesToJudgeIds: articlesToJudge.map((article) => {
@@ -106,5 +113,5 @@ export const judgmentsJobsCronGetArticles = async (
   // No prompts, return nothing cause there is no idea to judge when there are no prompts.
   return !project || projectPrompts.length === 0
     ? {articlesToJudgeIds: [], articlesToJudge: [], projectPrompts: []}
-    : await getArticleIdsToJudge({db, projectPrompts, numberOfArticlesToGet, articlesAlreadyProccessing})
+    : await getArticleIdsToJudge({db, project, projectPrompts, numberOfArticlesToGet, articlesAlreadyProccessing})
 }

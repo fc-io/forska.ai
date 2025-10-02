@@ -1,7 +1,7 @@
-import type {getNewestArticlesToJudge} from '../../components/main/projectsGrid/projectsGridGetNewestArticlesToJudge.ts'
+import * as schema from '../../db/schema.ts'
 import {getShortId} from '../../utils/getShortId.ts'
 
-type PromptsType = Awaited<ReturnType<typeof getNewestArticlesToJudge>>['prompts']
+type PromptsType = (typeof schema.prompts.$inferSelect)[]
 
 export const getBaseHeading = (prompt: PromptsType[number]): string => {
   return (prompt.promptHeading ?? `${prompt.order ?? 0}-${getShortId()}`) + `^^^${prompt.id}`
@@ -21,7 +21,7 @@ output_type: ${prompt.type}
   }, '')
 }
 
-type ArticleType = Awaited<ReturnType<typeof getNewestArticlesToJudge>>['articles'][number]
+type ArticleType = typeof schema.articles.$inferSelect
 
 export const judgeGetPrompt = (article: ArticleType, prompts: PromptsType): string => {
   // const prompts = getSortedArticle(article)

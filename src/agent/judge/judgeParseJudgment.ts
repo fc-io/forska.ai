@@ -1,6 +1,6 @@
 import {type as arktype} from 'arktype'
 
-import type {getNewestArticlesToJudge} from '../../components/main/projectsGrid/projectsGridGetNewestArticlesToJudge.ts'
+import * as schema from '../../db/schema.ts'
 import {getBaseHeading} from './judgeGetPrompt.ts'
 // const Judgment = arktype('"yes" | "no" | "undecided" | "unsure"')
 
@@ -22,7 +22,7 @@ import {getBaseHeading} from './judgeGetPrompt.ts'
 // type JudgmentResultType = typeof JudgmentResult.infer
 
 // Helper that parses and validates the model response against the JudgmentResult schema
-type PromptsType = Awaited<ReturnType<typeof getNewestArticlesToJudge>>['prompts']
+type PromptsType = (typeof schema.prompts.$inferSelect)[]
 
 export const parseJudgment = (response: string, prompts: PromptsType) => {
   const parsed: unknown = JSON.parse(response)
