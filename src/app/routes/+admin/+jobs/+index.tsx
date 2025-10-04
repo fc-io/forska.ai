@@ -3,6 +3,7 @@ import {createFileRoute, Link} from '@tanstack/solid-router'
 import {formatDate, formatDistanceToNow} from 'date-fns'
 import {For, Show} from 'solid-js'
 
+import {TokenUsageTimeline} from '../../../../components/TokenUsageTimeline'
 import {fetchJudgmentsJobs} from '../../../../services/judgmentsJobsService'
 
 const getStatusColor = (status: string | null) => {
@@ -51,6 +52,10 @@ const AdminJobs = () => {
     <div class="min-h-screen bg-gray-50 p-6 mx-auto">
       <div class="flex justify-between items-center mb-6">
         <h1 class="text-2xl font-bold">Judgment Jobs</h1>
+      </div>
+
+      <div class="mb-6">
+        <TokenUsageTimeline allJobs={true} />
       </div>
 
       <div class="space-y-4">

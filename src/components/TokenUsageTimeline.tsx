@@ -35,7 +35,7 @@ type TokenTimelineData = {
 
 type UsageStat = {timestamp: string; totalTokens: number}
 
-type TokenUsageTimelineProps = {projectId: string}
+type TokenUsageTimelineProps = {projectId?: string; allJobs?: boolean}
 
 export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
   const [selectedInterval, setSelectedInterval] = createSignal<TimeInterval>('24h')
@@ -168,19 +168,25 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
       // Keep key stable for a given project + interval; time window advances via refetch
       queryKey: [
         'token-timeline',
-        props.projectId,
+        props.allJobs ? 'all-jobs' : props.projectId,
         selectedInterval(),
         range ? range.start.toISOString() : null,
         range ? range.end.toISOString() : null,
       ],
       queryFn: async () => {
         const activeRange = range ?? getDateRangeForInterval(selectedInterval())
-        const response = await apiClient.api.tokens.timeline.post({
-          projectId: props.projectId,
-          interval: selectedInterval(),
-          startDate: activeRange.start.toISOString(),
-          endDate: activeRange.end.toISOString(),
-        })
+        const response = props.allJobs
+          ? await apiClient.api.tokens.timelineAllJobs.post({
+              interval: selectedInterval(),
+              startDate: activeRange.start.toISOString(),
+              endDate: activeRange.end.toISOString(),
+            })
+          : await apiClient.api.tokens.timeline.post({
+              projectId: props.projectId as string,
+              interval: selectedInterval(),
+              startDate: activeRange.start.toISOString(),
+              endDate: activeRange.end.toISOString(),
+            })
 
         if (!response.data || !response.data.success) {
           throw new Error('Failed to fetch token timeline')
