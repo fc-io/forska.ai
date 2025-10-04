@@ -44,19 +44,19 @@ export const judgmentsJobsSendToLLM = async (
   serverJobId: string,
 ): Promise<void> => {
   // console.log('0')
-  const sendMoreStatus = await getReadyToSendMoreStatus(db, serverJobId)
+  // const sendMoreStatus = await getReadyToSendMoreStatus(db, serverJobId)
 
-  if (sendMoreStatus.isReady) {
-    // console.log('0 loop jobs')
-    await Promise.allSettled(
-      allJobs.map((job) => {
-        return sendToLLM(db, serverJobId, job.id, job.sendToLLMBatchSize)
-      }),
-    )
-  } else {
-    // registerCooldownEvent(sendMoreStatus.state)
-    console.log('waiting for cooldown:', sendMoreStatus.state)
-  }
+  // if (sendMoreStatus.isReady) {
+  // console.log('0 loop jobs')
+  await Promise.allSettled(
+    allJobs.map((job) => {
+      return sendToLLM(db, serverJobId, job.id, job.sendToLLMBatchSize)
+    }),
+  )
+  // } else {
+  // registerCooldownEvent(sendMoreStatus.state)
+  // console.log('waiting for cooldown:', sendMoreStatus.state)
+  // }
   // console.log('2 end send to LLM')
   // console.log('---------------------------')
 }

@@ -11,6 +11,7 @@ import {judgmentsRoutes} from './routes/JudgmentsRoutes.ts'
 import {projectsRoutes} from './routes/ProjectsRoutes.ts'
 import {tokensRoutes} from './routes/TokensRoutes.ts'
 import {usersRoutes} from './routes/UsersRoutes.ts'
+import {vllmStatusRoutes} from './routes/VllmStatusRoutes.ts'
 import {env} from './utils/env.ts'
 
 const app = new Elysia()
@@ -25,6 +26,7 @@ const app = new Elysia()
   .use(dataSourcesImportRoutes)
   .use(tokensRoutes)
   .use(usersRoutes)
+  .use(vllmStatusRoutes)
   .listen(env.SERVER_PORT)
 
 console.log(`🦊 Elysia is running at ${app.server?.hostname}:${app.server?.port}`)

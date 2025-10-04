@@ -131,7 +131,7 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
       sendToLLMInterval: schema.judgmentsJobs.sendToLLMInterval,
     })
     .from(schema.judgmentsJobs)
-  const vllmMetricsUrl = env.VITE_LLM_SERVER_URL + '/metrics'
+  const vllmMetricsUrl = 'http://localhost:8000' + '/metrics'
 
   const res = await fetch(vllmMetricsUrl).catch(() => {
     return undefined

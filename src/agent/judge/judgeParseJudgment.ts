@@ -13,7 +13,7 @@ export const parseJudgment = (response: string, prompts: PromptsType): Record<st
     const keyQuestion = `${baseHeading}---question`
     const keyExplanation = `${baseHeading}---explanation`
     const keyQuotes = `${baseHeading}---quotes`
-    console.log('keyQuestion', typeof keyQuestion, keyQuestion)
+
     return {...acc, [keyQuestion]: prompt.type || 'string', [keyExplanation]: 'string', [keyQuotes]: 'string[] | null'}
   }, {})
   const Types = arktype(typeDefs)
