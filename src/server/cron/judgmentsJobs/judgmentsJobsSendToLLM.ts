@@ -54,7 +54,7 @@ export const judgmentsJobsSendToLLM = async (
       }),
     )
   } else {
-    registerCooldownEvent(sendMoreStatus.state)
+    // registerCooldownEvent(sendMoreStatus.state)
     console.log('waiting for cooldown:', sendMoreStatus.state)
   }
   // console.log('2 end send to LLM')

@@ -15,10 +15,10 @@ import {judgmentsJobsSendToLLM} from './judgmentsJobs/judgmentsJobsSendToLLM.ts'
 export const MAX_ARTICLES_BATCH_SIZE = 15
 const serverJobId = `server-job-${crypto.randomUUID()}`
 
-const NEW_ARTICLES_INTERVAL = '*/2 * * * * *' // Every 5 seconds
-const LLM_PROCESSING_INTERVAL = '*/6 * * * * *' // Every 8 seconds
-const ADJUST_BATCH_SIZE_INTERVAL = '0 */3 * * * *' // Every 3 minutes
-const CLEANUP_STALE_INTERVAL = '0 */5 * * * *' // Every 5 minutes
+const NEW_ARTICLES_INTERVAL = '*/2 * * * * *' // Every 2 seconds
+const LLM_PROCESSING_INTERVAL = '*/6 * * * * *' // Every 6 seconds
+const ADJUST_BATCH_SIZE = '0 */2 * * * *' // Every 2 seconds
+const CLEANUP_STALE_REQUESTS = '0 */5 * * * *' // Every 5 minutes
 
 const getNewArticlesForJobs = async (): Promise<void> => {
   if (!env.RUN_SERVER_JUDGING) return
@@ -58,5 +58,5 @@ const cleanupStaleQueueCron = async (): Promise<void> => {
 export const judgmentsJobsCron = new Elysia()
   .use(cron({name: 'judgments-jobs-fetch-articles', pattern: NEW_ARTICLES_INTERVAL, run: getNewArticlesForJobs}))
   .use(cron({name: 'judgments-jobs-send-to-llm', pattern: LLM_PROCESSING_INTERVAL, run: sendToLLMCron}))
-  .use(cron({name: 'judgments-jobs-adjust-batch-size', pattern: ADJUST_BATCH_SIZE_INTERVAL, run: adjustBatchSizeCron}))
-  .use(cron({name: 'judgments-jobs-cleanup-stale', pattern: CLEANUP_STALE_INTERVAL, run: cleanupStaleQueueCron}))
+  .use(cron({name: 'judgments-jobs-adjust-batch-size', pattern: ADJUST_BATCH_SIZE, run: adjustBatchSizeCron}))
+  .use(cron({name: 'judgments-jobs-cleanup-stale', pattern: CLEANUP_STALE_REQUESTS, run: cleanupStaleQueueCron}))
