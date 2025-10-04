@@ -1,5 +1,17 @@
-import {boolean, integer, jsonb, pgEnum, pgTable, pgView, text, timestamp, uuid} from 'drizzle-orm/pg-core'
-import {index} from 'drizzle-orm/pg-core/indexes'
+import {
+  boolean,
+  bigint,
+  doublePrecision,
+  integer,
+  jsonb,
+  pgEnum,
+  pgTable,
+  pgView,
+  text,
+  timestamp,
+  uuid,
+} from 'drizzle-orm/pg-core'
+import {index, uniqueIndex} from 'drizzle-orm/pg-core/indexes'
 
 import {session, user} from '../../auth-schema.ts'
 
@@ -484,3 +496,59 @@ export const projectStats = pgView('project_stats', {
   originalNo: integer('original_no'),
   originalUnsure: integer('original_unsure'),
 }).existing()
+
+// vLLM status snapshots
+export const vllmStatus = pgTable(
+  'vllm_status',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+
+    // when this poll was recorded
+    ts: timestamp('ts', {withTimezone: true}).defaultNow().notNull(),
+
+    // identity / dimensions
+    instanceId: text('instance_id').notNull(),
+    modelName: text('model_name').notNull(),
+    vllmVersion: text('vllm_version'),
+    gpuType: text('gpu_type'),
+    gpuCount: integer('gpu_count'),
+    pollMs: integer('poll_ms').notNull().default(2000),
+
+    // RAW counters (monotonic) — use BIGINT
+    promptTokensTotal: bigint('prompt_tokens_total', {mode: 'number'}).notNull().default(0),
+    generationTokensTotal: bigint('generation_tokens_total', {mode: 'number'}).notNull().default(0),
+    requestSuccessTotal: bigint('request_success_total', {mode: 'number'}),
+    requestErrorTotal: bigint('request_error_total', {mode: 'number'}),
+    numPreemptionsTotal: bigint('num_preemptions_total', {mode: 'number'}),
+
+    // RAW gauges
+    numRequestsWaiting: integer('num_requests_waiting').notNull().default(0),
+    numRequestsRunning: integer('num_requests_running').notNull().default(0),
+    gpuCacheUsagePerc: doublePrecision('gpu_cache_usage_perc'),
+    numRequestsSwapped: integer('num_requests_swapped'),
+
+    // DERIVED rates (tokens/s)
+    prefillTps: doublePrecision('prefill_tps'),
+    genTps: doublePrecision('gen_tps'),
+    impliedRps: doublePrecision('implied_rps'),
+
+    // Controller state (client-side)
+    targetGenTps: doublePrecision('target_gen_tps'),
+    targetPrefillTps: doublePrecision('target_prefill_tps'),
+    inFlight: integer('in_flight'),
+    maxInFlight: integer('max_in_flight'),
+    lastAction: text('last_action'),
+
+    // Latency histograms — store raw buckets OR derived quantiles (raw buckets here)
+    e2eLatency: jsonb('e2e_latency_buckets'),
+    ttftLatency: jsonb('ttft_latency_buckets'),
+    itlLatency: jsonb('itl_latency_buckets'),
+  },
+  (table) => {
+    return [
+      index('vllm_status_ts_idx').on(table.ts),
+      uniqueIndex('vllm_status_instance_ts_idx').on(table.instanceId, table.ts),
+      index('vllm_status_model_ts_idx').on(table.modelName, table.ts),
+    ]
+  },
+)
