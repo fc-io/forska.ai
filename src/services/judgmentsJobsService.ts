@@ -36,3 +36,28 @@ export const getAllJudgmentsJobs = async () => {
   const response = await apiClient.api.judgmentsjobs.get()
   return handleApiResponse(response, 'Failed to fetch all jobs')
 }
+
+export const updateJudgmentsJobStatus = async (
+  jobId: string,
+  status:
+    | 'not_started'
+    | 'waiting_on_llm_connection'
+    | 'waiting_on_db_connection'
+    | 'running'
+    | 'paused_by_user'
+    | 'paused_by_admin'
+    | 'failed'
+    | 'completed'
+    | 'project_removed',
+) => {
+  const response = await apiClient.api.judgmentsjobs({id: jobId}).patch({status})
+  return handleApiResponse(response, 'Failed to update job status')
+}
+
+export const pauseJudgmentsJob = (jobId: string) => {
+  return updateJudgmentsJobStatus(jobId, 'paused_by_admin')
+}
+
+export const startJudgmentsJob = (jobId: string) => {
+  return updateJudgmentsJobStatus(jobId, 'running')
+}

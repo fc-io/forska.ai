@@ -4,7 +4,7 @@ import {formatDate} from 'date-fns'
 import {For, Show} from 'solid-js'
 
 import {TokenUsageTimeline} from '../../../../components/TokenUsageTimeline'
-import {getJudgmentsJobById} from '../../../../services/judgmentsJobsService'
+import {getJudgmentsJobById, pauseJudgmentsJob, startJudgmentsJob} from '../../../../services/judgmentsJobsService'
 
 const getStatusColor = (status: string | null) => {
   switch (status) {
@@ -228,13 +228,25 @@ const AdminJudgmentJobDetail = () => {
                   <h2 class="text-lg font-semibold mb-4">Actions</h2>
                   <div class="flex gap-3">
                     <Show when={data()?.status === 'running'}>
-                      <button class="px-4 py-2 bg-yellow-600 text-white rounded-md hover:bg-yellow-700">
+                      <button
+                        class="px-4 py-2 bg-yellow-600 text-white rounded-md hover:bg-yellow-700"
+                        onClick={() => {
+                          const id = data()?.id
+                          return id ? pauseJudgmentsJob(id).then(() => job.refetch()) : undefined
+                        }}
+                      >
                         Pause Job
                       </button>
                     </Show>
                     <Show when={data()?.status === 'paused_by_admin' || data()?.status === 'paused_by_user'}>
-                      <button class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700">
-                        Resume Job
+                      <button
+                        class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
+                        onClick={() => {
+                          const id = data()?.id
+                          return id ? startJudgmentsJob(id).then(() => job.refetch()) : undefined
+                        }}
+                      >
+                        Start Job
                       </button>
                     </Show>
                     <Show when={data()?.status === 'failed'}>

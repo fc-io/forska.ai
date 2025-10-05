@@ -4,7 +4,7 @@ import {formatDate, formatDistanceToNow} from 'date-fns'
 import {For, Show} from 'solid-js'
 
 import {TokenUsageTimeline} from '../../../../components/TokenUsageTimeline'
-import {fetchJudgmentsJobs} from '../../../../services/judgmentsJobsService'
+import {fetchJudgmentsJobs, pauseJudgmentsJob, startJudgmentsJob} from '../../../../services/judgmentsJobsService'
 
 const getStatusColor = (status: string | null) => {
   switch (status) {
@@ -194,10 +194,28 @@ const AdminJobs = () => {
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                           <div class="flex gap-2">
                             <Show when={job.status === 'running'}>
-                              <button class="text-sm text-yellow-600 hover:text-yellow-800">Pause</button>
+                              <button
+                                class="text-sm text-yellow-600 hover:text-yellow-800"
+                                onClick={() => {
+                                  return pauseJudgmentsJob(job.id).then(() => {
+                                    return void jobs.refetch()
+                                  })
+                                }}
+                              >
+                                Pause
+                              </button>
                             </Show>
                             <Show when={job.status === 'paused_by_admin' || job.status === 'paused_by_user'}>
-                              <button class="text-sm text-green-600 hover:text-green-800">Resume</button>
+                              <button
+                                class="text-sm text-green-600 hover:text-green-800"
+                                onClick={() => {
+                                  return startJudgmentsJob(job.id).then(() => {
+                                    return void jobs.refetch()
+                                  })
+                                }}
+                              >
+                                Start
+                              </button>
                             </Show>
                             <Show when={job.status === 'failed'}>
                               <button class="text-sm text-blue-600 hover:text-blue-800">Retry</button>
