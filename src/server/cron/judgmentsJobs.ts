@@ -15,9 +15,9 @@ import {judgmentsJobsSendToLLM} from './judgmentsJobs/judgmentsJobsSendToLLM.ts'
 export const MAX_ARTICLES_BATCH_SIZE = 15
 const serverJobId = `server-job-${crypto.randomUUID()}`
 
-const NEW_ARTICLES_INTERVAL = '*/2 * * * * *' // Every 2 seconds
-const LLM_PROCESSING_INTERVAL = '*/6 * * * * *' // Every 6 seconds
-const ADJUST_BATCH_SIZE = '*/2 * * * * *' // Every 2 seconds
+const NEW_ARTICLES_INTERVAL = '0/2 * * * * *' // Every 2 seconds
+const LLM_PROCESSING_INTERVAL = '0/6 * * * * *' // Every 6 seconds
+const ADJUST_BATCH_SIZE = '1/2 * * * * *' // Every 2 seconds
 const CLEANUP_STALE_REQUESTS = '0 */5 * * * *' // Every 5 minutes
 
 const getNewArticlesForJobs = async (): Promise<void> => {
@@ -25,11 +25,10 @@ const getNewArticlesForJobs = async (): Promise<void> => {
   const db = getDatabase()
   const numberOfArticlesInReadyQueue = await getNumberOfArticlesInReadyQueue(db, serverJobId)
   const allJobs = await judgmentsJobsGetJobs(db)
-  // console.log('numberOfArticlesInReadyQueue', numberOfArticlesInReadyQueue)
-  // console.log('isReadyToGetMoreArticles', isReadyToGetMoreArticles(numberOfArticlesInReadyQueue, allJobs))
 
   if (isReadyToGetMoreArticles(numberOfArticlesInReadyQueue, allJobs)) {
     const newArticlesToProcess = await judgmentsJobsGetNewArticles(db, allJobs)
+    console.log('newArticlesToProcess', newArticlesToProcess.length)
     await judgmentsJobsAddToJobsQueue(db, newArticlesToProcess, serverJobId)
   }
 }
