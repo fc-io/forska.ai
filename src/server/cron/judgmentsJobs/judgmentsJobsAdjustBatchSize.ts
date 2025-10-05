@@ -71,6 +71,7 @@ const toJSON = (data: unknown): string => {
 }
 
 export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof schema>) => {
+  const instanceId = env.VITE_LLM_SERVER_URL
   const jobs = await db
     .select({
       id: schema.judgmentsJobs.id,
@@ -81,6 +82,8 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
     .from(schema.judgmentsJobs)
     .leftJoin(schema.projects, eq(schema.judgmentsJobs.projectId, schema.projects.id))
     .leftJoin(schema.models, eq(schema.projects.modelId, schema.models.id))
+  const modelName = jobs[0]?.modelName ?? 'unknown'
+  const prev = await getLatestStatus(db, instanceId, modelName)
   const {
     promptTokensTotal,
     generationTokensTotal,
@@ -93,11 +96,6 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
     gpuCacheUsagePerc,
   } = await getVllmMetrics()
 
-  const nowTs = new Date()
-  const instanceId = env.VITE_LLM_SERVER_URL
-  const modelName = jobs[0]?.modelName ?? 'unknown'
-
-  const prev = await getLatestStatus(db, instanceId, modelName)
   const {prefill, gen, rps, dtMs} = computeTps(
     prev
       ? {
@@ -107,7 +105,7 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
           ts: new Date(prev.ts),
         }
       : undefined,
-    {prompt: promptTokensTotal, gen: generationTokensTotal, success: requestSuccessTotal, ts: nowTs},
+    {prompt: promptTokensTotal, gen: generationTokensTotal, success: requestSuccessTotal, ts: new Date()},
   )
 
   const alpha = 0.3
