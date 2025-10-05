@@ -5,32 +5,6 @@ import * as schema from '../../../db/schema.ts'
 import {env} from '../../utils/env.ts'
 import {getVllmMetrics} from './judgmentsJobsAdjustBatchSize/getVllmMetrics.ts'
 
-type PromSample = Awaited<ReturnType<typeof getVllmMetrics>>[number]
-
-const sumByName = (samples: PromSample[], names: string[]): number => {
-  const set = new Set(names)
-  return samples.reduce((acc, s) => {
-    return set.has(s.name) ? acc + s.value : acc
-  }, 0)
-}
-
-const maxByName = (samples: PromSample[], names: string[]): number => {
-  const set = new Set(names)
-  let max = 0
-  for (const s of samples) if (set.has(s.name) && s.value > max) max = s.value
-  return max
-}
-
-const pickOne = (samples: PromSample[], names: string[], def = 0): number => {
-  for (const n of names) {
-    const s = samples.find((x) => {
-      return x.name === n
-    })
-    if (s) return s.value
-  }
-  return def
-}
-
 const clamp = (lo: number, hi: number, v: number): number => {
   return Math.min(hi, Math.max(lo, v))
 }
@@ -107,23 +81,21 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
     .from(schema.judgmentsJobs)
     .leftJoin(schema.projects, eq(schema.judgmentsJobs.projectId, schema.projects.id))
     .leftJoin(schema.models, eq(schema.projects.modelId, schema.models.id))
-  const samples = await getVllmMetrics()
+  const {
+    promptTokensTotal,
+    generationTokensTotal,
+    requestSuccessTotal,
+    requestErrorTotal,
+    numPreemptionsTotal,
+    numRequestsWaiting,
+    numRequestsRunning,
+    numRequestsSwapped,
+    gpuCacheUsagePerc,
+  } = await getVllmMetrics()
+
   const nowTs = new Date()
   const instanceId = env.VITE_LLM_SERVER_URL
   const modelName = jobs[0]?.modelName ?? 'unknown'
-
-  const promptTokensTotal = Math.floor(sumByName(samples, ['vllm:prompt_tokens_total', 'vllm_prompt_tokens_total']))
-  const generationTokensTotal = Math.floor(
-    sumByName(samples, ['vllm:generation_tokens_total', 'vllm_generated_tokens_total']),
-  )
-  const requestSuccessTotal = Math.floor(sumByName(samples, ['vllm:request_success_total']))
-  const requestErrorTotal = Math.floor(sumByName(samples, ['vllm:request_error_total']))
-  const numPreemptionsTotal = Math.floor(sumByName(samples, ['vllm:num_preemptions_total']))
-
-  const numRequestsWaiting = Math.floor(pickOne(samples, ['vllm:num_requests_waiting']))
-  const numRequestsRunning = Math.floor(pickOne(samples, ['vllm:num_requests_running']))
-  const numRequestsSwapped = Math.floor(pickOne(samples, ['vllm:num_requests_swapped'], 0))
-  const gpuCacheUsagePerc = maxByName(samples, ['vllm:gpu_cache_usage_ratio', 'vllm:gpu_cache_usage_perc'])
 
   const prev = await getLatestStatus(db, instanceId, modelName)
   const {prefill, gen, rps, dtMs} = computeTps(
