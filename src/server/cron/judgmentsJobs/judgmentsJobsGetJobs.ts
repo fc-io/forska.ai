@@ -15,12 +15,7 @@ export const judgmentsJobsGetJobs = async (db: PostgresJsDatabase<typeof schema>
     })
     .from(schema.judgmentsJobs)
     .innerJoin(schema.projects, eq(schema.judgmentsJobs.projectId, schema.projects.id))
+    .where(eq(schema.judgmentsJobs.status, 'running'))
 
-  // return result.map((r) => {
-  //   return {}
-  //     ...r,
-  //     projectName: ,
-  //   }
-  // })
   return result
 }
