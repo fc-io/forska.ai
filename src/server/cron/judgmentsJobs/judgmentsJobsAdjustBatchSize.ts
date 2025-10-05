@@ -102,12 +102,15 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
       id: schema.judgmentsJobs.id,
       sendToLLMBatchSize: schema.judgmentsJobs.sendToLLMBatchSize,
       sendToLLMInterval: schema.judgmentsJobs.sendToLLMInterval,
+      modelName: schema.models.modelName,
     })
     .from(schema.judgmentsJobs)
+    .leftJoin(schema.projects, eq(schema.judgmentsJobs.projectId, schema.projects.id))
+    .leftJoin(schema.models, eq(schema.projects.modelId, schema.models.id))
   const samples = await getVllmMetrics()
   const nowTs = new Date()
   const instanceId = env.VITE_LLM_SERVER_URL
-  const modelName = 'unknown'
+  const modelName = jobs[0]?.modelName ?? 'unknown'
 
   const promptTokensTotal = Math.floor(sumByName(samples, ['vllm:prompt_tokens_total', 'vllm_prompt_tokens_total']))
   const generationTokensTotal = Math.floor(
