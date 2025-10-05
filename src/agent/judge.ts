@@ -261,11 +261,6 @@ export const judge = async ({
           }
         }
       }
-      // If we exit the loop without returning, we failed all retries
-      // return {
-      //   error: lastError ?? 'Unknown error after retries',
-      //   raw_response: lastResponse,
-      // }
     }),
   )
   const duration = performance.now() - startDuration

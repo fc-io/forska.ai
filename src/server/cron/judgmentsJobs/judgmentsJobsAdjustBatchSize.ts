@@ -3,36 +3,9 @@ import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../db/schema.ts'
 import {env} from '../../utils/env.ts'
+import {getVllmMetrics} from './judgmentsJobsAdjustBatchSize/getVllmMetrics.ts'
 
-type PromValue = number
-type PromSample = {name: string; labels: Record<string, string>; value: PromValue}
-
-const parsePrometheusText = (text: string): PromSample[] => {
-  const lines = text.split(/\n+/)
-  const parse = (line: string): PromSample | undefined => {
-    if (!line || line.startsWith('#')) return undefined
-    const m = line.match(/^([a-zA-Z_:][a-zA-Z0-9_:]*)(\{[^}]*\})?\s+(-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)$/)
-    if (!m) return undefined
-    const [, name, labelStr, valStr] = m
-    const labels: Record<string, string> = !labelStr
-      ? {}
-      : Object.fromEntries(
-          labelStr
-            .slice(1, -1)
-            .split(',')
-            .filter(Boolean)
-            .map((kv) => {
-              const idx = kv.indexOf('=')
-              const k = kv.slice(0, idx)
-              const v = kv.slice(idx + 1).replace(/^"|"$/g, '')
-              return [k, v]
-            }),
-        )
-    const value = Number(valStr)
-    return Number.isFinite(value) ? {name, labels, value} : undefined
-  }
-  return lines.map(parse).filter(Boolean) as PromSample[]
-}
+type PromSample = Awaited<ReturnType<typeof getVllmMetrics>>[number]
 
 const sumByName = (samples: PromSample[], names: string[]): number => {
   const set = new Set(names)
@@ -131,15 +104,7 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
       sendToLLMInterval: schema.judgmentsJobs.sendToLLMInterval,
     })
     .from(schema.judgmentsJobs)
-  const vllmMetricsUrl = 'http://localhost:8000' + '/metrics'
-
-  const res = await fetch(vllmMetricsUrl).catch(() => {
-    return undefined
-  })
-  if (!res || !res.ok) return
-  const text = await res.text()
-  const samples = parsePrometheusText(text)
-
+  const samples = await getVllmMetrics()
   const nowTs = new Date()
   const instanceId = env.VITE_LLM_SERVER_URL
   const modelName = 'unknown'
@@ -187,12 +152,14 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
   const prevState = (() => {
     if (!prev?.lastAction) return {bestGen: 0}
     try {
-      const parsed = JSON.parse(prev.lastAction)
-      return typeof parsed === 'object' && parsed ? parsed : {bestGen: 0}
+      const parsed = JSON.parse(prev.lastAction) as unknown
+      return typeof parsed === 'object' && parsed && 'bestGen' in parsed && typeof parsed.bestGen === 'number'
+        ? {bestGen: parsed.bestGen}
+        : {bestGen: 0}
     } catch (_e) {
       return {bestGen: 0}
     }
-  })() as {bestGen: number}
+  })()
 
   const bestGenDecay = Math.max(0, prevState.bestGen * 0.98)
   const bestGen = Math.max(bestGenDecay, genTps)
@@ -225,38 +192,34 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
       .where(inArray(schema.judgmentsJobs.id, jobIds))
   }
 
-  await db
-    .insert(schema.vllmStatus)
-    .values({
-      instanceId,
-      modelName,
-      vllmVersion: null,
-      gpuType: null,
-      gpuCount: null,
-      pollMs: dtMs || 2000,
-      promptTokensTotal,
-      generationTokensTotal,
-      requestSuccessTotal,
-      requestErrorTotal,
-      numPreemptionsTotal,
-      numRequestsWaiting,
-      numRequestsRunning,
-      gpuCacheUsagePerc,
-      numRequestsSwapped,
-      prefillTps,
-      genTps,
-      impliedRps: rps,
-      targetGenTps: tGen,
-      targetPrefillTps: tPre,
-      inFlight,
-      maxInFlight,
-      lastAction: toJSON({bestGen, smallQueue: wasSmall, safety: isUnsafe, admit, perJob: boundedPerJob}),
-      e2eLatency: null,
-      ttftLatency: null,
-      itlLatency: null,
-    })
-}
+  const vllmStatusData = {
+    instanceId,
+    modelName,
+    vllmVersion: null,
+    gpuType: null,
+    gpuCount: null,
+    pollMs: dtMs || 2000,
+    promptTokensTotal,
+    generationTokensTotal,
+    requestSuccessTotal,
+    requestErrorTotal,
+    numPreemptionsTotal,
+    numRequestsWaiting,
+    numRequestsRunning,
+    gpuCacheUsagePerc,
+    numRequestsSwapped,
+    prefillTps,
+    genTps,
+    impliedRps: rps,
+    targetGenTps: tGen,
+    targetPrefillTps: tPre,
+    inFlight,
+    maxInFlight,
+    lastAction: toJSON({bestGen, smallQueue: wasSmall, safety: isUnsafe, admit, perJob: boundedPerJob}),
+    e2eLatency: null,
+    ttftLatency: null,
+    itlLatency: null,
+  }
 
-export const registerCooldownEvent = (_reason: string): void => {
-  // Hook for external callers; keep lightweight to avoid side-effects
+  await db.insert(schema.vllmStatus).values(vllmStatusData)
 }
