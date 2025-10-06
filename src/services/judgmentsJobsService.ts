@@ -61,3 +61,9 @@ export const pauseJudgmentsJob = (jobId: string) => {
 export const startJudgmentsJob = (jobId: string) => {
   return updateJudgmentsJobStatus(jobId, 'running')
 }
+
+export const getJudgmentsJobUnassessedArticles = async (jobId: string) => {
+  const response = await apiClient.api['judgmentsjobs-unassessed-articles'].get({query: {jobId}})
+  const result = handleApiResponse(response, 'Failed to fetch unassessed articles for job')
+  return result?.data ?? []
+}

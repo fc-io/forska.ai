@@ -16,14 +16,15 @@ import { Route as ProjectsIndexRouteImport } from './routes/+projects/+index'
 import { Route as LoginIndexRouteImport } from './routes/+login/+index'
 import { Route as LatestArticlesIndexRouteImport } from './routes/+latest-articles/+index'
 import { Route as ProjectsIdEditRouteImport } from './routes/+projects/+$id/+edit'
-import { Route as AdminJobsIdRouteImport } from './routes/+admin/+jobs/+$id'
 import { Route as ProjectsIdIndexRouteImport } from './routes/+projects/+$id/+index'
 import { Route as AdminVllmIndexRouteImport } from './routes/+admin/+vllm/+index'
 import { Route as AdminUsersIndexRouteImport } from './routes/+admin/+users/+index'
 import { Route as AdminJobsIndexRouteImport } from './routes/+admin/+jobs/+index'
 import { Route as AdminDatasourcesIndexRouteImport } from './routes/+admin/+datasources/+index'
+import { Route as AdminJobsIdUnassessed_articlesRouteImport } from './routes/+admin/+jobs/+$id/+unassessed_articles'
 import { Route as AdminDatasourcesIdEditRouteImport } from './routes/+admin/+datasources/+$id/+edit'
 import { Route as ProjectsIdReviewsIndexRouteImport } from './routes/+projects/+$id/+reviews/+index'
+import { Route as AdminJobsIdIndexRouteImport } from './routes/+admin/+jobs/+$id/+index'
 import { Route as ProjectsIdReviewsArticleIdIndexRouteImport } from './routes/+projects/+$id/+reviews/+$articleId/+index'
 
 const IndexRoute = IndexRouteImport.update({
@@ -61,11 +62,6 @@ const ProjectsIdEditRoute = ProjectsIdEditRouteImport.update({
   path: '/projects/$id/edit',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AdminJobsIdRoute = AdminJobsIdRouteImport.update({
-  id: '/admin/jobs/$id',
-  path: '/admin/jobs/$id',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const ProjectsIdIndexRoute = ProjectsIdIndexRouteImport.update({
   id: '/projects/$id/',
   path: '/projects/$id/',
@@ -91,6 +87,12 @@ const AdminDatasourcesIndexRoute = AdminDatasourcesIndexRouteImport.update({
   path: '/admin/datasources/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminJobsIdUnassessed_articlesRoute =
+  AdminJobsIdUnassessed_articlesRouteImport.update({
+    id: '/admin/jobs/$id/unassessed_articles',
+    path: '/admin/jobs/$id/unassessed_articles',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const AdminDatasourcesIdEditRoute = AdminDatasourcesIdEditRouteImport.update({
   id: '/admin/datasources/$id/edit',
   path: '/admin/datasources/$id/edit',
@@ -99,6 +101,11 @@ const AdminDatasourcesIdEditRoute = AdminDatasourcesIdEditRouteImport.update({
 const ProjectsIdReviewsIndexRoute = ProjectsIdReviewsIndexRouteImport.update({
   id: '/projects/$id/reviews/',
   path: '/projects/$id/reviews/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminJobsIdIndexRoute = AdminJobsIdIndexRouteImport.update({
+  id: '/admin/jobs/$id/',
+  path: '/admin/jobs/$id/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ProjectsIdReviewsArticleIdIndexRoute =
@@ -120,10 +127,11 @@ export interface FileRoutesByFullPath {
   '/admin/users': typeof AdminUsersIndexRoute
   '/admin/vllm': typeof AdminVllmIndexRoute
   '/projects/$id': typeof ProjectsIdIndexRoute
-  '/admin/jobs/$id': typeof AdminJobsIdRoute
   '/projects/$id/edit': typeof ProjectsIdEditRoute
+  '/admin/jobs/$id': typeof AdminJobsIdIndexRoute
   '/projects/$id/reviews': typeof ProjectsIdReviewsIndexRoute
   '/admin/datasources/$id/edit': typeof AdminDatasourcesIdEditRoute
+  '/admin/jobs/$id/unassessed_articles': typeof AdminJobsIdUnassessed_articlesRoute
   '/projects/$id/reviews/$articleId': typeof ProjectsIdReviewsArticleIdIndexRoute
 }
 export interface FileRoutesByTo {
@@ -138,10 +146,11 @@ export interface FileRoutesByTo {
   '/admin/users': typeof AdminUsersIndexRoute
   '/admin/vllm': typeof AdminVllmIndexRoute
   '/projects/$id': typeof ProjectsIdIndexRoute
-  '/admin/jobs/$id': typeof AdminJobsIdRoute
   '/projects/$id/edit': typeof ProjectsIdEditRoute
+  '/admin/jobs/$id': typeof AdminJobsIdIndexRoute
   '/projects/$id/reviews': typeof ProjectsIdReviewsIndexRoute
   '/admin/datasources/$id/edit': typeof AdminDatasourcesIdEditRoute
+  '/admin/jobs/$id/unassessed_articles': typeof AdminJobsIdUnassessed_articlesRoute
   '/projects/$id/reviews/$articleId': typeof ProjectsIdReviewsArticleIdIndexRoute
 }
 export interface FileRoutesById {
@@ -157,10 +166,11 @@ export interface FileRoutesById {
   '/admin/users/': typeof AdminUsersIndexRoute
   '/admin/vllm/': typeof AdminVllmIndexRoute
   '/projects/$id/': typeof ProjectsIdIndexRoute
-  '/admin/jobs/$id': typeof AdminJobsIdRoute
   '/projects/$id/edit': typeof ProjectsIdEditRoute
+  '/admin/jobs/$id/': typeof AdminJobsIdIndexRoute
   '/projects/$id/reviews/': typeof ProjectsIdReviewsIndexRoute
   '/admin/datasources/$id/edit': typeof AdminDatasourcesIdEditRoute
+  '/admin/jobs/$id/unassessed_articles': typeof AdminJobsIdUnassessed_articlesRoute
   '/projects/$id/reviews/$articleId/': typeof ProjectsIdReviewsArticleIdIndexRoute
 }
 export interface FileRouteTypes {
@@ -177,10 +187,11 @@ export interface FileRouteTypes {
     | '/admin/users'
     | '/admin/vllm'
     | '/projects/$id'
-    | '/admin/jobs/$id'
     | '/projects/$id/edit'
+    | '/admin/jobs/$id'
     | '/projects/$id/reviews'
     | '/admin/datasources/$id/edit'
+    | '/admin/jobs/$id/unassessed_articles'
     | '/projects/$id/reviews/$articleId'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -195,10 +206,11 @@ export interface FileRouteTypes {
     | '/admin/users'
     | '/admin/vllm'
     | '/projects/$id'
-    | '/admin/jobs/$id'
     | '/projects/$id/edit'
+    | '/admin/jobs/$id'
     | '/projects/$id/reviews'
     | '/admin/datasources/$id/edit'
+    | '/admin/jobs/$id/unassessed_articles'
     | '/projects/$id/reviews/$articleId'
   id:
     | '__root__'
@@ -213,10 +225,11 @@ export interface FileRouteTypes {
     | '/admin/users/'
     | '/admin/vllm/'
     | '/projects/$id/'
-    | '/admin/jobs/$id'
     | '/projects/$id/edit'
+    | '/admin/jobs/$id/'
     | '/projects/$id/reviews/'
     | '/admin/datasources/$id/edit'
+    | '/admin/jobs/$id/unassessed_articles'
     | '/projects/$id/reviews/$articleId/'
   fileRoutesById: FileRoutesById
 }
@@ -232,10 +245,11 @@ export interface RootRouteChildren {
   AdminUsersIndexRoute: typeof AdminUsersIndexRoute
   AdminVllmIndexRoute: typeof AdminVllmIndexRoute
   ProjectsIdIndexRoute: typeof ProjectsIdIndexRoute
-  AdminJobsIdRoute: typeof AdminJobsIdRoute
   ProjectsIdEditRoute: typeof ProjectsIdEditRoute
+  AdminJobsIdIndexRoute: typeof AdminJobsIdIndexRoute
   ProjectsIdReviewsIndexRoute: typeof ProjectsIdReviewsIndexRoute
   AdminDatasourcesIdEditRoute: typeof AdminDatasourcesIdEditRoute
+  AdminJobsIdUnassessed_articlesRoute: typeof AdminJobsIdUnassessed_articlesRoute
   ProjectsIdReviewsArticleIdIndexRoute: typeof ProjectsIdReviewsArticleIdIndexRoute
 }
 
@@ -290,13 +304,6 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof ProjectsIdEditRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/admin/jobs/$id': {
-      id: '/admin/jobs/$id'
-      path: '/admin/jobs/$id'
-      fullPath: '/admin/jobs/$id'
-      preLoaderRoute: typeof AdminJobsIdRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/projects/$id/': {
       id: '/projects/$id/'
       path: '/projects/$id'
@@ -332,6 +339,13 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof AdminDatasourcesIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/jobs/$id/unassessed_articles': {
+      id: '/admin/jobs/$id/unassessed_articles'
+      path: '/admin/jobs/$id/unassessed_articles'
+      fullPath: '/admin/jobs/$id/unassessed_articles'
+      preLoaderRoute: typeof AdminJobsIdUnassessed_articlesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/admin/datasources/$id/edit': {
       id: '/admin/datasources/$id/edit'
       path: '/admin/datasources/$id/edit'
@@ -344,6 +358,13 @@ declare module '@tanstack/solid-router' {
       path: '/projects/$id/reviews'
       fullPath: '/projects/$id/reviews'
       preLoaderRoute: typeof ProjectsIdReviewsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/jobs/$id/': {
+      id: '/admin/jobs/$id/'
+      path: '/admin/jobs/$id'
+      fullPath: '/admin/jobs/$id'
+      preLoaderRoute: typeof AdminJobsIdIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/projects/$id/reviews/$articleId/': {
@@ -368,10 +389,11 @@ const rootRouteChildren: RootRouteChildren = {
   AdminUsersIndexRoute: AdminUsersIndexRoute,
   AdminVllmIndexRoute: AdminVllmIndexRoute,
   ProjectsIdIndexRoute: ProjectsIdIndexRoute,
-  AdminJobsIdRoute: AdminJobsIdRoute,
   ProjectsIdEditRoute: ProjectsIdEditRoute,
+  AdminJobsIdIndexRoute: AdminJobsIdIndexRoute,
   ProjectsIdReviewsIndexRoute: ProjectsIdReviewsIndexRoute,
   AdminDatasourcesIdEditRoute: AdminDatasourcesIdEditRoute,
+  AdminJobsIdUnassessed_articlesRoute: AdminJobsIdUnassessed_articlesRoute,
   ProjectsIdReviewsArticleIdIndexRoute: ProjectsIdReviewsArticleIdIndexRoute,
 }
 export const routeTree = rootRouteImport

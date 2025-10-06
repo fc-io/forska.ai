@@ -3,8 +3,8 @@ import {createFileRoute, Link} from '@tanstack/solid-router'
 import {formatDate} from 'date-fns'
 import {For, Show} from 'solid-js'
 
-import {TokenUsageTimeline} from '../../../../components/TokenUsageTimeline'
-import {getJudgmentsJobById, pauseJudgmentsJob, startJudgmentsJob} from '../../../../services/judgmentsJobsService'
+import {TokenUsageTimeline} from '../../../../../components/TokenUsageTimeline'
+import {getJudgmentsJobById, pauseJudgmentsJob, startJudgmentsJob} from '../../../../../services/judgmentsJobsService'
 
 const getStatusColor = (status: string | null) => {
   switch (status) {
@@ -137,13 +137,30 @@ const AdminJudgmentJobDetail = () => {
                   <div class="mt-6 pt-6 border-t border-gray-200">
                     <h3 class="text-sm font-medium text-gray-900 mb-3">Project</h3>
                     <Show when={data() && 'unassessedArticlesCount' in (data() as any)}>
-                      <div class="mb-4">
+                      <div class="mb-4 space-y-1">
                         <p class="text-sm text-gray-500">Unassessed Articles</p>
                         <p class="font-medium">
                           {data() && 'unassessedArticlesCount' in (data() as any)
                             ? (data() as any).unassessedArticlesCount?.toLocaleString() || '0'
                             : '0'}
                         </p>
+                        <Show
+                          when={
+                            Boolean(
+                              data()?.id &&
+                                (data() && 'unassessedArticlesCount' in (data() as any)
+                                  ? (data() as any).unassessedArticlesCount > 0
+                                  : false),
+                            )
+                          }
+                        >
+                          <Link
+                            to={`/admin/jobs/${data()?.id}/unassessed_articles`}
+                            class="inline-flex text-sm text-blue-600 hover:text-blue-800"
+                          >
+                            View unassessed articles
+                          </Link>
+                        </Show>
                       </div>
                     </Show>
                     <Show when={data() && 'totalTokenUsage' in (data() as any) && (data() as any).totalTokenUsage}>
@@ -271,4 +288,4 @@ const AdminJudgmentJobDetail = () => {
   )
 }
 
-export const Route = createFileRoute('/admin/jobs/$id')({component: AdminJudgmentJobDetail})
+export const Route = createFileRoute('/admin/jobs/$id/')({component: AdminJudgmentJobDetail})

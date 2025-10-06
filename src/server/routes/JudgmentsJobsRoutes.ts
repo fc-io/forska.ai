@@ -75,6 +75,107 @@ const getUnassessedArticlesCount = async ({
   return unassessedCount
 }
 
+const getJobContext = async ({
+  db,
+  jobId,
+}: {
+  db: Database
+  jobId: string
+}): Promise<{
+  job: {
+    id: string
+    createdAt: Date
+    updatedAt: Date
+    projectId: string
+    status: string
+    error: string[] | null
+    projectName: string | null
+  }
+  projectDateFrom: Date | null
+  projectDateTo: Date | null
+  promptIds: string[]
+}> => {
+  const [jobWithProject] = await db
+    .select({
+      id: judgmentsJobs.id,
+      createdAt: judgmentsJobs.createdAt,
+      updatedAt: judgmentsJobs.updatedAt,
+      projectId: judgmentsJobs.projectId,
+      status: judgmentsJobs.status,
+      error: judgmentsJobs.error,
+      projectName: projects.name,
+      projectDateFrom: projects.dateFrom,
+      projectDateTo: projects.dateTo,
+    })
+    .from(judgmentsJobs)
+    .leftJoin(projects, eq(judgmentsJobs.projectId, projects.id))
+    .where(eq(judgmentsJobs.id, jobId))
+    .limit(1)
+
+  if (!jobWithProject) {
+    throw new Error('Job not found')
+  }
+
+  const {projectDateFrom, projectDateTo, ...job} = jobWithProject
+
+  const projectPrompts = await db
+    .select({id: prompts.id})
+    .from(prompts)
+    .where(eq(prompts.projectId, job.projectId))
+
+  return {
+    job,
+    projectDateFrom,
+    projectDateTo,
+    promptIds: projectPrompts.map((prompt) => {
+      return prompt.id
+    }),
+  }
+}
+
+const getUnassessedArticles = async ({
+  db,
+  promptIds,
+  projectDateFrom,
+  projectDateTo,
+}: {
+  db: Database
+  promptIds: string[]
+  projectDateFrom: Date | null | undefined
+  projectDateTo: Date | null | undefined
+}): Promise<{
+  id: string
+  articleId: string | null
+  articleTitle: string
+  articleAuthors: string[] | null
+  articleCreatedAt: Date | null
+  articleUpdatedAt: Date | null
+}[]> => {
+  if (promptIds.length === 0) {
+    return []
+  }
+
+  const whereClauses = [
+    ...buildProjectDateConditions({projectDateFrom, projectDateTo}),
+    buildProjectPromptCondition(promptIds),
+  ]
+
+  const articlesToAssess = await db
+    .select({
+      id: articles.id,
+      articleId: articles.articleId,
+      articleTitle: articles.articleTitle,
+      articleAuthors: articles.articleAuthors,
+      articleCreatedAt: articles.articleCreatedAt,
+      articleUpdatedAt: articles.articleUpdatedAt,
+    })
+    .from(articles)
+    .where(sql`${sql.join(whereClauses, sql` AND `)}`)
+    .orderBy(sql`COALESCE(${articles.articleUpdatedAt}, ${articles.createdAt}) DESC`)
+
+  return articlesToAssess
+}
+
 export const judgmentsJobsRoutes = new Elysia()
   .use(withErrorHandler())
   .post(
@@ -113,39 +214,16 @@ export const judgmentsJobsRoutes = new Elysia()
     async ({params}) => {
       const db = getDatabase()
 
-      const [jobWithProject] = await db
-        .select({
-          id: judgmentsJobs.id,
-          createdAt: judgmentsJobs.createdAt,
-          updatedAt: judgmentsJobs.updatedAt,
-          projectId: judgmentsJobs.projectId,
-          status: judgmentsJobs.status,
-          error: judgmentsJobs.error,
-          projectName: projects.name,
-          projectDateFrom: projects.dateFrom,
-          projectDateTo: projects.dateTo,
-        })
-        .from(judgmentsJobs)
-        .leftJoin(projects, eq(judgmentsJobs.projectId, projects.id))
-        .where(eq(judgmentsJobs.id, params.id))
-        .limit(1)
-
-      if (!jobWithProject) {
-        throw new Error('Job not found')
-      }
-
-      const {projectDateFrom, projectDateTo, ...job} = jobWithProject
-
-      const projectPrompts = await db
-        .select({id: prompts.id})
-        .from(prompts)
-        .where(eq(prompts.projectId, job.projectId))
+      const {job, projectDateFrom, projectDateTo, promptIds} = await getJobContext({
+        db,
+        jobId: params.id,
+      })
 
       // Get article statistics
       const articleStats = await db
         .select({status: judgmentsJobsArticles.status, count: sql<number>`count(*)::int`})
         .from(judgmentsJobsArticles)
-        .where(eq(judgmentsJobsArticles.jobId, params.id))
+        .where(eq(judgmentsJobsArticles.jobId, job.id))
         .groupBy(judgmentsJobsArticles.status)
 
       // Transform stats into a more usable format
@@ -157,14 +235,7 @@ export const judgmentsJobsRoutes = new Elysia()
         if (stat.status === 'judged') stats.judged = stat.count
       })
 
-      const unassessedCount = await getUnassessedArticlesCount({
-        db,
-        promptIds: projectPrompts.map((prompt) => {
-          return prompt.id
-        }),
-        projectDateFrom,
-        projectDateTo,
-      })
+      const unassessedCount = await getUnassessedArticlesCount({db, promptIds, projectDateFrom, projectDateTo})
 
       // Get total token usage for this job
       const totalTokenUsage = await db
@@ -174,7 +245,7 @@ export const judgmentsJobsRoutes = new Elysia()
           totalCompletionTokens: sql<number>`COALESCE(SUM(total_completion_tokens), 0)::int`,
         })
         .from(tokenUse)
-        .where(eq(tokenUse.judgmentsJobId, params.id))
+        .where(eq(tokenUse.judgmentsJobId, job.id))
 
       // Get token usage per day for this job
       const tokenUsagePerDay = await db
@@ -186,7 +257,7 @@ export const judgmentsJobsRoutes = new Elysia()
           requests: sql<number>`SUM(requests)::int`,
         })
         .from(tokenUse)
-        .where(eq(tokenUse.judgmentsJobId, params.id))
+        .where(eq(tokenUse.judgmentsJobId, job.id))
         .groupBy(sql`DATE(created_at AT TIME ZONE 'UTC')`)
         .orderBy(sql`DATE(created_at AT TIME ZONE 'UTC')`)
 
@@ -203,6 +274,27 @@ export const judgmentsJobsRoutes = new Elysia()
       }
     },
     {params: t.Object({id: t.String()})},
+  )
+  .get(
+    '/api/judgmentsjobs-unassessed-articles',
+    async ({query}) => {
+      const db = getDatabase()
+
+      const {projectDateFrom, projectDateTo, promptIds} = await getJobContext({
+        db,
+        jobId: query.jobId,
+      })
+
+      const unassessedArticles = await getUnassessedArticles({
+        db,
+        promptIds,
+        projectDateFrom,
+        projectDateTo,
+      })
+
+      return {data: unassessedArticles, error: null}
+    },
+    {query: t.Object({jobId: t.String()})},
   )
   .get('/api/judgmentsjobs', async () => {
     const db = getDatabase()
