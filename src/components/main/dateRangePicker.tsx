@@ -2,7 +2,7 @@ import {fromDate} from '@internationalized/date'
 import {createMemo, Index, type JSX} from 'solid-js'
 import {Portal} from 'solid-js/web'
 
-import {getWeekNumberLabel} from '../../../../utils/getWeekNumber'
+import {getWeekNumberLabel} from '../../utils/getWeekNumber'
 import {
   DatePicker,
   DatePickerContent,
@@ -24,7 +24,7 @@ import {
   DatePickerView,
   DatePickerViewControl,
   DatePickerViewTrigger,
-} from '../../../ui/date-picker'
+} from '../ui/date-picker'
 
 export interface DateRangePickerProps {
   locale?: string

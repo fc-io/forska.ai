@@ -6,7 +6,7 @@ import {getArticleUrl} from '../../../app/utils/getArticleUrl.ts'
 import type {articles, judgments} from '../../../db/schema.ts'
 import {apiClient} from '../../../services/apiClient.ts'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse'
-import {DateRangePicker} from '../../main/commands/subheaderSettingsPanel/subheaderSettingsPanelDateRangePicker.tsx'
+import {DateRangePicker} from '../dateRangePicker'
 
 type ArticleWithJudgments = typeof articles.$inferSelect & {judgments: Array<typeof judgments.$inferSelect>}
 
