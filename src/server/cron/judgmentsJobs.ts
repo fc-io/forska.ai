@@ -43,7 +43,7 @@ const sendToLLMCron = async (): Promise<void> => {
 
 const adjustBatchSizeCron = async (): Promise<void> => {
   if (!env.RUN_SERVER_JUDGING) return
-  console.log('adjustBatchSizeCron')
+  console.log('~~~adjustBatchSizeCron 1.~~~')
   const db = getDatabase()
   await judgmentsJobsAdjustBatchSize(db)
 }

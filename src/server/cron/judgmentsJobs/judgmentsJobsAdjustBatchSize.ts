@@ -195,4 +195,5 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
   }
 
   await db.insert(schema.vllmStatus).values(vllmStatusData)
+  console.log('~~~adjustBatchSizeCron (vllmStatusData sent) 2.~~~')
 }

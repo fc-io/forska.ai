@@ -15,7 +15,7 @@ const openAIClients = new Map<string, OpenAI>()
 const DEFAULT_MODEL_LOOKUP = 'Qwen3-32B-FP8'
 const DEFAULT_MODEL_NAME = './models/Qwen3-32B-FP8'
 
-type ModelConfigInput = {modelId?: string | null; modelName?: string | null; baseURL?: string | null}
+type ModelConfigInput = {modelId: string; modelName: string; baseURL: string}
 
 type AssistantMessageShape = {
   role: 'assistant'
@@ -183,36 +183,77 @@ type ArticlesType = (typeof schema.articles.$inferSelect)[]
 
 type PromptsType = (typeof schema.prompts.$inferSelect)[]
 
+const attemptJudgment = async ({
+  prompt,
+  baseURL,
+  modelName,
+  article,
+  prompts,
+  modelId,
+}: {
+  prompt: string
+  baseURL: string
+  modelName: string
+  article: ArticlesType[number]
+  prompts: PromptsType
+  modelId?: string
+}): Promise<
+  | {success: true; judgment: unknown; usage: {promptTokens: number; completionTokens: number; totalTokens: number}}
+  | {success: false; error: string; lastResponse: string}
+> => {
+  const modelResponse = await generateModelResponse({prompt, baseURL, modelName}).catch((error) => {
+    return {error: error instanceof Error ? error.message : 'Unknown error'}
+  })
+
+  if ('error' in modelResponse) {
+    return {success: false, error: modelResponse.error, lastResponse: ''}
+  }
+
+  const parseResult = await Promise.resolve()
+    .then(() => {
+      return {success: true as const, value: parseJudgment(modelResponse.text, prompts)}
+    })
+    .catch((error) => {
+      return {success: false as const, error: error instanceof Error ? error.message : 'Parse error'}
+    })
+
+  if (!parseResult.success) {
+    return {success: false, error: parseResult.error, lastResponse: modelResponse.text}
+  }
+
+  const judgment = parseResult.value
+  const promptIds = prompts.map((p) => {
+    return p.id
+  })
+
+  if (modelId) {
+    await judgeStoreJudgment(article.id, article.articleTitle, judgment, modelId, promptIds)
+  }
+
+  return {
+    success: true,
+    judgment,
+    usage: {
+      promptTokens: modelResponse.usage.promptTokens,
+      completionTokens: modelResponse.usage.completionTokens,
+      totalTokens: modelResponse.usage.totalTokens,
+    },
+  }
+}
+
 export const judge = async ({
   articles,
   prompts,
   sessionId,
   judgmentsJobId,
-  modelConfig,
+  modelConfig: {baseURL, modelName, modelId},
 }: {
   articles: ArticlesType
   prompts: PromptsType
   sessionId: string | null
   judgmentsJobId?: string
-  modelConfig?: ModelConfigInput
+  modelConfig: ModelConfigInput
 }): Promise<void> => {
-  const baseURL = modelConfig?.baseURL || env.VITE_LLM_SERVER_URL
-  const modelName = modelConfig?.modelName || DEFAULT_MODEL_NAME
-  const modelLookupName = modelConfig?.modelName || DEFAULT_MODEL_LOOKUP
-
-  let modelId: string | undefined = modelConfig?.modelId ?? undefined
-  if (!modelId) {
-    try {
-      const modelResult = await apiClient.api.judgments.model.get({
-        query: {name: modelLookupName, provider: 'vLLM', baseURL},
-      })
-      if (modelResult.data?.success && modelResult.data?.data) {
-        modelId = modelResult.data.data.id
-      }
-    } catch (error) {
-      console.error('Failed to get model ID:', error)
-    }
-  }
   const tokenUse: {promptTokens: number; completionTokens: number; totalTokens: number}[] = []
   const startedAt = new Date().toISOString()
   const startDuration = performance.now()
@@ -225,37 +266,19 @@ export const judge = async ({
       let lastError: string | null = null
       let lastResponse = ''
 
-      while (attempts < MAX_RETRIES) {
+      while (attempts <= MAX_RETRIES) {
         attempts += 1
-        if (attempts > 1) {
-          console.log(`${article.id} | Attempt ${attempts} of ${MAX_RETRIES}`)
-          // console.log(prompt)
-        }
-        try {
-          const modelResponse = await generateModelResponse({prompt, baseURL, modelName})
-          // console.log('modelResponse', modelResponse)
-          lastResponse = modelResponse.text
-          const judgment = parseJudgment(lastResponse, prompts)
-          const promptIds = prompts.map((p) => {
-            return p.id
-          })
-          if (modelId) {
-            await judgeStoreJudgment(article.id, article.articleTitle, judgment, modelId, promptIds)
-          }
-          tokenUse.push({
-            // articleId: article.id,
-            promptTokens: modelResponse.usage.promptTokens,
-            completionTokens: modelResponse.usage.completionTokens,
-            totalTokens: modelResponse.usage.totalTokens,
-          })
-          console.log('judgment success')
-          return judgment
-        } catch (error: unknown) {
-          console.log('while catch')
-          lastError = error instanceof Error ? error.message : 'Unknown error'
-          // console.error(`${article.id} | Attempt ${attempts} failed schema validation: ${lastError}`)
+        const result = await attemptJudgment({prompt, baseURL, modelName, article, prompts, modelId})
 
-          // Prepare prompt for next retry (memory + error context)
+        if (result.success) {
+          console.log('judgment success')
+          tokenUse.push(result.usage)
+          return result.judgment
+        } else {
+          console.log('judgment error')
+          lastError = result.error
+          lastResponse = result.lastResponse
+
           if (attempts < MAX_RETRIES) {
             prompt = buildRetryPrompt(basePrompt, lastError, lastResponse)
           } else {
