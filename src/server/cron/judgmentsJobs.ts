@@ -18,7 +18,8 @@ const serverJobId = `server-job-${crypto.randomUUID()}`
 
 const NEW_ARTICLES_INTERVAL = '0/2 * * * * *'
 const LLM_PROCESSING_INTERVAL = '0/6 * * * * *'
-const ADJUST_BATCH_SIZE = '* */1 * * * *'
+const BATCH_SIZE_WARMUP = '0 * * * * *'
+const BATCH_SIZE_ADJUST = '0 */5 * * * *'
 const CHECK_VLLM_STATUS = '* */1 * * * *'
 const CLEANUP_STALE_REQUESTS = '0 */5 * * * *'
 
@@ -42,8 +43,9 @@ const sendToLLMCron = async (): Promise<void> => {
   const allJobs = await judgmentsJobsGetJobs(db)
   await judgmentsJobsSendToLLM(db, allJobs, serverJobId)
 }
-const adjustBatchSizeCron = async (): Promise<void> => {
+const adjustBatchSizeCron = async (phase: string): Promise<void> => {
   if (!env.RUN_SERVER_JUDGING) return
+  console.log(`~~~adjustBatchSizeCron ${phase} 1.~~~`)
   const db = getDatabase()
   await judgmentsJobsAdjustBatchSize(db)
 }
@@ -64,6 +66,25 @@ const cleanupStaleQueueCron = async (): Promise<void> => {
 export const judgmentsJobsCron = new Elysia()
   .use(cron({name: 'judgments-jobs-fetch-articles', pattern: NEW_ARTICLES_INTERVAL, run: getNewArticlesForJobs}))
   .use(cron({name: 'judgments-jobs-send-to-llm', pattern: LLM_PROCESSING_INTERVAL, run: sendToLLMCron}))
-  .use(cron({name: 'judgments-jobs-adjust-batch-size', pattern: ADJUST_BATCH_SIZE, run: adjustBatchSizeCron}))
+  .use(
+    cron({
+      name: 'judgments-jobs-batch-size-warmup',
+      pattern: BATCH_SIZE_WARMUP,
+      maxRuns: 5,
+      run: () => {
+        return adjustBatchSizeCron('BATCH_SIZE_WARMUP')
+      },
+    }),
+  )
+  .use(
+    cron({
+      name: 'judgments-jobs-batch-size-adjust',
+      pattern: BATCH_SIZE_ADJUST,
+      startAt: 'BATCH_SIZE_ADJUST',
+      run: () => {
+        return adjustBatchSizeCron('BATCH_SIZE_ADJUST')
+      },
+    }),
+  )
   .use(cron({name: 'judgments-jobs-adjust-batch-size', pattern: CHECK_VLLM_STATUS, run: checkVLLMStatusCron}))
   .use(cron({name: 'judgments-jobs-cleanup-stale', pattern: CLEANUP_STALE_REQUESTS, run: cleanupStaleQueueCron}))
