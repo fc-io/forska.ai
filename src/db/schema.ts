@@ -1,6 +1,6 @@
 import {
-  boolean,
   bigint,
+  boolean,
   doublePrecision,
   integer,
   jsonb,
@@ -216,12 +216,14 @@ export const projects = pgTable('projects', {
       },
       {onDelete: 'cascade'},
     ),
-  modelId: uuid('model_id').references(
-    () => {
-      return models.id
-    },
-    {onDelete: 'set null'},
-  ),
+  modelId: uuid('model_id')
+    .notNull()
+    .references(
+      () => {
+        return models.id
+      },
+      {onDelete: 'restrict'},
+    ),
   dateFrom: timestamp('date_from', {withTimezone: true}),
   dateTo: timestamp('date_to', {withTimezone: true}),
   createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
