@@ -16,11 +16,11 @@ import {judgmentsJobsSendToLLM} from './judgmentsJobs/judgmentsJobsSendToLLM.ts'
 export const MAX_ARTICLES_BATCH_SIZE = 15
 const serverJobId = `server-job-${crypto.randomUUID()}`
 
-const NEW_ARTICLES_INTERVAL = '0/2 * * * * *' // Every 2 seconds
-const LLM_PROCESSING_INTERVAL = '0/6 * * * * *' // Every 6 seconds
-const ADJUST_BATCH_SIZE = '1/2 * * * * *' // Every 2 seconds
-const CHECK_VLLM_STATUS = '1/2 * * * * *' // Every 2 seconds
-const CLEANUP_STALE_REQUESTS = '0 */5 * * * *' // Every 5 minutes
+const NEW_ARTICLES_INTERVAL = '0/2 * * * * *'
+const LLM_PROCESSING_INTERVAL = '0/6 * * * * *'
+const ADJUST_BATCH_SIZE = '* */1 * * * *'
+const CHECK_VLLM_STATUS = '* */1 * * * *'
+const CLEANUP_STALE_REQUESTS = '0 */5 * * * *'
 
 const getNewArticlesForJobs = async (): Promise<void> => {
   if (!env.RUN_SERVER_JUDGING) return
@@ -42,19 +42,17 @@ const sendToLLMCron = async (): Promise<void> => {
   const allJobs = await judgmentsJobsGetJobs(db)
   await judgmentsJobsSendToLLM(db, allJobs, serverJobId)
 }
+const adjustBatchSizeCron = async (): Promise<void> => {
+  if (!env.RUN_SERVER_JUDGING) return
+  const db = getDatabase()
+  await judgmentsJobsAdjustBatchSize(db)
+}
 
 const checkVLLMStatusCron = async (): Promise<void> => {
   if (!env.RUN_SERVER_JUDGING) return
-  console.log('~~~adjustBatchSizeCron 1.~~~')
+  console.log('~~~judgmentsJobsCheckVLLMStatus 1.~~~')
   const db = getDatabase()
-  await checkVLLMStatus(db)
-}
-
-const adjustBatchSizeCron = async (): Promise<void> => {
-  if (!env.RUN_SERVER_JUDGING) return
-  console.log('~~~adjustBatchSizeCron 1.~~~')
-  const db = getDatabase()
-  await judgmentsJobsAdjustBatchSize(db)
+  await judgmentsJobsCheckVLLMStatus(db)
 }
 
 const cleanupStaleQueueCron = async (): Promise<void> => {

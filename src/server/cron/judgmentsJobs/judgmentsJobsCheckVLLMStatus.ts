@@ -1,4 +1,4 @@
-import {and, desc, eq, inArray} from 'drizzle-orm'
+import {and, desc, eq} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../db/schema.ts'
@@ -50,17 +50,7 @@ const safetyTriggered = (
   return waiting > 4 * thr || (Number.isFinite(gpuCache) && gpuCache > 0.95) || (swapped ?? 0) > 0
 }
 
-const computeAdmission = (genTpsEma: number, targetGenTps: number, running: number, waiting: number) => {
-  const inFlight = waiting + running
-  const maxInFlight = clamp(64, 4096, Math.round(running * 6))
-  const headroom = Math.max(0, maxInFlight - inFlight)
-  const perReqGenTps = running > 0 ? genTpsEma / running : 20
-  const effPerReq = perReqGenTps > 1 ? perReqGenTps : 20
-  const tpsHeadroom = Math.max(0, targetGenTps - genTpsEma)
-  const needForTps = Math.ceil(tpsHeadroom / effPerReq)
-  const admit = Math.max(0, Math.min(headroom, needForTps))
-  return {admit, inFlight, maxInFlight}
-}
+// Note: Admission control removed. Only computing status metrics now.
 
 const toJSON = (data: unknown): string => {
   try {
@@ -72,17 +62,12 @@ const toJSON = (data: unknown): string => {
 
 export const judgmentsJobsCheckVLLMStatus = async (db: PostgresJsDatabase<typeof schema>) => {
   const instanceId = env.VITE_LLM_SERVER_URL
-  const jobs = await db
-    .select({
-      id: schema.judgmentsJobs.id,
-      sendToLLMBatchSize: schema.judgmentsJobs.sendToLLMBatchSize,
-      sendToLLMInterval: schema.judgmentsJobs.sendToLLMInterval,
-      modelName: schema.models.modelName,
-    })
+  const jobModels = await db
+    .select({modelName: schema.models.modelName})
     .from(schema.judgmentsJobs)
     .leftJoin(schema.projects, eq(schema.judgmentsJobs.projectId, schema.projects.id))
     .leftJoin(schema.models, eq(schema.projects.modelId, schema.models.id))
-  const modelName = jobs[0]?.modelName ?? 'unknown'
+  const modelName = jobModels[0]?.modelName ?? 'unknown'
   const prev = await getLatestStatus(db, instanceId, modelName)
   const {
     promptTokensTotal,
@@ -149,21 +134,9 @@ export const judgmentsJobsCheckVLLMStatus = async (db: PostgresJsDatabase<typeof
   const tGen = isUnsafe ? targetGenFinal * 0.6 : targetGenFinal
   const tPre = isUnsafe ? targetPrefillFinal * 0.6 : targetPrefillFinal
 
-  const {admit, inFlight, maxInFlight} = computeAdmission(genTps, tGen, numRequestsRunning, numRequestsWaiting)
-
-  const jobCount = Math.max(1, jobs.length)
-  const suggestedPerJob = Math.max(1, Math.round(admit / jobCount))
-  const boundedPerJob = clamp(1, 512, suggestedPerJob)
-
-  const jobIds = jobs.map((j) => {
-    return j.id
-  })
-  if (jobIds.length > 0) {
-    await db
-      .update(schema.judgmentsJobs)
-      .set({sendToLLMBatchSize: boundedPerJob})
-      .where(inArray(schema.judgmentsJobs.id, jobIds))
-  }
+  // Compute simple in-flight status metrics (no batch-size adjustments)
+  const inFlight = numRequestsWaiting + numRequestsRunning
+  const maxInFlight = clamp(64, 4096, Math.round(numRequestsRunning * 6))
 
   const vllmStatusData = {
     instanceId,
@@ -188,12 +161,12 @@ export const judgmentsJobsCheckVLLMStatus = async (db: PostgresJsDatabase<typeof
     targetPrefillTps: tPre,
     inFlight,
     maxInFlight,
-    lastAction: toJSON({bestGen, smallQueue: wasSmall, safety: isUnsafe, admit, perJob: boundedPerJob}),
+    lastAction: toJSON({bestGen, smallQueue: wasSmall, safety: isUnsafe}),
     e2eLatency: null,
     ttftLatency: null,
     itlLatency: null,
   }
 
   await db.insert(schema.vllmStatus).values(vllmStatusData)
-  console.log('~~~adjustBatchSizeCron (vllmStatusData sent) 2.~~~')
+  console.log('~~~judgmentsJobsCheckVLLMStatus (vllmStatusData sent) 2.~~~')
 }
