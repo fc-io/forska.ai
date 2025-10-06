@@ -1,10 +1,8 @@
 import {useQuery} from '@tanstack/solid-query'
-import {format} from 'date-fns'
 import type {Setter} from 'solid-js'
 import {createEffect, For, Show} from 'solid-js'
 
 import {apiClient} from '../../../services/apiClient.ts'
-import {DateRangePicker} from '../commands/subheaderSettingsPanel/subheaderSettingsPanelDateRangePicker.tsx'
 
 interface ReviewsFilterControlsProps {
   projectId: string
@@ -13,10 +11,10 @@ interface ReviewsFilterControlsProps {
   pageLimit: () => number
   setPageLimit: Setter<number>
   setCurrentPage: Setter<number>
-  fromDate: Date
-  toDate: Date
-  setFromDate: Setter<Date>
-  setToDate: Setter<Date>
+  fromDate: string
+  toDate: string
+  setFromDate: Setter<string>
+  setToDate: Setter<string>
 }
 
 export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
@@ -30,17 +28,15 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
       queryKey: [
         'project-articles-reviews-filters',
         props.projectId,
-        format(props.fromDate, 'yyyy-MM-dd'),
-        format(props.toDate, 'yyyy-MM-dd'),
+        props.fromDate || null,
+        props.toDate || null,
       ],
       queryFn: async () => {
-        const response = await apiClient.api.articlesreviewsfilters.get({
-          query: {
-            projectId: props.projectId,
-            from: format(props.fromDate, 'yyyy-MM-dd'),
-            to: format(props.toDate, 'yyyy-MM-dd'),
-          },
-        })
+        const query: Record<string, string> = {projectId: props.projectId}
+        if (props.fromDate) query.from = props.fromDate
+        if (props.toDate) query.to = props.toDate
+
+        const response = await apiClient.api.articlesreviewsfilters.get({query})
 
         if (!response.data) {
           throw new Error('Failed to fetch filters')
@@ -85,16 +81,33 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
 
   return (
     <div class="p-4 bg-white rounded-lg shadow mb-6">
-      <div class="flex items-center gap-4 pb-4 border-b">
-        <DateRangePicker
-          defaultStart={props.fromDate}
-          defaultEnd={props.toDate}
-          onValueChange={([start, end]) => {
-            props.setFromDate(start)
-            props.setToDate(end)
-            props.setCurrentPage(1)
-          }}
-        />
+      <div class="flex items-center gap-4 pb-4 border-b w-full">
+        <label class="flex flex-col text-sm font-medium gap-1 w-44">
+          <span>Start Date</span>
+          <input
+            type="text"
+            value={props.fromDate}
+            onInput={(e) => {
+              props.setFromDate(e.currentTarget.value)
+              props.setCurrentPage(1)
+            }}
+            placeholder="YYYY-MM-DD"
+            class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+          />
+        </label>
+        <label class="flex flex-col text-sm font-medium gap-1 w-44">
+          <span>End Date</span>
+          <input
+            type="text"
+            value={props.toDate}
+            onInput={(e) => {
+              props.setToDate(e.currentTarget.value)
+              props.setCurrentPage(1)
+            }}
+            placeholder="YYYY-MM-DD"
+            class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+          />
+        </label>
         <div class="ml-auto flex items-center gap-2">
           <label class="font-medium">Items per page:</label>
           <select

@@ -15,9 +15,9 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
       const limit = parseInt(body?.limit || '100', 10)
       const offset = (page - 1) * limit
 
-      // Parse date range
-      const fromDate = new Date(`${body.from}T00:00:00.000Z`)
-      const toDate = new Date(`${body.to}T23:59:59.999Z`)
+      // Parse optional date range
+      const fromDate = body.from ? new Date(`${body.from}T00:00:00.000Z`) : null
+      const toDate = body.to ? new Date(`${body.to}T23:59:59.999Z`) : null
 
       // First get all prompts for this project
       const projectPrompts = await db.select().from(prompts).where(eq(prompts.projectId, body.projectId))
@@ -66,14 +66,18 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
           .where(and(eq(judgments.articleId, articles.id), inArray(judgments.promptId, promptIds)))}
       )`
 
-      // Always apply date range on articles.created_at
-      const dateRangeCondition = and(gte(articles.createdAt, fromDate), lte(articles.createdAt, toDate))
+      // Build final where parts with optional date bounds
+      const whereParts: Array<ReturnType<typeof sql>> =
+        conditions.length > 0 ? [...conditions] : [baseExistsCondition]
 
-      // Combine where conditions: ensure baseExistsCondition (or prompt filters) AND date range
-      const combinedWhereCondition =
-        conditions.length > 0
-          ? and(...conditions, dateRangeCondition)
-          : and(baseExistsCondition, dateRangeCondition)
+      if (fromDate) {
+        whereParts.push(gte(articles.createdAt, fromDate))
+      }
+      if (toDate) {
+        whereParts.push(lte(articles.createdAt, toDate))
+      }
+
+      const combinedWhereCondition = whereParts.length > 1 ? and(...whereParts) : whereParts[0]
 
       // First, get the total count
       const countQuery = await db
@@ -141,12 +145,12 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
   },
   {
     body: t.Object({
-      from: t.String(),
+      from: t.Optional(t.String()),
       limit: t.String(),
       page: t.String(),
       projectId: t.String(),
       prompts: t.Record(t.String(), t.String()),
-      to: t.String(),
+      to: t.Optional(t.String()),
     }),
   },
 )

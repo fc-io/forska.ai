@@ -27,8 +27,8 @@ import {ReviewsPaginationControls} from '../../../../../components/main/reviews/
 // }
 
 const Reviews = () => {
-  const [fromDate, setFromDate] = createSignal(new Date())
-  const [toDate, setToDate] = createSignal(new Date())
+  const [fromDate, setFromDate] = createSignal('')
+  const [toDate, setToDate] = createSignal('')
   const params = Route.useParams()
   const projectId = (params() as {id: string}).id
   const [promptFilters, setPromptFilters] = createSignal<Record<string, string | null>>({})

@@ -1,16 +1,19 @@
-import {format} from 'date-fns'
 import type {Accessor} from 'solid-js'
 
 import {apiClient} from '../../../services/apiClient.ts'
+
+const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/
 
 export const createArticlesReviewsQueryOptions = (
   projectId: string,
   promptFilters: Accessor<Record<string, string | null>>,
   currentPage: Accessor<number>,
   pageLimit: Accessor<number>,
-  fromDate: Accessor<Date>,
-  toDate: Accessor<Date>,
+  fromDateStr: Accessor<string>,
+  toDateStr: Accessor<string>,
 ) => {
+  const fromStr = () => fromDateStr().trim()
+  const toStr = () => toDateStr().trim()
   return {
     queryKey: [
       'project-articles-reviews-filters',
@@ -18,16 +21,14 @@ export const createArticlesReviewsQueryOptions = (
       promptFilters(),
       currentPage(),
       pageLimit(),
-      fromDate(),
-      toDate(),
+      fromStr(),
+      toStr(),
     ],
     queryFn: async () => {
-      const body = {
+      const body: Record<string, unknown> = {
         page: String(currentPage()),
         limit: String(pageLimit()),
         projectId,
-        from: format(fromDate(), 'yyyy-MM-dd'),
-        to: format(toDate(), 'yyyy-MM-dd'),
         prompts: Object.entries(promptFilters()).reduce(
           (acc, [promptId, value]) => {
             if (value !== null) {
@@ -37,6 +38,12 @@ export const createArticlesReviewsQueryOptions = (
           },
           {} as Record<string, string>,
         ),
+      }
+      if (isoDatePattern.test(fromStr())) {
+        body.from = fromStr()
+      }
+      if (isoDatePattern.test(toStr())) {
+        body.to = toStr()
       }
 
       const response = await apiClient.api.articlesreviews.post(body)
