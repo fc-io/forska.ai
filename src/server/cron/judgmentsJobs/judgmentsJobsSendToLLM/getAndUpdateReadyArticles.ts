@@ -8,9 +8,9 @@ export type ArticleToProcess = {
   articleId: string
   recordId: string
   projectId: string
-  modelId: string | null
-  modelName: string | null
-  modelBaseUrl: string | null
+  modelId: string
+  modelName: string
+  modelBaseUrl: string
 }
 
 const processReadyRows = async (
@@ -66,22 +66,37 @@ const processReadyRows = async (
   const jobConfigPairs = jobConfigs.map((config) => {
     return [config.jobId, config] as const
   })
+  console.log('jobConfigPairs', jobConfigPairs)
   const jobConfigMap = new Map(jobConfigPairs)
 
-  const articlesWithProjects = selectedArticles.map((article) => {
-    const config = jobConfigMap.get(article.jobId)
-    return {
-      ...article,
-      projectId: config?.projectId || '',
-      modelId: config?.modelId ?? null,
-      modelName: config?.modelName ?? null,
-      modelBaseUrl: config?.modelBaseUrl ?? null,
-    }
-  })
+  const articlesWithProjects = selectedArticles
+    .map((article) => {
+      const config = jobConfigMap.get(article.jobId)
+      if (!config?.projectId || !config?.modelId || !config?.modelName || !config?.modelBaseUrl) {
+        console.error('Article missing required model config:', {
+          articleId: article.articleId,
+          jobId: article.jobId,
+          hasConfig: !!config,
+          projectId: config?.projectId,
+          modelId: config?.modelId,
+          modelName: config?.modelName,
+          modelBaseUrl: config?.modelBaseUrl,
+        })
+        return null
+      }
+      return {
+        ...article,
+        projectId: config.projectId,
+        modelId: config.modelId,
+        modelName: config.modelName,
+        modelBaseUrl: config.modelBaseUrl,
+      }
+    })
+    .filter((article): article is ArticleToProcess => {
+      return article !== null
+    })
 
-  return articlesWithProjects.filter((article) => {
-    return article.projectId
-  })
+  return articlesWithProjects
 }
 
 export const getAndUpdateReadyArticles = async (
