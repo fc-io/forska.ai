@@ -242,6 +242,13 @@ export const projectsRoutes = new Elysia()
         if (body.description !== undefined) updateData.description = body.description
         if (parsedDateFrom !== undefined) updateData.dateFrom = parsedDateFrom
         if (parsedDateTo !== undefined) updateData.dateTo = parsedDateTo
+        if (body.modelId !== undefined) {
+          const [validModel] = await tx.select({id: models.id}).from(models).where(eq(models.id, body.modelId)).limit(1)
+          if (!validModel) {
+            throw new Error('Selected model does not exist')
+          }
+          updateData.modelId = body.modelId
+        }
 
         const [updatedProject] = await tx.update(projects).set(updateData).where(eq(projects.id, params.id)).returning()
 
@@ -329,6 +336,7 @@ export const projectsRoutes = new Elysia()
         description: t.Optional(t.Union([t.String(), t.Null()])),
         dateFrom: t.Optional(t.Union([t.String(), t.Null()])),
         dateTo: t.Optional(t.Union([t.String(), t.Null()])),
+        modelId: t.Optional(t.String()),
         prompts: t.Optional(
           t.Array(
             t.Object({

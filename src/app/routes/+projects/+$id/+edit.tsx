@@ -6,6 +6,7 @@ import {createStore} from 'solid-js/store'
 
 import {Button} from '../../../../components/ui/button'
 import {apiClient} from '../../../../services/apiClient'
+import {handleApiResponse} from '../../../../services/utils/handleApiResponse'
 import {fetchProjectWithPrompts} from '../../../../services/projectsService'
 
 type PromptItem = {
@@ -33,7 +34,15 @@ type ProjectSummary = {
   dateTo: string | Date | null
 }
 
-type ProjectDetailsResponse = {project: ProjectSummary; prompts: ProjectPromptResponse[]; hasJudgedArticles: boolean}
+type ModelOption = {id: string; name: string; provider: string | null; modelName: string | null}
+type ModelsResponse = {data: ModelOption[]}
+
+type ProjectDetailsResponse = {
+  project: ProjectSummary
+  prompts: ProjectPromptResponse[]
+  hasJudgedArticles: boolean
+  model?: {id: string; name: string; provider?: string | null; modelName?: string | null} | null
+}
 
 type ParsedDateResult = {date: Date | null; normalized: string | null; error: string | null}
 
@@ -82,13 +91,18 @@ const isProjectDetailsResponse = (value: unknown): value is ProjectDetailsRespon
   const project = details.project
   const prompts = details.prompts
   const hasJudgedArticles = details.hasJudgedArticles
+  const model = details.model
   if (!isProjectSummary(project)) {
     return false
   }
   if (!Array.isArray(prompts) || !prompts.every(isProjectPromptResponse)) {
     return false
   }
-  return typeof hasJudgedArticles === 'boolean'
+  const isValidModel =
+    model === undefined ||
+    model === null ||
+    (typeof model === 'object' && model !== null && typeof (model as {id?: unknown}).id === 'string')
+  return typeof hasJudgedArticles === 'boolean' && isValidModel
 }
 
 const buildExistingPrompt = (prompt: ProjectPromptResponse): PromptItem => {
@@ -201,6 +215,28 @@ const EditProject = (): JSX.Element => {
   const [dateTo, setDateTo] = createSignal('')
   const [isLoading, setIsLoading] = createSignal(false)
   const [errorMessage, setErrorMessage] = createSignal<string | null>(null)
+  const [selectedModelId, setSelectedModelId] = createSignal('')
+
+  const modelsQuery = useQuery(() => {
+    return {
+      queryKey: ['models'],
+      queryFn: async () => {
+        const response = await apiClient.api.models.get()
+        const result = handleApiResponse<ModelsResponse>(response, 'Failed to load models')
+        return result.data ?? []
+      },
+      staleTime: 1000 * 60 * 5,
+    }
+  })
+
+  const createDefaultModel = async () => {
+    await apiClient.api.judgments.model.get()
+    await modelsQuery.refetch()
+  }
+
+  const availableModels = () => {
+    return modelsQuery.data ?? []
+  }
 
   const projectDetails = createMemo(() => {
     const data = projectData.data
@@ -233,10 +269,21 @@ const EditProject = (): JSX.Element => {
       setDateFrom(formatDateForInput(details.project.dateFrom))
       setDateTo(formatDateForInput(details.project.dateTo))
       setPrompts(mapPromptsFromResponse(details.prompts))
+      if (!selectedModelId() && details.model?.id) {
+        setSelectedModelId(details.model.id)
+      }
     } else if (projectData.isSuccess) {
       setPrompts([buildEmptyPrompt(1)])
       setDateFrom('')
       setDateTo('')
+    }
+  })
+
+  createEffect(() => {
+    const models = availableModels()
+    const firstId = models[0]?.id
+    if (!selectedModelId() && firstId) {
+      setSelectedModelId(firstId)
     }
   })
 
@@ -274,6 +321,7 @@ const EditProject = (): JSX.Element => {
         prompts: promptsPayload,
         dateFrom: startDate,
         dateTo: endDate,
+        modelId: selectedModelId() || undefined,
       })
 
     if (response.error || !response.data?.data) {
@@ -370,6 +418,52 @@ const EditProject = (): JSX.Element => {
           </Show>
 
           <form onSubmit={handleSubmit} class="space-y-6">
+            <div>
+              <label for="model" class="block text-sm font-medium mb-2">
+                Model
+              </label>
+              <Show when={modelsQuery.isLoading}>
+                <p class="text-sm text-muted-foreground">Loading models...</p>
+              </Show>
+              <Show when={modelsQuery.isError}>
+                <p class="text-sm text-red-600">
+                  {modelsQuery.error instanceof Error ? modelsQuery.error.message : 'Failed to load models'}
+                </p>
+              </Show>
+              <Show when={!modelsQuery.isLoading && !modelsQuery.isError && availableModels().length > 0}>
+                <select
+                  id="model"
+                  class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
+                  value={selectedModelId()}
+                  onChange={(event) => {
+                    return setSelectedModelId(event.currentTarget.value)
+                  }}
+                  disabled={isLocked()}
+                >
+                  <For each={availableModels()}>
+                    {(m) => {
+                      return <option value={m.id}>{m.name}</option>
+                    }}
+                  </For>
+                </select>
+              </Show>
+              <Show when={!modelsQuery.isLoading && !modelsQuery.isError && availableModels().length === 0}>
+                <div class="flex items-center justify-between gap-3">
+                  <p class="text-sm text-muted-foreground">No models available.</p>
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => {
+                      return void createDefaultModel()
+                    }}
+                    disabled={isLocked()}
+                    class={actionStateClass()}
+                  >
+                    Create default model
+                  </Button>
+                </div>
+              </Show>
+            </div>
             <div>
               <label for="project-name" class="block text-sm font-medium mb-2">
                 Project Name *
