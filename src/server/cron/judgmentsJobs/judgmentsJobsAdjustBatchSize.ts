@@ -33,6 +33,7 @@ const getLatestSmallQueue = async (db: PostgresJsDatabase<typeof schema>): Promi
     .leftJoin(schema.models, eq(schema.models.id, schema.projects.modelId))
   const modelName = jobModels[0]?.modelName ?? 'unknown'
 
+  // TODO: handle use of multiple models. It would be weird if we limit the speed of an external model.
   const rows = await db
     .select()
     .from(schema.vllmStatus)
