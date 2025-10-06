@@ -171,7 +171,7 @@ const getUnassessedArticles = async ({
     })
     .from(articles)
     .where(sql`${sql.join(whereClauses, sql` AND `)}`)
-    .orderBy(sql`COALESCE(${articles.articleUpdatedAt}, ${articles.createdAt}) DESC`)
+    .orderBy(sql`COALESCE(${articles.articleUpdatedAt}, ${articles.createdAt}) DESC, ${articles.id} DESC`)
 
   return articlesToAssess
 }
