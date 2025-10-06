@@ -105,6 +105,9 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
                   </Button>
                 </div>
                 <div class="flex gap-2">
+                  <Button size="sm" variant="outline" class="px-3 py-1 text-sm">
+                    Clone Project
+                  </Button>
                   <Button
                     size="sm"
                     class="px-3 py-1 text-sm"
