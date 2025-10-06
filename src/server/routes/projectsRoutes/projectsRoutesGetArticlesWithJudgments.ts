@@ -1,4 +1,4 @@
-import {and, desc, eq, sql} from 'drizzle-orm'
+import {and, desc, eq, gte, lte, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {articles, judgments, prompts} from '../../../db/schema.ts'
@@ -28,7 +28,15 @@ export const projectsRoutesGetArticlesWithJudgments = new Elysia().get(
       })
 
       // Build the base query conditions
-      const conditions = []
+      const conditions: Array<ReturnType<typeof sql>> = []
+
+      // Optional date range
+      const fromDate = query.from ? new Date(`${query.from}T00:00:00.000Z`) : null
+      const toDate = query.to ? new Date(`${query.to}T23:59:59.999Z`) : null
+      const dateRangeCondition = fromDate && toDate ? and(gte(articles.createdAt, fromDate), lte(articles.createdAt, toDate)) : null
+      if (dateRangeCondition) {
+        conditions.push(dateRangeCondition)
+      }
 
       // Add filter for answered_original if provided
       if (query.answered_original !== undefined) {
@@ -49,13 +57,7 @@ export const projectsRoutesGetArticlesWithJudgments = new Elysia().get(
       }
 
       // First, get the total count
-      const countQuery = await db
-        .select({count: sql<number>`COUNT(DISTINCT ${articles.id})`.as('count')})
-        .from(articles)
-        .where(
-          conditions.length > 0
-            ? and(...conditions)
-            : sql`EXISTS (
+      const baseExistsCondition = sql`EXISTS (
                 SELECT 1 FROM ${judgments}
                 WHERE ${judgments.articleId} = ${articles.id}
                 AND ${judgments.promptId} = ANY(ARRAY[${sql.join(
@@ -64,8 +66,15 @@ export const projectsRoutesGetArticlesWithJudgments = new Elysia().get(
                   }),
                   sql`,`,
                 )}])
-              )`,
-        )
+              )`
+
+      const combinedWhereForCount =
+        conditions.length > 0 ? and(baseExistsCondition, ...conditions) : baseExistsCondition
+
+      const countQuery = await db
+        .select({count: sql<number>`COUNT(DISTINCT ${articles.id})`.as('count')})
+        .from(articles)
+        .where(combinedWhereForCount)
         .innerJoin(
           judgments,
           and(
@@ -84,6 +93,9 @@ export const projectsRoutesGetArticlesWithJudgments = new Elysia().get(
       const totalCount = countQuery.length
 
       // Query articles that have judgments for ALL prompts with pagination
+      const combinedWhereForList =
+        conditions.length > 0 ? and(baseExistsCondition, ...conditions) : baseExistsCondition
+
       const articlesWithJudgments = await db
         .select({
           article: articles,
@@ -100,20 +112,7 @@ export const projectsRoutesGetArticlesWithJudgments = new Elysia().get(
           )`.as('judgment_count'),
         })
         .from(articles)
-        .where(
-          conditions.length > 0
-            ? and(...conditions)
-            : sql`EXISTS (
-                SELECT 1 FROM ${judgments}
-                WHERE ${judgments.articleId} = ${articles.id}
-                AND ${judgments.promptId} = ANY(ARRAY[${sql.join(
-                  promptIds.map((id) => {
-                    return sql`${id}::uuid`
-                  }),
-                  sql`,`,
-                )}])
-              )`,
-        )
+        .where(combinedWhereForList)
         .having(sql`COUNT(DISTINCT ${judgments.promptId}) = ${promptIds.length}`)
         .innerJoin(
           judgments,
@@ -193,6 +192,8 @@ export const projectsRoutesGetArticlesWithJudgments = new Elysia().get(
       answered_original: t.Optional(t.String()),
       page: t.Optional(t.String()),
       limit: t.Optional(t.String()),
+      from: t.Optional(t.String()),
+      to: t.Optional(t.String()),
     }),
   },
 )

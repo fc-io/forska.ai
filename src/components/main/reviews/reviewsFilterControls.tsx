@@ -1,6 +1,7 @@
 import {useQuery} from '@tanstack/solid-query'
+import {format} from 'date-fns'
 import type {Setter} from 'solid-js'
-import {For, Show} from 'solid-js'
+import {createEffect, For, Show} from 'solid-js'
 
 import {apiClient} from '../../../services/apiClient.ts'
 import {DateRangePicker} from '../commands/subheaderSettingsPanel/subheaderSettingsPanelDateRangePicker.tsx'
@@ -26,9 +27,20 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
 
   const filtersQuery = useQuery(() => {
     return {
-      queryKey: ['project-articles-reviews-filters', props.projectId],
+      queryKey: [
+        'project-articles-reviews-filters',
+        props.projectId,
+        format(props.fromDate, 'yyyy-MM-dd'),
+        format(props.toDate, 'yyyy-MM-dd'),
+      ],
       queryFn: async () => {
-        const response = await apiClient.api.articlesreviewsfilters.get({query: {projectId: props.projectId}})
+        const response = await apiClient.api.articlesreviewsfilters.get({
+          query: {
+            projectId: props.projectId,
+            from: format(props.fromDate, 'yyyy-MM-dd'),
+            to: format(props.toDate, 'yyyy-MM-dd'),
+          },
+        })
 
         if (!response.data) {
           throw new Error('Failed to fetch filters')
@@ -46,8 +58,59 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
     props.setCurrentPage(1)
   }
 
+  createEffect(() => {
+    const maybe = (filtersQuery as unknown as {data?: unknown}).data
+    const filters = typeof maybe === 'function' ? (maybe as () => Array<{promptId: string; answeredOriginalValues: string[]}> )() : (maybe as Array<{promptId: string; answeredOriginalValues: string[]}> | undefined)
+    if (!filters) {
+      return
+    }
+    const allowedByPrompt: Record<string, Set<string>> = filters.reduce((acc, f) => {
+      acc[f.promptId] = new Set(f.answeredOriginalValues)
+      return acc
+    }, {} as Record<string, Set<string>>)
+    props.setPromptFilters((prev) => {
+      const next: Record<string, string | null> = {}
+      for (const [promptId, value] of Object.entries(prev)) {
+        if (value === null) {
+          next[promptId] = null
+        } else if (allowedByPrompt[promptId]?.has(value)) {
+          next[promptId] = value
+        } else {
+          next[promptId] = null
+        }
+      }
+      return next
+    })
+  })
+
   return (
     <div class="p-4 bg-white rounded-lg shadow mb-6">
+      <div class="flex items-center gap-4 pb-4 border-b">
+        <DateRangePicker
+          defaultStart={props.fromDate}
+          defaultEnd={props.toDate}
+          onValueChange={([start, end]) => {
+            props.setFromDate(start)
+            props.setToDate(end)
+            props.setCurrentPage(1)
+          }}
+        />
+        <div class="ml-auto flex items-center gap-2">
+          <label class="font-medium">Items per page:</label>
+          <select
+            class="px-3 py-2 border rounded-md"
+            value={String(props.pageLimit())}
+            onChange={(e) => {
+              return handleLimitChange(parseInt(e.target.value))
+            }}
+          >
+            <option value="50">50</option>
+            <option value="100">100</option>
+            <option value="200">200</option>
+            <option value="500">500</option>
+          </select>
+        </div>
+      </div>
       <Show when={filtersQuery.data}>
         {(data) => {
           const filters = data()
@@ -82,31 +145,6 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
                     )
                   }}
                 </For>
-              </div>
-              <div class="flex items-center gap-4 pt-4 border-t">
-                <div>
-                  <DateRangePicker
-                    defaultStart={props.fromDate}
-                    defaultEnd={props.toDate}
-                    onValueChange={([start, end]) => {
-                      props.setFromDate(start)
-                      props.setToDate(end)
-                    }}
-                  />
-                </div>
-                <label class="font-medium">Items per page:</label>
-                <select
-                  class="px-3 py-2 border rounded-md"
-                  value={String(props.pageLimit())}
-                  onChange={(e) => {
-                    return handleLimitChange(parseInt(e.target.value))
-                  }}
-                >
-                  <option value="50">50</option>
-                  <option value="100">100</option>
-                  <option value="200">200</option>
-                  <option value="500">500</option>
-                </select>
               </div>
             </div>
           )

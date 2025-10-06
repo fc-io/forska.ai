@@ -17,13 +17,13 @@ export const isReadyToGetMoreArticles = (
   // sendToLLMCronJob call so that if we increase the amount of articles to send we will already
   // have enough articles in the ready queue.
   const isReady = numberOfArticlesInReadyQueue < getTotalNumberOfArticlesToProcessInEachBatch(allJobs) * 3
-  console.log(
-    'GetMoreArticles',
-    isReady,
-    'numberOfArticlesInReadyQueue',
-    numberOfArticlesInReadyQueue,
-    'articlesToProcessInEachBatch',
-    getTotalNumberOfArticlesToProcessInEachBatch(allJobs) * 3,
-  )
+  // console.log(
+  //   'GetMoreArticles',
+  //   isReady,
+  //   'numberOfArticlesInReadyQueue',
+  //   numberOfArticlesInReadyQueue,
+  //   'articlesToProcessInEachBatch',
+  //   getTotalNumberOfArticlesToProcessInEachBatch(allJobs) * 3,
+  // )
   return isReady
 }

@@ -6,6 +6,7 @@ import {getArticleUrl} from '../../../app/utils/getArticleUrl.ts'
 import type {articles, judgments} from '../../../db/schema.ts'
 import {apiClient} from '../../../services/apiClient.ts'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse'
+import {DateRangePicker} from '../../main/commands/subheaderSettingsPanel/subheaderSettingsPanelDateRangePicker.tsx'
 
 type ArticleWithJudgments = typeof articles.$inferSelect & {judgments: Array<typeof judgments.$inferSelect>}
 
@@ -13,6 +14,8 @@ export const ProjectDetailsArticles = (props: {projectId: string}) => {
   const [filterAnsweredOriginal, setFilterAnsweredOriginal] = createSignal<boolean | null>(null)
   const [currentPage, setCurrentPage] = createSignal(1)
   const [pageLimit, setPageLimit] = createSignal(100)
+  const [fromDate, setFromDate] = createSignal(new Date())
+  const [toDate, setToDate] = createSignal(new Date())
 
   const articlesQuery = useQuery(() => {
     return {
@@ -22,9 +25,11 @@ export const ProjectDetailsArticles = (props: {projectId: string}) => {
         filterAnsweredOriginal(),
         currentPage(),
         pageLimit(),
+        fromDate(),
+        toDate(),
       ],
       queryFn: async () => {
-        const queryParams: {answered_original?: string; page?: string; limit?: string} = {
+        const queryParams: {answered_original?: string; page?: string; limit?: string; from?: string; to?: string} = {
           page: String(currentPage()),
           limit: String(pageLimit()),
         }
@@ -32,6 +37,8 @@ export const ProjectDetailsArticles = (props: {projectId: string}) => {
         if (filterAnsweredOriginal() !== null) {
           queryParams.answered_original = String(filterAnsweredOriginal())
         }
+        queryParams.from = format(fromDate(), 'yyyy-MM-dd')
+        queryParams.to = format(toDate(), 'yyyy-MM-dd')
         const response = await apiClient.api
           .projects({id: props.projectId})
           ['articles-with-judgments'].get({query: queryParams})
@@ -60,7 +67,16 @@ export const ProjectDetailsArticles = (props: {projectId: string}) => {
   return (
     <>
       <div class="flex items-center gap-4 p-4 bg-white rounded-lg shadow">
-        <label class="font-medium">Filter by answered_original:</label>
+        <DateRangePicker
+          defaultStart={fromDate()}
+          defaultEnd={toDate()}
+          onValueChange={([start, end]) => {
+            setFromDate(start)
+            setToDate(end)
+            setCurrentPage(1)
+          }}
+        />
+        <label class="font-medium ml-4">Filter by answered_original:</label>
         <select
           class="px-3 py-2 border rounded-md"
           value={filterAnsweredOriginal() === null ? 'all' : String(filterAnsweredOriginal())}

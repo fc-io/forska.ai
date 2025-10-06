@@ -1,7 +1,7 @@
-import {eq, sql} from 'drizzle-orm'
+import {and, eq, gte, lte, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {judgments, prompts} from '../../../db/schema.ts'
+import {articles, judgments, prompts} from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
 export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
@@ -16,6 +16,9 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
         throw new Error('Project ID is required')
       }
 
+      const fromDate = query?.from ? new Date(`${query.from}T00:00:00.000Z`) : null
+      const toDate = query?.to ? new Date(`${query.to}T23:59:59.999Z`) : null
+
       // Get all prompts for this project
       const projectPrompts = await db
         .select({id: prompts.id, promptHeading: prompts.promptHeading, originalText: prompts.originalText})
@@ -26,15 +29,20 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
         return []
       }
 
-      // For each prompt, get unique answered_original values
+      // For each prompt, get unique answered_original values (optionally scoped by date range)
       const promptFilters = await Promise.all(
         projectPrompts.map(async (prompt) => {
-          const uniqueValues = await db.execute<{answered_original: string}>(
-            sql`SELECT DISTINCT answered_original
+          const base = sql`SELECT DISTINCT ${judgments.answeredOriginal} as answered_original
                 FROM ${judgments}
-                WHERE prompt_id = ${prompt.id}::uuid
-                ORDER BY answered_original`,
-          )
+                INNER JOIN ${articles} ON ${articles.id} = ${judgments.articleId}
+                WHERE ${judgments.promptId} = ${prompt.id}::uuid`
+
+          const dateScoped =
+            fromDate && toDate
+              ? sql`${base} AND ${and(gte(articles.createdAt, fromDate), lte(articles.createdAt, toDate))} ORDER BY ${judgments.answeredOriginal}`
+              : sql`${base} ORDER BY ${judgments.answeredOriginal}`
+
+          const uniqueValues = await db.execute<{answered_original: string}>(dateScoped)
 
           return {
             promptId: prompt.id,
@@ -53,5 +61,5 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
       throw new Error(error instanceof Error ? error.message : 'Failed to fetch articles reviews filters')
     }
   },
-  {query: t.Object({projectId: t.String()})},
+  {query: t.Object({projectId: t.String(), from: t.Optional(t.String()), to: t.Optional(t.String())})},
 )
