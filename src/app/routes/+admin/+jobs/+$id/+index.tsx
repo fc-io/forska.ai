@@ -96,6 +96,26 @@ const AdminJudgmentJobDetail = () => {
           {(jobData) => {
             // Keep as accessor to preserve Solid reactivity
             const data = jobData
+            const jobDetails = data() as Record<string, unknown> | undefined
+            const unassessedArticlesValue =
+              jobDetails && 'unassessedArticlesCount' in jobDetails
+                ? (jobDetails as {unassessedArticlesCount?: number | string}).unassessedArticlesCount
+                : 0
+            const unassessedArticlesCount =
+              typeof unassessedArticlesValue === 'number'
+                ? unassessedArticlesValue
+                : Number(unassessedArticlesValue) || 0
+            const formattedUnassessedArticlesCount = unassessedArticlesCount.toLocaleString()
+            const jobIdValue =
+              jobDetails && 'id' in jobDetails
+                ? (jobDetails as {id?: string | number}).id
+                : undefined
+            const jobId =
+              typeof jobIdValue === 'number' || typeof jobIdValue === 'string' ? String(jobIdValue) : ''
+            const shouldLinkToUnassessedArticles = Boolean(jobId && unassessedArticlesCount > 0)
+            const unassessedArticlesLink = shouldLinkToUnassessedArticles
+              ? `/admin/jobs/${jobId}/unassessed_articles`
+              : ''
             return (
               <>
                 <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
@@ -139,26 +159,12 @@ const AdminJudgmentJobDetail = () => {
                     <Show when={data() && 'unassessedArticlesCount' in (data() as any)}>
                       <div class="mb-4 space-y-1">
                         <p class="text-sm text-gray-500">Unassessed Articles</p>
-                        <p class="font-medium">
-                          {data() && 'unassessedArticlesCount' in (data() as any)
-                            ? (data() as any).unassessedArticlesCount?.toLocaleString() || '0'
-                            : '0'}
-                        </p>
                         <Show
-                          when={
-                            Boolean(
-                              data()?.id &&
-                                (data() && 'unassessedArticlesCount' in (data() as any)
-                                  ? (data() as any).unassessedArticlesCount > 0
-                                  : false),
-                            )
-                          }
+                          when={shouldLinkToUnassessedArticles}
+                          fallback={<p class="font-medium">{formattedUnassessedArticlesCount}</p>}
                         >
-                          <Link
-                            to={`/admin/jobs/${data()?.id}/unassessed_articles`}
-                            class="inline-flex text-sm text-blue-600 hover:text-blue-800"
-                          >
-                            View unassessed articles
+                          <Link to={unassessedArticlesLink} class="font-medium text-blue-600 hover:text-blue-800">
+                            {formattedUnassessedArticlesCount}
                           </Link>
                         </Show>
                       </div>
