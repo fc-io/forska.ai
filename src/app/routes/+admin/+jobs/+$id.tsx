@@ -54,7 +54,7 @@ const AdminJudgmentJobDetail = () => {
 
         return response
       },
-      refetchInterval: 1000 * 15, // Refresh every 30 seconds
+      refetchInterval: 1000 * 2, // Refresh every 30 seconds
     }
   })
   // console.log('job.data:', job.data?.unassessedArticlesCount)
@@ -232,7 +232,11 @@ const AdminJudgmentJobDetail = () => {
                         class="px-4 py-2 bg-yellow-600 text-white rounded-md hover:bg-yellow-700"
                         onClick={() => {
                           const id = data()?.id
-                          return id ? pauseJudgmentsJob(id).then(() => job.refetch()) : undefined
+                          return id
+                            ? pauseJudgmentsJob(id).then(() => {
+                                return job.refetch()
+                              })
+                            : undefined
                         }}
                       >
                         Pause Job
@@ -243,7 +247,11 @@ const AdminJudgmentJobDetail = () => {
                         class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
                         onClick={() => {
                           const id = data()?.id
-                          return id ? startJudgmentsJob(id).then(() => job.refetch()) : undefined
+                          return id
+                            ? startJudgmentsJob(id).then(() => {
+                                return job.refetch()
+                              })
+                            : undefined
                         }}
                       >
                         Start Job
