@@ -12,7 +12,6 @@ IMPORTANT: On the client/app – use import {useQuery} from '@tanstack/solid-que
 IMPORTANT: Keep filenames camelCase, even for TSX/JSX React components.
 There is an .env.local file in the project; you just can't read it because of security concerns. Always assume the .env files are correct unless the env.ts file throws an error. Use process.env instead of Bun's env functionality to stay compatible with ordinary Node.
 
-
 ## File structure
 
 * IMPORTANT: Keep filenames Pascal case, even for TSX/JSX React components.
