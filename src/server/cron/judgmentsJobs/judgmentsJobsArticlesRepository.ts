@@ -45,7 +45,7 @@ export const markArticlesAsJudged = async (
   articleIds: string[],
 ): Promise<void> => {
   if (articleIds.length === 0) return
-
+  // this does not indicate if the article failed to be judged or not
   await db
     .update(schema.judgmentsJobsArticles)
     .set({status: 'judged', judgedAt: new Date(), updatedAt: new Date()})

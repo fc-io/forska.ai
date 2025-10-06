@@ -2,8 +2,6 @@ import OpenAI from 'openai'
 import type {ChatCompletion, ChatCompletionMessage} from 'openai/resources/chat/completions'
 
 import * as schema from '../db/schema.ts'
-import {env} from '../server/utils/env.ts'
-import {apiClient} from '../services/apiClient.ts'
 import {judgeGetPrompt} from './judge/judgeGetPrompt.ts'
 import {parseJudgment} from './judge/judgeParseJudgment.ts'
 import {AIResponseType} from './judge/judgeParseModelResponse.ts'
@@ -12,8 +10,6 @@ import {judgeStoreTokenUse} from './judge/judgeStoreTokenUse.ts'
 import {SYSTEM_PROMPT} from './judge/judgeSystemPrompt.ts'
 
 const openAIClients = new Map<string, OpenAI>()
-const DEFAULT_MODEL_LOOKUP = 'Qwen3-32B-FP8'
-const DEFAULT_MODEL_NAME = './models/Qwen3-32B-FP8'
 
 type ModelConfigInput = {modelId: string; modelName: string; baseURL: string}
 
@@ -196,7 +192,7 @@ const attemptJudgment = async ({
   modelName: string
   article: ArticlesType[number]
   prompts: PromptsType
-  modelId?: string
+  modelId: string
 }): Promise<
   | {success: true; judgment: unknown; usage: {promptTokens: number; completionTokens: number; totalTokens: number}}
   | {success: false; error: string; lastResponse: string}
@@ -226,9 +222,7 @@ const attemptJudgment = async ({
     return p.id
   })
 
-  if (modelId) {
-    await judgeStoreJudgment(article.id, article.articleTitle, judgment, modelId, promptIds)
-  }
+  await judgeStoreJudgment(article.id, article.articleTitle, judgment, modelId, promptIds)
 
   return {
     success: true,
@@ -251,7 +245,7 @@ export const judge = async ({
   articles: ArticlesType
   prompts: PromptsType
   sessionId: string | null
-  judgmentsJobId?: string
+  judgmentsJobId: string
   modelConfig: ModelConfigInput
 }): Promise<void> => {
   const {baseURL, modelName, modelId} = modelConfig
@@ -298,5 +292,7 @@ export const judge = async ({
   const finishedAt = new Date().toISOString()
   // console.log('tokenUse:', tokenUse)
   console.log(`Total aborts: ${abortCount}`)
-  await judgeStoreTokenUse(tokenUse, sessionId, {startedAt, finishedAt, duration}, judgmentsJobId)
+  await judgeStoreTokenUse(tokenUse, sessionId, {startedAt, finishedAt, duration}, judgmentsJobId).catch((error) => {
+    console.error('judgeStoreTokenUse failed; continuing', error instanceof Error ? error.message : error)
+  })
 }
