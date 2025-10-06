@@ -1,6 +1,6 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
-import {createSignal, For, Show} from 'solid-js'
+import {createEffect, createSignal, For, Show} from 'solid-js'
 import {createStore} from 'solid-js/store'
 
 import {Button} from '../../../components/ui/button'
@@ -15,6 +15,9 @@ type ParsedDateResult = {date: Date | null; normalized: string | null; error: st
 type DataSourceOption = {id: string; title: string; description: string | null}
 
 type DataSourcesResponse = {data: DataSourceOption[]}
+
+type ModelOption = {id: string; name: string; provider: string | null; modelName: string | null}
+type ModelsResponse = {data: ModelOption[]}
 
 const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/
 
@@ -53,9 +56,25 @@ const CreateProject = () => {
       staleTime: 1000 * 60 * 5,
     }
   })
+  const modelsQuery = useQuery(() => {
+    return {
+      queryKey: ['models'],
+      queryFn: async () => {
+        const response = await apiClient.api.models.get()
+        const result = handleApiResponse<ModelsResponse>(response, 'Failed to load models')
+        return result.data ?? []
+      },
+      staleTime: 1000 * 60 * 5,
+    }
+  })
+  const createDefaultModel = async () => {
+    await apiClient.api.judgments.model.get()
+    await modelsQuery.refetch()
+  }
   const navigate = useNavigate()
   const [projectName, setProjectName] = createSignal('')
   const [description, setDescription] = createSignal('')
+  const [selectedModelId, setSelectedModelId] = createSignal('')
   const [dateFrom, setDateFrom] = createSignal('')
   const [dateTo, setDateTo] = createSignal('')
   const [prompts, setPrompts] = createStore<PromptItem[]>([
@@ -68,6 +87,17 @@ const CreateProject = () => {
   const availableDataSources = () => {
     return dataSourcesQuery.data ?? []
   }
+
+  const availableModels = () => {
+    return modelsQuery.data ?? []
+  }
+
+  createEffect(() => {
+    const models = availableModels()
+    if (models.length > 0 && !selectedModelId()) {
+      setSelectedModelId(models[0]!.id)
+    }
+  })
 
   const addPromptInput = () => {
     setPrompts([...prompts, {id: crypto.randomUUID(), content: '', promptHeading: '', type: ''}])
@@ -106,6 +136,7 @@ const CreateProject = () => {
   const createProject = async (
     name: string,
     description: string,
+    modelId: string,
     promptItems: PromptItem[],
     dataSourceIds: string[],
     startDate?: string,
@@ -135,6 +166,7 @@ const CreateProject = () => {
       name,
       description: description.trim() || undefined,
       ownerId: sessionQuery.data.user.id,
+      modelId,
       prompts: validPrompts,
       dateFrom: startDate,
       dateTo: endDate,
@@ -173,9 +205,16 @@ const CreateProject = () => {
     setIsLoading(true)
 
     try {
+      if (!selectedModelId()) {
+        setError('Please select a model for this project')
+        setIsLoading(false)
+        return
+      }
+
       await createProject(
         projectName(),
         description(),
+        selectedModelId(),
         prompts,
         selectedDataSourceIds(),
         startDateResult.normalized ?? undefined,
@@ -210,6 +249,50 @@ const CreateProject = () => {
           }}
           class="space-y-6"
         >
+          <div>
+            <label for="model" class="block text-sm font-medium mb-2">
+              Model *
+            </label>
+            <Show when={modelsQuery.isLoading}>
+              <p class="text-sm text-muted-foreground">Loading models...</p>
+            </Show>
+            <Show when={modelsQuery.isError}>
+              <p class="text-sm text-red-600">
+                {modelsQuery.error instanceof Error ? modelsQuery.error.message : 'Failed to load models'}
+              </p>
+            </Show>
+            <Show when={!modelsQuery.isLoading && !modelsQuery.isError && availableModels().length > 0}>
+              <select
+                id="model"
+                class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+                value={selectedModelId()}
+                onChange={(e) => {
+                  return setSelectedModelId(e.currentTarget.value)
+                }}
+              >
+                <For each={availableModels()}>
+                  {(m) => {
+                    return <option value={m.id}>{m.name}</option>
+                  }}
+                </For>
+              </select>
+            </Show>
+            <Show when={!modelsQuery.isLoading && !modelsQuery.isError && availableModels().length === 0}>
+              <div class="flex items-center justify-between gap-3">
+                <p class="text-sm text-muted-foreground">No models available.</p>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => {
+                    return void createDefaultModel()
+                  }}
+                >
+                  Create default model
+                </Button>
+              </div>
+            </Show>
+          </div>
+
           <div>
             <label for="project-name" class="block text-sm font-medium mb-2">
               Project Name *
@@ -290,9 +373,7 @@ const CreateProject = () => {
             >
               <p class="text-sm text-muted-foreground">No data sources available.</p>
             </Show>
-            <Show
-              when={!dataSourcesQuery.isLoading && !dataSourcesQuery.isError && availableDataSources().length > 0}
-            >
+            <Show when={!dataSourcesQuery.isLoading && !dataSourcesQuery.isError && availableDataSources().length > 0}>
               <div class="space-y-2">
                 <For each={availableDataSources()}>
                   {(source) => {

@@ -85,7 +85,7 @@ const ProjectDetail = () => {
         </Match>
         <Match when={projectData.data}>
           {(data) => {
-            const {project, prompts: rawPrompts, dataSources} = data()
+            const {project, prompts: rawPrompts, dataSources, model} = data()
 
             interface RawPrompt {
               id: string
@@ -114,7 +114,7 @@ const ProjectDetail = () => {
             })
             return (
               <div class="space-y-4">
-                <ProjectDetailsInformation project={project} dataSources={dataSources} />
+                <ProjectDetailsInformation project={project} dataSources={dataSources} model={model} />
                 <ProjectDetailsPrompts prompts={prompts} formatDate={formatDate} />
                 <ProjectDetailsArticles projectId={projectId} />
               </div>

@@ -1,7 +1,7 @@
 import {desc, eq, inArray} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {dataSource, judgments, projectDataSourceLink, projects, prompts} from '../../db/schema.ts'
+import {dataSource, judgments, models, projectDataSourceLink, projects, prompts} from '../../db/schema.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {projectsRoutesGetArticlesReviews} from './projectsRoutes/projectsRoutesGetArticlesReviews.ts'
@@ -79,7 +79,29 @@ export const projectsRoutes = new Elysia()
       hasJudgedArticles = existingJudgments.length > 0
     }
 
-    return {data: {project, prompts: projectPrompts, dataSources: projectDataSources, hasJudgedArticles}}
+    // Fetch selected model for this project
+    const [projectModel] = await db
+      .select({
+        id: models.id,
+        name: models.name,
+        provider: models.provider,
+        modelName: models.modelName,
+        baseURL: models.baseURL,
+        version: models.version,
+      })
+      .from(models)
+      .where(eq(models.id, project.modelId))
+      .limit(1)
+
+    return {
+      data: {
+        project,
+        prompts: projectPrompts,
+        dataSources: projectDataSources,
+        hasJudgedArticles,
+        model: projectModel ?? null,
+      },
+    }
   })
   .post(
     '/api/projects',
@@ -92,10 +114,27 @@ export const projectsRoutes = new Elysia()
         throw new Error('date_from must be on or before date_to')
       }
 
+      const [validModel] = await db
+        .select({id: models.id})
+        .from(models)
+        .where(eq(models.id, body.modelId))
+        .limit(1)
+
+      if (!validModel) {
+        throw new Error('Selected model does not exist')
+      }
+
       // Create project
       const [newProject] = await db
         .insert(projects)
-        .values({name: body.name, description: body.description || null, ownerId: body.ownerId, dateFrom, dateTo})
+        .values({
+          name: body.name,
+          description: body.description || null,
+          ownerId: body.ownerId,
+          modelId: body.modelId,
+          dateFrom,
+          dateTo,
+        })
         .returning()
 
       // Create prompts if provided
@@ -145,6 +184,7 @@ export const projectsRoutes = new Elysia()
         name: t.String(),
         description: t.Optional(t.String()),
         ownerId: t.String(),
+        modelId: t.String(),
         dateFrom: t.Optional(t.String()),
         dateTo: t.Optional(t.String()),
         dataSourceIds: t.Optional(t.Array(t.String())),

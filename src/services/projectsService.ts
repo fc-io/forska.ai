@@ -38,6 +38,7 @@ export const createProject = async (
   name: string,
   description: string | null,
   ownerId: string,
+  modelId: string,
   promptTexts: string[],
 ) => {
   try {
@@ -45,6 +46,7 @@ export const createProject = async (
       name,
       description: description || undefined,
       ownerId,
+      modelId,
       prompts: promptTexts.length > 0 ? promptTexts : undefined,
     })
 

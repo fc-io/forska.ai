@@ -19,6 +19,7 @@ interface ProjectDetailsInformationDataSource {
 type ProjectDetailsInformationProps = {
   project: ProjectDetailsInformationProject
   dataSources: ProjectDetailsInformationDataSource[]
+  model?: {id: string; name: string; provider?: string | null; modelName?: string | null} | null
 }
 
 const parseDate = (value: Date | string | null) => {
@@ -56,10 +57,13 @@ export const ProjectDetailsInformation = (props: ProjectDetailsInformationProps)
   const hasDataSources = createMemo(() => {
     return props.dataSources.length > 0
   })
+  const modelName = createMemo(() => {
+    return props.model?.name ?? 'Unknown'
+  })
 
   return (
     <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-      <div class="grid grid-cols-1 md:grid-cols-2 md:grid-flow-col md:grid-rows-3 gap-1">
+      <div class="grid grid-cols-1 md:grid-cols-2 md:grid-flow-col md:grid-rows-4 gap-1">
         <div class="flex gap-2 items-start">
           <label class="text-sm font-medium text-muted-foreground">Project Name:</label>
           <p class="text-sm">{props.project.name}</p>
@@ -85,6 +89,10 @@ export const ProjectDetailsInformation = (props: ProjectDetailsInformationProps)
         <div class="flex gap-2 items-start">
           <label class="text-sm font-medium text-muted-foreground">Date To:</label>
           <p class="text-sm">{dateTo()}</p>
+        </div>
+        <div class="flex gap-2 items-start">
+          <label class="text-sm font-medium text-muted-foreground">Model:</label>
+          <p class="text-sm">{modelName()}</p>
         </div>
       </div>
       <div class="flex gap-2 items-start">

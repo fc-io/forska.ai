@@ -259,6 +259,7 @@ export const judge = async ({
     console.log('missing baseURL', modelConfig, baseURL)
   }
   const tokenUse: {promptTokens: number; completionTokens: number; totalTokens: number}[] = []
+  let abortCount = 0
   const startedAt = new Date().toISOString()
   const startDuration = performance.now()
 
@@ -286,6 +287,7 @@ export const judge = async ({
           if (attempts < MAX_RETRIES) {
             prompt = buildRetryPrompt(basePrompt, lastError, lastResponse)
           } else {
+            abortCount += 1
             console.error(`${article.id} | Aborting: ${lastError}`)
           }
         }
@@ -295,5 +297,6 @@ export const judge = async ({
   const duration = performance.now() - startDuration
   const finishedAt = new Date().toISOString()
   // console.log('tokenUse:', tokenUse)
+  console.log(`Total aborts: ${abortCount}`)
   await judgeStoreTokenUse(tokenUse, sessionId, {startedAt, finishedAt, duration}, judgmentsJobId)
 }
