@@ -248,8 +248,10 @@ export const judge = async ({
             completionTokens: modelResponse.usage.completionTokens,
             totalTokens: modelResponse.usage.totalTokens,
           })
+          console.log('judgment success')
           return judgment
         } catch (error: unknown) {
+          console.log('while catch')
           lastError = error instanceof Error ? error.message : 'Unknown error'
           // console.error(`${article.id} | Attempt ${attempts} failed schema validation: ${lastError}`)
 
