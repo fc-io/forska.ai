@@ -1,4 +1,5 @@
 import {cron} from '@elysiajs/cron'
+import {addMinutes} from 'date-fns'
 import {Elysia} from 'elysia'
 
 import {env} from '../utils/env.ts'
@@ -16,11 +17,11 @@ import {judgmentsJobsSendToLLM} from './judgmentsJobs/judgmentsJobsSendToLLM.ts'
 export const MAX_ARTICLES_BATCH_SIZE = 15
 const serverJobId = `server-job-${crypto.randomUUID()}`
 
-const NEW_ARTICLES_INTERVAL = '0/2 * * * * *'
-const LLM_PROCESSING_INTERVAL = '0/6 * * * * *'
+const NEW_ARTICLES_INTERVAL = '*/3 * * * * *'
+const LLM_PROCESSING_INTERVAL = '*/9 * * * * *'
 const BATCH_SIZE_WARMUP = '0 * * * * *'
 const BATCH_SIZE_ADJUST = '0 */5 * * * *'
-const CHECK_VLLM_STATUS = '* */1 * * * *'
+const CHECK_VLLM_STATUS = '0 * * * * *'
 const CLEANUP_STALE_REQUESTS = '0 */5 * * * *'
 
 const getNewArticlesForJobs = async (): Promise<void> => {
@@ -52,7 +53,6 @@ const adjustBatchSizeCron = async (phase: string): Promise<void> => {
 
 const checkVLLMStatusCron = async (): Promise<void> => {
   if (!env.RUN_SERVER_JUDGING) return
-  console.log('~~~judgmentsJobsCheckVLLMStatus 1.~~~')
   const db = getDatabase()
   await judgmentsJobsCheckVLLMStatus(db)
 }
@@ -80,11 +80,11 @@ export const judgmentsJobsCron = new Elysia()
     cron({
       name: 'judgments-jobs-batch-size-adjust',
       pattern: BATCH_SIZE_ADJUST,
-      startAt: 'BATCH_SIZE_ADJUST',
+      startAt: addMinutes(new Date(), 6),
       run: () => {
         return adjustBatchSizeCron('BATCH_SIZE_ADJUST')
       },
     }),
   )
-  .use(cron({name: 'judgments-jobs-adjust-batch-size', pattern: CHECK_VLLM_STATUS, run: checkVLLMStatusCron}))
+  .use(cron({name: 'judgments-jobs-check-vllm-status', pattern: CHECK_VLLM_STATUS, run: checkVLLMStatusCron}))
   .use(cron({name: 'judgments-jobs-cleanup-stale', pattern: CLEANUP_STALE_REQUESTS, run: cleanupStaleQueueCron}))
