@@ -234,6 +234,8 @@ const attemptJudgment = async ({
     },
   }
 }
+let abortCount = 0
+let successCount = 0
 
 export const judge = async ({
   articles,
@@ -253,7 +255,6 @@ export const judge = async ({
     console.log('missing baseURL', modelConfig, baseURL)
   }
   const tokenUse: {promptTokens: number; completionTokens: number; totalTokens: number}[] = []
-  let abortCount = 0
   const startedAt = new Date().toISOString()
   const startDuration = performance.now()
 
@@ -271,6 +272,7 @@ export const judge = async ({
 
         if (result.success) {
           console.log('judgment success')
+          successCount += 1
           tokenUse.push(result.usage)
           return result.judgment
         } else {
@@ -291,7 +293,7 @@ export const judge = async ({
   const duration = performance.now() - startDuration
   const finishedAt = new Date().toISOString()
   // console.log('tokenUse:', tokenUse)
-  console.log(`Total aborts: ${abortCount}`)
+  console.log(`Total: ${abortCount} aborts, ${successCount} successes`)
   await judgeStoreTokenUse(tokenUse, sessionId, {startedAt, finishedAt, duration}, judgmentsJobId).catch((error) => {
     console.error('judgeStoreTokenUse failed; continuing', error instanceof Error ? error.message : error)
   })
