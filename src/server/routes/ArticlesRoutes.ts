@@ -32,7 +32,6 @@ export const articlesRoutes = new Elysia()
         // For now, returning article data
       })
       .from(articles)
-      .leftJoin(judgments, eq(articles.id, judgments.articleId))
       .orderBy(desc(articles.createdAt))
       .limit(200)
 
