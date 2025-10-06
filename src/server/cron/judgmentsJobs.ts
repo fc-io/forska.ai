@@ -7,6 +7,7 @@ import {getNumberOfArticlesInReadyQueue} from './judgmentsJobs/getNumberOfArticl
 import {isReadyToGetMoreArticles} from './judgmentsJobs/isReadyToGetMoreArticles.ts'
 import {judgmentsJobsAddToJobsQueue} from './judgmentsJobs/judgmentsJobsAddToJobsQueue.ts'
 import {judgmentsJobsAdjustBatchSize} from './judgmentsJobs/judgmentsJobsAdjustBatchSize.ts'
+import {judgmentsJobsCheckVLLMStatus} from './judgmentsJobs/judgmentsJobsCheckVLLMStatus.ts'
 import {judgmentsJobsCleanupStale} from './judgmentsJobs/judgmentsJobsCleanupStale.ts'
 import {judgmentsJobsGetJobs} from './judgmentsJobs/judgmentsJobsGetJobs.ts'
 import {judgmentsJobsGetNewArticles} from './judgmentsJobs/judgmentsJobsGetNewArticles.ts'
@@ -18,6 +19,7 @@ const serverJobId = `server-job-${crypto.randomUUID()}`
 const NEW_ARTICLES_INTERVAL = '0/2 * * * * *' // Every 2 seconds
 const LLM_PROCESSING_INTERVAL = '0/6 * * * * *' // Every 6 seconds
 const ADJUST_BATCH_SIZE = '1/2 * * * * *' // Every 2 seconds
+const CHECK_VLLM_STATUS = '1/2 * * * * *' // Every 2 seconds
 const CLEANUP_STALE_REQUESTS = '0 */5 * * * *' // Every 5 minutes
 
 const getNewArticlesForJobs = async (): Promise<void> => {
@@ -41,6 +43,13 @@ const sendToLLMCron = async (): Promise<void> => {
   await judgmentsJobsSendToLLM(db, allJobs, serverJobId)
 }
 
+const checkVLLMStatusCron = async (): Promise<void> => {
+  if (!env.RUN_SERVER_JUDGING) return
+  console.log('~~~adjustBatchSizeCron 1.~~~')
+  const db = getDatabase()
+  await checkVLLMStatus(db)
+}
+
 const adjustBatchSizeCron = async (): Promise<void> => {
   if (!env.RUN_SERVER_JUDGING) return
   console.log('~~~adjustBatchSizeCron 1.~~~')
@@ -58,4 +67,5 @@ export const judgmentsJobsCron = new Elysia()
   .use(cron({name: 'judgments-jobs-fetch-articles', pattern: NEW_ARTICLES_INTERVAL, run: getNewArticlesForJobs}))
   .use(cron({name: 'judgments-jobs-send-to-llm', pattern: LLM_PROCESSING_INTERVAL, run: sendToLLMCron}))
   .use(cron({name: 'judgments-jobs-adjust-batch-size', pattern: ADJUST_BATCH_SIZE, run: adjustBatchSizeCron}))
+  .use(cron({name: 'judgments-jobs-adjust-batch-size', pattern: CHECK_VLLM_STATUS, run: checkVLLMStatusCron}))
   .use(cron({name: 'judgments-jobs-cleanup-stale', pattern: CLEANUP_STALE_REQUESTS, run: cleanupStaleQueueCron}))
