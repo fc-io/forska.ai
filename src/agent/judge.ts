@@ -246,7 +246,7 @@ export const judge = async ({
   prompts,
   sessionId,
   judgmentsJobId,
-  modelConfig: {baseURL, modelName, modelId},
+  modelConfig,
 }: {
   articles: ArticlesType
   prompts: PromptsType
@@ -254,6 +254,10 @@ export const judge = async ({
   judgmentsJobId?: string
   modelConfig: ModelConfigInput
 }): Promise<void> => {
+  const {baseURL, modelName, modelId} = modelConfig
+  if (!baseURL) {
+    console.log('missing baseURL', modelConfig, baseURL)
+  }
   const tokenUse: {promptTokens: number; completionTokens: number; totalTokens: number}[] = []
   const startedAt = new Date().toISOString()
   const startDuration = performance.now()

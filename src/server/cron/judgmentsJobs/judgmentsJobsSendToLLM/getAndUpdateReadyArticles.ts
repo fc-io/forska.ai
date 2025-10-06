@@ -66,7 +66,6 @@ const processReadyRows = async (
   const jobConfigPairs = jobConfigs.map((config) => {
     return [config.jobId, config] as const
   })
-  console.log('jobConfigPairs', jobConfigPairs)
   const jobConfigMap = new Map(jobConfigPairs)
 
   const articlesWithProjects = selectedArticles
