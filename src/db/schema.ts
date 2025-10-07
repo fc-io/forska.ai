@@ -347,7 +347,7 @@ export const judgments = pgTable(
         () => {
           return articles.id
         },
-        {onDelete: 'cascade'},
+        {onDelete: 'restrict'},
       ),
     modelId: uuid('model_id')
       .notNull()
