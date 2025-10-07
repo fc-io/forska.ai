@@ -31,7 +31,6 @@ const fetchDataSources = async () => {
       accessCount: entry.accessCount ?? 0,
       lastImportAt: entry.lastImportAt ? String(entry.lastImportAt) : null,
       itemsAfterLastImport: entry.itemsAfterLastImport ?? 0,
-      articlesCountInRange: entry.articlesCountInRange ?? 0,
       importRoute: entry.importRoute ?? null,
     }
   })
@@ -299,7 +298,7 @@ const AdminDataSources = () => {
                                 </div>
                                 <div class="text-sm text-gray-500">
                                   <span class="font-medium text-gray-700">Items After Import:</span>{' '}
-                                  {entry.articlesCountInRange.toLocaleString()}
+                                  {entry.itemsAfterLastImport.toLocaleString()}
                                 </div>
                                 <div class="text-sm text-gray-500">
                                   <span class="font-medium text-gray-700">Route:</span>{' '}

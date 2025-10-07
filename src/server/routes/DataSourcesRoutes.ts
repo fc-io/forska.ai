@@ -2,7 +2,7 @@ import {desc, eq, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {user} from '../../../auth-schema'
-import {articles, dataSource, dataSourceAccess} from '../../db/schema.ts'
+import {dataSource, dataSourceAccess} from '../../db/schema.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
@@ -27,18 +27,6 @@ export const dataSourcesRoutes = new Elysia()
         ownerName: user.name,
         ownerEmail: user.email,
         accessCount: sql<number>`COUNT(DISTINCT ${dataSourceAccess.userId})`.as('access_count'),
-        // Count articles within the datasource's date range (inclusive), handling null bounds
-        // it's a bit problematic that articleCreatedAt and articleUpdatedAt both are of importance
-        articlesCountInRange: sql<number>`(
-          CASE
-            WHEN ${dataSource.dateFrom} IS NULL AND ${dataSource.dateTo} IS NULL THEN 0
-            ELSE (
-              SELECT COUNT(*)::int FROM ${articles}
-              WHERE (${dataSource.dateFrom} IS NULL OR ${articles.articleCreatedAt} >= ${dataSource.dateFrom})
-                AND (${dataSource.dateTo}   IS NULL OR ${articles.articleCreatedAt} <= ${dataSource.dateTo})
-            )
-          END
-        )`.as('articles_count_in_range'),
       })
       .from(dataSource)
       .leftJoin(user, eq(dataSource.ownerId, user.id))
@@ -62,7 +50,7 @@ export const dataSourcesRoutes = new Elysia()
 
     return {
       data: dataSources.map((entry) => {
-        return {...entry, accessCount: entry.accessCount ?? 0, articlesCountInRange: entry.articlesCountInRange ?? 0}
+        return {...entry, accessCount: entry.accessCount ?? 0}
       }),
     }
   })

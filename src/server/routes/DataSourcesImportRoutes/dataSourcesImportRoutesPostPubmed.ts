@@ -1,5 +1,5 @@
 import {format} from 'date-fns'
-import {count, eq, isNull, or} from 'drizzle-orm'
+import {and, count, eq, gte, isNull, lte, or} from 'drizzle-orm'
 
 import {pubmedHarvest} from '../../../agent/pubmedHarvest.ts'
 import {articles, dataSource} from '../../../db/schema.ts'
@@ -16,15 +16,26 @@ const fetchDataSourceById = async (db: Database, id: string): Promise<DataSource
   return record
 }
 
-const countArticles = async (db: Database, route: string | null | undefined): Promise<number> => {
-  const routeToUse = route ?? '/api/datasources/import/pubmed'
-  const whereClause =
-    routeToUse === '/api/datasources/import/pubmed'
-      ? or(eq(articles.importRoute, routeToUse), isNull(articles.importRoute))
-      : eq(articles.importRoute, routeToUse)
-
-  const [countResult] = await db.select({value: count()}).from(articles).where(whereClause)
-
+const countArticlesInRange = async (db: Database, route: string, record: DataSourceRecord): Promise<number> => {
+  const base =
+    route === '/api/datasources/import/pubmed'
+      ? or(eq(articles.importRoute, route), isNull(articles.importRoute))
+      : eq(articles.importRoute, route)
+  const hasFrom = Boolean(record.dateFrom)
+  const hasTo = Boolean(record.dateTo)
+  const where =
+    hasFrom && hasTo
+      ? and(
+          base,
+          gte(articles.articleCreatedAt, record.dateFrom as Date),
+          lte(articles.articleCreatedAt, record.dateTo as Date),
+        )
+      : hasFrom
+        ? and(base, gte(articles.articleCreatedAt, record.dateFrom as Date))
+        : hasTo
+          ? and(base, lte(articles.articleCreatedAt, record.dateTo as Date))
+          : base
+  const [countResult] = await db.select({value: count()}).from(articles).where(where)
   const rawValue = countResult?.value ?? 0
   return typeof rawValue === 'number' ? rawValue : Number(rawValue)
 }
@@ -63,8 +74,10 @@ export const dataSourcesImportRoutesPostPubmed = async (body: {id: string}) => {
   if (!record.dateTo) {
     console.warn('dataSourcesImportRoutesPostPubmed – To date is good to have')
   }
+  const beforeCount = await countArticlesInRange(db, importRoute, record)
   await pubmedHarvest({fromDate, toDate, maxResults: 100, importRoute})
-  const importedCount = await countArticles(db, importRoute)
+  const afterCount = await countArticlesInRange(db, importRoute, record)
+  const importedCount = Math.max(0, afterCount - beforeCount)
   const updatedDataSource = await updateDataSourceAfterImport(db, record.id, importedCount)
 
   return {success: true, data: updatedDataSource}
