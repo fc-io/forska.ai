@@ -114,8 +114,7 @@ const AdminJudgmentJobDetail = () => {
             }
             const jobId = () => {
               const details = jobDetails()
-              const jobIdValue =
-                details && 'id' in details ? (details as {id?: string | number}).id : undefined
+              const jobIdValue = details && 'id' in details ? (details as {id?: string | number}).id : undefined
               const resolvedId =
                 typeof jobIdValue === 'number' || typeof jobIdValue === 'string' ? String(jobIdValue) : ''
               return resolvedId
@@ -125,9 +124,7 @@ const AdminJudgmentJobDetail = () => {
               return hasLink
             }
             const unassessedArticlesLink = () => {
-              return shouldLinkToUnassessedArticles()
-                ? `/admin/jobs/${jobId()}/unassessed_articles`
-                : ''
+              return shouldLinkToUnassessedArticles() ? `/admin/jobs/${jobId()}/unassessed_articles` : ''
             }
             return (
               <>
@@ -176,10 +173,7 @@ const AdminJudgmentJobDetail = () => {
                           when={shouldLinkToUnassessedArticles()}
                           fallback={<p class="font-medium">{formattedUnassessedArticlesCount()}</p>}
                         >
-                          <Link
-                            to={unassessedArticlesLink()}
-                            class="font-medium text-blue-600 hover:text-blue-800"
-                          >
+                          <Link to={unassessedArticlesLink()} class="font-medium text-blue-600 hover:text-blue-800">
                             {formattedUnassessedArticlesCount()}
                           </Link>
                         </Show>
