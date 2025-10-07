@@ -71,15 +71,10 @@ const PubMedPubDate = type({
 })
 
 const History = type({PubMedPubDate: PubMedPubDate.or(PubMedPubDate.array())})
-
 const ArticleIdList = type({ArticleId: 'unknown'})
-
 const Citation = type({'i?': 'string', 'b?': 'string | number', '#text': 'string'})
-
 const Reference = type({Citation: Citation})
-
 const ReferenceList = type({Reference: Reference.or(Reference.array())})
-
 const PubmedData = type({
   'History?': History,
   'PublicationStatus?': 'string',
@@ -88,9 +83,7 @@ const PubmedData = type({
 })
 
 const PubmedArticle = type({MedlineCitation: MedlineCitation, 'PubmedData?': PubmedData})
-
 const PubmedArticleSet = type({PubmedArticle: 'unknown'})
-
 const PubmedDocument = type({PubmedArticleSet: PubmedArticleSet})
 
 type PubmedDocumentType = typeof PubmedDocument.infer
