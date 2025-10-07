@@ -72,7 +72,16 @@ const PubMedPubDate = type({
 
 const History = type({PubMedPubDate: PubMedPubDate.or(PubMedPubDate.array())})
 const ArticleIdList = type({ArticleId: 'unknown'})
-const Citation = type({'i?': 'string', 'b?': 'string | number', '#text': 'string'})
+// Some PubMed records serialize <Citation> as plain text, others as
+// an object with nested inline tags (e.g., <i>, <b>) that map to
+// properties and a consolidated '#text'. Accept both forms.
+const CitationText = type('string')
+const CitationObject = type({
+  'i?': 'string',
+  'b?': 'string | number',
+  '#text': 'string',
+})
+const Citation = CitationText.or(CitationObject)
 const Reference = type({Citation: Citation})
 const ReferenceList = type({Reference: Reference.or(Reference.array())})
 const PubmedData = type({
