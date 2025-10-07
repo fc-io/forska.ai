@@ -52,6 +52,7 @@ export const dataSourcesImportRoutesPostPubmed = async (body: {id: string}) => {
   const db = getDatabase()
   const record = await fetchDataSourceById(db, body.id)
   const importRoute = record.importRoute ?? '/api/datasources/import/pubmed'
+  console.log('###importRoute', importRoute)
   const fromDate = record.dateFrom ? format(record.dateFrom, 'yyyy-MM-dd') : '2020-01-01'
   const now = new Date()
   const recordToDate = record.dateTo ? new Date(record.dateTo) : now
