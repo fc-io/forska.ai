@@ -24,7 +24,7 @@ const getEssearchresult = async (response: Response) => {
   return parsed.esearchresult
 }
 
-const RETMAX = 2
+const RETMAX = 100
 
 const pubmedHarvestArticles = async (
   esearchresult: typeof ESearchResultInner.infer,
@@ -74,13 +74,6 @@ const pubmedHarvest = async (input: InputData): Promise<void> => {
   const esearchresult = await getEssearchresult(response)
   // console.log('2 pubmed esearchresult')
   await pubmedHarvestArticles(esearchresult, input.importRoute)
-  // console.log('3 pubmedHarvestArticles')
-  // const result = await fetchRecords(arxivQueryUrl)
-  // await arxivWorkflowStoreEntires(result.records)
-  // if (result.resumptionToken) {
-  // await sleep(5000)
-  // await arxivWorkflowHarvest(input, result.resumptionToken)
-  // }
 }
 
 export {type ESearchResultInnerType, Essearchresult, pubmedHarvest}
