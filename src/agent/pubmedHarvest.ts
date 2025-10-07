@@ -1,7 +1,7 @@
 import {type} from 'arktype'
 
-import type {InputData} from '../agent.ts'
 import {sleep} from '../utils/sleep.ts'
+import type {InputData} from './arxivWorkflow/arxivWorkflowHarvest.ts'
 import {pubmedHarvestGetArticlesParams} from './pubmedHarvest/pubmedHarvestGetArticlesParams.ts'
 import {pubmedHarvestGetIdParams} from './pubmedHarvest/pubmedHarvestGetIdParams.ts'
 import {pubmedHarvestGetParsedXML} from './pubmedHarvest/pubmedHarvestGetParsedXML.ts'
