@@ -23,6 +23,8 @@ const fetchDataSources = async () => {
       description: entry.description ?? null,
       createdAt: String(entry.createdAt),
       updatedAt: String(entry.updatedAt),
+      dateFrom: entry.dateFrom ? String(entry.dateFrom) : null,
+      dateTo: entry.dateTo ? String(entry.dateTo) : null,
       ownerId: entry.ownerId,
       ownerName: entry.ownerName ?? null,
       ownerEmail: entry.ownerEmail ?? null,
@@ -281,6 +283,14 @@ const AdminDataSources = () => {
                                 <div class="text-sm text-gray-500">
                                   <span class="font-medium text-gray-700">Last Import:</span>{' '}
                                   {formatImportTimestamp(entry.lastImportAt)}
+                                </div>
+                                <div class="text-sm text-gray-500">
+                                  <span class="font-medium text-gray-700">Date From:</span>{' '}
+                                  {entry.dateFrom ? formatDate(new Date(entry.dateFrom), 'yyyy-MM-dd') : 'Not set'}
+                                </div>
+                                <div class="text-sm text-gray-500">
+                                  <span class="font-medium text-gray-700">Date To:</span>{' '}
+                                  {entry.dateTo ? formatDate(new Date(entry.dateTo), 'yyyy-MM-dd') : 'Not set'}
                                 </div>
                                 <div class="text-sm text-gray-500">
                                   <span class="font-medium text-gray-700">Items After Import:</span>{' '}
