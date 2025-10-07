@@ -58,6 +58,13 @@ export const articles = pgTable('articles', {
   pubmedId: text('pubmed_id'),
   url: text('url'),
   contentHash: text('content_hash'),
+  importRoute: text('import_route'),
+  importedBy: text('imported_by').references(
+    () => {
+      return user.id
+    },
+    {onDelete: 'set null'},
+  ),
   publicationStatus: publicationStatusEnum('publication_status'),
 })
 
