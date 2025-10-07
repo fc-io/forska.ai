@@ -5,6 +5,7 @@ import type {InputData} from './arxivWorkflow/arxivWorkflowHarvest.ts'
 import {pubmedHarvestGetArticlesParams} from './pubmedHarvest/pubmedHarvestGetArticlesParams.ts'
 import {pubmedHarvestGetIdParams} from './pubmedHarvest/pubmedHarvestGetIdParams.ts'
 import {pubmedHarvestGetParsedXML} from './pubmedHarvest/pubmedHarvestGetParsedXML.ts'
+import {pubmedWorkflowStoreEntries} from './pubmedWorkflowStoreEntries.ts'
 
 const ESearchResultInner = type({count: 'string.integer.parse', webenv: 'string', querykey: 'string'})
 
@@ -25,7 +26,10 @@ const getEssearchresult = async (response: Response) => {
 
 const RETMAX = 2
 
-const pubmedHarvestArticles = async (esearchresult: typeof ESearchResultInner.infer): Promise<void> => {
+const pubmedHarvestArticles = async (
+  esearchresult: typeof ESearchResultInner.infer,
+  importRoute: string,
+): Promise<void> => {
   console.log('pubmedHarvestArticles', esearchresult)
   let retstart = 0
   while (true) {
@@ -37,9 +41,15 @@ const pubmedHarvestArticles = async (esearchresult: typeof ESearchResultInner.in
       body: new URLSearchParams(articleParams.searchParams).toString(),
     })
     const responseData = (await response.text()) as unknown
-    await pubmedHarvestGetParsedXML(responseData)
+    const entries = await pubmedHarvestGetParsedXML(responseData, importRoute)
+    if (entries.length > 0) {
+      await pubmedWorkflowStoreEntries(entries)
+    }
     console.log('responseData', responseData)
     retstart += RETMAX
+    if (retstart >= esearchresult.count) {
+      break
+    }
     await sleep(100)
   }
 }
@@ -54,7 +64,7 @@ const pubmedHarvest = async (input: InputData): Promise<void> => {
   })
 
   const esearchresult = await getEssearchresult(response)
-  await pubmedHarvestArticles(esearchresult)
+  await pubmedHarvestArticles(esearchresult, input.importRoute)
   // const result = await fetchRecords(arxivQueryUrl)
   // await arxivWorkflowStoreEntires(result.records)
   // if (result.resumptionToken) {
