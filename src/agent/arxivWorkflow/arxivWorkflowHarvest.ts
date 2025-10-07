@@ -6,7 +6,7 @@ import {arxivWorkflowGetQuery} from './arxivWorkflowGetQuery.ts'
 import {arxivEntry} from './arxivWorkflowStoreEntires.ts'
 import {arxivWorkflowStoreEntires} from './arxivWorkflowStoreEntires.ts'
 
-export type InputData = {fromDate: string; toDate: string; maxResults: number}
+export type InputData = {fromDate: string; toDate: string; maxResults: number; importRoute: string}
 
 const fxp = new XMLParser({
   ignoreAttributes: false,
@@ -230,7 +230,7 @@ const fetchRecords = async (arxivQueryUrl: string): Promise<typeof arxivFeedSche
 const arxivWorkflowHarvest = async (input: InputData, resumptionToken?: string): Promise<void> => {
   const arxivQueryUrl = arxivWorkflowGetQuery(input, resumptionToken)
   const result = await fetchRecords(arxivQueryUrl)
-  await arxivWorkflowStoreEntires(result.records)
+  await arxivWorkflowStoreEntires(result.records, input.importRoute)
 
   if (result.resumptionToken) {
     await sleep(5000)

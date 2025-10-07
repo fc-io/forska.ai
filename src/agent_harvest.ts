@@ -8,6 +8,7 @@ export const runAgentHarvest = async () => {
     fromDate: '2025-07-01',
     toDate: '2025-07-31',
     maxResults: 99999, // basically ignored by the arxiv oai api
+    importRoute: '/api/datasources/import/arxiv',
   }
   await startArxivHarvest(config)
   // await pubmedHarvest(config)

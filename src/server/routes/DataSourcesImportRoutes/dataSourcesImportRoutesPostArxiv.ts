@@ -1,5 +1,5 @@
 import {format} from 'date-fns'
-import {count, eq} from 'drizzle-orm'
+import {count, eq, isNull, or} from 'drizzle-orm'
 
 import {startArxivHarvest} from '../../../agent/startArxivHarvest.ts'
 import {articles, dataSource} from '../../../db/schema.ts'
@@ -16,9 +16,14 @@ const fetchDataSourceById = async (db: Database, id: string): Promise<DataSource
   return record
 }
 
-const countArticles = async (db: Database): Promise<number> => {
-  // need to filter based on data source type
-  const [countResult] = await db.select({value: count()}).from(articles)
+const countArticles = async (db: Database, route: string | null | undefined): Promise<number> => {
+  const routeToUse = route ?? '/api/datasources/import/arxiv'
+  const whereClause =
+    routeToUse === '/api/datasources/import/arxiv'
+      ? or(eq(articles.importRoute, routeToUse), isNull(articles.importRoute))
+      : eq(articles.importRoute, routeToUse)
+
+  const [countResult] = await db.select({value: count()}).from(articles).where(whereClause)
 
   const rawValue = countResult?.value ?? 0
   return typeof rawValue === 'number' ? rawValue : Number(rawValue)
@@ -46,6 +51,7 @@ const updateDataSourceAfterImport = async (
 export const dataSourcesImportRoutesPostArxiv = async (body: {id: string}) => {
   const db = getDatabase()
   const record = await fetchDataSourceById(db, body.id)
+  const importRoute = record.importRoute ?? '/api/datasources/import/arxiv'
   const fromDate = record.dateFrom ? format(record.dateFrom, 'yyyy-MM-dd') : '2020-01-01'
   const now = new Date()
   const recordToDate = record.dateTo ? new Date(record.dateTo) : now
@@ -56,8 +62,8 @@ export const dataSourcesImportRoutesPostArxiv = async (body: {id: string}) => {
   if (!record.dateTo) {
     console.warn('dataSourcesImportRoutesPostArxiv – To date is good to have')
   }
-  await startArxivHarvest({fromDate, toDate, maxResults: 100})
-  const importedCount = await countArticles(db)
+  await startArxivHarvest({fromDate, toDate, maxResults: 100, importRoute})
+  const importedCount = await countArticles(db, importRoute)
   const updatedDataSource = await updateDataSourceAfterImport(db, record.id, importedCount)
 
   return {success: true, data: updatedDataSource}

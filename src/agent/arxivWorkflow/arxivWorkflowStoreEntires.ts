@@ -28,10 +28,11 @@ const DatabaseItem = type({
   article_created_at: 'string',
   article_version: 'string',
   arxiv_id: 'string',
+  import_route: 'string',
 })
 
 // Transform ArxivEntry to DatabaseItem
-const transformEntry = (entry: typeof arxivEntry.infer): typeof DatabaseItem.infer => {
+const transformEntry = (entry: typeof arxivEntry.infer, importRoute: string): typeof DatabaseItem.infer => {
   // Safely extract authors
   const authors = Array.isArray(entry.author)
     ? entry.author.map((author) => {
@@ -56,6 +57,7 @@ const transformEntry = (entry: typeof arxivEntry.infer): typeof DatabaseItem.inf
     article_updated_at: entry.updated,
     article_created_at: entry.published,
     article_version: version,
+    import_route: importRoute,
   }
 }
 
@@ -84,10 +86,15 @@ const storeBatch = async (batch: (typeof DatabaseItem.infer)[]): Promise<void> =
 }
 
 // Main function to store records with batching
-const arxivWorkflowStoreEntires = async (records: (typeof arxivEntry.infer)[]): Promise<void> => {
+const arxivWorkflowStoreEntires = async (
+  records: (typeof arxivEntry.infer)[],
+  importRoute: string,
+): Promise<void> => {
   try {
     // Transform records to database format
-    const transformedEntries = records.map(transformEntry)
+    const transformedEntries = records.map((entry) => {
+      return transformEntry(entry, importRoute)
+    })
 
     // Validate transformed records
     transformedEntries.forEach((entry, index) => {
