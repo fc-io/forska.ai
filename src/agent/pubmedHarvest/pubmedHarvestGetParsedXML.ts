@@ -1,90 +1,126 @@
 import {type} from 'arktype'
 import {XMLParser} from 'fast-xml-parser'
 
-import type {DatabaseEntry} from '../pubmedWorkflowStoreEntries.ts'
+import {articles as articlesSchema} from '../../db/schema.ts'
 
-const DateRevised = type({Year: 'number', Month: 'number', Day: 'number'})
+type ArticleInsert = typeof articlesSchema.$inferInsert
 
-const PubDate = type({Year: 'number', Month: 'string', Day: 'number'})
+type ArticlesUpsertPayload = {
+  article_id: string
+  article_title: NonNullable<ArticleInsert['articleTitle']>
+  article_summary: string
+  article_authors: NonNullable<ArticleInsert['articleAuthors']>
+  article_updated_at: string
+  article_created_at: string
+  article_version: string
+  pubmed_id: string
+  import_route: NonNullable<ArticleInsert['importRoute']>
+}
+const DateRevised = type({Year: 'string | number', Month: 'string | number', Day: 'string | number'})
+const PubDate = type({Year: 'string | number', Month: 'string | number', Day: 'string | number'})
+const JournalIssue = type({Volume: 'string | number', Issue: 'string | number', PubDate: PubDate})
+const Journal = type({'ISSN?': 'string', JournalIssue: JournalIssue, Title: 'string', 'ISOAbbreviation?': 'string'})
+const Pagination = type({StartPage: 'string | number', MedlinePgn: 'string | number'})
+const Author = type({
+  'LastName?': 'string',
+  'ForeName?': 'string',
+  'Initials?': 'string',
+  'AffiliationInfo?': 'unknown',
+})
 
-const JournalIssue = type({Volume: 'number', Issue: 'number', PubDate: PubDate})
-
-const Journal = type({ISSN: 'string', JournalIssue: JournalIssue, Title: 'string', ISOAbbreviation: 'string'})
-
-const Pagination = type({StartPage: 'number', MedlinePgn: 'number'})
-
-const Abstract = type({AbstractText: 'string', CopyrightInformation: 'string'})
-
-const AffiliationInfo = type({Affiliation: 'string'})
-
-const Author = type({LastName: 'string', ForeName: 'string', Initials: 'string', AffiliationInfo: AffiliationInfo})
-
-const AuthorList = type({Author: Author.array()})
-
-const PublicationTypeList = type({PublicationType: 'string'})
-
-const ArticleDate = type({Year: 'number', Month: 'number', Day: 'number'})
-
+const AuthorList = type({Author: Author.or(Author.array())})
+const PublicationTypeList = type({PublicationType: 'unknown'})
+const ArticleDate = type({Year: 'string | number', Month: 'string | number', Day: 'string | number'})
 const Article = type({
   Journal: Journal,
   ArticleTitle: 'string',
-  Pagination: Pagination,
-  ELocationID: 'unknown[]',
-  Abstract: Abstract,
-  AuthorList: AuthorList,
-  Language: 'string',
-  PublicationTypeList: PublicationTypeList,
-  ArticleDate: ArticleDate,
+  'Pagination?': Pagination,
+  ELocationID: 'unknown',
+  'Abstract?': 'unknown',
+  'AuthorList?': AuthorList,
+  'Language?': 'string',
+  'PublicationTypeList?': PublicationTypeList,
+  'ArticleDate?': ArticleDate,
 })
 
-const MedlineJournalInfo = type({Country: 'string', MedlineTA: 'string', NlmUniqueID: 'number', ISSNLinking: 'string'})
+const MedlineJournalInfo = type({
+  'Country?': 'string',
+  'MedlineTA?': 'string',
+  'NlmUniqueID?': 'string | number',
+  'ISSNLinking?': 'string',
+})
 
-const KeywordList = type({Keyword: 'string[]'})
+const KeywordList = type({Keyword: 'string | string[]'})
 
 const MedlineCitation = type({
-  PMID: 'number',
-  DateRevised: DateRevised,
+  PMID: 'string | number',
+  'DateRevised?': DateRevised,
   Article: Article,
-  MedlineJournalInfo: MedlineJournalInfo,
-  CitationSubset: 'string',
-  KeywordList: KeywordList,
-  CoiStatement: 'string',
+  'MedlineJournalInfo?': MedlineJournalInfo,
+  'CitationSubset?': 'string',
+  'KeywordList?': KeywordList,
+  'CoiStatement?': 'string',
 })
 
-const PubMedPubDate = type({Year: 'number', Month: 'number', Day: 'number', 'Hour?': 'number', 'Minute?': 'number'})
+const PubMedPubDate = type({
+  Year: 'string | number',
+  Month: 'string | number',
+  Day: 'string | number',
+  'Hour?': 'string | number',
+  'Minute?': 'string | number',
+})
 
-const History = type({PubMedPubDate: PubMedPubDate.array()})
+const History = type({PubMedPubDate: PubMedPubDate.or(PubMedPubDate.array())})
 
-const ArticleIdList = type({ArticleId: 'unknown[]'})
+const ArticleIdList = type({ArticleId: 'unknown'})
 
-const Citation = type({'i?': 'string', 'b?': 'number', '#text': 'string'})
+const Citation = type({'i?': 'string', 'b?': 'string | number', '#text': 'string'})
 
 const Reference = type({Citation: Citation})
 
-const ReferenceList = type({Reference: Reference.array()})
+const ReferenceList = type({Reference: Reference.or(Reference.array())})
 
 const PubmedData = type({
-  History: History,
-  PublicationStatus: 'string',
-  ArticleIdList: ArticleIdList,
-  ReferenceList: ReferenceList,
+  'History?': History,
+  'PublicationStatus?': 'string',
+  'ArticleIdList?': ArticleIdList,
+  'ReferenceList?': ReferenceList,
 })
 
-const PubmedArticle = type({MedlineCitation: MedlineCitation, PubmedData: PubmedData})
+const PubmedArticle = type({MedlineCitation: MedlineCitation, 'PubmedData?': PubmedData})
 
-const PubmedArticleSet = type({PubmedArticle: 'unknown | unknown[]'})
+const PubmedArticleSet = type({PubmedArticle: 'unknown'})
 
-const PubmedDocument = type({'?xml': 'string', PubmedArticleSet: PubmedArticleSet})
+const PubmedDocument = type({PubmedArticleSet: PubmedArticleSet})
 
 type PubmedDocumentType = typeof PubmedDocument.infer
 
 const parser = new XMLParser({ignoreAttributes: true})
 
-const toIsoDate = (y?: number, m?: number | string, d?: number): string => {
-  const year = y ?? 1970
-  const monthNum = typeof m === 'string' ? Date.parse(`${m} 1, ${year}`) : undefined
-  const month = typeof m === 'number' ? m : monthNum ? new Date(monthNum).getMonth() + 1 : 1
-  const day = d ?? 1
+const toIsoDate = (y?: number | string, m?: number | string, d?: number | string): string => {
+  const toInt = (v: unknown): number | undefined => {
+    if (typeof v === 'number') return v
+    if (typeof v === 'string') {
+      const n = Number.parseInt(v, 10)
+      return Number.isNaN(n) ? undefined : n
+    }
+    return undefined
+  }
+
+  const year = toInt(y) ?? 1970
+
+  const month = (() => {
+    if (typeof m === 'number') return m
+    if (typeof m === 'string') {
+      const asNum = toInt(m)
+      if (asNum && asNum >= 1 && asNum <= 12) return asNum
+      const parsed = Date.parse(`${m} 1, ${year}`)
+      return Number.isNaN(parsed) ? 1 : new Date(parsed).getMonth() + 1
+    }
+    return 1
+  })()
+
+  const day = toInt(d) ?? 1
   const mm = String(month).padStart(2, '0')
   const dd = String(day).padStart(2, '0')
   return `${year}-${mm}-${dd}T00:00:00.000Z`
@@ -136,75 +172,67 @@ const extractAuthors = (authList: unknown): string[] => {
   return []
 }
 
-const pubmedHarvestGetParsedXML = async (responseData: unknown, importRoute: string): Promise<DatabaseEntry[]> => {
+const readArticlesArray = (maybeArray: unknown): unknown[] => {
+  if (Array.isArray(maybeArray)) return maybeArray
+  return maybeArray ? [maybeArray] : []
+}
+
+const buildPayload = (it: any, importRoute: string): ArticlesUpsertPayload | undefined => {
+  const pmidRaw = it?.MedlineCitation?.PMID
+  const pmid = typeof pmidRaw === 'number' ? String(pmidRaw) : typeof pmidRaw === 'string' ? pmidRaw : ''
+  if (!pmid) return undefined
+
+  const article = it?.MedlineCitation?.Article ?? {}
+  const title = article?.ArticleTitle ?? ''
+  const abstract = extractAbstract(article?.Abstract)
+  const authors = extractAuthors(article?.AuthorList)
+  const dr = it?.MedlineCitation?.DateRevised
+  const ad = article?.ArticleDate
+  const createdAt = ad ? toIsoDate(ad.Year, ad.Month, ad.Day) : toIsoDate(dr?.Year, dr?.Month, dr?.Day)
+  const updatedAt = dr ? toIsoDate(dr.Year, dr.Month, dr.Day) : createdAt
+
+  return {
+    article_id: `pmid:${pmid}`,
+    article_title: String(title),
+    article_summary: abstract,
+    article_authors: authors,
+    article_created_at: createdAt,
+    article_updated_at: updatedAt,
+    article_version: '1',
+    pubmed_id: pmid,
+    import_route: importRoute,
+  }
+}
+
+const pubmedHarvestGetParsedXML = async (
+  responseData: unknown,
+  importRoute: string,
+): Promise<ArticlesUpsertPayload[]> => {
   // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
   const root = parser.parse(responseData as string)
-  const result: DatabaseEntry[] = []
-  try {
-    const parsedRoot = PubmedDocument.assert(root)
-    const artsRaw = parsedRoot.PubmedArticleSet?.PubmedArticle
-    const arts = Array.isArray(artsRaw) ? artsRaw : artsRaw ? [artsRaw] : []
+  const doc = PubmedDocument(root)
+  const results: ArticlesUpsertPayload[] = []
 
-    for (const item of arts) {
-      try {
-        const art = PubmedArticle.assert(item)
-        const cite = art.MedlineCitation
-        const article = cite.Article
-        const pmidNum = cite.PMID
-        const pmid = String(pmidNum)
-        const title = article.ArticleTitle
-        const abstract = extractAbstract(article.Abstract)
-        const authors = extractAuthors(article.AuthorList)
-        const createdAt = article.ArticleDate
-          ? toIsoDate(article.ArticleDate.Year, article.ArticleDate.Month, article.ArticleDate.Day)
-          : toIsoDate(cite.DateRevised?.Year, cite.DateRevised?.Month, cite.DateRevised?.Day)
-        const updatedAt = cite.DateRevised
-          ? toIsoDate(cite.DateRevised.Year, cite.DateRevised.Month, cite.DateRevised.Day)
-          : createdAt
-
-        result.push({
-          article_id: `pmid:${pmid}`,
-          article_title: title,
-          article_summary: abstract,
-          article_authors: authors,
-          article_created_at: createdAt,
-          article_updated_at: updatedAt,
-          article_version: '1',
-          pubmed_id: pmid,
-          import_route: importRoute,
-        })
-      } catch (e) {
-        // Skip invalid item; continue
-      }
-    }
-  } catch (e) {
-    // If strict schema fails, try a looser parse path without throwing
-    const set = (root && root.PubmedArticleSet && root.PubmedArticleSet.PubmedArticle) || []
-    const arts = Array.isArray(set) ? set : set ? [set] : []
-    for (const it of arts) {
-      const pmid = String(it?.MedlineCitation?.PMID ?? '')
-      if (!pmid) continue
-      const title = it?.MedlineCitation?.Article?.ArticleTitle ?? ''
-      const abstract = extractAbstract(it?.MedlineCitation?.Article?.Abstract)
-      const authors = extractAuthors(it?.MedlineCitation?.Article?.AuthorList)
-      const dr = it?.MedlineCitation?.DateRevised
-      const ad = it?.MedlineCitation?.Article?.ArticleDate
-      const createdAt = ad ? toIsoDate(ad.Year, ad.Month, ad.Day) : toIsoDate(dr?.Year, dr?.Month, dr?.Day)
-      const updatedAt = dr ? toIsoDate(dr.Year, dr.Month, dr.Day) : createdAt
-      result.push({
-        article_id: `pmid:${pmid}`,
-        article_title: String(title),
-        article_summary: abstract,
-        article_authors: authors,
-        article_created_at: createdAt,
-        article_updated_at: updatedAt,
-        article_version: '1',
-        pubmed_id: pmid,
-        import_route: importRoute,
+  if (!(doc instanceof type.errors)) {
+    const arts = readArticlesArray(doc.PubmedArticleSet?.PubmedArticle)
+    const payloads = arts
+      .map((item) => {
+        const parsed = PubmedArticle(item)
+        return parsed instanceof type.errors ? buildPayload(item, importRoute) : buildPayload(parsed, importRoute)
       })
-    }
+      .filter((x): x is ArticlesUpsertPayload => {
+        return Boolean(x)
+      })
+    return payloads
   }
-  return result
+
+  const set = (root && root.PubmedArticleSet && root.PubmedArticleSet.PubmedArticle) || []
+  const arts = readArticlesArray(set)
+  for (const it of arts) {
+    const payload = buildPayload(it, importRoute)
+    if (payload) results.push(payload)
+  }
+  return results
 }
 
 export {PubmedDocument, type PubmedDocumentType, pubmedHarvestGetParsedXML}
