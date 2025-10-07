@@ -13,6 +13,8 @@ type AdminDataSourceDetail = {
   itemsAfterLastImport: number
   createdAt: string
   updatedAt: string
+  dateFrom: string | null
+  dateTo: string | null
 }
 
 const fetchDataSourceById = async (id: string): Promise<AdminDataSourceDetail> => {
@@ -38,12 +40,20 @@ const fetchDataSourceById = async (id: string): Promise<AdminDataSourceDetail> =
     itemsAfterLastImport: entry.itemsAfterLastImport ?? 0,
     createdAt: String(entry.createdAt),
     updatedAt: String(entry.updatedAt),
+    dateFrom: entry.dateFrom ? String(entry.dateFrom) : null,
+    dateTo: entry.dateTo ? String(entry.dateTo) : null,
   }
 }
 
 const updateDataSource = async (
   id: string,
-  payload: Partial<{title: string; description: string | null; importRoute: string | null}>,
+  payload: Partial<{
+    title: string
+    description: string | null
+    importRoute: string | null
+    dateFrom: string | null
+    dateTo: string | null
+  }>,
 ): Promise<AdminDataSourceDetail> => {
   const response = await apiClient.api.datasources({id}).patch(payload)
 
@@ -67,6 +77,8 @@ const updateDataSource = async (
     itemsAfterLastImport: entry.itemsAfterLastImport ?? 0,
     createdAt: String(entry.createdAt),
     updatedAt: String(entry.updatedAt),
+    dateFrom: entry.dateFrom ? String(entry.dateFrom) : null,
+    dateTo: entry.dateTo ? String(entry.dateTo) : null,
   }
 }
 
@@ -88,9 +100,32 @@ const AdminEditDataSource = () => {
   const [title, setTitle] = createSignal('')
   const [description, setDescription] = createSignal('')
   const [importRoute, setImportRoute] = createSignal('')
+  const [dateFrom, setDateFrom] = createSignal('')
+  const [dateTo, setDateTo] = createSignal('')
   const [isSaving, setIsSaving] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
   const [successMessage, setSuccessMessage] = createSignal<string | null>(null)
+
+  const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/
+  const parseDateInput = (value: string): {date: Date | null; normalized: string | null; error: string | null} => {
+    const trimmedValue = value.trim()
+    if (!trimmedValue) {
+      return {date: null, normalized: null, error: null}
+    }
+    const matchesPattern = isoDatePattern.exec(trimmedValue)
+    if (!matchesPattern) {
+      return {date: null, normalized: null, error: 'Dates must use the YYYY-MM-DD format'}
+    }
+    const parsedDate = new Date(`${trimmedValue}T00:00:00.000Z`)
+    if (Number.isNaN(parsedDate.getTime())) {
+      return {date: null, normalized: null, error: 'Invalid date provided'}
+    }
+    return {date: parsedDate, normalized: trimmedValue, error: null}
+  }
+
+  const formatDateForInput = (value: string | null | undefined) => {
+    return value ? new Date(value).toISOString().slice(0, 10) : ''
+  }
 
   createEffect(() => {
     const data = dataSourceQuery.data
@@ -99,6 +134,8 @@ const AdminEditDataSource = () => {
     setTitle(data.title)
     setDescription(data.description ?? '')
     setImportRoute(data.importRoute ?? '')
+    setDateFrom(formatDateForInput(data.dateFrom))
+    setDateTo(formatDateForInput(data.dateTo))
   })
 
   const handleSubmit = (event: Event) => {
@@ -107,17 +144,41 @@ const AdminEditDataSource = () => {
     setSuccessMessage(null)
     setIsSaving(true)
 
+    const startDateResult = parseDateInput(dateFrom())
+    if (startDateResult.error) {
+      setError(startDateResult.error)
+      setIsSaving(false)
+      return
+    }
+
+    const endDateResult = parseDateInput(dateTo())
+    if (endDateResult.error) {
+      setError(endDateResult.error)
+      setIsSaving(false)
+      return
+    }
+
+    if (startDateResult.date && endDateResult.date && startDateResult.date > endDateResult.date) {
+      setError('Start date must be on or before the end date')
+      setIsSaving(false)
+      return
+    }
+
     const payload = {
       title: title(),
       description: description().trim() === '' ? null : description(),
       importRoute: importRoute().trim() === '' ? null : importRoute(),
+      dateFrom: startDateResult.normalized,
+      dateTo: endDateResult.normalized,
     }
 
-    return updateDataSource(dataSourceId(), payload)
+    void updateDataSource(dataSourceId(), payload)
       .then((response) => {
         setTitle(response.title)
         setDescription(response.description ?? '')
         setImportRoute(response.importRoute ?? '')
+        setDateFrom(formatDateForInput(response.dateFrom))
+        setDateTo(formatDateForInput(response.dateTo))
         setSuccessMessage('Data source updated successfully.')
         setIsSaving(false)
       })
@@ -184,6 +245,36 @@ const AdminEditDataSource = () => {
                 placeholder="/api/imports/example"
                 class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
               />
+            </div>
+
+            <div>
+              <p class="block text-sm font-medium mb-2">Date Range</p>
+              <div class="grid grid-cols-2 gap-4">
+                <label class="flex flex-col text-sm font-medium gap-1">
+                  <span>Date From</span>
+                  <input
+                    type="text"
+                    value={dateFrom()}
+                    onInput={(event) => {
+                      setDateFrom(event.currentTarget.value)
+                    }}
+                    placeholder="YYYY-MM-DD"
+                    class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+                  />
+                </label>
+                <label class="flex flex-col text-sm font-medium gap-1">
+                  <span>Date To</span>
+                  <input
+                    type="text"
+                    value={dateTo()}
+                    onInput={(event) => {
+                      setDateTo(event.currentTarget.value)
+                    }}
+                    placeholder="YYYY-MM-DD"
+                    class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+                  />
+                </label>
+              </div>
             </div>
 
             <Show when={error()}>

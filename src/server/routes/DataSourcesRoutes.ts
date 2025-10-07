@@ -67,6 +67,8 @@ export const dataSourcesRoutes = new Elysia()
         itemsAfterLastImport: dataSource.itemsAfterLastImport,
         createdAt: dataSource.createdAt,
         updatedAt: dataSource.updatedAt,
+        dateFrom: dataSource.dateFrom,
+        dateTo: dataSource.dateTo,
       })
       .from(dataSource)
       .where(eq(dataSource.id, params.id))
@@ -83,11 +85,36 @@ export const dataSourcesRoutes = new Elysia()
     async ({params, body}) => {
       const db = getDatabase()
 
+      const parseOptionalDate = (value?: string | null) => {
+        if (!value) {
+          return null
+        }
+        const trimmedValue = value.trim()
+        if (!trimmedValue) {
+          return null
+        }
+        const isoDateOnlyPattern = /^\d{4}-\d{2}-\d{2}$/
+        const hasIsoDateOnlyMatch = isoDateOnlyPattern.exec(trimmedValue)
+        const normalizedValue = hasIsoDateOnlyMatch ? `${trimmedValue}T00:00:00.000Z` : trimmedValue
+        const parsedDate = new Date(normalizedValue)
+        if (Number.isNaN(parsedDate.getTime())) {
+          throw new Error('Invalid date value provided')
+        }
+        return parsedDate
+      }
+
       const updateData: Partial<typeof dataSource.$inferInsert> = {updatedAt: new Date()}
 
       if (body.title !== undefined) updateData.title = body.title
       if (body.description !== undefined) updateData.description = body.description
       if (body.importRoute !== undefined) updateData.importRoute = body.importRoute
+      const parsedDateFrom = body.dateFrom === undefined ? undefined : parseOptionalDate(body.dateFrom)
+      const parsedDateTo = body.dateTo === undefined ? undefined : parseOptionalDate(body.dateTo)
+      if (parsedDateFrom && parsedDateTo && parsedDateFrom > parsedDateTo) {
+        throw new Error('date_from must be on or before date_to')
+      }
+      if (parsedDateFrom !== undefined) updateData.dateFrom = parsedDateFrom
+      if (parsedDateTo !== undefined) updateData.dateTo = parsedDateTo
 
       const [updated] = await db.update(dataSource).set(updateData).where(eq(dataSource.id, params.id)).returning()
 
@@ -102,6 +129,8 @@ export const dataSourcesRoutes = new Elysia()
         title: t.Optional(t.String()),
         description: t.Optional(t.Union([t.String(), t.Null()])),
         importRoute: t.Optional(t.Union([t.String(), t.Null()])),
+        dateFrom: t.Optional(t.Union([t.String(), t.Null()])),
+        dateTo: t.Optional(t.Union([t.String(), t.Null()])),
       }),
     },
   )
