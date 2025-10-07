@@ -287,11 +287,15 @@ const AdminDataSources = () => {
                                 </div>
                                 <div class="text-sm text-gray-500">
                                   <span class="font-medium text-gray-700">Date From:</span>{' '}
-                                  {entry.dateFrom ? formatDate(new Date(entry.dateFrom), 'yyyy-MM-dd') : 'Not set'}
+                                  {entry.dateFrom
+                                    ? formatDate(new Date(entry.dateFrom), 'yyyy-MM-dd HH:mm xxx')
+                                    : 'Not set'}
                                 </div>
                                 <div class="text-sm text-gray-500">
                                   <span class="font-medium text-gray-700">Date To:</span>{' '}
-                                  {entry.dateTo ? formatDate(new Date(entry.dateTo), 'yyyy-MM-dd') : 'Not set'}
+                                  {entry.dateTo
+                                    ? formatDate(new Date(entry.dateTo), 'yyyy-MM-dd HH:mm xxx')
+                                    : 'Not set'}
                                 </div>
                                 <div class="text-sm text-gray-500">
                                   <span class="font-medium text-gray-700">Items After Import:</span>{' '}

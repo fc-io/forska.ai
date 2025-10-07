@@ -47,15 +47,16 @@ export const dataSourcesImportRoutesPostArxiv = async (body: {id: string}) => {
   const db = getDatabase()
   const record = await fetchDataSourceById(db, body.id)
   const fromDate = record.dateFrom ? format(record.dateFrom, 'yyyy-MM-dd') : '2020-01-01'
-  const toDate = record.dateTo ? format(record.dateTo, 'yyyy-MM-dd') : format(new Date(), 'yyyy-MM-dd')
-  if (!fromDate) {
+  const now = new Date()
+  const recordToDate = record.dateTo ? new Date(record.dateTo) : now
+  const toDate = recordToDate > now ? format(now, 'yyyy-MM-dd') : format(recordToDate, 'yyyy-MM-dd')
+  if (!record.dateFrom) {
     console.warn('dataSourcesImportRoutesPostArxiv – From date is good to have')
   }
-  if (!toDate) {
+  if (!record.dateTo) {
     console.warn('dataSourcesImportRoutesPostArxiv – To date is good to have')
   }
   await startArxivHarvest({fromDate, toDate, maxResults: 100})
-
   const importedCount = await countArticles(db)
   const updatedDataSource = await updateDataSourceAfterImport(db, record.id, importedCount)
 
