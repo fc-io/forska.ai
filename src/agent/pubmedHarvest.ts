@@ -24,7 +24,7 @@ const getEssearchresult = async (response: Response) => {
   return parsed.esearchresult
 }
 
-const RETMAX = 5000
+const RETMAX = 10_000
 
 const pubmedHarvestArticles = async (
   esearchresult: typeof ESearchResultInner.infer,
@@ -45,7 +45,7 @@ const pubmedHarvestArticles = async (
     if (entries.length > 0) {
       await pubmedWorkflowStoreEntries(entries)
     }
-    console.log('responseData', responseData)
+    // console.log('responseData', responseData)
     retstart += RETMAX
     if (retstart >= esearchresult.count) {
       break
