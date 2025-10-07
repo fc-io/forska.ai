@@ -74,10 +74,8 @@ export const dataSourcesImportRoutesPostPubmed = async (body: {id: string}) => {
   if (!record.dateTo) {
     console.warn('dataSourcesImportRoutesPostPubmed – To date is good to have')
   }
-  const beforeCount = await countArticlesInRange(db, importRoute, record)
   await pubmedHarvest({fromDate, toDate, maxResults: 100, importRoute})
-  const afterCount = await countArticlesInRange(db, importRoute, record)
-  const importedCount = Math.max(0, afterCount - beforeCount)
+  const importedCount = await countArticlesInRange(db, importRoute, record)
   const updatedDataSource = await updateDataSourceAfterImport(db, record.id, importedCount)
 
   return {success: true, data: updatedDataSource}

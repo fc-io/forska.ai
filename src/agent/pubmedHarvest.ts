@@ -24,7 +24,7 @@ const getEssearchresult = async (response: Response) => {
   return parsed.esearchresult
 }
 
-const RETMAX = 100
+const RETMAX = 1000
 
 const pubmedHarvestArticles = async (
   esearchresult: typeof ESearchResultInner.infer,
