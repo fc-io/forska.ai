@@ -33,7 +33,7 @@ const PublicationTypeList = type({PublicationType: 'unknown'})
 const ArticleDate = type({Year: 'string | number', Month: 'string | number', Day: 'string | number'})
 const Article = type({
   Journal: Journal,
-  ArticleTitle: 'string',
+  ArticleTitle: 'unknown',
   'Pagination?': Pagination,
   ELocationID: 'unknown',
   'Abstract?': 'unknown',
@@ -179,6 +179,30 @@ const readArticlesArray = (maybeArray: unknown): unknown[] => {
   return maybeArray ? [maybeArray] : []
 }
 
+const extractTitle = (value: unknown): string => {
+  if (!value) return ''
+  if (typeof value === 'string') return value
+  if (Array.isArray(value)) return value.map(extractTitle).filter(Boolean).join(' ')
+  if (typeof value === 'object') {
+    const obj = value as Record<string, unknown>
+    const t = obj['#text']
+    if (typeof t === 'string') return t
+    const collected = Object.values(obj)
+      .map((v) => {
+        if (typeof v === 'string') return v
+        if (typeof v === 'object' && v !== null) {
+          const vt = (v as Record<string, unknown>)['#text']
+          return typeof vt === 'string' ? vt : ''
+        }
+        return ''
+      })
+      .filter(Boolean)
+      .join(' ')
+    return collected
+  }
+  return ''
+}
+
 const buildPayload = (it: any, importRoute: string): ArticlesUpsertPayload | undefined => {
   const pmidRaw = it?.MedlineCitation?.PMID
   const pmid = typeof pmidRaw === 'number' ? String(pmidRaw) : typeof pmidRaw === 'string' ? pmidRaw : ''
@@ -195,7 +219,7 @@ const buildPayload = (it: any, importRoute: string): ArticlesUpsertPayload | und
 
   return {
     article_id: `pmid:${pmid}`,
-    article_title: String(title),
+    article_title: extractTitle(title),
     article_summary: abstract,
     article_authors: authors,
     article_created_at: createdAt,

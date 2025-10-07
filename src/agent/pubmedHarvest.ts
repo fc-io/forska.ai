@@ -31,6 +31,7 @@ const pubmedHarvestArticles = async (
   importRoute: string,
 ): Promise<void> => {
   // console.log('pubmedHarvestArticles', esearchresult)
+  console.log('esearchresult.count', esearchresult.count)
   let retstart = 0
   while (true) {
     const articleParams = pubmedHarvestGetArticlesParams(esearchresult, RETMAX, retstart)
@@ -41,17 +42,19 @@ const pubmedHarvestArticles = async (
       body: new URLSearchParams(articleParams.searchParams).toString(),
     })
     const responseData = (await response.text()) as unknown
-    console.log('-----------------')
-    console.log(responseData)
-    console.log('-----------------')
+    // console.log('-----------------')
+    // console.log(responseData)
+    // console.log('-----------------')
 
     const entries = await pubmedHarvestGetParsedXML(responseData, importRoute)
-    console.log('5 entries', entries)
+    console.log('5 entries', entries.length)
     if (entries.length > 0) {
-      console.log('6 store entries')
+      // console.log('6 store entries')
       await pubmedWorkflowStoreEntries(entries)
     }
     // console.log('responseData', responseData)
+    console.log('retstart', retstart)
+
     retstart += RETMAX
     if (retstart >= esearchresult.count) {
       break
