@@ -156,6 +156,12 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
   state.rotation = (state.rotation + 1) % Math.max(1, jobs.length)
   state.lastRun = now
   state.lastTotal = finalTotal
+  console.log('adjust-batch-size latest state', {
+    lastRun: state.lastRun,
+    lastTotal: state.lastTotal,
+    rotation: state.rotation,
+    snapshotCount: state.snapshots.length,
+  })
 
   return
 }
