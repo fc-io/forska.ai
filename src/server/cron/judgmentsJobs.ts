@@ -20,7 +20,7 @@ const serverJobId = `server-job-${crypto.randomUUID()}`
 const NEW_ARTICLES_INTERVAL = '*/3 * * * * *'
 const LLM_PROCESSING_INTERVAL = '*/9 * * * * *'
 const BATCH_SIZE_WARMUP = '0 * * * * *'
-const BATCH_SIZE_ADJUST = '0 */5 * * * *'
+const BATCH_SIZE_ADJUST = '0 */1 * * * *'
 const CHECK_VLLM_STATUS = '0 * * * * *'
 const CLEANUP_STALE_REQUESTS = '0 */5 * * * *'
 
