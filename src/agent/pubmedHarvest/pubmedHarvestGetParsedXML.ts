@@ -1,5 +1,6 @@
 import {type} from 'arktype'
 import {XMLParser} from 'fast-xml-parser'
+
 import type {DatabaseEntry} from '../pubmedWorkflowStoreEntries.ts'
 
 const DateRevised = type({Year: 'number', Month: 'number', Day: 'number'})
@@ -102,7 +103,7 @@ const extractAbstract = (abs: unknown): string => {
           if (typeof x === 'string') return x
           if (typeof x === 'object' && x !== null) {
             const xo = x as Record<string, unknown>
-            return typeof xo['#text'] === 'string' ? (xo['#text'] as string) : JSON.stringify(x)
+            return typeof xo['#text'] === 'string' ? xo['#text'] : JSON.stringify(x)
           }
           return String(x)
         })
@@ -135,10 +136,7 @@ const extractAuthors = (authList: unknown): string[] => {
   return []
 }
 
-const pubmedHarvestGetParsedXML = async (
-  responseData: unknown,
-  importRoute: string,
-): Promise<DatabaseEntry[]> => {
+const pubmedHarvestGetParsedXML = async (responseData: unknown, importRoute: string): Promise<DatabaseEntry[]> => {
   // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
   const root = parser.parse(responseData as string)
   const result: DatabaseEntry[] = []
@@ -181,7 +179,7 @@ const pubmedHarvestGetParsedXML = async (
     }
   } catch (e) {
     // If strict schema fails, try a looser parse path without throwing
-    const set = (root && (root as any).PubmedArticleSet && (root as any).PubmedArticleSet.PubmedArticle) || []
+    const set = (root && root.PubmedArticleSet && root.PubmedArticleSet.PubmedArticle) || []
     const arts = Array.isArray(set) ? set : set ? [set] : []
     for (const it of arts) {
       const pmid = String(it?.MedlineCitation?.PMID ?? '')

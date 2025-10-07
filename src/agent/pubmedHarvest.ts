@@ -24,7 +24,7 @@ const getEssearchresult = async (response: Response) => {
   return parsed.esearchresult
 }
 
-const RETMAX = 10_000
+const RETMAX = 2
 
 const pubmedHarvestArticles = async (
   esearchresult: typeof ESearchResultInner.infer,
@@ -41,8 +41,14 @@ const pubmedHarvestArticles = async (
       body: new URLSearchParams(articleParams.searchParams).toString(),
     })
     const responseData = (await response.text()) as unknown
+    console.log('-----------------')
+    console.log(responseData)
+    console.log('-----------------')
+
     const entries = await pubmedHarvestGetParsedXML(responseData, importRoute)
+    console.log('5 entries', entries)
     if (entries.length > 0) {
+      console.log('6 store entries')
       await pubmedWorkflowStoreEntries(entries)
     }
     // console.log('responseData', responseData)
@@ -55,16 +61,20 @@ const pubmedHarvestArticles = async (
 }
 
 const pubmedHarvest = async (input: InputData): Promise<void> => {
+  // console.log('pubmed input', input)
+
   const idParams = pubmedHarvestGetIdParams(input)
-  console.log('pubmedIdQuery', idParams)
+  console.log('0pubmedIdQuery', idParams)
   const response = await fetch(idParams.baseUrl, {
     method: 'POST',
     headers: {'Content-Type': 'application/x-www-form-urlencoded'},
     body: new URLSearchParams(idParams.searchParams).toString(),
   })
-
+  // console.log('1 pubmed response')
   const esearchresult = await getEssearchresult(response)
+  // console.log('2 pubmed esearchresult')
   await pubmedHarvestArticles(esearchresult, input.importRoute)
+  // console.log('3 pubmedHarvestArticles')
   // const result = await fetchRecords(arxivQueryUrl)
   // await arxivWorkflowStoreEntires(result.records)
   // if (result.resumptionToken) {
