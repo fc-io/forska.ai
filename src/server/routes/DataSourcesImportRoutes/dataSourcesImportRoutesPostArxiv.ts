@@ -1,3 +1,4 @@
+import {format} from 'date-fns'
 import {count, eq} from 'drizzle-orm'
 
 import {startArxivHarvest} from '../../../agent/startArxivHarvest.ts'
@@ -45,8 +46,15 @@ const updateDataSourceAfterImport = async (
 export const dataSourcesImportRoutesPostArxiv = async (body: {id: string}) => {
   const db = getDatabase()
   const record = await fetchDataSourceById(db, body.id)
-
-  await startArxivHarvest({fromDate: '2025-09-22', toDate: '2025-10-05', maxResults: 100})
+  const fromDate = record.dateFrom ? format(record.dateFrom, 'yyyy-MM-dd') : '2020-01-01'
+  const toDate = record.dateTo ? format(record.dateTo, 'yyyy-MM-dd') : format(new Date(), 'yyyy-MM-dd')
+  if (!fromDate) {
+    console.warn('dataSourcesImportRoutesPostArxiv – From date is good to have')
+  }
+  if (!toDate) {
+    console.warn('dataSourcesImportRoutesPostArxiv – To date is good to have')
+  }
+  await startArxivHarvest({fromDate, toDate, maxResults: 100})
 
   const importedCount = await countArticles(db)
   const updatedDataSource = await updateDataSourceAfterImport(db, record.id, importedCount)
