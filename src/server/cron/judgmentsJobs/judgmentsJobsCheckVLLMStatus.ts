@@ -36,7 +36,7 @@ const computeTps = (
 }
 
 const smallQueue = (waiting: number, running: number): boolean => {
-  const thr = Math.max(1, Math.ceil(0.15 * running))
+  const thr = Math.max(1, Math.ceil(0.05 * running))
   return waiting <= thr
 }
 
