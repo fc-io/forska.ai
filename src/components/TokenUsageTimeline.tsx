@@ -38,7 +38,7 @@ type UsageStat = {timestamp: string; totalTokens: number}
 type TokenUsageTimelineProps = {projectId?: string; allJobs?: boolean}
 
 export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
-  const [selectedInterval, setSelectedInterval] = createSignal<TimeInterval>('24h')
+  const [selectedInterval, setSelectedInterval] = createSignal<TimeInterval>('1min')
   const [customRange, setCustomRange] = createSignal<TokenUsageTimelineDateRange | null>(null)
   // Keep chart readiness local to this component instance
   const [chartReady, setChartReady] = createSignal(false)
