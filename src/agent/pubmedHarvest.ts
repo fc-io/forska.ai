@@ -24,17 +24,17 @@ const getEssearchresult = async (response: Response) => {
   return parsed.esearchresult
 }
 
-const RETMAX = 2
+const RETMAX = 5000
 
 const pubmedHarvestArticles = async (
   esearchresult: typeof ESearchResultInner.infer,
   importRoute: string,
 ): Promise<void> => {
-  console.log('pubmedHarvestArticles', esearchresult)
+  // console.log('pubmedHarvestArticles', esearchresult)
   let retstart = 0
   while (true) {
     const articleParams = pubmedHarvestGetArticlesParams(esearchresult, RETMAX, retstart)
-    console.log('fetch, with articleParams', articleParams)
+    // console.log('fetch, with articleParams', articleParams)
     const response = await fetch(articleParams.baseUrl, {
       method: 'POST',
       headers: {'Content-Type': 'application/x-www-form-urlencoded'},
