@@ -1,5 +1,6 @@
 import {type} from 'arktype'
 
+import {env as serverEnv} from '../../server/utils/env.ts'
 import type {ESearchResultInnerType} from '../pubmedHarvest.ts'
 
 const IdParams = type({
@@ -23,7 +24,10 @@ export const pubmedHarvestGetArticlesParams = (
   RETMAX: number,
   retstart: number,
 ): typeof IdParams.infer => {
-  const {VITE_NCBI_EMAIL, VITE_NCBI_API_KEY, VITE_NCBI_TOOL} = import.meta.env
+  const {NCBI_EMAIL, NCBI_API_KEY, NCBI_TOOL} = serverEnv
+  const email = NCBI_EMAIL ?? ''
+  const apiKey = NCBI_API_KEY ?? ''
+  const tool = NCBI_TOOL ?? ''
   const retmax = String(Math.min(RETMAX, count - retstart))
 
   const baseUrl = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi'
@@ -37,9 +41,9 @@ export const pubmedHarvestGetArticlesParams = (
       retmax,
       retmode: 'xml',
       rettype: 'abstract', // limits payload but keeps title+abstract
-      email: VITE_NCBI_EMAIL,
-      api_key: VITE_NCBI_API_KEY,
-      tool: VITE_NCBI_TOOL,
+      email,
+      api_key: apiKey,
+      tool,
     },
   })
 

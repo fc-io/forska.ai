@@ -1,7 +1,8 @@
 import {type} from 'arktype'
 import {format} from 'date-fns'
 
-import type {InputData} from '../../agent.ts'
+import {env as serverEnv} from '../../server/utils/env.ts'
+import type {InputData} from '../arxivWorkflow/arxivWorkflowHarvest.ts'
 
 const IdParams = type({
   baseUrl: 'string',
@@ -25,7 +26,10 @@ export const pubmedHarvestGetIdParams = (input: InputData): typeof IdParams.infe
   const from = format(fromDate, 'yyyy/MM/dd')
   const to = format(toDate, 'yyyy/MM/dd')
 
-  const {VITE_NCBI_EMAIL, VITE_NCBI_API_KEY, VITE_NCBI_TOOL} = import.meta.env
+  const {NCBI_EMAIL, NCBI_API_KEY, NCBI_TOOL} = serverEnv
+  const email = NCBI_EMAIL ?? ''
+  const apiKey = NCBI_API_KEY ?? ''
+  const tool = NCBI_TOOL ?? ''
 
   const baseUrl = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi'
   const idParams = IdParams.assert({
@@ -39,9 +43,9 @@ export const pubmedHarvestGetIdParams = (input: InputData): typeof IdParams.infe
       usehistory: 'y',
       retmax: '0',
       retmode: 'json',
-      email: VITE_NCBI_EMAIL,
-      api_key: VITE_NCBI_API_KEY,
-      tool: VITE_NCBI_TOOL,
+      email,
+      api_key: apiKey,
+      tool,
     },
   })
 
