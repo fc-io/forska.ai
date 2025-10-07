@@ -94,28 +94,41 @@ const AdminJudgmentJobDetail = () => {
 
         <Show when={job.data}>
           {(jobData) => {
-            // Keep as accessor to preserve Solid reactivity
             const data = jobData
-            const jobDetails = data() as Record<string, unknown> | undefined
-            const unassessedArticlesValue =
-              jobDetails && 'unassessedArticlesCount' in jobDetails
-                ? (jobDetails as {unassessedArticlesCount?: number | string}).unassessedArticlesCount
-                : 0
-            const unassessedArticlesCount =
-              typeof unassessedArticlesValue === 'number'
+            const jobDetails = () => {
+              const details = data() as Record<string, unknown> | undefined
+              return details
+            }
+            const unassessedArticlesCount = () => {
+              const details = jobDetails()
+              const unassessedArticlesValue =
+                details && 'unassessedArticlesCount' in details
+                  ? (details as {unassessedArticlesCount?: number | string}).unassessedArticlesCount
+                  : 0
+              return typeof unassessedArticlesValue === 'number'
                 ? unassessedArticlesValue
                 : Number(unassessedArticlesValue) || 0
-            const formattedUnassessedArticlesCount = unassessedArticlesCount.toLocaleString()
-            const jobIdValue =
-              jobDetails && 'id' in jobDetails
-                ? (jobDetails as {id?: string | number}).id
-                : undefined
-            const jobId =
-              typeof jobIdValue === 'number' || typeof jobIdValue === 'string' ? String(jobIdValue) : ''
-            const shouldLinkToUnassessedArticles = Boolean(jobId && unassessedArticlesCount > 0)
-            const unassessedArticlesLink = shouldLinkToUnassessedArticles
-              ? `/admin/jobs/${jobId}/unassessed_articles`
-              : ''
+            }
+            const formattedUnassessedArticlesCount = () => {
+              return unassessedArticlesCount().toLocaleString()
+            }
+            const jobId = () => {
+              const details = jobDetails()
+              const jobIdValue =
+                details && 'id' in details ? (details as {id?: string | number}).id : undefined
+              const resolvedId =
+                typeof jobIdValue === 'number' || typeof jobIdValue === 'string' ? String(jobIdValue) : ''
+              return resolvedId
+            }
+            const shouldLinkToUnassessedArticles = () => {
+              const hasLink = Boolean(jobId() && unassessedArticlesCount() > 0)
+              return hasLink
+            }
+            const unassessedArticlesLink = () => {
+              return shouldLinkToUnassessedArticles()
+                ? `/admin/jobs/${jobId()}/unassessed_articles`
+                : ''
+            }
             return (
               <>
                 <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
@@ -160,11 +173,14 @@ const AdminJudgmentJobDetail = () => {
                       <div class="mb-4 space-y-1">
                         <p class="text-sm text-gray-500">Unassessed Articles</p>
                         <Show
-                          when={shouldLinkToUnassessedArticles}
-                          fallback={<p class="font-medium">{formattedUnassessedArticlesCount}</p>}
+                          when={shouldLinkToUnassessedArticles()}
+                          fallback={<p class="font-medium">{formattedUnassessedArticlesCount()}</p>}
                         >
-                          <Link to={unassessedArticlesLink} class="font-medium text-blue-600 hover:text-blue-800">
-                            {formattedUnassessedArticlesCount}
+                          <Link
+                            to={unassessedArticlesLink()}
+                            class="font-medium text-blue-600 hover:text-blue-800"
+                          >
+                            {formattedUnassessedArticlesCount()}
                           </Link>
                         </Show>
                       </div>
