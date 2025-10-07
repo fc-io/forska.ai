@@ -48,6 +48,13 @@ const pubmedHarvestArticles = async (
 
     const entries = await pubmedHarvestGetParsedXML(responseData, importRoute)
     console.log('5 entries', entries.length)
+    if (entries.length === 0) {
+      console.log('no entries')
+      console.log('----------')
+      console.log('responseData', responseData)
+      console.log('----------')
+      break
+    }
     if (entries.length > 0) {
       // console.log('6 store entries')
       await pubmedWorkflowStoreEntries(entries)
