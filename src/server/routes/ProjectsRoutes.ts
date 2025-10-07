@@ -6,6 +6,7 @@ import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {projectsRoutesGetArticlesReviews} from './projectsRoutes/projectsRoutesGetArticlesReviews.ts'
 import {projectsRoutesGetArticlesReviewsFilters} from './projectsRoutes/projectsRoutesGetArticlesReviewsFilters.ts'
+import {projectsRoutesGetArticlesReviewsUnassessed} from './projectsRoutes/projectsRoutesGetArticlesReviewsUnassessed.ts'
 import {projectsRoutesGetArticlesWithJudgments} from './projectsRoutes/projectsRoutesGetArticlesWithJudgments.ts'
 import {projectsRoutesPostArticleReviewDetails} from './projectsRoutes/projectsRoutesPostArticleReviewDetails.ts'
 
@@ -31,6 +32,7 @@ export const projectsRoutes = new Elysia()
   .use(withErrorHandler())
   .use(projectsRoutesGetArticlesWithJudgments)
   .use(projectsRoutesGetArticlesReviews)
+  .use(projectsRoutesGetArticlesReviewsUnassessed)
   .use(projectsRoutesGetArticlesReviewsFilters)
   .use(projectsRoutesPostArticleReviewDetails)
   .get('/api/projects', async () => {

@@ -15,6 +15,7 @@ interface ReviewsFilterControlsProps {
   toDate: string
   setFromDate: Setter<string>
   setToDate: Setter<string>
+  hidePromptSelectors?: boolean
 }
 
 export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
@@ -44,6 +45,7 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
 
         return response.data as Array<{promptId: string; promptName: string; answeredOriginalValues: string[]}>
       },
+      enabled: !props.hidePromptSelectors,
     }
   })
 
@@ -55,8 +57,14 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
   }
 
   createEffect(() => {
+    if (props.hidePromptSelectors) {
+      return
+    }
     const maybe = (filtersQuery as unknown as {data?: unknown}).data
-    const filters = typeof maybe === 'function' ? (maybe as () => Array<{promptId: string; answeredOriginalValues: string[]}> )() : (maybe as Array<{promptId: string; answeredOriginalValues: string[]}> | undefined)
+    const filters =
+      typeof maybe === 'function'
+        ? (maybe as () => Array<{promptId: string; answeredOriginalValues: string[]}>)()
+        : ((maybe as Array<{promptId: string; answeredOriginalValues: string[]}> | undefined))
     if (!filters) {
       return
     }
@@ -124,7 +132,7 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
           </select>
         </div>
       </div>
-      <Show when={filtersQuery.data}>
+      <Show when={!props.hidePromptSelectors && filtersQuery.data}>
         {(data) => {
           const filters = data()
           return (
@@ -163,10 +171,10 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
           )
         }}
       </Show>
-      <Show when={filtersQuery.isPending}>
+      <Show when={!props.hidePromptSelectors && filtersQuery.isPending}>
         <div class="text-gray-500">Loading filters...</div>
       </Show>
-      <Show when={filtersQuery.error}>
+      <Show when={!props.hidePromptSelectors && filtersQuery.error}>
         <div class="text-red-600">Error loading filters</div>
       </Show>
     </div>
