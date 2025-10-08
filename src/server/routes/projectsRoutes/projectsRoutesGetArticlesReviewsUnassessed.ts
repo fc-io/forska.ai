@@ -1,7 +1,7 @@
 import {and, desc, eq, gte, inArray, lte, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {articles, judgments, prompts} from '../../../db/schema.ts'
+import {articles, judgments, projects, prompts} from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
 export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
@@ -13,9 +13,6 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
       const page = parseInt(body?.page || '1', 10)
       const limit = parseInt(body?.limit || '100', 10)
       const offset = (page - 1) * limit
-
-      const fromDate = body.from ? new Date(`${body.from}T00:00:00.000Z`) : null
-      const toDate = body.to ? new Date(`${body.to}T23:59:59.999Z`) : null
 
       const projectPrompts = await db.select().from(prompts).where(eq(prompts.projectId, body.projectId))
 
@@ -36,12 +33,19 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
           .limit(1)}
       )`
 
+      // Always enforce the project's date range, regardless of provided start/end
+      const [projectBounds] = await db
+        .select({dateFrom: projects.dateFrom, dateTo: projects.dateTo})
+        .from(projects)
+        .where(eq(projects.id, body.projectId))
+        .limit(1)
+
       const whereParts: Array<ReturnType<typeof sql>> = [noJudgmentsForProjectPrompts]
-      if (fromDate) {
-        whereParts.push(gte(articles.createdAt, fromDate))
+      if (projectBounds?.dateFrom) {
+        whereParts.push(gte(articles.createdAt, projectBounds.dateFrom))
       }
-      if (toDate) {
-        whereParts.push(lte(articles.createdAt, toDate))
+      if (projectBounds?.dateTo) {
+        whereParts.push(lte(articles.createdAt, projectBounds.dateTo))
       }
       const combinedWhereCondition = whereParts.length > 1 ? and(...whereParts) : whereParts[0]
 
