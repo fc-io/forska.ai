@@ -1,4 +1,6 @@
 import {type} from 'arktype'
+import {$} from 'bun'
+import {XMLParser} from 'fast-xml-parser'
 
 import {sleep} from '../utils/sleep.ts'
 import type {InputData} from './arxivWorkflow/arxivWorkflowHarvest.ts'
@@ -13,14 +15,23 @@ const Essearchresult = type({esearchresult: ESearchResultInner})
 
 type ESearchResultInnerType = typeof ESearchResultInner.infer
 
-const getEssearchresult = async (response: Response) => {
-  const responseJson = (await response.json()) as unknown
-  const parsed = Essearchresult(responseJson)
+const getEssearchresult = (cliOutput: string) => {
+  const parser = new XMLParser({ignoreAttributes: true})
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+  const root = parser.parse(cliOutput)
+  // Support common capitalizations just in case
+  const node = root?.eSearchResult ?? root?.esearchresult ?? root?.ESearchResult ?? root?.ESEARCHRESULT
+  const count = node?.Count ?? node?.count
+  const querykey = node?.QueryKey ?? node?.querykey
+  const webenv = node?.WebEnv ?? node?.webenv
 
-  if (parsed instanceof type.errors) {
-    throw new Error('getEssearchresult: Invalid response from pubmed')
+  const shaped = {
+    esearchresult: {count: String(count ?? '0'), webenv: String(webenv ?? ''), querykey: String(querykey ?? '')},
   }
-
+  const parsed = Essearchresult(shaped)
+  if (parsed instanceof type.errors) {
+    throw new Error('getEssearchresult: Invalid response from esearch CLI')
+  }
   return parsed.esearchresult
 }
 
@@ -35,13 +46,11 @@ const pubmedHarvestArticles = async (
   let retstart = 0
   while (true) {
     const articleParams = pubmedHarvestGetArticlesParams(esearchresult, RETMAX, retstart)
-    // console.log('fetch, with articleParams', articleParams)
-    const response = await fetch(articleParams.baseUrl, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-      body: new URLSearchParams(articleParams.searchParams).toString(),
-    })
-    const responseData = (await response.text()) as unknown
+    // Use EDirect CLI (efetch) instead of HTTP fetch
+    const sp = articleParams.searchParams
+    // Prefer XML output with abstract-only payload when supported
+    const responseData =
+      await $`efetch -db ${sp.db} -webenv ${sp.WebEnv} -query_key ${sp.query_key} -retstart ${sp.retstart} -retmax ${sp.retmax} -retmode ${sp.retmode} -rettype ${sp.rettype} -email ${sp.email} -api_key ${sp.api_key} -tool ${sp.tool}`.text()
     // console.log('-----------------')
     // console.log(responseData)
     // console.log('-----------------')
@@ -75,13 +84,12 @@ const pubmedHarvest = async (input: InputData): Promise<void> => {
 
   const idParams = pubmedHarvestGetIdParams(input)
   console.log('0pubmedIdQuery', idParams)
-  const response = await fetch(idParams.baseUrl, {
-    method: 'POST',
-    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-    body: new URLSearchParams(idParams.searchParams).toString(),
-  })
-  // console.log('1 pubmed response')
-  const esearchresult = await getEssearchresult(response)
+  // Use EDirect CLI (esearch) with history to obtain WebEnv/QueryKey
+  const sp = idParams.searchParams
+  const esearchOutput =
+    await $`esearch -db ${sp.db} -query ${sp.term} -datetype ${sp.datetype} -mindate ${sp.mindate} -maxdate ${sp.maxdate} -usehistory ${sp.usehistory} -retmax ${sp.retmax} -email ${sp.email} -api_key ${sp.api_key} -tool ${sp.tool}`.text()
+  // console.log('1 pubmed response (CLI)')
+  const esearchresult = getEssearchresult(esearchOutput)
   // console.log('2 pubmed esearchresult')
   await pubmedHarvestArticles(esearchresult, input.importRoute)
 }
