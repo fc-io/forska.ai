@@ -151,7 +151,7 @@ const fetchEuropePmc = async (
   url.searchParams.set('resultType', 'core')
   url.searchParams.set('pageSize', String(pageSize))
   if (cursorMark) url.searchParams.set('cursorMark', cursorMark)
-  console.log('fetching', url.toString())
+  // console.log('fetching', url.toString())
   const res = await fetch(url)
   if (!res.ok) {
     throw new Error(`Europe PMC HTTP ${res.status}`)

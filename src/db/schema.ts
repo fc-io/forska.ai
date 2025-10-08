@@ -61,6 +61,7 @@ export const articles = pgTable(
     url: text('url'),
     contentHash: text('content_hash'),
     importRoute: text('import_route'),
+    originalData: jsonb('original_data'),
     importedBy: text('imported_by').references(
       () => {
         return user.id
