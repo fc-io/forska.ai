@@ -4,7 +4,6 @@ import {XMLParser} from 'fast-xml-parser'
 
 import {sleep} from '../utils/sleep.ts'
 import type {InputData} from './arxivWorkflow/arxivWorkflowHarvest.ts'
-import {pubmedHarvestGetArticlesParams} from './pubmedHarvest/pubmedHarvestGetArticlesParams.ts'
 import {pubmedHarvestGetIdParams} from './pubmedHarvest/pubmedHarvestGetIdParams.ts'
 import {pubmedHarvestGetParsedXML} from './pubmedHarvest/pubmedHarvestGetParsedXML.ts'
 import {pubmedWorkflowStoreEntries} from './pubmedWorkflowStoreEntries.ts'
@@ -13,21 +12,25 @@ const ESearchResultInner = type({count: 'string.integer.parse', webenv: 'string'
 
 const Essearchresult = type({esearchresult: ESearchResultInner})
 
-type ESearchResultInnerType = typeof ESearchResultInner.infer
-
 const getEssearchresult = (cliOutput: string) => {
+  console.log('getEssearchresult', cliOutput)
   const parser = new XMLParser({ignoreAttributes: true})
   // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
   const root = parser.parse(cliOutput)
-  // Support common capitalizations just in case
-  const node = root?.eSearchResult ?? root?.esearchresult ?? root?.ESearchResult ?? root?.ESEARCHRESULT
-  const count = node?.Count ?? node?.count
-  const querykey = node?.QueryKey ?? node?.querykey
-  const webenv = node?.WebEnv ?? node?.webenv
-
-  const shaped = {
-    esearchresult: {count: String(count ?? '0'), webenv: String(webenv ?? ''), querykey: String(querykey ?? '')},
+  const asObject = (x: unknown): Record<string, unknown> | undefined => {
+    return typeof x === 'object' && x !== null ? (x as Record<string, unknown>) : undefined
   }
+  const r = asObject(root)
+  const eNode = asObject(r?.['eSearchResult'] ?? r?.['esearchresult'] ?? r?.['ESearchResult'] ?? r?.['ESEARCHRESULT'])
+  const dNode = asObject(r?.['ENTREZ_DIRECT'] ?? r?.['Entrez_Direct'] ?? r?.['entrez_direct'])
+  const count = eNode?.['Count'] ?? eNode?.['count'] ?? dNode?.['Count'] ?? dNode?.['count']
+  const querykey = eNode?.['QueryKey'] ?? eNode?.['querykey']
+  const webenv = eNode?.['WebEnv'] ?? eNode?.['webenv']
+  const countStr = typeof count === 'string' || typeof count === 'number' ? String(count) : '0'
+  const querykeyStr = typeof querykey === 'string' ? querykey : ''
+  const webenvStr = typeof webenv === 'string' ? webenv : ''
+
+  const shaped = {esearchresult: {count: countStr, webenv: webenvStr, querykey: querykeyStr}}
   const parsed = Essearchresult(shaped)
   if (parsed instanceof type.errors) {
     throw new Error('getEssearchresult: Invalid response from esearch CLI')
@@ -45,12 +48,19 @@ const pubmedHarvestArticles = async (
   console.log('esearchresult.count', esearchresult.count)
   let retstart = 0
   while (true) {
-    const articleParams = pubmedHarvestGetArticlesParams(esearchresult, RETMAX, retstart)
+    const retmax = String(Math.min(RETMAX, esearchresult.count - retstart))
     // Use EDirect CLI (efetch) instead of HTTP fetch
-    const sp = articleParams.searchParams
     // Prefer XML output with abstract-only payload when supported
-    const responseData =
-      await $`efetch -db ${sp.db} -webenv ${sp.WebEnv} -query_key ${sp.query_key} -retstart ${sp.retstart} -retmax ${sp.retmax} -retmode ${sp.retmode} -rettype ${sp.rettype} -email ${sp.email} -api_key ${sp.api_key} -tool ${sp.tool}`.text()
+    const responseData = await $`
+      efetch \
+        -db pubmed \
+        -webenv ${esearchresult.webenv} \
+        -query_key ${esearchresult.querykey} \
+        -retstart ${String(retstart)} \
+        -retmax ${retmax} \
+        -retmode xml \
+        -rettype abstract
+    `.text()
     // console.log('-----------------')
     // console.log(responseData)
     // console.log('-----------------')
@@ -86,12 +96,29 @@ const pubmedHarvest = async (input: InputData): Promise<void> => {
   console.log('0pubmedIdQuery', idParams)
   // Use EDirect CLI (esearch) with history to obtain WebEnv/QueryKey
   const sp = idParams.searchParams
-  const esearchOutput =
-    await $`esearch -db ${sp.db} -query ${sp.term} -datetype ${sp.datetype} -mindate ${sp.mindate} -maxdate ${sp.maxdate} -usehistory ${sp.usehistory} -retmax ${sp.retmax} -email ${sp.email} -api_key ${sp.api_key} -tool ${sp.tool}`.text()
-  // console.log('1 pubmed response (CLI)')
-  const esearchresult = getEssearchresult(esearchOutput)
-  // console.log('2 pubmed esearchresult')
-  await pubmedHarvestArticles(esearchresult, input.importRoute)
+  let esearchOutput = ''
+  try {
+    esearchOutput = await $`
+    esearch \
+      -db ${sp.db} \
+      -query ${sp.term} \
+      -datetype ${sp.datetype} \
+      -mindate ${sp.mindate} \
+      -maxdate ${sp.maxdate}
+    `.text()
+  } catch (error) {
+    console.error('Error executing esearch', error)
+    throw error
+  }
+  console.log('1 pubmed response (CLI)')
+  try {
+    const esearchresult = getEssearchresult(esearchOutput)
+    console.log('2 pubmed esearchresult')
+    await pubmedHarvestArticles(esearchresult, input.importRoute)
+  } catch (error) {
+    console.error('Error getting esearchresult', error)
+    throw error
+  }
 }
 
-export {type ESearchResultInnerType, Essearchresult, pubmedHarvest}
+export {Essearchresult, pubmedHarvest}
