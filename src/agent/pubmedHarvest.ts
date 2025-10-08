@@ -38,7 +38,7 @@ const getEssearchresult = (cliOutput: string) => {
   return parsed.esearchresult
 }
 
-const RETMAX = 1000
+const RETMAX = 10
 
 const pubmedHarvestArticles = async (
   esearchresult: typeof ESearchResultInner.infer,
@@ -48,18 +48,13 @@ const pubmedHarvestArticles = async (
   console.log('esearchresult.count', esearchresult.count)
   let retstart = 0
   while (true) {
-    const retmax = String(Math.min(RETMAX, esearchresult.count - retstart))
+    // const retmax = String(Math.min(RETMAX, esearchresult.count - retstart))
     // Use EDirect CLI (efetch) instead of HTTP fetch
     // Prefer XML output with abstract-only payload when supported
     const responseData = await $`
       efetch \
         -db pubmed \
-        -webenv ${esearchresult.webenv} \
-        -query_key ${esearchresult.querykey} \
-        -retstart ${String(retstart)} \
-        -retmax ${retmax} \
-        -retmode xml \
-        -rettype abstract
+        -format xml \
     `.text()
     // console.log('-----------------')
     // console.log(responseData)
