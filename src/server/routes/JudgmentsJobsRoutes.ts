@@ -1,5 +1,5 @@
-import {count, eq, gte, lte, sql} from 'drizzle-orm'
 import type {SQL} from 'drizzle-orm'
+import {count, eq, gte, lte, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {articles, judgments, judgmentsJobs, judgmentsJobsArticles, projects, prompts, tokenUse} from '../../db/schema'
@@ -18,11 +18,11 @@ const buildProjectDateConditions = ({
   const conditions: SQL[] = []
 
   if (projectDateFrom) {
-    conditions.push(gte(articles.articleUpdatedAt, projectDateFrom))
+    conditions.push(gte(articles.createdAt, projectDateFrom))
   }
 
   if (projectDateTo) {
-    conditions.push(lte(articles.articleUpdatedAt, projectDateTo))
+    conditions.push(lte(articles.createdAt, projectDateTo))
   }
 
   return conditions
@@ -118,10 +118,7 @@ const getJobContext = async ({
 
   const {projectDateFrom, projectDateTo, ...job} = jobWithProject
 
-  const projectPrompts = await db
-    .select({id: prompts.id})
-    .from(prompts)
-    .where(eq(prompts.projectId, job.projectId))
+  const projectPrompts = await db.select({id: prompts.id}).from(prompts).where(eq(prompts.projectId, job.projectId))
 
   return {
     job,
@@ -143,14 +140,16 @@ const getUnassessedArticles = async ({
   promptIds: string[]
   projectDateFrom: Date | null | undefined
   projectDateTo: Date | null | undefined
-}): Promise<{
-  id: string
-  articleId: string | null
-  articleTitle: string
-  articleAuthors: string[] | null
-  articleCreatedAt: Date | null
-  articleUpdatedAt: Date | null
-}[]> => {
+}): Promise<
+  {
+    id: string
+    articleId: string | null
+    articleTitle: string
+    articleAuthors: string[] | null
+    articleCreatedAt: Date | null
+    articleUpdatedAt: Date | null
+  }[]
+> => {
   if (promptIds.length === 0) {
     return []
   }
@@ -215,10 +214,7 @@ export const judgmentsJobsRoutes = new Elysia()
     async ({params}) => {
       const db = getDatabase()
 
-      const {job, projectDateFrom, projectDateTo, promptIds} = await getJobContext({
-        db,
-        jobId: params.id,
-      })
+      const {job, projectDateFrom, projectDateTo, promptIds} = await getJobContext({db, jobId: params.id})
 
       // Get article statistics
       const articleStats = await db
@@ -281,17 +277,9 @@ export const judgmentsJobsRoutes = new Elysia()
     async ({query}) => {
       const db = getDatabase()
 
-      const {projectDateFrom, projectDateTo, promptIds} = await getJobContext({
-        db,
-        jobId: query.jobId,
-      })
+      const {projectDateFrom, projectDateTo, promptIds} = await getJobContext({db, jobId: query.jobId})
 
-      const unassessedArticles = await getUnassessedArticles({
-        db,
-        promptIds,
-        projectDateFrom,
-        projectDateTo,
-      })
+      const unassessedArticles = await getUnassessedArticles({db, promptIds, projectDateFrom, projectDateTo})
 
       return {data: unassessedArticles, error: null}
     },
