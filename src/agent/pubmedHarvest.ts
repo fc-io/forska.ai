@@ -193,6 +193,7 @@ const toDatabaseEntry = (it: typeof EuropePmcItem.infer, importRoute: string) =>
     article_version: '1',
     pubmed_id: pmid,
     import_route: importRoute,
+    original_data: it,
   }
 }
 
@@ -229,18 +230,10 @@ const harvestPage = async (
 
 const pubmedHarvest = async (input: InputData): Promise<void> => {
   const idParams = pubmedHarvestGetIdParams(input)
-  try {
-    const sp = idParams.searchParams
-    const query = buildQuery(sp.mindate, sp.maxdate)
-    console.log('building query', query)
-    const pageSize = 1000
-    console.log('pageSize', pageSize)
-    await harvestPage(query, input.importRoute, pageSize, Number.POSITIVE_INFINITY, '*')
-    console.log('3. harvested page')
-  } catch (error) {
-    console.error('Error harvesting eu pubmed', error)
-    throw error
-  }
+  const sp = idParams.searchParams
+  const query = buildQuery(sp.mindate, sp.maxdate)
+  const pageSize = 1000
+  await harvestPage(query, input.importRoute, pageSize, Number.POSITIVE_INFINITY, '*')
 }
 
 export {pubmedHarvest}

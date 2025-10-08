@@ -17,10 +17,7 @@ const fetchDataSourceById = async (db: Database, id: string): Promise<DataSource
 }
 
 const countArticlesInRange = async (db: Database, route: string, record: DataSourceRecord): Promise<number> => {
-  const base =
-    route === '/api/datasources/import/pubmed'
-      ? or(eq(articles.importRoute, route), isNull(articles.importRoute))
-      : eq(articles.importRoute, route)
+  const base = eq(articles.importRoute, route)
   const hasFrom = Boolean(record.dateFrom)
   const hasTo = Boolean(record.dateTo)
   const where =

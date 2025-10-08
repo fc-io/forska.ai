@@ -57,6 +57,7 @@ export const articlesRoutes = new Elysia()
           arxivId: entry.arxiv_id,
           pubmedId: entry.pubmed_id,
           importRoute: entry.import_route,
+          originalData: entry.original_data,
         }
       })
 
@@ -74,6 +75,7 @@ export const articlesRoutes = new Elysia()
             arxivId: sql`EXCLUDED.arxiv_id`,
             pubmedId: sql`EXCLUDED.pubmed_id`,
             importRoute: sql`EXCLUDED.import_route`,
+            originalData: sql`EXCLUDED.original_data`,
             updatedAt: sql`CURRENT_TIMESTAMP`,
           },
         })
@@ -94,6 +96,7 @@ export const articlesRoutes = new Elysia()
             arxiv_id: t.Optional(t.String()),
             pubmed_id: t.Optional(t.String()),
             import_route: t.String(),
+            original_data: t.Optional(t.Any()),
           }),
         ),
       }),

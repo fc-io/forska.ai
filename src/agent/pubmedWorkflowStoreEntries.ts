@@ -12,6 +12,7 @@ const DatabaseItem = type({
   article_version: 'string',
   pubmed_id: 'string',
   import_route: 'string',
+  'original_data?': 'unknown',
 })
 
 type DatabaseEntry = typeof DatabaseItem.infer
@@ -66,4 +67,3 @@ export const pubmedWorkflowStoreEntries = async (entries: DatabaseEntry[]): Prom
 
 export type {DatabaseEntry}
 export {DatabaseItem}
-
