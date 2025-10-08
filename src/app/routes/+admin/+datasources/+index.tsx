@@ -147,9 +147,12 @@ const AdminDataSources = () => {
         >
           <div class="flex justify-between items-center mb-6">
             <h1 class="text-2xl font-bold">Data Sources</h1>
-            <button class="px-4 py-2 bg-gray-100 text-gray-400 rounded-md cursor-not-allowed" disabled>
+            <Link
+              to="/admin/datasources/create"
+              class="px-4 py-2 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
               Add Data Source
-            </button>
+            </Link>
           </div>
 
           <div class="space-y-4">

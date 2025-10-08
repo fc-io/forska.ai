@@ -6,6 +6,24 @@ import {dataSource, dataSourceAccess} from '../../db/schema.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
+const parseOptionalDate = (value?: string | null) => {
+  if (!value) {
+    return null
+  }
+  const trimmedValue = value.trim()
+  if (!trimmedValue) {
+    return null
+  }
+  const isoDateOnlyPattern = /^\d{4}-\d{2}-\d{2}$/
+  const hasIsoDateOnlyMatch = isoDateOnlyPattern.exec(trimmedValue)
+  const normalizedValue = hasIsoDateOnlyMatch ? `${trimmedValue}T00:00:00.000Z` : trimmedValue
+  const parsedDate = new Date(normalizedValue)
+  if (Number.isNaN(parsedDate.getTime())) {
+    throw new Error('Invalid date value provided')
+  }
+  return parsedDate
+}
+
 export const dataSourcesRoutes = new Elysia()
   .use(withErrorHandler())
   .get('/api/datasources', async () => {
@@ -80,28 +98,46 @@ export const dataSourcesRoutes = new Elysia()
 
     return {data: entry}
   })
+  .post(
+    '/api/datasources',
+    async ({body}) => {
+      const db = getDatabase()
+
+      const dateFrom = parseOptionalDate(body.dateFrom)
+      const dateTo = parseOptionalDate(body.dateTo)
+      if (dateFrom && dateTo && dateFrom > dateTo) {
+        throw new Error('date_from must be on or before date_to')
+      }
+
+      const [created] = await db
+        .insert(dataSource)
+        .values({
+          title: body.title,
+          description: body.description ?? null,
+          importRoute: body.importRoute ?? null,
+          dateFrom,
+          dateTo,
+          ownerId: body.ownerId,
+        })
+        .returning()
+
+      return {data: created}
+    },
+    {
+      body: t.Object({
+        title: t.String(),
+        description: t.Optional(t.String()),
+        importRoute: t.Optional(t.String()),
+        dateFrom: t.Optional(t.String()),
+        dateTo: t.Optional(t.String()),
+        ownerId: t.String(),
+      }),
+    },
+  )
   .patch(
     '/api/datasources/:id',
     async ({params, body}) => {
       const db = getDatabase()
-
-      const parseOptionalDate = (value?: string | null) => {
-        if (!value) {
-          return null
-        }
-        const trimmedValue = value.trim()
-        if (!trimmedValue) {
-          return null
-        }
-        const isoDateOnlyPattern = /^\d{4}-\d{2}-\d{2}$/
-        const hasIsoDateOnlyMatch = isoDateOnlyPattern.exec(trimmedValue)
-        const normalizedValue = hasIsoDateOnlyMatch ? `${trimmedValue}T00:00:00.000Z` : trimmedValue
-        const parsedDate = new Date(normalizedValue)
-        if (Number.isNaN(parsedDate.getTime())) {
-          throw new Error('Invalid date value provided')
-        }
-        return parsedDate
-      }
 
       const updateData: Partial<typeof dataSource.$inferInsert> = {updatedAt: new Date()}
 
