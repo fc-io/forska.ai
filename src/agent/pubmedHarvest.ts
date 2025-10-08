@@ -162,9 +162,17 @@ const fetchEuropePmc = async (
     console.error('Invalid response from Europe PMC')
     throw new Error(parsed.join('\n'))
   }
+  console.log('hitCount', parsed.hitCount)
   const items = readArray(parsed.resultList.result)
   logMissingIds(items)
-  const hitCount = typeof parsed.hitCount === 'number' ? parsed.hitCount : items.length
+  const hitCount = (() => {
+    if (typeof parsed.hitCount === 'number') return parsed.hitCount
+    if (typeof parsed.hitCount === 'string') {
+      const n = Number.parseInt(parsed.hitCount, 10)
+      return Number.isNaN(n) ? items.length : n
+    }
+    return items.length
+  })()
   const nextCursor = parsed.nextCursorMark
   return {items, nextCursor, hitCount}
 }
@@ -225,9 +233,9 @@ const pubmedHarvest = async (input: InputData): Promise<void> => {
     const sp = idParams.searchParams
     const query = buildQuery(sp.mindate, sp.maxdate)
     console.log('building query', query)
-    const pageSize = Math.min(1000, Math.max(1, input.maxResults))
+    const pageSize = 1000
     console.log('pageSize', pageSize)
-    await harvestPage(query, input.importRoute, pageSize, input.maxResults, '*')
+    await harvestPage(query, input.importRoute, pageSize, Number.POSITIVE_INFINITY, '*')
     console.log('3. harvested page')
   } catch (error) {
     console.error('Error harvesting eu pubmed', error)

@@ -6,7 +6,7 @@ import {arxivWorkflowGetQuery} from './arxivWorkflowGetQuery.ts'
 import {arxivEntry} from './arxivWorkflowStoreEntires.ts'
 import {arxivWorkflowStoreEntires} from './arxivWorkflowStoreEntires.ts'
 
-export type InputData = {fromDate: string; toDate: string; maxResults: number; importRoute: string}
+export type InputData = {fromDate: string; toDate: string; importRoute: string}
 
 const fxp = new XMLParser({
   ignoreAttributes: false,

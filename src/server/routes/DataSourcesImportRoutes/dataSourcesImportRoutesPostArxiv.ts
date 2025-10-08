@@ -73,7 +73,7 @@ export const dataSourcesImportRoutesPostArxiv = async (body: {id: string}) => {
   if (!record.dateTo) {
     console.warn('dataSourcesImportRoutesPostArxiv – To date is good to have')
   }
-  await startArxivHarvest({fromDate, toDate, maxResults: 100, importRoute})
+  await startArxivHarvest({fromDate, toDate, importRoute})
   console.log('`````start count')
   const importedCount = await countArticlesInRange(db, importRoute, record)
   console.log('`````after count', importedCount)
