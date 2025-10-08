@@ -1,119 +1,238 @@
 import {type} from 'arktype'
-import {$} from 'bun'
-import {XMLParser} from 'fast-xml-parser'
 
 import {sleep} from '../utils/sleep.ts'
 import type {InputData} from './arxivWorkflow/arxivWorkflowHarvest.ts'
 import {pubmedHarvestGetIdParams} from './pubmedHarvest/pubmedHarvestGetIdParams.ts'
-import {pubmedHarvestGetParsedXML} from './pubmedHarvest/pubmedHarvestGetParsedXML.ts'
 import {pubmedWorkflowStoreEntries} from './pubmedWorkflowStoreEntries.ts'
 
-const ESearchResultInner = type({count: 'string.integer.parse', webenv: 'string', querykey: 'string'})
+const EuropePmcAuthor = type({
+  'fullName?': 'string',
+  'firstName?': 'string',
+  'lastName?': 'string',
+  'initials?': 'string',
+  'collectiveName?': 'string',
+})
+const EuropePmcAuthorList = type({'author?': EuropePmcAuthor.or(EuropePmcAuthor.array())})
+const EuropePmcItem = type({
+  'id?': 'string | number',
+  source: 'string',
+  'pmid?': 'string | number',
+  'title?': 'unknown',
+  'authorString?': 'string',
+  'authorList?': EuropePmcAuthorList,
+  'abstractText?': 'string',
+  'firstPublicationDate?': 'string',
+  'pubYear?': 'string | number',
+  'pubMonth?': 'string | number',
+  'pubDay?': 'string | number',
+})
 
-const Essearchresult = type({esearchresult: ESearchResultInner})
+const EuropePmcRequest = type({
+  queryString: 'string',
+  resultType: 'string',
+  'cursorMark?': 'string',
+  'pageSize?': 'number | string',
+  'sort?': 'string',
+  'synonym?': 'boolean',
+})
 
-const getEssearchresult = (cliOutput: string) => {
-  console.log('getEssearchresult', cliOutput)
-  const parser = new XMLParser({ignoreAttributes: true})
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-  const root = parser.parse(cliOutput)
-  const asObject = (x: unknown): Record<string, unknown> | undefined => {
-    return typeof x === 'object' && x !== null ? (x as Record<string, unknown>) : undefined
+const EuropePmcResultList = type({'result?': EuropePmcItem.or(EuropePmcItem.array())})
+
+const EuropePmcResponse = type({
+  'version?': 'string | number',
+  'hitCount?': 'string | number',
+  resultList: EuropePmcResultList,
+  'nextCursorMark?': 'string',
+  'nextPageUrl?': 'string',
+  'request?': EuropePmcRequest,
+})
+
+const toIsoDate = (y?: number | string, m?: number | string, d?: number | string): string => {
+  const toInt = (v: unknown): number | undefined => {
+    if (typeof v === 'number') return v
+    if (typeof v === 'string') {
+      const n = Number.parseInt(v, 10)
+      return Number.isNaN(n) ? undefined : n
+    }
+    return undefined
   }
-  const r = asObject(root)
-  const eNode = asObject(r?.['eSearchResult'] ?? r?.['esearchresult'] ?? r?.['ESearchResult'] ?? r?.['ESEARCHRESULT'])
-  const dNode = asObject(r?.['ENTREZ_DIRECT'] ?? r?.['Entrez_Direct'] ?? r?.['entrez_direct'])
-  const count = eNode?.['Count'] ?? eNode?.['count'] ?? dNode?.['Count'] ?? dNode?.['count']
-  const querykey = eNode?.['QueryKey'] ?? eNode?.['querykey']
-  const webenv = eNode?.['WebEnv'] ?? eNode?.['webenv']
-  const countStr = typeof count === 'string' || typeof count === 'number' ? String(count) : '0'
-  const querykeyStr = typeof querykey === 'string' ? querykey : ''
-  const webenvStr = typeof webenv === 'string' ? webenv : ''
 
-  const shaped = {esearchresult: {count: countStr, webenv: webenvStr, querykey: querykeyStr}}
-  const parsed = Essearchresult(shaped)
-  if (parsed instanceof type.errors) {
-    throw new Error('getEssearchresult: Invalid response from esearch CLI')
-  }
-  return parsed.esearchresult
+  const year = toInt(y) ?? 1970
+  const month = (() => {
+    if (typeof m === 'number') return m
+    if (typeof m === 'string') {
+      const asNum = toInt(m)
+      if (asNum && asNum >= 1 && asNum <= 12) return asNum
+      const parsed = Date.parse(`${m} 1, ${year}`)
+      return Number.isNaN(parsed) ? 1 : new Date(parsed).getMonth() + 1
+    }
+    return 1
+  })()
+  const day = toInt(d) ?? 1
+  const mm = String(month).padStart(2, '0')
+  const dd = String(day).padStart(2, '0')
+  return `${year}-${mm}-${dd}T00:00:00.000Z`
 }
 
-const RETMAX = 10
+const toIsoFromDateString = (date?: string): string => {
+  if (!date) return toIsoDate()
+  const parts = date.split('-')
+  if (parts.length === 3) return `${parts[0]}-${parts[1]}-${parts[2]}T00:00:00.000Z`
+  if (parts.length === 2) return toIsoDate(parts[0] as unknown as number, parts[1] as unknown as number, 1)
+  return toIsoDate(Number.parseInt(parts[0] ?? '1970', 10), 1, 1)
+}
 
-const pubmedHarvestArticles = async (
-  esearchresult: typeof ESearchResultInner.infer,
-  importRoute: string,
-): Promise<void> => {
-  // console.log('pubmedHarvestArticles', esearchresult)
-  console.log('esearchresult.count', esearchresult.count)
-  let retstart = 0
-  while (true) {
-    // const retmax = String(Math.min(RETMAX, esearchresult.count - retstart))
-    // Use EDirect CLI (efetch) instead of HTTP fetch
-    // Prefer XML output with abstract-only payload when supported
-    const responseData = await $`
-      efetch \
-        -db pubmed \
-        -format xml \
-    `.text()
-    // console.log('-----------------')
-    // console.log(responseData)
-    // console.log('-----------------')
+const readArray = <T>(x: T | T[] | undefined): T[] => {
+  return Array.isArray(x) ? x : x ? [x] : []
+}
 
-    const entries = await pubmedHarvestGetParsedXML(responseData, importRoute)
-    console.log('5 entries', entries.length)
-    if (entries.length === 0) {
-      console.log('no entries')
-      console.log('----------')
-      console.log('responseData', responseData)
-      console.log('----------')
-      break
+const logMissingIds = (items: (typeof EuropePmcItem.infer)[], i = 0): void => {
+  const it = items[i]
+  if (it) {
+    const hasId = typeof it.id === 'string' || typeof it.id === 'number'
+    if (!hasId) {
+      console.log('Europe PMC item missing id. Full item:', it)
     }
-    if (entries.length > 0) {
-      // console.log('6 store entries')
-      await pubmedWorkflowStoreEntries(entries)
-    }
-    // console.log('responseData', responseData)
-    console.log('retstart', retstart)
-
-    retstart += RETMAX
-    if (retstart >= esearchresult.count) {
-      break
-    }
-    await sleep(100)
+    logMissingIds(items, i + 1)
   }
+}
+
+const extractAuthors = (item: typeof EuropePmcItem.infer): string[] => {
+  const list = item.authorList?.author
+  if (list) {
+    const arr = readArray(list)
+    return arr
+      .map((a) => {
+        if (typeof a.fullName === 'string' && a.fullName.trim()) return a.fullName
+        const ln = typeof a.lastName === 'string' ? a.lastName.trim() : ''
+        const initials = typeof a.initials === 'string' ? a.initials.trim() : ''
+        const fn = typeof a.firstName === 'string' ? a.firstName.trim() : ''
+        const collective = typeof a.collectiveName === 'string' ? a.collectiveName.trim() : ''
+        if (ln && initials) return `${ln} ${initials}`
+        if (fn && ln) return `${fn} ${ln}`
+        return collective || ln || fn || ''
+      })
+      .filter(Boolean)
+  }
+  const s = item.authorString
+  if (!s) return []
+  return s
+    .split(',')
+    .map((x) => {
+      return x.trim()
+    })
+    .filter(Boolean)
+}
+
+const extractTitle = (t: unknown): string => {
+  if (!t) return ''
+  if (typeof t === 'string') return t
+  if (typeof t === 'object' && t !== null) {
+    const v = (t as Record<string, unknown>)['#text']
+    return typeof v === 'string' ? v : ''
+  }
+  return ''
+}
+
+const buildQuery = (from: string, to: string): string => {
+  const a = from.replaceAll('/', '-')
+  const b = to.replaceAll('/', '-')
+  return `SRC:MED AND FIRST_PDATE:[${a} TO ${b}]`
+}
+
+const fetchEuropePmc = async (
+  query: string,
+  pageSize: number,
+  cursorMark?: string,
+): Promise<{items: (typeof EuropePmcItem.infer)[]; nextCursor?: string; hitCount: number}> => {
+  const url = new URL('https://www.ebi.ac.uk/europepmc/webservices/rest/search')
+  url.searchParams.set('query', query)
+  url.searchParams.set('format', 'json')
+  url.searchParams.set('resultType', 'core')
+  url.searchParams.set('pageSize', String(pageSize))
+  if (cursorMark) url.searchParams.set('cursorMark', cursorMark)
+  console.log('fetching', url.toString())
+  const res = await fetch(url)
+  if (!res.ok) {
+    throw new Error(`Europe PMC HTTP ${res.status}`)
+  }
+  const json: unknown = await res.json()
+  const parsed = EuropePmcResponse(json)
+  if (parsed instanceof type.errors) {
+    console.error('Invalid response from Europe PMC')
+    throw new Error(parsed.join('\n'))
+  }
+  const items = readArray(parsed.resultList.result)
+  logMissingIds(items)
+  const hitCount = typeof parsed.hitCount === 'number' ? parsed.hitCount : items.length
+  const nextCursor = parsed.nextCursorMark
+  return {items, nextCursor, hitCount}
+}
+
+const toDatabaseEntry = (it: typeof EuropePmcItem.infer, importRoute: string) => {
+  const pmidRaw = (typeof it.pmid === 'number' || typeof it.pmid === 'string') && it.pmid ? it.pmid : it.id
+  const pmid = typeof pmidRaw === 'number' ? String(pmidRaw) : String(pmidRaw)
+  const createdAt = it.firstPublicationDate
+    ? toIsoFromDateString(it.firstPublicationDate)
+    : toIsoDate(it.pubYear, it.pubMonth, it.pubDay)
+  return {
+    article_id: `pmid:${pmid}`,
+    article_title: extractTitle(it.title),
+    article_summary: it.abstractText ?? '',
+    article_authors: extractAuthors(it),
+    article_created_at: createdAt,
+    article_updated_at: createdAt,
+    article_version: '1',
+    pubmed_id: pmid,
+    import_route: importRoute,
+  }
+}
+
+const harvestPage = async (
+  query: string,
+  importRoute: string,
+  pageSize: number,
+  maxResults: number,
+  cursorMark?: string,
+  importedCount = 0,
+): Promise<void> => {
+  const {items, nextCursor, hitCount} = await fetchEuropePmc(query, pageSize, cursorMark)
+  const remaining = Math.max(0, maxResults - importedCount)
+  const slice = items.slice(0, remaining)
+  const hasAnyId = (it: typeof EuropePmcItem.infer) => {
+    const hasPmid = (typeof it.pmid === 'number' || typeof it.pmid === 'string') && String(it.pmid).length > 0
+    const hasId = (typeof it.id === 'number' || typeof it.id === 'string') && String(it.id).length > 0
+    return hasPmid || hasId
+  }
+  const entries = slice.filter(hasAnyId).map((it) => {
+    return toDatabaseEntry(it, importRoute)
+  })
+  if (entries.length > 0) {
+    await pubmedWorkflowStoreEntries(entries)
+  }
+  const newCount = importedCount + entries.length
+  const doneByLimit = newCount >= maxResults
+  const noMoreByCursor = !nextCursor || nextCursor === cursorMark
+  const doneByExhaustion = newCount >= hitCount
+  return doneByLimit || noMoreByCursor || doneByExhaustion
+    ? undefined
+    : (await sleep(100), harvestPage(query, importRoute, pageSize, maxResults, nextCursor, newCount))
 }
 
 const pubmedHarvest = async (input: InputData): Promise<void> => {
-  // console.log('pubmed input', input)
-
   const idParams = pubmedHarvestGetIdParams(input)
-  console.log('0pubmedIdQuery', idParams)
-  // Use EDirect CLI (esearch) with history to obtain WebEnv/QueryKey
-  const sp = idParams.searchParams
-  let esearchOutput = ''
   try {
-    esearchOutput = await $`
-    esearch \
-      -db ${sp.db} \
-      -query ${sp.term} \
-      -datetype ${sp.datetype} \
-      -mindate ${sp.mindate} \
-      -maxdate ${sp.maxdate}
-    `.text()
+    const sp = idParams.searchParams
+    const query = buildQuery(sp.mindate, sp.maxdate)
+    console.log('building query', query)
+    const pageSize = Math.min(1000, Math.max(1, input.maxResults))
+    console.log('pageSize', pageSize)
+    await harvestPage(query, input.importRoute, pageSize, input.maxResults, '*')
+    console.log('3. harvested page')
   } catch (error) {
-    console.error('Error executing esearch', error)
-    throw error
-  }
-  console.log('1 pubmed response (CLI)')
-  try {
-    const esearchresult = getEssearchresult(esearchOutput)
-    console.log('2 pubmed esearchresult')
-    await pubmedHarvestArticles(esearchresult, input.importRoute)
-  } catch (error) {
-    console.error('Error getting esearchresult', error)
+    console.error('Error harvesting eu pubmed', error)
     throw error
   }
 }
 
-export {Essearchresult, pubmedHarvest}
+export {pubmedHarvest}
