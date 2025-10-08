@@ -1,7 +1,7 @@
 import {and, desc, eq, gte, inArray, lte, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {articles, judgments, projects, prompts} from '../../../db/schema.ts'
+import {articles, dataSource, judgments, projectDataSourceLink, projects, prompts} from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
 export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
@@ -24,6 +24,24 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
         return p.id
       })
 
+      // Compute allowed import routes via project -> datasource links
+      const dsRoutes = await db
+        .select({importRoute: dataSource.importRoute})
+        .from(projectDataSourceLink)
+        .leftJoin(dataSource, eq(projectDataSourceLink.dataSourceId, dataSource.id))
+        .where(eq(projectDataSourceLink.projectId, body.projectId))
+      const allowedImportRoutes = dsRoutes
+        .map((r) => {
+          return r.importRoute
+        })
+        .filter((v): v is string => {
+          return Boolean(v)
+        })
+
+      if (allowedImportRoutes.length === 0) {
+        return {data: [], totalCount: 0, page, limit, totalPages: 0}
+      }
+
       // Condition: there are NO judgments for this article for any of the project's prompts
       const noJudgmentsForProjectPrompts = sql`NOT EXISTS (
         ${db
@@ -40,7 +58,7 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
         .where(eq(projects.id, body.projectId))
         .limit(1)
 
-      const whereParts: Array<ReturnType<typeof sql>> = [noJudgmentsForProjectPrompts]
+      const whereParts: Array<ReturnType<typeof sql>> = [noJudgmentsForProjectPrompts, inArray(articles.importRoute, allowedImportRoutes)]
       if (projectBounds?.dateFrom) {
         whereParts.push(gte(articles.createdAt, projectBounds.dateFrom))
       }
