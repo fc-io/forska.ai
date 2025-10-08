@@ -1,4 +1,4 @@
-import {count, desc, eq, isNull, sql} from 'drizzle-orm'
+import {count, eq, isNull, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {articles, judgments} from '../../db/schema.ts'
@@ -32,7 +32,9 @@ export const articlesRoutes = new Elysia()
         // For now, returning article data
       })
       .from(articles)
-      .orderBy(desc(articles.createdAt))
+      .orderBy(
+        sql`COALESCE(${articles.articleCreatedAt}, ${articles.createdAt}) DESC, ${articles.createdAt} DESC, ${articles.id} DESC`,
+      )
       .limit(200)
 
     return {data}

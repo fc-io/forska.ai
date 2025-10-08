@@ -42,31 +42,42 @@ export const judgmentsJobsArticlesStatusEnum = pgEnum('judgments_jobs_articles_s
   'judged_and_ready_to_remove_from_queue',
 ])
 
-export const articles = pgTable('articles', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
-  updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
-  articleTitle: text('article_title').notNull(),
-  articleAuthors: text('article_authors').array(),
-  articleCreatedAt: timestamp('article_created_at', {withTimezone: true}),
-  articleUpdatedAt: timestamp('article_updated_at', {withTimezone: true}),
-  articleId: text('article_id').unique(),
-  articleSummary: text('article_summary'),
-  articleVersion: integer('article_version'),
-  arxivId: text('arxiv_id'),
-  doi: text('doi'),
-  pubmedId: text('pubmed_id'),
-  url: text('url'),
-  contentHash: text('content_hash'),
-  importRoute: text('import_route'),
-  importedBy: text('imported_by').references(
-    () => {
-      return user.id
-    },
-    {onDelete: 'set null'},
-  ),
-  publicationStatus: publicationStatusEnum('publication_status'),
-})
+export const articles = pgTable(
+  'articles',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
+    articleTitle: text('article_title').notNull(),
+    articleAuthors: text('article_authors').array(),
+    articleCreatedAt: timestamp('article_created_at', {withTimezone: true}),
+    articleUpdatedAt: timestamp('article_updated_at', {withTimezone: true}),
+    articleId: text('article_id').unique(),
+    articleSummary: text('article_summary'),
+    articleVersion: integer('article_version'),
+    arxivId: text('arxiv_id'),
+    doi: text('doi'),
+    pubmedId: text('pubmed_id'),
+    url: text('url'),
+    contentHash: text('content_hash'),
+    importRoute: text('import_route'),
+    importedBy: text('imported_by').references(
+      () => {
+        return user.id
+      },
+      {onDelete: 'set null'},
+    ),
+    publicationStatus: publicationStatusEnum('publication_status'),
+  },
+  (table) => {
+    return [
+      index('articles_article_created_created_id_idx').on(table.articleCreatedAt, table.createdAt, table.id),
+      index('articles_created_idx').on(table.createdAt),
+      index('articles_article_updated_idx').on(table.articleUpdatedAt),
+      index('articles_import_route_article_created_idx').on(table.importRoute, table.articleCreatedAt),
+    ]
+  },
+)
 
 export const models = pgTable(
   'models',
@@ -307,7 +318,13 @@ export const prompts = pgTable('prompts', {
   order: integer('order'),
   archived: boolean('archived').default(false).notNull(),
   type: text('type'),
-})
+},
+(
+  table,
+) => {
+  return [index('prompts_project_idx').on(table.projectId)]
+},
+)
 
 // export const projectMembers = pgTable(
 //   'project_members',
