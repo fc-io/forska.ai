@@ -22,23 +22,13 @@ export const articlesRoutes = new Elysia()
 
     const [totalRow] = await db.select({count: count()}).from(articles)
 
-    // Count by linked import routes (via article_route_link)
-    const linkedCounts = await db
+    // Count exclusively by linked import routes (via article_route_link)
+    const byRoute = await db
       .select({importRoute: importRouteTable.route, count: count()})
       .from(articles)
       .innerJoin(articleRouteLink, eq(articleRouteLink.articleId, articles.id))
       .innerJoin(importRouteTable, eq(importRouteTable.id, articleRouteLink.importRouteId))
       .groupBy(importRouteTable.route)
-
-    // Fallback: count rows not yet linked, grouped by legacy articles.importRoute
-    const unlinkedCounts = await db
-      .select({importRoute: articles.importRoute, count: count()})
-      .from(articles)
-      .leftJoin(articleRouteLink, eq(articleRouteLink.articleId, articles.id))
-      .where(isNull(articleRouteLink.id))
-      .groupBy(articles.importRoute)
-
-    const byRoute = [...linkedCounts, ...unlinkedCounts]
 
     return {total: totalRow?.count ?? 0, byImportRoute: byRoute}
   })
