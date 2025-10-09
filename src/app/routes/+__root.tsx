@@ -8,15 +8,21 @@ import {Navigation} from '../../components/Navigation'
 import {fetchSession} from '../../services/fetchSession'
 import {authClient} from '../lib/auth-client'
 
+const sessionQueryKey = ['session'] as const
+
 const signOut = async (queryClient: QueryClient) => {
-  try {
-    await authClient.signOut()
-    queryClient.setQueryData(['session'], null)
-    await queryClient.invalidateQueries({queryKey: ['session']})
-  } catch (error) {
-    console.error('Error signing out:', error)
-    throw error
-  }
+  const previousSession = queryClient.getQueryData<Awaited<ReturnType<typeof fetchSession>>>(sessionQueryKey)
+  queryClient.setQueryData(sessionQueryKey, null)
+  return authClient.signOut().then(
+    () => {
+      return queryClient.invalidateQueries({queryKey: sessionQueryKey})
+    },
+    (error) => {
+      queryClient.setQueryData(sessionQueryKey, previousSession)
+      console.error('Error signing out:', error)
+      throw error
+    },
+  )
 }
 const RootComponent = () => {
   console.log('import.meta.env.DEV', import.meta.env.DEV)
@@ -25,7 +31,7 @@ const RootComponent = () => {
   const navigate = useNavigate()
   const sessionQuery = useQuery(() => {
     return {
-      queryKey: ['session'],
+      queryKey: sessionQueryKey,
       queryFn: fetchSession,
       staleTime: 1000 * 60 * 5, // Consider data fresh for 5 minutes
       refetchInterval: 1000 * 60 * 5, // Refetch every 5 minutes
