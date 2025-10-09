@@ -2,7 +2,17 @@ import type {SQL} from 'drizzle-orm'
 import {count, eq, gte, lte, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {articles, judgments, judgmentsJobs, judgmentsJobsArticles, projects, prompts, tokenUse} from '../../db/schema'
+import {
+  articleRouteLink,
+  articles,
+  judgments,
+  judgmentsJobs,
+  judgmentsJobsArticles,
+  projectRouteLink,
+  projects,
+  prompts,
+  tokenUse,
+} from '../../db/schema'
 import {getDatabase} from '../utils/getDatabase'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
@@ -47,16 +57,38 @@ const buildProjectPromptCondition = (promptIds: string[]): SQL => {
   )`
 }
 
+const buildProjectRouteCondition = (importRouteIds: string[]): SQL => {
+  if (importRouteIds.length === 0) {
+    return sql`FALSE`
+  }
+
+  const routeIdArray = sql.join(
+    importRouteIds.map((routeId) => {
+      return sql`${routeId}::uuid`
+    }),
+    sql`,`,
+  )
+
+  return sql`EXISTS (
+    SELECT 1
+    FROM ${articleRouteLink} arl
+    WHERE arl."article_id" = ${articles.id}
+    AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
+  )`
+}
+
 const getUnassessedArticlesCount = async ({
   db,
   promptIds,
   projectDateFrom,
   projectDateTo,
+  importRouteIds,
 }: {
   db: Database
   promptIds: string[]
   projectDateFrom: Date | null | undefined
   projectDateTo: Date | null | undefined
+  importRouteIds: string[]
 }): Promise<number> => {
   if (promptIds.length === 0) {
     return 0
@@ -65,6 +97,7 @@ const getUnassessedArticlesCount = async ({
   const whereClauses = [
     ...buildProjectDateConditions({projectDateFrom, projectDateTo}),
     buildProjectPromptCondition(promptIds),
+    buildProjectRouteCondition(importRouteIds),
   ]
 
   const [{count: unassessedCount = 0} = {count: 0}] = await db
@@ -94,6 +127,7 @@ const getJobContext = async ({
   projectDateFrom: Date | null
   projectDateTo: Date | null
   promptIds: string[]
+  importRouteIds: string[]
 }> => {
   const [jobWithProject] = await db
     .select({
@@ -120,12 +154,20 @@ const getJobContext = async ({
 
   const projectPrompts = await db.select({id: prompts.id}).from(prompts).where(eq(prompts.projectId, job.projectId))
 
+  const projectImportRoutes = await db
+    .select({importRouteId: projectRouteLink.importRouteId})
+    .from(projectRouteLink)
+    .where(eq(projectRouteLink.projectId, job.projectId))
+
   return {
     job,
     projectDateFrom,
     projectDateTo,
     promptIds: projectPrompts.map((prompt) => {
       return prompt.id
+    }),
+    importRouteIds: projectImportRoutes.map((r) => {
+      return r.importRouteId
     }),
   }
 }
@@ -135,11 +177,13 @@ const getUnassessedArticles = async ({
   promptIds,
   projectDateFrom,
   projectDateTo,
+  importRouteIds,
 }: {
   db: Database
   promptIds: string[]
   projectDateFrom: Date | null | undefined
   projectDateTo: Date | null | undefined
+  importRouteIds: string[]
 }): Promise<
   {
     id: string
@@ -157,6 +201,7 @@ const getUnassessedArticles = async ({
   const whereClauses = [
     ...buildProjectDateConditions({projectDateFrom, projectDateTo}),
     buildProjectPromptCondition(promptIds),
+    buildProjectRouteCondition(importRouteIds),
   ]
 
   const articlesToAssess = await db
@@ -214,7 +259,7 @@ export const judgmentsJobsRoutes = new Elysia()
     async ({params}) => {
       const db = getDatabase()
 
-      const {job, projectDateFrom, projectDateTo, promptIds} = await getJobContext({
+      const {job, projectDateFrom, projectDateTo, promptIds, importRouteIds} = await getJobContext({
         db,
         jobId: params.id,
       })
@@ -235,7 +280,13 @@ export const judgmentsJobsRoutes = new Elysia()
         if (stat.status === 'judged') stats.judged = stat.count
       })
 
-      const unassessedCount = await getUnassessedArticlesCount({db, promptIds, projectDateFrom, projectDateTo})
+      const unassessedCount = await getUnassessedArticlesCount({
+        db,
+        promptIds,
+        projectDateFrom,
+        projectDateTo,
+        importRouteIds,
+      })
 
       // Get total token usage for this job
       const totalTokenUsage = await db
@@ -280,12 +331,18 @@ export const judgmentsJobsRoutes = new Elysia()
     async ({query}) => {
       const db = getDatabase()
 
-      const {projectDateFrom, projectDateTo, promptIds} = await getJobContext({
+      const {projectDateFrom, projectDateTo, promptIds, importRouteIds} = await getJobContext({
         db,
         jobId: query.jobId,
       })
 
-      const unassessedArticles = await getUnassessedArticles({db, promptIds, projectDateFrom, projectDateTo})
+      const unassessedArticles = await getUnassessedArticles({
+        db,
+        promptIds,
+        projectDateFrom,
+        projectDateTo,
+        importRouteIds,
+      })
 
       return {data: unassessedArticles, error: null}
     },

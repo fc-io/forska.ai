@@ -1,7 +1,7 @@
 import {and, desc, eq, gte, inArray, lte, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {articles, judgments, projects, prompts} from '../../../db/schema.ts'
+import {articleRouteLink, articles, judgments, projectRouteLink, projects, prompts} from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
 export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
@@ -40,7 +40,30 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
         .where(eq(projects.id, body.projectId))
         .limit(1)
 
-      const whereParts: Array<ReturnType<typeof sql>> = [noJudgmentsForProjectPrompts]
+      // Filter by project's linked import routes via EXISTS against article_route_link
+      const projectImportRoutes = await db
+        .select({importRouteId: projectRouteLink.importRouteId})
+        .from(projectRouteLink)
+        .where(eq(projectRouteLink.projectId, body.projectId))
+
+      if (projectImportRoutes.length === 0) {
+        return {data: [], totalCount: 0, page, limit, totalPages: 0}
+      }
+
+      const routeIdArray = sql.join(
+        projectImportRoutes.map((r) => {
+          return sql`${r.importRouteId}::uuid`
+        }),
+        sql`,`,
+      )
+
+      const hasMatchingImportRoute = sql`EXISTS (
+        SELECT 1 FROM ${articleRouteLink} arl
+        WHERE arl."article_id" = ${articles.id}
+        AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
+      )`
+
+      const whereParts: Array<ReturnType<typeof sql>> = [noJudgmentsForProjectPrompts, hasMatchingImportRoute]
       if (projectBounds?.dateFrom) {
         whereParts.push(gte(articles.createdAt, projectBounds.dateFrom))
       }
