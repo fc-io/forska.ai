@@ -1,5 +1,5 @@
 import type {SQL} from 'drizzle-orm'
-import {count, eq, gte, inArray, lte, sql} from 'drizzle-orm'
+import {count, eq, gte, lte, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {articles, judgments, judgmentsJobs, judgmentsJobsArticles, projects, prompts, tokenUse} from '../../db/schema'

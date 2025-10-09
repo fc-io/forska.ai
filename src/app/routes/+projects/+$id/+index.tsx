@@ -85,7 +85,11 @@ const ProjectDetail = () => {
         </Match>
         <Match when={projectData.data}>
           {(data) => {
-            const {project, prompts: rawPrompts, dataSources, model} = data()
+            const result = data()
+            const {project, prompts: rawPrompts, model} = result
+            const dataSources = Array.isArray((result as {dataSources?: unknown}).dataSources)
+              ? ((result as {dataSources: unknown[]}).dataSources)
+              : []
 
             interface RawPrompt {
               id: string
