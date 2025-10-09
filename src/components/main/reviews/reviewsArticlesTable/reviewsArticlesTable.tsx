@@ -40,7 +40,15 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
   },
   {
     accessorKey: 'articleCreatedAt',
-    header: 'Date',
+    header: 'Article Uploaded',
+    cell: (info) => {
+      const date = info.getValue() as Date | null
+      return date ? format(date, 'yyyy-MM-dd') : 'No date'
+    },
+  },
+  {
+    accessorKey: 'articleUpdatedAt',
+    header: 'Article Updated',
     cell: (info) => {
       const date = info.getValue() as Date | null
       return date ? format(date, 'yyyy-MM-dd') : 'No date'
