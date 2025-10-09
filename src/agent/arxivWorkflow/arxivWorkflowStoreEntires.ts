@@ -29,6 +29,7 @@ const DatabaseItem = type({
   article_version: 'string',
   arxiv_id: 'string',
   import_route: 'string',
+  'original_data?': 'unknown',
 })
 
 // Transform ArxivEntry to DatabaseItem
@@ -58,6 +59,7 @@ const transformEntry = (entry: typeof arxivEntry.infer, importRoute: string): ty
     article_created_at: entry.published,
     article_version: version,
     import_route: importRoute,
+    original_data: entry,
   }
 }
 

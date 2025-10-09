@@ -117,6 +117,30 @@ const doThing = async (value): Promise<void> => {
   await processValue(value)
 }
 ```
+#### Example
+
+Don't explain code with comments, like:
+
+```
+// Transform records to database format
+const transformedEntries = records.map((entry) => {
+  return transformEntry(entry, importRoute)
+})
+```
+
+Instead explain by making use of function names, like:
+
+```
+const getEntriesInDatabaseFormat(importRoute: string, entries: Entry[]) => {
+  return entries.map((entry) => {
+    return transformEntry(entry, importRoute)
+  })
+}
+
+const transformedEntries = getEntriesInDatabaseFormat(importRoute, entries)
+```
+
+
 
 ### TypeScript conventions
 
