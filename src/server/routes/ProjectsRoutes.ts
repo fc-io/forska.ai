@@ -90,7 +90,20 @@ export const projectsRoutes = new Elysia()
       .where(eq(models.id, project.modelId))
       .limit(1)
 
-    return {data: {project, prompts: projectPrompts, hasJudgedArticles, model: projectModel ?? null}}
+    // Fetch linked import routes for this project via projectRouteLink
+    const linkedImportRoutes = await db
+      .select({route: importRouteTable.route})
+      .from(projectRouteLink)
+      .innerJoin(importRouteTable, eq(projectRouteLink.importRouteId, importRouteTable.id))
+      .where(eq(projectRouteLink.projectId, params.id))
+
+    const importRoutes = linkedImportRoutes.map((r) => {
+      return r.route
+    })
+
+    return {
+      data: {project, prompts: projectPrompts, hasJudgedArticles, model: projectModel ?? null, importRoutes},
+    }
   })
   .post(
     '/api/projects',
