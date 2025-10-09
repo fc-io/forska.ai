@@ -28,11 +28,11 @@ const buildProjectDateConditions = ({
   const conditions: SQL[] = []
 
   if (projectDateFrom) {
-    conditions.push(gte(articles.createdAt, projectDateFrom))
+    conditions.push(gte(articles.articleCreatedAt, projectDateFrom))
   }
 
   if (projectDateTo) {
-    conditions.push(lte(articles.createdAt, projectDateTo))
+    conditions.push(lte(articles.articleCreatedAt, projectDateTo))
   }
 
   return conditions
@@ -215,7 +215,9 @@ const getUnassessedArticles = async ({
     })
     .from(articles)
     .where(sql`${sql.join(whereClauses, sql` AND `)}`)
-    .orderBy(sql`COALESCE(${articles.articleUpdatedAt}, ${articles.createdAt}) DESC, ${articles.id} DESC`)
+    .orderBy(
+      sql`COALESCE(${articles.articleUpdatedAt}, ${articles.articleCreatedAt}, ${articles.createdAt}) DESC, ${articles.id} DESC`,
+    )
     .limit(100)
 
   return articlesToAssess
