@@ -167,7 +167,8 @@ const AdminJobs = () => {
                       <tr class="hover:bg-gray-50">
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                           <Link
-                            to={`/admin/jobs/${job.id}`}
+                            to="/admin/jobs/$id"
+                            params={{id: job.id}}
                             class="font-mono text-xs text-blue-600 hover:text-blue-800 hover:underline"
                           >
                             {job.id.slice(0, 8)}...
