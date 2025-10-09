@@ -6,8 +6,8 @@ import {createStore} from 'solid-js/store'
 
 import {Button} from '../../../../components/ui/button'
 import {apiClient} from '../../../../services/apiClient'
-import {handleApiResponse} from '../../../../services/utils/handleApiResponse'
 import {fetchProjectWithPrompts} from '../../../../services/projectsService'
+import {handleApiResponse} from '../../../../services/utils/handleApiResponse'
 
 type PromptItem = {
   id: string
@@ -101,9 +101,9 @@ const isProjectDetailsResponse = (value: unknown): value is ProjectDetailsRespon
     return false
   }
   const isValidModel =
-    model === undefined ||
-    model === null ||
-    (typeof model === 'object' && model !== null && typeof (model as {id?: unknown}).id === 'string')
+    model === undefined
+    || model === null
+    || (typeof model === 'object' && model !== null && typeof (model as {id?: unknown}).id === 'string')
   return typeof hasJudgedArticles === 'boolean' && isValidModel
 }
 
@@ -512,21 +512,29 @@ const EditProject = (): JSX.Element => {
                 </p>
               </Show>
               <Show
-                when={!importRoutesQuery.isLoading && !importRoutesQuery.isError && availableImportRoutes().length === 0}
+                when={
+                  !importRoutesQuery.isLoading && !importRoutesQuery.isError && availableImportRoutes().length === 0
+                }
               >
                 <p class="text-sm text-muted-foreground">No import routes available.</p>
               </Show>
-              <Show when={!importRoutesQuery.isLoading && !importRoutesQuery.isError && availableImportRoutes().length > 0}>
+              <Show
+                when={!importRoutesQuery.isLoading && !importRoutesQuery.isError && availableImportRoutes().length > 0}
+              >
                 <div class="space-y-2">
                   <For each={availableImportRoutes()}>
                     {(route) => {
                       return (
-                        <label class={`flex items-start gap-3 border rounded-md p-3 cursor-pointer ${isLocked() ? 'opacity-60' : 'border-input'}`}>
+                        <label
+                          class={`flex items-start gap-3 border rounded-md p-3 cursor-pointer ${isLocked() ? 'opacity-60' : 'border-input'}`}
+                        >
                           <input
                             type="checkbox"
                             class="mt-1"
                             checked={selectedImportRoutes().includes(route)}
-                            onChange={() => toggleImportRouteSelection(route)}
+                            onChange={() => {
+                              return toggleImportRouteSelection(route)
+                            }}
                             disabled={isLocked()}
                           />
                           <div class="flex-1">
