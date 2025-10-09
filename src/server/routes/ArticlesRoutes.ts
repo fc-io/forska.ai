@@ -30,17 +30,8 @@ export const articlesRoutes = new Elysia()
       .innerJoin(importRouteTable, eq(importRouteTable.id, articleRouteLink.importRouteId))
       .groupBy(importRouteTable.route)
 
-    // Fallback: count rows not yet linked, grouped by legacy articles.importRoute
-    const unlinkedCounts = await db
-      .select({importRoute: articles.importRoute, count: count()})
-      .from(articles)
-      .leftJoin(articleRouteLink, eq(articleRouteLink.articleId, articles.id))
-      .where(isNull(articleRouteLink.id))
-      .groupBy(articles.importRoute)
-
-    const byRoute = [...linkedCounts, ...unlinkedCounts]
-
-    return {total: totalRow?.count ?? 0, byImportRoute: byRoute}
+    // Only count articles that are linked to an import route
+    return {total: totalRow?.count ?? 0, byImportRoute: linkedCounts}
   })
   .get('/api/articles/latest', async () => {
     const db = getDatabase()
@@ -81,7 +72,6 @@ export const articlesRoutes = new Elysia()
           articleVersion: parseInt(entry.article_version),
           arxivId: entry.arxiv_id,
           pubmedId: entry.pubmed_id,
-          importRoute: entry.import_route,
           originalData: entry.original_data,
         }
       })
@@ -99,7 +89,6 @@ export const articlesRoutes = new Elysia()
             articleVersion: sql`EXCLUDED.article_version`,
             arxivId: sql`EXCLUDED.arxiv_id`,
             pubmedId: sql`EXCLUDED.pubmed_id`,
-            importRoute: sql`EXCLUDED.import_route`,
             originalData: sql`EXCLUDED.original_data`,
             updatedAt: sql`CURRENT_TIMESTAMP`,
           },
@@ -111,26 +100,26 @@ export const articlesRoutes = new Elysia()
         return r.articleId
       })
 
-      const routeSet = new Set(
-        entries
-          .map((e) => {
-            return e.import_route
-          })
-          .filter(Boolean),
+      const articleIdToRoute = new Map(
+        entries.map((e) => {
+          return [e.article_id, e.import_route]
+        }),
       )
-      const routeList = Array.from(routeSet)
+      const routeList = Array.from(
+        new Set(
+          entries
+            .map((e) => {
+              return e.import_route
+            })
+            .filter(Boolean),
+        ),
+      )
 
       if (routeList.length > 0 && articleIds.length > 0) {
-        const [articlesWithRoutes, importRoutes] = await Promise.all([
-          db
-            .select({id: articles.id, articleId: articles.articleId, importRoute: articles.importRoute})
-            .from(articles)
-            .where(inArray(articles.articleId, articleIds)),
-          db
-            .select({id: importRouteTable.id, route: importRouteTable.route})
-            .from(importRouteTable)
-            .where(inArray(importRouteTable.route, routeList)),
-        ])
+        const importRoutes = await db
+          .select({id: importRouteTable.id, route: importRouteTable.route})
+          .from(importRouteTable)
+          .where(inArray(importRouteTable.route, routeList))
 
         const routeMap = new Map(
           importRoutes.map((r) => {
@@ -138,9 +127,10 @@ export const articlesRoutes = new Elysia()
           }),
         )
 
-        const links = articlesWithRoutes
+        const links = inserted
           .map((a) => {
-            const importRouteId = a.importRoute ? routeMap.get(a.importRoute) : undefined
+            const route = articleIdToRoute.get(a.articleId)
+            const importRouteId = route ? routeMap.get(route) : undefined
             return importRouteId ? {articleId: a.id, importRouteId} : null
           })
           .filter((v): v is {articleId: string; importRouteId: string} => {

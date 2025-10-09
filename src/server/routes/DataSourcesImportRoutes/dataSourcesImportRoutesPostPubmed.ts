@@ -1,5 +1,5 @@
 import {format} from 'date-fns'
-import {and, count, eq, gte, isNull, lte, or, sql} from 'drizzle-orm'
+import {and, count, eq, gte, lte, sql} from 'drizzle-orm'
 
 import {pubmedHarvest} from '../../../agent/pubmedHarvest.ts'
 import {articleRouteLink, articles, dataSource, importRoute as importRouteTable} from '../../../db/schema.ts'
@@ -23,7 +23,8 @@ const countArticlesInRange = async (db: Database, route: string, record: DataSou
     WHERE arl."article_id" = ${articles.id} AND ir."route" = ${route}
   )`
 
-  const base = or(eq(articles.importRoute, route), linkedExists)
+  // Only count articles linked via the new import_route table
+  const base = linkedExists
   const hasFrom = Boolean(record.dateFrom)
   const hasTo = Boolean(record.dateTo)
   const where =
