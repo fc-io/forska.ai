@@ -268,15 +268,7 @@ const harvestPage = async (
   return doneByLimit || noMoreByCursor || doneByExhaustion
     ? newFetchedCount
     : (await sleep(100),
-      harvestPage(
-        query,
-        importRoute,
-        pageSize,
-        maxResults,
-        nextCursor,
-        newImportedCount,
-        newFetchedCount,
-      ))
+      harvestPage(query, importRoute, pageSize, maxResults, nextCursor, newImportedCount, newFetchedCount))
 }
 
 const pubmedHarvest = async (input: InputData): Promise<void> => {
