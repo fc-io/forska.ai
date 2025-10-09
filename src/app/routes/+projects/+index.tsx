@@ -16,7 +16,7 @@ export const ProjectsPage = () => {
     <div class="min-h-screen bg-gray-50 p-6 mx-auto">
       <div class="flex justify-between items-center mb-6">
         <h1 class="text-2xl font-bold">Projects</h1>
-        <Button as={Link} href="/projects/create">
+        <Button as={Link} to="/projects/create">
           Create New Project
         </Button>
       </div>
@@ -35,7 +35,7 @@ export const ProjectsPage = () => {
         <div class="text-center py-12">
           <h2 class="text-xl font-semibold mb-4">No projects found</h2>
           <p class="text-muted-foreground mb-6">Get started by creating your first project.</p>
-          <Button as={Link} href="/projects/create">
+          <Button as={Link} to="/projects/create">
             Create Your First Project
           </Button>
         </div>

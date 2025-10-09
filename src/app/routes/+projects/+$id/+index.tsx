@@ -49,14 +49,14 @@ const ProjectDetail = () => {
     <div class="min-h-screen bg-gray-50 p-6 mx-auto">
       <div class="flex justify-between items-center mb-6">
         <div class="flex items-center gap-4">
-          <Button as={Link} href="/projects" variant="outline" size="sm">
+          <Button as={Link} to="/projects" variant="outline" size="sm">
             ← Back to Projects
           </Button>
           <h1 class="text-2xl font-bold">Project Details</h1>
         </div>
         <Show when={projectData.isSuccess}>
           <div class="flex gap-2">
-            <Button as={Link} href={`/projects/${projectId}/edit`}>
+            <Button as={Link} to="/projects/$id/edit" params={{id: projectId}}>
               Edit Project
             </Button>
             <Button

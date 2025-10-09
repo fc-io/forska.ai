@@ -225,7 +225,7 @@ const CreateProject = () => {
   return (
     <div class="p-6 max-w-4xl mx-auto">
       <div class="flex items-center gap-4 mb-6">
-        <Button as={Link} href="/projects" variant="outline" size="sm">
+        <Button as={Link} to="/projects" variant="outline" size="sm">
           ← Back to Projects
         </Button>
         <h1 class="text-3xl font-bold">Create New Project</h1>
@@ -455,7 +455,7 @@ const CreateProject = () => {
             <Button type="submit" disabled={!projectName().trim() || isLoading()}>
               {isLoading() ? 'Creating...' : 'Create Project'}
             </Button>
-            <Button as={Link} href="/projects" variant="outline">
+            <Button as={Link} to="/projects" variant="outline">
               Cancel
             </Button>
           </div>
