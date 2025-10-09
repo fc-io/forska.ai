@@ -12,9 +12,7 @@ type PromptItem = {id: string; content: string; promptHeading: string; type: str
 
 type ParsedDateResult = {date: Date | null; normalized: string | null; error: string | null}
 
-type DataSourceOption = {id: string; title: string; description: string | null}
-
-type DataSourcesResponse = {data: DataSourceOption[]}
+type ImportRoutesResponse = {data: string[]}
 
 type ModelOption = {id: string; name: string; provider: string | null; modelName: string | null}
 type ModelsResponse = {data: ModelOption[]}
@@ -45,12 +43,12 @@ const CreateProject = () => {
       staleTime: 1000 * 60 * 5, // Consider data fresh for 5 minutes
     }
   })
-  const dataSourcesQuery = useQuery(() => {
+  const importRoutesQuery = useQuery(() => {
     return {
-      queryKey: ['datasources'],
+      queryKey: ['importroutes'],
       queryFn: async () => {
-        const response = await apiClient.api.datasources.get()
-        const result = handleApiResponse<DataSourcesResponse>(response, 'Failed to load data sources')
+        const response = await apiClient.api.importroutes.get()
+        const result = handleApiResponse<ImportRoutesResponse>(response, 'Failed to load import routes')
         return result.data ?? []
       },
       staleTime: 1000 * 60 * 5,
@@ -80,12 +78,12 @@ const CreateProject = () => {
   const [prompts, setPrompts] = createStore<PromptItem[]>([
     {id: crypto.randomUUID(), content: '', promptHeading: '', type: ''},
   ])
-  const [selectedDataSourceIds, setSelectedDataSourceIds] = createSignal<string[]>([])
+  const [selectedImportRoutes, setSelectedImportRoutes] = createSignal<string[]>([])
   const [isLoading, setIsLoading] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
 
-  const availableDataSources = () => {
-    return dataSourcesQuery.data ?? []
+  const availableImportRoutes = () => {
+    return importRoutesQuery.data ?? []
   }
 
   const availableModels = () => {
@@ -122,14 +120,10 @@ const CreateProject = () => {
     }
   }
 
-  const toggleDataSourceSelection = (id: string) => {
-    setSelectedDataSourceIds((current) => {
-      const hasId = current.includes(id)
-      return hasId
-        ? current.filter((value) => {
-            return value !== id
-          })
-        : [...current, id]
+  const toggleImportRouteSelection = (route: string) => {
+    setSelectedImportRoutes((current) => {
+      const has = current.includes(route)
+      return has ? current.filter((v) => v !== route) : [...current, route]
     })
   }
 
@@ -138,7 +132,7 @@ const CreateProject = () => {
     description: string,
     modelId: string,
     promptItems: PromptItem[],
-    dataSourceIds: string[],
+    importRoutes: string[],
     startDate?: string,
     endDate?: string,
   ) => {
@@ -160,8 +154,6 @@ const CreateProject = () => {
       throw new Error('User must be authenticated to create a project')
     }
 
-    const uniqueDataSourceIds = [...new Set(dataSourceIds)]
-
     const response = await apiClient.api.projects.post({
       name,
       description: description.trim() || undefined,
@@ -170,7 +162,7 @@ const CreateProject = () => {
       prompts: validPrompts,
       dateFrom: startDate,
       dateTo: endDate,
-      dataSourceIds: uniqueDataSourceIds.length > 0 ? uniqueDataSourceIds : undefined,
+      importRoutes: importRoutes.length > 0 ? Array.from(new Set(importRoutes)) : undefined,
     })
 
     const result = handleApiResponse(response, 'Failed to create project')
@@ -216,7 +208,7 @@ const CreateProject = () => {
         description(),
         selectedModelId(),
         prompts,
-        selectedDataSourceIds(),
+        selectedImportRoutes(),
         startDateResult.normalized ?? undefined,
         endDateResult.normalized ?? undefined,
       )
@@ -357,43 +349,38 @@ const CreateProject = () => {
           </div>
 
           <div>
-            <p class="block text-sm font-medium mb-2">Data Sources</p>
-            <Show when={dataSourcesQuery.isLoading}>
-              <p class="text-sm text-muted-foreground">Loading data sources...</p>
+            <p class="block text-sm font-medium mb-2">Import Routes</p>
+            <Show when={importRoutesQuery.isLoading}>
+              <p class="text-sm text-muted-foreground">Loading import routes...</p>
             </Show>
-            <Show when={dataSourcesQuery.isError}>
+            <Show when={importRoutesQuery.isError}>
               <p class="text-sm text-red-600">
-                {dataSourcesQuery.error instanceof Error
-                  ? dataSourcesQuery.error.message
-                  : 'Failed to load data sources'}
+                {importRoutesQuery.error instanceof Error
+                  ? importRoutesQuery.error.message
+                  : 'Failed to load import routes'}
               </p>
             </Show>
             <Show
-              when={!dataSourcesQuery.isLoading && !dataSourcesQuery.isError && availableDataSources().length === 0}
+              when={!importRoutesQuery.isLoading && !importRoutesQuery.isError && availableImportRoutes().length === 0}
             >
-              <p class="text-sm text-muted-foreground">No data sources available.</p>
+              <p class="text-sm text-muted-foreground">No import routes available.</p>
             </Show>
-            <Show when={!dataSourcesQuery.isLoading && !dataSourcesQuery.isError && availableDataSources().length > 0}>
+            <Show when={!importRoutesQuery.isLoading && !importRoutesQuery.isError && availableImportRoutes().length > 0}>
               <div class="space-y-2">
-                <For each={availableDataSources()}>
-                  {(source) => {
+                <For each={availableImportRoutes()}>
+                  {(route) => {
                     return (
                       <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer">
                         <input
                           type="checkbox"
                           class="mt-1"
-                          checked={selectedDataSourceIds().includes(source.id)}
-                          onChange={() => {
-                            return toggleDataSourceSelection(source.id)
-                          }}
+                          checked={selectedImportRoutes().includes(route)}
+                          onChange={() => toggleImportRouteSelection(route)}
                         />
                         <div class="flex-1">
-                          <p class="text-sm font-medium text-gray-900">{source.title}</p>
-                          <Show when={source.description}>
-                            {(descriptionText) => {
-                              return <p class="text-sm text-muted-foreground">{descriptionText()}</p>
-                            }}
-                          </Show>
+                          <p class="text-sm font-medium text-gray-900">
+                            <span class="font-mono">{route}</span>
+                          </p>
                         </div>
                       </label>
                     )

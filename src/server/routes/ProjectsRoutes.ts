@@ -1,7 +1,7 @@
 import {desc, eq, inArray} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {dataSource, judgments, models, projectDataSourceLink, projects, prompts} from '../../db/schema.ts'
+import {judgments, models, projects, prompts} from '../../db/schema.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {projectsRoutesGetArticlesReviews} from './projectsRoutes/projectsRoutesGetArticlesReviews.ts'
@@ -48,18 +48,6 @@ export const projectsRoutes = new Elysia()
       throw new Error('Project not found')
     }
 
-    const projectDataSources = await db
-      .select({
-        id: dataSource.id,
-        title: dataSource.title,
-        description: dataSource.description,
-        createdAt: dataSource.createdAt,
-        updatedAt: dataSource.updatedAt,
-      })
-      .from(projectDataSourceLink)
-      .innerJoin(dataSource, eq(projectDataSourceLink.dataSourceId, dataSource.id))
-      .where(eq(projectDataSourceLink.projectId, params.id))
-
     const projectPrompts = await db
       .select()
       .from(prompts)
@@ -99,7 +87,6 @@ export const projectsRoutes = new Elysia()
       data: {
         project,
         prompts: projectPrompts,
-        dataSources: projectDataSources,
         hasJudgedArticles,
         model: projectModel ?? null,
       },
@@ -159,25 +146,7 @@ export const projectsRoutes = new Elysia()
         )
       }
 
-      if (newProject && body.dataSourceIds && body.dataSourceIds.length > 0) {
-        const uniqueIds = [...new Set(body.dataSourceIds)]
-        if (uniqueIds.length > 0) {
-          const validDataSources = await db
-            .select({id: dataSource.id})
-            .from(dataSource)
-            .where(inArray(dataSource.id, uniqueIds))
-
-          if (validDataSources.length !== uniqueIds.length) {
-            throw new Error('One or more selected data sources do not exist')
-          }
-
-          await db.insert(projectDataSourceLink).values(
-            validDataSources.map((entry) => {
-              return {projectId: newProject.id, dataSourceId: entry.id}
-            }),
-          )
-        }
-      }
+      // Linking datasources to projects removed
 
       return {data: newProject}
     },
@@ -189,7 +158,6 @@ export const projectsRoutes = new Elysia()
         modelId: t.String(),
         dateFrom: t.Optional(t.String()),
         dateTo: t.Optional(t.String()),
-        dataSourceIds: t.Optional(t.Array(t.String())),
         prompts: t.Optional(
           t.Union([
             t.Array(t.String()),

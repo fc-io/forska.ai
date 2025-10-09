@@ -2,17 +2,7 @@ import type {SQL} from 'drizzle-orm'
 import {count, eq, gte, inArray, lte, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {
-  articles,
-  dataSource,
-  judgments,
-  judgmentsJobs,
-  judgmentsJobsArticles,
-  projectDataSourceLink,
-  projects,
-  prompts,
-  tokenUse,
-} from '../../db/schema'
+import {articles, judgments, judgmentsJobs, judgmentsJobsArticles, projects, prompts, tokenUse} from '../../db/schema'
 import {getDatabase} from '../utils/getDatabase'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
@@ -62,22 +52,19 @@ const getUnassessedArticlesCount = async ({
   promptIds,
   projectDateFrom,
   projectDateTo,
-  importRoutes,
 }: {
   db: Database
   promptIds: string[]
   projectDateFrom: Date | null | undefined
   projectDateTo: Date | null | undefined
-  importRoutes: string[]
 }): Promise<number> => {
-  if (promptIds.length === 0 || importRoutes.length === 0) {
+  if (promptIds.length === 0) {
     return 0
   }
 
   const whereClauses = [
     ...buildProjectDateConditions({projectDateFrom, projectDateTo}),
     buildProjectPromptCondition(promptIds),
-    inArray(articles.importRoute, importRoutes),
   ]
 
   const [{count: unassessedCount = 0} = {count: 0}] = await db
@@ -107,7 +94,6 @@ const getJobContext = async ({
   projectDateFrom: Date | null
   projectDateTo: Date | null
   promptIds: string[]
-  importRoutes: string[]
 }> => {
   const [jobWithProject] = await db
     .select({
@@ -134,13 +120,6 @@ const getJobContext = async ({
 
   const projectPrompts = await db.select({id: prompts.id}).from(prompts).where(eq(prompts.projectId, job.projectId))
 
-  // Get allowed import routes from datasources linked to this project
-  const dsRoutes = await db
-    .select({importRoute: dataSource.importRoute})
-    .from(projectDataSourceLink)
-    .leftJoin(dataSource, eq(projectDataSourceLink.dataSourceId, dataSource.id))
-    .where(eq(projectDataSourceLink.projectId, job.projectId))
-
   return {
     job,
     projectDateFrom,
@@ -148,13 +127,6 @@ const getJobContext = async ({
     promptIds: projectPrompts.map((prompt) => {
       return prompt.id
     }),
-    importRoutes: dsRoutes
-      .map((r) => {
-        return r.importRoute
-      })
-      .filter((v): v is string => {
-        return Boolean(v)
-      }),
   }
 }
 
@@ -163,13 +135,11 @@ const getUnassessedArticles = async ({
   promptIds,
   projectDateFrom,
   projectDateTo,
-  importRoutes,
 }: {
   db: Database
   promptIds: string[]
   projectDateFrom: Date | null | undefined
   projectDateTo: Date | null | undefined
-  importRoutes: string[]
 }): Promise<
   {
     id: string
@@ -180,14 +150,13 @@ const getUnassessedArticles = async ({
     articleUpdatedAt: Date | null
   }[]
 > => {
-  if (promptIds.length === 0 || importRoutes.length === 0) {
+  if (promptIds.length === 0) {
     return []
   }
 
   const whereClauses = [
     ...buildProjectDateConditions({projectDateFrom, projectDateTo}),
     buildProjectPromptCondition(promptIds),
-    inArray(articles.importRoute, importRoutes),
   ]
 
   const articlesToAssess = await db
@@ -245,7 +214,7 @@ export const judgmentsJobsRoutes = new Elysia()
     async ({params}) => {
       const db = getDatabase()
 
-      const {job, projectDateFrom, projectDateTo, promptIds, importRoutes} = await getJobContext({
+      const {job, projectDateFrom, projectDateTo, promptIds} = await getJobContext({
         db,
         jobId: params.id,
       })
@@ -266,13 +235,7 @@ export const judgmentsJobsRoutes = new Elysia()
         if (stat.status === 'judged') stats.judged = stat.count
       })
 
-      const unassessedCount = await getUnassessedArticlesCount({
-        db,
-        promptIds,
-        projectDateFrom,
-        projectDateTo,
-        importRoutes,
-      })
+      const unassessedCount = await getUnassessedArticlesCount({db, promptIds, projectDateFrom, projectDateTo})
 
       // Get total token usage for this job
       const totalTokenUsage = await db
@@ -317,18 +280,12 @@ export const judgmentsJobsRoutes = new Elysia()
     async ({query}) => {
       const db = getDatabase()
 
-      const {projectDateFrom, projectDateTo, promptIds, importRoutes} = await getJobContext({
+      const {projectDateFrom, projectDateTo, promptIds} = await getJobContext({
         db,
         jobId: query.jobId,
       })
 
-      const unassessedArticles = await getUnassessedArticles({
-        db,
-        promptIds,
-        projectDateFrom,
-        projectDateTo,
-        importRoutes,
-      })
+      const unassessedArticles = await getUnassessedArticles({db, promptIds, projectDateFrom, projectDateTo})
 
       return {data: unassessedArticles, error: null}
     },

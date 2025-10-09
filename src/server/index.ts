@@ -9,6 +9,7 @@ import {dataSourcesRoutes} from './routes/DataSourcesRoutes.ts'
 import {judgmentsJobsRoutes} from './routes/JudgmentsJobsRoutes.ts'
 import {judgmentsRoutes} from './routes/JudgmentsRoutes.ts'
 import {modelsRoutes} from './routes/ModelsRoutes.ts'
+import {importRoutes} from './routes/ImportRoutes.ts'
 import {projectsRoutes} from './routes/ProjectsRoutes.ts'
 import {tokensRoutes} from './routes/TokensRoutes.ts'
 import {usersRoutes} from './routes/UsersRoutes.ts'
@@ -24,6 +25,7 @@ const app = new Elysia()
   .use(judgmentsRoutes)
   .use(modelsRoutes)
   .use(projectsRoutes)
+  .use(importRoutes)
   .use(dataSourcesRoutes)
   .use(dataSourcesImportRoutes)
   .use(tokensRoutes)
