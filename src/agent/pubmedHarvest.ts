@@ -140,6 +140,45 @@ const buildQuery = (from: string, to: string): string => {
   return `SRC:MED AND FIRST_PDATE:[${a} TO ${b}]`
 }
 
+const europePmcFetchTimeoutMs = 20_000
+const europePmcRetryDelayMs = 5_000
+
+const fetchWithTimeoutAndRetry = (
+  url: URL,
+  timeoutMs: number,
+  maxRetries: number,
+  retryDelayMs: number,
+): Promise<Response> => {
+  const attempt = (i: number): Promise<Response> => {
+    const controller = new AbortController()
+    const timer = setTimeout(() => {
+      controller.abort()
+    }, timeoutMs)
+    const p = fetch(url, {signal: controller.signal}).finally(() => {
+      clearTimeout(timer)
+    })
+    return p.then(
+      (res) => {
+        return res.ok
+          ? res
+          : i < maxRetries
+            ? sleep(retryDelayMs).then(() => {
+                return attempt(i + 1)
+              })
+            : Promise.reject(new Error(`Europe PMC HTTP ${res.status}`))
+      },
+      (err) => {
+        return i < maxRetries
+          ? sleep(retryDelayMs).then(() => {
+              return attempt(i + 1)
+            })
+          : Promise.reject(err)
+      },
+    )
+  }
+  return attempt(0)
+}
+
 const fetchEuropePmc = async (
   query: string,
   pageSize: number,
@@ -152,10 +191,7 @@ const fetchEuropePmc = async (
   url.searchParams.set('pageSize', String(pageSize))
   if (cursorMark) url.searchParams.set('cursorMark', cursorMark)
   // console.log('fetching', url.toString())
-  const res = await fetch(url)
-  if (!res.ok) {
-    throw new Error(`Europe PMC HTTP ${res.status}`)
-  }
+  const res = await fetchWithTimeoutAndRetry(url, europePmcFetchTimeoutMs, 1, europePmcRetryDelayMs)
   const json: unknown = await res.json()
   const parsed = EuropePmcResponse(json)
   if (parsed instanceof type.errors) {
