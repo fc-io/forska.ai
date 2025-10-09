@@ -236,6 +236,7 @@ const arxivWorkflowHarvest = async (input: InputData, resumptionToken?: string):
     await sleep(5000)
     await arxivWorkflowHarvest(input, result.resumptionToken)
   }
+  console.log('Arxiv Workflow harvest complete')
 }
 
 export {arxivFeedSchema, arxivWorkflowHarvest, fetchArxivQueryStepSchema, OaiPmhResponseSchema}
