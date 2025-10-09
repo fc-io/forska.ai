@@ -22,10 +22,12 @@ const getQueryConditions = ({
   articlesAlreadyProccessing,
   promptIds,
   project,
+  importRouteIds,
 }: {
   articlesAlreadyProccessing: string[]
   promptIds: string[]
   project: typeof schema.projects.$inferSelect
+  importRouteIds: string[]
 }) => {
   const conditions = []
 
@@ -34,13 +36,13 @@ const getQueryConditions = ({
     conditions.push(notInArray(schema.articles.id, articlesAlreadyProccessing))
   }
 
-  // Filter by project date range
+  // Filter by project date range (based on articleCreatedAt for consistency)
   if (project.dateFrom) {
-    conditions.push(gte(schema.articles.articleUpdatedAt, project.dateFrom))
+    conditions.push(gte(schema.articles.articleCreatedAt, project.dateFrom))
   }
 
   if (project.dateTo) {
-    conditions.push(lte(schema.articles.articleUpdatedAt, project.dateTo))
+    conditions.push(lte(schema.articles.articleCreatedAt, project.dateTo))
   }
 
   // Use EXISTS to find articles that haven't been judged by ALL prompts
@@ -62,6 +64,26 @@ const getQueryConditions = ({
     )`,
   )
 
+  if (importRouteIds.length === 0) {
+    conditions.push(sql`FALSE`)
+  } else {
+    const routeIdArray = sql.join(
+      importRouteIds.map((id) => {
+        return sql`${id}::uuid`
+      }),
+      sql`,`,
+    )
+
+    conditions.push(
+      sql`EXISTS (
+        SELECT 1
+        FROM ${schema.articleRouteLink} arl
+        WHERE arl."article_id" = ${schema.articles.id}
+        AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
+      )`,
+    )
+  }
+
   return conditions
 }
 
@@ -71,21 +93,23 @@ const getArticleIdsToJudge = async ({
   projectPrompts,
   numberOfArticlesToGet,
   articlesAlreadyProccessing,
+  importRouteIds,
 }: {
   db: PostgresJsDatabase<typeof schema>
   project: typeof schema.projects.$inferSelect
   projectPrompts: (typeof schema.prompts.$inferSelect)[]
   numberOfArticlesToGet: number
   articlesAlreadyProccessing: string[]
+  importRouteIds: string[]
 }): Promise<ArticleProcessingData> => {
   const promptIds = getPromptIds(projectPrompts)
-  const queryConditions = getQueryConditions({articlesAlreadyProccessing, promptIds, project})
+  const queryConditions = getQueryConditions({articlesAlreadyProccessing, promptIds, project, importRouteIds})
 
   const query = db
     .select()
     .from(schema.articles)
     .where(queryConditions.length > 0 ? sql`${sql.join(queryConditions, sql` AND `)}` : undefined)
-    .orderBy(desc(schema.articles.articleUpdatedAt), desc(schema.articles.id))
+    .orderBy(desc(schema.articles.articleCreatedAt), desc(schema.articles.id))
     .limit(numberOfArticlesToGet)
 
   const articlesToJudge = await query
@@ -108,10 +132,22 @@ export const judgmentsJobsCronGetArticles = async (
 
   const [project] = await db.select().from(schema.projects).where(eq(schema.projects.id, projectId)).limit(1)
   const projectPrompts = await db.select().from(schema.prompts).where(eq(schema.prompts.projectId, projectId))
+  const projectImportRoutes = await db
+    .select({importRouteId: schema.projectRouteLink.importRouteId})
+    .from(schema.projectRouteLink)
+    .where(eq(schema.projectRouteLink.projectId, projectId))
+  const importRouteIds = projectImportRoutes.map((r) => {
+    return r.importRouteId
+  })
 
-  // No project, return nothing.
-  // No prompts, return nothing cause there is no idea to judge when there are no prompts.
-  return !project || projectPrompts.length === 0
+  return !project || projectPrompts.length === 0 || importRouteIds.length === 0
     ? {articlesToJudgeIds: [], articlesToJudge: [], projectPrompts: []}
-    : await getArticleIdsToJudge({db, project, projectPrompts, numberOfArticlesToGet, articlesAlreadyProccessing})
+    : await getArticleIdsToJudge({
+        db,
+        project,
+        projectPrompts,
+        numberOfArticlesToGet,
+        articlesAlreadyProccessing,
+        importRouteIds,
+      })
 }
