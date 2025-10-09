@@ -1,5 +1,5 @@
-import {useQuery} from '@tanstack/solid-query'
 import * as Select from '@kobalte/core/select'
+import {useQuery} from '@tanstack/solid-query'
 import type {Setter} from 'solid-js'
 import {createEffect, createMemo, For, Show} from 'solid-js'
 
@@ -27,12 +27,7 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
 
   const filtersQuery = useQuery(() => {
     return {
-      queryKey: [
-        'project-articles-reviews-filters',
-        props.projectId,
-        props.fromDate || null,
-        props.toDate || null,
-      ],
+      queryKey: ['project-articles-reviews-filters', props.projectId, props.fromDate || null, props.toDate || null],
       queryFn: async () => {
         const query: Record<string, string> = {projectId: props.projectId}
         if (props.fromDate) query.from = props.fromDate
@@ -65,13 +60,16 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
     const filters =
       typeof maybe === 'function'
         ? (maybe as () => Array<{promptId: string; answeredOriginalValues: string[]}>)()
-        : ((maybe as Array<{promptId: string; answeredOriginalValues: string[]}> | undefined))
+        : (maybe as Array<{promptId: string; answeredOriginalValues: string[]}> | undefined)
     if (!filters) {
       return
     }
-    const allowedByPrompt: Record<string, Set<string>> = filters.reduce((acc, f) => {
-      return {...acc, [f.promptId]: new Set(f.answeredOriginalValues)}
-    }, {} as Record<string, Set<string>>)
+    const allowedByPrompt: Record<string, Set<string>> = filters.reduce(
+      (acc, f) => {
+        return {...acc, [f.promptId]: new Set(f.answeredOriginalValues)}
+      },
+      {} as Record<string, Set<string>>,
+    )
     props.setPromptFilters((prev) => {
       const next: Record<string, string[] | null> = {}
       for (const [promptId, value] of Object.entries(prev)) {
@@ -79,10 +77,12 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
           next[promptId] = null
         } else {
           const allowed = allowedByPrompt[promptId]
-          next[promptId] = allowed ? value.filter((v) => {
-            return allowed.has(v)
-          }) : null
-          if (next[promptId] && next[promptId]!.length === 0) {
+          next[promptId] = allowed
+            ? value.filter((v) => {
+                return allowed.has(v)
+              })
+            : null
+          if (next[promptId] && next[promptId].length === 0) {
             next[promptId] = null
           }
         }
@@ -144,8 +144,12 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
               <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 <For each={filters}>
                   {(promptFilter) => {
-                    const current = createMemo(() => props.promptFilters()[promptFilter.promptId] ?? [])
-                    const options = createMemo(() => promptFilter.answeredOriginalValues)
+                    const current = createMemo(() => {
+                      return props.promptFilters()[promptFilter.promptId] ?? []
+                    })
+                    const options = createMemo(() => {
+                      return promptFilter.answeredOriginalValues
+                    })
                     return (
                       <div class="flex flex-col gap-2">
                         <label
@@ -157,52 +161,69 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
                         <Select.Root
                           multiple
                           value={current()}
-                          onChange={(vals) => setPromptMulti(promptFilter.promptId, vals.length ? vals : null)}
+                          onChange={(vals) => {
+                            return setPromptMulti(promptFilter.promptId, vals.length ? vals : null)
+                          }}
                           options={options()}
-                          optionValue={(v) => v}
-                          optionLabel={(v) => v}
-                          optionTextValue={(v) => v}
+                          optionValue={(v) => {
+                            return v
+                          }}
+                          optionLabel={(v) => {
+                            return v
+                          }}
+                          optionTextValue={(v) => {
+                            return v
+                          }}
                           name={promptFilter.promptId}
-                          itemComponent={(itemProps) => (
-                            <Select.Item
-                              item={itemProps.item}
-                              class="relative flex select-none items-center justify-between gap-2 rounded-md px-2 py-1.5 text-sm outline-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[highlighted]:bg-blue-600 data-[highlighted]:text-white"
-                            >
-                              <Select.ItemLabel class="truncate">{itemProps.item.rawValue}</Select.ItemLabel>
-                              <Select.ItemIndicator class="ml-2 text-current">
-                                <svg
-                                  xmlns="http://www.w3.org/2000/svg"
-                                  viewBox="0 0 24 24"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  stroke-width="3"
-                                  stroke-linecap="round"
-                                  stroke-linejoin="round"
-                                  class="size-3"
-                                >
-                                  <path d="M5 12l5 5l10 -10" />
-                                </svg>
-                              </Select.ItemIndicator>
-                            </Select.Item>
-                          )}
+                          itemComponent={(itemProps) => {
+                            return (
+                              <Select.Item
+                                item={itemProps.item}
+                                class="relative flex select-none items-center justify-between gap-2 rounded-md px-2 py-1.5 text-sm outline-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[highlighted]:bg-blue-600 data-[highlighted]:text-white"
+                              >
+                                <Select.ItemLabel class="truncate">{itemProps.item.rawValue}</Select.ItemLabel>
+                                <Select.ItemIndicator class="ml-2 text-current">
+                                  <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="3"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    class="size-3"
+                                  >
+                                    <path d="M5 12l5 5l10 -10" />
+                                  </svg>
+                                </Select.ItemIndicator>
+                              </Select.Item>
+                            )
+                          }}
                         >
                           <Select.Trigger
                             class="group min-h-11 w-full rounded-md border border-input bg-background bg-white dark:bg-neutral-900 px-2 py-1.5 text-sm shadow-sm transition-[box-shadow,background-color] flex items-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[expanded]:ring-2 data-[expanded]:ring-ring"
                             aria-label={promptFilter.promptName || `Prompt ${promptFilter.promptId}`}
                           >
                             <div class="flex flex-wrap gap-2 grow">
-                              <Show when={current().length > 0} fallback={<span class="text-muted-foreground">All</span>}>
+                              <Show
+                                when={current().length > 0}
+                                fallback={<span class="text-muted-foreground">All</span>}
+                              >
                                 <For each={current()}>
                                   {(val) => {
                                     return (
                                       <span class="inline-flex items-center gap-1 rounded-md border border-input bg-muted/70 px-2 py-1 text-sm text-foreground">
-                                        <span class="truncate max-w-[10rem]" title={val}>{val}</span>
+                                        <span class="truncate max-w-[10rem]" title={val}>
+                                          {val}
+                                        </span>
                                         <button
                                           type="button"
                                           class="inline-flex size-4 items-center justify-center rounded hover:bg-muted-foreground/10"
                                           aria-label={`Remove ${val}`}
                                           onClick={() => {
-                                            const next = current().filter((v) => v !== val)
+                                            const next = current().filter((v) => {
+                                              return v !== val
+                                            })
                                             setPromptMulti(promptFilter.promptId, next.length ? next : null)
                                           }}
                                         >
@@ -232,7 +253,9 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
                                 class="inline-flex size-6 items-center justify-center rounded hover:bg-muted-foreground/10"
                                 title="Clear selection"
                                 aria-label="Clear selection"
-                                onClick={() => setPromptMulti(promptFilter.promptId, null)}
+                                onClick={() => {
+                                  return setPromptMulti(promptFilter.promptId, null)
+                                }}
                               >
                                 <svg
                                   xmlns="http://www.w3.org/2000/svg"

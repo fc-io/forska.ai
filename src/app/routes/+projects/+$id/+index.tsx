@@ -88,7 +88,7 @@ const ProjectDetail = () => {
             const result = data()
             const {project, prompts: rawPrompts, model} = result
             const importRoutes = Array.isArray((result as {importRoutes?: unknown}).importRoutes)
-              ? ((result as {importRoutes: string[]}).importRoutes)
+              ? (result as {importRoutes: string[]}).importRoutes
               : []
 
             interface RawPrompt {
