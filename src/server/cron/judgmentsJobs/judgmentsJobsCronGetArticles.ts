@@ -1,4 +1,4 @@
-import {desc, eq, gte, lte, notInArray, sql} from 'drizzle-orm'
+import {eq, gte, lte, notInArray, sql} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../db/schema.ts'
@@ -109,7 +109,9 @@ const getArticleIdsToJudge = async ({
     .select()
     .from(schema.articles)
     .where(queryConditions.length > 0 ? sql`${sql.join(queryConditions, sql` AND `)}` : undefined)
-    .orderBy(desc(schema.articles.articleCreatedAt), desc(schema.articles.id))
+    .orderBy(
+      sql`COALESCE(${schema.articles.articleUpdatedAt}, ${schema.articles.articleCreatedAt}, ${schema.articles.createdAt}) DESC, ${schema.articles.id} DESC`,
+    )
     .limit(numberOfArticlesToGet)
 
   const articlesToJudge = await query
