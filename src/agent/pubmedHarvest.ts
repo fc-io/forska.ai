@@ -270,6 +270,7 @@ const pubmedHarvest = async (input: InputData): Promise<void> => {
   const query = buildQuery(sp.mindate, sp.maxdate)
   const pageSize = 1000
   await harvestPage(query, input.importRoute, pageSize, Number.POSITIVE_INFINITY, '*')
+  console.log('Europe PMC harvest complete')
 }
 
 export {pubmedHarvest}

@@ -65,10 +65,10 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
 
       const whereParts: Array<ReturnType<typeof sql>> = [noJudgmentsForProjectPrompts, hasMatchingImportRoute]
       if (projectBounds?.dateFrom) {
-        whereParts.push(gte(articles.createdAt, projectBounds.dateFrom))
+        whereParts.push(gte(articles.articleCreatedAt, projectBounds.dateFrom))
       }
       if (projectBounds?.dateTo) {
-        whereParts.push(lte(articles.createdAt, projectBounds.dateTo))
+        whereParts.push(lte(articles.articleCreatedAt, projectBounds.dateTo))
       }
       const combinedWhereCondition = whereParts.length > 1 ? and(...whereParts) : whereParts[0]
 
@@ -83,7 +83,7 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
         .select({article: articles})
         .from(articles)
         .where(combinedWhereCondition)
-        .orderBy(desc(articles.createdAt))
+        .orderBy(desc(articles.articleCreatedAt))
         .limit(limit)
         .offset(offset)
 
