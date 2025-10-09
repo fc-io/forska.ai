@@ -17,6 +17,18 @@ export const articlesRoutes = new Elysia()
 
     return {count: result[0]?.count || 0}
   })
+  .get('/api/articles/stats', async () => {
+    const db = getDatabase()
+
+    const [totalRow] = await db.select({count: count()}).from(articles)
+
+    const byRoute = await db
+      .select({importRoute: articles.importRoute, count: count()})
+      .from(articles)
+      .groupBy(articles.importRoute)
+
+    return {total: totalRow?.count ?? 0, byImportRoute: byRoute}
+  })
   .get('/api/articles/latest', async () => {
     const db = getDatabase()
 

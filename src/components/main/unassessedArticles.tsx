@@ -1,6 +1,6 @@
 import {useQuery} from '@tanstack/solid-query'
 import {format} from 'date-fns'
-import {type JSX, Show} from 'solid-js'
+import {type JSX, Show, For} from 'solid-js'
 
 import {apiClient} from '../../services/apiClient.ts'
 // import {fetchLatestArticles} from '../../services/articlesService.ts'
@@ -14,6 +14,11 @@ const fetchLatestArticles = async () => {
   const response = await apiClient.api.articles.latest.get()
   const result = handleApiResponse(response, 'Failed to fetch articles')
   return result?.data || []
+}
+
+const fetchArticlesStats = async () => {
+  const response = await apiClient.api.articles.stats.get()
+  return handleApiResponse(response, 'Failed to fetch article stats')
 }
 
 export const UnassessedArticles = (): JSX.Element => {
@@ -35,6 +40,15 @@ export const UnassessedArticles = (): JSX.Element => {
     }
   })
 
+  const articlesStatsQuery = useQuery(() => {
+    return {
+      queryKey: ['articles', 'stats'],
+      queryFn: fetchArticlesStats,
+      refetchInterval: 60 * 1000,
+      refetchIntervalInBackground: true,
+    }
+  })
+
   const formatTimestamp = (date: Date | null) => {
     if (!date) return ''
     return format(date, 'HH:mm')
@@ -52,6 +66,23 @@ export const UnassessedArticles = (): JSX.Element => {
             <p class="text-muted-foreground">
               {`${formatNumber(infoQuery.data?.unassessedCount)} unassessed articles`}
             </p>
+          </Show>
+          <Show when={!articlesStatsQuery.isLoading}>
+            <p class="text-muted-foreground">
+              {`Total articles: ${formatNumber(articlesStatsQuery.data?.total || 0)}`}
+            </p>
+            <div class="mt-1">
+              <p class="text-muted-foreground">By import route:</p>
+              <ul class="list-disc list-inside text-muted-foreground">
+                <For each={articlesStatsQuery.data?.byImportRoute || []}>
+                  {(r) => (
+                    <li>
+                      <span class="font-mono">{r.importRoute ?? 'Not set'}</span>: {formatNumber(r.count || 0)}
+                    </li>
+                  )}
+                </For>
+              </ul>
+            </div>
           </Show>
           {/* <p class="text-muted-foreground">
             {infoQuery.data?.tokenUseLast10Minutes}
