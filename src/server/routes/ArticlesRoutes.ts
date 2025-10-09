@@ -1,7 +1,7 @@
-import {count, eq, isNull, sql} from 'drizzle-orm'
+import {count, eq, inArray, isNull, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {articles, judgments} from '../../db/schema.ts'
+import {articleRouteLink, articles, importRoute as importRouteTable, judgments} from '../../db/schema.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
@@ -22,10 +22,23 @@ export const articlesRoutes = new Elysia()
 
     const [totalRow] = await db.select({count: count()}).from(articles)
 
-    const byRoute = await db
+    // Count by linked import routes (via article_route_link)
+    const linkedCounts = await db
+      .select({importRoute: importRouteTable.route, count: count()})
+      .from(articles)
+      .innerJoin(articleRouteLink, eq(articleRouteLink.articleId, articles.id))
+      .innerJoin(importRouteTable, eq(importRouteTable.id, articleRouteLink.importRouteId))
+      .groupBy(importRouteTable.route)
+
+    // Fallback: count rows not yet linked, grouped by legacy articles.importRoute
+    const unlinkedCounts = await db
       .select({importRoute: articles.importRoute, count: count()})
       .from(articles)
+      .leftJoin(articleRouteLink, eq(articleRouteLink.articleId, articles.id))
+      .where(isNull(articleRouteLink.id))
       .groupBy(articles.importRoute)
+
+    const byRoute = [...linkedCounts, ...unlinkedCounts]
 
     return {total: totalRow?.count ?? 0, byImportRoute: byRoute}
   })
@@ -73,7 +86,7 @@ export const articlesRoutes = new Elysia()
         }
       })
 
-      await db
+      const inserted = await db
         .insert(articles)
         .values(articlesToUpsert)
         .onConflictDoUpdate({
@@ -91,6 +104,53 @@ export const articlesRoutes = new Elysia()
             updatedAt: sql`CURRENT_TIMESTAMP`,
           },
         })
+        .returning({id: articles.id, articleId: articles.articleId})
+
+      // Link articles to import routes in article_route_link
+      const articleIds = inserted.map((r) => {
+        return r.articleId
+      })
+
+      const routeSet = new Set(
+        entries
+          .map((e) => {
+            return e.import_route
+          })
+          .filter(Boolean),
+      )
+      const routeList = Array.from(routeSet)
+
+      if (routeList.length > 0 && articleIds.length > 0) {
+        const [articlesWithRoutes, importRoutes] = await Promise.all([
+          db
+            .select({id: articles.id, articleId: articles.articleId, importRoute: articles.importRoute})
+            .from(articles)
+            .where(inArray(articles.articleId, articleIds)),
+          db
+            .select({id: importRouteTable.id, route: importRouteTable.route})
+            .from(importRouteTable)
+            .where(inArray(importRouteTable.route, routeList)),
+        ])
+
+        const routeMap = new Map(
+          importRoutes.map((r) => {
+            return [r.route, r.id]
+          }),
+        )
+
+        const links = articlesWithRoutes
+          .map((a) => {
+            const importRouteId = a.importRoute ? routeMap.get(a.importRoute) : undefined
+            return importRouteId ? {articleId: a.id, importRouteId} : null
+          })
+          .filter((v): v is {articleId: string; importRouteId: string} => {
+            return v !== null
+          })
+
+        if (links.length > 0) {
+          await db.insert(articleRouteLink).values(links).onConflictDoNothing()
+        }
+      }
 
       return {success: true, count: entries.length}
     },

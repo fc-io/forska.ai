@@ -1,8 +1,8 @@
 import {format} from 'date-fns'
-import {and, count, eq, gte, isNull, lte, or} from 'drizzle-orm'
+import {and, count, eq, gte, isNull, lte, or, sql} from 'drizzle-orm'
 
 import {pubmedHarvest} from '../../../agent/pubmedHarvest.ts'
-import {articles, dataSource} from '../../../db/schema.ts'
+import {articleRouteLink, articles, dataSource, importRoute as importRouteTable} from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
 type Database = ReturnType<typeof getDatabase>
@@ -17,7 +17,13 @@ const fetchDataSourceById = async (db: Database, id: string): Promise<DataSource
 }
 
 const countArticlesInRange = async (db: Database, route: string, record: DataSourceRecord): Promise<number> => {
-  const base = eq(articles.importRoute, route)
+  const linkedExists = sql`EXISTS (
+    SELECT 1 FROM ${articleRouteLink} arl
+    JOIN ${importRouteTable} ir ON ir.id = arl."import_route_id"
+    WHERE arl."article_id" = ${articles.id} AND ir."route" = ${route}
+  )`
+
+  const base = or(eq(articles.importRoute, route), linkedExists)
   const hasFrom = Boolean(record.dateFrom)
   const hasTo = Boolean(record.dateTo)
   const where =
