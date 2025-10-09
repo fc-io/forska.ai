@@ -1,6 +1,7 @@
 import {type} from 'arktype'
+import {inArray, sql} from 'drizzle-orm'
 
-import {apiClient} from '../../services/apiClient'
+import {articleRouteLink, articles, importRoute as importRouteTable} from '../../db/schema.ts'
 
 // Define the ArxivEntry type to match the transformed record structure
 const arxivEntry = type({
@@ -72,26 +73,118 @@ const batchEntries = <T>(records: T[], batchSize: number): T[][] => {
   return batches
 }
 
-// Store a batch of records to server
+// Store a batch of records directly via Drizzle and link import routes
 const storeBatch = async (batch: (typeof DatabaseItem.infer)[]): Promise<void> => {
-  const response = await apiClient.api.articles['batch-upsert'].post({entries: batch})
+  const {getDatabase} = await import('../../server/utils/getDatabase.ts')
+  const db = getDatabase()
 
-  if (response.error) {
-    const errorMessage =
-      typeof response.error.value === 'string' ? response.error.value : JSON.stringify(response.error.value)
-    throw new Error(`Failed to store batch: ${errorMessage}`)
+  const articlesToUpsert = batch.map((entry) => {
+    return {
+      articleId: entry.article_id,
+      articleTitle: entry.article_title,
+      articleSummary: entry.article_summary,
+      articleAuthors: entry.article_authors,
+      articleUpdatedAt: new Date(entry.article_updated_at),
+      articleCreatedAt: new Date(entry.article_created_at),
+      articleVersion: parseInt(entry.article_version),
+      arxivId: entry.arxiv_id,
+      originalData: entry.original_data,
+    }
+  })
+
+  const inserted = await db
+    .insert(articles)
+    .values(articlesToUpsert)
+    .onConflictDoUpdate({
+      target: articles.articleId,
+      set: {
+        articleTitle: sql`EXCLUDED.article_title`,
+        articleSummary: sql`EXCLUDED.article_summary`,
+        articleAuthors: sql`EXCLUDED.article_authors`,
+        articleUpdatedAt: sql`EXCLUDED.article_updated_at`,
+        articleVersion: sql`EXCLUDED.article_version`,
+        arxivId: sql`EXCLUDED.arxiv_id`,
+        originalData: sql`EXCLUDED.original_data`,
+        updatedAt: sql`CURRENT_TIMESTAMP`,
+      },
+    })
+    .returning({id: articles.id, articleId: articles.articleId})
+
+  const articleIdToDbId = new Map(
+    inserted.map((r) => {
+      return [r.articleId, r.id]
+    }),
+  )
+
+  const routeList = Array.from(
+    new Set(
+      batch
+        .map((e) => {
+          return e.import_route
+        })
+        .filter((r): r is string => {
+          return Boolean(r && r.trim())
+        }),
+    ),
+  )
+
+  if (routeList.length === 0 || inserted.length === 0) {
+    return
   }
 
-  if (!response.data?.success) {
-    throw new Error(`Failed to store batch: ${response.data?.error || 'Unknown error'}`)
+  const existingRoutes = await db
+    .select({id: importRouteTable.id, route: importRouteTable.route})
+    .from(importRouteTable)
+    .where(inArray(importRouteTable.route, routeList))
+
+  const existingSet = new Set(
+    existingRoutes.map((r) => {
+      return r.route
+    }),
+  )
+  const missingRoutes = routeList.filter((r) => {
+    return !existingSet.has(r)
+  })
+
+  if (missingRoutes.length > 0) {
+    await db
+      .insert(importRouteTable)
+      .values(
+        missingRoutes.map((route) => {
+          return {route, name: route, active: true}
+        }),
+      )
+      .onConflictDoNothing()
+  }
+
+  const importRoutes = await db
+    .select({id: importRouteTable.id, route: importRouteTable.route})
+    .from(importRouteTable)
+    .where(inArray(importRouteTable.route, routeList))
+
+  const routeMap = new Map(
+    importRoutes.map((r) => {
+      return [r.route, r.id]
+    }),
+  )
+
+  const links = batch
+    .map((e) => {
+      const articleId = articleIdToDbId.get(e.article_id)
+      const importRouteId = e.import_route ? routeMap.get(e.import_route) : undefined
+      return articleId && importRouteId ? {articleId, importRouteId} : null
+    })
+    .filter((v): v is {articleId: string; importRouteId: string} => {
+      return v !== null
+    })
+
+  if (links.length > 0) {
+    await db.insert(articleRouteLink).values(links).onConflictDoNothing()
   }
 }
 
 // Main function to store records with batching
-const arxivWorkflowStoreEntires = async (
-  records: (typeof arxivEntry.infer)[],
-  importRoute: string,
-): Promise<void> => {
+const arxivWorkflowStoreEntires = async (records: (typeof arxivEntry.infer)[], importRoute: string): Promise<void> => {
   try {
     // Transform records to database format
     const transformedEntries = records.map((entry) => {
