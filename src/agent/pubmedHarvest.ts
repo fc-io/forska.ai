@@ -240,9 +240,14 @@ const harvestPage = async (
   maxResults: number,
   cursorMark?: string,
   importedCount = 0,
-): Promise<void> => {
+  fetchedCount = 0,
+): Promise<number> => {
+  const isInitialRun = cursorMark === '*'
+  const baseImportedCount = isInitialRun ? 0 : importedCount
+  const baseFetchedCount = isInitialRun ? 0 : fetchedCount
+
   const {items, nextCursor, hitCount} = await fetchEuropePmc(query, pageSize, cursorMark)
-  const remaining = Math.max(0, maxResults - importedCount)
+  const remaining = Math.max(0, maxResults - baseImportedCount)
   const slice = items.slice(0, remaining)
   const hasAnyId = (it: typeof EuropePmcItem.infer) => {
     const hasPmid = (typeof it.pmid === 'number' || typeof it.pmid === 'string') && String(it.pmid).length > 0
@@ -255,13 +260,23 @@ const harvestPage = async (
   if (entries.length > 0) {
     await pubmedWorkflowStoreEntries(entries)
   }
-  const newCount = importedCount + entries.length
-  const doneByLimit = newCount >= maxResults
+  const newImportedCount = baseImportedCount + entries.length
+  const newFetchedCount = baseFetchedCount + items.length
+  const doneByLimit = newImportedCount >= maxResults
   const noMoreByCursor = !nextCursor || nextCursor === cursorMark
-  const doneByExhaustion = newCount >= hitCount
+  const doneByExhaustion = newImportedCount >= hitCount
   return doneByLimit || noMoreByCursor || doneByExhaustion
-    ? undefined
-    : (await sleep(100), harvestPage(query, importRoute, pageSize, maxResults, nextCursor, newCount))
+    ? newFetchedCount
+    : (await sleep(100),
+      harvestPage(
+        query,
+        importRoute,
+        pageSize,
+        maxResults,
+        nextCursor,
+        newImportedCount,
+        newFetchedCount,
+      ))
 }
 
 const pubmedHarvest = async (input: InputData): Promise<void> => {
@@ -269,8 +284,8 @@ const pubmedHarvest = async (input: InputData): Promise<void> => {
   const sp = idParams.searchParams
   const query = buildQuery(sp.mindate, sp.maxdate)
   const pageSize = 1000
-  await harvestPage(query, input.importRoute, pageSize, Number.POSITIVE_INFINITY, '*')
-  console.log('Europe PMC harvest complete')
+  const fetchedTotal = await harvestPage(query, input.importRoute, pageSize, Number.POSITIVE_INFINITY, '*')
+  console.log(`Europe PMC harvest complete. Fetched ${fetchedTotal} articles.`)
 }
 
 export {pubmedHarvest}
