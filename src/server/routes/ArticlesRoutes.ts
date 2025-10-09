@@ -30,8 +30,15 @@ export const articlesRoutes = new Elysia()
       .innerJoin(importRouteTable, eq(importRouteTable.id, articleRouteLink.importRouteId))
       .groupBy(importRouteTable.route)
 
-    // Only count articles that are linked to an import route
-    return {total: totalRow?.count ?? 0, byImportRoute: linkedCounts}
+    // Count articles that have no import_route link
+    const [unlinkedRow] = await db
+      .select({count: count()})
+      .from(articles)
+      .leftJoin(articleRouteLink, eq(articleRouteLink.articleId, articles.id))
+      .where(isNull(articleRouteLink.id))
+
+    // Only count articles that are linked to an import route; also expose unlinked count
+    return {total: totalRow?.count ?? 0, unlinkedCount: unlinkedRow?.count ?? 0, byImportRoute: linkedCounts}
   })
   .get('/api/articles/latest', async () => {
     const db = getDatabase()
