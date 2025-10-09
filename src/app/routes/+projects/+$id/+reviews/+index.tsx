@@ -6,10 +6,9 @@ import {ReviewsFilterControls} from '../../../../../components/main/reviews/revi
 import {ReviewsTabs} from '../../../../../components/main/reviews/reviewsTabs.tsx'
 
 const Reviews = () => {
+  const params = Route.useParams()
   const [fromDate, setFromDate] = createSignal('')
   const [toDate, setToDate] = createSignal('')
-  const params = Route.useParams()
-  const projectId = (params() as {id: string}).id
   const [promptFilters, setPromptFilters] = createSignal<Record<string, string[] | null>>({})
   const [currentPage, setCurrentPage] = createSignal(1)
   const [pageLimit, setPageLimit] = createSignal(100)
@@ -17,10 +16,10 @@ const Reviews = () => {
   return (
     <div class="min-h-screen bg-gray-50 p-6 mx-auto">
       <h1 class="text-1xl font-bold mb-2">Project Reviews</h1>
-      <ReviewsTabs projectId={projectId} active="assessed" />
+      <ReviewsTabs projectId={params().id} active="assessed" />
 
       <ReviewsFilterControls
-        projectId={projectId}
+        projectId={params().id}
         promptFilters={promptFilters}
         setPromptFilters={setPromptFilters}
         pageLimit={pageLimit}
@@ -33,7 +32,7 @@ const Reviews = () => {
       />
 
       <ReviewsArticlesTableContainer
-        projectId={projectId}
+        projectId={params().id}
         promptFilters={promptFilters}
         currentPage={currentPage}
         setCurrentPage={setCurrentPage}

@@ -1,12 +1,10 @@
 import type {QueryClient} from '@tanstack/solid-query'
 import {useQuery, useQueryClient} from '@tanstack/solid-query'
 import {createRootRoute, Outlet, useLocation, useNavigate} from '@tanstack/solid-router'
-import {TanStackRouterDevtools} from '@tanstack/solid-router-devtools'
-import {Show, createEffect} from 'solid-js'
+import {createEffect, Show} from 'solid-js'
 
 import {Login} from '../../components/login'
 import {Navigation} from '../../components/Navigation'
-// import {AccessRequired} from '../../components/ui/access-required'
 import {fetchSession} from '../../services/fetchSession'
 import {authClient} from '../lib/auth-client'
 
@@ -71,7 +69,6 @@ const RootComponent = () => {
           />
         </Show>
         <Outlet />
-        <TanStackRouterDevtools />
       </Show>
     </>
   )
