@@ -1,5 +1,5 @@
 import {useQuery} from '@tanstack/solid-query'
-import {createFileRoute, Link} from '@tanstack/solid-router'
+import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
 import type {JSX} from 'solid-js'
 import {createEffect, createMemo, createSignal, For, Show} from 'solid-js'
 import {createStore} from 'solid-js/store'
@@ -200,6 +200,7 @@ const formatDateForInput = (value: string | Date | null): string => {
 const EditProject = (): JSX.Element => {
   const params = Route.useParams()
   const projectId = (params() as {id: string}).id
+  const navigate = useNavigate()
 
   const projectData = useQuery(() => {
     return {
@@ -394,7 +395,7 @@ const EditProject = (): JSX.Element => {
 
     const onFulfilled = () => {
       setIsLoading(false)
-      void projectData.refetch()
+      void navigate({to: '/projects'})
     }
 
     const onRejected = (error: unknown) => {

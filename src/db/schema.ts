@@ -215,6 +215,38 @@ export const projectRouteLink = pgTable(
   },
 )
 
+export const articleRouteLink = pgTable(
+  'article_route_link',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
+    articleId: uuid('article_id')
+      .notNull()
+      .references(
+        () => {
+          return articles.id
+        },
+        {onDelete: 'cascade'},
+      ),
+    importRouteId: uuid('import_route_id')
+      .notNull()
+      .references(
+        () => {
+          return importRoute.id
+        },
+        {onDelete: 'cascade'},
+      ),
+  },
+  (table) => {
+    return [
+      uniqueIndex('article_route_link_unique').on(table.articleId, table.importRouteId),
+      index('article_route_link_article_idx').on(table.articleId),
+      index('article_route_link_route_idx').on(table.importRouteId),
+    ]
+  },
+)
+
 export const dataSourceAccess = pgTable(
   'datasource_access',
   {
