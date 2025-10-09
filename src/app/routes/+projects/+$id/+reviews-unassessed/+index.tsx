@@ -27,8 +27,12 @@ const ReviewsUnassessed = () => {
 
       <ReviewsFilterControls
         projectId={projectId}
-        promptFilters={() => {return {}}}
-        setPromptFilters={() => {return}}
+        promptFilters={() => {
+          return {}
+        }}
+        setPromptFilters={() => {
+          return
+        }}
         pageLimit={pageLimit}
         setPageLimit={setPageLimit}
         setCurrentPage={setCurrentPage}
@@ -67,7 +71,9 @@ const ReviewsUnassessed = () => {
                       : '0'}
                     )
                   </h3>
-                  <p class="text-sm text-gray-600">Showing articles that have no judgments for any prompts in this project</p>
+                  <p class="text-sm text-gray-600">
+                    Showing articles that have no judgments for any prompts in this project
+                  </p>
                 </div>
 
                 <Show when={response().totalPages > 1}>
