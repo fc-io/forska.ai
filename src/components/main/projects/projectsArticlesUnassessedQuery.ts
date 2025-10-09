@@ -11,23 +11,16 @@ export const createArticlesUnassessedQueryOptions = (
   fromDateStr: Accessor<string>,
   toDateStr: Accessor<string>,
 ) => {
-  const fromStr = () => fromDateStr().trim()
-  const toStr = () => toDateStr().trim()
+  const fromStr = () => {
+    return fromDateStr().trim()
+  }
+  const toStr = () => {
+    return toDateStr().trim()
+  }
   return {
-    queryKey: [
-      'project-articles-unassessed',
-      projectId,
-      currentPage(),
-      pageLimit(),
-      fromStr(),
-      toStr(),
-    ],
+    queryKey: ['project-articles-unassessed', projectId, currentPage(), pageLimit(), fromStr(), toStr()],
     queryFn: async () => {
-      const body: Record<string, unknown> = {
-        page: String(currentPage()),
-        limit: String(pageLimit()),
-        projectId,
-      }
+      const body: Record<string, unknown> = {page: String(currentPage()), limit: String(pageLimit()), projectId}
       if (isoDatePattern.test(fromStr())) {
         body.from = fromStr()
       }
@@ -45,4 +38,3 @@ export const createArticlesUnassessedQueryOptions = (
     },
   }
 }
-
