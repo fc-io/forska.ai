@@ -187,7 +187,7 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
                           )}
                         >
                           <Select.Trigger
-                            class="group min-h-11 w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm shadow-sm transition-[box-shadow,background-color] flex items-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[expanded]:ring-2 data-[expanded]:ring-ring"
+                            class="group min-h-11 w-full rounded-md border border-input bg-background bg-white dark:bg-neutral-900 px-2 py-1.5 text-sm shadow-sm transition-[box-shadow,background-color] flex items-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[expanded]:ring-2 data-[expanded]:ring-ring"
                             aria-label={promptFilter.promptName || `Prompt ${promptFilter.promptId}`}
                           >
                             <div class="flex flex-wrap gap-2 grow">
@@ -265,7 +265,7 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
                             </div>
                           </Select.Trigger>
                           <Select.Portal>
-                            <Select.Content class="z-50 min-w-56 rounded-md border bg-popover p-1 text-popover-foreground shadow-xl outline-none">
+                            <Select.Content class="z-50 min-w-56 rounded-md border bg-popover bg-white dark:bg-neutral-900 p-1 text-popover-foreground shadow-xl outline-none">
                               <Select.Listbox class="max-h-60 overflow-auto outline-none" />
                             </Select.Content>
                           </Select.Portal>
