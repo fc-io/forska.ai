@@ -20,6 +20,15 @@ interface ReviewsFilterControlsProps {
 }
 
 export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
+  const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/
+  const validFrom = () => {
+    const s = (props.fromDate || '').trim()
+    return isoDatePattern.test(s) ? s : null
+  }
+  const validTo = () => {
+    const s = (props.toDate || '').trim()
+    return isoDatePattern.test(s) ? s : null
+  }
   const handleLimitChange = (newLimit: number) => {
     props.setPageLimit(newLimit)
     props.setCurrentPage(1)
@@ -27,11 +36,14 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
 
   const filtersQuery = useQuery(() => {
     return {
-      queryKey: ['project-articles-reviews-filters', props.projectId, props.fromDate || null, props.toDate || null],
+      // Only include dates in the key when valid to avoid thrashing while typing
+      queryKey: ['project-articles-reviews-filters', props.projectId, validFrom(), validTo()],
       queryFn: async () => {
         const query: Record<string, string> = {projectId: props.projectId}
-        if (props.fromDate) query.from = props.fromDate
-        if (props.toDate) query.to = props.toDate
+        const from = validFrom()
+        const to = validTo()
+        if (from) query.from = from
+        if (to) query.to = to
 
         const response = await apiClient.api.articlesreviewsfilters.get({query})
 

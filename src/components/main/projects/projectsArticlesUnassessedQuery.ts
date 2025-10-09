@@ -17,16 +17,23 @@ export const createArticlesUnassessedQueryOptions = (
   const toStr = () => {
     return toDateStr().trim()
   }
+  const validFrom = () => {
+    const s = fromStr()
+    return isoDatePattern.test(s) ? s : null
+  }
+  const validTo = () => {
+    const s = toStr()
+    return isoDatePattern.test(s) ? s : null
+  }
   return {
-    queryKey: ['project-articles-unassessed', projectId, currentPage(), pageLimit(), fromStr(), toStr()],
+    // Only include dates when valid to prevent refetching on partial input
+    queryKey: ['project-articles-unassessed', projectId, currentPage(), pageLimit(), validFrom(), validTo()],
     queryFn: async () => {
       const body: Record<string, unknown> = {page: String(currentPage()), limit: String(pageLimit()), projectId}
-      if (isoDatePattern.test(fromStr())) {
-        body.from = fromStr()
-      }
-      if (isoDatePattern.test(toStr())) {
-        body.to = toStr()
-      }
+      const from = validFrom()
+      const to = validTo()
+      if (from) body.from = from
+      if (to) body.to = to
 
       const response = await apiClient.api.articlesreviewsunassessed.post(body)
 

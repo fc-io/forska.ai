@@ -14,16 +14,17 @@ export const createArticlesReviewsQueryOptions = (
 ) => {
   const fromStr = () => fromDateStr().trim()
   const toStr = () => toDateStr().trim()
+  const validFrom = () => {
+    const s = fromStr()
+    return isoDatePattern.test(s) ? s : null
+  }
+  const validTo = () => {
+    const s = toStr()
+    return isoDatePattern.test(s) ? s : null
+  }
   return {
-    queryKey: [
-      'project-articles-reviews-filters',
-      projectId,
-      promptFilters(),
-      currentPage(),
-      pageLimit(),
-      fromStr(),
-      toStr(),
-    ],
+    // Only include dates when valid to prevent refetching on partial input
+    queryKey: ['project-articles-reviews', projectId, promptFilters(), currentPage(), pageLimit(), validFrom(), validTo()],
     queryFn: async () => {
       const body: Record<string, unknown> = {
         page: String(currentPage()),
@@ -36,12 +37,10 @@ export const createArticlesReviewsQueryOptions = (
           return acc
         }, {} as Record<string, string[]>),
       }
-      if (isoDatePattern.test(fromStr())) {
-        body.from = fromStr()
-      }
-      if (isoDatePattern.test(toStr())) {
-        body.to = toStr()
-      }
+      const from = validFrom()
+      const to = validTo()
+      if (from) body.from = from
+      if (to) body.to = to
 
       const response = await apiClient.api.articlesreviews.post(body)
 
