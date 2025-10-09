@@ -32,4 +32,3 @@ export const ReviewsTabs = (props: ReviewsTabsProps): JSX.Element => {
     </div>
   )
 }
-
