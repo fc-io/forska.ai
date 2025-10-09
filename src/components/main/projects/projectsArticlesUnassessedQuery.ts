@@ -17,8 +17,10 @@ export const createArticlesUnassessedQueryOptions = (
   const toStr = () => {
     return toDateStr().trim()
   }
+  const fromKey = () => (isoDatePattern.test(fromStr()) ? fromStr() : null)
+  const toKey = () => (isoDatePattern.test(toStr()) ? toStr() : null)
   return {
-    queryKey: ['project-articles-unassessed', projectId, currentPage(), pageLimit(), fromStr(), toStr()],
+    queryKey: ['project-articles-unassessed', projectId, currentPage(), pageLimit(), fromKey(), toKey()],
     queryFn: async () => {
       const body: Record<string, unknown> = {page: String(currentPage()), limit: String(pageLimit()), projectId}
       if (isoDatePattern.test(fromStr())) {

@@ -14,6 +14,8 @@ export const createArticlesReviewsQueryOptions = (
 ) => {
   const fromStr = () => fromDateStr().trim()
   const toStr = () => toDateStr().trim()
+  const fromKey = () => (isoDatePattern.test(fromStr()) ? fromStr() : null)
+  const toKey = () => (isoDatePattern.test(toStr()) ? toStr() : null)
   return {
     queryKey: [
       'project-articles-reviews-filters',
@@ -21,8 +23,8 @@ export const createArticlesReviewsQueryOptions = (
       promptFilters(),
       currentPage(),
       pageLimit(),
-      fromStr(),
-      toStr(),
+      fromKey(),
+      toKey(),
     ],
     queryFn: async () => {
       const body: Record<string, unknown> = {

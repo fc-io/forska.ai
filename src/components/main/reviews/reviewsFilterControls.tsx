@@ -4,6 +4,8 @@ import {createEffect, For, Show} from 'solid-js'
 
 import {apiClient} from '../../../services/apiClient.ts'
 
+const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/
+
 interface ReviewsFilterControlsProps {
   projectId: string
   promptFilters: () => Record<string, string | null>
@@ -25,17 +27,19 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
   }
 
   const filtersQuery = useQuery(() => {
+    const fromKey = () => (isoDatePattern.test(props.fromDate.trim()) ? props.fromDate.trim() : null)
+    const toKey = () => (isoDatePattern.test(props.toDate.trim()) ? props.toDate.trim() : null)
     return {
       queryKey: [
         'project-articles-reviews-filters',
         props.projectId,
-        props.fromDate || null,
-        props.toDate || null,
+        fromKey(),
+        toKey(),
       ],
       queryFn: async () => {
         const query: Record<string, string> = {projectId: props.projectId}
-        if (props.fromDate) query.from = props.fromDate
-        if (props.toDate) query.to = props.toDate
+        if (fromKey() !== null) query.from = fromKey() as string
+        if (toKey() !== null) query.to = toKey() as string
 
         const response = await apiClient.api.articlesreviewsfilters.get({query})
 
@@ -96,8 +100,11 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
             type="text"
             value={props.fromDate}
             onInput={(e) => {
-              props.setFromDate(e.currentTarget.value)
-              props.setCurrentPage(1)
+              const next = e.currentTarget.value.trim()
+              props.setFromDate(next)
+              if (next === '' || isoDatePattern.test(next)) {
+                props.setCurrentPage(1)
+              }
             }}
             placeholder="YYYY-MM-DD"
             class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
@@ -109,8 +116,11 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
             type="text"
             value={props.toDate}
             onInput={(e) => {
-              props.setToDate(e.currentTarget.value)
-              props.setCurrentPage(1)
+              const next = e.currentTarget.value.trim()
+              props.setToDate(next)
+              if (next === '' || isoDatePattern.test(next)) {
+                props.setCurrentPage(1)
+              }
             }}
             placeholder="YYYY-MM-DD"
             class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
