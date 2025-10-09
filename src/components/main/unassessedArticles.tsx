@@ -71,6 +71,9 @@ export const UnassessedArticles = (): JSX.Element => {
             <p class="text-muted-foreground">
               {`Total articles: ${formatNumber(articlesStatsQuery.data?.total || 0)}`}
             </p>
+            <p class="text-muted-foreground">
+              {`Without import_route link: ${formatNumber(articlesStatsQuery.data?.withoutImportRoute || 0)}`}
+            </p>
             <div class="mt-1">
               <p class="text-muted-foreground">By import route:</p>
               <ul class="list-disc list-inside text-muted-foreground">
