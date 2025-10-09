@@ -1,7 +1,14 @@
 import {desc, eq, inArray} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {judgments, models, projects, prompts} from '../../db/schema.ts'
+import {
+  importRoute as importRouteTable,
+  judgments,
+  models,
+  projectRouteLink,
+  projects,
+  prompts,
+} from '../../db/schema.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {projectsRoutesGetArticlesReviews} from './projectsRoutes/projectsRoutesGetArticlesReviews.ts'
@@ -83,14 +90,7 @@ export const projectsRoutes = new Elysia()
       .where(eq(models.id, project.modelId))
       .limit(1)
 
-    return {
-      data: {
-        project,
-        prompts: projectPrompts,
-        hasJudgedArticles,
-        model: projectModel ?? null,
-      },
-    }
+    return {data: {project, prompts: projectPrompts, hasJudgedArticles, model: projectModel ?? null}}
   })
   .post(
     '/api/projects',
@@ -103,11 +103,7 @@ export const projectsRoutes = new Elysia()
         throw new Error('date_from must be on or before date_to')
       }
 
-      const [validModel] = await db
-        .select({id: models.id})
-        .from(models)
-        .where(eq(models.id, body.modelId))
-        .limit(1)
+      const [validModel] = await db.select({id: models.id}).from(models).where(eq(models.id, body.modelId)).limit(1)
 
       if (!validModel) {
         throw new Error('Selected model does not exist')
@@ -146,6 +142,34 @@ export const projectsRoutes = new Elysia()
         )
       }
 
+      // Link selected import routes to the project
+      if (newProject && body.importRoutes && body.importRoutes.length > 0) {
+        const selectedRoutes = Array.from(
+          new Set(
+            body.importRoutes.filter((r) => {
+              return typeof r === 'string' && r.trim() !== ''
+            }),
+          ),
+        )
+
+        if (selectedRoutes.length > 0) {
+          const routeRows = await db
+            .select({id: importRouteTable.id, route: importRouteTable.route})
+            .from(importRouteTable)
+            .where(inArray(importRouteTable.route, selectedRoutes))
+
+          if (routeRows.length !== selectedRoutes.length) {
+            throw new Error('One or more selected import routes are invalid')
+          }
+
+          await db.insert(projectRouteLink).values(
+            routeRows.map((r) => {
+              return {projectId: newProject.id, importRouteId: r.id}
+            }),
+          )
+        }
+      }
+
       // Linking datasources to projects removed
 
       return {data: newProject}
@@ -158,6 +182,7 @@ export const projectsRoutes = new Elysia()
         modelId: t.String(),
         dateFrom: t.Optional(t.String()),
         dateTo: t.Optional(t.String()),
+        importRoutes: t.Optional(t.Array(t.String())),
         prompts: t.Optional(
           t.Union([
             t.Array(t.String()),

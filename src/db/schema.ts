@@ -135,6 +135,54 @@ export const dataSource = pgTable(
   },
 )
 
+export const importRoute = pgTable(
+  'import_route',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
+    route: text('route').notNull(),
+    name: text('name'),
+    description: text('description'),
+    active: boolean('active').default(true).notNull(),
+  },
+  (table) => {
+    return [uniqueIndex('import_route_route_unique').on(table.route), index('import_route_active_idx').on(table.active)]
+  },
+)
+
+export const projectRouteLink = pgTable(
+  'project_route_link',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
+    projectId: uuid('project_id')
+      .notNull()
+      .references(
+        () => {
+          return projects.id
+        },
+        {onDelete: 'cascade'},
+      ),
+    importRouteId: uuid('import_route_id')
+      .notNull()
+      .references(
+        () => {
+          return importRoute.id
+        },
+        {onDelete: 'cascade'},
+      ),
+  },
+  (table) => {
+    return [
+      uniqueIndex('project_route_link_unique').on(table.projectId, table.importRouteId),
+      index('project_route_link_project_idx').on(table.projectId),
+      index('project_route_link_route_idx').on(table.importRouteId),
+    ]
+  },
+)
+
 export const dataSourceAccess = pgTable(
   'datasource_access',
   {
@@ -272,30 +320,30 @@ export const judgmentsJobsArticles = pgTable('judgments_jobs_articles', {
   status: judgmentsJobsArticlesStatusEnum('status').default('ready').notNull(),
 })
 
-export const prompts = pgTable('prompts', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
-  updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
-  projectId: uuid('project_id')
-    .notNull()
-    .references(
-      () => {
-        return projects.id
-      },
-      {onDelete: 'cascade'},
-    ),
-  originalText: text('original_text').notNull(),
-  transformedText: text('transformed_text'),
-  promptHeading: text('prompt_heading'),
-  order: integer('order'),
-  archived: boolean('archived').default(false).notNull(),
-  type: text('type'),
-},
-(
-  table,
-) => {
-  return [index('prompts_project_idx').on(table.projectId)]
-},
+export const prompts = pgTable(
+  'prompts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
+    projectId: uuid('project_id')
+      .notNull()
+      .references(
+        () => {
+          return projects.id
+        },
+        {onDelete: 'cascade'},
+      ),
+    originalText: text('original_text').notNull(),
+    transformedText: text('transformed_text'),
+    promptHeading: text('prompt_heading'),
+    order: integer('order'),
+    archived: boolean('archived').default(false).notNull(),
+    type: text('type'),
+  },
+  (table) => {
+    return [index('prompts_project_idx').on(table.projectId)]
+  },
 )
 
 // export const projectMembers = pgTable(
