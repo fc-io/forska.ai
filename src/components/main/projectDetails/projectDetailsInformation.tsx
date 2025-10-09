@@ -10,15 +10,9 @@ interface ProjectDetailsInformationProject {
   dateTo: Date | string | null
 }
 
-interface ProjectDetailsInformationDataSource {
-  id: string
-  title: string
-  description: string | null
-}
-
 type ProjectDetailsInformationProps = {
   project: ProjectDetailsInformationProject
-  dataSources: ProjectDetailsInformationDataSource[]
+  importRoutes: string[]
   model?: {id: string; name: string; provider?: string | null; modelName?: string | null} | null
 }
 
@@ -54,8 +48,8 @@ export const ProjectDetailsInformation = (props: ProjectDetailsInformationProps)
   const description = createMemo(() => {
     return props.project.description || 'No description provided'
   })
-  const hasDataSources = createMemo(() => {
-    return props.dataSources.length > 0
+  const hasImportRoutes = createMemo(() => {
+    return props.importRoutes.length > 0
   })
   const modelName = createMemo(() => {
     return props.model?.name ?? 'Unknown'
@@ -100,21 +94,12 @@ export const ProjectDetailsInformation = (props: ProjectDetailsInformationProps)
         <p class="text-sm max-w-[580px]">{description()}</p>
       </div>
       <div class="flex gap-2 items-start">
-        <label class="text-sm font-medium text-muted-foreground">Data Sources:</label>
-        <Show when={hasDataSources()} fallback={<p class="text-sm">No data sources assigned</p>}>
-          <ul class="space-y-2 text-sm">
-            <For each={props.dataSources}>
-              {(source) => {
-                return (
-                  <li class="flex flex-col" data-id={source.id}>
-                    <span class="font-medium text-gray-900">{source.title}</span>
-                    <Show when={source.description}>
-                      {(descriptionText) => {
-                        return <span class="text-muted-foreground">{descriptionText()}</span>
-                      }}
-                    </Show>
-                  </li>
-                )
+        <label class="text-sm font-medium text-muted-foreground">Import Routes:</label>
+        <Show when={hasImportRoutes()} fallback={<p class="text-sm">No import routes assigned</p>}>
+          <ul class="space-y-1 text-sm">
+            <For each={props.importRoutes}>
+              {(route) => {
+                return <li class="font-medium text-gray-900 break-all">{route}</li>
               }}
             </For>
           </ul>

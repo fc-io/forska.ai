@@ -87,8 +87,8 @@ const ProjectDetail = () => {
           {(data) => {
             const result = data()
             const {project, prompts: rawPrompts, model} = result
-            const dataSources = Array.isArray((result as {dataSources?: unknown}).dataSources)
-              ? ((result as {dataSources: unknown[]}).dataSources)
+            const importRoutes = Array.isArray((result as {importRoutes?: unknown}).importRoutes)
+              ? ((result as {importRoutes: string[]}).importRoutes)
               : []
 
             interface RawPrompt {
@@ -118,7 +118,7 @@ const ProjectDetail = () => {
             })
             return (
               <div class="space-y-4">
-                <ProjectDetailsInformation project={project} dataSources={dataSources} model={model} />
+                <ProjectDetailsInformation project={project} importRoutes={importRoutes} model={model} />
                 <ProjectDetailsPrompts prompts={prompts} formatDate={formatDate} />
                 <ProjectDetailsArticles projectId={projectId} />
               </div>
