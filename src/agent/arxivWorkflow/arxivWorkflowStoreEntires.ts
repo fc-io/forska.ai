@@ -203,7 +203,7 @@ const arxivWorkflowStoreEntires = async (records: (typeof arxivEntry.infer)[], i
     // Batch records (max 500 at a time)
     const batches = batchEntries(transformedEntries, 500)
 
-    globalThis.console.log(`Storing ${records.length} records in ${batches.length} batches`)
+    console.log(`Storing ${records.length} records in ${batches.length} batches`)
 
     // Store each batch
     for (let i = 0; i < batches.length; i++) {
@@ -212,21 +212,21 @@ const arxivWorkflowStoreEntires = async (records: (typeof arxivEntry.infer)[], i
         continue
       }
 
-      globalThis.console.log(`Storing batch ${i + 1}/${batches.length} (${batch.length} records)`)
+      console.log(`Storing batch ${i + 1}/${batches.length} (${batch.length} records)`)
 
       await storeBatch(batch)
 
       // Add a small delay between batches to avoid overwhelming the API
       if (i < batches.length - 1) {
         await new Promise((resolve) => {
-          return globalThis.setTimeout(resolve, 100)
+          return setTimeout(resolve, 100)
         })
       }
     }
 
-    globalThis.console.log(`Successfully stored ${records.length} records to server`)
+    console.log(`Successfully stored ${records.length} records to server`)
   } catch (error) {
-    globalThis.console.error('Error storing records:', error)
+    console.error('Error storing records:', error)
     throw error
   }
 }
