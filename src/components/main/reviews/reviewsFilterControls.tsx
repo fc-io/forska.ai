@@ -201,10 +201,10 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
                           }}
                         >
                           <Select.Trigger
-                            class="group min-h-11 w-full rounded-md border border-input bg-background bg-white dark:bg-neutral-900 px-2 py-1.5 text-sm shadow-sm transition-[box-shadow,background-color] flex items-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[expanded]:ring-2 data-[expanded]:ring-ring"
+                            class="group h-11 w-full overflow-hidden rounded-md border border-input bg-background bg-white dark:bg-neutral-900 px-2 py-1.5 text-sm shadow-sm transition-[box-shadow,background-color] flex items-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[expanded]:ring-2 data-[expanded]:ring-ring"
                             aria-label={promptFilter.promptName || `Prompt ${promptFilter.promptId}`}
                           >
-                            <div class="flex flex-wrap gap-2 grow">
+                            <div class="flex flex-nowrap items-center gap-2 grow min-w-0 overflow-hidden">
                               <Show
                                 when={current().length > 0}
                                 fallback={<span class="text-muted-foreground">All</span>}
