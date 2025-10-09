@@ -19,10 +19,8 @@
     "db:triggers": "bun src/db/addUpdatedAtTriggers.ts",
     "db:clear": "bun src/db/clearDatabase.ts",
     "db:seed": "bun src/db/seed.ts",
-    "db:backfill-article-links": "bun src/db/scripts/backfillArticleRouteLink.ts",
     "db:seed-auth": "bun src/seedAuth.ts",
-    "db:studio": "bun --env-file=.env.local run drizzle-kit studio",
-    "cc": "bunx ccusage blocks -b --color "
+    "db:studio": "bun --env-file=.env.local run drizzle-kit studio"
   },
   "dependencies": {
     "@ai-sdk/openai": "^2.0.9",
