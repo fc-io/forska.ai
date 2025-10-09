@@ -326,6 +326,37 @@ export const projectsRoutes = new Elysia()
           }
         }
 
+        // Update import route links if provided
+        if (body.importRoutes !== undefined) {
+          const selectedRoutes = Array.from(
+            new Set(
+              body.importRoutes.filter((r) => {
+                return typeof r === 'string' && r.trim() !== ''
+              }),
+            ),
+          )
+
+          // Clear existing links then (re)insert selected
+          await tx.delete(projectRouteLink).where(eq(projectRouteLink.projectId, params.id))
+
+          if (selectedRoutes.length > 0) {
+            const routeRows = await tx
+              .select({id: importRouteTable.id, route: importRouteTable.route})
+              .from(importRouteTable)
+              .where(inArray(importRouteTable.route, selectedRoutes))
+
+            if (routeRows.length !== selectedRoutes.length) {
+              throw new Error('One or more selected import routes are invalid')
+            }
+
+            await tx.insert(projectRouteLink).values(
+              routeRows.map((r) => {
+                return {projectId: params.id, importRouteId: r.id}
+              }),
+            )
+          }
+        }
+
         // Fetch updated prompts
         const updatedPrompts = await tx
           .select()
@@ -345,6 +376,7 @@ export const projectsRoutes = new Elysia()
         dateFrom: t.Optional(t.Union([t.String(), t.Null()])),
         dateTo: t.Optional(t.Union([t.String(), t.Null()])),
         modelId: t.Optional(t.String()),
+        importRoutes: t.Optional(t.Array(t.String())),
         prompts: t.Optional(
           t.Array(
             t.Object({

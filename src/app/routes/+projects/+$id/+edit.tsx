@@ -36,12 +36,14 @@ type ProjectSummary = {
 
 type ModelOption = {id: string; name: string; provider: string | null; modelName: string | null}
 type ModelsResponse = {data: ModelOption[]}
+type ImportRoutesResponse = {data: string[]}
 
 type ProjectDetailsResponse = {
   project: ProjectSummary
   prompts: ProjectPromptResponse[]
   hasJudgedArticles: boolean
   model?: {id: string; name: string; provider?: string | null; modelName?: string | null} | null
+  importRoutes?: string[]
 }
 
 type ParsedDateResult = {date: Date | null; normalized: string | null; error: string | null}
@@ -216,6 +218,7 @@ const EditProject = (): JSX.Element => {
   const [isLoading, setIsLoading] = createSignal(false)
   const [errorMessage, setErrorMessage] = createSignal<string | null>(null)
   const [selectedModelId, setSelectedModelId] = createSignal('')
+  const [selectedImportRoutes, setSelectedImportRoutes] = createSignal<string[]>([])
 
   const modelsQuery = useQuery(() => {
     return {
@@ -229,6 +232,18 @@ const EditProject = (): JSX.Element => {
     }
   })
 
+  const importRoutesQuery = useQuery(() => {
+    return {
+      queryKey: ['importroutes'],
+      queryFn: async () => {
+        const response = await apiClient.api.importroutes.get()
+        const result = handleApiResponse<ImportRoutesResponse>(response, 'Failed to load import routes')
+        return result.data ?? []
+      },
+      staleTime: 1000 * 60 * 5,
+    }
+  })
+
   const createDefaultModel = async () => {
     await apiClient.api.judgments.model.get()
     await modelsQuery.refetch()
@@ -236,6 +251,10 @@ const EditProject = (): JSX.Element => {
 
   const availableModels = () => {
     return modelsQuery.data ?? []
+  }
+
+  const availableImportRoutes = () => {
+    return importRoutesQuery.data ?? []
   }
 
   const projectDetails = createMemo(() => {
@@ -272,6 +291,8 @@ const EditProject = (): JSX.Element => {
       if (!selectedModelId() && details.model?.id) {
         setSelectedModelId(details.model.id)
       }
+      const routes = Array.isArray(details.importRoutes) ? details.importRoutes : []
+      setSelectedImportRoutes(routes)
     } else if (projectData.isSuccess) {
       setPrompts([buildEmptyPrompt(1)])
       setDateFrom('')
@@ -301,6 +322,17 @@ const EditProject = (): JSX.Element => {
     }
   }
 
+  const toggleImportRouteSelection = (route: string) => {
+    setSelectedImportRoutes((current) => {
+      const has = current.includes(route)
+      return has
+        ? current.filter((v) => {
+            return v !== route
+          })
+        : [...current, route]
+    })
+  }
+
   const updatePromptInput = (promptId: string, field: 'originalText' | 'promptHeading' | 'type', value: string) => {
     setPrompts(
       (prompt) => {
@@ -322,6 +354,7 @@ const EditProject = (): JSX.Element => {
         dateFrom: startDate,
         dateTo: endDate,
         modelId: selectedModelId() || undefined,
+        importRoutes: selectedImportRoutes(),
       })
 
     if (response.error || !response.data?.data) {
@@ -461,6 +494,49 @@ const EditProject = (): JSX.Element => {
                   >
                     Create default model
                   </Button>
+                </div>
+              </Show>
+            </div>
+
+            <div>
+              <p class="block text-sm font-medium mb-2">Import Routes</p>
+              <Show when={importRoutesQuery.isLoading}>
+                <p class="text-sm text-muted-foreground">Loading import routes...</p>
+              </Show>
+              <Show when={importRoutesQuery.isError}>
+                <p class="text-sm text-red-600">
+                  {importRoutesQuery.error instanceof Error
+                    ? importRoutesQuery.error.message
+                    : 'Failed to load import routes'}
+                </p>
+              </Show>
+              <Show
+                when={!importRoutesQuery.isLoading && !importRoutesQuery.isError && availableImportRoutes().length === 0}
+              >
+                <p class="text-sm text-muted-foreground">No import routes available.</p>
+              </Show>
+              <Show when={!importRoutesQuery.isLoading && !importRoutesQuery.isError && availableImportRoutes().length > 0}>
+                <div class="space-y-2">
+                  <For each={availableImportRoutes()}>
+                    {(route) => {
+                      return (
+                        <label class={`flex items-start gap-3 border rounded-md p-3 cursor-pointer ${isLocked() ? 'opacity-60' : 'border-input'}`}>
+                          <input
+                            type="checkbox"
+                            class="mt-1"
+                            checked={selectedImportRoutes().includes(route)}
+                            onChange={() => toggleImportRouteSelection(route)}
+                            disabled={isLocked()}
+                          />
+                          <div class="flex-1">
+                            <p class="text-sm font-medium text-gray-900">
+                              <span class="font-mono">{route}</span>
+                            </p>
+                          </div>
+                        </label>
+                      )
+                    }}
+                  </For>
                 </div>
               </Show>
             </div>
