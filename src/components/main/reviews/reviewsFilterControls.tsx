@@ -162,13 +162,14 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
                           optionValue={(v) => v}
                           optionLabel={(v) => v}
                           optionTextValue={(v) => v}
+                          name={promptFilter.promptId}
                           itemComponent={(itemProps) => (
                             <Select.Item
                               item={itemProps.item}
-                              class="flex cursor-pointer items-center justify-between gap-2 rounded px-2 py-1 hover:bg-accent/60"
+                              class="relative flex select-none items-center justify-between gap-2 rounded-md px-2 py-1.5 text-sm outline-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[highlighted]:bg-blue-600 data-[highlighted]:text-white"
                             >
-                              <Select.ItemLabel class="text-sm">{itemProps.item.rawValue}</Select.ItemLabel>
-                              <Select.ItemIndicator>
+                              <Select.ItemLabel class="truncate">{itemProps.item.rawValue}</Select.ItemLabel>
+                              <Select.ItemIndicator class="ml-2 text-current">
                                 <svg
                                   xmlns="http://www.w3.org/2000/svg"
                                   viewBox="0 0 24 24"
@@ -186,38 +187,66 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
                           )}
                         >
                           <Select.Trigger
-                            class="min-h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm transition-[box-shadow,background-color] flex items-center gap-2 focus-visible:outline-none focus-visible:ring-[1.5px] focus-visible:ring-ring"
+                            class="group min-h-11 w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm shadow-sm transition-[box-shadow,background-color] flex items-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[expanded]:ring-2 data-[expanded]:ring-ring"
                             aria-label={promptFilter.promptName || `Prompt ${promptFilter.promptId}`}
                           >
                             <div class="flex flex-wrap gap-2 grow">
-                              <Select.Value<string[]>>
-                                {(state) => (
-                                  <Show
-                                    when={state.selectedOptions().length > 0}
-                                    fallback={<span class="text-muted-foreground">All</span>}
-                                  >
-                                    <For each={state.selectedOptions()}>
-                                      {(opt) => (
-                                        <Select.Tag
-                                          option={opt}
-                                          class="inline-flex items-center gap-1 rounded bg-accent/60 px-2 py-1 text-sm"
+                              <Show when={current().length > 0} fallback={<span class="text-muted-foreground">All</span>}>
+                                <For each={current()}>
+                                  {(val) => {
+                                    return (
+                                      <span class="inline-flex items-center gap-1 rounded-md border border-input bg-muted/70 px-2 py-1 text-sm text-foreground">
+                                        <span class="truncate max-w-[10rem]" title={val}>{val}</span>
+                                        <button
+                                          type="button"
+                                          class="inline-flex size-4 items-center justify-center rounded hover:bg-muted-foreground/10"
+                                          aria-label={`Remove ${val}`}
+                                          onClick={() => {
+                                            const next = current().filter((v) => v !== val)
+                                            setPromptMulti(promptFilter.promptId, next.length ? next : null)
+                                          }}
                                         >
-                                          <Select.TagLabel>{opt.label}</Select.TagLabel>
-                                          <Select.TagCloseButton class="opacity-70 hover:opacity-100" />
-                                        </Select.Tag>
-                                      )}
-                                    </For>
-                                  </Show>
-                                )}
-                              </Select.Value>
+                                          <svg
+                                            xmlns="http://www.w3.org/2000/svg"
+                                            viewBox="0 0 24 24"
+                                            fill="none"
+                                            stroke="currentColor"
+                                            stroke-width="2"
+                                            stroke-linecap="round"
+                                            stroke-linejoin="round"
+                                            class="size-3"
+                                          >
+                                            <path d="M18 6L6 18" />
+                                            <path d="M6 6l12 12" />
+                                          </svg>
+                                        </button>
+                                      </span>
+                                    )
+                                  }}
+                                </For>
+                              </Show>
                             </div>
-                            <div class="ml-auto flex items-center gap-2">
+                            <div class="ml-auto flex items-center gap-1">
                               <button
                                 type="button"
-                                class="text-xs text-blue-600 hover:underline"
+                                class="inline-flex size-6 items-center justify-center rounded hover:bg-muted-foreground/10"
+                                title="Clear selection"
+                                aria-label="Clear selection"
                                 onClick={() => setPromptMulti(promptFilter.promptId, null)}
                               >
-                                Clear
+                                <svg
+                                  xmlns="http://www.w3.org/2000/svg"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  stroke-width="2"
+                                  stroke-linecap="round"
+                                  stroke-linejoin="round"
+                                  class="size-4 opacity-70"
+                                >
+                                  <path d="M18 6L6 18" />
+                                  <path d="M6 6l12 12" />
+                                </svg>
                               </button>
                               <Select.Icon>
                                 <svg
@@ -236,8 +265,8 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
                             </div>
                           </Select.Trigger>
                           <Select.Portal>
-                            <Select.Content class="z-50 min-w-56 rounded-md border bg-popover p-2 text-popover-foreground shadow-md outline-none">
-                              <Select.Listbox class="max-h-60 overflow-auto" />
+                            <Select.Content class="z-50 min-w-56 rounded-md border bg-popover p-1 text-popover-foreground shadow-xl outline-none">
+                              <Select.Listbox class="max-h-60 overflow-auto outline-none" />
                             </Select.Content>
                           </Select.Portal>
                         </Select.Root>
