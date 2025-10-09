@@ -6,7 +6,7 @@ const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/
 
 export const createArticlesReviewsQueryOptions = (
   projectId: string,
-  promptFilters: Accessor<Record<string, string | null>>,
+  promptFilters: Accessor<Record<string, string[] | null>>,
   currentPage: Accessor<number>,
   pageLimit: Accessor<number>,
   fromDateStr: Accessor<string>,
@@ -29,15 +29,12 @@ export const createArticlesReviewsQueryOptions = (
         page: String(currentPage()),
         limit: String(pageLimit()),
         projectId,
-        prompts: Object.entries(promptFilters()).reduce(
-          (acc, [promptId, value]) => {
-            if (value !== null) {
-              acc[promptId] = value
-            }
-            return acc
-          },
-          {} as Record<string, string>,
-        ),
+        prompts: Object.entries(promptFilters()).reduce((acc, [promptId, value]) => {
+          if (Array.isArray(value) && value.length > 0) {
+            acc[promptId] = value
+          }
+          return acc
+        }, {} as Record<string, string[]>),
       }
       if (isoDatePattern.test(fromStr())) {
         body.from = fromStr()

@@ -32,7 +32,7 @@ const Reviews = () => {
   const [toDate, setToDate] = createSignal('')
   const params = Route.useParams()
   const projectId = (params() as {id: string}).id
-  const [promptFilters, setPromptFilters] = createSignal<Record<string, string | null>>({})
+  const [promptFilters, setPromptFilters] = createSignal<Record<string, string[] | null>>({})
   const [currentPage, setCurrentPage] = createSignal(1)
   const [pageLimit, setPageLimit] = createSignal(100)
 
@@ -88,7 +88,10 @@ const Reviews = () => {
                   </h3>
                   <p class="text-sm text-gray-600">
                     Showing articles that have judgments for all prompts in this project
-                    {Object.keys(promptFilters()).length > 0 && <span> (with filters applied)</span>}
+                    {Object.keys(promptFilters()).some((k) => {
+                      const v = promptFilters()[k]
+                      return Array.isArray(v) && v.length > 0
+                    }) && <span> (with filters applied)</span>}
                   </p>
                 </div>
 
@@ -106,7 +109,8 @@ const Reviews = () => {
                     <div class="p-8 text-center text-gray-500">
                       No articles found with complete judgments
                       {Object.keys(promptFilters()).some((k) => {
-                        return promptFilters()[k] !== null
+                        const v = promptFilters()[k]
+                        return Array.isArray(v) && v.length > 0
                       }) && ' for the selected filters'}
                     </div>
                   }

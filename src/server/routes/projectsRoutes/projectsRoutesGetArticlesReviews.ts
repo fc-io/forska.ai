@@ -34,15 +34,15 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
       // Build the base query conditions
       const conditions: Array<ReturnType<typeof sql>> = []
 
-      // Add filters for each prompt's answered_original if provided
-      const promptFilters = Object.entries(body.prompts || {}).map(([key, value]) => {
-        return [key, value] as const
+      // Add filters for each prompt's answered_original if provided (multiple values allowed)
+      const promptFilters = Object.entries(body.prompts || {}).map(([key, values]) => {
+        return [key, Array.isArray(values) ? values : [String(values)]] as const
       })
 
       console.log('promptFilters', promptFilters)
 
       // Apply prompt-specific filters using Drizzle subqueries
-      for (const [promptId, answeredValue] of promptFilters) {
+      for (const [promptId, answeredValues] of promptFilters) {
         const subquery = db
           .select({exists: sql`1`})
           .from(judgments)
@@ -50,7 +50,7 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
             and(
               eq(judgments.articleId, articles.id),
               eq(judgments.promptId, promptId),
-              eq(judgments.answeredOriginal, answeredValue),
+              inArray(judgments.answeredOriginal, answeredValues),
             ),
           )
           .limit(1)
@@ -149,7 +149,7 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
       limit: t.String(),
       page: t.String(),
       projectId: t.String(),
-      prompts: t.Record(t.String(), t.String()),
+      prompts: t.Record(t.String(), t.Array(t.String())),
       to: t.Optional(t.String()),
     }),
   },
