@@ -12,7 +12,7 @@ import {
 } from 'chart.js'
 import {format} from 'date-fns'
 import {Bar} from 'solid-chartjs'
-import {createEffect, createMemo, createSignal, onCleanup, onMount, Show} from 'solid-js'
+import {createEffect, createMemo, createSignal, onCleanup, onMount, Show, Suspense} from 'solid-js'
 
 import {apiClient} from '../services/apiClient.ts'
 import {TokenUsageTimelineDatePicker} from './TokenUsageTimeline/TokenUsageTimelineDatePicker.tsx'
@@ -494,10 +494,11 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
   })
 
   return (
-    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-      <div class="mb-6">
-        <div class="flex justify-between items-center mb-4">
-          <div>
+    <Suspense>
+      <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+        <div class="mb-6">
+          <div class="flex justify-between items-center mb-4">
+            <div>
             <div class="flex items-center gap-2">
               <h2 class="text-lg font-semibold text-gray-900">Token Usage Timeline</h2>
             </div>
@@ -591,6 +592,6 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
           </div>
         </Show>
       </div>
-    </div>
+    </Suspense>
   )
 }

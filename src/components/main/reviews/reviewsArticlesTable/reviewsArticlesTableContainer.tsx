@@ -1,6 +1,6 @@
 import {useQuery} from '@tanstack/solid-query'
 import type {Accessor, Setter} from 'solid-js'
-import {Show} from 'solid-js'
+import {Show, Suspense} from 'solid-js'
 
 import {createArticlesReviewsQueryOptions} from '../../projects/projectsArticlesReviewsQuery.ts'
 import {ReviewsPaginationControls} from '../reviewsPaginationControls.tsx'
@@ -29,7 +29,8 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
   })
 
   return (
-    <div class="space-y-4">
+    <Suspense>
+      <div class="space-y-4">
       <Show when={articlesQuery.isPending}>
         <div class="flex justify-center p-8">
           <div class="text-gray-500">Loading articles...</div>
@@ -97,6 +98,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
           )
         }}
       </Show>
-    </div>
+      </div>
+    </Suspense>
   )
 }

@@ -1,6 +1,6 @@
 import {useQuery} from '@tanstack/solid-query'
 import {format} from 'date-fns'
-import {createSignal, For, Show} from 'solid-js'
+import {createSignal, For, Show, Suspense} from 'solid-js'
 
 import {getArticleUrl} from '../../../app/utils/getArticleUrl.ts'
 import type {articles, judgments} from '../../../db/schema.ts'
@@ -65,7 +65,7 @@ export const ProjectDetailsArticles = (props: {projectId: string}) => {
   }
 
   return (
-    <>
+    <Suspense>
       <div class="flex items-center gap-4 p-4 bg-white rounded-lg shadow">
         <DateRangePicker
           defaultStart={fromDate()}
@@ -312,6 +312,6 @@ export const ProjectDetailsArticles = (props: {projectId: string}) => {
           }}
         </Show>
       </div>
-    </>
+    </Suspense>
   )
 }

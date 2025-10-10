@@ -1,7 +1,7 @@
 import * as Select from '@kobalte/core/select'
 import {useQuery} from '@tanstack/solid-query'
 import type {Setter} from 'solid-js'
-import {createEffect, createMemo, For, Show} from 'solid-js'
+import {createEffect, createMemo, For, Show, Suspense} from 'solid-js'
 
 import {apiClient} from '../../../services/apiClient.ts'
 
@@ -104,10 +104,11 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
   })
 
   return (
-    <div class="p-4 bg-white rounded-lg shadow mb-6">
-      <div class="flex items-center gap-4 pb-4 border-b w-full">
-        <label class="flex flex-col text-sm font-medium gap-1 w-44">
-          <span>Start Date</span>
+    <Suspense>
+      <div class="p-4 bg-white rounded-lg shadow mb-6">
+        <div class="flex items-center gap-4 pb-4 border-b w-full">
+          <label class="flex flex-col text-sm font-medium gap-1 w-44">
+            <span>Start Date</span>
           <input
             type="text"
             value={props.fromDate}
@@ -320,6 +321,7 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
       <Show when={!props.hidePromptSelectors && filtersQuery.error}>
         <div class="text-red-600">Error loading filters</div>
       </Show>
-    </div>
+      </div>
+    </Suspense>
   )
 }
