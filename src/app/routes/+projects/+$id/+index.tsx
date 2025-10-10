@@ -1,7 +1,7 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
 import {format} from 'date-fns'
-import {createSignal, Match, Show, Switch} from 'solid-js'
+import {createSignal, Match, Show, Switch, Suspense} from 'solid-js'
 
 import {ProjectDetailsArticles} from '../../../../components/main/projectDetails/projectDetailsArticles'
 import {ProjectDetailsInformation} from '../../../../components/main/projectDetails/projectDetailsInformation'
@@ -73,59 +73,61 @@ const ProjectDetail = () => {
         </Show>
       </div>
 
-      <Switch>
-        <Match when={projectData.isLoading}>
-          <div class="text-center py-8">Loading project details...</div>
-        </Match>
-        <Match when={projectData.isError}>
-          <div class="text-center py-8 text-red-600">
-            Error loading project:{' '}
-            {projectData.error instanceof Error ? projectData.error.message : String(projectData.error)}
-          </div>
-        </Match>
-        <Match when={projectData.data}>
-          {(data) => {
-            const result = data()
-            const {project, prompts: rawPrompts, model} = result
-            const importRoutes = Array.isArray((result as {importRoutes?: unknown}).importRoutes)
-              ? (result as {importRoutes: string[]}).importRoutes
-              : []
+      <Suspense>
+        <Switch>
+          <Match when={projectData.isLoading}>
+            <div class="text-center py-8">Loading project details...</div>
+          </Match>
+          <Match when={projectData.isError}>
+            <div class="text-center py-8 text-red-600">
+              Error loading project:{' '}
+              {projectData.error instanceof Error ? projectData.error.message : String(projectData.error)}
+            </div>
+          </Match>
+          <Match when={projectData.data}>
+            {(data) => {
+              const result = data()
+              const {project, prompts: rawPrompts, model} = result
+              const importRoutes = Array.isArray((result as {importRoutes?: unknown}).importRoutes)
+                ? (result as {importRoutes: string[]}).importRoutes
+                : []
 
-            interface RawPrompt {
-              id: string
-              createdAt: Date
-              updatedAt: Date
-              projectId: string
-              originalText: string
-              transformedText: string | null
-              promptHeading: string | null
-              order: number | null
-              archived: boolean
-              type: string | null
-            }
-
-            const prompts = rawPrompts.map((p: RawPrompt) => {
-              return {
-                ...p,
-                order: p.order ?? 0,
-                promptHeading: p.promptHeading ?? undefined,
-                type: p.type ?? undefined,
-                created_at: p.createdAt.toString(),
-                original_text: p.originalText,
-                transformed_text: p.transformedText ?? undefined,
-                archived: p.archived ?? undefined,
+              interface RawPrompt {
+                id: string
+                createdAt: Date
+                updatedAt: Date
+                projectId: string
+                originalText: string
+                transformedText: string | null
+                promptHeading: string | null
+                order: number | null
+                archived: boolean
+                type: string | null
               }
-            })
-            return (
-              <div class="space-y-4">
-                <ProjectDetailsInformation project={project} importRoutes={importRoutes} model={model} />
-                <ProjectDetailsPrompts prompts={prompts} formatDate={formatDate} />
-                <ProjectDetailsArticles projectId={projectId} />
-              </div>
-            )
-          }}
-        </Match>
-      </Switch>
+
+              const prompts = rawPrompts.map((p: RawPrompt) => {
+                return {
+                  ...p,
+                  order: p.order ?? 0,
+                  promptHeading: p.promptHeading ?? undefined,
+                  type: p.type ?? undefined,
+                  created_at: p.createdAt.toString(),
+                  original_text: p.originalText,
+                  transformed_text: p.transformedText ?? undefined,
+                  archived: p.archived ?? undefined,
+                }
+              })
+              return (
+                <div class="space-y-4">
+                  <ProjectDetailsInformation project={project} importRoutes={importRoutes} model={model} />
+                  <ProjectDetailsPrompts prompts={prompts} formatDate={formatDate} />
+                  <ProjectDetailsArticles projectId={projectId} />
+                </div>
+              )
+            }}
+          </Match>
+        </Switch>
+      </Suspense>
     </div>
   )
 }

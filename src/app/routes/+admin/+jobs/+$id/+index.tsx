@@ -1,7 +1,7 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
 import {formatDate} from 'date-fns'
-import {For, Show} from 'solid-js'
+import {For, Show, Suspense} from 'solid-js'
 
 import {TokenUsageTimeline} from '../../../../../components/TokenUsageTimeline'
 import {getJudgmentsJobById, pauseJudgmentsJob, startJudgmentsJob} from '../../../../../services/judgmentsJobsService'
@@ -72,27 +72,28 @@ const AdminJudgmentJobDetail = () => {
           </Link>
         </div>
 
-        <Show when={job.isLoading}>
-          <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
-            <p class="text-gray-500 text-center">Loading job details...</p>
-          </div>
-        </Show>
+        <Suspense>
+          <Show when={job.isLoading}>
+            <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
+              <p class="text-gray-500 text-center">Loading job details...</p>
+            </div>
+          </Show>
 
-        <Show when={job.isError}>
-          <div class="p-4 rounded-md bg-red-50 border border-red-200">
-            <p class="text-red-600">Failed to load job details</p>
-            <button
-              onClick={() => {
-                return void job.refetch()
-              }}
-              class="mt-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
-            >
-              Retry
-            </button>
-          </div>
-        </Show>
+          <Show when={job.isError}>
+            <div class="p-4 rounded-md bg-red-50 border border-red-200">
+              <p class="text-red-600">Failed to load job details</p>
+              <button
+                onClick={() => {
+                  return void job.refetch()
+                }}
+                class="mt-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+              >
+                Retry
+              </button>
+            </div>
+          </Show>
 
-        <Show when={job.data}>
+          <Show when={job.data}>
           {(jobData) => {
             const data = jobData
             const jobDetails = () => {
@@ -298,7 +299,8 @@ const AdminJudgmentJobDetail = () => {
               </>
             )
           }}
-        </Show>
+          </Show>
+        </Suspense>
       </div>
     </div>
   )

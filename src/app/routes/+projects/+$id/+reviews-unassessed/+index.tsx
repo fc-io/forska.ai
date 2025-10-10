@@ -1,5 +1,5 @@
 import {createFileRoute} from '@tanstack/solid-router'
-import {createSignal} from 'solid-js'
+import {createSignal, Suspense} from 'solid-js'
 
 import {ReviewsArticlesUnassessedTableContainer} from '../../../../../components/main/reviews/reviewsArticlesTable/reviewsArticlesUnassessedTableContainer.tsx'
 import {ReviewsFilterControls} from '../../../../../components/main/reviews/reviewsFilterControls.tsx'
@@ -17,35 +17,37 @@ const ReviewsUnassessed = () => {
 
   return (
     <div class="min-h-screen bg-gray-50 p-6 mx-auto">
-      <h1 class="text-1xl font-bold mb-2">Project Reviews</h1>
-      <ReviewsTabs projectId={projectId} active="unassessed" />
+      <Suspense>
+        <h1 class="text-1xl font-bold mb-2">Project Reviews</h1>
+        <ReviewsTabs projectId={projectId} active="unassessed" />
 
-      <ReviewsFilterControls
-        projectId={projectId}
-        promptFilters={() => {
-          return {}
-        }}
-        setPromptFilters={() => {
-          return
-        }}
-        pageLimit={pageLimit}
-        setPageLimit={setPageLimit}
-        setCurrentPage={setCurrentPage}
-        fromDate={fromDate()}
-        toDate={toDate()}
-        setFromDate={setFromDate}
-        setToDate={setToDate}
-        hidePromptSelectors={true}
-      />
+        <ReviewsFilterControls
+          projectId={projectId}
+          promptFilters={() => {
+            return {}
+          }}
+          setPromptFilters={() => {
+            return
+          }}
+          pageLimit={pageLimit}
+          setPageLimit={setPageLimit}
+          setCurrentPage={setCurrentPage}
+          fromDate={fromDate()}
+          toDate={toDate()}
+          setFromDate={setFromDate}
+          setToDate={setToDate}
+          hidePromptSelectors={true}
+        />
 
-      <ReviewsArticlesUnassessedTableContainer
-        projectId={projectId}
-        currentPage={currentPage}
-        setCurrentPage={setCurrentPage}
-        pageLimit={pageLimit}
-        fromDate={fromDate}
-        toDate={toDate}
-      />
+        <ReviewsArticlesUnassessedTableContainer
+          projectId={projectId}
+          currentPage={currentPage}
+          setCurrentPage={setCurrentPage}
+          pageLimit={pageLimit}
+          fromDate={fromDate}
+          toDate={toDate}
+        />
+      </Suspense>
     </div>
   )
 }

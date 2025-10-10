@@ -1,7 +1,7 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
 import {formatDate, formatDistanceToNow} from 'date-fns'
-import {For, Show} from 'solid-js'
+import {For, Show, Suspense} from 'solid-js'
 
 import {TokenUsageTimeline} from '../../../../components/TokenUsageTimeline'
 import {fetchJudgmentsJobs, pauseJudgmentsJob, startJudgmentsJob} from '../../../../services/judgmentsJobsService'
@@ -58,7 +58,8 @@ const AdminJobs = () => {
         <TokenUsageTimeline allJobs={true} />
       </div>
 
-      <div class="space-y-4">
+      <Suspense>
+        <div class="space-y-4">
         {/* Loading State */}
         <Show when={jobs.isLoading}>
           <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
@@ -231,7 +232,8 @@ const AdminJobs = () => {
             </table>
           </div>
         </Show>
-      </div>
+        </div>
+      </Suspense>
     </div>
   )
 }

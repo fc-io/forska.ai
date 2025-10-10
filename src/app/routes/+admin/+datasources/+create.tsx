@@ -1,6 +1,6 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
-import {createSignal, Show} from 'solid-js'
+import {createSignal, Show, Suspense} from 'solid-js'
 
 import {apiClient} from '../../../../services/apiClient.ts'
 import {fetchSession} from '../../../../services/fetchSession.ts'
@@ -112,13 +112,11 @@ const AdminCreateDataSource = () => {
           </Link>
         </div>
 
-        <Show
-          when={!sessionQuery.isLoading && isAdmin()}
-          fallback={<p class="text-sm text-gray-500">Checking permissions...</p>}
-        >
-          <form class="space-y-6" onSubmit={(e) => {
-            return void handleSubmit(e)
-          }}>
+        <Suspense fallback={<p class="text-sm text-gray-500">Checking permissions...</p>}>
+          <Show when={isAdmin()}>
+            <form class="space-y-6" onSubmit={(e) => {
+              return void handleSubmit(e)
+            }}>
             <div>
               <label class="block text-sm font-medium text-gray-700 mb-2">Title</label>
               <input
@@ -210,12 +208,12 @@ const AdminCreateDataSource = () => {
                 Cancel
               </Link>
             </div>
-          </form>
-        </Show>
+            </form>
+          </Show>
+        </Suspense>
       </div>
     </div>
   )
 }
 
 export const Route = createFileRoute('/admin/datasources/create')({component: AdminCreateDataSource})
-

@@ -1,6 +1,6 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
-import {createEffect, createSignal, Show} from 'solid-js'
+import {createEffect, createSignal, Show, Suspense} from 'solid-js'
 
 import {apiClient} from '../../../../../services/apiClient.ts'
 
@@ -199,15 +199,16 @@ const AdminEditDataSource = () => {
           </Link>
         </div>
 
-        <Show when={dataSourceQuery.isLoading}>
-          <p class="text-sm text-gray-500">Loading data source details...</p>
-        </Show>
+        <Suspense>
+          <Show when={dataSourceQuery.isLoading}>
+            <p class="text-sm text-gray-500">Loading data source details...</p>
+          </Show>
 
-        <Show when={dataSourceQuery.isError}>
-          <p class="text-sm text-red-600">Failed to load data source.</p>
-        </Show>
+          <Show when={dataSourceQuery.isError}>
+            <p class="text-sm text-red-600">Failed to load data source.</p>
+          </Show>
 
-        <Show when={dataSourceQuery.data}>
+          <Show when={dataSourceQuery.data}>
           <form class="space-y-6" onSubmit={handleSubmit}>
             <div>
               <label class="block text-sm font-medium text-gray-700 mb-2">Title</label>
@@ -301,7 +302,8 @@ const AdminEditDataSource = () => {
               </Link>
             </div>
           </form>
-        </Show>
+          </Show>
+        </Suspense>
       </div>
     </div>
   )

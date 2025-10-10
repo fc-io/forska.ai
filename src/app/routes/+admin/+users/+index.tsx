@@ -1,7 +1,7 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute} from '@tanstack/solid-router'
 import {formatDate} from 'date-fns'
-import {createSignal, For, Show} from 'solid-js'
+import {createSignal, For, Show, Suspense} from 'solid-js'
 
 import {fetchUsers} from '../../../../services/usersService.ts'
 
@@ -40,7 +40,8 @@ const AdminUsers = () => {
         </button>
       </div>
 
-      <div class="space-y-4">
+      <Suspense>
+        <div class="space-y-4">
         {/* Filters */}
         <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
           <div class="flex gap-4 items-center">
@@ -167,7 +168,8 @@ const AdminUsers = () => {
             </tbody>
           </table>
         </div>
-      </div>
+        </div>
+      </Suspense>
     </div>
   )
 }

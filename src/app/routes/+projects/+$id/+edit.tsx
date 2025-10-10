@@ -1,7 +1,7 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
 import type {JSX} from 'solid-js'
-import {createEffect, createMemo, createSignal, For, Show} from 'solid-js'
+import {createEffect, createMemo, createSignal, For, Show, Suspense} from 'solid-js'
 import {createStore} from 'solid-js/store'
 
 import {Button} from '../../../../components/ui/button'
@@ -419,17 +419,18 @@ const EditProject = (): JSX.Element => {
         <h1 class="text-3xl font-bold">Edit Project</h1>
       </div>
 
-      <Show when={projectData.isLoading}>
-        <div class="text-center py-8">Loading project data...</div>
-      </Show>
+      <Suspense>
+        <Show when={projectData.isLoading}>
+          <div class="text-center py-8">Loading project data...</div>
+        </Show>
 
-      <Show when={Boolean(projectData.error)}>
-        <div class="text-center py-8 text-red-600">
-          Error loading project: {projectData.error instanceof Error ? projectData.error.message : 'Unknown error'}
-        </div>
-      </Show>
+        <Show when={Boolean(projectData.error)}>
+          <div class="text-center py-8 text-red-600">
+            Error loading project: {projectData.error instanceof Error ? projectData.error.message : 'Unknown error'}
+          </div>
+        </Show>
 
-      <Show when={projectDetails()}>
+        <Show when={projectDetails()}>
         <div class="bg-card border rounded-lg p-6">
           <Show when={isLocked()}>
             <div class="mb-6 p-4 bg-amber-50 border-2 border-amber-300 rounded-lg">
@@ -703,7 +704,8 @@ const EditProject = (): JSX.Element => {
             </div>
           </form>
         </div>
-      </Show>
+        </Show>
+      </Suspense>
     </div>
   )
 }

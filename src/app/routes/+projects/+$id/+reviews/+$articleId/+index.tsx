@@ -1,6 +1,6 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute} from '@tanstack/solid-router'
-import {createSignal, For, Show} from 'solid-js'
+import {createSignal, For, Show, Suspense} from 'solid-js'
 
 import {ReviewArticleDetails} from '../../../../../../components/main/projects/reviews/review/reviewArticleDetails.tsx'
 import {ReviewJudgments} from '../../../../../../components/main/projects/reviews/review/reviewJudgments.tsx'
@@ -30,19 +30,20 @@ export const ReviewDetail = () => {
   return (
     <div class="min-h-screen bg-gray-50 p-6">
       <div class="max-w-7xl mx-auto space-y-6">
-        <Show when={articleQuery.isLoading}>
-          <div class="p-4 bg-white rounded-lg shadow">
-            <p class="text-gray-500">Loading article details...</p>
-          </div>
-        </Show>
+        <Suspense>
+          <Show when={articleQuery.isLoading}>
+            <div class="p-4 bg-white rounded-lg shadow">
+              <p class="text-gray-500">Loading article details...</p>
+            </div>
+          </Show>
 
-        <Show when={articleQuery.error}>
-          <div class="p-4 bg-red-50 rounded-lg shadow">
-            <p class="text-red-600">Error loading article: {articleQuery.error?.message}</p>
-          </div>
-        </Show>
+          <Show when={articleQuery.error}>
+            <div class="p-4 bg-red-50 rounded-lg shadow">
+              <p class="text-red-600">Error loading article: {articleQuery.error?.message}</p>
+            </div>
+          </Show>
 
-        <Show when={articleQuery.data}>
+          <Show when={articleQuery.data}>
           {(data) => {
             return (
               <div class="flex gap-6">
@@ -70,7 +71,8 @@ export const ReviewDetail = () => {
               </div>
             )
           }}
-        </Show>
+          </Show>
+        </Suspense>
       </div>
     </div>
   )

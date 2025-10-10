@@ -1,5 +1,5 @@
 import {createFileRoute} from '@tanstack/solid-router'
-import {createSignal} from 'solid-js'
+import {createSignal, Suspense} from 'solid-js'
 
 import {ReviewsArticlesTableContainer} from '../../../../../components/main/reviews/reviewsArticlesTable/reviewsArticlesTableContainer.tsx'
 import {ReviewsFilterControls} from '../../../../../components/main/reviews/reviewsFilterControls.tsx'
@@ -15,31 +15,33 @@ const Reviews = () => {
 
   return (
     <div class="min-h-screen bg-gray-50 p-6 mx-auto">
-      <h1 class="text-1xl font-bold mb-2">Project Reviews</h1>
-      <ReviewsTabs projectId={params().id} active="assessed" />
+      <Suspense>
+        <h1 class="text-1xl font-bold mb-2">Project Reviews</h1>
+        <ReviewsTabs projectId={params().id} active="assessed" />
 
-      <ReviewsFilterControls
-        projectId={params().id}
-        promptFilters={promptFilters}
-        setPromptFilters={setPromptFilters}
-        pageLimit={pageLimit}
-        setPageLimit={setPageLimit}
-        setCurrentPage={setCurrentPage}
-        fromDate={fromDate()}
-        toDate={toDate()}
-        setFromDate={setFromDate}
-        setToDate={setToDate}
-      />
+        <ReviewsFilterControls
+          projectId={params().id}
+          promptFilters={promptFilters}
+          setPromptFilters={setPromptFilters}
+          pageLimit={pageLimit}
+          setPageLimit={setPageLimit}
+          setCurrentPage={setCurrentPage}
+          fromDate={fromDate()}
+          toDate={toDate()}
+          setFromDate={setFromDate}
+          setToDate={setToDate}
+        />
 
-      <ReviewsArticlesTableContainer
-        projectId={params().id}
-        promptFilters={promptFilters}
-        currentPage={currentPage}
-        setCurrentPage={setCurrentPage}
-        pageLimit={pageLimit}
-        fromDate={fromDate}
-        toDate={toDate}
-      />
+        <ReviewsArticlesTableContainer
+          projectId={params().id}
+          promptFilters={promptFilters}
+          currentPage={currentPage}
+          setCurrentPage={setCurrentPage}
+          pageLimit={pageLimit}
+          fromDate={fromDate}
+          toDate={toDate}
+        />
+      </Suspense>
     </div>
   )
 }

@@ -1,7 +1,7 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
 import {format} from 'date-fns'
-import {For, Show} from 'solid-js'
+import {For, Show, Suspense} from 'solid-js'
 
 import {apiClient} from '../../../../services/apiClient.ts'
 import {fetchSession} from '../../../../services/fetchSession.ts'
@@ -91,8 +91,7 @@ const AdminVllm = () => {
 
   return (
     <div class="min-h-screen bg-gray-50 p-6 mx-auto">
-      <Show
-        when={!sessionQuery.isLoading}
+      <Suspense
         fallback={
           <div class="flex items-center justify-center h-64">
             <div class="flex items-center space-x-2">
@@ -239,7 +238,7 @@ const AdminVllm = () => {
             </div>
           </Show>
         </Show>
-      </Show>
+      </Suspense>
     </div>
   )
 }

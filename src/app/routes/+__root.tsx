@@ -1,7 +1,7 @@
 import type {QueryClient} from '@tanstack/solid-query'
 import {useQuery, useQueryClient} from '@tanstack/solid-query'
 import {createRootRoute, Outlet, useLocation, useNavigate} from '@tanstack/solid-router'
-import {createEffect, Show} from 'solid-js'
+import {createEffect, Show, Suspense} from 'solid-js'
 
 import {Login} from '../../components/login'
 import {Navigation} from '../../components/Navigation'
@@ -48,8 +48,7 @@ const RootComponent = () => {
   })
   return (
     <>
-      <Show
-        when={!sessionQuery.isLoading}
+      <Suspense
         fallback={
           <div class="min-h-screen bg-gray-50 flex items-center justify-center">
             <div class="flex items-center space-x-2">
@@ -75,7 +74,7 @@ const RootComponent = () => {
           />
         </Show>
         <Outlet />
-      </Show>
+      </Suspense>
     </>
   )
 }

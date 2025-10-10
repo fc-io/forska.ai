@@ -1,6 +1,6 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
-import {createEffect, createSignal, For, Show} from 'solid-js'
+import {createEffect, createSignal, For, Show, Suspense} from 'solid-js'
 import {createStore} from 'solid-js/store'
 
 import {Button} from '../../../components/ui/button'
@@ -231,7 +231,8 @@ const CreateProject = () => {
         <h1 class="text-3xl font-bold">Create New Project</h1>
       </div>
 
-      <div class="bg-card border rounded-lg p-6">
+      <Suspense>
+        <div class="bg-card border rounded-lg p-6">
         <Show when={error()}>
           <div class="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm">{error()}</div>
         </Show>
@@ -460,7 +461,8 @@ const CreateProject = () => {
             </Button>
           </div>
         </form>
-      </div>
+        </div>
+      </Suspense>
     </div>
   )
 }
