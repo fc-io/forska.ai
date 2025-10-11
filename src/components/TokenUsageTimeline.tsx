@@ -499,24 +499,25 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
         <div class="mb-6">
           <div class="flex justify-between items-center mb-4">
             <div>
-            <div class="flex items-center gap-2">
-              <h2 class="text-lg font-semibold text-gray-900">Token Usage Timeline</h2>
-            </div>
-            <div>
-              <Show when={highestUsageStat()}>
-                <div class="text-sm text-gray-600 mt-1">
-                  <span class="font-medium">Highest per {intervalBucketLabel()}: </span>
-                  <span>{highestUsageStat()?.totalTokens.toLocaleString()} tokens</span>
-                  <span class="text-gray-400 ml-1">({intervalHistoryLabel()})</span>
-                </div>
-              </Show>
-              <Show when={p90UsageStat()}>
-                <div class="text-sm text-gray-600 mt-1">
-                  <span class="font-medium">90th percentile per {intervalBucketLabel()}: </span>
-                  <span>{p90UsageStat()?.totalTokens.toLocaleString()} tokens</span>
-                  <span class="text-gray-400 ml-1">({intervalHistoryLabel()})</span>
-                </div>
-              </Show>
+              <div class="flex items-center gap-2">
+                <h2 class="text-lg font-semibold text-gray-900">Token Usage Timeline</h2>
+              </div>
+              <div>
+                <Show when={highestUsageStat()}>
+                  <div class="text-sm text-gray-600 mt-1">
+                    <span class="font-medium">Highest per {intervalBucketLabel()}: </span>
+                    <span>{highestUsageStat()?.totalTokens.toLocaleString()} tokens</span>
+                    <span class="text-gray-400 ml-1">({intervalHistoryLabel()})</span>
+                  </div>
+                </Show>
+                <Show when={p90UsageStat()}>
+                  <div class="text-sm text-gray-600 mt-1">
+                    <span class="font-medium">90th percentile per {intervalBucketLabel()}: </span>
+                    <span>{p90UsageStat()?.totalTokens.toLocaleString()} tokens</span>
+                    <span class="text-gray-400 ml-1">({intervalHistoryLabel()})</span>
+                  </div>
+                </Show>
+              </div>
             </div>
           </div>
 
