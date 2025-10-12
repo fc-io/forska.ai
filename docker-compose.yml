@@ -1,23 +1,71 @@
-version: "3.9"
+# ./docker-compose.yaml
+# Compose v2+ (no version key needed)
+name: forska-stack
+
+x-caches: &caches
+  HF_HOME: /cache/hf
+  XDG_CACHE_HOME: /cache/xdg
+  VLLM_CACHE_ROOT: /cache/vllm
+  TORCHINDUCTOR_CACHE_DIR: /cache/vllm/torchinductor
+  TRITON_CACHE_DIR: /cache/vllm/triton
 
 services:
-  postgres:
-    image: postgres:16-alpine
-    container_name: app-postgres
+  db:
+    image: postgres:16
     environment:
+      POSTGRES_DB: appdb
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: app
-    ports:
-      - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - ./pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 5s
+      test: ["CMD-SHELL", "pg_isready -U postgres -d appdb -h 127.0.0.1 -p 5432"]
+      interval: 10s
       timeout: 5s
-      retries: 5
-    restart: unless-stopped
+      retries: 6
+    ports:
+      - "5432:5432"   # optional for local psql access
 
-volumes:
-  postgres_data:
+  vllm:
+    image: vllm/vllm-openai:latest
+    shm_size: "8gb"
+    environment:
+      <<: *caches
+      VLLM_API_KEY: ${VLLM_API_KEY:?set in .env}
+      # tuneables
+      VLLM_GPU_UTIL: ${VLLM_GPU_UTIL:-0.90}
+      TP_SIZE: ${TP_SIZE:-1}           # set to your local GPU count (e.g., 4)
+    volumes:
+      - ${HOST_MODELS_DIR:-./models}:/models:ro
+      - ./cache/hf:/cache/hf
+      - ./cache/xdg:/cache/xdg
+      - ./cache/vllm:/cache/vllm
+    command: >
+      vllm serve /models/Qwen3-32B-FP8
+      --host 0.0.0.0 --port 8000
+      --tensor-parallel-size ${TP_SIZE:-1}
+      --gpu-memory-utilization ${VLLM_GPU_UTIL:-0.90}
+      --api-key ${VLLM_API_KEY}
+    gpus: all
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf -H 'Authorization: Bearer ${VLLM_API_KEY}' http://localhost:8000/v1/models >/dev/null"]
+      interval: 20s
+      timeout: 5s
+      retries: 12
+    ports:
+      - "8000:8000"
+
+  app:
+    build: ./bun
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/appdb
+      VLLM_BASE_URL: http://vllm:8000/v1
+      OPENAI_API_KEY: ${VLLM_API_KEY}
+      MODEL_ID: /models/Qwen3-32B-FP8
+    depends_on:
+      db:
+        condition: service_healthy
+      vllm:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
