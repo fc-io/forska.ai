@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 FROM oven/bun:1 AS build
 WORKDIR /app
 
@@ -11,7 +12,10 @@ RUN apt-get update \
 # Install only production deps to avoid slow native/optional dev installs
 ENV NODE_ENV=production
 COPY bun.lock package.json ./
-RUN bun install --frozen-lockfile --production
+# Cache Bun's package store across builds for speed
+RUN --mount=type=cache,target=/root/.bun \
+    --mount=type=cache,target=/root/.cache \
+    bun install --frozen-lockfile --production
 
 # Include project files needed for build
 COPY tsconfig.json ./

@@ -77,6 +77,19 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.app
+      args:
+        DATABASE_URL: postgresql://postgres:postgres@db:5432/appdb
+        BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET required in .env}
+        BETTER_AUTH_URL: ${BETTER_AUTH_URL:?BETTER_AUTH_URL required in .env}
+        VITE_PORT: "8080"
+        SERVER_PORT: "3000"
+        RUN_SERVER_JUDGING: ${RUN_SERVER_JUDGING:-false}
+        VITE_LLM_SERVER_URL: http://vllm:8000/v1
+        NCBI_EMAIL: ${NCBI_EMAIL:-}
+        NCBI_API_KEY: ${NCBI_API_KEY:-}
+        NCBI_TOOL: ${NCBI_TOOL:-}
+        VITE_DATABASE_URL: ${VITE_DATABASE_URL:?VITE_DATABASE_URL required in .env}
+        VITE_SERVER_API: ${VITE_SERVER_API:?VITE_SERVER_API required in .env}
     env_file:
       - .env
     environment:
@@ -84,8 +97,8 @@ services:
       SERVER_PORT: 3000
       PROD_SERVER: 8080
       NODE_ENV: production
-    depends_on:
-      api-server:
-        condition: service_healthy
+    # depends_on:
+    #   api-server:
+    #     condition: service_healthy
     ports:
       - "8080:8080"
