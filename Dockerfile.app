@@ -3,7 +3,7 @@ WORKDIR /app
 
 # Install deps with good cache behavior
 COPY bun.lock package.json ./
-RUN bun install --frozen-lockfile
+RUN bun install --frozen-lockfile --production
 
 # Include project files needed for build
 COPY tsconfig.json ./

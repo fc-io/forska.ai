@@ -70,11 +70,6 @@ services:
       NODE_ENV: production
       OPENAI_API_KEY: ${VLLM_API_KEY}
       MODEL_ID: /models/Qwen3-32B-FP8
-    depends_on:
-      db:
-        condition: service_healthy
-      vllm:
-        condition: service_healthy
     ports:
       - "3000:3000"
 
