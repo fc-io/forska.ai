@@ -1,6 +1,12 @@
 FROM oven/bun:1 AS build
 WORKDIR /app
 
+# Install build tools required for native modules (node-gyp)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+      python3 python-is-python3 make g++ \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install deps with good cache behavior
 COPY bun.lock package.json ./
 RUN bun install --frozen-lockfile
