@@ -18,10 +18,7 @@ import {usersRoutes} from './routes/UsersRoutes.ts'
 import {vllmStatusRoutes} from './routes/VllmStatusRoutes.ts'
 import {env} from './utils/env.ts'
 
-const allowedOrigins = [
-  `http://localhost:${env.VITE_PORT}`,
-  `http://localhost:${process.env.PROD_SERVER ?? 8080}`,
-]
+const allowedOrigins = [`http://localhost:${env.VITE_PORT}`, `http://localhost:${process.env.PROD_SERVER ?? 8080}`]
 
 const app = new Elysia()
   .use(
