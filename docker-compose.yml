@@ -55,10 +55,12 @@ services:
     ports:
       - "8000:8000"
 
-  app:
-    build: .
+  api-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
     env_file:
-      - .env.local
+      - .env
     environment:
       DATABASE_URL: postgresql://postgres:postgres@db:5432/appdb
       VLLM_BASE_URL: http://vllm:8000/v1
@@ -81,14 +83,14 @@ services:
       context: .
       dockerfile: Dockerfile.app
     env_file:
-      - .env.local
+      - .env
     environment:
-      SERVER_HOST: app
+      SERVER_HOST: api-server
       SERVER_PORT: 3000
       PROD_SERVER: 8080
       NODE_ENV: production
     depends_on:
-      app:
-        condition: service_started
+      api-server:
+        condition: service_healthy
     ports:
       - "8080:8080"
