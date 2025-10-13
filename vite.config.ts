@@ -20,20 +20,6 @@ export default defineConfig({
     tailwindcss(),
   ],
   resolve: {alias: {'~': path.resolve(__dirname, './src')}},
-  server: {
-    port: env.VITE_PORT,
-    strictPort: false,
-    proxy: {
-      '/api/arxiv': {
-        target: 'https://oaipmh.arxiv.org',
-        changeOrigin: true,
-        rewrite: (path) => {
-          return path.replace(/^\/api\/arxiv/, '')
-        },
-        secure: true,
-      },
-      '/api': {target: `http://localhost:${env.SERVER_PORT}`, changeOrigin: true},
-    },
-  },
+  server: {port: env.VITE_PORT, strictPort: false},
   build: {target: 'esnext'},
 })
