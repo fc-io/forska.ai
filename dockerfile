@@ -8,8 +8,10 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # Install deps with good cache behavior
+# Install only production deps to avoid slow native/optional dev installs
+ENV NODE_ENV=production
 COPY bun.lock package.json ./
-RUN bun install --frozen-lockfile
+RUN bun install --frozen-lockfile --production
 
 # Include project files needed for build
 COPY tsconfig.json ./
