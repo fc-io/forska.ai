@@ -13,7 +13,7 @@ const app = new Elysia()
     const url = new URL(request.url)
     const target = `${apiScheme}://${apiHost}:${apiPort}${url.pathname}${url.search}`
     const method = request.method
-    const body = method === 'GET' || method === 'HEAD' ? undefined : (request as Request).body
+    const body = method === 'GET' || method === 'HEAD' ? undefined : request.body
     return fetch(target, {method, headers: request.headers, body})
   })
   .get('*', () => {
