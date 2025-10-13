@@ -3,7 +3,10 @@
   "version": "1.0.51",
   "type": "module",
   "scripts": {
-    "start": "bun --env-file=.env run build && bun --env-file=.env run src/server/index.ts & bun --env-file=.env run src/appServer.ts",
+    "start": "bun run start:build && bun run start:server & bun run start:app-server",
+    "start:build": "bun --env-file=.env run build",
+    "start:server": "bun --env-file=.env run src/server/index.ts",
+    "start:app-server": "bun --env-file=.env run src/appServer.ts",
     "app": "bun --env-file=.env.local run build && bun --env-file=.env.local run preview",
     "build": "bunx --bun vite build",
     "preview": "bunx --bun vite preview",
