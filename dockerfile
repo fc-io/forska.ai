@@ -1,7 +1,7 @@
 # ./bun/Dockerfile
 FROM oven/bun:1 AS deps
 WORKDIR /forska
-COPY package.json bun.lockb ./
+COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
 
 FROM oven/bun:1
