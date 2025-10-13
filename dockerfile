@@ -1,23 +1,31 @@
-# ./bun/Dockerfile
-FROM oven/bun AS build
+FROM oven/bun:1 AS build
 WORKDIR /app
-# Cache packages installation
-COPY package.json package.json
-COPY bun.lock bun.lock
-RUN bun install
-COPY ./src ./src
+
+# Install deps with good cache behavior
+COPY bun.lock package.json ./
+RUN bun install --frozen-lockfile
+
+# Include project files needed for build
+COPY tsconfig.json ./
+COPY auth-schema.ts ./
+COPY src ./src
 
 ENV NODE_ENV=production
+
+# Compile API server to a single binary
 RUN bun build \
-	--compile \
-	--minify-whitespace \
-	--minify-syntax \
-	--outfile server \
-	src/server/index.ts
+    --compile \
+    --minify-whitespace \
+    --minify-syntax \
+    --outfile /app/server \
+    src/server/index.ts
 
-FROM gcr.io/distroless/base
+# Minimal runtime image
+FROM gcr.io/distroless/cc-debian12
 WORKDIR /app
-COPY --from=build /app/server server
+COPY --from=build /app/server /app/server
 ENV NODE_ENV=production
-CMD ["./server"]
 EXPOSE 3000
+# Run as non-root
+USER 65532:65532
+CMD ["./server"]

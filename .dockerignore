@@ -1,0 +1,18 @@
+# Reduce Docker build context size and avoid leaking secrets
+node_modules
+.git
+dist
+cache
+pgdata
+.idea
+.vscode
+.DS_Store
+.tanstack
+
+# Env files should be provided at runtime, not built in
+.env
+.env.*
+
+# Bun caches
+**/.bun
+**/.cache
