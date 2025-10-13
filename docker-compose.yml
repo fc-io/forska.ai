@@ -57,9 +57,15 @@ services:
 
   app:
     build: .
+    env_file:
+      - .env.local
     environment:
       DATABASE_URL: postgresql://postgres:postgres@db:5432/appdb
       VLLM_BASE_URL: http://vllm:8000/v1
+      VITE_LLM_SERVER_URL: http://vllm:8000/v1
+      SERVER_PORT: 3000
+      VITE_PORT: 8080
+      NODE_ENV: production
       OPENAI_API_KEY: ${VLLM_API_KEY}
       MODEL_ID: /models/Qwen3-32B-FP8
     depends_on:
@@ -69,3 +75,20 @@ services:
         condition: service_healthy
     ports:
       - "3000:3000"
+
+  app-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+    env_file:
+      - .env.local
+    environment:
+      SERVER_HOST: app
+      SERVER_PORT: 3000
+      PROD_SERVER: 8080
+      NODE_ENV: production
+    depends_on:
+      app:
+        condition: service_started
+    ports:
+      - "8080:8080"
