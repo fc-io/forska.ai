@@ -18,7 +18,7 @@ RUN bun build \
     --minify-whitespace \
     --minify-syntax \
     --outfile /app \
-    src/server/appServer.ts
+    src/appServer.ts
 
 # Minimal runtime image
 FROM gcr.io/distroless/cc-debian12
