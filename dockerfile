@@ -1,16 +1,23 @@
 # ./bun/Dockerfile
-FROM oven/bun:1 AS deps
-WORKDIR /forska
-COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile
+FROM oven/bun AS build
+WORKDIR /app
+# Cache packages installation
+COPY package.json package.json
+COPY bun.lock bun.lock
+RUN bun install
+COPY ./src ./src
 
-FROM oven/bun:1
-WORKDIR /forska
-ENV NODE_ENV=production \
-    PORT=3000
-COPY --from=deps /forska/node_modules ./node_modules
-COPY . .
+ENV NODE_ENV=production
+RUN bun build \
+	--compile \
+	--minify-whitespace \
+	--minify-syntax \
+	--outfile server \
+	src/server/index.ts
+
+FROM gcr.io/distroless/base
+WORKDIR /app
+COPY --from=build /app/server server
+ENV NODE_ENV=production
+CMD ["./server"]
 EXPOSE 3000
-# Healthcheck endpoint is optional – expose /healthz in your app if you like
-# HEALTHCHECK --interval=30s --timeout=5s CMD curl -fsS http://localhost:3000/healthz || exit 1
-CMD ["bun", "run", "start"]
