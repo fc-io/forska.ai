@@ -104,3 +104,97 @@ services:
     #     condition: service_healthy
     ports:
       - "8080:8080"
+
+  # Host-network variants to simulate Apptainer/Singularity where localhost is shared
+  # These services are only included when the 'hostnet' profile is enabled.
+  db-hostnet:
+    profiles: ["hostnet"]
+    image: postgres:17
+    environment:
+      POSTGRES_DB: appdb
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+      - ./init-db:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d appdb -h 127.0.0.1 -p 5432"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    network_mode: host
+
+  vllm-hostnet:
+    profiles: ["hostnet"]
+    image: vllm/vllm-openai:latest
+    shm_size: "8gb"
+    environment:
+      <<: *caches
+      VLLM_API_KEY: ${VLLM_API_KEY:?set in .env}
+      VLLM_GPU_UTIL: ${VLLM_GPU_UTIL:-0.90}
+      TP_SIZE: ${TP_SIZE:-1}
+    volumes:
+      - ${HOST_MODELS_DIR:-./models}:/models:ro
+      - ./cache/hf:/cache/hf
+      - ./cache/xdg:/cache/xdg
+      - ./cache/vllm:/cache/vllm
+    command: >
+      vllm serve /models/Qwen3-32B-FP8
+      --host 0.0.0.0 --port 8000
+      --tensor-parallel-size ${TP_SIZE:-1}
+      --gpu-memory-utilization ${VLLM_GPU_UTIL:-0.90}
+      --api-key ${VLLM_API_KEY}
+    gpus: all
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf -H 'Authorization: Bearer ${VLLM_API_KEY}' http://localhost:8000/v1/models >/dev/null"]
+      interval: 20s
+      timeout: 5s
+      retries: 12
+    network_mode: host
+
+  api-server-hostnet:
+    profiles: ["hostnet"]
+    image: ghcr.io/${GHCR_OWNER:-local}/api-server:${TAG:-dev}
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/appdb
+      VLLM_BASE_URL: http://localhost:8000/v1
+      VITE_LLM_SERVER_URL: http://localhost:8000/v1
+      SERVER_PORT: 3000
+      VITE_PORT: 8080
+      NODE_ENV: production
+      OPENAI_API_KEY: ${VLLM_API_KEY}
+      MODEL_ID: /models/Qwen3-32B-FP8
+    network_mode: host
+
+  app-server-hostnet:
+    profiles: ["hostnet"]
+    image: ghcr.io/${GHCR_OWNER:-local}/app-server:${TAG:-dev}
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+      args:
+        DATABASE_URL: postgresql://postgres:postgres@localhost:5432/appdb
+        BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET required in .env}
+        BETTER_AUTH_URL: ${BETTER_AUTH_URL:?BETTER_AUTH_URL required in .env}
+        VITE_PORT: "8080"
+        SERVER_PORT: "3000"
+        RUN_SERVER_JUDGING: ${RUN_SERVER_JUDGING:-false}
+        VITE_LLM_SERVER_URL: http://localhost:8000/v1
+        NCBI_EMAIL: ${NCBI_EMAIL:-}
+        NCBI_API_KEY: ${NCBI_API_KEY:-}
+        NCBI_TOOL: ${NCBI_TOOL:-}
+        VITE_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/appdb
+        VITE_SERVER_API: http://localhost:3000
+    env_file:
+      - .env
+    environment:
+      SERVER_HOST: localhost
+      SERVER_PORT: 3000
+      PROD_SERVER: 8080
+      NODE_ENV: production
+    network_mode: host
