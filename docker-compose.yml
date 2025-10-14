@@ -11,13 +11,15 @@ x-caches: &caches
 
 services:
   db:
-    image: postgres:16
+    image: postgres:17
     environment:
       POSTGRES_DB: appdb
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     volumes:
       - ./pgdata:/var/lib/postgresql/data
+      # Seed database on first init; files run in alphanumeric order
+      - ./init-db:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d appdb -h 127.0.0.1 -p 5432"]
       interval: 10s
