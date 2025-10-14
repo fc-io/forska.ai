@@ -1,23 +1,46 @@
 # forska.ai
 
-Elysia (Bun) API server + Solid (Vite) client, using Drizzle ORM (Postgres) and Better Auth.
+This is a really deep, deep research "agent" It's actively developed, it's going to be a lot of changes.
+You can run it yourself if you have the chops. There will be a hosted version eventually.
 
+It uses Elysia/Bun for the API server. Solid.js/Tanstack/Vite on the client. Uses Drizzle ORM with Postgres and Better Auth. It then hooks up to open ai compatible apis – vllm or something, to analyze data (mainly research papers).
+
+## Quick Start (Local production build)
+
+Prereqs
+- Bun installed
+- Docker (for local Postgres) and a GPU if you plan to run VLLM locally
+
+Steps
+1) Install dependencies
 ```
-export STACK_ROOT=/mimer/NOBACKUP/groups/clin-agent-bench/dev; mkdir -p $STACK_ROOT/{pgdata,models,hf_cache,logs} && echo $STACK_ROOT
-export XDG_CACHE_HOME=$STACK_ROOT/.cache; export VLLM_CACHE_ROOT=$XDG_CACHE_HOME/vllm; export TORCHINDUCTOR_CACHE_DIR=$VLLM_CACHE_ROOT/torchinductor; export TRITON_CACHE_DIR=$VLLM_CACHE_ROOT/triton; export HF_HOME=$STACK_ROOT/hf_cache
+bun install
 ```
 
+2) Start Postgres (Compose, bridge network)
 ```
-ls -al $STACK_ROOT/models/Qwen3-32B-FP8
+docker compose up db
 ```
+
+3) Start API and App in watch mode
+```
+bun run dev:server
+bun run dev:app
+```
+
+Default endpoints
+- App: http://localhost:8080
+- API: http://localhost:3000
+- Postgres: localhost:5432
+
+If you need the GPU-backed LLM locally, also start the `vllm` service via Compose (see below).
 
 ## Docker Compose
 
 Two modes are available:
 
 1) Default (bridge network)
-
-- Start everything locally with inter-service DNS (`db`, `vllm`, `api-server`).
+- Start everything locally with inter-service DNS (`db`, `vllm`, `api-server`, `app-server`).
 - Command: `docker compose up`
 - Endpoints:
   - App: http://localhost:8080
@@ -26,7 +49,6 @@ Two modes are available:
   - Postgres: localhost:5432
 
 2) Host networking (Linux only; mirrors Apptainer/Singularity)
-
 - Uses `network_mode: host` and localhost URLs inside containers.
 - Command: `docker compose --profile hostnet up`
 - Notes:
@@ -40,47 +62,26 @@ Two modes are available:
 
 ## HPC / Apptainer (Singularity)
 
-Recommended flow: pre-pull images to SIF files once, then run those SIFs with host networking (`--net --network=host`). This mirrors the Compose hostnet profile and uses localhost URLs inside containers.
+On clusters and airgapped compute nodes, pre-pull images to SIF files on a shared filesystem and run with host networking (`--net --network=host`). This mirrors the Compose hostnet profile and uses localhost URLs inside containers.
 
-Tip: the `--profile hostnet` compose setup on Linux behaves like Apptainer’s host networking, so you can validate localhost-based URLs locally before deploying.
-
-### Using a password file (secrets)
-
-The official Postgres image supports `POSTGRES_PASSWORD_FILE`. You can bind‑mount a local secret into the container and point Postgres at it.
-
-Prepare a secret file on the host (one line, the password), then restrict permissions:
+Recommended shared paths and caches
 ```
-mkdir -p "$HOME/.secrets" && echo 'yourStrongPassword' > "$HOME/.secrets/pg_password" && chmod 600 "$HOME/.secrets/pg_password"
-```
+export STACK_ROOT=/mimer/NOBACKUP/groups/clin-agent-bench/dev; \
+  mkdir -p $STACK_ROOT/{pgdata,models,hf_cache,logs,images,.cache} && echo $STACK_ROOT
+export XDG_CACHE_HOME=$STACK_ROOT/.cache; \
+  export VLLM_CACHE_ROOT=$XDG_CACHE_HOME/vllm; \
+  export TORCHINDUCTOR_CACHE_DIR=$VLLM_CACHE_ROOT/torchinductor; \
+  export TRITON_CACHE_DIR=$VLLM_CACHE_ROOT/triton; \
+  export HF_HOME=$STACK_ROOT/hf_cache
 
-Run Postgres SIF with a secret file mounted read‑only:
-```
-apptainer run --net --network=host \
-  --env POSTGRES_USER=postgres \
-  --env POSTGRES_PASSWORD_FILE=/run/secrets/pg_password \
-  --env POSTGRES_DB=appdb \
-  --bind $STACK_ROOT/pgdata:/var/lib/postgresql/data \
-  --bind $HOME/.secrets/pg_password:/run/secrets/pg_password:ro \
-  $STACK_ROOT/images/postgres_18.sif
+# Optional: verify your model path exists
+ls -al "$STACK_ROOT/models/Qwen3-32B-FP8" || true
 ```
 
-Verification helpers:
-```
-# Check env inside the SIF
-apptainer exec $STACK_ROOT/images/postgres_18.sif env | grep POSTGRES_PASSWORD_FILE
+### 1) Pre-pull images (offline-friendly)
 
-# Check the secret is mounted
-apptainer exec \
-  --bind $HOME/.secrets/pg_password:/run/secrets/pg_password:ro \
-  $STACK_ROOT/images/postgres_18.sif \
-  sh -lc 'ls -l /run/secrets && head -c 5 /run/secrets/pg_password && echo'
-```
+If compute nodes cannot reach container registries, pull on a login/head node with network access and place the `.sif` files under `$STACK_ROOT/images`.
 
-### Pre-pull images (offline compute nodes)
-
-If compute nodes cannot reach container registries, pre-pull images on a login/head node with network access and place the `.sif` files on a shared filesystem (e.g., `$STACK_ROOT/images`) visible to compute nodes.
-
-Pull on a networked node
 ```
 mkdir -p "$STACK_ROOT/images"
 
@@ -94,9 +95,19 @@ apptainer pull --arch amd64 "$STACK_ROOT/images/api_server_${TAG}.sif" docker://
 apptainer pull --arch amd64 "$STACK_ROOT/images/app_server_${TAG}.sif" docker://ghcr.io/$GHCR_OWNER/app-server:$TAG
 ```
 
-Run on compute nodes using the `.sif` files (no registry access required)
+Tip: the `--profile hostnet` compose setup on Linux behaves like Apptainer’s host networking, so you can validate localhost-based URLs locally before deploying.
+
+### 2) Provide secrets (Postgres password file)
+
+The official Postgres image supports `POSTGRES_PASSWORD_FILE`. Create a one-line secret and restrict permissions:
 ```
-# DB (Postgres)
+mkdir -p "$HOME/.secrets" && echo 'yourStrongPassword' > "$HOME/.secrets/pg_password" && chmod 600 "$HOME/.secrets/pg_password"
+```
+
+### 3) Run the SIFs (no registry access required)
+
+DB (Postgres)
+```
 apptainer run --net --network=host \
   --env POSTGRES_USER=postgres \
   --env POSTGRES_PASSWORD_FILE=/run/secrets/pg_password \
@@ -104,27 +115,45 @@ apptainer run --net --network=host \
   --bind $STACK_ROOT/pgdata:/var/lib/postgresql/data \
   --bind $HOME/.secrets/pg_password:/run/secrets/pg_password:ro \
   $STACK_ROOT/images/postgres_18.sif
+```
 
-# VLLM (GPU)
+VLLM (GPU)
+```
 apptainer run --nv --net --network=host \
   --bind $STACK_ROOT/models:/models:ro \
   $STACK_ROOT/images/vllm_openai_latest.sif \
   vllm serve /models/Qwen3-32B-FP8 \
     --host 0.0.0.0 --port 8000 \
     --api-key "$VLLM_API_KEY"
+```
 
-# API
+API
+```
 apptainer run --net --network=host \
   --env DATABASE_URL=postgresql://postgres:postgres@localhost:5432/appdb \
   --env VITE_LLM_SERVER_URL=http://localhost:8000/v1 \
   --env SERVER_PORT=3000 \
   $STACK_ROOT/images/api_server_${TAG}.sif
+```
 
-# App
+App
+```
 apptainer run --net --network=host \
   --env SERVER_HOST=localhost --env SERVER_PORT=3000 \
   --env PROD_SERVER=8080 \
   $STACK_ROOT/images/app_server_${TAG}.sif
+```
+
+Verification helpers
+```
+# Check env inside the SIF
+apptainer exec $STACK_ROOT/images/postgres_18.sif env | grep POSTGRES_PASSWORD_FILE
+
+# Check the secret is mounted
+apptainer exec \
+  --bind $HOME/.secrets/pg_password:/run/secrets/pg_password:ro \
+  $STACK_ROOT/images/postgres_18.sif \
+  sh -lc 'ls -l /run/secrets && head -c 5 /run/secrets/pg_password && echo'
 ```
 
 Optional — Docker save/load (if you must use Docker on airgapped hosts)
@@ -179,8 +208,6 @@ docker compose --profile hostnet build api-server-hostnet app-server-hostnet
 # Push directly with Compose (requires GHCR_OWNER and TAG)
 docker compose --profile hostnet push api-server-hostnet app-server-hostnet
 ```
-
- 
 
 Notes
 - The same image works for both bridge and host networking; the difference is in how you run it.
