@@ -117,13 +117,13 @@ Pull on a networked node
 mkdir -p "$STACK_ROOT/images"
 
 # Public registries
-apptainer pull "$STACK_ROOT/images/postgres_18.sif" docker://docker.io/library/postgres:18
-apptainer pull "$STACK_ROOT/images/vllm_openai_latest.sif" docker://vllm/vllm-openai:latest
+apptainer pull "$STACK_ROOT/postgres_18.sif" docker://docker.io/library/postgres:18
+apptainer pull "$STACK_ROOT/vllm_openai_latest.sif" docker://vllm/vllm-openai:latest
 
 # GHCR (login first if private)
-apptainer registry login ghcr.io -u "$GHCR_USER" -p "$GHCR_TOKEN"
-apptainer pull "$STACK_ROOT/images/api_server_${TAG}.sif" docker://ghcr.io/$GHCR_OWNER/api-server:$TAG
-apptainer pull "$STACK_ROOT/images/app_server_${TAG}.sif" docker://ghcr.io/$GHCR_OWNER/app-server:$TAG
+apptainer registry login ghcr.io -u "$GHCR_USER"
+apptainer pull "$STACK_ROOT/api_server_${TAG}.sif" docker://ghcr.io/$GHCR_OWNER/api-server:$TAG
+apptainer pull "$STACK_ROOT/app_server_${TAG}.sif" docker://ghcr.io/$GHCR_OWNER/app-server:$TAG
 ```
 
 Run on compute nodes using the `.sif` files (no registry access required)

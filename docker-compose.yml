@@ -110,6 +110,7 @@ services:
   db-hostnet:
     profiles: ["hostnet"]
     image: postgres:18
+    platform: linux/amd64
     environment:
       POSTGRES_DB: appdb
       POSTGRES_USER: postgres
@@ -127,6 +128,7 @@ services:
   vllm-hostnet:
     profiles: ["hostnet"]
     image: vllm/vllm-openai:latest
+    platform: linux/amd64
     shm_size: "8gb"
     environment:
       <<: *caches
@@ -155,6 +157,7 @@ services:
   api-server-hostnet:
     profiles: ["hostnet"]
     image: ghcr.io/${GHCR_OWNER:-local}/api-server:${TAG:-dev}
+    platform: linux/amd64
     build:
       context: .
       dockerfile: Dockerfile.api
@@ -174,6 +177,7 @@ services:
   app-server-hostnet:
     profiles: ["hostnet"]
     image: ghcr.io/${GHCR_OWNER:-local}/app-server:${TAG:-dev}
+    platform: linux/amd64
     build:
       context: .
       dockerfile: Dockerfile.app
