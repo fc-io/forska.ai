@@ -58,7 +58,7 @@ apptainer run --net --network=host \
   --env POSTGRES_PASSWORD=postgres \
   --env POSTGRES_DB=appdb \
   --bind $STACK_ROOT/pgdata:/var/lib/postgresql/data \
-  docker://docker.io/library/postgres:16-alpine
+  docker://docker.io/library/postgres:18-alpine
 
 # API server
 apptainer run --net --network=host \
@@ -93,18 +93,18 @@ apptainer run --net --network=host \
   --env POSTGRES_DB=appdb \
   --bind $STACK_ROOT/pgdata:/var/lib/postgresql/data \
   --bind $HOME/.secrets/pg_password:/run/secrets/pg_password:ro \
-  docker://docker.io/library/postgres:17
+  docker://docker.io/library/postgres:18
 ```
 
 Verification helpers:
 ```
 # Check env inside the image
-apptainer exec docker://docker.io/library/postgres:17 env | grep POSTGRES_PASSWORD_FILE
+apptainer exec docker://docker.io/library/postgres:18 env | grep POSTGRES_PASSWORD_FILE
 
 # Check the secret is mounted
 apptainer exec \
   --bind $HOME/.secrets/pg_password:/run/secrets/pg_password:ro \
-  docker://docker.io/library/postgres:17 \
+  docker://docker.io/library/postgres:18 \
   sh -lc 'ls -l /run/secrets && head -c 5 /run/secrets/pg_password && echo'
 ```
 
@@ -117,7 +117,7 @@ Pull on a networked node
 mkdir -p "$STACK_ROOT/images"
 
 # Public registries
-apptainer pull "$STACK_ROOT/images/postgres_17.sif" docker://docker.io/library/postgres:17
+apptainer pull "$STACK_ROOT/images/postgres_18.sif" docker://docker.io/library/postgres:18
 apptainer pull "$STACK_ROOT/images/vllm_openai_latest.sif" docker://vllm/vllm-openai:latest
 
 # GHCR (login first if private)
@@ -135,7 +135,7 @@ apptainer run --net --network=host \
   --env POSTGRES_DB=appdb \
   --bind $STACK_ROOT/pgdata:/var/lib/postgresql/data \
   --bind $HOME/.secrets/pg_password:/run/secrets/pg_password:ro \
-  $STACK_ROOT/images/postgres_17.sif
+  $STACK_ROOT/images/postgres_18.sif
 
 # VLLM (GPU)
 apptainer run --nv --net --network=host \
@@ -245,7 +245,7 @@ apptainer run --net --network=host \
   --env POSTGRES_PASSWORD=postgres \
   --env POSTGRES_DB=appdb \
   --bind $STACK_ROOT/pgdata:/var/lib/postgresql/data \
-  docker://docker.io/library/postgres:17
+  docker://docker.io/library/postgres:18
 
 # VLLM (GPU)
 apptainer run --nv --net --network=host \

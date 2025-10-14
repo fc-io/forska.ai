@@ -11,7 +11,7 @@ x-caches: &caches
 
 services:
   db:
-    image: postgres:17
+    image: postgres:18
     environment:
       POSTGRES_DB: appdb
       POSTGRES_USER: postgres
@@ -109,7 +109,7 @@ services:
   # These services are only included when the 'hostnet' profile is enabled.
   db-hostnet:
     profiles: ["hostnet"]
-    image: postgres:17
+    image: postgres:18
     environment:
       POSTGRES_DB: appdb
       POSTGRES_USER: postgres
