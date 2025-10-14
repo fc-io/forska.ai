@@ -40,39 +40,7 @@ Two modes are available:
 
 ## HPC / Apptainer (Singularity)
 
-When running images via Apptainer with host networking, use localhost URLs to mirror the hostnet profile above.
-
-Examples (adjust org/image:tag and env to your setup):
-
-```
-# VLLM (GPU)
-apptainer run --nv --net --network=host \
-  docker://vllm/vllm-openai:latest \
-  vllm serve /models/Qwen3-32B-FP8 \
-    --host 0.0.0.0 --port 8000 \
-    --api-key "$VLLM_API_KEY"
-
-# Postgres (database)
-apptainer run --net --network=host \
-  --env POSTGRES_USER=postgres \
-  --env POSTGRES_PASSWORD=postgres \
-  --env POSTGRES_DB=appdb \
-  --bind $STACK_ROOT/pgdata:/var/lib/postgresql/data \
-  docker://docker.io/library/postgres:18-alpine
-
-# API server
-apptainer run --net --network=host \
-  --env DATABASE_URL=postgresql://postgres:postgres@localhost:5432/appdb \
-  --env VITE_LLM_SERVER_URL=http://localhost:8000/v1 \
-  --env SERVER_PORT=3000 \
-  docker://ghcr.io/ORG/api-server:TAG
-
-# App server (static assets + proxy to API)
-apptainer run --net --network=host \
-  --env SERVER_HOST=localhost --env SERVER_PORT=3000 \
-  --env PROD_SERVER=8080 \
-  docker://ghcr.io/ORG/app-server:TAG
-```
+Recommended flow: pre-pull images to SIF files once, then run those SIFs with host networking (`--net --network=host`). This mirrors the Compose hostnet profile and uses localhost URLs inside containers.
 
 Tip: the `--profile hostnet` compose setup on Linux behaves like Apptainer’s host networking, so you can validate localhost-based URLs locally before deploying.
 
@@ -85,7 +53,7 @@ Prepare a secret file on the host (one line, the password), then restrict permis
 mkdir -p "$HOME/.secrets" && echo 'yourStrongPassword' > "$HOME/.secrets/pg_password" && chmod 600 "$HOME/.secrets/pg_password"
 ```
 
-Run Postgres with a secret file mounted read‑only:
+Run Postgres SIF with a secret file mounted read‑only:
 ```
 apptainer run --net --network=host \
   --env POSTGRES_USER=postgres \
@@ -93,18 +61,18 @@ apptainer run --net --network=host \
   --env POSTGRES_DB=appdb \
   --bind $STACK_ROOT/pgdata:/var/lib/postgresql/data \
   --bind $HOME/.secrets/pg_password:/run/secrets/pg_password:ro \
-  docker://docker.io/library/postgres:18
+  $STACK_ROOT/images/postgres_18.sif
 ```
 
 Verification helpers:
 ```
-# Check env inside the image
-apptainer exec docker://docker.io/library/postgres:18 env | grep POSTGRES_PASSWORD_FILE
+# Check env inside the SIF
+apptainer exec $STACK_ROOT/images/postgres_18.sif env | grep POSTGRES_PASSWORD_FILE
 
 # Check the secret is mounted
 apptainer exec \
   --bind $HOME/.secrets/pg_password:/run/secrets/pg_password:ro \
-  docker://docker.io/library/postgres:18 \
+  $STACK_ROOT/images/postgres_18.sif \
   sh -lc 'ls -l /run/secrets && head -c 5 /run/secrets/pg_password && echo'
 ```
 
@@ -116,14 +84,14 @@ Pull on a networked node
 ```
 mkdir -p "$STACK_ROOT/images"
 
-# Public registries
-apptainer pull "$STACK_ROOT/postgres_18.sif" docker://docker.io/library/postgres:18
-apptainer pull "$STACK_ROOT/vllm_openai_latest.sif" docker://vllm/vllm-openai:latest
+# Public registries (explicit amd64)
+apptainer pull --arch amd64 "$STACK_ROOT/images/postgres_18.sif" docker://docker.io/library/postgres:18
+apptainer pull --arch amd64 "$STACK_ROOT/images/vllm_openai_latest.sif" docker://vllm/vllm-openai:latest
 
 # GHCR (login first if private)
 apptainer registry login ghcr.io -u "$GHCR_USER"
-apptainer pull "$STACK_ROOT/api_server_${TAG}.sif" docker://ghcr.io/$GHCR_OWNER/api-server:$TAG
-apptainer pull "$STACK_ROOT/app_server_${TAG}.sif" docker://ghcr.io/$GHCR_OWNER/app-server:$TAG
+apptainer pull --arch amd64 "$STACK_ROOT/images/api_server_${TAG}.sif" docker://ghcr.io/$GHCR_OWNER/api-server:$TAG
+apptainer pull --arch amd64 "$STACK_ROOT/images/app_server_${TAG}.sif" docker://ghcr.io/$GHCR_OWNER/app-server:$TAG
 ```
 
 Run on compute nodes using the `.sif` files (no registry access required)
@@ -174,7 +142,7 @@ docker load -i app-server_$TAG.tar
 
 ## Build and Push to GHCR (hostnet runtime)
 
-Host networking is a runtime setting; you don’t need a special build. Build the same images and run them with host networking (Compose hostnet profile or Apptainer `--network=host`). Below are two ways to build and push to GitHub Container Registry (ghcr.io).
+Host networking is a runtime setting; you don’t need a special build. Build the same images and run them with host networking (Compose hostnet profile or Apptainer `--network=host`). Use the Compose path below to build and push to GitHub Container Registry (ghcr.io).
 
 Prereqs
 - Create a GitHub Personal Access Token with `write:packages` (and `read:packages` to pull).
@@ -203,7 +171,7 @@ Login
 echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 ```
 
-Option A — Build via Compose (uses hostnet service configs)
+Build via Compose (uses hostnet service configs)
 ```
 # Build the hostnet variants (Linux only)
 docker compose --profile hostnet build api-server-hostnet app-server-hostnet
@@ -212,64 +180,7 @@ docker compose --profile hostnet build api-server-hostnet app-server-hostnet
 docker compose --profile hostnet push api-server-hostnet app-server-hostnet
 ```
 
-Option B — Plain Docker builds
-
-API server
-```
-docker build -f Dockerfile.api -t ghcr.io/$GHCR_OWNER/api-server:$TAG .
-docker push ghcr.io/$GHCR_OWNER/api-server:$TAG
-```
-
-App server (requires build args used by Vite build)
-```
-docker build -f Dockerfile.app \
-  --build-arg DATABASE_URL=postgresql://postgres:postgres@localhost:5432/appdb \
-  --build-arg BETTER_AUTH_SECRET=$BETTER_AUTH_SECRET \
-  --build-arg BETTER_AUTH_URL=http://localhost:3000 \
-  --build-arg VITE_PORT=8080 \
-  --build-arg SERVER_PORT=3000 \
-  --build-arg RUN_SERVER_JUDGING=false \
-  --build-arg VITE_LLM_SERVER_URL=http://localhost:8000/v1 \
-  --build-arg VITE_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/appdb \
-  --build-arg VITE_SERVER_API=http://localhost:3000 \
-  -t ghcr.io/$GHCR_OWNER/app-server:$TAG .
-
-docker push ghcr.io/$GHCR_OWNER/app-server:$TAG
-```
-
-Pull/run with Apptainer
-```
-# DB (Postgres)
-apptainer run --net --network=host \
-  --env POSTGRES_USER=postgres \
-  --env POSTGRES_PASSWORD=postgres \
-  --env POSTGRES_DB=appdb \
-  --bind $STACK_ROOT/pgdata:/var/lib/postgresql/data \
-  docker://docker.io/library/postgres:18
-
-# VLLM (GPU)
-apptainer run --nv --net --network=host \
-  --bind $STACK_ROOT/models:/models:ro \
-  docker://vllm/vllm-openai:latest \
-  vllm serve /models/Qwen3-32B-FP8 \
-    --host 0.0.0.0 --port 8000 \
-    --tensor-parallel-size ${TP_SIZE:-1} \
-    --gpu-memory-utilization ${VLLM_GPU_UTIL:-0.90} \
-    --api-key "$VLLM_API_KEY"
-
-# API
-apptainer run --net --network=host \
-  --env DATABASE_URL=postgresql://postgres:postgres@localhost:5432/appdb \
-  --env VITE_LLM_SERVER_URL=http://localhost:8000/v1 \
-  --env SERVER_PORT=3000 \
-  docker://ghcr.io/$GHCR_OWNER/api-server:$TAG
-
-# App
-apptainer run --net --network=host \
-  --env SERVER_HOST=localhost --env SERVER_PORT=3000 \
-  --env PROD_SERVER=8080 \
-  docker://ghcr.io/$GHCR_OWNER/app-server:$TAG
-```
+ 
 
 Notes
 - The same image works for both bridge and host networking; the difference is in how you run it.
