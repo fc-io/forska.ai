@@ -2,6 +2,7 @@
 node_modules
 
 pgdata/
+init-db/
 
 # output
 out
