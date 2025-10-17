@@ -13,7 +13,7 @@ services:
   db:
     image: postgres:18
     environment:
-      POSTGRES_DB: ${DB_NAME:-appdb}
+      POSTGRES_DB: ${DB_NAME:-postgres}
       POSTGRES_USER: ${DB_USER:-postgres}
       POSTGRES_PASSWORD: ${DB_PASS:?set DB_PASS in .env.local}
     volumes:
@@ -21,12 +21,12 @@ services:
       # Seed database on first init; files run in alphanumeric order
       - ./init-db:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-appdb} -h 127.0.0.1 -p 5432"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-postgres} -h 127.0.0.1 -p 5432"]
       interval: 10s
       timeout: 5s
       retries: 6
     ports:
-      - "5432:5432"   # optional for local psql access
+      - "${POSTGRES_PORT:-5432}:5432"   # optional for local psql access
 
   vllm:
     image: vllm/vllm-openai:latest
@@ -64,7 +64,7 @@ services:
     env_file:
       - .env.local
     environment:
-      DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASS:?set DB_PASS in .env.local}@db:5432/${DB_NAME:-appdb}
+      DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASS:?set DB_PASS in .env.local}@db:5432/${DB_NAME:-postgres}
       VLLM_BASE_URL: http://vllm:8000/v1
       VITE_LLM_SERVER_URL: http://vllm:8000/v1
       SERVER_PORT: 3000
@@ -80,7 +80,7 @@ services:
       context: .
       dockerfile: Dockerfile.app
       args:
-        DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASS:?set DB_PASS in .env.local}@db:5432/${DB_NAME:-appdb}
+        DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASS:?set DB_PASS in .env.local}@db:5432/${DB_NAME:-postgres}
         BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET required in .env.local}
         BETTER_AUTH_URL: ${BETTER_AUTH_URL:?BETTER_AUTH_URL required in .env.local}
         VITE_PORT: "8080"
@@ -90,7 +90,7 @@ services:
         NCBI_EMAIL: ${NCBI_EMAIL:-}
         NCBI_API_KEY: ${NCBI_API_KEY:-}
         NCBI_TOOL: ${NCBI_TOOL:-}
-        VITE_DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASS:?set DB_PASS in .env.local}@db:5432/${DB_NAME:-appdb}
+        VITE_DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASS:?set DB_PASS in .env.local}@db:5432/${DB_NAME:-postgres}
         VITE_SERVER_API: ${VITE_SERVER_API:?VITE_SERVER_API required in .env.local}
     env_file:
       - .env.local
@@ -112,14 +112,14 @@ services:
     image: postgres:18
     platform: linux/amd64
     environment:
-      POSTGRES_DB: ${DB_NAME:-appdb}
+      POSTGRES_DB: ${DB_NAME:-postgres}
       POSTGRES_USER: ${DB_USER:-postgres}
       POSTGRES_PASSWORD_FILE: /run/secrets/db_password
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./init-db:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-appdb} -h 127.0.0.1 -p 5432"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-postgres} -h 127.0.0.1 -p 5432"]
       interval: 10s
       timeout: 5s
       retries: 6
@@ -166,7 +166,7 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASS:?set DB_PASS in .env.local}@localhost:5432/${DB_NAME:-appdb}
+      DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASS:?set DB_PASS in .env.local}@localhost:${POSTGRES_PORT:-5432}/${DB_NAME:-postgres}
       VLLM_BASE_URL: http://localhost:8000/v1
       VITE_LLM_SERVER_URL: http://localhost:8000/v1
       SERVER_PORT: 3000
@@ -184,7 +184,7 @@ services:
       context: .
       dockerfile: Dockerfile.app
       args:
-        DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASS:?set DB_PASS in .env.local}@localhost:5432/${DB_NAME:-appdb}
+        DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASS:?set DB_PASS in .env.local}@localhost:${POSTGRES_PORT:-5432}/${DB_NAME:-postgres}
         BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET required in .env}
         BETTER_AUTH_URL: ${BETTER_AUTH_URL:?BETTER_AUTH_URL required in .env}
         VITE_PORT: "8080"
@@ -194,7 +194,7 @@ services:
         NCBI_EMAIL: ${NCBI_EMAIL:-}
         NCBI_API_KEY: ${NCBI_API_KEY:-}
         NCBI_TOOL: ${NCBI_TOOL:-}
-        VITE_DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASS:?set DB_PASS in .env.local}@localhost:5432/${DB_NAME:-appdb}
+        VITE_DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASS:?set DB_PASS in .env.local}@localhost:${POSTGRES_PORT:-5432}/${DB_NAME:-postgres}
         VITE_SERVER_API: http://localhost:3000
     env_file:
       - .env

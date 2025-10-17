@@ -27,6 +27,7 @@ DB_NAME=postgres
 DB_USER=postgres
 DB_PASS=change-me
 VLLM_API_KEY=fake_key
+POSTGRES_PORT=5432
 ```
 
 Validate your Compose config (optional – shows no output if correct):
@@ -66,7 +67,7 @@ Two modes are available:
   - App: http://localhost:8080
   - API: http://localhost:3000
   - VLLM: http://localhost:8000
-  - Postgres: localhost:5432
+  - Postgres: localhost:5432 (configurable via `POSTGRES_PORT`)
 
 2) Host networking (Linux only; mirrors Apptainer/Singularity)
 - Uses `network_mode: host` and localhost URLs inside containers.
@@ -76,10 +77,19 @@ Two modes are available:
   - Requires Linux (Docker Desktop macOS/Windows does not support host networking for compose).
   - Ensure ports 5432/8000/3000/8080 are free on the host.
   - Services expect localhost endpoints:
-    - DB: `postgresql://postgres:postgres@localhost:5432/appdb`
+    - DB: `postgresql://postgres:postgres@localhost:5432/appdb` (use your `POSTGRES_PORT` if changed)
     - VLLM: `http://localhost:8000/v1`
     - API: `http://localhost:3000`
     - App: `http://localhost:8080`
+
+### Postgres port override (`POSTGRES_PORT`)
+- Controls the host port exposed for Postgres in Compose (bridge network) and the port used by hostnet URLs.
+- Default: `5432`. Override by setting `POSTGRES_PORT=5433`.
+- Where to set it:
+  - Bridge mode: `.env.local` (used by `docker compose --env-file .env.local ...`)
+  - Hostnet mode: `.env` (used by `docker compose --profile hostnet ...`)
+- Internal container-to-container URLs stay at `db:5432` and do not change with this variable.
+- If you develop outside Docker, update `DATABASE_URL` and `VITE_DATABASE_URL` in your `.env` to match the port you chose.
 
 ### Secrets for hostnet profile
 The hostnet Postgres uses a Docker secret via `POSTGRES_PASSWORD_FILE`. Create a one-line secret file and keep your `.env.local` `DB_PASS` in sync with its contents (the app/API still use `DATABASE_URL`).
@@ -196,12 +206,13 @@ apptainer run --nv --net --network=host \
 
 API
 ```
-apptainer run --net --network=host \
+ apptainer run --net --network=host \
   --env DATABASE_URL=postgresql://postgres:postgres@localhost:5432/appdb \
   --env VITE_LLM_SERVER_URL=http://localhost:8000/v1 \
   --env SERVER_PORT=3000 \
   $STACK_ROOT/images/api_server_${TAG}.sif
 ```
+Replace 5432 in the DATABASE_URL above if you changed `POSTGRES_PORT`.
 
 App
 ```
