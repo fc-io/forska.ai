@@ -5,7 +5,7 @@ You can run it yourself if you have the chops. There will probably be a hosted v
 
 It uses Elysia/Bun for the API server. Solid.js/Tanstack/Vite on the client. Uses Drizzle ORM with Postgres and Better Auth. It then hooks up to open ai compatible apis – vllm or something, to analyze data in various forms (though mainly research papers for the time being).
 
-## Quick Start (Local dev build)
+## Run local dev build
 
 Prereqs
 - Bun installed
@@ -17,7 +17,7 @@ Prereqs
 bun install
 ```
 
-### 2) Configure env, validate, and start Postgres (Compose, bridge network)
+### 2) Configure env variables and  validate
 
 Create `.env.local` (gitignored) and set required values. At minimum:
 
@@ -27,6 +27,7 @@ DB_USER=postgres
 DB_PASS=change-me
 VLLM_API_KEY=fake_key
 POSTGRES_PORT=5432
+# and some more that can be found in env.ts
 ```
 
 Validate your Compose config (optional – shows no output if correct):
@@ -35,7 +36,9 @@ Validate your Compose config (optional – shows no output if correct):
 docker compose --env-file .env.local config -q
 ```
 
-Then start Postgres using `.env.local` for Compose substitution:
+### 3) Start Postgres (compose, bridge network)
+
+Then start Postgres using `.env.local` for compose substitution:
 
 ```
 docker compose --env-file .env.local up db
@@ -43,7 +46,7 @@ docker compose --env-file .env.local up db
 
 Note: Postgres uses a named Docker volume (`forska-stack_pgdata`) rather than a bind mount. This avoids filesystem issues with cloud‑synced folders (Dropbox/iCloud). You can inspect or remove it with `docker volume ls` and `docker volume rm forska-stack_pgdata`.
 
-#### 3) Start API and App in watch mode
+### 3) Start API and App in watch mode
 
 ```
 bun run dev:server
@@ -52,13 +55,14 @@ bun run dev:app
 
 Hit http://localhost:5173 in your browser for the web interface.
 
-If you need the GPU-backed LLM locally, also start the `vllm` service via Compose (see below).
+If you need the GPU-backed LLM locally, also start the `vllm` service via compose (see below).
 
-## Docker Compose
+## Run production builds
 
-Two modes are available:
+Two modes are available.
 
-1) Default (bridge network)
+### Default – bridge network (recommended for local build on mac/windows, need a supported GPU if running VLLM)
+
 - Start everything locally with inter-service DNS (`db`, `vllm`, `api-server`, `app-server`).
 - Validate: `docker compose --env-file .env.local config -q`
 - Command: `docker compose --env-file .env.local up`
@@ -68,73 +72,44 @@ Two modes are available:
   - VLLM: http://localhost:8000
   - Postgres: localhost:5432 (configurable via `POSTGRES_PORT`)
 
-2) Host networking (Linux only; mirrors Apptainer/Singularity)
-- Uses `network_mode: host` and localhost URLs inside containers.
-- Validate: `docker compose --profile hostnet --env-file .env.local config -q`
-- Command: `docker compose --profile hostnet --env-file .env.local up`
-- Notes:
-  - Requires Linux (Docker Desktop macOS/Windows does not support host networking for compose).
-  - Ensure ports 5432/8000/3000/8080 are free on the host.
-  - Services expect localhost endpoints:
-    - DB: `postgresql://postgres:postgres@localhost:5432/appdb` (use your `POSTGRES_PORT` if changed)
-    - VLLM: `http://localhost:8000/v1`
-    - API: `http://localhost:3000`
-    - App: `http://localhost:8080`
+### Host networking – for HPCs running Apptainer
 
-### Postgres port override (`POSTGRES_PORT`)
-- Controls the host port exposed for Postgres in Compose (bridge network) and the port used by hostnet URLs.
-- Default: `5432`. Override by setting `POSTGRES_PORT=5433`.
-- Where to set it:
-  - Bridge mode: `.env.local` (used by `docker compose --env-file .env.local ...`)
-  - Hostnet mode: `.env` (used by `docker compose --profile hostnet ...`)
-- Internal container-to-container URLs stay at `db:5432` and do not change with this variable.
-- If you develop outside Docker, update `DATABASE_URL` and `VITE_DATABASE_URL` in your `.env` to match the port you chose.
+#### Secrets for hostnet profile
 
-### Secrets for hostnet profile
 The hostnet Postgres uses a Docker secret via `POSTGRES_PASSWORD_FILE`. Create a one-line secret file and keep your `.env.local` `DB_PASS` in sync with its contents (the app/API still use `DATABASE_URL`).
 
 ```
 mkdir -p ./.secrets
 printf "%s" "change-me" > ./.secrets/db_password.txt
 chmod 600 ./.secrets/db_password.txt
-
-# Start only the hostnet DB
-docker compose --profile hostnet up db-hostnet
-
-# Or start all hostnet services
-docker compose --profile hostnet up
 ```
 
 Required variables for hostnet runs (in `.env.local`):
-- `DB_NAME`, `DB_USER`, `DB_PASS` (must match `./.secrets/db_password.txt`)
-- `VLLM_API_KEY` (if using `vllm-hostnet`)
+- `DB_NAME`, `DB_USER`, `DB_PASS` (must match `./.secrets/db_password.txt`), `VLLM_API_KEY`
 
-### Validate Compose config
+#### Validate Compose config
+
 Use Compose’s config command to validate YAML, render the effective configuration, and fail fast on missing required variables (e.g., `${DB_PASS:?...}`). This also confirms profile behavior and env-file sourcing.
 
-Why validate
-- Fail fast on required vars and substitutions
-- See the effective config after anchors/profiles/env substitution
-- Catch schema/syntax issues early
-- Verify hostnet profile selection
-- Clarify that `--env-file .env.local` is used for substitution
-
-Commands
+##### Inspect the fully rendered YAML (optional)
 ```
-# Validate local (bridge) configuration
-docker compose --env-file .env.local config -q
+docker compose --env-file .env config > docker-compose.effective.yml
+```
 
-# Inspect the fully rendered YAML
-docker compose --env-file .env.local config > docker-compose.effective.yml
-
-# Validate hostnet view (Linux only)
-docker compose --profile hostnet --env-file .env.local config -q
-
-# List selected services with current env/profile
-docker compose --env-file .env.local config --services
+##### Validate hostnet view – Linux only (optional)
+```
+docker compose --profile hostnet --env-file .env config -q
 ```
 
 Note: `config` validates that secrets are defined and referenced, but the actual secret file presence/permissions are checked at `up` time.
+
+#### Start all hostnet services
+
+- Ensure ports 5432/8000/3000/8080 are free on the host.
+
+```
+docker compose --profile hostnet up
+```
 
 ## HPC / Apptainer (Singularity)
 
