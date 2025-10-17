@@ -5,14 +5,10 @@ const envShape = arktype({
   BETTER_AUTH_SECRET: 'string',
   BETTER_AUTH_URL: 'string',
   VITE_PORT: 'string.integer.parse',
-  SERVER_PORT: 'string.integer.parse',
+  API_SERVER_PORT: 'string.integer.parse',
   RUN_SERVER_JUDGING: arktype('"true" | "false" | boolean').pipe((v) => {
     return typeof v === 'string' ? v.toLowerCase() === 'true' : v
   }),
-  VITE_LLM_SERVER_URL: 'string',
-  NCBI_EMAIL: 'string | undefined',
-  NCBI_API_KEY: 'string | undefined',
-  NCBI_TOOL: 'string | undefined',
 })
 
 const loadEnv = (): typeof envShape.infer => {

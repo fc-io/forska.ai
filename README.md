@@ -11,14 +11,13 @@ Prereqs
 - Bun installed
 - Docker (for local Postgres) and a GPU if you plan to run VLLM locally
 
-### Steps
-#### 1) Install dependencies
+### 1) Install dependencies
 
 ```
 bun install
 ```
 
-#### 2) Configure env, validate, and start Postgres (Compose, bridge network)
+### 2) Configure env, validate, and start Postgres (Compose, bridge network)
 
 Create `.env.local` (gitignored) and set required values. At minimum:
 
@@ -209,7 +208,7 @@ API
  apptainer run --net --network=host \
   --env DATABASE_URL=postgresql://postgres:postgres@localhost:5432/appdb \
   --env VITE_LLM_SERVER_URL=http://localhost:8000/v1 \
-  --env SERVER_PORT=3000 \
+  --env API_SERVER_PORT=3000 \
   $STACK_ROOT/images/api_server_${TAG}.sif
 ```
 Replace 5432 in the DATABASE_URL above if you changed `POSTGRES_PORT`.
@@ -217,7 +216,7 @@ Replace 5432 in the DATABASE_URL above if you changed `POSTGRES_PORT`.
 App
 ```
 apptainer run --net --network=host \
-  --env SERVER_HOST=localhost --env SERVER_PORT=3000 \
+  --env SERVER_HOST=localhost --env API_SERVER_PORT=3000 \
   --env PROD_SERVER=8080 \
   $STACK_ROOT/images/app_server_${TAG}.sif
 ```

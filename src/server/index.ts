@@ -1,6 +1,4 @@
 import {cors} from '@elysiajs/cors'
-import {staticPlugin} from '@elysiajs/static'
-import {file} from 'bun'
 import {Elysia} from 'elysia'
 
 import {judgmentsJobsCron} from './cron/judgmentsJobs.ts'
@@ -42,7 +40,7 @@ const app = new Elysia()
   .use(tokensRoutes)
   .use(usersRoutes)
   .use(vllmStatusRoutes)
-  .listen(env.SERVER_PORT)
+  .listen(env.API_SERVER_PORT)
 
 console.log(`🦊 Elysia is running at ${app.server?.hostname}:${app.server?.port}`)
 

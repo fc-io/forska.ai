@@ -67,7 +67,7 @@ services:
       DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASS:?set DB_PASS in .env.local}@db:5432/${DB_NAME:-postgres}
       VLLM_BASE_URL: http://vllm:8000/v1
       VITE_LLM_SERVER_URL: http://vllm:8000/v1
-      SERVER_PORT: 3000
+      API_SERVER_PORT: 3000
       VITE_PORT: 8080
       NODE_ENV: production
       OPENAI_API_KEY: ${VLLM_API_KEY}
@@ -84,7 +84,7 @@ services:
         BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET required in .env.local}
         BETTER_AUTH_URL: ${BETTER_AUTH_URL:?BETTER_AUTH_URL required in .env.local}
         VITE_PORT: "8080"
-        SERVER_PORT: "3000"
+        API_SERVER_PORT: "3000"
         RUN_SERVER_JUDGING: ${RUN_SERVER_JUDGING:-false}
         VITE_LLM_SERVER_URL: http://vllm:8000/v1
         NCBI_EMAIL: ${NCBI_EMAIL:-}
@@ -96,7 +96,7 @@ services:
       - .env.local
     environment:
       SERVER_HOST: api-server
-      SERVER_PORT: 3000
+      API_SERVER_PORT: 3000
       PROD_SERVER: 8080
       NODE_ENV: production
     # depends_on:
@@ -169,7 +169,7 @@ services:
       DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASS:?set DB_PASS in .env.local}@localhost:${POSTGRES_PORT:-5432}/${DB_NAME:-postgres}
       VLLM_BASE_URL: http://localhost:8000/v1
       VITE_LLM_SERVER_URL: http://localhost:8000/v1
-      SERVER_PORT: 3000
+      API_SERVER_PORT: 3000
       VITE_PORT: 8080
       NODE_ENV: production
       OPENAI_API_KEY: ${VLLM_API_KEY}
@@ -188,7 +188,7 @@ services:
         BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET required in .env}
         BETTER_AUTH_URL: ${BETTER_AUTH_URL:?BETTER_AUTH_URL required in .env}
         VITE_PORT: "8080"
-        SERVER_PORT: "3000"
+        API_SERVER_PORT: "3000"
         RUN_SERVER_JUDGING: ${RUN_SERVER_JUDGING:-false}
         VITE_LLM_SERVER_URL: http://localhost:8000/v1
         NCBI_EMAIL: ${NCBI_EMAIL:-}
@@ -200,7 +200,7 @@ services:
       - .env
     environment:
       SERVER_HOST: localhost
-      SERVER_PORT: 3000
+      API_SERVER_PORT: 3000
       PROD_SERVER: 8080
       NODE_ENV: production
     network_mode: host
