@@ -1,9 +1,9 @@
 # forska.ai
 
-This is a really deep, deep research "agent" It's actively developed, it's going to be a lot of changes.
+This is a really deep, "deep research agent". It's actively developed, it's going to be a lot of changes.
 You can run it yourself if you have the chops. There will be a hosted version eventually.
 
-It uses Elysia/Bun for the API server. Solid.js/Tanstack/Vite on the client. Uses Drizzle ORM with Postgres and Better Auth. It then hooks up to open ai compatible apis – vllm or something, to analyze data (mainly research papers).
+It uses Elysia/Bun for the API server. Solid.js/Tanstack/Vite on the client. Uses Drizzle ORM with Postgres and Better Auth. It then hooks up to open ai compatible apis – vllm or something, to analyze data in various forms (though mainly research papers for the time being).
 
 ## Quick Start (Local production build)
 
@@ -21,6 +21,8 @@ bun install
 ```
 docker compose up db
 ```
+
+Note: Postgres uses a named Docker volume (`forska-stack_pgdata`) rather than a bind mount. This avoids filesystem issues with cloud‑synced folders (Dropbox/iCloud). You can inspect or remove it with `docker volume ls` and `docker volume rm forska-stack_pgdata`.
 
 3) Start API and App in watch mode
 ```

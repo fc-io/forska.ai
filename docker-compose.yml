@@ -17,7 +17,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     volumes:
-      - ./pgdata:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql/data
       # Seed database on first init; files run in alphanumeric order
       - ./init-db:/docker-entrypoint-initdb.d:ro
     healthcheck:
@@ -116,7 +116,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     volumes:
-      - ./pgdata:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql/data
       - ./init-db:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d appdb -h 127.0.0.1 -p 5432"]
@@ -202,3 +202,6 @@ services:
       PROD_SERVER: 8080
       NODE_ENV: production
     network_mode: host
+
+volumes:
+  pgdata:
