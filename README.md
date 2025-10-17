@@ -11,25 +11,32 @@ Prereqs
 - Bun installed
 - Docker (for local Postgres) and a GPU if you plan to run VLLM locally
 
-Steps
-1) Install dependencies
+### Steps
+#### 1) Install dependencies
+
 ```
 bun install
 ```
 
-2) Configure env, validate, and start Postgres (Compose, bridge network)
+#### 2) Configure env, validate, and start Postgres (Compose, bridge network)
+
 Create `.env.local` (gitignored) and set required values. At minimum:
+
 ```
 DB_NAME=postgres
 DB_USER=postgres
 DB_PASS=change-me
 VLLM_API_KEY=fake_key
 ```
-Validate your Compose config (recommended):
+
+Validate your Compose config (optional – shows no output if correct):
+
 ```
 docker compose --env-file .env.local config -q
 ```
+
 Then start Postgres using `.env.local` for Compose substitution:
+
 ```
 docker compose --env-file .env.local up db
 ```
