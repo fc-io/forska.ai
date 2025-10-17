@@ -39,6 +39,7 @@ junit.xml
 .temp/
 .tmp/
 temp/
+.secrets/
 
 # editor/IDE files
 .idea

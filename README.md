@@ -1,7 +1,7 @@
 # forska.ai
 
 This is a really deep, "deep research agent". It's actively developed, it's going to be a lot of changes.
-You can run it yourself if you have the chops. There will be a hosted version eventually.
+You can run it yourself if you have the chops. There will probably be a hosted version eventually.
 
 It uses Elysia/Bun for the API server. Solid.js/Tanstack/Vite on the client. Uses Drizzle ORM with Postgres and Better Auth. It then hooks up to open ai compatible apis – vllm or something, to analyze data in various forms (though mainly research papers for the time being).
 
@@ -17,9 +17,21 @@ Steps
 bun install
 ```
 
-2) Start Postgres (Compose, bridge network)
+2) Configure env, validate, and start Postgres (Compose, bridge network)
+Create `.env.local` (gitignored) and set required values. At minimum:
 ```
-docker compose up db
+DB_NAME=postgres
+DB_USER=postgres
+DB_PASS=change-me
+VLLM_API_KEY=fake_key
+```
+Validate your Compose config (recommended):
+```
+docker compose --env-file .env.local config -q
+```
+Then start Postgres using `.env.local` for Compose substitution:
+```
+docker compose --env-file .env.local up db
 ```
 
 Note: Postgres uses a named Docker volume (`forska-stack_pgdata`) rather than a bind mount. This avoids filesystem issues with cloud‑synced folders (Dropbox/iCloud). You can inspect or remove it with `docker volume ls` and `docker volume rm forska-stack_pgdata`.
@@ -43,7 +55,8 @@ Two modes are available:
 
 1) Default (bridge network)
 - Start everything locally with inter-service DNS (`db`, `vllm`, `api-server`, `app-server`).
-- Command: `docker compose up`
+- Validate: `docker compose --env-file .env.local config -q`
+- Command: `docker compose --env-file .env.local up`
 - Endpoints:
   - App: http://localhost:8080
   - API: http://localhost:3000
@@ -52,7 +65,8 @@ Two modes are available:
 
 2) Host networking (Linux only; mirrors Apptainer/Singularity)
 - Uses `network_mode: host` and localhost URLs inside containers.
-- Command: `docker compose --profile hostnet up`
+- Validate: `docker compose --profile hostnet --env-file .env.local config -q`
+- Command: `docker compose --profile hostnet --env-file .env.local up`
 - Notes:
   - Requires Linux (Docker Desktop macOS/Windows does not support host networking for compose).
   - Ensure ports 5432/8000/3000/8080 are free on the host.
@@ -61,6 +75,52 @@ Two modes are available:
     - VLLM: `http://localhost:8000/v1`
     - API: `http://localhost:3000`
     - App: `http://localhost:8080`
+
+### Secrets for hostnet profile
+The hostnet Postgres uses a Docker secret via `POSTGRES_PASSWORD_FILE`. Create a one-line secret file and keep your `.env.local` `DB_PASS` in sync with its contents (the app/API still use `DATABASE_URL`).
+
+```
+mkdir -p ./.secrets
+printf "%s" "change-me" > ./.secrets/db_password.txt
+chmod 600 ./.secrets/db_password.txt
+
+# Start only the hostnet DB
+docker compose --profile hostnet up db-hostnet
+
+# Or start all hostnet services
+docker compose --profile hostnet up
+```
+
+Required variables for hostnet runs (in `.env.local`):
+- `DB_NAME`, `DB_USER`, `DB_PASS` (must match `./.secrets/db_password.txt`)
+- `VLLM_API_KEY` (if using `vllm-hostnet`)
+
+### Validate Compose config
+Use Compose’s config command to validate YAML, render the effective configuration, and fail fast on missing required variables (e.g., `${DB_PASS:?...}`). This also confirms profile behavior and env-file sourcing.
+
+Why validate
+- Fail fast on required vars and substitutions
+- See the effective config after anchors/profiles/env substitution
+- Catch schema/syntax issues early
+- Verify hostnet profile selection
+- Clarify that `--env-file .env.local` is used for substitution
+
+Commands
+```
+# Validate local (bridge) configuration
+docker compose --env-file .env.local config -q
+
+# Inspect the fully rendered YAML
+docker compose --env-file .env.local config > docker-compose.effective.yml
+
+# Validate hostnet view (Linux only)
+docker compose --profile hostnet --env-file .env.local config -q
+
+# List selected services with current env/profile
+docker compose --env-file .env.local config --services
+```
+
+Note: `config` validates that secrets are defined and referenced, but the actual secret file presence/permissions are checked at `up` time.
 
 ## HPC / Apptainer (Singularity)
 

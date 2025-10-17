@@ -13,9 +13,9 @@ services:
   db:
     image: postgres:18
     environment:
-      POSTGRES_DB: appdb
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ${DB_NAME:-appdb}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASS:?set DB_PASS in .env.local}
     volumes:
       - pgdata:/var/lib/postgresql/data
       # Seed database on first init; files run in alphanumeric order
@@ -33,7 +33,7 @@ services:
     shm_size: "8gb"
     environment:
       <<: *caches
-      VLLM_API_KEY: ${VLLM_API_KEY:?set in .env}
+      VLLM_API_KEY: ${VLLM_API_KEY:?set in .env.local}
       # tuneables
       VLLM_GPU_UTIL: ${VLLM_GPU_UTIL:-0.90}
       TP_SIZE: ${TP_SIZE:-1}           # set to your local GPU count (e.g., 4)
@@ -62,9 +62,9 @@ services:
       context: .
       dockerfile: Dockerfile.api
     env_file:
-      - .env
+      - .env.local
     environment:
-      DATABASE_URL: postgresql://postgres:postgres@db:5432/appdb
+      DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASS:?set DB_PASS in .env.local}@db:5432/${DB_NAME:-appdb}
       VLLM_BASE_URL: http://vllm:8000/v1
       VITE_LLM_SERVER_URL: http://vllm:8000/v1
       SERVER_PORT: 3000
@@ -80,9 +80,9 @@ services:
       context: .
       dockerfile: Dockerfile.app
       args:
-        DATABASE_URL: postgresql://postgres:postgres@db:5432/appdb
-        BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET required in .env}
-        BETTER_AUTH_URL: ${BETTER_AUTH_URL:?BETTER_AUTH_URL required in .env}
+        DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASS:?set DB_PASS in .env.local}@db:5432/${DB_NAME:-appdb}
+        BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET required in .env.local}
+        BETTER_AUTH_URL: ${BETTER_AUTH_URL:?BETTER_AUTH_URL required in .env.local}
         VITE_PORT: "8080"
         SERVER_PORT: "3000"
         RUN_SERVER_JUDGING: ${RUN_SERVER_JUDGING:-false}
@@ -90,10 +90,10 @@ services:
         NCBI_EMAIL: ${NCBI_EMAIL:-}
         NCBI_API_KEY: ${NCBI_API_KEY:-}
         NCBI_TOOL: ${NCBI_TOOL:-}
-        VITE_DATABASE_URL: ${VITE_DATABASE_URL:?VITE_DATABASE_URL required in .env}
-        VITE_SERVER_API: ${VITE_SERVER_API:?VITE_SERVER_API required in .env}
+        VITE_DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASS:?set DB_PASS in .env.local}@db:5432/${DB_NAME:-appdb}
+        VITE_SERVER_API: ${VITE_SERVER_API:?VITE_SERVER_API required in .env.local}
     env_file:
-      - .env
+      - .env.local
     environment:
       SERVER_HOST: api-server
       SERVER_PORT: 3000
@@ -112,9 +112,9 @@ services:
     image: postgres:18
     platform: linux/amd64
     environment:
-      POSTGRES_DB: appdb
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ${DB_NAME:-appdb}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./init-db:/docker-entrypoint-initdb.d:ro
@@ -124,6 +124,8 @@ services:
       timeout: 5s
       retries: 6
     network_mode: host
+    secrets:
+      - db_password
 
   vllm-hostnet:
     profiles: ["hostnet"]
@@ -164,7 +166,7 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/appdb
+      DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASS:?set DB_PASS in .env.local}@localhost:5432/${DB_NAME:-appdb}
       VLLM_BASE_URL: http://localhost:8000/v1
       VITE_LLM_SERVER_URL: http://localhost:8000/v1
       SERVER_PORT: 3000
@@ -182,7 +184,7 @@ services:
       context: .
       dockerfile: Dockerfile.app
       args:
-        DATABASE_URL: postgresql://postgres:postgres@localhost:5432/appdb
+        DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASS:?set DB_PASS in .env.local}@localhost:5432/${DB_NAME:-appdb}
         BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET required in .env}
         BETTER_AUTH_URL: ${BETTER_AUTH_URL:?BETTER_AUTH_URL required in .env}
         VITE_PORT: "8080"
@@ -192,7 +194,7 @@ services:
         NCBI_EMAIL: ${NCBI_EMAIL:-}
         NCBI_API_KEY: ${NCBI_API_KEY:-}
         NCBI_TOOL: ${NCBI_TOOL:-}
-        VITE_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/appdb
+        VITE_DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASS:?set DB_PASS in .env.local}@localhost:5432/${DB_NAME:-appdb}
         VITE_SERVER_API: http://localhost:3000
     env_file:
       - .env
@@ -205,3 +207,6 @@ services:
 
 volumes:
   pgdata:
+secrets:
+  db_password:
+    file: ./.secrets/db_password.txt
