@@ -21,7 +21,7 @@ services:
       # Seed database on first init; files run in alphanumeric order
       - ./init-db:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d appdb -h 127.0.0.1 -p 5432"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-appdb} -h 127.0.0.1 -p 5432"]
       interval: 10s
       timeout: 5s
       retries: 6
@@ -119,7 +119,7 @@ services:
       - pgdata:/var/lib/postgresql/data
       - ./init-db:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d appdb -h 127.0.0.1 -p 5432"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-appdb} -h 127.0.0.1 -p 5432"]
       interval: 10s
       timeout: 5s
       retries: 6

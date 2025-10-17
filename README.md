@@ -5,7 +5,7 @@ You can run it yourself if you have the chops. There will probably be a hosted v
 
 It uses Elysia/Bun for the API server. Solid.js/Tanstack/Vite on the client. Uses Drizzle ORM with Postgres and Better Auth. It then hooks up to open ai compatible apis – vllm or something, to analyze data in various forms (though mainly research papers for the time being).
 
-## Quick Start (Local production build)
+## Quick Start (Local dev build)
 
 Prereqs
 - Bun installed
@@ -43,16 +43,14 @@ docker compose --env-file .env.local up db
 
 Note: Postgres uses a named Docker volume (`forska-stack_pgdata`) rather than a bind mount. This avoids filesystem issues with cloud‑synced folders (Dropbox/iCloud). You can inspect or remove it with `docker volume ls` and `docker volume rm forska-stack_pgdata`.
 
-3) Start API and App in watch mode
+#### 3) Start API and App in watch mode
+
 ```
 bun run dev:server
 bun run dev:app
 ```
 
-Default endpoints
-- App: http://localhost:8080
-- API: http://localhost:3000
-- Postgres: localhost:5432
+Hit http://localhost:5173 in your browser for the web interface.
 
 If you need the GPU-backed LLM locally, also start the `vllm` service via Compose (see below).
 
@@ -282,3 +280,13 @@ Notes
 - The same image works for both bridge and host networking; the difference is in how you run it.
 - The app build reads env at build time (Vite). Ensure the build-arg values match the runtime endpoints you intend to use.
 - If you prefer, you can source your `.env` and pass values in `--build-arg` from that file.
+
+## Troubleshooting
+
+- Postgres logs: `FATAL:  database "appdb" does not exist`
+  - Cause: the healthcheck previously targeted a hardcoded `appdb` DB. It now respects `DB_NAME` from your env. Ensure your Compose run uses the intended env file for substitution (e.g., `--env-file .env.local`).
+  - Align DB name: set `DB_NAME` in your env file to match the database that exists in the `pgdata` volume (commonly `postgres`). Example: `DB_NAME=postgres`.
+  - Recreate database volume (if you want to switch DB names cleanly):
+    - Stop and remove containers and the named volume: `docker compose down -v`
+    - Start again with your env: `docker compose --env-file .env.local up db`
+  - Create the DB manually (alternative): `docker exec -it $(docker ps --filter name=db --format '{{.ID}}') psql -U ${DB_USER:-postgres} -c "CREATE DATABASE ${DB_NAME:-appdb};"`
