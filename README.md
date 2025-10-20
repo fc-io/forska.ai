@@ -82,14 +82,18 @@ The hostnet profile uses secrets files (not env) for database credentials:
 - API reads its connection string via `DATABASE_URL_FILE`.
 - Optional: `BETTER_AUTH_SECRET_FILE` and `BETTER_AUTH_URL_FILE` are also supported.
 
+Safer one‑liners (no secret in history):
+
+zsh
 ```
-mkdir -p ./.secrets
-# DB server password (one line, no trailing newline)
-printf "%s" "change-me" > ./.secrets/db_password.txt
-chmod 600 ./.secrets/db_password.txt
-# API connection string (full DSN, one line)
-printf "%s" "postgresql://postgres:change-me@localhost:5432/postgres" > ./.secrets/database_url.txt
-chmod 600 ./.secrets/database_url.txt
+mkdir -p ./.secrets && read -s "PW?DB password: " && umask 077 && printf '%s' "$PW" > ./.secrets/db_password.txt && chmod 600 ./.secrets/db_password.txt && unset PW
+read -s "URL?Database URL (postgresql://...): " && umask 077 && printf '%s' "$URL" > ./.secrets/database_url.txt && chmod 600 ./.secrets/database_url.txt && unset URL
+```
+
+bash
+```
+mkdir -p ./.secrets; read -s -p 'DB password: ' PW; echo; umask 077; printf '%s' "$PW" > ./.secrets/db_password.txt; chmod 600 ./.secrets/db_password.txt; unset PW
+read -s -p 'Database URL (postgresql://...): ' URL; echo; umask 077; printf '%s' "$URL" > ./.secrets/database_url.txt; chmod 600 ./.secrets/database_url.txt; unset URL
 ```
 
 #### Env vars hostnet profile
@@ -106,35 +110,32 @@ POSTGRES_PORT=5432
 
 Compared to running locally, do not set `DB_PASS` for hostnet – use the secrets files above instead.
 
-#### Setup container use on HPC
+#### Set shared path
 
+Recommended shared paths and caches (for running on Alvis HPC, adapt to your setup)
 
-Pre-pull images to SIF files on a shared filesystem and run with host networking (`--net --network=host`). This mirrors the Compose hostnet profile and uses localhost URLs inside containers.
-
-Recommended shared paths and caches
 ```
 export STACK_ROOT=/mimer/NOBACKUP/groups/clin-agent-bench/dev; \
-  mkdir -p $STACK_ROOT/{pgdata,models,hf_cache,logs,images,.cache} && echo $STACK_ROOT
+  mkdir -p $STACK_ROOT/{pgdata,models,hf_cache,logs,.cache} && echo $STACK_ROOT
 export XDG_CACHE_HOME=$STACK_ROOT/.cache; \
   export VLLM_CACHE_ROOT=$XDG_CACHE_HOME/vllm; \
   export TORCHINDUCTOR_CACHE_DIR=$VLLM_CACHE_ROOT/torchinductor; \
   export TRITON_CACHE_DIR=$VLLM_CACHE_ROOT/triton; \
   export HF_HOME=$STACK_ROOT/hf_cache
-
-# Optional: verify your model path exists
-ls -al "$STACK_ROOT/models/Qwen3-32B-FP8" || true
 ```
 
-### 1) Pre-pull images (offline-friendly)
+#### Setup container use on HPC
 
-If compute nodes cannot reach container registries, pull on a login/head node with network access and place the `.sif` files under `$STACK_ROOT/images`.
+##### 0) Build api and app docker images locally and put on your private registry
+
+##### 1) Pre-pull images (offline-friendly)
+
+Place the `.sif` files under `$STACK_ROOT`.
 
 ```
-mkdir -p "$STACK_ROOT/images"
-
 # Public registries (explicit amd64)
-apptainer pull --arch amd64 "$STACK_ROOT/images/postgres_18.sif" docker://docker.io/library/postgres:18
-apptainer pull --arch amd64 "$STACK_ROOT/images/vllm_openai_latest.sif" docker://vllm/vllm-openai:latest
+apptainer pull --arch amd64 "$STACK_ROOT/postgres_18.sif" docker://docker.io/library/postgres:18
+apptainer pull --arch amd64 "$STACK_ROOT/vllm_openai_latest.sif" docker://vllm/vllm-openai:latest
 
 # GHCR (login first if private)
 apptainer registry login ghcr.io -u "$GHCR_USER"
@@ -147,8 +148,14 @@ Tip: the `--profile hostnet` compose setup on Linux behaves like Apptainer’s h
 ### 2) Provide secrets (Postgres password file)
 
 The official Postgres image supports `POSTGRES_PASSWORD_FILE`. Create a one-line secret and restrict permissions:
+zsh (no secret in history)
 ```
-mkdir -p "$HOME/.secrets" && echo 'yourStrongPassword' > "$HOME/.secrets/pg_password" && chmod 600 "$HOME/.secrets/pg_password"
+mkdir -p "$HOME/.secrets" && read -s "PW?Postgres password: " && umask 077 && printf '%s' "$PW" > "$HOME/.secrets/pg_password" && chmod 600 "$HOME/.secrets/pg_password" && unset PW
+```
+
+bash (no secret in history)
+```
+mkdir -p "$HOME/.secrets"; read -s -p 'Postgres password: ' PW; echo; umask 077; printf '%s' "$PW" > "$HOME/.secrets/pg_password"; chmod 600 "$HOME/.secrets/pg_password"; unset PW
 ```
 
 ### 3) Run the SIFs (no registry access required)
@@ -162,6 +169,10 @@ apptainer run --net --network=host \
   --bind $STACK_ROOT/pgdata:/var/lib/postgresql/data \
   --bind $HOME/.secrets/pg_password:/run/secrets/pg_password:ro \
   $STACK_ROOT/images/postgres_18.sif
+```
+
+# Optional: verify your model path exists
+ls -al "$STACK_ROOT/models/Qwen3-32B-FP8" || true
 ```
 
 VLLM (GPU)
