@@ -122,13 +122,32 @@ export XDG_CACHE_HOME=$STACK_ROOT/.cache; \
   export TORCHINDUCTOR_CACHE_DIR=$VLLM_CACHE_ROOT/torchinductor; \
   export TRITON_CACHE_DIR=$VLLM_CACHE_ROOT/triton; \
   export HF_HOME=$STACK_ROOT/hf_cache
+  # Required: who owns the images in GHCR (lowercase)
+  export GHCR_OWNER=<your-org-or-username>
+  # Required: who logs in to GHCR (can be the same as owner)
+  export GHCR_USER=<your-gh-username>
+
 ```
 
 #### Setup container use on HPC
 
-##### 0) Build api and app docker images locally and put on your private registry
+##### 1) Build api and app docker images locally and push to GHCR
 
-##### 1) Pre-pull images (offline-friendly)
+Prereqs
+- Create a GitHub Personal Access Token with `write:packages` (and `read:packages` to pull).
+- Login `docker login ghcr.io -u "$GHCR_USER"` locally
+
+##### 2) set the required
+
+```
+bun run build:docker
+```
+
+Notes
+- The app build reads `.env` at build time (Vite). Ensure the build-arg values match the runtime endpoints you intend to use.
+- If you prefer, you can source your `.env` and pass values in `--build-arg` from that file.
+
+##### 3) Pre-pull images (offline-friendly)
 
 Place the `.sif` files under `$STACK_ROOT`.
 
@@ -137,10 +156,10 @@ Place the `.sif` files under `$STACK_ROOT`.
 apptainer pull --arch amd64 "$STACK_ROOT/postgres_18.sif" docker://docker.io/library/postgres:18
 apptainer pull --arch amd64 "$STACK_ROOT/vllm_openai_latest.sif" docker://vllm/vllm-openai:latest
 
-# GHCR (login first if private)
+# GHCR (login first on remote)
 apptainer registry login ghcr.io -u "$GHCR_USER"
-apptainer pull --arch amd64 "$STACK_ROOT/images/api_server_${TAG}.sif" docker://ghcr.io/$GHCR_OWNER/api-server:$TAG
-apptainer pull --arch amd64 "$STACK_ROOT/images/app_server_${TAG}.sif" docker://ghcr.io/$GHCR_OWNER/app-server:$TAG
+apptainer pull --arch amd64 "$STACK_ROOT/api_server_${TAG}.sif" docker://ghcr.io/$GHCR_OWNER/api-server:$TAG
+apptainer pull --arch amd64 "$STACK_ROOT/app_server_${TAG}.sif" docker://ghcr.io/$GHCR_OWNER/app-server:$TAG
 ```
 
 Tip: the `--profile hostnet` compose setup on Linux behaves like Apptainer’s host networking, so you can validate localhost-based URLs locally before deploying.
@@ -216,70 +235,8 @@ apptainer exec \
   sh -lc 'ls -l /run/secrets && head -c 5 /run/secrets/pg_password && echo'
 ```
 
-Optional — Docker save/load (if you must use Docker on airgapped hosts)
-```
-# On a networked machine
-docker pull ghcr.io/$GHCR_OWNER/api-server:$TAG
-docker pull ghcr.io/$GHCR_OWNER/app-server:$TAG
-docker save -o api-server_$TAG.tar ghcr.io/$GHCR_OWNER/api-server:$TAG
-docker save -o app-server_$TAG.tar ghcr.io/$GHCR_OWNER/app-server:$TAG
-
-# On the target host(s)
-docker load -i api-server_$TAG.tar
-docker load -i app-server_$TAG.tar
-```
-
-## Build and Push to GHCR (hostnet runtime)
-
-Host networking is a runtime setting; you don’t need a special build. Build the same images and run them with host networking (Compose hostnet profile or Apptainer `--network=host`). Use the Compose path below to build and push to GitHub Container Registry (ghcr.io).
-
-Prereqs
-- Create a GitHub Personal Access Token with `write:packages` (and `read:packages` to pull).
-- Quick-setup environment (adjust values to your repo/org):
-```
-# Required: who owns the images in GHCR (lowercase)
-export GHCR_OWNER=your-org-or-username
-
-# Required: who logs in to GHCR (can be the same as owner)
-export GHCR_USER=your-gh-username
-
-# Required: GitHub PAT with write:packages
-export GHCR_TOKEN=ghp_xxx
-
-# Recommended: consistent tag for both images
-# Use a version:
-# export TAG=v0.1.0
-# Or a git SHA (default suggestion):
-export TAG=$(git rev-parse --short HEAD)
-# Or a datestamp:
-# export TAG=$(date +%Y%m%d-%H%M%S)
-```
-
-Login
-```
-echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-```
-
-Build via Compose (uses hostnet service configs)
-```
-# Build the hostnet variants (Linux only)
-docker compose --profile hostnet build api-server-hostnet app-server-hostnet
-
-# Push directly with Compose (requires GHCR_OWNER and TAG)
-docker compose --profile hostnet push api-server-hostnet app-server-hostnet
-```
-
-Notes
-- The same image works for both bridge and host networking; the difference is in how you run it.
-- The app build reads env at build time (Vite). Ensure the build-arg values match the runtime endpoints you intend to use.
-- If you prefer, you can source your `.env` and pass values in `--build-arg` from that file.
-
 ## Troubleshooting
-
-- Postgres logs: `FATAL:  database "appdb" does not exist`
-  - Cause: the healthcheck previously targeted a hardcoded `appdb` DB. It now respects `DB_NAME` from your env. Ensure your Compose run uses the intended env file for substitution (e.g., `--env-file .env.local`).
-  - Align DB name: set `DB_NAME` in your env file to match the database that exists in the `pgdata` volume (commonly `postgres`). Example: `DB_NAME=postgres`.
-  - Recreate database volume (if you want to switch DB names cleanly):
+  - Recreate database volume
     - Stop and remove containers and the named volume: `docker compose down -v`
     - Start again with your env: `docker compose --env-file .env.local up db`
   - Create the DB manually (alternative): `docker exec -it $(docker ps --filter name=db --format '{{.ID}}') psql -U ${DB_USER:-postgres} -c "CREATE DATABASE ${DB_NAME:-appdb};"`

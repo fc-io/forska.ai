@@ -1,5 +1,5 @@
-import {readFileSync} from 'fs'
 import {type as arktype} from 'arktype'
+import {readFileSync} from 'fs'
 
 const envShape = arktype({
   DATABASE_URL: 'string',
@@ -18,7 +18,7 @@ const readFromFileVar = (key: string): string | undefined => {
   return filePath ? readFileSync(filePath, 'utf8').trim() : undefined
 }
 
-const getEnvWithFileFallback = (): NodeJS.ProcessEnv => {
+const getEnvWithFileFallback = (): Record<string, string | undefined> => {
   const source = {...process.env}
   const withFile = (k: string): void => {
     if (!source[k]) {
