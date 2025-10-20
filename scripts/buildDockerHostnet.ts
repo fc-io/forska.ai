@@ -10,10 +10,6 @@ console.log(`\n`)
 console.log(`Built and pushed images to GHCR with tag ${tag}`)
 console.log(`--------------------------`)
 console.log('Now pull images on remote:')
-console.log(
-  `apptainer pull --arch amd64 "$STACK_ROOT/api_server_${tag}.sif" docker://ghcr.io/$GHCR_OWNER/api-server:${tag}`,
-)
-console.log(
-  `apptainer pull --arch amd64 "$STACK_ROOT/app_server_${tag}.sif" docker://ghcr.io/$GHCR_OWNER/app-server:${tag}`,
-)
+console.log(`apptainer pull --arch amd64 "$STACK_ROOT/api_server.sif" docker://ghcr.io/$GHCR_OWNER/api-server:${tag}`)
+console.log(`apptainer pull --arch amd64 "$STACK_ROOT/app_server.sif" docker://ghcr.io/$GHCR_OWNER/app-server:${tag}`)
 console.log(`--------------------------`)

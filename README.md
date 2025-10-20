@@ -158,8 +158,8 @@ apptainer pull --arch amd64 "$STACK_ROOT/vllm_openai_latest.sif" docker://vllm/v
 
 # GHCR (login first on remote)
 apptainer registry login ghcr.io -u "$GHCR_USER"
-apptainer pull --arch amd64 "$STACK_ROOT/api_server_${TAG}.sif" docker://ghcr.io/$GHCR_OWNER/api-server:$TAG
-apptainer pull --arch amd64 "$STACK_ROOT/app_server_${TAG}.sif" docker://ghcr.io/$GHCR_OWNER/app-server:$TAG
+apptainer pull --arch amd64 "$STACK_ROOT/api_server.sif" docker://ghcr.io/$GHCR_OWNER/api-server:$TAG
+apptainer pull --arch amd64 "$STACK_ROOT/app_server.sif" docker://ghcr.io/$GHCR_OWNER/app-server:$TAG
 ```
 
 Tip: the `--profile hostnet` compose setup on Linux behaves like Apptainer’s host networking, so you can validate localhost-based URLs locally before deploying.
@@ -194,58 +194,59 @@ Notes
 ### 3) Run the SIFs (no registry access required)
 
 DB (Postgres)
-```
+``` bash
 apptainer run --net --network=host \
   --env POSTGRES_USER=postgres \
   --env POSTGRES_PASSWORD_FILE=/run/secrets/db_password \
   --env POSTGRES_DB=appdb \
   --bind $STACK_ROOT/pgdata:/var/lib/postgresql/data \
   --bind ${STACK_ROOT:-.}/.secrets/db_password.txt:/run/secrets/db_password:ro \
-  $STACK_ROOT/images/postgres_18.sif
+  $STACK_ROOT/postgres_18.sif
 ```
 
 # Optional: verify your model path exists
+```
 ls -al "$STACK_ROOT/models/Qwen3-32B-FP8" || true
 ```
 
 VLLM (GPU)
-```
+``` bash
 apptainer run --nv --net --network=host \
   --bind $STACK_ROOT/models:/models:ro \
-  $STACK_ROOT/images/vllm_openai_latest.sif \
+  $STACK_ROOT/vllm_openai_latest.sif \
   vllm serve /models/Qwen3-32B-FP8 \
     --host 0.0.0.0 --port 8000 \
     --api-key "$VLLM_API_KEY"
 ```
 
 API
-```
+``` bash
 apptainer run --net --network=host \
   --bind ${STACK_ROOT:-.}/.secrets/database_url.txt:/run/secrets/database_url:ro \
   --env DATABASE_URL_FILE=/run/secrets/database_url \
   --env VITE_LLM_SERVER_URL=http://localhost:8000/v1 \
   --env API_SERVER_PORT=3000 \
-  $STACK_ROOT/images/api_server_${TAG}.sif
+  $STACK_ROOT/api_server.sif
 ```
 Replace 5432 in your `${STACK_ROOT:-.}/.secrets/database_url.txt` if you changed `POSTGRES_PORT`.
 
 App
-```
+``` bash
 apptainer run --net --network=host \
   --env SERVER_HOST=localhost --env API_SERVER_PORT=3000 \
   --env PROD_SERVER=8080 \
-  $STACK_ROOT/images/app_server_${TAG}.sif
+  $STACK_ROOT/app_server.sif
 ```
 
 Verification helpers
 ```
 # Check env inside the SIF
-apptainer exec $STACK_ROOT/images/postgres_18.sif env | grep POSTGRES_PASSWORD_FILE
+apptainer exec $STACK_ROOT/postgres_18.sif env | grep POSTGRES_PASSWORD_FILE
 
 # Check the secret is mounted
 apptainer exec \
   --bind ${STACK_ROOT:-.}/.secrets/db_password.txt:/run/secrets/db_password:ro \
-  $STACK_ROOT/images/postgres_18.sif \
+  $STACK_ROOT/postgres_18.sif \
   sh -lc 'ls -l /run/secrets && head -c 5 /run/secrets/db_password && echo'
 ```
 
