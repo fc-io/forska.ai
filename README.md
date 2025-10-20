@@ -76,27 +76,35 @@ Two modes are available.
 
 #### Secrets for hostnet profile
 
-The hostnet Postgres uses a Docker secret via `POSTGRES_PASSWORD_FILE`. Create a one-line secret file and keep your `.env.local` `DB_PASS` in sync with its contents (the app/API still use `DATABASE_URL`).
+The hostnet profile uses secrets files (not env) for database credentials:
+
+- Postgres reads its password via `POSTGRES_PASSWORD_FILE`.
+- API reads its connection string via `DATABASE_URL_FILE`.
+- Optional: `BETTER_AUTH_SECRET_FILE` and `BETTER_AUTH_URL_FILE` are also supported.
 
 ```
 mkdir -p ./.secrets
+# DB server password (one line, no trailing newline)
 printf "%s" "change-me" > ./.secrets/db_password.txt
 chmod 600 ./.secrets/db_password.txt
+# API connection string (full DSN, one line)
+printf "%s" "postgresql://postgres:change-me@localhost:5432/postgres" > ./.secrets/database_url.txt
+chmod 600 ./.secrets/database_url.txt
 ```
 
-Required variables for hostnet runs (in `.env.local`):
+#### Env vars hostnet profile
+
+Required variables for hostnet runs (in `.env` or `.env.local`):
 
 ```
 DB_NAME=postgres
 DB_USER=postgres
-DB_PASS=change-me
 VLLM_API_KEY=fake_key
 POSTGRES_PORT=5432
 # and some more that can be found in env.ts
 ```
 
-- `DB_NAME`, `DB_USER`, `DB_PASS` (must match `./.secrets/db_password.txt`), `VLLM_API_KEY`
-
+Compared to running locally, do not set `DB_PASS` for hostnet – use the secrets files above instead.
 
 
 On clusters and airgapped compute nodes, pre-pull images to SIF files on a shared filesystem and run with host networking (`--net --network=host`). This mirrors the Compose hostnet profile and uses localhost URLs inside containers.
@@ -166,13 +174,14 @@ apptainer run --nv --net --network=host \
 
 API
 ```
- apptainer run --net --network=host \
-  --env DATABASE_URL=postgresql://postgres:postgres@localhost:5432/appdb \
+apptainer run --net --network=host \
+  --bind $STACK_ROOT/.secrets/database_url.txt:/run/secrets/database_url:ro \
+  --env DATABASE_URL_FILE=/run/secrets/database_url \
   --env VITE_LLM_SERVER_URL=http://localhost:8000/v1 \
   --env API_SERVER_PORT=3000 \
   $STACK_ROOT/images/api_server_${TAG}.sif
 ```
-Replace 5432 in the DATABASE_URL above if you changed `POSTGRES_PORT`.
+Replace 5432 in your `.secrets/database_url.txt` if you changed `POSTGRES_PORT`.
 
 App
 ```

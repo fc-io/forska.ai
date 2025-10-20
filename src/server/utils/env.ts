@@ -1,3 +1,4 @@
+import {readFileSync} from 'fs'
 import {type as arktype} from 'arktype'
 
 const envShape = arktype({
@@ -11,8 +12,29 @@ const envShape = arktype({
   }),
 })
 
+const readFromFileVar = (key: string): string | undefined => {
+  const fileVar = `${key}_FILE`
+  const filePath = process.env[fileVar]
+  return filePath ? readFileSync(filePath, 'utf8').trim() : undefined
+}
+
+const getEnvWithFileFallback = (): NodeJS.ProcessEnv => {
+  const source = {...process.env}
+  const withFile = (k: string): void => {
+    if (!source[k]) {
+      const v = readFromFileVar(k)
+      if (v) source[k] = v
+    }
+  }
+  withFile('DATABASE_URL')
+  withFile('BETTER_AUTH_SECRET')
+  withFile('BETTER_AUTH_URL')
+  return source
+}
+
 const loadEnv = (): typeof envShape.infer => {
-  return envShape.assert(process.env)
+  const merged = getEnvWithFileFallback()
+  return envShape.assert(merged)
 }
 
 export const env = loadEnv()

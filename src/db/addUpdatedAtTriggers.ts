@@ -1,4 +1,5 @@
 import {Client} from 'pg'
+import {env} from '../server/utils/env.ts'
 
 const tablesWithUpdatedAt = [
   'articles',
@@ -37,12 +38,7 @@ FOR EACH ROW EXECUTE FUNCTION set_updated_at_timestamp();`
 }
 
 const run = async (): Promise<void> => {
-  const databaseUrl = process.env.DATABASE_URL
-  if (!databaseUrl) {
-    throw new Error('DATABASE_URL is not set')
-  }
-
-  const client = new Client({connectionString: databaseUrl})
+  const client = new Client({connectionString: env.DATABASE_URL})
   await client.connect()
 
   try {
