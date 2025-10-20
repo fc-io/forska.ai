@@ -106,8 +106,10 @@ POSTGRES_PORT=5432
 
 Compared to running locally, do not set `DB_PASS` for hostnet – use the secrets files above instead.
 
+#### Setup container use on HPC
 
-On clusters and airgapped compute nodes, pre-pull images to SIF files on a shared filesystem and run with host networking (`--net --network=host`). This mirrors the Compose hostnet profile and uses localhost URLs inside containers.
+
+Pre-pull images to SIF files on a shared filesystem and run with host networking (`--net --network=host`). This mirrors the Compose hostnet profile and uses localhost URLs inside containers.
 
 Recommended shared paths and caches
 ```
