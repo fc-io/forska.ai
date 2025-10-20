@@ -46,7 +46,7 @@ docker compose --env-file .env.local up db
 
 Note: Postgres uses a named Docker volume (`forska-stack_pgdata`) rather than a bind mount. This avoids filesystem issues with cloud‑synced folders (Dropbox/iCloud). You can inspect or remove it with `docker volume ls` and `docker volume rm forska-stack_pgdata`.
 
-### 3) Start API and App in watch mode
+### 4) Start API and App in watch mode
 
 ```
 bun run dev:server
@@ -64,8 +64,8 @@ Two modes are available.
 ### Default – bridge network (recommended for local build on mac/windows, need a supported GPU if running VLLM)
 
 - Start everything locally with inter-service DNS (`db`, `vllm`, `api-server`, `app-server`).
-- Validate: `docker compose --env-file .env.local config -q`
-- Command: `docker compose --env-file .env.local up`
+- Validate config: `docker compose --env-file .env.local config -q`
+- Run command: `docker compose --env-file .env.local up`
 - Endpoints:
   - App: http://localhost:8080
   - API: http://localhost:3000
@@ -85,33 +85,19 @@ chmod 600 ./.secrets/db_password.txt
 ```
 
 Required variables for hostnet runs (in `.env.local`):
+
+```
+DB_NAME=postgres
+DB_USER=postgres
+DB_PASS=change-me
+VLLM_API_KEY=fake_key
+POSTGRES_PORT=5432
+# and some more that can be found in env.ts
+```
+
 - `DB_NAME`, `DB_USER`, `DB_PASS` (must match `./.secrets/db_password.txt`), `VLLM_API_KEY`
 
-#### Validate Compose config
 
-Use Compose’s config command to validate YAML, render the effective configuration, and fail fast on missing required variables (e.g., `${DB_PASS:?...}`). This also confirms profile behavior and env-file sourcing.
-
-##### Inspect the fully rendered YAML (optional)
-```
-docker compose --env-file .env config > docker-compose.effective.yml
-```
-
-##### Validate hostnet view – Linux only (optional)
-```
-docker compose --profile hostnet --env-file .env config -q
-```
-
-Note: `config` validates that secrets are defined and referenced, but the actual secret file presence/permissions are checked at `up` time.
-
-#### Start all hostnet services
-
-- Ensure ports 5432/8000/3000/8080 are free on the host.
-
-```
-docker compose --profile hostnet up
-```
-
-## HPC / Apptainer (Singularity)
 
 On clusters and airgapped compute nodes, pre-pull images to SIF files on a shared filesystem and run with host networking (`--net --network=host`). This mirrors the Compose hostnet profile and uses localhost URLs inside containers.
 
