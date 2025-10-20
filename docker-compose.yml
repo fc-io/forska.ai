@@ -211,6 +211,6 @@ volumes:
   pgdata:
 secrets:
   db_password:
-    file: ./.secrets/db_password.txt
+    file: ${STACK_ROOT:-.}/.secrets/db_password.txt
   database_url:
-    file: ./.secrets/database_url.txt
+    file: ${STACK_ROOT:-.}/.secrets/database_url.txt

@@ -86,14 +86,14 @@ Safer one‑liners (no secret in history):
 
 zsh
 ```
-mkdir -p ./.secrets && read -s "PW?DB password: " && umask 077 && printf '%s' "$PW" > ./.secrets/db_password.txt && chmod 600 ./.secrets/db_password.txt && unset PW
-read -s "URL?Database URL (postgresql://...): " && umask 077 && printf '%s' "$URL" > ./.secrets/database_url.txt && chmod 600 ./.secrets/database_url.txt && unset URL
+mkdir -p "${STACK_ROOT:-.}/.secrets" && read -s "PW?DB password: " && umask 077 && printf '%s' "$PW" > "${STACK_ROOT:-.}/.secrets/db_password.txt" && chmod 600 "${STACK_ROOT:-.}/.secrets/db_password.txt" && unset PW
+read -s "URL?Database URL (postgresql://...): " && umask 077 && printf '%s' "$URL" > "${STACK_ROOT:-.}/.secrets/database_url.txt" && chmod 600 "${STACK_ROOT:-.}/.secrets/database_url.txt" && unset URL
 ```
 
 bash
 ```
-mkdir -p ./.secrets; read -s -p 'DB password: ' PW; echo; umask 077; printf '%s' "$PW" > ./.secrets/db_password.txt; chmod 600 ./.secrets/db_password.txt; unset PW
-read -s -p 'Database URL (postgresql://...): ' URL; echo; umask 077; printf '%s' "$URL" > ./.secrets/database_url.txt; chmod 600 ./.secrets/database_url.txt; unset URL
+mkdir -p "${STACK_ROOT:-.}/.secrets"; read -s -p 'DB password: ' PW; echo; umask 077; printf '%s' "$PW" > "${STACK_ROOT:-.}/.secrets/db_password.txt"; chmod 600 "${STACK_ROOT:-.}/.secrets/db_password.txt"; unset PW
+read -s -p 'Database URL (postgresql://...): ' URL; echo; umask 077; printf '%s' "$URL" > "${STACK_ROOT:-.}/.secrets/database_url.txt"; chmod 600 "${STACK_ROOT:-.}/.secrets/database_url.txt"; unset URL
 ```
 
 #### Env vars hostnet profile
@@ -164,15 +164,34 @@ apptainer pull --arch amd64 "$STACK_ROOT/app_server_${TAG}.sif" docker://ghcr.io
 
 Tip: the `--profile hostnet` compose setup on Linux behaves like Apptainer’s host networking, so you can validate localhost-based URLs locally before deploying.
 
-### 2) Provide secrets
+##### 4) Provide secrets
 
-The official Postgres image supports `POSTGRES_PASSWORD_FILE`. Create a one-line secret and restrict permissions.
+Create the secrets files used by the host‑network/Apptainer flow. These are one‑line files with strict perms.
 
-(make sure that $HOME is set in your path)
+###### Postgres password (`POSTGRES_PASSWORD_FILE`):
+
+```bash
+mkdir -p "${STACK_ROOT:-.}/.secrets"; read -s -p 'DB password: ' PW; echo; umask 077; printf '%s' "$PW" > "${STACK_ROOT:-.}/.secrets/db_password.txt"; chmod 600 "${STACK_ROOT:-.}/.secrets/db_password.txt"; unset PW
+```
+
+###### Database URL for the API (`DATABASE_URL_FILE`):
 
 ``` bash
-mkdir -p "$HOME/.secrets"; read -s -p 'Postgres password: ' PW; echo; umask 077; printf '%s' "$PW" > "$HOME/.secrets/pg_password"; chmod 600 "$HOME/.secrets/pg_password"; unset PW
+mkdir -p "${STACK_ROOT:-.}/.secrets"; read -s -p "Database URL (postgresql://user:pass@localhost:${POSTGRES_PORT:-5432}/${DB_NAME:-postgres}): " URL; echo; umask 077; printf '%s' "$URL" > "${STACK_ROOT:-.}/.secrets/database_url.txt"; chmod 600 "${STACK_ROOT:-.}/.secrets/database_url.txt"; unset URL
 ```
+
+###### Optional Better Auth secrets (supported via `*_FILE` fallbacks):
+
+``` bash
+read -s -p 'Better Auth secret: ' S; echo; umask 077; printf '%s' "$S" > "${STACK_ROOT:-.}/.secrets/better_auth_secret.txt"; chmod 600 "${STACK_ROOT:-.}/.secrets/better_auth_secret.txt"; unset S
+read -s -p 'Better Auth URL (https://...): ' U; echo; umask 077; printf '%s' "$U" > "${STACK_ROOT:-.}/.secrets/better_auth_url.txt"; chmod 600 "${STACK_ROOT:-.}/.secrets/better_auth_url.txt"; unset U
+```
+
+Notes
+- API expects `DATABASE_URL_FILE`; mount the file at runtime and set `--env DATABASE_URL_FILE=/run/secrets/database_url` (see the example below).
+- If you created Better Auth files, mount them and set: `--env BETTER_AUTH_SECRET_FILE=/run/secrets/better_auth_secret` and `--env BETTER_AUTH_URL_FILE=/run/secrets/better_auth_url`.
+- The VLLM key (`VLLM_API_KEY`) is read from env; you can export it in your shell or pass it with `--env VLLM_API_KEY=...` when starting `vllm`.
+- We'll remove VLLM_API_KEY from env eventually.
 
 ### 3) Run the SIFs (no registry access required)
 
@@ -180,10 +199,10 @@ DB (Postgres)
 ```
 apptainer run --net --network=host \
   --env POSTGRES_USER=postgres \
-  --env POSTGRES_PASSWORD_FILE=/run/secrets/pg_password \
+  --env POSTGRES_PASSWORD_FILE=/run/secrets/db_password \
   --env POSTGRES_DB=appdb \
   --bind $STACK_ROOT/pgdata:/var/lib/postgresql/data \
-  --bind $HOME/.secrets/pg_password:/run/secrets/pg_password:ro \
+  --bind ${STACK_ROOT:-.}/.secrets/db_password.txt:/run/secrets/db_password:ro \
   $STACK_ROOT/images/postgres_18.sif
 ```
 
@@ -204,13 +223,13 @@ apptainer run --nv --net --network=host \
 API
 ```
 apptainer run --net --network=host \
-  --bind $STACK_ROOT/.secrets/database_url.txt:/run/secrets/database_url:ro \
+  --bind ${STACK_ROOT:-.}/.secrets/database_url.txt:/run/secrets/database_url:ro \
   --env DATABASE_URL_FILE=/run/secrets/database_url \
   --env VITE_LLM_SERVER_URL=http://localhost:8000/v1 \
   --env API_SERVER_PORT=3000 \
   $STACK_ROOT/images/api_server_${TAG}.sif
 ```
-Replace 5432 in your `.secrets/database_url.txt` if you changed `POSTGRES_PORT`.
+Replace 5432 in your `${STACK_ROOT:-.}/.secrets/database_url.txt` if you changed `POSTGRES_PORT`.
 
 App
 ```
@@ -227,9 +246,9 @@ apptainer exec $STACK_ROOT/images/postgres_18.sif env | grep POSTGRES_PASSWORD_F
 
 # Check the secret is mounted
 apptainer exec \
-  --bind $HOME/.secrets/pg_password:/run/secrets/pg_password:ro \
+  --bind ${STACK_ROOT:-.}/.secrets/db_password.txt:/run/secrets/db_password:ro \
   $STACK_ROOT/images/postgres_18.sif \
-  sh -lc 'ls -l /run/secrets && head -c 5 /run/secrets/pg_password && echo'
+  sh -lc 'ls -l /run/secrets && head -c 5 /run/secrets/db_password && echo'
 ```
 
 ## Troubleshooting
