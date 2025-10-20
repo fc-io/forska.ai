@@ -6,13 +6,14 @@ process.env.TAG = tag
 await $`docker compose --profile hostnet build api-server-hostnet app-server-hostnet`
 await $`docker compose --profile hostnet push api-server-hostnet app-server-hostnet`
 
+console.log(`\n`)
 console.log(`Built and pushed images to GHCR with tag ${tag}`)
 console.log(`--------------------------`)
 console.log('Now pull images on remote:')
 console.log(
-  `apptainer pull --arch amd64 "$STACK_ROOT/api_server_${TAG}.sif" docker://ghcr.io/$GHCR_OWNER/api-server:${TAG}`,
+  `apptainer pull --arch amd64 "$STACK_ROOT/api_server_${tag}.sif" docker://ghcr.io/$GHCR_OWNER/api-server:${tag}`,
 )
 console.log(
-  `apptainer pull --arch amd64 "$STACK_ROOT/app_server_${TAG}.sif" docker://ghcr.io/$GHCR_OWNER/app-server:${TAG}`,
+  `apptainer pull --arch amd64 "$STACK_ROOT/app_server_${tag}.sif" docker://ghcr.io/$GHCR_OWNER/app-server:${tag}`,
 )
 console.log(`--------------------------`)

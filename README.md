@@ -188,8 +188,6 @@ read -s -p 'Better Auth URL (https://...): ' U; echo; umask 077; printf '%s' "$U
 ```
 
 Notes
-- API expects `DATABASE_URL_FILE`; mount the file at runtime and set `--env DATABASE_URL_FILE=/run/secrets/database_url` (see the example below).
-- If you created Better Auth files, mount them and set: `--env BETTER_AUTH_SECRET_FILE=/run/secrets/better_auth_secret` and `--env BETTER_AUTH_URL_FILE=/run/secrets/better_auth_url`.
 - The VLLM key (`VLLM_API_KEY`) is read from env; you can export it in your shell or pass it with `--env VLLM_API_KEY=...` when starting `vllm`.
 - We'll remove VLLM_API_KEY from env eventually.
 
