@@ -164,16 +164,13 @@ apptainer pull --arch amd64 "$STACK_ROOT/app_server_${TAG}.sif" docker://ghcr.io
 
 Tip: the `--profile hostnet` compose setup on Linux behaves like Apptainer’s host networking, so you can validate localhost-based URLs locally before deploying.
 
-### 2) Provide secrets (Postgres password file)
+### 2) Provide secrets
 
-The official Postgres image supports `POSTGRES_PASSWORD_FILE`. Create a one-line secret and restrict permissions:
-zsh (no secret in history)
-```
-mkdir -p "$HOME/.secrets" && read -s "PW?Postgres password: " && umask 077 && printf '%s' "$PW" > "$HOME/.secrets/pg_password" && chmod 600 "$HOME/.secrets/pg_password" && unset PW
-```
+The official Postgres image supports `POSTGRES_PASSWORD_FILE`. Create a one-line secret and restrict permissions.
 
-bash (no secret in history)
-```
+(make sure that $HOME is set in your path)
+
+``` bash
 mkdir -p "$HOME/.secrets"; read -s -p 'Postgres password: ' PW; echo; umask 077; printf '%s' "$PW" > "$HOME/.secrets/pg_password"; chmod 600 "$HOME/.secrets/pg_password"; unset PW
 ```
 
