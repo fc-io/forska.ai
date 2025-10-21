@@ -90,7 +90,6 @@ services:
         NCBI_EMAIL: ${NCBI_EMAIL:-}
         NCBI_API_KEY: ${NCBI_API_KEY:-}
         NCBI_TOOL: ${NCBI_TOOL:-}
-        VITE_DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASS:?set DB_PASS in .env.local}@db:5432/${DB_NAME:-postgres}
         VITE_SERVER_API: ${VITE_SERVER_API:?VITE_SERVER_API required in .env.local}
     env_file:
       - .env.local
@@ -196,7 +195,6 @@ services:
         NCBI_EMAIL: ${NCBI_EMAIL:-}
         NCBI_API_KEY: ${NCBI_API_KEY:-}
         NCBI_TOOL: ${NCBI_TOOL:-}
-        VITE_DATABASE_URL: postgresql://${DB_USER:-postgres}:***@localhost:${POSTGRES_PORT:-5432}/${DB_NAME:-postgres}
         VITE_SERVER_API: http://localhost:3000
     env_file:
       - .env
