@@ -54,6 +54,10 @@ const isNullableString = (value: unknown): value is string | null => {
   return value === null || typeof value === 'string'
 }
 
+const isNullableStringOrDate = (value: unknown): value is string | Date | null => {
+  return value === null || typeof value === 'string' || value instanceof Date
+}
+
 const isProjectSummary = (value: unknown): value is ProjectSummary => {
   if (!value || typeof value !== 'object') {
     return false
@@ -63,7 +67,7 @@ const isProjectSummary = (value: unknown): value is ProjectSummary => {
   const description = summary.description
   const dateFrom = summary.dateFrom
   const dateTo = summary.dateTo
-  const hasValidDates = isNullableString(dateFrom) && isNullableString(dateTo)
+  const hasValidDates = isNullableStringOrDate(dateFrom) && isNullableStringOrDate(dateTo)
   return typeof name === 'string' && isNullableString(description) && hasValidDates
 }
 
