@@ -1,4 +1,6 @@
-import Bun from 'bun'
+import {$} from 'bun'
+import {existsSync, mkdirSync} from 'fs'
+import {join} from 'path'
 
 const log = (s: string): void => {
   console.log(`[dbPull] ${s}`)
@@ -18,19 +20,52 @@ const requireEnv = (k: string): string => {
   return v && v.length > 0 ? v : fail(`Missing env ${k}`)
 }
 
-const spawn = async (cmd: string, args: string[]): Promise<number> => {
-  const child = Bun.spawn([cmd, ...args], {stdio: ['inherit', 'inherit', 'inherit']})
-  return await child.exited
+const nothrow = $.nothrow()
+
+const assertLocalDbStopped = async (): Promise<void> => {
+  const id = (await nothrow`docker compose ps -q db`.text()).trim()
+  if (id) {
+    const running = (await nothrow`docker inspect -f {{.State.Running}} ${id}`.text()).trim()
+    if (running === 'true') fail('Local docker compose db is running. Stop it: docker compose stop db')
+  }
+  const pidPath = join('pgdata', 'postmaster.pid')
+  if (existsSync(pidPath))
+    fail('Detected postmaster.pid in ./pgdata. Local Postgres appears running. Stop it before rsync.')
+}
+
+const volumeExists = async (name: string): Promise<boolean> => {
+  return (await nothrow`docker volume inspect ${name}`).exitCode === 0
+}
+
+const pickVolume = async (names: string[]): Promise<string | undefined> => {
+  return names.length === 0 ? undefined : (await volumeExists(names[0])) ? names[0] : await pickVolume(names.slice(1))
+}
+
+const getPgVolume = async (): Promise<string> => {
+  if (process.env.DB_VOLUME) return process.env.DB_VOLUME
+  const vol = await pickVolume(['forska-stack_pgdata', 'pgdata'])
+  return vol ?? fail('No Docker volume found for Postgres (set DB_VOLUME env)')
+}
+
+const copyIntoVolume = async (volume: string): Promise<void> => {
+  if (!existsSync('pgdata')) mkdirSync('pgdata', {recursive: true})
+  log(`Copying ./pgdata into Docker volume '${volume}'`)
+  const cmd = `docker run --rm -v ${volume}:/to -v "${process.cwd()}/pgdata":/from alpine sh -lc 'rm -rf /to/* && cp -a /from/. /to/'`
+  const res = await nothrow`bash -lc ${cmd}`
+  if (res.exitCode !== 0) fail('Failed to copy from ./pgdata into Docker volume')
 }
 
 const main = async (): Promise<void> => {
   if (!hasArg('--force')) fail('Refusing to rsync pgdata without --force (ensure Postgres stopped on both ends)')
+  await assertLocalDbStopped()
   const sshAlias = requireEnv('SSH_ALIAS')
   const stackRoot = requireEnv('STACK_ROOT')
   log(`Pulling ${sshAlias}:${stackRoot}/pgdata/ -> ./pgdata via rsync`)
-  await spawn('bash', ['-lc', 'mkdir -p pgdata'])
-  const code = await spawn('rsync', ['-az', '--delete', `${sshAlias}:${stackRoot}/pgdata/`, 'pgdata/'])
-  if (code !== 0) fail('rsync failed')
+  if (!existsSync('pgdata')) mkdirSync('pgdata', {recursive: true})
+  const sync = await nothrow`rsync -az --delete ${sshAlias}:${stackRoot}/pgdata/ pgdata/`
+  if (sync.exitCode !== 0) fail('rsync failed')
+  const vol = await getPgVolume()
+  await copyIntoVolume(vol)
   log('Done')
 }
 

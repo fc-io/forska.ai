@@ -27,8 +27,9 @@
     "db:seed-auth": "bun src/seedAuth.ts",
     "db:studio": "bun --env-file=.env.local run drizzle-kit studio",
     "db:backup": "bun scripts/dbBackup.ts",
-    "db:push-to-server": "bun scripts/dbPush.ts",
-    "db:pull-from-server": "bun scripts/dbPull.ts"
+    "db:remote:push": "bun scripts/dbPush.ts",
+    "db:remote:backup": "bun scripts/dbRemoteBackup.ts",
+    "db:remote:pull": "bun scripts/dbRemotePull.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^2.0.9",

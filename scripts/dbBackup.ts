@@ -1,4 +1,4 @@
-import Bun from 'bun'
+import {$} from 'bun'
 import {mkdirSync} from 'fs'
 
 const log = (s: string): void => {
@@ -22,14 +22,6 @@ const ensureDir = (p: string): void => {
   mkdirSync(p, {recursive: true})
 }
 
-const spawn = async (cmd: string, args: string[], env?: Record<string, string>): Promise<number> => {
-  const child = Bun.spawn([cmd, ...args], {
-    stdio: ['inherit', 'inherit', 'inherit'],
-    env: env ? {...process.env, ...env} : process.env,
-  })
-  return await child.exited
-}
-
 const getDbVars = (): {user: string; pass: string; db: string} => {
   const user = process.env.DB_USER || 'postgres'
   const pass = process.env.DB_PASS || ''
@@ -43,11 +35,9 @@ const main = async (): Promise<void> => {
   const out = `backups/dump_local_${db}_${nowStamp()}.dump`
   log(`Creating dump via docker compose exec -> ${out}`)
   const redir = `> ${out}`
-  const cmd = [
-    `docker compose exec -e PGPASSWORD='${pass.replace(/'/g, "'\\''")}' -T db pg_dump -U ${user} -d ${db} -Fc -Z 9 ${redir}`,
-  ]
-  const code = await spawn('bash', ['-lc', cmd.join(' ')])
-  if (code !== 0) fail('pg_dump failed')
+  const cmd = `docker compose exec -e PGPASSWORD='${pass.replace(/'/g, "'\\''")}' -T db pg_dump -U ${user} -d ${db} -Fc -Z 9 ${redir}`
+  const res = await $.nothrow()`bash -lc ${cmd}`
+  if (res.exitCode !== 0) fail('pg_dump failed')
   log('Done')
 }
 
