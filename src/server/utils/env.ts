@@ -34,6 +34,11 @@ const getEnvWithFileFallback = (): Record<string, string | undefined> => {
 
 const loadEnv = (): typeof envShape.infer => {
   const merged = getEnvWithFileFallback()
+  // Default to true when not provided
+  if (merged.RUN_SERVER_JUDGING == null || merged.RUN_SERVER_JUDGING === '') {
+    // string form to satisfy shape before parsing to boolean via pipe
+    ;(merged as Record<string, string>).RUN_SERVER_JUDGING = 'true'
+  }
   return envShape.assert(merged)
 }
 

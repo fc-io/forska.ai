@@ -45,14 +45,12 @@ const sendToLLMCron = async (): Promise<void> => {
   await judgmentsJobsSendToLLM(db, allJobs, serverJobId)
 }
 const adjustBatchSizeCron = async (phase: string): Promise<void> => {
-  if (!env.RUN_SERVER_JUDGING) return
   console.log(`~~~adjustBatchSizeCron ${phase} 1.~~~`)
   const db = getDatabase()
   await judgmentsJobsAdjustBatchSize(db)
 }
 
 const checkVLLMStatusCron = async (): Promise<void> => {
-  if (!env.RUN_SERVER_JUDGING) return
   const db = getDatabase()
   await judgmentsJobsCheckVLLMStatus(db)
 }

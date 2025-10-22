@@ -85,7 +85,6 @@ services:
         BETTER_AUTH_URL: ${BETTER_AUTH_URL:?BETTER_AUTH_URL required in .env.local}
         VITE_PORT: "8080"
         API_SERVER_PORT: "3000"
-        RUN_SERVER_JUDGING: ${RUN_SERVER_JUDGING:-false}
         VITE_LLM_SERVER_URL: http://vllm:8000/v1
         NCBI_EMAIL: ${NCBI_EMAIL:-}
         NCBI_API_KEY: ${NCBI_API_KEY:-}
@@ -190,7 +189,6 @@ services:
         BETTER_AUTH_URL: ${BETTER_AUTH_URL:?BETTER_AUTH_URL required in .env}
         VITE_PORT: "8080"
         API_SERVER_PORT: "3000"
-        RUN_SERVER_JUDGING: ${RUN_SERVER_JUDGING:-false}
         VITE_LLM_SERVER_URL: http://localhost:8000/v1
         NCBI_EMAIL: ${NCBI_EMAIL:-}
         NCBI_API_KEY: ${NCBI_API_KEY:-}
