@@ -1,5 +1,6 @@
 # Reduce Docker build context size and avoid leaking secrets
 node_modules
+backups
 .git
 dist
 cache
