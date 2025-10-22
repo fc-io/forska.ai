@@ -276,7 +276,8 @@ const EditProject = (): JSX.Element => {
   })
 
   const sortedPrompts = createMemo(() => {
-    return [...prompts].sort((a, b) => {
+    // Avoid spreading a Solid store array (not guaranteed iterable)
+    return prompts.slice().sort((a, b) => {
       return a.order - b.order
     })
   })
@@ -310,16 +311,17 @@ const EditProject = (): JSX.Element => {
   })
 
   const addPromptInput = () => {
-    setPrompts([...prompts, buildEmptyPrompt(prompts.length === 0 ? 1 : getNextOrder(prompts))])
+    const next = prompts.slice()
+    next.push(buildEmptyPrompt(prompts.length === 0 ? 1 : getNextOrder(prompts)))
+    setPrompts(next)
   }
 
   const removePromptInput = (promptId: string) => {
     if (prompts.length > 1) {
-      setPrompts(
-        prompts.filter((prompt) => {
-          return prompt.id !== promptId
-        }),
-      )
+      const next = prompts.slice().filter((prompt) => {
+        return prompt.id !== promptId
+      })
+      setPrompts(next)
     }
   }
 
