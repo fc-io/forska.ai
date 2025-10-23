@@ -198,7 +198,7 @@ DB (Postgres)
 apptainer run --net --network=host \
   --env POSTGRES_USER=postgres \
   --env POSTGRES_PASSWORD_FILE=/run/secrets/db_password \
-  --env POSTGRES_DB=appdb \
+  --env POSTGRES_DB=postgres \
   --bind $STACK_ROOT/pgdata:/var/lib/postgresql/data \
   --bind ${STACK_ROOT:-.}/.secrets/db_password.txt:/run/secrets/db_password:ro \
   $STACK_ROOT/postgres_18.sif

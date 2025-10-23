@@ -1,5 +1,6 @@
 import {$} from 'bun'
 import {mkdirSync} from 'fs'
+
 import {env} from './env.ts'
 
 const log = (s: string): void => {
@@ -78,8 +79,7 @@ const main = async (): Promise<void> => {
   log('Copying local dump to remote backups/')
   const push = await $.nothrow()`scp ${localDump} ${sshAlias}:${stackRoot}/backups/`
   if (push.exitCode !== 0) fail('scp failed')
-  log(`Pushed dump to remote path: ${sshAlias}:${stackRoot}/backups/${(localDump.split('/')
-    .pop() as string)}`)
+  log(`Pushed dump to remote path: ${sshAlias}:${stackRoot}/backups/${localDump.split('/').pop() as string}`)
 
   if (!doRestore) {
     log('Pushed dump to remote. Skipping restore (no REMOTE_DATABASE_URL or --no-restore/--push-only).')
