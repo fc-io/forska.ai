@@ -28,13 +28,19 @@ const nowStamp = (): string => {
 }
 
 const parseDbUrl = (url?: string): {host: string; port: string; user: string; pass: string; db: string} => {
-  if (!url) return {host: '127.0.0.1', port: '5432', user: 'postgres', pass: '', db: 'postgres'}
-  const u = new URL(url)
-  const host = u.hostname || '127.0.0.1'
-  const port = u.port || '5432'
-  const user = decodeURIComponent(u.username || 'postgres')
-  const pass = decodeURIComponent(u.password || '')
-  const db = (u.pathname || '/postgres').replace(/^\//, '') || 'postgres'
+  const defaults = {
+    host: '127.0.0.1',
+    port: process.env.POSTGRES_PORT || '5432',
+    user: process.env.DB_USER || 'postgres',
+    pass: process.env.DB_PASS || '',
+    db: process.env.DB_NAME || 'postgres',
+  }
+  const u = url ? new URL(url) : undefined
+  const host = u?.hostname || defaults.host
+  const port = u?.port || defaults.port
+  const user = decodeURIComponent(u?.username || defaults.user)
+  const pass = decodeURIComponent(u?.password || defaults.pass)
+  const db = (u?.pathname || `/${defaults.db}`).replace(/^\//, '') || defaults.db
   return {host, port, user, pass, db}
 }
 
@@ -72,6 +78,8 @@ const main = async (): Promise<void> => {
   log('Copying local dump to remote backups/')
   const push = await $.nothrow()`scp ${localDump} ${sshAlias}:${stackRoot}/backups/`
   if (push.exitCode !== 0) fail('scp failed')
+  log(`Pushed dump to remote path: ${sshAlias}:${stackRoot}/backups/${(localDump.split('/')
+    .pop() as string)}`)
 
   if (!doRestore) {
     log('Pushed dump to remote. Skipping restore (no REMOTE_DATABASE_URL or --no-restore/--push-only).')
