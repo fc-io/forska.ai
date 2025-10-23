@@ -1,6 +1,5 @@
 import {type as arktype} from 'arktype'
 
-// Model after src/server/utils/env.ts: assert, parse, no undefined for required keys
 const envShape = arktype({
   DB_NAME: 'string',
   DB_USER: 'string',
