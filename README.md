@@ -193,9 +193,18 @@ Notes
 
 ### 3) Run the SIFs (no registry access required)
 
-DB (Postgres)
+All services communicate over HTTP/TCP.
+
+- Postgres: TCP on `localhost:5432` (standard Postgres protocol)
+- API: HTTP on `localhost:3000`
+- App: HTTP on `localhost:8080`
+- vLLM: HTTP on `localhost:8000/v1` (OpenAI compatible)
+
+Apptainer typically shares the host network namespace by default. If your HPC disallows `--net`/`--network` flags, simply omit them; the commands below do not require explicit network flags.
+
+DB (Postgres over TCP)
 ``` bash
-apptainer run --net --network=host \
+apptainer run \
   --env POSTGRES_USER=postgres \
   --env POSTGRES_PASSWORD_FILE=/run/secrets/db_password \
   --env POSTGRES_DB=postgres \
@@ -209,9 +218,9 @@ apptainer run --net --network=host \
 ls -al "$STACK_ROOT/models/Qwen3-32B-FP8" || true
 ```
 
-VLLM (GPU)
+VLLM (GPU, HTTP on :8000)
 ``` bash
-apptainer run --nv --net --network=host \
+apptainer run --nv \
   --bind $STACK_ROOT/models:/models:ro \
   $STACK_ROOT/vllm_openai_latest.sif \
   vllm serve /models/Qwen3-32B-FP8 \
@@ -219,9 +228,9 @@ apptainer run --nv --net --network=host \
     --api-key "$VLLM_API_KEY"
 ```
 
-API
+API (HTTP on :3000; connects to Postgres via TCP and vLLM via HTTP)
 ``` bash
-apptainer run --net --network=host \
+apptainer run \
   --bind ${STACK_ROOT:-.}/.secrets/database_url.txt:/run/secrets/database_url:ro \
   --env DATABASE_URL_FILE=/run/secrets/database_url \
   --env VITE_LLM_SERVER_URL=http://localhost:8000/v1 \
@@ -230,9 +239,9 @@ apptainer run --net --network=host \
 ```
 Replace 5432 in your `${STACK_ROOT:-.}/.secrets/database_url.txt` if you changed `POSTGRES_PORT`.
 
-App
+App (HTTP on :8080; talks to API over HTTP)
 ``` bash
-apptainer run --net --network=host \
+apptainer run \
   --env SERVER_HOST=localhost --env API_SERVER_PORT=3000 \
   --env PROD_SERVER=8080 \
   $STACK_ROOT/app_server.sif
@@ -250,111 +259,9 @@ apptainer exec \
   sh -lc 'ls -l /run/secrets && head -c 5 /run/secrets/db_password && echo'
 ```
 
-### Apptainer without networking (UNIX sockets)
+### About UNIX sockets (only for DB seeding)
 
-Some HPC clusters disallow container networking entirely. In that case, run Postgres over a shared UNIX domain socket and bind that directory into every Apptainer instance that needs DB access.
-
-#### Server (Postgres)
-
-``` bash
-# 0) Stop any old instance (safe to ignore errors)
-apptainer instance stop pg18 || true
-```
-
-``` bash
-# 1) Prepare dirs (data, secrets, shared socket)
-install -d -m 700 "$STACK_ROOT/.secrets" "$STACK_ROOT/pgdata"
-install -d -m 1777 "$STACK_ROOT/pgsocket" # world-writable sticky dir for sockets
-
-# 2) Start the instance (no networking flags needed)
-apptainer instance start \
-  --env POSTGRES_USER=postgres \
-  --env POSTGRES_DB=postgres \
-  --bind "$STACK_ROOT/pgdata:/var/lib/postgresql/data" \
-  --bind "$STACK_ROOT/.secrets/db_password.txt:/run/secrets/db_password:ro" \
-  --bind "$STACK_ROOT/backups:/backups:ro" \
-  --bind "$STACK_ROOT/pgsocket:/srv/pgsocket" \
-  "$STACK_ROOT/postgres_18.sif" pg18
-
-# 3) Initialize cluster (first run only) with password auth on local sockets
-apptainer exec --cleanenv instance://pg18 bash --noprofile --norc -lc \
-  'initdb -D /var/lib/postgresql/data -U postgres -A scram-sha-256 --pwfile=/run/secrets/db_password'
-```
-
-``` bash
-# 4) Start Postgres, listening ONLY on the UNIX socket in the shared dir
-apptainer exec --cleanenv instance://pg18 bash --noprofile --norc -lc \
-  'pg_ctl -D /var/lib/postgresql/data \
-    -l /var/lib/postgresql/data/server.log \
-    -o "-c unix_socket_directories=/srv/pgsocket -c unix_socket_permissions=0777 -c listen_addresses='' -c dynamic_shared_memory_type=mmap" \
-    -w start'
-```
-
-``` bash
-# 5) Wait for readiness over the socket
-apptainer exec --cleanenv instance://pg18 bash --noprofile --norc -lc \
-  'for i in {1..120}; do PGHOST=/srv/pgsocket pg_isready -U postgres >/dev/null 2>&1 && { echo "Postgres is ready."; exit 0; }; sleep 0.5; done; tail -n 200 /var/lib/postgresql/data/server.log; exit 1'
-
-# 6) Optional: restore latest dump from bound backups dir
-apptainer exec --cleanenv instance://pg18 bash --noprofile --norc -lc \
-  'f=$(ls -1t /backups/dump_local_postgres_*.dump | head -n1); echo "Restoring $f"; PGHOST=/srv/pgsocket pg_restore -U postgres -d postgres --clean --if-exists --no-owner --verbose -j $(nproc) "$f"'
-
-# 7) Sanity check
-apptainer exec --cleanenv instance://pg18 bash --noprofile --norc -lc \
-  'PGHOST=/srv/pgsocket psql -U postgres -d postgres -c "SELECT current_database() AS db, now() AS ts;"'
-```
-
-Clients (any Apptainer instance that needs DB access)
-
-```bash
-# Optional connectivity check (helpful on first setup or when debugging):
-# Bind the same socket dir and point clients to it with PGHOST or a socket DSN
-apptainer exec \
-  --bind "$STACK_ROOT/pgsocket:/srv/pgsocket" \
-  "$STACK_ROOT/postgres_18.sif" \
-  bash -lc 'PGHOST=/srv/pgsocket psql -U postgres -d postgres -c "select 1"'
-```
-
-Database URL over sockets (for API / Node clients)
-- Env vars: `PGHOST=/srv/pgsocket`, `PGUSER=postgres`, `PGDATABASE=postgres` (password via your secret file).
-- DSN form: `postgresql://postgres@/postgres?host=/srv/pgsocket` (password can be embedded or read via `DATABASE_URL_FILE`).
-
-Note on sockets vs TCP
-- Only the database connection uses UNIX domain sockets here.
-- The API and App still expose HTTP on TCP ports so browsers can reach them; browsers cannot speak UNIX sockets. If you run the App locally, it should remain on host networking or a reachable TCP port.
-
-Example API run (socket DSN)
-```bash
-# Write a socket-based DSN to the secret file
-umask 077; printf '%s\n' "postgresql://postgres@/postgres?host=/srv/pgsocket" > "$STACK_ROOT/.secrets/database_url.txt"
-
-apptainer run \
-  --bind "$STACK_ROOT/pgsocket:/srv/pgsocket" \
-  --bind "$STACK_ROOT/.secrets/database_url.txt:/run/secrets/database_url:ro" \
-  --env DATABASE_URL_FILE=/run/secrets/database_url \
-  --env VITE_LLM_SERVER_URL=http://localhost:8000/v1 \
-  --env API_SERVER_PORT=3000 \
-  "$STACK_ROOT/api_server.sif"
-```
-
-Start App (host network)
-```bash
-apptainer run --net --network=host \
-  --env SERVER_HOST=localhost \
-  --env API_SERVER_PORT=3000 \
-  --env PROD_SERVER=8080 \
-  "$STACK_ROOT/app_server.sif"
-```
-
-Start VLLM (host network + GPU)
-```bash
-apptainer run --nv --net --network=host \
-  --bind "$STACK_ROOT/models:/models:ro" \
-  "$STACK_ROOT/vllm_openai_latest.sif" \
-  vllm serve /models/Qwen3-32B-FP8 \
-    --host 0.0.0.0 --port 8000 \
-    --api-key "$VLLM_API_KEY"
-```
+Some HPC clusters disallow container networking entirely. We no longer support running the app or API against Postgres over UNIX sockets. The only remaining socket-based flow is for database population/restore via the `dbPush` helper, which still supports remote UNIX sockets when needed.
 
 Database push/restore helpers (dbPush)
 ```bash
@@ -366,7 +273,7 @@ export STACK_ROOT=/mimer/NOBACKUP/groups/clin-agent-bench/dev
 export REMOTE_DATABASE_URL='postgresql://postgres:***@localhost:5432/postgres'
 bun scripts/dbPush.ts --force --restore
 
-# UNIX socket remote (no networking). Instance name and socket dir are configurable.
+# Optional UNIX socket remote (only if your HPC forbids networking for Postgres). Instance name and socket dir are configurable.
 export REMOTE_DATABASE_URL='postgresql://postgres:***@/postgres?host=/srv/pgsocket'
 export REMOTE_PG_INSTANCE=pg18
 # optional override if your socket path differs
@@ -377,17 +284,14 @@ bun scripts/dbPush.ts --force --restore --remote-socket
 bun scripts/dbPush.ts --force --restore --remote-socket --stream
 ```
 
-Database URL forms
+Database URL forms (for runtime)
 - TCP: `postgresql://user:pass@host:port/db` (e.g., `postgresql://postgres:pw@localhost:5432/postgres`)
-- UNIX socket: `postgresql://user:pass@/db?host=/path/to/socketdir` (e.g., `postgresql://postgres:pw@/postgres?host=/srv/pgsocket`)
-- The `dbPush` script reads `REMOTE_DATABASE_URL` and also accepts `--remote-socket` to force socket mode. It honors `REMOTE_PG_INSTANCE` and `REMOTE_SOCKET_DIR`.
+- For dbPush only, a UNIX socket DSN is supported: `postgresql://user:pass@/db?host=/path/to/socketdir`
+  - The `dbPush` script reads `REMOTE_DATABASE_URL` and accepts `--remote-socket` to force socket mode. It honors `REMOTE_PG_INSTANCE` and `REMOTE_SOCKET_DIR`.
 
-Notes and pitfalls
-- Ensure the socket dir is writable and shared: use `0777` on the directory (sticky bit optional) so processes with different UIDs can create/connect.
-- Keep the socket path short; Linux’s UNIX socket path limit is ~108 bytes. `"$STACK_ROOT/pgsocket"` is usually fine; avoid very deep paths.
-- `listen_addresses=''` disables TCP entirely; all clients must use the UNIX socket.
-- Services that do not support UNIX sockets cannot communicate without networking. For those, run them in the same instance or on the host.
-- If the HPC bind policy blocks `/backups`, stream the dump into the instance and restore from a file under the data dir instead.
+Notes
+- Prefer HTTP/TCP everywhere (Postgres over TCP; API/App/vLLM over HTTP). Browsers cannot use sockets, and HTTP simplifies Apptainer/HPC setups.
+- If the HPC bind policy blocks `/backups`, use the `--stream` option with `dbPush` to stream the dump into the instance.
 
 ## Troubleshooting
   - Recreate database volume
