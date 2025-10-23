@@ -65,13 +65,18 @@ const main = async (): Promise<void> => {
   mkdirSync('backups', {recursive: true})
   await $.nothrow()`ssh ${sshAlias} mkdir -p ${stackRoot}/backups`
 
-  const local = parseDbUrl(process.env.DATABASE_URL)
-  const dbNameForFile = doRestore ? parseDbUrl(remoteUrl).db : local.db
+  // Require explicit local DB credentials; do not rely on DATABASE_URL
+  const localUser = requireEnv('DB_USER')
+  const localPass = requireEnv('DB_PASS')
+  const localDb = requireEnv('DB_NAME')
+  // If restoring on remote, require REMOTE_DATABASE_URL explicitly when --restore is passed
+  if (hasArg('--restore') && !remoteUrl) fail('Missing env REMOTE_DATABASE_URL when using --restore')
+  const dbNameForFile = doRestore ? parseDbUrl(remoteUrl).db : localDb
   const localDump = `backups/dump_local_${dbNameForFile}_${nowStamp()}.dump`
 
   log('Creating local dump via docker compose (pg_dump)')
   const redir = `> ${localDump}`
-  const dumpCmd = `docker compose exec -e PGPASSWORD='${local.pass.replace(/'/g, "'\\''")}' -T db pg_dump -U ${local.user} -d ${local.db} -Fc -Z 9 ${redir}`
+  const dumpCmd = `docker compose exec -e PGPASSWORD='${localPass.replace(/'/g, "'\\''")}' -T db pg_dump -U ${localUser} -d ${localDb} -Fc -Z 9 ${redir}`
   const dump = await $.nothrow()`bash -lc ${dumpCmd}`
   if (dump.exitCode !== 0) fail('local pg_dump failed')
 

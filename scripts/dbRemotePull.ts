@@ -63,12 +63,15 @@ const main = async (): Promise<void> => {
   if (pull.exitCode !== 0) fail('scp failed')
   const fname = remoteDump.split('/').pop() as string
   await assertLocalDbRunning()
-  const local = parseDbUrl(process.env.DATABASE_URL)
+  // Require explicit local DB credentials; do not rely on DATABASE_URL
+  const localUser = requireEnv('DB_USER')
+  const localPass = requireEnv('DB_PASS')
+  const localDb = requireEnv('DB_NAME')
   log('Copying dump into local container and restoring')
   const cpIn = await $.nothrow()`docker compose cp backups/${fname} db:/tmp/${fname}`
   if (cpIn.exitCode !== 0) fail('docker compose cp failed')
   const restore =
-    await $.nothrow()`docker compose exec -T -e PGPASSWORD=${local.pass} db pg_restore -U ${local.user} -d ${local.db} --clean --if-exists --no-owner --no-privileges /tmp/${fname}`
+    await $.nothrow()`docker compose exec -T -e PGPASSWORD=${localPass} db pg_restore -U ${localUser} -d ${localDb} --clean --if-exists --no-owner --no-privileges /tmp/${fname}`
   if (restore.exitCode !== 0) fail('pg_restore failed')
   log('Done')
 }
