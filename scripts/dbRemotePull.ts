@@ -12,7 +12,9 @@ const fail = (s: string): never => {
 
 const nowStamp = (): string => {
   const d = new Date()
-  const z = (n: number): string => (n < 10 ? `0${n}` : `${n}`)
+  const z = (n: number): string => {
+    return n < 10 ? `0${n}` : `${n}`
+  }
   return `${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}_${z(d.getHours())}${z(d.getMinutes())}${z(d.getSeconds())}`
 }
 
@@ -47,7 +49,8 @@ const main = async (): Promise<void> => {
   await $.nothrow()`ssh ${sshAlias} mkdir -p ${stackRoot}/backups`
   const remoteDump = `${stackRoot}/backups/dump_remote_${remote.db}_${nowStamp()}.dump`
   log('Creating remote dump via Apptainer (pg_dump)')
-  const dump = await $.nothrow()`ssh ${sshAlias} apptainer exec --env PGPASSWORD=${remote.pass} docker://postgres:18 pg_dump -h ${remote.host} -p ${remote.port} -U ${remote.user} -d ${remote.db} -Fc -Z 9 -f ${remoteDump}`
+  const dump =
+    await $.nothrow()`ssh ${sshAlias} apptainer exec --env PGPASSWORD=${remote.pass} docker://postgres:18 pg_dump -h ${remote.host} -p ${remote.port} -U ${remote.user} -d ${remote.db} -Fc -Z 9 -f ${remoteDump}`
   if (dump.exitCode !== 0) fail('remote pg_dump failed')
   log('Copying remote dump to local backups/')
   const pull = await $.nothrow()`scp ${sshAlias}:${remoteDump} backups/`
@@ -58,7 +61,8 @@ const main = async (): Promise<void> => {
   log('Copying dump into local container and restoring')
   const cpIn = await $.nothrow()`docker compose cp backups/${fname} db:/tmp/${fname}`
   if (cpIn.exitCode !== 0) fail('docker compose cp failed')
-  const restore = await $.nothrow()`docker compose exec -T -e PGPASSWORD=${local.pass} db pg_restore -U ${local.user} -d ${local.db} --clean --if-exists --no-owner --no-privileges /tmp/${fname}`
+  const restore =
+    await $.nothrow()`docker compose exec -T -e PGPASSWORD=${local.pass} db pg_restore -U ${local.user} -d ${local.db} --clean --if-exists --no-owner --no-privileges /tmp/${fname}`
   if (restore.exitCode !== 0) fail('pg_restore failed')
   log('Done')
 }
