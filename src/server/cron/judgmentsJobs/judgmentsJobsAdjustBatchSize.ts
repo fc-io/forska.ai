@@ -2,7 +2,6 @@ import {and, desc, eq, gte, inArray, lt, sum} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../db/schema.ts'
-import {env} from '../../utils/env.ts'
 import {judgmentsJobsGetJobs} from './judgmentsJobsGetJobs.ts'
 
 type Snapshot = {start: Date; end: Date; totalTokens: number; total: number}
@@ -26,7 +25,7 @@ const toNow = (): Date => {
 }
 
 const getLatestSmallQueue = async (db: PostgresJsDatabase<typeof schema>): Promise<boolean> => {
-  const instanceId = env.VITE_LLM_SERVER_URL
+  const instanceId = 'http://localhost:8000/v1' // replace with url from project/job/model
   const jobModels = await db
     .select({modelName: schema.models.modelName})
     .from(schema.judgmentsJobs)
@@ -34,7 +33,7 @@ const getLatestSmallQueue = async (db: PostgresJsDatabase<typeof schema>): Promi
     .leftJoin(schema.models, eq(schema.models.id, schema.projects.modelId))
   const modelName = jobModels[0]?.modelName ?? 'unknown'
 
-  // TODO: handle use of multiple models. It would be weird if we limit the speed of an external model.
+  // TODO: handle use of multiple and external models. It would be weird if we limit the speed of an external model.
   const rows = await db
     .select()
     .from(schema.vllmStatus)
@@ -122,7 +121,10 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
   if (!hasJobs) {
     const ts = toNow()
     state.history = [...state.history, {ts, note: 'adjust-batch-size: skipped; no running jobs'}].slice(-20)
-    console.log('adjust-batch-size skipped: no running jobs', {ts: ts.toISOString(), historyCount: state.history.length})
+    console.log('adjust-batch-size skipped: no running jobs', {
+      ts: ts.toISOString(),
+      historyCount: state.history.length,
+    })
     return
   }
   const now = toNow()

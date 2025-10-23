@@ -84,7 +84,8 @@ const main = async (): Promise<void> => {
   const remoteDump = `${stackRoot}/backups/${fname}`
 
   log('Restoring on remote via Apptainer (pg_restore)')
-  const restore = await $.nothrow()`ssh ${sshAlias} apptainer exec --env PGPASSWORD=${remote.pass} docker://${pgToolsImage} pg_restore -h ${remote.host} -p ${remote.port} -U ${remote.user} -d ${remote.db} --clean --if-exists --no-owner --no-privileges --single-transaction ${remoteDump}`
+  const restore =
+    await $.nothrow()`ssh ${sshAlias} apptainer exec --env PGPASSWORD=${remote.pass} docker://${pgToolsImage} pg_restore -h ${remote.host} -p ${remote.port} -U ${remote.user} -d ${remote.db} --clean --if-exists --no-owner --no-privileges --single-transaction ${remoteDump}`
   if (restore.exitCode !== 0) fail('remote pg_restore failed')
 
   log('Done')
