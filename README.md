@@ -200,15 +200,13 @@ All services communicate over HTTP/TCP.
 - App: HTTP on `localhost:8080`
 - vLLM: HTTP on `localhost:8000/v1` (OpenAI compatible)
 
-Apptainer typically shares the host network namespace by default. If your HPC disallows `--net`/`--network` flags, simply omit them; the commands below do not require explicit network flags.
-
 DB (Postgres over TCP)
 ``` bash
-apptainer run \
+apptainer run --cleanenv --writable-tmpfs \
   --env POSTGRES_USER=postgres \
   --env POSTGRES_PASSWORD_FILE=/run/secrets/db_password \
   --env POSTGRES_DB=postgres \
-  --bind $STACK_ROOT/pgdata:/var/lib/postgresql/data \
+  --bind ${STACK_ROOT:-.}/pgdata:/var/lib/postgresql \
   --bind ${STACK_ROOT:-.}/.secrets/db_password.txt:/run/secrets/db_password:ro \
   $STACK_ROOT/postgres_18.sif
 ```
@@ -220,7 +218,7 @@ ls -al "$STACK_ROOT/models/Qwen3-32B-FP8" || true
 
 VLLM (GPU, HTTP on :8000)
 ``` bash
-apptainer run --nv \
+apptainer run --cleanenv --nv \
   --bind $STACK_ROOT/models:/models:ro \
   $STACK_ROOT/vllm_openai_latest.sif \
   vllm serve /models/Qwen3-32B-FP8 \
@@ -230,7 +228,7 @@ apptainer run --nv \
 
 API (HTTP on :3000; connects to Postgres via TCP and vLLM via HTTP)
 ``` bash
-apptainer run \
+apptainer run --cleanenv \
   --bind ${STACK_ROOT:-.}/.secrets/database_url.txt:/run/secrets/database_url:ro \
   --env DATABASE_URL_FILE=/run/secrets/database_url \
   --env VITE_LLM_SERVER_URL=http://localhost:8000/v1 \
@@ -241,7 +239,7 @@ Replace 5432 in your `${STACK_ROOT:-.}/.secrets/database_url.txt` if you changed
 
 App (HTTP on :8080; talks to API over HTTP)
 ``` bash
-apptainer run \
+apptainer run --cleanenv \
   --env SERVER_HOST=localhost --env API_SERVER_PORT=3000 \
   --env PROD_SERVER=8080 \
   $STACK_ROOT/app_server.sif
@@ -250,14 +248,81 @@ apptainer run \
 Verification helpers
 ```
 # Check env inside the SIF
-apptainer exec $STACK_ROOT/postgres_18.sif env | grep POSTGRES_PASSWORD_FILE
+apptainer exec --cleanenv $STACK_ROOT/postgres_18.sif env | grep POSTGRES_PASSWORD_FILE
 
 # Check the secret is mounted
-apptainer exec \
+apptainer exec --cleanenv \
   --bind ${STACK_ROOT:-.}/.secrets/db_password.txt:/run/secrets/db_password:ro \
   $STACK_ROOT/postgres_18.sif \
   sh -lc 'ls -l /run/secrets && head -c 5 /run/secrets/db_password && echo'
 ```
+
+Notes
+- If your Apptainer build does not support `--fakeroot`, drop that flag; `--cleanenv` and `--writable-tmpfs` are still recommended to avoid host env leakage and read-only runtime paths.
+
+### Clean reset and restore (PG18, Apptainer)
+
+Use this flow to start fresh on the remote (remove old PG17 layout) and validate the full dump → push → restore path.
+
+Prereqs
+- Remote: `${STACK_ROOT}/.secrets/db_password.txt` exists with strict perms (0600)
+- Local: Docker Postgres running for dumps (`docker compose --env-file .env.local up -d db`)
+- Env: `SSH_ALIAS`, `STACK_ROOT`, `DB_NAME`, `DB_USER`, `DB_PASS`, `POSTGRES_PORT`
+
+1) Remote reset (remove legacy data layout)
+```bash
+ssh $SSH_ALIAS apptainer instance stop pg18 || true
+ssh $SSH_ALIAS apptainer instance stop pg17 || true
+# Safe backup then recreate clean dir
+ssh $SSH_ALIAS 'mv -f ${STACK_ROOT}/pgdata ${STACK_ROOT}/pgdata_pg17_bak_$(date +%Y%m%d_%H%M%S) || true; install -d -m 700 ${STACK_ROOT}/pgdata'
+# If perms block removal, force delete then recreate
+# ssh $SSH_ALIAS 'chmod -R u+w ${STACK_ROOT}/pgdata || true; rm -rf ${STACK_ROOT}/pgdata || true; install -d -m 700 ${STACK_ROOT}/pgdata'
+```
+
+2) Start Postgres 18 (fresh cluster)
+```bash
+ssh $SSH_ALIAS apptainer run --cleanenv --writable-tmpfs --fakeroot \
+  --env POSTGRES_USER=postgres \
+  --env POSTGRES_PASSWORD_FILE=/run/secrets/db_password \
+  --env POSTGRES_DB=${DB_NAME:-postgres} \
+  --bind ${STACK_ROOT:-.}/pgdata:/var/lib/postgresql \
+  --bind ${STACK_ROOT:-.}/.secrets/db_password.txt:/run/secrets/db_password:ro \
+  ${STACK_ROOT}/postgres_18.sif
+ssh $SSH_ALIAS apptainer exec --cleanenv ${STACK_ROOT}/postgres_18.sif pg_isready -h 127.0.0.1 -p 5432 -U postgres
+```
+If `--fakeroot` is unavailable on your cluster, omit it.
+
+3) Push dump to remote (no restore, validates end-to-end copy)
+```bash
+# Local: ensure DB container is up for dump
+docker compose --env-file .env.local up -d db
+# Local: creates dump and uploads to ${STACK_ROOT}/backups on remote
+bun run db:remote:push
+# Remote: verify file arrived
+ssh $SSH_ALIAS 'ls -l ${STACK_ROOT}/backups'
+```
+
+4) Restore into the fresh PG18 (scripted)
+```bash
+export REMOTE_DATABASE_URL="postgresql://postgres:$(cat ${STACK_ROOT}/.secrets/db_password.txt)@localhost:5432/${DB_NAME:-postgres}"
+bun scripts/dbPush.ts --force --restore
+```
+
+Manual restore alternative
+```bash
+# Pick the uploaded dump name from backups/
+ssh $SSH_ALIAS 'ls -1 ${STACK_ROOT}/backups'
+# Restore using an ephemeral Postgres 18 container
+ssh $SSH_ALIAS apptainer exec --cleanenv \
+  --env PGPASSWORD="$(cat ${STACK_ROOT}/.secrets/db_password.txt)" \
+  --bind ${STACK_ROOT}/backups:/backups:ro docker://postgres:18 \
+  pg_restore -h localhost -p 5432 -U postgres -d ${DB_NAME:-postgres} \
+  --clean --if-exists --no-owner --no-privileges --single-transaction /backups/<your_dump>.dump
+```
+
+Why this works
+- Postgres 18 expects a major-version layout under `/var/lib/postgresql`; a fresh, empty `${STACK_ROOT}/pgdata` avoids the legacy `/data` structure that triggers the safety check.
+- `db:remote:push` verifies the local dump and remote upload path; the `--restore` run completes the cycle by loading into the fresh cluster.
 
 ### About UNIX sockets (only for DB seeding)
 
