@@ -1,5 +1,6 @@
 import {$} from 'bun'
 import {mkdirSync} from 'fs'
+import {env} from './env.ts'
 
 const log = (s: string): void => {
   console.log(`[dbRemotePull] ${s}`)
@@ -18,18 +19,13 @@ const nowStamp = (): string => {
   return `${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}_${z(d.getHours())}${z(d.getMinutes())}${z(d.getSeconds())}`
 }
 
-const requireEnv = (k: string): string => {
-  const v = process.env[k]
-  return v && v.length > 0 ? v : fail(`Missing env ${k}`)
-}
-
 const parseDbUrl = (url?: string): {host: string; port: string; user: string; pass: string; db: string} => {
   const defaults = {
     host: '127.0.0.1',
-    port: process.env.POSTGRES_PORT || '5432',
-    user: process.env.DB_USER || 'postgres',
-    pass: process.env.DB_PASS || '',
-    db: process.env.DB_NAME || 'postgres',
+    port: String(env.POSTGRES_PORT ?? '5432'),
+    user: env.DB_USER || 'postgres',
+    pass: env.DB_PASS || '',
+    db: env.DB_NAME || 'postgres',
   }
   const u = url ? new URL(url) : undefined
   const host = u?.hostname || defaults.host
@@ -48,9 +44,9 @@ const assertLocalDbRunning = async (): Promise<void> => {
 }
 
 const main = async (): Promise<void> => {
-  const sshAlias = requireEnv('SSH_ALIAS')
-  const stackRoot = requireEnv('STACK_ROOT')
-  const remote = parseDbUrl(process.env.REMOTE_DATABASE_URL)
+  const sshAlias = env.SSH_ALIAS
+  const stackRoot = env.STACK_ROOT
+  const remote = parseDbUrl(env.REMOTE_DATABASE_URL)
   mkdirSync('backups', {recursive: true})
   await $.nothrow()`ssh ${sshAlias} mkdir -p ${stackRoot}/backups`
   const remoteDump = `${stackRoot}/backups/dump_remote_${remote.db}_${nowStamp()}.dump`
@@ -64,9 +60,9 @@ const main = async (): Promise<void> => {
   const fname = remoteDump.split('/').pop() as string
   await assertLocalDbRunning()
   // Require explicit local DB credentials; do not rely on DATABASE_URL
-  const localUser = requireEnv('DB_USER')
-  const localPass = requireEnv('DB_PASS')
-  const localDb = requireEnv('DB_NAME')
+  const localUser = env.DB_USER
+  const localPass = env.DB_PASS
+  const localDb = env.DB_NAME
   log('Copying dump into local container and restoring')
   const cpIn = await $.nothrow()`docker compose cp backups/${fname} db:/tmp/${fname}`
   if (cpIn.exitCode !== 0) fail('docker compose cp failed')

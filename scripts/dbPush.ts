@@ -1,5 +1,6 @@
 import {$} from 'bun'
 import {mkdirSync} from 'fs'
+import {env} from './env.ts'
 
 const log = (s: string): void => {
   console.log(`[dbPush] ${s}`)
@@ -14,11 +15,6 @@ const hasArg = (k: string): boolean => {
   return process.argv.includes(k)
 }
 
-const requireEnv = (k: string): string => {
-  const v = process.env[k]
-  return v && v.length > 0 ? v : fail(`Missing env ${k}`)
-}
-
 const nowStamp = (): string => {
   const d = new Date()
   const z = (n: number): string => {
@@ -30,10 +26,10 @@ const nowStamp = (): string => {
 const parseDbUrl = (url?: string): {host: string; port: string; user: string; pass: string; db: string} => {
   const defaults = {
     host: '127.0.0.1',
-    port: process.env.POSTGRES_PORT || '5432',
-    user: process.env.DB_USER || 'postgres',
-    pass: process.env.DB_PASS || '',
-    db: process.env.DB_NAME || 'postgres',
+    port: String(env.POSTGRES_PORT ?? '5432'),
+    user: env.DB_USER || 'postgres',
+    pass: env.DB_PASS || '',
+    db: env.DB_NAME || 'postgres',
   }
   const u = url ? new URL(url) : undefined
   const host = u?.hostname || defaults.host
@@ -56,19 +52,18 @@ const main = async (): Promise<void> => {
 
   await assertLocalDbRunning()
 
-  const sshAlias = requireEnv('SSH_ALIAS')
-  const stackRoot = requireEnv('STACK_ROOT')
-  const remoteUrl = process.env.REMOTE_DATABASE_URL
+  const sshAlias = env.SSH_ALIAS
+  const stackRoot = env.STACK_ROOT
+  const remoteUrl = env.REMOTE_DATABASE_URL
   const doRestore = hasArg('--restore') || (!!remoteUrl && !hasArg('--no-restore') && !hasArg('--push-only'))
-  const pgToolsImage = process.env.PG_TOOLS_IMAGE || 'postgres:18'
 
   mkdirSync('backups', {recursive: true})
   await $.nothrow()`ssh ${sshAlias} mkdir -p ${stackRoot}/backups`
 
   // Require explicit local DB credentials; do not rely on DATABASE_URL
-  const localUser = requireEnv('DB_USER')
-  const localPass = requireEnv('DB_PASS')
-  const localDb = requireEnv('DB_NAME')
+  const localUser = env.DB_USER
+  const localPass = env.DB_PASS
+  const localDb = env.DB_NAME
   // If restoring on remote, require REMOTE_DATABASE_URL explicitly when --restore is passed
   if (hasArg('--restore') && !remoteUrl) fail('Missing env REMOTE_DATABASE_URL when using --restore')
   const dbNameForFile = doRestore ? parseDbUrl(remoteUrl).db : localDb
@@ -98,7 +93,7 @@ const main = async (): Promise<void> => {
 
   log('Restoring on remote via Apptainer (pg_restore)')
   const restore =
-    await $.nothrow()`ssh ${sshAlias} apptainer exec --env PGPASSWORD=${remote.pass} docker://${pgToolsImage} pg_restore -h ${remote.host} -p ${remote.port} -U ${remote.user} -d ${remote.db} --clean --if-exists --no-owner --no-privileges --single-transaction ${remoteDump}`
+    await $.nothrow()`ssh ${sshAlias} apptainer exec --env PGPASSWORD=${remote.pass} docker://postgres:18 pg_restore -h ${remote.host} -p ${remote.port} -U ${remote.user} -d ${remote.db} --clean --if-exists --no-owner --no-privileges --single-transaction ${remoteDump}`
   if (restore.exitCode !== 0) fail('remote pg_restore failed')
 
   log('Done')

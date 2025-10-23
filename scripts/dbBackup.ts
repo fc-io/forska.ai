@@ -1,5 +1,6 @@
 import {$} from 'bun'
 import {mkdirSync} from 'fs'
+import {env} from './env.ts'
 
 const log = (s: string): void => {
   console.log(`[dbBackup] ${s}`)
@@ -23,9 +24,9 @@ const ensureDir = (p: string): void => {
 }
 
 const getDbVars = (): {user: string; pass: string; db: string} => {
-  const user = process.env.DB_USER || 'postgres'
-  const pass = process.env.DB_PASS || ''
-  const db = process.env.DB_NAME || 'postgres'
+  const user = env.DB_USER || 'postgres'
+  const pass = env.DB_PASS || ''
+  const db = env.DB_NAME || 'postgres'
   return {user, pass, db}
 }
 

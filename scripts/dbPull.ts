@@ -1,6 +1,7 @@
 import {$} from 'bun'
 import {existsSync, mkdirSync} from 'fs'
 import {join} from 'path'
+import {env} from './env.ts'
 
 const log = (s: string): void => {
   console.log(`[dbPull] ${s}`)
@@ -13,11 +14,6 @@ const fail = (s: string): never => {
 
 const hasArg = (k: string): boolean => {
   return process.argv.includes(k)
-}
-
-const requireEnv = (k: string): string => {
-  const v = process.env[k]
-  return v && v.length > 0 ? v : fail(`Missing env ${k}`)
 }
 
 const nothrow = $.nothrow()
@@ -42,7 +38,7 @@ const pickVolume = async (names: string[]): Promise<string | undefined> => {
 }
 
 const getPgVolume = async (): Promise<string> => {
-  if (process.env.DB_VOLUME) return process.env.DB_VOLUME
+  if (env.DB_VOLUME) return env.DB_VOLUME
   const vol = await pickVolume(['forska-stack_pgdata', 'pgdata'])
   return vol ?? fail('No Docker volume found for Postgres (set DB_VOLUME env)')
 }
@@ -58,8 +54,8 @@ const copyIntoVolume = async (volume: string): Promise<void> => {
 const main = async (): Promise<void> => {
   if (!hasArg('--force')) fail('Refusing to rsync pgdata without --force (ensure Postgres stopped on both ends)')
   await assertLocalDbStopped()
-  const sshAlias = requireEnv('SSH_ALIAS')
-  const stackRoot = requireEnv('STACK_ROOT')
+  const sshAlias = env.SSH_ALIAS
+  const stackRoot = env.STACK_ROOT
   log(`Pulling ${sshAlias}:${stackRoot}/pgdata/ -> ./pgdata via rsync`)
   if (!existsSync('pgdata')) mkdirSync('pgdata', {recursive: true})
   const sync = await nothrow`rsync -az --delete ${sshAlias}:${stackRoot}/pgdata/ pgdata/`
