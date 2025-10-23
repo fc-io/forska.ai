@@ -1,13 +1,31 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
-import {format} from 'date-fns'
+import {format, fromUnixTime, isValid, parseISO} from 'date-fns'
 import {For, Show, Suspense} from 'solid-js'
 
 import {apiClient} from '../../../../services/apiClient.ts'
 import {fetchSession} from '../../../../services/fetchSession.ts'
 
+const normalizeTimestamp = (value: unknown): Date | null => {
+  if (value instanceof Date) {
+    return isValid(value) ? new Date(value.getTime()) : null
+  }
+  if (typeof value === 'string') {
+    const parsed = parseISO(value)
+    return isValid(parsed) ? parsed : null
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) {
+      return null
+    }
+    const parsed = value > 1_000_000_000_000 ? new Date(value) : fromUnixTime(value)
+    return isValid(parsed) ? parsed : null
+  }
+  return null
+}
+
 type VllmStatusRow = {
-  ts: string
+  ts: Date | null
   instanceId: string
   modelName: string
   vllmVersion: string | null
@@ -34,7 +52,7 @@ const fetchVllmStatus = async (): Promise<VllmStatusRow[]> => {
   const entries = response.data?.data ?? []
   return entries.map((row: Record<string, unknown>) => {
     return {
-      ts: typeof row.ts === 'string' ? row.ts : '',
+      ts: normalizeTimestamp(row.ts),
       instanceId: typeof row.instanceId === 'string' ? row.instanceId : '',
       modelName: typeof row.modelName === 'string' ? row.modelName : '',
       vllmVersion: (row.vllmVersion as string | null) ?? null,
@@ -77,12 +95,11 @@ const AdminVllm = () => {
     return statusQuery.data ?? []
   }
 
-  const formatTs = (value: Date | string | null | undefined) => {
+  const formatTs = (value: Date | null | undefined) => {
     if (!value) {
       return '—'
     }
-    const d = typeof value === 'string' ? new Date(value) : value
-    return Number.isNaN(d.getTime()) ? '—' : format(d, 'yyyy-MM-dd HH:mm:ss')
+    return isValid(value) ? format(value, 'yyyy-MM-dd HH:mm:ss') : '—'
   }
 
   const formatNumber = (value: number | null | undefined, fractionDigits = 2) => {
