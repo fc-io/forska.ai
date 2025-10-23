@@ -14,7 +14,8 @@ const state: {
   snapshots: Snapshot[]
   warmupStart: number
   warmupMax: number
-} = {lastRun: null, lastTotal: null, rotation: 0, snapshots: [], warmupStart: 6, warmupMax: 10}
+  history: {ts: Date; note: string}[]
+} = {lastRun: null, lastTotal: null, rotation: 0, snapshots: [], warmupStart: 6, warmupMax: 10, history: []}
 
 const clamp = (v: number, lo: number, hi: number): number => {
   return Math.max(lo, Math.min(hi, v))
@@ -118,6 +119,12 @@ const nextFromCompare = (snapshots: Snapshot[], curTotal: number): number => {
 export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof schema>) => {
   const jobs = await judgmentsJobsGetJobs(db)
   const hasJobs = jobs.length > 0
+  if (!hasJobs) {
+    const ts = toNow()
+    state.history = [...state.history, {ts, note: 'adjust-batch-size: skipped; no running jobs'}].slice(-20)
+    console.log('adjust-batch-size skipped: no running jobs', {ts: ts.toISOString(), historyCount: state.history.length})
+    return
+  }
   const now = toNow()
 
   const jobIds = jobs.map((j) => {
@@ -147,7 +154,7 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
     warmupOrUndefined !== undefined ? warmupOrUndefined : small ? nextFromCompare(state.snapshots, cur) : cur - 2
 
   const minTotal = Math.max(1, jobs.length)
-  const maxTotal = 200
+  const maxTotal = 200 // might be bad to have an upper limit
   const finalTotal = clamp(nextTotal, minTotal, maxTotal)
   const batches = distribute(finalTotal, jobs.length, state.rotation)
 
