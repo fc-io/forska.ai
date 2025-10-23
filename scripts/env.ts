@@ -11,6 +11,12 @@ const envShape = arktype({
 
 const load = () => {
   const asserted = envShape.assert({...process.env})
-  return {...asserted, REMOTE_DATABASE_URL: process.env.REMOTE_DATABASE_URL, DB_VOLUME: process.env.DB_VOLUME}
+  return {
+    ...asserted,
+    REMOTE_DATABASE_URL: process.env.REMOTE_DATABASE_URL,
+    DB_VOLUME: process.env.DB_VOLUME,
+    REMOTE_PG_INSTANCE: process.env.REMOTE_PG_INSTANCE,
+    REMOTE_SOCKET_DIR: process.env.REMOTE_SOCKET_DIR,
+  }
 }
 export const env = load()

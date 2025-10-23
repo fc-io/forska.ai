@@ -250,6 +250,87 @@ apptainer exec \
   sh -lc 'ls -l /run/secrets && head -c 5 /run/secrets/db_password && echo'
 ```
 
+### Apptainer without networking (UNIX sockets)
+
+Some HPC clusters disallow container networking entirely. In that case, run Postgres over a shared UNIX domain socket and bind that directory into every Apptainer instance that needs DB access.
+
+Server (Postgres)
+```bash
+# 0) Stop any old instance (safe to ignore errors)
+apptainer instance stop pg18 || true
+
+# 1) Prepare dirs (data, secrets, shared socket)
+install -d -m 700 "$STACK_ROOT/.secrets" "$STACK_ROOT/pgdata"
+install -d -m 1777 "$STACK_ROOT/pgsocket"   # world-writable sticky dir for sockets
+
+# 2) Start the instance (no networking flags needed)
+apptainer instance start \
+  --env POSTGRES_USER=postgres \
+  --env POSTGRES_DB=postgres \
+  --bind "$STACK_ROOT/pgdata:/var/lib/postgresql/data" \
+  --bind "$STACK_ROOT/.secrets/db_password.txt:/run/secrets/db_password:ro" \
+  --bind "$STACK_ROOT/backups:/backups:ro" \
+  --bind "$STACK_ROOT/pgsocket:/srv/pgsocket" \
+  "$STACK_ROOT/postgres_18.sif" pg18
+
+# 3) Initialize cluster (first run only) with password auth on local sockets
+apptainer exec --cleanenv instance://pg18 bash --noprofile --norc -lc \
+  'initdb -D /var/lib/postgresql/data -U postgres -A scram-sha-256 --pwfile=/run/secrets/db_password'
+
+# 4) Start Postgres, listening ONLY on the UNIX socket in the shared dir
+apptainer exec --cleanenv instance://pg18 bash --noprofile --norc -lc \
+  'pg_ctl -D /var/lib/postgresql/data \
+    -l /var/lib/postgresql/data/server.log \
+    -o "-c unix_socket_directories=/srv/pgsocket -c unix_socket_permissions=0777 -c listen_addresses='' -c dynamic_shared_memory_type=mmap" \
+    -w start'
+
+# 5) Wait for readiness over the socket
+apptainer exec --cleanenv instance://pg18 bash --noprofile --norc -lc \
+  'for i in {1..120}; do PGHOST=/srv/pgsocket pg_isready -U postgres >/dev/null 2>&1 && { echo "Postgres is ready."; exit 0; }; sleep 0.5; done; tail -n 200 /var/lib/postgresql/data/server.log; exit 1'
+
+# 6) Optional: restore latest dump from bound backups dir
+apptainer exec --cleanenv instance://pg18 bash --noprofile --norc -lc \
+  'f=$(ls -1t /backups/dump_local_postgres_*.dump | head -n1); echo "Restoring $f"; PGHOST=/srv/pgsocket pg_restore -U postgres -d postgres --clean --if-exists --no-owner --verbose -j $(nproc) "$f"'
+
+# 7) Sanity check
+apptainer exec --cleanenv instance://pg18 bash --noprofile --norc -lc \
+  'PGHOST=/srv/pgsocket psql -U postgres -d postgres -c "SELECT current_database() AS db, now() AS ts;"'
+```
+
+Clients (any Apptainer instance that needs DB access)
+```bash
+# Bind the same socket dir and point clients to it with PGHOST or a socket DSN
+apptainer exec \
+  --bind "$STACK_ROOT/pgsocket:/srv/pgsocket" \
+  "$STACK_ROOT/postgres_18.sif" \
+  bash -lc 'PGHOST=/srv/pgsocket psql -U postgres -d postgres -c "select 1"'
+```
+
+Database URL over sockets (for API / Node clients)
+- Env vars: `PGHOST=/srv/pgsocket`, `PGUSER=postgres`, `PGDATABASE=postgres` (password via your secret file).
+- DSN form: `postgresql://postgres@/postgres?host=/srv/pgsocket` (password can be embedded or read via `DATABASE_URL_FILE`).
+
+Example API run (socket DSN)
+```bash
+# Write a socket-based DSN to the secret file
+umask 077; printf '%s\n' "postgresql://postgres@/postgres?host=/srv/pgsocket" > "$STACK_ROOT/.secrets/database_url.txt"
+
+apptainer run \
+  --bind "$STACK_ROOT/pgsocket:/srv/pgsocket" \
+  --bind "$STACK_ROOT/.secrets/database_url.txt:/run/secrets/database_url:ro" \
+  --env DATABASE_URL_FILE=/run/secrets/database_url \
+  --env VITE_LLM_SERVER_URL=http://localhost:8000/v1 \
+  --env API_SERVER_PORT=3000 \
+  "$STACK_ROOT/api_server.sif"
+```
+
+Notes and pitfalls
+- Ensure the socket dir is writable and shared: use `0777` on the directory (sticky bit optional) so processes with different UIDs can create/connect.
+- Keep the socket path short; Linux’s UNIX socket path limit is ~108 bytes. `"$STACK_ROOT/pgsocket"` is usually fine; avoid very deep paths.
+- `listen_addresses=''` disables TCP entirely; all clients must use the UNIX socket.
+- Services that do not support UNIX sockets cannot communicate without networking. For those, run them in the same instance or on the host.
+- If the HPC bind policy blocks `/backups`, stream the dump into the instance and restore from a file under the data dir instead.
+
 ## Troubleshooting
   - Recreate database volume
     - Stop and remove containers and the named volume: `docker compose down -v`

@@ -33,8 +33,10 @@ const parseDbUrl = (url?: string): {host: string; port: string; user: string; pa
     db: env.DB_NAME || 'postgres',
   }
   const u = url ? new URL(url) : undefined
-  const host = u?.hostname || defaults.host
-  const port = u?.port || defaults.port
+  const qpHost = u?.searchParams.get('host') || ''
+  const qpPort = u?.searchParams.get('port') || ''
+  const host = (qpHost && qpHost.length > 0 ? qpHost : u?.hostname) || defaults.host
+  const port = (qpPort && qpPort.length > 0 ? qpPort : u?.port) || defaults.port
   const user = decodeURIComponent(u?.username || defaults.user)
   const pass = decodeURIComponent(u?.password || defaults.pass)
   const db = (u?.pathname || `/${defaults.db}`).replace(/^\//, '') || defaults.db
@@ -91,10 +93,31 @@ const main = async (): Promise<void> => {
   const fname = localDump.split('/').pop() as string
   const remoteDump = `${stackRoot}/backups/${fname}`
 
-  log('Restoring on remote via Apptainer (pg_restore)')
-  const restore =
-    await $.nothrow()`ssh ${sshAlias} apptainer exec --env PGPASSWORD=${remote.pass} docker://postgres:18 pg_restore -h ${remote.host} -p ${remote.port} -U ${remote.user} -d ${remote.db} --clean --if-exists --no-owner --no-privileges --single-transaction ${remoteDump}`
-  if (restore.exitCode !== 0) fail('remote pg_restore failed')
+  const isSocket = hasArg('--remote-socket') || (remoteUrl ? /[?&]host=\//.test(remoteUrl) : false) || remote.host.startsWith('/')
+
+  if (isSocket) {
+    const instance = env.REMOTE_PG_INSTANCE || 'pg18'
+    const socketDir = remote.host.startsWith('/') ? remote.host : env.REMOTE_SOCKET_DIR || '/srv/pgsocket'
+    const dumpInInstance = `/backups/${fname}`
+
+    log('Restoring on remote via Apptainer instance over UNIX socket')
+    const restoreSock = await $.nothrow()`ssh ${sshAlias} apptainer exec --cleanenv instance://${instance} bash --noprofile --norc -lc 'PGPASSWORD=${remote.pass.replace(/'/g, "'\\''")} PGHOST=${socketDir} pg_restore -U ${remote.user} -d ${remote.db} --clean --if-exists --no-owner --no-privileges --single-transaction ${dumpInInstance}'`
+    if (restoreSock.exitCode !== 0) {
+      if (hasArg('--stream')) {
+        log('Socket restore failed; streaming dump into instance and retrying')
+        const streamUpload = await $.nothrow()`bash -lc 'cat ${localDump} | ssh ${sshAlias} apptainer exec --cleanenv instance://${instance} bash --noprofile --norc -lc "cat > /var/lib/postgresql/data/restore.dump"'`
+        if (streamUpload.exitCode !== 0) fail('stream upload to instance failed')
+        const restoreStream = await $.nothrow()`ssh ${sshAlias} apptainer exec --cleanenv instance://${instance} bash --noprofile --norc -lc 'PGPASSWORD=${remote.pass.replace(/'/g, "'\\''")} PGHOST=${socketDir} pg_restore -U ${remote.user} -d ${remote.db} --clean --if-exists --no-owner --no-privileges --single-transaction /var/lib/postgresql/data/restore.dump'`
+        if (restoreStream.exitCode !== 0) fail('remote pg_restore (streamed) failed')
+      } else {
+        fail('remote pg_restore over socket failed (try --stream to avoid /backups bind policy)')
+      }
+    }
+  } else {
+    log('Restoring on remote via Apptainer (TCP)')
+    const restore = await $.nothrow()`ssh ${sshAlias} apptainer exec --env PGPASSWORD=${remote.pass} --bind ${stackRoot}/backups:/backups:ro docker://postgres:18 pg_restore -h ${remote.host} -p ${remote.port} -U ${remote.user} -d ${remote.db} --clean --if-exists --no-owner --no-privileges --single-transaction /backups/${fname}`
+    if (restore.exitCode !== 0) fail('remote pg_restore failed')
+  }
 
   log('Done')
 }
