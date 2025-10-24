@@ -2,34 +2,23 @@ import {and, desc, eq, gte, inArray, lt, sum} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../db/schema.ts'
-import {env} from '../../utils/env.ts'
 import {judgmentsJobsGetJobs} from './judgmentsJobsGetJobs.ts'
 
 type Snapshot = {start: Date; end: Date; totalTokens: number; total: number}
 
-const state: {
+type InstanceState = {
   lastRun: Date | null
   lastTotal: number | null
   rotation: number
   snapshots: Snapshot[]
-  warmupStart: number
-  warmupMax: number
   history: {ts: Date; note: string}[]
   lastWaitingCount: number | null
   lastNonZeroTotal: number | null
   sleeping: boolean
-} = {
-  lastRun: null,
-  lastTotal: null,
-  rotation: 0,
-  snapshots: [],
-  warmupStart: 6,
-  warmupMax: 10,
-  history: [],
-  lastWaitingCount: null,
-  lastNonZeroTotal: null,
-  sleeping: false,
 }
+
+const instanceStates = new Map<string, InstanceState>()
+const warmup = {start: 6, max: 10}
 
 const clamp = (v: number, lo: number, hi: number): number => {
   return Math.max(lo, Math.min(hi, v))
@@ -39,20 +28,34 @@ const toNow = (): Date => {
   return new Date()
 }
 
-const pushHistory = (note: string): void => {
-  const ts = toNow()
-  state.history = [...state.history, {ts, note}].slice(-20)
+const getState = (instanceId: string): InstanceState => {
+  const cur = instanceStates.get(instanceId)
+  if (cur) return cur
+  const init: InstanceState = {
+    lastRun: null,
+    lastTotal: null,
+    rotation: 0,
+    snapshots: [],
+    history: [],
+    lastWaitingCount: null,
+    lastNonZeroTotal: null,
+    sleeping: false,
+  }
+  instanceStates.set(instanceId, init)
+  return init
 }
 
-const getLatestWaitingCount = async (db: PostgresJsDatabase<typeof schema>): Promise<number> => {
-  const instanceId = env.VITE_LLM_SERVER_URL
-  const jobModels = await db
-    .select({modelName: schema.models.modelName})
-    .from(schema.judgmentsJobs)
-    .leftJoin(schema.projects, eq(schema.projects.id, schema.judgmentsJobs.projectId))
-    .leftJoin(schema.models, eq(schema.models.id, schema.projects.modelId))
-  const modelName = jobModels[0]?.modelName ?? 'unknown'
+const pushHistory = (instanceId: string, note: string): void => {
+  const s = getState(instanceId)
+  const ts = toNow()
+  s.history = [...s.history, {ts, note}].slice(-20)
+}
 
+const getLatestWaitingCountFor = async (
+  db: PostgresJsDatabase<typeof schema>,
+  instanceId: string,
+  modelName: string,
+): Promise<number> => {
   const rows = await db
     .select({waiting: schema.vllmStatus.numRequestsWaiting})
     .from(schema.vllmStatus)
@@ -192,50 +195,102 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
   const hasJobs = jobs.length > 0
 
   if (!hasJobs) {
-    pushHistory('adjust-batch-size: skipped; no running jobs')
-    console.log('adjust-batch-size skipped: no running jobs', {
-      ts: toNow().toISOString(),
-      historyCount: state.history.length,
-    })
+    console.log('adjust-batch-size skipped: no running jobs', {ts: toNow().toISOString()})
   } else {
     const now = toNow()
-    const jobIds = extractJobIds(jobs)
-    const currentTotalFromDb = sumBatchSizes(jobs)
-    const lastRun = state.lastRun
-    const lastTotal = state.lastTotal ?? (currentTotalFromDb > 0 ? currentTotalFromDb : null)
 
-    const isFirstRun = !lastRun
-    const inWarmup = !isFirstRun && (lastTotal ?? 0) < state.warmupMax
+    const jobConfigs = await db
+      .select({
+        jobId: schema.judgmentsJobs.id,
+        sendToLLMBatchSize: schema.judgmentsJobs.sendToLLMBatchSize,
+        baseURL: schema.models.baseURL,
+        modelName: schema.models.modelName,
+      })
+      .from(schema.judgmentsJobs)
+      .innerJoin(schema.projects, eq(schema.projects.id, schema.judgmentsJobs.projectId))
+      .innerJoin(schema.models, eq(schema.models.id, schema.projects.modelId))
+      .where(eq(schema.judgmentsJobs.status, 'running'))
 
-    const tokens = lastRun ? await sumTokensSince(db, jobIds, lastRun, now) : 0
-    const prevSnap = lastRun && lastTotal ? [{start: lastRun, end: now, totalTokens: tokens, total: lastTotal}] : []
-    state.snapshots = [...state.snapshots, ...prevSnap].slice(-8)
-
-    const warmupTarget = getWarmupTarget(isFirstRun, inWarmup, lastTotal, state.warmupStart, state.warmupMax)
-    const cur = lastTotal ?? state.warmupStart
-
-    const waitingCount = await getLatestWaitingCount(db)
-    const decision = decideNextTotal(cur, waitingCount, state.lastWaitingCount, warmupTarget, state.snapshots)
-
-    state.sleeping = decision.sleeping
-    if (decision.historyNote) pushHistory(decision.historyNote)
-
-    const minTotal = Math.max(1, jobs.length)
-    const maxTotal = 200
-    const finalTotal = state.sleeping ? 0 : clamp(decision.nextTotal, minTotal, maxTotal)
-    const batches = distribute(finalTotal, jobs.length, state.rotation)
-
-    await applyBatches(db, jobIds, batches)
-
-    state.rotation = (state.rotation + 1) % Math.max(1, jobs.length)
-    state.lastRun = now
-    state.lastTotal = finalTotal
-    state.lastNonZeroTotal = finalTotal > 0 ? finalTotal : state.lastNonZeroTotal
-    console.log('adjust-batch-size latest state', {
-      lastRun: state.lastRun,
-      lastTotal: state.lastTotal,
-      rotation: state.rotation,
-      snapshotCount: state.snapshots.length,
+    const filtered = jobConfigs.filter((j) => {
+      return !!j.baseURL
     })
+
+    const byInstance = filtered.reduce((acc, j) => {
+      const key = String(j.baseURL)
+      const cur = acc.get(key) ?? []
+      acc.set(key, [...cur, j])
+      return acc
+    }, new Map<string, (typeof filtered)[number][]>())
+
+    const allJobIds: string[] = []
+    const allBatches: number[] = []
+    const summary: Record<
+      string,
+      {
+        lastRun: Date | null
+        lastTotal: number | null
+        rotation: number
+        snapshotCount: number
+        assignedTotal: number
+        jobCount: number
+      }
+    > = {}
+
+    for (const [instanceId, list] of byInstance.entries()) {
+      const modelName = list[0]?.modelName ?? 'unknown'
+      const s = getState(instanceId)
+
+      const jobIds = list.map((x) => {
+        return x.jobId
+      })
+      const currentTotalFromDb = sumBatchSizes(list)
+      const lastRun = s.lastRun
+      const lastTotal = s.lastTotal ?? (currentTotalFromDb > 0 ? currentTotalFromDb : null)
+
+      const isFirstRun = !lastRun
+      const inWarmup = !isFirstRun && (lastTotal ?? 0) < warmup.max
+
+      const tokens = lastRun ? await sumTokensSince(db, jobIds, lastRun, now) : 0
+      const prevSnap = lastRun && lastTotal ? [{start: lastRun, end: now, totalTokens: tokens, total: lastTotal}] : []
+      s.snapshots = [...s.snapshots, ...prevSnap].slice(-8)
+
+      const warmupTarget = getWarmupTarget(isFirstRun, inWarmup, lastTotal, warmup.start, warmup.max)
+      const cur = lastTotal ?? warmup.start
+
+      const waitingCount = await getLatestWaitingCountFor(db, instanceId, modelName)
+      const decision = decideNextTotal(cur, waitingCount, s.lastWaitingCount, warmupTarget, s.snapshots)
+
+      s.sleeping = decision.sleeping
+      if (decision.historyNote) pushHistory(instanceId, decision.historyNote)
+      s.lastWaitingCount = waitingCount
+
+      const minTotal = Math.max(1, list.length)
+      const maxTotal = 200
+      const finalTotal = s.sleeping ? 0 : clamp(decision.nextTotal, minTotal, maxTotal)
+      const batches = distribute(finalTotal, list.length, s.rotation)
+
+      // accumulate for single update
+      allJobIds.push(...jobIds)
+      allBatches.push(...batches)
+
+      // update instance state
+      s.rotation = (s.rotation + 1) % Math.max(1, list.length)
+      s.lastRun = now
+      s.lastTotal = finalTotal
+      s.lastNonZeroTotal = finalTotal > 0 ? finalTotal : s.lastNonZeroTotal
+
+      summary[instanceId] = {
+        lastRun: s.lastRun,
+        lastTotal: s.lastTotal,
+        rotation: s.rotation,
+        snapshotCount: s.snapshots.length,
+        assignedTotal: finalTotal,
+        jobCount: list.length,
+      }
+    }
+
+    if (allJobIds.length > 0) await applyBatches(db, allJobIds, allBatches)
+
+    console.log('adjust-batch-size latest state', {instances: summary})
   }
 }
