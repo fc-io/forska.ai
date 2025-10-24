@@ -296,7 +296,16 @@ export const judge = async ({
   const duration = performance.now() - startDuration
   const finishedAt = new Date().toISOString()
   // console.log('tokenUse:', tokenUse)
-  console.log(`Total: ${errorCount} errorCount,${abortCount} aborts, ${successCount} successes`)
+  if (
+    errorCount === 0
+    || abortCount === 0
+    || successCount === 0
+    || errorCount % 100 === 0
+    || abortCount % 100 === 0
+    || successCount % 100 === 0
+  ) {
+    console.log(`Total: ${errorCount} errorCount,${abortCount} aborts, ${successCount} successes`)
+  }
   await judgeStoreTokenUse(tokenUse, sessionId, {startedAt, finishedAt, duration}, judgmentsJobId).catch((error) => {
     console.error('judgeStoreTokenUse failed; continuing', error instanceof Error ? error.message : error)
   })
