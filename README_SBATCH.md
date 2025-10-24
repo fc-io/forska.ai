@@ -70,3 +70,36 @@ Quick checks
 - Compute node and job: printed at start; also see `squeue -j <jobid>`.
 - Health: check logs in `$STACK_ROOT/logs/<jobid>/`.
 - vLLM: `curl -sf -H "Authorization: Bearer $VLLM_API_KEY" http://localhost:8000/v1/models | jq .` (from the compute node or via tunnel).
+
+Monitor logs in real-time
+
+```bash
+# Get the job ID first
+JOBID=$(squeue -u $USER -h -o "%i" -n forska-stack)
+
+# Follow all logs at once
+tail -f $STACK_ROOT/logs/$JOBID/*.log
+
+# Or monitor specific services:
+tail -f $STACK_ROOT/logs/$JOBID/vllm.log
+tail -f $STACK_ROOT/logs/$JOBID/api.log
+tail -f $STACK_ROOT/logs/$JOBID/app.log
+tail -f $STACK_ROOT/logs/$JOBID/db.log
+```
+
+Slurm wrapper logs (.out/.err)
+
+The sbatch header writes job-level stdout/stderr to `forska-stack-<jobid>.out` and `forska-stack-<jobid>.err` in the directory where you ran `sbatch`. If you submit using the helper that `cd`'s into `$STACK_ROOT`, those files will be created under `$STACK_ROOT/`.
+
+```bash
+# Using the same JOBID as above, follow wrapper logs too
+tail -f "$STACK_ROOT/forska-stack-$JOBID.out" \
+        "$STACK_ROOT/forska-stack-$JOBID.err"
+
+# After the job finishes, view all logs together
+# (fallback to newest log dir if sacct is unavailable)
+JOBID=${JOBID:-$(basename "$(ls -1dt "$STACK_ROOT"/logs/*/ | head -n1)")}
+less "$STACK_ROOT/logs/$JOBID/"*.log \
+     "$STACK_ROOT/forska-stack-$JOBID.out" \
+     "$STACK_ROOT/forska-stack-$JOBID.err"
+```

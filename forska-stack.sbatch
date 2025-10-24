@@ -35,7 +35,8 @@ export API_SERVER_PORT=${API_SERVER_PORT:-3001}
 export PROD_SERVER=${PROD_SERVER:-8181}
 
 # vLLM runtime knobs (aligned with your interactive config)
-export VLLM_API_KEY=${VLLM_API_KEY:?set VLLM_API_KEY in your env}
+# Default to a dummy key when not provided
+export VLLM_API_KEY=${VLLM_API_KEY:-fake_key}
 export VLLM_GPU_UTIL=${VLLM_GPU_UTIL:-0.90}
 export TP_SIZE=${TP_SIZE:-2}
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1}
