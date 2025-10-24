@@ -8,6 +8,9 @@
 #SBATCH -o %x-%j.out
 #SBATCH -e %x-%j.err
 #SBATCH --export=ALL
+# Send an early warning signal 2 minutes before time limit
+# so we can shut down services cleanly
+#SBATCH --signal=B:USR1@120
 
 set -euo pipefail
 
@@ -59,11 +62,24 @@ need "$SIF_DB"; need "$SIF_VLLM"; need "$SIF_API"; need "$SIF_APP"; need "$DB_PW
 LOG_DIR="$STACK_ROOT/logs/${SLURM_JOB_ID:-manual}"
 mkdir -p "$LOG_DIR"
 
-cleanup() {
-  echo "[forska] cleaning up..."
-  jobs -pr | xargs -r kill || true
+graceful_shutdown() {
+  local reason="${1:-cleanup}"
+  echo "[forska] shutting down ($reason)..."
+  # Ask all backgrounded apptainer processes to exit
+  jobs -pr | xargs -r kill -TERM || true
+  # Give them a moment to flush and exit
+  for ((i=0; i<20; i++)); do
+    [[ -z "$(jobs -pr)" ]] && break
+    sleep 1
+  done
+  # Force kill anything that didn't exit in time
+  if [[ -n "$(jobs -pr)" ]]; then
+    jobs -pr | xargs -r kill -KILL || true
+  fi
 }
-trap cleanup EXIT INT TERM
+trap 'graceful_shutdown EXIT' EXIT
+trap 'graceful_shutdown SIGNAL' INT TERM
+trap 'graceful_shutdown TIME_LIMIT' USR1
 
 echo "[forska] logs -> $LOG_DIR"
 
@@ -130,4 +146,3 @@ echo "[forska] tail logs in: $LOG_DIR"
 
 # Block until all background services exit
 wait
-
