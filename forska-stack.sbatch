@@ -1,12 +1,10 @@
 #!/bin/bash
 #SBATCH -J forska-stack
-#SBATCH -A NAISS2025-22-715
+#SBATCH -A NAISS2025-22-715 -p alvis
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:A100:2
-#SBATCH --time=08:00:00
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=64G
+#SBATCH --time=01:00:00
 #SBATCH -o %x-%j.out
 #SBATCH -e %x-%j.err
 #SBATCH --export=ALL

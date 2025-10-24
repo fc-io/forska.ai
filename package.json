@@ -28,7 +28,8 @@
     "db:studio": "bun --env-file=.env.local run drizzle-kit studio",
     "db:backup": "bun scripts/dbBackup.ts",
     "db:remote:push": "bun scripts/dbPush.ts --force --no-restore",
-    "db:remote:pull": "bun scripts/dbRemotePull.ts"
+    "db:remote:pull": "bun scripts/dbRemotePull.ts",
+    "sbatch:put": "bun scripts/sbatchPut.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^2.0.9",
