@@ -232,25 +232,14 @@ apptainer run --cleanenv --nv \
 #### API
 
 ``` bash
-apptainer run --cleanenv \
-  --bind ${STACK_ROOT:-.}/.secrets/database_url.txt:/run/secrets/database_url:ro \
-  --bind ${STACK_ROOT:-.}/.secrets/better_auth_secret.txt:/run/secrets/better_auth_secret:ro \
-  --bind ${STACK_ROOT:-.}/.secrets/better_auth_url.txt:/run/secrets/better_auth_url:ro \
-  --env DATABASE_URL_FILE=/run/secrets/database_url \
-  --env BETTER_AUTH_SECRET_FILE=/run/secrets/better_auth_secret \
-  --env BETTER_AUTH_URL_FILE=/run/secrets/better_auth_url \
-  --env VITE_LLM_SERVER_URL=http://localhost:8000/v1 \
-  --env VITE_PORT=8080 \
-  --env VITE_SERVER_API=http://localhost:3000 \
-  --env API_SERVER_PORT=3001 \
-  $STACK_ROOT/api_server.sif
+apptainer run --cleanenv   --bind ${STACK_ROOT:-.}/.secrets/database_url.txt:/run/secrets/database_url:ro   --bind ${STACK_ROOT:-.}/.secrets/better_auth_secret.txt:/run/secrets/better_auth_secret:ro   --bind ${STACK_ROOT:-.}/.secrets/better_auth_url.txt:/run/secrets/better_auth_url:ro   --env DATABASE_URL_FILE=/run/secrets/database_url   --env BETTER_AUTH_SECRET_FILE=/run/secrets/better_auth_secret   --env BETTER_AUTH_URL_FILE=/run/secrets/better_auth_url   --env VITE_LLM_SERVER_URL=http://localhost:8000/v1   --env VITE_PORT=8181   --env VITE_SERVER_API=http://localhost:3001   --env API_SERVER_PORT=3001   $STACK_ROOT/api_server.si
 ```
 Replace 5432 in your `${STACK_ROOT:-.}/.secrets/database_url.txt` if you changed `POSTGRES_PORT`.
 
 App (HTTP on :8080; talks to API over HTTP)
 Note: The app image now uses an absolute CMD (`/app/app-server`), so Apptainer runs correctly regardless of your host working directory.
 ``` bash
-apptainer -d run --cleanenv --env SERVER_HOST=localhost --env API_SERVER_PORT=3001 --env PROD_SERVER=8080 "$STACK_ROOT/app_server.sif"
+apptainer -d run --cleanenv --env SERVER_HOST=localhost --env API_SERVER_PORT=3001 --env PROD_SERVER=8123 "$STACK_ROOT/app_server.sif"
 ```
 
 Verification helpers
