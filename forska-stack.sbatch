@@ -3,7 +3,7 @@
 #SBATCH -A NAISS2025-22-715 -p alvis
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --gres=gpu:A100:2
+#SBATCH --gpus-per-node=A100:2
 #SBATCH --time=01:00:00
 #SBATCH -o %x-%j.out
 #SBATCH -e %x-%j.err

@@ -36,6 +36,31 @@ Open the app at http://localhost:8181 (it proxies API calls to http://localhost:
 Script
 - Use the maintained script in the repo: [forska-stack.sbatch](./forska-stack.sbatch). This is the single source of truth and is preconfigured for NAISS A100×2 with `TP_SIZE=2`.
 
+Helper (upload via Bun)
+- A convenience script uploads the batch file to your remote `$STACK_ROOT`:
+
+```
+bun run sbatch:put
+```
+
+Requirements
+- `SSH_ALIAS` (e.g., `user@cluster-login` or an SSH config alias) set in your shell
+- `STACK_ROOT` (remote shared path where your SIFs/secrets live)
+
+What it does
+- Creates the remote directory if missing: `ssh $SSH_ALIAS mkdir -p $STACK_ROOT`
+- Copies `forska-stack.sbatch` to `$SSH_ALIAS:$STACK_ROOT/` via `scp`
+
+Optional next step (submit remotely)
+
+```
+# After uploading, submit from your laptop in one go
+bun run sbatch:put \
+  && ssh "$SSH_ALIAS" "cd \"$STACK_ROOT\" && sbatch --export=ALL forska-stack.sbatch"
+```
+
+Tip: Add any job-specific overrides on submit, e.g. `--export=ALL,TP_SIZE=2,VLLM_GPU_UTIL=0.90`.
+
 Notes
 - The API reads secrets via `*_FILE` env fallbacks. If Better Auth files are absent, those envs are ignored.
 - vLLM requires a GPU. Increase `--gres=gpu:<N>` and set `TP_SIZE=<N>` if serving with tensor parallelism.
