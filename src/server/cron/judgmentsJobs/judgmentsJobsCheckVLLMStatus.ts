@@ -2,7 +2,6 @@ import {and, desc, eq} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../db/schema.ts'
-import {env} from '../../utils/env.ts'
 import {getVllmMetrics} from './judgmentsJobsAdjustBatchSize/getVllmMetrics.ts'
 
 const clamp = (lo: number, hi: number, v: number): number => {
@@ -61,112 +60,132 @@ const toJSON = (data: unknown): string => {
 }
 
 export const judgmentsJobsCheckVLLMStatus = async (db: PostgresJsDatabase<typeof schema>) => {
-  const instanceId = env.VITE_LLM_SERVER_URL
-  const jobModels = await db
-    .select({modelName: schema.models.modelName})
+  const runningJobConfigs = await db
+    .select({modelName: schema.models.modelName, baseURL: schema.models.baseURL})
     .from(schema.judgmentsJobs)
     .leftJoin(schema.projects, eq(schema.judgmentsJobs.projectId, schema.projects.id))
     .leftJoin(schema.models, eq(schema.projects.modelId, schema.models.id))
-  const modelName = jobModels[0]?.modelName ?? 'unknown'
-  const prev = await getLatestStatus(db, instanceId, modelName)
-  const {
-    promptTokensTotal,
-    generationTokensTotal,
-    requestSuccessTotal,
-    requestErrorTotal,
-    numPreemptionsTotal,
-    numRequestsWaiting,
-    numRequestsRunning,
-    numRequestsSwapped,
-    gpuCacheUsagePerc,
-  } = await getVllmMetrics()
+    .where(eq(schema.judgmentsJobs.status, 'running'))
 
-  const {prefill, gen, rps, dtMs} = computeTps(
-    prev
-      ? {
-          prompt: Number(prev.promptTokensTotal ?? 0),
-          gen: Number(prev.generationTokensTotal ?? 0),
-          success: Number(prev.requestSuccessTotal ?? 0),
-          ts: new Date(prev.ts),
-        }
-      : undefined,
-    {prompt: promptTokensTotal, gen: generationTokensTotal, success: requestSuccessTotal, ts: new Date()},
-  )
+  const validConfigs = runningJobConfigs.filter((r) => {
+    return !!r.baseURL
+  })
 
-  const alpha = 0.3
-  const prefillTps = ema(prev?.prefillTps ?? null, prefill, alpha)
-  const genTps = ema(prev?.genTps ?? null, gen, alpha)
-
-  const wasSmall = smallQueue(numRequestsWaiting, numRequestsRunning)
-
-  const prevTargets = {gen: Number(prev?.targetGenTps ?? 0), prefill: Number(prev?.targetPrefillTps ?? 0)}
-  const incGen = Math.max(prevTargets.gen, genTps * 1.08 + 50)
-  const incPrefill = Math.max(prevTargets.prefill, prefillTps * 1.08 + 50)
-  const decGen = prevTargets.gen * 0.85
-  const decPrefill = prevTargets.prefill * 0.85
-  const targetGenTps = wasSmall ? incGen : decGen
-  const targetPrefillTps = wasSmall ? incPrefill : decPrefill
-
-  const prevState = (() => {
-    if (!prev?.lastAction) return {bestGen: 0}
-    try {
-      const parsed = JSON.parse(prev.lastAction) as unknown
-      return typeof parsed === 'object' && parsed && 'bestGen' in parsed && typeof parsed.bestGen === 'number'
-        ? {bestGen: parsed.bestGen}
-        : {bestGen: 0}
-    } catch (_e) {
-      return {bestGen: 0}
-    }
-  })()
-
-  const bestGenDecay = Math.max(0, prevState.bestGen * 0.98)
-  const bestGen = Math.max(bestGenDecay, genTps)
-  const plateauGen = 0.92 * bestGen
-  const targetGenFinal = Math.max(targetGenTps, plateauGen)
-  const targetPrefillFinal = targetPrefillTps
-
-  const isUnsafe = safetyTriggered(
-    numRequestsWaiting,
-    numRequestsRunning,
-    Number.isFinite(gpuCacheUsagePerc) ? gpuCacheUsagePerc : 0,
-    Number.isFinite(numRequestsSwapped) ? numRequestsSwapped : 0,
-  )
-  const tGen = isUnsafe ? targetGenFinal * 0.6 : targetGenFinal
-  const tPre = isUnsafe ? targetPrefillFinal * 0.6 : targetPrefillFinal
-
-  // Compute simple in-flight status metrics (no batch-size adjustments)
-  const inFlight = numRequestsWaiting + numRequestsRunning
-  const maxInFlight = clamp(64, 4096, Math.round(numRequestsRunning * 6))
-
-  const vllmStatusData = {
-    instanceId,
-    modelName,
-    vllmVersion: null,
-    gpuType: null,
-    gpuCount: null,
-    pollMs: dtMs || 2000,
-    promptTokensTotal,
-    generationTokensTotal,
-    requestSuccessTotal,
-    requestErrorTotal,
-    numPreemptionsTotal,
-    numRequestsWaiting,
-    numRequestsRunning,
-    gpuCacheUsagePerc,
-    numRequestsSwapped,
-    prefillTps,
-    genTps,
-    impliedRps: rps,
-    targetGenTps: tGen,
-    targetPrefillTps: tPre,
-    inFlight,
-    maxInFlight,
-    lastAction: toJSON({bestGen, smallQueue: wasSmall, safety: isUnsafe}),
-    e2eLatency: null,
-    ttftLatency: null,
-    itlLatency: null,
+  const baseUrlToModel = new Map<string, string>()
+  for (const cfg of validConfigs) {
+    const baseURL = String(cfg.baseURL)
+    if (!baseUrlToModel.has(baseURL)) baseUrlToModel.set(baseURL, cfg.modelName ?? 'unknown')
   }
 
-  await db.insert(schema.vllmStatus).values(vllmStatusData)
-  console.log('~~~judgmentsJobsCheckVLLMStatus (vllmStatusData sent) 2.~~~')
+  const uniqueBaseUrls = [...baseUrlToModel.keys()]
+  if (uniqueBaseUrls.length === 0) return
+
+  for (const baseURL of uniqueBaseUrls) {
+    const instanceId = baseURL
+    const modelName = baseUrlToModel.get(baseURL) ?? 'unknown'
+    const prev = await getLatestStatus(db, instanceId, modelName)
+    const {
+      promptTokensTotal,
+      generationTokensTotal,
+      requestSuccessTotal,
+      requestErrorTotal,
+      numPreemptionsTotal,
+      numRequestsWaiting,
+      numRequestsRunning,
+      numRequestsSwapped,
+      gpuCacheUsagePerc,
+    } = await getVllmMetrics(baseURL)
+
+    const {prefill, gen, rps, dtMs} = computeTps(
+      prev
+        ? {
+            prompt: Number(prev.promptTokensTotal ?? 0),
+            gen: Number(prev.generationTokensTotal ?? 0),
+            success: Number(prev.requestSuccessTotal ?? 0),
+            ts: new Date(prev.ts),
+          }
+        : undefined,
+      {prompt: promptTokensTotal, gen: generationTokensTotal, success: requestSuccessTotal, ts: new Date()},
+    )
+
+    const alpha = 0.3
+    const prefillTps = ema(prev?.prefillTps ?? null, prefill, alpha)
+    const genTps = ema(prev?.genTps ?? null, gen, alpha)
+
+    const wasSmall = smallQueue(numRequestsWaiting, numRequestsRunning)
+
+    const prevTargets = {gen: Number(prev?.targetGenTps ?? 0), prefill: Number(prev?.targetPrefillTps ?? 0)}
+    const incGen = Math.max(prevTargets.gen, genTps * 1.08 + 50)
+    const incPrefill = Math.max(prevTargets.prefill, prefillTps * 1.08 + 50)
+    const decGen = prevTargets.gen * 0.85
+    const decPrefill = prevTargets.prefill * 0.85
+    const targetGenTps = wasSmall ? incGen : decGen
+    const targetPrefillTps = wasSmall ? incPrefill : decPrefill
+
+    const prevState = (() => {
+      if (!prev?.lastAction) return {bestGen: 0}
+      try {
+        const parsed = JSON.parse(prev.lastAction) as unknown
+        return typeof parsed === 'object'
+          && parsed
+          && 'bestGen' in parsed
+          && typeof (parsed as {bestGen?: unknown}).bestGen === 'number'
+          ? {bestGen: (parsed as {bestGen: number}).bestGen}
+          : {bestGen: 0}
+      } catch (_e) {
+        return {bestGen: 0}
+      }
+    })()
+
+    const bestGenDecay = Math.max(0, prevState.bestGen * 0.98)
+    const bestGen = Math.max(bestGenDecay, genTps)
+    const plateauGen = 0.92 * bestGen
+    const targetGenFinal = Math.max(targetGenTps, plateauGen)
+    const targetPrefillFinal = targetPrefillTps
+
+    const isUnsafe = safetyTriggered(
+      numRequestsWaiting,
+      numRequestsRunning,
+      Number.isFinite(gpuCacheUsagePerc) ? gpuCacheUsagePerc : 0,
+      Number.isFinite(numRequestsSwapped) ? numRequestsSwapped : 0,
+    )
+    const tGen = isUnsafe ? targetGenFinal * 0.6 : targetGenFinal
+    const tPre = isUnsafe ? targetPrefillFinal * 0.6 : targetPrefillFinal
+
+    // Compute simple in-flight status metrics (no batch-size adjustments)
+    const inFlight = numRequestsWaiting + numRequestsRunning
+    const maxInFlight = clamp(64, 4096, Math.round(numRequestsRunning * 6))
+
+    const vllmStatusData = {
+      instanceId,
+      modelName,
+      vllmVersion: null,
+      gpuType: null,
+      gpuCount: null,
+      pollMs: dtMs || 2000,
+      promptTokensTotal,
+      generationTokensTotal,
+      requestSuccessTotal,
+      requestErrorTotal,
+      numPreemptionsTotal,
+      numRequestsWaiting,
+      numRequestsRunning,
+      gpuCacheUsagePerc,
+      numRequestsSwapped,
+      prefillTps,
+      genTps,
+      impliedRps: rps,
+      targetGenTps: tGen,
+      targetPrefillTps: tPre,
+      inFlight,
+      maxInFlight,
+      lastAction: toJSON({bestGen, smallQueue: wasSmall, safety: isUnsafe}),
+      e2eLatency: null,
+      ttftLatency: null,
+      itlLatency: null,
+    }
+
+    await db.insert(schema.vllmStatus).values(vllmStatusData)
+  }
+  console.log('~~~judgmentsJobsCheckVLLMStatus (vllmStatusData sent) 3.~~~')
 }

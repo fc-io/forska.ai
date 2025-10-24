@@ -32,8 +32,14 @@ const parsePrometheusText = (text: string) => {
   })
 }
 
-const fetchMetrics = async () => {
-  const vllmMetricsUrl = 'http://localhost:8000/metrics'
+const buildMetricsUrl = (baseURL: string): string => {
+  const trimmed = baseURL.replace(/\/+$/, '')
+  const withoutV1 = trimmed.replace(/\/?v1\/?$/, '')
+  return `${withoutV1}/metrics`
+}
+
+const fetchMetrics = async (baseURL: string) => {
+  const vllmMetricsUrl = buildMetricsUrl(baseURL)
   const res = await fetch(vllmMetricsUrl).catch(() => {
     return undefined
   })
@@ -69,7 +75,7 @@ const pickOne = (metrics: PromSample[], names: string[], def = 0): number => {
   return def
 }
 
-export const getVllmMetrics = async (): Promise<{
+export const getVllmMetrics = async (baseURL: string): Promise<{
   promptTokensTotal: number
   generationTokensTotal: number
   requestSuccessTotal: number
@@ -80,7 +86,7 @@ export const getVllmMetrics = async (): Promise<{
   numRequestsSwapped: number
   gpuCacheUsagePerc: number
 }> => {
-  const metrics = await fetchMetrics()
+  const metrics = await fetchMetrics(baseURL)
 
   return {
     promptTokensTotal: Math.floor(sumByName(metrics, ['vllm:prompt_tokens_total', 'vllm_prompt_tokens_total'])),
