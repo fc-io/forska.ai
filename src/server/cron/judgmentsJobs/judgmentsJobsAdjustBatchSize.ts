@@ -2,6 +2,7 @@ import {and, desc, eq, gte, inArray, lt, sum} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../db/schema.ts'
+import {env} from '../../utils/env.ts'
 import {judgmentsJobsGetJobs} from './judgmentsJobsGetJobs.ts'
 
 type Snapshot = {start: Date; end: Date; totalTokens: number; total: number}
@@ -24,8 +25,8 @@ const toNow = (): Date => {
   return new Date()
 }
 
-const getLatestSmallQueue = async (db: PostgresJsDatabase<typeof schema>): Promise<boolean> => {
-  const instanceId = 'http://localhost:8000/v1' // replace with url from project/job/model
+const getLatestHasWaiting = async (db: PostgresJsDatabase<typeof schema>): Promise<boolean> => {
+  const instanceId = env.VITE_LLM_SERVER_URL
   const jobModels = await db
     .select({modelName: schema.models.modelName})
     .from(schema.judgmentsJobs)
@@ -33,23 +34,15 @@ const getLatestSmallQueue = async (db: PostgresJsDatabase<typeof schema>): Promi
     .leftJoin(schema.models, eq(schema.models.id, schema.projects.modelId))
   const modelName = jobModels[0]?.modelName ?? 'unknown'
 
-  // TODO: handle use of multiple and external models. It would be weird if we limit the speed of an external model.
   const rows = await db
-    .select()
+    .select({waiting: schema.vllmStatus.numRequestsWaiting})
     .from(schema.vllmStatus)
     .where(and(eq(schema.vllmStatus.instanceId, instanceId), eq(schema.vllmStatus.modelName, modelName)))
     .orderBy(desc(schema.vllmStatus.ts))
     .limit(1)
 
-  const last = rows[0]
-  if (!last?.lastAction) return true
-
-  try {
-    const parsed = JSON.parse(last.lastAction) as {smallQueue?: unknown}
-    return parsed?.smallQueue === true
-  } catch (_e) {
-    return true
-  }
+  const waiting = Number(rows[0]?.waiting ?? 0)
+  return waiting > 0
 }
 
 const sumTokensSince = async (
@@ -145,18 +138,25 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
   const prevSnap = lastRun && lastTotal ? [{start: lastRun, end: now, totalTokens: tokens, total: lastTotal}] : []
   state.snapshots = [...state.snapshots, ...prevSnap].slice(-8)
 
-  const decide = () => {
-    return isFirstRun ? state.warmupStart : inWarmup ? Math.min((lastTotal as number) + 1, state.warmupMax) : undefined
+  const getWarmupTarget = (): number | undefined => {
+    if (isFirstRun) return state.warmupStart
+    if (inWarmup && lastTotal != null) return Math.min(lastTotal + 1, state.warmupMax)
+    return undefined
   }
 
-  const warmupOrUndefined = decide()
-  const small = warmupOrUndefined === undefined ? await getLatestSmallQueue(db) : true
+  const warmupOrUndefined = getWarmupTarget()
   const cur = lastTotal ?? state.warmupStart
-  const nextTotal =
-    warmupOrUndefined !== undefined ? warmupOrUndefined : small ? nextFromCompare(state.snapshots, cur) : cur - 2
+  let nextTotal: number
+
+  if (warmupOrUndefined !== undefined) {
+    nextTotal = warmupOrUndefined
+  } else {
+    const hasWaiting = await getLatestHasWaiting(db)
+    nextTotal = hasWaiting ? cur - 2 : nextFromCompare(state.snapshots, cur)
+  }
 
   const minTotal = Math.max(1, jobs.length)
-  const maxTotal = 200 // might be bad to have an upper limit
+  const maxTotal = 200 // prop be bad to have an upper limit
   const finalTotal = clamp(nextTotal, minTotal, maxTotal)
   const batches = distribute(finalTotal, jobs.length, state.rotation)
 
