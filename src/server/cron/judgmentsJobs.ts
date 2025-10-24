@@ -36,8 +36,10 @@ const getNewArticlesForJobs = async (): Promise<void> => {
     const totalArticles = newArticlesToProcess.reduce((sum, job) => {
       return sum + job.articlesToJudgeIds.length
     }, 0)
-    console.log('newArticlesToProcess', {jobs: newArticlesToProcess.length, totalArticles})
-    await judgmentsJobsAddToJobsQueue(db, newArticlesToProcess, serverJobId)
+    console.log(`newArticlesToProcess | jobs: ${newArticlesToProcess.length}, totalArticles: ${totalArticles}`)
+    if (totalArticles > 0) {
+      await judgmentsJobsAddToJobsQueue(db, newArticlesToProcess, serverJobId)
+    }
   }
 }
 
