@@ -39,6 +39,11 @@ const toNow = (): Date => {
   return new Date()
 }
 
+const pushHistory = (note: string): void => {
+  const ts = toNow()
+  state.history = [...state.history, {ts, note}].slice(-20)
+}
+
 const getLatestWaitingCount = async (db: PostgresJsDatabase<typeof schema>): Promise<number> => {
   const instanceId = env.VITE_LLM_SERVER_URL
   const jobModels = await db
@@ -94,6 +99,18 @@ const distribute = (total: number, n: number, rotation: number): number[] => {
   return rotate(assigned, rotation)
 }
 
+const extractJobIds = (jobs: {id: string}[]): string[] => {
+  return jobs.map((j) => {
+    return j.id
+  })
+}
+
+const sumBatchSizes = (jobs: {sendToLLMBatchSize: number | null}[]): number => {
+  return jobs.reduce((acc, j) => {
+    return acc + Number(j.sendToLLMBatchSize || 0)
+  }, 0)
+}
+
 const applyBatches = async (
   db: PostgresJsDatabase<typeof schema>,
   jobIds: string[],
@@ -121,100 +138,104 @@ const nextFromCompare = (snapshots: Snapshot[], curTotal: number): number => {
   return larger.totalTokens > smaller.totalTokens ? larger.total + 1 : larger.total - 2
 }
 
+const getWarmupTarget = (
+  isFirstRun: boolean,
+  inWarmup: boolean,
+  lastTotal: number | null,
+  warmupStart: number,
+  warmupMax: number,
+): number | undefined => {
+  return isFirstRun ? warmupStart : inWarmup && lastTotal != null ? Math.min(lastTotal + 1, warmupMax) : undefined
+}
+
+type NextDecision = {nextTotal: number; sleeping: boolean; historyNote: string | null}
+
+const decideForWaiting = (waitingCount: number, prevWaiting: number | null, cur: number): NextDecision | null => {
+  return waitingCount <= 0
+    ? null
+    : (() => {
+        const firstWait = prevWaiting == null
+        const increasedOrSame = firstWait ? true : waitingCount >= prevWaiting
+
+        state.lastNonZeroTotal = state.lastNonZeroTotal ?? (cur > 0 ? cur : null)
+        state.lastWaitingCount = waitingCount
+
+        return increasedOrSame
+          ? {nextTotal: 0, sleeping: true, historyNote: `adjust-batch-size: waiting=${waitingCount} -> sleep`}
+          : {
+              nextTotal: Math.max(0, (state.lastNonZeroTotal ?? cur) - 2),
+              sleeping: false,
+              historyNote: `adjust-batch-size: waiting=${waitingCount} < prev=${prevWaiting} -> base-2(${state.lastNonZeroTotal ?? cur}-2)`,
+            }
+      })()
+}
+
+const decideNextTotal = (
+  cur: number,
+  waitingCount: number,
+  prevWaiting: number | null,
+  warmupTarget: number | undefined,
+  snapshots: Snapshot[],
+): NextDecision => {
+  const waiting = decideForWaiting(waitingCount, prevWaiting, cur)
+  if (waiting) return waiting
+
+  if (warmupTarget !== undefined) {
+    return {nextTotal: warmupTarget, sleeping: false, historyNote: null}
+  }
+
+  return {nextTotal: nextFromCompare(snapshots, cur), sleeping: false, historyNote: null}
+}
+
 export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof schema>) => {
   const jobs = await judgmentsJobsGetJobs(db)
   const hasJobs = jobs.length > 0
+
   if (!hasJobs) {
-    const ts = toNow()
-    state.history = [...state.history, {ts, note: 'adjust-batch-size: skipped; no running jobs'}].slice(-20)
+    pushHistory('adjust-batch-size: skipped; no running jobs')
     console.log('adjust-batch-size skipped: no running jobs', {
-      ts: ts.toISOString(),
+      ts: toNow().toISOString(),
       historyCount: state.history.length,
     })
-    return
-  }
-  const now = toNow()
-
-  const jobIds = jobs.map((j) => {
-    return j.id
-  })
-  const currentTotalFromDb = jobs.reduce((acc, j) => {
-    return acc + Number(j.sendToLLMBatchSize || 0)
-  }, 0)
-  const lastRun = state.lastRun
-  const lastTotal = state.lastTotal ?? (currentTotalFromDb > 0 ? currentTotalFromDb : null)
-
-  const isFirstRun = !lastRun
-  const inWarmup = !isFirstRun && (lastTotal ?? 0) < state.warmupMax
-
-  const tokens = lastRun ? await sumTokensSince(db, jobIds, lastRun, now) : 0
-  const prevSnap = lastRun && lastTotal ? [{start: lastRun, end: now, totalTokens: tokens, total: lastTotal}] : []
-  state.snapshots = [...state.snapshots, ...prevSnap].slice(-8)
-
-  const getWarmupTarget = (): number | undefined => {
-    if (isFirstRun) return state.warmupStart
-    if (inWarmup && lastTotal != null) return Math.min(lastTotal + 1, state.warmupMax)
-    return undefined
-  }
-
-  const warmupOrUndefined = getWarmupTarget()
-  const cur = lastTotal ?? state.warmupStart
-  let nextTotal: number
-
-  const waitingCount = await getLatestWaitingCount(db)
-  const hasWaiting = waitingCount > 0
-
-  if (hasWaiting) {
-    const prevWaiting = state.lastWaitingCount
-    const firstWait = prevWaiting == null
-    const increasedOrSame = firstWait ? true : waitingCount >= prevWaiting
-
-    // Capture last non-zero total once when we first enter waiting
-    state.lastNonZeroTotal = state.lastNonZeroTotal ?? (cur > 0 ? cur : null)
-    state.lastWaitingCount = waitingCount
-
-    if (increasedOrSame) {
-      // Sleep: set batch total to 0 for this cycle
-      nextTotal = 0
-      state.sleeping = true
-      const ts = toNow()
-      state.history = [...state.history, {ts, note: `adjust-batch-size: waiting=${waitingCount} -> sleep`}].slice(-20)
-    } else {
-      // Waiting decreased compared to last time: resume from last non-zero minus 2
-      const base = state.lastNonZeroTotal ?? cur
-      nextTotal = Math.max(0, base - 2)
-      state.sleeping = false
-      const ts = toNow()
-      state.history = [
-        ...state.history,
-        {ts, note: `adjust-batch-size: waiting=${waitingCount} < prev=${prevWaiting} -> base-2(${base}-2)`},
-      ].slice(-20)
-    }
-  } else if (warmupOrUndefined !== undefined) {
-    nextTotal = warmupOrUndefined
-    state.sleeping = false
   } else {
-    nextTotal = nextFromCompare(state.snapshots, cur)
-    state.sleeping = false
+    const now = toNow()
+    const jobIds = extractJobIds(jobs)
+    const currentTotalFromDb = sumBatchSizes(jobs)
+    const lastRun = state.lastRun
+    const lastTotal = state.lastTotal ?? (currentTotalFromDb > 0 ? currentTotalFromDb : null)
+
+    const isFirstRun = !lastRun
+    const inWarmup = !isFirstRun && (lastTotal ?? 0) < state.warmupMax
+
+    const tokens = lastRun ? await sumTokensSince(db, jobIds, lastRun, now) : 0
+    const prevSnap = lastRun && lastTotal ? [{start: lastRun, end: now, totalTokens: tokens, total: lastTotal}] : []
+    state.snapshots = [...state.snapshots, ...prevSnap].slice(-8)
+
+    const warmupTarget = getWarmupTarget(isFirstRun, inWarmup, lastTotal, state.warmupStart, state.warmupMax)
+    const cur = lastTotal ?? state.warmupStart
+
+    const waitingCount = await getLatestWaitingCount(db)
+    const decision = decideNextTotal(cur, waitingCount, state.lastWaitingCount, warmupTarget, state.snapshots)
+
+    state.sleeping = decision.sleeping
+    if (decision.historyNote) pushHistory(decision.historyNote)
+
+    const minTotal = Math.max(1, jobs.length)
+    const maxTotal = 200
+    const finalTotal = state.sleeping ? 0 : clamp(decision.nextTotal, minTotal, maxTotal)
+    const batches = distribute(finalTotal, jobs.length, state.rotation)
+
+    await applyBatches(db, jobIds, batches)
+
+    state.rotation = (state.rotation + 1) % Math.max(1, jobs.length)
+    state.lastRun = now
+    state.lastTotal = finalTotal
+    state.lastNonZeroTotal = finalTotal > 0 ? finalTotal : state.lastNonZeroTotal
+    console.log('adjust-batch-size latest state', {
+      lastRun: state.lastRun,
+      lastTotal: state.lastTotal,
+      rotation: state.rotation,
+      snapshotCount: state.snapshots.length,
+    })
   }
-
-  const minTotal = Math.max(1, jobs.length)
-  const maxTotal = 200 // prop be bad to have an upper limit
-  const finalTotal = state.sleeping ? 0 : clamp(nextTotal, minTotal, maxTotal)
-  const batches = distribute(finalTotal, jobs.length, state.rotation)
-
-  if (hasJobs) await applyBatches(db, jobIds, batches)
-
-  state.rotation = (state.rotation + 1) % Math.max(1, jobs.length)
-  state.lastRun = now
-  state.lastTotal = finalTotal
-  state.lastNonZeroTotal = finalTotal > 0 ? finalTotal : state.lastNonZeroTotal
-  console.log('adjust-batch-size latest state', {
-    lastRun: state.lastRun,
-    lastTotal: state.lastTotal,
-    rotation: state.rotation,
-    snapshotCount: state.snapshots.length,
-  })
-
-  return
 }
