@@ -138,7 +138,7 @@ const nextFromCompare = (snapshots: Snapshot[], curTotal: number): number => {
   if (!a || !b) return curTotal + 1
   const larger = a.total >= b.total ? a : b
   const smaller = a.total >= b.total ? b : a
-  return larger.totalTokens > smaller.totalTokens ? larger.total + 1 : larger.total - 2
+  return larger.totalTokens > smaller.totalTokens ? larger.total + 1 : larger.total - 1
 }
 
 const getWarmupTarget = (
