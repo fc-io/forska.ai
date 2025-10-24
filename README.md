@@ -195,12 +195,7 @@ Notes
 
 ### 3) Run the SIFs (no registry access required)
 
-All services communicate over HTTP/TCP.
-
-- Postgres: TCP on `localhost:5432` (standard Postgres protocol)
-- API: HTTP on `localhost:3000`
-- App: HTTP on `localhost:8080`
-- vLLM: HTTP on `localhost:8000/v1` (OpenAI compatible)
+All services communicate over HTTP/TCP so the ports needs to be available.
 
 #### DB (Postgres over TCP)
 
