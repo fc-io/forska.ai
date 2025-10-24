@@ -43,7 +43,7 @@ export const judgmentsJobsSendToLLM = async (
   allJobs: Awaited<ReturnType<typeof judgmentsJobsGetJobs>>,
   serverJobId: string,
 ): Promise<void> => {
-  console.log('1. send ${allJobs.length} jobs to LLM')
+  console.log(`1. send ${allJobs.length} jobs to LLM`)
   await Promise.allSettled(
     allJobs.map((job) => {
       return sendToLLM(db, serverJobId, job.id, job.sendToLLMBatchSize)

@@ -23,6 +23,7 @@ const BATCH_SIZE_WARMUP = '0 * * * * *'
 const BATCH_SIZE_ADJUST = '0 */1 * * * *'
 const CHECK_VLLM_STATUS = '0 * * * * *'
 const CLEANUP_STALE_REQUESTS = '0 */5 * * * *'
+const START_DELAY_MS = 1000
 
 const getNewArticlesForJobs = async (): Promise<void> => {
   if (!env.RUN_SERVER_JUDGING) return
@@ -62,12 +63,27 @@ const cleanupStaleQueueCron = async (): Promise<void> => {
 }
 
 export const judgmentsJobsCron = new Elysia()
-  .use(cron({name: 'judgments-jobs-fetch-articles', pattern: NEW_ARTICLES_INTERVAL, run: getNewArticlesForJobs}))
-  .use(cron({name: 'judgments-jobs-send-to-llm', pattern: LLM_PROCESSING_INTERVAL, run: sendToLLMCron}))
+  .use(
+    cron({
+      name: 'judgments-jobs-fetch-articles',
+      pattern: NEW_ARTICLES_INTERVAL,
+      startAt: new Date(Date.now() + START_DELAY_MS),
+      run: getNewArticlesForJobs,
+    }),
+  )
+  .use(
+    cron({
+      name: 'judgments-jobs-send-to-llm',
+      pattern: LLM_PROCESSING_INTERVAL,
+      startAt: new Date(Date.now() + START_DELAY_MS),
+      run: sendToLLMCron,
+    }),
+  )
   .use(
     cron({
       name: 'judgments-jobs-batch-size-warmup',
       pattern: BATCH_SIZE_WARMUP,
+      startAt: new Date(Date.now() + START_DELAY_MS),
       maxRuns: 5,
       run: () => {
         return adjustBatchSizeCron('BATCH_SIZE_WARMUP')
@@ -84,5 +100,19 @@ export const judgmentsJobsCron = new Elysia()
       },
     }),
   )
-  .use(cron({name: 'judgments-jobs-check-vllm-status', pattern: CHECK_VLLM_STATUS, run: checkVLLMStatusCron}))
-  .use(cron({name: 'judgments-jobs-cleanup-stale', pattern: CLEANUP_STALE_REQUESTS, run: cleanupStaleQueueCron}))
+  .use(
+    cron({
+      name: 'judgments-jobs-check-vllm-status',
+      pattern: CHECK_VLLM_STATUS,
+      startAt: new Date(Date.now() + START_DELAY_MS),
+      run: checkVLLMStatusCron,
+    }),
+  )
+  .use(
+    cron({
+      name: 'judgments-jobs-cleanup-stale',
+      pattern: CLEANUP_STALE_REQUESTS,
+      startAt: new Date(Date.now() + START_DELAY_MS),
+      run: cleanupStaleQueueCron,
+    }),
+  )

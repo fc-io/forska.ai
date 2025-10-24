@@ -232,7 +232,7 @@ apptainer run --cleanenv --nv \
 #### API
 
 ``` bash
-apptainer run --cleanenv   --bind ${STACK_ROOT:-.}/.secrets/database_url.txt:/run/secrets/database_url:ro   --bind ${STACK_ROOT:-.}/.secrets/better_auth_secret.txt:/run/secrets/better_auth_secret:ro   --bind ${STACK_ROOT:-.}/.secrets/better_auth_url.txt:/run/secrets/better_auth_url:ro   --env DATABASE_URL_FILE=/run/secrets/database_url   --env BETTER_AUTH_SECRET_FILE=/run/secrets/better_auth_secret   --env BETTER_AUTH_URL_FILE=/run/secrets/better_auth_url   --env VITE_LLM_SERVER_URL=http://localhost:8000/v1   --env VITE_PORT=8181   --env VITE_SERVER_API=http://localhost:3001   --env API_SERVER_PORT=3001   $STACK_ROOT/api_server.si
+apptainer run --cleanenv   --bind ${STACK_ROOT:-.}/.secrets/database_url.txt:/run/secrets/database_url:ro   --bind ${STACK_ROOT:-.}/.secrets/better_auth_secret.txt:/run/secrets/better_auth_secret:ro   --bind ${STACK_ROOT:-.}/.secrets/better_auth_url.txt:/run/secrets/better_auth_url:ro   --env DATABASE_URL_FILE=/run/secrets/database_url   --env BETTER_AUTH_SECRET_FILE=/run/secrets/better_auth_secret   --env BETTER_AUTH_URL_FILE=/run/secrets/better_auth_url   --env VITE_LLM_SERVER_URL=http://localhost:8000/v1   --env VITE_PORT=8181   --env VITE_SERVER_API=http://localhost:3001   --env API_SERVER_PORT=3001   $STACK_ROOT/api_server.sif
 ```
 Replace 5432 in your `${STACK_ROOT:-.}/.secrets/database_url.txt` if you changed `POSTGRES_PORT`.
 
