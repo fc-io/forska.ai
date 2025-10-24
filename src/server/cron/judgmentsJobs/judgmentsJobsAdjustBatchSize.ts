@@ -170,9 +170,9 @@ const decideForWaiting = (
         return increasedOrSame
           ? {nextTotal: 0, sleeping: true, historyNote: `adjust-batch-size: waiting=${waitingCount} -> sleep`}
           : {
-              nextTotal: Math.max(0, (remembered ?? cur) - 2),
+              nextTotal: Math.max(0, (remembered ?? cur) - 1),
               sleeping: false,
-              historyNote: `adjust-batch-size: waiting=${waitingCount} < prev=${prevWaiting} -> base-2(${remembered ?? cur}-2)`,
+              historyNote: `adjust-batch-size: waiting=${waitingCount} < prev=${prevWaiting} -> base-2(${remembered ?? cur}-1)`,
             }
       })()
 }
