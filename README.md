@@ -200,7 +200,8 @@ All services communicate over HTTP/TCP.
 - App: HTTP on `localhost:8080`
 - vLLM: HTTP on `localhost:8000/v1` (OpenAI compatible)
 
-DB (Postgres over TCP)
+#### DB (Postgres over TCP)
+
 ``` bash
 apptainer run --cleanenv --writable-tmpfs \
   --env POSTGRES_USER=postgres \
@@ -211,9 +212,14 @@ apptainer run --cleanenv --writable-tmpfs \
   $STACK_ROOT/postgres_18.sif
 ```
 
-# Optional: verify your model path exists
 ```
+# Optional: verify your model path exists
 ls -al "$STACK_ROOT/models/Qwen3-32B-FP8" || true
+```
+
+```
+# Optional: ping postgres
+curl -i http://127.0.0.1:5432/
 ```
 
 VLLM (GPU, HTTP on :8000)
@@ -226,8 +232,8 @@ apptainer run --cleanenv --nv \
     --api-key "$VLLM_API_KEY"
 ```
 
-API (HTTP on :3000; connects to Postgres via TCP and vLLM via HTTP)
-Note: The API image now uses an absolute CMD (`/app/server`), so Apptainer runs correctly regardless of your host working directory.
+#### API
+
 ``` bash
 apptainer run --cleanenv \
   --bind ${STACK_ROOT:-.}/.secrets/database_url.txt:/run/secrets/database_url:ro \
