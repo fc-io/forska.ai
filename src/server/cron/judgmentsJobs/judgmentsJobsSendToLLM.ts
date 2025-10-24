@@ -38,16 +38,22 @@ const sendToLLM = async (
   }
 }
 
+let hasLogged = false
 export const judgmentsJobsSendToLLM = async (
   db: PostgresJsDatabase<typeof schema>,
   allJobs: Awaited<ReturnType<typeof judgmentsJobsGetJobs>>,
   serverJobId: string,
 ): Promise<void> => {
-  console.log(`1. send ${allJobs.length} jobs to LLM`)
+  if (!hasLogged) {
+    console.log(`1. send ${allJobs.length} jobs to LLM`)
+  }
   await Promise.allSettled(
     allJobs.map((job) => {
       return sendToLLM(db, serverJobId, job.id, job.sendToLLMBatchSize)
     }),
   )
-  console.log('2. send to LLM done')
+  if (!hasLogged) {
+    console.log('2. send to LLM done')
+    hasLogged = true
+  }
 }
