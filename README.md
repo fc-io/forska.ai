@@ -227,6 +227,7 @@ apptainer run --cleanenv --nv \
 ```
 
 API (HTTP on :3000; connects to Postgres via TCP and vLLM via HTTP)
+Note: The API image now uses an absolute CMD (`/app/server`), so Apptainer runs correctly regardless of your host working directory.
 ``` bash
 apptainer run --cleanenv \
   --bind ${STACK_ROOT:-.}/.secrets/database_url.txt:/run/secrets/database_url:ro \
@@ -238,11 +239,9 @@ apptainer run --cleanenv \
 Replace 5432 in your `${STACK_ROOT:-.}/.secrets/database_url.txt` if you changed `POSTGRES_PORT`.
 
 App (HTTP on :8080; talks to API over HTTP)
+Note: The app image now uses an absolute CMD (`/app/app-server`), so Apptainer runs correctly regardless of your host working directory.
 ``` bash
-apptainer run --cleanenv \
-  --env SERVER_HOST=localhost --env API_SERVER_PORT=3000 \
-  --env PROD_SERVER=8080 \
-  $STACK_ROOT/app_server.sif
+apptainer -d run --cleanenv --env SERVER_HOST=localhost --env API_SERVER_PORT=3000 --env PROD_SERVER=8080 "$STACK_ROOT/app_server.sif"
 ```
 
 Verification helpers

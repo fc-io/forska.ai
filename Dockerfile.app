@@ -77,4 +77,4 @@ ENV NODE_ENV=production
 EXPOSE 8080
 # Run as non-root
 USER 65532:65532
-CMD ["./app-server"]
+CMD ["/app/app-server"]
