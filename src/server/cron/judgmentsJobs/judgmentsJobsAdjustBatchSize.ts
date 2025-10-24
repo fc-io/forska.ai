@@ -15,7 +15,21 @@ const state: {
   warmupStart: number
   warmupMax: number
   history: {ts: Date; note: string}[]
-} = {lastRun: null, lastTotal: null, rotation: 0, snapshots: [], warmupStart: 6, warmupMax: 10, history: []}
+  lastWaitingCount: number | null
+  lastNonZeroTotal: number | null
+  sleeping: boolean
+} = {
+  lastRun: null,
+  lastTotal: null,
+  rotation: 0,
+  snapshots: [],
+  warmupStart: 6,
+  warmupMax: 10,
+  history: [],
+  lastWaitingCount: null,
+  lastNonZeroTotal: null,
+  sleeping: false,
+}
 
 const clamp = (v: number, lo: number, hi: number): number => {
   return Math.max(lo, Math.min(hi, v))
@@ -25,7 +39,7 @@ const toNow = (): Date => {
   return new Date()
 }
 
-const getLatestHasWaiting = async (db: PostgresJsDatabase<typeof schema>): Promise<boolean> => {
+const getLatestWaitingCount = async (db: PostgresJsDatabase<typeof schema>): Promise<number> => {
   const instanceId = env.VITE_LLM_SERVER_URL
   const jobModels = await db
     .select({modelName: schema.models.modelName})
@@ -41,8 +55,7 @@ const getLatestHasWaiting = async (db: PostgresJsDatabase<typeof schema>): Promi
     .orderBy(desc(schema.vllmStatus.ts))
     .limit(1)
 
-  const waiting = Number(rows[0]?.waiting ?? 0)
-  return waiting > 0
+  return Number(rows[0]?.waiting ?? 0)
 }
 
 const sumTokensSince = async (
@@ -148,16 +161,46 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
   const cur = lastTotal ?? state.warmupStart
   let nextTotal: number
 
-  if (warmupOrUndefined !== undefined) {
+  const waitingCount = await getLatestWaitingCount(db)
+  const hasWaiting = waitingCount > 0
+
+  if (hasWaiting) {
+    const prevWaiting = state.lastWaitingCount
+    const firstWait = prevWaiting == null
+    const increasedOrSame = firstWait ? true : waitingCount >= prevWaiting
+
+    // Capture last non-zero total once when we first enter waiting
+    state.lastNonZeroTotal = state.lastNonZeroTotal ?? (cur > 0 ? cur : null)
+    state.lastWaitingCount = waitingCount
+
+    if (increasedOrSame) {
+      // Sleep: set batch total to 0 for this cycle
+      nextTotal = 0
+      state.sleeping = true
+      const ts = toNow()
+      state.history = [...state.history, {ts, note: `adjust-batch-size: waiting=${waitingCount} -> sleep`}].slice(-20)
+    } else {
+      // Waiting decreased compared to last time: resume from last non-zero minus 2
+      const base = state.lastNonZeroTotal ?? cur
+      nextTotal = Math.max(0, base - 2)
+      state.sleeping = false
+      const ts = toNow()
+      state.history = [
+        ...state.history,
+        {ts, note: `adjust-batch-size: waiting=${waitingCount} < prev=${prevWaiting} -> base-2(${base}-2)`},
+      ].slice(-20)
+    }
+  } else if (warmupOrUndefined !== undefined) {
     nextTotal = warmupOrUndefined
+    state.sleeping = false
   } else {
-    const hasWaiting = await getLatestHasWaiting(db)
-    nextTotal = hasWaiting ? cur - 2 : nextFromCompare(state.snapshots, cur)
+    nextTotal = nextFromCompare(state.snapshots, cur)
+    state.sleeping = false
   }
 
   const minTotal = Math.max(1, jobs.length)
   const maxTotal = 200 // prop be bad to have an upper limit
-  const finalTotal = clamp(nextTotal, minTotal, maxTotal)
+  const finalTotal = state.sleeping ? 0 : clamp(nextTotal, minTotal, maxTotal)
   const batches = distribute(finalTotal, jobs.length, state.rotation)
 
   if (hasJobs) await applyBatches(db, jobIds, batches)
@@ -165,6 +208,7 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
   state.rotation = (state.rotation + 1) % Math.max(1, jobs.length)
   state.lastRun = now
   state.lastTotal = finalTotal
+  state.lastNonZeroTotal = finalTotal > 0 ? finalTotal : state.lastNonZeroTotal
   console.log('adjust-batch-size latest state', {
     lastRun: state.lastRun,
     lastTotal: state.lastTotal,
