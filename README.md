@@ -74,7 +74,7 @@ Two modes are available.
 
 ### Host networking – for HPCs running Apptainer
 
-For Slurm batch job examples using Apptainer, see README_SBATCH.md.
+For Slurm batch job examples using Apptainer, see [README_SBATCH.md](./README_SBATCH.md).
 
 #### Secrets for hostnet profile
 
