@@ -86,14 +86,8 @@ The hostnet profile uses secrets files (not env) for database credentials:
 
 Safer one‑liners (no secret in history):
 
-zsh
-```
-mkdir -p "${STACK_ROOT:-.}/.secrets" && read -s "PW?DB password: " && umask 077 && printf '%s' "$PW" > "${STACK_ROOT:-.}/.secrets/db_password.txt" && chmod 600 "${STACK_ROOT:-.}/.secrets/db_password.txt" && unset PW
-read -s "URL?Database URL (postgresql://...): " && umask 077 && printf '%s' "$URL" > "${STACK_ROOT:-.}/.secrets/database_url.txt" && chmod 600 "${STACK_ROOT:-.}/.secrets/database_url.txt" && unset URL
-```
 
-bash
-```
+``` bash
 mkdir -p "${STACK_ROOT:-.}/.secrets"; read -s -p 'DB password: ' PW; echo; umask 077; printf '%s' "$PW" > "${STACK_ROOT:-.}/.secrets/db_password.txt"; chmod 600 "${STACK_ROOT:-.}/.secrets/db_password.txt"; unset PW
 read -s -p 'Database URL (postgresql://...): ' URL; echo; umask 077; printf '%s' "$URL" > "${STACK_ROOT:-.}/.secrets/database_url.txt"; chmod 600 "${STACK_ROOT:-.}/.secrets/database_url.txt"; unset URL
 ```
@@ -102,7 +96,7 @@ read -s -p 'Database URL (postgresql://...): ' URL; echo; umask 077; printf '%s'
 
 Required variables for hostnet runs (in `.env` or `.env.local`):
 
-```
+``` bash
 DB_NAME=postgres
 DB_USER=postgres
 VLLM_API_KEY=fake_key
@@ -256,9 +250,6 @@ apptainer exec --cleanenv \
   sh -lc 'ls -l /run/secrets && head -c 5 /run/secrets/db_password && echo'
 ```
 
-Notes
-- If your Apptainer build does not support `--fakeroot`, drop that flag; `--cleanenv` and `--writable-tmpfs` are still recommended to avoid host env leakage and read-only runtime paths.
-
 ### Clean reset and restore (PG18, Apptainer)
 
 Use this flow to start fresh on the remote (remove old PG17 layout) and validate the full dump → push → restore path.
@@ -280,7 +271,7 @@ ssh $SSH_ALIAS 'mv -f ${STACK_ROOT}/pgdata ${STACK_ROOT}/pgdata_pg17_bak_$(date 
 
 2) Start Postgres 18 (fresh cluster)
 ```bash
-ssh $SSH_ALIAS apptainer run --cleanenv --writable-tmpfs --fakeroot \
+ssh $SSH_ALIAS apptainer run --cleanenv --writable-tmpfs \
   --env POSTGRES_USER=postgres \
   --env POSTGRES_PASSWORD_FILE=/run/secrets/db_password \
   --env POSTGRES_DB=${DB_NAME:-postgres} \
@@ -289,7 +280,6 @@ ssh $SSH_ALIAS apptainer run --cleanenv --writable-tmpfs --fakeroot \
   ${STACK_ROOT}/postgres_18.sif
 ssh $SSH_ALIAS apptainer exec --cleanenv ${STACK_ROOT}/postgres_18.sif pg_isready -h 127.0.0.1 -p 5432 -U postgres
 ```
-If `--fakeroot` is unavailable on your cluster, omit it.
 
 3) Push dump to remote (no restore, validates end-to-end copy)
 ```bash

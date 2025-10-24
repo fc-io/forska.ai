@@ -6,13 +6,11 @@ Before using these, follow the Host networking – for HPCs running Apptainer se
 - Set `STACK_ROOT` and create the shared dirs (`pgdata`, `models`, `hf_cache`, `logs`, `.cache`).
 - Pull the required SIF images into `$STACK_ROOT`.
 - Create secrets under `$STACK_ROOT/.secrets` as described (database password and connection URL).
+- Populate the database base
 
 Assumptions
-- Apptainer is available on the compute node (adjust the optional `module load` lines if your cluster uses modules).
-- The following SIFs exist in `$STACK_ROOT`: `postgres_18.sif`, `vllm_openai_latest.sif`, `app_server.sif`.
-- Ports 5432 (db), 8000 (vLLM), and 8123 (app) are reachable from where you access them (often via SSH tunnel).
-
-Tip: Submit with your environment exported to the job (so `STACK_ROOT`, `VLLM_API_KEY`, etc. are inherited):
+- Apptainer is available on the compute node.
+- Ports 5432 (db), 8000 (vLLM), and 8123 (app) ain't conflicting and are reachable from where you access them (often via SSH tunnel).
 
 ```
 export STACK_ROOT=/mimer/NOBACKUP/groups/clin-agent-bench/dev
