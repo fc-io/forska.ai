@@ -8,22 +8,22 @@ Read first (from README.md)
 - Create secrets under `$STACK_ROOT/.secrets`: `db_password.txt` and `database_url.txt`. Optional: `better_auth_secret.txt`, `better_auth_url.txt`.
 - Ensure env has `VLLM_API_KEY` (temporary; see README.md).
 
-Assumptions
+ Assumptions
 - Apptainer is available on the compute node (e.g., `module load apptainer`).
-- Ports 5432 (db), 8000 (vLLM), 3001 (API), and 8123 (app) are free on the node and reachable via SSH port-forwarding.
+- Ports 5432 (db), 8000 (vLLM), 3001 (API), and 8181 (app) are free on the node and reachable via SSH port-forwarding.
 
-Submit with `sbatch forska-stack.sbatch`, then tunnel from your laptop:
+Submit with `sbatch forska-stack.sbatch` (if your cluster does not export environment variables to jobs by default, use `sbatch --export=ALL forska-stack.sbatch` or keep the directive in the script below), then tunnel from your laptop:
 
 ```
 # After the job starts, check the compute hostname printed in the logs, e.g. c17-42
 ssh -N \
-  -L 8123:c17-42:8123 \
+  -L 8181:c17-42:8181 \
   -L 3001:c17-42:3001 \
   -L 8000:c17-42:8000 \
   your-user@cluster-login
 ```
 
-Open the app at http://localhost:8123 (it proxies API calls to http://localhost:3001). vLLM is exposed at http://localhost:8000/v1.
+Open the app at http://localhost:8181 (it proxies API calls to http://localhost:3001). vLLM is exposed at http://localhost:8000/v1.
 
 forska-stack.sbatch
 ```
@@ -37,6 +37,7 @@ forska-stack.sbatch
 #SBATCH --mem=64G
 #SBATCH -o %x-%j.out
 #SBATCH -e %x-%j.err
+#SBATCH --export=ALL
 
 set -euo pipefail
 
@@ -58,7 +59,7 @@ export HF_HOME=${HF_HOME:-$STACK_ROOT/hf_cache}
 # Service ports (host networking)
 export POSTGRES_PORT=${POSTGRES_PORT:-5432}
 export API_SERVER_PORT=${API_SERVER_PORT:-3001}
-export PROD_SERVER=${PROD_SERVER:-8123}
+export PROD_SERVER=${PROD_SERVER:-8181}
 
 # vLLM runtime knobs
 export VLLM_API_KEY=${VLLM_API_KEY:?set VLLM_API_KEY in your env}
