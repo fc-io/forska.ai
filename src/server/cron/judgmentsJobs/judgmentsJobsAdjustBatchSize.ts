@@ -153,22 +153,26 @@ const getWarmupTarget = (
 
 type NextDecision = {nextTotal: number; sleeping: boolean; historyNote: string | null}
 
-const decideForWaiting = (waitingCount: number, prevWaiting: number | null, cur: number): NextDecision | null => {
+const decideForWaiting = (
+  waitingCount: number,
+  prevWaiting: number | null,
+  cur: number,
+  lastNonZeroTotal: number | null,
+): NextDecision | null => {
   return waitingCount <= 0
     ? null
     : (() => {
         const firstWait = prevWaiting == null
         const increasedOrSame = firstWait ? true : waitingCount >= prevWaiting
 
-        state.lastNonZeroTotal = state.lastNonZeroTotal ?? (cur > 0 ? cur : null)
-        state.lastWaitingCount = waitingCount
+        const remembered = lastNonZeroTotal ?? (cur > 0 ? cur : null)
 
         return increasedOrSame
           ? {nextTotal: 0, sleeping: true, historyNote: `adjust-batch-size: waiting=${waitingCount} -> sleep`}
           : {
-              nextTotal: Math.max(0, (state.lastNonZeroTotal ?? cur) - 2),
+              nextTotal: Math.max(0, (remembered ?? cur) - 2),
               sleeping: false,
-              historyNote: `adjust-batch-size: waiting=${waitingCount} < prev=${prevWaiting} -> base-2(${state.lastNonZeroTotal ?? cur}-2)`,
+              historyNote: `adjust-batch-size: waiting=${waitingCount} < prev=${prevWaiting} -> base-2(${remembered ?? cur}-2)`,
             }
       })()
 }
@@ -179,8 +183,9 @@ const decideNextTotal = (
   prevWaiting: number | null,
   warmupTarget: number | undefined,
   snapshots: Snapshot[],
+  lastNonZeroTotal: number | null,
 ): NextDecision => {
-  const waiting = decideForWaiting(waitingCount, prevWaiting, cur)
+  const waiting = decideForWaiting(waitingCount, prevWaiting, cur, lastNonZeroTotal)
   if (waiting) return waiting
 
   if (warmupTarget !== undefined) {
@@ -258,7 +263,14 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
       const cur = lastTotal ?? warmup.start
 
       const waitingCount = await getLatestWaitingCountFor(db, instanceId, modelName)
-      const decision = decideNextTotal(cur, waitingCount, s.lastWaitingCount, warmupTarget, s.snapshots)
+      const decision = decideNextTotal(
+        cur,
+        waitingCount,
+        s.lastWaitingCount,
+        warmupTarget,
+        s.snapshots,
+        s.lastNonZeroTotal,
+      )
 
       s.sleeping = decision.sleeping
       if (decision.historyNote) pushHistory(instanceId, decision.historyNote)
