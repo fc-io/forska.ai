@@ -247,7 +247,7 @@ apptainer run --cleanenv \
   --env VITE_LLM_SERVER_URL=http://localhost:8000/v1 \
   --env VITE_PORT=8080 \
   --env VITE_SERVER_API=http://localhost:3000 \
-  --env API_SERVER_PORT=3000 \
+  --env API_SERVER_PORT=3001 \
   $STACK_ROOT/api_server.sif
 ```
 Replace 5432 in your `${STACK_ROOT:-.}/.secrets/database_url.txt` if you changed `POSTGRES_PORT`.
