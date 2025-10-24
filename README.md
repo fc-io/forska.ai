@@ -74,6 +74,8 @@ Two modes are available.
 
 ### Host networking – for HPCs running Apptainer
 
+For Slurm batch job examples using Apptainer, see README_SBATCH.md.
+
 #### Secrets for hostnet profile
 
 The hostnet profile uses secrets files (not env) for database credentials:

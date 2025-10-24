@@ -276,9 +276,8 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
       if (decision.historyNote) pushHistory(instanceId, decision.historyNote)
       s.lastWaitingCount = waitingCount
 
-      const minTotal = Math.max(1, list.length)
       const maxTotal = 200
-      const finalTotal = s.sleeping ? 0 : clamp(decision.nextTotal, minTotal, maxTotal)
+      const finalTotal = s.sleeping ? 0 : clamp(decision.nextTotal, 1, maxTotal)
       const batches = distribute(finalTotal, list.length, s.rotation)
 
       // accumulate for single update
