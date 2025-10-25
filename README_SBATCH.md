@@ -38,6 +38,17 @@ Important: The OpenAI-compatible model name used in requests must match the serv
 Script
 - Use the maintained script in the repo: [forska-stack.sbatch](./forska-stack.sbatch). This is the single source of truth and is preconfigured for NAISS A100×2 with `TP_SIZE=2`.
 
+Multi-node (Ray) mode
+- The batch script now supports multi-node vLLM via Ray. Set `#SBATCH --nodes=<N>` and `#SBATCH --gpus-per-node=A100:<G>` and it will:
+  - Start a Ray head on the first node and Ray workers on the others.
+  - Launch vLLM on the head with `--distributed-executor-backend ray` and `--tensor-parallel-size (N×G)`.
+- Defaults in the script are 2 nodes × 4 GPUs per node (TP=8). Override `GPUS_PER_NODE` or `TP_SIZE` with `--export` if needed.
+- Requirements:
+  - The vLLM SIF must include `ray` CLI and Python package.
+  - Nodes must be able to talk to each other on ports `6379` (Ray GCS) and `8265` (dashboard). Firewalls must allow intra-allocation traffic.
+  - If your cluster needs NCCL tuning for cross-node GPU comms, set `NCCL_SOCKET_IFNAME` (e.g., `ib0`) and related env vars before submission.
+  - Slurm must allocate GPUs on each node (use `--gpus-per-node` or your site’s `--gres` equivalent).
+
 Helper (upload via Bun)
 - A convenience script uploads the batch file to your remote `$STACK_ROOT`:
 

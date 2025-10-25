@@ -1,9 +1,11 @@
 #!/bin/bash
 #SBATCH -J forska-stack
 #SBATCH -A NAISS2025-22-715 -p alvis
-#SBATCH --nodes=1
+#SBATCH --nodes=2
 #SBATCH --ntasks=1
-#SBATCH --gpus-per-node=A100:2
+# Request 4 A100 GPUs per node (2 nodes total)
+# Adjust for your cluster if it uses --gres instead
+#SBATCH --gpus-per-node=A100:4
 #SBATCH --time=01:00:00
 #SBATCH -o %x-%j.log
 #SBATCH --export=ALL
@@ -37,8 +39,11 @@ export PROD_SERVER=${PROD_SERVER:-8181}
 # Default to a dummy key when not provided
 export VLLM_API_KEY=${VLLM_API_KEY:-fake_key}
 export VLLM_GPU_UTIL=${VLLM_GPU_UTIL:-0.90}
-export TP_SIZE=${TP_SIZE:-2}
-export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1}
+# Total TP across the whole Ray cluster; default to 2 nodes × 4 GPUs
+export GPUS_PER_NODE=${GPUS_PER_NODE:-4}
+export TP_SIZE=${TP_SIZE:-$(( (${SLURM_NNODES:-1}) * GPUS_PER_NODE ))}
+# Do NOT pin CUDA_VISIBLE_DEVICES when using Ray + multi-node
+# Ray/vLLM will respect Slurm cgroups; leaving all allocated GPUs visible per node
 
 # Client/API URLs used by the compiled servers
 export VITE_LLM_SERVER_URL=${VITE_LLM_SERVER_URL:-http://localhost:8000/v1}
@@ -62,6 +67,16 @@ need "$SIF_DB"; need "$SIF_VLLM"; need "$SIF_API"; need "$SIF_APP"; need "$DB_PW
 LOG_DIR="$STACK_ROOT/logs/${SLURM_JOB_ID:-manual}"
 mkdir -p "$LOG_DIR"
 
+# Multi-node/Ray topology
+NNODES=${SLURM_NNODES:-1}
+HOSTS=( $(scontrol show hostnames "${SLURM_NODELIST:-$(hostname -s)}") )
+HEAD_NODE=${HOSTS[0]:-$(hostname -s)}
+THIS_NODE=$(hostname -s)
+WORKER_NODES=( "${HOSTS[@]:1}" )
+RAY_PORT=${RAY_PORT:-6379}
+RAY_DASHBOARD_PORT=${RAY_DASHBOARD_PORT:-8265}
+RAY_TMP_DIR=${RAY_TMP_DIR:-$STACK_ROOT/.cache/ray}
+
 graceful_shutdown() {
   local reason="${1:-cleanup}"
   echo "[forska] shutting down ($reason)..."
@@ -75,6 +90,17 @@ graceful_shutdown() {
   # Force kill anything that didn't exit in time
   if [[ -n "$(jobs -pr)" ]]; then
     jobs -pr | xargs -r kill -KILL || true
+  fi
+  # Stop Ray cluster (head + workers) if started
+  if [[ ${NNODES:-1} -gt 1 ]]; then
+    echo "[forska] stopping ray on head ${HEAD_NODE}"
+    apptainer exec --cleanenv --nv "$SIF_VLLM" ray stop >/dev/null 2>&1 || true
+    if [[ ${#WORKER_NODES[@]} -gt 0 ]]; then
+      echo "[forska] stopping ray on workers: ${WORKER_NODES[*]}"
+      srun --ntasks=$((NNODES-1)) --nodes=$((NNODES-1)) --nodelist="$(printf "%s," "${WORKER_NODES[@]}" | sed 's/,$//')" \
+        bash -lc "apptainer exec --cleanenv --nv '$SIF_VLLM' ray stop >/dev/null 2>&1 || true" \
+        >/dev/null 2>&1 || true
+    fi
   fi
 }
 trap 'graceful_shutdown EXIT' EXIT
@@ -93,13 +119,56 @@ apptainer run --cleanenv --writable-tmpfs \
   "$SIF_DB" \
   >"$LOG_DIR/db.log" 2>&1 &
 
-echo "[forska] starting vllm on :8000"
+############################################
+# Start Ray (multi-node) + vLLM on the head
+############################################
+
+if [[ $NNODES -gt 1 ]]; then
+  echo "[forska] starting ray cluster across $NNODES nodes (head=$HEAD_NODE, workers=${WORKER_NODES:-none})"
+  mkdir -p "$RAY_TMP_DIR"
+  # Start Ray head on this node (the batch script runs on the head)
+  apptainer exec --cleanenv --nv \
+    --bind "$RAY_TMP_DIR:$RAY_TMP_DIR" \
+    "$SIF_VLLM" \
+    ray start --head \
+      --port "$RAY_PORT" \
+      --dashboard-host 0.0.0.0 \
+      --dashboard-port "$RAY_DASHBOARD_PORT" \
+      --temp-dir "$RAY_TMP_DIR" \
+    >"$LOG_DIR/ray-head.log" 2>&1 || { echo "[forska] ray head failed" >&2; exit 2; }
+
+  # Start Ray workers on the remaining nodes
+  if [[ ${#WORKER_NODES[@]} -gt 0 ]]; then
+    srun --nodes=$((NNODES-1)) --ntasks=$((NNODES-1)) \
+      --nodelist="$(printf "%s," "${WORKER_NODES[@]}" | sed 's/,$//')" \
+      --output "$LOG_DIR/ray-worker-%h.log" \
+      bash -lc "mkdir -p '$RAY_TMP_DIR' && apptainer exec --cleanenv --nv '$SIF_VLLM' ray start --address '${HEAD_NODE}:${RAY_PORT}' --temp-dir '$RAY_TMP_DIR'" || {
+        echo "[forska] ray workers failed" >&2; exit 2;
+      }
+  fi
+
+  # Give Ray a moment to settle
+  sleep 3
+fi
+
+echo "[forska] starting vllm on :8000 (backend=$([[ $NNODES -gt 1 ]] && echo ray || echo mp), tp=$TP_SIZE)"
 if [[ ! -d "$STACK_ROOT/models/Qwen3-32B-FP8" ]]; then
   echo "[forska] warning: model directory missing: $STACK_ROOT/models/Qwen3-32B-FP8" >&2
   echo "[forska]          vLLM will fail unless the model is present or HF download is configured" >&2
 fi
 
+VLLM_BACKEND=$([[ $NNODES -gt 1 ]] && echo ray || echo mp)
+VLLM_ENV=(
+  --env VLLM_CACHE_ROOT="$VLLM_CACHE_ROOT"
+  --env HF_HOME="$HF_HOME"
+)
+if [[ $NNODES -gt 1 ]]; then
+  VLLM_ENV+=(--env RAY_ADDRESS="${HEAD_NODE}:${RAY_PORT}")
+  VLLM_ENV+=(--env RAY_TMPDIR="$RAY_TMP_DIR")
+fi
+
 apptainer run --cleanenv --nv \
+  "${VLLM_ENV[@]}" \
   --bind "$STACK_ROOT/models:/models:ro" \
   "$SIF_VLLM" \
   --model /models/Qwen3-32B-FP8 \
@@ -110,7 +179,7 @@ apptainer run --cleanenv --nv \
     --enable-auto-tool-choice \
     --tool-call-parser hermes \
     --reasoning-parser deepseek_r1 \
-    --distributed-executor-backend mp \
+    --distributed-executor-backend "$VLLM_BACKEND" \
     --api-key "$VLLM_API_KEY" \
   >"$LOG_DIR/vllm.log" 2>&1 &
 
@@ -163,6 +232,10 @@ echo "[forska] services launched"
 echo "  host:        $(hostname)"
 echo "  postgres:    127.0.0.1:$POSTGRES_PORT"
 echo "  vllm:        http://127.0.0.1:8000/v1"
+if [[ $NNODES -gt 1 ]]; then
+  echo "  ray head:    ${HEAD_NODE}:${RAY_PORT} (dashboard :${RAY_DASHBOARD_PORT})"
+  echo "  nodes:       ${HOSTS[*]}"
+fi
 echo "  api:         http://127.0.0.1:$API_SERVER_PORT"
 echo "  app:         http://127.0.0.1:$PROD_SERVER"
 echo "[forska] tail logs in: $LOG_DIR"
