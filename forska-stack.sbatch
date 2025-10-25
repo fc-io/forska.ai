@@ -46,7 +46,7 @@ export VITE_SERVER_API=${VITE_SERVER_API:-http://localhost:${API_SERVER_PORT}}
 export VITE_PORT=${VITE_PORT:-8181}
 
 SIF_DB="$STACK_ROOT/postgres_18.sif"
-SIF_VLLM="$STACK_ROOT/vllm_openai_latest.sif"
+SIF_VLLM="$STACK_ROOT/vllm-openai_latest.sif"
 SIF_API="$STACK_ROOT/api_server.sif"
 SIF_APP="$STACK_ROOT/app_server.sif"
 
