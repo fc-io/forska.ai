@@ -41,13 +41,29 @@ Script
 Multi-node (Ray) mode
 - The batch script now supports multi-node vLLM via Ray. Set `#SBATCH --nodes=<N>` and `#SBATCH --gpus-per-node=A100:<G>` and it will:
   - Start a Ray head on the first node and Ray workers on the others.
-  - Launch vLLM on the head with `--distributed-executor-backend ray` and `--tensor-parallel-size (N×G)`.
+  - Launch vLLM on the head with `--distributed-executor-backend ray`; TP/DP are computed from total GPUs (see below).
 - Defaults in the script are 2 nodes × 4 GPUs per node (TP=8). Override `GPUS_PER_NODE` or `TP_SIZE` with `--export` if needed.
 - Requirements:
   - The vLLM SIF must include `ray` CLI and Python package.
   - Nodes must be able to talk to each other on ports `6379` (Ray GCS) and `8265` (dashboard). Firewalls must allow intra-allocation traffic.
   - If your cluster needs NCCL tuning for cross-node GPU comms, set `NCCL_SOCKET_IFNAME` (e.g., `ib0`) and related env vars before submission.
   - Slurm must allocate GPUs on each node (use `--gpus-per-node` or your site’s `--gres` equivalent).
+
+TP/DP sizing
+- The script now computes sizes from total GPUs: `TOTAL_GPUS = NNODES × GPUS_PER_NODE`.
+- Defaults: `TP_SIZE=2` (pair GPUs) when `TOTAL_GPUS ≥ 2`, otherwise `1`; `DP_SIZE = TOTAL_GPUS / TP_SIZE`.
+- For your example (2 nodes × 4 GPUs = 8 total): `--tensor-parallel-size 2 --data-parallel-size 4`.
+- Override with `--export=ALL,TP_SIZE=<n>,DP_SIZE=<m>` if you want a different layout. If `TOTAL_GPUS` is not divisible by `TP_SIZE`, the script falls back to `TP_SIZE=TOTAL_GPUS, DP_SIZE=1` and logs a warning.
+
+Parameterizing nodes/GPUs
+- Note: Slurm `#SBATCH` lines do not expand environment variables. To override node/GPU allocation, pass flags at submit time:
+  - Example: `sbatch -N 2 --gpus-per-node=A100:4 --export=ALL forska-stack.sbatch`
+- Environment variables like `NNODES`, `GPUS_PER_NODE`, `TP_SIZE`, and `DP_SIZE` only influence vLLM’s distribution sizing; they don’t change Slurm’s allocation.
+
+NCCL hints
+- The script sets some safe defaults: `NCCL_DEBUG=WARN`, `NCCL_ASYNC_ERROR_HANDLING=1`.
+- If your cluster requires specific interfaces, override via `--export`:
+  - `NCCL_SOCKET_IFNAME=ib0` (or your NIC), optionally `NCCL_IB_HCA` and `NCCL_IB_GID_INDEX`.
 
 Helper (upload via Bun)
 - A convenience script uploads the batch file to your remote `$STACK_ROOT`:

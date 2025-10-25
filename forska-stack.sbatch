@@ -39,11 +39,19 @@ export PROD_SERVER=${PROD_SERVER:-8181}
 # Default to a dummy key when not provided
 export VLLM_API_KEY=${VLLM_API_KEY:-fake_key}
 export VLLM_GPU_UTIL=${VLLM_GPU_UTIL:-0.90}
-# Total TP across the whole Ray cluster; default to 2 nodes × 4 GPUs
-export GPUS_PER_NODE=${GPUS_PER_NODE:-4}
-export TP_SIZE=${TP_SIZE:-$(( (${SLURM_NNODES:-1}) * GPUS_PER_NODE ))}
+# GPU shape overrides used to compute DP/TP; Slurm allocation must match
+# Autodetect GPUs per node from Slurm if available; override via --export GPUS_PER_NODE=<n>
+export GPUS_PER_NODE=${GPUS_PER_NODE:-${SLURM_GPUS_ON_NODE:-4}}
 # Do NOT pin CUDA_VISIBLE_DEVICES when using Ray + multi-node
 # Ray/vLLM will respect Slurm cgroups; leaving all allocated GPUs visible per node
+
+# NCCL tuning hints (override via --export as needed)
+export NCCL_DEBUG=${NCCL_DEBUG:-WARN}
+export NCCL_ASYNC_ERROR_HANDLING=${NCCL_ASYNC_ERROR_HANDLING:-1}
+# If your cluster requires a specific NIC/Infiniband device, uncomment and set:
+# export NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-ib0}
+# export NCCL_IB_HCA=${NCCL_IB_HCA:-mlx5_0}
+# export NCCL_IB_GID_INDEX=${NCCL_IB_GID_INDEX:-3}
 
 # Client/API URLs used by the compiled servers
 export VITE_LLM_SERVER_URL=${VITE_LLM_SERVER_URL:-http://localhost:8000/v1}
@@ -68,7 +76,7 @@ LOG_DIR="$STACK_ROOT/logs/${SLURM_JOB_ID:-manual}"
 mkdir -p "$LOG_DIR"
 
 # Multi-node/Ray topology
-NNODES=${SLURM_NNODES:-1}
+NNODES=${NNODES:-${SLURM_NNODES:-1}}
 HOSTS=( $(scontrol show hostnames "${SLURM_NODELIST:-$(hostname -s)}") )
 HEAD_NODE=${HOSTS[0]:-$(hostname -s)}
 THIS_NODE=$(hostname -s)
@@ -76,6 +84,17 @@ WORKER_NODES=( "${HOSTS[@]:1}" )
 RAY_PORT=${RAY_PORT:-6379}
 RAY_DASHBOARD_PORT=${RAY_DASHBOARD_PORT:-8265}
 RAY_TMP_DIR=${RAY_TMP_DIR:-$STACK_ROOT/.cache/ray}
+
+# Compute distributed sizes: default to TP=2 (pair GPUs) and DP=TOT/TP
+TOTAL_GPUS=$(( NNODES * GPUS_PER_NODE ))
+DEFAULT_TP=$(( TOTAL_GPUS >= 2 ? 2 : 1 ))
+TP_SIZE=${TP_SIZE:-$DEFAULT_TP}
+DP_SIZE=${DP_SIZE:-$(( TOTAL_GPUS / TP_SIZE ))}
+if (( TOTAL_GPUS % TP_SIZE != 0 )); then
+  echo "[forska] warning: total GPUs ($TOTAL_GPUS) not divisible by TP_SIZE ($TP_SIZE); adjusting to TP=$TOTAL_GPUS, DP=1" >&2
+  TP_SIZE=$TOTAL_GPUS
+  DP_SIZE=1
+fi
 
 graceful_shutdown() {
   local reason="${1:-cleanup}"
@@ -128,6 +147,11 @@ if [[ $NNODES -gt 1 ]]; then
   mkdir -p "$RAY_TMP_DIR"
   # Start Ray head on this node (the batch script runs on the head)
   apptainer exec --cleanenv --nv \
+    --env NCCL_DEBUG="$NCCL_DEBUG" \
+    --env NCCL_ASYNC_ERROR_HANDLING="$NCCL_ASYNC_ERROR_HANDLING" \
+    ${NCCL_SOCKET_IFNAME:+--env NCCL_SOCKET_IFNAME="$NCCL_SOCKET_IFNAME"} \
+    ${NCCL_IB_HCA:+--env NCCL_IB_HCA="$NCCL_IB_HCA"} \
+    ${NCCL_IB_GID_INDEX:+--env NCCL_IB_GID_INDEX="$NCCL_IB_GID_INDEX"} \
     --bind "$RAY_TMP_DIR:$RAY_TMP_DIR" \
     "$SIF_VLLM" \
     ray start --head \
@@ -142,7 +166,7 @@ if [[ $NNODES -gt 1 ]]; then
     srun --nodes=$((NNODES-1)) --ntasks=$((NNODES-1)) \
       --nodelist="$(printf "%s," "${WORKER_NODES[@]}" | sed 's/,$//')" \
       --output "$LOG_DIR/ray-worker-%h.log" \
-      bash -lc "mkdir -p '$RAY_TMP_DIR' && apptainer exec --cleanenv --nv '$SIF_VLLM' ray start --address '${HEAD_NODE}:${RAY_PORT}' --temp-dir '$RAY_TMP_DIR'" || {
+      bash -lc "mkdir -p '$RAY_TMP_DIR' && apptainer exec --cleanenv --nv --env NCCL_DEBUG='$NCCL_DEBUG' --env NCCL_ASYNC_ERROR_HANDLING='$NCCL_ASYNC_ERROR_HANDLING' ${NCCL_SOCKET_IFNAME:+--env NCCL_SOCKET_IFNAME='$NCCL_SOCKET_IFNAME'} ${NCCL_IB_HCA:+--env NCCL_IB_HCA='$NCCL_IB_HCA'} ${NCCL_IB_GID_INDEX:+--env NCCL_IB_GID_INDEX='$NCCL_IB_GID_INDEX'} '$SIF_VLLM' ray start --address '${HEAD_NODE}:${RAY_PORT}' --temp-dir '$RAY_TMP_DIR'" || {
         echo "[forska] ray workers failed" >&2; exit 2;
       }
   fi
@@ -151,7 +175,7 @@ if [[ $NNODES -gt 1 ]]; then
   sleep 3
 fi
 
-echo "[forska] starting vllm on :8000 (backend=$([[ $NNODES -gt 1 ]] && echo ray || echo mp), tp=$TP_SIZE)"
+echo "[forska] starting vllm on :8000 (backend=$([[ $NNODES -gt 1 ]] && echo ray || echo mp), tp=$TP_SIZE, dp=$DP_SIZE)"
 if [[ ! -d "$STACK_ROOT/models/Qwen3-32B-FP8" ]]; then
   echo "[forska] warning: model directory missing: $STACK_ROOT/models/Qwen3-32B-FP8" >&2
   echo "[forska]          vLLM will fail unless the model is present or HF download is configured" >&2
@@ -174,7 +198,7 @@ apptainer run --cleanenv --nv \
   --model /models/Qwen3-32B-FP8 \
     --host 0.0.0.0 --port 8000 \
     --tensor-parallel-size "$TP_SIZE" \
-    --data-parallel-size 1 \
+    --data-parallel-size "$DP_SIZE" \
     --gpu-memory-utilization "$VLLM_GPU_UTIL" \
     --enable-auto-tool-choice \
     --tool-call-parser hermes \
@@ -236,6 +260,7 @@ if [[ $NNODES -gt 1 ]]; then
   echo "  ray head:    ${HEAD_NODE}:${RAY_PORT} (dashboard :${RAY_DASHBOARD_PORT})"
   echo "  nodes:       ${HOSTS[*]}"
 fi
+echo "  dist:        ${NNODES} node(s) × ${GPUS_PER_NODE} GPU(s) = ${TOTAL_GPUS} (tp=${TP_SIZE}, dp=${DP_SIZE})"
 echo "  api:         http://127.0.0.1:$API_SERVER_PORT"
 echo "  app:         http://127.0.0.1:$PROD_SERVER"
 echo "[forska] tail logs in: $LOG_DIR"
