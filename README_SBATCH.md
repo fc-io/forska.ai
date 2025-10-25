@@ -76,17 +76,14 @@ Quick checks
 Monitor logs in real-time
 
 ```bash
-# Get the job ID first
-JOBID=$(squeue -u $USER -h -o "%i" -n forska-stack)
+# Follow all logs at once (latest forska-stack job)
+tail -f "$STACK_ROOT"/logs/"$(squeue -u "$USER" -h -o "%i" -n forska-stack --sort=-i | head -n1)"/*.log
 
-# Follow all logs at once
-tail -f $STACK_ROOT/logs/$JOBID/*.log
-
-# Or monitor specific services:
-tail -f $STACK_ROOT/logs/$JOBID/vllm.log
-tail -f $STACK_ROOT/logs/$JOBID/api.log
-tail -f $STACK_ROOT/logs/$JOBID/app.log
-tail -f $STACK_ROOT/logs/$JOBID/db.log
+# Or monitor specific services (latest job):
+tail -f "$STACK_ROOT"/logs/"$(squeue -u "$USER" -h -o "%i" -n forska-stack --sort=-i | head -n1)"/vllm.log
+tail -f "$STACK_ROOT"/logs/"$(squeue -u "$USER" -h -o "%i" -n forska-stack --sort=-i | head -n1)"/api.log
+tail -f "$STACK_ROOT"/logs/"$(squeue -u "$USER" -h -o "%i" -n forska-stack --sort=-i | head -n1)"/app.log
+tail -f "$STACK_ROOT"/logs/"$(squeue -u "$USER" -h -o "%i" -n forska-stack --sort=-i | head -n1)"/db.log
 ```
 
 Slurm wrapper logs (.out/.err)
