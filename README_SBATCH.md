@@ -93,8 +93,7 @@ The sbatch header writes job-level stdout/stderr to `forska-stack-<jobid>.out` a
 
 ```bash
 # Using the same JOBID as above, follow wrapper logs too
-tail -f "$STACK_ROOT/forska-stack-$JOBID.out" \
-        "$STACK_ROOT/forska-stack-$JOBID.err"
+tail -f "$STACK_ROOT/forska-stack-$JOBID.log"
 
 # After the job finishes, view all logs together
 # (fallback to newest log dir if sacct is unavailable)
@@ -103,3 +102,43 @@ less "$STACK_ROOT/logs/$JOBID/"*.log \
      "$STACK_ROOT/forska-stack-$JOBID.out" \
      "$STACK_ROOT/forska-stack-$JOBID.err"
 ```
+
+How long has the job been running?
+
+- Quick (live) with squeue: shows elapsed time since start in the TIME column.
+
+```bash
+# Elapsed runtime is the %.10M column
+squeue -h -j "$JOBID" -o "%.18i %.10T %.10M %.19S %R"
+#           JobID     STATE   ELAPSED  START_TIME          NODELIST(REASON)
+```
+
+- Live per-step with sstat: useful while RUNNING; reports Elapsed for the batch step.
+
+```bash
+# For a normal job
+sstat -j "${JOBID}.batch" --format=JobID,Elapsed
+
+# For an array element (example: element 3)
+# sstat -j "${JOBID}[3].batch" --format=JobID,Elapsed
+```
+
+- Historical/precise with sacct: works after the job has started (and after it finishes).
+
+```bash
+# Includes Start/End and total Elapsed, plus TimeLimit
+sacct -j "$JOBID" --format=JobID,JobName,State,Start,End,Elapsed,TimeLimit
+
+# Tip: add -X to exclude other users' jobs on some clusters; add -n for no headers
+# sacct -X -n -j "$JOBID" --format=JobID,State,Start,End,Elapsed
+```
+
+- Detailed view with scontrol: prints RunTime, StartTime, and TimeLimit in one place.
+
+```bash
+scontrol show job "$JOBID" | egrep "RunTime=|StartTime=|TimeLimit="
+```
+
+Notes
+- Pending jobs have no elapsed time; use `squeue --start -j "$JOBID"` to see the expected start time.
+- Job arrays: replace `$JOBID` with the array element ID (e.g., `12345_7`), or use `sacct -j 12345` to see all elements.
