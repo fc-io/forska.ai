@@ -2,7 +2,9 @@
 #SBATCH -J forska-stack
 #SBATCH -A NAISS2025-22-715 -p alvis
 #SBATCH --nodes=2
-#SBATCH --ntasks=1
+# Use one task per node; matches multi-node Ray layout
+# (avoid --ntasks=1 which triggers Slurm's node/task mismatch warning)
+#SBATCH --ntasks-per-node=1
 # Request 4 A100 GPUs per node (2 nodes total)
 # Adjust for your cluster if it uses --gres instead
 #SBATCH --gpus-per-node=A100:4
