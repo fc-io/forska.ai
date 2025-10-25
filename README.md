@@ -220,7 +220,7 @@ VLLM (GPU, HTTP on :8000)
 apptainer run --cleanenv --nv \
   --bind $STACK_ROOT/models:/models:ro \
   $STACK_ROOT/vllm-openai_latest.sif \
-  vllm serve /models/Qwen3-32B-FP8 \
+  --model /models/Qwen3-32B-FP8 \
     --host 0.0.0.0 --port 8000 \
     --api-key "$VLLM_API_KEY"
 ```

@@ -102,7 +102,7 @@ fi
 apptainer run --cleanenv --nv \
   --bind "$STACK_ROOT/models:/models:ro" \
   "$SIF_VLLM" \
-  vllm serve /models/Qwen3-32B-FP8 \
+  --model /models/Qwen3-32B-FP8 \
     --host 0.0.0.0 --port 8000 \
     --tensor-parallel-size "$TP_SIZE" \
     --data-parallel-size 1 \

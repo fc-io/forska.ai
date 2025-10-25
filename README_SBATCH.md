@@ -16,7 +16,7 @@ Cluster GPU/account notes
 - Account/project: set your Slurm account via `#SBATCH -A <account>`. Example (NAISS): `#SBATCH -A NAISS2025-22-715`.
 - GPUs: request the right GPU type/count with `--gres`. Example for 2×A100: `#SBATCH --gres=gpu:A100:2`. Keep the job on one node for tensor parallelism.
 - Nodes/tasks: keep everything on a single node. Add `#SBATCH --nodes=1` and `#SBATCH --ntasks=1` (the services run as background processes within one task).
-- vLLM parallelism: set `TP_SIZE` to the number of GPUs you requested (e.g., `TP_SIZE=2` for 2 GPUs). The script passes it to `vllm serve` as `--tensor-parallel-size $TP_SIZE`.
+- vLLM parallelism: set `TP_SIZE` to the number of GPUs you requested (e.g., `TP_SIZE=2` for 2 GPUs). The script passes it to the vLLM server as `--tensor-parallel-size $TP_SIZE`.
 - Exporting env to the job: either export before submission, or pass on the command line. Example: `sbatch --export=ALL,TP_SIZE=2,VLLM_GPU_UTIL=0.90 forska-stack.sbatch`.
 - Partitions/constraints vary by cluster. If your site uses generic `--gres=gpu:2` plus constraints, use `#SBATCH -C a100` and keep `TP_SIZE` in sync.
 
@@ -142,3 +142,8 @@ scontrol show job "$JOBID" | egrep "RunTime=|StartTime=|TimeLimit="
 Notes
 - Pending jobs have no elapsed time; use `squeue --start -j "$JOBID"` to see the expected start time.
 - Job arrays: replace `$JOBID` with the array element ID (e.g., `12345_7`), or use `sacct -j 12345` to see all elements.
+
+### copy api log to clipboard
+``` bash
+ssh alvis2 'cat /mimer/NOBACKUP/groups/clin-agent-bench/dev/logs/5246678/api.log' | pbcopy
+```
