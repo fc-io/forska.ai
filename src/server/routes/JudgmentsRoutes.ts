@@ -22,7 +22,7 @@ export const judgmentsRoutes = new Elysia().get('/api/judgments/model', async ({
     if (!model) {
       ;[model] = await db
         .insert(models)
-        .values({name: modelName, provider, baseURL, modelName: './models/Qwen3-32B-FP8', version: '1.0.0'})
+        .values({name: modelName, provider, baseURL, modelName: '/models/Qwen3-32B-FP8', version: '1.0.0'})
         .returning()
     }
 

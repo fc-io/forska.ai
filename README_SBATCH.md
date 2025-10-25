@@ -33,6 +33,8 @@ ssh -N \
 
 Open the app at http://localhost:8181 (it proxies API calls to http://localhost:3001). vLLM is exposed at http://localhost:8000/v1.
 
+Important: The OpenAI-compatible model name used in requests must match the served name. With this script, vLLM is started as `--model /models/Qwen3-32B-FP8` so clients must send `{"model": "/models/Qwen3-32B-FP8"}` (note the leading slash; not `./models/...`).
+
 Script
 - Use the maintained script in the repo: [forska-stack.sbatch](./forska-stack.sbatch). This is the single source of truth and is preconfigured for NAISS A100×2 with `TP_SIZE=2`.
 

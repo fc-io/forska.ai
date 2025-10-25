@@ -30,6 +30,16 @@ const getOpenAIClient = (baseURL: string): OpenAI => {
   return client
 }
 
+const normalizeVllmModelName = (name: string): string => {
+  if (name.startsWith('./models/')) {
+    return `/${name.slice(2)}`
+  }
+  if (name.startsWith('models/')) {
+    return `/${name}`
+  }
+  return name
+}
+
 const hasReasoningContent = (
   message: ChatCompletionMessage,
 ): message is ChatCompletionMessage & {reasoning_content: string} => {
@@ -97,8 +107,9 @@ const generateModelResponse = async ({
 }): Promise<typeof AIResponseType.infer> => {
   const client = getOpenAIClient(baseURL)
   try {
+    const modelToUse = normalizeVllmModelName(modelName)
     const response = await client.chat.completions.create({
-      model: modelName,
+      model: modelToUse,
       messages: [
         {role: 'system', content: SYSTEM_PROMPT},
         {role: 'user', content: prompt},
@@ -132,7 +143,7 @@ const generateModelResponse = async ({
       warnings: [],
       request: {
         body: JSON.stringify({
-          model: modelName,
+          model: modelToUse,
           messages: [
             {role: 'system', content: SYSTEM_PROMPT},
             {role: 'user', content: prompt},
