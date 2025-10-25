@@ -94,6 +94,11 @@ apptainer run --cleanenv --writable-tmpfs \
   >"$LOG_DIR/db.log" 2>&1 &
 
 echo "[forska] starting vllm on :8000"
+if [[ ! -d "$STACK_ROOT/models/Qwen3-32B-FP8" ]]; then
+  echo "[forska] warning: model directory missing: $STACK_ROOT/models/Qwen3-32B-FP8" >&2
+  echo "[forska]          vLLM will fail unless the model is present or HF download is configured" >&2
+fi
+
 apptainer run --cleanenv --nv \
   --bind "$STACK_ROOT/models:/models:ro" \
   "$SIF_VLLM" \
@@ -108,6 +113,24 @@ apptainer run --cleanenv --nv \
     --distributed-executor-backend mp \
     --api-key "$VLLM_API_KEY" \
   >"$LOG_DIR/vllm.log" 2>&1 &
+
+# Wait for vLLM to become ready before starting API
+echo "[forska] waiting for vllm to be healthy..."
+for i in $(seq 1 60); do
+  if curl -sf -H "Authorization: Bearer $VLLM_API_KEY" http://localhost:8000/v1/models >/dev/null; then
+    echo "[forska] vllm is up"
+    break
+  fi
+  if ! kill -0 $(jobs -pr | head -n1) 2>/dev/null; then
+    echo "[forska] vllm process appears to have exited; see $LOG_DIR/vllm.log" >&2
+    break
+  fi
+  sleep 2
+done
+if ! curl -sf -H "Authorization: Bearer $VLLM_API_KEY" http://localhost:8000/v1/models >/dev/null; then
+  echo "[forska] warning: vllm is not responding on :8000; API may fail to connect" >&2
+fi
+
 
 API_BINDS=(
   --bind "$DB_URL_FILE:/run/secrets/database_url:ro"
@@ -143,6 +166,10 @@ echo "  vllm:        http://127.0.0.1:8000/v1"
 echo "  api:         http://127.0.0.1:$API_SERVER_PORT"
 echo "  app:         http://127.0.0.1:$PROD_SERVER"
 echo "[forska] tail logs in: $LOG_DIR"
+echo "[forska] for ssh tunnel to the api"
+echo "  ssh -N -L 3001:localhost:$API_SERVER_PORT alvis2"
+echo "[forska] for ssh tunnel to the vllm server"
+echo "  ssh -N -L 8000:localhost:8000 alvis2"
 
 # Block until all background services exit
 wait
