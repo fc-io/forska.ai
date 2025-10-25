@@ -103,6 +103,10 @@ Quick checks
 Monitor logs in real-time
 
 ```bash
+tail -f "$STACK_ROOT"/forska-stack-"$(squeue -u "$USER" -h -o "%i" -n forska-stack --sort=-i | head -n1)".log
+```
+
+```bash
 # Follow all logs at once (latest forska-stack job)
 tail -f "$STACK_ROOT"/logs/"$(squeue -u "$USER" -h -o "%i" -n forska-stack --sort=-i | head -n1)"/*.log
 
