@@ -5,8 +5,7 @@
 #SBATCH --ntasks=1
 #SBATCH --gpus-per-node=A100:2
 #SBATCH --time=01:00:00
-#SBATCH -o %x-%j.out
-#SBATCH -e %x-%j.err
+#SBATCH -o %x-%j.log
 #SBATCH --export=ALL
 # Send an early warning signal 2 minutes before time limit
 # so we can shut down services cleanly
