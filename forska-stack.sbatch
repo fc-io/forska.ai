@@ -85,10 +85,22 @@ THIS_NODE=$(hostname -s)
 WORKER_NODES=( "${HOSTS[@]:1}" )
 RAY_PORT=${RAY_PORT:-6379}
 RAY_DASHBOARD_PORT=${RAY_DASHBOARD_PORT:-8265}
-# Resolve an IP for the head node that workers can reach.
-# Prefer DNS resolution of the short hostname, fall back to the first local IP.
-HEAD_IP=${HEAD_IP:-$(getent hosts "$HEAD_NODE" | awk '{print $1; exit}')}
-[[ -z "$HEAD_IP" ]] && HEAD_IP=$(hostname -I | awk '{print $1}')
+# Resolve an IPv4 address for the head node that workers can reach.
+# Avoid IPv6 (Ray may parse "host:port" incorrectly for IPv6 without brackets).
+# Try DNS for IPv4 first, then fall back to the first local IPv4.
+if [[ -z "${HEAD_IP:-}" ]]; then
+  if command -v getent >/dev/null 2>&1; then
+    HEAD_IP=$(getent ahostsv4 "$HEAD_NODE" | awk '{print $1; exit}')
+  fi
+  if [[ -z "${HEAD_IP:-}" ]]; then
+    HEAD_IP=$(hostname -I | tr ' ' '\n' | grep -m1 -E '^[0-9]+(\.[0-9]+){3}$' || true)
+  fi
+fi
+if [[ -z "${HEAD_IP:-}" ]]; then
+  echo "[forska] error: unable to resolve an IPv4 address for head node '$HEAD_NODE'." >&2
+  echo "         Set HEAD_IP=<ipv4> when submitting: sbatch --export=ALL,HEAD_IP=1.2.3.4 forska-stack.sbatch" >&2
+  exit 2
+fi
 # Ray stores Unix domain sockets under its temp dir and Linux limits
 # AF_UNIX socket paths to 107 bytes. Use a short per-job path on local tmp
 # by default to avoid path length overflows on long $STACK_ROOT paths.
@@ -156,6 +168,7 @@ apptainer run --cleanenv --writable-tmpfs \
   echo "[forska] ray tmp dir: $RAY_TMP_DIR"
   mkdir -p "$RAY_TMP_DIR"
   # Start Ray head on this node (the batch script runs on the head)
+  echo "[forska] ray head ip: $HEAD_IP (port $RAY_PORT, dashboard $RAY_DASHBOARD_PORT)"
   apptainer exec --cleanenv --nv \
     --env NCCL_DEBUG="$NCCL_DEBUG" \
     --env NCCL_ASYNC_ERROR_HANDLING="$NCCL_ASYNC_ERROR_HANDLING" \
@@ -178,7 +191,19 @@ apptainer run --cleanenv --writable-tmpfs \
     srun --nodes=$((NNODES-1)) --ntasks=$((NNODES-1)) \
       --nodelist="$(printf "%s," "${WORKER_NODES[@]}" | sed 's/,$//')" \
       --output "$LOG_DIR/ray-worker-%h.log" \
-      bash -lc "mkdir -p '$RAY_TMP_DIR' && WORKER_IP=\$(hostname -I | awk '{print \$1}') && apptainer exec --cleanenv --nv --env NCCL_DEBUG='$NCCL_DEBUG' --env NCCL_ASYNC_ERROR_HANDLING='$NCCL_ASYNC_ERROR_HANDLING' ${NCCL_SOCKET_IFNAME:+--env NCCL_SOCKET_IFNAME='$NCCL_SOCKET_IFNAME'} ${NCCL_IB_HCA:+--env NCCL_IB_HCA='$NCCL_IB_HCA'} ${NCCL_IB_GID_INDEX:+--env NCCL_IB_GID_INDEX='$NCCL_IB_GID_INDEX'} '$SIF_VLLM' ray start --node-ip-address \"\$WORKER_IP\" --address '${HEAD_IP}:${RAY_PORT}' --temp-dir '$RAY_TMP_DIR' --disable-usage-stats" || {
+      bash -lc "mkdir -p '$RAY_TMP_DIR' \
+        && WORKER_IP=\$( (command -v getent >/dev/null 2>&1 && getent ahostsv4 \"\$(hostname -s)\" | awk '{print \$1; exit}') || true; \
+                          [[ -n \"\$WORKER_IP\" ]] || WORKER_IP=\$(hostname -I | tr ' ' '\n' | grep -m1 -E '^[0-9]+(\\.[0-9]+){3}$' || true); \
+                          echo -n \"\$WORKER_IP\" ) \
+        && { [[ -n \"\$WORKER_IP\" ]] || { echo '[forska] worker: failed to resolve IPv4 address' >&2; exit 2; }; } \
+        && apptainer exec --cleanenv --nv \
+             --env NCCL_DEBUG='$NCCL_DEBUG' \
+             --env NCCL_ASYNC_ERROR_HANDLING='$NCCL_ASYNC_ERROR_HANDLING' \
+             ${NCCL_SOCKET_IFNAME:+--env NCCL_SOCKET_IFNAME='$NCCL_SOCKET_IFNAME'} \
+             ${NCCL_IB_HCA:+--env NCCL_IB_HCA='$NCCL_IB_HCA'} \
+             ${NCCL_IB_GID_INDEX:+--env NCCL_IB_GID_INDEX='$NCCL_IB_GID_INDEX'} \
+             '$SIF_VLLM' \
+             ray start --node-ip-address \"\$WORKER_IP\" --address '${HEAD_IP}:${RAY_PORT}' --temp-dir '$RAY_TMP_DIR' --disable-usage-stats" || {
         echo "[forska] ray workers failed" >&2; exit 2;
       }
   fi
