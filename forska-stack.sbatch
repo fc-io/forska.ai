@@ -88,8 +88,8 @@ RAY_DASHBOARD_PORT=${RAY_DASHBOARD_PORT:-8265}
 # Ray ports: allow user override; otherwise, pick free ports on the head
 # within a preferred range. This avoids collisions and works with HPC firewalls
 # when the range is pre-approved.
-PREFERRED_MIN=${RAY_PREFERRED_MIN:-6380}
-PREFERRED_MAX=${RAY_PREFERRED_MAX:-8079}
+PREFERRED_MIN=${RAY_PREFERRED_MIN:-8888}
+PREFERRED_MAX=${RAY_PREFERRED_MAX:-8988}
 
 # Cache of already-chosen ports within this script to avoid duplicates
 declare -ag _RESERVED_PORTS=()
@@ -248,10 +248,10 @@ apptainer run --cleanenv --writable-tmpfs \
   if [[ $NNODES -gt 1 ]]; then
   echo "[forska] starting ray cluster across $NNODES nodes (head=$HEAD_NODE, workers=${WORKER_NODES:-none})"
   echo "[forska] ray tmp dir: $RAY_TMP_DIR"
+  echo "[forska] ray selected ports: gcs=$RAY_PORT, obj=$RAY_OBJECT_MANAGER_PORT, node=$RAY_NODE_MANAGER_PORT, workers=$RAY_WORKER_PORT_MIN-$RAY_WORKER_PORT_MAX"
   mkdir -p "$RAY_TMP_DIR"
   # Start Ray head on this node (the batch script runs on the head)
   echo "[forska] ray head ip: $HEAD_IP (port $RAY_PORT, dashboard $RAY_DASHBOARD_PORT)"
-  echo "[forska] ray ports: gcs=$RAY_PORT, obj=$RAY_OBJECT_MANAGER_PORT, node=$RAY_NODE_MANAGER_PORT, workers=$RAY_WORKER_PORT_MIN-$RAY_WORKER_PORT_MAX"
   apptainer exec --cleanenv --nv \
     --env NCCL_DEBUG="$NCCL_DEBUG" \
     --env NCCL_ASYNC_ERROR_HANDLING="$NCCL_ASYNC_ERROR_HANDLING" \
@@ -276,6 +276,13 @@ apptainer run --cleanenv --writable-tmpfs \
       --temp-dir "$RAY_TMP_DIR" \
       --disable-usage-stats \
     >"$LOG_DIR/ray-head.log" 2>&1 || { echo "[forska] ray head failed" >&2; exit 2; }
+
+  # Capture actual ports Ray bound to for diagnostics
+  echo "[forska] ray head requested ports: gcs=$RAY_PORT, obj=$RAY_OBJECT_MANAGER_PORT, node=$RAY_NODE_MANAGER_PORT" >"$LOG_DIR/ray-head-ports.log"
+  echo "[forska] ray head actual bound ports:" >>"$LOG_DIR/ray-head-ports.log"
+  ss -ltn | grep -E "(${RAY_PORT}|${RAY_OBJECT_MANAGER_PORT}|${RAY_NODE_MANAGER_PORT})" >>"$LOG_DIR/ray-head-ports.log" 2>&1 || echo "  (no matching ports found)" >>"$LOG_DIR/ray-head-ports.log"
+  echo "[forska] all listening ports on head:" >>"$LOG_DIR/ray-head-ports.log"
+  ss -ltn >>"$LOG_DIR/ray-head-ports.log" 2>&1
 
   # Wait for head to open core ports before launching workers
   for p in "$RAY_PORT" "$RAY_OBJECT_MANAGER_PORT" "$RAY_NODE_MANAGER_PORT"; do
@@ -345,6 +352,7 @@ exec apptainer exec --cleanenv --nv \
   ${NCCL_SOCKET_IFNAME:+--env NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME}"} \
   ${NCCL_IB_HCA:+--env NCCL_IB_HCA="${NCCL_IB_HCA}"} \
   ${NCCL_IB_GID_INDEX:+--env NCCL_IB_GID_INDEX="${NCCL_IB_GID_INDEX}"} \
+  --bind "${RAY_TMP_DIR}:${RAY_TMP_DIR}" \
   "${SIF_VLLM}" \
   ray start \
     --node-ip-address "${WORKER_IP}" \
@@ -357,16 +365,16 @@ exec apptainer exec --cleanenv --nv \
 RAY_WORKER
   chmod +x "$WORKER_SCRIPT"
   # Launch Ray workers using the prepared script (robust, avoids nested quoting issues)
-  if false && [[ ${#WORKER_NODES[@]} -gt 0 ]]; then
+  if [[ ${#WORKER_NODES[@]} -gt 0 ]]; then
     srun --nodes=$((NNODES-1)) --ntasks=$((NNODES-1)) \
-      --export=ALL,HEAD_IP=${HEAD_IP},RAY_PORT=${RAY_PORT},RAY_OBJECT_MANAGER_PORT=${RAY_OBJECT_MANAGER_PORT},RAY_NODE_MANAGER_PORT=${RAY_NODE_MANAGER_PORT},RAY_WORKER_PORT_MIN=${RAY_WORKER_PORT_MIN},RAY_WORKER_PORT_MAX=${RAY_WORKER_PORT_MAX} \
+      --export=ALL,HEAD_IP=${HEAD_IP},RAY_PORT=${RAY_PORT},RAY_OBJECT_MANAGER_PORT=${RAY_OBJECT_MANAGER_PORT},RAY_NODE_MANAGER_PORT=${RAY_NODE_MANAGER_PORT},RAY_WORKER_PORT_MIN=${RAY_WORKER_PORT_MIN},RAY_WORKER_PORT_MAX=${RAY_WORKER_PORT_MAX},RAY_TMP_DIR=${RAY_TMP_DIR},SIF_VLLM=${SIF_VLLM},NCCL_DEBUG=${NCCL_DEBUG},NCCL_ASYNC_ERROR_HANDLING=${NCCL_ASYNC_ERROR_HANDLING} \
       --nodelist="$(printf "%s," "${WORKER_NODES[@]}" | sed 's/,$//')" \
       --output "$LOG_DIR/ray-worker-%N.log" \
       bash -lc "$WORKER_SCRIPT" || {
         echo "[forska] ray workers failed" >&2; exit 2;
       }
   fi
-  if [[ ${#WORKER_NODES[@]} -gt 0 ]]; then
+  if false && [[ ${#WORKER_NODES[@]} -gt 0 ]]; then
     srun --nodes=$((NNODES-1)) --ntasks=$((NNODES-1)) \
       --export=ALL,HEAD_IP=${HEAD_IP},RAY_PORT=${RAY_PORT},RAY_OBJECT_MANAGER_PORT=${RAY_OBJECT_MANAGER_PORT},RAY_NODE_MANAGER_PORT=${RAY_NODE_MANAGER_PORT},RAY_WORKER_PORT_MIN=${RAY_WORKER_PORT_MIN},RAY_WORKER_PORT_MAX=${RAY_WORKER_PORT_MAX} \
       --nodelist="$(printf "%s," "${WORKER_NODES[@]}" | sed 's/,$//')" \
