@@ -152,6 +152,48 @@ find_free_port_block() {
   done
   return 1
 }
+
+postgres_ping() {
+  if apptainer exec --cleanenv "$SIF_DB" pg_isready \
+    -h 127.0.0.1 \
+    -p "$POSTGRES_PORT" \
+    -d "${DB_NAME:-postgres}" \
+    -U "${DB_USER:-postgres}" >/dev/null 2>&1; then
+    return 0
+  fi
+  if command -v nc >/dev/null 2>&1 && nc -z 127.0.0.1 "$POSTGRES_PORT" >/dev/null 2>&1; then
+    return 0
+  fi
+  if (exec 3<>"/dev/tcp/127.0.0.1/$POSTGRES_PORT") 2>/dev/null; then
+    exec 3>&- 2>/dev/null || true
+    return 0
+  fi
+  return 1
+}
+
+wait_for_postgres() {
+  local pid="$1"
+  local log="$2"
+  local attempts=${POSTGRES_READY_ATTEMPTS:-60}
+  local delay=${POSTGRES_READY_DELAY:-2}
+  local elapsed=$(( attempts * delay ))
+
+  for ((i=1; i<=attempts; i++)); do
+    if postgres_ping; then
+      echo "[forska] postgres is accepting connections"
+      return 0
+    fi
+    if ! kill -0 "$pid" 2>/dev/null; then
+      echo "[forska] postgres process ($pid) exited early; see $log" >&2
+      return 1
+    fi
+    sleep "$delay"
+  done
+
+  echo "[forska] postgres failed to become ready within ${elapsed}s; see $log" >&2
+  return 1
+}
+
 # Allocate worker block FIRST (largest allocation), then individual ports OUTSIDE that block
 echo "[forska] allocating ray ports from range $PREFERRED_MIN-$PREFERRED_MAX"
 WORKER_PORT_BLOCK_SIZE=${WORKER_PORT_BLOCK_SIZE:-200}
@@ -318,6 +360,12 @@ apptainer run --cleanenv --writable-tmpfs \
   --bind "$DB_PW_FILE:/run/secrets/db_password:ro" \
   "$SIF_DB" \
   >"$LOG_DIR/db.log" 2>&1 &
+DB_PID=$!
+
+if ! wait_for_postgres "$DB_PID" "$LOG_DIR/db.log"; then
+  echo "[forska] postgres failed to accept connections; aborting startup" >&2
+  exit 2
+fi
 
 ############################################
 # Start Ray (multi-node) + vLLM on the head
@@ -530,6 +578,8 @@ fi
 apptainer run --cleanenv --nv \
   "${VLLM_ENV[@]}" \
   --env CUDA_DEVICE_ORDER=PCI_BUS_ID \
+  ${CUDA_VISIBLE_DEVICES:+--env CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES"} \
+  ${CUDA_VISIBLE_DEVICES:+--env NVIDIA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES"} \
   --bind "$STACK_ROOT/models:/models:ro" \
   "$SIF_VLLM" \
   --model /models/Qwen3-32B-FP8 \
@@ -594,7 +644,7 @@ echo "  host:        $(hostname)"
 echo "  postgres:    127.0.0.1:$POSTGRES_PORT"
 echo "  vllm:        http://127.0.0.1:8000/v1"
 if [[ $NNODES -gt 1 ]]; then
-  echo "  ray head:    ${HEAD_IP}:${RAY_PORT} (dashboard :${RAY_DASHBOARD_PORT})"
+  echo "  ray head:    ${HEAD_NODE} (${HEAD_IP}:${RAY_PORT}, dashboard :${RAY_DASHBOARD_PORT})"
   echo "  nodes:       ${HOSTS[*]}"
 fi
 echo "  dist:        ${NNODES} node(s) × ${GPUS_PER_NODE} GPU(s) = ${TOTAL_GPUS} (tp=${TP_SIZE}, dp=${DP_SIZE})"
