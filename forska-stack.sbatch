@@ -520,8 +520,6 @@ fi
 apptainer run --cleanenv --nv \
   "${VLLM_ENV[@]}" \
   --env CUDA_DEVICE_ORDER=PCI_BUS_ID \
-  ${CUDA_VISIBLE_DEVICES:+--env CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES"} \
-  ${CUDA_VISIBLE_DEVICES:+--env NVIDIA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES"} \
   --bind "$STACK_ROOT/models:/models:ro" \
   "$SIF_VLLM" \
   --model /models/Qwen3-32B-FP8 \
