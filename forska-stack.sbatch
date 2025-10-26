@@ -216,6 +216,23 @@ apptainer run --cleanenv --writable-tmpfs \
       --disable-usage-stats \
     >"$LOG_DIR/ray-head.log" 2>&1 || { echo "[forska] ray head failed" >&2; exit 2; }
 
+  # Wait for head to open core ports before launching workers
+  for p in "$RAY_PORT" "$RAY_OBJECT_MANAGER_PORT" "$RAY_NODE_MANAGER_PORT"; do
+    echo "[forska] waiting for head to listen on :$p"
+    ok=0
+    for i in $(seq 1 20); do
+      if (command -v nc >/dev/null 2>&1 && timeout 2 nc -z "$HEAD_IP" "$p") || \
+         timeout 2 bash -lc "echo > /dev/tcp/$HEAD_IP/$p" >/dev/null 2>&1; then
+        ok=1; break
+      fi
+      sleep 1
+    done
+    if [[ $ok -ne 1 ]]; then
+      echo "[forska] error: head not listening on :$p after waiting" >&2
+      exit 2
+    fi
+  done
+
   # Start Ray workers on the remaining nodes
   if [[ ${#WORKER_NODES[@]} -gt 0 ]]; then
     srun --nodes=$((NNODES-1)) --ntasks=$((NNODES-1)) \
