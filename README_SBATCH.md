@@ -48,6 +48,7 @@ Multi-node (Ray) mode
   - Nodes must be able to talk to each other on ports `6379` (Ray GCS) and `8265` (dashboard). Firewalls must allow intra-allocation traffic.
   - If your cluster needs NCCL tuning for cross-node GPU comms, set `NCCL_SOCKET_IFNAME` (e.g., `ib0`) and related env vars before submission.
   - Slurm must allocate GPUs on each node (use `--gpus-per-node` or your site’s `--gres` equivalent).
+ - Ray temp dir (important): Linux limits AF_UNIX socket paths to 107 bytes. The script now defaults `RAY_TMP_DIR` to a short, per-job path under `/tmp` (e.g., `/tmp/ray-<jobid>`). If you override `RAY_TMP_DIR`, keep it short (e.g., a path under `/tmp`) to avoid `OSError: AF_UNIX path length cannot exceed 107 bytes`.
 
 TP/DP sizing
 - The script now computes sizes from total GPUs: `TOTAL_GPUS = NNODES × GPUS_PER_NODE`.
@@ -69,7 +70,7 @@ Helper (upload via Bun)
 - A convenience script uploads the batch file to your remote `$STACK_ROOT`:
 
 ```
-bun run sbatch:put
+bun run sbatch:push
 ```
 
 Requirements
@@ -84,7 +85,7 @@ Optional next step (submit remotely)
 
 ```
 # After uploading, submit from your laptop in one go
-bun run sbatch:put \
+bun run sbatch:push \
   && ssh "$SSH_ALIAS" "cd \"$STACK_ROOT\" && sbatch --export=ALL forska-stack.sbatch"
 ```
 

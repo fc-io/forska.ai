@@ -85,7 +85,10 @@ THIS_NODE=$(hostname -s)
 WORKER_NODES=( "${HOSTS[@]:1}" )
 RAY_PORT=${RAY_PORT:-6379}
 RAY_DASHBOARD_PORT=${RAY_DASHBOARD_PORT:-8265}
-RAY_TMP_DIR=${RAY_TMP_DIR:-$STACK_ROOT/.cache/ray}
+# Ray stores Unix domain sockets under its temp dir and Linux limits
+# AF_UNIX socket paths to 107 bytes. Use a short per-job path on local tmp
+# by default to avoid path length overflows on long $STACK_ROOT paths.
+RAY_TMP_DIR=${RAY_TMP_DIR:-/tmp/ray-${SLURM_JOB_ID:-$$}}
 
 # Compute distributed sizes: default to TP=2 (pair GPUs) and DP=TOT/TP
 TOTAL_GPUS=$(( NNODES * GPUS_PER_NODE ))
@@ -144,8 +147,9 @@ apptainer run --cleanenv --writable-tmpfs \
 # Start Ray (multi-node) + vLLM on the head
 ############################################
 
-if [[ $NNODES -gt 1 ]]; then
+  if [[ $NNODES -gt 1 ]]; then
   echo "[forska] starting ray cluster across $NNODES nodes (head=$HEAD_NODE, workers=${WORKER_NODES:-none})"
+  echo "[forska] ray tmp dir: $RAY_TMP_DIR"
   mkdir -p "$RAY_TMP_DIR"
   # Start Ray head on this node (the batch script runs on the head)
   apptainer exec --cleanenv --nv \
