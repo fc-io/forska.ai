@@ -299,7 +299,7 @@ apptainer run --cleanenv --writable-tmpfs \
     srun --nodes=$((NNODES-1)) --ntasks=$((NNODES-1)) \
       --export=ALL,HEAD_IP=${HEAD_IP},RAY_PORT=${RAY_PORT},RAY_OBJECT_MANAGER_PORT=${RAY_OBJECT_MANAGER_PORT},RAY_NODE_MANAGER_PORT=${RAY_NODE_MANAGER_PORT},RAY_WORKER_PORT_MIN=${RAY_WORKER_PORT_MIN},RAY_WORKER_PORT_MAX=${RAY_WORKER_PORT_MAX} \
       --nodelist="$(printf "%s," "${WORKER_NODES[@]}" | sed 's/,$//')" \
-      --output "$LOG_DIR/ray-worker-%h.log" \
+      --output "$LOG_DIR/ray-worker-%N.log" \
       bash -lc "mkdir -p '$RAY_TMP_DIR' \
         && WORKER_IP=\$( (command -v getent >/dev/null 2>&1 && getent ahostsv4 \"\$(hostname -s)\" | awk '{print \$1; exit}') || true; \
                           [[ -n \"\$WORKER_IP\" ]] || WORKER_IP=\$(hostname -I | tr ' ' '\n' | grep -m1 -E '^[0-9]+(\\.[0-9]+){3}$' || true); \
