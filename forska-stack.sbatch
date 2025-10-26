@@ -295,6 +295,77 @@ apptainer run --cleanenv --writable-tmpfs \
   done
 
   # Start Ray workers on the remaining nodes
+  # Prepare worker launcher script to avoid brittle quoting within srun bash -lc
+  WORKER_SCRIPT="$STACK_ROOT/.cache/ray-worker-start.sh"
+  mkdir -p "$(dirname "$WORKER_SCRIPT")"
+  cat >"$WORKER_SCRIPT" <<'RAY_WORKER'
+#!/usr/bin/env bash
+set -euo pipefail
+
+mkdir -p "$RAY_TMP_DIR"
+
+# Resolve IPv4 address for this worker
+WORKER_IP=$(getent ahostsv4 "$(hostname -s)" | awk '{print $1; exit}' || true)
+if [[ -z "${WORKER_IP:-}" ]]; then
+  WORKER_IP=$(hostname -I | tr ' ' '\n' | grep -m1 -E '^[0-9]+(\.[0-9]+){3}$' || true)
+fi
+if [[ -z "${WORKER_IP:-}" ]]; then
+  echo "[forska] worker: failed to resolve IPv4 address" >&2
+  exit 2
+fi
+
+can_connect() {
+  local host="$1" port="$2"
+  if command -v nc >/dev/null 2>&1; then
+    timeout 3 nc -z "$host" "$port"
+  else
+    (echo >/dev/tcp/"$host"/"$port") >/dev/null 2>&1
+  fi
+}
+
+for p in "$RAY_PORT" "$RAY_OBJECT_MANAGER_PORT" "$RAY_NODE_MANAGER_PORT"; do
+  ok=0
+  for i in $(seq 1 20); do
+    if can_connect "${HEAD_IP}" "$p"; then ok=1; break; fi
+    sleep 1
+  done
+  if [[ $ok -ne 1 ]]; then
+    echo "[forska] worker: head not reachable on port $p" >&2
+    exit 2
+  fi
+done
+
+exec apptainer exec --cleanenv --nv \
+  --env NCCL_DEBUG="${NCCL_DEBUG}" \
+  --env NCCL_ASYNC_ERROR_HANDLING="${NCCL_ASYNC_ERROR_HANDLING}" \
+  --env CUDA_DEVICE_ORDER=PCI_BUS_ID \
+  ${CUDA_VISIBLE_DEVICES:+--env CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES}"} \
+  ${CUDA_VISIBLE_DEVICES:+--env NVIDIA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES}"} \
+  --env RAY_TMPDIR="${RAY_TMP_DIR}" \
+  ${NCCL_SOCKET_IFNAME:+--env NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME}"} \
+  ${NCCL_IB_HCA:+--env NCCL_IB_HCA="${NCCL_IB_HCA}"} \
+  ${NCCL_IB_GID_INDEX:+--env NCCL_IB_GID_INDEX="${NCCL_IB_GID_INDEX}"} \
+  "${SIF_VLLM}" \
+  ray start \
+    --node-ip-address "${WORKER_IP}" \
+    --address "${HEAD_IP}:${RAY_PORT}" \
+    --object-manager-port "${RAY_OBJECT_MANAGER_PORT}" \
+    --node-manager-port "${RAY_NODE_MANAGER_PORT}" \
+    --min-worker-port "${RAY_WORKER_PORT_MIN}" \
+    --max-worker-port "${RAY_WORKER_PORT_MAX}" \
+    --disable-usage-stats
+RAY_WORKER
+  chmod +x "$WORKER_SCRIPT"
+  # Launch Ray workers using the prepared script (robust, avoids nested quoting issues)
+  if false && [[ ${#WORKER_NODES[@]} -gt 0 ]]; then
+    srun --nodes=$((NNODES-1)) --ntasks=$((NNODES-1)) \
+      --export=ALL,HEAD_IP=${HEAD_IP},RAY_PORT=${RAY_PORT},RAY_OBJECT_MANAGER_PORT=${RAY_OBJECT_MANAGER_PORT},RAY_NODE_MANAGER_PORT=${RAY_NODE_MANAGER_PORT},RAY_WORKER_PORT_MIN=${RAY_WORKER_PORT_MIN},RAY_WORKER_PORT_MAX=${RAY_WORKER_PORT_MAX} \
+      --nodelist="$(printf "%s," "${WORKER_NODES[@]}" | sed 's/,$//')" \
+      --output "$LOG_DIR/ray-worker-%N.log" \
+      bash -lc "$WORKER_SCRIPT" || {
+        echo "[forska] ray workers failed" >&2; exit 2;
+      }
+  fi
   if [[ ${#WORKER_NODES[@]} -gt 0 ]]; then
     srun --nodes=$((NNODES-1)) --ntasks=$((NNODES-1)) \
       --export=ALL,HEAD_IP=${HEAD_IP},RAY_PORT=${RAY_PORT},RAY_OBJECT_MANAGER_PORT=${RAY_OBJECT_MANAGER_PORT},RAY_NODE_MANAGER_PORT=${RAY_NODE_MANAGER_PORT},RAY_WORKER_PORT_MIN=${RAY_WORKER_PORT_MIN},RAY_WORKER_PORT_MAX=${RAY_WORKER_PORT_MAX} \
