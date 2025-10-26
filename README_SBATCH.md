@@ -16,8 +16,8 @@ Cluster GPU/account notes
 - Account/project: set your Slurm account via `#SBATCH -A <account>`. Example (NAISS): `#SBATCH -A NAISS2025-22-715`.
 - GPUs: request the right GPU type/count with `--gres`. Example for 2×A100: `#SBATCH --gres=gpu:A100:2`. Keep the job on one node for tensor parallelism.
 - Nodes/tasks: keep everything on a single node. Add `#SBATCH --nodes=1` and `#SBATCH --ntasks=1` (the services run as background processes within one task).
-- vLLM parallelism: set `TP_SIZE` to the number of GPUs you requested (e.g., `TP_SIZE=2` for 2 GPUs). The script passes it to the vLLM server as `--tensor-parallel-size $TP_SIZE`.
-- Exporting env to the job: either export before submission, or pass on the command line. Example: `sbatch --export=ALL,TP_SIZE=2,VLLM_GPU_UTIL=0.90 forska-stack.sbatch`.
+- vLLM parallelism: by default the script sets `TP_SIZE = GPUS_PER_NODE` and `DP_SIZE = NNODES` so each tensor-parallel group stays within a node. Override (e.g., `TP_SIZE=2`) if you need a different split; the script passes them to vLLM as `--tensor-parallel-size` / `--data-parallel-size`.
+- Exporting env to the job: either export before submission, or pass on the command line. Example override: `sbatch --export=ALL,TP_SIZE=2,DP_SIZE=4,VLLM_GPU_UTIL=0.90 forska-stack.sbatch`.
 - Partitions/constraints vary by cluster. If your site uses generic `--gres=gpu:2` plus constraints, use `#SBATCH -C a100` and keep `TP_SIZE` in sync.
 
 Submit with `sbatch forska-stack.sbatch` (if your cluster does not export environment variables to jobs by default, use `sbatch --export=ALL forska-stack.sbatch` or keep the directive in the script below), then tunnel from your laptop:
@@ -36,13 +36,13 @@ Open the app at http://localhost:8181 (it proxies API calls to http://localhost:
 Important: The OpenAI-compatible model name used in requests must match the served name. With this script, vLLM is started as `--model /models/Qwen3-32B-FP8` so clients must send `{"model": "/models/Qwen3-32B-FP8"}` (note the leading slash; not `./models/...`).
 
 Script
-- Use the maintained script in the repo: [forska-stack.sbatch](./forska-stack.sbatch). This is the single source of truth and is preconfigured for NAISS A100×2 with `TP_SIZE=2`.
+- Use the maintained script in the repo: [forska-stack.sbatch](./forska-stack.sbatch). This is the single source of truth and is preconfigured for the NAISS multi-node example (2 nodes × 4 GPUs); leaving the env alone yields `TP_SIZE=4`, `DP_SIZE=2`.
 
 Multi-node (Ray) mode
 - The batch script now supports multi-node vLLM via Ray. Set `#SBATCH --nodes=<N>` and `#SBATCH --gpus-per-node=A100:<G>` and it will:
   - Start a Ray head on the first node and Ray workers on the others.
   - Launch vLLM on the head with `--distributed-executor-backend ray`; TP/DP are computed from total GPUs (see below).
-- Defaults in the script are 2 nodes × 4 GPUs per node (TP=8). Override `GPUS_PER_NODE` or `TP_SIZE` with `--export` if needed.
+- Defaults in the script are 2 nodes × 4 GPUs per node, which the auto-sizing turns into `TP_SIZE=4` (per node) and `DP_SIZE=2` (per node count). Override `GPUS_PER_NODE` or `TP_SIZE` with `--export` if needed.
 - Requirements:
   - The vLLM SIF must include `ray` CLI and Python package.
   - Nodes must be able to talk to each other on ports `6379` (Ray GCS) and `8265` (dashboard). Firewalls must allow intra-allocation traffic.
@@ -58,9 +58,9 @@ Multi-node (Ray) mode
  - Ray temp dir (important): Linux limits AF_UNIX socket paths to 107 bytes. The script now defaults `RAY_TMP_DIR` to a short, per-job path under `/tmp` (e.g., `/tmp/ray-<jobid>`). The container processes receive this via `RAY_TMPDIR` (head and workers). The worker no longer passes `--temp-dir` (which Ray ignores unless `--head`), removing the warning. If you override `RAY_TMP_DIR`, keep it short (e.g., a path under `/tmp`) to avoid `OSError: AF_UNIX path length cannot exceed 107 bytes`.
 
 TP/DP sizing
-- The script now computes sizes from total GPUs: `TOTAL_GPUS = NNODES × GPUS_PER_NODE`.
-- Defaults: `TP_SIZE=2` (pair GPUs) when `TOTAL_GPUS ≥ 2`, otherwise `1`; `DP_SIZE = TOTAL_GPUS / TP_SIZE`.
-- For your example (2 nodes × 4 GPUs = 8 total): `--tensor-parallel-size 2 --data-parallel-size 4`.
+- The script computes sizes from total GPUs: `TOTAL_GPUS = NNODES × GPUS_PER_NODE`.
+- Defaults: `TP_SIZE = GPUS_PER_NODE` (>=1) so a tensor-parallel shard never hops across nodes; `DP_SIZE = TOTAL_GPUS / TP_SIZE` which becomes `NNODES` when every node has the same GPU count.
+- Example (2 nodes × 4 GPUs = 8 total): the defaults produce `--tensor-parallel-size 4 --data-parallel-size 2`.
 - Override with `--export=ALL,TP_SIZE=<n>,DP_SIZE=<m>` if you want a different layout. If `TOTAL_GPUS` is not divisible by `TP_SIZE`, the script falls back to `TP_SIZE=TOTAL_GPUS, DP_SIZE=1` and logs a warning.
 
 Parameterizing nodes/GPUs
@@ -100,7 +100,7 @@ Tip: Add any job-specific overrides on submit, e.g. `--export=ALL,TP_SIZE=2,VLLM
 
 Notes
 - The API reads secrets via `*_FILE` env fallbacks. If Better Auth files are absent, those envs are ignored.
-- vLLM requires a GPU. Increase `--gres=gpu:<N>` and set `TP_SIZE=<N>` if serving with tensor parallelism.
+- vLLM requires a GPU. Increase `--gres=gpu:<N>`; the default sizing will follow the per-node count, but set `TP_SIZE`/`DP_SIZE` explicitly if you need a custom arrangement.
 - Update partition/account/directives to match your cluster.
 
 Quick checks

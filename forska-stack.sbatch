@@ -256,14 +256,24 @@ fi
 # by default to avoid path length overflows on long $STACK_ROOT paths.
 RAY_TMP_DIR=${RAY_TMP_DIR:-/tmp/ray-${SLURM_JOB_ID:-$$}}
 
-# Compute distributed sizes: default to TP=2 (pair GPUs) and DP=TOT/TP
+# Compute distributed sizes: keep tensor parallel groups within a node by default
 TOTAL_GPUS=$(( NNODES * GPUS_PER_NODE ))
-DEFAULT_TP=$(( TOTAL_GPUS >= 2 ? 2 : 1 ))
+DEFAULT_TP=$(( GPUS_PER_NODE > 0 ? GPUS_PER_NODE : 1 ))
 TP_SIZE=${TP_SIZE:-$DEFAULT_TP}
-DP_SIZE=${DP_SIZE:-$(( TOTAL_GPUS / TP_SIZE ))}
+if [[ -z "${DP_SIZE:-}" ]]; then
+  if (( TP_SIZE > 0 )); then
+    DP_SIZE=$(( TOTAL_GPUS / TP_SIZE ))
+  else
+    DP_SIZE=1
+  fi
+fi
 if (( TOTAL_GPUS % TP_SIZE != 0 )); then
   echo "[forska] warning: total GPUs ($TOTAL_GPUS) not divisible by TP_SIZE ($TP_SIZE); adjusting to TP=$TOTAL_GPUS, DP=1" >&2
   TP_SIZE=$TOTAL_GPUS
+  DP_SIZE=1
+fi
+if (( DP_SIZE < 1 )); then
+  echo "[forska] warning: DP_SIZE computed as <1; forcing DP=1" >&2
   DP_SIZE=1
 fi
 
