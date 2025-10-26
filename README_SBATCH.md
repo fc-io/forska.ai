@@ -49,8 +49,8 @@ Multi-node (Ray) mode
   - Additional Ray ports: the script now auto-selects free ports on the head within a preferred range for auxiliary services and propagates them to workers. By default it uses `PREFERRED_MIN=6380`–`PREFERRED_MAX=8079` and chooses:
     - `object-manager-port` (auto-picked or fallback 10001)
     - `node-manager-port` (auto-picked or fallback 10002)
-    - `worker` port range `11000–11999` (contiguous by default)
-    Ensure intra-allocation traffic is allowed for these. Override with `--export` if your site mandates a specific range: `RAY_OBJECT_MANAGER_PORT=... RAY_NODE_MANAGER_PORT=... RAY_WORKER_PORT_MIN=... RAY_WORKER_PORT_MAX=...`.
+    - `worker` port range: contiguous block inside 6380–8079 (default size 200)
+    Ensure intra-allocation traffic is allowed for these. Override with `--export` if your site mandates a specific range: `RAY_OBJECT_MANAGER_PORT=... RAY_NODE_MANAGER_PORT=... RAY_WORKER_PORT_MIN=... RAY_WORKER_PORT_MAX=...` or adjust block size via `WORKER_PORT_BLOCK_SIZE`.
   - If your cluster needs NCCL tuning for cross-node GPU comms, set `NCCL_SOCKET_IFNAME` (e.g., `ib0`) and related env vars before submission.
   - Slurm must allocate GPUs on each node (use `--gpus-per-node` or your site’s `--gres` equivalent).
 - Addressing: the script resolves a reachable head IP (`HEAD_IP`) from the Slurm-provided short hostname and passes it to both head and workers. If workers fail to connect to `GCS at address <host>:6379`, verify that `HEAD_IP` is reachable from worker nodes and adjust DNS or pass `HEAD_IP=<ip>` on submit if needed.
@@ -141,7 +141,7 @@ Troubleshooting (Ray connectivity)
 Notes
 - The script now adds `--disable-usage-stats` to Ray start commands to suppress non-interactive telemetry notices in logs.
 - CUDA/NVML: the sbatch propagates `CUDA_VISIBLE_DEVICES` and `CUDA_DEVICE_ORDER=PCI_BUS_ID` into containers to avoid NVML `InvalidArgument` errors when vLLM probes device capabilities.
-- Port selection: the script includes a `find_free_port()` that caches the current TCP listening set (`ss -H -ltn`), scans the entire preferred range in random order, and reserves picks within the script to avoid duplicate selections across multiple calls. Control the range with `RAY_PREFERRED_MIN`/`RAY_PREFERRED_MAX` (defaults 6380–8079 for firewall-friendly clusters).
+- Port selection: the script includes a `find_free_port()` that caches the current TCP listening set (`ss -H -ltn`), scans the entire preferred range in random order, and reserves picks within the script to avoid duplicate selections across multiple calls. For worker ports, it uses `find_free_port_block()` to allocate a contiguous block (default 200). Control the range with `RAY_PREFERRED_MIN`/`RAY_PREFERRED_MAX` (defaults 6380–8079), and the worker block size with `WORKER_PORT_BLOCK_SIZE`.
 
 Slurm wrapper logs (.out/.err)
 

@@ -119,11 +119,54 @@ find_free_port() {
   done
   return 1
 }
+
+# Find a contiguous free block of ports and reserve them
+find_free_port_block() {
+  local min=${1:-$PREFERRED_MIN}
+  local max=${2:-$PREFERRED_MAX}
+  local size=${3:-200}
+  local listening n cand start end port ok
+
+  n=$(( max - min + 1 ))
+  (( size >= 1 )) || { echo "[forska] bad block size: $size" >&2; return 2; }
+  (( n >= size )) || { echo "[forska] bad range for size $size: $min-$max" >&2; return 2; }
+
+  listening=$(ss -H -ltn 2>/dev/null \
+    | awk '{print $4}' \
+    | sed -E 's/.*:([0-9]+)$/\1/' \
+    | sort -u)
+
+  cand=$(( (max - size + 1) - min + 1 ))
+  for start in $(shuf -i "$min-$((max - size + 1))" -n "$cand"); do
+    end=$(( start + size - 1 ))
+    ok=1
+    for port in $(seq "$start" "$end"); do
+      if grep -qx "$port" <<<"$listening"; then ok=0; break; fi
+      if [[ ${#_RESERVED_PORTS[@]} -gt 0 ]] && printf '%s\n' "${_RESERVED_PORTS[@]}" | grep -qx "$port"; then ok=0; break; fi
+    done
+    if (( ok == 1 )); then
+      for port in $(seq "$start" "$end"); do _RESERVED_PORTS+=("$port"); done
+      echo "$start $end"
+      return 0
+    fi
+  done
+  return 1
+}
 RAY_OBJECT_MANAGER_PORT=${RAY_OBJECT_MANAGER_PORT:-$(find_free_port || echo 10001)}
 RAY_NODE_MANAGER_PORT=${RAY_NODE_MANAGER_PORT:-$(find_free_port || echo 10002)}
 # Keep a contiguous worker range (defaults if not overridden)
-RAY_WORKER_PORT_MIN=${RAY_WORKER_PORT_MIN:-11000}
-RAY_WORKER_PORT_MAX=${RAY_WORKER_PORT_MAX:-11999}
+# Worker ports: allocate a contiguous, tight block inside preferred range
+WORKER_PORT_BLOCK_SIZE=${WORKER_PORT_BLOCK_SIZE:-200}
+if [[ -z "${RAY_WORKER_PORT_MIN:-}" || -z "${RAY_WORKER_PORT_MAX:-}" ]]; then
+  if read -r _WMIN _WMAX < <(find_free_port_block "$PREFERRED_MIN" "$PREFERRED_MAX" "$WORKER_PORT_BLOCK_SIZE"); then
+    RAY_WORKER_PORT_MIN=${RAY_WORKER_PORT_MIN:-$_WMIN}
+    RAY_WORKER_PORT_MAX=${RAY_WORKER_PORT_MAX:-$_WMAX}
+  else
+    # Fallback to entire preferred window
+    RAY_WORKER_PORT_MIN=${RAY_WORKER_PORT_MIN:-$PREFERRED_MIN}
+    RAY_WORKER_PORT_MAX=${RAY_WORKER_PORT_MAX:-$PREFERRED_MAX}
+  fi
+fi
 # Resolve an IPv4 address for the head node that workers can reach.
 # Avoid IPv6 (Ray may parse "host:port" incorrectly for IPv6 without brackets).
 # Try DNS for IPv4 first, then fall back to the first local IPv4.
