@@ -90,14 +90,32 @@ RAY_DASHBOARD_PORT=${RAY_DASHBOARD_PORT:-8265}
 # when the range is pre-approved.
 PREFERRED_MIN=${RAY_PREFERRED_MIN:-10000}
 PREFERRED_MAX=${RAY_PREFERRED_MAX:-19999}
+
+# Cache of already-chosen ports within this script to avoid duplicates
+declare -ag _RESERVED_PORTS=()
+
 find_free_port() {
   local min=${1:-$PREFERRED_MIN}
   local max=${2:-$PREFERRED_MAX}
-  local p
-  for p in $(shuf -i "$min-$max" -n 100); do
-    if ! ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE ":$p$"; then
-      echo "$p"; return 0
-    fi
+  local p n listening
+
+  # Validate and size the search space
+  n=$(( max - min + 1 ))
+  (( n >= 1 )) || { echo "[forska] bad port range: $min-$max" >&2; return 2; }
+
+  # Cache the set of in-use TCP listen ports for this call
+  listening=$(ss -H -ltn 2>/dev/null \
+    | awk '{print $4}' \
+    | sed -E 's/.*:([0-9]+)$/\1/' \
+    | sort -u)
+
+  # Try the whole range in random order and avoid duplicates picked earlier in the script
+  for p in $(shuf -i "$min-$max" -n "$n"); do
+    if grep -qx "$p" <<<"$listening"; then continue; fi
+    if [[ ${#_RESERVED_PORTS[@]} -gt 0 ]] && printf '%s\n' "${_RESERVED_PORTS[@]}" | grep -qx "$p"; then continue; fi
+    _RESERVED_PORTS+=("$p")
+    echo "$p"
+    return 0
   done
   return 1
 }

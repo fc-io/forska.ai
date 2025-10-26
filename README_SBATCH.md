@@ -141,7 +141,7 @@ Troubleshooting (Ray connectivity)
 Notes
 - The script now adds `--disable-usage-stats` to Ray start commands to suppress non-interactive telemetry notices in logs.
 - CUDA/NVML: the sbatch propagates `CUDA_VISIBLE_DEVICES` and `CUDA_DEVICE_ORDER=PCI_BUS_ID` into containers to avoid NVML `InvalidArgument` errors when vLLM probes device capabilities.
- - Port selection: the script includes a small `find_free_port()` that tries up to 100 random ports inside the preferred range and falls back to standard defaults if it cannot find free ones. Control the range with `RAY_PREFERRED_MIN`/`RAY_PREFERRED_MAX`.
+- Port selection: the script includes a `find_free_port()` that caches the current TCP listening set (`ss -H -ltn`), scans the entire preferred range in random order, and reserves picks within the script to avoid duplicate selections across multiple calls. Control the range with `RAY_PREFERRED_MIN`/`RAY_PREFERRED_MAX` (defaults 10000–19999 for firewall-friendly clusters).
 
 Slurm wrapper logs (.out/.err)
 
