@@ -85,9 +85,25 @@ THIS_NODE=$(hostname -s)
 WORKER_NODES=( "${HOSTS[@]:1}" )
 RAY_PORT=${RAY_PORT:-6379}
 RAY_DASHBOARD_PORT=${RAY_DASHBOARD_PORT:-8265}
-# Bind Ray's auxiliary ports to a fixed range (HPC-friendly)
-RAY_OBJECT_MANAGER_PORT=${RAY_OBJECT_MANAGER_PORT:-10001}
-RAY_NODE_MANAGER_PORT=${RAY_NODE_MANAGER_PORT:-10002}
+# Ray ports: allow user override; otherwise, pick free ports on the head
+# within a preferred range. This avoids collisions and works with HPC firewalls
+# when the range is pre-approved.
+PREFERRED_MIN=${RAY_PREFERRED_MIN:-10000}
+PREFERRED_MAX=${RAY_PREFERRED_MAX:-19999}
+find_free_port() {
+  local min=${1:-$PREFERRED_MIN}
+  local max=${2:-$PREFERRED_MAX}
+  local p
+  for p in $(shuf -i "$min-$max" -n 100); do
+    if ! ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE ":$p$"; then
+      echo "$p"; return 0
+    fi
+  done
+  return 1
+}
+RAY_OBJECT_MANAGER_PORT=${RAY_OBJECT_MANAGER_PORT:-$(find_free_port || echo 10001)}
+RAY_NODE_MANAGER_PORT=${RAY_NODE_MANAGER_PORT:-$(find_free_port || echo 10002)}
+# Keep a contiguous worker range (defaults if not overridden)
 RAY_WORKER_PORT_MIN=${RAY_WORKER_PORT_MIN:-11000}
 RAY_WORKER_PORT_MAX=${RAY_WORKER_PORT_MAX:-11999}
 # Resolve an IPv4 address for the head node that workers can reach.
@@ -174,6 +190,7 @@ apptainer run --cleanenv --writable-tmpfs \
   mkdir -p "$RAY_TMP_DIR"
   # Start Ray head on this node (the batch script runs on the head)
   echo "[forska] ray head ip: $HEAD_IP (port $RAY_PORT, dashboard $RAY_DASHBOARD_PORT)"
+  echo "[forska] ray ports: gcs=$RAY_PORT, obj=$RAY_OBJECT_MANAGER_PORT, node=$RAY_NODE_MANAGER_PORT, workers=$RAY_WORKER_PORT_MIN-$RAY_WORKER_PORT_MAX"
   apptainer exec --cleanenv --nv \
     --env NCCL_DEBUG="$NCCL_DEBUG" \
     --env NCCL_ASYNC_ERROR_HANDLING="$NCCL_ASYNC_ERROR_HANDLING" \
@@ -202,7 +219,7 @@ apptainer run --cleanenv --writable-tmpfs \
   # Start Ray workers on the remaining nodes
   if [[ ${#WORKER_NODES[@]} -gt 0 ]]; then
     srun --nodes=$((NNODES-1)) --ntasks=$((NNODES-1)) \
-      --export=ALL,HEAD_IP=${HEAD_IP},RAY_PORT=${RAY_PORT} \
+      --export=ALL,HEAD_IP=${HEAD_IP},RAY_PORT=${RAY_PORT},RAY_OBJECT_MANAGER_PORT=${RAY_OBJECT_MANAGER_PORT},RAY_NODE_MANAGER_PORT=${RAY_NODE_MANAGER_PORT},RAY_WORKER_PORT_MIN=${RAY_WORKER_PORT_MIN},RAY_WORKER_PORT_MAX=${RAY_WORKER_PORT_MAX} \
       --nodelist="$(printf "%s," "${WORKER_NODES[@]}" | sed 's/,$//')" \
       --output "$LOG_DIR/ray-worker-%h.log" \
       bash -lc "mkdir -p '$RAY_TMP_DIR' \
@@ -212,6 +229,10 @@ apptainer run --cleanenv --writable-tmpfs \
         && { [[ -n \"\$WORKER_IP\" ]] || { echo '[forska] worker: failed to resolve IPv4 address' >&2; exit 2; }; } \
         && ( (command -v nc >/dev/null 2>&1 && timeout 3 nc -vz \"\${HEAD_IP}\" \"\${RAY_PORT}\") \
              || timeout 3 bash -lc 'echo > /dev/tcp/'\"\${HEAD_IP}\"'/'\"\${RAY_PORT}\" ) \
+        && ( (command -v nc >/dev/null 2>&1 && timeout 3 nc -vz \"\${HEAD_IP}\" \"$RAY_OBJECT_MANAGER_PORT\") \
+             || timeout 3 bash -lc 'echo > /dev/tcp/'\"\${HEAD_IP}\"'/'\"$RAY_OBJECT_MANAGER_PORT\" ) \
+        && ( (command -v nc >/dev/null 2>&1 && timeout 3 nc -vz \"\${HEAD_IP}\" \"$RAY_NODE_MANAGER_PORT\") \
+             || timeout 3 bash -lc 'echo > /dev/tcp/'\"\${HEAD_IP}\"'/'\"$RAY_NODE_MANAGER_PORT\" ) \
         && apptainer exec --cleanenv --nv \
              --env NCCL_DEBUG='$NCCL_DEBUG' \
              --env NCCL_ASYNC_ERROR_HANDLING='$NCCL_ASYNC_ERROR_HANDLING' \
