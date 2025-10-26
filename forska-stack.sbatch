@@ -190,6 +190,7 @@ apptainer run --cleanenv --writable-tmpfs \
   # Start Ray workers on the remaining nodes
   if [[ ${#WORKER_NODES[@]} -gt 0 ]]; then
     srun --nodes=$((NNODES-1)) --ntasks=$((NNODES-1)) \
+      --export=ALL,HEAD_IP=${HEAD_IP},RAY_PORT=${RAY_PORT} \
       --nodelist="$(printf "%s," "${WORKER_NODES[@]}" | sed 's/,$//')" \
       --output "$LOG_DIR/ray-worker-%h.log" \
       bash -lc "mkdir -p '$RAY_TMP_DIR' \
