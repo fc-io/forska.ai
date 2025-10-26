@@ -172,6 +172,9 @@ apptainer run --cleanenv --writable-tmpfs \
   apptainer exec --cleanenv --nv \
     --env NCCL_DEBUG="$NCCL_DEBUG" \
     --env NCCL_ASYNC_ERROR_HANDLING="$NCCL_ASYNC_ERROR_HANDLING" \
+    --env CUDA_DEVICE_ORDER=PCI_BUS_ID \
+    ${CUDA_VISIBLE_DEVICES:+--env CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES"} \
+    ${CUDA_VISIBLE_DEVICES:+--env NVIDIA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES"} \
     --env RAY_TMPDIR="$RAY_TMP_DIR" \
     ${NCCL_SOCKET_IFNAME:+--env NCCL_SOCKET_IFNAME="$NCCL_SOCKET_IFNAME"} \
     ${NCCL_IB_HCA:+--env NCCL_IB_HCA="$NCCL_IB_HCA"} \
@@ -203,6 +206,9 @@ apptainer run --cleanenv --writable-tmpfs \
         && apptainer exec --cleanenv --nv \
              --env NCCL_DEBUG='$NCCL_DEBUG' \
              --env NCCL_ASYNC_ERROR_HANDLING='$NCCL_ASYNC_ERROR_HANDLING' \
+             --env CUDA_DEVICE_ORDER=PCI_BUS_ID \
+             ${CUDA_VISIBLE_DEVICES:+--env CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES"} \
+             ${CUDA_VISIBLE_DEVICES:+--env NVIDIA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES"} \
              --env RAY_TMPDIR="$RAY_TMP_DIR" \
              ${NCCL_SOCKET_IFNAME:+--env NCCL_SOCKET_IFNAME='$NCCL_SOCKET_IFNAME'} \
              ${NCCL_IB_HCA:+--env NCCL_IB_HCA='$NCCL_IB_HCA'} \
@@ -235,6 +241,9 @@ fi
 
 apptainer run --cleanenv --nv \
   "${VLLM_ENV[@]}" \
+  --env CUDA_DEVICE_ORDER=PCI_BUS_ID \
+  ${CUDA_VISIBLE_DEVICES:+--env CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES"} \
+  ${CUDA_VISIBLE_DEVICES:+--env NVIDIA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES"} \
   --bind "$STACK_ROOT/models:/models:ro" \
   "$SIF_VLLM" \
   --model /models/Qwen3-32B-FP8 \
