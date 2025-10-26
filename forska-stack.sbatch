@@ -301,7 +301,14 @@ RAY_TMP_DIR=${RAY_TMP_DIR:-/tmp/ray-${SLURM_JOB_ID:-$$}}
 # Compute distributed sizes: keep tensor parallel groups within a node by default
 TOTAL_GPUS=$(( NNODES * GPUS_PER_NODE ))
 DEFAULT_TP=$(( GPUS_PER_NODE > 0 ? GPUS_PER_NODE : 1 ))
-TP_SIZE=${TP_SIZE:-$DEFAULT_TP}
+# For multi-node with Ray, use all GPUs for tensor parallelism, no data parallelism
+# to avoid NVML worker spawn issues
+if [[ $NNODES -gt 1 ]]; then
+  TP_SIZE=${TP_SIZE:-$TOTAL_GPUS}
+  DP_SIZE=${DP_SIZE:-1}
+else
+  TP_SIZE=${TP_SIZE:-$DEFAULT_TP}
+fi
 if [[ -z "${DP_SIZE:-}" ]]; then
   if (( TP_SIZE > 0 )); then
     DP_SIZE=$(( TOTAL_GPUS / TP_SIZE ))
