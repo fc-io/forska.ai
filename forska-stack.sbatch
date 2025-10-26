@@ -89,7 +89,7 @@ RAY_DASHBOARD_PORT=${RAY_DASHBOARD_PORT:-8265}
 # within a preferred range. This avoids collisions and works with HPC firewalls
 # when the range is pre-approved.
 PREFERRED_MIN=${RAY_PREFERRED_MIN:-8888}
-PREFERRED_MAX=${RAY_PREFERRED_MAX:-8988}
+PREFERRED_MAX=${RAY_PREFERRED_MAX:-9200}
 
 # Cache of already-chosen ports within this script to avoid duplicates
 declare -ag _RESERVED_PORTS=()
@@ -152,21 +152,89 @@ find_free_port_block() {
   done
   return 1
 }
-RAY_OBJECT_MANAGER_PORT=${RAY_OBJECT_MANAGER_PORT:-$(find_free_port || echo 10001)}
-RAY_NODE_MANAGER_PORT=${RAY_NODE_MANAGER_PORT:-$(find_free_port || echo 10002)}
-# Keep a contiguous worker range (defaults if not overridden)
-# Worker ports: allocate a contiguous, tight block inside preferred range
+# Allocate worker block FIRST (largest allocation), then individual ports OUTSIDE that block
+echo "[forska] allocating ray ports from range $PREFERRED_MIN-$PREFERRED_MAX"
 WORKER_PORT_BLOCK_SIZE=${WORKER_PORT_BLOCK_SIZE:-200}
 if [[ -z "${RAY_WORKER_PORT_MIN:-}" || -z "${RAY_WORKER_PORT_MAX:-}" ]]; then
+  echo "[forska] searching for ${WORKER_PORT_BLOCK_SIZE} contiguous free ports..."
   if read -r _WMIN _WMAX < <(find_free_port_block "$PREFERRED_MIN" "$PREFERRED_MAX" "$WORKER_PORT_BLOCK_SIZE"); then
     RAY_WORKER_PORT_MIN=${RAY_WORKER_PORT_MIN:-$_WMIN}
     RAY_WORKER_PORT_MAX=${RAY_WORKER_PORT_MAX:-$_WMAX}
+    # Manually reserve the block since subshell doesn't persist _RESERVED_PORTS changes
+    for p in $(seq "$RAY_WORKER_PORT_MIN" "$RAY_WORKER_PORT_MAX"); do
+      _RESERVED_PORTS+=("$p")
+    done
+    echo "[forska] allocated worker port block: $RAY_WORKER_PORT_MIN-$RAY_WORKER_PORT_MAX (${WORKER_PORT_BLOCK_SIZE} ports, reserved in _RESERVED_PORTS)"
   else
-    # Fallback to entire preferred window
-    RAY_WORKER_PORT_MIN=${RAY_WORKER_PORT_MIN:-$PREFERRED_MIN}
-    RAY_WORKER_PORT_MAX=${RAY_WORKER_PORT_MAX:-$PREFERRED_MAX}
+    echo "[forska] warning: could not find ${WORKER_PORT_BLOCK_SIZE} contiguous free ports in $PREFERRED_MIN-$PREFERRED_MAX" >&2
+    echo "[forska] falling back to 10100-10299" >&2
+    RAY_WORKER_PORT_MIN=${RAY_WORKER_PORT_MIN:-10100}
+    RAY_WORKER_PORT_MAX=${RAY_WORKER_PORT_MAX:-10299}
+    # Manually reserve fallback range
+    for p in $(seq "$RAY_WORKER_PORT_MIN" "$RAY_WORKER_PORT_MAX"); do
+      _RESERVED_PORTS+=("$p")
+    done
   fi
 fi
+
+# Now allocate individual ports OUTSIDE the worker block to avoid conflicts
+echo "[forska] allocating object_manager port (avoiding ${#_RESERVED_PORTS[@]} reserved ports)..."
+RAY_OBJECT_MANAGER_PORT=${RAY_OBJECT_MANAGER_PORT:-$(find_free_port || echo 10001)}
+echo "[forska] allocated object_manager port: $RAY_OBJECT_MANAGER_PORT"
+
+echo "[forska] allocating node_manager port (avoiding ${#_RESERVED_PORTS[@]} reserved ports)..."
+RAY_NODE_MANAGER_PORT=${RAY_NODE_MANAGER_PORT:-$(find_free_port || echo 10002)}
+echo "[forska] allocated node_manager port: $RAY_NODE_MANAGER_PORT"
+
+echo "[forska] ray port allocation:"
+echo "  - GCS port:           $RAY_PORT"
+echo "  - Object manager:     $RAY_OBJECT_MANAGER_PORT"
+echo "  - Node manager:       $RAY_NODE_MANAGER_PORT"
+echo "  - Worker ports:       $RAY_WORKER_PORT_MIN-$RAY_WORKER_PORT_MAX"
+echo "  - Dashboard:          $RAY_DASHBOARD_PORT"
+echo "  - Preferred range:    $PREFERRED_MIN-$PREFERRED_MAX"
+
+# Validate no conflicts between individual ports and worker block
+for p in "$RAY_PORT" "$RAY_OBJECT_MANAGER_PORT" "$RAY_NODE_MANAGER_PORT" "$RAY_DASHBOARD_PORT"; do
+  if (( p >= RAY_WORKER_PORT_MIN && p <= RAY_WORKER_PORT_MAX )); then
+    echo "[forska] error: port $p conflicts with worker port range $RAY_WORKER_PORT_MIN-$RAY_WORKER_PORT_MAX" >&2
+    exit 2
+  fi
+done
+echo "[forska] port allocation validated (no conflicts detected)"
+
+# Save detailed port allocation state for debugging
+PORT_DIAG="$LOG_DIR/port-allocation.log"
+cat >"$PORT_DIAG" <<PORT_DIAG_EOF
+Ray Port Allocation Diagnostics
+================================
+Job ID: ${SLURM_JOB_ID:-manual}
+Timestamp: $(date)
+Host: $(hostname)
+
+Port Assignments:
+-----------------
+GCS_SERVER_PORT:        $RAY_PORT
+OBJECT_MANAGER_PORT:    $RAY_OBJECT_MANAGER_PORT
+NODE_MANAGER_PORT:      $RAY_NODE_MANAGER_PORT
+DASHBOARD_PORT:         $RAY_DASHBOARD_PORT
+WORKER_PORT_MIN:        $RAY_WORKER_PORT_MIN
+WORKER_PORT_MAX:        $RAY_WORKER_PORT_MAX
+WORKER_PORT_COUNT:      $(( RAY_WORKER_PORT_MAX - RAY_WORKER_PORT_MIN + 1 ))
+
+Configuration:
+--------------
+PREFERRED_MIN:          $PREFERRED_MIN
+PREFERRED_MAX:          $PREFERRED_MAX
+WORKER_BLOCK_SIZE:      $WORKER_PORT_BLOCK_SIZE
+
+Reserved Ports Count: ${#_RESERVED_PORTS[@]}
+
+Ports Currently Listening (pre-Ray):
+--------------------------------------
+$(ss -ltn | awk 'NR>1 {print $4}' | sed -E 's/.*:([0-9]+)$/\1/' | sort -n | uniq)
+PORT_DIAG_EOF
+echo "[forska] port allocation diagnostics saved to $PORT_DIAG"
 # Resolve an IPv4 address for the head node that workers can reach.
 # Avoid IPv6 (Ray may parse "host:port" incorrectly for IPv6 without brackets).
 # Try DNS for IPv4 first, then fall back to the first local IPv4.
@@ -248,7 +316,6 @@ apptainer run --cleanenv --writable-tmpfs \
   if [[ $NNODES -gt 1 ]]; then
   echo "[forska] starting ray cluster across $NNODES nodes (head=$HEAD_NODE, workers=${WORKER_NODES:-none})"
   echo "[forska] ray tmp dir: $RAY_TMP_DIR"
-  echo "[forska] ray selected ports: gcs=$RAY_PORT, obj=$RAY_OBJECT_MANAGER_PORT, node=$RAY_NODE_MANAGER_PORT, workers=$RAY_WORKER_PORT_MIN-$RAY_WORKER_PORT_MAX"
   mkdir -p "$RAY_TMP_DIR"
   # Start Ray head on this node (the batch script runs on the head)
   echo "[forska] ray head ip: $HEAD_IP (port $RAY_PORT, dashboard $RAY_DASHBOARD_PORT)"
@@ -278,11 +345,33 @@ apptainer run --cleanenv --writable-tmpfs \
     >"$LOG_DIR/ray-head.log" 2>&1 || { echo "[forska] ray head failed" >&2; exit 2; }
 
   # Capture actual ports Ray bound to for diagnostics
-  echo "[forska] ray head requested ports: gcs=$RAY_PORT, obj=$RAY_OBJECT_MANAGER_PORT, node=$RAY_NODE_MANAGER_PORT" >"$LOG_DIR/ray-head-ports.log"
-  echo "[forska] ray head actual bound ports:" >>"$LOG_DIR/ray-head-ports.log"
-  ss -ltn | grep -E "(${RAY_PORT}|${RAY_OBJECT_MANAGER_PORT}|${RAY_NODE_MANAGER_PORT})" >>"$LOG_DIR/ray-head-ports.log" 2>&1 || echo "  (no matching ports found)" >>"$LOG_DIR/ray-head-ports.log"
-  echo "[forska] all listening ports on head:" >>"$LOG_DIR/ray-head-ports.log"
-  ss -ltn >>"$LOG_DIR/ray-head-ports.log" 2>&1
+  echo "[forska] verifying ray ports..."
+  RAY_PORTS_LOG="$LOG_DIR/ray-head-ports.log"
+  cat >"$RAY_PORTS_LOG" <<RAY_PORTS_EOF
+Ray Head Port Verification
+===========================
+Job ID: ${SLURM_JOB_ID:-manual}
+Timestamp: $(date)
+
+Requested Port Configuration:
+------------------------------
+GCS:            $RAY_PORT
+Object Manager: $RAY_OBJECT_MANAGER_PORT
+Node Manager:   $RAY_NODE_MANAGER_PORT
+Dashboard:      $RAY_DASHBOARD_PORT
+Worker Range:   $RAY_WORKER_PORT_MIN-$RAY_WORKER_PORT_MAX
+
+Ray-specific Listening Ports:
+------------------------------
+RAY_PORTS_EOF
+  ss -ltn | grep -E "(${RAY_PORT}|${RAY_OBJECT_MANAGER_PORT}|${RAY_NODE_MANAGER_PORT}|${RAY_DASHBOARD_PORT})" >>"$RAY_PORTS_LOG" 2>&1 || echo "(no matching ports found - possible startup failure)" >>"$RAY_PORTS_LOG"
+
+  echo "" >>"$RAY_PORTS_LOG"
+  echo "All Listening TCP Ports:" >>"$RAY_PORTS_LOG"
+  echo "------------------------" >>"$RAY_PORTS_LOG"
+  ss -ltn >>"$RAY_PORTS_LOG" 2>&1
+
+  echo "[forska] ray port verification saved to $RAY_PORTS_LOG"
 
   # Wait for head to open core ports before launching workers
   for p in "$RAY_PORT" "$RAY_OBJECT_MANAGER_PORT" "$RAY_NODE_MANAGER_PORT"; do
