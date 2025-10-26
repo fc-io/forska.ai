@@ -172,6 +172,7 @@ apptainer run --cleanenv --writable-tmpfs \
   apptainer exec --cleanenv --nv \
     --env NCCL_DEBUG="$NCCL_DEBUG" \
     --env NCCL_ASYNC_ERROR_HANDLING="$NCCL_ASYNC_ERROR_HANDLING" \
+    --env RAY_TMPDIR="$RAY_TMP_DIR" \
     ${NCCL_SOCKET_IFNAME:+--env NCCL_SOCKET_IFNAME="$NCCL_SOCKET_IFNAME"} \
     ${NCCL_IB_HCA:+--env NCCL_IB_HCA="$NCCL_IB_HCA"} \
     ${NCCL_IB_GID_INDEX:+--env NCCL_IB_GID_INDEX="$NCCL_IB_GID_INDEX"} \
@@ -196,14 +197,17 @@ apptainer run --cleanenv --writable-tmpfs \
                           [[ -n \"\$WORKER_IP\" ]] || WORKER_IP=\$(hostname -I | tr ' ' '\n' | grep -m1 -E '^[0-9]+(\\.[0-9]+){3}$' || true); \
                           echo -n \"\$WORKER_IP\" ) \
         && { [[ -n \"\$WORKER_IP\" ]] || { echo '[forska] worker: failed to resolve IPv4 address' >&2; exit 2; }; } \
+        && ( (command -v nc >/dev/null 2>&1 && timeout 3 nc -vz \"\${HEAD_IP}\" \"\${RAY_PORT}\") \
+             || timeout 3 bash -lc 'echo > /dev/tcp/'\"\${HEAD_IP}\"'/'\"\${RAY_PORT}\" ) \
         && apptainer exec --cleanenv --nv \
              --env NCCL_DEBUG='$NCCL_DEBUG' \
              --env NCCL_ASYNC_ERROR_HANDLING='$NCCL_ASYNC_ERROR_HANDLING' \
+             --env RAY_TMPDIR="$RAY_TMP_DIR" \
              ${NCCL_SOCKET_IFNAME:+--env NCCL_SOCKET_IFNAME='$NCCL_SOCKET_IFNAME'} \
              ${NCCL_IB_HCA:+--env NCCL_IB_HCA='$NCCL_IB_HCA'} \
              ${NCCL_IB_GID_INDEX:+--env NCCL_IB_GID_INDEX='$NCCL_IB_GID_INDEX'} \
              '$SIF_VLLM' \
-             ray start --node-ip-address \"\$WORKER_IP\" --address '${HEAD_IP}:${RAY_PORT}' --temp-dir '$RAY_TMP_DIR' --disable-usage-stats" || {
+             ray start --node-ip-address \"\$WORKER_IP\" --address \"\${HEAD_IP}:\${RAY_PORT}\" --disable-usage-stats" || {
         echo "[forska] ray workers failed" >&2; exit 2;
       }
   fi
