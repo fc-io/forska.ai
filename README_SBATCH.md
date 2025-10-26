@@ -48,6 +48,7 @@ Multi-node (Ray) mode
   - Nodes must be able to talk to each other on ports `6379` (Ray GCS) and `8265` (dashboard). Firewalls must allow intra-allocation traffic.
   - If your cluster needs NCCL tuning for cross-node GPU comms, set `NCCL_SOCKET_IFNAME` (e.g., `ib0`) and related env vars before submission.
   - Slurm must allocate GPUs on each node (use `--gpus-per-node` or your site’s `--gres` equivalent).
+  - Addressing: the script resolves a reachable head IP (`HEAD_IP`) from the Slurm-provided short hostname and passes it to both head and workers. If workers fail to connect to `GCS at address <host>:6379`, verify that `HEAD_IP` is reachable from worker nodes and adjust DNS or pass `HEAD_IP=<ip>` on submit if needed.
  - Ray temp dir (important): Linux limits AF_UNIX socket paths to 107 bytes. The script now defaults `RAY_TMP_DIR` to a short, per-job path under `/tmp` (e.g., `/tmp/ray-<jobid>`). If you override `RAY_TMP_DIR`, keep it short (e.g., a path under `/tmp`) to avoid `OSError: AF_UNIX path length cannot exceed 107 bytes`.
 
 TP/DP sizing
@@ -117,6 +118,19 @@ tail -f "$STACK_ROOT"/logs/"$(squeue -u "$USER" -h -o "%i" -n forska-stack --sor
 tail -f "$STACK_ROOT"/logs/"$(squeue -u "$USER" -h -o "%i" -n forska-stack --sort=-i | head -n1)"/app.log
 tail -f "$STACK_ROOT"/logs/"$(squeue -u "$USER" -h -o "%i" -n forska-stack --sort=-i | head -n1)"/db.log
 ```
+
+Troubleshooting (Ray connectivity)
+
+- Symptom: worker logs show `Failed to connect to GCS at address <host>:6379` and `Timed out while waiting for GCS to become available`.
+- Checks:
+  - In `ray-head.log`, confirm `Ray runtime started` and note the `Local node IP`.
+  - Ensure `ray-head` is listening on `:6379` on the head node: `ss -ltnp | grep 6379` (run on head).
+  - Verify workers can resolve and reach the head IP: `srun -N1 -w <a-worker> getent hosts <head-shortname>` and `srun -N1 -w <a-worker> timeout 3 bash -lc 'nc -vz <head-ip> 6379'`.
+  - If name resolution differs across nodes, pass an explicit head IP: submit with `--export=ALL,HEAD_IP=<reachable-ip>`.
+  - If your site has multiple NICs/subnets, ensure the resolved head IP and each worker’s `--node-ip-address` are on the same fabric; set `NCCL_SOCKET_IFNAME` accordingly.
+
+Notes
+- The script now adds `--disable-usage-stats` to Ray start commands to suppress non-interactive telemetry notices in logs.
 
 Slurm wrapper logs (.out/.err)
 

@@ -85,6 +85,10 @@ THIS_NODE=$(hostname -s)
 WORKER_NODES=( "${HOSTS[@]:1}" )
 RAY_PORT=${RAY_PORT:-6379}
 RAY_DASHBOARD_PORT=${RAY_DASHBOARD_PORT:-8265}
+# Resolve an IP for the head node that workers can reach.
+# Prefer DNS resolution of the short hostname, fall back to the first local IP.
+HEAD_IP=${HEAD_IP:-$(getent hosts "$HEAD_NODE" | awk '{print $1; exit}')}
+[[ -z "$HEAD_IP" ]] && HEAD_IP=$(hostname -I | awk '{print $1}')
 # Ray stores Unix domain sockets under its temp dir and Linux limits
 # AF_UNIX socket paths to 107 bytes. Use a short per-job path on local tmp
 # by default to avoid path length overflows on long $STACK_ROOT paths.
@@ -161,10 +165,12 @@ apptainer run --cleanenv --writable-tmpfs \
     --bind "$RAY_TMP_DIR:$RAY_TMP_DIR" \
     "$SIF_VLLM" \
     ray start --head \
+      --node-ip-address "$HEAD_IP" \
       --port "$RAY_PORT" \
       --dashboard-host 0.0.0.0 \
       --dashboard-port "$RAY_DASHBOARD_PORT" \
       --temp-dir "$RAY_TMP_DIR" \
+      --disable-usage-stats \
     >"$LOG_DIR/ray-head.log" 2>&1 || { echo "[forska] ray head failed" >&2; exit 2; }
 
   # Start Ray workers on the remaining nodes
@@ -172,7 +178,7 @@ apptainer run --cleanenv --writable-tmpfs \
     srun --nodes=$((NNODES-1)) --ntasks=$((NNODES-1)) \
       --nodelist="$(printf "%s," "${WORKER_NODES[@]}" | sed 's/,$//')" \
       --output "$LOG_DIR/ray-worker-%h.log" \
-      bash -lc "mkdir -p '$RAY_TMP_DIR' && apptainer exec --cleanenv --nv --env NCCL_DEBUG='$NCCL_DEBUG' --env NCCL_ASYNC_ERROR_HANDLING='$NCCL_ASYNC_ERROR_HANDLING' ${NCCL_SOCKET_IFNAME:+--env NCCL_SOCKET_IFNAME='$NCCL_SOCKET_IFNAME'} ${NCCL_IB_HCA:+--env NCCL_IB_HCA='$NCCL_IB_HCA'} ${NCCL_IB_GID_INDEX:+--env NCCL_IB_GID_INDEX='$NCCL_IB_GID_INDEX'} '$SIF_VLLM' ray start --address '${HEAD_NODE}:${RAY_PORT}' --temp-dir '$RAY_TMP_DIR'" || {
+      bash -lc "mkdir -p '$RAY_TMP_DIR' && WORKER_IP=\$(hostname -I | awk '{print \$1}') && apptainer exec --cleanenv --nv --env NCCL_DEBUG='$NCCL_DEBUG' --env NCCL_ASYNC_ERROR_HANDLING='$NCCL_ASYNC_ERROR_HANDLING' ${NCCL_SOCKET_IFNAME:+--env NCCL_SOCKET_IFNAME='$NCCL_SOCKET_IFNAME'} ${NCCL_IB_HCA:+--env NCCL_IB_HCA='$NCCL_IB_HCA'} ${NCCL_IB_GID_INDEX:+--env NCCL_IB_GID_INDEX='$NCCL_IB_GID_INDEX'} '$SIF_VLLM' ray start --node-ip-address \"\$WORKER_IP\" --address '${HEAD_IP}:${RAY_PORT}' --temp-dir '$RAY_TMP_DIR' --disable-usage-stats" || {
         echo "[forska] ray workers failed" >&2; exit 2;
       }
   fi
@@ -193,7 +199,7 @@ VLLM_ENV=(
   --env HF_HOME="$HF_HOME"
 )
 if [[ $NNODES -gt 1 ]]; then
-  VLLM_ENV+=(--env RAY_ADDRESS="${HEAD_NODE}:${RAY_PORT}")
+  VLLM_ENV+=(--env RAY_ADDRESS="${HEAD_IP}:${RAY_PORT}")
   VLLM_ENV+=(--env RAY_TMPDIR="$RAY_TMP_DIR")
 fi
 
@@ -263,7 +269,7 @@ echo "  host:        $(hostname)"
 echo "  postgres:    127.0.0.1:$POSTGRES_PORT"
 echo "  vllm:        http://127.0.0.1:8000/v1"
 if [[ $NNODES -gt 1 ]]; then
-  echo "  ray head:    ${HEAD_NODE}:${RAY_PORT} (dashboard :${RAY_DASHBOARD_PORT})"
+  echo "  ray head:    ${HEAD_IP}:${RAY_PORT} (dashboard :${RAY_DASHBOARD_PORT})"
   echo "  nodes:       ${HOSTS[*]}"
 fi
 echo "  dist:        ${NNODES} node(s) × ${GPUS_PER_NODE} GPU(s) = ${TOTAL_GPUS} (tp=${TP_SIZE}, dp=${DP_SIZE})"
