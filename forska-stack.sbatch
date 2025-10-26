@@ -419,17 +419,17 @@ can_connect() {
   fi
 }
 
-for p in "$RAY_PORT" "$RAY_OBJECT_MANAGER_PORT" "$RAY_NODE_MANAGER_PORT"; do
-  ok=0
-  for i in $(seq 1 20); do
-    if can_connect "${HEAD_IP}" "$p"; then ok=1; break; fi
-    sleep 1
-  done
-  if [[ $ok -ne 1 ]]; then
-    echo "[forska] worker: head not reachable on port $p" >&2
-    exit 2
-  fi
+# Workers only need to connect to the GCS server (RAY_PORT)
+# Object manager and node manager ports are per-node, not shared
+ok=0
+for i in $(seq 1 20); do
+  if can_connect "${HEAD_IP}" "$RAY_PORT"; then ok=1; break; fi
+  sleep 1
 done
+if [[ $ok -ne 1 ]]; then
+  echo "[forska] worker: head not reachable on port $RAY_PORT" >&2
+  exit 2
+fi
 
 exec apptainer exec --cleanenv --nv \
   --env NCCL_DEBUG="${NCCL_DEBUG}" \
@@ -446,8 +446,6 @@ exec apptainer exec --cleanenv --nv \
   ray start \
     --node-ip-address "${WORKER_IP}" \
     --address "${HEAD_IP}:${RAY_PORT}" \
-    --object-manager-port "${RAY_OBJECT_MANAGER_PORT}" \
-    --node-manager-port "${RAY_NODE_MANAGER_PORT}" \
     --min-worker-port "${RAY_WORKER_PORT_MIN}" \
     --max-worker-port "${RAY_WORKER_PORT_MAX}" \
     --disable-usage-stats
@@ -456,7 +454,7 @@ RAY_WORKER
   # Launch Ray workers using the prepared script (robust, avoids nested quoting issues)
   if [[ ${#WORKER_NODES[@]} -gt 0 ]]; then
     srun --nodes=$((NNODES-1)) --ntasks=$((NNODES-1)) \
-      --export=ALL,HEAD_IP=${HEAD_IP},RAY_PORT=${RAY_PORT},RAY_OBJECT_MANAGER_PORT=${RAY_OBJECT_MANAGER_PORT},RAY_NODE_MANAGER_PORT=${RAY_NODE_MANAGER_PORT},RAY_WORKER_PORT_MIN=${RAY_WORKER_PORT_MIN},RAY_WORKER_PORT_MAX=${RAY_WORKER_PORT_MAX},RAY_TMP_DIR=${RAY_TMP_DIR},SIF_VLLM=${SIF_VLLM},NCCL_DEBUG=${NCCL_DEBUG},NCCL_ASYNC_ERROR_HANDLING=${NCCL_ASYNC_ERROR_HANDLING} \
+      --export=ALL,HEAD_IP=${HEAD_IP},RAY_PORT=${RAY_PORT},RAY_WORKER_PORT_MIN=${RAY_WORKER_PORT_MIN},RAY_WORKER_PORT_MAX=${RAY_WORKER_PORT_MAX},RAY_TMP_DIR=${RAY_TMP_DIR},SIF_VLLM=${SIF_VLLM},NCCL_DEBUG=${NCCL_DEBUG},NCCL_ASYNC_ERROR_HANDLING=${NCCL_ASYNC_ERROR_HANDLING} \
       --nodelist="$(printf "%s," "${WORKER_NODES[@]}" | sed 's/,$//')" \
       --output "$LOG_DIR/ray-worker-%N.log" \
       bash -lc "$WORKER_SCRIPT" || {
