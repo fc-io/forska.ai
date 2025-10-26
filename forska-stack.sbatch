@@ -88,8 +88,8 @@ RAY_DASHBOARD_PORT=${RAY_DASHBOARD_PORT:-8265}
 # Ray ports: allow user override; otherwise, pick free ports on the head
 # within a preferred range. This avoids collisions and works with HPC firewalls
 # when the range is pre-approved.
-PREFERRED_MIN=${RAY_PREFERRED_MIN:-10000}
-PREFERRED_MAX=${RAY_PREFERRED_MAX:-19999}
+PREFERRED_MIN=${RAY_PREFERRED_MIN:-6380}
+PREFERRED_MAX=${RAY_PREFERRED_MAX:-8079}
 
 # Cache of already-chosen ports within this script to avoid duplicates
 declare -ag _RESERVED_PORTS=()
@@ -262,12 +262,9 @@ apptainer run --cleanenv --writable-tmpfs \
                           [[ -n \"\$WORKER_IP\" ]] || WORKER_IP=\$(hostname -I | tr ' ' '\n' | grep -m1 -E '^[0-9]+(\\.[0-9]+){3}$' || true); \
                           echo -n \"\$WORKER_IP\" ) \
         && { [[ -n \"\$WORKER_IP\" ]] || { echo '[forska] worker: failed to resolve IPv4 address' >&2; exit 2; }; } \
-        && ( (command -v nc >/dev/null 2>&1 && timeout 3 nc -vz \"\${HEAD_IP}\" \"\${RAY_PORT}\") \
-             || timeout 3 bash -lc 'echo > /dev/tcp/'\"\${HEAD_IP}\"'/'\"\${RAY_PORT}\" ) \
-        && ( (command -v nc >/dev/null 2>&1 && timeout 3 nc -vz \"\${HEAD_IP}\" \"$RAY_OBJECT_MANAGER_PORT\") \
-             || timeout 3 bash -lc 'echo > /dev/tcp/'\"\${HEAD_IP}\"'/'\"$RAY_OBJECT_MANAGER_PORT\" ) \
-        && ( (command -v nc >/dev/null 2>&1 && timeout 3 nc -vz \"\${HEAD_IP}\" \"$RAY_NODE_MANAGER_PORT\") \
-             || timeout 3 bash -lc 'echo > /dev/tcp/'\"\${HEAD_IP}\"'/'\"$RAY_NODE_MANAGER_PORT\" ) \
+        && ok=0; for i in $(seq 1 20); do { (command -v nc >/dev/null 2>&1 && timeout 3 nc -z \"\${HEAD_IP}\" \"\${RAY_PORT}\") || timeout 3 bash -lc 'echo > /dev/tcp/'\"\${HEAD_IP}\"'/'\"\${RAY_PORT}\" >/dev/null 2>&1; } && ok=1 && break; sleep 1; done; [[ $ok -eq 1 ]] \
+        && ok=0; for i in $(seq 1 20); do { (command -v nc >/dev/null 2>&1 && timeout 3 nc -z \"\${HEAD_IP}\" \"$RAY_OBJECT_MANAGER_PORT\") || timeout 3 bash -lc 'echo > /dev/tcp/'\"\${HEAD_IP}\"'/'\"$RAY_OBJECT_MANAGER_PORT\" >/dev/null 2>&1; } && ok=1 && break; sleep 1; done; [[ $ok -eq 1 ]] \
+        && ok=0; for i in $(seq 1 20); do { (command -v nc >/dev/null 2>&1 && timeout 3 nc -z \"\${HEAD_IP}\" \"$RAY_NODE_MANAGER_PORT\") || timeout 3 bash -lc 'echo > /dev/tcp/'\"\${HEAD_IP}\"'/'\"$RAY_NODE_MANAGER_PORT\" >/dev/null 2>&1; } && ok=1 && break; sleep 1; done; [[ $ok -eq 1 ]] \
         && apptainer exec --cleanenv --nv \
              --env NCCL_DEBUG='$NCCL_DEBUG' \
              --env NCCL_ASYNC_ERROR_HANDLING='$NCCL_ASYNC_ERROR_HANDLING' \
