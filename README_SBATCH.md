@@ -46,6 +46,7 @@ Multi-node (Ray) mode
 - Requirements:
   - The vLLM SIF must include `ray` CLI and Python package.
   - Nodes must be able to talk to each other on ports `6379` (Ray GCS) and `8265` (dashboard). Firewalls must allow intra-allocation traffic.
+  - Additional Ray ports: the script pins Ray's auxiliary ports to a fixed range for HPC firewalls: `object-manager-port=10001`, `node-manager-port=10002`, and worker port range `11000–11999`. Ensure intra-allocation traffic is allowed for these.
   - If your cluster needs NCCL tuning for cross-node GPU comms, set `NCCL_SOCKET_IFNAME` (e.g., `ib0`) and related env vars before submission.
   - Slurm must allocate GPUs on each node (use `--gpus-per-node` or your site’s `--gres` equivalent).
 - Addressing: the script resolves a reachable head IP (`HEAD_IP`) from the Slurm-provided short hostname and passes it to both head and workers. If workers fail to connect to `GCS at address <host>:6379`, verify that `HEAD_IP` is reachable from worker nodes and adjust DNS or pass `HEAD_IP=<ip>` on submit if needed.
@@ -126,13 +127,16 @@ Troubleshooting (Ray connectivity)
 - Checks:
   - In `ray-head.log`, confirm `Ray runtime started` and note the `Local node IP`.
   - Ensure `ray-head` is listening on `:6379` on the head node: `ss -ltnp | grep 6379` (run on head).
+  - Ensure head listens on the auxiliary ports: `ss -ltnp | egrep ":(10001|10002)"`.
   - Verify workers can resolve and reach the head IP: `srun -N1 -w <a-worker> getent hosts <head-shortname>` and `srun -N1 -w <a-worker> timeout 3 bash -lc 'nc -vz <head-ip> 6379'`.
+  - If workers time out despite passing 6379 checks, open/allow the auxiliary ports or override with `--export=ALL,RAY_OBJECT_MANAGER_PORT=...,RAY_NODE_MANAGER_PORT=...,RAY_WORKER_PORT_MIN=...,RAY_WORKER_PORT_MAX=...`.
   - Worker pre-check: the script now tests worker → head connectivity (`<HEAD_IP>:<RAY_PORT>`) before starting Ray on workers. If unreachable, the worker logs emit `GCS unreachable` and the job fails early instead of hanging.
   - If name resolution differs across nodes, pass an explicit head IP: submit with `--export=ALL,HEAD_IP=<reachable-ip>`.
   - If your site has multiple NICs/subnets, ensure the resolved head IP and each worker’s `--node-ip-address` are on the same fabric; set `NCCL_SOCKET_IFNAME` accordingly.
 
 Notes
 - The script now adds `--disable-usage-stats` to Ray start commands to suppress non-interactive telemetry notices in logs.
+- CUDA/NVML: the sbatch propagates `CUDA_VISIBLE_DEVICES` and `CUDA_DEVICE_ORDER=PCI_BUS_ID` into containers to avoid NVML `InvalidArgument` errors when vLLM probes device capabilities.
 
 Slurm wrapper logs (.out/.err)
 

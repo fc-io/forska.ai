@@ -85,6 +85,11 @@ THIS_NODE=$(hostname -s)
 WORKER_NODES=( "${HOSTS[@]:1}" )
 RAY_PORT=${RAY_PORT:-6379}
 RAY_DASHBOARD_PORT=${RAY_DASHBOARD_PORT:-8265}
+# Bind Ray's auxiliary ports to a fixed range (HPC-friendly)
+RAY_OBJECT_MANAGER_PORT=${RAY_OBJECT_MANAGER_PORT:-10001}
+RAY_NODE_MANAGER_PORT=${RAY_NODE_MANAGER_PORT:-10002}
+RAY_WORKER_PORT_MIN=${RAY_WORKER_PORT_MIN:-11000}
+RAY_WORKER_PORT_MAX=${RAY_WORKER_PORT_MAX:-11999}
 # Resolve an IPv4 address for the head node that workers can reach.
 # Avoid IPv6 (Ray may parse "host:port" incorrectly for IPv6 without brackets).
 # Try DNS for IPv4 first, then fall back to the first local IPv4.
@@ -184,6 +189,10 @@ apptainer run --cleanenv --writable-tmpfs \
     ray start --head \
       --node-ip-address "$HEAD_IP" \
       --port "$RAY_PORT" \
+      --object-manager-port "$RAY_OBJECT_MANAGER_PORT" \
+      --node-manager-port "$RAY_NODE_MANAGER_PORT" \
+      --min-worker-port "$RAY_WORKER_PORT_MIN" \
+      --max-worker-port "$RAY_WORKER_PORT_MAX" \
       --dashboard-host 0.0.0.0 \
       --dashboard-port "$RAY_DASHBOARD_PORT" \
       --temp-dir "$RAY_TMP_DIR" \
@@ -214,7 +223,14 @@ apptainer run --cleanenv --writable-tmpfs \
              ${NCCL_IB_HCA:+--env NCCL_IB_HCA='$NCCL_IB_HCA'} \
              ${NCCL_IB_GID_INDEX:+--env NCCL_IB_GID_INDEX='$NCCL_IB_GID_INDEX'} \
              '$SIF_VLLM' \
-             ray start --node-ip-address \"\$WORKER_IP\" --address \"\${HEAD_IP}:\${RAY_PORT}\" --disable-usage-stats" || {
+             ray start \
+               --node-ip-address \"\$WORKER_IP\" \
+               --address \"\${HEAD_IP}:\${RAY_PORT}\" \
+               --object-manager-port \"$RAY_OBJECT_MANAGER_PORT\" \
+               --node-manager-port \"$RAY_NODE_MANAGER_PORT\" \
+               --min-worker-port \"$RAY_WORKER_PORT_MIN\" \
+               --max-worker-port \"$RAY_WORKER_PORT_MAX\" \
+               --disable-usage-stats" || {
         echo "[forska] ray workers failed" >&2; exit 2;
       }
   fi
