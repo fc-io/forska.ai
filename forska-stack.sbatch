@@ -535,14 +535,15 @@ exec apptainer exec --cleanenv --nv \
 RAY_WORKER
   chmod +x "$WORKER_SCRIPT"
   # Launch Ray workers using the prepared script (robust, avoids nested quoting issues)
+  # Run in background since workers block forever
   if [[ ${#WORKER_NODES[@]} -gt 0 ]]; then
     srun --nodes=$((NNODES-1)) --ntasks=$((NNODES-1)) \
       --export=ALL,HEAD_IP=${HEAD_IP},RAY_PORT=${RAY_PORT},RAY_WORKER_PORT_MIN=${RAY_WORKER_PORT_MIN},RAY_WORKER_PORT_MAX=${RAY_WORKER_PORT_MAX},RAY_TMP_DIR=${RAY_TMP_DIR},SIF_VLLM=${SIF_VLLM},NCCL_DEBUG=${NCCL_DEBUG},NCCL_ASYNC_ERROR_HANDLING=${NCCL_ASYNC_ERROR_HANDLING} \
       --nodelist="$(printf "%s," "${WORKER_NODES[@]}" | sed 's/,$//')" \
       --output "$LOG_DIR/ray-worker-%N.log" \
-      bash -lc "$WORKER_SCRIPT" || {
-        echo "[forska] ray workers failed" >&2; exit 2;
-      }
+      bash -lc "$WORKER_SCRIPT" &
+    RAY_WORKERS_PID=$!
+    echo "[forska] ray workers started in background (pid=$RAY_WORKERS_PID)"
   fi
   if false && [[ ${#WORKER_NODES[@]} -gt 0 ]]; then
     srun --nodes=$((NNODES-1)) --ntasks=$((NNODES-1)) \
