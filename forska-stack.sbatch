@@ -526,7 +526,7 @@ exec apptainer exec --cleanenv --nv \
   ${NCCL_IB_GID_INDEX:+--env NCCL_IB_GID_INDEX="${NCCL_IB_GID_INDEX}"} \
   --bind "${RAY_TMP_DIR}:${RAY_TMP_DIR}" \
   "${SIF_VLLM}" \
-  ray start \
+  ray start --block \
     --node-ip-address "${WORKER_IP}" \
     --address "${HEAD_IP}:${RAY_PORT}" \
     --min-worker-port "${RAY_WORKER_PORT_MIN}" \
