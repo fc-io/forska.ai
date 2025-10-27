@@ -305,6 +305,10 @@ fi
 # by default to avoid path length overflows on long $STACK_ROOT paths.
 RAY_TMP_DIR=${RAY_TMP_DIR:-/tmp/ray-${SLURM_JOB_ID:-$$}}
 
+# Force HF libraries to use local files only - export early so Ray workers inherit these
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+
 # Compute distributed sizes: keep tensor parallel groups within a node by default
 TOTAL_GPUS=$(( NNODES * GPUS_PER_NODE ))
 DEFAULT_TP=$(( GPUS_PER_NODE > 0 ? GPUS_PER_NODE : 1 ))
@@ -612,10 +616,6 @@ if [[ ! -d "$STACK_ROOT/models/Qwen3-32B-FP8" ]]; then
   echo "[forska] warning: model directory missing: $STACK_ROOT/models/Qwen3-32B-FP8" >&2
   echo "[forska]          vLLM will fail unless the model is present or HF download is configured" >&2
 fi
-
-# Force HF libraries to use local files only - export so Ray workers inherit these
-export HF_HUB_OFFLINE=1
-export TRANSFORMERS_OFFLINE=1
 
 VLLM_BACKEND=$([[ $NNODES -gt 1 ]] && echo ray || echo mp)
 VLLM_ENV=(
