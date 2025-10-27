@@ -527,10 +527,15 @@ exec apptainer exec --cleanenv --nv \
   --env RAY_TMPDIR="${RAY_TMP_DIR}" \
   --env HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}" \
   --env TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}" \
+  --env HF_HOME="${HF_HOME}" \
+  --env VLLM_CACHE_ROOT="${VLLM_CACHE_ROOT}" \
   ${NCCL_SOCKET_IFNAME:+--env NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME}"} \
   ${NCCL_IB_HCA:+--env NCCL_IB_HCA="${NCCL_IB_HCA}"} \
   ${NCCL_IB_GID_INDEX:+--env NCCL_IB_GID_INDEX="${NCCL_IB_GID_INDEX}"} \
   --bind "${RAY_TMP_DIR}:${RAY_TMP_DIR}" \
+  --bind "${STACK_ROOT}/models:/models:ro" \
+  --bind "${HF_HOME}:${HF_HOME}" \
+  --bind "${VLLM_CACHE_ROOT}:${VLLM_CACHE_ROOT}" \
   "${SIF_VLLM}" \
   ray start --block \
     --node-ip-address "${WORKER_IP}" \
@@ -544,7 +549,7 @@ RAY_WORKER
   # Run in background since workers block forever
   if [[ ${#WORKER_NODES[@]} -gt 0 ]]; then
     srun --nodes=$((NNODES-1)) --ntasks=$((NNODES-1)) \
-      --export=ALL,HEAD_IP=${HEAD_IP},RAY_PORT=${RAY_PORT},RAY_WORKER_PORT_MIN=${RAY_WORKER_PORT_MIN},RAY_WORKER_PORT_MAX=${RAY_WORKER_PORT_MAX},RAY_TMP_DIR=${RAY_TMP_DIR},SIF_VLLM=${SIF_VLLM},NCCL_DEBUG=${NCCL_DEBUG},NCCL_ASYNC_ERROR_HANDLING=${NCCL_ASYNC_ERROR_HANDLING},HF_HUB_OFFLINE=${HF_HUB_OFFLINE},TRANSFORMERS_OFFLINE=${TRANSFORMERS_OFFLINE} \
+      --export=ALL,HEAD_IP=${HEAD_IP},RAY_PORT=${RAY_PORT},RAY_WORKER_PORT_MIN=${RAY_WORKER_PORT_MIN},RAY_WORKER_PORT_MAX=${RAY_WORKER_PORT_MAX},RAY_TMP_DIR=${RAY_TMP_DIR},SIF_VLLM=${SIF_VLLM},NCCL_DEBUG=${NCCL_DEBUG},NCCL_ASYNC_ERROR_HANDLING=${NCCL_ASYNC_ERROR_HANDLING},HF_HUB_OFFLINE=${HF_HUB_OFFLINE},TRANSFORMERS_OFFLINE=${TRANSFORMERS_OFFLINE},HF_HOME=${HF_HOME},VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT},STACK_ROOT=${STACK_ROOT} \
       --nodelist="$(printf "%s," "${WORKER_NODES[@]}" | sed 's/,$//')" \
       --output "$LOG_DIR/ray-worker-%N.log" \
       bash -lc "$WORKER_SCRIPT" &
@@ -612,9 +617,33 @@ RAY_WORKER
 fi
 
 echo "[forska] starting vllm on :8000 (backend=$([[ $NNODES -gt 1 ]] && echo ray || echo mp), tp=$TP_SIZE, dp=$DP_SIZE)"
-if [[ ! -d "$STACK_ROOT/models/Qwen3-32B-FP8" ]]; then
-  echo "[forska] warning: model directory missing: $STACK_ROOT/models/Qwen3-32B-FP8" >&2
-  echo "[forska]          vLLM will fail unless the model is present or HF download is configured" >&2
+
+# Preflight: verify model directory exists and is accessible
+MODEL_DIR="$STACK_ROOT/models/Qwen3-32B-FP8"
+if [[ ! -d "$MODEL_DIR" ]]; then
+  echo "[forska] error: model directory not found: $MODEL_DIR" >&2
+  echo "[forska]        vLLM cannot load the model without this directory" >&2
+  exit 2
+fi
+
+# Check for essential model files
+if [[ ! -f "$MODEL_DIR/config.json" ]]; then
+  echo "[forska] warning: config.json not found in $MODEL_DIR" >&2
+  echo "[forska]          This may not be a valid model directory" >&2
+fi
+
+# For multi-node: warn about shared filesystem requirement
+if [[ $NNODES -gt 1 ]]; then
+  echo "[forska] multi-node setup detected: verifying model directory is on shared filesystem"
+  echo "[forska]   model path: $MODEL_DIR"
+  echo "[forska]   IMPORTANT: This directory must be accessible from all compute nodes:"
+  for node in "${HOSTS[@]}"; do
+    echo "[forska]     - $node"
+  done
+  echo "[forska]   If vLLM fails with 'invalid repository id', ensure:"
+  echo "[forska]     1. $MODEL_DIR exists on a shared filesystem (NFS/Lustre)"
+  echo "[forska]     2. All nodes can read the model files"
+  echo "[forska]     3. The bind mount path matches on all nodes"
 fi
 
 VLLM_BACKEND=$([[ $NNODES -gt 1 ]] && echo ray || echo mp)
@@ -633,8 +662,11 @@ apptainer run --cleanenv --nv \
   "${VLLM_ENV[@]}" \
   --env CUDA_DEVICE_ORDER=PCI_BUS_ID \
   --bind "$STACK_ROOT/models:/models:ro" \
+  --bind "$HF_HOME:$HF_HOME" \
+  --bind "$VLLM_CACHE_ROOT:$VLLM_CACHE_ROOT" \
   "$SIF_VLLM" \
   --model /models/Qwen3-32B-FP8 \
+    --load-format auto \
     --host 0.0.0.0 --port 8000 \
     --tensor-parallel-size "$TP_SIZE" \
     --data-parallel-size "$DP_SIZE" \
