@@ -44,8 +44,18 @@ export VLLM_GPU_UTIL=${VLLM_GPU_UTIL:-0.90}
 # GPU shape overrides used to compute DP/TP; Slurm allocation must match
 # Autodetect GPUs per node from Slurm if available; override via --export GPUS_PER_NODE=<n>
 export GPUS_PER_NODE=${GPUS_PER_NODE:-${SLURM_GPUS_ON_NODE:-4}}
-# Do NOT pin CUDA_VISIBLE_DEVICES when using Ray + multi-node
-# Ray/vLLM will respect Slurm cgroups; leaving all allocated GPUs visible per node
+# Propagate CUDA_VISIBLE_DEVICES into containers so NVML sees the Slurm-assigned GPUs
+
+if [[ -z "${CUDA_VISIBLE_DEVICES:-}" && ${GPUS_PER_NODE:-0} -gt 0 ]]; then
+  CUDA_VISIBLE_DEVICES=$(seq -s, 0 $((GPUS_PER_NODE - 1)))
+  export CUDA_VISIBLE_DEVICES
+  echo "[forska] defaulting CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
+elif [[ -n "${CUDA_VISIBLE_DEVICES:-}" ]]; then
+  export CUDA_VISIBLE_DEVICES
+  echo "[forska] detected CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
+else
+  echo "[forska] CUDA_VISIBLE_DEVICES is unset; downstream containers may enumerate all visible GPUs"
+fi
 
 # NCCL tuning hints (override via --export as needed)
 export NCCL_DEBUG=${NCCL_DEBUG:-WARN}
@@ -402,6 +412,7 @@ fi
     --env NCCL_ASYNC_ERROR_HANDLING="$NCCL_ASYNC_ERROR_HANDLING" \
     --env CUDA_DEVICE_ORDER=PCI_BUS_ID \
     --env RAY_TMPDIR="$RAY_TMP_DIR" \
+    ${CUDA_VISIBLE_DEVICES:+--env CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES"} \
     ${NCCL_SOCKET_IFNAME:+--env NCCL_SOCKET_IFNAME="$NCCL_SOCKET_IFNAME"} \
     ${NCCL_IB_HCA:+--env NCCL_IB_HCA="$NCCL_IB_HCA"} \
     ${NCCL_IB_GID_INDEX:+--env NCCL_IB_GID_INDEX="$NCCL_IB_GID_INDEX"} \
@@ -520,6 +531,11 @@ if [[ $ok -ne 1 ]]; then
   exit 2
 fi
 
+CUDA_ENV=()
+if [[ -n "${CUDA_VISIBLE_DEVICES:-}" ]]; then
+  CUDA_ENV=(--env CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES}")
+fi
+
 exec apptainer exec --cleanenv --nv \
   --env NCCL_DEBUG="${NCCL_DEBUG}" \
   --env NCCL_ASYNC_ERROR_HANDLING="${NCCL_ASYNC_ERROR_HANDLING}" \
@@ -529,6 +545,7 @@ exec apptainer exec --cleanenv --nv \
   --env TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}" \
   --env HF_HOME="${HF_HOME}" \
   --env VLLM_CACHE_ROOT="${VLLM_CACHE_ROOT}" \
+  "${CUDA_ENV[@]}" \
   ${NCCL_SOCKET_IFNAME:+--env NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME}"} \
   ${NCCL_IB_HCA:+--env NCCL_IB_HCA="${NCCL_IB_HCA}"} \
   ${NCCL_IB_GID_INDEX:+--env NCCL_IB_GID_INDEX="${NCCL_IB_GID_INDEX}"} \
@@ -549,7 +566,7 @@ RAY_WORKER
   # Run in background since workers block forever
   if [[ ${#WORKER_NODES[@]} -gt 0 ]]; then
     srun --nodes=$((NNODES-1)) --ntasks=$((NNODES-1)) \
-      --export=ALL,HEAD_IP=${HEAD_IP},RAY_PORT=${RAY_PORT},RAY_WORKER_PORT_MIN=${RAY_WORKER_PORT_MIN},RAY_WORKER_PORT_MAX=${RAY_WORKER_PORT_MAX},RAY_TMP_DIR=${RAY_TMP_DIR},SIF_VLLM=${SIF_VLLM},NCCL_DEBUG=${NCCL_DEBUG},NCCL_ASYNC_ERROR_HANDLING=${NCCL_ASYNC_ERROR_HANDLING},HF_HUB_OFFLINE=${HF_HUB_OFFLINE},TRANSFORMERS_OFFLINE=${TRANSFORMERS_OFFLINE},HF_HOME=${HF_HOME},VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT},STACK_ROOT=${STACK_ROOT} \
+      --export=ALL,HEAD_IP=${HEAD_IP},RAY_PORT=${RAY_PORT},RAY_WORKER_PORT_MIN=${RAY_WORKER_PORT_MIN},RAY_WORKER_PORT_MAX=${RAY_WORKER_PORT_MAX},RAY_TMP_DIR=${RAY_TMP_DIR},SIF_VLLM=${SIF_VLLM},NCCL_DEBUG=${NCCL_DEBUG},NCCL_ASYNC_ERROR_HANDLING=${NCCL_ASYNC_ERROR_HANDLING},HF_HUB_OFFLINE=${HF_HUB_OFFLINE},TRANSFORMERS_OFFLINE=${TRANSFORMERS_OFFLINE},HF_HOME=${HF_HOME},VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT},STACK_ROOT=${STACK_ROOT},CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} \
       --nodelist="$(printf "%s," "${WORKER_NODES[@]}" | sed 's/,$//')" \
       --output "$LOG_DIR/ray-worker-%N.log" \
       bash -lc "$WORKER_SCRIPT" &
@@ -664,6 +681,9 @@ VLLM_ENV=(
   --env HF_HUB_OFFLINE="$HF_HUB_OFFLINE"
   --env TRANSFORMERS_OFFLINE="$TRANSFORMERS_OFFLINE"
 )
+if [[ -n "${CUDA_VISIBLE_DEVICES:-}" ]]; then
+  VLLM_ENV+=(--env CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES")
+fi
 if [[ $NNODES -gt 1 ]]; then
   VLLM_ENV+=(--env RAY_ADDRESS="${HEAD_IP}:${RAY_PORT}")
   VLLM_ENV+=(--env RAY_TMPDIR="$RAY_TMP_DIR")
