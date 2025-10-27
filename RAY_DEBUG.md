@@ -1,6 +1,20 @@
 # Ray Multi-Node Debugging Guide
 
-## Current Issue (Job 5248953)
+## Current Issue (Job 5249415) - FIXED
+
+**Problem:** Ray head started but immediately exited because `ray start --head` daemonizes and returns, causing the container to exit.
+
+**Symptom:**
+- Ray head log shows "Ray runtime started"
+- Port checks pass briefly
+- But `ray status` fails with "Failed to connect to GCS"
+- No Ray processes running, no ports listening
+
+**Fix:** Added `--block` flag to `ray start --head` and run it in background with `&`
+
+---
+
+## Previous Issue (Job 5248953)
 
 vLLM failing with: `Failed to connect to GCS at address 10.21.30.87:6379`
 

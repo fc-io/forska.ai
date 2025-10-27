@@ -336,6 +336,17 @@ fi
 graceful_shutdown() {
   local reason="${1:-cleanup}"
   echo "[forska] shutting down ($reason)..."
+  # Stop Ray cluster (head + workers) if started - do this BEFORE killing containers
+  if [[ ${NNODES:-1} -gt 1 ]]; then
+    echo "[forska] stopping ray on head ${HEAD_NODE}"
+    apptainer exec --cleanenv --nv "$SIF_VLLM" ray stop >/dev/null 2>&1 || true
+    if [[ ${#WORKER_NODES[@]} -gt 0 ]]; then
+      echo "[forska] stopping ray on workers: ${WORKER_NODES[*]}"
+      srun --ntasks=$((NNODES-1)) --nodes=$((NNODES-1)) --nodelist="$(printf "%s," "${WORKER_NODES[@]}" | sed 's/,$//')" \
+        bash -lc "apptainer exec --cleanenv --nv '$SIF_VLLM' ray stop >/dev/null 2>&1 || true" \
+        >/dev/null 2>&1 || true
+    fi
+  fi
   # Ask all backgrounded apptainer processes to exit
   jobs -pr | xargs -r kill -TERM || true
   # Give them a moment to flush and exit
@@ -346,17 +357,6 @@ graceful_shutdown() {
   # Force kill anything that didn't exit in time
   if [[ -n "$(jobs -pr)" ]]; then
     jobs -pr | xargs -r kill -KILL || true
-  fi
-  # Stop Ray cluster (head + workers) if started
-  if [[ ${NNODES:-1} -gt 1 ]]; then
-    echo "[forska] stopping ray on head ${HEAD_NODE}"
-    apptainer exec --cleanenv --nv "$SIF_VLLM" ray stop >/dev/null 2>&1 || true
-    if [[ ${#WORKER_NODES[@]} -gt 0 ]]; then
-      echo "[forska] stopping ray on workers: ${WORKER_NODES[*]}"
-      srun --ntasks=$((NNODES-1)) --nodes=$((NNODES-1)) --nodelist="$(printf "%s," "${WORKER_NODES[@]}" | sed 's/,$//')" \
-        bash -lc "apptainer exec --cleanenv --nv '$SIF_VLLM' ray stop >/dev/null 2>&1 || true" \
-        >/dev/null 2>&1 || true
-    fi
   fi
 }
 trap 'graceful_shutdown EXIT' EXIT
@@ -403,7 +403,7 @@ fi
     ${NCCL_IB_GID_INDEX:+--env NCCL_IB_GID_INDEX="$NCCL_IB_GID_INDEX"} \
     --bind "$RAY_TMP_DIR:$RAY_TMP_DIR" \
     "$SIF_VLLM" \
-    ray start --head \
+    ray start --head --block \
       --node-ip-address "$HEAD_IP" \
       --port "$RAY_PORT" \
       --object-manager-port "$RAY_OBJECT_MANAGER_PORT" \
@@ -414,7 +414,20 @@ fi
       --dashboard-port "$RAY_DASHBOARD_PORT" \
       --temp-dir "$RAY_TMP_DIR" \
       --disable-usage-stats \
-    >"$LOG_DIR/ray-head.log" 2>&1 || { echo "[forska] ray head failed" >&2; exit 2; }
+    >"$LOG_DIR/ray-head.log" 2>&1 &
+  RAY_HEAD_PID=$!
+
+  # Give Ray head a moment to initialize
+  echo "[forska] ray head started (pid=$RAY_HEAD_PID), waiting for initialization..."
+  sleep 5
+
+  # Verify Ray head process is still running
+  if ! kill -0 "$RAY_HEAD_PID" 2>/dev/null; then
+    echo "[forska] error: ray head process exited early" >&2
+    echo "[forska]        check $LOG_DIR/ray-head.log for errors" >&2
+    tail -20 "$LOG_DIR/ray-head.log" >&2
+    exit 2
+  fi
 
   # Capture actual ports Ray bound to for diagnostics
   echo "[forska] verifying ray ports..."
