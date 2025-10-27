@@ -44,19 +44,6 @@ export VLLM_GPU_UTIL=${VLLM_GPU_UTIL:-0.90}
 # GPU shape overrides used to compute DP/TP; Slurm allocation must match
 # Autodetect GPUs per node from Slurm if available; override via --export GPUS_PER_NODE=<n>
 export GPUS_PER_NODE=${GPUS_PER_NODE:-${SLURM_GPUS_ON_NODE:-4}}
-# Propagate CUDA_VISIBLE_DEVICES into containers so NVML sees the Slurm-assigned GPUs
-
-if [[ -z "${CUDA_VISIBLE_DEVICES:-}" && ${GPUS_PER_NODE:-0} -gt 0 ]]; then
-  CUDA_VISIBLE_DEVICES=$(seq -s, 0 $((GPUS_PER_NODE - 1)))
-  export CUDA_VISIBLE_DEVICES
-  echo "[forska] defaulting CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
-elif [[ -n "${CUDA_VISIBLE_DEVICES:-}" ]]; then
-  export CUDA_VISIBLE_DEVICES
-  echo "[forska] detected CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
-else
-  echo "[forska] CUDA_VISIBLE_DEVICES is unset; downstream containers may enumerate all visible GPUs"
-fi
-
 # NCCL tuning hints (override via --export as needed)
 export NCCL_DEBUG=${NCCL_DEBUG:-WARN}
 export NCCL_ASYNC_ERROR_HANDLING=${NCCL_ASYNC_ERROR_HANDLING:-1}
@@ -347,6 +334,29 @@ if (( DP_SIZE < 1 )); then
   DP_SIZE=1
 fi
 
+# Propagate CUDA_VISIBLE_DEVICES into containers so NVML sees the Slurm-assigned GPUs
+if [[ -z "${CUDA_VISIBLE_DEVICES:-}" && ${GPUS_PER_NODE:-0} -gt 0 ]]; then
+  if [[ ${NNODES:-1} -gt 1 ]]; then
+    cuda_mask=()
+    for ((node=0; node<NNODES; node++)); do
+      for ((gpu=0; gpu<GPUS_PER_NODE; gpu++)); do
+        cuda_mask+=("$gpu")
+      done
+    done
+    CUDA_VISIBLE_DEVICES=$(IFS=,; echo "${cuda_mask[*]}")
+    unset -v cuda_mask
+  else
+    CUDA_VISIBLE_DEVICES=$(seq -s, 0 $((GPUS_PER_NODE - 1)))
+  fi
+  export CUDA_VISIBLE_DEVICES
+  echo "[forska] defaulting CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
+elif [[ -n "${CUDA_VISIBLE_DEVICES:-}" ]]; then
+  export CUDA_VISIBLE_DEVICES
+  echo "[forska] detected CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
+else
+  echo "[forska] CUDA_VISIBLE_DEVICES is unset; downstream containers may enumerate all visible GPUs"
+fi
+
 graceful_shutdown() {
   local reason="${1:-cleanup}"
   echo "[forska] shutting down ($reason)..."
@@ -566,7 +576,7 @@ RAY_WORKER
   # Run in background since workers block forever
   if [[ ${#WORKER_NODES[@]} -gt 0 ]]; then
     srun --nodes=$((NNODES-1)) --ntasks=$((NNODES-1)) \
-      --export=ALL,HEAD_IP=${HEAD_IP},RAY_PORT=${RAY_PORT},RAY_WORKER_PORT_MIN=${RAY_WORKER_PORT_MIN},RAY_WORKER_PORT_MAX=${RAY_WORKER_PORT_MAX},RAY_TMP_DIR=${RAY_TMP_DIR},SIF_VLLM=${SIF_VLLM},NCCL_DEBUG=${NCCL_DEBUG},NCCL_ASYNC_ERROR_HANDLING=${NCCL_ASYNC_ERROR_HANDLING},HF_HUB_OFFLINE=${HF_HUB_OFFLINE},TRANSFORMERS_OFFLINE=${TRANSFORMERS_OFFLINE},HF_HOME=${HF_HOME},VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT},STACK_ROOT=${STACK_ROOT},CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} \
+      --export=ALL,HEAD_IP=${HEAD_IP},RAY_PORT=${RAY_PORT},RAY_WORKER_PORT_MIN=${RAY_WORKER_PORT_MIN},RAY_WORKER_PORT_MAX=${RAY_WORKER_PORT_MAX},RAY_TMP_DIR=${RAY_TMP_DIR},SIF_VLLM=${SIF_VLLM},NCCL_DEBUG=${NCCL_DEBUG},NCCL_ASYNC_ERROR_HANDLING=${NCCL_ASYNC_ERROR_HANDLING},HF_HUB_OFFLINE=${HF_HUB_OFFLINE},TRANSFORMERS_OFFLINE=${TRANSFORMERS_OFFLINE},HF_HOME=${HF_HOME},VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT},STACK_ROOT=${STACK_ROOT} \
       --nodelist="$(printf "%s," "${WORKER_NODES[@]}" | sed 's/,$//')" \
       --output "$LOG_DIR/ray-worker-%N.log" \
       bash -lc "$WORKER_SCRIPT" &
