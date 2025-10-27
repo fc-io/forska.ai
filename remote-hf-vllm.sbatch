@@ -7,7 +7,7 @@
 #SBATCH --time=01:00:00
 #SBATCH -o %x-%j.log
 #SBATCH --export=ALL
-#SBATCH --signal=B:USR1@120
+#SBATCH --signal=B:USR1@300
 
 set -euo pipefail
 
@@ -20,7 +20,7 @@ export HF_HOME=${HF_HOME:-$STACK_ROOT/hf_cache}
 
 # vLLM config
 export VLLM_API_KEY=${VLLM_API_KEY:-fake_key}
-export VLLM_GPU_UTIL=${VLLM_GPU_UTIL:-0.90}
+export VLLM_GPU_UTIL=${VLLM_GPU_UTIL:-0.80}
 
 # Network config
 export GPUS_PER_NODE=${GPUS_PER_NODE:-${SLURM_GPUS_ON_NODE:-2}}
@@ -257,9 +257,9 @@ apptainer run --cleanenv --nv \
 VLLM_PID=$!
 echo "[test-vllm] vllm started (pid=$VLLM_PID)"
 
-# Wait for vLLM to be ready
+# Wait for vLLM to be ready (up to 30 minutes)
 echo "[test-vllm] waiting for vllm to be ready..."
-for i in $(seq 1 60); do
+for i in $(seq 1 900); do
   if curl -sf -H "Authorization: Bearer $VLLM_API_KEY" http://localhost:8000/v1/models >/dev/null; then
     echo "[test-vllm] vllm is ready"
     curl -sf -H "Authorization: Bearer $VLLM_API_KEY" http://localhost:8000/v1/models | jq .
@@ -270,11 +270,16 @@ for i in $(seq 1 60); do
     tail -20 "$LOG_DIR/vllm.log" >&2
     exit 2
   fi
+  if [[ $((i % 10)) -eq 0 ]]; then
+    echo "[test-vllm] still waiting for vllm... (attempt $i/900)"
+    tail -5 "$LOG_DIR/vllm.log" >&2
+  fi
   sleep 2
 done
 
 if ! curl -sf -H "Authorization: Bearer $VLLM_API_KEY" http://localhost:8000/v1/models >/dev/null; then
-  echo "[test-vllm] error: vllm not responding" >&2
+  echo "[test-vllm] error: vllm not responding after 30 minutes" >&2
+  tail -20 "$LOG_DIR/vllm.log" >&2
   exit 2
 fi
 
