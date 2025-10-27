@@ -302,9 +302,6 @@ fi
 # by default to avoid path length overflows on long $STACK_ROOT paths.
 RAY_TMP_DIR=${RAY_TMP_DIR:-/tmp/ray-${SLURM_JOB_ID:-$$}}
 
-# Force HF libraries to use local files only - export early so Ray workers inherit these
-export TRANSFORMERS_OFFLINE=1
-
 # Compute distributed sizes: keep tensor parallel groups within a node by default
 TOTAL_GPUS=$(( NNODES * GPUS_PER_NODE ))
 DEFAULT_TP=$(( GPUS_PER_NODE > 0 ? GPUS_PER_NODE : 1 ))
@@ -545,7 +542,6 @@ exec apptainer exec --cleanenv --nv \
   --env NCCL_ASYNC_ERROR_HANDLING="${NCCL_ASYNC_ERROR_HANDLING}" \
   --env CUDA_DEVICE_ORDER=PCI_BUS_ID \
   --env RAY_TMPDIR="${RAY_TMP_DIR}" \
-  --env TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}" \
   --env HF_HOME="${HF_HOME}" \
   --env VLLM_CACHE_ROOT="${VLLM_CACHE_ROOT}" \
   ${NCCL_SOCKET_IFNAME:+--env NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME}"} \
@@ -568,7 +564,7 @@ RAY_WORKER
   # Run in background since workers block forever
   if [[ ${#WORKER_NODES[@]} -gt 0 ]]; then
     srun --nodes=$((NNODES-1)) --ntasks=$((NNODES-1)) \
-      --export=ALL,HEAD_IP=${HEAD_IP},RAY_PORT=${RAY_PORT},RAY_WORKER_PORT_MIN=${RAY_WORKER_PORT_MIN},RAY_WORKER_PORT_MAX=${RAY_WORKER_PORT_MAX},RAY_TMP_DIR=${RAY_TMP_DIR},SIF_VLLM=${SIF_VLLM},NCCL_DEBUG=${NCCL_DEBUG},NCCL_ASYNC_ERROR_HANDLING=${NCCL_ASYNC_ERROR_HANDLING},TRANSFORMERS_OFFLINE=${TRANSFORMERS_OFFLINE},HF_HOME=${HF_HOME},VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT},STACK_ROOT=${STACK_ROOT} \
+      --export=ALL,HEAD_IP=${HEAD_IP},RAY_PORT=${RAY_PORT},RAY_WORKER_PORT_MIN=${RAY_WORKER_PORT_MIN},RAY_WORKER_PORT_MAX=${RAY_WORKER_PORT_MAX},RAY_TMP_DIR=${RAY_TMP_DIR},SIF_VLLM=${SIF_VLLM},NCCL_DEBUG=${NCCL_DEBUG},NCCL_ASYNC_ERROR_HANDLING=${NCCL_ASYNC_ERROR_HANDLING},HF_HOME=${HF_HOME},VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT},STACK_ROOT=${STACK_ROOT} \
       --nodelist="$(printf "%s," "${WORKER_NODES[@]}" | sed 's/,$//')" \
       --output "$LOG_DIR/ray-worker-%N.log" \
       bash -lc "$WORKER_SCRIPT" &
@@ -680,7 +676,6 @@ VLLM_BACKEND=$([[ $NNODES -gt 1 ]] && echo ray || echo mp)
 VLLM_ENV=(
   --env VLLM_CACHE_ROOT="$VLLM_CACHE_ROOT"
   --env HF_HOME="$HF_HOME"
-  --env TRANSFORMERS_OFFLINE="$TRANSFORMERS_OFFLINE"
 )
 if [[ $NNODES -gt 1 ]]; then
   VLLM_ENV+=(--env RAY_ADDRESS="${HEAD_IP}:${RAY_PORT}")
