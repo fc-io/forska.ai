@@ -8,7 +8,7 @@
 # Request 4 A100 GPUs per node (2 nodes total = 8 GPUs)
 # Adjust for your cluster if it uses --gres instead
 #SBATCH --gpus-per-node=A100:4
-#SBATCH --time=01:00:00
+#SBATCH --time=36:00:00
 #SBATCH -o %x-%j.log
 #SBATCH --export=ALL
 # Send an early warning signal 2 minutes before time limit
