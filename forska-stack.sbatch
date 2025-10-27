@@ -293,6 +293,13 @@ if [[ -z "${HEAD_IP:-}" ]]; then
   echo "         Set HEAD_IP=<ipv4> when submitting: sbatch --export=ALL,HEAD_IP=1.2.3.4 forska-stack.sbatch" >&2
   exit 2
 fi
+echo "[forska] resolved HEAD_IP=$HEAD_IP for head node $HEAD_NODE"
+
+# Test if HEAD_IP is reachable from this node
+if ! ping -c 1 -W 2 "$HEAD_IP" >/dev/null 2>&1; then
+  echo "[forska] warning: HEAD_IP $HEAD_IP is not pingable from $(hostname)" >&2
+  echo "[forska]          This may cause Ray connectivity issues in multi-node setup" >&2
+fi
 # Ray stores Unix domain sockets under its temp dir and Linux limits
 # AF_UNIX socket paths to 107 bytes. Use a short per-job path on local tmp
 # by default to avoid path length overflows on long $STACK_ROOT paths.
@@ -383,7 +390,9 @@ fi
   echo "[forska] ray tmp dir: $RAY_TMP_DIR"
   mkdir -p "$RAY_TMP_DIR"
   # Start Ray head on this node (the batch script runs on the head)
-  echo "[forska] ray head ip: $HEAD_IP (port $RAY_PORT, dashboard $RAY_DASHBOARD_PORT)"
+  echo "[forska] ray head: starting on $HEAD_NODE ($HEAD_IP:$RAY_PORT)"
+  echo "[forska]           dashboard: http://${HEAD_IP}:${RAY_DASHBOARD_PORT}"
+  echo "[forska]           temp dir: $RAY_TMP_DIR"
   apptainer exec --cleanenv --nv \
     --env NCCL_DEBUG="$NCCL_DEBUG" \
     --env NCCL_ASYNC_ERROR_HANDLING="$NCCL_ASYNC_ERROR_HANDLING" \
@@ -558,6 +567,28 @@ RAY_WORKER
 
   # Give Ray a moment to settle
   sleep 3
+
+  # Verify Ray cluster is healthy before starting vLLM
+  echo "[forska] verifying ray cluster health..."
+  RAY_STATUS_OK=0
+  for i in $(seq 1 30); do
+    if apptainer exec --cleanenv --nv \
+         --env RAY_ADDRESS="${HEAD_IP}:${RAY_PORT}" \
+         "$SIF_VLLM" ray status >/dev/null 2>&1; then
+      RAY_STATUS_OK=1
+      echo "[forska] ray cluster is healthy ($(apptainer exec --cleanenv --nv --env RAY_ADDRESS="${HEAD_IP}:${RAY_PORT}" "$SIF_VLLM" ray status | grep -E '(node|GPU)' | head -3))"
+      break
+    fi
+    echo "[forska] waiting for ray cluster (attempt $i/30)..."
+    sleep 2
+  done
+  if [[ $RAY_STATUS_OK -ne 1 ]]; then
+    echo "[forska] error: ray cluster failed health check after 60s" >&2
+    echo "[forska]        check $LOG_DIR/ray-head.log and ray-worker-*.log" >&2
+    echo "[forska]        attempted connection to ${HEAD_IP}:${RAY_PORT}" >&2
+    apptainer exec --cleanenv --nv --env RAY_ADDRESS="${HEAD_IP}:${RAY_PORT}" "$SIF_VLLM" ray status || true
+    exit 2
+  fi
 fi
 
 echo "[forska] starting vllm on :8000 (backend=$([[ $NNODES -gt 1 ]] && echo ray || echo mp), tp=$TP_SIZE, dp=$DP_SIZE)"
