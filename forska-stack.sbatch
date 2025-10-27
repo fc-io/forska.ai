@@ -521,6 +521,8 @@ exec apptainer exec --cleanenv --nv \
   --env NCCL_ASYNC_ERROR_HANDLING="${NCCL_ASYNC_ERROR_HANDLING}" \
   --env CUDA_DEVICE_ORDER=PCI_BUS_ID \
   --env RAY_TMPDIR="${RAY_TMP_DIR}" \
+  --env HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}" \
+  --env TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}" \
   ${NCCL_SOCKET_IFNAME:+--env NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME}"} \
   ${NCCL_IB_HCA:+--env NCCL_IB_HCA="${NCCL_IB_HCA}"} \
   ${NCCL_IB_GID_INDEX:+--env NCCL_IB_GID_INDEX="${NCCL_IB_GID_INDEX}"} \
@@ -538,7 +540,7 @@ RAY_WORKER
   # Run in background since workers block forever
   if [[ ${#WORKER_NODES[@]} -gt 0 ]]; then
     srun --nodes=$((NNODES-1)) --ntasks=$((NNODES-1)) \
-      --export=ALL,HEAD_IP=${HEAD_IP},RAY_PORT=${RAY_PORT},RAY_WORKER_PORT_MIN=${RAY_WORKER_PORT_MIN},RAY_WORKER_PORT_MAX=${RAY_WORKER_PORT_MAX},RAY_TMP_DIR=${RAY_TMP_DIR},SIF_VLLM=${SIF_VLLM},NCCL_DEBUG=${NCCL_DEBUG},NCCL_ASYNC_ERROR_HANDLING=${NCCL_ASYNC_ERROR_HANDLING} \
+      --export=ALL,HEAD_IP=${HEAD_IP},RAY_PORT=${RAY_PORT},RAY_WORKER_PORT_MIN=${RAY_WORKER_PORT_MIN},RAY_WORKER_PORT_MAX=${RAY_WORKER_PORT_MAX},RAY_TMP_DIR=${RAY_TMP_DIR},SIF_VLLM=${SIF_VLLM},NCCL_DEBUG=${NCCL_DEBUG},NCCL_ASYNC_ERROR_HANDLING=${NCCL_ASYNC_ERROR_HANDLING},HF_HUB_OFFLINE=${HF_HUB_OFFLINE},TRANSFORMERS_OFFLINE=${TRANSFORMERS_OFFLINE} \
       --nodelist="$(printf "%s," "${WORKER_NODES[@]}" | sed 's/,$//')" \
       --output "$LOG_DIR/ray-worker-%N.log" \
       bash -lc "$WORKER_SCRIPT" &
@@ -611,12 +613,16 @@ if [[ ! -d "$STACK_ROOT/models/Qwen3-32B-FP8" ]]; then
   echo "[forska]          vLLM will fail unless the model is present or HF download is configured" >&2
 fi
 
+# Force HF libraries to use local files only - export so Ray workers inherit these
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+
 VLLM_BACKEND=$([[ $NNODES -gt 1 ]] && echo ray || echo mp)
 VLLM_ENV=(
   --env VLLM_CACHE_ROOT="$VLLM_CACHE_ROOT"
   --env HF_HOME="$HF_HOME"
-  --env HF_HUB_OFFLINE=1
-  --env TRANSFORMERS_OFFLINE=1
+  --env HF_HUB_OFFLINE="$HF_HUB_OFFLINE"
+  --env TRANSFORMERS_OFFLINE="$TRANSFORMERS_OFFLINE"
 )
 if [[ $NNODES -gt 1 ]]; then
   VLLM_ENV+=(--env RAY_ADDRESS="${HEAD_IP}:${RAY_PORT}")
