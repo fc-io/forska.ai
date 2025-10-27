@@ -312,11 +312,11 @@ export TRANSFORMERS_OFFLINE=1
 # Compute distributed sizes: keep tensor parallel groups within a node by default
 TOTAL_GPUS=$(( NNODES * GPUS_PER_NODE ))
 DEFAULT_TP=$(( GPUS_PER_NODE > 0 ? GPUS_PER_NODE : 1 ))
-# For multi-node with Ray, use all GPUs for tensor parallelism, no data parallelism
-# to avoid NVML worker spawn issues
+# For multi-node with Ray, keep tensor parallel groups within a node by default
+# so collectives avoid cross-node traffic; scale across nodes via data parallelism
 if [[ $NNODES -gt 1 ]]; then
-  TP_SIZE=${TP_SIZE:-$TOTAL_GPUS}
-  DP_SIZE=${DP_SIZE:-1}
+  TP_SIZE=${TP_SIZE:-$DEFAULT_TP}
+  DP_SIZE=${DP_SIZE:-$(( TOTAL_GPUS / TP_SIZE ))}
 else
   TP_SIZE=${TP_SIZE:-$DEFAULT_TP}
 fi
@@ -644,6 +644,17 @@ if [[ $NNODES -gt 1 ]]; then
   echo "[forska]     1. $MODEL_DIR exists on a shared filesystem (NFS/Lustre)"
   echo "[forska]     2. All nodes can read the model files"
   echo "[forska]     3. The bind mount path matches on all nodes"
+  SHARED_MISSING=()
+  for node in "${HOSTS[@]}"; do
+    if ! srun --nodes=1 --ntasks=1 --nodelist="$node" --quiet bash -lc "[[ -d \"$MODEL_DIR\" && -r \"$MODEL_DIR\" ]]"; then
+      SHARED_MISSING+=("$node")
+    fi
+  done
+  if (( ${#SHARED_MISSING[@]} > 0 )); then
+    echo "[forska] error: model directory not readable on nodes: ${SHARED_MISSING[*]}" >&2
+    echo "[forska]        Set STACK_ROOT to a shared path accessible to every node before submitting the job." >&2
+    exit 2
+  fi
 fi
 
 VLLM_BACKEND=$([[ $NNODES -gt 1 ]] && echo ray || echo mp)
@@ -666,7 +677,7 @@ apptainer run --cleanenv --nv \
   --bind "$VLLM_CACHE_ROOT:$VLLM_CACHE_ROOT" \
   "$SIF_VLLM" \
   --model /models/Qwen3-32B-FP8 \
-    --load-format auto \
+    --load-format local \
     --host 0.0.0.0 --port 8000 \
     --tensor-parallel-size "$TP_SIZE" \
     --data-parallel-size "$DP_SIZE" \
