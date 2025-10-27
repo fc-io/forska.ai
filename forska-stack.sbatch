@@ -646,7 +646,7 @@ if [[ $NNODES -gt 1 ]]; then
   echo "[forska]     3. The bind mount path matches on all nodes"
   SHARED_MISSING=()
   for node in "${HOSTS[@]}"; do
-    if ! srun --nodes=1 --ntasks=1 --nodelist="$node" --quiet bash -lc "[[ -d \"$MODEL_DIR\" && -r \"$MODEL_DIR\" ]]"; then
+    if ! srun --overlap --nodes=1 --ntasks=1 --nodelist="$node" --quiet bash -lc "[[ -d \"$MODEL_DIR\" && -r \"$MODEL_DIR\" ]]"; then
       SHARED_MISSING+=("$node")
     fi
   done
