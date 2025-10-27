@@ -154,6 +154,12 @@ set -euo pipefail
 
 mkdir -p "$RAY_TMP_DIR"
 
+# Verify model directory exists
+if [[ ! -d "${STACK_ROOT}/models/Qwen3-32B-FP8" ]]; then
+  echo "[test-vllm] worker: model directory not found: ${STACK_ROOT}/models/Qwen3-32B-FP8" >&2
+  exit 2
+fi
+
 WORKER_IP=$(getent ahostsv4 "$(hostname -s)" | awk '{print $1; exit}' || true)
 if [[ -z "${WORKER_IP:-}" ]]; then
   WORKER_IP=$(hostname -I | tr ' ' '\n' | grep -m1 -E '^[0-9]+(\.[0-9]+){3}$' || true)
@@ -251,7 +257,7 @@ apptainer run --cleanenv --nv \
   --bind "$HF_HOME:$HF_HOME" \
   --bind "$STACK_ROOT/.cache:$STACK_ROOT/.cache" \
   "$SIF_VLLM" \
-  --model /models/Qwen3-32B-FP8 \
+  "/models/Qwen3-32B-FP8" \
     --host 0.0.0.0 --port 8000 \
     --tensor-parallel-size "$TP_SIZE" \
     --data-parallel-size "$DP_SIZE" \
