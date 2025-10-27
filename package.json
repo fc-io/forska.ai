@@ -29,7 +29,7 @@
     "db:backup": "bun scripts/dbBackup.ts",
     "db:r:p": "bun scripts/dbPush.ts --force --no-restore",
     "db:r:pull": "bun scripts/dbRemotePull.ts",
-    "r:s:p": "bun scripts/sbatchPut.ts"
+    "s:p": "bun scripts/sbatchPut.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^2.0.9",
