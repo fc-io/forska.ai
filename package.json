@@ -30,7 +30,8 @@
     "db:r:p": "bun scripts/dbPush.ts --force --no-restore",
     "db:r:pull": "bun scripts/dbRemotePull.ts",
     "s:p": "bun scripts/sbatchPut.ts",
-    "t:p": "bun scripts/testPut.ts"
+    "t:p": "bun scripts/testPut.ts",
+    "r:p": "bun scripts/remoteHfVllm.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^2.0.9",
