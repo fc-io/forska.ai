@@ -1,13 +1,13 @@
 #!/bin/bash
 #SBATCH -J forska-stack
 #SBATCH -A NAISS2025-22-715 -p alvis
-#SBATCH --nodes=1
+#SBATCH --nodes=2
 # Use one task per node; matches multi-node Ray layout
 # (avoid --ntasks=1 which triggers Slurm's node/task mismatch warning)
 #SBATCH --ntasks-per-node=1
-# Request 4 A100 GPUs per node (2 nodes total)
+# Request 2 A100 GPUs per node (2 nodes total = 4 GPUs)
 # Adjust for your cluster if it uses --gres instead
-#SBATCH --gpus-per-node=A100:4
+#SBATCH --gpus-per-node=A100:2
 #SBATCH --time=01:00:00
 #SBATCH -o %x-%j.log
 #SBATCH --export=ALL
@@ -25,7 +25,7 @@ echo "[forska] starting on host $(hostname) at $(date)"
 
 # Shared root and caches (see README.md)
 export STACK_ROOT=${STACK_ROOT:-$PWD}
-mkdir -p "$STACK_ROOT"/{pgdata,models,hf_cache,logs,.cache,.secrets}
+mkdir -p "$STACK_ROOT"/{pgdata,hf_cache,logs,.cache,.secrets}
 export XDG_CACHE_HOME=${XDG_CACHE_HOME:-$STACK_ROOT/.cache}
 export VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT:-$XDG_CACHE_HOME/vllm}
 export TORCHINDUCTOR_CACHE_DIR=${TORCHINDUCTOR_CACHE_DIR:-$VLLM_CACHE_ROOT/torchinductor}
@@ -43,7 +43,7 @@ export VLLM_API_KEY=${VLLM_API_KEY:-fake_key}
 export VLLM_GPU_UTIL=${VLLM_GPU_UTIL:-0.90}
 # GPU shape overrides used to compute DP/TP; Slurm allocation must match
 # Autodetect GPUs per node from Slurm if available; override via --export GPUS_PER_NODE=<n>
-export GPUS_PER_NODE=${GPUS_PER_NODE:-${SLURM_GPUS_ON_NODE:-4}}
+export GPUS_PER_NODE=${GPUS_PER_NODE:-${SLURM_GPUS_ON_NODE:-2}}
 # NCCL tuning hints (override via --export as needed)
 export NCCL_DEBUG=${NCCL_DEBUG:-WARN}
 export NCCL_ASYNC_ERROR_HANDLING=${NCCL_ASYNC_ERROR_HANDLING:-1}
@@ -548,7 +548,6 @@ exec apptainer exec --cleanenv --nv \
   ${NCCL_IB_HCA:+--env NCCL_IB_HCA="${NCCL_IB_HCA}"} \
   ${NCCL_IB_GID_INDEX:+--env NCCL_IB_GID_INDEX="${NCCL_IB_GID_INDEX}"} \
   --bind "${RAY_TMP_DIR}:${RAY_TMP_DIR}" \
-  --bind "${STACK_ROOT}/models:/models:ro" \
   --bind "${HF_HOME}:${HF_HOME}" \
   --bind "${VLLM_CACHE_ROOT}:${VLLM_CACHE_ROOT}" \
   "${SIF_VLLM}" \
@@ -632,45 +631,8 @@ RAY_WORKER
 fi
 
 echo "[forska] starting vllm on :8000 (backend=$([[ $NNODES -gt 1 ]] && echo ray || echo mp), tp=$TP_SIZE, dp=$DP_SIZE)"
-
-# Preflight: verify model directory exists and is accessible
-MODEL_DIR="$STACK_ROOT/models/Qwen3-32B-FP8"
-if [[ ! -d "$MODEL_DIR" ]]; then
-  echo "[forska] error: model directory not found: $MODEL_DIR" >&2
-  echo "[forska]        vLLM cannot load the model without this directory" >&2
-  exit 2
-fi
-
-# Check for essential model files
-if [[ ! -f "$MODEL_DIR/config.json" ]]; then
-  echo "[forska] warning: config.json not found in $MODEL_DIR" >&2
-  echo "[forska]          This may not be a valid model directory" >&2
-fi
-
-# For multi-node: warn about shared filesystem requirement
-if [[ $NNODES -gt 1 ]]; then
-  echo "[forska] multi-node setup detected: verifying model directory is on shared filesystem"
-  echo "[forska]   model path: $MODEL_DIR"
-  echo "[forska]   IMPORTANT: This directory must be accessible from all compute nodes:"
-  for node in "${HOSTS[@]}"; do
-    echo "[forska]     - $node"
-  done
-  echo "[forska]   If vLLM fails with 'invalid repository id', ensure:"
-  echo "[forska]     1. $MODEL_DIR exists on a shared filesystem (NFS/Lustre)"
-  echo "[forska]     2. All nodes can read the model files"
-  echo "[forska]     3. The bind mount path matches on all nodes"
-  SHARED_MISSING=()
-  for node in "${HOSTS[@]}"; do
-    if ! srun --overlap --nodes=1 --ntasks=1 --nodelist="$node" --quiet bash -lc "[[ -d \"$MODEL_DIR\" && -r \"$MODEL_DIR\" ]]"; then
-      SHARED_MISSING+=("$node")
-    fi
-  done
-  if (( ${#SHARED_MISSING[@]} > 0 )); then
-    echo "[forska] error: model directory not readable on nodes: ${SHARED_MISSING[*]}" >&2
-    echo "[forska]        Set STACK_ROOT to a shared path accessible to every node before submitting the job." >&2
-    exit 2
-  fi
-fi
+echo "[forska] loading model from Hugging Face: Qwen/Qwen3-32B-FP8"
+echo "[forska] model will be cached in: $HF_HOME"
 
 VLLM_BACKEND=$([[ $NNODES -gt 1 ]] && echo ray || echo mp)
 VLLM_ENV=(
@@ -685,11 +647,10 @@ fi
 apptainer run --cleanenv --nv \
   "${VLLM_ENV[@]}" \
   --env CUDA_DEVICE_ORDER=PCI_BUS_ID \
-  --bind "$STACK_ROOT/models:/models:ro" \
   --bind "$HF_HOME:$HF_HOME" \
   --bind "$VLLM_CACHE_ROOT:$VLLM_CACHE_ROOT" \
   "$SIF_VLLM" \
-  --model /models/Qwen3-32B-FP8 \
+  --model Qwen/Qwen3-32B-FP8 \
     --host 0.0.0.0 --port 8000 \
     --tensor-parallel-size "$TP_SIZE" \
     --data-parallel-size "$DP_SIZE" \
@@ -702,20 +663,30 @@ apptainer run --cleanenv --nv \
   >"$LOG_DIR/vllm.log" 2>&1 &
 
 # Wait for vLLM to become ready before starting API
-echo "[forska] waiting for vllm to be healthy..."
-for i in $(seq 1 60); do
+# Increased timeout to 20 minutes to allow for model download from Hugging Face
+echo "[forska] waiting for vllm to be healthy (timeout: 20 minutes)..."
+echo "[forska] model will be downloaded from Hugging Face on first run - this may take several minutes"
+for i in $(seq 1 600); do
   if curl -sf -H "Authorization: Bearer $VLLM_API_KEY" http://localhost:8000/v1/models >/dev/null; then
-    echo "[forska] vllm is up"
+    elapsed=$((i * 2))
+    echo "[forska] vllm is up (ready after ${elapsed}s)"
     break
   fi
   if ! kill -0 $(jobs -pr | head -n1) 2>/dev/null; then
     echo "[forska] vllm process appears to have exited; see $LOG_DIR/vllm.log" >&2
     break
   fi
+  # Progress update every 30 seconds
+  if (( i % 15 == 0 )); then
+    elapsed=$((i * 2))
+    remaining=$((1200 - elapsed))
+    echo "[forska] still waiting for vllm... (${elapsed}s elapsed, ${remaining}s remaining)"
+  fi
   sleep 2
 done
 if ! curl -sf -H "Authorization: Bearer $VLLM_API_KEY" http://localhost:8000/v1/models >/dev/null; then
-  echo "[forska] warning: vllm is not responding on :8000; API may fail to connect" >&2
+  echo "[forska] warning: vllm is not responding on :8000 after 20 minutes; API may fail to connect" >&2
+  echo "[forska]          check $LOG_DIR/vllm.log for model download progress or errors" >&2
 fi
 
 
