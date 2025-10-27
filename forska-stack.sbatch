@@ -615,6 +615,8 @@ VLLM_BACKEND=$([[ $NNODES -gt 1 ]] && echo ray || echo mp)
 VLLM_ENV=(
   --env VLLM_CACHE_ROOT="$VLLM_CACHE_ROOT"
   --env HF_HOME="$HF_HOME"
+  --env HF_HUB_OFFLINE=1
+  --env TRANSFORMERS_OFFLINE=1
 )
 if [[ $NNODES -gt 1 ]]; then
   VLLM_ENV+=(--env RAY_ADDRESS="${HEAD_IP}:${RAY_PORT}")
