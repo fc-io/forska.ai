@@ -303,7 +303,6 @@ fi
 RAY_TMP_DIR=${RAY_TMP_DIR:-/tmp/ray-${SLURM_JOB_ID:-$$}}
 
 # Force HF libraries to use local files only - export early so Ray workers inherit these
-export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 
 # Compute distributed sizes: keep tensor parallel groups within a node by default
@@ -312,8 +311,9 @@ DEFAULT_TP=$(( GPUS_PER_NODE > 0 ? GPUS_PER_NODE : 1 ))
 # For multi-node with Ray, keep tensor parallel groups within a node by default
 # so collectives avoid cross-node traffic; scale across nodes via data parallelism
 if [[ $NNODES -gt 1 ]]; then
-  TP_SIZE=${TP_SIZE:-$DEFAULT_TP}
-  DP_SIZE=${DP_SIZE:-$(( TOTAL_GPUS / TP_SIZE ))}
+  # Option B: favor cross-node TP to avoid DP slicing on head
+  TP_SIZE=${TP_SIZE:-$TOTAL_GPUS}
+  DP_SIZE=${DP_SIZE:-1}
 else
   TP_SIZE=${TP_SIZE:-$DEFAULT_TP}
 fi
@@ -422,7 +422,6 @@ fi
     --env NCCL_ASYNC_ERROR_HANDLING="$NCCL_ASYNC_ERROR_HANDLING" \
     --env CUDA_DEVICE_ORDER=PCI_BUS_ID \
     --env RAY_TMPDIR="$RAY_TMP_DIR" \
-    ${CUDA_VISIBLE_DEVICES:+--env CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES"} \
     ${NCCL_SOCKET_IFNAME:+--env NCCL_SOCKET_IFNAME="$NCCL_SOCKET_IFNAME"} \
     ${NCCL_IB_HCA:+--env NCCL_IB_HCA="$NCCL_IB_HCA"} \
     ${NCCL_IB_GID_INDEX:+--env NCCL_IB_GID_INDEX="$NCCL_IB_GID_INDEX"} \
@@ -541,21 +540,14 @@ if [[ $ok -ne 1 ]]; then
   exit 2
 fi
 
-CUDA_ENV=()
-if [[ -n "${CUDA_VISIBLE_DEVICES:-}" ]]; then
-  CUDA_ENV=(--env CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES}")
-fi
-
 exec apptainer exec --cleanenv --nv \
   --env NCCL_DEBUG="${NCCL_DEBUG}" \
   --env NCCL_ASYNC_ERROR_HANDLING="${NCCL_ASYNC_ERROR_HANDLING}" \
   --env CUDA_DEVICE_ORDER=PCI_BUS_ID \
   --env RAY_TMPDIR="${RAY_TMP_DIR}" \
-  --env HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}" \
   --env TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}" \
   --env HF_HOME="${HF_HOME}" \
   --env VLLM_CACHE_ROOT="${VLLM_CACHE_ROOT}" \
-  "${CUDA_ENV[@]}" \
   ${NCCL_SOCKET_IFNAME:+--env NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME}"} \
   ${NCCL_IB_HCA:+--env NCCL_IB_HCA="${NCCL_IB_HCA}"} \
   ${NCCL_IB_GID_INDEX:+--env NCCL_IB_GID_INDEX="${NCCL_IB_GID_INDEX}"} \
@@ -576,7 +568,7 @@ RAY_WORKER
   # Run in background since workers block forever
   if [[ ${#WORKER_NODES[@]} -gt 0 ]]; then
     srun --nodes=$((NNODES-1)) --ntasks=$((NNODES-1)) \
-      --export=ALL,HEAD_IP=${HEAD_IP},RAY_PORT=${RAY_PORT},RAY_WORKER_PORT_MIN=${RAY_WORKER_PORT_MIN},RAY_WORKER_PORT_MAX=${RAY_WORKER_PORT_MAX},RAY_TMP_DIR=${RAY_TMP_DIR},SIF_VLLM=${SIF_VLLM},NCCL_DEBUG=${NCCL_DEBUG},NCCL_ASYNC_ERROR_HANDLING=${NCCL_ASYNC_ERROR_HANDLING},HF_HUB_OFFLINE=${HF_HUB_OFFLINE},TRANSFORMERS_OFFLINE=${TRANSFORMERS_OFFLINE},HF_HOME=${HF_HOME},VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT},STACK_ROOT=${STACK_ROOT} \
+      --export=ALL,HEAD_IP=${HEAD_IP},RAY_PORT=${RAY_PORT},RAY_WORKER_PORT_MIN=${RAY_WORKER_PORT_MIN},RAY_WORKER_PORT_MAX=${RAY_WORKER_PORT_MAX},RAY_TMP_DIR=${RAY_TMP_DIR},SIF_VLLM=${SIF_VLLM},NCCL_DEBUG=${NCCL_DEBUG},NCCL_ASYNC_ERROR_HANDLING=${NCCL_ASYNC_ERROR_HANDLING},TRANSFORMERS_OFFLINE=${TRANSFORMERS_OFFLINE},HF_HOME=${HF_HOME},VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT},STACK_ROOT=${STACK_ROOT} \
       --nodelist="$(printf "%s," "${WORKER_NODES[@]}" | sed 's/,$//')" \
       --output "$LOG_DIR/ray-worker-%N.log" \
       bash -lc "$WORKER_SCRIPT" &
@@ -688,12 +680,8 @@ VLLM_BACKEND=$([[ $NNODES -gt 1 ]] && echo ray || echo mp)
 VLLM_ENV=(
   --env VLLM_CACHE_ROOT="$VLLM_CACHE_ROOT"
   --env HF_HOME="$HF_HOME"
-  --env HF_HUB_OFFLINE="$HF_HUB_OFFLINE"
   --env TRANSFORMERS_OFFLINE="$TRANSFORMERS_OFFLINE"
 )
-if [[ -n "${CUDA_VISIBLE_DEVICES:-}" ]]; then
-  VLLM_ENV+=(--env CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES")
-fi
 if [[ $NNODES -gt 1 ]]; then
   VLLM_ENV+=(--env RAY_ADDRESS="${HEAD_IP}:${RAY_PORT}")
   VLLM_ENV+=(--env RAY_TMPDIR="$RAY_TMP_DIR")
@@ -707,7 +695,6 @@ apptainer run --cleanenv --nv \
   --bind "$VLLM_CACHE_ROOT:$VLLM_CACHE_ROOT" \
   "$SIF_VLLM" \
   --model /models/Qwen3-32B-FP8 \
-    --load-format local \
     --host 0.0.0.0 --port 8000 \
     --tensor-parallel-size "$TP_SIZE" \
     --data-parallel-size "$DP_SIZE" \
