@@ -1,13 +1,13 @@
 #!/bin/bash
 #SBATCH -J forska-stack
 #SBATCH -A NAISS2025-22-715 -p alvis
-#SBATCH --nodes=4
+#SBATCH --nodes=2
+#SBATCH --ntasks=2
 # Use one task per node; matches multi-node Ray layout
-# (avoid --ntasks=1 which triggers Slurm's node/task mismatch warning)
 #SBATCH --ntasks-per-node=1
-# Request 2 A100 GPUs per node (4 nodes total = 8 GPUs)
+# Request 4 A100 GPUs per node (2 nodes total = 8 GPUs)
 # Adjust for your cluster if it uses --gres instead
-#SBATCH --gpus-per-node=A100:2
+#SBATCH --gpus-per-node=A100:4
 #SBATCH --time=01:00:00
 #SBATCH -o %x-%j.log
 #SBATCH --export=ALL
@@ -43,7 +43,7 @@ export VLLM_API_KEY=${VLLM_API_KEY:-fake_key}
 export VLLM_GPU_UTIL=${VLLM_GPU_UTIL:-0.90}
 # GPU shape overrides used to compute DP/TP; Slurm allocation must match
 # Autodetect GPUs per node from Slurm if available; override via --export GPUS_PER_NODE=<n>
-export GPUS_PER_NODE=${GPUS_PER_NODE:-${SLURM_GPUS_ON_NODE:-2}}
+export GPUS_PER_NODE=${GPUS_PER_NODE:-${SLURM_GPUS_ON_NODE:-4}}
 # NCCL tuning hints (override via --export as needed)
 export NCCL_DEBUG=${NCCL_DEBUG:-WARN}
 export NCCL_ASYNC_ERROR_HANDLING=${NCCL_ASYNC_ERROR_HANDLING:-1}

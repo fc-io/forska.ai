@@ -36,13 +36,13 @@ Open the app at http://localhost:8181 (it proxies API calls to http://localhost:
 Important: The OpenAI-compatible model name used in requests must match the served name. With this script, vLLM is started as `--model /models/Qwen3-32B-FP8` so clients must send `{"model": "/models/Qwen3-32B-FP8"}` (note the leading slash; not `./models/...`).
 
 Script
-- Use the maintained script in the repo: [forska-stack.sbatch](./forska-stack.sbatch). This is the single source of truth and is preconfigured for the NAISS multi-node example (4 nodes × 2 GPUs); leaving the env alone yields `TP_SIZE=8`, `DP_SIZE=1`.
+- Use the maintained script in the repo: [forska-stack.sbatch](./forska-stack.sbatch). This is the single source of truth and is preconfigured for the NAISS multi-node example (2 nodes × 4 GPUs); leaving the env alone yields `TP_SIZE=8`, `DP_SIZE=1`.
 
 Multi-node (Ray) mode
 - The batch script now supports multi-node vLLM via Ray. Set `#SBATCH --nodes=<N>` and `#SBATCH --gpus-per-node=A100:<G>` and it will:
   - Start a Ray head on the first node and Ray workers on the others.
   - Launch vLLM on the head with `--distributed-executor-backend ray`; TP/DP are computed from total GPUs (see below).
-- Defaults in the script are 4 nodes × 2 GPUs per node, which the auto-sizing turns into `TP_SIZE=8` (cross-node) and `DP_SIZE=1`. Override `GPUS_PER_NODE` or `TP_SIZE` with `--export` if needed.
+- Defaults in the script are 2 nodes × 4 GPUs per node, which the auto-sizing turns into `TP_SIZE=8` (cross-node) and `DP_SIZE=1`. Override `GPUS_PER_NODE` or `TP_SIZE` with `--export` if needed.
 - Requirements:
   - The vLLM SIF must include `ray` CLI and Python package.
   - Nodes must be able to talk to each other on ports `6379` (Ray GCS) and `8265` (dashboard). Firewalls must allow intra-allocation traffic.
@@ -60,7 +60,7 @@ Multi-node (Ray) mode
 TP/DP sizing
 - The script computes sizes from total GPUs: `TOTAL_GPUS = NNODES × GPUS_PER_NODE`.
 - Defaults: For multi-node setups, `TP_SIZE = TOTAL_GPUS` (uses all GPUs in one tensor-parallel group) and `DP_SIZE = 1`; this avoids data-parallel slicing at the head. For single-node, `TP_SIZE = GPUS_PER_NODE`.
-- Example (4 nodes × 2 GPUs = 8 total): the defaults produce `--tensor-parallel-size 8 --data-parallel-size 1`.
+- Example (2 nodes × 4 GPUs = 8 total): the defaults produce `--tensor-parallel-size 8 --data-parallel-size 1`.
 - Override with `--export=ALL,TP_SIZE=<n>,DP_SIZE=<m>` if you want a different layout. If `TOTAL_GPUS` is not divisible by `TP_SIZE`, the script falls back to `TP_SIZE=TOTAL_GPUS, DP_SIZE=1` and logs a warning.
 
 Parameterizing nodes/GPUs
