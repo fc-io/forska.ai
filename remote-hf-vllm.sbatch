@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -J test-vllm
+#SBATCH -J remote-hf-vllm
 #SBATCH -A NAISS2025-22-715 -p alvis
 #SBATCH --nodes=2
 #SBATCH --ntasks-per-node=1
