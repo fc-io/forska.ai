@@ -729,6 +729,8 @@ echo "  dist:        ${NNODES} node(s) × ${GPUS_PER_NODE} GPU(s) = ${TOTAL_GPUS
 echo "  api:         http://127.0.0.1:$API_SERVER_PORT"
 echo "  app:         http://127.0.0.1:$PROD_SERVER"
 echo "[forska] tail logs in: $LOG_DIR"
+echo "[forska] for ssh tunnel to postgres"
+echo "  ssh -N -L 8432:$(hostname):$POSTGRES_PORT alvis2"
 echo "[forska] for ssh tunnel to the api"
 echo "  ssh -N -L 3001:$(hostname):$API_SERVER_PORT alvis2"
 echo "[forska] for ssh tunnel to the vllm server"
