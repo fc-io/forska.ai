@@ -20,7 +20,7 @@ export HF_HOME=${HF_HOME:-$STACK_ROOT/hf_cache}
 
 # vLLM config
 export VLLM_API_KEY=${VLLM_API_KEY:-fake_key}
-export VLLM_GPU_UTIL=${VLLM_GPU_UTIL:-0.80}
+export VLLM_GPU_UTIL=${VLLM_GPU_UTIL:-0.90}
 
 # Network config
 export GPUS_PER_NODE=${GPUS_PER_NODE:-${SLURM_GPUS_ON_NODE:-2}}
@@ -247,6 +247,7 @@ apptainer run --cleanenv --nv \
     --tensor-parallel-size "$TP_SIZE" \
     --data-parallel-size "$DP_SIZE" \
     --gpu-memory-utilization "$VLLM_GPU_UTIL" \
+    --max-model-len 32768 \
     --enable-auto-tool-choice \
     --tool-call-parser hermes \
     --reasoning-parser deepseek_r1 \
