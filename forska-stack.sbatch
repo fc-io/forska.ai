@@ -1,11 +1,11 @@
 #!/bin/bash
 #SBATCH -J forska-stack
 #SBATCH -A NAISS2025-22-715 -p alvis
-#SBATCH --nodes=2
+#SBATCH --nodes=4
 # Use one task per node; matches multi-node Ray layout
 # (avoid --ntasks=1 which triggers Slurm's node/task mismatch warning)
 #SBATCH --ntasks-per-node=1
-# Request 2 A100 GPUs per node (2 nodes total = 4 GPUs)
+# Request 2 A100 GPUs per node (4 nodes total = 8 GPUs)
 # Adjust for your cluster if it uses --gres instead
 #SBATCH --gpus-per-node=A100:2
 #SBATCH --time=01:00:00
@@ -302,13 +302,9 @@ fi
 # by default to avoid path length overflows on long $STACK_ROOT paths.
 RAY_TMP_DIR=${RAY_TMP_DIR:-/tmp/ray-${SLURM_JOB_ID:-$$}}
 
-# Compute distributed sizes: keep tensor parallel groups within a node by default
 TOTAL_GPUS=$(( NNODES * GPUS_PER_NODE ))
 DEFAULT_TP=$(( GPUS_PER_NODE > 0 ? GPUS_PER_NODE : 1 ))
-# For multi-node with Ray, keep tensor parallel groups within a node by default
-# so collectives avoid cross-node traffic; scale across nodes via data parallelism
 if [[ $NNODES -gt 1 ]]; then
-  # Option B: favor cross-node TP to avoid DP slicing on head
   TP_SIZE=${TP_SIZE:-$TOTAL_GPUS}
   DP_SIZE=${DP_SIZE:-1}
 else
