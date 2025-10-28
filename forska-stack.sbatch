@@ -7,8 +7,7 @@
 #SBATCH --ntasks-per-node=1
 # Request 4 A100 GPUs on the node
 # Adjust for your cluster if it uses --gres instead
-#SBATCH --gpus-per-node=4
-#SBATCH -C "A100|A100fat"
+#SBATCH --gpus-per-node=A100fat:4
 #SBATCH --time=08:00:00
 #SBATCH -o %x-%j.log
 #SBATCH --export=ALL
