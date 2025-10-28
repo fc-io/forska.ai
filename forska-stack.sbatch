@@ -353,7 +353,51 @@ fi
 graceful_shutdown() {
   local reason="${1:-cleanup}"
   echo "[forska] shutting down ($reason)..."
-  # Stop Ray cluster (head + workers) if started - do this BEFORE killing containers
+
+  # Ordered shutdown: API → Postgres → Ray → everything else
+
+  # 1. Stop API server first (needs DB connection, so shut down before Postgres)
+  if [[ -n "${API_PID:-}" ]] && kill -0 "$API_PID" 2>/dev/null; then
+    echo "[forska] stopping API server (pid=$API_PID)..."
+    kill -TERM "$API_PID" 2>/dev/null || true
+    for ((i=0; i<10; i++)); do
+      kill -0 "$API_PID" 2>/dev/null || break
+      sleep 1
+    done
+    if kill -0 "$API_PID" 2>/dev/null; then
+      echo "[forska] force-killing API server"
+      kill -KILL "$API_PID" 2>/dev/null || true
+    fi
+  fi
+
+  # 2. Stop App server
+  if [[ -n "${APP_PID:-}" ]] && kill -0 "$APP_PID" 2>/dev/null; then
+    echo "[forska] stopping App server (pid=$APP_PID)..."
+    kill -TERM "$APP_PID" 2>/dev/null || true
+    for ((i=0; i<10; i++)); do
+      kill -0 "$APP_PID" 2>/dev/null || break
+      sleep 1
+    done
+    if kill -0 "$APP_PID" 2>/dev/null; then
+      kill -KILL "$APP_PID" 2>/dev/null || true
+    fi
+  fi
+
+  # 3. Stop Postgres (after API no longer needs it)
+  if [[ -n "${DB_PID:-}" ]] && kill -0 "$DB_PID" 2>/dev/null; then
+    echo "[forska] stopping Postgres (pid=$DB_PID)..."
+    kill -TERM "$DB_PID" 2>/dev/null || true
+    for ((i=0; i<10; i++)); do
+      kill -0 "$DB_PID" 2>/dev/null || break
+      sleep 1
+    done
+    if kill -0 "$DB_PID" 2>/dev/null; then
+      echo "[forska] force-killing Postgres"
+      kill -KILL "$DB_PID" 2>/dev/null || true
+    fi
+  fi
+
+  # 4. Stop Ray cluster (head + workers)
   if [[ ${NNODES:-1} -gt 1 ]]; then
     echo "[forska] stopping ray on head ${HEAD_NODE}"
     apptainer exec --cleanenv --nv "$SIF_VLLM" ray stop >/dev/null 2>&1 || true
@@ -364,16 +408,24 @@ graceful_shutdown() {
         >/dev/null 2>&1 || true
     fi
   fi
-  # Ask all backgrounded apptainer processes to exit
-  jobs -pr | xargs -r kill -TERM || true
-  # Give them a moment to flush and exit
-  for ((i=0; i<20; i++)); do
-    [[ -z "$(jobs -pr)" ]] && break
-    sleep 1
-  done
-  # Force kill anything that didn't exit in time
+
+  # 5. Stop vLLM and any remaining background processes
+  if [[ -n "${VLLM_PID:-}" ]] && kill -0 "$VLLM_PID" 2>/dev/null; then
+    echo "[forska] stopping vLLM (pid=$VLLM_PID)..."
+    kill -TERM "$VLLM_PID" 2>/dev/null || true
+  fi
+
+  # Clean up any remaining backgrounded processes
   if [[ -n "$(jobs -pr)" ]]; then
-    jobs -pr | xargs -r kill -KILL || true
+    echo "[forska] cleaning up remaining background processes..."
+    jobs -pr | xargs -r kill -TERM || true
+    for ((i=0; i<10; i++)); do
+      [[ -z "$(jobs -pr)" ]] && break
+      sleep 1
+    done
+    if [[ -n "$(jobs -pr)" ]]; then
+      jobs -pr | xargs -r kill -KILL || true
+    fi
   fi
 }
 trap 'graceful_shutdown EXIT' EXIT
@@ -685,6 +737,7 @@ apptainer run --cleanenv --nv \
     --distributed-executor-backend "$VLLM_BACKEND" \
     --api-key "$VLLM_API_KEY" \
   >"$LOG_DIR/vllm.log" 2>&1 &
+VLLM_PID=$!
 
 # Wait for vLLM to become ready before starting API
 # Increased timeout to 20 minutes to allow for model download from Hugging Face
@@ -732,6 +785,7 @@ apptainer run --cleanenv \
   --env VITE_PORT="$VITE_PORT" \
   "$SIF_API" \
   >"$LOG_DIR/api.log" 2>&1 &
+API_PID=$!
 
 echo "[forska] starting app on :$PROD_SERVER (proxies to API :$API_SERVER_PORT)"
 apptainer run --cleanenv \
@@ -740,6 +794,7 @@ apptainer run --cleanenv \
   --env PROD_SERVER="$PROD_SERVER" \
   "$SIF_APP" \
   >"$LOG_DIR/app.log" 2>&1 &
+APP_PID=$!
 
 echo "[forska] services launched"
 echo "  host:        $(hostname)"

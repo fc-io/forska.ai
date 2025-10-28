@@ -259,26 +259,28 @@ Prereqs
 - Local: Docker Postgres running for dumps (`docker compose --env-file .env.local up -d db`)
 - Env: `SSH_ALIAS`, `STACK_ROOT`, `DB_NAME`, `DB_USER`, `DB_PASS`, `POSTGRES_PORT`
 
-1) Remote reset (remove legacy data layout)
+1) Reset on remote (remove legacy data layout)
 ```bash
-ssh $SSH_ALIAS apptainer instance stop pg18 || true
-ssh $SSH_ALIAS apptainer instance stop pg17 || true
-# Safe backup then recreate clean dir
-ssh $SSH_ALIAS 'mv -f ${STACK_ROOT}/pgdata ${STACK_ROOT}/pgdata_pg17_bak_$(date +%Y%m%d_%H%M%S) || true; install -d -m 700 ${STACK_ROOT}/pgdata'
+# Remote: close any running instance of postgres
+apptainer instance stop pg18 || true
+# Remote: Safe backup then recreate clean dir
+mv -f ${STACK_ROOT}/pgdata ${STACK_ROOT}/pgdata_pg18_bak_$(date +%Y%m%d_%H%M%S) || true; install -d -m 700 ${STACK_ROOT}/pgdata
 # If perms block removal, force delete then recreate
 # ssh $SSH_ALIAS 'chmod -R u+w ${STACK_ROOT}/pgdata || true; rm -rf ${STACK_ROOT}/pgdata || true; install -d -m 700 ${STACK_ROOT}/pgdata'
 ```
 
 2) Start Postgres 18 (fresh cluster)
 ```bash
-ssh $SSH_ALIAS apptainer run --cleanenv --writable-tmpfs \
+# Remote: start postgres in container
+apptainer run --cleanenv --writable-tmpfs \
   --env POSTGRES_USER=postgres \
   --env POSTGRES_PASSWORD_FILE=/run/secrets/db_password \
   --env POSTGRES_DB=${DB_NAME:-postgres} \
   --bind ${STACK_ROOT:-.}/pgdata:/var/lib/postgresql \
   --bind ${STACK_ROOT:-.}/.secrets/db_password.txt:/run/secrets/db_password:ro \
   ${STACK_ROOT}/postgres_18.sif
-ssh $SSH_ALIAS apptainer exec --cleanenv ${STACK_ROOT}/postgres_18.sif pg_isready -h 127.0.0.1 -p 5432 -U postgres
+# Remote: check that is working
+apptainer exec --cleanenv ${STACK_ROOT}/postgres_18.sif pg_isready -h 127.0.0.1 -p 5432 -U postgres
 ```
 
 3) Push dump to remote (no restore, validates end-to-end copy)
@@ -288,7 +290,7 @@ docker compose --env-file .env.local up -d db
 # Local: creates dump and uploads to ${STACK_ROOT}/backups on remote
 bun run db:remote:push
 # Remote: verify file arrived
-ssh $SSH_ALIAS 'ls -l ${STACK_ROOT}/backups'
+ls -l ${STACK_ROOT}/backups
 ```
 
 4) Restore into the fresh PG18 (scripted)
@@ -297,21 +299,33 @@ export REMOTE_DATABASE_URL="postgresql://postgres:$(cat ${STACK_ROOT}/.secrets/d
 bun scripts/dbPush.ts --force --restore
 ```
 
-Manual restore alternative
+or
+
+Manual restore alternative (this is what I used last)
 ```bash
+# start the local database to copy from
+docker compose up db
+# the push
+bun db:r:p
+# set ssh alias
 # Pick the uploaded dump name from backups/
-ssh $SSH_ALIAS 'ls -1 ${STACK_ROOT}/backups'
+ls -1 ${STACK_ROOT}/backups
 # Restore using an ephemeral Postgres 18 container
-ssh $SSH_ALIAS apptainer exec --cleanenv \
-  --env PGPASSWORD="$(cat ${STACK_ROOT}/.secrets/db_password.txt)" \
-  --bind ${STACK_ROOT}/backups:/backups:ro docker://postgres:18 \
+apptainer exec --cleanenv --writable-tmpfs \
+  --env POSTGRES_USER=postgres \
+  --env POSTGRES_PASSWORD_FILE=/run/secrets/db_password \
+  --env POSTGRES_DB=${DB_NAME:-postgres} \
+  --bind ${STACK_ROOT:-.}/pgdata:/var/lib/postgresql \
+  --bind ${STACK_ROOT:-.}/.secrets/db_password.txt:/run/secrets/db_password:ro \
+  --bind ${STACK_ROOT:-.}/backups:/backups:ro \
+  ${STACK_ROOT}/postgres_18.sif \
   pg_restore -h localhost -p 5432 -U postgres -d ${DB_NAME:-postgres} \
-  --clean --if-exists --no-owner --no-privileges --single-transaction /backups/<your_dump>.dump
+  --clean --if-exists --no-owner --no-privileges --single-transaction /backups/dump_local_postgres_20251028_094527.dump
 ```
 
 Why this works
 - Postgres 18 expects a major-version layout under `/var/lib/postgresql`; a fresh, empty `${STACK_ROOT}/pgdata` avoids the legacy `/data` structure that triggers the safety check.
-- `db:remote:push` verifies the local dump and remote upload path; the `--restore` run completes the cycle by loading into the fresh cluster.
+- `db:r:p` verifies the local dump and remote upload path; the `--restore` run completes the cycle by loading into the fresh cluster.
 
 ### About UNIX sockets (only for DB seeding)
 
