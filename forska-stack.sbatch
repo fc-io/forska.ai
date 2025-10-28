@@ -7,8 +7,8 @@
 #SBATCH --ntasks-per-node=1
 # Request 4 A100 GPUs per node (2 nodes total = 8 GPUs)
 # Adjust for your cluster if it uses --gres instead
-#SBATCH --gpus-per-node=A100:4
-#SBATCH --time=36:00:00
+#SBATCH --gpus-per-node=A100fat:4
+#SBATCH --time=08:00:00
 #SBATCH -o %x-%j.log
 #SBATCH --export=ALL
 # Send an early warning signal 2 minutes before time limit
@@ -24,7 +24,7 @@ echo "[forska] starting on host $(hostname) at $(date)"
 # module load apptainer
 
 # Shared root and caches (see README.md)
-export STACK_ROOT=${STACK_ROOT:-$PWD}
+export STACK_ROOT=${STACK_ROOT:-/mimer/NOBACKUP/groups/clin-agent-bench/dev}
 mkdir -p "$STACK_ROOT"/{pgdata,hf_cache,logs,.cache,.secrets}
 export XDG_CACHE_HOME=${XDG_CACHE_HOME:-$STACK_ROOT/.cache}
 export VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT:-$XDG_CACHE_HOME/vllm}
