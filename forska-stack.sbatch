@@ -298,9 +298,9 @@ if ! ping -c 1 -W 2 "$HEAD_IP" >/dev/null 2>&1; then
   echo "[forska]          This may cause Ray connectivity issues in multi-node setup" >&2
 fi
 # Ray stores Unix domain sockets under its temp dir and Linux limits
-# AF_UNIX socket paths to 107 bytes. Use a short per-job path on local tmp
-# by default to avoid path length overflows on long $STACK_ROOT paths.
-RAY_TMP_DIR=${RAY_TMP_DIR:-/tmp/ray-${SLURM_JOB_ID:-$$}}
+# AF_UNIX socket paths to 107 bytes. Use a short per-job path under STACK_ROOT
+# to keep everything on shared storage while avoiding path length overflows.
+RAY_TMP_DIR=${RAY_TMP_DIR:-$STACK_ROOT/ray/${SLURM_JOB_ID:-$$}}
 
 TOTAL_GPUS=$(( NNODES * GPUS_PER_NODE ))
 DEFAULT_TP=$(( GPUS_PER_NODE > 0 ? GPUS_PER_NODE : 1 ))
@@ -501,6 +501,8 @@ RAY_PORTS_EOF
 set -euo pipefail
 
 mkdir -p "$RAY_TMP_DIR"
+# Ensure STACK_ROOT directory structure exists on worker nodes
+mkdir -p "${HF_HOME}" "${VLLM_CACHE_ROOT}"
 
 # Resolve IPv4 address for this worker
 WORKER_IP=$(getent ahostsv4 "$(hostname -s)" | awk '{print $1; exit}' || true)
@@ -640,11 +642,18 @@ if [[ $NNODES -gt 1 ]]; then
   VLLM_ENV+=(--env RAY_TMPDIR="$RAY_TMP_DIR")
 fi
 
+VLLM_BINDS=(
+  --bind "$HF_HOME:$HF_HOME"
+  --bind "$VLLM_CACHE_ROOT:$VLLM_CACHE_ROOT"
+)
+if [[ $NNODES -gt 1 ]]; then
+  VLLM_BINDS+=(--bind "$RAY_TMP_DIR:$RAY_TMP_DIR")
+fi
+
 apptainer run --cleanenv --nv \
   "${VLLM_ENV[@]}" \
   --env CUDA_DEVICE_ORDER=PCI_BUS_ID \
-  --bind "$HF_HOME:$HF_HOME" \
-  --bind "$VLLM_CACHE_ROOT:$VLLM_CACHE_ROOT" \
+  "${VLLM_BINDS[@]}" \
   "$SIF_VLLM" \
   --model Qwen/Qwen3-32B-FP8 \
     --host 0.0.0.0 --port 8000 \
