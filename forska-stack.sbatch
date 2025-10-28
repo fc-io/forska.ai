@@ -1,11 +1,11 @@
 #!/bin/bash
 #SBATCH -J forska-stack
 #SBATCH -A NAISS2025-22-715 -p alvis
-#SBATCH --nodes=2
-#SBATCH --ntasks=2
-# Use one task per node; matches multi-node Ray layout
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+# Single node; one task
 #SBATCH --ntasks-per-node=1
-# Request 4 A100 GPUs per node (2 nodes total = 8 GPUs)
+# Request 4 A100 GPUs on the node
 # Adjust for your cluster if it uses --gres instead
 #SBATCH --gpus-per-node=A100fat:4
 #SBATCH --time=08:00:00
