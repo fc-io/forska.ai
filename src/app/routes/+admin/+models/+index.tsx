@@ -1,0 +1,141 @@
+import {useQuery} from '@tanstack/solid-query'
+import {createFileRoute, Link} from '@tanstack/solid-router'
+import {For, Show, Suspense} from 'solid-js'
+
+import {apiClient} from '../../../../services/apiClient.ts'
+import {fetchSession} from '../../../../services/fetchSession.ts'
+import {handleApiResponse} from '../../../../services/utils/handleApiResponse.ts'
+
+type ModelRow = {
+  id: string
+  name: string
+  provider: string | null
+  modelName: string | null
+  baseURL: string | null
+  version: string | null
+  apiKeyVariable: string | null
+  createdAt?: string | Date
+}
+
+type ModelsResponse = {data: ModelRow[]}
+
+const AdminModels = () => {
+  const sessionQuery = useQuery(() => {
+    return {queryKey: ['session'], queryFn: fetchSession}
+  })
+
+  const modelsQuery = useQuery(() => {
+    return {
+      queryKey: ['models', 'admin-list'],
+      queryFn: async () => {
+        const response = await apiClient.api.models.get()
+        const result = handleApiResponse<ModelsResponse>(response, 'Failed to load models')
+        return result.data ?? []
+      },
+      staleTime: 1000 * 60 * 5,
+      refetchOnWindowFocus: true,
+    }
+  })
+
+  const isAdmin = () => {
+    return sessionQuery.data?.user?.role === 'admin'
+  }
+
+  const rows = () => {
+    return modelsQuery.data ?? []
+  }
+
+  return (
+    <div class="min-h-screen bg-gray-50 p-6 mx-auto">
+      <Suspense
+        fallback={
+          <div class="flex items-center justify-center h-64">
+            <div class="flex items-center space-x-2">
+              <svg class="animate-spin h-6 w-6 text-blue-600" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none" />
+                <path
+                  class="opacity-75"
+                  fill="currentColor"
+                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                />
+              </svg>
+              <span class="text-gray-600">Checking permissions...</span>
+            </div>
+          </div>
+        }
+      >
+        <Show
+          when={isAdmin()}
+          fallback={
+            <div class="max-w-xl mx-auto text-center py-12">
+              <h2 class="text-xl font-semibold text-gray-900">Unauthorized</h2>
+              <p class="mt-2 text-gray-600">You need admin access to view this page.</p>
+              <Link to="/" class="mt-4 inline-block text-blue-600 hover:underline">
+                Go back home
+              </Link>
+            </div>
+          }
+        >
+          <div class="flex justify-between items-center mb-6">
+            <h1 class="text-2xl font-bold">Models</h1>
+          </div>
+
+          <Show when={modelsQuery.isLoading}>
+            <p class="text-gray-500">Loading models…</p>
+          </Show>
+          <Show when={modelsQuery.isError}>
+            <div class="p-4 rounded-md bg-red-50 border border-red-200">
+              <p class="text-red-600">Failed to load models</p>
+              <button
+                onClick={() => {
+                  return void modelsQuery.refetch()
+                }}
+                class="mt-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+              >
+                Retry
+              </button>
+            </div>
+          </Show>
+
+          <Show when={!modelsQuery.isLoading && !modelsQuery.isError}>
+            <div class="overflow-x-auto bg-white rounded-lg shadow">
+              <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                  <tr>
+                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
+                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Provider</th>
+                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Model</th>
+                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Base URL</th>
+                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Version</th>
+                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">API Key Var</th>
+                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID</th>
+                  </tr>
+                </thead>
+                <tbody class="bg-white divide-y divide-gray-200">
+                  <For each={rows()}>
+                    {(m) => {
+                      return (
+                        <tr class="hover:bg-gray-50">
+                          <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{m.name}</td>
+                          <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{m.provider ?? '—'}</td>
+                          <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{m.modelName ?? '—'}</td>
+                          <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{m.baseURL ?? '—'}</td>
+                          <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{m.version ?? '—'}</td>
+                          <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{m.apiKeyVariable ?? '—'}</td>
+                          <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500">{m.id}</td>
+                        </tr>
+                      )
+                    }}
+                  </For>
+                </tbody>
+              </table>
+            </div>
+          </Show>
+        </Show>
+      </Suspense>
+    </div>
+  )
+}
+
+export const Route = createFileRoute('/admin/models/')({component: AdminModels})
+
