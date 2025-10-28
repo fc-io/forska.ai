@@ -51,9 +51,9 @@ export const tokensRoutesGetTimelineAllJobs = async ({interval, startDate, endDa
   const timeBucket = isMonthly
     ? sql`date_trunc('month', ${tokenUse.createdAt})`
     : sql`date_bin(
-    interval '${sql.raw((intervalSeconds as number).toString())} seconds',
+    ${sql.raw(`interval '${intervalSeconds} seconds'`)},
     ${tokenUse.createdAt},
-    timestamptz '${sql.raw(startDate)}'
+    ${sql.raw(`timestamptz '${startDate}'`)}
   )`
 
   const result = await db
