@@ -415,10 +415,16 @@ fi
     --env NCCL_ASYNC_ERROR_HANDLING="$NCCL_ASYNC_ERROR_HANDLING" \
     --env CUDA_DEVICE_ORDER=PCI_BUS_ID \
     --env RAY_TMPDIR="$RAY_TMP_DIR" \
+    --env HF_HOME="$HF_HOME" \
+    --env HF_HUB_CACHE="$HF_HOME/hub" \
+    --env HUGGINGFACE_HUB_CACHE="$HF_HOME/hub" \
+    --env VLLM_CACHE_ROOT="$VLLM_CACHE_ROOT" \
     ${NCCL_SOCKET_IFNAME:+--env NCCL_SOCKET_IFNAME="$NCCL_SOCKET_IFNAME"} \
     ${NCCL_IB_HCA:+--env NCCL_IB_HCA="$NCCL_IB_HCA"} \
     ${NCCL_IB_GID_INDEX:+--env NCCL_IB_GID_INDEX="$NCCL_IB_GID_INDEX"} \
     --bind "$RAY_TMP_DIR:$RAY_TMP_DIR" \
+    --bind "$HF_HOME:$HF_HOME" \
+    --bind "$VLLM_CACHE_ROOT:$VLLM_CACHE_ROOT" \
     "$SIF_VLLM" \
     ray start --head --block \
       --node-ip-address "$HEAD_IP" \
@@ -541,6 +547,8 @@ exec apptainer exec --cleanenv --nv \
   --env CUDA_DEVICE_ORDER=PCI_BUS_ID \
   --env RAY_TMPDIR="${RAY_TMP_DIR}" \
   --env HF_HOME="${HF_HOME}" \
+  --env HF_HUB_CACHE="${HF_HOME}/hub" \
+  --env HUGGINGFACE_HUB_CACHE="${HF_HOME}/hub" \
   --env VLLM_CACHE_ROOT="${VLLM_CACHE_ROOT}" \
   ${NCCL_SOCKET_IFNAME:+--env NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME}"} \
   ${NCCL_IB_HCA:+--env NCCL_IB_HCA="${NCCL_IB_HCA}"} \
@@ -636,6 +644,8 @@ VLLM_BACKEND=$([[ $NNODES -gt 1 ]] && echo ray || echo mp)
 VLLM_ENV=(
   --env VLLM_CACHE_ROOT="$VLLM_CACHE_ROOT"
   --env HF_HOME="$HF_HOME"
+  --env HF_HUB_CACHE="$HF_HOME/hub"
+  --env HUGGINGFACE_HUB_CACHE="$HF_HOME/hub"
 )
 if [[ $NNODES -gt 1 ]]; then
   VLLM_ENV+=(--env RAY_ADDRESS="${HEAD_IP}:${RAY_PORT}")
