@@ -51,19 +51,19 @@ const pushHistory = (instanceId: string, note: string): void => {
   s.history = [...s.history, {ts, note}].slice(-20)
 }
 
-const getLatestWaitingCountFor = async (
+const getLatestCountsFor = async (
   db: PostgresJsDatabase<typeof schema>,
   instanceId: string,
   modelName: string,
-): Promise<number> => {
+): Promise<{waiting: number; running: number}> => {
   const rows = await db
-    .select({waiting: schema.vllmStatus.numRequestsWaiting})
+    .select({waiting: schema.vllmStatus.numRequestsWaiting, running: schema.vllmStatus.numRequestsRunning})
     .from(schema.vllmStatus)
     .where(and(eq(schema.vllmStatus.instanceId, instanceId), eq(schema.vllmStatus.modelName, modelName)))
     .orderBy(desc(schema.vllmStatus.ts))
     .limit(1)
 
-  return Number(rows[0]?.waiting ?? 0)
+  return {waiting: Number(rows[0]?.waiting ?? 0), running: Number(rows[0]?.running ?? 0)}
 }
 
 const sumTokensSince = async (
@@ -180,11 +180,16 @@ const decideForWaiting = (
 const decideNextTotal = (
   cur: number,
   waitingCount: number,
+  runningCount: number,
   prevWaiting: number | null,
   warmupTarget: number | undefined,
   snapshots: Snapshot[],
   lastNonZeroTotal: number | null,
 ): NextDecision => {
+  const RUNNING_CAP = 128
+  if (runningCount > RUNNING_CAP) {
+    return {nextTotal: 0, sleeping: true, historyNote: `adjust-batch-size: running=${runningCount} > cap=${RUNNING_CAP} -> sleep`}
+  }
   const waiting = decideForWaiting(waitingCount, prevWaiting, cur, lastNonZeroTotal)
   if (waiting) return waiting
 
@@ -262,10 +267,13 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
       const warmupTarget = getWarmupTarget(isFirstRun, inWarmup, lastTotal, warmup.start, warmup.max)
       const cur = lastTotal ?? warmup.start
 
-      const waitingCount = await getLatestWaitingCountFor(db, instanceId, modelName)
+      const counts = await getLatestCountsFor(db, instanceId, modelName)
+      const waitingCount = counts.waiting
+      const runningCount = counts.running
       const decision = decideNextTotal(
         cur,
         waitingCount,
+        runningCount,
         s.lastWaitingCount,
         warmupTarget,
         s.snapshots,
