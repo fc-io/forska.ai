@@ -28,6 +28,7 @@
     "db:studio": "bun --env-file=.env.local run drizzle-kit studio",
     "db:backup": "bun scripts/dbBackup.ts",
     "db:backup:remote": "bun scripts/dbRemoteBackup.ts",
+    "db:merge:remote": "bun scripts/dbMergeRemoteDump.ts",
     "db:r:p": "bun scripts/dbPush.ts --force --no-restore",
     "db:r:pull": "bun scripts/dbRemotePull.ts",
     "f:p": "bun scripts/sbatchPut.ts"
