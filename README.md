@@ -366,3 +366,4 @@ Notes
     - Stop and remove containers and the named volume: `docker compose down -v`
     - Start again with your env: `docker compose --env-file .env.local up db`
   - Create the DB manually (alternative): `docker exec -it $(docker ps --filter name=db --format '{{.ID}}') psql -U ${DB_USER:-postgres} -c "CREATE DATABASE ${DB_NAME:-appdb};"`
+  - Local: Get the postgres db password from the secret in the running container: `PW=$(ssh alvis2 'ssh alvis3-41 "tr -d \"\r\n\" < \"${STACK_ROOT:-.}/.secrets/db_password.txt\""' | python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.stdin.read().strip(), safe=""))')`

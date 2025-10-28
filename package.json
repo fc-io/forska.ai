@@ -29,19 +29,7 @@
     "db:backup": "bun scripts/dbBackup.ts",
     "db:r:p": "bun scripts/dbPush.ts --force --no-restore",
     "db:r:pull": "bun scripts/dbRemotePull.ts",
-    "f:p": "bun scripts/sbatchPut.ts",
-
-    "bucardo:up": "docker compose up -d db bucardo",
-    "bucardo:logs": "docker compose logs -f bucardo",
-    "bucardo:status": "docker compose exec bucardo bucardo status",
-    "bucardo:dbs": "docker compose exec bucardo bucardo list db",
-    "bucardo:relgroups": "docker compose exec bucardo bucardo list relgroup",
-    "bucardo:syncs": "docker compose exec bucardo bucardo list sync",
-    "bucardo:kick": "docker compose exec bucardo bucardo kick public_all_sync",
-    "bucardo:reload": "docker compose exec bucardo bucardo reload",
-    "bucardo:start": "docker compose exec bucardo bucardo start",
-    "bucardo:stop": "docker compose exec bucardo bucardo stop",
-    "bucardo:restart": "docker compose restart bucardo"
+    "f:p": "bun scripts/sbatchPut.ts"
 
   },
   "dependencies": {
