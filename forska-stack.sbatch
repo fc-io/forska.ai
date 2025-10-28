@@ -298,9 +298,9 @@ if ! ping -c 1 -W 2 "$HEAD_IP" >/dev/null 2>&1; then
   echo "[forska]          This may cause Ray connectivity issues in multi-node setup" >&2
 fi
 # Ray stores Unix domain sockets under its temp dir and Linux limits
-# AF_UNIX socket paths to 107 bytes. Use a short per-job path under STACK_ROOT
-# to keep everything on shared storage while avoiding path length overflows.
-RAY_TMP_DIR=${RAY_TMP_DIR:-$STACK_ROOT/ray/${SLURM_JOB_ID:-$$}}
+# AF_UNIX socket paths to 107 bytes. Must use /tmp for Ray session files.
+# Important data (models, cache, DB) stays on STACK_ROOT.
+RAY_TMP_DIR=${RAY_TMP_DIR:-/tmp/ray-${SLURM_JOB_ID:-$$}}
 
 TOTAL_GPUS=$(( NNODES * GPUS_PER_NODE ))
 DEFAULT_TP=$(( GPUS_PER_NODE > 0 ? GPUS_PER_NODE : 1 ))
