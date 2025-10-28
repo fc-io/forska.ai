@@ -28,6 +28,46 @@ services:
     ports:
       - "${POSTGRES_PORT:-5432}:5432"   # optional for local psql access
 
+  bucardo:
+    image: bucardo/bucardo:latest
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env.local
+    environment:
+      # Bucardo control DB (hosted on local Postgres service)
+      BUCARDO_DB_HOST: db
+      BUCARDO_DB_PORT: 5432
+      BUCARDO_DB_NAME: bucardo
+      BUCARDO_DB_USER: ${DB_USER:-postgres}
+      BUCARDO_DB_PASS: ${DB_PASS:?set DB_PASS in .env.local}
+
+      # Local DB (Compose Postgres)
+      LOCAL_PG_HOST: db
+      LOCAL_PG_PORT: 5432
+      LOCAL_PG_DB: ${DB_NAME:-postgres}
+      LOCAL_PG_USER: ${DB_USER:-postgres}
+      LOCAL_PG_PASS: ${DB_PASS:?set DB_PASS in .env.local}
+
+      # Remote DB (reachable from inside Docker via host.docker.internal)
+      REMOTE_PG_HOST: host.docker.internal
+      REMOTE_PG_PORT: 8432
+      REMOTE_PG_DB: ${DB_NAME:-postgres}
+      REMOTE_PG_USER: ${DB_USER:-postgres}
+      REMOTE_PG_PASS: ${DB_PASS:?set DB_PASS in .env.local}
+
+      # Sync scope and conflict handling
+      SYNC_SCHEMAS: public
+      EXCLUDE_TABLES: drizzle.__drizzle_migrations
+      CONFLICT_STRATEGY: latest
+      CONFLICT_COLUMN: updated_at
+
+    volumes:
+      - ./scripts/bucardo:/scripts/bucardo:ro
+    entrypoint: ["/bin/bash", "/scripts/bucardo/bootstrap.sh"]
+    restart: unless-stopped
+
   vllm:
     image: vllm/vllm-openai:latest
     shm_size: "8gb"
