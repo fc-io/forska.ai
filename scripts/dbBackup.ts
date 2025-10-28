@@ -1,5 +1,6 @@
 import {$} from 'bun'
 import {mkdirSync} from 'fs'
+
 import {env} from './env.ts'
 
 const log = (s: string): void => {
