@@ -15,6 +15,7 @@ type InstanceState = {
   lastWaitingCount: number | null
   lastNonZeroTotal: number | null
   sleeping: boolean
+  hasSeenWaiting: boolean
 }
 
 const instanceStates = new Map<string, InstanceState>()
@@ -40,6 +41,7 @@ const getState = (instanceId: string): InstanceState => {
     lastWaitingCount: null,
     lastNonZeroTotal: null,
     sleeping: false,
+    hasSeenWaiting: false,
   }
   instanceStates.set(instanceId, init)
   return init
@@ -55,15 +57,23 @@ const getLatestCountsFor = async (
   db: PostgresJsDatabase<typeof schema>,
   instanceId: string,
   modelName: string,
-): Promise<{waiting: number; running: number}> => {
+): Promise<{waiting: number; running: number; ts: Date | null}> => {
   const rows = await db
-    .select({waiting: schema.vllmStatus.numRequestsWaiting, running: schema.vllmStatus.numRequestsRunning})
+    .select({
+      waiting: schema.vllmStatus.numRequestsWaiting,
+      running: schema.vllmStatus.numRequestsRunning,
+      ts: schema.vllmStatus.ts,
+    })
     .from(schema.vllmStatus)
     .where(and(eq(schema.vllmStatus.instanceId, instanceId), eq(schema.vllmStatus.modelName, modelName)))
     .orderBy(desc(schema.vllmStatus.ts))
     .limit(1)
 
-  return {waiting: Number(rows[0]?.waiting ?? 0), running: Number(rows[0]?.running ?? 0)}
+  return {
+    waiting: Number(rows[0]?.waiting ?? 0),
+    running: Number(rows[0]?.running ?? 0),
+    ts: rows[0]?.ts ? new Date(rows[0].ts) : null,
+  }
 }
 
 const sumTokensSince = async (
@@ -133,12 +143,16 @@ const applyBatches = async (
 }
 
 const nextFromCompare = (snapshots: Snapshot[], curTotal: number): number => {
+  return nextFromCompareWithStep(snapshots, curTotal, 1, 1)
+}
+
+const nextFromCompareWithStep = (snapshots: Snapshot[], curTotal: number, upStep: number, downStep: number): number => {
   const a = snapshots.at(-1)
   const b = snapshots.at(-2)
-  if (!a || !b) return curTotal + 1
+  if (!a || !b) return curTotal + upStep
   const larger = a.total >= b.total ? a : b
   const smaller = a.total >= b.total ? b : a
-  return larger.totalTokens > smaller.totalTokens ? larger.total + 1 : larger.total - 1
+  return larger.totalTokens > smaller.totalTokens ? larger.total + upStep : larger.total - downStep
 }
 
 const getWarmupTarget = (
@@ -148,7 +162,7 @@ const getWarmupTarget = (
   warmupStart: number,
   warmupMax: number,
 ): number | undefined => {
-  return isFirstRun ? warmupStart : inWarmup && lastTotal != null ? Math.min(lastTotal + 1, warmupMax) : undefined
+  return isFirstRun ? warmupStart : inWarmup && lastTotal != null ? Math.min(lastTotal + 2, warmupMax) : undefined
 }
 
 type NextDecision = {nextTotal: number; sleeping: boolean; historyNote: string | null}
@@ -185,6 +199,8 @@ const decideNextTotal = (
   warmupTarget: number | undefined,
   snapshots: Snapshot[],
   lastNonZeroTotal: number | null,
+  staleStatus: boolean,
+  upStep: number,
 ): NextDecision => {
   const RUNNING_CAP = 196
   if (runningCount > RUNNING_CAP) {
@@ -194,6 +210,9 @@ const decideNextTotal = (
       historyNote: `adjust-batch-size: running=${runningCount} > cap=${RUNNING_CAP} -> sleep`,
     }
   }
+  if (staleStatus) {
+    return {nextTotal: 0, sleeping: true, historyNote: 'adjust-batch-size: waiting=stale-status>2m -> sleep'}
+  }
   const waiting = decideForWaiting(waitingCount, prevWaiting, cur, lastNonZeroTotal)
   if (waiting) return waiting
 
@@ -201,7 +220,7 @@ const decideNextTotal = (
     return {nextTotal: warmupTarget, sleeping: false, historyNote: null}
   }
 
-  return {nextTotal: nextFromCompare(snapshots, cur), sleeping: false, historyNote: null}
+  return {nextTotal: nextFromCompareWithStep(snapshots, cur, upStep, 1), sleeping: false, historyNote: null}
 }
 
 export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof schema>) => {
@@ -274,6 +293,13 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
       const counts = await getLatestCountsFor(db, instanceId, modelName)
       const waitingCount = counts.waiting
       const runningCount = counts.running
+      const lastStatusTs = counts.ts
+      const ageMs = lastStatusTs ? now.getTime() - new Date(lastStatusTs).getTime() : Number.POSITIVE_INFINITY
+      const staleStatus = !inWarmup && ageMs > 2 * 60 * 1000
+
+      if (waitingCount > 0 || staleStatus) s.hasSeenWaiting = true
+
+      const upStep = s.hasSeenWaiting ? 2 : 4
       const decision = decideNextTotal(
         cur,
         waitingCount,
@@ -282,6 +308,8 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
         warmupTarget,
         s.snapshots,
         s.lastNonZeroTotal,
+        staleStatus,
+        upStep,
       )
 
       s.sleeping = decision.sleeping
