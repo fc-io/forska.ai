@@ -187,5 +187,4 @@ export const judgmentsJobsCheckVLLMStatus = async (db: PostgresJsDatabase<typeof
 
     await db.insert(schema.vllmStatus).values(vllmStatusData)
   }
-  console.log('~~~judgmentsJobsCheckVLLMStatus (vllmStatusData sent) 3.~~~')
 }

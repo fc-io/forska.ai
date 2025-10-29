@@ -21,9 +21,14 @@ const NEW_ARTICLES_INTERVAL = '*/3 * * * * *'
 const LLM_PROCESSING_INTERVAL = '*/9 * * * * *'
 const BATCH_SIZE_WARMUP = '0 * * * * *'
 const BATCH_SIZE_ADJUST = '0 */1 * * * *'
+const BATCH_SIZE_STABLE = '0 */3 * * * *'
 const CHECK_VLLM_STATUS = '0 * * * * *'
 const CLEANUP_STALE_REQUESTS = '0 */5 * * * *'
 const START_DELAY_MS = 1000
+
+let hasRunWarmup = false
+let hasRunAdjust = false
+let hasRunStable = false
 
 const getNewArticlesForJobs = async (): Promise<void> => {
   if (!env.RUN_SERVER_JUDGING) return
@@ -36,7 +41,7 @@ const getNewArticlesForJobs = async (): Promise<void> => {
     const totalArticles = newArticlesToProcess.reduce((sum, job) => {
       return sum + job.articlesToJudgeIds.length
     }, 0)
-    console.log(`newArticlesToProcess | jobs: ${newArticlesToProcess.length}, totalArticles: ${totalArticles}`)
+    // console.log(`newArticlesToProcess | jobs: ${newArticlesToProcess.length}, totalArticles: ${totalArticles}`)
     if (totalArticles > 0) {
       await judgmentsJobsAddToJobsQueue(db, newArticlesToProcess, serverJobId)
     }
@@ -51,6 +56,17 @@ const sendToLLMCron = async (): Promise<void> => {
   await judgmentsJobsSendToLLM(db, allJobs, serverJobId)
 }
 const adjustBatchSizeCron = async (phase: string): Promise<void> => {
+  if (phase === 'BATCH_SIZE_WARMUP' && !hasRunWarmup) {
+    console.log(`BATCH_SIZE_WARMUP starting - first run`)
+    hasRunWarmup = true
+  } else if (phase === 'BATCH_SIZE_ADJUST' && !hasRunAdjust) {
+    console.log(`BATCH_SIZE_ADJUST starting - first run`)
+    hasRunAdjust = true
+  } else if (phase === 'BATCH_SIZE_STABLE' && !hasRunStable) {
+    console.log(`BATCH_SIZE_STABLE starting - first run`)
+    hasRunStable = true
+  }
+
   console.log(`~~~adjustBatchSizeCron ${phase} 1.~~~`)
   const db = getDatabase()
   await judgmentsJobsAdjustBatchSize(db)
@@ -100,8 +116,19 @@ export const judgmentsJobsCron = new Elysia()
       name: 'judgments-jobs-batch-size-adjust',
       pattern: BATCH_SIZE_ADJUST,
       startAt: addMinutes(new Date(), 6),
+      maxRuns: 24,
       run: () => {
         return adjustBatchSizeCron('BATCH_SIZE_ADJUST')
+      },
+    }),
+  )
+  .use(
+    cron({
+      name: 'judgments-jobs-batch-size-stable',
+      pattern: BATCH_SIZE_STABLE,
+      startAt: addMinutes(new Date(), 30),
+      run: () => {
+        return adjustBatchSizeCron('BATCH_SIZE_STABLE')
       },
     }),
   )
