@@ -135,6 +135,70 @@ const listImportedTables = async (db: string): Promise<string[]> => {
   return out ? out.split('\n').filter(Boolean) : []
 }
 
+const getForeignKeyEdges = async (
+  db: string,
+): Promise<Array<{ table: string; referencedTable: string }>> => {
+  // List foreign key edges within public schema
+  const sql = `
+    SELECT
+      tc.table_name AS table,
+      ccu.table_name AS referenced_table
+    FROM information_schema.table_constraints AS tc
+    JOIN information_schema.key_column_usage AS kcu
+      ON tc.constraint_name = kcu.constraint_name
+      AND tc.table_schema = kcu.table_schema
+    JOIN information_schema.constraint_column_usage AS ccu
+      ON ccu.constraint_name = tc.constraint_name
+      AND ccu.table_schema = tc.table_schema
+    WHERE tc.constraint_type = 'FOREIGN KEY'
+      AND tc.table_schema = 'public'
+    ORDER BY 1, 2;`
+  const out = await runPsql(db, sql)
+  if (!out) return []
+  return out
+    .split('\n')
+    .filter(Boolean)
+    .map((l) => l.split('|'))
+    .map(([table, referencedTable]) => ({table, referencedTable}))
+}
+
+const topoSortTables = (tables: string[], edges: Array<{ table: string; referencedTable: string }>): string[] => {
+  // Kahn's algorithm constrained to provided tables subset
+  const set = new Set(tables)
+  const adj = new Map<string, Set<string>>()
+  const indeg = new Map<string, number>()
+  for (const t of tables) {
+    adj.set(t, new Set())
+    indeg.set(t, 0)
+  }
+  for (const e of edges) {
+    if (!set.has(e.table) || !set.has(e.referencedTable)) continue
+    // Edge: referencedTable -> table (parent before child)
+    if (!adj.get(e.referencedTable)!.has(e.table)) {
+      adj.get(e.referencedTable)!.add(e.table)
+      indeg.set(e.table, (indeg.get(e.table) || 0) + 1)
+    }
+  }
+  const queue: string[] = []
+  for (const [t, d] of indeg.entries()) if (d === 0) queue.push(t)
+  const out: string[] = []
+  while (queue.length) {
+    const n = queue.shift()!
+    out.push(n)
+    for (const m of adj.get(n) || []) {
+      const d = (indeg.get(m) || 0) - 1
+      indeg.set(m, d)
+      if (d === 0) queue.push(m)
+    }
+  }
+  // If cycle or missing, fall back to original order appended
+  if (out.length !== tables.length) {
+    const missing = tables.filter((t) => !out.includes(t))
+    return [...out, ...missing]
+  }
+  return out
+}
+
 const getTableMeta = async (db: string, table: string): Promise<TableMeta> => {
   const pkeysRaw = await runPsql(
     db,
@@ -244,7 +308,15 @@ const main = async (): Promise<void> => {
 
   const localTables = await listLocalTables(localDb)
   const importedTables = await listImportedTables(localDb)
-  const mergeTables = localTables.filter((t) => importedTables.includes(t))
+  let mergeTables = localTables.filter((t) => importedTables.includes(t))
+
+  // Order tables so parents are merged before children (respect FK deps)
+  const fkEdges = await getForeignKeyEdges(localDb)
+  const ordered = topoSortTables(mergeTables, fkEdges)
+  if (ordered.join(',') !== mergeTables.join(',')) {
+    log(`Reordered tables by FK deps`)
+  }
+  mergeTables = ordered
 
   log(`Tables to merge (${mergeTables.length}): ${mergeTables.join(', ')}`)
 
