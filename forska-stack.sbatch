@@ -730,7 +730,7 @@ apptainer run --cleanenv --nv \
     --host 0.0.0.0 --port 8000 \
     --tensor-parallel-size "$TP_SIZE" \
     --data-parallel-size "$DP_SIZE" \
-    --max-num-seqs 196 \
+    --max-num-seqs 512 \
     --gpu-memory-utilization "$VLLM_GPU_UTIL" \
     --enable-auto-tool-choice \
     --tool-call-parser hermes \

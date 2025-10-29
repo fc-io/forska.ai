@@ -186,9 +186,13 @@ const decideNextTotal = (
   snapshots: Snapshot[],
   lastNonZeroTotal: number | null,
 ): NextDecision => {
-  const RUNNING_CAP = 128
+  const RUNNING_CAP = 196
   if (runningCount > RUNNING_CAP) {
-    return {nextTotal: 0, sleeping: true, historyNote: `adjust-batch-size: running=${runningCount} > cap=${RUNNING_CAP} -> sleep`}
+    return {
+      nextTotal: 0,
+      sleeping: true,
+      historyNote: `adjust-batch-size: running=${runningCount} > cap=${RUNNING_CAP} -> sleep`,
+    }
   }
   const waiting = decideForWaiting(waitingCount, prevWaiting, cur, lastNonZeroTotal)
   if (waiting) return waiting
