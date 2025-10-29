@@ -22,7 +22,6 @@
     "db:ba-mig": "bunx --bun @better-auth/cli migrate",
     "db:ba-gen": "bunx --bun @better-auth/cli generate",
     "db:triggers": "bun src/db/addUpdatedAtTriggers.ts",
-    "db:clear": "bun src/db/clearDatabase.ts",
     "db:seed": "bun src/db/seed.ts",
     "db:seed-auth": "bun src/seedAuth.ts",
     "db:studio": "bun --env-file=.env.local run drizzle-kit studio",
@@ -32,7 +31,6 @@
     "db:r:p": "bun scripts/dbPush.ts --force --no-restore",
     "db:r:pull": "bun scripts/dbRemotePull.ts",
     "f:p": "bun scripts/sbatchPut.ts"
-
   },
   "dependencies": {
     "@ai-sdk/openai": "^2.0.9",
@@ -50,7 +48,7 @@
     "@tanstack/solid-table": "^8.21.3",
     "ai": "^5.0.9",
     "arktype": "^2.1.20",
-    "better-auth": "^1.3.4",
+    "better-auth": "^1.3.34",
     "chart.js": "^4.5.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
