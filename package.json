@@ -30,6 +30,8 @@
     "db:merge-from-remote-dump": "bun scripts/dbMergeRemoteDump.ts",
     "db:r:p": "bun scripts/dbPush.ts --force --no-restore",
     "db:r:pull": "bun scripts/dbRemotePull.ts",
+    "db:clear": "bun scripts/dbClear.ts",
+    "db:reset": "bun scripts/dbClear.ts --drop --force",
     "f:p": "bun scripts/sbatchPut.ts"
   },
   "dependencies": {
