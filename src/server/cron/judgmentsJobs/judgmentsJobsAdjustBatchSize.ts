@@ -312,12 +312,20 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
         upStep,
       )
 
+      const wasSleeping = s.sleeping
       s.sleeping = decision.sleeping
       if (decision.historyNote) pushHistory(instanceId, decision.historyNote)
       s.lastWaitingCount = waitingCount
 
       const maxTotal = 200
-      const finalTotal = s.sleeping ? 0 : clamp(decision.nextTotal, 1, maxTotal)
+      // If we just woke up from sleep, start a bit lower (minus 4)
+      let next = decision.nextTotal
+      if (!s.sleeping && wasSleeping) {
+        const base = s.lastNonZeroTotal ?? next
+        next = base - 4
+        pushHistory(instanceId, `adjust-batch-size: wake-from-sleep -> base=${base} - 4`)
+      }
+      const finalTotal = s.sleeping ? 0 : clamp(next, 1, maxTotal)
       const batches = distribute(finalTotal, list.length, s.rotation)
 
       // accumulate for single update
