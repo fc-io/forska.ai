@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -J forska-stack
+#SBATCH -J forska-alvis
 #SBATCH -A NAISS2025-22-715 -p alvis
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -287,7 +287,7 @@ if [[ -z "${HEAD_IP:-}" ]]; then
 fi
 if [[ -z "${HEAD_IP:-}" ]]; then
   echo "[forska] error: unable to resolve an IPv4 address for head node '$HEAD_NODE'." >&2
-  echo "         Set HEAD_IP=<ipv4> when submitting: sbatch --export=ALL,HEAD_IP=1.2.3.4 forska-stack.sbatch" >&2
+  echo "         Set HEAD_IP=<ipv4> when submitting: sbatch --export=ALL,HEAD_IP=1.2.3.4 forska-alvis.sbatch" >&2
   exit 2
 fi
 echo "[forska] resolved HEAD_IP=$HEAD_IP for head node $HEAD_NODE"
