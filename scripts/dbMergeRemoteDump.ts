@@ -1,16 +1,13 @@
+import {stdin as input, stdout as output} from 'node:process'
+import readline from 'node:readline/promises'
+
 import {$} from 'bun'
 import {mkdirSync, readdirSync, statSync} from 'fs'
 import {basename} from 'path'
-import readline from 'node:readline/promises'
-import {stdin as input, stdout as output} from 'node:process'
+
 import {env} from './env.ts'
 
-type TableMeta = {
-  table: string
-  pkeys: string[]
-  cols: string[]
-  updatable: string[]
-}
+type TableMeta = {table: string; pkeys: string[]; cols: string[]; updatable: string[]}
 
 const log = (s: string): void => {
   console.log(`[dbMerge] ${s}`)
@@ -23,14 +20,22 @@ const fail = (s: string): never => {
 
 const nowStamp = (): string => {
   const d = new Date()
-  const p = (n: number): string => (n < 10 ? `0${n}` : `${n}`)
+  const p = (n: number): string => {
+    return n < 10 ? `0${n}` : `${n}`
+  }
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
 }
 
 const latestFileMatching = (dir: string, prefix: string): string | undefined => {
-  const files = readdirSync(dir).filter((f) => f.startsWith(prefix))
-  const dated = files.map((f) => ({f, mtime: statSync(`${dir}/${f}`).mtimeMs}))
-  const sorted = dated.sort((a, b) => b.mtime - a.mtime)
+  const files = readdirSync(dir).filter((f) => {
+    return f.startsWith(prefix)
+  })
+  const dated = files.map((f) => {
+    return {f, mtime: statSync(`${dir}/${f}`).mtimeMs}
+  })
+  const sorted = dated.sort((a, b) => {
+    return b.mtime - a.mtime
+  })
   return sorted[0]?.f ? `${dir}/${sorted[0].f}` : undefined
 }
 
@@ -41,8 +46,12 @@ const assertLocalDbRunning = async (): Promise<void> => {
   if (running !== 'true') fail('Local db is not running. Start it: docker compose up -d db')
 }
 
-const escapeShell = (s: string): string => s.replace(/'/g, "'\\''")
-const hasArg = (a: string): boolean => process.argv.includes(a)
+const escapeShell = (s: string): string => {
+  return s.replace(/'/g, "'\\''")
+}
+const hasArg = (a: string): boolean => {
+  return process.argv.includes(a)
+}
 const confirmUse = async (file: string): Promise<void> => {
   if (hasArg('--yes') || hasArg('-y')) return
   const rl = readline.createInterface({input, output})
@@ -88,7 +97,8 @@ const createTempDb = async (tempDb: string): Promise<void> => {
 
 const restoreDumpToDb = async (containerDumpPath: string, tempDb: string): Promise<void> => {
   log(`Restore dump into temp database ${tempDb}`)
-  const restore = await $.nothrow()`docker compose exec -T -e PGPASSWORD='${escapeShell(env.DB_PASS)}' db pg_restore -U ${env.DB_USER} -d ${tempDb} --no-owner --no-privileges ${containerDumpPath}`
+  const restore =
+    await $.nothrow()`docker compose exec -T -e PGPASSWORD='${escapeShell(env.DB_PASS)}' db pg_restore -U ${env.DB_USER} -d ${tempDb} --no-owner --no-privileges ${containerDumpPath}`
   if (restore.exitCode !== 0) fail('pg_restore into temp DB failed')
 }
 
@@ -135,9 +145,7 @@ const listImportedTables = async (db: string): Promise<string[]> => {
   return out ? out.split('\n').filter(Boolean) : []
 }
 
-const getForeignKeyEdges = async (
-  db: string,
-): Promise<Array<{ table: string; referencedTable: string }>> => {
+const getForeignKeyEdges = async (db: string): Promise<Array<{table: string; referencedTable: string}>> => {
   // List foreign key edges within public schema
   const sql = `
     SELECT
@@ -158,11 +166,15 @@ const getForeignKeyEdges = async (
   return out
     .split('\n')
     .filter(Boolean)
-    .map((l) => l.split('|'))
-    .map(([table, referencedTable]) => ({table, referencedTable}))
+    .map((l) => {
+      return l.split('|')
+    })
+    .map(([table, referencedTable]) => {
+      return {table, referencedTable}
+    })
 }
 
-const topoSortTables = (tables: string[], edges: Array<{ table: string; referencedTable: string }>): string[] => {
+const topoSortTables = (tables: string[], edges: Array<{table: string; referencedTable: string}>): string[] => {
   // Kahn's algorithm constrained to provided tables subset
   const set = new Set(tables)
   const adj = new Map<string, Set<string>>()
@@ -193,7 +205,9 @@ const topoSortTables = (tables: string[], edges: Array<{ table: string; referenc
   }
   // If cycle or missing, fall back to original order appended
   if (out.length !== tables.length) {
-    const missing = tables.filter((t) => !out.includes(t))
+    const missing = tables.filter((t) => {
+      return !out.includes(t)
+    })
     return [...out, ...missing]
   }
   return out
@@ -230,7 +244,11 @@ const getTableMeta = async (db: string, table: string): Promise<TableMeta> => {
 }
 
 const countMissingKeys = async (db: string, table: string, pkeys: string[]): Promise<number> => {
-  const on = pkeys.map((c) => `t."${c}" = p."${c}"`).join(' AND ')
+  const on = pkeys
+    .map((c) => {
+      return `t."${c}" = p."${c}"`
+    })
+    .join(' AND ')
   const cond = `p."${pkeys[0]}" IS NULL`
   const sql = `SELECT COUNT(*) FROM import_tmp."${table}" t LEFT JOIN public."${table}" p ON ${on} WHERE ${cond};`
   const out = await runPsql(db, sql)
@@ -238,7 +256,11 @@ const countMissingKeys = async (db: string, table: string, pkeys: string[]): Pro
 }
 
 const countMatchingKeys = async (db: string, table: string, pkeys: string[]): Promise<number> => {
-  const on = pkeys.map((c) => `t."${c}" = p."${c}"`).join(' AND ')
+  const on = pkeys
+    .map((c) => {
+      return `t."${c}" = p."${c}"`
+    })
+    .join(' AND ')
   const sql = `SELECT COUNT(*) FROM import_tmp."${table}" t INNER JOIN public."${table}" p ON ${on};`
   const out = await runPsql(db, sql)
   return Number(out || '0')
@@ -246,28 +268,52 @@ const countMatchingKeys = async (db: string, table: string, pkeys: string[]): Pr
 
 const buildUpsertSql = (meta: TableMeta): string => {
   const {table, pkeys, cols, updatable} = meta
-  const colList = cols.map((c) => `"${c}"`).join(', ')
-  const pkList = pkeys.map((c) => `"${c}"`).join(', ')
-  const nonPkUpdates = updatable.filter((c) => !pkeys.includes(c))
-  const setList = nonPkUpdates.map((c) => `"${c}" = EXCLUDED."${c}"`).join(', ')
+  const colList = cols
+    .map((c) => {
+      return `"${c}"`
+    })
+    .join(', ')
+  const pkList = pkeys
+    .map((c) => {
+      return `"${c}"`
+    })
+    .join(', ')
+  const nonPkUpdates = updatable.filter((c) => {
+    return !pkeys.includes(c)
+  })
+  const setList = nonPkUpdates
+    .map((c) => {
+      return `"${c}" = EXCLUDED."${c}"`
+    })
+    .join(', ')
   const whereDiff = nonPkUpdates
-    .map((c) => `(public."${table}"."${c}" IS DISTINCT FROM EXCLUDED."${c}")`)
+    .map((c) => {
+      return `(public."${table}"."${c}" IS DISTINCT FROM EXCLUDED."${c}")`
+    })
     .join(' OR ')
   const hasUpdates = setList.length > 0
-  const updateClause = hasUpdates
-    ? `DO UPDATE SET ${setList}${whereDiff ? ` WHERE ${whereDiff}` : ''}`
-    : 'DO NOTHING'
+  const updateClause = hasUpdates ? `DO UPDATE SET ${setList}${whereDiff ? ` WHERE ${whereDiff}` : ''}` : 'DO NOTHING'
   return `INSERT INTO public."${table}" (${colList})\n  SELECT ${colList} FROM import_tmp."${table}"\n  ON CONFLICT (${pkList}) ${updateClause};`
 }
 
 const adjustSequences = async (db: string, tables: string[]): Promise<void> => {
   const sql = `SELECT c.table_name, c.column_name, pg_get_serial_sequence('public.'||c.table_name, c.column_name) AS seq\n  FROM information_schema.columns c\n  WHERE c.table_schema='public' AND (c.identity_generation IS NOT NULL OR c.column_default LIKE 'nextval(%');`
   const out = await runPsql(db, sql)
-  const rows = out ? out.split('\n').map((l) => l.split('|')) : []
+  const rows = out
+    ? out.split('\n').map((l) => {
+        return l.split('|')
+      })
+    : []
   const entries = rows
-    .map((r) => ({table: r[0], col: r[1], seq: r[2]}))
-    .filter((e) => e.table && e.col && e.seq)
-    .filter((e) => tables.includes(e.table))
+    .map((r) => {
+      return {table: r[0], col: r[1], seq: r[2]}
+    })
+    .filter((e) => {
+      return e.table && e.col && e.seq
+    })
+    .filter((e) => {
+      return tables.includes(e.table)
+    })
   const apply = async (i: number): Promise<void> => {
     if (i >= entries.length) return
     const e = entries[i]
@@ -308,7 +354,9 @@ const main = async (): Promise<void> => {
 
   const localTables = await listLocalTables(localDb)
   const importedTables = await listImportedTables(localDb)
-  let mergeTables = localTables.filter((t) => importedTables.includes(t))
+  let mergeTables = localTables.filter((t) => {
+    return importedTables.includes(t)
+  })
 
   // Order tables so parents are merged before children (respect FK deps)
   const fkEdges = await getForeignKeyEdges(localDb)

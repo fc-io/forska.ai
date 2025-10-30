@@ -1,5 +1,5 @@
 import type {SQL} from 'drizzle-orm'
-import {count, eq, gte, lte, sql} from 'drizzle-orm'
+import {eq, gte, lte, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {
@@ -17,6 +17,21 @@ import {getDatabase} from '../utils/getDatabase'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
 type Database = ReturnType<typeof getDatabase>
+
+type UnassessedCountCacheValue = {value: number; expiresAt: number}
+const unassessedCountTTLms = 10_000
+const unassessedCountCache = new Map<string, UnassessedCountCacheValue>()
+const getUnassessedCountCacheKey = (
+  projectId: string,
+  projectDateFrom: Date | null | undefined,
+  projectDateTo: Date | null | undefined,
+  importRouteIds: string[],
+) => {
+  const from = projectDateFrom ? projectDateFrom.toISOString() : ''
+  const to = projectDateTo ? projectDateTo.toISOString() : ''
+  const routes = importRouteIds.slice().sort().join(',')
+  return `${projectId}|${from}|${to}|${routes}`
+}
 
 const buildProjectDateConditions = ({
   projectDateFrom,
@@ -38,17 +53,10 @@ const buildProjectDateConditions = ({
   return conditions
 }
 
-const buildProjectPromptCondition = (promptIds: string[]): SQL => {
-  const promptArray = sql.join(
-    promptIds.map((promptId) => {
-      return sql`${promptId}::uuid`
-    }),
-    sql`,`,
-  )
-
+const buildProjectPromptCondition = (projectId: string): SQL => {
   return sql`EXISTS (
     SELECT 1 FROM ${prompts} p
-    WHERE p.id = ANY(ARRAY[${promptArray}])
+    WHERE p.project_id = ${projectId}::uuid
     AND NOT EXISTS (
       SELECT 1 FROM ${judgments} j
       WHERE j."article_id" = ${articles.id}
@@ -79,33 +87,39 @@ const buildProjectRouteCondition = (importRouteIds: string[]): SQL => {
 
 const getUnassessedArticlesCount = async ({
   db,
-  promptIds,
+  projectId,
   projectDateFrom,
   projectDateTo,
   importRouteIds,
 }: {
   db: Database
-  promptIds: string[]
+  projectId: string
   projectDateFrom: Date | null | undefined
   projectDateTo: Date | null | undefined
   importRouteIds: string[]
 }): Promise<number> => {
-  if (promptIds.length === 0) {
-    return 0
+  const cacheKey = getUnassessedCountCacheKey(projectId, projectDateFrom, projectDateTo, importRouteIds)
+  const cached = unassessedCountCache.get(cacheKey)
+  const now = Date.now()
+  if (cached && cached.expiresAt > now) {
+    return cached.value
   }
 
-  const whereClauses = [
-    ...buildProjectDateConditions({projectDateFrom, projectDateTo}),
-    buildProjectPromptCondition(promptIds),
-    buildProjectRouteCondition(importRouteIds),
-  ]
+  const dateConditions = buildProjectDateConditions({projectDateFrom, projectDateTo})
+  const conditions: SQL[] = [buildProjectPromptCondition(projectId), ...dateConditions]
+
+  if (importRouteIds.length > 0) {
+    conditions.push(buildProjectRouteCondition(importRouteIds))
+  }
 
   const [{count: unassessedCount = 0} = {count: 0}] = await db
-    .select({count: count()})
+    .select({count: sql<number>`COUNT(*)`})
     .from(articles)
-    .where(sql`${sql.join(whereClauses, sql` AND `)}`)
+    .where(sql`${sql.join(conditions, sql` AND `)}`)
 
-  return unassessedCount
+  const value = Number(unassessedCount)
+  unassessedCountCache.set(cacheKey, {value, expiresAt: now + unassessedCountTTLms})
+  return value
 }
 
 const getJobContext = async ({
@@ -126,7 +140,6 @@ const getJobContext = async ({
   }
   projectDateFrom: Date | null
   projectDateTo: Date | null
-  promptIds: string[]
   importRouteIds: string[]
 }> => {
   const [jobWithProject] = await db
@@ -152,8 +165,6 @@ const getJobContext = async ({
 
   const {projectDateFrom, projectDateTo, ...job} = jobWithProject
 
-  const projectPrompts = await db.select({id: prompts.id}).from(prompts).where(eq(prompts.projectId, job.projectId))
-
   const projectImportRoutes = await db
     .select({importRouteId: projectRouteLink.importRouteId})
     .from(projectRouteLink)
@@ -163,9 +174,6 @@ const getJobContext = async ({
     job,
     projectDateFrom,
     projectDateTo,
-    promptIds: projectPrompts.map((prompt) => {
-      return prompt.id
-    }),
     importRouteIds: projectImportRoutes.map((r) => {
       return r.importRouteId
     }),
@@ -174,13 +182,13 @@ const getJobContext = async ({
 
 const getUnassessedArticles = async ({
   db,
-  promptIds,
+  projectId,
   projectDateFrom,
   projectDateTo,
   importRouteIds,
 }: {
   db: Database
-  promptIds: string[]
+  projectId: string
   projectDateFrom: Date | null | undefined
   projectDateTo: Date | null | undefined
   importRouteIds: string[]
@@ -194,17 +202,20 @@ const getUnassessedArticles = async ({
     articleUpdatedAt: Date | null
   }[]
 > => {
-  if (promptIds.length === 0) {
-    return []
+  const dateConditions: SQL[] = []
+  if (projectDateFrom) {
+    dateConditions.push(gte(articles.articleCreatedAt, projectDateFrom))
+  }
+  if (projectDateTo) {
+    dateConditions.push(lte(articles.articleCreatedAt, projectDateTo))
   }
 
-  const whereClauses = [
-    ...buildProjectDateConditions({projectDateFrom, projectDateTo}),
-    buildProjectPromptCondition(promptIds),
-    buildProjectRouteCondition(importRouteIds),
-  ]
+  const allConditions: SQL[] = [sql`${judgments.id} IS NULL`]
+  if (dateConditions.length > 0) {
+    allConditions.push(...dateConditions)
+  }
 
-  const articlesToAssess = await db
+  let query = db
     .select({
       id: articles.id,
       articleId: articles.articleId,
@@ -214,7 +225,34 @@ const getUnassessedArticles = async ({
       articleUpdatedAt: articles.articleUpdatedAt,
     })
     .from(articles)
-    .where(sql`${sql.join(whereClauses, sql` AND `)}`)
+    .innerJoin(prompts, eq(prompts.projectId, projectId))
+    .leftJoin(
+      judgments,
+      sql`${judgments.articleId} = ${articles.id} AND ${judgments.promptId} = ${prompts.id}`,
+    )
+    .groupBy(
+      articles.id,
+      articles.articleId,
+      articles.articleTitle,
+      articles.articleAuthors,
+      articles.articleCreatedAt,
+      articles.articleUpdatedAt,
+    )
+
+  if (importRouteIds.length > 0) {
+    query = query
+      .innerJoin(articleRouteLink, eq(articleRouteLink.articleId, articles.id))
+      .where(
+        sql`${sql.join(allConditions, sql` AND `)} AND ${articleRouteLink.importRouteId} = ANY(ARRAY[${sql.join(
+          importRouteIds.map((id) => sql`${id}::uuid`),
+          sql`,`,
+        )}])`,
+      )
+  } else {
+    query = query.where(sql`${sql.join(allConditions, sql` AND `)}`)
+  }
+
+  const articlesToAssess = await query
     .orderBy(
       sql`COALESCE(${articles.articleUpdatedAt}, ${articles.articleCreatedAt}, ${articles.createdAt}) DESC, ${articles.id} DESC`,
     )
@@ -261,19 +299,40 @@ export const judgmentsJobsRoutes = new Elysia()
     async ({params}) => {
       const db = getDatabase()
 
-      const {job, projectDateFrom, projectDateTo, promptIds, importRouteIds} = await getJobContext({
+      const {job, projectDateFrom, projectDateTo, importRouteIds} = await getJobContext({
         db,
         jobId: params.id,
       })
 
-      // Get article statistics
-      const articleStats = await db
-        .select({status: judgmentsJobsArticles.status, count: sql<number>`count(*)::int`})
-        .from(judgmentsJobsArticles)
-        .where(eq(judgmentsJobsArticles.jobId, job.id))
-        .groupBy(judgmentsJobsArticles.status)
+      const [articleStats, unassessedCount, totalTokenUsage, tokenUsagePerDay] = await Promise.all([
+        db
+          .select({status: judgmentsJobsArticles.status, count: sql<number>`count(*)::int`})
+          .from(judgmentsJobsArticles)
+          .where(eq(judgmentsJobsArticles.jobId, job.id))
+          .groupBy(judgmentsJobsArticles.status),
+        getUnassessedArticlesCount({db, projectId: job.projectId, projectDateFrom, projectDateTo, importRouteIds}),
+        db
+          .select({
+            totalTokens: sql<number>`COALESCE(SUM(total_tokens), 0)::int`,
+            totalPromptTokens: sql<number>`COALESCE(SUM(total_prompt_tokens), 0)::int`,
+            totalCompletionTokens: sql<number>`COALESCE(SUM(total_completion_tokens), 0)::int`,
+          })
+          .from(tokenUse)
+          .where(eq(tokenUse.judgmentsJobId, job.id)),
+        db
+          .select({
+            date: sql<string>`DATE(created_at AT TIME ZONE 'UTC')`,
+            dailyTokens: sql<number>`SUM(total_tokens)::int`,
+            dailyPromptTokens: sql<number>`SUM(total_prompt_tokens)::int`,
+            dailyCompletionTokens: sql<number>`SUM(total_completion_tokens)::int`,
+            requests: sql<number>`SUM(requests)::int`,
+          })
+          .from(tokenUse)
+          .where(eq(tokenUse.judgmentsJobId, job.id))
+          .groupBy(sql`DATE(created_at AT TIME ZONE 'UTC')`)
+          .orderBy(sql`DATE(created_at AT TIME ZONE 'UTC')`),
+      ])
 
-      // Transform stats into a more usable format
       const stats = {ready: 0, sent: 0, judged: 0}
 
       articleStats.forEach((stat) => {
@@ -281,38 +340,6 @@ export const judgmentsJobsRoutes = new Elysia()
         if (stat.status === 'sent') stats.sent = stat.count
         if (stat.status === 'judged') stats.judged = stat.count
       })
-
-      const unassessedCount = await getUnassessedArticlesCount({
-        db,
-        promptIds,
-        projectDateFrom,
-        projectDateTo,
-        importRouteIds,
-      })
-
-      // Get total token usage for this job
-      const totalTokenUsage = await db
-        .select({
-          totalTokens: sql<number>`COALESCE(SUM(total_tokens), 0)::int`,
-          totalPromptTokens: sql<number>`COALESCE(SUM(total_prompt_tokens), 0)::int`,
-          totalCompletionTokens: sql<number>`COALESCE(SUM(total_completion_tokens), 0)::int`,
-        })
-        .from(tokenUse)
-        .where(eq(tokenUse.judgmentsJobId, job.id))
-
-      // Get token usage per day for this job
-      const tokenUsagePerDay = await db
-        .select({
-          date: sql<string>`DATE(created_at AT TIME ZONE 'UTC')`,
-          dailyTokens: sql<number>`SUM(total_tokens)::int`,
-          dailyPromptTokens: sql<number>`SUM(total_prompt_tokens)::int`,
-          dailyCompletionTokens: sql<number>`SUM(total_completion_tokens)::int`,
-          requests: sql<number>`SUM(requests)::int`,
-        })
-        .from(tokenUse)
-        .where(eq(tokenUse.judgmentsJobId, job.id))
-        .groupBy(sql`DATE(created_at AT TIME ZONE 'UTC')`)
-        .orderBy(sql`DATE(created_at AT TIME ZONE 'UTC')`)
 
       return {
         ...job,
@@ -333,14 +360,14 @@ export const judgmentsJobsRoutes = new Elysia()
     async ({query}) => {
       const db = getDatabase()
 
-      const {projectDateFrom, projectDateTo, promptIds, importRouteIds} = await getJobContext({
+      const {projectDateFrom, projectDateTo, importRouteIds, job} = await getJobContext({
         db,
         jobId: query.jobId,
       })
 
       const unassessedArticles = await getUnassessedArticles({
         db,
-        promptIds,
+        projectId: job.projectId,
         projectDateFrom,
         projectDateTo,
         importRouteIds,

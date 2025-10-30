@@ -1,4 +1,5 @@
 import {Client} from 'pg'
+
 import {env} from '../server/utils/env.ts'
 
 const tablesWithUpdatedAt = [

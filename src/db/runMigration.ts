@@ -1,6 +1,7 @@
 import {readFileSync} from 'fs'
 import {join} from 'path'
 import {Client} from 'pg'
+
 import {env} from '../server/utils/env.ts'
 
 const runMigration = async (): Promise<void> => {

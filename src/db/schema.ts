@@ -358,31 +358,40 @@ export const judgmentsJobs = pgTable(
   },
 )
 
-export const judgmentsJobsArticles = pgTable('judgments_jobs_articles', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
-  updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
-  jobId: uuid('job_id')
-    .notNull()
-    .references(
-      () => {
-        return judgmentsJobs.id
-      },
-      {onDelete: 'cascade'},
-    ),
-  articleId: uuid('article_id')
-    .notNull()
-    .references(
-      () => {
-        return articles.id
-      },
-      {onDelete: 'cascade'},
-    ),
-  serverId: text('server_id'),
-  sentAt: timestamp('sent_at', {withTimezone: true}),
-  judgedAt: timestamp('judged_at', {withTimezone: true}),
-  status: judgmentsJobsArticlesStatusEnum('status').default('ready').notNull(),
-})
+export const judgmentsJobsArticles = pgTable(
+  'judgments_jobs_articles',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
+    jobId: uuid('job_id')
+      .notNull()
+      .references(
+        () => {
+          return judgmentsJobs.id
+        },
+        {onDelete: 'cascade'},
+      ),
+    articleId: uuid('article_id')
+      .notNull()
+      .references(
+        () => {
+          return articles.id
+        },
+        {onDelete: 'cascade'},
+      ),
+    serverId: text('server_id'),
+    sentAt: timestamp('sent_at', {withTimezone: true}),
+    judgedAt: timestamp('judged_at', {withTimezone: true}),
+    status: judgmentsJobsArticlesStatusEnum('status').default('ready').notNull(),
+  },
+  (table) => {
+    return [
+      index('judgments_jobs_articles_job_idx').on(table.jobId),
+      index('judgments_jobs_articles_job_status_idx').on(table.jobId, table.status),
+    ]
+  },
+)
 
 export const prompts = pgTable(
   'prompts',
@@ -482,6 +491,7 @@ export const judgments = pgTable(
     return [
       index('judgments_article_prompt_idx').on(table.articleId, table.promptId),
       index('judgments_article_prompt_answered_idx').on(table.articleId, table.promptId, table.answeredOriginal),
+      index('judgments_prompt_article_idx').on(table.promptId, table.articleId),
     ]
   },
 )
