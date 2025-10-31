@@ -17,6 +17,7 @@ type InstanceState = {
   sleeping: boolean
   hasSeenWaiting: boolean
   maxCeilingTotal: number | null
+  pinnedAtCeilingCount: number
 }
 
 const instanceStates = new Map<string, InstanceState>()
@@ -44,6 +45,7 @@ const getState = (instanceId: string): InstanceState => {
     sleeping: false,
     hasSeenWaiting: false,
     maxCeilingTotal: null,
+    pinnedAtCeilingCount: 0,
   }
   instanceStates.set(instanceId, init)
   return init
@@ -259,6 +261,7 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
 
     const allJobIds: string[] = []
     const allBatches: number[] = []
+    let anyPinnedThreePlus = false
     const summary: Record<
       string,
       {
@@ -303,10 +306,10 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
 
       // Lock a ceiling the first time we observe waiting > 0
       if (waitingCount > 0 && s.maxCeilingTotal == null) {
-        const ceiling = Math.max(1, cur)
+        const ceiling = Math.max(1, cur - 1)
         s.maxCeilingTotal = ceiling
         console.log(
-          `\x1b[31madjust-batch-size: wait>0 -> locking max ceiling to ${ceiling} for instance=${instanceId} model=${modelName} at ${now.toISOString()}\x1b[0m`,
+          `\x1b[31madjust-batch-size: wait>0 -> locking max ceiling to (current-1)=${ceiling} for instance=${instanceId} model=${modelName} at ${now.toISOString()}\x1b[0m`,
         )
       }
 
@@ -340,6 +343,11 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
       const finalTotal = s.sleeping ? 0 : clamp(next, 1, maxHi)
       const batches = distribute(finalTotal, list.length, s.rotation)
 
+      // track consecutive runs pinned at ceiling for this instance
+      const atCeiling = !s.sleeping && s.maxCeilingTotal != null && finalTotal === Math.min(maxTotal, s.maxCeilingTotal)
+      s.pinnedAtCeilingCount = atCeiling ? s.pinnedAtCeilingCount + 1 : 0
+      if (s.pinnedAtCeilingCount >= 3) anyPinnedThreePlus = true
+
       // accumulate for single update
       allJobIds.push(...jobIds)
       allBatches.push(...batches)
@@ -362,6 +370,10 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
 
     if (allJobIds.length > 0) await applyBatches(db, allJobIds, allBatches)
 
-    console.log('adjust-batch-size latest state', {instances: summary})
+    if (anyPinnedThreePlus) {
+      console.log('\x1b[32madjust-batch-size latest state\x1b[0m', {instances: summary})
+    } else {
+      console.log('adjust-batch-size latest state', {instances: summary})
+    }
   }
 }
