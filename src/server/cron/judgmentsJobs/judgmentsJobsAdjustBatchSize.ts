@@ -7,7 +7,7 @@ import {judgmentsJobsGetJobs} from './judgmentsJobsGetJobs.ts'
 type Snapshot = {start: Date; end: Date; totalTokens: number; total: number}
 
 type InstanceState = {
-  lastRun: Date | null
+  timestamp: Date | null
   lastTotal: number | null
   rotation: number
   snapshots: Snapshot[]
@@ -35,7 +35,7 @@ const getState = (instanceId: string): InstanceState => {
   const cur = instanceStates.get(instanceId)
   if (cur) return cur
   const init: InstanceState = {
-    lastRun: null,
+    timestamp: null,
     lastTotal: null,
     rotation: 0,
     snapshots: [],
@@ -270,7 +270,7 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
     let anyPinnedThreePlus = false
     const summary: Record<
       string,
-      {lastRun: Date | null; rotation: number; snapshotCount: number; batchSize: number; jobCount: number}
+      {timestamp: Date | null; rotation: number; snapshotCount: number; batchSize: number; jobCount: number}
     > = {}
 
     for (const [instanceId, list] of byInstance.entries()) {
@@ -281,14 +281,15 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
         return x.jobId
       })
       const currentTotalFromDb = sumBatchSizes(list)
-      const lastRun = s.lastRun
+      const prevTimestamp = s.timestamp
       const lastTotal = s.lastTotal ?? (currentTotalFromDb > 0 ? currentTotalFromDb : null)
 
-      const isFirstRun = !lastRun
+      const isFirstRun = !prevTimestamp
       const inWarmup = !isFirstRun && (lastTotal ?? 0) < warmup.max
 
-      const tokens = lastRun ? await sumTokensSince(db, jobIds, lastRun, now) : 0
-      const prevSnap = lastRun && lastTotal ? [{start: lastRun, end: now, totalTokens: tokens, total: lastTotal}] : []
+      const tokens = prevTimestamp ? await sumTokensSince(db, jobIds, prevTimestamp, now) : 0
+      const prevSnap =
+        prevTimestamp && lastTotal ? [{start: prevTimestamp, end: now, totalTokens: tokens, total: lastTotal}] : []
       s.snapshots = [...s.snapshots, ...prevSnap].slice(-32)
 
       const warmupTarget = getWarmupTarget(isFirstRun, inWarmup, lastTotal, warmup.start, warmup.max)
@@ -352,12 +353,12 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
 
       // update instance state
       s.rotation = (s.rotation + 1) % Math.max(1, list.length)
-      s.lastRun = now
+      s.timestamp = now
       s.lastTotal = finalTotal
       s.lastNonZeroTotal = finalTotal > 0 ? finalTotal : s.lastNonZeroTotal
 
       summary[instanceId] = {
-        lastRun: s.lastRun,
+        timestamp: s.timestamp,
         rotation: s.rotation,
         snapshotCount: s.snapshots.length,
         batchSize: finalTotal,

@@ -307,7 +307,11 @@ export const judge = async ({
   const duration = performance.now() - startDuration
   const finishedAt = new Date().toISOString()
   // console.log('tokenUse:', tokenUse)
-  if (successCount === 0 || errorCount % 100 === 0 || abortCount % 100 === 0 || successCount % 100 === 0) {
+  if (
+    (errorCount % 100 === 0 && errorCount > 0)
+    || (abortCount % 100 === 0 && abortCount > 0)
+    || successCount % 100 === 0
+  ) {
     console.log(`Total: ${errorCount} errorCount,${abortCount} aborts, ${successCount} successes`)
   }
   await judgeStoreTokenUse(tokenUse, sessionId, {startedAt, finishedAt, duration}, judgmentsJobId).catch((error) => {
