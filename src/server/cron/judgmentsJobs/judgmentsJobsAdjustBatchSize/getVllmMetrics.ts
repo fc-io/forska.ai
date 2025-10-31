@@ -75,7 +75,9 @@ const pickOne = (metrics: PromSample[], names: string[], def = 0): number => {
   return def
 }
 
-export const getVllmMetrics = async (baseURL: string): Promise<{
+export const getVllmMetrics = async (
+  baseURL: string,
+): Promise<{
   promptTokensTotal: number
   generationTokensTotal: number
   requestSuccessTotal: number
@@ -100,6 +102,12 @@ export const getVllmMetrics = async (baseURL: string): Promise<{
     numRequestsWaiting: Math.floor(pickOne(metrics, ['vllm:num_requests_waiting'])),
     numRequestsRunning: Math.floor(pickOne(metrics, ['vllm:num_requests_running'])),
     numRequestsSwapped: Math.floor(pickOne(metrics, ['vllm:num_requests_swapped'], 0)),
-    gpuCacheUsagePerc: maxByName(metrics, ['vllm:gpu_cache_usage_ratio', 'vllm:gpu_cache_usage_perc']),
+    // vLLM renamed GPU cache usage metric to kv_cache_usage_*. Prefer new name, fallback to old ones.
+    gpuCacheUsagePerc: maxByName(metrics, [
+      'vllm:kv_cache_usage_perc',
+      'vllm:kv_cache_usage_ratio',
+      'vllm:gpu_cache_usage_ratio',
+      'vllm:gpu_cache_usage_perc',
+    ]),
   }
 }
