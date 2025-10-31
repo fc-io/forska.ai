@@ -303,7 +303,7 @@ export const TokenUsageTimelineDatePicker = (props: TokenUsageTimelineDatePicker
                           return resetSelection({api, onReset: props.onReset})
                         }}
                       >
-                        Use interval range
+                        Show current range
                       </button>
                     </div>
                   </>
