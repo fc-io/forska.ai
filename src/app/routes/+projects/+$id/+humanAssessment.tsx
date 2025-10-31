@@ -72,11 +72,11 @@ export const HumanAssessment = () => {
             <div class="space-y-3">
               <div>
                 <div class="text-sm text-gray-500 mb-1">Title</div>
-                <div class="p-3 border rounded bg-gray-50 text-gray-900">{placeholderTitle}</div>
+                <div class="text-gray-900">{placeholderTitle}</div>
               </div>
               <div>
                 <div class="text-sm text-gray-500 mb-1">Abstract</div>
-                <div class="p-3 border rounded bg-gray-50 text-gray-900 leading-relaxed">
+                <div class="text-gray-900 leading-relaxed">
                   {placeholderAbstract}
                 </div>
               </div>
@@ -84,7 +84,6 @@ export const HumanAssessment = () => {
           </section>
 
           <section class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-            <h2 class="text-lg font-semibold mb-4">Prompts</h2>
             <div class="space-y-6">
               <For each={answers()}>
                 {(item, i) => {
