@@ -19,8 +19,8 @@ Use this checklist to migrate from vLLM to SGLang in small, verifiable steps. Ti
   - Gateway exposes Prometheus metrics at `http://sglang-gateway:30000/metrics` (fields: `sglang_gateway_active_requests`, `sglang_gateway_num_workers`, `sglang_gateway_queue_depth`).
   - Workers expose Prometheus metrics on `http://<worker-host>:30001/metrics` (default port) including `sglang_worker_generated_tokens_total`, `sglang_worker_prefill_tokens_total`, and per-request latency histograms.
   - Fallback: if token totals are unavailable (observed when streaming-only mode enabled), mark engine as `degraded-metrics` so batch-size cron skips auto-adjust.
-- [x] Prepare environment variables (our app): `LLM_PROVIDER`, `LLM_BASE_URL`, `SGLANG_API_KEY` (if required), model identifiers, and cache paths.
-  - Application `.env.local`: set `LLM_PROVIDER=sglang`, `LLM_BASE_URL=http://sglang-gateway:30000/v1`, optional `SGLANG_API_KEY` (injected when Gateway auth is enabled), `LLM_MODEL_JUDGE`, `LLM_MODEL_ASSISTANT`, and `SGLANG_CACHE_DIR=/var/cache/sglang`.
+- [x] Prepare environment variables (our app): `LLM_BASE_URL`, `SGLANG_API_KEY` (if required), and cache paths.
+  - Application `.env.local`: set `LLM_BASE_URL=http://sglang-gateway:30000/v1`, optional `SGLANG_API_KEY` (injected when Gateway auth is enabled), and `SGLANG_CACHE_DIR=/var/cache/sglang`.
   - Docker/Slurm nodes share `HF_HOME` and `XDG_CACHE_HOME` volumes to reuse downloads across workers.
 - [x] Prepare Gateway/Worker process config: use SGLang CLI/env (e.g., `--gateway-host`, `--model-path`, `SGLANG_GATEWAY_URL`) — the Gateway does not read `LLM_BASE_URL` (that is app-only).
   - Gateway command: `sglang.gateway --host 0.0.0.0 --port 30000 --allow-credentials --max-queue-size 256`.
@@ -56,7 +56,7 @@ Use this checklist to migrate from vLLM to SGLang in small, verifiable steps. Ti
 - [ ] Remove vLLM from Docker immediately after SGLang is healthy and cutover completes: delete `vllm` and `vllm-hostnet` services from `docker-compose.yml`, drop `VLLM_*` env vars, and update dependent services to use `LLM_BASE_URL`/`SGLANG_API_KEY`. Re-run `docker compose up -d` to ensure only SGLang remains.
 
 ## Phase 2 — Minimal Functional Swap (OpenAI-compatible)
-- [ ] Add `LLM_PROVIDER=sglang` and `LLM_BASE_URL` to `.env.local` (keep vLLM values available for rollback).
+- [ ] Set `LLM_BASE_URL` in `.env.local` (keep vLLM value available for rollback alongside comment for quick revert).
 - [ ] In `src/agent/judge.ts`, point the OpenAI client `baseURL` to `LLM_BASE_URL` and remove `normalizeVllmModelName()` (not needed for SGLang).
 - [ ] Ensure OpenAI client payload matches SGLang expectations (e.g., `stream: true|false` shape) — some vLLM adapters accepted non-standard payloads.
 - [ ] Smoke test: run SGLang locally/remote and `curl -H "Authorization: Bearer $SGLANG_API_KEY" ${LLM_BASE_URL%/}/models`.
