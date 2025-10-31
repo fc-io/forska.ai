@@ -7,8 +7,12 @@ import type {judgmentsJobsGetJobs} from './judgmentsJobsGetJobs.ts'
 
 type Job = Awaited<ReturnType<typeof judgmentsJobsGetJobs>>[number]
 
+let highestBatchSizePerJob = 0
+
 const fetchArticlesForJob = async (db: PostgresJsDatabase<typeof schema>, job: Job, excludeIds: string[]) => {
-  const batchSize = Math.max(Math.ceil(job.sendToLLMBatchSize / 3), 1)
+  // Track the highest batch size seen and always use that to avoid queue starvation during ramp-up
+  highestBatchSizePerJob = Math.max(highestBatchSizePerJob, job.sendToLLMBatchSize)
+  const batchSize = Math.max(Math.ceil(highestBatchSizePerJob / 3), 1)
   const existingArticleIds = await getProcessingArticleIds(db, job.id)
   const articleData = await judgmentsJobsCronGetArticles(job.projectId, batchSize, [
     ...existingArticleIds,
