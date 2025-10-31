@@ -1,9 +1,10 @@
-import {createFileRoute} from '@tanstack/solid-router'
+import {createFileRoute, Link} from '@tanstack/solid-router'
 import {createSignal, Suspense} from 'solid-js'
 
 import {ReviewsArticlesTableContainer} from '../../../../../components/main/reviews/reviewsArticlesTable/reviewsArticlesTableContainer.tsx'
 import {ReviewsFilterControls} from '../../../../../components/main/reviews/reviewsFilterControls.tsx'
 import {ReviewsTabs} from '../../../../../components/main/reviews/reviewsTabs.tsx'
+import {Button} from '../../../../../components/ui/button'
 
 const Reviews = () => {
   const params = Route.useParams()
@@ -16,7 +17,12 @@ const Reviews = () => {
   return (
     <div class="min-h-screen bg-gray-50 p-6 mx-auto">
       <Suspense>
-        <h1 class="text-1xl font-bold mb-2">Project Reviews</h1>
+        <div class="flex items-center justify-between mb-2">
+          <h1 class="text-1xl font-bold">Project Reviews</h1>
+          <Button as={Link} to="/projects/$id/humanAssessment" params={{id: params().id}} variant="outline" size="sm">
+            Human Assessment
+          </Button>
+        </div>
         <ReviewsTabs projectId={params().id} active="assessed" />
 
         <ReviewsFilterControls

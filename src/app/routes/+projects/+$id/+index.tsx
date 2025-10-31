@@ -59,6 +59,9 @@ const ProjectDetail = () => {
             <Button as={Link} to="/projects/$id/reviews" params={{id: projectId}} variant="outline">
               Project Reviews
             </Button>
+            <Button as={Link} to="/projects/$id/humanAssessment" params={{id: projectId}} variant="outline">
+              Human Assessment
+            </Button>
             <Button as={Link} to="/projects/$id/edit" params={{id: projectId}}>
               Edit Project
             </Button>

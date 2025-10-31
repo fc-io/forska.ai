@@ -98,6 +98,16 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
                   </Button>
                   <Button
                     as={Link}
+                    to="/projects/$id/humanAssessment"
+                    params={{id: project.id}}
+                    variant="outline"
+                    size="sm"
+                    class="px-3 py-1 text-sm"
+                  >
+                    Human Assessment
+                  </Button>
+                  <Button
+                    as={Link}
                     to="/projects/$id/edit"
                     params={{id: project.id}}
                     size="sm"
