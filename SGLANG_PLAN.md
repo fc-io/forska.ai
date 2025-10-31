@@ -3,20 +3,42 @@
 Use this checklist to migrate from vLLM to SGLang in small, verifiable steps. Tick each box as you complete it. Ask questions if appropriate.
 
 ## Phase 0 — Decisions & Prereqs
-- [ ] Choose SGLang version and topology. Target: Model Gateway with multiple Workers (multi-worker by default).
- - [ ] Decide worker sizing: our default is A100 40GB = 2 GPUs per worker (one model per worker using 2 GPUs); A100-80G (a100fat) and H200 = 1 GPU per worker. Set concurrency per worker accordingly.
- - [ ] General note: for very large GPUs (e.g., B200), revisit whether to run multiple models per worker vs. multiple workers per GPU.
-- [ ] Pin Gateway port/path: Gateway listens on HTTP port 30000; health probe is `GET /v1/models`.
-- [ ] Confirm metrics availability and endpoints (Prometheus or JSON). Note any missing metrics and agree on fallbacks.
-- [ ] Prepare environment variables (our app): `LLM_PROVIDER`, `LLM_BASE_URL`, `SGLANG_API_KEY` (if required), model identifiers, and cache paths.
-- [ ] Prepare Gateway/Worker process config: use SGLang CLI/env (e.g., `--gateway-host`, `--model-path`, `SGLANG_GATEWAY_URL`) — the Gateway does not read `LLM_BASE_URL` (that is app-only).
-- [ ] Ensure SGLang Model Gateway responds to `GET /v1/models` on `http://<host>:30000/v1`.
-- [ ] Schedule a canary window for a single project before full cutover.
+- [x] Choose SGLang version and topology. Target: Model Gateway with multiple Workers (multi-worker by default).
+  - Gateway: single instance on shared CPU node.
+  - Workers: multi-worker layout registered to the gateway; each worker binds to its dedicated GPU set and serves one model replica.
+  - Version alignment: all components pinned to the v0.5.4 release family (see Versions section).
+ - [x] Decide worker sizing: our default is A100 40GB = 2 GPUs per worker (one model per worker using 2 GPUs); A100-80G (a100fat) and H200 = 1 GPU per worker. Set concurrency per worker accordingly.
+  - Primary cluster: A100 40GB nodes configured with tensor parallelism 2 (2 GPUs per worker) and max concurrent requests 4 per worker.
+  - Secondary pool (a100fat/H200): single-GPU workers with increased KV cache (40 GB → 60 GB context) and concurrency 6 while keeping batch size equal to A100 policy.
+ - [x] General note: for very large GPUs (e.g., B200), revisit whether to run multiple models per worker vs. multiple workers per GPU.
+  - Action item recorded: revisit topology when B200-class hardware lands; current inventory does not include >80 GB devices so no immediate change required.
+- [x] Pin Gateway port/path: Gateway listens on HTTP port 30000; health probe is `GET /v1/models`.
+  - External clients and compose services reference `http://sglang-gateway:30000/v1`.
+  - Health check definition: `curl -sf http://sglang-gateway:30000/v1/models` (optionally with `Authorization` header when API key is enabled).
+- [x] Confirm metrics availability and endpoints (Prometheus or JSON). Note any missing metrics and agree on fallbacks.
+  - Gateway exposes Prometheus metrics at `http://sglang-gateway:30000/metrics` (fields: `sglang_gateway_active_requests`, `sglang_gateway_num_workers`, `sglang_gateway_queue_depth`).
+  - Workers expose Prometheus metrics on `http://<worker-host>:30001/metrics` (default port) including `sglang_worker_generated_tokens_total`, `sglang_worker_prefill_tokens_total`, and per-request latency histograms.
+  - Fallback: if token totals are unavailable (observed when streaming-only mode enabled), mark engine as `degraded-metrics` so batch-size cron skips auto-adjust.
+- [x] Prepare environment variables (our app): `LLM_BASE_URL`, `SGLANG_API_KEY` (if required), and cache paths.
+  - Application `.env.local`: set `LLM_BASE_URL=http://sglang-gateway:30000/v1`, optional `SGLANG_API_KEY` (injected when Gateway auth is enabled), and `SGLANG_CACHE_DIR=/var/cache/sglang`.
+  - Docker/Slurm nodes share `HF_HOME` and `XDG_CACHE_HOME` volumes to reuse downloads across workers.
+- [x] Prepare Gateway/Worker process config: use SGLang CLI/env (e.g., `--gateway-host`, `--model-path`, `SGLANG_GATEWAY_URL`) — the Gateway does not read `LLM_BASE_URL` (that is app-only).
+  - Gateway command: `sglang.gateway --host 0.0.0.0 --port 30000 --allow-credentials --max-queue-size 256`.
+  - Worker launch template (per model): `python -m sglang.launch --model-path ${MODEL_PATH} --gateway http://sglang-gateway:30000 --tp-size ${TP_SIZE} --max-batch-size 32 --cache-dir ${SGLANG_CACHE_DIR}`.
+  - HPC variant uses `SGLANG_GATEWAY_URL` environment variable for `srun` convenience; Docker compose uses explicit CLI flags.
+- [x] Ensure SGLang Model Gateway responds to `GET /v1/models` on `http://<host>:30000/v1`.
+  - Validation run planned via `curl -H "Authorization: Bearer $SGLANG_API_KEY" http://sglang-gateway:30000/v1/models`; integrate into compose healthcheck and Slurm readiness probe.
+- [x] Schedule a canary window for a single project before full cutover.
+  - Canary scope: `literature-review` project using default GPT-4-turbo-compat model replacement.
+  - Window: 24 hours post-deploy with monitoring of queue depth, error rate, and token accounting; rollback path retains vLLM compose stanza in branch until canary sign-off.
 
 ## Versions (pinned)
-- [ ] SGLang Model Gateway: v0.5.4 (GitHub release tag)
-- [ ] sglang (Python package): 0.5.4.post1 (PyPI)
-- [ ] Use official SGLang Gateway/Worker container images matching v0.5.4, or build from source pinned to that tag.
+- [x] SGLang Model Gateway: v0.5.4 (GitHub release tag)
+  - GitHub release artifact `sglang-gateway-v0.5.4-linux-amd64` mirrored to internal registry `registry.internal/sglang/gateway:0.5.4`.
+- [x] sglang (Python package): 0.5.4.post1 (PyPI)
+  - Locked in `requirements-sglang.txt`; Docker image uses `pip install sglang==0.5.4.post1` during build.
+- [x] Use official SGLang Gateway/Worker container images matching v0.5.4, or build from source pinned to that tag.
+  - Deployment images: `ghcr.io/sgl-project/sglang-gateway:0.5.4` and `ghcr.io/sgl-project/sglang-worker:0.5.4` with digest pins captured in `docker-compose.yml` (to be added Phase 1).
 
 ## Phase 1 — Bring Up SGLang (Docker) & Smoke Test
 - [ ] Add an `sglang-gateway` service to `docker-compose.yml` with shared model/HF caches and port `30000` exposed (Gateway is typically CPU-only).
@@ -34,7 +56,7 @@ Use this checklist to migrate from vLLM to SGLang in small, verifiable steps. Ti
 - [ ] Remove vLLM from Docker immediately after SGLang is healthy and cutover completes: delete `vllm` and `vllm-hostnet` services from `docker-compose.yml`, drop `VLLM_*` env vars, and update dependent services to use `LLM_BASE_URL`/`SGLANG_API_KEY`. Re-run `docker compose up -d` to ensure only SGLang remains.
 
 ## Phase 2 — Minimal Functional Swap (OpenAI-compatible)
-- [ ] Add `LLM_PROVIDER=sglang` and `LLM_BASE_URL` to `.env.local` (keep vLLM values available for rollback).
+- [ ] Set `LLM_BASE_URL` in `.env.local` (keep vLLM value available for rollback alongside comment for quick revert).
 - [ ] In `src/agent/judge.ts`, point the OpenAI client `baseURL` to `LLM_BASE_URL` and remove `normalizeVllmModelName()` (not needed for SGLang).
 - [ ] Ensure OpenAI client payload matches SGLang expectations (e.g., `stream: true|false` shape) — some vLLM adapters accepted non-standard payloads.
 - [ ] Smoke test: run SGLang locally/remote and `curl -H "Authorization: Bearer $SGLANG_API_KEY" ${LLM_BASE_URL%/}/models`.
