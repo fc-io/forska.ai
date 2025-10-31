@@ -731,6 +731,7 @@ apptainer run --cleanenv --nv \
     --tensor-parallel-size "$TP_SIZE" \
     --data-parallel-size "$DP_SIZE" \
     --gpu-memory-utilization "$VLLM_GPU_UTIL" \
+    --max-model-len 8192 \
     --enable-auto-tool-choice \
     --tool-call-parser hermes \
     --reasoning-parser deepseek_r1 \

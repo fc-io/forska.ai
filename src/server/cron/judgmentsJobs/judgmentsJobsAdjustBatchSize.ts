@@ -160,16 +160,18 @@ const nextFromCompareWithStep = (snapshots: Snapshot[], curTotal: number, upStep
 }
 
 const getSecondHighestBatchSizeInHistory = (snapshots: Snapshot[], cur: number): number | null => {
-  const totals = [...snapshots.map((s) => {
-    return s.total
-  }), cur]
-    .filter((n) => {
-      return Number(n) > 0
-    })
+  const totals = [
+    ...snapshots.map((s) => {
+      return s.total
+    }),
+    cur,
+  ].filter((n) => {
+    return Number(n) > 0
+  })
   const uniqueDesc = Array.from(new Set(totals)).sort((a, b) => {
     return b - a
   })
-  return uniqueDesc.length >= 2 ? uniqueDesc[1] ?? null : null
+  return uniqueDesc.length >= 2 ? (uniqueDesc[1] ?? null) : null
 }
 
 const getWarmupTarget = (
@@ -268,14 +270,7 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
     let anyPinnedThreePlus = false
     const summary: Record<
       string,
-      {
-        lastRun: Date | null
-        lastTotal: number | null
-        rotation: number
-        snapshotCount: number
-        assignedTotal: number
-        jobCount: number
-      }
+      {lastRun: Date | null; rotation: number; snapshotCount: number; batchSize: number; jobCount: number}
     > = {}
 
     for (const [instanceId, list] of byInstance.entries()) {
@@ -294,7 +289,7 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
 
       const tokens = lastRun ? await sumTokensSince(db, jobIds, lastRun, now) : 0
       const prevSnap = lastRun && lastTotal ? [{start: lastRun, end: now, totalTokens: tokens, total: lastTotal}] : []
-      s.snapshots = [...s.snapshots, ...prevSnap].slice(-8)
+      s.snapshots = [...s.snapshots, ...prevSnap].slice(-32)
 
       const warmupTarget = getWarmupTarget(isFirstRun, inWarmup, lastTotal, warmup.start, warmup.max)
       const cur = lastTotal ?? warmup.start
@@ -363,10 +358,9 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
 
       summary[instanceId] = {
         lastRun: s.lastRun,
-        lastTotal: s.lastTotal,
         rotation: s.rotation,
         snapshotCount: s.snapshots.length,
-        assignedTotal: finalTotal,
+        batchSize: finalTotal,
         jobCount: list.length,
       }
     }
