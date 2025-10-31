@@ -49,8 +49,6 @@ const safetyTriggered = (
   return waiting > 4 * thr || (Number.isFinite(gpuCache) && gpuCache > 0.95) || (swapped ?? 0) > 0
 }
 
-// Note: Admission control removed. Only computing status metrics now.
-
 const toJSON = (data: unknown): string => {
   try {
     return JSON.stringify(data)
@@ -154,7 +152,8 @@ export const judgmentsJobsCheckVLLMStatus = async (db: PostgresJsDatabase<typeof
 
     // Compute simple in-flight status metrics (no batch-size adjustments)
     const inFlight = numRequestsWaiting + numRequestsRunning
-    const maxInFlight = clamp(64, 4096, Math.round(numRequestsRunning * 6))
+    // Scale maxInFlight by throughput: allow ~60s of queue buffer based on actual rps
+    const maxInFlight = clamp(64, 4096, Math.round(Math.max(rps, 1) * 60))
 
     const vllmStatusData = {
       instanceId,

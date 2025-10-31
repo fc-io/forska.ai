@@ -211,7 +211,6 @@ const decideForWaiting = (
 const decideNextTotal = (
   cur: number,
   waitingCount: number,
-  runningCount: number,
   prevWaiting: number | null,
   warmupTarget: number | undefined,
   snapshots: Snapshot[],
@@ -219,14 +218,6 @@ const decideNextTotal = (
   staleStatus: boolean,
   upStep: number,
 ): NextDecision => {
-  const RUNNING_CAP = 300
-  if (runningCount > RUNNING_CAP) {
-    return {
-      nextTotal: 0,
-      sleeping: true,
-      historyNote: `adjust-batch-size: running=${runningCount} > cap=${RUNNING_CAP} -> sleep`,
-    }
-  }
   if (staleStatus) {
     return {nextTotal: 0, sleeping: true, historyNote: 'adjust-batch-size: waiting=stale-status>1m -> sleep'}
   }
@@ -310,7 +301,6 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
 
       const counts = await getLatestCountsFor(db, instanceId, modelName)
       const waitingCount = counts.waiting
-      const runningCount = counts.running
       const lastStatusTs = counts.ts
       const ageMs = lastStatusTs ? now.getTime() - new Date(lastStatusTs).getTime() : Number.POSITIVE_INFINITY
       const staleStatus = !inWarmup && ageMs > 1 * 60 * 1000
@@ -331,7 +321,6 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
       const decision = decideNextTotal(
         cur,
         waitingCount,
-        runningCount,
         s.lastWaitingCount,
         warmupTarget,
         s.snapshots,
