@@ -5,6 +5,7 @@ alwaysApply: true
 
 IMPORTANT: We use Eden/RPC so derive the types from the API when possible and don't make up new types.
 IMPORTANT: I don't like try, catch, finally, throw. Only use when absolutely necessary.
+IMPORTANT: Avoid branching. If something can be done without, please do without. For example have an type ArrayThatWillLop = array and initalize with an empty array, instead of type LopIfArray = [] | null.
 IMPORTANT: If there is only one export in a file, then the filename should match the name of the exported function
 IMPORTANT: On the server – prefer Drizzle ORM over executing pure SQL commands
 IMPORTANT: On the client/app – use import {useQuery} from '@tanstack/solid-query' over createQuery
