@@ -16,6 +16,7 @@ type InstanceState = {
   lastNonZeroTotal: number | null
   sleeping: boolean
   hasSeenWaiting: boolean
+  maxCeilingTotal: number | null
 }
 
 const instanceStates = new Map<string, InstanceState>()
@@ -42,6 +43,7 @@ const getState = (instanceId: string): InstanceState => {
     lastNonZeroTotal: null,
     sleeping: false,
     hasSeenWaiting: false,
+    maxCeilingTotal: null,
   }
   instanceStates.set(instanceId, init)
   return init
@@ -299,6 +301,15 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
 
       if (waitingCount > 0 || staleStatus) s.hasSeenWaiting = true
 
+      // Lock a ceiling the first time we observe waiting > 0
+      if (waitingCount > 0 && s.maxCeilingTotal == null) {
+        const ceiling = Math.max(1, cur)
+        s.maxCeilingTotal = ceiling
+        console.log(
+          `\x1b[31madjust-batch-size: wait>0 -> locking max ceiling to ${ceiling} for instance=${instanceId} model=${modelName} at ${now.toISOString()}\x1b[0m`,
+        )
+      }
+
       const upStep = s.hasSeenWaiting ? 2 : 4
       const decision = decideNextTotal(
         cur,
@@ -325,7 +336,8 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
         next = base - 4
         pushHistory(instanceId, `adjust-batch-size: wake-from-sleep -> base=${base} - 4`)
       }
-      const finalTotal = s.sleeping ? 0 : clamp(next, 1, maxTotal)
+      const maxHi = s.maxCeilingTotal != null ? Math.min(maxTotal, s.maxCeilingTotal) : maxTotal
+      const finalTotal = s.sleeping ? 0 : clamp(next, 1, maxHi)
       const batches = distribute(finalTotal, list.length, s.rotation)
 
       // accumulate for single update
