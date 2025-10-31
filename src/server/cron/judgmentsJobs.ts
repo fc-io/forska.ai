@@ -22,7 +22,7 @@ const LLM_PROCESSING_INTERVAL = '*/9 * * * * *'
 const BATCH_SIZE_WARMUP = '0 * * * * *'
 const BATCH_SIZE_ADJUST = '0 */1 * * * *'
 const BATCH_SIZE_STABLE = '0 */3 * * * *'
-const CHECK_VLLM_STATUS = '0 * * * * *'
+const CHECK_VLLM_STATUS = '*/30 * * * * *'
 const CLEANUP_STALE_REQUESTS = '0 */5 * * * *'
 const START_DELAY_MS = 1000
 

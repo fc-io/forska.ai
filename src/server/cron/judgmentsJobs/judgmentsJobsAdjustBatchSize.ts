@@ -228,7 +228,7 @@ const decideNextTotal = (
     }
   }
   if (staleStatus) {
-    return {nextTotal: 0, sleeping: true, historyNote: 'adjust-batch-size: waiting=stale-status>2m -> sleep'}
+    return {nextTotal: 0, sleeping: true, historyNote: 'adjust-batch-size: waiting=stale-status>1m -> sleep'}
   }
   const waiting = decideForWaiting(waitingCount, prevWaiting, cur, lastNonZeroTotal)
   if (waiting) return waiting
@@ -313,7 +313,7 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
       const runningCount = counts.running
       const lastStatusTs = counts.ts
       const ageMs = lastStatusTs ? now.getTime() - new Date(lastStatusTs).getTime() : Number.POSITIVE_INFINITY
-      const staleStatus = !inWarmup && ageMs > 2 * 60 * 1000
+      const staleStatus = !inWarmup && ageMs > 1 * 60 * 1000
 
       if (waitingCount > 0 || staleStatus) s.hasSeenWaiting = true
 
