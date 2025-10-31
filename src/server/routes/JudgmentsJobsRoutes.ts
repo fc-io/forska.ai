@@ -226,10 +226,7 @@ const getUnassessedArticles = async ({
     })
     .from(articles)
     .innerJoin(prompts, eq(prompts.projectId, projectId))
-    .leftJoin(
-      judgments,
-      sql`${judgments.articleId} = ${articles.id} AND ${judgments.promptId} = ${prompts.id}`,
-    )
+    .leftJoin(judgments, sql`${judgments.articleId} = ${articles.id} AND ${judgments.promptId} = ${prompts.id}`)
     .groupBy(
       articles.id,
       articles.articleId,
@@ -240,14 +237,14 @@ const getUnassessedArticles = async ({
     )
 
   if (importRouteIds.length > 0) {
-    query = query
-      .innerJoin(articleRouteLink, eq(articleRouteLink.articleId, articles.id))
-      .where(
-        sql`${sql.join(allConditions, sql` AND `)} AND ${articleRouteLink.importRouteId} = ANY(ARRAY[${sql.join(
-          importRouteIds.map((id) => sql`${id}::uuid`),
-          sql`,`,
-        )}])`,
-      )
+    query = query.innerJoin(articleRouteLink, eq(articleRouteLink.articleId, articles.id)).where(
+      sql`${sql.join(allConditions, sql` AND `)} AND ${articleRouteLink.importRouteId} = ANY(ARRAY[${sql.join(
+        importRouteIds.map((id) => {
+          return sql`${id}::uuid`
+        }),
+        sql`,`,
+      )}])`,
+    )
   } else {
     query = query.where(sql`${sql.join(allConditions, sql` AND `)}`)
   }
@@ -299,10 +296,7 @@ export const judgmentsJobsRoutes = new Elysia()
     async ({params}) => {
       const db = getDatabase()
 
-      const {job, projectDateFrom, projectDateTo, importRouteIds} = await getJobContext({
-        db,
-        jobId: params.id,
-      })
+      const {job, projectDateFrom, projectDateTo, importRouteIds} = await getJobContext({db, jobId: params.id})
 
       const [articleStats, totalTokenUsage, tokenUsagePerDay] = await Promise.all([
         db
@@ -358,10 +352,7 @@ export const judgmentsJobsRoutes = new Elysia()
     async ({query}) => {
       const db = getDatabase()
 
-      const {projectDateFrom, projectDateTo, importRouteIds, job} = await getJobContext({
-        db,
-        jobId: query.jobId,
-      })
+      const {projectDateFrom, projectDateTo, importRouteIds, job} = await getJobContext({db, jobId: query.jobId})
 
       const count = await getUnassessedArticlesCount({
         db,
@@ -380,10 +371,7 @@ export const judgmentsJobsRoutes = new Elysia()
     async ({query}) => {
       const db = getDatabase()
 
-      const {projectDateFrom, projectDateTo, importRouteIds, job} = await getJobContext({
-        db,
-        jobId: query.jobId,
-      })
+      const {projectDateFrom, projectDateTo, importRouteIds, job} = await getJobContext({db, jobId: query.jobId})
 
       const unassessedArticles = await getUnassessedArticles({
         db,
