@@ -206,7 +206,7 @@ const decideNextTotal = (
   staleStatus: boolean,
   upStep: number,
 ): NextDecision => {
-  const RUNNING_CAP = 196
+  const RUNNING_CAP = 300
   if (runningCount > RUNNING_CAP) {
     return {
       nextTotal: 0,
