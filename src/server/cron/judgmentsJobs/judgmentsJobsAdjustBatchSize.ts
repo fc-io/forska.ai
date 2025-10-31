@@ -159,6 +159,19 @@ const nextFromCompareWithStep = (snapshots: Snapshot[], curTotal: number, upStep
   return larger.totalTokens > smaller.totalTokens ? larger.total + upStep : larger.total - downStep
 }
 
+const getSecondHighestBatchSizeInHistory = (snapshots: Snapshot[], cur: number): number | null => {
+  const totals = [...snapshots.map((s) => {
+    return s.total
+  }), cur]
+    .filter((n) => {
+      return Number(n) > 0
+    })
+  const uniqueDesc = Array.from(new Set(totals)).sort((a, b) => {
+    return b - a
+  })
+  return uniqueDesc.length >= 2 ? uniqueDesc[1] ?? null : null
+}
+
 const getWarmupTarget = (
   isFirstRun: boolean,
   inWarmup: boolean,
@@ -306,10 +319,11 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
 
       // Lock a ceiling the first time we observe waiting > 0
       if (waitingCount > 0 && s.maxCeilingTotal == null) {
-        const ceiling = Math.max(1, cur - 1)
+        const secondHighest = getSecondHighestBatchSizeInHistory(s.snapshots, cur)
+        const ceiling = secondHighest != null ? secondHighest : Math.max(1, cur - 1)
         s.maxCeilingTotal = ceiling
         console.log(
-          `\x1b[31madjust-batch-size: wait>0 -> locking max ceiling to (current-1)=${ceiling} for instance=${instanceId} model=${modelName} at ${now.toISOString()}\x1b[0m`,
+          `\x1b[31madjust-batch-size: wait>0 -> locking max ceiling to ${secondHighest != null ? `2nd-highest-in-history=${ceiling}` : `(fallback current-1)=${ceiling}`} for instance=${instanceId} model=${modelName} at ${now.toISOString()}\x1b[0m`,
         )
       }
 
