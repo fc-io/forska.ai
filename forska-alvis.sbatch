@@ -728,6 +728,7 @@ apptainer run --cleanenv --nv \
   "$SIF_VLLM" \
   --model Qwen/Qwen3-32B-FP8 \
     --host 0.0.0.0 --port 8000 \
+    --max-num-seqs 256 \
     --tensor-parallel-size "$TP_SIZE" \
     --data-parallel-size "$DP_SIZE" \
     --gpu-memory-utilization "$VLLM_GPU_UTIL" \
