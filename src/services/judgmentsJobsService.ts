@@ -11,7 +11,6 @@ const buildMissingJob = () => {
     error: '',
     projectName: '',
     articleStats: {ready: 0, sent: 0, judged: 0},
-    unassessedArticlesCount: 0,
   }
 }
 

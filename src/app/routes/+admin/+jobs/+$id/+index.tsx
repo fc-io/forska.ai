@@ -5,6 +5,8 @@ import {For, Show, Suspense} from 'solid-js'
 
 import {TokenUsageTimeline} from '../../../../../components/TokenUsageTimeline'
 import {getJudgmentsJobById, pauseJudgmentsJob, startJudgmentsJob} from '../../../../../services/judgmentsJobsService'
+import {apiClient} from '../../../../../services/apiClient.ts'
+import {handleApiResponse} from '../../../../../services/utils/handleApiResponse'
 
 const getStatusColor = (status: string | null) => {
   switch (status) {
@@ -57,6 +59,18 @@ const AdminJudgmentJobDetail = () => {
       refetchInterval: 1000 * 2, // Refresh every 30 seconds
     }
   })
+  const unassessedCountQuery = useQuery(() => {
+    return {
+      queryKey: ['judgments-job-unassessed-count', id()],
+      enabled: Boolean(id()),
+      refetchInterval: 1000 * 2,
+      queryFn: async () => {
+        const response = await apiClient.api['judgmentsjobs-unassessed-count'].get({query: {jobId: id()}})
+        const data = handleApiResponse(response, 'Failed to fetch unassessed count') as {count?: number}
+        return Number(data?.count || 0)
+      },
+    }
+  })
   // console.log('job.data:', job.data?.unassessedArticlesCount)
   // console.log('job.data type:', typeof job, Array.isArray(job))
 
@@ -94,21 +108,14 @@ const AdminJudgmentJobDetail = () => {
           </Show>
 
           <Show when={job.data}>
-          {(jobData) => {
-            const data = jobData
-            const jobDetails = () => {
-              const details = data() as Record<string, unknown> | undefined
-              return details
-            }
+            {(jobData) => {
+              const data = jobData
+              const jobDetails = () => {
+                const details = data() as Record<string, unknown> | undefined
+                return details
+              }
             const unassessedArticlesCount = () => {
-              const details = jobDetails()
-              const unassessedArticlesValue =
-                details && 'unassessedArticlesCount' in details
-                  ? (details as {unassessedArticlesCount?: number | string}).unassessedArticlesCount
-                  : 0
-              return typeof unassessedArticlesValue === 'number'
-                ? unassessedArticlesValue
-                : Number(unassessedArticlesValue) || 0
+              return unassessedCountQuery.data ?? 0
             }
             const formattedUnassessedArticlesCount = () => {
               return unassessedArticlesCount().toLocaleString()
@@ -129,47 +136,47 @@ const AdminJudgmentJobDetail = () => {
             }
             return (
               <>
-                <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
-                  <div class="flex justify-between items-start mb-4">
-                    <div>
-                      <h1 class="text-2xl font-bold text-gray-900">Job</h1>
-                      <p class="text-sm text-gray-500 mt-1 font-mono">{data()?.id}</p>
+                  <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
+                    <div class="flex justify-between items-start mb-4">
+                      <div>
+                        <h1 class="text-2xl font-bold text-gray-900">Job</h1>
+                        <p class="text-sm text-gray-500 mt-1 font-mono">{data()?.id}</p>
+                      </div>
+                      <span
+                        class={`px-3 py-1 rounded-full text-sm font-medium border ${getStatusColor(data()?.status ?? null)}`}
+                      >
+                        {formatStatus(data()?.status ?? null)}
+                      </span>
                     </div>
-                    <span
-                      class={`px-3 py-1 rounded-full text-sm font-medium border ${getStatusColor(data()?.status ?? null)}`}
-                    >
-                      {formatStatus(data()?.status ?? null)}
-                    </span>
-                  </div>
 
-                  <div class="grid grid-cols-2 gap-4 mt-6">
-                    <div>
-                      <p class="text-sm text-gray-500">Project</p>
-                      <p class="font-medium">{data()?.projectName || 'Unknown Project'}</p>
+                    <div class="grid grid-cols-2 gap-4 mt-6">
+                      <div>
+                        <p class="text-sm text-gray-500">Project</p>
+                        <p class="font-medium">{data()?.projectName || 'Unknown Project'}</p>
+                      </div>
+                      <div>
+                        <p class="text-sm text-gray-500">Project ID</p>
+                        <p class="font-mono text-sm">{data()?.projectId}</p>
+                      </div>
+                      <div>
+                        <p class="text-sm text-gray-500">Created</p>
+                        <p class="font-medium">
+                          {data()?.createdAt ? formatDate(new Date(data().createdAt), 'yyyy-MM-dd HH:mm:ss') : 'N/A'}
+                        </p>
+                      </div>
+                      <div>
+                        <p class="text-sm text-gray-500">Last Updated</p>
+                        <p class="font-medium">
+                          {data()?.updatedAt ? formatDate(new Date(data().updatedAt), 'yyyy-MM-dd HH:mm:ss') : 'N/A'}
+                        </p>
+                      </div>
                     </div>
-                    <div>
-                      <p class="text-sm text-gray-500">Project ID</p>
-                      <p class="font-mono text-sm">{data()?.projectId}</p>
-                    </div>
-                    <div>
-                      <p class="text-sm text-gray-500">Created</p>
-                      <p class="font-medium">
-                        {data()?.createdAt ? formatDate(new Date(data().createdAt), 'yyyy-MM-dd HH:mm:ss') : 'N/A'}
-                      </p>
-                    </div>
-                    <div>
-                      <p class="text-sm text-gray-500">Last Updated</p>
-                      <p class="font-medium">
-                        {data()?.updatedAt ? formatDate(new Date(data().updatedAt), 'yyyy-MM-dd HH:mm:ss') : 'N/A'}
-                      </p>
-                    </div>
-                  </div>
 
                   <div class="mt-6 pt-6 border-t border-gray-200">
                     <h3 class="text-sm font-medium text-gray-900 mb-3">Project</h3>
-                    <Show when={data() && 'unassessedArticlesCount' in (data() as any)}>
-                      <div class="mb-4 space-y-1">
-                        <p class="text-sm text-gray-500">Unassessed Articles</p>
+                    <div class="mb-4 space-y-1">
+                      <p class="text-sm text-gray-500">Unassessed Articles</p>
+                      <Show when={!unassessedCountQuery.isLoading} fallback={<p class="font-medium">Loading…</p>}>
                         <Show
                           when={shouldLinkToUnassessedArticles()}
                           fallback={<p class="font-medium">{formattedUnassessedArticlesCount()}</p>}
@@ -178,127 +185,129 @@ const AdminJudgmentJobDetail = () => {
                             {formattedUnassessedArticlesCount()}
                           </Link>
                         </Show>
-                      </div>
-                    </Show>
+                      </Show>
+                    </div>
                     <Show when={data() && 'totalTokenUsage' in (data() as any) && (data() as any).totalTokenUsage}>
                       <div class="grid grid-cols-3 gap-4">
                         <div>
-                          <p class="text-sm text-gray-500">Total Tokens</p>
-                          <p class="font-medium">
-                            {data() && 'totalTokenUsage' in (data() as any)
-                              ? (data() as any).totalTokenUsage?.totalTokens?.toLocaleString() || '0'
-                              : '0'}
-                          </p>
+                            <p class="text-sm text-gray-500">Total Tokens</p>
+                            <p class="font-medium">
+                              {data() && 'totalTokenUsage' in (data() as any)
+                                ? (data() as any).totalTokenUsage?.totalTokens?.toLocaleString() || '0'
+                                : '0'}
+                            </p>
+                          </div>
+                          <div>
+                            <p class="text-sm text-gray-500">Prompt Tokens</p>
+                            <p class="font-medium">
+                              {data() && 'totalTokenUsage' in (data() as any)
+                                ? (data() as any).totalTokenUsage?.totalPromptTokens?.toLocaleString() || '0'
+                                : '0'}
+                            </p>
+                          </div>
+                          <div>
+                            <p class="text-sm text-gray-500">Completion Tokens</p>
+                            <p class="font-medium">
+                              {data() && 'totalTokenUsage' in (data() as any)
+                                ? (data() as any).totalTokenUsage?.totalCompletionTokens?.toLocaleString() || '0'
+                                : '0'}
+                            </p>
+                          </div>
                         </div>
-                        <div>
-                          <p class="text-sm text-gray-500">Prompt Tokens</p>
-                          <p class="font-medium">
-                            {data() && 'totalTokenUsage' in (data() as any)
-                              ? (data() as any).totalTokenUsage?.totalPromptTokens?.toLocaleString() || '0'
-                              : '0'}
-                          </p>
-                        </div>
-                        <div>
-                          <p class="text-sm text-gray-500">Completion Tokens</p>
-                          <p class="font-medium">
-                            {data() && 'totalTokenUsage' in (data() as any)
-                              ? (data() as any).totalTokenUsage?.totalCompletionTokens?.toLocaleString() || '0'
-                              : '0'}
-                          </p>
-                        </div>
-                      </div>
-                    </Show>
-                  </div>
-                </div>
-                <Show when={data() && 'articleStats' in (data() as any) && (data() as any).articleStats}>
-                  <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
-                    <h2 class="text-lg font-semibold mb-4">Job Queue</h2>
-                    <div class="grid grid-cols-3 gap-4">
-                      <div class="bg-gray-50 rounded-lg p-4">
-                        <p class="text-sm text-gray-500 mb-1">Ready</p>
-                        <p class="text-2xl font-bold text-gray-900">
-                          {data() && 'articleStats' in (data() as any) ? (data() as any).articleStats?.ready || 0 : 0}
-                        </p>
-                        <p class="text-xs text-gray-500 mt-1">Articles ready to process</p>
-                      </div>
-                      <div class="bg-blue-50 rounded-lg p-4">
-                        <p class="text-sm text-blue-600 mb-1">Sent</p>
-                        <p class="text-2xl font-bold text-blue-900">
-                          {data() && 'articleStats' in (data() as any) ? (data() as any).articleStats?.sent || 0 : 0}
-                        </p>
-                        <p class="text-xs text-blue-600 mt-1">Articles sent for judgment</p>
-                      </div>
-                      <div class="bg-green-50 rounded-lg p-4">
-                        <p class="text-sm text-green-600 mb-1">Judged</p>
-                        <p class="text-2xl font-bold text-green-900">
-                          {data() && 'articleStats' in (data() as any) ? (data() as any).articleStats?.judged || 0 : 0}
-                        </p>
-                        <p class="text-xs text-green-600 mt-1">Articles completed</p>
-                      </div>
+                      </Show>
                     </div>
                   </div>
-                </Show>
+                  <Show when={data() && 'articleStats' in (data() as any) && (data() as any).articleStats}>
+                    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
+                      <h2 class="text-lg font-semibold mb-4">Job Queue</h2>
+                      <div class="grid grid-cols-3 gap-4">
+                        <div class="bg-gray-50 rounded-lg p-4">
+                          <p class="text-sm text-gray-500 mb-1">Ready</p>
+                          <p class="text-2xl font-bold text-gray-900">
+                            {data() && 'articleStats' in (data() as any) ? (data() as any).articleStats?.ready || 0 : 0}
+                          </p>
+                          <p class="text-xs text-gray-500 mt-1">Articles ready to process</p>
+                        </div>
+                        <div class="bg-blue-50 rounded-lg p-4">
+                          <p class="text-sm text-blue-600 mb-1">Sent</p>
+                          <p class="text-2xl font-bold text-blue-900">
+                            {data() && 'articleStats' in (data() as any) ? (data() as any).articleStats?.sent || 0 : 0}
+                          </p>
+                          <p class="text-xs text-blue-600 mt-1">Articles sent for judgment</p>
+                        </div>
+                        <div class="bg-green-50 rounded-lg p-4">
+                          <p class="text-sm text-green-600 mb-1">Judged</p>
+                          <p class="text-2xl font-bold text-green-900">
+                            {data() && 'articleStats' in (data() as any)
+                              ? (data() as any).articleStats?.judged || 0
+                              : 0}
+                          </p>
+                          <p class="text-xs text-green-600 mt-1">Articles completed</p>
+                        </div>
+                      </div>
+                    </div>
+                  </Show>
 
-                <Show when={Array.isArray((data() as any)?.error) && (data() as any).error.length > 0}>
-                  <div class="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
-                    <h2 class="text-lg font-semibold text-red-900 mb-2">Errors</h2>
-                    <ul class="list-disc list-inside space-y-1">
-                      <For each={Array.isArray((data() as any)?.error) ? (data() as any).error : []}>
-                        {(err) => {
-                          return <li class="text-red-700">{err}</li>
-                        }}
-                      </For>
-                    </ul>
-                  </div>
-                </Show>
+                  <Show when={Array.isArray((data() as any)?.error) && (data() as any).error.length > 0}>
+                    <div class="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
+                      <h2 class="text-lg font-semibold text-red-900 mb-2">Errors</h2>
+                      <ul class="list-disc list-inside space-y-1">
+                        <For each={Array.isArray((data() as any)?.error) ? (data() as any).error : []}>
+                          {(err) => {
+                            return <li class="text-red-700">{err}</li>
+                          }}
+                        </For>
+                      </ul>
+                    </div>
+                  </Show>
 
-                <Show when={data()?.projectId}>
-                  <div class="mb-6">
-                    <TokenUsageTimeline projectId={data().projectId} />
-                  </div>
-                </Show>
+                  <Show when={data()?.projectId}>
+                    <div class="mb-6">
+                      <TokenUsageTimeline projectId={data().projectId} />
+                    </div>
+                  </Show>
 
-                <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-                  <h2 class="text-lg font-semibold mb-4">Actions</h2>
-                  <div class="flex gap-3">
-                    <Show when={data()?.status === 'running'}>
-                      <button
-                        class="px-4 py-2 bg-yellow-600 text-white rounded-md hover:bg-yellow-700"
-                        onClick={() => {
-                          const id = data()?.id
-                          return id
-                            ? pauseJudgmentsJob(id).then(() => {
-                                return job.refetch()
-                              })
-                            : undefined
-                        }}
-                      >
-                        Pause Job
-                      </button>
-                    </Show>
-                    <Show when={data()?.status === 'paused_by_admin' || data()?.status === 'paused_by_user'}>
-                      <button
-                        class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
-                        onClick={() => {
-                          const id = data()?.id
-                          return id
-                            ? startJudgmentsJob(id).then(() => {
-                                return job.refetch()
-                              })
-                            : undefined
-                        }}
-                      >
-                        Start Job
-                      </button>
-                    </Show>
-                    <Show when={data()?.status === 'failed'}>
-                      <button class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">Retry Job</button>
-                    </Show>
+                  <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+                    <h2 class="text-lg font-semibold mb-4">Actions</h2>
+                    <div class="flex gap-3">
+                      <Show when={data()?.status === 'running'}>
+                        <button
+                          class="px-4 py-2 bg-yellow-600 text-white rounded-md hover:bg-yellow-700"
+                          onClick={() => {
+                            const id = data()?.id
+                            return id
+                              ? pauseJudgmentsJob(id).then(() => {
+                                  return job.refetch()
+                                })
+                              : undefined
+                          }}
+                        >
+                          Pause Job
+                        </button>
+                      </Show>
+                      <Show when={data()?.status === 'paused_by_admin' || data()?.status === 'paused_by_user'}>
+                        <button
+                          class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
+                          onClick={() => {
+                            const id = data()?.id
+                            return id
+                              ? startJudgmentsJob(id).then(() => {
+                                  return job.refetch()
+                                })
+                              : undefined
+                          }}
+                        >
+                          Start Job
+                        </button>
+                      </Show>
+                      <Show when={data()?.status === 'failed'}>
+                        <button class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">Retry Job</button>
+                      </Show>
+                    </div>
                   </div>
-                </div>
-              </>
-            )
-          }}
+                </>
+              )
+            }}
           </Show>
         </Suspense>
       </div>

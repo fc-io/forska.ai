@@ -304,13 +304,12 @@ export const judgmentsJobsRoutes = new Elysia()
         jobId: params.id,
       })
 
-      const [articleStats, unassessedCount, totalTokenUsage, tokenUsagePerDay] = await Promise.all([
+      const [articleStats, totalTokenUsage, tokenUsagePerDay] = await Promise.all([
         db
           .select({status: judgmentsJobsArticles.status, count: sql<number>`count(*)::int`})
           .from(judgmentsJobsArticles)
           .where(eq(judgmentsJobsArticles.jobId, job.id))
           .groupBy(judgmentsJobsArticles.status),
-        getUnassessedArticlesCount({db, projectId: job.projectId, projectDateFrom, projectDateTo, importRouteIds}),
         db
           .select({
             totalTokens: sql<number>`COALESCE(SUM(total_tokens), 0)::int`,
@@ -344,7 +343,6 @@ export const judgmentsJobsRoutes = new Elysia()
       return {
         ...job,
         articleStats: stats,
-        unassessedArticlesCount: unassessedCount,
         totalTokenUsage: {
           totalTokens: totalTokenUsage[0]?.totalTokens || 0,
           totalPromptTokens: totalTokenUsage[0]?.totalPromptTokens || 0,
@@ -354,6 +352,28 @@ export const judgmentsJobsRoutes = new Elysia()
       }
     },
     {params: t.Object({id: t.String()})},
+  )
+  .get(
+    '/api/judgmentsjobs-unassessed-count',
+    async ({query}) => {
+      const db = getDatabase()
+
+      const {projectDateFrom, projectDateTo, importRouteIds, job} = await getJobContext({
+        db,
+        jobId: query.jobId,
+      })
+
+      const count = await getUnassessedArticlesCount({
+        db,
+        projectId: job.projectId,
+        projectDateFrom,
+        projectDateTo,
+        importRouteIds,
+      })
+
+      return {count}
+    },
+    {query: t.Object({jobId: t.String()})},
   )
   .get(
     '/api/judgmentsjobs-unassessed-articles',
