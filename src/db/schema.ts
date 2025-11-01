@@ -42,6 +42,8 @@ export const judgmentsJobsArticlesStatusEnum = pgEnum('judgments_jobs_articles_s
   'judged_and_ready_to_remove_from_queue',
 ])
 
+export const engineEnum = pgEnum('engine_enum', ['sglang', 'vllm'])
+
 export const articles = pgTable(
   'articles',
   {
@@ -671,6 +673,55 @@ export const vllmStatus = pgTable(
       index('vllm_status_ts_idx').on(table.ts),
       uniqueIndex('vllm_status_instance_ts_idx').on(table.instanceId, table.ts),
       index('vllm_status_model_ts_idx').on(table.modelName, table.ts),
+    ]
+  },
+)
+
+export const llmStatus = pgTable(
+  'llm_status',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+
+    ts: timestamp('ts', {withTimezone: true}).defaultNow().notNull(),
+
+    engine: engineEnum('engine').notNull(),
+    instanceId: text('instance_id').notNull(),
+    modelName: text('model_name').notNull(),
+    engineVersion: text('engine_version'),
+    gpuType: text('gpu_type'),
+    gpuCount: integer('gpu_count'),
+    pollMs: integer('poll_ms').notNull().default(2000),
+
+    prefillTokensTotal: bigint('prefill_tokens_total', {mode: 'number'}).notNull().default(0),
+    genTokensTotal: bigint('gen_tokens_total', {mode: 'number'}).notNull().default(0),
+    requestSuccessTotal: bigint('request_success_total', {mode: 'number'}),
+    requestErrorTotal: bigint('request_error_total', {mode: 'number'}),
+    preemptionsTotal: bigint('preemptions_total', {mode: 'number'}),
+
+    numRequestsWaiting: integer('num_requests_waiting').notNull().default(0),
+    numRequestsRunning: integer('num_requests_running').notNull().default(0),
+    gpuCacheUsagePerc: doublePrecision('gpu_cache_usage_perc'),
+    numRequestsSwapped: integer('num_requests_swapped'),
+
+    prefillTps: doublePrecision('prefill_tps'),
+    genTps: doublePrecision('gen_tps'),
+    rps: doublePrecision('rps'),
+
+    targetGenTps: doublePrecision('target_gen_tps'),
+    targetPrefillTps: doublePrecision('target_prefill_tps'),
+    inFlight: integer('in_flight'),
+    maxInFlight: integer('max_in_flight'),
+    lastAction: text('last_action'),
+
+    e2eLatency: jsonb('e2e_latency_buckets'),
+    ttftLatency: jsonb('ttft_latency_buckets'),
+    itlLatency: jsonb('itl_latency_buckets'),
+  },
+  (table) => {
+    return [
+      index('llm_status_ts_idx').on(table.ts),
+      uniqueIndex('llm_status_engine_instance_ts_idx').on(table.engine, table.instanceId, table.ts),
+      index('llm_status_model_ts_idx').on(table.modelName, table.ts),
     ]
   },
 )

@@ -74,9 +74,9 @@ Use this checklist to migrate from vLLM to SGLang in small, verifiable steps. Ti
 - [ ] Update `src/server/cron/judgmentsJobs/judgmentsJobsAdjustBatchSize.ts` to read provider-agnostic fields; guard safety logic when metrics are missing or `degraded-metrics` is set.
 
 ## Phase 4 — Database Schema (Drizzle)
-- [ ] Prefer additive changes: create a new `llm_status` table (do not rename or alter existing `vllm_status`).
-- [ ] Add an `engine` column to `llm_status` (values like `'sglang' | 'vllm'`) to allow multi-engine reporting if needed.
-- [ ] Update `src/db/schema.ts` to define the new `llm_status` table and indices; leave `vllm_status` untouched for historical data.
+- [x] Prefer additive changes: create a new `llm_status` table (do not rename or alter existing `vllm_status`).
+- [x] Add an `engine` column to `llm_status` (values like `'sglang' | 'vllm'`) to allow multi-engine reporting if needed.
+- [x] Update `src/db/schema.ts` to define the new `llm_status` table and indices; leave `vllm_status` untouched for historical data.
 - [ ] Generate and apply migrations: `bun run db:gen` → `bun run db:mig`.
 - [ ] Update ingestion code (`judgmentsJobsCheckLLMStatus.ts`) and readers to use `llm_status` going forward.
 
