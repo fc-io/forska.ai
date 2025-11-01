@@ -45,7 +45,7 @@ Use this checklist to migrate from vLLM to SGLang in small, verifiable steps. Ti
 - [x] Add an `sglang-gateway` service to `docker-compose.yml` with shared model/HF caches and port `30000` exposed (Gateway is typically CPU-only).
 - [x] Add an `sglang-worker` service definition that connects to the Gateway and mounts the same model/HF caches. Configure workers to use GPUs.
 - [x] Set `LLM_BASE_URL=http://localhost:30000/v1` in `.env.local` (app env only) and swap to the service name/hostname when running inside Docker networks or remote workers.
- 
+
 - [ ] Start locally: `docker compose up -d sglang-gateway`.
  - [ ] Scale workers: scale by number of workers (not GPUs). For A100 40GB, each worker uses 2 GPUs; for a100fat/H200, each worker uses 1 GPU.
  - [ ] Verify health: `curl -sf ${LLM_BASE_URL%/}/models` returns models; check `docker compose logs -f sglang-gateway` for readiness.
@@ -57,7 +57,7 @@ Use this checklist to migrate from vLLM to SGLang in small, verifiable steps. Ti
 - [ ] Remove vLLM from Docker immediately after SGLang is healthy and cutover completes: delete `vllm` and `vllm-hostnet` services from `docker-compose.yml`, drop `VLLM_*` env vars, and update dependent services to use `LLM_BASE_URL`. Re-run `docker compose up -d` to ensure only SGLang remains.
 
 ## Phase 2 — Minimal Functional Swap (OpenAI-compatible)
-- [ ] Set `LLM_BASE_URL` in `.env.local` (keep vLLM value available for rollback alongside comment for quick revert).
+- [x] Set `LLM_BASE_URL` in `.env.local` (keep vLLM value available for rollback alongside comment for quick revert).
 - [ ] In `src/agent/judge.ts`, point the OpenAI client `baseURL` to `LLM_BASE_URL` and remove `normalizeVllmModelName()` (not needed for SGLang).
 - [ ] Ensure OpenAI client payload matches SGLang expectations (e.g., `stream: true|false` shape) — some vLLM adapters accepted non-standard payloads.
 - [ ] Smoke test: run SGLang locally/remote and `curl -sf ${LLM_BASE_URL%/}/models`.
@@ -77,7 +77,7 @@ Use this checklist to migrate from vLLM to SGLang in small, verifiable steps. Ti
 - [x] Prefer additive changes: create a new `llm_status` table (do not rename or alter existing `vllm_status`).
 - [x] Add an `engine` column to `llm_status` (values like `'sglang' | 'vllm'`) to allow multi-engine reporting if needed.
 - [x] Update `src/db/schema.ts` to define the new `llm_status` table and indices; leave `vllm_status` untouched for historical data.
-- [ ] Generate and apply migrations: `bun run db:gen` → `bun run db:mig`.
+- [x] Generate and apply migrations: `bun run db:gen` → `bun run db:mig`.
 - [ ] Update ingestion code (`judgmentsJobsCheckLLMStatus.ts`) and readers to use `llm_status` going forward.
 
 ### Phase 4.1 — Project-level Engine Fields (App-level)
