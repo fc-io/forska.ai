@@ -57,6 +57,51 @@ services:
     ports:
       - "8000:8000"
 
+  sglang-gateway:
+    image: ghcr.io/sgl-project/sglang-gateway:0.5.4
+    environment:
+      HF_HOME: /cache/hf
+      XDG_CACHE_HOME: /cache/xdg
+    volumes:
+      - ./cache/hf:/cache/hf
+      - ./cache/xdg:/cache/xdg
+    command: >
+      --host 0.0.0.0
+      --port 30000
+      --allow-credentials
+      --max-queue-size 256
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:30000/v1/models >/dev/null"]
+      interval: 20s
+      timeout: 5s
+      retries: 12
+    ports:
+      - "30000:30000"
+
+  sglang-worker:
+    image: ghcr.io/sgl-project/sglang-worker:0.5.4
+    environment:
+      HF_HOME: /cache/hf
+      XDG_CACHE_HOME: /cache/xdg
+      SGLANG_CACHE_DIR: /cache/sglang
+      SGLANG_GATEWAY_URL: http://sglang-gateway:30000
+      MODEL_PATH: ${MODEL_PATH:-/models/Qwen3-32B-FP8}
+      TP_SIZE: ${TP_SIZE:-1}
+    volumes:
+      - ${HOST_MODELS_DIR:-./models}:/models:ro
+      - ./cache/hf:/cache/hf
+      - ./cache/xdg:/cache/xdg
+      - ./cache/sglang:/cache/sglang
+    command: >
+      --model-path ${MODEL_PATH:-/models/Qwen3-32B-FP8}
+      --gateway ${SGLANG_GATEWAY_URL:-http://sglang-gateway:30000}
+      --tp-size ${TP_SIZE:-1}
+      --max-batch-size ${MAX_BATCH_SIZE:-32}
+      --cache-dir ${SGLANG_CACHE_DIR:-/cache/sglang}
+    gpus: all
+    depends_on:
+      - sglang-gateway
+
   api-server:
     build:
       context: .
