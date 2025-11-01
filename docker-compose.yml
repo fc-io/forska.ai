@@ -58,7 +58,8 @@ services:
       - "8000:8000"
 
   sglang-gateway:
-    image: ghcr.io/sgl-project/sglang-gateway:0.5.4
+    image: lmsysorg/sglang:latest
+    entrypoint: ["python", "-m", "sglang.gateway"]
     environment:
       HF_HOME: /cache/hf
       XDG_CACHE_HOME: /cache/xdg
@@ -79,7 +80,8 @@ services:
       - "30000:30000"
 
   sglang-worker:
-    image: ghcr.io/sgl-project/sglang-worker:0.5.4
+    image: lmsysorg/sglang:latest
+    entrypoint: ["python", "-m", "sglang.launch"]
     environment:
       HF_HOME: /cache/hf
       XDG_CACHE_HOME: /cache/xdg
