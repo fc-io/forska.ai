@@ -4,6 +4,7 @@ Prereqs:
 - A working local build
 - On the HPC
   - Apptainer
+  - Policy: SGLang must run via Apptainer using the official Docker Hub image (`lmsysorg/sglang`). Do not run Docker directly on the cluster.
 
 ## Setup
 
@@ -23,6 +24,7 @@ export VLLM_CACHE_ROOT=$XDG_CACHE_HOME/vllm;
 export TORCHINDUCTOR_CACHE_DIR=$VLLM_CACHE_ROOT/torchinductor;
 export TRITON_CACHE_DIR=$VLLM_CACHE_ROOT/triton
 export HF_HOME=$STACK_ROOT/hf_cache
+export SGLANG_CACHE_DIR=$STACK_ROOT/.cache/sglang
 export APPTAINER_TMPDIR=$STACK_ROOT/tmp
 export TMPDIR=$APPTAINER_TMPDIR
 export APPTAINER_CACHEDIR=$STACK_ROOT/.apptainer/cache
@@ -75,6 +77,7 @@ Place the `.sif` files under `$STACK_ROOT`.
 # Public registries (explicit amd64)
 apptainer pull --arch amd64 "$STACK_ROOT/postgres_18.sif" docker://docker.io/library/postgres:18
 apptainer pull --arch amd64 "$STACK_ROOT/vllm_openai_latest.sif" docker://vllm/vllm-openai:latest
+apptainer pull --arch amd64 "$STACK_ROOT/sglang_latest.sif" docker://docker.io/lmsysorg/sglang:latest
 
 # GHCR (login first on remote)
 apptainer registry login --username "$GHCR_USER" oras://ghcr.io
@@ -149,6 +152,40 @@ apptainer run --cleanenv --nv \
     --host 0.0.0.0 --port 8000 \
     --api-key "$VLLM_API_KEY"
 ```
+
+SGLang — Gateway (CPU, HTTP on :30000)
+``` bash
+# Gateway responds to GET /v1/models
+apptainer exec --cleanenv \
+  --env HF_HOME=/hf_cache \
+  --bind $HF_HOME:/hf_cache:rw \
+  $STACK_ROOT/sglang_latest.sif \
+  python -m sglang.gateway --host 0.0.0.0 --port 30000 --allow-credentials --max-queue-size 256
+```
+
+SGLang — Worker (GPU; connects to Gateway)
+``` bash
+# Replace HEAD_HOST with the hostname or IP where the gateway runs
+export SGLANG_GATEWAY_URL=http://HEAD_HOST:30000
+
+apptainer exec --cleanenv --nv \
+  --env HF_HOME=/hf_cache \
+  --bind $HF_HOME:/hf_cache:rw \
+  --env SGLANG_CACHE_DIR=/sg_cache \
+  --bind $SGLANG_CACHE_DIR:/sg_cache:rw \
+  --bind $STACK_ROOT/models:/models:ro \
+  $STACK_ROOT/sglang_latest.sif \
+  python -m sglang.launch \
+    --model-path /models/Qwen3-32B-FP8 \
+    --gateway ${SGLANG_GATEWAY_URL} \
+    --tp-size 2 \
+    --max-batch-size 32 \
+    --cache-dir /sg_cache
+```
+Notes
+- Use one worker per model replica. For A100 40GB, set `--tp-size 2` (2 GPUs per worker) and run one worker per pair of GPUs; for A100-80G/H200, prefer `--tp-size 1`.
+- To constrain GPU visibility per worker, export `CUDA_VISIBLE_DEVICES` before the `apptainer exec` call (e.g., `export CUDA_VISIBLE_DEVICES=0,1`).
+- When running on the same host as the gateway, you can use `SGLANG_GATEWAY_URL=http://localhost:30000`.
 
 ### API
 
@@ -294,5 +331,4 @@ For Slurm batch job examples using Apptainer, see [README_SBATCH.md](./README_SB
     - Start again with your env: `docker compose --env-file .env.local up db`
   - Create the DB manually (alternative): `docker exec -it $(docker ps --filter name=db --format '{{.ID}}') psql -U ${DB_USER:-postgres} -c "CREATE DATABASE ${DB_NAME:-appdb};"`
   - Local: Get the postgres db password from the secret in the running container: `PW=$(ssh alvis2 'ssh alvis3-41 "tr -d \"\\r\\n\" < \"${STACK_ROOT:-.}/.secrets/db_password.txt\""' | python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.stdin.read().strip(), safe=""))')`
-
 
