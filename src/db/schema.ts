@@ -322,6 +322,8 @@ export const projects = pgTable('projects', {
       },
       {onDelete: 'cascade'},
     ),
+  // Engine used for this project (e.g., 'sglang' | 'vllm')
+  engine: engineEnum('engine'),
   modelId: uuid('model_id')
     .notNull()
     .references(

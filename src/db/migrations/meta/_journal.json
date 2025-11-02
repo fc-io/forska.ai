@@ -15,6 +15,13 @@
       "when": 1761992176960,
       "tag": "0001_big_susan_delgado",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1762085737452,
+      "tag": "0002_broken_lightspeed",
+      "breakpoints": true
     }
   ]
 }
