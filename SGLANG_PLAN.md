@@ -81,7 +81,8 @@ Use this checklist to migrate from vLLM to SGLang in small, verifiable steps. Ti
 - [ ] Update ingestion code (`judgmentsJobsCheckLLMStatus.ts`) and readers to use `llm_status` going forward.
 
 ### Phase 4.1 — Project-level Engine Fields (App-level)
-- [ ] Persist engine at the project level for historical clarity: add `engine` column to `projects` (enum/text like `'sglang' | 'vllm'`), backfill existing projects to `'vllm'` (or derive from current model/provider/baseURL), and set `'sglang'` for new or migrated projects.
+- [ ] Persist engine at the project level for historical clarity: add `engine` column to `projects` (enum/text like `'sglang' | 'vllm'`)
+- [ ] backfill existing projects to `'vllm'`, and set `'sglang'` for new or migrated projects.
 - [ ] (Optional but recommended) Add `engine` to `judgments_jobs` and/or `token_use` rows to capture engine per run and per usage-sample for auditing.
 
 ## Phase 5 — API Routes & Admin UI
