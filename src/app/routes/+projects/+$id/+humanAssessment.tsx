@@ -1,4 +1,5 @@
-import {useQuery} from '@tanstack/solid-query'
+import {createForm} from '@tanstack/solid-form'
+import {useMutation, useQuery, useQueryClient} from '@tanstack/solid-query'
 import {createFileRoute} from '@tanstack/solid-router'
 import DOMPurify from 'dompurify'
 import {For, Suspense} from 'solid-js'
@@ -6,10 +7,9 @@ import {For, Suspense} from 'solid-js'
 import {apiClient} from '../../../../services/apiClient'
 import {handleApiResponse} from '../../../../services/utils/handleApiResponse'
 
-// type InitResponse = Awaited<ReturnType<typeof apiClient.api.humanassessment.init.post>>
-
 export const HumanAssessment = () => {
   const params = Route.useParams()
+  const queryClient = useQueryClient()
 
   const query = useQuery(() => {
     return {
@@ -17,14 +17,65 @@ export const HumanAssessment = () => {
       queryFn: async () => {
         const response = await apiClient.api.humanassessment.init.post({projectId: params().id})
         const {data} = handleApiResponse(response, 'Failed to initialize human assessment')
+        console.log('data', data)
         return data
       },
       enabled: !!params().id,
+      staleTime: 0,
     }
   })
 
   const data = () => {
     return query.data
+  }
+  const submitMutation = useMutation(() => {
+    return {
+      mutationFn: async (values: Record<string, string>) => {
+        const answers = Object.entries(values)
+          .filter(([, answer]) => {
+            return answer.trim() !== ''
+          })
+          .map(([judgmentHumanId, answer]) => {
+            return {judgmentHumanId, answer}
+          })
+
+        const response = await apiClient.api.humanassessment.submit.post({projectId: params().id, answers})
+        const {data} = handleApiResponse(response, 'Failed to submit assessment')
+        return data
+      },
+      onSuccess: async () => {
+        await queryClient.refetchQueries({queryKey: ['human-assessment-init', params().id]})
+      },
+    }
+  })
+
+  const form = createForm(() => {
+    return {
+      defaultValues: {} as Record<string, string>,
+      onSubmit: async ({value}) => {
+        await submitMutation.mutateAsync(value)
+      },
+    }
+  })
+
+  const parsePromptType = (typeStr: string | null) => {
+    if (!typeStr) return {kind: 'string', isOptional: false}
+
+    const isOptional = typeStr.toLowerCase().includes('null')
+    const cleanType = typeStr.replace(/\s*\|\s*null/gi, '').trim()
+
+    // Check if it's an enum (contains quotes and pipes)
+    if (cleanType.includes("'") || cleanType.includes('"')) {
+      const options = cleanType
+        .split('|')
+        .map((opt) => {
+          return opt.trim().replace(/['"]/g, '')
+        })
+        .filter(Boolean)
+      return {kind: 'enum' as const, options, isOptional}
+    }
+
+    return {kind: 'string' as const, isOptional}
   }
 
   return (
@@ -57,21 +108,74 @@ export const HumanAssessment = () => {
               </div>
             </section>
 
-            <form>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                void form.handleSubmit()
+              }}
+            >
               <section class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
                 <div class="space-y-6">
-                  <For each={data()?.prompts ?? []}>
-                    {(p) => {
+                  <For each={data()?.judgmentsHuman ?? []}>
+                    {(judgment) => {
+                      const prompt = data()?.prompts.find((p) => {
+                        return p.id === judgment.promptId
+                      })
+                      console.log('prompt', prompt)
+
+                      const promptType = parsePromptType(prompt?.type ?? null)
+                      console.log('promptType', promptType)
                       return (
-                        <div class="border rounded-md p-4">
-                          <div class="font-medium mb-3">{p.originalText}</div>
-                          <input
-                            type="text"
-                            class="w-full max-w-xl border border-gray-300 rounded-md p-2 text-sm"
-                            name={p.id}
-                            placeholder="Enter your answer"
-                          />
-                        </div>
+                        <form.Field
+                          name={judgment.id}
+                          defaultValue=""
+                          children={(field) => {
+                            return (
+                              <div class="border rounded-md p-4">
+                                <div class="font-medium mb-3">
+                                  {prompt?.originalText}
+                                  {!promptType.isOptional && <span class="text-red-500 ml-1">*</span>}
+                                  {promptType.isOptional && <span class="text-blue-500 ml-1 text-sm">(optional)</span>}
+                                </div>
+                                {promptType.kind === 'string' && (
+                                  <input
+                                    type="text"
+                                    class="w-full max-w-xl border border-gray-300 rounded-md p-2 text-sm"
+                                    placeholder="Enter your answer"
+                                    value={field().state.value ?? ''}
+                                    onInput={(e) => {
+                                      field().handleChange(e.currentTarget.value)
+                                    }}
+                                  />
+                                )}
+                                {promptType.kind === 'enum' && (
+                                  <div class="space-y-2">
+                                    <For each={promptType.options}>
+                                      {(option) => {
+                                        return (
+                                          <label class="flex items-center gap-2 cursor-pointer">
+                                            <input
+                                              type="radio"
+                                              name={judgment.id}
+                                              value={option}
+                                              checked={field().state.value === option}
+                                              onChange={(e) => {
+                                                field().handleChange(e.currentTarget.value)
+                                              }}
+                                              class="w-4 h-4 text-blue-600"
+                                            />
+                                            <span class="text-sm">{option}</span>
+                                          </label>
+                                        )
+                                      }}
+                                    </For>
+                                  </div>
+                                )}
+                              </div>
+                            )
+                          }}
+                        />
                       )
                     }}
                   </For>
@@ -79,9 +183,16 @@ export const HumanAssessment = () => {
               </section>
 
               <div class="flex items-center gap-3 mt-4">
-                <button type="submit" class="px-4 py-2 rounded-md bg-blue-600 text-white">
-                  Submit Assessment
+                <button
+                  type="submit"
+                  class="px-4 py-2 rounded-md bg-blue-600 text-white disabled:opacity-50"
+                  disabled={submitMutation.isPending}
+                >
+                  {submitMutation.isPending ? 'Submitting...' : 'Submit Assessment'}
                 </button>
+                {submitMutation.isSuccess && (
+                  <span class="text-green-600 text-sm">Assessment submitted successfully!</span>
+                )}
               </div>
             </form>
           </div>

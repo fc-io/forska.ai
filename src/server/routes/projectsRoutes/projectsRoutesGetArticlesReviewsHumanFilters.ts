@@ -50,7 +50,9 @@ export const projectsRoutesGetArticlesReviewsHumanFilters = new Elysia().get(
           return {
             promptId: prompt.id,
             promptName: prompt.promptHeading || prompt.originalText,
-            answeredOriginalValues: uniqueValues.rows.map((v) => v.answer),
+            answeredOriginalValues: uniqueValues.rows.map((v) => {
+              return v.answer
+            }),
           }
         }),
       )
@@ -71,4 +73,3 @@ export const projectsRoutesGetArticlesReviewsHumanFilters = new Elysia().get(
     }),
   },
 )
-

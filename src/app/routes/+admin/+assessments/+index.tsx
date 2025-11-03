@@ -2,8 +2,8 @@ import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
 import {For, Show, Suspense} from 'solid-js'
 
-import {fetchSession} from '../../../../services/fetchSession'
 import {apiClient} from '../../../../services/apiClient'
+import {fetchSession} from '../../../../services/fetchSession'
 import {handleApiResponse} from '../../../../services/utils/handleApiResponse'
 
 export const AdminAssessments = () => {
@@ -27,10 +27,7 @@ export const AdminAssessments = () => {
       queryKey: ['human-assessments-overview'],
       queryFn: async () => {
         const response = await apiClient.api.humanassessment.overview.get()
-        const result = handleApiResponse<{data: OverviewData}>(
-          response,
-          'Failed to fetch assessments overview',
-        )
+        const result = handleApiResponse<{data: OverviewData}>(response, 'Failed to fetch assessments overview')
         return result.data
       },
       enabled: isAdmin(),
@@ -92,7 +89,6 @@ export const AdminAssessments = () => {
     }, {})
   }
 
-
   return (
     <div class="min-h-screen bg-gray-50 p-6 mx-auto">
       <Suspense
@@ -151,9 +147,15 @@ export const AdminAssessments = () => {
                 <table class="min-w-full divide-y divide-gray-200">
                   <thead class="bg-gray-50">
                     <tr>
-                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Project</th>
-                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Articles Assessed</th>
-                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Assessed by Both</th>
+                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Project
+                      </th>
+                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Articles Assessed
+                      </th>
+                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Assessed by Both
+                      </th>
                     </tr>
                   </thead>
                   <tbody class="bg-white divide-y divide-gray-200">
@@ -173,7 +175,9 @@ export const AdminAssessments = () => {
                             <tr>
                               <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{row.projectName}</td>
                               <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{row.count}</td>
-                              <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{bothProjectsById()[row.projectId] ?? 0}</td>
+                              <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                {bothProjectsById()[row.projectId] ?? 0}
+                              </td>
                             </tr>
                           )
                         }}
@@ -192,9 +196,15 @@ export const AdminAssessments = () => {
                 <table class="min-w-full divide-y divide-gray-200">
                   <thead class="bg-gray-50">
                     <tr>
-                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">User</th>
-                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Articles Assessed</th>
-                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Assessed by Both</th>
+                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        User
+                      </th>
+                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Articles Assessed
+                      </th>
+                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Assessed by Both
+                      </th>
                     </tr>
                   </thead>
                   <tbody class="bg-white divide-y divide-gray-200">
@@ -214,7 +224,9 @@ export const AdminAssessments = () => {
                             <tr>
                               <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{row.userName}</td>
                               <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{row.count}</td>
-                              <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{bothUsersById()[row.userId] ?? 0}</td>
+                              <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                {bothUsersById()[row.userId] ?? 0}
+                              </td>
                             </tr>
                           )
                         }}
@@ -224,8 +236,6 @@ export const AdminAssessments = () => {
                 </table>
               </div>
             </div>
-
-            
           </div>
         </Show>
       </Suspense>

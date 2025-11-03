@@ -1,8 +1,8 @@
 import {and, eq, inArray, isNotNull} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {articles, judgmentAssessments, judgments, judgmentsHuman, prompts, reviews} from '../../../db/schema.ts'
 import {user} from '../../../../auth-schema.ts'
+import {articles, judgmentAssessments, judgments, judgmentsHuman, prompts, reviews} from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
 export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
@@ -85,17 +85,27 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         .from(judgmentsHuman)
         .innerJoin(user, eq(user.id, judgmentsHuman.user))
         .innerJoin(prompts, eq(prompts.id, judgmentsHuman.promptId))
-        .where(and(eq(judgmentsHuman.articleId, articleId), eq(judgmentsHuman.projectId, projectId), isNotNull(judgmentsHuman.answer)))
+        .where(
+          and(
+            eq(judgmentsHuman.articleId, articleId),
+            eq(judgmentsHuman.projectId, projectId),
+            isNotNull(judgmentsHuman.answer),
+          ),
+        )
         .orderBy(user.name, prompts.order)
 
       const humanByUser = humanRows.reduce(
         (acc, row) => {
-          const current = acc[row.userId] ?? {userId: row.userId, userName: row.userName, judgments: [] as Array<{
-            id: string
-            prompt: {originalText: string}
-            answer: string | null
-            comment: string | null
-          }>}
+          const current = acc[row.userId] ?? {
+            userId: row.userId,
+            userName: row.userName,
+            judgments: [] as Array<{
+              id: string
+              prompt: {originalText: string}
+              answer: string | null
+              comment: string | null
+            }>,
+          }
           const next = {
             id: row.judgmentId,
             prompt: {originalText: row.promptOriginalText},
@@ -104,7 +114,19 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
           }
           return {...acc, [row.userId]: {...current, judgments: [...current.judgments, next]}}
         },
-        {} as Record<string, {userId: string; userName: string; judgments: Array<{id: string; prompt: {originalText: string}; answer: string | null; comment: string | null}>}>,
+        {} as Record<
+          string,
+          {
+            userId: string
+            userName: string
+            judgments: Array<{
+              id: string
+              prompt: {originalText: string}
+              answer: string | null
+              comment: string | null
+            }>
+          }
+        >,
       )
 
       const humanAssessmentsByUser = Object.values(humanByUser)

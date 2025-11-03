@@ -63,4 +63,3 @@ const ReviewsBoth = () => {
 }
 
 export const Route = createFileRoute('/projects/$id/reviews-both/')({component: ReviewsBoth})
-

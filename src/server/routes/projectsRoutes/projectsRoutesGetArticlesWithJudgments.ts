@@ -33,7 +33,8 @@ export const projectsRoutesGetArticlesWithJudgments = new Elysia().get(
       // Optional date range
       const fromDate = query.from ? new Date(`${query.from}T00:00:00.000Z`) : null
       const toDate = query.to ? new Date(`${query.to}T23:59:59.999Z`) : null
-      const dateRangeCondition = fromDate && toDate ? and(gte(articles.createdAt, fromDate), lte(articles.createdAt, toDate)) : null
+      const dateRangeCondition =
+        fromDate && toDate ? and(gte(articles.createdAt, fromDate), lte(articles.createdAt, toDate)) : null
       if (dateRangeCondition) {
         conditions.push(dateRangeCondition)
       }
@@ -93,8 +94,7 @@ export const projectsRoutesGetArticlesWithJudgments = new Elysia().get(
       const totalCount = countQuery.length
 
       // Query articles that have judgments for ALL prompts with pagination
-      const combinedWhereForList =
-        conditions.length > 0 ? and(baseExistsCondition, ...conditions) : baseExistsCondition
+      const combinedWhereForList = conditions.length > 0 ? and(baseExistsCondition, ...conditions) : baseExistsCondition
 
       const articlesWithJudgments = await db
         .select({

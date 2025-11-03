@@ -60,178 +60,182 @@ const AdminJobs = () => {
 
       <Suspense>
         <div class="space-y-4">
-        {/* Loading State */}
-        <Show when={jobs.isLoading}>
-          <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
-            <p class="text-gray-500 text-center">Loading judgment jobs...</p>
-          </div>
-        </Show>
-
-        {/* Error State */}
-        <Show when={jobs.isError}>
-          <div class="p-4 rounded-md bg-red-50 border border-red-200">
-            <p class="text-red-600">Failed to load judgment jobs</p>
-            <button
-              onClick={() => {
-                return void jobs.refetch()
-              }}
-              class="mt-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
-            >
-              Retry
-            </button>
-          </div>
-        </Show>
-
-        {/* Empty State */}
-        <Show when={!jobs.isLoading && !jobs.isError && jobs.data?.length === 0}>
-          <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-12">
-            <div class="text-center">
-              <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width={2}
-                  d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"
-                />
-              </svg>
-              <h3 class="mt-2 text-sm font-medium text-gray-900">No judgment jobs</h3>
-              <p class="mt-1 text-sm text-gray-500">No judgment jobs have been created yet.</p>
-              <p class="mt-1 text-sm text-gray-500">
-                Jobs will appear here once they are initiated from project pages.
-              </p>
+          {/* Loading State */}
+          <Show when={jobs.isLoading}>
+            <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
+              <p class="text-gray-500 text-center">Loading judgment jobs...</p>
             </div>
-          </div>
-        </Show>
+          </Show>
 
-        {/* Stats */}
-        <Show when={jobs.data && jobs.data.length > 0}>
-          <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-            <div class="flex gap-6 text-sm text-gray-600">
-              <span>
-                <span class="font-semibold text-gray-900">{jobs.data?.length ?? 0}</span> total jobs
-              </span>
-              <span>
-                <span class="font-semibold text-blue-600">
-                  {jobs.data?.filter((j) => {
-                    return j.status === 'running'
-                  }).length ?? 0}
-                </span>{' '}
-                running
-              </span>
-              <span>
-                <span class="font-semibold text-green-600">
-                  {jobs.data?.filter((j) => {
-                    return j.status === 'completed'
-                  }).length ?? 0}
-                </span>{' '}
-                completed
-              </span>
-              <span>
-                <span class="font-semibold text-red-600">
-                  {jobs.data?.filter((j) => {
-                    return j.status === 'failed'
-                  }).length ?? 0}
-                </span>{' '}
-                failed
-              </span>
+          {/* Error State */}
+          <Show when={jobs.isError}>
+            <div class="p-4 rounded-md bg-red-50 border border-red-200">
+              <p class="text-red-600">Failed to load judgment jobs</p>
+              <button
+                onClick={() => {
+                  return void jobs.refetch()
+                }}
+                class="mt-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+              >
+                Retry
+              </button>
             </div>
-          </div>
-        </Show>
+          </Show>
 
-        {/* Jobs Table */}
-        <Show when={jobs.data && jobs.data.length > 0}>
-          <div class="text-sm text-gray-500 mb-2">Last updated: {formatDistanceToNow(jobs.dataUpdatedAt)} ago</div>
-          <div class="overflow-x-auto bg-white rounded-lg shadow">
-            <table class="min-w-full divide-y divide-gray-200">
-              <thead class="bg-gray-50">
-                <tr>
-                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Job ID</th>
-                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Project
-                  </th>
-                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Created
-                  </th>
-                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Updated
-                  </th>
-                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody class="bg-white divide-y divide-gray-200">
-                <For each={jobs.data}>
-                  {(job) => {
-                    return (
-                      <tr class="hover:bg-gray-50">
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                          <Link
-                            to="/admin/jobs/$id"
-                            params={{id: job.id}}
-                            class="font-mono text-xs text-blue-600 hover:text-blue-800 hover:underline"
-                          >
-                            {job.id.slice(0, 8)}...
-                          </Link>
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                          {job.projectName || 'Unknown Project'}
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm">
-                          <span
-                            class={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(
-                              job.status,
-                            )}`}
-                          >
-                            {formatStatus(job.status)}
-                          </span>
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                          {job.createdAt ? formatDate(new Date(job.createdAt), 'yyyy-MM-dd HH:mm') : 'N/A'}
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                          {job.updatedAt ? formatDate(new Date(job.updatedAt), 'yyyy-MM-dd HH:mm') : 'N/A'}
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                          <div class="flex gap-2">
-                            <Show when={job.status === 'running'}>
-                              <button
-                                class="text-sm text-yellow-600 hover:text-yellow-800"
-                                onClick={() => {
-                                  return pauseJudgmentsJob(job.id).then(() => {
-                                    return void jobs.refetch()
-                                  })
-                                }}
-                              >
-                                Pause
-                              </button>
-                            </Show>
-                            <Show when={job.status === 'paused_by_admin' || job.status === 'paused_by_user'}>
-                              <button
-                                class="text-sm text-green-600 hover:text-green-800"
-                                onClick={() => {
-                                  return startJudgmentsJob(job.id).then(() => {
-                                    return void jobs.refetch()
-                                  })
-                                }}
-                              >
-                                Start
-                              </button>
-                            </Show>
-                            <Show when={job.status === 'failed'}>
-                              <button class="text-sm text-blue-600 hover:text-blue-800">Retry</button>
-                            </Show>
-                          </div>
-                        </td>
-                      </tr>
-                    )
-                  }}
-                </For>
-              </tbody>
-            </table>
-          </div>
-        </Show>
+          {/* Empty State */}
+          <Show when={!jobs.isLoading && !jobs.isError && jobs.data?.length === 0}>
+            <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-12">
+              <div class="text-center">
+                <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width={2}
+                    d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"
+                  />
+                </svg>
+                <h3 class="mt-2 text-sm font-medium text-gray-900">No judgment jobs</h3>
+                <p class="mt-1 text-sm text-gray-500">No judgment jobs have been created yet.</p>
+                <p class="mt-1 text-sm text-gray-500">
+                  Jobs will appear here once they are initiated from project pages.
+                </p>
+              </div>
+            </div>
+          </Show>
+
+          {/* Stats */}
+          <Show when={jobs.data && jobs.data.length > 0}>
+            <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+              <div class="flex gap-6 text-sm text-gray-600">
+                <span>
+                  <span class="font-semibold text-gray-900">{jobs.data?.length ?? 0}</span> total jobs
+                </span>
+                <span>
+                  <span class="font-semibold text-blue-600">
+                    {jobs.data?.filter((j) => {
+                      return j.status === 'running'
+                    }).length ?? 0}
+                  </span>{' '}
+                  running
+                </span>
+                <span>
+                  <span class="font-semibold text-green-600">
+                    {jobs.data?.filter((j) => {
+                      return j.status === 'completed'
+                    }).length ?? 0}
+                  </span>{' '}
+                  completed
+                </span>
+                <span>
+                  <span class="font-semibold text-red-600">
+                    {jobs.data?.filter((j) => {
+                      return j.status === 'failed'
+                    }).length ?? 0}
+                  </span>{' '}
+                  failed
+                </span>
+              </div>
+            </div>
+          </Show>
+
+          {/* Jobs Table */}
+          <Show when={jobs.data && jobs.data.length > 0}>
+            <div class="text-sm text-gray-500 mb-2">Last updated: {formatDistanceToNow(jobs.dataUpdatedAt)} ago</div>
+            <div class="overflow-x-auto bg-white rounded-lg shadow">
+              <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                  <tr>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Job ID
+                    </th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Project
+                    </th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Status
+                    </th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Created
+                    </th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Updated
+                    </th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Actions
+                    </th>
+                  </tr>
+                </thead>
+                <tbody class="bg-white divide-y divide-gray-200">
+                  <For each={jobs.data}>
+                    {(job) => {
+                      return (
+                        <tr class="hover:bg-gray-50">
+                          <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            <Link
+                              to="/admin/jobs/$id"
+                              params={{id: job.id}}
+                              class="font-mono text-xs text-blue-600 hover:text-blue-800 hover:underline"
+                            >
+                              {job.id.slice(0, 8)}...
+                            </Link>
+                          </td>
+                          <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            {job.projectName || 'Unknown Project'}
+                          </td>
+                          <td class="px-6 py-4 whitespace-nowrap text-sm">
+                            <span
+                              class={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(
+                                job.status,
+                              )}`}
+                            >
+                              {formatStatus(job.status)}
+                            </span>
+                          </td>
+                          <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {job.createdAt ? formatDate(new Date(job.createdAt), 'yyyy-MM-dd HH:mm') : 'N/A'}
+                          </td>
+                          <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {job.updatedAt ? formatDate(new Date(job.updatedAt), 'yyyy-MM-dd HH:mm') : 'N/A'}
+                          </td>
+                          <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            <div class="flex gap-2">
+                              <Show when={job.status === 'running'}>
+                                <button
+                                  class="text-sm text-yellow-600 hover:text-yellow-800"
+                                  onClick={() => {
+                                    return pauseJudgmentsJob(job.id).then(() => {
+                                      return void jobs.refetch()
+                                    })
+                                  }}
+                                >
+                                  Pause
+                                </button>
+                              </Show>
+                              <Show when={job.status === 'paused_by_admin' || job.status === 'paused_by_user'}>
+                                <button
+                                  class="text-sm text-green-600 hover:text-green-800"
+                                  onClick={() => {
+                                    return startJudgmentsJob(job.id).then(() => {
+                                      return void jobs.refetch()
+                                    })
+                                  }}
+                                >
+                                  Start
+                                </button>
+                              </Show>
+                              <Show when={job.status === 'failed'}>
+                                <button class="text-sm text-blue-600 hover:text-blue-800">Retry</button>
+                              </Show>
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    }}
+                  </For>
+                </tbody>
+              </table>
+            </div>
+          </Show>
         </div>
       </Suspense>
     </div>

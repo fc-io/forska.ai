@@ -33,8 +33,7 @@ export const articlesRoutes = new Elysia()
     // Count articles with NO import_route link via NOT EXISTS
     const [{count: withoutImportRoute = 0} = {count: 0}] = await db
       .select({count: sql<number>`COUNT(*)`.as('count')})
-      .from(articles)
-      .where(sql`NOT EXISTS (
+      .from(articles).where(sql`NOT EXISTS (
         ${db
           .select({exists: sql`1`})
           .from(articleRouteLink)

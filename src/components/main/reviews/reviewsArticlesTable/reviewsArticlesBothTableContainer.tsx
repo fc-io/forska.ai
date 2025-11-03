@@ -104,4 +104,3 @@ export const ReviewsArticlesBothTableContainer = (props: ReviewsArticlesBothTabl
     </Suspense>
   )
 }
-

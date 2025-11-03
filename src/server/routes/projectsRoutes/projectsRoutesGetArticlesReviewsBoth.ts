@@ -23,7 +23,9 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
       return {data: [], totalCount: 0, page, limit, totalPages: 0}
     }
 
-    const promptIds = projectPrompts.map((p) => p.id)
+    const promptIds = projectPrompts.map((p) => {
+      return p.id
+    })
 
     // Fully assessed by a single human for ALL prompts
     const fullyAssessedByHumanExists = sql`EXISTS (
@@ -98,7 +100,9 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
       .limit(limit)
       .offset(offset)
 
-    const articleIds = articlesWithBoth.map((a) => a.article.id)
+    const articleIds = articlesWithBoth.map((a) => {
+      return a.article.id
+    })
 
     const allLlMJudgments =
       articleIds.length > 0
@@ -134,4 +138,3 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
     }),
   },
 )
-

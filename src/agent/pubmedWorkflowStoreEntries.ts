@@ -63,9 +63,11 @@ const storeBatch = async (batch: DatabaseEntry[]): Promise<void> => {
     .returning({id: articles.id, articleId: articles.articleId})
 
   // Build a map of articleId -> importRoute from batch
-  const articleIdToRoute = new Map(batch.map((e) => {
-    return [e.article_id, e.import_route]
-  }))
+  const articleIdToRoute = new Map(
+    batch.map((e) => {
+      return [e.article_id, e.import_route]
+    }),
+  )
 
   // Ensure import routes exist, fetch their ids
   const routeSet = new Set(
@@ -88,9 +90,11 @@ const storeBatch = async (batch: DatabaseEntry[]): Promise<void> => {
     .from(importRouteTable)
     .where(inArray(importRouteTable.route, routeList))
 
-  const existingSet = new Set(existingRoutes.map((r) => {
-    return r.route
-  }))
+  const existingSet = new Set(
+    existingRoutes.map((r) => {
+      return r.route
+    }),
+  )
   const missingRoutes = routeList.filter((r) => {
     return !existingSet.has(r)
   })
@@ -121,9 +125,14 @@ const storeBatch = async (batch: DatabaseEntry[]): Promise<void> => {
   const dbArticles = await db
     .select({id: articles.id, articleId: articles.articleId})
     .from(articles)
-    .where(inArray(articles.articleId, upserted.map((r) => {
-      return r.articleId
-    })))
+    .where(
+      inArray(
+        articles.articleId,
+        upserted.map((r) => {
+          return r.articleId
+        }),
+      ),
+    )
 
   const links = dbArticles
     .map((a) => {

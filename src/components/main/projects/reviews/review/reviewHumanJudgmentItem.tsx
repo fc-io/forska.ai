@@ -1,12 +1,7 @@
 import {Show} from 'solid-js'
 
 type ReviewHumanJudgmentItemProps = {
-  judgment: {
-    id: string
-    prompt: {originalText: string}
-    answer: string | null
-    comment: string | null
-  }
+  judgment: {id: string; prompt: {originalText: string}; answer: string | null; comment: string | null}
 }
 
 export const ReviewHumanJudgmentItem = (props: ReviewHumanJudgmentItemProps) => {
@@ -25,4 +20,3 @@ export const ReviewHumanJudgmentItem = (props: ReviewHumanJudgmentItemProps) => 
     </div>
   )
 }
-

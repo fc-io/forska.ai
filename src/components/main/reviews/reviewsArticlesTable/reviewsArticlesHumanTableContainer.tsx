@@ -104,4 +104,3 @@ export const ReviewsArticlesHumanTableContainer = (props: ReviewsArticlesHumanTa
     </Suspense>
   )
 }
-

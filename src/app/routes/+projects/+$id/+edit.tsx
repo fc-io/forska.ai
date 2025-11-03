@@ -437,279 +437,281 @@ const EditProject = (): JSX.Element => {
         </Show>
 
         <Show when={projectDetails()}>
-        <div class="bg-card border rounded-lg p-6">
-          <Show when={isLocked()}>
-            <div class="mb-6 p-4 bg-amber-50 border-2 border-amber-300 rounded-lg">
-              <div class="flex items-start gap-3">
-                <span class="text-amber-600 text-xl mt-0.5">⚠️</span>
-                <div>
-                  <h3 class="font-semibold text-amber-900 mb-1">Project Locked for Editing</h3>
-                  <p class="text-amber-800 text-sm">
-                    This project cannot be modified because articles have already been judged based on its prompts. All
-                    fields and buttons have been disabled to preserve the integrity of existing assessments.
-                  </p>
+          <div class="bg-card border rounded-lg p-6">
+            <Show when={isLocked()}>
+              <div class="mb-6 p-4 bg-amber-50 border-2 border-amber-300 rounded-lg">
+                <div class="flex items-start gap-3">
+                  <span class="text-amber-600 text-xl mt-0.5">⚠️</span>
+                  <div>
+                    <h3 class="font-semibold text-amber-900 mb-1">Project Locked for Editing</h3>
+                    <p class="text-amber-800 text-sm">
+                      This project cannot be modified because articles have already been judged based on its prompts.
+                      All fields and buttons have been disabled to preserve the integrity of existing assessments.
+                    </p>
+                  </div>
                 </div>
               </div>
-            </div>
-          </Show>
-          <Show when={errorMessage()}>
-            <div id="test" class="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm">
-              {errorMessage()}
-            </div>
-          </Show>
+            </Show>
+            <Show when={errorMessage()}>
+              <div id="test" class="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm">
+                {errorMessage()}
+              </div>
+            </Show>
 
-          <form onSubmit={handleSubmit} class="space-y-6">
-            <div>
-              <label for="model" class="block text-sm font-medium mb-2">
-                Model
-              </label>
-              <Show when={modelsQuery.isLoading}>
-                <p class="text-sm text-muted-foreground">Loading models...</p>
-              </Show>
-              <Show when={modelsQuery.isError}>
-                <p class="text-sm text-red-600">
-                  {modelsQuery.error instanceof Error ? modelsQuery.error.message : 'Failed to load models'}
-                </p>
-              </Show>
-              <Show when={!modelsQuery.isLoading && !modelsQuery.isError && availableModels().length > 0}>
-                <select
-                  id="model"
-                  class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
-                  value={selectedModelId()}
-                  onChange={(event) => {
-                    return setSelectedModelId(event.currentTarget.value)
-                  }}
-                  disabled={isLocked()}
-                >
-                  <For each={availableModels()}>
-                    {(m) => {
-                      return <option value={m.id}>{m.name}</option>
+            <form onSubmit={handleSubmit} class="space-y-6">
+              <div>
+                <label for="model" class="block text-sm font-medium mb-2">
+                  Model
+                </label>
+                <Show when={modelsQuery.isLoading}>
+                  <p class="text-sm text-muted-foreground">Loading models...</p>
+                </Show>
+                <Show when={modelsQuery.isError}>
+                  <p class="text-sm text-red-600">
+                    {modelsQuery.error instanceof Error ? modelsQuery.error.message : 'Failed to load models'}
+                  </p>
+                </Show>
+                <Show when={!modelsQuery.isLoading && !modelsQuery.isError && availableModels().length > 0}>
+                  <select
+                    id="model"
+                    class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
+                    value={selectedModelId()}
+                    onChange={(event) => {
+                      return setSelectedModelId(event.currentTarget.value)
                     }}
-                  </For>
-                </select>
-              </Show>
-              <Show when={!modelsQuery.isLoading && !modelsQuery.isError && availableModels().length === 0}>
-                <div class="flex items-center justify-between gap-3">
-                  <p class="text-sm text-muted-foreground">No models available.</p>
+                    disabled={isLocked()}
+                  >
+                    <For each={availableModels()}>
+                      {(m) => {
+                        return <option value={m.id}>{m.name}</option>
+                      }}
+                    </For>
+                  </select>
+                </Show>
+                <Show when={!modelsQuery.isLoading && !modelsQuery.isError && availableModels().length === 0}>
+                  <div class="flex items-center justify-between gap-3">
+                    <p class="text-sm text-muted-foreground">No models available.</p>
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => {
+                        return void createDefaultModel()
+                      }}
+                      disabled={isLocked()}
+                      class={actionStateClass()}
+                    >
+                      Create default model
+                    </Button>
+                  </div>
+                </Show>
+              </div>
+
+              <div>
+                <p class="block text-sm font-medium mb-2">Import Routes</p>
+                <Show when={importRoutesQuery.isLoading}>
+                  <p class="text-sm text-muted-foreground">Loading import routes...</p>
+                </Show>
+                <Show when={importRoutesQuery.isError}>
+                  <p class="text-sm text-red-600">
+                    {importRoutesQuery.error instanceof Error
+                      ? importRoutesQuery.error.message
+                      : 'Failed to load import routes'}
+                  </p>
+                </Show>
+                <Show
+                  when={
+                    !importRoutesQuery.isLoading && !importRoutesQuery.isError && availableImportRoutes().length === 0
+                  }
+                >
+                  <p class="text-sm text-muted-foreground">No import routes available.</p>
+                </Show>
+                <Show
+                  when={
+                    !importRoutesQuery.isLoading && !importRoutesQuery.isError && availableImportRoutes().length > 0
+                  }
+                >
+                  <div class="space-y-2">
+                    <For each={availableImportRoutes()}>
+                      {(route) => {
+                        return (
+                          <label
+                            class={`flex items-start gap-3 border rounded-md p-3 cursor-pointer ${isLocked() ? 'opacity-60' : 'border-input'}`}
+                          >
+                            <input
+                              type="checkbox"
+                              class="mt-1"
+                              checked={selectedImportRoutes().includes(route)}
+                              onChange={() => {
+                                return toggleImportRouteSelection(route)
+                              }}
+                              disabled={isLocked()}
+                            />
+                            <div class="flex-1">
+                              <p class="text-sm font-medium text-gray-900">
+                                <span class="font-mono">{route}</span>
+                              </p>
+                            </div>
+                          </label>
+                        )
+                      }}
+                    </For>
+                  </div>
+                </Show>
+              </div>
+              <div>
+                <label for="project-name" class="block text-sm font-medium mb-2">
+                  Project Name *
+                </label>
+                <input
+                  id="project-name"
+                  type="text"
+                  value={projectName()}
+                  onInput={(event) => {
+                    return setProjectName(event.currentTarget.value)
+                  }}
+                  placeholder="Enter project name"
+                  class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
+                  required
+                  disabled={isLocked()}
+                />
+              </div>
+
+              <div>
+                <label for="description" class="block text-sm font-medium mb-2">
+                  Description
+                </label>
+                <textarea
+                  id="description"
+                  value={description()}
+                  onInput={(event) => {
+                    return setDescription(event.currentTarget.value)
+                  }}
+                  placeholder="Describe your project..."
+                  rows="4"
+                  class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent resize-none ${fieldStateClass()}`}
+                  disabled={isLocked()}
+                />
+              </div>
+
+              <div>
+                <p class="block text-sm font-medium mb-2">Project Timeline</p>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <label class={`flex flex-col text-sm font-medium gap-1 ${isLocked() ? 'opacity-60' : ''}`}>
+                    <span>Start Date</span>
+                    <input
+                      type="text"
+                      value={dateFrom()}
+                      onInput={(event) => {
+                        return setDateFrom(event.currentTarget.value)
+                      }}
+                      placeholder="YYYY-MM-DD"
+                      class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
+                      disabled={isLocked()}
+                    />
+                  </label>
+                  <label class={`flex flex-col text-sm font-medium gap-1 ${isLocked() ? 'opacity-60' : ''}`}>
+                    <span>End Date</span>
+                    <input
+                      type="text"
+                      value={dateTo()}
+                      onInput={(event) => {
+                        return setDateTo(event.currentTarget.value)
+                      }}
+                      placeholder="YYYY-MM-DD"
+                      class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
+                      disabled={isLocked()}
+                    />
+                  </label>
+                </div>
+              </div>
+
+              <div>
+                <div class="flex items-center justify-between mb-2">
+                  <label class="block text-sm font-medium">Your questions about the article</label>
                   <Button
                     type="button"
+                    variant="outline"
                     size="sm"
-                    onClick={() => {
-                      return void createDefaultModel()
-                    }}
+                    onClick={addPromptInput}
                     disabled={isLocked()}
                     class={actionStateClass()}
                   >
-                    Create default model
+                    + Add Prompt
                   </Button>
                 </div>
-              </Show>
-            </div>
-
-            <div>
-              <p class="block text-sm font-medium mb-2">Import Routes</p>
-              <Show when={importRoutesQuery.isLoading}>
-                <p class="text-sm text-muted-foreground">Loading import routes...</p>
-              </Show>
-              <Show when={importRoutesQuery.isError}>
-                <p class="text-sm text-red-600">
-                  {importRoutesQuery.error instanceof Error
-                    ? importRoutesQuery.error.message
-                    : 'Failed to load import routes'}
-                </p>
-              </Show>
-              <Show
-                when={
-                  !importRoutesQuery.isLoading && !importRoutesQuery.isError && availableImportRoutes().length === 0
-                }
-              >
-                <p class="text-sm text-muted-foreground">No import routes available.</p>
-              </Show>
-              <Show
-                when={!importRoutesQuery.isLoading && !importRoutesQuery.isError && availableImportRoutes().length > 0}
-              >
-                <div class="space-y-2">
-                  <For each={availableImportRoutes()}>
-                    {(route) => {
+                <div class="space-y-3">
+                  <For each={sortedPrompts()} fallback={<div>No prompts</div>}>
+                    {(promptItem, index) => {
                       return (
-                        <label
-                          class={`flex items-start gap-3 border rounded-md p-3 cursor-pointer ${isLocked() ? 'opacity-60' : 'border-input'}`}
-                        >
-                          <input
-                            type="checkbox"
-                            class="mt-1"
-                            checked={selectedImportRoutes().includes(route)}
-                            onChange={() => {
-                              return toggleImportRouteSelection(route)
-                            }}
-                            disabled={isLocked()}
-                          />
-                          <div class="flex-1">
-                            <p class="text-sm font-medium text-gray-900">
-                              <span class="font-mono">{route}</span>
-                            </p>
+                        <div class="flex gap-2">
+                          <div class="flex-1 space-y-2">
+                            <input
+                              type="text"
+                              value={promptItem.promptHeading}
+                              onInput={(event) => {
+                                return updatePromptInput(promptItem.id, 'promptHeading', event.currentTarget.value)
+                              }}
+                              placeholder={`Prompt ${index() + 1} heading (optional)...`}
+                              class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
+                              disabled={isLocked()}
+                            />
+                            <input
+                              type="text"
+                              value={promptItem.type}
+                              onInput={(event) => {
+                                return updatePromptInput(promptItem.id, 'type', event.currentTarget.value)
+                              }}
+                              placeholder={`Prompt ${index() + 1} type (optional)...`}
+                              class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
+                              disabled={isLocked()}
+                            />
+                            <textarea
+                              value={promptItem.originalText}
+                              onInput={(event) => {
+                                return updatePromptInput(promptItem.id, 'originalText', event.currentTarget.value)
+                              }}
+                              placeholder={`Enter prompt ${index() + 1} content...`}
+                              rows="4"
+                              class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent resize-none ${fieldStateClass()}`}
+                              disabled={isLocked()}
+                            />
                           </div>
-                        </label>
+                          <Show when={prompts.length > 1}>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                return removePromptInput(promptItem.id)
+                              }}
+                              class={`self-start mt-1 ${actionStateClass()}`}
+                              disabled={isLocked()}
+                            >
+                              ×
+                            </Button>
+                          </Show>
+                        </div>
                       )
                     }}
                   </For>
                 </div>
-              </Show>
-            </div>
-            <div>
-              <label for="project-name" class="block text-sm font-medium mb-2">
-                Project Name *
-              </label>
-              <input
-                id="project-name"
-                type="text"
-                value={projectName()}
-                onInput={(event) => {
-                  return setProjectName(event.currentTarget.value)
-                }}
-                placeholder="Enter project name"
-                class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
-                required
-                disabled={isLocked()}
-              />
-            </div>
-
-            <div>
-              <label for="description" class="block text-sm font-medium mb-2">
-                Description
-              </label>
-              <textarea
-                id="description"
-                value={description()}
-                onInput={(event) => {
-                  return setDescription(event.currentTarget.value)
-                }}
-                placeholder="Describe your project..."
-                rows="4"
-                class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent resize-none ${fieldStateClass()}`}
-                disabled={isLocked()}
-              />
-            </div>
-
-            <div>
-              <p class="block text-sm font-medium mb-2">Project Timeline</p>
-              <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <label class={`flex flex-col text-sm font-medium gap-1 ${isLocked() ? 'opacity-60' : ''}`}>
-                  <span>Start Date</span>
-                  <input
-                    type="text"
-                    value={dateFrom()}
-                    onInput={(event) => {
-                      return setDateFrom(event.currentTarget.value)
-                    }}
-                    placeholder="YYYY-MM-DD"
-                    class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
-                    disabled={isLocked()}
-                  />
-                </label>
-                <label class={`flex flex-col text-sm font-medium gap-1 ${isLocked() ? 'opacity-60' : ''}`}>
-                  <span>End Date</span>
-                  <input
-                    type="text"
-                    value={dateTo()}
-                    onInput={(event) => {
-                      return setDateTo(event.currentTarget.value)
-                    }}
-                    placeholder="YYYY-MM-DD"
-                    class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
-                    disabled={isLocked()}
-                  />
-                </label>
               </div>
-            </div>
 
-            <div>
-              <div class="flex items-center justify-between mb-2">
-                <label class="block text-sm font-medium">Your questions about the article</label>
+              <div class="flex gap-3 pt-4">
                 <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={addPromptInput}
-                  disabled={isLocked()}
+                  type="submit"
+                  disabled={!projectName().trim() || isLoading() || isLocked()}
+                  title={isLocked() ? 'Cannot update: articles have been judged based on this project' : undefined}
                   class={actionStateClass()}
                 >
-                  + Add Prompt
+                  {isLoading() ? 'Updating...' : 'Update Project'}
+                </Button>
+                <Button as={Link} to="/projects" variant="outline">
+                  Cancel
                 </Button>
               </div>
-              <div class="space-y-3">
-                <For each={sortedPrompts()} fallback={<div>No prompts</div>}>
-                  {(promptItem, index) => {
-                    return (
-                      <div class="flex gap-2">
-                        <div class="flex-1 space-y-2">
-                          <input
-                            type="text"
-                            value={promptItem.promptHeading}
-                            onInput={(event) => {
-                              return updatePromptInput(promptItem.id, 'promptHeading', event.currentTarget.value)
-                            }}
-                            placeholder={`Prompt ${index() + 1} heading (optional)...`}
-                            class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
-                            disabled={isLocked()}
-                          />
-                          <input
-                            type="text"
-                            value={promptItem.type}
-                            onInput={(event) => {
-                              return updatePromptInput(promptItem.id, 'type', event.currentTarget.value)
-                            }}
-                            placeholder={`Prompt ${index() + 1} type (optional)...`}
-                            class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
-                            disabled={isLocked()}
-                          />
-                          <textarea
-                            value={promptItem.originalText}
-                            onInput={(event) => {
-                              return updatePromptInput(promptItem.id, 'originalText', event.currentTarget.value)
-                            }}
-                            placeholder={`Enter prompt ${index() + 1} content...`}
-                            rows="4"
-                            class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent resize-none ${fieldStateClass()}`}
-                            disabled={isLocked()}
-                          />
-                        </div>
-                        <Show when={prompts.length > 1}>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => {
-                              return removePromptInput(promptItem.id)
-                            }}
-                            class={`self-start mt-1 ${actionStateClass()}`}
-                            disabled={isLocked()}
-                          >
-                            ×
-                          </Button>
-                        </Show>
-                      </div>
-                    )
-                  }}
-                </For>
-              </div>
-            </div>
-
-            <div class="flex gap-3 pt-4">
-              <Button
-                type="submit"
-                disabled={!projectName().trim() || isLoading() || isLocked()}
-                title={isLocked() ? 'Cannot update: articles have been judged based on this project' : undefined}
-                class={actionStateClass()}
-              >
-                {isLoading() ? 'Updating...' : 'Update Project'}
-              </Button>
-              <Button as={Link} to="/projects" variant="outline">
-                Cancel
-              </Button>
-            </div>
-          </form>
-        </div>
+            </form>
+          </div>
         </Show>
       </Suspense>
     </div>

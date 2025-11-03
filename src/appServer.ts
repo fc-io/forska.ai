@@ -1,8 +1,9 @@
+import fs from 'node:fs'
+import path from 'node:path'
+
 import {staticPlugin} from '@elysiajs/static'
 import {file} from 'bun'
 import {Elysia} from 'elysia'
-import path from 'node:path'
-import fs from 'node:fs'
 
 const port = Number(process.env.PROD_SERVER || 8080)
 const apiHost = process.env.SERVER_HOST || process.env.API_HOST || 'localhost'
@@ -18,7 +19,9 @@ const resolveDistDir = () => {
     path.resolve(import.meta.dir, '../dist'),
   ].filter(Boolean) as string[]
 
-  const pick = (dir: string) => fs.existsSync(path.join(dir, 'index.html')) && fs.existsSync(path.join(dir, 'assets'))
+  const pick = (dir: string) => {
+    return fs.existsSync(path.join(dir, 'index.html')) && fs.existsSync(path.join(dir, 'assets'))
+  }
   const found = candidates.find(pick)
   return found ?? path.resolve(process.cwd(), 'dist')
 }

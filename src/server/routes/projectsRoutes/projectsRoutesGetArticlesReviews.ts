@@ -68,8 +68,7 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
       )`
 
       // Build final where parts with optional date bounds
-      const whereParts: Array<ReturnType<typeof sql>> =
-        conditions.length > 0 ? [...conditions] : [baseExistsCondition]
+      const whereParts: Array<ReturnType<typeof sql>> = conditions.length > 0 ? [...conditions] : [baseExistsCondition]
 
       if (fromDate) {
         whereParts.push(gte(articles.createdAt, fromDate))

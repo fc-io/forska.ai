@@ -13,8 +13,12 @@ export const createArticlesHumanReviewsQueryOptions = (
   toDateStr: Accessor<string>,
   searchTitleApplied: Accessor<string>,
 ) => {
-  const fromStr = () => fromDateStr().trim()
-  const toStr = () => toDateStr().trim()
+  const fromStr = () => {
+    return fromDateStr().trim()
+  }
+  const toStr = () => {
+    return toDateStr().trim()
+  }
   const validFrom = () => {
     const s = fromStr()
     return isoDatePattern.test(s) ? s : null
@@ -39,12 +43,15 @@ export const createArticlesHumanReviewsQueryOptions = (
         page: String(currentPage()),
         limit: String(pageLimit()),
         projectId,
-        prompts: Object.entries(promptFilters()).reduce((acc, [promptId, value]) => {
-          if (Array.isArray(value) && value.length > 0) {
-            acc[promptId] = value
-          }
-          return acc
-        }, {} as Record<string, string[]>),
+        prompts: Object.entries(promptFilters()).reduce(
+          (acc, [promptId, value]) => {
+            if (Array.isArray(value) && value.length > 0) {
+              acc[promptId] = value
+            }
+            return acc
+          },
+          {} as Record<string, string[]>,
+        ),
       }
       const from = validFrom()
       const to = validTo()
@@ -63,4 +70,3 @@ export const createArticlesHumanReviewsQueryOptions = (
     },
   }
 }
-

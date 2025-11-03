@@ -4,8 +4,8 @@ import {formatDate} from 'date-fns'
 import {For, Show, Suspense} from 'solid-js'
 
 import {TokenUsageTimeline} from '../../../../../components/TokenUsageTimeline'
-import {getJudgmentsJobById, pauseJudgmentsJob, startJudgmentsJob} from '../../../../../services/judgmentsJobsService'
 import {apiClient} from '../../../../../services/apiClient.ts'
+import {getJudgmentsJobById, pauseJudgmentsJob, startJudgmentsJob} from '../../../../../services/judgmentsJobsService'
 import {handleApiResponse} from '../../../../../services/utils/handleApiResponse'
 
 const getStatusColor = (status: string | null) => {
@@ -114,28 +114,28 @@ const AdminJudgmentJobDetail = () => {
                 const details = data() as Record<string, unknown> | undefined
                 return details
               }
-            const unassessedArticlesCount = () => {
-              return unassessedCountQuery.data ?? 0
-            }
-            const formattedUnassessedArticlesCount = () => {
-              return unassessedArticlesCount().toLocaleString()
-            }
-            const jobId = () => {
-              const details = jobDetails()
-              const jobIdValue = details && 'id' in details ? (details as {id?: string | number}).id : undefined
-              const resolvedId =
-                typeof jobIdValue === 'number' || typeof jobIdValue === 'string' ? String(jobIdValue) : ''
-              return resolvedId
-            }
-            const shouldLinkToUnassessedArticles = () => {
-              const hasLink = Boolean(jobId() && unassessedArticlesCount() > 0)
-              return hasLink
-            }
-            const unassessedArticlesLink = () => {
-              return shouldLinkToUnassessedArticles() ? `/admin/jobs/${jobId()}/unassessed_articles` : ''
-            }
-            return (
-              <>
+              const unassessedArticlesCount = () => {
+                return unassessedCountQuery.data ?? 0
+              }
+              const formattedUnassessedArticlesCount = () => {
+                return unassessedArticlesCount().toLocaleString()
+              }
+              const jobId = () => {
+                const details = jobDetails()
+                const jobIdValue = details && 'id' in details ? (details as {id?: string | number}).id : undefined
+                const resolvedId =
+                  typeof jobIdValue === 'number' || typeof jobIdValue === 'string' ? String(jobIdValue) : ''
+                return resolvedId
+              }
+              const shouldLinkToUnassessedArticles = () => {
+                const hasLink = Boolean(jobId() && unassessedArticlesCount() > 0)
+                return hasLink
+              }
+              const unassessedArticlesLink = () => {
+                return shouldLinkToUnassessedArticles() ? `/admin/jobs/${jobId()}/unassessed_articles` : ''
+              }
+              return (
+                <>
                   <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
                     <div class="flex justify-between items-start mb-4">
                       <div>
@@ -172,24 +172,24 @@ const AdminJudgmentJobDetail = () => {
                       </div>
                     </div>
 
-                  <div class="mt-6 pt-6 border-t border-gray-200">
-                    <h3 class="text-sm font-medium text-gray-900 mb-3">Project</h3>
-                    <div class="mb-4 space-y-1">
-                      <p class="text-sm text-gray-500">Unassessed Articles</p>
-                      <Show when={!unassessedCountQuery.isLoading} fallback={<p class="font-medium">Loading…</p>}>
-                        <Show
-                          when={shouldLinkToUnassessedArticles()}
-                          fallback={<p class="font-medium">{formattedUnassessedArticlesCount()}</p>}
-                        >
-                          <Link to={unassessedArticlesLink()} class="font-medium text-blue-600 hover:text-blue-800">
-                            {formattedUnassessedArticlesCount()}
-                          </Link>
+                    <div class="mt-6 pt-6 border-t border-gray-200">
+                      <h3 class="text-sm font-medium text-gray-900 mb-3">Project</h3>
+                      <div class="mb-4 space-y-1">
+                        <p class="text-sm text-gray-500">Unassessed Articles</p>
+                        <Show when={!unassessedCountQuery.isLoading} fallback={<p class="font-medium">Loading…</p>}>
+                          <Show
+                            when={shouldLinkToUnassessedArticles()}
+                            fallback={<p class="font-medium">{formattedUnassessedArticlesCount()}</p>}
+                          >
+                            <Link to={unassessedArticlesLink()} class="font-medium text-blue-600 hover:text-blue-800">
+                              {formattedUnassessedArticlesCount()}
+                            </Link>
+                          </Show>
                         </Show>
-                      </Show>
-                    </div>
-                    <Show when={data() && 'totalTokenUsage' in (data() as any) && (data() as any).totalTokenUsage}>
-                      <div class="grid grid-cols-3 gap-4">
-                        <div>
+                      </div>
+                      <Show when={data() && 'totalTokenUsage' in (data() as any) && (data() as any).totalTokenUsage}>
+                        <div class="grid grid-cols-3 gap-4">
+                          <div>
                             <p class="text-sm text-gray-500">Total Tokens</p>
                             <p class="font-medium">
                               {data() && 'totalTokenUsage' in (data() as any)

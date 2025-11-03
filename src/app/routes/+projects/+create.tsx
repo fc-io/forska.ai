@@ -123,7 +123,11 @@ const CreateProject = () => {
   const toggleImportRouteSelection = (route: string) => {
     setSelectedImportRoutes((current) => {
       const has = current.includes(route)
-      return has ? current.filter((v) => v !== route) : [...current, route]
+      return has
+        ? current.filter((v) => {
+            return v !== route
+          })
+        : [...current, route]
     })
   }
 
@@ -233,234 +237,240 @@ const CreateProject = () => {
 
       <Suspense>
         <div class="bg-card border rounded-lg p-6">
-        <Show when={error()}>
-          <div class="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm">{error()}</div>
-        </Show>
-        <form
-          onSubmit={(e) => {
-            return void handleSubmit(e)
-          }}
-          class="space-y-6"
-        >
-          <div>
-            <label for="model" class="block text-sm font-medium mb-2">
-              Model *
-            </label>
-            <Show when={modelsQuery.isLoading}>
-              <p class="text-sm text-muted-foreground">Loading models...</p>
-            </Show>
-            <Show when={modelsQuery.isError}>
-              <p class="text-sm text-red-600">
-                {modelsQuery.error instanceof Error ? modelsQuery.error.message : 'Failed to load models'}
-              </p>
-            </Show>
-            <Show when={!modelsQuery.isLoading && !modelsQuery.isError && availableModels().length > 0}>
-              <select
-                id="model"
-                class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
-                value={selectedModelId()}
-                onChange={(e) => {
-                  return setSelectedModelId(e.currentTarget.value)
-                }}
-              >
-                <For each={availableModels()}>
-                  {(m) => {
-                    return <option value={m.id}>{m.name}</option>
-                  }}
-                </For>
-              </select>
-            </Show>
-            <Show when={!modelsQuery.isLoading && !modelsQuery.isError && availableModels().length === 0}>
-              <div class="flex items-center justify-between gap-3">
-                <p class="text-sm text-muted-foreground">No models available.</p>
-                <Button
-                  type="button"
-                  size="sm"
-                  onClick={() => {
-                    return void createDefaultModel()
+          <Show when={error()}>
+            <div class="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm">{error()}</div>
+          </Show>
+          <form
+            onSubmit={(e) => {
+              return void handleSubmit(e)
+            }}
+            class="space-y-6"
+          >
+            <div>
+              <label for="model" class="block text-sm font-medium mb-2">
+                Model *
+              </label>
+              <Show when={modelsQuery.isLoading}>
+                <p class="text-sm text-muted-foreground">Loading models...</p>
+              </Show>
+              <Show when={modelsQuery.isError}>
+                <p class="text-sm text-red-600">
+                  {modelsQuery.error instanceof Error ? modelsQuery.error.message : 'Failed to load models'}
+                </p>
+              </Show>
+              <Show when={!modelsQuery.isLoading && !modelsQuery.isError && availableModels().length > 0}>
+                <select
+                  id="model"
+                  class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+                  value={selectedModelId()}
+                  onChange={(e) => {
+                    return setSelectedModelId(e.currentTarget.value)
                   }}
                 >
-                  Create default model
+                  <For each={availableModels()}>
+                    {(m) => {
+                      return <option value={m.id}>{m.name}</option>
+                    }}
+                  </For>
+                </select>
+              </Show>
+              <Show when={!modelsQuery.isLoading && !modelsQuery.isError && availableModels().length === 0}>
+                <div class="flex items-center justify-between gap-3">
+                  <p class="text-sm text-muted-foreground">No models available.</p>
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => {
+                      return void createDefaultModel()
+                    }}
+                  >
+                    Create default model
+                  </Button>
+                </div>
+              </Show>
+            </div>
+
+            <div>
+              <label for="project-name" class="block text-sm font-medium mb-2">
+                Project Name *
+              </label>
+              <input
+                id="project-name"
+                type="text"
+                value={projectName()}
+                onInput={(e) => {
+                  return setProjectName(e.currentTarget.value)
+                }}
+                placeholder="Enter project name"
+                class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+                required
+              />
+            </div>
+
+            <div>
+              <label for="description" class="block text-sm font-medium mb-2">
+                Description
+              </label>
+              <textarea
+                id="description"
+                value={description()}
+                onInput={(e) => {
+                  return setDescription(e.currentTarget.value)
+                }}
+                placeholder="Describe your project..."
+                rows="4"
+                class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent resize-none"
+              />
+            </div>
+
+            <div>
+              <p class="block text-sm font-medium mb-2">Project Timeline</p>
+              <div class="grid grid-cols-2 gap-4">
+                <label class="flex flex-col text-sm font-medium gap-1">
+                  <span>Start Date</span>
+                  <input
+                    type="text"
+                    value={dateFrom()}
+                    onInput={(e) => {
+                      return setDateFrom(e.currentTarget.value)
+                    }}
+                    placeholder="YYYY-MM-DD"
+                    class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+                  />
+                </label>
+                <label class="flex flex-col text-sm font-medium gap-1">
+                  <span>End Date</span>
+                  <input
+                    type="text"
+                    value={dateTo()}
+                    onInput={(e) => {
+                      return setDateTo(e.currentTarget.value)
+                    }}
+                    placeholder="YYYY-MM-DD"
+                    class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+                  />
+                </label>
+              </div>
+            </div>
+
+            <div>
+              <p class="block text-sm font-medium mb-2">Import Routes</p>
+              <Show when={importRoutesQuery.isLoading}>
+                <p class="text-sm text-muted-foreground">Loading import routes...</p>
+              </Show>
+              <Show when={importRoutesQuery.isError}>
+                <p class="text-sm text-red-600">
+                  {importRoutesQuery.error instanceof Error
+                    ? importRoutesQuery.error.message
+                    : 'Failed to load import routes'}
+                </p>
+              </Show>
+              <Show
+                when={
+                  !importRoutesQuery.isLoading && !importRoutesQuery.isError && availableImportRoutes().length === 0
+                }
+              >
+                <p class="text-sm text-muted-foreground">No import routes available.</p>
+              </Show>
+              <Show
+                when={!importRoutesQuery.isLoading && !importRoutesQuery.isError && availableImportRoutes().length > 0}
+              >
+                <div class="space-y-2">
+                  <For each={availableImportRoutes()}>
+                    {(route) => {
+                      return (
+                        <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            class="mt-1"
+                            checked={selectedImportRoutes().includes(route)}
+                            onChange={() => {
+                              return toggleImportRouteSelection(route)
+                            }}
+                          />
+                          <div class="flex-1">
+                            <p class="text-sm font-medium text-gray-900">
+                              <span class="font-mono">{route}</span>
+                            </p>
+                          </div>
+                        </label>
+                      )
+                    }}
+                  </For>
+                </div>
+              </Show>
+            </div>
+
+            <div>
+              <div class="flex items-center justify-between mb-2">
+                <label class="block text-sm font-medium">Prompts</label>
+                <Button type="button" variant="outline" size="sm" onClick={addPromptInput}>
+                  + Add Prompt
                 </Button>
               </div>
-            </Show>
-          </div>
-
-          <div>
-            <label for="project-name" class="block text-sm font-medium mb-2">
-              Project Name *
-            </label>
-            <input
-              id="project-name"
-              type="text"
-              value={projectName()}
-              onInput={(e) => {
-                return setProjectName(e.currentTarget.value)
-              }}
-              placeholder="Enter project name"
-              class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
-              required
-            />
-          </div>
-
-          <div>
-            <label for="description" class="block text-sm font-medium mb-2">
-              Description
-            </label>
-            <textarea
-              id="description"
-              value={description()}
-              onInput={(e) => {
-                return setDescription(e.currentTarget.value)
-              }}
-              placeholder="Describe your project..."
-              rows="4"
-              class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent resize-none"
-            />
-          </div>
-
-          <div>
-            <p class="block text-sm font-medium mb-2">Project Timeline</p>
-            <div class="grid grid-cols-2 gap-4">
-              <label class="flex flex-col text-sm font-medium gap-1">
-                <span>Start Date</span>
-                <input
-                  type="text"
-                  value={dateFrom()}
-                  onInput={(e) => {
-                    return setDateFrom(e.currentTarget.value)
-                  }}
-                  placeholder="YYYY-MM-DD"
-                  class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
-                />
-              </label>
-              <label class="flex flex-col text-sm font-medium gap-1">
-                <span>End Date</span>
-                <input
-                  type="text"
-                  value={dateTo()}
-                  onInput={(e) => {
-                    return setDateTo(e.currentTarget.value)
-                  }}
-                  placeholder="YYYY-MM-DD"
-                  class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
-                />
-              </label>
-            </div>
-          </div>
-
-          <div>
-            <p class="block text-sm font-medium mb-2">Import Routes</p>
-            <Show when={importRoutesQuery.isLoading}>
-              <p class="text-sm text-muted-foreground">Loading import routes...</p>
-            </Show>
-            <Show when={importRoutesQuery.isError}>
-              <p class="text-sm text-red-600">
-                {importRoutesQuery.error instanceof Error
-                  ? importRoutesQuery.error.message
-                  : 'Failed to load import routes'}
-              </p>
-            </Show>
-            <Show
-              when={!importRoutesQuery.isLoading && !importRoutesQuery.isError && availableImportRoutes().length === 0}
-            >
-              <p class="text-sm text-muted-foreground">No import routes available.</p>
-            </Show>
-            <Show when={!importRoutesQuery.isLoading && !importRoutesQuery.isError && availableImportRoutes().length > 0}>
-              <div class="space-y-2">
-                <For each={availableImportRoutes()}>
-                  {(route) => {
+              <div class="space-y-3">
+                <For each={prompts} fallback={<div>No prompts</div>}>
+                  {(promptItem, index) => {
                     return (
-                      <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          class="mt-1"
-                          checked={selectedImportRoutes().includes(route)}
-                          onChange={() => toggleImportRouteSelection(route)}
-                        />
-                        <div class="flex-1">
-                          <p class="text-sm font-medium text-gray-900">
-                            <span class="font-mono">{route}</span>
-                          </p>
+                      <div class="flex gap-2">
+                        <div class="flex-1 space-y-2">
+                          <input
+                            type="text"
+                            value={promptItem.promptHeading}
+                            onInput={(e) => {
+                              return updatePromptInput(promptItem.id, 'promptHeading', e.currentTarget.value)
+                            }}
+                            placeholder={`Prompt ${index() + 1} heading (optional)...`}
+                            class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+                          />
+                          <input
+                            type="text"
+                            value={promptItem.type}
+                            onInput={(e) => {
+                              return updatePromptInput(promptItem.id, 'type', e.currentTarget.value)
+                            }}
+                            placeholder={`Prompt ${index() + 1} type (optional)...`}
+                            class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+                          />
+                          <textarea
+                            value={promptItem.content}
+                            onInput={(e) => {
+                              return updatePromptInput(promptItem.id, 'content', e.currentTarget.value)
+                            }}
+                            placeholder={`Enter prompt ${index() + 1} content...`}
+                            rows="4"
+                            class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent resize-none"
+                          />
                         </div>
-                      </label>
+                        <Show when={prompts.length > 1}>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              return removePromptInput(promptItem.id)
+                            }}
+                            class="self-start mt-1"
+                          >
+                            ×
+                          </Button>
+                        </Show>
+                      </div>
                     )
                   }}
                 </For>
               </div>
-            </Show>
-          </div>
+            </div>
 
-          <div>
-            <div class="flex items-center justify-between mb-2">
-              <label class="block text-sm font-medium">Prompts</label>
-              <Button type="button" variant="outline" size="sm" onClick={addPromptInput}>
-                + Add Prompt
+            <div class="flex gap-3 pt-4">
+              <Button type="submit" disabled={!projectName().trim() || isLoading()}>
+                {isLoading() ? 'Creating...' : 'Create Project'}
+              </Button>
+              <Button as={Link} to="/projects" variant="outline">
+                Cancel
               </Button>
             </div>
-            <div class="space-y-3">
-              <For each={prompts} fallback={<div>No prompts</div>}>
-                {(promptItem, index) => {
-                  return (
-                    <div class="flex gap-2">
-                      <div class="flex-1 space-y-2">
-                        <input
-                          type="text"
-                          value={promptItem.promptHeading}
-                          onInput={(e) => {
-                            return updatePromptInput(promptItem.id, 'promptHeading', e.currentTarget.value)
-                          }}
-                          placeholder={`Prompt ${index() + 1} heading (optional)...`}
-                          class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
-                        />
-                        <input
-                          type="text"
-                          value={promptItem.type}
-                          onInput={(e) => {
-                            return updatePromptInput(promptItem.id, 'type', e.currentTarget.value)
-                          }}
-                          placeholder={`Prompt ${index() + 1} type (optional)...`}
-                          class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
-                        />
-                        <textarea
-                          value={promptItem.content}
-                          onInput={(e) => {
-                            return updatePromptInput(promptItem.id, 'content', e.currentTarget.value)
-                          }}
-                          placeholder={`Enter prompt ${index() + 1} content...`}
-                          rows="4"
-                          class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent resize-none"
-                        />
-                      </div>
-                      <Show when={prompts.length > 1}>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => {
-                            return removePromptInput(promptItem.id)
-                          }}
-                          class="self-start mt-1"
-                        >
-                          ×
-                        </Button>
-                      </Show>
-                    </div>
-                  )
-                }}
-              </For>
-            </div>
-          </div>
-
-          <div class="flex gap-3 pt-4">
-            <Button type="submit" disabled={!projectName().trim() || isLoading()}>
-              {isLoading() ? 'Creating...' : 'Create Project'}
-            </Button>
-            <Button as={Link} to="/projects" variant="outline">
-              Cancel
-            </Button>
-          </div>
-        </form>
+          </form>
         </div>
       </Suspense>
     </div>

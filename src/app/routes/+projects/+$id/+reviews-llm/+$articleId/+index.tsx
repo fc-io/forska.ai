@@ -3,9 +3,9 @@ import {createFileRoute} from '@tanstack/solid-router'
 import {createSignal, For, Show, Suspense} from 'solid-js'
 
 import {ReviewArticleDetails} from '../../../../../../components/main/projects/reviews/review/reviewArticleDetails.tsx'
+import {ReviewHumanAssessments} from '../../../../../../components/main/projects/reviews/review/reviewHumanAssessments.tsx'
 import {ReviewJudgments} from '../../../../../../components/main/projects/reviews/review/reviewJudgments.tsx'
 import {ReviewStatus} from '../../../../../../components/main/projects/reviews/review/reviewStatus.tsx'
-import {ReviewHumanAssessments} from '../../../../../../components/main/projects/reviews/review/reviewHumanAssessments.tsx'
 import {apiClient} from '../../../../../../services/apiClient.ts'
 
 export const ReviewDetail = () => {
@@ -45,34 +45,34 @@ export const ReviewDetail = () => {
           </Show>
 
           <Show when={articleQuery.data}>
-          {(data) => {
-            return (
-              <div class="flex gap-6">
-                <div class="flex-1 space-y-6">
-                  <Show when={articleViewToShow() === undefined}>
-                    <ReviewArticleDetails article={data().article} />
-                  </Show>
-                  <For each={data().judgments}>
-                    {(judgment) => {
-                      console.log(judgment.id)
-                      return (
-                        <Show when={articleViewToShow() === judgment.id}>
-                          <ReviewArticleDetails article={data().article} judgment={judgment} />
-                        </Show>
-                      )
-                    }}
-                  </For>
-                  <Show when={data().review}>
-                    <ReviewStatus review={data().review} />
-                  </Show>
+            {(data) => {
+              return (
+                <div class="flex gap-6">
+                  <div class="flex-1 space-y-6">
+                    <Show when={articleViewToShow() === undefined}>
+                      <ReviewArticleDetails article={data().article} />
+                    </Show>
+                    <For each={data().judgments}>
+                      {(judgment) => {
+                        console.log(judgment.id)
+                        return (
+                          <Show when={articleViewToShow() === judgment.id}>
+                            <ReviewArticleDetails article={data().article} judgment={judgment} />
+                          </Show>
+                        )
+                      }}
+                    </For>
+                    <Show when={data().review}>
+                      <ReviewStatus review={data().review} />
+                    </Show>
+                  </div>
+                  <div class="w-96">
+                    <ReviewJudgments judgments={data().judgments} setArticleViewToShow={setArticleViewToShow} />
+                    <ReviewHumanAssessments groups={data().humanAssessmentsByUser} />
+                  </div>
                 </div>
-                <div class="w-96">
-                  <ReviewJudgments judgments={data().judgments} setArticleViewToShow={setArticleViewToShow} />
-                  <ReviewHumanAssessments groups={data().humanAssessmentsByUser} />
-                </div>
-              </div>
-            )
-          }}
+              )
+            }}
           </Show>
         </Suspense>
       </div>

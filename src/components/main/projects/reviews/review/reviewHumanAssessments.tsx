@@ -5,17 +5,10 @@ import {ReviewHumanJudgmentItem} from './reviewHumanJudgmentItem.tsx'
 type HumanGroup = {
   userId: string
   userName: string
-  judgments: Array<{
-    id: string
-    prompt: {originalText: string}
-    answer: string | null
-    comment: string | null
-  }>
+  judgments: Array<{id: string; prompt: {originalText: string}; answer: string | null; comment: string | null}>
 }
 
-type ReviewHumanAssessmentsProps = {
-  groups?: HumanGroup[]
-}
+type ReviewHumanAssessmentsProps = {groups?: HumanGroup[]}
 
 export const ReviewHumanAssessments = (props: ReviewHumanAssessmentsProps) => {
   return (
@@ -43,4 +36,3 @@ export const ReviewHumanAssessments = (props: ReviewHumanAssessmentsProps) => {
     </Show>
   )
 }
-

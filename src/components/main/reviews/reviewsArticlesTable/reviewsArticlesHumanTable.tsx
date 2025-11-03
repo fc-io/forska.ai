@@ -15,9 +15,7 @@ declare module '@tanstack/solid-table' {
 
 type HumanJudgmentType = typeof judgmentsHuman.$inferSelect
 
-type ArticleWithHumanJudgments = Omit<typeof articles.$inferSelect, 'judgments'> & {
-  judgments: Array<HumanJudgmentType>
-}
+type ArticleWithHumanJudgments = Omit<typeof articles.$inferSelect, 'judgments'> & {judgments: Array<HumanJudgmentType>}
 
 interface ReviewsArticlesHumanTableProps {
   articles: ArticleWithHumanJudgments[]
@@ -117,9 +115,7 @@ export const ReviewsArticlesHumanTable = (props: ReviewsArticlesHumanTableProps)
     },
     columns,
     getCoreRowModel: getCoreRowModel(),
-    meta: {
-      projectId,
-    },
+    meta: {projectId},
   })
 
   return (

@@ -62,4 +62,3 @@ const ReviewsHuman = () => {
   )
 }
 export const Route = createFileRoute('/projects/$id/reviews-human/')({component: ReviewsHuman})
-

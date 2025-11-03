@@ -24,7 +24,9 @@ export const projectsRoutesGetArticlesReviewsHuman = new Elysia().post(
         return {data: [], totalCount: 0, page, limit, totalPages: 0}
       }
 
-      const promptIds = projectPrompts.map((p) => p.id)
+      const promptIds = projectPrompts.map((p) => {
+        return p.id
+      })
 
       // Base condition: Article is fully assessed by at least one human user for all project prompts
       const fullyAssessedByHumanExists = sql`EXISTS (
@@ -92,7 +94,9 @@ export const projectsRoutesGetArticlesReviewsHuman = new Elysia().post(
         .limit(limit)
         .offset(offset)
 
-      const articleIds = articlesWithHumanJudgments.map((a) => a.article.id)
+      const articleIds = articlesWithHumanJudgments.map((a) => {
+        return a.article.id
+      })
 
       const allHumanJudgments =
         articleIds.length > 0
@@ -132,4 +136,3 @@ export const projectsRoutesGetArticlesReviewsHuman = new Elysia().post(
     }),
   },
 )
-

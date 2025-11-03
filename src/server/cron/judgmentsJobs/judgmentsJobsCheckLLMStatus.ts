@@ -202,4 +202,3 @@ export const judgmentsJobsCheckLLMStatus = async (db: PostgresJsDatabase<typeof 
     await db.insert(schema.llmStatus).values(llmStatusData)
   }
 }
-
