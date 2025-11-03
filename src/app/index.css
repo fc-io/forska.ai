@@ -1,1 +1,13 @@
 @import "tailwindcss";
+
+.assessment-container {
+    line-height: 1.8;
+}
+.assessment-container h4 {
+    font-weight: 600;
+    /* margin-top: 1.5rem; */
+}
+
+.assessment-container h4:not(:first-child) {
+    margin-top: 1.5rem;
+}

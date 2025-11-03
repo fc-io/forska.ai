@@ -1,5 +1,6 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute} from '@tanstack/solid-router'
+import DOMPurify from 'dompurify'
 import {createEffect, createMemo, createSignal, For, Show, Suspense} from 'solid-js'
 
 import {Button} from '../../../../components/ui/button'
@@ -90,6 +91,26 @@ export const HumanAssessment = () => {
   const [articleTitle, setArticleTitle] = createSignal<string>(placeholderTitle)
   const [articleAbstract, setArticleAbstract] = createSignal<string>(placeholderAbstract)
   const [projectName, setProjectName] = createSignal<string>('')
+
+  const sanitizedAbstract = createMemo<TrustedHTML | string>(() => {
+    const clean = DOMPurify.sanitize(articleAbstract() ?? '')
+    const tt = (
+      globalThis as unknown as {
+        trustedTypes?: {
+          createPolicy: (
+            name: string,
+            p: {createHTML: (s: string) => string},
+          ) => {createHTML: (s: string) => TrustedHTML}
+        }
+      }
+    ).trustedTypes
+    const policy = tt?.createPolicy('humanAssessment#abstract', {
+      createHTML: (s: string) => {
+        return s
+      },
+    })
+    return policy ? policy.createHTML(clean) : clean
+  })
 
   const initQuery = useQuery(() => {
     return {
@@ -214,7 +235,7 @@ export const HumanAssessment = () => {
                 </div>
                 <div>
                   <div class="text-sm text-gray-500 mb-1">Abstract</div>
-                  <div class="text-gray-900 leading-relaxed">{articleAbstract()}</div>
+                  <div class="text-gray-900 leading-relaxed assessment-container" innerHTML={sanitizedAbstract()} />
                 </div>
               </div>
             </section>
