@@ -44,6 +44,7 @@ export const HumanAssessment = () => {
         return data
       },
       onSuccess: async () => {
+        form.reset()
         await queryClient.refetchQueries({queryKey: ['human-assessment-init', params().id]})
       },
     }
