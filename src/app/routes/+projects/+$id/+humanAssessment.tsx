@@ -48,16 +48,14 @@ const typeIncludesNull = (typeStr?: string | null): boolean => {
   })
 }
 
-type TextAnswerInputProps = {index: number; value: string; setAnswer: (index: number, value: string) => void}
+type TextAnswerInputProps = {name: string; onInput?: (e: InputEvent) => void}
 export const TextAnswerInput = (props: TextAnswerInputProps) => {
   return (
     <input
       type="text"
       class="w-full max-w-xl border border-gray-300 rounded-md p-2 text-sm"
-      value={props.value}
-      onInput={(e) => {
-        return props.setAnswer(props.index, e.currentTarget.value)
-      }}
+      name={props.name}
+      onInput={props.onInput}
       placeholder="Enter your answer"
     />
   )
@@ -70,6 +68,33 @@ type PromptAnswer = {
   promptId?: string
   judgmentHumanId?: string
   promptType?: string | null
+}
+
+const isNonEmpty = (v: unknown): boolean => {
+  return v != null && String(v).trim() !== ''
+}
+
+const getFormFieldValue = (form: HTMLFormElement | undefined, name: string | undefined): string | null => {
+  if (!form || !name) return null
+  const el = form.elements.namedItem(name) as unknown as RadioNodeList | HTMLInputElement | null
+  if (!el) return null
+  // If RadioNodeList (multiple with same name), it has a string value of the checked one
+  if (typeof (el as unknown as {length?: number}).length === 'number') {
+    const val = (el as unknown as RadioNodeList).value
+    return typeof val === 'string' ? val : null
+  }
+  // Single input element
+  const input = el as HTMLInputElement
+  return typeof input.value === 'string' ? input.value : null
+}
+
+const canSubmitFromForm = (form: HTMLFormElement | undefined, prompts: PromptAnswer[]): boolean => {
+  if (!form) return false
+  return prompts.every((p) => {
+    const optional = typeIncludesNull(p.promptType)
+    const val = getFormFieldValue(form, p.judgmentHumanId) ?? getFormFieldValue(form, p.promptId)
+    return optional || isNonEmpty(val)
+  })
 }
 
 type HumanAssessmentInitResponse = {
@@ -98,6 +123,8 @@ export const HumanAssessment = () => {
   const [articleTitle, setArticleTitle] = createSignal<string>(placeholderTitle)
   const [articleAbstract, setArticleAbstract] = createSignal<string>(placeholderAbstract)
   const [projectName, setProjectName] = createSignal<string>('')
+  let formEl: HTMLFormElement | undefined
+  const [canSubmit, setCanSubmit] = createSignal(false)
 
   const sanitizedAbstract = createMemo<TrustedHTML | string>(() => {
     const clean = DOMPurify.sanitize(articleAbstract() ?? '')
@@ -117,6 +144,12 @@ export const HumanAssessment = () => {
       },
     })
     return policy ? policy.createHTML(clean) : clean
+  })
+
+  createEffect(() => {
+    // Recompute submit availability whenever prompts load/change
+    void answers()
+    setCanSubmit(canSubmitFromForm(formEl, answers()))
   })
 
   const initQuery = useQuery(() => {
@@ -166,47 +199,29 @@ export const HumanAssessment = () => {
     )
   })
 
-  const setAnswer = (index: number, value: string) => {
-    setAnswers((prev) => {
-      const next = [...prev]
-      next[index] = {...next[index], answer: value}
-      return next
-    })
-  }
-
-  const setNotes = (index: number, value: string) => {
-    setAnswers((prev) => {
-      const next = [...prev]
-      next[index] = {...next[index], notes: value}
-      return next
-    })
-  }
-
-  const allAnswered = createMemo(() => {
-    return answers().every((a) => {
-      const optional = typeIncludesNull(a.promptType)
-      const hasAnswer = a.answer !== null && String(a.answer).trim() !== ''
-      return (optional || hasAnswer) && !!a.judgmentHumanId
-    })
-  })
-
   const handleSubmit = async () => {
-    const payload = {
-      projectId: projectId(),
-      answers: answers()
-        .filter((a) => {
-          const optional = typeIncludesNull(a.promptType)
-          const hasAnswer = a.answer !== null && String(a.answer).trim() !== ''
-          return !optional || hasAnswer
-        })
-        .map((a) => {
-        return {
-          judgmentHumanId: a.judgmentHumanId!,
-          answer: String(a.answer),
-          comment: a.notes?.trim() ? a.notes : undefined,
+    const payload = formEl
+      ? {
+          projectId: projectId(),
+          answers: answers()
+            .map((a) => {
+              const v = getFormFieldValue(formEl, a.judgmentHumanId) ?? getFormFieldValue(formEl, a.promptId)
+              return {meta: a, value: v}
+            })
+            .filter(({meta, value}) => {
+              const optional = typeIncludesNull(meta.promptType)
+              const hasValue = value !== null && String(value).trim() !== ''
+              return !optional ? true : hasValue
+            })
+            .map(({meta, value}) => {
+              return {
+                judgmentHumanId: meta.judgmentHumanId!,
+                answer: String(value ?? ''),
+                comment: meta.notes?.trim() ? meta.notes : undefined,
+              }
+            }),
         }
-      }),
-    }
+      : {projectId: projectId(), answers: []}
 
     const response = await apiClient.api.humanassessment.submit.post(payload)
     const result = handleApiResponse<{data: {updated: number}}>(response, 'Failed to submit assessment')
@@ -255,58 +270,76 @@ export const HumanAssessment = () => {
               </div>
             </section>
 
-            <section class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-              <div class="space-y-6">
-                <For each={answers()}>
-                  {(item, i) => {
-                    const typeStr = item.promptType ?? 'string'
-                    const enumOptions = getEnumOptions(typeStr)
-                    const isOptional = typeIncludesNull(typeStr)
-                    return (
-                      <div class="border rounded-md p-4">
-                        <div class="font-medium mb-3">
-                          {item.prompt}
-                          <Show when={isOptional}>
-                            <span class="ml-2 text-blue-600 text-sm">(optional)</span>
+            <form
+              ref={(el) => {
+                formEl = el
+                setCanSubmit(canSubmitFromForm(formEl, answers()))
+              }}
+              onSubmit={(e) => {
+                e.preventDefault()
+                void handleSubmit()
+              }}
+              onInput={() => {
+                setCanSubmit(canSubmitFromForm(formEl, answers()))
+              }}
+              onChange={() => {
+                setCanSubmit(canSubmitFromForm(formEl, answers()))
+              }}
+            >
+              <section class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+                <div class="space-y-6">
+                  <For each={answers()}>
+                    {(item, i) => {
+                      const typeStr = item.promptType ?? 'string'
+                      const enumOptions = getEnumOptions(typeStr)
+                      const isOptional = typeIncludesNull(typeStr)
+                      const groupName = item.judgmentHumanId || item.promptId || `prompt-${i()}`
+                      return (
+                        <div class="border rounded-md p-4">
+                          <div class="font-medium mb-3">
+                            {item.prompt}
+                            <Show when={isOptional}>
+                              <span class="ml-2 text-blue-600 text-sm">(optional)</span>
+                            </Show>
+                          </div>
+                          <Show
+                            when={enumOptions.length > 0}
+                            fallback={<TextAnswerInput name={groupName} onInput={() => setCanSubmit(canSubmitFromForm(formEl, answers()))} />}
+                          >
+                            <div class="flex items-center gap-4 mb-3">
+                              <For each={enumOptions}>
+                                {(opt) => {
+                                  return (
+                                    <label class="inline-flex items-center gap-2 text-sm">
+                                      <input
+                                        type="radio"
+                                        name={groupName}
+                                        class="accent-blue-600"
+                                        value={opt}
+                                        onChange={() => {
+                                          setCanSubmit(canSubmitFromForm(formEl, answers()))
+                                        }}
+                                      />
+                                      {opt.charAt(0).toUpperCase() + opt.slice(1)}
+                                    </label>
+                                  )
+                                }}
+                              </For>
+                            </div>
                           </Show>
                         </div>
-                        <Show
-                          when={enumOptions.length > 0}
-                          fallback={<TextAnswerInput index={i()} value={item.answer ?? ''} setAnswer={setAnswer} />}
-                        >
-                          <div class="flex items-center gap-4 mb-3">
-                            <For each={enumOptions}>
-                              {(opt) => {
-                                return (
-                                  <label class="inline-flex items-center gap-2 text-sm">
-                                    <input
-                                      type="radio"
-                                      name={`answer-${i()}`}
-                                      class="accent-blue-600"
-                                      checked={item.answer === opt}
-                                      onChange={() => {
-                                        return setAnswer(i(), opt)
-                                      }}
-                                    />
-                                    {opt.charAt(0).toUpperCase() + opt.slice(1)}
-                                  </label>
-                                )
-                              }}
-                            </For>
-                          </div>
-                        </Show>
-                      </div>
-                    )
-                  }}
-                </For>
-              </div>
-            </section>
+                      )
+                    }}
+                  </For>
+                </div>
+              </section>
 
-            <div class="flex items-center gap-3">
-              <Button onClick={handleSubmit} disabled={!allAnswered()}>
-                Submit Assessment
-              </Button>
-            </div>
+              <div class="flex items-center gap-3 mt-4">
+                <Button type="submit" disabled={!canSubmit()}>
+                  Submit Assessment
+                </Button>
+              </div>
+            </form>
           </div>
         </Suspense>
       </div>
