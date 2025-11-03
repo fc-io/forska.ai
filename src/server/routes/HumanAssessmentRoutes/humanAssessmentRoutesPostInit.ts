@@ -41,6 +41,7 @@ export const humanAssessmentRoutesPostInit = async ({
     set.status = 404
     return {data: null, error: 'Project not found'}
   }
+  console.log('project', project)
 
   const projectPrompts = await db
     .select({
@@ -53,6 +54,7 @@ export const humanAssessmentRoutesPostInit = async ({
     .from(prompts)
     .where(eq(prompts.projectId, body.projectId))
     .orderBy(prompts.order)
+  console.log('projectPrompts', projectPrompts.length)
 
   if (projectPrompts.length === 0) {
     set.status = 400
@@ -68,13 +70,11 @@ export const humanAssessmentRoutesPostInit = async ({
         eq(judgmentsHuman.projectId, body.projectId),
         eq(judgmentsHuman.user, sessionUserId),
         isNull(judgmentsHuman.answer),
-        sql`${prompts.type} IS NULL OR ${prompts.type} NOT ILIKE '%null%'
-            `,
       ),
     )
     .orderBy(desc(judgmentsHuman.createdAt))
     .limit(50)
-
+  console.log('existingUnanswered', existingUnanswered.length)
   let targetArticleId: string | null = null
   if (existingUnanswered.length > 0) {
     targetArticleId = existingUnanswered[0]!.articleId
