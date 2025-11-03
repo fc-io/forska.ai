@@ -21,7 +21,7 @@ export const ReviewJudgments = (props: ReviewJudgmentsProps) => {
   return (
     <div class="sticky top-6 bg-white rounded-lg shadow h-fit">
       <div class="p-4 border-b">
-        <h2 class="text-lg font-bold">Judgments</h2>
+        <h2 class="text-lg font-bold">LLM assessment</h2>
       </div>
       <Show
         when={props.judgments && props.judgments.length > 0}
