@@ -14,6 +14,8 @@ import {withErrorHandler} from '../utils/routeErrorHandler'
 import {projectsRoutesGetArticlesReviews} from './projectsRoutes/projectsRoutesGetArticlesReviews.ts'
 import {projectsRoutesGetArticlesReviewsFilters} from './projectsRoutes/projectsRoutesGetArticlesReviewsFilters.ts'
 import {projectsRoutesGetArticlesReviewsUnassessed} from './projectsRoutes/projectsRoutesGetArticlesReviewsUnassessed.ts'
+import {projectsRoutesGetArticlesReviewsHuman} from './projectsRoutes/projectsRoutesGetArticlesReviewsHuman.ts'
+import {projectsRoutesGetArticlesReviewsHumanFilters} from './projectsRoutes/projectsRoutesGetArticlesReviewsHumanFilters.ts'
 import {projectsRoutesGetArticlesWithJudgments} from './projectsRoutes/projectsRoutesGetArticlesWithJudgments.ts'
 import {projectsRoutesPostArticleReviewDetails} from './projectsRoutes/projectsRoutesPostArticleReviewDetails.ts'
 
@@ -39,8 +41,10 @@ export const projectsRoutes = new Elysia()
   .use(withErrorHandler())
   .use(projectsRoutesGetArticlesWithJudgments)
   .use(projectsRoutesGetArticlesReviews)
+  .use(projectsRoutesGetArticlesReviewsHuman)
   .use(projectsRoutesGetArticlesReviewsUnassessed)
   .use(projectsRoutesGetArticlesReviewsFilters)
+  .use(projectsRoutesGetArticlesReviewsHumanFilters)
   .use(projectsRoutesPostArticleReviewDetails)
   .get('/api/projects', async () => {
     const db = getDatabase()
