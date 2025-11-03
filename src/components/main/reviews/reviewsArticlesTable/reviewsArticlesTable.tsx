@@ -29,7 +29,7 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
     cell: (info) => {
       return (
         <Link
-          to="/projects/$id/reviews/$articleId"
+          to="/projects/$id/reviews-llm/$articleId"
           params={{id: info.table.options.meta?.projectId?.() || '', articleId: info.row.original.id}}
           class="text-blue-600 hover:underline"
         >

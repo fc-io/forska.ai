@@ -29,10 +29,12 @@ import { Route as AdminJobsIdUnassessed_articlesRouteImport } from './routes/+ad
 import { Route as AdminDatasourcesIdEditRouteImport } from './routes/+admin/+datasources/+$id/+edit'
 import { Route as ProjectsIdReviewsIndexRouteImport } from './routes/+projects/+$id/+reviews/+index'
 import { Route as ProjectsIdReviewsUnassessedIndexRouteImport } from './routes/+projects/+$id/+reviews-unassessed/+index'
+import { Route as ProjectsIdReviewsLlmIndexRouteImport } from './routes/+projects/+$id/+reviews-llm/+index'
 import { Route as ProjectsIdReviewsHumanIndexRouteImport } from './routes/+projects/+$id/+reviews-human/+index'
 import { Route as ProjectsIdReviewsBothIndexRouteImport } from './routes/+projects/+$id/+reviews-both/+index'
 import { Route as AdminJobsIdIndexRouteImport } from './routes/+admin/+jobs/+$id/+index'
 import { Route as ProjectsIdReviewsArticleIdIndexRouteImport } from './routes/+projects/+$id/+reviews/+$articleId/+index'
+import { Route as ProjectsIdReviewsLlmArticleIdIndexRouteImport } from './routes/+projects/+$id/+reviews-llm/+$articleId/+index'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -137,6 +139,12 @@ const ProjectsIdReviewsUnassessedIndexRoute =
     path: '/projects/$id/reviews-unassessed/',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ProjectsIdReviewsLlmIndexRoute =
+  ProjectsIdReviewsLlmIndexRouteImport.update({
+    id: '/projects/$id/reviews-llm/',
+    path: '/projects/$id/reviews-llm/',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ProjectsIdReviewsHumanIndexRoute =
   ProjectsIdReviewsHumanIndexRouteImport.update({
     id: '/projects/$id/reviews-human/',
@@ -160,6 +168,12 @@ const ProjectsIdReviewsArticleIdIndexRoute =
     path: '/projects/$id/reviews/$articleId/',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ProjectsIdReviewsLlmArticleIdIndexRoute =
+  ProjectsIdReviewsLlmArticleIdIndexRouteImport.update({
+    id: '/projects/$id/reviews-llm/$articleId/',
+    path: '/projects/$id/reviews-llm/$articleId/',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -181,10 +195,12 @@ export interface FileRoutesByFullPath {
   '/admin/jobs/$id': typeof AdminJobsIdIndexRoute
   '/projects/$id/reviews-both': typeof ProjectsIdReviewsBothIndexRoute
   '/projects/$id/reviews-human': typeof ProjectsIdReviewsHumanIndexRoute
+  '/projects/$id/reviews-llm': typeof ProjectsIdReviewsLlmIndexRoute
   '/projects/$id/reviews-unassessed': typeof ProjectsIdReviewsUnassessedIndexRoute
   '/projects/$id/reviews': typeof ProjectsIdReviewsIndexRoute
   '/admin/datasources/$id/edit': typeof AdminDatasourcesIdEditRoute
   '/admin/jobs/$id/unassessed_articles': typeof AdminJobsIdUnassessed_articlesRoute
+  '/projects/$id/reviews-llm/$articleId': typeof ProjectsIdReviewsLlmArticleIdIndexRoute
   '/projects/$id/reviews/$articleId': typeof ProjectsIdReviewsArticleIdIndexRoute
 }
 export interface FileRoutesByTo {
@@ -207,10 +223,12 @@ export interface FileRoutesByTo {
   '/admin/jobs/$id': typeof AdminJobsIdIndexRoute
   '/projects/$id/reviews-both': typeof ProjectsIdReviewsBothIndexRoute
   '/projects/$id/reviews-human': typeof ProjectsIdReviewsHumanIndexRoute
+  '/projects/$id/reviews-llm': typeof ProjectsIdReviewsLlmIndexRoute
   '/projects/$id/reviews-unassessed': typeof ProjectsIdReviewsUnassessedIndexRoute
   '/projects/$id/reviews': typeof ProjectsIdReviewsIndexRoute
   '/admin/datasources/$id/edit': typeof AdminDatasourcesIdEditRoute
   '/admin/jobs/$id/unassessed_articles': typeof AdminJobsIdUnassessed_articlesRoute
+  '/projects/$id/reviews-llm/$articleId': typeof ProjectsIdReviewsLlmArticleIdIndexRoute
   '/projects/$id/reviews/$articleId': typeof ProjectsIdReviewsArticleIdIndexRoute
 }
 export interface FileRoutesById {
@@ -234,10 +252,12 @@ export interface FileRoutesById {
   '/admin/jobs/$id/': typeof AdminJobsIdIndexRoute
   '/projects/$id/reviews-both/': typeof ProjectsIdReviewsBothIndexRoute
   '/projects/$id/reviews-human/': typeof ProjectsIdReviewsHumanIndexRoute
+  '/projects/$id/reviews-llm/': typeof ProjectsIdReviewsLlmIndexRoute
   '/projects/$id/reviews-unassessed/': typeof ProjectsIdReviewsUnassessedIndexRoute
   '/projects/$id/reviews/': typeof ProjectsIdReviewsIndexRoute
   '/admin/datasources/$id/edit': typeof AdminDatasourcesIdEditRoute
   '/admin/jobs/$id/unassessed_articles': typeof AdminJobsIdUnassessed_articlesRoute
+  '/projects/$id/reviews-llm/$articleId/': typeof ProjectsIdReviewsLlmArticleIdIndexRoute
   '/projects/$id/reviews/$articleId/': typeof ProjectsIdReviewsArticleIdIndexRoute
 }
 export interface FileRouteTypes {
@@ -262,10 +282,12 @@ export interface FileRouteTypes {
     | '/admin/jobs/$id'
     | '/projects/$id/reviews-both'
     | '/projects/$id/reviews-human'
+    | '/projects/$id/reviews-llm'
     | '/projects/$id/reviews-unassessed'
     | '/projects/$id/reviews'
     | '/admin/datasources/$id/edit'
     | '/admin/jobs/$id/unassessed_articles'
+    | '/projects/$id/reviews-llm/$articleId'
     | '/projects/$id/reviews/$articleId'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -288,10 +310,12 @@ export interface FileRouteTypes {
     | '/admin/jobs/$id'
     | '/projects/$id/reviews-both'
     | '/projects/$id/reviews-human'
+    | '/projects/$id/reviews-llm'
     | '/projects/$id/reviews-unassessed'
     | '/projects/$id/reviews'
     | '/admin/datasources/$id/edit'
     | '/admin/jobs/$id/unassessed_articles'
+    | '/projects/$id/reviews-llm/$articleId'
     | '/projects/$id/reviews/$articleId'
   id:
     | '__root__'
@@ -314,10 +338,12 @@ export interface FileRouteTypes {
     | '/admin/jobs/$id/'
     | '/projects/$id/reviews-both/'
     | '/projects/$id/reviews-human/'
+    | '/projects/$id/reviews-llm/'
     | '/projects/$id/reviews-unassessed/'
     | '/projects/$id/reviews/'
     | '/admin/datasources/$id/edit'
     | '/admin/jobs/$id/unassessed_articles'
+    | '/projects/$id/reviews-llm/$articleId/'
     | '/projects/$id/reviews/$articleId/'
   fileRoutesById: FileRoutesById
 }
@@ -341,10 +367,12 @@ export interface RootRouteChildren {
   AdminJobsIdIndexRoute: typeof AdminJobsIdIndexRoute
   ProjectsIdReviewsBothIndexRoute: typeof ProjectsIdReviewsBothIndexRoute
   ProjectsIdReviewsHumanIndexRoute: typeof ProjectsIdReviewsHumanIndexRoute
+  ProjectsIdReviewsLlmIndexRoute: typeof ProjectsIdReviewsLlmIndexRoute
   ProjectsIdReviewsUnassessedIndexRoute: typeof ProjectsIdReviewsUnassessedIndexRoute
   ProjectsIdReviewsIndexRoute: typeof ProjectsIdReviewsIndexRoute
   AdminDatasourcesIdEditRoute: typeof AdminDatasourcesIdEditRoute
   AdminJobsIdUnassessed_articlesRoute: typeof AdminJobsIdUnassessed_articlesRoute
+  ProjectsIdReviewsLlmArticleIdIndexRoute: typeof ProjectsIdReviewsLlmArticleIdIndexRoute
   ProjectsIdReviewsArticleIdIndexRoute: typeof ProjectsIdReviewsArticleIdIndexRoute
 }
 
@@ -490,6 +518,13 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof ProjectsIdReviewsUnassessedIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/projects/$id/reviews-llm/': {
+      id: '/projects/$id/reviews-llm/'
+      path: '/projects/$id/reviews-llm'
+      fullPath: '/projects/$id/reviews-llm'
+      preLoaderRoute: typeof ProjectsIdReviewsLlmIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/projects/$id/reviews-human/': {
       id: '/projects/$id/reviews-human/'
       path: '/projects/$id/reviews-human'
@@ -518,6 +553,13 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof ProjectsIdReviewsArticleIdIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/projects/$id/reviews-llm/$articleId/': {
+      id: '/projects/$id/reviews-llm/$articleId/'
+      path: '/projects/$id/reviews-llm/$articleId'
+      fullPath: '/projects/$id/reviews-llm/$articleId'
+      preLoaderRoute: typeof ProjectsIdReviewsLlmArticleIdIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -541,10 +583,13 @@ const rootRouteChildren: RootRouteChildren = {
   AdminJobsIdIndexRoute: AdminJobsIdIndexRoute,
   ProjectsIdReviewsBothIndexRoute: ProjectsIdReviewsBothIndexRoute,
   ProjectsIdReviewsHumanIndexRoute: ProjectsIdReviewsHumanIndexRoute,
+  ProjectsIdReviewsLlmIndexRoute: ProjectsIdReviewsLlmIndexRoute,
   ProjectsIdReviewsUnassessedIndexRoute: ProjectsIdReviewsUnassessedIndexRoute,
   ProjectsIdReviewsIndexRoute: ProjectsIdReviewsIndexRoute,
   AdminDatasourcesIdEditRoute: AdminDatasourcesIdEditRoute,
   AdminJobsIdUnassessed_articlesRoute: AdminJobsIdUnassessed_articlesRoute,
+  ProjectsIdReviewsLlmArticleIdIndexRoute:
+    ProjectsIdReviewsLlmArticleIdIndexRoute,
   ProjectsIdReviewsArticleIdIndexRoute: ProjectsIdReviewsArticleIdIndexRoute,
 }
 export const routeTree = rootRouteImport

@@ -15,18 +15,18 @@ export const ReviewsTabs = (props: ReviewsTabsProps): JSX.Element => {
     <div class="mb-4 border-b border-gray-200">
       <nav class="-mb-px flex gap-4" aria-label="Tabs">
         <Link
-          to="/projects/$id/reviews"
-          params={{id: props.projectId}}
-          class={`${base} ${props.active === 'assessed' ? active : inactive}`}
-        >
-          Assessed by LLM
-        </Link>
-        <Link
           to="/projects/$id/reviews-both"
           params={{id: props.projectId}}
           class={`${base} ${props.active === 'assessedBoth' ? active : inactive}`}
         >
           Assessed by Both
+        </Link>
+        <Link
+          to="/projects/$id/reviews-llm"
+          params={{id: props.projectId}}
+          class={`${base} ${props.active === 'assessed' ? active : inactive}`}
+        >
+          Assessed by LLM
         </Link>
         <Link
           to="/projects/$id/reviews-human"
