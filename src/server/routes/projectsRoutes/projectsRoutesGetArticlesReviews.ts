@@ -18,6 +18,7 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
       // Parse optional date range
       const fromDate = body.from ? new Date(`${body.from}T00:00:00.000Z`) : null
       const toDate = body.to ? new Date(`${body.to}T23:59:59.999Z`) : null
+      const searchTitle = typeof body.search === 'string' ? body.search.trim() : ''
 
       // First get all prompts for this project
       const projectPrompts = await db.select().from(prompts).where(eq(prompts.projectId, body.projectId))
@@ -75,6 +76,9 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
       }
       if (toDate) {
         whereParts.push(lte(articles.createdAt, toDate))
+      }
+      if (searchTitle) {
+        whereParts.push(sql`${articles.articleTitle} ILIKE ${'%' + searchTitle + '%'}`)
       }
 
       const combinedWhereCondition = whereParts.length > 1 ? and(...whereParts) : whereParts[0]
@@ -151,6 +155,7 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
       projectId: t.String(),
       prompts: t.Record(t.String(), t.Array(t.String())),
       to: t.Optional(t.String()),
+      search: t.Optional(t.String()),
     }),
   },
 )

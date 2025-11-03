@@ -18,6 +18,7 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
 
       const fromDate = query?.from ? new Date(`${query.from}T00:00:00.000Z`) : null
       const toDate = query?.to ? new Date(`${query.to}T23:59:59.999Z`) : null
+      const searchTitle = typeof query?.search === 'string' ? query.search.trim() : ''
 
       // Get all prompts for this project
       const projectPrompts = await db
@@ -37,10 +38,14 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
                 INNER JOIN ${articles} ON ${articles.id} = ${judgments.articleId}
                 WHERE ${judgments.promptId} = ${prompt.id}::uuid`
 
-          const dateScoped =
-            fromDate && toDate
-              ? sql`${base} AND ${and(gte(articles.createdAt, fromDate), lte(articles.createdAt, toDate))} ORDER BY ${judgments.answeredOriginal}`
-              : sql`${base} ORDER BY ${judgments.answeredOriginal}`
+          let scoped = base
+          if (fromDate && toDate) {
+            scoped = sql`${scoped} AND ${and(gte(articles.createdAt, fromDate), lte(articles.createdAt, toDate))}`
+          }
+          if (searchTitle) {
+            scoped = sql`${scoped} AND ${articles.articleTitle} ILIKE ${'%' + searchTitle + '%'}`
+          }
+          const dateScoped = sql`${scoped} ORDER BY ${judgments.answeredOriginal}`
 
           const uniqueValues = await db.execute<{answered_original: string}>(dateScoped)
 
@@ -61,5 +66,12 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
       throw new Error(error instanceof Error ? error.message : 'Failed to fetch articles reviews filters')
     }
   },
-  {query: t.Object({projectId: t.String(), from: t.Optional(t.String()), to: t.Optional(t.String())})},
+  {
+    query: t.Object({
+      projectId: t.String(),
+      from: t.Optional(t.String()),
+      to: t.Optional(t.String()),
+      search: t.Optional(t.String()),
+    }),
+  },
 )

@@ -11,6 +11,7 @@ export const createArticlesReviewsQueryOptions = (
   pageLimit: Accessor<number>,
   fromDateStr: Accessor<string>,
   toDateStr: Accessor<string>,
+  searchTitleApplied: Accessor<string>,
 ) => {
   const fromStr = () => fromDateStr().trim()
   const toStr = () => toDateStr().trim()
@@ -24,7 +25,16 @@ export const createArticlesReviewsQueryOptions = (
   }
   return {
     // Only include dates when valid to prevent refetching on partial input
-    queryKey: ['project-articles-reviews', projectId, promptFilters(), currentPage(), pageLimit(), validFrom(), validTo()],
+    queryKey: [
+      'project-articles-reviews',
+      projectId,
+      promptFilters(),
+      currentPage(),
+      pageLimit(),
+      validFrom(),
+      validTo(),
+      (searchTitleApplied() || '').trim() || null,
+    ],
     queryFn: async () => {
       const body: Record<string, unknown> = {
         page: String(currentPage()),
@@ -41,6 +51,8 @@ export const createArticlesReviewsQueryOptions = (
       const to = validTo()
       if (from) body.from = from
       if (to) body.to = to
+      const search = (searchTitleApplied() || '').trim()
+      if (search) body.search = search
 
       const response = await apiClient.api.articlesreviews.post(body)
 

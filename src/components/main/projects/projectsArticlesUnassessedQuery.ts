@@ -10,6 +10,7 @@ export const createArticlesUnassessedQueryOptions = (
   pageLimit: Accessor<number>,
   fromDateStr: Accessor<string>,
   toDateStr: Accessor<string>,
+  searchTitleApplied: Accessor<string>,
 ) => {
   const fromStr = () => {
     return fromDateStr().trim()
@@ -27,13 +28,23 @@ export const createArticlesUnassessedQueryOptions = (
   }
   return {
     // Only include dates when valid to prevent refetching on partial input
-    queryKey: ['project-articles-unassessed', projectId, currentPage(), pageLimit(), validFrom(), validTo()],
+    queryKey: [
+      'project-articles-unassessed',
+      projectId,
+      currentPage(),
+      pageLimit(),
+      validFrom(),
+      validTo(),
+      (searchTitleApplied() || '').trim() || null,
+    ],
     queryFn: async () => {
       const body: Record<string, unknown> = {page: String(currentPage()), limit: String(pageLimit()), projectId}
       const from = validFrom()
       const to = validTo()
       if (from) body.from = from
       if (to) body.to = to
+      const search = (searchTitleApplied() || '').trim()
+      if (search) body.search = search
 
       const response = await apiClient.api.articlesreviewsunassessed.post(body)
 
