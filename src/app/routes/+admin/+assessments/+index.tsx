@@ -19,6 +19,8 @@ export const AdminAssessments = () => {
     projects: Array<{projectId: string; projectName: string; count: number}>
     users: Array<{userId: string; userName: string; email: string; count: number}>
   }
+  type BothProjectsRow = {projectId: string; projectName: string; count: number}
+  type BothUsersRow = {userId: string; userName: string; email: string; count: number}
 
   const overviewQuery = useQuery(() => {
     return {
@@ -36,11 +38,58 @@ export const AdminAssessments = () => {
     }
   })
 
+  const bothProjectsQuery = useQuery(() => {
+    return {
+      queryKey: ['human-assessments-overview-both-projects'],
+      queryFn: async () => {
+        const response = await apiClient.api.humanassessment['overview-both-projects'].get()
+        const result = handleApiResponse<{data: Array<BothProjectsRow>}>(
+          response,
+          'Failed to fetch both-assessed per-project counts',
+        )
+        return result.data
+      },
+      enabled: isAdmin(),
+      staleTime: 10_000,
+    }
+  })
+
+  const bothUsersQuery = useQuery(() => {
+    return {
+      queryKey: ['human-assessments-overview-both-users'],
+      queryFn: async () => {
+        const response = await apiClient.api.humanassessment['overview-both-users'].get()
+        const result = handleApiResponse<{data: Array<BothUsersRow>}>(
+          response,
+          'Failed to fetch both-assessed per-user counts',
+        )
+        return result.data
+      },
+      enabled: isAdmin(),
+      staleTime: 10_000,
+    }
+  })
+
   const projectRows = () => {
     return overviewQuery.data?.projects ?? []
   }
   const userRows = () => {
     return overviewQuery.data?.users ?? []
+  }
+
+  const bothProjectsById = () => {
+    const rows = bothProjectsQuery.data ?? []
+    return rows.reduce<Record<string, number>>((acc, row) => {
+      acc[row.projectId] = row.count
+      return acc
+    }, {})
+  }
+  const bothUsersById = () => {
+    const rows = bothUsersQuery.data ?? []
+    return rows.reduce<Record<string, number>>((acc, row) => {
+      acc[row.userId] = row.count
+      return acc
+    }, {})
   }
 
 
@@ -104,6 +153,7 @@ export const AdminAssessments = () => {
                     <tr>
                       <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Project</th>
                       <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Articles Assessed</th>
+                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Assessed by Both</th>
                     </tr>
                   </thead>
                   <tbody class="bg-white divide-y divide-gray-200">
@@ -123,6 +173,7 @@ export const AdminAssessments = () => {
                             <tr>
                               <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{row.projectName}</td>
                               <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{row.count}</td>
+                              <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{bothProjectsById()[row.projectId] ?? 0}</td>
                             </tr>
                           )
                         }}
@@ -143,6 +194,7 @@ export const AdminAssessments = () => {
                     <tr>
                       <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">User</th>
                       <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Articles Assessed</th>
+                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Assessed by Both</th>
                     </tr>
                   </thead>
                   <tbody class="bg-white divide-y divide-gray-200">
@@ -162,6 +214,7 @@ export const AdminAssessments = () => {
                             <tr>
                               <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{row.userName}</td>
                               <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{row.count}</td>
+                              <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{bothUsersById()[row.userId] ?? 0}</td>
                             </tr>
                           )
                         }}

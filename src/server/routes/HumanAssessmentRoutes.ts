@@ -4,7 +4,7 @@ import {Elysia, t} from 'elysia'
 
 import {user} from '../../../auth-schema'
 import {auth} from '../../auth.ts'
-import {articleRouteLink, articles, judgmentsHuman, projectRouteLink, projects, prompts} from '../../db/schema.ts'
+import {articleRouteLink, articles, judgments, judgmentsHuman, projectRouteLink, projects, prompts} from '../../db/schema.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 
@@ -57,6 +57,115 @@ export const humanAssessmentRoutes = new Elysia()
       .orderBy(sql`COUNT(DISTINCT ${judgmentsHuman.articleId}) DESC`)
 
     return {data: {projects: perProject, users: perUser}}
+  })
+  .get('/api/humanassessment/overview-both-projects', async ({request, set}) => {
+    const session = await auth.api.getSession({headers: request.headers})
+    const role = session?.user?.role ?? null
+    if (role !== 'admin') {
+      set.status = 403
+      return {data: null, error: 'Administrator access required'}
+    }
+
+    const db = getDatabase()
+
+    // Count distinct articles per project that are fully assessed by at least one human (all prompts answered)
+    // AND also fully assessed by AI (judgments present for all prompts in the project)
+    const bothPerProject = await db
+      .select({
+        projectId: judgmentsHuman.projectId,
+        projectName: projects.name,
+        count: sql<number>`COUNT(DISTINCT ${judgmentsHuman.articleId})::int`,
+      })
+      .from(judgmentsHuman)
+      .innerJoin(projects, eq(projects.id, judgmentsHuman.projectId))
+      .where(
+        and(
+          // Exists a full human assessment set (same user) covering all prompts of the project
+          sql`EXISTS (
+            SELECT 1
+            FROM ${judgmentsHuman} jh2
+            WHERE jh2."project_id" = ${judgmentsHuman.projectId}
+              AND jh2."article_id" = ${judgmentsHuman.articleId}
+              AND jh2."user" = ${judgmentsHuman.user}
+              AND jh2."answer" IS NOT NULL
+            GROUP BY jh2."project_id", jh2."article_id", jh2."user"
+            HAVING COUNT(DISTINCT jh2."prompt_id") = (
+              SELECT COUNT(*) FROM ${prompts} p WHERE p."project_id" = jh2."project_id"
+            )
+          )`,
+          // Exists a full AI assessment set covering all prompts of the same project
+          sql`EXISTS (
+            SELECT 1
+            FROM ${judgments} j
+            INNER JOIN ${prompts} pr ON pr."id" = j."prompt_id"
+            WHERE pr."project_id" = ${judgmentsHuman.projectId}
+              AND j."article_id" = ${judgmentsHuman.articleId}
+            GROUP BY j."article_id"
+            HAVING COUNT(DISTINCT j."prompt_id") = (
+              SELECT COUNT(*) FROM ${prompts} p2 WHERE p2."project_id" = ${judgmentsHuman.projectId}
+            )
+          )`,
+        ),
+      )
+      .groupBy(judgmentsHuman.projectId, projects.name)
+      .orderBy(sql`COUNT(DISTINCT ${judgmentsHuman.articleId}) DESC`)
+
+    return {data: bothPerProject}
+  })
+  .get('/api/humanassessment/overview-both-users', async ({request, set}) => {
+    const session = await auth.api.getSession({headers: request.headers})
+    const role = session?.user?.role ?? null
+    if (role !== 'admin') {
+      set.status = 403
+      return {data: null, error: 'Administrator access required'}
+    }
+
+    const db = getDatabase()
+
+    // Count distinct articles per user where that user has fully answered all prompts in a project
+    // AND those articles also have a full set of AI judgments for that project
+    const bothPerUser = await db
+      .select({
+        userId: judgmentsHuman.user,
+        userName: user.name,
+        email: user.email,
+        count: sql<number>`COUNT(DISTINCT ${judgmentsHuman.articleId})::int`,
+      })
+      .from(judgmentsHuman)
+      .innerJoin(user, eq(user.id, judgmentsHuman.user))
+      .where(
+        and(
+          // User has a complete human assessment for the article within the project
+          sql`EXISTS (
+            SELECT 1
+            FROM ${judgmentsHuman} jh2
+            WHERE jh2."project_id" = ${judgmentsHuman.projectId}
+              AND jh2."article_id" = ${judgmentsHuman.articleId}
+              AND jh2."user" = ${judgmentsHuman.user}
+              AND jh2."answer" IS NOT NULL
+            GROUP BY jh2."project_id", jh2."article_id", jh2."user"
+            HAVING COUNT(DISTINCT jh2."prompt_id") = (
+              SELECT COUNT(*) FROM ${prompts} p WHERE p."project_id" = jh2."project_id"
+            )
+          )`,
+          // AI has a complete assessment for the same article within the project
+          sql`EXISTS (
+            SELECT 1
+            FROM ${judgments} j
+            INNER JOIN ${prompts} pr ON pr."id" = j."prompt_id"
+            WHERE pr."project_id" = ${judgmentsHuman.projectId}
+              AND j."article_id" = ${judgmentsHuman.articleId}
+            GROUP BY j."article_id"
+            HAVING COUNT(DISTINCT j."prompt_id") = (
+              SELECT COUNT(*) FROM ${prompts} p2 WHERE p2."project_id" = ${judgmentsHuman.projectId}
+            )
+          )`,
+        ),
+      )
+      .groupBy(judgmentsHuman.user, user.name, user.email)
+      .orderBy(sql`COUNT(DISTINCT ${judgmentsHuman.articleId}) DESC`)
+
+    return {data: bothPerUser}
   })
   .post(
     '/api/humanassessment/init',
