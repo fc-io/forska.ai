@@ -1,3 +1,4 @@
+import {createForm} from '@tanstack/solid-form'
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute} from '@tanstack/solid-router'
 import DOMPurify from 'dompurify'
@@ -48,22 +49,8 @@ const typeIncludesNull = (typeStr?: string | null): boolean => {
   })
 }
 
-type TextAnswerInputProps = {name: string; onInput?: (e: InputEvent) => void}
-export const TextAnswerInput = (props: TextAnswerInputProps) => {
-  return (
-    <input
-      type="text"
-      class="w-full max-w-xl border border-gray-300 rounded-md p-2 text-sm"
-      name={props.name}
-      onInput={props.onInput}
-      placeholder="Enter your answer"
-    />
-  )
-}
-
 type PromptAnswer = {
   prompt: string
-  answer: string | null
   notes: string
   promptId?: string
   judgmentHumanId?: string
@@ -72,29 +59,6 @@ type PromptAnswer = {
 
 const isNonEmpty = (v: unknown): boolean => {
   return v != null && String(v).trim() !== ''
-}
-
-const getFormFieldValue = (form: HTMLFormElement | undefined, name: string | undefined): string | null => {
-  if (!form || !name) return null
-  const el = form.elements.namedItem(name) as unknown as RadioNodeList | HTMLInputElement | null
-  if (!el) return null
-  // If RadioNodeList (multiple with same name), it has a string value of the checked one
-  if (typeof (el as unknown as {length?: number}).length === 'number') {
-    const val = (el as unknown as RadioNodeList).value
-    return typeof val === 'string' ? val : null
-  }
-  // Single input element
-  const input = el as HTMLInputElement
-  return typeof input.value === 'string' ? input.value : null
-}
-
-const canSubmitFromForm = (form: HTMLFormElement | undefined, prompts: PromptAnswer[]): boolean => {
-  if (!form) return false
-  return prompts.every((p) => {
-    const optional = typeIncludesNull(p.promptType)
-    const val = getFormFieldValue(form, p.judgmentHumanId) ?? getFormFieldValue(form, p.promptId)
-    return optional || isNonEmpty(val)
-  })
 }
 
 type HumanAssessmentInitResponse = {
@@ -120,11 +84,77 @@ export const HumanAssessment = () => {
   })
 
   const [answers, setAnswers] = createSignal<PromptAnswer[]>([])
-  const [articleTitle, setArticleTitle] = createSignal<string>(placeholderTitle)
-  const [articleAbstract, setArticleAbstract] = createSignal<string>(placeholderAbstract)
-  const [projectName, setProjectName] = createSignal<string>('')
-  let formEl: HTMLFormElement | undefined
-  const [canSubmit, setCanSubmit] = createSignal(false)
+  const form = createForm(() => {
+    const defaults = answers().reduce<Record<string, string>>((acc, a, i) => {
+      const k = a.judgmentHumanId || a.promptId || `prompt-${i}`
+      acc[k] = ''
+      return acc
+    }, {})
+    return {
+      defaultValues: defaults,
+      onSubmit: async ({value}) => {
+        const payload = {
+          projectId: projectId(),
+          answers: answers()
+            .map((a, i) => {
+              const k = a.judgmentHumanId || a.promptId || `prompt-${i}`
+              return {meta: a, value: value[k] as unknown as string | null}
+            })
+            .filter(({meta, value}) => {
+              const optional = typeIncludesNull(meta.promptType)
+              const hasValue = value !== null && String(value).trim() !== ''
+              return optional ? hasValue : true
+            })
+            .map(({meta, value}) => {
+              return {
+                judgmentHumanId: meta.judgmentHumanId!,
+                answer: String(value ?? ''),
+                comment: meta.notes?.trim() ? meta.notes : undefined,
+              }
+            }),
+        }
+
+        const response = await apiClient.api.humanassessment.submit.post(payload)
+        const result = handleApiResponse<{data: {updated: number}}>(response, 'Failed to submit assessment')
+        if (result.data.updated > 0) {
+          setAnswers([])
+          void initQuery.refetch()
+        }
+      },
+    }
+  })
+
+  const initQuery = useQuery(() => {
+    return {
+      queryKey: ['human-assessment-init', projectId()],
+      queryFn: async () => {
+        const response = await apiClient.api.humanassessment.init.post({projectId: projectId()})
+        const result = handleApiResponse<{data: HumanAssessmentInitResponse}>(
+          response,
+          'Failed to initialize human assessment',
+        )
+        return result.data
+      },
+      enabled: !!projectId(),
+      staleTime: 0,
+    }
+  })
+
+  const currentData = createMemo<HumanAssessmentInitResponse | undefined>(() => {
+    return typeof initQuery.data === 'function'
+      ? (initQuery.data as unknown as () => HumanAssessmentInitResponse | undefined)()
+      : (initQuery.data as unknown as HumanAssessmentInitResponse | undefined)
+  })
+
+  const projectName = createMemo<string>(() => {
+    return currentData()?.project.name ?? ''
+  })
+  const articleTitle = createMemo<string>(() => {
+    return currentData()?.article.articleTitle ?? placeholderTitle
+  })
+  const articleAbstract = createMemo<string>(() => {
+    return currentData()?.article.articleSummary ?? placeholderAbstract
+  })
 
   const sanitizedAbstract = createMemo<TrustedHTML | string>(() => {
     const clean = DOMPurify.sanitize(articleAbstract() ?? '')
@@ -147,38 +177,12 @@ export const HumanAssessment = () => {
   })
 
   createEffect(() => {
-    // Recompute submit availability whenever prompts load/change
-    void answers()
-    setCanSubmit(canSubmitFromForm(formEl, answers()))
-  })
-
-  const initQuery = useQuery(() => {
-    return {
-      queryKey: ['human-assessment-init', projectId()],
-      queryFn: async () => {
-        const response = await apiClient.api.humanassessment.init.post({projectId: projectId()})
-        const result = handleApiResponse<{data: HumanAssessmentInitResponse}>(
-          response,
-          'Failed to initialize human assessment',
-        )
-        return result.data
-      },
-      enabled: !!projectId(),
-      staleTime: 0,
-    }
-  })
-
-  createEffect(() => {
     const d =
       typeof initQuery.data === 'function'
         ? (initQuery.data as unknown as () => HumanAssessmentInitResponse | undefined)()
         : (initQuery.data as unknown as HumanAssessmentInitResponse | undefined)
 
     if (!d) return
-    setProjectName(d.project.name)
-    setArticleTitle(d.article.articleTitle)
-    setArticleAbstract(d.article.articleSummary ?? '')
-
     const judgmentsMap = new Map<string, string>(
       d.judgmentsHuman.map((j) => {
         return [j.promptId, j.id]
@@ -189,7 +193,6 @@ export const HumanAssessment = () => {
       d.prompts.map((p) => {
         return {
           prompt: p.originalText,
-          answer: null,
           notes: '',
           promptId: p.id,
           judgmentHumanId: judgmentsMap.get(p.id),
@@ -198,38 +201,6 @@ export const HumanAssessment = () => {
       }),
     )
   })
-
-  const handleSubmit = async () => {
-    const payload = formEl
-      ? {
-          projectId: projectId(),
-          answers: answers()
-            .map((a) => {
-              const v = getFormFieldValue(formEl, a.judgmentHumanId) ?? getFormFieldValue(formEl, a.promptId)
-              return {meta: a, value: v}
-            })
-            .filter(({meta, value}) => {
-              const optional = typeIncludesNull(meta.promptType)
-              const hasValue = value !== null && String(value).trim() !== ''
-              return !optional ? true : hasValue
-            })
-            .map(({meta, value}) => {
-              return {
-                judgmentHumanId: meta.judgmentHumanId!,
-                answer: String(value ?? ''),
-                comment: meta.notes?.trim() ? meta.notes : undefined,
-              }
-            }),
-        }
-      : {projectId: projectId(), answers: []}
-
-    const response = await apiClient.api.humanassessment.submit.post(payload)
-    const result = handleApiResponse<{data: {updated: number}}>(response, 'Failed to submit assessment')
-    if (result.data.updated > 0) {
-      setAnswers([])
-      void initQuery.refetch()
-    }
-  }
 
   return (
     <div class="min-h-screen bg-gray-50 p-6 mx-auto">
@@ -271,19 +242,9 @@ export const HumanAssessment = () => {
             </section>
 
             <form
-              ref={(el) => {
-                formEl = el
-                setCanSubmit(canSubmitFromForm(formEl, answers()))
-              }}
               onSubmit={(e) => {
                 e.preventDefault()
-                void handleSubmit()
-              }}
-              onInput={() => {
-                setCanSubmit(canSubmitFromForm(formEl, answers()))
-              }}
-              onChange={() => {
-                setCanSubmit(canSubmitFromForm(formEl, answers()))
+                void form.handleSubmit()
               }}
             >
               <section class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
@@ -302,31 +263,62 @@ export const HumanAssessment = () => {
                               <span class="ml-2 text-blue-600 text-sm">(optional)</span>
                             </Show>
                           </div>
-                          <Show
-                            when={enumOptions.length > 0}
-                            fallback={<TextAnswerInput name={groupName} onInput={() => setCanSubmit(canSubmitFromForm(formEl, answers()))} />}
+                          <form.Field
+                            name={groupName as never}
+                            validators={{
+                              onMount: ({value}) => {
+                                return isOptional || isNonEmpty(value) ? undefined : 'Required'
+                              },
+                              onChange: ({value}) => {
+                                return isOptional || isNonEmpty(value) ? undefined : 'Required'
+                              },
+                              onSubmit: ({value}) => {
+                                return isOptional || isNonEmpty(value) ? undefined : 'Required'
+                              },
+                            }}
                           >
-                            <div class="flex items-center gap-4 mb-3">
-                              <For each={enumOptions}>
-                                {(opt) => {
-                                  return (
-                                    <label class="inline-flex items-center gap-2 text-sm">
-                                      <input
-                                        type="radio"
-                                        name={groupName}
-                                        class="accent-blue-600"
-                                        value={opt}
-                                        onChange={() => {
-                                          setCanSubmit(canSubmitFromForm(formEl, answers()))
-                                        }}
-                                      />
-                                      {opt.charAt(0).toUpperCase() + opt.slice(1)}
-                                    </label>
-                                  )
-                                }}
-                              </For>
-                            </div>
-                          </Show>
+                            {(field) => {
+                              return (
+                                <Show
+                                  when={enumOptions.length > 0}
+                                  fallback={
+                                    <input
+                                      type="text"
+                                      class="w-full max-w-xl border border-gray-300 rounded-md p-2 text-sm"
+                                      name={groupName}
+                                      value={String(field().state.value ?? '')}
+                                      onInput={(e) => {
+                                        field().setValue((e.currentTarget as HTMLInputElement).value as never)
+                                      }}
+                                      placeholder="Enter your answer"
+                                    />
+                                  }
+                                >
+                                  <div class="flex items-center gap-4 mb-3">
+                                    <For each={enumOptions}>
+                                      {(opt) => {
+                                        return (
+                                          <label class="inline-flex items-center gap-2 text-sm">
+                                            <input
+                                              type="radio"
+                                              name={groupName}
+                                              class="accent-blue-600"
+                                              value={opt}
+                                              checked={String(field().state.value ?? '') === opt}
+                                              onChange={() => {
+                                                field().setValue(opt as never)
+                                              }}
+                                            />
+                                            {opt.charAt(0).toUpperCase() + opt.slice(1)}
+                                          </label>
+                                        )
+                                      }}
+                                    </For>
+                                  </div>
+                                </Show>
+                              )
+                            }}
+                          </form.Field>
                         </div>
                       )
                     }}
@@ -335,9 +327,19 @@ export const HumanAssessment = () => {
               </section>
 
               <div class="flex items-center gap-3 mt-4">
-                <Button type="submit" disabled={!canSubmit()}>
-                  Submit Assessment
-                </Button>
+                <form.Subscribe
+                  selector={(s) => {
+                    return s.canSubmit
+                  }}
+                >
+                  {(canSubmit) => {
+                    return (
+                      <Button type="submit" disabled={!canSubmit()}>
+                        Submit Assessment
+                      </Button>
+                    )
+                  }}
+                </form.Subscribe>
               </div>
             </form>
           </div>

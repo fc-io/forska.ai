@@ -43,6 +43,7 @@
     "@internationalized/date": "^3.8.2",
     "@kobalte/core": "^0.13.11",
     "@tanstack/router-plugin": "^1.132.56",
+    "@tanstack/solid-form": "^1.23.8",
     "@tanstack/solid-query": "^5.83.1",
     "@tanstack/solid-router": "^1.130.12",
     "@tanstack/solid-router-devtools": "^1.130.13",
