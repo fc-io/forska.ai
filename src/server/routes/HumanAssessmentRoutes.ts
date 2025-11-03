@@ -1,16 +1,10 @@
+import {type as arktype} from 'arktype'
 import {and, desc, eq, gte, inArray, isNull, lte, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
-import {type as arktype} from 'arktype'
 
-import {
-  articleRouteLink,
-  articles,
-  judgmentsHuman,
-  projectRouteLink,
-  projects,
-  prompts,
-} from '../../db/schema.ts'
+import {user} from '../../../auth-schema'
 import {auth} from '../../auth.ts'
+import {articleRouteLink, articles, judgmentsHuman, projectRouteLink, projects, prompts} from '../../db/schema.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 
@@ -23,6 +17,32 @@ type InitResponse = {
 
 export const humanAssessmentRoutes = new Elysia()
   .use(withErrorHandler())
+  .get('/api/humanassessment/overview', async ({request, set}) => {
+    const session = await auth.api.getSession({headers: request.headers})
+    const role = session?.user?.role ?? null
+    if (role !== 'admin') {
+      set.status = 403
+      return {data: null, error: 'Administrator access required'}
+    }
+
+    const db = getDatabase()
+
+    const perProject = await db
+      .select({projectId: judgmentsHuman.projectId, projectName: projects.name, count: sql<number>`count(*)::int`})
+      .from(judgmentsHuman)
+      .innerJoin(projects, eq(projects.id, judgmentsHuman.projectId))
+      .groupBy(judgmentsHuman.projectId, projects.name)
+      .orderBy(sql`count(*) DESC`)
+
+    const perUser = await db
+      .select({userId: judgmentsHuman.user, userName: user.name, email: user.email, count: sql<number>`count(*)::int`})
+      .from(judgmentsHuman)
+      .innerJoin(user, eq(user.id, judgmentsHuman.user))
+      .groupBy(judgmentsHuman.user, user.name, user.email)
+      .orderBy(sql`count(*) DESC`)
+
+    return {data: {projects: perProject, users: perUser}}
+  })
   .post(
     '/api/humanassessment/init',
     async ({body, request, set}) => {
@@ -160,7 +180,10 @@ export const humanAssessmentRoutes = new Elysia()
           }
         })
 
-        const inserted = await db.insert(judgmentsHuman).values(insertValues).returning({id: judgmentsHuman.id, promptId: judgmentsHuman.promptId})
+        const inserted = await db
+          .insert(judgmentsHuman)
+          .values(insertValues)
+          .returning({id: judgmentsHuman.id, promptId: judgmentsHuman.promptId})
 
         const response: InitResponse = {
           project: {id: project.id, name: project.name},
@@ -178,7 +201,7 @@ export const humanAssessmentRoutes = new Elysia()
       const [article] = await db
         .select({id: articles.id, articleTitle: articles.articleTitle, articleSummary: articles.articleSummary})
         .from(articles)
-        .where(eq(articles.id, targetId!))
+        .where(eq(articles.id, targetId))
         .limit(1)
 
       articleRow = article ?? null
@@ -191,7 +214,7 @@ export const humanAssessmentRoutes = new Elysia()
           and(
             eq(judgmentsHuman.projectId, body.projectId),
             eq(judgmentsHuman.user, sessionUserId),
-            eq(judgmentsHuman.articleId, targetId!),
+            eq(judgmentsHuman.articleId, targetId),
             isNull(judgmentsHuman.answer),
           ),
         )
@@ -229,7 +252,13 @@ export const humanAssessmentRoutes = new Elysia()
         })
         .from(judgmentsHuman)
         .innerJoin(prompts, eq(judgmentsHuman.promptId, prompts.id))
-        .where(and(eq(judgmentsHuman.projectId, body.projectId), eq(judgmentsHuman.user, sessionUserId), isNull(judgmentsHuman.answer)))
+        .where(
+          and(
+            eq(judgmentsHuman.projectId, body.projectId),
+            eq(judgmentsHuman.user, sessionUserId),
+            isNull(judgmentsHuman.answer),
+          ),
+        )
 
       if (pending.length === 0) {
         set.status = 400

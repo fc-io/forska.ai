@@ -1,8 +1,10 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
-import {Show, Suspense} from 'solid-js'
+import {For, Show, Suspense} from 'solid-js'
 
 import {fetchSession} from '../../../../services/fetchSession'
+import {apiClient} from '../../../../services/apiClient'
+import {handleApiResponse} from '../../../../services/utils/handleApiResponse'
 
 export const AdminAssessments = () => {
   const sessionQuery = useQuery(() => {
@@ -13,9 +15,34 @@ export const AdminAssessments = () => {
     return sessionQuery.data?.user?.role === 'admin'
   }
 
-  const projectRows: Array<{projectName: string; count: number}> = []
-  const userRows: Array<{userName: string; count: number}> = []
-  
+  type OverviewData = {
+    projects: Array<{projectId: string; projectName: string; count: number}>
+    users: Array<{userId: string; userName: string; email: string; count: number}>
+  }
+
+  const overviewQuery = useQuery(() => {
+    return {
+      queryKey: ['human-assessments-overview'],
+      queryFn: async () => {
+        const response = await apiClient.api.humanassessment.overview.get()
+        const result = handleApiResponse<{data: OverviewData}>(
+          response,
+          'Failed to fetch assessments overview',
+        )
+        return result.data
+      },
+      enabled: isAdmin(),
+      staleTime: 10_000,
+    }
+  })
+
+  const projectRows = () => {
+    return overviewQuery.data?.projects ?? []
+  }
+  const userRows = () => {
+    return overviewQuery.data?.users ?? []
+  }
+
 
   return (
     <div class="min-h-screen bg-gray-50 p-6 mx-auto">
@@ -58,11 +85,11 @@ export const AdminAssessments = () => {
           <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
             <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
               <div class="text-sm text-gray-500">Projects with assessments</div>
-              <div class="text-2xl font-semibold text-gray-900">{projectRows.length}</div>
+              <div class="text-2xl font-semibold text-gray-900">{projectRows().length}</div>
             </div>
             <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
               <div class="text-sm text-gray-500">Users with assessments</div>
-              <div class="text-2xl font-semibold text-gray-900">{userRows.length}</div>
+              <div class="text-2xl font-semibold text-gray-900">{userRows().length}</div>
             </div>
           </div>
 
@@ -80,11 +107,27 @@ export const AdminAssessments = () => {
                     </tr>
                   </thead>
                   <tbody class="bg-white divide-y divide-gray-200">
-                    <tr>
-                      <td colSpan={2} class="px-6 py-6 text-center text-sm text-gray-500">
-                        No data yet — wire API to populate.
-                      </td>
-                    </tr>
+                    <Show
+                      when={projectRows().length > 0}
+                      fallback={
+                        <tr>
+                          <td colSpan={2} class="px-6 py-6 text-center text-sm text-gray-500">
+                            No project assessments yet.
+                          </td>
+                        </tr>
+                      }
+                    >
+                      <For each={projectRows()}>
+                        {(row) => {
+                          return (
+                            <tr>
+                              <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{row.projectName}</td>
+                              <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{row.count}</td>
+                            </tr>
+                          )
+                        }}
+                      </For>
+                    </Show>
                   </tbody>
                 </table>
               </div>
@@ -103,11 +146,27 @@ export const AdminAssessments = () => {
                     </tr>
                   </thead>
                   <tbody class="bg-white divide-y divide-gray-200">
-                    <tr>
-                      <td colSpan={2} class="px-6 py-6 text-center text-sm text-gray-500">
-                        No data yet — wire API to populate.
-                      </td>
-                    </tr>
+                    <Show
+                      when={userRows().length > 0}
+                      fallback={
+                        <tr>
+                          <td colSpan={2} class="px-6 py-6 text-center text-sm text-gray-500">
+                            No user assessments yet.
+                          </td>
+                        </tr>
+                      }
+                    >
+                      <For each={userRows()}>
+                        {(row) => {
+                          return (
+                            <tr>
+                              <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{row.userName}</td>
+                              <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{row.count}</td>
+                            </tr>
+                          )
+                        }}
+                      </For>
+                    </Show>
                   </tbody>
                 </table>
               </div>
