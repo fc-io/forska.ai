@@ -24,6 +24,7 @@ import { Route as AdminUsersIndexRouteImport } from './routes/+admin/+users/+ind
 import { Route as AdminModelsIndexRouteImport } from './routes/+admin/+models/+index'
 import { Route as AdminJobsIndexRouteImport } from './routes/+admin/+jobs/+index'
 import { Route as AdminDatasourcesIndexRouteImport } from './routes/+admin/+datasources/+index'
+import { Route as AdminAssessmentsIndexRouteImport } from './routes/+admin/+assessments/+index'
 import { Route as AdminJobsIdUnassessed_articlesRouteImport } from './routes/+admin/+jobs/+$id/+unassessed_articles'
 import { Route as AdminDatasourcesIdEditRouteImport } from './routes/+admin/+datasources/+$id/+edit'
 import { Route as ProjectsIdReviewsIndexRouteImport } from './routes/+projects/+$id/+reviews/+index'
@@ -107,6 +108,11 @@ const AdminDatasourcesIndexRoute = AdminDatasourcesIndexRouteImport.update({
   path: '/admin/datasources/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminAssessmentsIndexRoute = AdminAssessmentsIndexRouteImport.update({
+  id: '/admin/assessments/',
+  path: '/admin/assessments/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AdminJobsIdUnassessed_articlesRoute =
   AdminJobsIdUnassessed_articlesRouteImport.update({
     id: '/admin/jobs/$id/unassessed_articles',
@@ -148,6 +154,7 @@ export interface FileRoutesByFullPath {
   '/projects': typeof ProjectsIndexRoute
   '/settings': typeof SettingsIndexRoute
   '/projects/create': typeof ProjectsCreateRoute
+  '/admin/assessments': typeof AdminAssessmentsIndexRoute
   '/admin/datasources': typeof AdminDatasourcesIndexRoute
   '/admin/jobs': typeof AdminJobsIndexRoute
   '/admin/models': typeof AdminModelsIndexRoute
@@ -171,6 +178,7 @@ export interface FileRoutesByTo {
   '/projects': typeof ProjectsIndexRoute
   '/settings': typeof SettingsIndexRoute
   '/projects/create': typeof ProjectsCreateRoute
+  '/admin/assessments': typeof AdminAssessmentsIndexRoute
   '/admin/datasources': typeof AdminDatasourcesIndexRoute
   '/admin/jobs': typeof AdminJobsIndexRoute
   '/admin/models': typeof AdminModelsIndexRoute
@@ -195,6 +203,7 @@ export interface FileRoutesById {
   '/projects/': typeof ProjectsIndexRoute
   '/settings/': typeof SettingsIndexRoute
   '/projects/create': typeof ProjectsCreateRoute
+  '/admin/assessments/': typeof AdminAssessmentsIndexRoute
   '/admin/datasources/': typeof AdminDatasourcesIndexRoute
   '/admin/jobs/': typeof AdminJobsIndexRoute
   '/admin/models/': typeof AdminModelsIndexRoute
@@ -220,6 +229,7 @@ export interface FileRouteTypes {
     | '/projects'
     | '/settings'
     | '/projects/create'
+    | '/admin/assessments'
     | '/admin/datasources'
     | '/admin/jobs'
     | '/admin/models'
@@ -243,6 +253,7 @@ export interface FileRouteTypes {
     | '/projects'
     | '/settings'
     | '/projects/create'
+    | '/admin/assessments'
     | '/admin/datasources'
     | '/admin/jobs'
     | '/admin/models'
@@ -266,6 +277,7 @@ export interface FileRouteTypes {
     | '/projects/'
     | '/settings/'
     | '/projects/create'
+    | '/admin/assessments/'
     | '/admin/datasources/'
     | '/admin/jobs/'
     | '/admin/models/'
@@ -290,6 +302,7 @@ export interface RootRouteChildren {
   ProjectsIndexRoute: typeof ProjectsIndexRoute
   SettingsIndexRoute: typeof SettingsIndexRoute
   ProjectsCreateRoute: typeof ProjectsCreateRoute
+  AdminAssessmentsIndexRoute: typeof AdminAssessmentsIndexRoute
   AdminDatasourcesIndexRoute: typeof AdminDatasourcesIndexRoute
   AdminJobsIndexRoute: typeof AdminJobsIndexRoute
   AdminModelsIndexRoute: typeof AdminModelsIndexRoute
@@ -414,6 +427,13 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof AdminDatasourcesIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/assessments/': {
+      id: '/admin/assessments/'
+      path: '/admin/assessments'
+      fullPath: '/admin/assessments'
+      preLoaderRoute: typeof AdminAssessmentsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/admin/jobs/$id/unassessed_articles': {
       id: '/admin/jobs/$id/unassessed_articles'
       path: '/admin/jobs/$id/unassessed_articles'
@@ -466,6 +486,7 @@ const rootRouteChildren: RootRouteChildren = {
   ProjectsIndexRoute: ProjectsIndexRoute,
   SettingsIndexRoute: SettingsIndexRoute,
   ProjectsCreateRoute: ProjectsCreateRoute,
+  AdminAssessmentsIndexRoute: AdminAssessmentsIndexRoute,
   AdminDatasourcesIndexRoute: AdminDatasourcesIndexRoute,
   AdminJobsIndexRoute: AdminJobsIndexRoute,
   AdminModelsIndexRoute: AdminModelsIndexRoute,

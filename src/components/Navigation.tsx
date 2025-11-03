@@ -56,6 +56,9 @@ export const Navigation = (props: NavigationProps) => {
           </div>
           <div class="flex items-center space-x-4">
             <Show when={props.user?.role === 'admin'}>
+              <Link to="/admin/assessments" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
+                Assessments
+              </Link>
               <Link to="/admin/datasources" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
                 Data Sources
               </Link>
