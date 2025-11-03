@@ -19,7 +19,7 @@ type ReviewJudgmentsProps = {
 
 export const ReviewJudgments = (props: ReviewJudgmentsProps) => {
   return (
-    <div class="sticky top-6 bg-white rounded-lg shadow h-fit">
+    <div class="bg-white rounded-lg shadow h-fit">
       <div class="p-4 border-b">
         <h2 class="text-lg font-bold">LLM assessment</h2>
       </div>
