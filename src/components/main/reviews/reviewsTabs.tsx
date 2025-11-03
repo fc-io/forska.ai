@@ -19,7 +19,7 @@ export const ReviewsTabs = (props: ReviewsTabsProps): JSX.Element => {
           params={{id: props.projectId}}
           class={`${base} ${props.active === 'assessed' ? active : inactive}`}
         >
-          Assessed
+          Assessed by LLM
         </Link>
         <Link
           to="/projects/$id/reviews-unassessed"
