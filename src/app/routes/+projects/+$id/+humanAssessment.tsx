@@ -41,6 +41,13 @@ const getEnumOptions = (typeStr?: string | null): string[] => {
   return hadAllQuoted ? options : []
 }
 
+const typeIncludesNull = (typeStr?: string | null): boolean => {
+  if (!typeStr) return false
+  return typeStr.split('|').some((p) => {
+    return p.trim() === 'null'
+  })
+}
+
 type TextAnswerInputProps = {index: number; value: string; setAnswer: (index: number, value: string) => void}
 export const TextAnswerInput = (props: TextAnswerInputProps) => {
   return (
@@ -177,14 +184,22 @@ export const HumanAssessment = () => {
 
   const allAnswered = createMemo(() => {
     return answers().every((a) => {
-      return a.answer !== null && String(a.answer).trim() !== '' && a.judgmentHumanId
+      const optional = typeIncludesNull(a.promptType)
+      const hasAnswer = a.answer !== null && String(a.answer).trim() !== ''
+      return (optional || hasAnswer) && !!a.judgmentHumanId
     })
   })
 
   const handleSubmit = async () => {
     const payload = {
       projectId: projectId(),
-      answers: answers().map((a) => {
+      answers: answers()
+        .filter((a) => {
+          const optional = typeIncludesNull(a.promptType)
+          const hasAnswer = a.answer !== null && String(a.answer).trim() !== ''
+          return !optional || hasAnswer
+        })
+        .map((a) => {
         return {
           judgmentHumanId: a.judgmentHumanId!,
           answer: String(a.answer),
@@ -246,9 +261,15 @@ export const HumanAssessment = () => {
                   {(item, i) => {
                     const typeStr = item.promptType ?? 'string'
                     const enumOptions = getEnumOptions(typeStr)
+                    const isOptional = typeIncludesNull(typeStr)
                     return (
                       <div class="border rounded-md p-4">
-                        <div class="font-medium mb-3">{item.prompt}</div>
+                        <div class="font-medium mb-3">
+                          {item.prompt}
+                          <Show when={isOptional}>
+                            <span class="ml-2 text-blue-600 text-sm">(optional)</span>
+                          </Show>
+                        </div>
                         <Show
                           when={enumOptions.length > 0}
                           fallback={<TextAnswerInput index={i()} value={item.answer ?? ''} setAnswer={setAnswer} />}

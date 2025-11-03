@@ -206,15 +206,19 @@ export const humanAssessmentRoutes = new Elysia()
         return {data: null, error: 'Project has no prompts configured'}
       }
 
-      // Check for existing unanswered human judgments for this user in this project
+      // Check for existing unanswered required human judgments for this user in this project
+      // Required = prompt type does NOT include 'null'
       const existingUnanswered = await db
         .select({id: judgmentsHuman.id, articleId: judgmentsHuman.articleId})
         .from(judgmentsHuman)
+        .innerJoin(prompts, eq(prompts.id, judgmentsHuman.promptId))
         .where(
           and(
             eq(judgmentsHuman.projectId, body.projectId),
             eq(judgmentsHuman.user, sessionUserId),
             isNull(judgmentsHuman.answer),
+            sql`${prompts.type} IS NULL OR ${prompts.type} NOT ILIKE '%null%'
+            `,
           ),
         )
         .orderBy(desc(judgmentsHuman.createdAt))
@@ -333,7 +337,7 @@ export const humanAssessmentRoutes = new Elysia()
 
       articleRow = article ?? null
 
-      // Fetch all unanswered judgments for this user, project, and target article
+      // Fetch all unanswered judgments for this user, project, and target article (both required and optional)
       const pendingForArticle = await db
         .select({id: judgmentsHuman.id, promptId: judgmentsHuman.promptId})
         .from(judgmentsHuman)
@@ -405,8 +409,17 @@ export const humanAssessmentRoutes = new Elysia()
         return {data: null, error: 'Multiple pending articles detected; please refresh and try again'}
       }
 
-      const expectedIds = new Set(
+      // Split pending into required vs optional by prompt type
+      const requiredPending = pending.filter((p) => {
+        return !((p.type ?? '').toLowerCase().includes('null'))
+      })
+      const allPendingIds = new Set(
         pending.map((p) => {
+          return p.id
+        }),
+      )
+      const expectedIds = new Set(
+        requiredPending.map((p) => {
           return p.id
         }),
       )
@@ -417,18 +430,22 @@ export const humanAssessmentRoutes = new Elysia()
         }),
       )
 
-      if (submittedIds.size !== expectedIds.size) {
+      // Validate that all required IDs are included in submission
+      const missingRequired = Array.from(expectedIds).some((id) => {
+        return !submittedIds.has(id)
+      })
+      if (missingRequired) {
         set.status = 400
-        return {data: null, error: 'All prompts must be answered before submitting'}
+        return {data: null, error: 'Missing answers for one or more required prompts'}
       }
 
-      const hasAllIds = Array.from(expectedIds).every((id) => {
-        return submittedIds.has(id)
+      // Validate that submitted IDs are a subset of all pending (allow optional answers too)
+      const hasOnlyPending = Array.from(submittedIds).every((id) => {
+        return allPendingIds.has(id)
       })
-
-      if (!hasAllIds) {
+      if (!hasOnlyPending) {
         set.status = 400
-        return {data: null, error: 'Submission is missing answers for one or more prompts'}
+        return {data: null, error: 'Submission contains answers for non-pending prompts'}
       }
 
       const byId = body.answers.reduce<Record<string, {answer: string; comment?: string}>>((acc, a) => {
@@ -441,18 +458,30 @@ export const humanAssessmentRoutes = new Elysia()
       for (const row of pending) {
         const submitted = byId[row.id]
         const value = submitted?.answer
-        if (value == null || `${value}`.trim() === '') {
-          set.status = 400
-          return {data: null, error: 'All prompts must have a non-empty answer'}
-        }
         const typeStr = row.type ?? 'string'
         const Type = arktype(typeStr)
-        // Will throw if value does not conform — let error handler convert to response if needed
-        try {
-          Type.assert(value)
-        } catch (e) {
-          set.status = 400
-          return {data: null, error: `Answer does not match required type for a prompt (${typeStr})`}
+
+        // For required prompts, enforce non-empty; optional prompts only validate if provided
+        const isOptional = (row.type ?? '').toLowerCase().includes('null')
+        if (!isOptional) {
+          if (value == null || `${value}`.trim() === '') {
+            set.status = 400
+            return {data: null, error: 'All required prompts must have a non-empty answer'}
+          }
+          try {
+            Type.assert(value)
+          } catch {
+            set.status = 400
+            return {data: null, error: `Answer does not match required type for a prompt (${typeStr})`}
+          }
+        } else if (value != null && `${value}`.trim() !== '') {
+          // Optional prompt provided — validate if present
+          try {
+            Type.assert(value)
+          } catch {
+            set.status = 400
+            return {data: null, error: `Answer does not match required type for a prompt (${typeStr})`}
+          }
         }
       }
 
