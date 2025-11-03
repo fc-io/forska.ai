@@ -1,4 +1,4 @@
-import {createFileRoute, Link} from '@tanstack/solid-router'
+import {createFileRoute} from '@tanstack/solid-router'
 import {For, createMemo, createSignal} from 'solid-js'
 
 import {Button} from '../../../../components/ui/button'
@@ -59,9 +59,6 @@ export const HumanAssessment = () => {
     <div class="min-h-screen bg-gray-50 p-6 mx-auto">
       <div class="flex justify-between items-center mb-6">
         <div class="flex items-center gap-4">
-          <Button as={Link} to="/projects/$id" params={{id: projectId()}} variant="outline" size="sm">
-            ← Back to Project
-          </Button>
           <h1 class="text-2xl font-bold">Human Assessment</h1>
         </div>
       </div>
@@ -145,4 +142,3 @@ export const HumanAssessment = () => {
 }
 
 export const Route = createFileRoute('/projects/$id/humanAssessment')({component: HumanAssessment})
-
