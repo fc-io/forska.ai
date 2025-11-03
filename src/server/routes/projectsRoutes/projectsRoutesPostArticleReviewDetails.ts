@@ -1,7 +1,8 @@
-import {and, eq, inArray} from 'drizzle-orm'
+import {and, eq, inArray, isNotNull} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {articles, judgmentAssessments, judgments, prompts, reviews} from '../../../db/schema.ts'
+import {articles, judgmentAssessments, judgments, judgmentsHuman, prompts, reviews} from '../../../db/schema.ts'
+import {user} from '../../../../auth-schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
 export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
@@ -69,7 +70,46 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         return {...judgment, prompt, assessments: assessmentsByJudgment[judgment.id] || []}
       })
 
-      return {article, review, prompts: projectPrompts, judgments: judgmentsWithDetails}
+      // Fetch human judgments for this article within this project, grouped by user
+      const humanRows = await db
+        .select({
+          userId: judgmentsHuman.user,
+          userName: user.name,
+          judgmentId: judgmentsHuman.id,
+          promptId: judgmentsHuman.promptId,
+          answer: judgmentsHuman.answer,
+          comment: judgmentsHuman.comment,
+          promptOriginalText: prompts.originalText,
+          promptOrder: prompts.order,
+        })
+        .from(judgmentsHuman)
+        .innerJoin(user, eq(user.id, judgmentsHuman.user))
+        .innerJoin(prompts, eq(prompts.id, judgmentsHuman.promptId))
+        .where(and(eq(judgmentsHuman.articleId, articleId), eq(judgmentsHuman.projectId, projectId), isNotNull(judgmentsHuman.answer)))
+        .orderBy(user.name, prompts.order)
+
+      const humanByUser = humanRows.reduce(
+        (acc, row) => {
+          const current = acc[row.userId] ?? {userId: row.userId, userName: row.userName, judgments: [] as Array<{
+            id: string
+            prompt: {originalText: string}
+            answer: string | null
+            comment: string | null
+          }>}
+          const next = {
+            id: row.judgmentId,
+            prompt: {originalText: row.promptOriginalText},
+            answer: row.answer,
+            comment: row.comment,
+          }
+          return {...acc, [row.userId]: {...current, judgments: [...current.judgments, next]}}
+        },
+        {} as Record<string, {userId: string; userName: string; judgments: Array<{id: string; prompt: {originalText: string}; answer: string | null; comment: string | null}>}>,
+      )
+
+      const humanAssessmentsByUser = Object.values(humanByUser)
+
+      return {article, review, prompts: projectPrompts, judgments: judgmentsWithDetails, humanAssessmentsByUser}
     } catch (error) {
       console.error('Error fetching article review details:', error)
       throw new Error(error instanceof Error ? error.message : 'Failed to fetch article review details')
