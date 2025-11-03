@@ -1,4 +1,5 @@
 import {and, desc, eq, gte, isNull, lte, sql} from 'drizzle-orm'
+import type {Context} from 'elysia'
 
 import {auth} from '../../../auth.ts'
 import {articleRouteLink, articles, judgmentsHuman, projectRouteLink, projects, prompts} from '../../../db/schema.ts'
@@ -24,7 +25,7 @@ export const humanAssessmentRoutesPostInit = async ({
 }: {
   body: {projectId: string}
   request: Request
-  set: any
+  set: Context['set']
 }) => {
   const db = getDatabase()
   const session = await auth.api.getSession({headers: request.headers})
