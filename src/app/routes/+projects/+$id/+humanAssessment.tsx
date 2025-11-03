@@ -6,18 +6,74 @@ import {Button} from '../../../../components/ui/button'
 import {apiClient} from '../../../../services/apiClient'
 import {handleApiResponse} from '../../../../services/utils/handleApiResponse'
 
+const stripQuotes = (s: string) => {
+  const t = s.trim()
+  const q = t[0]
+  if ((q === '"' || q === "'") && t[t.length - 1] === q) {
+    return t.slice(1, -1)
+  }
+  return t
+}
+
+const getEnumOptions = (typeStr?: string | null): string[] => {
+  if (!typeStr) return []
+  const parts = typeStr.split('|').map((p) => {
+    return p.trim()
+  })
+  if (parts.length < 2) return []
+  const options = parts
+    .filter((p) => {
+      return p !== 'null' && p !== 'undefined'
+    })
+    .map((p) => {
+      return stripQuotes(p)
+    })
+  const hadAllQuoted = parts
+    .filter((p) => {
+      return p !== 'null' && p !== 'undefined'
+    })
+    .every((p) => {
+      const t = p.trim()
+      const q = t[0]
+      return (q === '"' || q === "'") && t[t.length - 1] === q
+    })
+  return hadAllQuoted ? options : []
+}
+
+type TextAnswerInputProps = {index: number; value: string; setAnswer: (index: number, value: string) => void}
+export const TextAnswerInput = (props: TextAnswerInputProps) => {
+  return (
+    <input
+      type="text"
+      class="w-full max-w-xl border border-gray-300 rounded-md p-2 text-sm"
+      value={props.value}
+      onInput={(e) => {
+        return props.setAnswer(props.index, e.currentTarget.value)
+      }}
+      placeholder="Enter your answer"
+    />
+  )
+}
+
 type PromptAnswer = {
   prompt: string
-  answer: 'yes' | 'no' | 'unsure' | null
+  answer: string | null
   notes: string
   promptId?: string
   judgmentHumanId?: string
+  promptType?: string | null
 }
 
 type HumanAssessmentInitResponse = {
   project: {id: string; name: string}
   article: {id: string; articleTitle: string; articleSummary: string | null}
-  prompts: Array<{id: string; originalText: string; promptHeading: string | null; order: number | null}>
+  prompts: Array<{
+    id: string
+    originalText: string
+    promptHeading: string | null
+    order: number | null
+    type: string | null
+  }>
   judgmentsHuman: Array<{id: string; promptId: string}>
 }
 
@@ -71,12 +127,19 @@ export const HumanAssessment = () => {
     setAnswers(
       d.prompts.map((p) => {
         const promptText = p.promptHeading ?? p.originalText
-        return {prompt: promptText, answer: null, notes: '', promptId: p.id, judgmentHumanId: judgmentsMap.get(p.id)}
+        return {
+          prompt: promptText,
+          answer: null,
+          notes: '',
+          promptId: p.id,
+          judgmentHumanId: judgmentsMap.get(p.id),
+          promptType: p.type ?? 'string',
+        }
       }),
     )
   })
 
-  const setAnswer = (index: number, value: PromptAnswer['answer']) => {
+  const setAnswer = (index: number, value: string) => {
     setAnswers((prev) => {
       const next = [...prev]
       next[index] = {...next[index], answer: value}
@@ -94,7 +157,7 @@ export const HumanAssessment = () => {
 
   const allAnswered = createMemo(() => {
     return answers().every((a) => {
-      return a.answer !== null && a.judgmentHumanId
+      return a.answer !== null && String(a.answer).trim() !== '' && a.judgmentHumanId
     })
   })
 
@@ -161,47 +224,33 @@ export const HumanAssessment = () => {
               <div class="space-y-6">
                 <For each={answers()}>
                   {(item, i) => {
+                    const typeStr = item.promptType ?? 'string'
+                    const enumOptions = getEnumOptions(typeStr)
                     return (
                       <div class="border rounded-md p-4">
                         <div class="font-medium mb-3">{item.prompt}</div>
-                        <div class="flex items-center gap-4 mb-3">
-                          <label class="inline-flex items-center gap-2 text-sm">
-                            <input
-                              type="radio"
-                              name={`answer-${i()}`}
-                              class="accent-blue-600"
-                              checked={item.answer === 'yes'}
-                              onChange={() => {
-                                return setAnswer(i(), 'yes')
+                        <Show when={enumOptions.length > 0} fallback={<TextAnswerInput index={i()} value={item.answer ?? ''} setAnswer={setAnswer} />}>
+                          <div class="flex items-center gap-4 mb-3">
+                            <For each={enumOptions}>
+                              {(opt) => {
+                                return (
+                                  <label class="inline-flex items-center gap-2 text-sm">
+                                    <input
+                                      type="radio"
+                                      name={`answer-${i()}`}
+                                      class="accent-blue-600"
+                                      checked={item.answer === opt}
+                                      onChange={() => {
+                                        return setAnswer(i(), opt)
+                                      }}
+                                    />
+                                    {opt.charAt(0).toUpperCase() + opt.slice(1)}
+                                  </label>
+                                )
                               }}
-                            />
-                            Yes
-                          </label>
-                          <label class="inline-flex items-center gap-2 text-sm">
-                            <input
-                              type="radio"
-                              name={`answer-${i()}`}
-                              class="accent-blue-600"
-                              checked={item.answer === 'no'}
-                              onChange={() => {
-                                return setAnswer(i(), 'no')
-                              }}
-                            />
-                            No
-                          </label>
-                          <label class="inline-flex items-center gap-2 text-sm">
-                            <input
-                              type="radio"
-                              name={`answer-${i()}`}
-                              class="accent-blue-600"
-                              checked={item.answer === 'unsure'}
-                              onChange={() => {
-                                return setAnswer(i(), 'unsure')
-                              }}
-                            />
-                            Unsure
-                          </label>
-                        </div>
+                            </For>
+                          </div>
+                        </Show>
                       </div>
                     )
                   }}

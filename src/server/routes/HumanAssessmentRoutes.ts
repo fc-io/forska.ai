@@ -11,7 +11,13 @@ import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 type InitResponse = {
   project: {id: string; name: string}
   article: {id: string; articleTitle: string; articleSummary: string | null}
-  prompts: Array<{id: string; originalText: string; promptHeading: string | null; order: number | null}>
+  prompts: Array<{
+    id: string
+    originalText: string
+    promptHeading: string | null
+    order: number | null
+    type: string | null
+  }>
   judgmentsHuman: Array<{id: string; promptId: string}>
 }
 
@@ -28,18 +34,27 @@ export const humanAssessmentRoutes = new Elysia()
     const db = getDatabase()
 
     const perProject = await db
-      .select({projectId: judgmentsHuman.projectId, projectName: projects.name, count: sql<number>`count(*)::int`})
+      .select({
+        projectId: judgmentsHuman.projectId,
+        projectName: projects.name,
+        count: sql<number>`COUNT(DISTINCT ${judgmentsHuman.articleId})::int`,
+      })
       .from(judgmentsHuman)
       .innerJoin(projects, eq(projects.id, judgmentsHuman.projectId))
       .groupBy(judgmentsHuman.projectId, projects.name)
-      .orderBy(sql`count(*) DESC`)
+      .orderBy(sql`COUNT(DISTINCT ${judgmentsHuman.articleId}) DESC`)
 
     const perUser = await db
-      .select({userId: judgmentsHuman.user, userName: user.name, email: user.email, count: sql<number>`count(*)::int`})
+      .select({
+        userId: judgmentsHuman.user,
+        userName: user.name,
+        email: user.email,
+        count: sql<number>`COUNT(DISTINCT ${judgmentsHuman.articleId})::int`,
+      })
       .from(judgmentsHuman)
       .innerJoin(user, eq(user.id, judgmentsHuman.user))
       .groupBy(judgmentsHuman.user, user.name, user.email)
-      .orderBy(sql`count(*) DESC`)
+      .orderBy(sql`COUNT(DISTINCT ${judgmentsHuman.articleId}) DESC`)
 
     return {data: {projects: perProject, users: perUser}}
   })
@@ -69,6 +84,7 @@ export const humanAssessmentRoutes = new Elysia()
           originalText: prompts.originalText,
           promptHeading: prompts.promptHeading,
           order: prompts.order,
+          type: prompts.type,
         })
         .from(prompts)
         .where(eq(prompts.projectId, body.projectId))
