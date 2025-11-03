@@ -500,6 +500,56 @@ export const judgments = pgTable(
   },
 )
 
+export const judgmentsHuman = pgTable(
+  'judgments_human',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
+    articleId: uuid('article_id')
+      .notNull()
+      .references(
+        () => {
+          return articles.id
+        },
+        {onDelete: 'restrict'},
+      ),
+    user: text('user')
+      .notNull()
+      .references(
+        () => {
+          return user.id
+        },
+        {onDelete: 'cascade'},
+      ),
+    promptId: uuid('prompt_id')
+      .notNull()
+      .references(
+        () => {
+          return prompts.id
+        },
+        {onDelete: 'cascade'},
+      ),
+    answer: text('answer'),
+    comment: text('comment'),
+    projectId: uuid('project_id')
+      .notNull()
+      .references(
+        () => {
+          return projects.id
+        },
+        {onDelete: 'cascade'},
+      ),
+  },
+  (table) => {
+    return [
+      index('judgments_human_article_prompt_idx').on(table.articleId, table.promptId),
+      index('judgments_human_prompt_article_idx').on(table.promptId, table.articleId),
+      index('judgments_human_project_idx').on(table.projectId),
+    ]
+  },
+)
+
 // Time-series token usage
 export const tokenUse = pgTable(
   'token_use',

@@ -8,6 +8,7 @@ const tablesWithUpdatedAt = [
   'projects',
   'prompts',
   'judgments',
+  'judgments_human',
   'token_use',
   // Review-related tables
   'reviews',
