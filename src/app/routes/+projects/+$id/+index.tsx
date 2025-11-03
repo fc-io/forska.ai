@@ -1,7 +1,7 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
 import {format} from 'date-fns'
-import {createSignal, Match, Show, Switch, Suspense} from 'solid-js'
+import {createSignal, Match, Show, Suspense, Switch} from 'solid-js'
 
 import {ProjectDetailsArticles} from '../../../../components/main/projectDetails/projectDetailsArticles'
 import {ProjectDetailsInformation} from '../../../../components/main/projectDetails/projectDetailsInformation'

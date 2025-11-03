@@ -126,9 +126,8 @@ export const HumanAssessment = () => {
 
     setAnswers(
       d.prompts.map((p) => {
-        const promptText = p.promptHeading ?? p.originalText
         return {
-          prompt: promptText,
+          prompt: p.originalText,
           answer: null,
           notes: '',
           promptId: p.id,
@@ -211,7 +210,7 @@ export const HumanAssessment = () => {
               <div class="space-y-3">
                 <div>
                   <div class="text-sm text-gray-500 mb-1">Title</div>
-                  <div class="text-gray-900">{articleTitle()}</div>
+                  <div class="text-lg font-semibold">{articleTitle()}</div>
                 </div>
                 <div>
                   <div class="text-sm text-gray-500 mb-1">Abstract</div>
@@ -229,7 +228,10 @@ export const HumanAssessment = () => {
                     return (
                       <div class="border rounded-md p-4">
                         <div class="font-medium mb-3">{item.prompt}</div>
-                        <Show when={enumOptions.length > 0} fallback={<TextAnswerInput index={i()} value={item.answer ?? ''} setAnswer={setAnswer} />}>
+                        <Show
+                          when={enumOptions.length > 0}
+                          fallback={<TextAnswerInput index={i()} value={item.answer ?? ''} setAnswer={setAnswer} />}
+                        >
                           <div class="flex items-center gap-4 mb-3">
                             <For each={enumOptions}>
                               {(opt) => {
