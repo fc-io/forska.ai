@@ -20,22 +20,19 @@ type HumanAssessmentInitResponse = {
 
 export const HumanAssessment = () => {
   const params = Route.useParams()
-  const projectId = () => {
-    return params().id
-  }
 
   const initQuery = useQuery(() => {
     return {
-      queryKey: ['human-assessment-init', projectId()],
+      queryKey: ['human-assessment-init', params().id],
       queryFn: async () => {
-        const response = await apiClient.api.humanassessment.init.post({projectId: projectId()})
+        const response = await apiClient.api.humanassessment.init.post({projectId: params().id})
         const result = handleApiResponse<{data: HumanAssessmentInitResponse}>(
           response as {data?: {data: HumanAssessmentInitResponse}; error?: unknown; status?: number},
           'Failed to initialize human assessment',
         )
         return result.data
       },
-      enabled: !!projectId(),
+      enabled: !!params().id,
       staleTime: 0,
     }
   })
