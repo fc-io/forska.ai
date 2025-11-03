@@ -1,5 +1,6 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute} from '@tanstack/solid-router'
+import DOMPurify from 'dompurify'
 import {For, Suspense} from 'solid-js'
 
 import {apiClient} from '../../../../services/apiClient'
@@ -46,9 +47,12 @@ export const HumanAssessment = () => {
                 </div>
                 <div>
                   <div class="text-sm text-gray-500 mb-1">Abstract</div>
-                  <div class="text-gray-900 leading-relaxed assessment-container">
-                    {data()?.article.articleSummary ?? ''}
-                  </div>
+                  {/* eslint-disable solid/no-innerhtml */}
+                  <div
+                    class="text-gray-900 leading-relaxed assessment-container"
+                    innerHTML={DOMPurify.sanitize(data()?.article.articleSummary ?? '')}
+                  />
+                  {/* eslint-enable solid/no-innerhtml */}
                 </div>
               </div>
             </section>
