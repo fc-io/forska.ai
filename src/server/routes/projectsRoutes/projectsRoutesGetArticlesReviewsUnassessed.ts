@@ -13,6 +13,7 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
       const page = parseInt(body?.page || '1', 10)
       const limit = parseInt(body?.limit || '100', 10)
       const offset = (page - 1) * limit
+      const searchTitle = typeof body.search === 'string' ? body.search.trim() : ''
 
       const projectPrompts = await db.select().from(prompts).where(eq(prompts.projectId, body.projectId))
 
@@ -70,6 +71,9 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
       if (projectBounds?.dateTo) {
         whereParts.push(lte(articles.articleCreatedAt, projectBounds.dateTo))
       }
+      if (searchTitle) {
+        whereParts.push(sql`${articles.articleTitle} ILIKE ${'%' + searchTitle + '%'}`)
+      }
       const combinedWhereCondition = whereParts.length > 1 ? and(...whereParts) : whereParts[0]
 
       // Count total
@@ -104,6 +108,7 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
       projectId: t.String(),
       from: t.Optional(t.String()),
       to: t.Optional(t.String()),
+      search: t.Optional(t.String()),
     }),
   },
 )

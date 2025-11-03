@@ -17,6 +17,10 @@ interface ReviewsFilterControlsProps {
   setFromDate: Setter<string>
   setToDate: Setter<string>
   hidePromptSelectors?: boolean
+  searchTitle: string
+  setSearchTitle: Setter<string>
+  appliedSearchTitle: string
+  onSubmitSearch: () => void
 }
 
 export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
@@ -37,13 +41,21 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
   const filtersQuery = useQuery(() => {
     return {
       // Only include dates in the key when valid to avoid thrashing while typing
-      queryKey: ['project-articles-reviews-filters', props.projectId, validFrom(), validTo()],
+      queryKey: [
+        'project-articles-reviews-filters',
+        props.projectId,
+        validFrom(),
+        validTo(),
+        (props.appliedSearchTitle || '').trim() || null,
+      ],
       queryFn: async () => {
         const query: Record<string, string> = {projectId: props.projectId}
         const from = validFrom()
         const to = validTo()
         if (from) query.from = from
         if (to) query.to = to
+        const search = (props.appliedSearchTitle || '').trim()
+        if (search) query.search = search
 
         const response = await apiClient.api.articlesreviewsfilters.get({query})
 
@@ -106,6 +118,33 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
   return (
     <Suspense>
       <div class="p-4 bg-white rounded-lg shadow mb-6">
+        <form
+          class="flex items-center gap-2 pb-4 border-b w-full mb-4"
+          onSubmit={(e) => {
+            e.preventDefault()
+            props.onSubmitSearch()
+            props.setCurrentPage(1)
+          }}
+        >
+          <label class="flex flex-col text-sm font-medium gap-1 w-full max-w-xl">
+            <span>Search title</span>
+            <input
+              type="text"
+              value={props.searchTitle}
+              onInput={(e) => {
+                props.setSearchTitle(e.currentTarget.value)
+              }}
+              placeholder="Type a title and press Search"
+              class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+            />
+          </label>
+          <button
+            type="submit"
+            class="self-end h-10 px-4 py-2 rounded-md border bg-blue-600 text-white hover:bg-blue-700"
+          >
+            Search
+          </button>
+        </form>
         <div class="flex items-center gap-4 pb-4 border-b w-full">
           <label class="flex flex-col text-sm font-medium gap-1 w-44">
             <span>Start Date</span>

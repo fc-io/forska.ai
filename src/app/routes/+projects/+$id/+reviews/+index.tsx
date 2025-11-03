@@ -13,6 +13,8 @@ const Reviews = () => {
   const [promptFilters, setPromptFilters] = createSignal<Record<string, string[] | null>>({})
   const [currentPage, setCurrentPage] = createSignal(1)
   const [pageLimit, setPageLimit] = createSignal(100)
+  const [searchTitle, setSearchTitle] = createSignal('')
+  const [appliedSearchTitle, setAppliedSearchTitle] = createSignal('')
 
   return (
     <div class="min-h-screen bg-gray-50 p-6 mx-auto">
@@ -36,6 +38,13 @@ const Reviews = () => {
           toDate={toDate()}
           setFromDate={setFromDate}
           setToDate={setToDate}
+          searchTitle={searchTitle()}
+          setSearchTitle={setSearchTitle}
+          appliedSearchTitle={appliedSearchTitle()}
+          onSubmitSearch={() => {
+            setAppliedSearchTitle(searchTitle())
+            setCurrentPage(1)
+          }}
         />
 
         <ReviewsArticlesTableContainer
@@ -46,6 +55,7 @@ const Reviews = () => {
           pageLimit={pageLimit}
           fromDate={fromDate}
           toDate={toDate}
+          searchTitle={appliedSearchTitle}
         />
       </Suspense>
     </div>

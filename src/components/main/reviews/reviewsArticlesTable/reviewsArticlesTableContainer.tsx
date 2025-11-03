@@ -14,6 +14,7 @@ interface ReviewsArticlesTableContainerProps {
   pageLimit: Accessor<number>
   fromDate: Accessor<string>
   toDate: Accessor<string>
+  searchTitle: Accessor<string>
 }
 
 export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContainerProps) => {
@@ -25,6 +26,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
       props.pageLimit,
       props.fromDate,
       props.toDate,
+      props.searchTitle,
     )
   })
 

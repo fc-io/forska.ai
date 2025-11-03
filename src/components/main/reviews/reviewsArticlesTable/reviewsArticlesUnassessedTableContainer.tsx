@@ -13,6 +13,7 @@ interface ReviewsArticlesUnassessedTableContainerProps {
   pageLimit: Accessor<number>
   fromDate: Accessor<string>
   toDate: Accessor<string>
+  searchTitle: Accessor<string>
 }
 
 export const ReviewsArticlesUnassessedTableContainer = (
@@ -25,6 +26,7 @@ export const ReviewsArticlesUnassessedTableContainer = (
       props.pageLimit,
       props.fromDate,
       props.toDate,
+      props.searchTitle,
     )
   })
 

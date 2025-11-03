@@ -12,6 +12,8 @@ const ReviewsUnassessed = () => {
   const projectId = (params() as {id: string}).id
   const [currentPage, setCurrentPage] = createSignal(1)
   const [pageLimit, setPageLimit] = createSignal(100)
+  const [searchTitle, setSearchTitle] = createSignal('')
+  const [appliedSearchTitle, setAppliedSearchTitle] = createSignal('')
 
   // Data for the table is now loaded inside the table container component
 
@@ -37,6 +39,13 @@ const ReviewsUnassessed = () => {
           setFromDate={setFromDate}
           setToDate={setToDate}
           hidePromptSelectors={true}
+          searchTitle={searchTitle()}
+          setSearchTitle={setSearchTitle}
+          appliedSearchTitle={appliedSearchTitle()}
+          onSubmitSearch={() => {
+            setAppliedSearchTitle(searchTitle())
+            setCurrentPage(1)
+          }}
         />
 
         <ReviewsArticlesUnassessedTableContainer
@@ -46,6 +55,7 @@ const ReviewsUnassessed = () => {
           pageLimit={pageLimit}
           fromDate={fromDate}
           toDate={toDate}
+          searchTitle={appliedSearchTitle}
         />
       </Suspense>
     </div>
