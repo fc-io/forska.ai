@@ -3,7 +3,7 @@ import type {JSX} from 'solid-js'
 
 interface ReviewsTabsProps {
   projectId: string
-  active: 'assessed' | 'assessedHuman' | 'unassessed'
+  active: 'assessed' | 'assessedBoth' | 'assessedHuman' | 'unassessed'
 }
 
 export const ReviewsTabs = (props: ReviewsTabsProps): JSX.Element => {
@@ -20,6 +20,13 @@ export const ReviewsTabs = (props: ReviewsTabsProps): JSX.Element => {
           class={`${base} ${props.active === 'assessed' ? active : inactive}`}
         >
           Assessed by LLM
+        </Link>
+        <Link
+          to="/projects/$id/reviews-both"
+          params={{id: props.projectId}}
+          class={`${base} ${props.active === 'assessedBoth' ? active : inactive}`}
+        >
+          Assessed by Both
         </Link>
         <Link
           to="/projects/$id/reviews-human"

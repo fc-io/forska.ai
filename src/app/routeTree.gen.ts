@@ -30,6 +30,7 @@ import { Route as AdminDatasourcesIdEditRouteImport } from './routes/+admin/+dat
 import { Route as ProjectsIdReviewsIndexRouteImport } from './routes/+projects/+$id/+reviews/+index'
 import { Route as ProjectsIdReviewsUnassessedIndexRouteImport } from './routes/+projects/+$id/+reviews-unassessed/+index'
 import { Route as ProjectsIdReviewsHumanIndexRouteImport } from './routes/+projects/+$id/+reviews-human/+index'
+import { Route as ProjectsIdReviewsBothIndexRouteImport } from './routes/+projects/+$id/+reviews-both/+index'
 import { Route as AdminJobsIdIndexRouteImport } from './routes/+admin/+jobs/+$id/+index'
 import { Route as ProjectsIdReviewsArticleIdIndexRouteImport } from './routes/+projects/+$id/+reviews/+$articleId/+index'
 
@@ -142,6 +143,12 @@ const ProjectsIdReviewsHumanIndexRoute =
     path: '/projects/$id/reviews-human/',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ProjectsIdReviewsBothIndexRoute =
+  ProjectsIdReviewsBothIndexRouteImport.update({
+    id: '/projects/$id/reviews-both/',
+    path: '/projects/$id/reviews-both/',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const AdminJobsIdIndexRoute = AdminJobsIdIndexRouteImport.update({
   id: '/admin/jobs/$id/',
   path: '/admin/jobs/$id/',
@@ -172,6 +179,7 @@ export interface FileRoutesByFullPath {
   '/projects/$id/edit': typeof ProjectsIdEditRoute
   '/projects/$id/humanAssessment': typeof ProjectsIdHumanAssessmentRoute
   '/admin/jobs/$id': typeof AdminJobsIdIndexRoute
+  '/projects/$id/reviews-both': typeof ProjectsIdReviewsBothIndexRoute
   '/projects/$id/reviews-human': typeof ProjectsIdReviewsHumanIndexRoute
   '/projects/$id/reviews-unassessed': typeof ProjectsIdReviewsUnassessedIndexRoute
   '/projects/$id/reviews': typeof ProjectsIdReviewsIndexRoute
@@ -197,6 +205,7 @@ export interface FileRoutesByTo {
   '/projects/$id/edit': typeof ProjectsIdEditRoute
   '/projects/$id/humanAssessment': typeof ProjectsIdHumanAssessmentRoute
   '/admin/jobs/$id': typeof AdminJobsIdIndexRoute
+  '/projects/$id/reviews-both': typeof ProjectsIdReviewsBothIndexRoute
   '/projects/$id/reviews-human': typeof ProjectsIdReviewsHumanIndexRoute
   '/projects/$id/reviews-unassessed': typeof ProjectsIdReviewsUnassessedIndexRoute
   '/projects/$id/reviews': typeof ProjectsIdReviewsIndexRoute
@@ -223,6 +232,7 @@ export interface FileRoutesById {
   '/projects/$id/edit': typeof ProjectsIdEditRoute
   '/projects/$id/humanAssessment': typeof ProjectsIdHumanAssessmentRoute
   '/admin/jobs/$id/': typeof AdminJobsIdIndexRoute
+  '/projects/$id/reviews-both/': typeof ProjectsIdReviewsBothIndexRoute
   '/projects/$id/reviews-human/': typeof ProjectsIdReviewsHumanIndexRoute
   '/projects/$id/reviews-unassessed/': typeof ProjectsIdReviewsUnassessedIndexRoute
   '/projects/$id/reviews/': typeof ProjectsIdReviewsIndexRoute
@@ -250,6 +260,7 @@ export interface FileRouteTypes {
     | '/projects/$id/edit'
     | '/projects/$id/humanAssessment'
     | '/admin/jobs/$id'
+    | '/projects/$id/reviews-both'
     | '/projects/$id/reviews-human'
     | '/projects/$id/reviews-unassessed'
     | '/projects/$id/reviews'
@@ -275,6 +286,7 @@ export interface FileRouteTypes {
     | '/projects/$id/edit'
     | '/projects/$id/humanAssessment'
     | '/admin/jobs/$id'
+    | '/projects/$id/reviews-both'
     | '/projects/$id/reviews-human'
     | '/projects/$id/reviews-unassessed'
     | '/projects/$id/reviews'
@@ -300,6 +312,7 @@ export interface FileRouteTypes {
     | '/projects/$id/edit'
     | '/projects/$id/humanAssessment'
     | '/admin/jobs/$id/'
+    | '/projects/$id/reviews-both/'
     | '/projects/$id/reviews-human/'
     | '/projects/$id/reviews-unassessed/'
     | '/projects/$id/reviews/'
@@ -326,6 +339,7 @@ export interface RootRouteChildren {
   ProjectsIdEditRoute: typeof ProjectsIdEditRoute
   ProjectsIdHumanAssessmentRoute: typeof ProjectsIdHumanAssessmentRoute
   AdminJobsIdIndexRoute: typeof AdminJobsIdIndexRoute
+  ProjectsIdReviewsBothIndexRoute: typeof ProjectsIdReviewsBothIndexRoute
   ProjectsIdReviewsHumanIndexRoute: typeof ProjectsIdReviewsHumanIndexRoute
   ProjectsIdReviewsUnassessedIndexRoute: typeof ProjectsIdReviewsUnassessedIndexRoute
   ProjectsIdReviewsIndexRoute: typeof ProjectsIdReviewsIndexRoute
@@ -483,6 +497,13 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof ProjectsIdReviewsHumanIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/projects/$id/reviews-both/': {
+      id: '/projects/$id/reviews-both/'
+      path: '/projects/$id/reviews-both'
+      fullPath: '/projects/$id/reviews-both'
+      preLoaderRoute: typeof ProjectsIdReviewsBothIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/admin/jobs/$id/': {
       id: '/admin/jobs/$id/'
       path: '/admin/jobs/$id'
@@ -518,6 +539,7 @@ const rootRouteChildren: RootRouteChildren = {
   ProjectsIdEditRoute: ProjectsIdEditRoute,
   ProjectsIdHumanAssessmentRoute: ProjectsIdHumanAssessmentRoute,
   AdminJobsIdIndexRoute: AdminJobsIdIndexRoute,
+  ProjectsIdReviewsBothIndexRoute: ProjectsIdReviewsBothIndexRoute,
   ProjectsIdReviewsHumanIndexRoute: ProjectsIdReviewsHumanIndexRoute,
   ProjectsIdReviewsUnassessedIndexRoute: ProjectsIdReviewsUnassessedIndexRoute,
   ProjectsIdReviewsIndexRoute: ProjectsIdReviewsIndexRoute,

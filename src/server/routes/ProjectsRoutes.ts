@@ -16,6 +16,7 @@ import {projectsRoutesGetArticlesReviewsFilters} from './projectsRoutes/projects
 import {projectsRoutesGetArticlesReviewsUnassessed} from './projectsRoutes/projectsRoutesGetArticlesReviewsUnassessed.ts'
 import {projectsRoutesGetArticlesReviewsHuman} from './projectsRoutes/projectsRoutesGetArticlesReviewsHuman.ts'
 import {projectsRoutesGetArticlesReviewsHumanFilters} from './projectsRoutes/projectsRoutesGetArticlesReviewsHumanFilters.ts'
+import {projectsRoutesGetArticlesReviewsBoth} from './projectsRoutes/projectsRoutesGetArticlesReviewsBoth.ts'
 import {projectsRoutesGetArticlesWithJudgments} from './projectsRoutes/projectsRoutesGetArticlesWithJudgments.ts'
 import {projectsRoutesPostArticleReviewDetails} from './projectsRoutes/projectsRoutesPostArticleReviewDetails.ts'
 
@@ -41,6 +42,7 @@ export const projectsRoutes = new Elysia()
   .use(withErrorHandler())
   .use(projectsRoutesGetArticlesWithJudgments)
   .use(projectsRoutesGetArticlesReviews)
+  .use(projectsRoutesGetArticlesReviewsBoth)
   .use(projectsRoutesGetArticlesReviewsHuman)
   .use(projectsRoutesGetArticlesReviewsUnassessed)
   .use(projectsRoutesGetArticlesReviewsFilters)
