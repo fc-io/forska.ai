@@ -5,18 +5,7 @@ import {For, Suspense} from 'solid-js'
 import {apiClient} from '../../../../services/apiClient'
 import {handleApiResponse} from '../../../../services/utils/handleApiResponse'
 
-type HumanAssessmentInitResponse = {
-  project: {id: string; name: string}
-  article: {id: string; articleTitle: string; articleSummary: string | null}
-  prompts: Array<{
-    id: string
-    originalText: string
-    promptHeading: string | null
-    order: number | null
-    type: string | null
-  }>
-  judgmentsHuman: Array<{id: string; promptId: string}>
-}
+// type InitResponse = Awaited<ReturnType<typeof apiClient.api.humanassessment.init.post>>
 
 export const HumanAssessment = () => {
   const params = Route.useParams()
@@ -26,14 +15,10 @@ export const HumanAssessment = () => {
       queryKey: ['human-assessment-init', params().id],
       queryFn: async () => {
         const response = await apiClient.api.humanassessment.init.post({projectId: params().id})
-        const result = handleApiResponse<{data: HumanAssessmentInitResponse}>(
-          response as {data?: {data: HumanAssessmentInitResponse}; error?: unknown; status?: number},
-          'Failed to initialize human assessment',
-        )
-        return result.data
+        const data = handleApiResponse(response, 'Failed to initialize human assessment')
+        return data.data
       },
       enabled: !!params().id,
-      staleTime: 0,
     }
   })
 
@@ -47,7 +32,7 @@ export const HumanAssessment = () => {
         <div class="flex justify-between items-center mb-6">
           <div class="flex items-center gap-4">
             <h1 class="text-2xl font-bold">Human Assessment</h1>
-            {data() && <span class="text-sm text-muted-foreground">for {data()?.project.name}</span>}
+            {data() && <span class="text-sm text-muted-foreground">for {data.project.name}</span>}
           </div>
         </div>
 
