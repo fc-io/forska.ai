@@ -44,18 +44,15 @@ export const fullTextArticleFetchFromUnpaywall = async ({
       `https://api.unpaywall.org/v2/${encodeURIComponent(doi)}?email=fredrik.carlsson@ki.se`,
     )
     console.log('fullTextArticle: ', fullTextArticle)
-    const fullText: string | null = null
     const fullTextSource = 'http://unpaywall.org'
     const fullTextOriginalFormat = 'pdf'
-    const fullTextAssets: unknown = null
     const json = await fullTextArticle.json()
     const best = json?.best_oa_location ?? null
     const pdfUrl: string | null =
       (best && typeof best === 'object' && typeof best.url_for_pdf === 'string' && best.url_for_pdf) || null
     const fullTextPDF: string | null = pdfUrl ? await storePdfToAssets(doi, await fetch(pdfUrl)) : null
-    const fullTextFetchedAt = new Date()
 
-    return {fullText, fullTextSource, fullTextOriginalFormat, fullTextAssets, fullTextPDF, fullTextFetchedAt}
+    return {fullTextSource, fullTextOriginalFormat, fullTextPDF}
   }
   return null
 }

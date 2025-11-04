@@ -58,14 +58,11 @@ export const fullTextArticleFetchFromArxiv = async ({
     console.log('2 fetch new arxivId: ', arxivId)
     const fullTextArticle = await fetch(`https://arxiv.org/pdf/${cleanArxivId(arxivId)}.pdf`)
     console.log('3 fullTextArticle:', fullTextArticle.status)
-    const fullText: string | null = null
     const fullTextSource = 'https://arxiv.org/'
     const fullTextOriginalFormat = 'pdf'
-    const fullTextAssets: unknown = null
     const fullTextPDF: string | null = await storePdfToAssets(arxivId, fullTextArticle)
-    const fullTextFetchedAt = new Date()
 
-    return {fullText, fullTextSource, fullTextOriginalFormat, fullTextAssets, fullTextPDF, fullTextFetchedAt}
+    return {fullTextSource, fullTextOriginalFormat, fullTextPDF}
   }
   return null
 }

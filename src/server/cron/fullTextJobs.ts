@@ -1,5 +1,5 @@
 import {cron} from '@elysiajs/cron'
-import {and, desc, eq, isNull} from 'drizzle-orm'
+import {eq, isNull, sql} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 import {Elysia} from 'elysia'
 
@@ -15,7 +15,23 @@ const getArticlesWithoutFullText = async (db: PostgresJsDatabase<typeof schema>,
     .select({id: schema.articles.id, arxivId: schema.articles.arxivId, originalData: schema.articles.originalData})
     .from(schema.articles)
     .where(isNull(schema.articles.fullTextFetchedAt))
-    .orderBy(desc(schema.articles.createdAt))
+    .orderBy(
+      sql`(
+        EXISTS (
+          ${db
+            .select({one: sql`1`})
+            .from(schema.judgments)
+            .where(eq(schema.judgments.articleId, schema.articles.id))
+            .limit(1)}
+        ) OR EXISTS (
+          ${db
+            .select({one: sql`1`})
+            .from(schema.judgmentsHuman)
+            .where(eq(schema.judgmentsHuman.articleId, schema.articles.id))
+            .limit(1)}
+        )
+      ) DESC, ${schema.articles.createdAt} DESC`,
+    )
     .limit(numberOfArticlesToFetch)
   console.log('getArticlesWithoutFullText: ', articlesWithoutFullText.length)
 
@@ -33,14 +49,7 @@ const getFullTextForArticle = async (
       return article
     }
   }
-  return {
-    fullText: null,
-    fullTextSource: null,
-    fullTextOriginalFormat: null,
-    fullTextAssets: null,
-    fullTextPDF: null,
-    fullTextFetchedAt: new Date(),
-  }
+  return {fullText: null, fullTextSource: null, fullTextOriginalFormat: null, fullTextAssets: null, fullTextPDF: null}
 }
 
 const storeFullText = async (
@@ -52,21 +61,21 @@ const storeFullText = async (
   await db
     .update(schema.articles)
     .set({
-      fullText: fullText.fullText,
+      // fullText: fullText.fullText ?? null,
       fullTextSource: fullText.fullTextSource,
       fullTextOriginalFormat: fullText.fullTextOriginalFormat,
-      fullTextAssets: fullText.fullTextAssets,
+      // fullTextAssets: fullText.fullTextAssets ?? null,
       fullTextPDF: fullText.fullTextPDF,
+      fullTextFetchedAt: new Date(),
     })
     .where(eq(schema.articles.id, id))
   console.log('storeFullText done')
 }
 
 const fetchFullTextForArticles = async () => {
-  const _minutesInADay = 24 * 60
-  const _unpaywallArticlesPerDayLimit = 100_000
-  //   const numberOfArticlesToFetch = _unpaywallArticlesPerDayLimit / _minutesInADay
-  const numberOfArticlesToFetch = 1 // for testing
+  const minutesInADay = 24 * 60
+  const unpaywallArticlesPerDayLimit = 100_000
+  const numberOfArticlesToFetch = unpaywallArticlesPerDayLimit / minutesInADay
   const db = getDatabase()
   const articlesWithoutFullText = await getArticlesWithoutFullText(db, numberOfArticlesToFetch)
   await Promise.all(
