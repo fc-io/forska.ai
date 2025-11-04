@@ -29,6 +29,13 @@
       "when": 1762156381686,
       "tag": "0003_slimy_silverclaw",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1762245119463,
+      "tag": "0004_open_clea",
+      "breakpoints": true
     }
   ]
 }

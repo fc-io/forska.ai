@@ -36,7 +36,7 @@ export const humanAssessmentRoutesGetOverviewBothProjects = async ({
             WHERE jh2."project_id" = ${judgmentsHuman.projectId}
               AND jh2."article_id" = ${judgmentsHuman.articleId}
               AND jh2."user" = ${judgmentsHuman.user}
-              AND jh2."answer" IS NOT NULL
+              AND jh2."is_answered" = true
             GROUP BY jh2."project_id", jh2."article_id", jh2."user"
             HAVING COUNT(DISTINCT jh2."prompt_id") = (
               SELECT COUNT(*) FROM ${prompts} p WHERE p."project_id" = jh2."project_id"
@@ -48,6 +48,7 @@ export const humanAssessmentRoutesGetOverviewBothProjects = async ({
             INNER JOIN ${prompts} pr ON pr."id" = j."prompt_id"
             WHERE pr."project_id" = ${judgmentsHuman.projectId}
               AND j."article_id" = ${judgmentsHuman.articleId}
+              AND j."is_answered" = true
             GROUP BY j."article_id"
             HAVING COUNT(DISTINCT j."prompt_id") = (
               SELECT COUNT(*) FROM ${prompts} p2 WHERE p2."project_id" = ${judgmentsHuman.projectId}
@@ -60,4 +61,3 @@ export const humanAssessmentRoutesGetOverviewBothProjects = async ({
 
   return {data: bothPerProject}
 }
-

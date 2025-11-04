@@ -31,13 +31,9 @@ export const HumanAssessment = () => {
   const submitMutation = useMutation(() => {
     return {
       mutationFn: async (values: Record<string, string>) => {
-        const answers = Object.entries(values)
-          .filter(([, answer]) => {
-            return answer.trim() !== ''
-          })
-          .map(([judgmentHumanId, answer]) => {
-            return {judgmentHumanId, answer}
-          })
+        const answers = Object.entries(values).map(([judgmentHumanId, answer]) => {
+          return {judgmentHumanId, answer}
+        })
 
         const response = await apiClient.api.humanassessment.submit.post({projectId: params().id, answers})
         const {data} = handleApiResponse(response, 'Failed to submit assessment')

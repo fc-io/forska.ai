@@ -51,6 +51,7 @@ export const judgeStoreJudgment = async (
         const [updated] = await db
           .update(judgments)
           .set({
+            isAnswered: true,
             answeredOriginal,
             answeredTransformed: null,
             confidenceOriginal: 50,
@@ -69,6 +70,7 @@ export const judgeStoreJudgment = async (
           articleId,
           modelId,
           promptId,
+          isAnswered: true,
           answeredOriginal,
           answeredTransformed: null,
           confidenceOriginal: 50,

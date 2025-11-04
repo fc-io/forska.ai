@@ -34,6 +34,7 @@ export const projectsRoutesGetArticlesReviewsHumanFilters = new Elysia().get(
                 FROM ${judgmentsHuman}
                 INNER JOIN ${articles} ON ${articles.id} = ${judgmentsHuman.articleId}
                 WHERE ${judgmentsHuman.promptId} = ${prompt.id}::uuid
+                AND ${judgmentsHuman.isAnswered} = true
                 AND ${judgmentsHuman.answer} IS NOT NULL`
 
           let scoped = base

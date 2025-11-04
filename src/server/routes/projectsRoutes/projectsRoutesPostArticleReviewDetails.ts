@@ -1,4 +1,4 @@
-import {and, eq, inArray, isNotNull} from 'drizzle-orm'
+import {and, eq, inArray} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {user} from '../../../../auth-schema.ts'
@@ -85,13 +85,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         .from(judgmentsHuman)
         .innerJoin(user, eq(user.id, judgmentsHuman.user))
         .innerJoin(prompts, eq(prompts.id, judgmentsHuman.promptId))
-        .where(
-          and(
-            eq(judgmentsHuman.articleId, articleId),
-            eq(judgmentsHuman.projectId, projectId),
-            isNotNull(judgmentsHuman.answer),
-          ),
-        )
+        .where(and(eq(judgmentsHuman.articleId, articleId), eq(judgmentsHuman.projectId, projectId), eq(judgmentsHuman.isAnswered, true)))
         .orderBy(user.name, prompts.order)
 
       const humanByUser = humanRows.reduce(

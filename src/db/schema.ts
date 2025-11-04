@@ -485,6 +485,8 @@ export const judgments = pgTable(
       },
       {onDelete: 'cascade'},
     ),
+    // Whether this LLM judgment has been answered (may have null answer fields in some cases)
+    isAnswered: boolean('is_answered').default(false),
     answeredOriginal: text('answered_original'),
     answeredTransformed: text('answered_transformed'),
     confidenceOriginal: integer('confidence_original'),
@@ -530,6 +532,8 @@ export const judgmentsHuman = pgTable(
         },
         {onDelete: 'cascade'},
       ),
+    // Whether this human judgment has been answered (allows null answer for optional prompts)
+    isAnswered: boolean('is_answered').default(false).notNull(),
     answer: text('answer'),
     comment: text('comment'),
     projectId: uuid('project_id')

@@ -23,7 +23,7 @@ export const humanAssessmentRoutesGetOverview = async ({request, set}: {request:
     })
     .from(judgmentsHuman)
     .innerJoin(projects, eq(projects.id, judgmentsHuman.projectId))
-    .where(sql`${judgmentsHuman.answer} IS NOT NULL`)
+    .where(eq(judgmentsHuman.isAnswered, true))
     .groupBy(judgmentsHuman.projectId, projects.name)
     .orderBy(sql`COUNT(DISTINCT ${judgmentsHuman.articleId}) DESC`)
 
@@ -36,7 +36,7 @@ export const humanAssessmentRoutesGetOverview = async ({request, set}: {request:
     })
     .from(judgmentsHuman)
     .innerJoin(user, eq(user.id, judgmentsHuman.user))
-    .where(sql`${judgmentsHuman.answer} IS NOT NULL`)
+    .where(eq(judgmentsHuman.isAnswered, true))
     .groupBy(judgmentsHuman.user, user.name, user.email)
     .orderBy(sql`COUNT(DISTINCT ${judgmentsHuman.articleId}) DESC`)
 

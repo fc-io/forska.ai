@@ -34,7 +34,7 @@ export const projectsRoutesGetArticlesReviewsHuman = new Elysia().post(
         FROM ${judgmentsHuman} jh
         WHERE jh."article_id" = ${articles.id}
           AND jh."project_id" = ${body.projectId}::uuid
-          AND jh."answer" IS NOT NULL
+          AND jh."is_answered" = true
         GROUP BY jh."article_id", jh."user"
         HAVING COUNT(DISTINCT jh."prompt_id") = ${promptIds.length}
       )`
