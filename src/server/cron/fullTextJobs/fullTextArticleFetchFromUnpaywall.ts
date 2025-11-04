@@ -31,7 +31,7 @@ const storePdfToAssets = async (key: string, response: Response): Promise<string
 export const fullTextArticleFetchFromUnpaywall = async ({
   originalData,
 }: Pick<typeof schema.articles.$inferSelect, 'arxivId' | 'originalData'>) => {
-  console.log('1 run fetchArticleFromUnpaywall', originalData)
+  console.log('1 run fetchArticleFromUnpaywall')
   if (
     originalData
     && typeof originalData === 'object'

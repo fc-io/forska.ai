@@ -8,7 +8,7 @@ import {getDatabase} from '../utils/getDatabase.ts'
 import {fullTextArticleFetchFromArxiv} from './fullTextJobs/fullTextArticleFetchFromArxiv.ts'
 import {fullTextArticleFetchFromUnpaywall} from './fullTextJobs/fullTextArticleFetchFromUnpaywall.ts'
 
-const NEW_ARTICLES_INTERVAL = '*/1 * * * * *'
+const NEW_ARTICLES_INTERVAL = '0 * * * * *'
 
 const getArticlesWithoutFullText = async (db: PostgresJsDatabase<typeof schema>, numberOfArticlesToFetch: number) => {
   const articlesWithoutFullText = await db
@@ -48,8 +48,7 @@ const storeFullText = async (
   id: (typeof schema.articles.$inferSelect)['id'],
   fullText: NonNullable<Awaited<ReturnType<typeof getFullTextForArticle>>>,
 ) => {
-  console.log('2:', id)
-  // TODO: after implementing all possible sources, we also need a tried to fetch (from x?) to not just retyr the same articles again and again.
+  console.log('storeFullText start:', id)
   await db
     .update(schema.articles)
     .set({

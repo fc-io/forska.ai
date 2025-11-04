@@ -57,7 +57,7 @@ export const fullTextArticleFetchFromArxiv = async ({
     await arxivRateLimit()
     console.log('2 fetch new arxivId: ', arxivId)
     const fullTextArticle = await fetch(`https://arxiv.org/pdf/${cleanArxivId(arxivId)}.pdf`)
-    console.log('3 fullTextArticle: ', fullTextArticle)
+    console.log('3 fullTextArticle:', fullTextArticle.status)
     const fullText: string | null = null
     const fullTextSource = 'https://arxiv.org/'
     const fullTextOriginalFormat = 'pdf'
