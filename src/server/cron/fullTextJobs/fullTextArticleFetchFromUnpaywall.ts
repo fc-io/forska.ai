@@ -20,8 +20,9 @@ export const fullTextArticleFetchFromUnpaywall = async ({
     const fullTextSource = 'http://unpaywall.org'
     const fullTextOriginalFormat = 'pdf'
     const fullTextAssets: unknown = null
+    const fullTextPDF: string | null = null
 
-    return {fullText, fullTextSource, fullTextOriginalFormat, fullTextAssets}
+    return {fullText, fullTextSource, fullTextOriginalFormat, fullTextAssets, fullTextPDF}
   }
   return null
 }

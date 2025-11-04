@@ -16,8 +16,9 @@ export const fullTextArticleFetchFromArxiv = async ({
     const fullTextSource = 'https://arxiv.org/'
     const fullTextOriginalFormat = 'pdf'
     const fullTextAssets: unknown = null
+    const fullTextPDF: string | null = null
 
-    return {fullText, fullTextSource, fullTextOriginalFormat, fullTextAssets}
+    return {fullText, fullTextSource, fullTextOriginalFormat, fullTextAssets, fullTextPDF}
   }
   return null
 }
