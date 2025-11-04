@@ -79,6 +79,9 @@ const CreateProject = () => {
     {id: crypto.randomUUID(), content: '', promptHeading: '', type: ''},
   ])
   const [selectedImportRoutes, setSelectedImportRoutes] = createSignal<string[]>([])
+  const [useTitle, setUseTitle] = createSignal(true)
+  const [useAbstract, setUseAbstract] = createSignal(true)
+  const [useFulltext, setUseFulltext] = createSignal(false)
   const [isLoading, setIsLoading] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
 
@@ -167,6 +170,9 @@ const CreateProject = () => {
       dateFrom: startDate,
       dateTo: endDate,
       importRoutes: importRoutes.length > 0 ? Array.from(new Set(importRoutes)) : undefined,
+      useTitle: useTitle(),
+      useAbstract: useAbstract(),
+      useFulltext: useFulltext(),
     })
 
     const result = handleApiResponse(response, 'Failed to create project')
@@ -399,6 +405,51 @@ const CreateProject = () => {
                   </For>
                 </div>
               </Show>
+            </div>
+
+            <div>
+              <p class="block text-sm font-medium mb-2">Article Content Used</p>
+              <div class="space-y-2">
+                <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    class="mt-1"
+                    checked={useTitle()}
+                    onChange={(e) => {
+                      return setUseTitle(e.currentTarget.checked)
+                    }}
+                  />
+                  <div class="flex-1">
+                    <p class="text-sm font-medium text-gray-900">Use Article Title</p>
+                  </div>
+                </label>
+                <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    class="mt-1"
+                    checked={useAbstract()}
+                    onChange={(e) => {
+                      return setUseAbstract(e.currentTarget.checked)
+                    }}
+                  />
+                  <div class="flex-1">
+                    <p class="text-sm font-medium text-gray-900">Use Article Abstract</p>
+                  </div>
+                </label>
+                <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    class="mt-1"
+                    checked={useFulltext()}
+                    onChange={(e) => {
+                      return setUseFulltext(e.currentTarget.checked)
+                    }}
+                  />
+                  <div class="flex-1">
+                    <p class="text-sm font-medium text-gray-900">Use the full text of the Article (less performant)</p>
+                  </div>
+                </label>
+              </div>
             </div>
 
             <div>

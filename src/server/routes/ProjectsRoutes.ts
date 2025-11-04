@@ -134,6 +134,9 @@ export const projectsRoutes = new Elysia()
           description: body.description || null,
           ownerId: body.ownerId,
           modelId: body.modelId,
+          useTitle: body.useTitle ?? true,
+          useAbstract: body.useAbstract ?? true,
+          useFulltext: body.useFulltext ?? false,
           dateFrom,
           dateTo,
         })
@@ -199,6 +202,9 @@ export const projectsRoutes = new Elysia()
         modelId: t.String(),
         dateFrom: t.Optional(t.String()),
         dateTo: t.Optional(t.String()),
+        useTitle: t.Optional(t.Boolean()),
+        useAbstract: t.Optional(t.Boolean()),
+        useFulltext: t.Optional(t.Boolean()),
         importRoutes: t.Optional(t.Array(t.String())),
         prompts: t.Optional(
           t.Union([
