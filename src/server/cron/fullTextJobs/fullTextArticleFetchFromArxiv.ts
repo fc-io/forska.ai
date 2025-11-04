@@ -2,6 +2,7 @@ import {mkdir, writeFile} from 'fs/promises'
 import path from 'path'
 
 import * as schema from '../../../db/schema.ts'
+import {sleep} from '../../../utils/sleep.ts'
 
 const cleanArxivId = (arxivId: string) => {
   return arxivId.replace('oai:arXiv.org:', '')
@@ -32,14 +33,31 @@ const storePdfToAssets = async (arxivId: string, response: Response): Promise<st
     : null
 }
 
+const arxivRateLimit = (() => {
+  const state: {lastAt: number; tail: Promise<unknown>} = {lastAt: 0, tail: Promise.resolve()}
+  const minGapMs = 3000
+  const acquire = () => {
+    const job = async () => {
+      const now = Date.now()
+      const waitMs = Math.max(0, state.lastAt + minGapMs - now)
+      await sleep(waitMs)
+      state.lastAt = Date.now()
+    }
+    state.tail = state.tail.then(job)
+    return state.tail
+  }
+  return acquire
+})()
+
 export const fullTextArticleFetchFromArxiv = async ({
   arxivId,
 }: Pick<typeof schema.articles.$inferSelect, 'arxivId' | 'originalData'>) => {
   console.log('1 run fullTextArticleFetchFromArxiv', arxivId)
   if (arxivId) {
-    console.log('arxivId: ', arxivId)
+    await arxivRateLimit()
+    console.log('2 fetch new arxivId: ', arxivId)
     const fullTextArticle = await fetch(`https://arxiv.org/pdf/${cleanArxivId(arxivId)}.pdf`)
-    console.log('fullTextArticle: ', fullTextArticle)
+    console.log('3 fullTextArticle: ', fullTextArticle)
     const fullText: string | null = null
     const fullTextSource = 'https://arxiv.org/'
     const fullTextOriginalFormat = 'pdf'
