@@ -114,12 +114,16 @@ export const HumanAssessment = () => {
             >
               <section class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
                 <div class="space-y-6">
-                  <For each={data()?.judgmentsHuman ?? []}>
-                    {(judgment) => {
-                      const prompt = data()?.prompts.find((p) => {
-                        return p.id === judgment.promptId
+                  <For each={data()?.prompts ?? []}>
+                    {(prompt) => {
+                      const judgment = data()?.judgmentsHuman.find((j) => {
+                        return j.promptId === prompt.id
                       })
                       console.log('prompt', prompt)
+
+                      if (!judgment) {
+                        return null
+                      }
 
                       const promptType = parsePromptType(prompt?.type ?? null)
                       console.log('promptType', promptType)
