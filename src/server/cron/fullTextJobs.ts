@@ -1,5 +1,5 @@
 import {cron} from '@elysiajs/cron'
-import {and, desc, isNull} from 'drizzle-orm'
+import {and, desc, eq, isNull} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 import {Elysia} from 'elysia'
 
@@ -12,9 +12,9 @@ const NEW_ARTICLES_INTERVAL = '*/1 * * * * *'
 
 const getArticlesWithoutFullText = async (db: PostgresJsDatabase<typeof schema>, numberOfArticlesToFetch: number) => {
   const articlesWithoutFullText = await db
-    .select({arxivId: schema.articles.arxivId, originalData: schema.articles.originalData})
+    .select({id: schema.articles.id, arxivId: schema.articles.arxivId, originalData: schema.articles.originalData})
     .from(schema.articles)
-    .where(and(isNull(schema.articles.fullText), isNull(schema.articles.fullTextPDF)))
+    .where(isNull(schema.articles.fullTextFetchedAt))
     .orderBy(desc(schema.articles.createdAt))
     .limit(numberOfArticlesToFetch)
   console.log('getArticlesWithoutFullText: ', articlesWithoutFullText.length)
@@ -33,11 +33,34 @@ const getFullTextForArticle = async (
       return article
     }
   }
-  return null
+  return {
+    fullText: null,
+    fullTextSource: null,
+    fullTextOriginalFormat: null,
+    fullTextAssets: null,
+    fullTextPDF: null,
+    fullTextFetchedAt: new Date(),
+  }
 }
 
-const storeFullText = async (fullText: unknown) => {
-  console.log('storeFullText: ', fullText)
+const storeFullText = async (
+  db: PostgresJsDatabase<typeof schema>,
+  id: (typeof schema.articles.$inferSelect)['id'],
+  fullText: NonNullable<Awaited<ReturnType<typeof getFullTextForArticle>>>,
+) => {
+  console.log('2:', id)
+  // TODO: after implementing all possible sources, we also need a tried to fetch (from x?) to not just retyr the same articles again and again.
+  await db
+    .update(schema.articles)
+    .set({
+      fullText: fullText.fullText,
+      fullTextSource: fullText.fullTextSource,
+      fullTextOriginalFormat: fullText.fullTextOriginalFormat,
+      fullTextAssets: fullText.fullTextAssets,
+      fullTextPDF: fullText.fullTextPDF,
+    })
+    .where(eq(schema.articles.id, id))
+  console.log('storeFullText done')
 }
 
 const fetchFullTextForArticles = async () => {
@@ -50,7 +73,7 @@ const fetchFullTextForArticles = async () => {
   await Promise.all(
     articlesWithoutFullText.map(async (articleData) => {
       const fullTextData = await getFullTextForArticle(articleData)
-      await storeFullText(fullTextData)
+      await storeFullText(db, articleData.id, fullTextData)
     }),
   )
 

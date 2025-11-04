@@ -57,6 +57,13 @@
       "when": 1762265920920,
       "tag": "0007_bizarre_surge",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1762270696675,
+      "tag": "0008_rich_mentor",
+      "breakpoints": true
     }
   ]
 }

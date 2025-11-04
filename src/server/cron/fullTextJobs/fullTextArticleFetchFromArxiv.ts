@@ -45,8 +45,9 @@ export const fullTextArticleFetchFromArxiv = async ({
     const fullTextOriginalFormat = 'pdf'
     const fullTextAssets: unknown = null
     const fullTextPDF: string | null = await storePdfToAssets(arxivId, fullTextArticle)
+    const fullTextFetchedAt = new Date()
 
-    return {fullText, fullTextSource, fullTextOriginalFormat, fullTextAssets, fullTextPDF}
+    return {fullText, fullTextSource, fullTextOriginalFormat, fullTextAssets, fullTextPDF, fullTextFetchedAt}
   }
   return null
 }

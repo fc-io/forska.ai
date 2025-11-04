@@ -21,8 +21,9 @@ export const fullTextArticleFetchFromUnpaywall = async ({
     const fullTextOriginalFormat = 'pdf'
     const fullTextAssets: unknown = null
     const fullTextPDF: string | null = null
+    const fullTextFetchedAt = new Date()
 
-    return {fullText, fullTextSource, fullTextOriginalFormat, fullTextAssets, fullTextPDF}
+    return {fullText, fullTextSource, fullTextOriginalFormat, fullTextAssets, fullTextPDF, fullTextFetchedAt}
   }
   return null
 }

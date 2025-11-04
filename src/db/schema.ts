@@ -61,6 +61,7 @@ export const articles = pgTable(
     doi: text('doi'),
     pubmedId: text('pubmed_id'),
     url: text('url'),
+    fullTextFetchedAt: timestamp('full_text_fetched_at', {withTimezone: true}),
     fullText: text('full_text'),
     fullTextSource: text('full_text_source'),
     fullTextOriginalFormat: text('full_text_original_format'),

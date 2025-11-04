@@ -1,0 +1,1 @@
+ALTER TABLE "articles" ADD COLUMN "full_text_fetched_at" timestamp with time zone;
