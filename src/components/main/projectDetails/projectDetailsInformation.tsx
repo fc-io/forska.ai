@@ -8,6 +8,9 @@ interface ProjectDetailsInformationProject {
   description: string | null
   dateFrom: Date | string | null
   dateTo: Date | string | null
+  useTitle: boolean
+  useAbstract: boolean
+  useFulltext: boolean
 }
 
 type ProjectDetailsInformationProps = {
@@ -54,6 +57,13 @@ export const ProjectDetailsInformation = (props: ProjectDetailsInformationProps)
   const modelName = createMemo(() => {
     return props.model?.name ?? 'Unknown'
   })
+  const useFlags = createMemo(() => {
+    return {
+      title: props.project.useTitle,
+      abstract: props.project.useAbstract,
+      fulltext: props.project.useFulltext,
+    }
+  })
 
   return (
     <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
@@ -92,6 +102,32 @@ export const ProjectDetailsInformation = (props: ProjectDetailsInformationProps)
       <div class="flex gap-2 items-start">
         <label class="text-sm font-medium text-muted-foreground">Description:</label>
         <p class="text-sm max-w-[580px]">{description()}</p>
+      </div>
+      <div class="flex gap-2 items-start">
+        <label class="text-sm font-medium text-muted-foreground">Content Used:</label>
+        <div class="flex flex-wrap gap-2">
+          <span
+            class={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+              useFlags().title ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'
+            }`}
+          >
+            Title {useFlags().title ? 'on' : 'off'}
+          </span>
+          <span
+            class={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+              useFlags().abstract ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'
+            }`}
+          >
+            Abstract {useFlags().abstract ? 'on' : 'off'}
+          </span>
+          <span
+            class={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+              useFlags().fulltext ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'
+            }`}
+          >
+            Full text {useFlags().fulltext ? 'on' : 'off'}
+          </span>
+        </div>
       </div>
       <div class="flex gap-2 items-start">
         <label class="text-sm font-medium text-muted-foreground">Import Routes:</label>
