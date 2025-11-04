@@ -1,6 +1,7 @@
 import {cors} from '@elysiajs/cors'
 import {Elysia} from 'elysia'
 
+import {fullTextJobsCron} from './cron/fullTextJobs.ts'
 import {judgmentsJobsCron} from './cron/judgmentsJobs.ts'
 import {articlesRoutes} from './routes/ArticlesRoutes.ts'
 import {authRoutes} from './routes/AuthRoutes.ts'
@@ -28,6 +29,7 @@ const app = new Elysia()
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     }),
   )
+  .use(fullTextJobsCron)
   .use(judgmentsJobsCron)
   .use(authRoutes)
   .use(judgmentsJobsRoutes)

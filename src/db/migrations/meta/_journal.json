@@ -50,6 +50,13 @@
       "when": 1762259962984,
       "tag": "0006_dear_red_hulk",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1762265920920,
+      "tag": "0007_bizarre_surge",
+      "breakpoints": true
     }
   ]
 }

@@ -64,6 +64,7 @@ export const articles = pgTable(
     fullText: text('full_text'),
     fullTextSource: text('full_text_source'),
     fullTextOriginalFormat: text('full_text_original_format'),
+    fullTextPDF: text('full_text_pdf'),
     fullTextAssets: jsonb('full_text_assets'),
     contentHash: text('content_hash'),
     importRoute: text('import_route'),
