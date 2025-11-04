@@ -267,6 +267,9 @@ export const projectsRoutes = new Elysia()
           }
           updateData.modelId = body.modelId
         }
+        if (body.useTitle !== undefined) updateData.useTitle = body.useTitle
+        if (body.useAbstract !== undefined) updateData.useAbstract = body.useAbstract
+        if (body.useFulltext !== undefined) updateData.useFulltext = body.useFulltext
 
         const [updatedProject] = await tx.update(projects).set(updateData).where(eq(projects.id, params.id)).returning()
 
@@ -386,6 +389,9 @@ export const projectsRoutes = new Elysia()
         dateFrom: t.Optional(t.Union([t.String(), t.Null()])),
         dateTo: t.Optional(t.Union([t.String(), t.Null()])),
         modelId: t.Optional(t.String()),
+        useTitle: t.Optional(t.Boolean()),
+        useAbstract: t.Optional(t.Boolean()),
+        useFulltext: t.Optional(t.Boolean()),
         importRoutes: t.Optional(t.Array(t.String())),
         prompts: t.Optional(
           t.Array(

@@ -32,6 +32,9 @@ type ProjectSummary = {
   description: string | null
   dateFrom: string | Date | null
   dateTo: string | Date | null
+  useTitle: boolean
+  useAbstract: boolean
+  useFulltext: boolean
 }
 
 type ModelOption = {id: string; name: string; provider: string | null; modelName: string | null}
@@ -67,8 +70,18 @@ const isProjectSummary = (value: unknown): value is ProjectSummary => {
   const description = summary.description
   const dateFrom = summary.dateFrom
   const dateTo = summary.dateTo
+  const useTitle = summary.useTitle
+  const useAbstract = summary.useAbstract
+  const useFulltext = summary.useFulltext
   const hasValidDates = isNullableStringOrDate(dateFrom) && isNullableStringOrDate(dateTo)
-  return typeof name === 'string' && isNullableString(description) && hasValidDates
+  return (
+    typeof name === 'string'
+    && isNullableString(description)
+    && hasValidDates
+    && typeof useTitle === 'boolean'
+    && typeof useAbstract === 'boolean'
+    && typeof useFulltext === 'boolean'
+  )
 }
 
 const isProjectPromptResponse = (value: unknown): value is ProjectPromptResponse => {
@@ -224,6 +237,9 @@ const EditProject = (): JSX.Element => {
   const [errorMessage, setErrorMessage] = createSignal<string | null>(null)
   const [selectedModelId, setSelectedModelId] = createSignal('')
   const [selectedImportRoutes, setSelectedImportRoutes] = createSignal<string[]>([])
+  const [useTitle, setUseTitle] = createSignal(true)
+  const [useAbstract, setUseAbstract] = createSignal(true)
+  const [useFulltext, setUseFulltext] = createSignal(false)
 
   const modelsQuery = useQuery(() => {
     return {
@@ -294,6 +310,9 @@ const EditProject = (): JSX.Element => {
       setDateFrom(formatDateForInput(details.project.dateFrom))
       setDateTo(formatDateForInput(details.project.dateTo))
       setPrompts(mapPromptsFromResponse(details.prompts))
+      setUseTitle(details.project.useTitle)
+      setUseAbstract(details.project.useAbstract)
+      setUseFulltext(details.project.useFulltext)
       if (!selectedModelId() && details.model?.id) {
         setSelectedModelId(details.model.id)
       }
@@ -362,6 +381,9 @@ const EditProject = (): JSX.Element => {
         dateTo: endDate,
         modelId: selectedModelId() || undefined,
         importRoutes: selectedImportRoutes(),
+        useTitle: useTitle(),
+        useAbstract: useAbstract(),
+        useFulltext: useFulltext(),
       })
 
     if (response.error || !response.data?.data) {
@@ -621,6 +643,68 @@ const EditProject = (): JSX.Element => {
                       class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
                       disabled={isLocked()}
                     />
+                  </label>
+                </div>
+              </div>
+
+              <div>
+                <p class="block text-sm font-medium mb-2">Article Content Used</p>
+                <div class="space-y-2">
+                  <label
+                    class={`flex items-start gap-3 border rounded-md p-3 cursor-pointer ${
+                      isLocked() ? 'opacity-60' : 'border-input'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      class="mt-1"
+                      checked={useTitle()}
+                      onChange={(event) => {
+                        return setUseTitle(event.currentTarget.checked)
+                      }}
+                      disabled={isLocked()}
+                    />
+                    <div class="flex-1">
+                      <p class="text-sm font-medium text-gray-900">Use Article Title</p>
+                    </div>
+                  </label>
+                  <label
+                    class={`flex items-start gap-3 border rounded-md p-3 cursor-pointer ${
+                      isLocked() ? 'opacity-60' : 'border-input'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      class="mt-1"
+                      checked={useAbstract()}
+                      onChange={(event) => {
+                        return setUseAbstract(event.currentTarget.checked)
+                      }}
+                      disabled={isLocked()}
+                    />
+                    <div class="flex-1">
+                      <p class="text-sm font-medium text-gray-900">Use Article Abstract</p>
+                    </div>
+                  </label>
+                  <label
+                    class={`flex items-start gap-3 border rounded-md p-3 cursor-pointer ${
+                      isLocked() ? 'opacity-60' : 'border-input'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      class="mt-1"
+                      checked={useFulltext()}
+                      onChange={(event) => {
+                        return setUseFulltext(event.currentTarget.checked)
+                      }}
+                      disabled={isLocked()}
+                    />
+                    <div class="flex-1">
+                      <p class="text-sm font-medium text-gray-900">
+                        Use the full text of the Article (less performant)
+                      </p>
+                    </div>
                   </label>
                 </div>
               </div>
