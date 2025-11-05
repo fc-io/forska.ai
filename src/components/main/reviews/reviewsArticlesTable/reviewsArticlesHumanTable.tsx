@@ -26,6 +26,9 @@ const columns: ColumnDef<ArticleWithHumanJudgments, unknown>[] = [
   {
     accessorKey: 'articleTitle',
     header: 'Title',
+    size: 400,
+    minSize: 200,
+    maxSize: 600,
     cell: (info) => {
       return (
         <Link
@@ -41,6 +44,8 @@ const columns: ColumnDef<ArticleWithHumanJudgments, unknown>[] = [
   {
     accessorKey: 'articleCreatedAt',
     header: 'Article Uploaded',
+    size: 120,
+    minSize: 100,
     cell: (info) => {
       const date = info.getValue() as Date | null
       return date ? format(date, 'yyyy-MM-dd') : 'No date'
@@ -49,6 +54,8 @@ const columns: ColumnDef<ArticleWithHumanJudgments, unknown>[] = [
   {
     accessorKey: 'articleUpdatedAt',
     header: 'Article Updated',
+    size: 120,
+    minSize: 100,
     cell: (info) => {
       const date = info.getValue() as Date | null
       return date ? format(date, 'yyyy-MM-dd') : 'No date'
@@ -57,6 +64,8 @@ const columns: ColumnDef<ArticleWithHumanJudgments, unknown>[] = [
   {
     accessorKey: 'articleId',
     header: 'Article ID',
+    size: 120,
+    minSize: 120,
     cell: (info) => {
       const articleId = info.getValue() as string
       return (
@@ -74,6 +83,8 @@ const columns: ColumnDef<ArticleWithHumanJudgments, unknown>[] = [
   {
     accessorKey: 'fullTextPDF',
     header: 'PDF',
+    size: 40,
+    minSize: 40,
     cell: (info) => {
       const pdf = (info.getValue() as string | null) || ''
       const fetched = Boolean((info.row.original as {fullTextFetchedAt?: unknown}).fullTextFetchedAt)
@@ -103,6 +114,8 @@ const columns: ColumnDef<ArticleWithHumanJudgments, unknown>[] = [
   {
     accessorKey: 'judgments',
     header: 'Human Judgments',
+    size: 120,
+    minSize: 120,
     cell: (info) => {
       const judgmentsData = info.getValue() as HumanJudgmentType[]
       return (
@@ -158,7 +171,10 @@ export const ReviewsArticlesHumanTable = (props: ReviewsArticlesHumanTableProps)
                   <For each={headerGroup.headers}>
                     {(header) => {
                       return (
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        <th
+                          class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                          style={{ width: `${header.getSize()}px` }}
+                        >
                           {header.isPlaceholder
                             ? null
                             : flexRender(header.column.columnDef.header, header.getContext())}
@@ -179,7 +195,14 @@ export const ReviewsArticlesHumanTable = (props: ReviewsArticlesHumanTableProps)
                   <For each={row.getVisibleCells()}>
                     {(cell) => {
                       return (
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        <td
+                          class={
+                            cell.column.id === 'articleTitle'
+                              ? 'px-6 py-4 text-sm text-gray-900'
+                              : 'px-6 py-4 whitespace-nowrap text-sm text-gray-900'
+                          }
+                          style={{ width: `${cell.column.getSize()}px` }}
+                        >
                           {flexRender(cell.column.columnDef.cell, cell.getContext())}
                         </td>
                       )
