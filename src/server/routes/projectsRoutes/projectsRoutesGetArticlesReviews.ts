@@ -20,8 +20,12 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
       const toDate = body.to ? new Date(`${body.to}T23:59:59.999Z`) : null
       const searchTitle = typeof body.search === 'string' ? body.search.trim() : ''
 
-      // First get all prompts for this project
-      const projectPrompts = await db.select().from(prompts).where(eq(prompts.projectId, body.projectId))
+      // First get all prompts for this project (ordered)
+      const projectPrompts = await db
+        .select()
+        .from(prompts)
+        .where(eq(prompts.projectId, body.projectId))
+        .orderBy(prompts.order)
 
       if (projectPrompts.length === 0) {
         return {data: [], totalCount: 0, page, limit, totalPages: 0}
@@ -135,9 +139,24 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
         {} as Record<string, typeof allJudgments>,
       )
 
-      // Combine articles with their judgments
+      // Build prompt order map and sort judgments accordingly
+      const promptOrderMap = projectPrompts.reduce(
+        (acc, p, idx) => {
+          const ord = (p.order ?? idx) as number
+          return {...acc, [p.id]: ord}
+        },
+        {} as Record<string, number>,
+      )
+
+      // Combine articles with their judgments sorted by prompt order
       const result = articlesWithJudgments.map(({article}) => {
-        return {...article, judgments: judgmentsByArticle[article.id] || []}
+        const unsorted = judgmentsByArticle[article.id] || []
+        const sorted = [...unsorted].sort((a, b) => {
+          const ao = promptOrderMap[a.promptId] ?? Number.MAX_SAFE_INTEGER
+          const bo = promptOrderMap[b.promptId] ?? Number.MAX_SAFE_INTEGER
+          return ao - bo
+        })
+        return {...article, judgments: sorted}
       })
 
       return {data: result, totalCount, page, limit, totalPages: Math.ceil(totalCount / limit)}
