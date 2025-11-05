@@ -76,15 +76,28 @@ const columns: ColumnDef<ArticleWithHumanJudgments, unknown>[] = [
     header: 'PDF',
     cell: (info) => {
       const pdf = (info.getValue() as string | null) || ''
+      const fetched = Boolean((info.row.original as {fullTextFetchedAt?: unknown}).fullTextFetchedAt)
       return pdf
         ? (
-            <span class="px-1.5 py-0.5 text-xs rounded bg-green-100 text-green-800" title="PDF available">
+            <a
+              href={pdf.startsWith('/') ? pdf : `/${pdf}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              class="px-1.5 py-0.5 text-xs rounded bg-green-100 text-green-800"
+              title="Open PDF"
+            >
               PDF
-            </span>
+            </a>
           )
-        : (
-            <span class="text-gray-400">—</span>
-          )
+        : fetched
+          ? (
+              <span class="px-1.5 py-0.5 text-xs rounded bg-yellow-100 text-yellow-800" title="Fetched, no PDF available">
+                No PDF
+              </span>
+            )
+          : (
+              <span class="text-gray-400">—</span>
+            )
     },
   },
   {
