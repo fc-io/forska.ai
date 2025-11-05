@@ -72,6 +72,22 @@ const columns: ColumnDef<ArticleWithHumanJudgments, unknown>[] = [
     },
   },
   {
+    accessorKey: 'fullTextPDF',
+    header: 'PDF',
+    cell: (info) => {
+      const pdf = (info.getValue() as string | null) || ''
+      return pdf
+        ? (
+            <span class="px-1.5 py-0.5 text-xs rounded bg-green-100 text-green-800" title="PDF available">
+              PDF
+            </span>
+          )
+        : (
+            <span class="text-gray-400">—</span>
+          )
+    },
+  },
+  {
     accessorKey: 'judgments',
     header: 'Human Judgments',
     cell: (info) => {
