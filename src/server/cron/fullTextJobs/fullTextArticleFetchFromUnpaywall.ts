@@ -31,27 +31,47 @@ const storePdfToAssets = async (key: string, response: Response): Promise<string
 export const fullTextArticleFetchFromUnpaywall = async ({
   originalData,
 }: Pick<typeof schema.articles.$inferSelect, 'arxivId' | 'originalData'>) => {
-  console.log('1 run fetchArticleFromUnpaywall')
   if (
     originalData
     && typeof originalData === 'object'
     && 'doi' in originalData
     && typeof originalData.doi === 'string'
   ) {
-    console.log('doi: ', originalData.doi)
+    console.log('Unpaywall doi: ', originalData.doi)
     const doi = originalData.doi
-    const fullTextArticle = await fetch(
-      `https://api.unpaywall.org/v2/${encodeURIComponent(doi)}?email=fredrik.carlsson@ki.se`,
-    )
     const fullTextSource = 'http://unpaywall.org'
     const fullTextOriginalFormat = 'pdf'
-    const json = await fullTextArticle.json()
-    const best = json?.best_oa_location ?? null
-    const pdfUrl: string | null =
-      (best && typeof best === 'object' && typeof best.url_for_pdf === 'string' && best.url_for_pdf) || null
-    const fullTextPDF: string | null = pdfUrl ? await storePdfToAssets(doi, await fetch(pdfUrl)) : null
 
-    return {fullTextSource, fullTextOriginalFormat, fullTextPDF}
+    const apiResponse = await fetch(
+      `https://api.unpaywall.org/v2/${encodeURIComponent(doi)}?email=fredrik.carlsson@ki.se`,
+    )
+    const isJson = (apiResponse.headers.get('content-type') ?? '').toLowerCase().includes('json')
+    const isValidApi = apiResponse.ok && isJson
+    const json: unknown = isValidApi
+      ? await apiResponse.json().catch(() => {
+          return null
+        })
+      : null
+    const best =
+      json && typeof json === 'object' && json !== null && 'best_oa_location' in json
+        ? (json as Record<string, unknown>).best_oa_location
+        : null
+    const bestObj: Record<string, unknown> | null =
+      best && typeof best === 'object' && best !== null ? (best as Record<string, unknown>) : null
+    const pdfCandidate = bestObj && 'url_for_pdf' in bestObj ? bestObj['url_for_pdf'] : null
+    const pdfUrl: string | null = typeof pdfCandidate === 'string' && pdfCandidate.length > 0 ? pdfCandidate : null
+    const fullTextPDF: string | null = pdfUrl
+      ? await fetch(pdfUrl)
+          .then(async (r) => {
+            return await storePdfToAssets(doi, r)
+          })
+          .catch(() => {
+            return null
+          })
+      : null
+    console.log('Unpaywall done')
+
+    return fullTextPDF ? {fullTextSource, fullTextOriginalFormat, fullTextPDF} : null
   }
   return null
 }

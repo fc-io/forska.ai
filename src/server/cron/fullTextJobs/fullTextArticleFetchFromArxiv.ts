@@ -53,14 +53,14 @@ export const fullTextArticleFetchFromArxiv = async ({
   arxivId,
 }: Pick<typeof schema.articles.$inferSelect, 'arxivId' | 'originalData'>) => {
   if (arxivId) {
-    console.log('fullTextArticleFetchFromArxiv:', arxivId)
+    console.log('Arxiv:', arxivId)
     await arxivRateLimit()
     const fullTextArticle = await fetch(`https://arxiv.org/pdf/${cleanArxivId(arxivId)}.pdf`)
     const fullTextSource = 'https://arxiv.org/'
     const fullTextOriginalFormat = 'pdf'
     const fullTextPDF: string | null = await storePdfToAssets(arxivId, fullTextArticle)
-
-    return {fullTextSource, fullTextOriginalFormat, fullTextPDF}
+    console.log('Arxiv done')
+    return fullTextPDF ? {fullTextSource, fullTextOriginalFormat, fullTextPDF} : null
   }
   return null
 }
