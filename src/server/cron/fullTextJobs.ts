@@ -4,6 +4,7 @@ import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 import {Elysia} from 'elysia'
 
 import * as schema from '../../db/schema.ts'
+import {env} from '../utils/env.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {fullTextArticleFetchFromArxiv} from './fullTextJobs/fullTextArticleFetchFromArxiv.ts'
 import {fullTextArticleFetchFromUnpaywall} from './fullTextJobs/fullTextArticleFetchFromUnpaywall.ts'
@@ -33,7 +34,6 @@ const getArticlesWithoutFullText = async (db: PostgresJsDatabase<typeof schema>,
       ) DESC, ${schema.articles.createdAt} DESC`,
     )
     .limit(numberOfArticlesToFetch)
-  console.log('getArticlesWithoutFullText: ', articlesWithoutFullText.length)
 
   return articlesWithoutFullText
 }
@@ -43,7 +43,6 @@ const getFullTextForArticle = async (
 ) => {
   const fetchSources = [fullTextArticleFetchFromUnpaywall, fullTextArticleFetchFromArxiv]
   for (const fetchSource of fetchSources) {
-    console.log('run fetchSource: ', fetchSource.name)
     const article = await fetchSource(articleData)
     if (article !== null) {
       return article
@@ -57,7 +56,6 @@ const storeFullText = async (
   id: (typeof schema.articles.$inferSelect)['id'],
   fullText: NonNullable<Awaited<ReturnType<typeof getFullTextForArticle>>>,
 ) => {
-  console.log('storeFullText start:', id)
   await db
     .update(schema.articles)
     .set({
@@ -69,13 +67,13 @@ const storeFullText = async (
       fullTextFetchedAt: new Date(),
     })
     .where(eq(schema.articles.id, id))
-  console.log('storeFullText done')
 }
 
 const fetchFullTextForArticles = async () => {
+  if (!env.RUN_SERVER_FULL_TEST_FETCHING) return
   const minutesInADay = 24 * 60
   const unpaywallArticlesPerDayLimit = 100_000
-  const numberOfArticlesToFetch = unpaywallArticlesPerDayLimit / minutesInADay
+  const numberOfArticlesToFetch = Math.floor(unpaywallArticlesPerDayLimit / minutesInADay)
   const db = getDatabase()
   const articlesWithoutFullText = await getArticlesWithoutFullText(db, numberOfArticlesToFetch)
   await Promise.all(
@@ -84,8 +82,6 @@ const fetchFullTextForArticles = async () => {
       await storeFullText(db, articleData.id, fullTextData)
     }),
   )
-
-  console.log('fetchFullTextForArticles done')
 }
 
 export const fullTextJobsCron = new Elysia().use(

@@ -52,12 +52,10 @@ const arxivRateLimit = (() => {
 export const fullTextArticleFetchFromArxiv = async ({
   arxivId,
 }: Pick<typeof schema.articles.$inferSelect, 'arxivId' | 'originalData'>) => {
-  console.log('1 run fullTextArticleFetchFromArxiv', arxivId)
   if (arxivId) {
+    console.log('fullTextArticleFetchFromArxiv:', arxivId)
     await arxivRateLimit()
-    console.log('2 fetch new arxivId: ', arxivId)
     const fullTextArticle = await fetch(`https://arxiv.org/pdf/${cleanArxivId(arxivId)}.pdf`)
-    console.log('3 fullTextArticle:', fullTextArticle.status)
     const fullTextSource = 'https://arxiv.org/'
     const fullTextOriginalFormat = 'pdf'
     const fullTextPDF: string | null = await storePdfToAssets(arxivId, fullTextArticle)

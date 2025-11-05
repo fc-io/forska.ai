@@ -43,7 +43,6 @@ export const fullTextArticleFetchFromUnpaywall = async ({
     const fullTextArticle = await fetch(
       `https://api.unpaywall.org/v2/${encodeURIComponent(doi)}?email=fredrik.carlsson@ki.se`,
     )
-    console.log('fullTextArticle: ', fullTextArticle)
     const fullTextSource = 'http://unpaywall.org'
     const fullTextOriginalFormat = 'pdf'
     const json = await fullTextArticle.json()
