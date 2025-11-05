@@ -168,9 +168,22 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
                     return `LLM: ${llmText} • Human(s): ${humanText}`
                   })()
 
+                  const text = (() => {
+                    const hasHuman = Array.isArray(row.humanAnswersByPrompt?.[judgment.promptId])
+                      && (row.humanAnswersByPrompt?.[judgment.promptId] || []).length > 0
+                    if (!hasHuman) return labelFor(judgment.answeredOriginal)
+
+                    const humans = (row.humanAnswersByPrompt?.[judgment.promptId] || [])
+                    const normalizedHumans = humans.map(norm)
+                    const firstDiff = normalizedHumans.find((h) => h !== llmAns)
+                    const humanLetter = labelFor(firstDiff ?? llmAns)
+                    const llmLetter = labelFor(judgment.answeredOriginal)
+                    return `${llmLetter}/${humanLetter}`
+                  })()
+
                   return (
                     <span class={`px-1.5 py-0.5 text-xs rounded ${cls}`} title={tooltip}>
-                      {labelFor(judgment.answeredOriginal)}
+                      {text}
                     </span>
                   )
                 }}
