@@ -120,8 +120,100 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
       {} as Record<string, typeof allLlMJudgments>,
     )
 
+    // Fetch human answers for qualifying humans: users who answered ALL prompts for the project on that article
+    // Strategy: fetch all human rows with non-null answers, then in code select users per article who have
+    // answers for all prompts, and aggregate answers per prompt for those qualifying users.
+    type HumanRow = {
+      articleId: string
+      userId: string
+      promptId: string
+      answer: string | null
+      updatedAt: Date | null
+    }
+
+    const humanRows: HumanRow[] =
+      articleIds.length > 0
+        ? await db
+            .select({
+              articleId: judgmentsHuman.articleId,
+              userId: judgmentsHuman.user,
+              promptId: judgmentsHuman.promptId,
+              answer: judgmentsHuman.answer,
+              updatedAt: judgmentsHuman.updatedAt,
+            })
+            .from(judgmentsHuman)
+            .where(
+              and(
+                inArray(judgmentsHuman.articleId, articleIds),
+                eq(judgmentsHuman.projectId, body.projectId),
+                // Only consider non-null answers when determining qualified humans
+                sql`${judgmentsHuman.answer} IS NOT NULL`,
+              ),
+            )
+        : []
+
+    // Deduplicate by latest updatedAt for (articleId, userId, promptId)
+    const latestByArticleUserPrompt = humanRows.reduce(
+      (acc, row) => {
+        const key = `${row.articleId}::${row.userId}::${row.promptId}`
+        const existing = acc.get(key)
+        if (!existing || ((row.updatedAt?.getTime() || 0) > (existing.updatedAt?.getTime() || 0))) {
+          acc.set(key, row)
+        }
+        return acc
+      },
+      new Map<string, HumanRow>(),
+    )
+
+    // Group rows by (articleId, userId) and retain only users who covered ALL prompts
+    const rowsByArticleUser = new Map<string, Map<string, HumanRow[]>>()
+    for (const row of latestByArticleUserPrompt.values()) {
+      const byUser = rowsByArticleUser.get(row.articleId) || new Map<string, HumanRow[]>()
+      const arr = byUser.get(row.userId) || []
+      arr.push(row)
+      byUser.set(row.userId, arr)
+      rowsByArticleUser.set(row.articleId, byUser)
+    }
+
+    // For each article, collect human answers per prompt from qualifying users
+    const humanAnswersByArticlePrompt: Record<string, Record<string, string[]>> = {}
+    for (const articleId of articleIds) {
+      const byUser = rowsByArticleUser.get(articleId)
+      if (!byUser) continue
+
+      // Users who have answered all prompts (non-null answers) for this project
+      const qualifyingUsers: string[] = []
+      for (const [userId, rows] of byUser.entries()) {
+        const covered = new Set(rows.map((r) => r.promptId))
+        if (covered.size === promptIds.length) {
+          qualifyingUsers.push(userId)
+        }
+      }
+
+      if (qualifyingUsers.length === 0) continue
+
+      // Initialize prompt map
+      const promptMap: Record<string, string[]> = {}
+      for (const pid of promptIds) promptMap[pid] = []
+
+      for (const userId of qualifyingUsers) {
+        const rows = byUser.get(userId) || []
+        for (const r of rows) {
+          if (r.answer !== null && r.answer !== undefined) {
+            promptMap[r.promptId].push(r.answer)
+          }
+        }
+      }
+
+      humanAnswersByArticlePrompt[articleId] = promptMap
+    }
+
     const result = articlesWithBoth.map(({article}) => {
-      return {...article, judgments: judgmentsByArticle[article.id] || []}
+      return {
+        ...article,
+        judgments: judgmentsByArticle[article.id] || [],
+        humanAnswersByPrompt: humanAnswersByArticlePrompt[article.id] || undefined,
+      }
     })
 
     return {data: result, totalCount, page, limit, totalPages: Math.ceil(totalCount / limit)}

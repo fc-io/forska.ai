@@ -15,7 +15,11 @@ declare module '@tanstack/solid-table' {
 
 type JudgmentType = typeof judgments.$inferSelect
 
-type ArticleWithJudgments = Omit<typeof articles.$inferSelect, 'judgments'> & {judgments: Array<JudgmentType>}
+type ArticleWithJudgments = Omit<typeof articles.$inferSelect, 'judgments'> & {
+  judgments: Array<JudgmentType>
+  // Present for "Assessed by Both" view: per-prompt human answers from all qualifying humans
+  humanAnswersByPrompt?: Record<string, string[]>
+}
 
 interface ReviewsArticlesTableProps {
   articles: ArticleWithJudgments[]
@@ -114,10 +118,25 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
   {
     accessorKey: 'judgments',
     header: 'Judgments',
-    size: 120,
-    minSize: 120,
+    size: 160,
+    minSize: 140,
     cell: (info) => {
       const judgmentsData = info.getValue() as JudgmentType[]
+      const row = info.row.original as ArticleWithJudgments
+
+      const norm = (s?: string | null) => {
+        return (s ?? '').toString().trim().toLowerCase()
+      }
+
+      const labelFor = (s?: string | null) => {
+        const n = norm(s)
+        if (!n) return '—'
+        if (n === 'yes') return 'Y'
+        if (n === 'no') return 'N'
+        if (n === 'unsure') return 'U'
+        return n.slice(0, 1).toUpperCase()
+      }
+
       return (
         <div class="flex items-center gap-2">
           <span class="text-sm text-gray-600">{judgmentsData?.length || 0}</span>
@@ -125,14 +144,33 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
             <div class="flex gap-1">
               <For each={judgmentsData.slice(0, 3)}>
                 {(judgment) => {
+                  const llmAns = norm(judgment.answeredOriginal)
+                  const humanAnswers = (row.humanAnswersByPrompt?.[judgment.promptId] ?? []).map(norm)
+
+                  let cls = 'bg-gray-100 text-gray-800'
+                  if (humanAnswers.length > 0 && llmAns) {
+                    const matches = humanAnswers.filter((a) => {
+                      return a === llmAns
+                    }).length
+                    if (matches === humanAnswers.length) {
+                      cls = 'bg-green-100 text-green-800'
+                    } else if (matches > 0) {
+                      cls = 'bg-yellow-100 text-yellow-800'
+                    } else {
+                      cls = 'bg-red-100 text-red-800'
+                    }
+                  }
+
+                  const tooltip = (() => {
+                    const llmText = judgment.answeredOriginal ?? '—'
+                    const humans = row.humanAnswersByPrompt?.[judgment.promptId]
+                    const humanText = humans && humans.length > 0 ? humans.join(', ') : '—'
+                    return `LLM: ${llmText} • Human(s): ${humanText}`
+                  })()
+
                   return (
-                    <span
-                      class={`px-1.5 py-0.5 text-xs rounded ${
-                        judgment.answeredOriginal ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-                      }`}
-                      title={judgment.answeredOriginal ? 'Original' : 'Not Original'}
-                    >
-                      {judgment.answeredOriginal ? 'O' : 'N'}
+                    <span class={`px-1.5 py-0.5 text-xs rounded ${cls}`} title={tooltip}>
+                      {labelFor(judgment.answeredOriginal)}
                     </span>
                   )
                 }}
