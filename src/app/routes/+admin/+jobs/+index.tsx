@@ -50,19 +50,11 @@ const formatNumber = (num: number): string => {
 
 const AdminJobs = () => {
   const jobs = useQuery(() => {
-    return {
-      queryKey: ['judgments-jobs'],
-      queryFn: fetchJudgmentsJobs,
-      refetchInterval: 30000,
-    }
+    return {queryKey: ['judgments-jobs'], queryFn: fetchJudgmentsJobs, refetchInterval: 30000}
   })
 
   const tokenUsage = useQuery(() => {
-    return {
-      queryKey: ['total-token-usage'],
-      queryFn: getTotalTokenUsage,
-      refetchInterval: 30000,
-    }
+    return {queryKey: ['total-token-usage'], queryFn: getTotalTokenUsage, refetchInterval: 30000}
   })
 
   return (
@@ -121,10 +113,28 @@ const AdminJobs = () => {
           </Show>
 
           {/* Stats */}
-          <Show when={jobs.data && jobs.data.length > 0}>
-            <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-              <div class="flex gap-6 text-sm text-gray-600 flex-wrap">
+          <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+            <div class="flex gap-6 text-sm text-gray-600 flex-wrap">
+              <Show when={tokenUsage.data}>
                 <span>
+                  <span class="font-semibold text-purple-600">{formatNumber(tokenUsage.data?.totalTokens ?? 0)}</span>{' '}
+                  total tokens
+                </span>
+                <span>
+                  <span class="font-semibold text-indigo-600">
+                    {formatNumber(tokenUsage.data?.totalPromptTokens ?? 0)}
+                  </span>{' '}
+                  prompt
+                </span>
+                <span>
+                  <span class="font-semibold text-cyan-600">
+                    {formatNumber(tokenUsage.data?.totalCompletionTokens ?? 0)}
+                  </span>{' '}
+                  completion
+                </span>
+              </Show>
+              <Show when={jobs.data && jobs.data.length > 0}>
+                <span class="border-l border-gray-300 pl-6">
                   <span class="font-semibold text-gray-900">{jobs.data?.length ?? 0}</span> total jobs
                 </span>
                 <span>
@@ -151,27 +161,9 @@ const AdminJobs = () => {
                   </span>{' '}
                   failed
                 </span>
-                <Show when={tokenUsage.data}>
-                  <span class="border-l border-gray-300 pl-6">
-                    <span class="font-semibold text-purple-600">{formatNumber(tokenUsage.data?.totalTokens ?? 0)}</span>{' '}
-                    total tokens
-                  </span>
-                  <span>
-                    <span class="font-semibold text-indigo-600">
-                      {formatNumber(tokenUsage.data?.totalPromptTokens ?? 0)}
-                    </span>{' '}
-                    prompt
-                  </span>
-                  <span>
-                    <span class="font-semibold text-cyan-600">
-                      {formatNumber(tokenUsage.data?.totalCompletionTokens ?? 0)}
-                    </span>{' '}
-                    completion
-                  </span>
-                </Show>
-              </div>
+              </Show>
             </div>
-          </Show>
+          </div>
 
           {/* Jobs Table */}
           <Show when={jobs.data && jobs.data.length > 0}>
