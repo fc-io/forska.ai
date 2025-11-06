@@ -57,37 +57,13 @@ services:
     ports:
       - "8000:8000"
 
-  sglang-gateway:
-    build:
-      context: .
-      dockerfile: Dockerfile.sglang-gateway
-    environment:
-      HF_HOME: /cache/hf
-      XDG_CACHE_HOME: /cache/xdg
-    volumes:
-      - ./cache/hf:/cache/hf
-      - ./cache/xdg:/cache/xdg
-    command: >
-      --host 0.0.0.0
-      --port 30000
-      --allow-credentials
-      --max-queue-size 256
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:30000/v1/models >/dev/null"]
-      interval: 20s
-      timeout: 5s
-      retries: 12
-    ports:
-      - "30000:30000"
-
-  sglang-worker:
+  sglang:
     image: lmsysorg/sglang:latest
-    entrypoint: ["python", "-m", "sglang.launch"]
+    entrypoint: ["python", "-m", "sglang.launch_server"]
     environment:
       HF_HOME: /cache/hf
       XDG_CACHE_HOME: /cache/xdg
       SGLANG_CACHE_DIR: /cache/sglang
-      SGLANG_GATEWAY_URL: http://sglang-gateway:30000
       MODEL_PATH: ${MODEL_PATH:-/models/Qwen3-32B-FP8}
       TP_SIZE: ${TP_SIZE:-1}
     volumes:
@@ -97,13 +73,19 @@ services:
       - ./cache/sglang:/cache/sglang
     command: >
       --model-path ${MODEL_PATH:-/models/Qwen3-32B-FP8}
-      --gateway ${SGLANG_GATEWAY_URL:-http://sglang-gateway:30000}
-      --tp-size ${TP_SIZE:-1}
-      --max-batch-size ${MAX_BATCH_SIZE:-32}
-      --cache-dir ${SGLANG_CACHE_DIR:-/cache/sglang}
+      --host 0.0.0.0
+      --port 30000
+      --tensor-parallel-size ${TP_SIZE:-1}
+      --max-running-requests ${MAX_RUNNING_REQUESTS:-32}
+      --download-dir /cache/hf
     gpus: all
-    depends_on:
-      - sglang-gateway
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:30000/v1/models >/dev/null"]
+      interval: 20s
+      timeout: 5s
+      retries: 12
+    ports:
+      - "30000:30000"
 
   api-server:
     build:

@@ -153,21 +153,11 @@ apptainer run --cleanenv --nv \
     --api-key "$VLLM_API_KEY"
 ```
 
-SGLang — Gateway (CPU, HTTP on :30000)
-``` bash
-# Gateway responds to GET /v1/models
-apptainer exec --cleanenv \
-  --env HF_HOME=/hf_cache \
-  --bind $HF_HOME:/hf_cache:rw \
-  $STACK_ROOT/sglang_latest.sif \
-  python -m sglang.gateway --host 0.0.0.0 --port 30000 --allow-credentials --max-queue-size 256
-```
+SGLang Server (GPU, HTTP on :30000)
+**Note:** SGLang v0.5.4+ uses unified `launch_server` (no separate Gateway/Worker processes).
 
-SGLang — Worker (GPU; connects to Gateway)
+**For A100-80G (a100fat) or H200 — use tensor-parallel-size 1:**
 ``` bash
-# Replace HEAD_HOST with the hostname or IP where the gateway runs
-export SGLANG_GATEWAY_URL=http://HEAD_HOST:30000
-
 apptainer exec --cleanenv --nv \
   --env HF_HOME=/hf_cache \
   --bind $HF_HOME:/hf_cache:rw \
@@ -175,17 +165,37 @@ apptainer exec --cleanenv --nv \
   --bind $SGLANG_CACHE_DIR:/sg_cache:rw \
   --bind $STACK_ROOT/models:/models:ro \
   $STACK_ROOT/sglang_latest.sif \
-  python -m sglang.launch \
+  python -m sglang.launch_server \
     --model-path /models/Qwen3-32B-FP8 \
-    --gateway ${SGLANG_GATEWAY_URL} \
-    --tp-size 2 \
-    --max-batch-size 32 \
-    --cache-dir /sg_cache
+    --host 0.0.0.0 --port 30000 \
+    --tensor-parallel-size 1 \
+    --max-running-requests 32 \
+    --download-dir /hf_cache
 ```
+
+**For A100-40G — use tensor-parallel-size 2:**
+``` bash
+apptainer exec --cleanenv --nv \
+  --env HF_HOME=/hf_cache \
+  --bind $HF_HOME:/hf_cache:rw \
+  --env SGLANG_CACHE_DIR=/sg_cache \
+  --bind $SGLANG_CACHE_DIR:/sg_cache:rw \
+  --bind $STACK_ROOT/models:/models:ro \
+  $STACK_ROOT/sglang_latest.sif \
+  python -m sglang.launch_server \
+    --model-path /models/Qwen3-32B-FP8 \
+    --host 0.0.0.0 --port 30000 \
+    --tensor-parallel-size 2 \
+    --max-running-requests 32 \
+    --download-dir /hf_cache
+```
+
 Notes
-- Use one worker per model replica. For A100 40GB, set `--tp-size 2` (2 GPUs per worker) and run one worker per pair of GPUs; for A100-80G/H200, prefer `--tp-size 1`.
-- To constrain GPU visibility per worker, export `CUDA_VISIBLE_DEVICES` before the `apptainer exec` call (e.g., `export CUDA_VISIBLE_DEVICES=0,1`).
-- When running on the same host as the gateway, you can use `SGLANG_GATEWAY_URL=http://localhost:30000`.
+- For A100 40GB: allocate 2 GPUs and use `--tensor-parallel-size 2`
+- For A100-80G/H200: allocate 1 GPU and use `--tensor-parallel-size 1`
+- To constrain GPU visibility, export `CUDA_VISIBLE_DEVICES` before the `apptainer exec` call (e.g., `export CUDA_VISIBLE_DEVICES=0,1`)
+- For multi-node setups, use `--data-parallel-size N`, `--nnodes`, `--node-rank`, `--dist-init-addr`
+- Health check: `curl -sf http://localhost:30000/v1/models`
 
 ### API
 

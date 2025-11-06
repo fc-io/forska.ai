@@ -3,59 +3,53 @@
 Use this checklist to migrate from vLLM to SGLang in small, verifiable steps. Tick each box as you complete it. Ask questions if appropriate.
 
 ## Phase 0 — Decisions & Prereqs
-- [x] Choose SGLang version and topology. Target: Model Gateway with multiple Workers (multi-worker by default).
-  - Gateway: single instance on shared CPU node.
-  - Workers: multi-worker layout registered to the gateway; each worker binds to its dedicated GPU set and serves one model replica.
+- [x] Choose SGLang version and topology. Target: SGLang v0.5.4+ unified server architecture.
+  - **Architecture note:** SGLang v0.5.4 uses `launch_server` (no separate Gateway/Worker processes).
+  - For multi-node: use `--data-parallel-size`, `--nnodes`, `--node-rank`, `--dist-init-addr`.
   - Version alignment: all components pinned to the v0.5.4 release family (see Versions section).
- - [x] Decide worker sizing: our default is A100 40GB = 2 GPUs per worker (one model per worker using 2 GPUs); A100-80G (a100fat) and H200 = 1 GPU per worker. Set concurrency per worker accordingly.
-  - Primary cluster: A100 40GB nodes configured with tensor parallelism 2 (2 GPUs per worker) and max concurrent requests 4 per worker.
-  - Secondary pool (a100fat/H200): single-GPU workers with increased KV cache (40 GB → 60 GB context) and concurrency 6 while keeping batch size equal to A100 policy.
- - [x] General note: for very large GPUs (e.g., B200), revisit whether to run multiple models per worker vs. multiple workers per GPU.
+ - [x] Decide server sizing: our default is A100 40GB = 2 GPUs per server (tensor parallelism 2); A100-80G (a100fat) and H200 = 1 GPU per server.
+  - Primary cluster: A100 40GB nodes configured with `--tensor-parallel-size 2` and `--max-running-requests 32`.
+  - Secondary pool (a100fat/H200): single-GPU servers with `--tensor-parallel-size 1` and `--max-running-requests 32`.
+ - [x] General note: for very large GPUs (e.g., B200), revisit whether to run multiple models per server vs. multiple servers per GPU.
   - Action item recorded: revisit topology when B200-class hardware lands; current inventory does not include >80 GB devices so no immediate change required.
-- [x] Pin Gateway port/path: Gateway listens on HTTP port 30000; health probe is `GET /v1/models`.
-  - External clients on single-host deployments (Apptainer/Slurm head node) use `http://localhost:30000/v1`; Docker Compose services can still reference `http://sglang-gateway:30000/v1` on the internal network.
+- [x] Pin server port/path: SGLang listens on HTTP port 30000; health probe is `GET /v1/models`.
+  - External clients on single-host deployments (Apptainer/Slurm head node) use `http://localhost:30000/v1`; Docker Compose services can reference `http://sglang:30000/v1` on the internal network.
   - Health check definition: `curl -sf http://localhost:30000/v1/models` (optionally with `Authorization` header when API key is enabled; swap host as appropriate).
 - [x] Confirm metrics availability and endpoints (Prometheus or JSON). Note any missing metrics and agree on fallbacks.
-  - Gateway exposes Prometheus metrics at `http://localhost:30000/metrics` (fields: `sglang_gateway_active_requests`, `sglang_gateway_num_workers`, `sglang_gateway_queue_depth`); swap to the service name when running inside Docker networks.
-  - Workers expose Prometheus metrics on `http://<worker-host>:30001/metrics` (default port) including `sglang_worker_generated_tokens_total`, `sglang_worker_prefill_tokens_total`, and per-request latency histograms.
+  - SGLang server exposes Prometheus metrics at `http://localhost:30000/metrics` (fields include request counts, token totals, and latency histograms).
   - Fallback: if token totals are unavailable (observed when streaming-only mode enabled), mark engine as `degraded-metrics` so batch-size cron skips auto-adjust.
  - [x] Prepare environment variables (our app): `LLM_BASE_URL` and cache paths.
   - Application `.env.local`: set `LLM_BASE_URL=http://localhost:30000/v1` and `SGLANG_CACHE_DIR=/var/cache/sglang`.
-  - Workers running on remote nodes override `LLM_BASE_URL` (or `SGLANG_GATEWAY_URL`) in their job env to point at the head node hostname (for example `http://$SLURMD_NODENAME:30000/v1`).
-  - Docker/Slurm nodes share `HF_HOME` and `XDG_CACHE_HOME` volumes to reuse downloads across workers.
-- [x] Prepare Gateway/Worker process config: use SGLang CLI/env (e.g., `--gateway-host`, `--model-path`, `SGLANG_GATEWAY_URL`) — the Gateway does not read `LLM_BASE_URL` (that is app-only).
-  - Gateway command: `sglang.gateway --host 0.0.0.0 --port 30000 --allow-credentials --max-queue-size 256`.
-  - Worker launch template (per model): `python -m sglang.launch --model-path ${MODEL_PATH} --gateway ${SGLANG_GATEWAY_URL} --tp-size ${TP_SIZE} --max-batch-size 32 --cache-dir ${SGLANG_CACHE_DIR}` (default `SGLANG_GATEWAY_URL=http://localhost:30000`).
-  - HPC variant uses `SGLANG_GATEWAY_URL` environment variable for `srun` convenience; Docker compose uses explicit CLI flags.
-- [x] Ensure SGLang Model Gateway responds to `GET /v1/models` on `http://<host>:30000/v1`.
-  - Validation run planned via `curl -sf http://localhost:30000/v1/models`; integrate into compose healthcheck and Slurm readiness probe (swap host for Docker service names or remote workers).
+  - Servers running on remote nodes use `http://<head-node-hostname>:30000/v1` as the base URL.
+  - Docker/Slurm nodes share `HF_HOME` and `XDG_CACHE_HOME` volumes to reuse downloads.
+- [x] Prepare SGLang server config: use `launch_server` CLI (e.g., `--model-path`, `--tensor-parallel-size`, `--max-running-requests`).
+  - Server command: `python -m sglang.launch_server --model-path ${MODEL_PATH} --host 0.0.0.0 --port 30000 --tensor-parallel-size ${TP_SIZE} --max-running-requests 32 --download-dir ${HF_HOME}`.
+  - HPC variant uses environment variables for cache paths; Docker compose uses explicit CLI flags.
+- [x] Ensure SGLang server responds to `GET /v1/models` on `http://<host>:30000/v1`.
+  - Validation run planned via `curl -sf http://localhost:30000/v1/models`; integrate into compose healthcheck and Slurm readiness probe (swap host for Docker service names or remote servers).
 - [x] Schedule a canary window for a single project before full cutover.
   - Canary scope: `literature-review` project using default GPT-4-turbo-compat model replacement.
   - Window: 24 hours post-deploy with monitoring of queue depth, error rate, and token accounting; rollback path retains vLLM compose stanza in branch until canary sign-off.
 
 ## Versions (pinned)
-- [x] SGLang Model Gateway: v0.5.4 (GitHub release tag)
-  - GitHub release artifact `sglang-gateway-v0.5.4-linux-amd64` mirrored to internal registry `registry.internal/sglang/gateway:0.5.4`.
-- [x] sglang (Python package): 0.5.4.post1 (PyPI)
-  - Locked in `requirements-sglang.txt`; Docker image uses `pip install sglang==0.5.4.post1` during build.
-- [x] Use official Docker Hub image for Worker and a custom-built Gateway image that pins the Python package.
-  - Gateway: build from `lmsysorg/sglang:latest` and `pip install sglang==0.5.4.post1` to keep `python -m sglang.gateway` working. See `Dockerfile.sglang-gateway`.
-  - Worker: `lmsysorg/sglang:latest` (we can pin later with a similar custom Dockerfile if needed).
-  - Rationale: Docker Hub does not provide `lmsysorg/sglang:0.5.4` tags; pinning at the Python package level avoids import/entrypoint drift while using the official base image.
-  - Compose runs gateway via `python -m sglang.gateway` and workers via `python -m sglang.launch`.
+- [x] sglang (Python package): 0.5.4.post3+ (from Docker Hub `lmsysorg/sglang:latest`)
+  - Verified via `apptainer exec sglang_latest.sif python -c "import sglang; print(sglang.__version__)"`.
+  - Available modules: `launch_server` (unified server, no separate gateway/worker).
+- [x] Use official Docker Hub image: `lmsysorg/sglang:latest`
+  - Single service architecture using `python -m sglang.launch_server`.
+  - For version pinning, use custom Dockerfile with `pip install sglang==0.5.4.postN` if needed.
+  - Docker Hub does not provide `lmsysorg/sglang:0.5.4` tags; use `:latest` or build custom images with pinned versions.
 
 ## Phase 1 — Bring Up SGLang (Docker) & Smoke Test
-- [x] Add an `sglang-gateway` service to `docker-compose.yml` with shared model/HF caches and port `30000` exposed (Gateway is typically CPU-only).
-- [x] Add an `sglang-worker` service definition that connects to the Gateway and mounts the same model/HF caches. Configure workers to use GPUs.
-- [x] Set `LLM_BASE_URL=http://localhost:30000/v1` in `.env.local` (app env only) and swap to the service name/hostname when running inside Docker networks or remote workers.
+- [x] Add an `sglang` service to `docker-compose.yml` with shared model/HF caches and port `30000` exposed using `launch_server`.
+- [x] Configure `--tensor-parallel-size` based on GPU type (2 for A100 40GB, 1 for A100-80G/H200).
+- [x] Set `LLM_BASE_URL=http://localhost:30000/v1` in `.env.local` (app env only) and swap to the service name/hostname when running inside Docker networks or remote servers.
 
-- [x] Start locally: `docker compose up -d sglang-gateway`.
- - [ ] Scale workers: scale by number of workers (not GPUs). For A100 40GB, each worker uses 2 GPUs; for a100fat/H200, each worker uses 1 GPU.
- - [ ] Verify health: `curl -sf ${LLM_BASE_URL%/}/models` returns models; check `docker compose logs -f sglang-gateway` for readiness.
- - [ ] Verify workers registered with the Gateway: observe Gateway/Worker logs reporting expected worker count.
- - [ ] Verify GPU assignment per worker matches sizing policy (A100 40GB = 2 GPUs per worker; a100fat/H200 = 1) and that workers see the correct CUDA devices.
-- [ ] For heterogeneous GPUs, start per-worker configs appropriate to each GPU class (e.g., A100 with default KV; H200/A100-80G with increased KV/longer context) so the Gateway sees different capacities.
-- [ ] Load test lightly: send concurrent requests to confirm Gateway balances across workers without errors.
+- [x] Start locally: `docker compose up -d sglang`.
+- [ ] Verify health: `curl -sf ${LLM_BASE_URL%/}/models` returns models; check `docker compose logs -f sglang` for readiness.
+- [ ] Verify GPU assignment matches sizing policy (A100 40GB = 2 GPUs; a100fat/H200 = 1) and that server sees the correct CUDA devices.
+- [ ] For multi-node/data-parallel setups, use `--data-parallel-size N` and configure `--nnodes`, `--node-rank`, `--dist-init-addr`.
+- [ ] Load test lightly: send concurrent requests to confirm server handles concurrency without errors.
 - [ ] Keep vLLM services available only during the canary window for rollback; remove promptly after cutover.
 - [ ] Remove vLLM from Docker immediately after SGLang is healthy and cutover completes: delete `vllm` and `vllm-hostnet` services from `docker-compose.yml`, drop `VLLM_*` env vars, and update dependent services to use `LLM_BASE_URL`. Re-run `docker compose up -d` to ensure only SGLang remains.
 
@@ -98,15 +92,15 @@ Use this checklist to migrate from vLLM to SGLang in small, verifiable steps. Ti
 
 ## Phase 6 — Deployment (HPC/Slurm: `forska-alvis.sbatch`)
 - [ ] Remove Ray/vLLM startup blocks.
-- [ ] Add SGLang Model Gateway startup on head node (HTTP port 30000).
-- [ ] Verify network path: workers must reach head node on the Gateway port (TCP worker-nodes → head:30000).
-- [ ] Add SGLang Worker startup per GPU on all nodes:
-  - [ ] Pass Gateway address/port to workers.
-  - [ ] Launch one worker per model/worker via `srun` across nodes. For A100 40GB, configure 2 GPUs per worker; for a100fat/H200, 1 GPU per worker.
-  - [ ] Ensure each worker binds to its GPU set (one or two GPUs as configured; e.g., via CUDA device mapping) and shares HF caches.
-  - [ ] For heterogeneous GPUs, set per-worker KV/cache/context sizes according to GPU memory (e.g., A100 default; larger KV/context on H200/80G).
-- [ ] Keep HF/XDG caches and model paths; drop vLLM-specific flags (distributed backend/tool/reasoning parsers).
-- [ ] Update healthcheck loops and log messages to Gateway endpoints and ports.
+- [ ] Add SGLang server startup using `launch_server` (HTTP port 30000).
+- [ ] For single-node: use `--tensor-parallel-size N` (1 or 2 based on GPU type).
+- [ ] For multi-node: use `--data-parallel-size N`, `--nnodes`, `--node-rank`, `--dist-init-addr`.
+- [ ] Launch via `srun` or `apptainer exec` with appropriate GPU binding:
+  - [ ] For A100 40GB, configure `--tensor-parallel-size 2` with 2 GPUs allocated.
+  - [ ] For a100fat/H200, configure `--tensor-parallel-size 1` with 1 GPU allocated.
+  - [ ] Ensure each server binds to its GPU set via CUDA device mapping and shares HF caches.
+- [ ] Keep HF/XDG caches and model paths; drop vLLM-specific flags.
+- [ ] Update healthcheck loops and log messages to server endpoints and ports.
 - [ ] Submit job; verify logs and readiness within the expected window.
 - [ ] Remove old vLLM batch scripts (e.g., `remote-hf-vllm.sbatch`) from the repo once SGLang jobs are stable.
 

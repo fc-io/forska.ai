@@ -1,13 +1,15 @@
 FROM lmsysorg/sglang:latest
 
-ARG SGLANG_VERSION=0.5.4.post1
+# This Dockerfile is DEPRECATED - SGLang v0.5.4+ uses unified launch_server architecture
+# Use the official lmsysorg/sglang:latest image directly with: python -m sglang.launch_server
+# Kept for reference only
 
-RUN pip install --no-cache-dir "sglang==${SGLANG_VERSION}"
+ARG SGLANG_VERSION=0.5.4.post3
 
 ENV HF_HOME=/cache/hf \
     XDG_CACHE_HOME=/cache/xdg
 
 EXPOSE 30000
 
-# Keep entrypoint aligned with the pinned sglang CLI layout
-ENTRYPOINT ["python", "-m", "sglang.gateway"]
+# Updated for SGLang v0.5.4+ unified server architecture
+ENTRYPOINT ["python", "-m", "sglang.launch_server"]
