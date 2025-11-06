@@ -42,6 +42,10 @@ const loadEnv = (): typeof envShape.infer => {
     // string form to satisfy shape before parsing to boolean via pipe
     ;(merged as Record<string, string>).RUN_SERVER_JUDGING = 'true'
   }
+  // Default to false when not provided (prevents accidental background fetching)
+  if (merged.RUN_SERVER_FULL_TEST_FETCHING == null || merged.RUN_SERVER_FULL_TEST_FETCHING === '') {
+    ;(merged as Record<string, string>).RUN_SERVER_FULL_TEST_FETCHING = 'false'
+  }
   return envShape.assert(merged)
 }
 
