@@ -373,9 +373,6 @@ else
       --host 0.0.0.0 --port "$SGLANG_PORT" \
       --tensor-parallel-size "$TP_SIZE" \
       --data-parallel-size "$DP_SIZE" \
-      --nnodes "$NNODES" \
-      --node-rank 0 \
-      --dist-init-addr "$DIST_ADDR" \
       --max-running-requests "$SGLANG_MAX_RUNNING_REQUESTS" \
       --mem-fraction-static "$SGLANG_MEM_FRACTION" \
       --schedule-policy "$SGLANG_SCHEDULE_POLICY" \
