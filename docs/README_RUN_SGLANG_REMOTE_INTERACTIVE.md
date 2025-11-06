@@ -54,7 +54,6 @@ salloc -A NAISS2025-22-715 -N1 --gres=gpu:A100:2 --time=1:00:00 --no-shell
 Start an interactive shell on the allocated node:
 ```bash
 srun --jobid=<YOUR_JOB_ID> --overlap --pty bash -l
-srun --jobid=5285256 --overlap --pty bash -l
 ```
 
 ## 4) Start the SGLang server
