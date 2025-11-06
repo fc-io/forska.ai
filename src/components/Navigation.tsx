@@ -66,7 +66,7 @@ export const Navigation = (props: NavigationProps) => {
                 Jobs
               </Link>
               <Link to="/admin/llm" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
-                LLM
+                LLM Metrics
               </Link>
               <Link to="/admin/models" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
                 Models
