@@ -66,27 +66,30 @@ const toJSON = (data: unknown): string => {
 // Generic LLM status ingestion targeting the new llm_status table.
 // Initially feeds engine='vllm' using the existing vLLM metrics adapter.
 export const judgmentsJobsCheckLLMStatus = async (db: PostgresJsDatabase<typeof schema>) => {
+  console.log('1. judgmentsJobsCheckLLMStatus')
   const runningJobConfigs = await db
     .select({modelName: schema.models.modelName, baseURL: schema.models.baseURL})
     .from(schema.judgmentsJobs)
     .leftJoin(schema.projects, eq(schema.judgmentsJobs.projectId, schema.projects.id))
     .leftJoin(schema.models, eq(schema.projects.modelId, schema.models.id))
     .where(eq(schema.judgmentsJobs.status, 'running'))
-
+  console.log('1aa', runningJobConfigs.length)
   const validConfigs = runningJobConfigs.filter((r) => {
     return !!r.baseURL
   })
-
+  console.log('1ab', validConfigs.length)
   const baseUrlToModel = new Map<string, string>()
   for (const cfg of validConfigs) {
     const baseURL = String(cfg.baseURL)
     if (!baseUrlToModel.has(baseURL)) baseUrlToModel.set(baseURL, cfg.modelName ?? 'unknown')
   }
-
+  console.log('1ac', baseUrlToModel.keys())
   const uniqueBaseUrls = [...baseUrlToModel.keys()]
   if (uniqueBaseUrls.length === 0) return
+  console.log('1a')
 
   for (const baseURL of uniqueBaseUrls) {
+    console.log('1b')
     const engine = 'sglang' as const
     const instanceId = baseURL
     const modelName = baseUrlToModel.get(baseURL) ?? 'unknown'
@@ -202,7 +205,9 @@ export const judgmentsJobsCheckLLMStatus = async (db: PostgresJsDatabase<typeof 
       perStageReqLatencySeconds: m.perStageReqLatencySeconds ?? null,
       queueTimeSeconds: m.queueTimeSeconds ?? null,
     }
+    console.log('2. inserting llmStatusData')
 
     await db.insert(schema.llmStatus).values(llmStatusData)
+    console.log('3. inserted llmStatusData')
   }
 }
