@@ -7,6 +7,14 @@ import {For, Suspense} from 'solid-js'
 import {apiClient} from '../../../../services/apiClient'
 import {handleApiResponse} from '../../../../services/utils/handleApiResponse'
 
+const decodeAndSanitize = (html: string) => {
+  const textarea = document.createElement('textarea')
+  textarea.innerHTML = html
+  // Convert newlines to <br> tags before sanitizing
+  const withBreaks = textarea.value.replace(/\n/g, '<br>')
+  return DOMPurify.sanitize(withBreaks)
+}
+
 export const HumanAssessment = () => {
   const params = Route.useParams()
   const queryClient = useQueryClient()
@@ -91,14 +99,19 @@ export const HumanAssessment = () => {
               <div class="space-y-3">
                 <div>
                   <div class="text-sm text-gray-500 mb-1">Title</div>
-                  <div class="text-lg font-semibold">{data()?.article.articleTitle}</div>
+                  {/* eslint-disable solid/no-innerhtml */}
+                  <div
+                    class="text-lg font-semibold"
+                    innerHTML={decodeAndSanitize(data()?.article.articleTitle ?? '')}
+                  />
+                  {/* eslint-enable solid/no-innerhtml */}
                 </div>
                 <div>
                   <div class="text-sm text-gray-500 mb-1">Abstract</div>
                   {/* eslint-disable solid/no-innerhtml */}
                   <div
                     class="text-gray-900 leading-relaxed assessment-container"
-                    innerHTML={DOMPurify.sanitize(data()?.article.articleSummary ?? '')}
+                    innerHTML={decodeAndSanitize(data()?.article.articleSummary ?? '')}
                   />
                   {/* eslint-enable solid/no-innerhtml */}
                 </div>
@@ -135,7 +148,9 @@ export const HumanAssessment = () => {
                             return (
                               <div class="border rounded-md p-4">
                                 <div class="font-medium mb-3">
-                                  {prompt?.originalText}
+                                  {/* eslint-disable solid/no-innerhtml */}
+                                  <span innerHTML={decodeAndSanitize(prompt?.originalText ?? '')} />
+                                  {/* eslint-enable solid/no-innerhtml */}
                                   {!promptType.isOptional && <span class="text-red-500 ml-1">*</span>}
                                   {promptType.isOptional && <span class="text-blue-500 ml-1 text-sm">(optional)</span>}
                                 </div>
