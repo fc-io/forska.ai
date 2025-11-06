@@ -46,7 +46,7 @@ Use this checklist to migrate from vLLM to SGLang in small, verifiable steps. Ti
 - [x] Add an `sglang-worker` service definition that connects to the Gateway and mounts the same model/HF caches. Configure workers to use GPUs.
 - [x] Set `LLM_BASE_URL=http://localhost:30000/v1` in `.env.local` (app env only) and swap to the service name/hostname when running inside Docker networks or remote workers.
 
-- [ ] Start locally: `docker compose up -d sglang-gateway`.
+- [x] Start locally: `docker compose up -d sglang-gateway`.
  - [ ] Scale workers: scale by number of workers (not GPUs). For A100 40GB, each worker uses 2 GPUs; for a100fat/H200, each worker uses 1 GPU.
  - [ ] Verify health: `curl -sf ${LLM_BASE_URL%/}/models` returns models; check `docker compose logs -f sglang-gateway` for readiness.
  - [ ] Verify workers registered with the Gateway: observe Gateway/Worker logs reporting expected worker count.
