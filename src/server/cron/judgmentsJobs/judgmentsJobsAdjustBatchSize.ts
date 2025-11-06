@@ -63,11 +63,7 @@ const getLatestCountsFor = async (
   modelName: string,
 ): Promise<{waiting: number; running: number; ts: Date | null}> => {
   const rows = await db
-    .select({
-      waiting: schema.llmStatus.numQueueReqs,
-      running: schema.llmStatus.numRunningReqs,
-      ts: schema.llmStatus.ts,
-    })
+    .select({waiting: schema.llmStatus.numQueueReqs, running: schema.llmStatus.numRunningReqs, ts: schema.llmStatus.ts})
     .from(schema.llmStatus)
     .where(
       and(
@@ -117,16 +113,11 @@ const distribute = (total: number, n: number, rotation: number): number[] => {
   }
   const assigned = build(0, [])
   const rotate = (arr: number[], r: number, k = 0, out: number[] = []): number[] => {
-    return k >= arr.length ? out : rotate(arr, r, k + 1, [...out, arr[idx(k)]])
+    return k >= arr.length ? out : rotate(arr, r, k + 1, [...out, arr[idx(k)] ?? 0])
   }
   return rotate(assigned, rotation)
 }
 
-const extractJobIds = (jobs: {id: string}[]): string[] => {
-  return jobs.map((j) => {
-    return j.id
-  })
-}
 
 const sumBatchSizes = (jobs: {sendToLLMBatchSize: number | null}[]): number => {
   return jobs.reduce((acc, j) => {
@@ -150,10 +141,6 @@ const applyBatches = async (
         .where(eq(schema.judgmentsJobs.id, p.id))
     }),
   )
-}
-
-const nextFromCompare = (snapshots: Snapshot[], curTotal: number): number => {
-  return nextFromCompareWithStep(snapshots, curTotal, 1, 1)
 }
 
 const nextFromCompareWithStep = (snapshots: Snapshot[], curTotal: number, upStep: number, downStep: number): number => {
@@ -198,7 +185,7 @@ const decideForWaiting = (
   cur: number,
   lastNonZeroTotal: number | null,
 ): NextDecision | null => {
-  return waitingCount <= 0
+  return waitingCount <= 32
     ? null
     : (() => {
         const firstWait = prevWaiting == null
@@ -307,15 +294,15 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
       const ageMs = lastStatusTs ? now.getTime() - new Date(lastStatusTs).getTime() : Number.POSITIVE_INFINITY
       const staleStatus = !inWarmup && ageMs > 1 * 60 * 1000
 
-      if (waitingCount > 0 || staleStatus) s.hasSeenWaiting = true
+      if (waitingCount > 32 || staleStatus) s.hasSeenWaiting = true
 
-      // Lock a ceiling the first time we observe waiting > 0
-      if (waitingCount > 0 && s.maxCeilingTotal == null) {
+      // Lock a ceiling the first time we observe waiting > 32
+      if (waitingCount > 32 && s.maxCeilingTotal == null) {
         const secondHighest = getSecondHighestBatchSizeInHistory(s.snapshots, cur)
         const ceiling = secondHighest != null ? secondHighest : Math.max(1, cur - 1)
         s.maxCeilingTotal = ceiling
         console.log(
-          `\x1b[31madjust-batch-size: wait>0 -> locking max ceiling to ${secondHighest != null ? `2nd-highest-in-history=${ceiling}` : `(fallback current-1)=${ceiling}`} for instance=${instanceId} model=${modelName} at ${now.toISOString()}\x1b[0m`,
+          `\x1b[31madjust-batch-size: wait>32 -> locking max ceiling to ${secondHighest != null ? `2nd-highest-in-history=${ceiling}` : `(fallback current-1)=${ceiling}`} for instance=${instanceId} model=${modelName} at ${now.toISOString()}\x1b[0m`,
         )
       }
 
