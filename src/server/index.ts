@@ -15,7 +15,6 @@ import {modelsRoutes} from './routes/ModelsRoutes.ts'
 import {projectsRoutes} from './routes/ProjectsRoutes.ts'
 import {tokensRoutes} from './routes/TokensRoutes.ts'
 import {usersRoutes} from './routes/UsersRoutes.ts'
-import {vllmStatusRoutes} from './routes/VllmStatusRoutes.ts'
 import {llmStatusRoutes} from './routes/LlmStatusRoutes.ts'
 import {env} from './utils/env.ts'
 
@@ -44,7 +43,6 @@ const app = new Elysia()
   .use(dataSourcesImportRoutes)
   .use(tokensRoutes)
   .use(usersRoutes)
-  .use(vllmStatusRoutes)
   .use(llmStatusRoutes)
   .listen(env.API_SERVER_PORT)
 

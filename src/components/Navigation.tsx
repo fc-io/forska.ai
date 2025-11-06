@@ -65,9 +65,6 @@ export const Navigation = (props: NavigationProps) => {
               <Link to="/admin/jobs" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
                 Jobs
               </Link>
-              <Link to="/admin/vllm" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
-                vLLM
-              </Link>
               <Link to="/admin/llm" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
                 LLM
               </Link>
