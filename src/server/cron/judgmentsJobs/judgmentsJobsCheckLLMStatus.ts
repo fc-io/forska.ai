@@ -2,7 +2,7 @@ import {and, desc, eq} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../db/schema.ts'
-import {getVllmMetrics} from './judgmentsJobsAdjustBatchSize/getVllmMetrics.ts'
+import {getSGLangMetrics} from './judgmentsJobsAdjustBatchSize/getSGLangMetrics.ts'
 
 const clamp = (lo: number, hi: number, v: number): number => {
   return Math.min(hi, Math.max(lo, v))
@@ -50,14 +50,9 @@ const smallQueue = (waiting: number, running: number): boolean => {
   return waiting <= thr
 }
 
-const safetyTriggered = (
-  waiting: number,
-  running: number,
-  gpuCache: number,
-  swapped: number | null | undefined,
-): boolean => {
+const safetyTriggered = (waiting: number, running: number): boolean => {
   const thr = Math.max(1, Math.ceil(0.15 * running))
-  return waiting > 4 * thr || (Number.isFinite(gpuCache) && gpuCache > 0.95) || (swapped ?? 0) > 0
+  return waiting > 4 * thr
 }
 
 const toJSON = (data: unknown): string => {
@@ -92,41 +87,35 @@ export const judgmentsJobsCheckLLMStatus = async (db: PostgresJsDatabase<typeof 
   if (uniqueBaseUrls.length === 0) return
 
   for (const baseURL of uniqueBaseUrls) {
-    const engine = 'vllm' as const // current ingestion path; SGLang engine wiring lands next
+    const engine = 'sglang' as const
     const instanceId = baseURL
     const modelName = baseUrlToModel.get(baseURL) ?? 'unknown'
     const prev = await getLatestStatus(db, engine, instanceId, modelName)
 
-    // Use existing vLLM metrics adapter until SGLang getLlmMetrics is added
-    const {
-      promptTokensTotal,
-      generationTokensTotal,
-      requestSuccessTotal,
-      requestErrorTotal,
-      numPreemptionsTotal,
-      numRequestsWaiting,
-      numRequestsRunning,
-      numRequestsSwapped,
-      gpuCacheUsagePerc,
-    } = await getVllmMetrics(baseURL)
+    const m = await getSGLangMetrics(baseURL)
+    const promptTokensTotal = m.promptTokensTotal
+    const generationTokensTotal = m.generationTokensTotal
+    const numRequestsTotal = m.numRequestsTotal
+    const numQueueReqs = m.numQueueReqs
+    const numRunningReqs = m.numRunningReqs
 
     const {prefill, gen, rps, dtMs} = computeTps(
       prev
         ? {
-            prefill: Number(prev.prefillTokensTotal ?? 0),
-            gen: Number(prev.genTokensTotal ?? 0),
-            success: Number(prev.requestSuccessTotal ?? 0),
+            prefill: Number(prev.promptTokensTotal ?? 0),
+            gen: Number(prev.generationTokensTotal ?? 0),
+            success: Number(prev.numRequestsTotal ?? 0),
             ts: new Date(prev.ts),
           }
         : undefined,
-      {prefill: promptTokensTotal, gen: generationTokensTotal, success: requestSuccessTotal, ts: new Date()},
+      {prefill: promptTokensTotal, gen: generationTokensTotal, success: numRequestsTotal, ts: new Date()},
     )
 
     const alpha = 0.3
     const prefillTps = ema(prev?.prefillTps ?? null, prefill, alpha)
     const genTps = ema(prev?.genTps ?? null, gen, alpha)
 
-    const wasSmall = smallQueue(numRequestsWaiting, numRequestsRunning)
+    const wasSmall = smallQueue(numQueueReqs, numRunningReqs)
 
     const prevTargets = {gen: Number(prev?.targetGenTps ?? 0), prefill: Number(prev?.targetPrefillTps ?? 0)}
     const incGen = Math.max(prevTargets.gen, genTps * 1.08 + 50)
@@ -157,16 +146,11 @@ export const judgmentsJobsCheckLLMStatus = async (db: PostgresJsDatabase<typeof 
     const targetGenFinal = Math.max(targetGenTps, plateauGen)
     const targetPrefillFinal = targetPrefillTps
 
-    const isUnsafe = safetyTriggered(
-      numRequestsWaiting,
-      numRequestsRunning,
-      Number.isFinite(gpuCacheUsagePerc) ? gpuCacheUsagePerc : 0,
-      Number.isFinite(numRequestsSwapped) ? numRequestsSwapped : 0,
-    )
+    const isUnsafe = safetyTriggered(numQueueReqs, numRunningReqs)
     const tGen = isUnsafe ? targetGenFinal * 0.6 : targetGenFinal
     const tPre = isUnsafe ? targetPrefillFinal * 0.6 : targetPrefillFinal
 
-    const inFlight = numRequestsWaiting + numRequestsRunning
+    const inFlight = numQueueReqs + numRunningReqs
     const maxInFlight = clamp(64, 4096, Math.round(Math.max(rps, 1) * 60))
 
     const llmStatusData = {
@@ -177,15 +161,33 @@ export const judgmentsJobsCheckLLMStatus = async (db: PostgresJsDatabase<typeof 
       gpuType: null,
       gpuCount: null,
       pollMs: dtMs || 2000,
-      prefillTokensTotal: promptTokensTotal,
-      genTokensTotal: generationTokensTotal,
-      requestSuccessTotal,
-      requestErrorTotal,
-      preemptionsTotal: numPreemptionsTotal,
-      numRequestsWaiting,
-      numRequestsRunning,
-      gpuCacheUsagePerc,
-      numRequestsSwapped,
+      promptTokensTotal,
+      generationTokensTotal,
+      numRequestsTotal,
+      cachedTokensTotal: m.cachedTokensTotal,
+      numRetractionsCount: m.numRetractionsCount,
+      numQueueReqs,
+      numRunningReqs,
+      numGrammarQueueReqs: m.numGrammarQueueReqs,
+      numRunningReqsOfflineBatch: m.numRunningReqsOfflineBatch,
+      numPrefillPreallocQueueReqs: m.numPrefillPreallocQueueReqs,
+      numPrefillInflightQueueReqs: m.numPrefillInflightQueueReqs,
+      numDecodePreallocQueueReqs: m.numDecodePreallocQueueReqs,
+      numDecodeTransferQueueReqs: m.numDecodeTransferQueueReqs,
+      genThroughput: m.genThroughput,
+      tokenUsage: m.tokenUsage,
+      utilization: m.utilization,
+      cacheHitRate: m.cacheHitRate,
+      specAcceptRate: m.specAcceptRate,
+      specAcceptLength: m.specAcceptLength,
+      isCudaGraph: m.isCudaGraph ?? null,
+      swaTokenUsage: m.swaTokenUsage,
+      mambaUsage: m.mambaUsage,
+      pendingPreallocTokenUsage: m.pendingPreallocTokenUsage,
+      kvTransferSpeedGbS: m.kvTransferSpeedGbS,
+      kvTransferLatencyMs: m.kvTransferLatencyMs,
+      kvTransferBootstrapMs: m.kvTransferBootstrapMs,
+      kvTransferAllocMs: m.kvTransferAllocMs,
       prefillTps,
       genTps,
       rps,
@@ -194,9 +196,11 @@ export const judgmentsJobsCheckLLMStatus = async (db: PostgresJsDatabase<typeof 
       inFlight,
       maxInFlight,
       lastAction: toJSON({bestGen, smallQueue: wasSmall, safety: isUnsafe}),
-      e2eLatency: null,
-      ttftLatency: null,
-      itlLatency: null,
+      timeToFirstTokenSeconds: m.timeToFirstTokenSeconds ?? null,
+      e2eRequestLatencySeconds: m.e2eRequestLatencySeconds ?? null,
+      interTokenLatencySeconds: m.interTokenLatencySeconds ?? null,
+      perStageReqLatencySeconds: m.perStageReqLatencySeconds ?? null,
+      queueTimeSeconds: m.queueTimeSeconds ?? null,
     }
 
     await db.insert(schema.llmStatus).values(llmStatusData)

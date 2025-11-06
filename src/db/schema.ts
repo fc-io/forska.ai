@@ -757,30 +757,59 @@ export const llmStatus = pgTable(
     gpuCount: integer('gpu_count'),
     pollMs: integer('poll_ms').notNull().default(2000),
 
-    prefillTokensTotal: bigint('prefill_tokens_total', {mode: 'number'}).notNull().default(0),
-    genTokensTotal: bigint('gen_tokens_total', {mode: 'number'}).notNull().default(0),
-    requestSuccessTotal: bigint('request_success_total', {mode: 'number'}),
-    requestErrorTotal: bigint('request_error_total', {mode: 'number'}),
-    preemptionsTotal: bigint('preemptions_total', {mode: 'number'}),
+    // SGLang-aligned counters
+    promptTokensTotal: bigint('prompt_tokens_total', {mode: 'number'}).notNull().default(0),
+    generationTokensTotal: bigint('generation_tokens_total', {mode: 'number'}).notNull().default(0),
+    numRequestsTotal: bigint('num_requests_total', {mode: 'number'}),
+    cachedTokensTotal: bigint('cached_tokens_total', {mode: 'number'}),
+    numRetractionsCount: bigint('num_retractions_count', {mode: 'number'}),
 
-    numRequestsWaiting: integer('num_requests_waiting').notNull().default(0),
-    numRequestsRunning: integer('num_requests_running').notNull().default(0),
-    gpuCacheUsagePerc: doublePrecision('gpu_cache_usage_perc'),
-    numRequestsSwapped: integer('num_requests_swapped'),
+    // SGLang-aligned gauges
+    numQueueReqs: integer('num_queue_reqs').notNull().default(0),
+    numRunningReqs: integer('num_running_reqs').notNull().default(0),
+    numGrammarQueueReqs: integer('num_grammar_queue_reqs'),
+    numRunningReqsOfflineBatch: integer('num_running_reqs_offline_batch'),
+    numPrefillPreallocQueueReqs: integer('num_prefill_prealloc_queue_reqs'),
+    numPrefillInflightQueueReqs: integer('num_prefill_inflight_queue_reqs'),
+    numDecodePreallocQueueReqs: integer('num_decode_prealloc_queue_reqs'),
+    numDecodeTransferQueueReqs: integer('num_decode_transfer_queue_reqs'),
 
+    // Throughput and utilization
+    genThroughput: doublePrecision('gen_throughput'),
+    tokenUsage: doublePrecision('token_usage'),
+    utilization: doublePrecision('utilization'),
+    cacheHitRate: doublePrecision('cache_hit_rate'),
+    specAcceptRate: doublePrecision('spec_accept_rate'),
+    specAcceptLength: doublePrecision('spec_accept_length'),
+    isCudaGraph: boolean('is_cuda_graph'),
+    swaTokenUsage: doublePrecision('swa_token_usage'),
+    mambaUsage: doublePrecision('mamba_usage'),
+    pendingPreallocTokenUsage: doublePrecision('pending_prealloc_token_usage'),
+
+    // KV transfer
+    kvTransferSpeedGbS: doublePrecision('kv_transfer_speed_gb_s'),
+    kvTransferLatencyMs: doublePrecision('kv_transfer_latency_ms'),
+    kvTransferBootstrapMs: doublePrecision('kv_transfer_bootstrap_ms'),
+    kvTransferAllocMs: doublePrecision('kv_transfer_alloc_ms'),
+
+    // Derived rates (kept for controller logic)
     prefillTps: doublePrecision('prefill_tps'),
     genTps: doublePrecision('gen_tps'),
     rps: doublePrecision('rps'),
 
+    // Controller state
     targetGenTps: doublePrecision('target_gen_tps'),
     targetPrefillTps: doublePrecision('target_prefill_tps'),
     inFlight: integer('in_flight'),
     maxInFlight: integer('max_in_flight'),
     lastAction: text('last_action'),
 
-    e2eLatency: jsonb('e2e_latency_buckets'),
-    ttftLatency: jsonb('ttft_latency_buckets'),
-    itlLatency: jsonb('itl_latency_buckets'),
+    // Histograms (store raw buckets)
+    timeToFirstTokenSeconds: jsonb('time_to_first_token_seconds'),
+    e2eRequestLatencySeconds: jsonb('e2e_request_latency_seconds'),
+    interTokenLatencySeconds: jsonb('inter_token_latency_seconds'),
+    perStageReqLatencySeconds: jsonb('per_stage_req_latency_seconds'),
+    queueTimeSeconds: jsonb('queue_time_seconds'),
   },
   (table) => {
     return [

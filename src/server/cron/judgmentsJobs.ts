@@ -8,7 +8,7 @@ import {getNumberOfArticlesInReadyQueue} from './judgmentsJobs/getNumberOfArticl
 import {isReadyToGetMoreArticles} from './judgmentsJobs/isReadyToGetMoreArticles.ts'
 import {judgmentsJobsAddToJobsQueue} from './judgmentsJobs/judgmentsJobsAddToJobsQueue.ts'
 import {judgmentsJobsAdjustBatchSize} from './judgmentsJobs/judgmentsJobsAdjustBatchSize.ts'
-import {judgmentsJobsCheckVLLMStatus} from './judgmentsJobs/judgmentsJobsCheckVLLMStatus.ts'
+import {judgmentsJobsCheckLLMStatus} from './judgmentsJobs/judgmentsJobsCheckLLMStatus.ts'
 import {judgmentsJobsCleanupStale} from './judgmentsJobs/judgmentsJobsCleanupStale.ts'
 import {judgmentsJobsGetJobs} from './judgmentsJobs/judgmentsJobsGetJobs.ts'
 import {judgmentsJobsGetNewArticles} from './judgmentsJobs/judgmentsJobsGetNewArticles.ts'
@@ -22,7 +22,7 @@ const LLM_PROCESSING_INTERVAL = '*/9 * * * * *'
 const BATCH_SIZE_WARMUP = '0 * * * * *'
 const BATCH_SIZE_ADJUST = '0 */1 * * * *'
 const BATCH_SIZE_STABLE = '0 */3 * * * *'
-const CHECK_VLLM_STATUS = '*/30 * * * * *'
+const CHECK_LLM_STATUS = '*/30 * * * * *'
 const CLEANUP_STALE_REQUESTS = '0 */5 * * * *'
 const START_DELAY_MS = 1000
 
@@ -72,9 +72,9 @@ const adjustBatchSizeCron = async (phase: string): Promise<void> => {
   await judgmentsJobsAdjustBatchSize(db)
 }
 
-const checkVLLMStatusCron = async (): Promise<void> => {
+const checkLLMStatusCron = async (): Promise<void> => {
   const db = getDatabase()
-  await judgmentsJobsCheckVLLMStatus(db)
+  await judgmentsJobsCheckLLMStatus(db)
 }
 
 const cleanupStaleQueueCron = async (): Promise<void> => {
@@ -134,10 +134,10 @@ export const judgmentsJobsCron = new Elysia()
   )
   .use(
     cron({
-      name: 'judgments-jobs-check-vllm-status',
-      pattern: CHECK_VLLM_STATUS,
+      name: 'judgments-jobs-check-llm-status',
+      pattern: CHECK_LLM_STATUS,
       startAt: new Date(Date.now() + START_DELAY_MS),
-      run: checkVLLMStatusCron,
+      run: checkLLMStatusCron,
     }),
   )
   .use(

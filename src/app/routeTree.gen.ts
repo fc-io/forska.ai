@@ -22,6 +22,7 @@ import { Route as ProjectsIdIndexRouteImport } from './routes/+projects/+$id/+in
 import { Route as AdminVllmIndexRouteImport } from './routes/+admin/+vllm/+index'
 import { Route as AdminUsersIndexRouteImport } from './routes/+admin/+users/+index'
 import { Route as AdminModelsIndexRouteImport } from './routes/+admin/+models/+index'
+import { Route as AdminLlmIndexRouteImport } from './routes/+admin/+llm/+index'
 import { Route as AdminJobsIndexRouteImport } from './routes/+admin/+jobs/+index'
 import { Route as AdminDatasourcesIndexRouteImport } from './routes/+admin/+datasources/+index'
 import { Route as AdminAssessmentsIndexRouteImport } from './routes/+admin/+assessments/+index'
@@ -100,6 +101,11 @@ const AdminUsersIndexRoute = AdminUsersIndexRouteImport.update({
 const AdminModelsIndexRoute = AdminModelsIndexRouteImport.update({
   id: '/admin/models/',
   path: '/admin/models/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminLlmIndexRoute = AdminLlmIndexRouteImport.update({
+  id: '/admin/llm/',
+  path: '/admin/llm/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminJobsIndexRoute = AdminJobsIndexRouteImport.update({
@@ -185,6 +191,7 @@ export interface FileRoutesByFullPath {
   '/admin/assessments': typeof AdminAssessmentsIndexRoute
   '/admin/datasources': typeof AdminDatasourcesIndexRoute
   '/admin/jobs': typeof AdminJobsIndexRoute
+  '/admin/llm': typeof AdminLlmIndexRoute
   '/admin/models': typeof AdminModelsIndexRoute
   '/admin/users': typeof AdminUsersIndexRoute
   '/admin/vllm': typeof AdminVllmIndexRoute
@@ -213,6 +220,7 @@ export interface FileRoutesByTo {
   '/admin/assessments': typeof AdminAssessmentsIndexRoute
   '/admin/datasources': typeof AdminDatasourcesIndexRoute
   '/admin/jobs': typeof AdminJobsIndexRoute
+  '/admin/llm': typeof AdminLlmIndexRoute
   '/admin/models': typeof AdminModelsIndexRoute
   '/admin/users': typeof AdminUsersIndexRoute
   '/admin/vllm': typeof AdminVllmIndexRoute
@@ -242,6 +250,7 @@ export interface FileRoutesById {
   '/admin/assessments/': typeof AdminAssessmentsIndexRoute
   '/admin/datasources/': typeof AdminDatasourcesIndexRoute
   '/admin/jobs/': typeof AdminJobsIndexRoute
+  '/admin/llm/': typeof AdminLlmIndexRoute
   '/admin/models/': typeof AdminModelsIndexRoute
   '/admin/users/': typeof AdminUsersIndexRoute
   '/admin/vllm/': typeof AdminVllmIndexRoute
@@ -272,6 +281,7 @@ export interface FileRouteTypes {
     | '/admin/assessments'
     | '/admin/datasources'
     | '/admin/jobs'
+    | '/admin/llm'
     | '/admin/models'
     | '/admin/users'
     | '/admin/vllm'
@@ -300,6 +310,7 @@ export interface FileRouteTypes {
     | '/admin/assessments'
     | '/admin/datasources'
     | '/admin/jobs'
+    | '/admin/llm'
     | '/admin/models'
     | '/admin/users'
     | '/admin/vllm'
@@ -328,6 +339,7 @@ export interface FileRouteTypes {
     | '/admin/assessments/'
     | '/admin/datasources/'
     | '/admin/jobs/'
+    | '/admin/llm/'
     | '/admin/models/'
     | '/admin/users/'
     | '/admin/vllm/'
@@ -357,6 +369,7 @@ export interface RootRouteChildren {
   AdminAssessmentsIndexRoute: typeof AdminAssessmentsIndexRoute
   AdminDatasourcesIndexRoute: typeof AdminDatasourcesIndexRoute
   AdminJobsIndexRoute: typeof AdminJobsIndexRoute
+  AdminLlmIndexRoute: typeof AdminLlmIndexRoute
   AdminModelsIndexRoute: typeof AdminModelsIndexRoute
   AdminUsersIndexRoute: typeof AdminUsersIndexRoute
   AdminVllmIndexRoute: typeof AdminVllmIndexRoute
@@ -469,6 +482,13 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof AdminModelsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/llm/': {
+      id: '/admin/llm/'
+      path: '/admin/llm'
+      fullPath: '/admin/llm'
+      preLoaderRoute: typeof AdminLlmIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/admin/jobs/': {
       id: '/admin/jobs/'
       path: '/admin/jobs'
@@ -573,6 +593,7 @@ const rootRouteChildren: RootRouteChildren = {
   AdminAssessmentsIndexRoute: AdminAssessmentsIndexRoute,
   AdminDatasourcesIndexRoute: AdminDatasourcesIndexRoute,
   AdminJobsIndexRoute: AdminJobsIndexRoute,
+  AdminLlmIndexRoute: AdminLlmIndexRoute,
   AdminModelsIndexRoute: AdminModelsIndexRoute,
   AdminUsersIndexRoute: AdminUsersIndexRoute,
   AdminVllmIndexRoute: AdminVllmIndexRoute,

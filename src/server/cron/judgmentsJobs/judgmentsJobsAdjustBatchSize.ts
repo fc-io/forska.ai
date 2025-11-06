@@ -64,13 +64,19 @@ const getLatestCountsFor = async (
 ): Promise<{waiting: number; running: number; ts: Date | null}> => {
   const rows = await db
     .select({
-      waiting: schema.vllmStatus.numRequestsWaiting,
-      running: schema.vllmStatus.numRequestsRunning,
-      ts: schema.vllmStatus.ts,
+      waiting: schema.llmStatus.numQueueReqs,
+      running: schema.llmStatus.numRunningReqs,
+      ts: schema.llmStatus.ts,
     })
-    .from(schema.vllmStatus)
-    .where(and(eq(schema.vllmStatus.instanceId, instanceId), eq(schema.vllmStatus.modelName, modelName)))
-    .orderBy(desc(schema.vllmStatus.ts))
+    .from(schema.llmStatus)
+    .where(
+      and(
+        eq(schema.llmStatus.engine, 'sglang'),
+        eq(schema.llmStatus.instanceId, instanceId),
+        eq(schema.llmStatus.modelName, modelName),
+      ),
+    )
+    .orderBy(desc(schema.llmStatus.ts))
     .limit(1)
 
   return {

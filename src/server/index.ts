@@ -16,6 +16,7 @@ import {projectsRoutes} from './routes/ProjectsRoutes.ts'
 import {tokensRoutes} from './routes/TokensRoutes.ts'
 import {usersRoutes} from './routes/UsersRoutes.ts'
 import {vllmStatusRoutes} from './routes/VllmStatusRoutes.ts'
+import {llmStatusRoutes} from './routes/LlmStatusRoutes.ts'
 import {env} from './utils/env.ts'
 
 const allowedOrigins = [`http://localhost:${env.VITE_PORT}`, `http://localhost:${process.env.PROD_SERVER ?? 8080}`]
@@ -44,6 +45,7 @@ const app = new Elysia()
   .use(tokensRoutes)
   .use(usersRoutes)
   .use(vllmStatusRoutes)
+  .use(llmStatusRoutes)
   .listen(env.API_SERVER_PORT)
 
 console.log(`🦊 Elysia is running at ${app.server?.hostname}:${app.server?.port}`)

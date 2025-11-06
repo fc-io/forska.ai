@@ -64,6 +64,13 @@
       "when": 1762270696675,
       "tag": "0008_rich_mentor",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1762429718541,
+      "tag": "0009_gigantic_squadron_sinister",
+      "breakpoints": true
     }
   ]
 }
