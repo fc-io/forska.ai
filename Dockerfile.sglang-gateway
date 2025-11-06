@@ -1,0 +1,13 @@
+FROM lmsysorg/sglang:latest
+
+ARG SGLANG_VERSION=0.5.4.post1
+
+RUN pip install --no-cache-dir "sglang==${SGLANG_VERSION}"
+
+ENV HF_HOME=/cache/hf \
+    XDG_CACHE_HOME=/cache/xdg
+
+EXPOSE 30000
+
+# Keep entrypoint aligned with the pinned sglang CLI layout
+ENTRYPOINT ["python", "-m", "sglang.gateway"]
