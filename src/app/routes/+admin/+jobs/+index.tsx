@@ -4,7 +4,12 @@ import {formatDate, formatDistanceToNow} from 'date-fns'
 import {For, Show, Suspense} from 'solid-js'
 
 import {TokenUsageTimeline} from '../../../../components/TokenUsageTimeline'
-import {fetchJudgmentsJobs, pauseJudgmentsJob, startJudgmentsJob} from '../../../../services/judgmentsJobsService'
+import {
+  fetchJudgmentsJobs,
+  getTotalTokenUsage,
+  pauseJudgmentsJob,
+  startJudgmentsJob,
+} from '../../../../services/judgmentsJobsService'
 
 const getStatusColor = (status: string | null) => {
   switch (status) {
@@ -39,12 +44,24 @@ const formatStatus = (status: string | null) => {
     .join(' ')
 }
 
+const formatNumber = (num: number): string => {
+  return num.toLocaleString('en-US')
+}
+
 const AdminJobs = () => {
   const jobs = useQuery(() => {
     return {
       queryKey: ['judgments-jobs'],
       queryFn: fetchJudgmentsJobs,
-      refetchInterval: 30000, // Refresh every 30 seconds
+      refetchInterval: 30000,
+    }
+  })
+
+  const tokenUsage = useQuery(() => {
+    return {
+      queryKey: ['total-token-usage'],
+      queryFn: getTotalTokenUsage,
+      refetchInterval: 30000,
     }
   })
 
@@ -106,7 +123,7 @@ const AdminJobs = () => {
           {/* Stats */}
           <Show when={jobs.data && jobs.data.length > 0}>
             <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-              <div class="flex gap-6 text-sm text-gray-600">
+              <div class="flex gap-6 text-sm text-gray-600 flex-wrap">
                 <span>
                   <span class="font-semibold text-gray-900">{jobs.data?.length ?? 0}</span> total jobs
                 </span>
@@ -134,6 +151,24 @@ const AdminJobs = () => {
                   </span>{' '}
                   failed
                 </span>
+                <Show when={tokenUsage.data}>
+                  <span class="border-l border-gray-300 pl-6">
+                    <span class="font-semibold text-purple-600">{formatNumber(tokenUsage.data?.totalTokens ?? 0)}</span>{' '}
+                    total tokens
+                  </span>
+                  <span>
+                    <span class="font-semibold text-indigo-600">
+                      {formatNumber(tokenUsage.data?.totalPromptTokens ?? 0)}
+                    </span>{' '}
+                    prompt
+                  </span>
+                  <span>
+                    <span class="font-semibold text-cyan-600">
+                      {formatNumber(tokenUsage.data?.totalCompletionTokens ?? 0)}
+                    </span>{' '}
+                    completion
+                  </span>
+                </Show>
               </div>
             </div>
           </Show>

@@ -404,6 +404,26 @@ export const judgmentsJobsRoutes = new Elysia()
 
     return {data: jobs, error: null}
   })
+  .get('/api/judgmentsjobs-total-token-usage', async () => {
+    const db = getDatabase()
+
+    const [totalUsage] = await db
+      .select({
+        totalTokens: sql<number>`COALESCE(SUM(total_tokens), 0)::int`,
+        totalPromptTokens: sql<number>`COALESCE(SUM(total_prompt_tokens), 0)::int`,
+        totalCompletionTokens: sql<number>`COALESCE(SUM(total_completion_tokens), 0)::int`,
+      })
+      .from(tokenUse)
+
+    return {
+      data: {
+        totalTokens: totalUsage?.totalTokens || 0,
+        totalPromptTokens: totalUsage?.totalPromptTokens || 0,
+        totalCompletionTokens: totalUsage?.totalCompletionTokens || 0,
+      },
+      error: null,
+    }
+  })
   .patch(
     '/api/judgmentsjobs/:id',
     async ({params, body}) => {

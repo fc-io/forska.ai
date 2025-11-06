@@ -66,3 +66,9 @@ export const getJudgmentsJobUnassessedArticles = async (jobId: string) => {
   const result = handleApiResponse(response, 'Failed to fetch unassessed articles for job')
   return result?.data ?? []
 }
+
+export const getTotalTokenUsage = async () => {
+  const response = await apiClient.api['judgmentsjobs-total-token-usage'].get()
+  const result = handleApiResponse(response, 'Failed to fetch total token usage')
+  return result?.data ?? {totalTokens: 0, totalPromptTokens: 0, totalCompletionTokens: 0}
+}
