@@ -278,7 +278,7 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
       const lastTotal = s.lastTotal ?? (currentTotalFromDb > 0 ? currentTotalFromDb : null)
 
       const isFirstRun = !prevTimestamp
-      const inWarmup = !isFirstRun && (lastTotal ?? 0) < warmup.max
+      const inWarmup = isFirstRun || (lastTotal ?? 0) < warmup.max
 
       const tokens = prevTimestamp ? await sumTokensSince(db, jobIds, prevTimestamp, now) : 0
       const prevSnap =
