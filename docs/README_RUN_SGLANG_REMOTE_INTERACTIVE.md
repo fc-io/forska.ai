@@ -43,7 +43,7 @@ Examples (adjust to your cluster's options):
 
 **For A100-80G (a100fat) or H200 — use 1 GPU:**
 ```bash
-salloc -A NAISS2025-22-715 -N1 --gres=gpu:A100fat:1 --time=1:00:00 --no-shell
+salloc -A NAISS2025-22-715 -N1 --gres=gpu:A100fat:1 --time=7:00:00 --no-shell
 ```
 
 **For A100-40G — use 2 GPUs:**
@@ -54,6 +54,7 @@ salloc -A NAISS2025-22-715 -N1 --gres=gpu:A100:2 --time=1:00:00 --no-shell
 Start an interactive shell on the allocated node:
 ```bash
 srun --jobid=<YOUR_JOB_ID> --overlap --pty bash -l
+srun --jobid=5285256 --overlap --pty bash -l
 ```
 
 ## 4) Start the SGLang server
