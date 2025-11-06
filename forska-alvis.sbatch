@@ -3,10 +3,7 @@
 #SBATCH -A NAISS2025-22-715 -p alvis
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-# Single node; one task
 #SBATCH --ntasks-per-node=1
-# Request 4 A100 GPUs on the node
-# Adjust for your cluster if it uses --gres instead
 #SBATCH --gpus-per-node=A100fat:2
 #SBATCH --time=08:00:00
 #SBATCH -o %x-%j.log
@@ -362,6 +359,8 @@ SGLANG_WORKER
     bash -lc "$SGLANG_WORKER_SCRIPT" &
   SGLANG_SRUN_PID=$!
 else
+  # Single-node launch. If more than one GPU is allocated and TP=1,
+  # run multiple data-parallel replicas so all GPUs are utilized.
   echo "[forska] starting SGLang on single node (tp=$TP_SIZE, dp=$DP_SIZE)"
   apptainer exec --cleanenv --nv \
     --env HF_HOME=/hf_cache \
@@ -373,6 +372,10 @@ else
       --model-path "$SGLANG_MODEL" \
       --host 0.0.0.0 --port "$SGLANG_PORT" \
       --tensor-parallel-size "$TP_SIZE" \
+      --data-parallel-size "$DP_SIZE" \
+      --nnodes "$NNODES" \
+      --node-rank 0 \
+      --dist-init-addr "$DIST_ADDR" \
       --max-running-requests "$SGLANG_MAX_RUNNING_REQUESTS" \
       --mem-fraction-static "$SGLANG_MEM_FRACTION" \
       --schedule-policy "$SGLANG_SCHEDULE_POLICY" \
