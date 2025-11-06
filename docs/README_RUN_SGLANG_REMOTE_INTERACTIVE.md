@@ -1,16 +1,12 @@
 # Run SGLang (Gateway + Worker) — HPC Interactive
 
-This guide shows how to run the SGLang Model Gateway and a single Worker in an interactive session on an HPC cluster using Apptainer. It does not start the rest of the app or the API.
+This guide shows how to run the SGLang Model Gateway and a single Worker in an interactive session on an HPC cluster using Apptainer.
 
 Prereqs
 - Apptainer/Singularity available on the HPC node(s)
-- A GPU node allocation (for the Worker). Gateway can run CPU-only
+- A GPU node.
 - Shared cache directories (recommended) on a fast filesystem
 - Hugging Face access (set `HUGGINGFACE_HUB_TOKEN` if the model is gated)
-
-Notes
-- We use the official Docker Hub image `docker.io/lmsysorg/sglang:latest` via Apptainer.
-- Default host networking is used; the Gateway listens on `:30000` and exposes OpenAI‑compatible routes under `/v1`.
 
 ## 1) Prepare shared paths and env
 
@@ -23,8 +19,6 @@ mkdir -p "$STACK_ROOT"/{hf_cache,logs,.cache,.apptainer/cache,tmp}
 export XDG_CACHE_HOME=$STACK_ROOT/.cache
 export HF_HOME=$STACK_ROOT/hf_cache
 export SGLANG_CACHE_DIR=$STACK_ROOT/.cache/sglang
-export APPTAINER_TMPDIR=$STACK_ROOT/tmp
-export APPTAINER_CACHEDIR=$STACK_ROOT/.apptainer/cache
 ```
 
 Optional (for gated models):
@@ -47,14 +41,13 @@ Examples (adjust to your cluster’s options). You need CPUs for the Gateway and
 
 ```bash
 # Example: one node with 2 A100 GPUs for a few hours
-salloc -A <ACCOUNT> -p <PARTITION> \
-  --gpus-per-node=A100:2 --cpus-per-task=16 --mem=120G --time=04:00:00
+salloc -A NAISS2025-22-715 -N1 --gres=gpu:A100fat:1 --time=1:00:00 --no-shell
 
 # Start an interactive shell on the allocated node
-srun --pty bash -l
+srun --jobid=5243821 --overlap --pty bash -l
 ```
 
-Tip: use tmux or two shells. Run the Gateway in one shell and the Worker in another (on the same node for simplest networking).
+Tip: use tmux/zellij or two shells. Run the Gateway in one shell and the Worker in another (on the same node for simplest networking).
 
 ## 4) Start the Gateway (CPU)
 
@@ -63,7 +56,7 @@ Runs on port 30000 and responds to `GET /v1/models`.
 ```bash
 apptainer exec --cleanenv \
   --env HF_HOME=/hf_cache \
-  --bind $HF_HOME:/hf_cache:rw \
+  --bind $STACK_ROOT/hf_cache:/hf_cache:rw \
   "$STACK_ROOT/sglang_latest.sif" \
   python -m sglang.gateway \
     --host 0.0.0.0 --port 30000 \
@@ -84,9 +77,9 @@ export SGLANG_GATEWAY_URL=http://localhost:30000
 
 apptainer exec --cleanenv --nv \
   --env HF_HOME=/hf_cache \
-  --bind $HF_HOME:/hf_cache:rw \
+  --bind $STACK_ROOT/hf_cache:/hf_cache:rw \
   --env SGLANG_CACHE_DIR=/sg_cache \
-  --bind $SGLANG_CACHE_DIR:/sg_cache:rw \
+  --bind $STACK_ROOT/.cache/sglang:/sg_cache:rw \
   "$STACK_ROOT/sglang_latest.sif" \
   python -m sglang.launch \
     --model-path Qwen/Qwen2.5-7B-Instruct \
