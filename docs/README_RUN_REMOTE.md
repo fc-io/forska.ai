@@ -170,6 +170,7 @@ apptainer exec --cleanenv --nv \
     --host 0.0.0.0 --port 30000 \
     --tensor-parallel-size 1 \
     --max-running-requests 32 \
+    --enable-metrics \
     --download-dir /hf_cache
 ```
 
@@ -187,6 +188,7 @@ apptainer exec --cleanenv --nv \
     --host 0.0.0.0 --port 30000 \
     --tensor-parallel-size 2 \
     --max-running-requests 32 \
+    --enable-metrics \
     --download-dir /hf_cache
 ```
 

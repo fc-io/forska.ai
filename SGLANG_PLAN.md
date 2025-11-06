@@ -8,8 +8,9 @@ Use this checklist to migrate from vLLM to SGLang in small, verifiable steps. Ti
   - For multi-node: use `--data-parallel-size`, `--nnodes`, `--node-rank`, `--dist-init-addr`.
   - Version alignment: all components pinned to the v0.5.4 release family (see Versions section).
  - [x] Decide server sizing: our default is A100 40GB = 2 GPUs per server (tensor parallelism 2); A100-80G (a100fat) and H200 = 1 GPU per server.
-  - Primary cluster: A100 40GB nodes configured with `--tensor-parallel-size 2` and `--max-running-requests 32`.
-  - Secondary pool (a100fat/H200): single-GPU servers with `--tensor-parallel-size 1` and `--max-running-requests 32`.
+  - Primary cluster: A100 40GB nodes configured with `--tensor-parallel-size 2`, `--max-running-requests 64`, `--mem-fraction-static 0.92`, `--schedule-policy lpm`.
+  - Secondary pool (a100fat/H200): single-GPU servers with `--tensor-parallel-size 1`, `--max-running-requests 64`, `--mem-fraction-static 0.92`, `--schedule-policy lpm`.
+  - Performance tuning rationale: uniform 2-3K token prompts benefit from higher concurrency and aggressive memory allocation; chunked prefill skipped since prompts are smaller than typical chunk sizes.
  - [x] General note: for very large GPUs (e.g., B200), revisit whether to run multiple models per server vs. multiple servers per GPU.
   - Action item recorded: revisit topology when B200-class hardware lands; current inventory does not include >80 GB devices so no immediate change required.
 - [x] Pin server port/path: SGLang listens on HTTP port 30000; health probe is `GET /v1/models`.
@@ -23,7 +24,7 @@ Use this checklist to migrate from vLLM to SGLang in small, verifiable steps. Ti
   - Servers running on remote nodes use `http://<head-node-hostname>:30000/v1` as the base URL.
   - Docker/Slurm nodes share `HF_HOME` and `XDG_CACHE_HOME` volumes to reuse downloads.
 - [x] Prepare SGLang server config: use `launch_server` CLI (e.g., `--model-path`, `--tensor-parallel-size`, `--max-running-requests`).
-  - Server command: `python -m sglang.launch_server --model-path ${MODEL_PATH} --host 0.0.0.0 --port 30000 --tensor-parallel-size ${TP_SIZE} --max-running-requests 32 --download-dir ${HF_HOME}`.
+  - Server command: `python -m sglang.launch_server --model-path ${MODEL_PATH} --host 0.0.0.0 --port 30000 --tensor-parallel-size ${TP_SIZE} --max-running-requests 64 --mem-fraction-static 0.92 --schedule-policy lpm --enable-metrics --download-dir ${HF_HOME}`.
   - HPC variant uses environment variables for cache paths; Docker compose uses explicit CLI flags.
 - [x] Ensure SGLang server responds to `GET /v1/models` on `http://<host>:30000/v1`.
   - Validation run planned via `curl -sf http://localhost:30000/v1/models`; integrate into compose healthcheck and Slurm readiness probe (swap host for Docker service names or remote servers).

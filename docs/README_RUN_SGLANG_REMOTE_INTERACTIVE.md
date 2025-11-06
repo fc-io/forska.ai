@@ -71,7 +71,10 @@ apptainer exec --cleanenv --nv \
     --model-path Qwen/Qwen3-30B-A3B-Instruct-2507 \
     --host 0.0.0.0 --port 30000 \
     --tensor-parallel-size 1 \
-    --max-running-requests 32 \
+    --max-running-requests 64 \
+    --mem-fraction-static 0.92 \
+    --schedule-policy lpm \
+    --enable-metrics \
     --download-dir /hf_cache
 ```
 
@@ -88,13 +91,18 @@ apptainer exec --cleanenv --nv \
     --model-path Qwen/Qwen3-30B-A3B-Instruct-2507 \
     --host 0.0.0.0 --port 30000 \
     --tensor-parallel-size 2 \
-    --max-running-requests 32 \
+    --max-running-requests 64 \
+    --mem-fraction-static 0.92 \
+    --schedule-policy lpm \
+    --enable-metrics \
     --download-dir /hf_cache
 ```
 
 **Parameters explained:**
 - `--tensor-parallel-size`: Number of GPUs to split the model across (1 for 80GB GPUs, 2 for 40GB GPUs)
-- `--max-running-requests`: Maximum concurrent requests (replaces old `--max-batch-size`)
+- `--max-running-requests`: Maximum concurrent requests (64 tuned for uniform 2-3K token prompts)
+- `--mem-fraction-static`: GPU memory fraction for KV cache (0.92 uses ~75GB on A100-80G)
+- `--schedule-policy`: Scheduling algorithm (lpm = longest-prompt-first for better batching)
 - `--download-dir`: Where to cache model weights (must be container path, not host path)
 
 **Notes:**
@@ -137,7 +145,8 @@ Expected: a JSON response with `choices[0].message.content` containing the model
 Stop the server with Ctrl‑C, then `exit` to release the allocation.
 
 ## Quick reference
-- **Server:** `python -m sglang.launch_server --model-path <HF_MODEL_ID> --host 0.0.0.0 --port 30000 --tensor-parallel-size <N>`
+- **Server:** `python -m sglang.launch_server --model-path <HF_MODEL_ID> --host 0.0.0.0 --port 30000 --tensor-parallel-size <N> --max-running-requests 64 --mem-fraction-static 0.92 --schedule-policy lpm --enable-metrics`
 - **Health:** `curl -sf http://localhost:30000/v1/models`
 - **A100-80G/H200:** Use `--tensor-parallel-size 1` with 1 GPU
 - **A100-40G:** Use `--tensor-parallel-size 2` with 2 GPUs
+- **Performance tuning:** Increase `--max-running-requests` for more concurrency; adjust `--mem-fraction-static` (0.85-0.95) based on memory headroom

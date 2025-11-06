@@ -77,6 +77,7 @@ services:
       --port 30000
       --tensor-parallel-size ${TP_SIZE:-1}
       --max-running-requests ${MAX_RUNNING_REQUESTS:-32}
+      --enable-metrics
       --download-dir /cache/hf
     gpus: all
     healthcheck:
