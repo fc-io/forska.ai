@@ -18,11 +18,9 @@ mkdir -p $STACK_ROOT/{pgdata,models,hf_cache,logs,.cache} && echo $STACK_ROOT
 
 ``` bash
 export STACK_ROOT=/valhalla/projects/ehpc-aif-2025pg01-233/dev
-export VLLM_CACHE_ROOT=/valhalla/projects/ehpc-aif-2025pg01-233/dev/.cache/vllm
-export XDG_CACHE_HOME=$STACK_ROOT/.cache;
-export VLLM_CACHE_ROOT=$XDG_CACHE_HOME/vllm;
-export TORCHINDUCTOR_CACHE_DIR=$VLLM_CACHE_ROOT/torchinductor;
-export TRITON_CACHE_DIR=$VLLM_CACHE_ROOT/triton
+mkdir -p "$STACK_ROOT"/{hf_cache,logs,.cache,.apptainer/cache,tmp}
+
+export XDG_CACHE_HOME=$STACK_ROOT/.cache
 export HF_HOME=$STACK_ROOT/hf_cache
 export SGLANG_CACHE_DIR=$STACK_ROOT/.cache/sglang
 export APPTAINER_TMPDIR=$STACK_ROOT/tmp
@@ -30,6 +28,9 @@ export TMPDIR=$APPTAINER_TMPDIR
 export APPTAINER_CACHEDIR=$STACK_ROOT/.apptainer/cache
 export GHCR_OWNER=fc-io
 export GHCR_USER=fc-io
+
+# Optional for gated models
+export HUGGINGFACE_HUB_TOKEN=xxxxxxxx
 ```
 
 ### Secrets
@@ -76,7 +77,6 @@ Place the `.sif` files under `$STACK_ROOT`.
 ``` bash
 # Public registries (explicit amd64)
 apptainer pull --arch amd64 "$STACK_ROOT/postgres_18.sif" docker://docker.io/library/postgres:18
-apptainer pull --arch amd64 "$STACK_ROOT/vllm_openai_latest.sif" docker://vllm/vllm-openai:latest
 apptainer pull --arch amd64 "$STACK_ROOT/sglang_latest.sif" docker://docker.io/lmsysorg/sglang:latest
 
 # GHCR (login first on remote)
@@ -114,8 +114,7 @@ read -s -p 'Better Auth URL (https://...): ' U; echo; umask 077; printf '%s' "$U
 ```
 
 Notes
-- The VLLM key (`VLLM_API_KEY`) is read from env; you can export it in your shell or pass it with `--env VLLM_API_KEY=...` when starting `vllm`.
-- We'll remove VLLM_API_KEY from env eventually.
+- If the model is gated on Hugging Face, ensure `HUGGINGFACE_HUB_TOKEN` is set in the environment used by Apptainer.
 
 ## 3) Run the SIFs (no registry access required)
 
@@ -134,23 +133,13 @@ apptainer run --cleanenv --writable-tmpfs \
 ```
 
 ```
-# Optional: verify your model path exists
-ls -al "$STACK_ROOT/models/Qwen3-32B-FP8" || true
+# Optional: verify HF cache is writable (and populated after first run)
+ls -al "$HF_HOME" || true
 ```
 
 ```
 # Optional: ping postgres
 curl -i http://127.0.0.1:5432/
-```
-
-VLLM (GPU, HTTP on :8000)
-``` bash
-apptainer run --cleanenv --nv \
-  --bind $STACK_ROOT/models:/models:ro \
-  $STACK_ROOT/vllm-openai_latest.sif \
-  --model /models/Qwen3-32B-FP8 \
-    --host 0.0.0.0 --port 8000 \
-    --api-key "$VLLM_API_KEY"
 ```
 
 SGLang Server (GPU, HTTP on :30000)
@@ -163,13 +152,14 @@ apptainer exec --cleanenv --nv \
   --bind $HF_HOME:/hf_cache:rw \
   --env SGLANG_CACHE_DIR=/sg_cache \
   --bind $SGLANG_CACHE_DIR:/sg_cache:rw \
-  --bind $STACK_ROOT/models:/models:ro \
   $STACK_ROOT/sglang_latest.sif \
   python -m sglang.launch_server \
-    --model-path /models/Qwen3-32B-FP8 \
+    --model-path Qwen/Qwen3-30B-A3B-Instruct-2507 \
     --host 0.0.0.0 --port 30000 \
     --tensor-parallel-size 1 \
-    --max-running-requests 32 \
+    --max-running-requests 64 \
+    --mem-fraction-static 0.92 \
+    --schedule-policy lpm \
     --enable-metrics \
     --download-dir /hf_cache
 ```
@@ -181,13 +171,14 @@ apptainer exec --cleanenv --nv \
   --bind $HF_HOME:/hf_cache:rw \
   --env SGLANG_CACHE_DIR=/sg_cache \
   --bind $SGLANG_CACHE_DIR:/sg_cache:rw \
-  --bind $STACK_ROOT/models:/models:ro \
   $STACK_ROOT/sglang_latest.sif \
   python -m sglang.launch_server \
-    --model-path /models/Qwen3-32B-FP8 \
+    --model-path Qwen/Qwen3-30B-A3B-Instruct-2507 \
     --host 0.0.0.0 --port 30000 \
     --tensor-parallel-size 2 \
-    --max-running-requests 32 \
+    --max-running-requests 64 \
+    --mem-fraction-static 0.92 \
+    --schedule-policy lpm \
     --enable-metrics \
     --download-dir /hf_cache
 ```
@@ -198,6 +189,64 @@ Notes
 - To constrain GPU visibility, export `CUDA_VISIBLE_DEVICES` before the `apptainer exec` call (e.g., `export CUDA_VISIBLE_DEVICES=0,1`)
 - For multi-node setups, use `--data-parallel-size N`, `--nnodes`, `--node-rank`, `--dist-init-addr`
 - Health check: `curl -sf http://localhost:30000/v1/models`
+
+## SGLang via sbatch (forska-alvis.sbatch)
+
+Use the provided `forska-alvis.sbatch` to launch the full stack (Postgres + SGLang + API + App) on Alvis using Apptainer.
+
+Prereqs
+- Place images in `$STACK_ROOT` (see pre-pull steps above):
+  - `postgres_18.sif`, `sglang_latest.sif`, `api_server.sif`, `app_server.sif`
+- Provide secrets in `$STACK_ROOT/.secrets`:
+  - `db_password.txt` and `database_url.txt` (optionally Better Auth secrets)
+
+Defaults and ports
+- Postgres: `:5432`
+- SGLang: `:30000` (OpenAI-compatible at `/v1`)
+- API: `:3001`
+- App: `:8181`
+
+GPU scaling and TP logic
+- A100-40GB → TP=2 (requires 2 GPUs per node)
+- A100-80GB/H200 → TP=1 (1 GPU per node)
+- Multi-node: uses `--nnodes`, `--node-rank`, `--dist-init-addr`; DP is computed as `(nodes × gpus_per_node) / TP`
+
+Submit examples
+
+- Single-node A100-80G (TP=1):
+```bash
+sbatch --nodes=1 --gpus-per-node=A100fat:1 forska-alvis.sbatch
+```
+
+- Single-node A100-40G (TP=2):
+```bash
+sbatch --nodes=1 --gpus-per-node=A100:2 forska-alvis.sbatch
+```
+
+- Multi-node A100-40G (2 nodes × 2 GPUs; TP=2, DP=2):
+```bash
+sbatch --nodes=2 --gpus-per-node=A100:2 forska-alvis.sbatch
+```
+
+The script auto-detects GPU memory with `nvidia-smi` to decide TP=1 vs TP=2. You can override with `--export=ALL,TP_SIZE=<n>,DP_SIZE=<m>` if needed.
+
+Environment variables
+- `STACK_ROOT` path for caches and images.
+- `SGLANG_MODEL` (default: `Qwen/Qwen3-30B-A3B-Instruct-2507`)
+- `SGLANG_PORT` (default: `30000`)
+- `SGLANG_MAX_RUNNING_REQUESTS` (default: `64`)
+- `SGLANG_MEM_FRACTION` (default: `0.92`)
+- `SGLANG_SCHEDULE_POLICY` (default: `lpm`)
+- `GPUS_PER_NODE` (auto from Slurm; override if needed)
+- `VITE_LLM_SERVER_URL` (defaults to `http://localhost:30000/v1` for the API)
+
+After submission
+- Logs: `$STACK_ROOT/logs/<jobid>`
+- Health: `curl -sf http://localhost:30000/v1/models` (when ready prints models)
+- Optional SSH tunnels from your laptop:
+  - SGLang: `ssh -N -L 30000:$(hostname):30000 alvis2`
+  - API: `ssh -N -L 3001:$(hostname):3001 alvis2`
+  - Postgres: `ssh -N -L 8432:$(hostname):5432 alvis2`
 
 ### API
 
@@ -343,4 +392,3 @@ For Slurm batch job examples using Apptainer, see [README_SBATCH.md](./README_SB
     - Start again with your env: `docker compose --env-file .env.local up db`
   - Create the DB manually (alternative): `docker exec -it $(docker ps --filter name=db --format '{{.ID}}') psql -U ${DB_USER:-postgres} -c "CREATE DATABASE ${DB_NAME:-appdb};"`
   - Local: Get the postgres db password from the secret in the running container: `PW=$(ssh alvis2 'ssh alvis3-41 "tr -d \"\\r\\n\" < \"${STACK_ROOT:-.}/.secrets/db_password.txt\""' | python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.stdin.read().strip(), safe=""))')`
-
