@@ -58,8 +58,9 @@ services:
       - "8000:8000"
 
   sglang-gateway:
-    image: lmsysorg/sglang:latest
-    entrypoint: ["python", "-m", "sglang.gateway"]
+    build:
+      context: .
+      dockerfile: Dockerfile.sglang-gateway
     environment:
       HF_HOME: /cache/hf
       XDG_CACHE_HOME: /cache/xdg

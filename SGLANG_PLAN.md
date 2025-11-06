@@ -38,7 +38,10 @@ Use this checklist to migrate from vLLM to SGLang in small, verifiable steps. Ti
   - GitHub release artifact `sglang-gateway-v0.5.4-linux-amd64` mirrored to internal registry `registry.internal/sglang/gateway:0.5.4`.
 - [x] sglang (Python package): 0.5.4.post1 (PyPI)
   - Locked in `requirements-sglang.txt`; Docker image uses `pip install sglang==0.5.4.post1` during build.
-- [x] Use official Docker Hub image for both Gateway and Worker: `lmsysorg/sglang:latest`.
+- [x] Use official Docker Hub image for Worker and a custom-built Gateway image that pins the Python package.
+  - Gateway: build from `lmsysorg/sglang:latest` and `pip install sglang==0.5.4.post1` to keep `python -m sglang.gateway` working. See `Dockerfile.sglang-gateway`.
+  - Worker: `lmsysorg/sglang:latest` (we can pin later with a similar custom Dockerfile if needed).
+  - Rationale: Docker Hub does not provide `lmsysorg/sglang:0.5.4` tags; pinning at the Python package level avoids import/entrypoint drift while using the official base image.
   - Compose runs gateway via `python -m sglang.gateway` and workers via `python -m sglang.launch`.
 
 ## Phase 1 — Bring Up SGLang (Docker) & Smoke Test
