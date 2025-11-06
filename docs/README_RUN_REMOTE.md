@@ -333,17 +333,25 @@ bun db:r:p
 # set ssh alias
 # Pick the uploaded dump name from backups/
 ls -1 ${STACK_ROOT}/backups
-# Restore using an ephemeral Postgres 18 container
+# start postgres in one session
+apptainer run --cleanenv --writable-tmpfs \
+  --env POSTGRES_USER=postgres \
+  --env POSTGRES_PASSWORD_FILE=/run/secrets/db_password \
+  --env POSTGRES_DB=postgres \
+  --bind ${STACK_ROOT:-.}/pgdata:/var/lib/postgresql \
+  --bind ${STACK_ROOT:-.}/.secrets/db_password.txt:/run/secrets/db_password:ro \
+  ${STACK_ROOT}/postgres_18.sif
+# then restore
 apptainer exec --cleanenv --writable-tmpfs \
   --env POSTGRES_USER=postgres \
   --env POSTGRES_PASSWORD_FILE=/run/secrets/db_password \
-  --env POSTGRES_DB=${DB_NAME:-postgres} \
+  --env POSTGRES_DB=postgres \
   --bind ${STACK_ROOT:-.}/pgdata:/var/lib/postgresql \
   --bind ${STACK_ROOT:-.}/.secrets/db_password.txt:/run/secrets/db_password:ro \
   --bind ${STACK_ROOT:-.}/backups:/backups:ro \
   ${STACK_ROOT}/postgres_18.sif \
-  pg_restore -h localhost -p 5432 -U postgres -d ${DB_NAME:-postgres} \
-  --clean --if-exists --no-owner --no-privileges --single-transaction /backups/dump_local_postgres_20251028_102914.dump
+  pg_restore -h localhost -p 5432 -U postgres -d postgres \
+  --clean --if-exists --no-owner --no-privileges --single-transaction /backups/dump_local_postgres_20251106_145355.dump
 ```
 
 Why this works

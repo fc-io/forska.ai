@@ -7,8 +7,8 @@
 #SBATCH --ntasks-per-node=1
 # Request 4 A100 GPUs on the node
 # Adjust for your cluster if it uses --gres instead
-#SBATCH --gpus-per-node=A100:2
-#SBATCH --time=08:00:00
+#SBATCH --gpus-per-node=A100fat:2
+#SBATCH --time=00:30:00
 #SBATCH -o %x-%j.log
 #SBATCH --export=ALL
 # Send an early warning signal 2 minutes before time limit
@@ -131,7 +131,7 @@ wait_for_postgres() {
   return 1
 }
 
- 
+
 
 # Resolve an IPv4 address for the head node that workers can reach.
 # Avoid IPv6 (Ray may parse "host:port" incorrectly for IPv6 without brackets).
