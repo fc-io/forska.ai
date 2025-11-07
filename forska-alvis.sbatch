@@ -4,7 +4,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --gpus-per-node=A100fat:2
+#SBATCH --gpus-per-node=A100fat:4
 #SBATCH --time=08:00:00
 #SBATCH -o %x-%j.log
 #SBATCH --export=ALL
@@ -188,6 +188,13 @@ if (( DP_SIZE < 1 )); then DP_SIZE=1; fi
 echo "[forska] topology: nodes=$NNODES, gpus/node=$GPUS_PER_NODE, total_gpus=$TOTAL_GPUS"
 echo "[forska] sglang parallelism: tp(per-node)=$TP_SIZE, dp=$DP_SIZE"
 
+# Scale max-running-requests with DP_SIZE (each DP replica can handle requests independently)
+# Base: 64 per DP replica. If user explicitly set SGLANG_MAX_RUNNING_REQUESTS, use that instead.
+if [[ -z "${SGLANG_MAX_RUNNING_REQUESTS:-}" ]]; then
+  SGLANG_MAX_RUNNING_REQUESTS=$(( 64 * DP_SIZE ))
+  echo "[forska] auto-scaling max-running-requests: 64 × DP_SIZE($DP_SIZE) = $SGLANG_MAX_RUNNING_REQUESTS"
+fi
+
 # Propagate CUDA_VISIBLE_DEVICES into containers so NVML sees the Slurm-assigned GPUs
 if [[ -z "${CUDA_VISIBLE_DEVICES:-}" && ${GPUS_PER_NODE:-0} -gt 0 ]]; then
   if [[ ${NNODES:-1} -gt 1 ]]; then
@@ -310,7 +317,7 @@ fi
 ############################################
 
 export SGLANG_MODEL=${SGLANG_MODEL:-Qwen/Qwen3-30B-A3B-Instruct-2507}
-export SGLANG_MAX_RUNNING_REQUESTS=${SGLANG_MAX_RUNNING_REQUESTS:-64}
+export SGLANG_MAX_RUNNING_REQUESTS
 export SGLANG_MEM_FRACTION=${SGLANG_MEM_FRACTION:-0.92}
 export SGLANG_SCHEDULE_POLICY=${SGLANG_SCHEDULE_POLICY:-lpm}
 
