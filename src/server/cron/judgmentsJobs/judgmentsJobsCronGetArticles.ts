@@ -1,4 +1,4 @@
-import {eq, gte, lte, notInArray, sql} from 'drizzle-orm'
+import {eq, gte, lte, sql} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../db/schema.ts'
@@ -12,29 +12,23 @@ export type ArticleProcessingData = {
   jobId?: string
 }
 
-const getPromptIds = (projectPrompts: (typeof schema.prompts.$inferSelect)[]) => {
-  return projectPrompts.map((p) => {
-    return p.id
-  })
-}
-
 const getQueryConditions = ({
-  articlesAlreadyProccessing,
-  promptIds,
+  jobId,
   project,
-  importRouteIds,
 }: {
-  articlesAlreadyProccessing: string[]
-  promptIds: string[]
+  jobId: string
   project: typeof schema.projects.$inferSelect
-  importRouteIds: string[]
 }) => {
   const conditions = []
 
-  // Exclude articles already being processed
-  if (articlesAlreadyProccessing.length > 0) {
-    conditions.push(notInArray(schema.articles.id, articlesAlreadyProccessing))
-  }
+  // Exclude articles already claimed/processed by this job without expanding large NOT IN lists
+  conditions.push(
+    sql`NOT EXISTS (
+      SELECT 1 FROM ${schema.judgmentsJobsArticles} jja
+      WHERE jja."article_id" = ${schema.articles.id}
+      AND jja."job_id" = ${jobId}
+    )`,
+  )
 
   // Filter by project date range (based on articleCreatedAt for consistency)
   if (project.dateFrom) {
@@ -45,17 +39,12 @@ const getQueryConditions = ({
     conditions.push(lte(schema.articles.articleCreatedAt, project.dateTo))
   }
 
-  // Use EXISTS to find articles that haven't been judged by ALL prompts
-  // This checks if there's at least one prompt that doesn't have a judgment for the article
+  // Use EXISTS to find articles that haven't been judged by ALL prompts in this project
+  // This checks if there's at least one prompt in the project that doesn't have a judgment for the article
   conditions.push(
     sql`EXISTS (
       SELECT 1 FROM ${schema.prompts} p
-      WHERE p.id = ANY(ARRAY[${sql.join(
-        promptIds.map((id) => {
-          return sql`${id}::uuid`
-        }),
-        sql`,`,
-      )}])
+      WHERE p."project_id" = ${project.id}
       AND NOT EXISTS (
         SELECT 1 FROM ${schema.judgments} j
         WHERE j."article_id" = ${schema.articles.id}
@@ -64,46 +53,34 @@ const getQueryConditions = ({
     )`,
   )
 
-  if (importRouteIds.length === 0) {
-    conditions.push(sql`FALSE`)
-  } else {
-    const routeIdArray = sql.join(
-      importRouteIds.map((id) => {
-        return sql`${id}::uuid`
-      }),
-      sql`,`,
-    )
-
-    conditions.push(
-      sql`EXISTS (
-        SELECT 1
-        FROM ${schema.articleRouteLink} arl
-        WHERE arl."article_id" = ${schema.articles.id}
-        AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
-      )`,
-    )
-  }
+  // Restrict to articles that belong to any of the project's import routes (via project_route_link)
+  conditions.push(
+    sql`EXISTS (
+      SELECT 1
+      FROM ${schema.articleRouteLink} arl
+      JOIN ${schema.projectRouteLink} prl ON prl."import_route_id" = arl."import_route_id"
+      WHERE arl."article_id" = ${schema.articles.id}
+      AND prl."project_id" = ${project.id}
+    )`,
+  )
 
   return conditions
 }
 
 const getArticleIdsToJudge = async ({
   db,
+  jobId,
   project,
   projectPrompts,
   numberOfArticlesToGet,
-  articlesAlreadyProccessing,
-  importRouteIds,
 }: {
   db: PostgresJsDatabase<typeof schema>
+  jobId: string
   project: typeof schema.projects.$inferSelect
   projectPrompts: (typeof schema.prompts.$inferSelect)[]
   numberOfArticlesToGet: number
-  articlesAlreadyProccessing: string[]
-  importRouteIds: string[]
 }): Promise<ArticleProcessingData> => {
-  const promptIds = getPromptIds(projectPrompts)
-  const queryConditions = getQueryConditions({articlesAlreadyProccessing, promptIds, project, importRouteIds})
+  const queryConditions = getQueryConditions({jobId, project})
 
   const query = db
     .select()
@@ -127,29 +104,21 @@ const getArticleIdsToJudge = async ({
 
 export const judgmentsJobsCronGetArticles = async (
   projectId: string,
+  jobId: string,
   numberOfArticlesToGet: number,
-  articlesAlreadyProccessing: string[] = [],
 ): Promise<ArticleProcessingData> => {
   const db = getDatabase()
 
   const [project] = await db.select().from(schema.projects).where(eq(schema.projects.id, projectId)).limit(1)
   const projectPrompts = await db.select().from(schema.prompts).where(eq(schema.prompts.projectId, projectId))
-  const projectImportRoutes = await db
-    .select({importRouteId: schema.projectRouteLink.importRouteId})
-    .from(schema.projectRouteLink)
-    .where(eq(schema.projectRouteLink.projectId, projectId))
-  const importRouteIds = projectImportRoutes.map((r) => {
-    return r.importRouteId
-  })
 
-  return !project || projectPrompts.length === 0 || importRouteIds.length === 0
+  return !project || projectPrompts.length === 0
     ? {articlesToJudgeIds: [], articlesToJudge: [], projectPrompts: []}
     : await getArticleIdsToJudge({
         db,
+        jobId,
         project,
         projectPrompts,
         numberOfArticlesToGet,
-        articlesAlreadyProccessing,
-        importRouteIds,
       })
 }
