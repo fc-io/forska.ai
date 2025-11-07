@@ -3,7 +3,10 @@ import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../db/schema.ts'
 import {env} from '../../utils/env.ts'
+import {decideForWaiting, type NextDecision, waitingThreshold} from './judgmentsJobsAdjustBatchSize/decideForWaiting.ts'
 import {getGPUMultiplier} from './judgmentsJobsAdjustBatchSize/getGPUMultiplier.ts'
+import {getSecondHighestBatchSizeInHistory} from './judgmentsJobsAdjustBatchSize/getSecondHighestBatchSizeInHistory.ts'
+import {getWarmupTarget} from './judgmentsJobsAdjustBatchSize/getWarmupTarget.ts'
 import {getServerSentStats} from './judgmentsJobsArticlesRepository.ts'
 import {judgmentsJobsGetJobs} from './judgmentsJobsGetJobs.ts'
 
@@ -26,7 +29,6 @@ type InstanceState = {
 const instanceStates = new Map<string, InstanceState>()
 const gpuMultiplier = getGPUMultiplier()
 const warmup = {start: 6 * gpuMultiplier, max: 16 * gpuMultiplier}
-const waitingThreshold = 16 * gpuMultiplier
 
 const clamp = (v: number, lo: number, hi: number): number => {
   return Math.max(lo, Math.min(hi, v))
@@ -156,57 +158,7 @@ const nextFromCompareWithStep = (snapshots: Snapshot[], curTotal: number, upStep
   return larger.totalTokens > smaller.totalTokens ? larger.total + upStep : larger.total - downStep
 }
 
-const getSecondHighestBatchSizeInHistory = (snapshots: Snapshot[], cur: number): number | null => {
-  const totals = [
-    ...snapshots.map((s) => {
-      return s.total
-    }),
-    cur,
-  ].filter((n) => {
-    return Number(n) > 0
-  })
-  const uniqueDesc = Array.from(new Set(totals)).sort((a, b) => {
-    return b - a
-  })
-  return uniqueDesc.length >= 2 ? (uniqueDesc[1] ?? null) : null
-}
-
-const getWarmupTarget = (
-  isFirstRun: boolean,
-  inWarmup: boolean,
-  lastTotal: number | null,
-  warmupStart: number,
-  warmupMax: number,
-): number | undefined => {
-  return isFirstRun ? warmupStart : inWarmup && lastTotal != null ? Math.min(lastTotal + 2, warmupMax) : undefined
-}
-
-type NextDecision = {nextTotal: number; sleeping: boolean; historyNote: string | null}
-
-const decideForWaiting = (
-  waitingCount: number,
-  prevWaiting: number | null,
-  cur: number,
-  lastNonZeroTotal: number | null,
-): NextDecision | null => {
-  return waitingCount <= waitingThreshold
-    ? null
-    : (() => {
-        const firstWait = prevWaiting == null
-        const increasedOrSame = firstWait ? true : waitingCount >= prevWaiting
-
-        const remembered = lastNonZeroTotal ?? (cur > 0 ? cur : null)
-
-        return increasedOrSame
-          ? {nextTotal: 0, sleeping: true, historyNote: `adjust-batch-size: waiting=${waitingCount} -> sleep`}
-          : {
-              nextTotal: Math.max(0, (remembered ?? cur) - 1),
-              sleeping: false,
-              historyNote: `adjust-batch-size: waiting=${waitingCount} < prev=${prevWaiting} -> base-2(${remembered ?? cur}-1)`,
-            }
-      })()
-}
-
+// moved helpers: getSecondHighestBatchSizeInHistory, getWarmupTarget
 const decideNextTotal = (
   cur: number,
   waitingCount: number,
