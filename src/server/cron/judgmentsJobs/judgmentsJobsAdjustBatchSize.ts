@@ -2,6 +2,7 @@ import {and, desc, eq, gte, inArray, lt, sum} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../db/schema.ts'
+import {env} from '../../utils/env.ts'
 import {getServerSentStats} from './judgmentsJobsArticlesRepository.ts'
 import {judgmentsJobsGetJobs} from './judgmentsJobsGetJobs.ts'
 
@@ -379,10 +380,18 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
 
     if (allJobIds.length > 0) await applyBatches(db, allJobIds, allBatches)
 
+    const gpu = {
+      nnodes: Number(env.GPU_NNODES),
+      gpusPerNode: Number(env.GPU_GPUS_PER_NODE),
+      totalGpus: Number(env.GPU_TOTAL_GPUS),
+      tpSize: Number(env.TP_SIZE),
+      dpSize: Number(env.DP_SIZE),
+    }
+
     if (anyPinnedThreePlus) {
-      console.log('\x1b[32madjust-batch-size latest state\x1b[0m', {instances: summary})
+      console.log('\x1b[32madjust-batch-size latest state\x1b[0m', {instances: summary, gpu})
     } else {
-      console.log('adjust-batch-size latest state', {instances: summary})
+      console.log('adjust-batch-size latest state', {instances: summary, gpu})
     }
   }
 }

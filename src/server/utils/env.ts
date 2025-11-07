@@ -13,6 +13,12 @@ const envShape = arktype({
   RUN_SERVER_JUDGING: arktype('"true" | "false" | boolean').pipe((v) => {
     return typeof v === 'string' ? v.toLowerCase() === 'true' : v
   }),
+  // GPU/cluster topology injected by sbatch; numeric fields parse to integers
+  GPU_NNODES: 'string.integer.parse',
+  GPU_GPUS_PER_NODE: 'string.integer.parse',
+  GPU_TOTAL_GPUS: 'string.integer.parse',
+  TP_SIZE: 'string.integer.parse',
+  DP_SIZE: 'string.integer.parse',
 })
 
 const readFromFileVar = (key: string): string | undefined => {
@@ -46,6 +52,13 @@ const loadEnv = (): typeof envShape.infer => {
   if (merged.RUN_SERVER_FULL_TEST_FETCHING == null || merged.RUN_SERVER_FULL_TEST_FETCHING === '') {
     ;(merged as Record<string, string>).RUN_SERVER_FULL_TEST_FETCHING = 'false'
   }
+  // Ensure numeric GPU/env defaults exist to satisfy shape; use 0 when not provided
+  const numericKeys = ['GPU_NNODES', 'GPU_GPUS_PER_NODE', 'GPU_TOTAL_GPUS', 'TP_SIZE', 'DP_SIZE']
+  numericKeys.forEach((k) => {
+    if (merged[k] == null || (merged as Record<string, string>)[k] === '') {
+      ;(merged as Record<string, string>)[k] = '0'
+    }
+  })
   return envShape.assert(merged)
 }
 

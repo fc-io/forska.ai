@@ -4,7 +4,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --gpus-per-node=A100fat:2
+#SBATCH --gpus-per-node=A100:2
 #SBATCH --time=08:00:00
 #SBATCH -o %x-%j.log
 #SBATCH --export=ALL
@@ -429,6 +429,11 @@ apptainer run --cleanenv \
   --env VITE_SERVER_API="http://localhost:${API_SERVER_PORT}" \
   --env API_SERVER_PORT="$API_SERVER_PORT" \
   --env VITE_PORT="$VITE_PORT" \
+  --env GPU_NNODES="$NNODES" \
+  --env GPU_GPUS_PER_NODE="$GPUS_PER_NODE" \
+  --env GPU_TOTAL_GPUS="$TOTAL_GPUS" \
+  --env TP_SIZE="$TP_SIZE" \
+  --env DP_SIZE="$DP_SIZE" \
   "$SIF_API" \
   >"$LOG_DIR/api.log" 2>&1 &
 API_PID=$!
@@ -439,6 +444,11 @@ apptainer run --cleanenv \
   --env SERVER_HOST=localhost \
   --env API_SERVER_PORT="$API_SERVER_PORT" \
   --env PROD_SERVER="$PROD_SERVER" \
+  --env GPU_NNODES="$NNODES" \
+  --env GPU_GPUS_PER_NODE="$GPUS_PER_NODE" \
+  --env GPU_TOTAL_GPUS="$TOTAL_GPUS" \
+  --env TP_SIZE="$TP_SIZE" \
+  --env DP_SIZE="$DP_SIZE" \
   "$SIF_APP" \
   >"$LOG_DIR/app.log" 2>&1 &
 APP_PID=$!

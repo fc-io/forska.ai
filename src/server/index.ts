@@ -46,6 +46,8 @@ const app = new Elysia()
   .use(llmStatusRoutes)
   .listen(env.API_SERVER_PORT)
 
-console.log(`🦊 Elysia is running at ${app.server?.hostname}:${app.server?.port}`)
+console.log(
+  `🦊 Elysia is running at ${app.server?.hostname}:${app.server?.port} (nodes=${env.GPU_NNODES}, gpus/node=${env.GPU_GPUS_PER_NODE}, total_gpus=${env.GPU_TOTAL_GPUS}, tp=${env.TP_SIZE}, dp=${env.DP_SIZE})`,
+)
 
 export type App = typeof app

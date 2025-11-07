@@ -19,6 +19,7 @@ const ProjectDetail = () => {
       queryFn: () => {
         return fetchProjectWithPrompts(projectId)
       },
+      refetchOnWindowFocus: true,
     }
   })
 
