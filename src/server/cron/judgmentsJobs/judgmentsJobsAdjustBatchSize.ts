@@ -3,6 +3,7 @@ import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../db/schema.ts'
 import {env} from '../../utils/env.ts'
+import {getGPUMultiplier} from './judgmentsJobsAdjustBatchSize/getGPUMultiplier.ts'
 import {getServerSentStats} from './judgmentsJobsArticlesRepository.ts'
 import {judgmentsJobsGetJobs} from './judgmentsJobsGetJobs.ts'
 
@@ -23,8 +24,9 @@ type InstanceState = {
 }
 
 const instanceStates = new Map<string, InstanceState>()
-const warmup = {start: 8, max: 12}
-const waitingThreshold = 64
+const gpuMultiplier = getGPUMultiplier()
+const warmup = {start: 6 * gpuMultiplier, max: 16 * gpuMultiplier}
+const waitingThreshold = 16 * gpuMultiplier
 
 const clamp = (v: number, lo: number, hi: number): number => {
   return Math.max(lo, Math.min(hi, v))
@@ -244,8 +246,7 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
     console.log('adjust-batch-size skipped: no running jobs', {ts: toNow().toISOString()})
   } else {
     const now = toNow()
-
-    const MAX_SENT = 1000
+    const MAX_SENT = 250 * gpuMultiplier
     const STALE_MS = 5 * 60 * 1000
     const {sentCount, oldestSentAt} = await getServerSentStats(db, serverJobId)
     const overCap = sentCount >= MAX_SENT
@@ -381,11 +382,11 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
     if (allJobIds.length > 0) await applyBatches(db, allJobIds, allBatches)
 
     const gpu = {
-      nnodes: Number(env.GPU_NNODES),
-      gpusPerNode: Number(env.GPU_GPUS_PER_NODE),
-      totalGpus: Number(env.GPU_TOTAL_GPUS),
-      tpSize: Number(env.TP_SIZE),
-      dpSize: Number(env.DP_SIZE),
+      nnodes: env.GPU_NNODES,
+      gpusPerNode: env.GPU_GPUS_PER_NODE,
+      totalGpus: env.GPU_TOTAL_GPUS,
+      tpSize: env.TP_SIZE,
+      dpSize: env.DP_SIZE,
     }
 
     if (anyPinnedThreePlus) {

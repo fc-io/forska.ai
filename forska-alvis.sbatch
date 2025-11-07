@@ -189,10 +189,10 @@ echo "[forska] topology: nodes=$NNODES, gpus/node=$GPUS_PER_NODE, total_gpus=$TO
 echo "[forska] sglang parallelism: tp(per-node)=$TP_SIZE, dp=$DP_SIZE"
 
 # Scale max-running-requests with DP_SIZE (each DP replica can handle requests independently)
-# Base: 64 per DP replica. If user explicitly set SGLANG_MAX_RUNNING_REQUESTS, use that instead.
+# Base: 32 per DP replica. If user explicitly set SGLANG_MAX_RUNNING_REQUESTS, use that instead.
 if [[ -z "${SGLANG_MAX_RUNNING_REQUESTS:-}" ]]; then
-  SGLANG_MAX_RUNNING_REQUESTS=$(( 64 * DP_SIZE ))
-  echo "[forska] auto-scaling max-running-requests: 64 × DP_SIZE($DP_SIZE) = $SGLANG_MAX_RUNNING_REQUESTS"
+  SGLANG_MAX_RUNNING_REQUESTS=$(( 32 * DP_SIZE ))
+  echo "[forska] auto-scaling max-running-requests: 32 × DP_SIZE($DP_SIZE) = $SGLANG_MAX_RUNNING_REQUESTS"
 fi
 
 # Propagate CUDA_VISIBLE_DEVICES into containers so NVML sees the Slurm-assigned GPUs

@@ -5,8 +5,8 @@ const envShape = arktype({
   DATABASE_URL: 'string',
   BETTER_AUTH_SECRET: 'string',
   BETTER_AUTH_URL: 'string',
-  VITE_PORT: 'string.integer.parse',
-  API_SERVER_PORT: 'string.integer.parse',
+  VITE_PORT: 'number | string.integer.parse',
+  API_SERVER_PORT: 'number | string.integer.parse',
   RUN_SERVER_FULL_TEST_FETCHING: arktype('"true" | "false" | boolean').pipe((v) => {
     return typeof v === 'string' ? v.toLowerCase() === 'true' : v
   }),
@@ -14,11 +14,11 @@ const envShape = arktype({
     return typeof v === 'string' ? v.toLowerCase() === 'true' : v
   }),
   // GPU/cluster topology injected by sbatch; numeric fields parse to integers
-  GPU_NNODES: 'string.integer.parse',
-  GPU_GPUS_PER_NODE: 'string.integer.parse',
-  GPU_TOTAL_GPUS: 'string.integer.parse',
-  TP_SIZE: 'string.integer.parse',
-  DP_SIZE: 'string.integer.parse',
+  GPU_NNODES: 'number | string.integer.parse',
+  GPU_GPUS_PER_NODE: 'number | string.integer.parse',
+  GPU_TOTAL_GPUS: 'number | string.integer.parse',
+  TP_SIZE: 'number | string.integer.parse',
+  DP_SIZE: 'number | string.integer.parse',
 })
 
 const readFromFileVar = (key: string): string | undefined => {
