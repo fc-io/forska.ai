@@ -69,7 +69,7 @@ const adjustBatchSizeCron = async (phase: string): Promise<void> => {
 
   console.log(`~~~adjustBatchSizeCron ${phase} 1.~~~`)
   const db = getDatabase()
-  await judgmentsJobsAdjustBatchSize(db)
+  await judgmentsJobsAdjustBatchSize(db, serverJobId)
 }
 
 const checkLLMStatusCron = async (): Promise<void> => {

@@ -1,4 +1,4 @@
-import {and, eq, inArray} from 'drizzle-orm'
+import {and, eq, inArray, sql} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../db/schema.ts'
@@ -86,4 +86,19 @@ export const getSentArticles = async (
     .select({id: schema.judgmentsJobsArticles.id, articleId: schema.judgmentsJobsArticles.articleId})
     .from(schema.judgmentsJobsArticles)
     .where(and(eq(schema.judgmentsJobsArticles.jobId, jobId), eq(schema.judgmentsJobsArticles.status, 'sent')))
+}
+
+export const getServerSentStats = async (
+  db: PostgresJsDatabase<typeof schema>,
+  serverJobId: string,
+): Promise<{sentCount: number; oldestSentAt: Date | null}> => {
+  const [row] = await db
+    .select({
+      sentCount: sql<number>`COUNT(*)::int`,
+      oldestSentAt: sql<Date>`MIN(${schema.judgmentsJobsArticles.sentAt})`,
+    })
+    .from(schema.judgmentsJobsArticles)
+    .where(and(eq(schema.judgmentsJobsArticles.serverId, serverJobId), eq(schema.judgmentsJobsArticles.status, 'sent')))
+
+  return {sentCount: Number(row?.sentCount ?? 0), oldestSentAt: row?.oldestSentAt ? new Date(row.oldestSentAt) : null}
 }

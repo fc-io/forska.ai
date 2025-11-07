@@ -2,6 +2,7 @@ import {and, desc, eq, gte, inArray, lt, sum} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../db/schema.ts'
+import {getServerSentStats} from './judgmentsJobsArticlesRepository.ts'
 import {judgmentsJobsGetJobs} from './judgmentsJobsGetJobs.ts'
 
 type Snapshot = {start: Date; end: Date; totalTokens: number; total: number}
@@ -22,7 +23,7 @@ type InstanceState = {
 
 const instanceStates = new Map<string, InstanceState>()
 const warmup = {start: 8, max: 12}
-const waitingThreshold = 128
+const waitingThreshold = 64
 
 const clamp = (v: number, lo: number, hi: number): number => {
   return Math.max(lo, Math.min(hi, v))
@@ -212,7 +213,15 @@ const decideNextTotal = (
   lastNonZeroTotal: number | null,
   staleStatus: boolean,
   upStep: number,
+  overCap: boolean,
+  hasStaleSent: boolean,
 ): NextDecision => {
+  if (overCap) {
+    return {nextTotal: 0, sleeping: true, historyNote: 'adjust-batch-size: sent>=1000 -> sleep'}
+  }
+  if (hasStaleSent) {
+    return {nextTotal: 0, sleeping: true, historyNote: 'adjust-batch-size: stale-sent>5m -> sleep'}
+  }
   if (staleStatus) {
     return {nextTotal: 0, sleeping: true, historyNote: 'adjust-batch-size: waiting=stale-status>1m -> sleep'}
   }
@@ -226,7 +235,7 @@ const decideNextTotal = (
   return {nextTotal: nextFromCompareWithStep(snapshots, cur, upStep, 1), sleeping: false, historyNote: null}
 }
 
-export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof schema>) => {
+export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof schema>, serverJobId: string) => {
   const jobs = await judgmentsJobsGetJobs(db)
   const hasJobs = jobs.length > 0
 
@@ -234,6 +243,13 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
     console.log('adjust-batch-size skipped: no running jobs', {ts: toNow().toISOString()})
   } else {
     const now = toNow()
+
+    const MAX_SENT = 1000
+    const STALE_MS = 5 * 60 * 1000
+    const {sentCount, oldestSentAt} = await getServerSentStats(db, serverJobId)
+    const overCap = sentCount >= MAX_SENT
+    const oldestDate = oldestSentAt ? new Date(oldestSentAt) : null
+    const hasStaleSent = oldestDate ? now.getTime() - oldestDate.getTime() > STALE_MS : false
 
     const jobConfigs = await db
       .select({
@@ -316,6 +332,8 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
         s.lastNonZeroTotal,
         staleStatus,
         upStep,
+        overCap,
+        hasStaleSent,
       )
 
       const wasSleeping = s.sleeping
