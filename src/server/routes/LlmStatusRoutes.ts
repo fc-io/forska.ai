@@ -18,7 +18,20 @@ export const llmStatusRoutes = new Elysia()
 
     const db = getDatabase()
     const data = await db
-      .select()
+      .select({
+        ts: llmStatus.ts,
+        instanceId: llmStatus.instanceId,
+        modelName: llmStatus.modelName,
+        engineVersion: llmStatus.engineVersion,
+        prefillTps: llmStatus.prefillTps,
+        genTps: llmStatus.genTps,
+        rps: llmStatus.rps,
+        numQueueReqs: llmStatus.numQueueReqs,
+        numRunningReqs: llmStatus.numRunningReqs,
+        cacheHitRate: llmStatus.cacheHitRate,
+        inFlight: llmStatus.inFlight,
+        maxInFlight: llmStatus.maxInFlight,
+      })
       .from(llmStatus)
       .where(eq(llmStatus.engine, 'sglang'))
       .orderBy(desc(llmStatus.ts))
@@ -26,4 +39,3 @@ export const llmStatusRoutes = new Elysia()
 
     return {data}
   })
-

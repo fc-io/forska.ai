@@ -33,7 +33,6 @@ type LlmStatusRow = {
   cacheHitRate: number | null
   inFlight: number | null
   maxInFlight: number | null
-  lastAction: string | null
 }
 
 const fetchLlmStatus = async (): Promise<LlmStatusRow[]> => {
@@ -54,7 +53,6 @@ const fetchLlmStatus = async (): Promise<LlmStatusRow[]> => {
       cacheHitRate: (row.cacheHitRate as number | null) ?? null,
       inFlight: (row.inFlight as number | null) ?? null,
       maxInFlight: (row.maxInFlight as number | null) ?? null,
-      lastAction: (row.lastAction as string | null) ?? null,
     }
   })
 }
@@ -173,9 +171,7 @@ const AdminLlm = () => {
                     <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Max In-flight
                     </th>
-                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Last Action
-                    </th>
+                    
                   </tr>
                 </thead>
                 <tbody class="bg-white divide-y divide-gray-200">
@@ -202,7 +198,6 @@ const AdminLlm = () => {
                           </td>
                           <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{row.inFlight ?? 0}</td>
                           <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{row.maxInFlight ?? 0}</td>
-                          <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{row.lastAction ?? '—'}</td>
                         </tr>
                       )
                     }}
