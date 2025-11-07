@@ -21,7 +21,8 @@ type InstanceState = {
 }
 
 const instanceStates = new Map<string, InstanceState>()
-const warmup = {start: 6, max: 10}
+const warmup = {start: 8, max: 12}
+const waitingThreshold = 128
 
 const clamp = (v: number, lo: number, hi: number): number => {
   return Math.max(lo, Math.min(hi, v))
@@ -118,7 +119,6 @@ const distribute = (total: number, n: number, rotation: number): number[] => {
   return rotate(assigned, rotation)
 }
 
-
 const sumBatchSizes = (jobs: {sendToLLMBatchSize: number | null}[]): number => {
   return jobs.reduce((acc, j) => {
     return acc + Number(j.sendToLLMBatchSize || 0)
@@ -185,7 +185,7 @@ const decideForWaiting = (
   cur: number,
   lastNonZeroTotal: number | null,
 ): NextDecision | null => {
-  return waitingCount <= 32
+  return waitingCount <= waitingThreshold
     ? null
     : (() => {
         const firstWait = prevWaiting == null
@@ -294,15 +294,15 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
       const ageMs = lastStatusTs ? now.getTime() - new Date(lastStatusTs).getTime() : Number.POSITIVE_INFINITY
       const staleStatus = !inWarmup && ageMs > 1 * 60 * 1000
 
-      if (waitingCount > 32 || staleStatus) s.hasSeenWaiting = true
+      if (waitingCount > waitingThreshold || staleStatus) s.hasSeenWaiting = true
 
-      // Lock a ceiling the first time we observe waiting > 32
-      if (waitingCount > 32 && s.maxCeilingTotal == null) {
+      // Lock a ceiling the first time we observe waiting > threshold
+      if (waitingCount > waitingThreshold && s.maxCeilingTotal == null) {
         const secondHighest = getSecondHighestBatchSizeInHistory(s.snapshots, cur)
         const ceiling = secondHighest != null ? secondHighest : Math.max(1, cur - 1)
         s.maxCeilingTotal = ceiling
         console.log(
-          `\x1b[31madjust-batch-size: wait>32 -> locking max ceiling to ${secondHighest != null ? `2nd-highest-in-history=${ceiling}` : `(fallback current-1)=${ceiling}`} for instance=${instanceId} model=${modelName} at ${now.toISOString()}\x1b[0m`,
+          `\x1b[31madjust-batch-size: wait>${waitingThreshold} -> locking max ceiling to ${secondHighest != null ? `2nd-highest-in-history=${ceiling}` : `(fallback current-1)=${ceiling}`} for instance=${instanceId} model=${modelName} at ${now.toISOString()}\x1b[0m`,
         )
       }
 
@@ -323,7 +323,7 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
       if (decision.historyNote) pushHistory(instanceId, decision.historyNote)
       s.lastWaitingCount = waitingCount
 
-      const maxTotal = 200
+      const maxTotal = 400
       // If we just woke up from sleep, start a bit lower (minus 4)
       let next = decision.nextTotal
       if (!s.sleeping && wasSleeping) {
