@@ -2,7 +2,6 @@
 #SBATCH -J forska-alvis
 #SBATCH -A NAISS2025-22-715 -p alvis
 #SBATCH --nodes=2
-#SBATCH --ntasks=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=A100:4
 #SBATCH --time=08:00:00
