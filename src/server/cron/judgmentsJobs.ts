@@ -31,7 +31,7 @@ let hasRunAdjust = false
 let hasRunStable = false
 
 const getNewArticlesForJobs = async (): Promise<void> => {
-  if (!env.RUN_SERVER_JUDGING) return
+  if (!env.RUN_SERVER_JUDGING || env.GPU_TOTAL_GPUS === 0) return
   const db = getDatabase()
   const numberOfArticlesInReadyQueue = await getNumberOfArticlesInReadyQueue(db, serverJobId)
   const allJobs = await judgmentsJobsGetJobs(db)
@@ -49,13 +49,15 @@ const getNewArticlesForJobs = async (): Promise<void> => {
 }
 
 const sendToLLMCron = async (): Promise<void> => {
-  if (!env.RUN_SERVER_JUDGING) return
+  if (!env.RUN_SERVER_JUDGING || env.GPU_TOTAL_GPUS === 0) return
 
   const db = getDatabase()
   const allJobs = await judgmentsJobsGetJobs(db)
   await judgmentsJobsSendToLLM(db, allJobs, serverJobId)
 }
 const adjustBatchSizeCron = async (phase: string): Promise<void> => {
+  if (!env.RUN_SERVER_JUDGING || env.GPU_TOTAL_GPUS === 0) return
+
   if (phase === 'BATCH_SIZE_WARMUP' && !hasRunWarmup) {
     console.log(`BATCH_SIZE_WARMUP starting - first run`)
     hasRunWarmup = true

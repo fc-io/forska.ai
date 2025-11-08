@@ -51,9 +51,14 @@ const main = async (): Promise<void> => {
   // Prefer local pg_dump if available (works with SSH tunnels on localhost)
   if (await hasLocalPgDump()) {
     log(`Creating dump via local pg_dump -> ${out}`)
-    const cmd = `PGPASSWORD='${pass.replace(/'/g, "'\\''")}' pg_dump -h ${host} -p ${port} -U ${user} -d ${db} -Fc -Z 9 -f ${out}`
-    const res = await $.nothrow()`bash -lc ${cmd}`
-    if (res.exitCode !== 0) fail('pg_dump failed')
+    log('Starting dump (this may take a while for large databases)...')
+    const cmd = `PGPASSWORD='${pass.replace(/'/g, "'\\''")}' pg_dump -h ${host} -p ${port} -U ${user} -d ${db} -Fc -Z 9 --verbose -f ${out}`
+    const proc = Bun.spawn(['bash', '-lc', cmd], {
+      stdout: 'inherit',
+      stderr: 'inherit',
+    })
+    const exitCode = await proc.exited
+    if (exitCode !== 0) fail('pg_dump failed')
     log('Done')
     return
   }
@@ -62,9 +67,14 @@ const main = async (): Promise<void> => {
   // Note: when targeting localhost from inside Docker, use host.docker.internal
   const dockerHost = isLocalHost(host) ? 'host.docker.internal' : host
   log(`Local pg_dump not found; using Docker to dump -> ${out}`)
-  const dockerCmd = `docker run --rm -e PGPASSWORD='${pass.replace(/'/g, "'\\''")}' postgres:18 pg_dump -h ${dockerHost} -p ${port} -U ${user} -d ${db} -Fc -Z 9 -f - > ${out}`
-  const pipe = await $.nothrow()`bash -lc ${dockerCmd}`
-  if (pipe.exitCode !== 0) fail('docker pg_dump failed')
+  log('Starting dump (this may take a while for large databases)...')
+  const dockerCmd = `docker run --rm -e PGPASSWORD='${pass.replace(/'/g, "'\\''")}' postgres:18 pg_dump -h ${dockerHost} -p ${port} -U ${user} -d ${db} -Fc -Z 9 --verbose -f - > ${out}`
+  const proc = Bun.spawn(['bash', '-lc', dockerCmd], {
+      stdout: 'inherit',
+      stderr: 'inherit',
+    })
+  const exitCode = await proc.exited
+  if (exitCode !== 0) fail('docker pg_dump failed')
   log('Done')
 }
 
