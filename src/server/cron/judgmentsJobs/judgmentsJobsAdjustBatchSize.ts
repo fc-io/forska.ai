@@ -23,6 +23,7 @@ type InstanceState = {
 
 const instanceStates = new Map<string, InstanceState>()
 const gpuMultiplier = getGPUMultiplier()
+console.log('gpuMultiplier', gpuMultiplier)
 const warmup = {start: 6 * gpuMultiplier, max: 16 * gpuMultiplier}
 
 const clamp = (v: number, lo: number, hi: number): number => {
@@ -54,7 +55,6 @@ const pushHistory = (instanceId: string, note: string): void => {
   const ts = toNow()
   s.history = [...s.history, {ts, note}].slice(-20)
 }
-
 
 const sumTokensSince = async (
   db: PostgresJsDatabase<typeof schema>,
@@ -153,7 +153,7 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
     console.log('adjust-batch-size skipped: no running jobs', {ts: toNow().toISOString()})
   } else {
     const now = toNow()
-    const MAX_SENT = 250 * gpuMultiplier
+    const MAX_SENT = 180 * gpuMultiplier
     const {sentCount} = await getServerSentStats(db, serverJobId)
     const overCap = sentCount >= MAX_SENT
 
@@ -210,14 +210,7 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
 
       // With LLM status removed, we use a fixed up step
       const upStep = 4
-      const decision = decideNextTotal(
-        cur,
-        warmupTarget,
-        s.snapshots,
-        s.lastNonZeroTotal,
-        upStep,
-        overCap,
-      )
+      const decision = decideNextTotal(cur, warmupTarget, s.snapshots, s.lastNonZeroTotal, upStep, overCap)
 
       const wasSleeping = s.sleeping
       s.sleeping = decision.sleeping
