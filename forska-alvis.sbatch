@@ -261,6 +261,27 @@ else
   echo "[forska] CUDA_VISIBLE_DEVICES is unset; downstream containers may enumerate all visible GPUs"
 fi
 
+# Derive a descriptive GPU shape string for logging (e.g., "A100:4")
+GPU_MODEL_RAW=""
+if command -v nvidia-smi >/dev/null 2>&1; then
+  GPU_MODEL_RAW=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -n1 || true)
+fi
+# Normalize common NVIDIA name suffixes for a compact identifier
+GPU_MODEL=$(sed -E \
+  -e 's/[[:space:]]+Tensor[[:space:]]+Core//Ig' \
+  -e 's/NVIDIA[[:space:]]+//Ig' \
+  -e 's/[[:space:]]+GPU//Ig' \
+  -e 's/[[:space:]]+PCIe//Ig' \
+  -e 's/[[:space:]]+SXM[0-9A-Za-z-]*//Ig' \
+  -e 's/[[:space:]]+[0-9]+GB//Ig' \
+  -e 's/[[:space:]]+/ /g' \
+  <<<"${GPU_MODEL_RAW}" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')
+if [[ -z "$GPU_MODEL" ]]; then
+  GPU_MODEL="unknown"
+fi
+GPU_SHAPE="${GPU_MODEL}:${GPUS_PER_NODE}"
+export GPU_SHAPE
+
 graceful_shutdown() {
   local reason="${1:-cleanup}"
   echo "[forska] shutting down ($reason)..."
@@ -492,6 +513,7 @@ apptainer run --cleanenv \
   --env VITE_PORT="$VITE_PORT" \
   --env GPU_NNODES="$NNODES" \
   --env GPU_GPUS_PER_NODE="$GPUS_PER_NODE" \
+  --env GPU_SHAPE="$GPU_SHAPE" \
   --env GPU_TOTAL_GPUS="$TOTAL_GPUS" \
   --env TP_SIZE="$TP_SIZE" \
   --env DP_SIZE="$DP_SIZE" \

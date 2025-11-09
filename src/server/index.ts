@@ -11,16 +11,16 @@ import {humanAssessmentRoutes} from './routes/HumanAssessmentRoutes.ts'
 import {importRoutes} from './routes/ImportRoutes.ts'
 import {judgmentsJobsRoutes} from './routes/JudgmentsJobsRoutes.ts'
 import {judgmentsRoutes} from './routes/JudgmentsRoutes.ts'
+import {llmStatusRoutes} from './routes/LlmStatusRoutes.ts'
 import {modelsRoutes} from './routes/ModelsRoutes.ts'
 import {projectsRoutes} from './routes/ProjectsRoutes.ts'
 import {tokensRoutes} from './routes/TokensRoutes.ts'
 import {usersRoutes} from './routes/UsersRoutes.ts'
-import {llmStatusRoutes} from './routes/LlmStatusRoutes.ts'
 import {env} from './utils/env.ts'
 
 const allowedOrigins = [`http://localhost:${env.VITE_PORT}`, `http://localhost:${process.env.PROD_SERVER ?? 8080}`]
 
-const app = new Elysia()
+const _app = new Elysia()
   .use(
     cors({
       origin: allowedOrigins,
@@ -47,7 +47,7 @@ const app = new Elysia()
   .listen(env.API_SERVER_PORT)
 
 console.log(
-  `🦊 Elysia is running at ${app.server?.hostname}:${app.server?.port} (nodes=${env.GPU_NNODES}, gpus/node=${env.GPU_GPUS_PER_NODE}, total_gpus=${env.GPU_TOTAL_GPUS}, tp=${env.TP_SIZE}, dp=${env.DP_SIZE})`,
+  `🦊 Elysia is running on :${env.API_SERVER_PORT} (nodes=${env.GPU_NNODES}, gpus/node=${env.GPU_GPUS_PER_NODE}, total_gpus=${env.GPU_TOTAL_GPUS}, shape=${env.GPU_SHAPE}, tp=${env.TP_SIZE}, dp=${env.DP_SIZE})`,
 )
 
-export type App = typeof app
+export type App = typeof _app

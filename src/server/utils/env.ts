@@ -35,6 +35,8 @@ const envShape = arktype({
   GPU_TOTAL_GPUS: 'number | string.integer.parse',
   TP_SIZE: 'number | string.integer.parse',
   DP_SIZE: 'number | string.integer.parse',
+  // Optional descriptive GPU shape, e.g. "A100:4" or "H100:8"
+  GPU_SHAPE: 'string | null | undefined',
   WORKER_URLS: CsvStringArray,
 })
 
@@ -78,6 +80,10 @@ const loadEnv = (): typeof envShape.infer => {
   })
   if (!('WORKER_URLS' in merged)) {
     ;(merged as Record<string, undefined>).WORKER_URLS = undefined
+  }
+  // Provide a stable default when GPU_SHAPE is not provided
+  if (merged.GPU_SHAPE == null || String(merged.GPU_SHAPE).trim() === '') {
+    ;(merged as Record<string, string>).GPU_SHAPE = 'not set'
   }
   return envShape.assert(merged)
 }
