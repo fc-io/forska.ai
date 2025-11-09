@@ -206,20 +206,43 @@ detect_tp_per_node() {
 
 TOTAL_GPUS=$(( NNODES * GPUS_PER_NODE ))
 TP_AUTO_DEFAULT=$(detect_tp_per_node)
-TP_SIZE=${TP_SIZE:-$TP_AUTO_DEFAULT}
-if (( TP_SIZE < 1 )); then TP_SIZE=1; fi
+if [[ -z "${TP_SIZE:-}" ]]; then
+  TP_SIZE=$TP_AUTO_DEFAULT
+  echo "[forska] deriving TP from allocation: TP_SIZE=$TP_SIZE"
+fi
+if (( TP_SIZE < 1 )); then
+  echo "[forska] error: TP_SIZE must be >=1 (got $TP_SIZE)" >&2
+  exit 2
+fi
 if (( TOTAL_GPUS < TP_SIZE )); then
   echo "[forska] error: TP=${TP_SIZE} requires ${TP_SIZE} GPU(s) total; only ${TOTAL_GPUS} allocated" >&2
   exit 2
 fi
-DP_SIZE=${DP_SIZE:-$(( TOTAL_GPUS / TP_SIZE ))}
+if [[ -z "${DP_SIZE:-}" ]]; then
+  DP_SIZE=$(( TOTAL_GPUS / TP_SIZE ))
+  if (( DP_SIZE < 1 )); then DP_SIZE=1; fi
+  if (( TOTAL_GPUS % TP_SIZE != 0 )); then
+    echo "[forska] warning: total_gpus (${TOTAL_GPUS}) not divisible by tp (${TP_SIZE}); defaulting DP=$DP_SIZE (some GPUs idle)" >&2
+  else
+    echo "[forska] deriving DP from allocation: DP_SIZE=$DP_SIZE"
+  fi
+fi
 if (( DP_SIZE < 1 )); then DP_SIZE=1; fi
+EFFECTIVE_GPUS=$(( TP_SIZE * DP_SIZE ))
+if (( EFFECTIVE_GPUS > TOTAL_GPUS )); then
+  echo "[forska] warning: TP×DP=${EFFECTIVE_GPUS} exceeds allocated GPUs (${TOTAL_GPUS}); reduce TP/DP or request more GPUs" >&2
+  exit 2
+fi
+if (( EFFECTIVE_GPUS < TOTAL_GPUS )); then
+  UNUSED=$(( TOTAL_GPUS - EFFECTIVE_GPUS ))
+  echo "[forska] note: ${UNUSED} GPU(s) will remain idle (allocated=${TOTAL_GPUS}, used=${EFFECTIVE_GPUS}). Adjust TP_SIZE/DP_SIZE or #SBATCH to match."
+fi
 echo "[forska] topology: nodes=$NNODES, gpus/node=$GPUS_PER_NODE, total_gpus=$TOTAL_GPUS"
-echo "[forska] sglang parallelism: tp(global)=$TP_SIZE, dp=$DP_SIZE"
+echo "[forska] sglang parallelism: tp(global)=$TP_SIZE, dp=$DP_SIZE (effective_gpus=$EFFECTIVE_GPUS)"
 
 # If user did not set an explicit concurrency cap, default to 32 per engine.
 if [[ -z "${SGLANG_MAX_RUNNING_REQUESTS:-}" ]]; then
-  SGLANG_MAX_RUNNING_REQUESTS=32
+  SGLANG_MAX_RUNNING_REQUESTS=64
   echo "[forska] defaulting max-running-requests to $SGLANG_MAX_RUNNING_REQUESTS (per engine)"
 fi
 
