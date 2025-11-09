@@ -150,6 +150,9 @@ const AdminLlm = () => {
                   <tr>
                     <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Time</th>
                     <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Instance
+                    </th>
+                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Prefill TPS
                     </th>
                     <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -180,6 +183,7 @@ const AdminLlm = () => {
                       return (
                         <tr class="hover:bg-gray-50">
                           <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{formatTs(row.ts)}</td>
+                          <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-600">{row.instanceId}</td>
                           <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
                             {formatNumber(row.prefillTps ?? undefined)}
                           </td>

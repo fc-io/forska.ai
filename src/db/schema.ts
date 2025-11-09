@@ -109,6 +109,7 @@ export const models = pgTable(
         },
         {onDelete: 'cascade'},
       ),
+    workerUrls: text('worker_urls').array(),
   },
   (table) => {
     return [index('models_owner_idx').on(table.ownerId)]

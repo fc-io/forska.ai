@@ -12,6 +12,7 @@ type ModelRow = {
   provider: string | null
   modelName: string | null
   baseURL: string | null
+  workerUrls: string[] | null
   version: string | null
   apiKeyVariable: string | null
   createdAt?: string | Date
@@ -43,6 +44,13 @@ const AdminModels = () => {
 
   const rows = () => {
     return modelsQuery.data ?? []
+  }
+
+  const formatWorkerUrls = (urls: string[] | null | undefined) => {
+    if (!urls || urls.length === 0) {
+      return '—'
+    }
+    return urls.join(', ')
   }
 
   return (
@@ -113,6 +121,9 @@ const AdminModels = () => {
                       Base URL
                     </th>
                     <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Worker URLs
+                    </th>
+                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Version
                     </th>
                     <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -130,6 +141,9 @@ const AdminModels = () => {
                           <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{m.provider ?? '—'}</td>
                           <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{m.modelName ?? '—'}</td>
                           <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{m.baseURL ?? '—'}</td>
+                          <td class="px-4 py-2 whitespace-pre-wrap text-sm text-gray-900 max-w-xs break-words">
+                            {formatWorkerUrls(m.workerUrls)}
+                          </td>
                           <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{m.version ?? '—'}</td>
                           <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{m.apiKeyVariable ?? '—'}</td>
                           <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500">{m.id}</td>

@@ -32,14 +32,14 @@ const parsePrometheusText = (text: string) => {
   })
 }
 
-const buildMetricsUrl = (baseURL: string): string => {
-  const trimmed = baseURL.replace(/\/+$/, '')
+const buildMetricsUrl = (endpoint: string): string => {
+  const trimmed = endpoint.replace(/\/+$/, '')
   const withoutV1 = trimmed.replace(/\/?v1\/?$/, '')
   return `${withoutV1}/metrics`
 }
 
-const fetchMetrics = async (baseURL: string) => {
-  const url = buildMetricsUrl(baseURL)
+const fetchMetrics = async (endpoint: string) => {
+  const url = buildMetricsUrl(endpoint)
   const res = await fetch(url).catch(() => {
     return undefined
   })
@@ -136,7 +136,7 @@ const collectHistogram = (metrics: PromSample[], baseName: string): {series: His
 }
 
 export const getSGLangMetrics = async (
-  baseURL: string,
+  endpoint: string,
 ): Promise<{
   promptTokensTotal: number
   generationTokensTotal: number
@@ -171,7 +171,7 @@ export const getSGLangMetrics = async (
   numRetractionsCount?: number
   cachedTokensTotal?: number
 }> => {
-  const metrics = await fetchMetrics(baseURL)
+  const metrics = await fetchMetrics(endpoint)
 
   // SGLang Prometheus names seen in the wild (prefix "sglang:")
   // Counters: prompt_tokens_total, generation_tokens_total, num_requests_total
