@@ -14,11 +14,12 @@ const getGPUTypeMultiplier = (): number => {
   if (gpuType === 'H200') {
     return 3
   } else if (gpuType === 'A100fat') {
-    return 2
+    return 1.2
+  // we only run A100 with tp=2
   } else if (gpuType === 'A100') {
-    return 2
+    return 1.4
   } else {
-    return 2
+    return 1
   }
 }
 export const getGPUMultiplier = (): number => {

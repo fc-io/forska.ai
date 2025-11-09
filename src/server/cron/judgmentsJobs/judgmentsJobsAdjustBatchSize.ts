@@ -24,7 +24,7 @@ type InstanceState = {
 const instanceStates = new Map<string, InstanceState>()
 const gpuMultiplier = getGPUMultiplier()
 console.log('gpuMultiplier', gpuMultiplier)
-const warmup = {start: 6 * gpuMultiplier, max: 16 * gpuMultiplier}
+const warmup = {start: 10 * gpuMultiplier, max: 20 * gpuMultiplier}
 
 const clamp = (v: number, lo: number, hi: number): number => {
   return Math.max(lo, Math.min(hi, v))
@@ -153,7 +153,7 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
     console.log('adjust-batch-size skipped: no running jobs', {ts: toNow().toISOString()})
   } else {
     const now = toNow()
-    const MAX_SENT = 180 * gpuMultiplier
+    const MAX_SENT = 1000 * gpuMultiplier
     const {sentCount} = await getServerSentStats(db, serverJobId)
     const overCap = sentCount >= MAX_SENT
 
