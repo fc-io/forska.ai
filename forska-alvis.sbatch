@@ -470,6 +470,9 @@ else
   echo "[forska] router disabled; worker is serving directly on :$SGLANG_PORT"
 fi
 
+WORKER_URLS_CSV=${SGLANG_ROUTER_WORKER_URLS:-}
+WORKER_URLS_CSV=${WORKER_URLS_CSV// /,}
+
 # Start API
 API_BINDS=(
   --bind "$DB_URL_FILE:/run/secrets/database_url:ro"
@@ -492,6 +495,7 @@ apptainer run --cleanenv \
   --env GPU_TOTAL_GPUS="$TOTAL_GPUS" \
   --env TP_SIZE="$TP_SIZE" \
   --env DP_SIZE="$DP_SIZE" \
+  --env WORKER_URLS="$WORKER_URLS_CSV" \
   "$SIF_API" \
   >"$LOG_DIR/api.log" 2>&1 &
 API_PID=$!

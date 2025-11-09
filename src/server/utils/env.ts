@@ -1,6 +1,17 @@
 import {type as arktype} from 'arktype'
 import {readFileSync} from 'fs'
 
+const CsvStringArray = arktype('string').pipe((value: string): string[] => {
+  return value
+    .split(',')
+    .map((part) => {
+      return part.trim()
+    })
+    .filter((part) => {
+      return part.length > 0
+    })
+})
+
 const envShape = arktype({
   DATABASE_URL: 'string',
   BETTER_AUTH_SECRET: 'string',
@@ -19,6 +30,7 @@ const envShape = arktype({
   GPU_TOTAL_GPUS: 'number | string.integer.parse',
   TP_SIZE: 'number | string.integer.parse',
   DP_SIZE: 'number | string.integer.parse',
+  WORKER_URLS: CsvStringArray,
 })
 
 const readFromFileVar = (key: string): string | undefined => {
@@ -59,6 +71,9 @@ const loadEnv = (): typeof envShape.infer => {
       ;(merged as Record<string, string>)[k] = '0'
     }
   })
+  if (merged.WORKER_URLS == null) {
+    ;(merged as Record<string, string>).WORKER_URLS = ''
+  }
   return envShape.assert(merged)
 }
 
