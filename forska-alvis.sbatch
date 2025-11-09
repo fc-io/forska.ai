@@ -52,6 +52,7 @@ SIF_DB="$STACK_ROOT/postgres_18.sif"
 SIF_SGLANG="$STACK_ROOT/sglang_latest.sif"
 SIF_API="$STACK_ROOT/api_server.sif"
 SIF_APP="$STACK_ROOT/app_server.sif"
+export SIF_DB SIF_SGLANG SIF_API SIF_APP
 
 DB_PW_FILE="$STACK_ROOT/.secrets/db_password.txt"
 DB_URL_FILE="$STACK_ROOT/.secrets/database_url.txt"
@@ -208,37 +209,39 @@ TOTAL_GPUS=$(( NNODES * GPUS_PER_NODE ))
 TP_AUTO_DEFAULT=$(detect_tp_per_node)
 if [[ -z "${TP_SIZE:-}" ]]; then
   TP_SIZE=$TP_AUTO_DEFAULT
-  echo "[forska] deriving TP from allocation: TP_SIZE=$TP_SIZE"
+  echo "[forska] deriving TP from GPU type: TP_SIZE=$TP_SIZE"
 fi
 if (( TP_SIZE < 1 )); then
   echo "[forska] error: TP_SIZE must be >=1 (got $TP_SIZE)" >&2
   exit 2
 fi
-if (( TOTAL_GPUS < TP_SIZE )); then
-  echo "[forska] error: TP=${TP_SIZE} requires ${TP_SIZE} GPU(s) total; only ${TOTAL_GPUS} allocated" >&2
+if (( GPUS_PER_NODE < TP_SIZE )); then
+  echo "[forska] error: TP=${TP_SIZE} requires ${TP_SIZE} GPU(s) per node; only ${GPUS_PER_NODE} allocated per node" >&2
   exit 2
 fi
 if [[ -z "${DP_SIZE:-}" ]]; then
-  DP_SIZE=$(( TOTAL_GPUS / TP_SIZE ))
-  if (( DP_SIZE < 1 )); then DP_SIZE=1; fi
-  if (( TOTAL_GPUS % TP_SIZE != 0 )); then
-    echo "[forska] warning: total_gpus (${TOTAL_GPUS}) not divisible by tp (${TP_SIZE}); defaulting DP=$DP_SIZE (some GPUs idle)" >&2
+  if (( GPUS_PER_NODE % TP_SIZE == 0 )); then
+    DP_SIZE=$(( GPUS_PER_NODE / TP_SIZE ))
+    if (( DP_SIZE < 1 )); then DP_SIZE=1; fi
+    echo "[forska] deriving DP to fill node: DP_SIZE=$DP_SIZE"
   else
-    echo "[forska] deriving DP from allocation: DP_SIZE=$DP_SIZE"
+    DP_SIZE=1
+    echo "[forska] warning: gpus_per_node (${GPUS_PER_NODE}) not divisible by tp (${TP_SIZE}); defaulting DP=1 (some GPUs idle)" >&2
   fi
 fi
 if (( DP_SIZE < 1 )); then DP_SIZE=1; fi
-EFFECTIVE_GPUS=$(( TP_SIZE * DP_SIZE ))
-if (( EFFECTIVE_GPUS > TOTAL_GPUS )); then
-  echo "[forska] warning: TP×DP=${EFFECTIVE_GPUS} exceeds allocated GPUs (${TOTAL_GPUS}); reduce TP/DP or request more GPUs" >&2
+GPUS_PER_ENGINE=$(( TP_SIZE * DP_SIZE ))
+if (( GPUS_PER_ENGINE > GPUS_PER_NODE )); then
+  echo "[forska] error: TP×DP=${GPUS_PER_ENGINE} exceeds GPUs per node (${GPUS_PER_NODE}); lower DP_SIZE or TP_SIZE" >&2
   exit 2
 fi
-if (( EFFECTIVE_GPUS < TOTAL_GPUS )); then
-  UNUSED=$(( TOTAL_GPUS - EFFECTIVE_GPUS ))
-  echo "[forska] note: ${UNUSED} GPU(s) will remain idle (allocated=${TOTAL_GPUS}, used=${EFFECTIVE_GPUS}). Adjust TP_SIZE/DP_SIZE or #SBATCH to match."
+if (( GPUS_PER_ENGINE < GPUS_PER_NODE )); then
+  UNUSED=$(( GPUS_PER_NODE - GPUS_PER_ENGINE ))
+  echo "[forska] note: ${UNUSED} GPU(s) per node will remain idle (tp=${TP_SIZE}, dp=${DP_SIZE}). Adjust TP_SIZE/DP_SIZE or #SBATCH to match."
 fi
 echo "[forska] topology: nodes=$NNODES, gpus/node=$GPUS_PER_NODE, total_gpus=$TOTAL_GPUS"
-echo "[forska] sglang parallelism: tp(global)=$TP_SIZE, dp=$DP_SIZE (effective_gpus=$EFFECTIVE_GPUS)"
+echo "[forska] sglang parallelism per node: tp=$TP_SIZE, dp=$DP_SIZE (gpus_used_per_node=$GPUS_PER_ENGINE)"
+export TP_SIZE DP_SIZE TOTAL_GPUS NNODES GPUS_PER_NODE GPUS_PER_ENGINE
 
 # If user did not set an explicit concurrency cap, default to 32 per engine.
 if [[ -z "${SGLANG_MAX_RUNNING_REQUESTS:-}" ]]; then
@@ -376,21 +379,13 @@ fi
 
 mkdir -p "${HF_HOME}" "${SGLANG_CACHE_DIR}"
 
-DIST_PORT=${DIST_PORT:-$(find_free_port 19000 19999 || echo 19500)}
-DIST_ADDR="${HEAD_IP}:${DIST_PORT}"
-
 if [[ $NNODES -gt 1 ]]; then
-  echo "[forska] starting SGLang across $NNODES node(s) (dist=$DIST_ADDR)"
+  echo "[forska] starting independent SGLang worker per node (tp=$TP_SIZE, dp=$DP_SIZE)"
   SGLANG_WORKER_SCRIPT="$STACK_ROOT/.cache/sglang/sglang-worker.sh"
   mkdir -p "$(dirname "$SGLANG_WORKER_SCRIPT")"
   cat >"$SGLANG_WORKER_SCRIPT" <<'SGLANG_WORKER'
 #!/usr/bin/env bash
 set -euo pipefail
-NODE_RANK=${SLURM_PROCID:-0}
-EXTRA=()
-if [[ "$NODE_RANK" == "0" ]]; then
-  EXTRA+=(--host 0.0.0.0 --port "$SGLANG_WORKER_PORT")
-fi
 exec apptainer exec --cleanenv --nv \
   --env HF_HOME=/hf_cache \
   --bind "$HF_HOME:/hf_cache:rw" \
@@ -399,28 +394,24 @@ exec apptainer exec --cleanenv --nv \
   "${SIF_SGLANG}" \
   python -m sglang.launch_server \
     --model-path "${SGLANG_MODEL}" \
+    --host 0.0.0.0 --port "${SGLANG_WORKER_PORT}" \
     --tensor-parallel-size "${TP_SIZE}" \
     --data-parallel-size "${DP_SIZE}" \
-    --nnodes "${NNODES}" \
-    --node-rank "${NODE_RANK}" \
-    --dist-init-addr "${DIST_ADDR}" \
     --max-running-requests "${SGLANG_MAX_RUNNING_REQUESTS}" \
     --mem-fraction-static "${SGLANG_MEM_FRACTION}" \
     --schedule-policy "${SGLANG_SCHEDULE_POLICY}" \
     --enable-metrics \
-    --download-dir /hf_cache \
-    "${EXTRA[@]}"
+    --download-dir /hf_cache
 SGLANG_WORKER
   chmod +x "$SGLANG_WORKER_SCRIPT"
   NODELIST=$(printf "%s," "${HOSTS[@]}" | sed 's/,$//')
   srun --nodes="$NNODES" --ntasks="$NNODES" \
     --nodelist="$NODELIST" \
+    --export=ALL \
     --output "$LOG_DIR/sglang-%N.log" \
     bash -lc "$SGLANG_WORKER_SCRIPT" &
   SGLANG_SRUN_PID=$!
 else
-  # Single-node launch. If more than one GPU is allocated and TP=1,
-  # run multiple data-parallel replicas so all GPUs are utilized.
   echo "[forska] starting SGLang on single node (tp=$TP_SIZE, dp=$DP_SIZE)"
   apptainer exec --cleanenv --nv \
     --env HF_HOME=/hf_cache \
@@ -447,13 +438,23 @@ wait_for_http "SGLang worker" "http://localhost:${SGLANG_WORKER_PORT}/v1/models"
 
 if [[ "${SGLANG_ENABLE_ROUTER}" == "1" ]]; then
   if [[ -z "${SGLANG_ROUTER_WORKER_URLS:-}" ]]; then
-    SGLANG_ROUTER_WORKER_URLS="http://127.0.0.1:${SGLANG_WORKER_PORT}"
+    ROUTER_WORKERS_AUTO=()
+    if [[ $NNODES -gt 1 ]]; then
+      for node_host in "${HOSTS[@]}"; do
+        ROUTER_WORKERS_AUTO+=("http://${node_host}:${SGLANG_WORKER_PORT}")
+      done
+    else
+      ROUTER_WORKERS_AUTO+=("http://127.0.0.1:${SGLANG_WORKER_PORT}")
+    fi
+    SGLANG_ROUTER_WORKER_URLS="${ROUTER_WORKERS_AUTO[*]}"
+    unset -v ROUTER_WORKERS_AUTO
+    echo "[forska] router workers: ${SGLANG_ROUTER_WORKER_URLS}"
   fi
   read -r -a ROUTER_WORKERS <<<"${SGLANG_ROUTER_WORKER_URLS}"
-  ROUTER_WORKER_ARGS=()
-  for worker_url in "${ROUTER_WORKERS[@]}"; do
-    ROUTER_WORKER_ARGS+=(--worker-urls "$worker_url")
-  done
+  if (( ${#ROUTER_WORKERS[@]} == 0 )); then
+    echo "[forska] error: router enabled but no worker URLs found" >&2
+    exit 2
+  fi
   echo "[forska] starting SGLang router on :$SGLANG_PORT (policy=${SGLANG_ROUTER_POLICY})"
   apptainer exec --cleanenv \
     "$SIF_SGLANG" \
@@ -461,7 +462,7 @@ if [[ "${SGLANG_ENABLE_ROUTER}" == "1" ]]; then
       --host 0.0.0.0 \
       --port "$SGLANG_PORT" \
       --policy "$SGLANG_ROUTER_POLICY" \
-      "${ROUTER_WORKER_ARGS[@]}" \
+      --worker-urls "${ROUTER_WORKERS[@]}" \
     >"$LOG_DIR/sglang-router.log" 2>&1 &
   SGLANG_ROUTER_PID=$!
   wait_for_http "SGLang router" "http://localhost:${SGLANG_PORT}/v1/models" 600 "$SGLANG_ROUTER_PID" || true
