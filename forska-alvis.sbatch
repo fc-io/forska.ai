@@ -127,6 +127,35 @@ wait_for_postgres() {
   return 1
 }
 
+wait_for_http() {
+  local label="$1"
+  local url="$2"
+  local timeout="${3:-1200}"
+  local tracked_pid="${4:-}"
+  local interval=2
+  local attempts=$((timeout / interval))
+  echo "[forska] waiting for ${label} (${url}; timeout: ${timeout}s)..."
+  for ((i=1; i<=attempts; i++)); do
+    if curl -sf "$url" >/dev/null; then
+      local elapsed=$((i * interval))
+      echo "[forska] ${label} is up (ready after ${elapsed}s)"
+      return 0
+    fi
+    if [[ -n "$tracked_pid" ]] && ! kill -0 "$tracked_pid" 2>/dev/null; then
+      echo "[forska] ${label} process (${tracked_pid}) exited early; check logs" >&2
+      return 1
+    fi
+    if (( i % 15 == 0 )); then
+      local elapsed=$((i * interval))
+      local remaining=$((timeout - elapsed))
+      echo "[forska] still waiting for ${label}... (${elapsed}s elapsed, ${remaining}s remaining)"
+    fi
+    sleep "$interval"
+  done
+  echo "[forska] warning: ${label} did not respond on ${url} within ${timeout}s" >&2
+  return 1
+}
+
 
 
 # Resolve an IPv4 address for the head node that workers can reach.
@@ -176,38 +205,27 @@ detect_tp_per_node() {
 }
 
 TOTAL_GPUS=$(( NNODES * GPUS_PER_NODE ))
-TP_PER_NODE_DEFAULT=$(detect_tp_per_node)
-TP_SIZE=${TP_SIZE:-$TP_PER_NODE_DEFAULT}
-if (( GPUS_PER_NODE < TP_SIZE )); then
-  echo "[forska] error: TP=${TP_SIZE} requires >=${TP_SIZE} GPU(s) per node; only ${GPUS_PER_NODE} allocated" >&2
+TP_AUTO_DEFAULT=$(detect_tp_per_node)
+TP_SIZE=${TP_SIZE:-$TP_AUTO_DEFAULT}
+if (( TP_SIZE < 1 )); then TP_SIZE=1; fi
+if (( TOTAL_GPUS < TP_SIZE )); then
+  echo "[forska] error: TP=${TP_SIZE} requires ${TP_SIZE} GPU(s) total; only ${TOTAL_GPUS} allocated" >&2
   exit 2
 fi
 DP_SIZE=${DP_SIZE:-$(( TOTAL_GPUS / TP_SIZE ))}
 if (( DP_SIZE < 1 )); then DP_SIZE=1; fi
 echo "[forska] topology: nodes=$NNODES, gpus/node=$GPUS_PER_NODE, total_gpus=$TOTAL_GPUS"
-echo "[forska] sglang parallelism: tp(per-node)=$TP_SIZE, dp=$DP_SIZE"
+echo "[forska] sglang parallelism: tp(global)=$TP_SIZE, dp=$DP_SIZE"
 
-# Scale max-running-requests with DP_SIZE (each DP replica can handle requests independently)
-# Base: 32 per DP replica. If user explicitly set SGLANG_MAX_RUNNING_REQUESTS, use that instead.
+# If user did not set an explicit concurrency cap, default to 32 per engine.
 if [[ -z "${SGLANG_MAX_RUNNING_REQUESTS:-}" ]]; then
-  SGLANG_MAX_RUNNING_REQUESTS=$(( 32 * DP_SIZE ))
-  echo "[forska] auto-scaling max-running-requests: 32 × DP_SIZE($DP_SIZE) = $SGLANG_MAX_RUNNING_REQUESTS"
+  SGLANG_MAX_RUNNING_REQUESTS=32
+  echo "[forska] defaulting max-running-requests to $SGLANG_MAX_RUNNING_REQUESTS (per engine)"
 fi
 
-# Propagate CUDA_VISIBLE_DEVICES into containers so NVML sees the Slurm-assigned GPUs
+# Propagate CUDA_VISIBLE_DEVICES into containers so NVML sees only the GPUs assigned on this node.
 if [[ -z "${CUDA_VISIBLE_DEVICES:-}" && ${GPUS_PER_NODE:-0} -gt 0 ]]; then
-  if [[ ${NNODES:-1} -gt 1 ]]; then
-    cuda_mask=()
-    for ((node=0; node<NNODES; node++)); do
-      for ((gpu=0; gpu<GPUS_PER_NODE; gpu++)); do
-        cuda_mask+=("$gpu")
-      done
-    done
-    CUDA_VISIBLE_DEVICES=$(IFS=,; echo "${cuda_mask[*]}")
-    unset -v cuda_mask
-  else
-    CUDA_VISIBLE_DEVICES=$(seq -s, 0 $((GPUS_PER_NODE - 1)))
-  fi
+  CUDA_VISIBLE_DEVICES=$(seq -s, 0 $((GPUS_PER_NODE - 1)))
   export CUDA_VISIBLE_DEVICES
   echo "[forska] defaulting CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
 elif [[ -n "${CUDA_VISIBLE_DEVICES:-}" ]]; then
@@ -265,6 +283,12 @@ graceful_shutdown() {
   fi
 
   # 4. Stop SGLang and any distributed workers
+  if [[ -n "${SGLANG_ROUTER_PID:-}" ]] && kill -0 "$SGLANG_ROUTER_PID" 2>/dev/null; then
+    echo "[forska] stopping SGLang router (pid=$SGLANG_ROUTER_PID)..."
+    kill -TERM "$SGLANG_ROUTER_PID" 2>/dev/null || true
+    sleep 2 || true
+    kill -KILL "$SGLANG_ROUTER_PID" 2>/dev/null || true
+  fi
   if [[ -n "${SGLANG_PID:-}" ]] && kill -0 "$SGLANG_PID" 2>/dev/null; then
     echo "[forska] stopping SGLang (pid=$SGLANG_PID)..."
     kill -TERM "$SGLANG_PID" 2>/dev/null || true
@@ -319,6 +343,13 @@ export SGLANG_MODEL=${SGLANG_MODEL:-Qwen/Qwen3-30B-A3B-Instruct-2507}
 export SGLANG_MAX_RUNNING_REQUESTS
 export SGLANG_MEM_FRACTION=${SGLANG_MEM_FRACTION:-0.92}
 export SGLANG_SCHEDULE_POLICY=${SGLANG_SCHEDULE_POLICY:-lpm}
+export SGLANG_ENABLE_ROUTER=${SGLANG_ENABLE_ROUTER:-1}
+export SGLANG_ROUTER_POLICY=${SGLANG_ROUTER_POLICY:-cache_aware}
+if [[ "${SGLANG_ENABLE_ROUTER}" == "1" ]]; then
+  export SGLANG_WORKER_PORT=${SGLANG_WORKER_PORT:-$((SGLANG_PORT + 1))}
+else
+  export SGLANG_WORKER_PORT=${SGLANG_PORT}
+fi
 
 mkdir -p "${HF_HOME}" "${SGLANG_CACHE_DIR}"
 
@@ -335,7 +366,7 @@ set -euo pipefail
 NODE_RANK=${SLURM_PROCID:-0}
 EXTRA=()
 if [[ "$NODE_RANK" == "0" ]]; then
-  EXTRA+=(--host 0.0.0.0 --port "$SGLANG_PORT")
+  EXTRA+=(--host 0.0.0.0 --port "$SGLANG_WORKER_PORT")
 fi
 exec apptainer exec --cleanenv --nv \
   --env HF_HOME=/hf_cache \
@@ -376,7 +407,7 @@ else
     "$SIF_SGLANG" \
     python -m sglang.launch_server \
       --model-path "$SGLANG_MODEL" \
-      --host 0.0.0.0 --port "$SGLANG_PORT" \
+      --host 0.0.0.0 --port "$SGLANG_WORKER_PORT" \
       --tensor-parallel-size "$TP_SIZE" \
       --data-parallel-size "$DP_SIZE" \
       --max-running-requests "$SGLANG_MAX_RUNNING_REQUESTS" \
@@ -388,27 +419,31 @@ else
   SGLANG_PID=$!
 fi
 
-# Wait for SGLang to become ready
-echo "[forska] waiting for SGLang to be healthy on :$SGLANG_PORT (timeout: 20 minutes)..."
-for i in $(seq 1 600); do
-  if curl -sf http://localhost:${SGLANG_PORT}/v1/models >/dev/null; then
-    elapsed=$((i * 2))
-    echo "[forska] SGLang is up (ready after ${elapsed}s)"
-    break
+WORKER_WAIT_PID="${SGLANG_PID:-${SGLANG_SRUN_PID:-}}"
+wait_for_http "SGLang worker" "http://localhost:${SGLANG_WORKER_PORT}/v1/models" 1200 "$WORKER_WAIT_PID" || true
+
+if [[ "${SGLANG_ENABLE_ROUTER}" == "1" ]]; then
+  if [[ -z "${SGLANG_ROUTER_WORKER_URLS:-}" ]]; then
+    SGLANG_ROUTER_WORKER_URLS="http://127.0.0.1:${SGLANG_WORKER_PORT}"
   fi
-  if [[ -n "${SGLANG_PID:-}" ]] && ! kill -0 "$SGLANG_PID" 2>/dev/null; then
-    echo "[forska] SGLang process appears to have exited; see $LOG_DIR/sglang.log" >&2
-    break
-  fi
-  if (( i % 15 == 0 )); then
-    elapsed=$((i * 2))
-    remaining=$((1200 - elapsed))
-    echo "[forska] still waiting for SGLang... (${elapsed}s elapsed, ${remaining}s remaining)"
-  fi
-  sleep 2
-done
-if ! curl -sf http://localhost:${SGLANG_PORT}/v1/models >/dev/null; then
-  echo "[forska] warning: SGLang is not responding on :$SGLANG_PORT after 20 minutes; API may fail to connect" >&2
+  read -r -a ROUTER_WORKERS <<<"${SGLANG_ROUTER_WORKER_URLS}"
+  ROUTER_WORKER_ARGS=()
+  for worker_url in "${ROUTER_WORKERS[@]}"; do
+    ROUTER_WORKER_ARGS+=(--worker-urls "$worker_url")
+  done
+  echo "[forska] starting SGLang router on :$SGLANG_PORT (policy=${SGLANG_ROUTER_POLICY})"
+  apptainer exec --cleanenv \
+    "$SIF_SGLANG" \
+    python -m sglang_router.launch_router \
+      --host 0.0.0.0 \
+      --port "$SGLANG_PORT" \
+      --policy "$SGLANG_ROUTER_POLICY" \
+      "${ROUTER_WORKER_ARGS[@]}" \
+    >"$LOG_DIR/sglang-router.log" 2>&1 &
+  SGLANG_ROUTER_PID=$!
+  wait_for_http "SGLang router" "http://localhost:${SGLANG_PORT}/v1/models" 600 "$SGLANG_ROUTER_PID" || true
+else
+  echo "[forska] router disabled; worker is serving directly on :$SGLANG_PORT"
 fi
 
 # Start API
