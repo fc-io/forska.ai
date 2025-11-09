@@ -237,10 +237,37 @@ const getTableMeta = async (db: string, table: string): Promise<TableMeta> => {
        AND is_generated='NEVER' AND (identity_generation IS NULL)
      ORDER BY ordinal_position;`,
   )
+
+  // Get columns from the foreign (imported) table
+  const importColsRaw = await runPsql(
+    db,
+    `SELECT column_name
+     FROM information_schema.columns
+     WHERE table_schema='import_tmp' AND table_name='${table}'
+     ORDER BY ordinal_position;`,
+  )
+
   const pkeys = pkeysRaw ? pkeysRaw.split('\n').filter(Boolean) : []
-  const cols = colsRaw ? colsRaw.split('\n').filter(Boolean) : []
+  const localCols = colsRaw ? colsRaw.split('\n').filter(Boolean) : []
+  const importCols = importColsRaw ? importColsRaw.split('\n').filter(Boolean) : []
   const updatable = updatableRaw ? updatableRaw.split('\n').filter(Boolean) : []
-  return {table, pkeys, cols, updatable}
+
+  // Only use columns that exist in both local AND imported tables
+  const commonCols = localCols.filter((c) => importCols.includes(c))
+  const commonUpdatable = updatable.filter((c) => importCols.includes(c))
+
+  if (commonCols.length !== localCols.length) {
+    const missing = localCols.filter((c) => !importCols.includes(c))
+    log(`  Schema mismatch for ${table}: local has ${missing.length} extra columns: ${missing.join(', ')}`)
+  }
+  if (importCols.length !== localCols.length) {
+    const extra = importCols.filter((c) => !localCols.includes(c))
+    if (extra.length > 0) {
+      log(`  Schema mismatch for ${table}: import has ${extra.length} extra columns: ${extra.join(', ')}`)
+    }
+  }
+
+  return {table, pkeys, cols: commonCols, updatable: commonUpdatable}
 }
 
 const countMissingKeys = async (db: string, table: string, pkeys: string[]): Promise<number> => {

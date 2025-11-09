@@ -15,7 +15,7 @@ const getGPUTypeMultiplier = (): number => {
     return 3
   } else if (gpuType === 'A100fat') {
     return 1.2
-  // we only run A100 with tp=2
+    // we only run A100 with tp=2
   } else if (gpuType === 'A100') {
     return 1.4
   } else {
