@@ -52,7 +52,7 @@ export const judgmentsJobsSendToLLM = async (
   const maxNumberOfInflightRequests = getMaxNumberOfInflightRequests()
   const articlesInFlight = await getNumberOfArticlesInFlight(db, serverJobId)
   const requestsToSend = Math.min(getMaxNumberOfInflightRequests(), maxNumberOfInflightRequests - articlesInFlight)
-
+  console.log('requestsToSend', requestsToSend)
   if (requestsToSend > 0) {
     const requestsToSendPerJob = Math.max(1, Math.floor(requestsToSend / allJobs.length))
 
