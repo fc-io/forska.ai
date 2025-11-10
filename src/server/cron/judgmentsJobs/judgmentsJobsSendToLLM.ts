@@ -2,6 +2,7 @@ import {and, count, eq} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../db/schema.ts'
+import {env} from '../../utils/env.ts'
 import {getMaxNumberOfInflightRequests} from './getMaxNumberOfInflightRequests.ts'
 import type {judgmentsJobsGetJobs} from './judgmentsJobsGetJobs.ts'
 import {type ArticleToProcess, getAndUpdateReadyArticles} from './judgmentsJobsSendToLLM/getAndUpdateReadyArticles.ts'
@@ -51,18 +52,30 @@ export const judgmentsJobsSendToLLM = async (
   isRunningJudgmentsJobsSendToLLM = true
   const maxNumberOfInflightRequests = getMaxNumberOfInflightRequests()
   const articlesInFlight = await getNumberOfArticlesInFlight(db, serverJobId)
-  const requestsToSend = Math.min(getMaxNumberOfInflightRequests(), maxNumberOfInflightRequests - articlesInFlight)
+  const requestsToSend = Math.min(env.SGLANG_MAX_RUNNING_REQUESTS, maxNumberOfInflightRequests - articlesInFlight)
   console.log('requestsToSend', requestsToSend)
-  if (requestsToSend > 0) {
+  if (requestsToSend > 0 && allJobs.length > 0) {
     const requestsToSendPerJob = Math.max(1, Math.floor(requestsToSend / allJobs.length))
 
-    allJobs.forEach((job) => {
+    const articlesToProcess = await Promise.allSettled(
+      allJobs.map((job) => {
+        return getAndUpdateReadyArticles(db, serverJobId, job.id, requestsToSendPerJob)
+      }),
+    ).then((results) => {
+      return results
+        .filter((result) => {
+          return result.status === 'fulfilled'
+        })
+        .map((result) => {
+          return result.value
+        })
+    })
+
+    articlesToProcess.forEach((articles) => {
       void (async () => {
         // TODO: fix the bug with not enough articles sent when when too few articles in project
-        const articlesToProcess = await getAndUpdateReadyArticles(db, serverJobId, job.id, requestsToSendPerJob)
-        const hasArticles = articlesToProcess.length > 0
-        if (hasArticles) {
-          await processArticles(db, articlesToProcess)
+        if (articles.length > 0) {
+          await processArticles(db, articles)
         } else {
           console.log('No articles to process – this should not happen, prob bug if it does')
         }
@@ -71,7 +84,7 @@ export const judgmentsJobsSendToLLM = async (
           error instanceof Error
             ? {name: error.name, message: error.message, stack: error.stack}
             : {message: String(error)}
-        console.error('judgmentsJobsSendToLLM job failed', {jobId: job.id, error: safeError})
+        console.error('judgmentsJobsSendToLLM job failed', {error: safeError})
       })
     })
   }
