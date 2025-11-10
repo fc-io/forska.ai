@@ -1,9 +1,10 @@
-import {desc, eq, inArray} from 'drizzle-orm'
+import {desc, eq, inArray, isNull} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {
   importRoute as importRouteTable,
   judgments,
+  judgmentsJobs,
   models,
   projectRouteLink,
   projects,
@@ -48,6 +49,17 @@ export const projectsRoutes = new Elysia()
   .use(projectsRoutesGetArticlesReviewsFilters)
   .use(projectsRoutesGetArticlesReviewsHumanFilters)
   .use(projectsRoutesPostArticleReviewDetails)
+  .get('/api/projects-without-jobs', async () => {
+    const db = getDatabase()
+    const rows = await db
+      .select({id: projects.id, name: projects.name, description: projects.description})
+      .from(projects)
+      .leftJoin(judgmentsJobs, eq(judgmentsJobs.projectId, projects.id))
+      .where(isNull(judgmentsJobs.id))
+      .orderBy(desc(projects.createdAt))
+
+    return {data: rows}
+  })
   .get('/api/projects', async () => {
     const db = getDatabase()
     const projectsList = await db.select().from(projects).orderBy(desc(projects.createdAt))
