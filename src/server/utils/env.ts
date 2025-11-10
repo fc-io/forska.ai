@@ -36,6 +36,7 @@ const envShape = arktype({
   DP_SIZE: 'number | string.integer.parse',
   GPU_SHAPE: 'string | null | undefined',
   SGLANG_MAX_RUNNING_REQUESTS: 'number | string.integer.parse',
+  SGLANG_MODEL: 'string | null | undefined',
   WORKER_URLS: CsvStringArray,
 })
 
@@ -87,6 +88,10 @@ const loadEnv = (): typeof envShape.infer => {
   // Provide a stable default when GPU_SHAPE is not provided
   if (merged.GPU_SHAPE == null || String(merged.GPU_SHAPE).trim() === '') {
     ;(merged as Record<string, string>).GPU_SHAPE = 'not set'
+  }
+  // Provide a stable default when SGLANG_MODEL is not provided
+  if (merged.SGLANG_MODEL == null || String(merged.SGLANG_MODEL).trim() === '') {
+    ;(merged as Record<string, string>).SGLANG_MODEL = 'not set'
   }
   return envShape.assert(merged)
 }

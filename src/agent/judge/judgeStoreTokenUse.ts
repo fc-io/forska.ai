@@ -36,6 +36,7 @@ const storeTokenUseDirectly = async (
       dpSize: env.DP_SIZE,
       gpuShape: env.GPU_SHAPE ?? null,
       sglangMaxRunningRequests: env.SGLANG_MAX_RUNNING_REQUESTS,
+      sglangModel: env.SGLANG_MODEL ?? null,
       requests: totalArticles,
       totalPromptTokens: totalTokenUse.totalPromptTokens,
       totalCompletionTokens: totalTokenUse.totalCompletionTokens,
