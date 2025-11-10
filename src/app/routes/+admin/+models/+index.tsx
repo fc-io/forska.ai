@@ -20,6 +20,19 @@ type ModelRow = {
 
 type ModelsResponse = {data: ModelRow[]}
 
+type GpuInfo = {
+  GPU_NNODES: number
+  GPU_GPUS_PER_NODE: number
+  GPU_SHAPE: string | null | undefined
+  GPU_TOTAL_GPUS: number
+  TP_SIZE: number
+  DP_SIZE: number
+  SGLANG_MAX_RUNNING_REQUESTS: number
+  WORKER_URLS: string[]
+  SGLANG_MODEL: string | null | undefined
+}
+type GpuInfoResponse = {data: GpuInfo}
+
 const AdminModels = () => {
   const sessionQuery = useQuery(() => {
     return {queryKey: ['session'], queryFn: fetchSession}
@@ -34,6 +47,19 @@ const AdminModels = () => {
         return result.data ?? []
       },
       staleTime: 1000 * 60 * 5,
+      refetchOnWindowFocus: true,
+    }
+  })
+
+  const gpuInfoQuery = useQuery(() => {
+    return {
+      queryKey: ['models', 'gpu-info'],
+      queryFn: async () => {
+        const response = await apiClient.api.models['gpu-info'].get()
+        const result = handleApiResponse<GpuInfoResponse>(response, 'Failed to load GPU info')
+        return result.data
+      },
+      staleTime: 1000 * 30,
       refetchOnWindowFocus: true,
     }
   })
@@ -155,6 +181,61 @@ const AdminModels = () => {
               </table>
             </div>
           </Show>
+
+          {/* GPU / Engine Info (moved below table) */}
+          <div class="mt-6">
+            <h2 class="text-lg font-semibold mb-2">GPU / Engine Info</h2>
+            <Show when={gpuInfoQuery.isLoading}>
+              <p class="text-gray-500">Loading GPU info…</p>
+            </Show>
+            <Show when={gpuInfoQuery.isError}>
+              <div class="p-3 rounded-md bg-red-50 border border-red-200 text-sm text-red-700">
+                Failed to load GPU info
+              </div>
+            </Show>
+            <Show when={!gpuInfoQuery.isLoading && !gpuInfoQuery.isError && gpuInfoQuery.data}>
+              <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 bg-white rounded-lg shadow p-4">
+                <div>
+                  <div class="text-xs text-gray-500">Nodes</div>
+                  <div class="text-sm text-gray-900">{gpuInfoQuery.data?.GPU_NNODES}</div>
+                </div>
+                <div>
+                  <div class="text-xs text-gray-500">GPUs per node</div>
+                  <div class="text-sm text-gray-900">{gpuInfoQuery.data?.GPU_GPUS_PER_NODE}</div>
+                </div>
+                <div>
+                  <div class="text-xs text-gray-500">Total GPUs</div>
+                  <div class="text-sm text-gray-900">{gpuInfoQuery.data?.GPU_TOTAL_GPUS}</div>
+                </div>
+                <div>
+                  <div class="text-xs text-gray-500">Shape</div>
+                  <div class="text-sm text-gray-900">{gpuInfoQuery.data?.GPU_SHAPE ?? '—'}</div>
+                </div>
+                <div>
+                  <div class="text-xs text-gray-500">TP size</div>
+                  <div class="text-sm text-gray-900">{gpuInfoQuery.data?.TP_SIZE}</div>
+                </div>
+                <div>
+                  <div class="text-xs text-gray-500">DP size</div>
+                  <div class="text-sm text-gray-900">{gpuInfoQuery.data?.DP_SIZE}</div>
+                </div>
+                <div>
+                  <div class="text-xs text-gray-500">SGLANG max running requests</div>
+                  <div class="text-sm text-gray-900">{gpuInfoQuery.data?.SGLANG_MAX_RUNNING_REQUESTS}</div>
+                </div>
+                <div class="md:col-span-2 xl:col-span-3">
+                  <div class="text-xs text-gray-500">Worker URLs</div>
+                  <div class="text-sm text-gray-900 whitespace-pre-wrap break-words">
+                    {gpuInfoQuery.data?.WORKER_URLS?.length ? gpuInfoQuery.data?.WORKER_URLS.join(', ') : '—'}
+                  </div>
+                </div>
+                <div class="xl:col-span-3">
+                  <div class="text-xs text-gray-500">Running SGLANG model</div>
+                  <div class="text-sm text-gray-900">{gpuInfoQuery.data?.SGLANG_MODEL ?? '—'}</div>
+                </div>
+              </div>
+            </Show>
+          </div>
         </Show>
       </Suspense>
     </div>
