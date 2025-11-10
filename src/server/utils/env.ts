@@ -29,13 +29,11 @@ const envShape = arktype({
   RUN_SERVER_JUDGING: arktype('"true" | "false" | boolean').pipe((v) => {
     return typeof v === 'string' ? v.toLowerCase() === 'true' : v
   }),
-  // GPU/cluster topology injected by sbatch; numeric fields parse to integers
   GPU_NNODES: 'number | string.integer.parse',
   GPU_GPUS_PER_NODE: 'number | string.integer.parse',
   GPU_TOTAL_GPUS: 'number | string.integer.parse',
   TP_SIZE: 'number | string.integer.parse',
   DP_SIZE: 'number | string.integer.parse',
-  // Optional descriptive GPU shape, e.g. "A100:4" or "H100:8"
   GPU_SHAPE: 'string | null | undefined',
   WORKER_URLS: CsvStringArray,
 })
