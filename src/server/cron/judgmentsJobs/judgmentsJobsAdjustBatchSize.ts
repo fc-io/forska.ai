@@ -248,14 +248,6 @@ export const judgmentsJobsAdjustBatchSize = async (db: PostgresJsDatabase<typeof
 
     if (allJobIds.length > 0) await applyBatches(db, allJobIds, allBatches)
 
-    const gpu = {
-      nnodes: env.GPU_NNODES,
-      gpusPerNode: env.GPU_GPUS_PER_NODE,
-      totalGpus: env.GPU_TOTAL_GPUS,
-      tpSize: env.TP_SIZE,
-      dpSize: env.DP_SIZE,
-    }
-
-    console.log('adjust-batch-size latest state', {instances: summary, gpu})
+    console.log('adjust-batch-size latest state', summary)
   }
 }
