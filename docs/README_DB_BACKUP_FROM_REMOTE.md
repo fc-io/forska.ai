@@ -23,7 +23,7 @@ Make the remote postgres host/port available on the local machine:
 ssh -N -L 8432:127.0.0.1:5433 alvis2
 ```
 
-Check if something is conflicting with the local port by:
+if something is conflicting with the local port check by:
 
 ``` bash
 lsof -iTCP:8432 -sTCP:LISTEN -Pn
