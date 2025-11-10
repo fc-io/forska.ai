@@ -1,5 +1,5 @@
 import type {SQL} from 'drizzle-orm'
-import {eq, gte, lte, sql} from 'drizzle-orm'
+import {eq, gte, lte, sql, sum} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {
@@ -306,19 +306,19 @@ export const judgmentsJobsRoutes = new Elysia()
           .groupBy(judgmentsJobsArticles.status),
         db
           .select({
-            totalTokens: sql<number>`COALESCE(SUM(total_tokens), 0)::int`,
-            totalPromptTokens: sql<number>`COALESCE(SUM(total_prompt_tokens), 0)::int`,
-            totalCompletionTokens: sql<number>`COALESCE(SUM(total_completion_tokens), 0)::int`,
+            totalTokens: sum(tokenUse.totalTokens),
+            totalPromptTokens: sum(tokenUse.totalPromptTokens),
+            totalCompletionTokens: sum(tokenUse.totalCompletionTokens),
           })
           .from(tokenUse)
           .where(eq(tokenUse.judgmentsJobId, job.id)),
         db
           .select({
             date: sql<string>`DATE(created_at AT TIME ZONE 'UTC')`,
-            dailyTokens: sql<number>`SUM(total_tokens)::int`,
-            dailyPromptTokens: sql<number>`SUM(total_prompt_tokens)::int`,
-            dailyCompletionTokens: sql<number>`SUM(total_completion_tokens)::int`,
-            requests: sql<number>`SUM(requests)::int`,
+            dailyTokens: sum(tokenUse.totalTokens),
+            dailyPromptTokens: sum(tokenUse.totalPromptTokens),
+            dailyCompletionTokens: sum(tokenUse.totalCompletionTokens),
+            requests: sum(tokenUse.requests),
           })
           .from(tokenUse)
           .where(eq(tokenUse.judgmentsJobId, job.id))
@@ -338,11 +338,19 @@ export const judgmentsJobsRoutes = new Elysia()
         ...job,
         articleStats: stats,
         totalTokenUsage: {
-          totalTokens: totalTokenUsage[0]?.totalTokens || 0,
-          totalPromptTokens: totalTokenUsage[0]?.totalPromptTokens || 0,
-          totalCompletionTokens: totalTokenUsage[0]?.totalCompletionTokens || 0,
+          totalTokens: Number(totalTokenUsage[0]?.totalTokens || 0),
+          totalPromptTokens: Number(totalTokenUsage[0]?.totalPromptTokens || 0),
+          totalCompletionTokens: Number(totalTokenUsage[0]?.totalCompletionTokens || 0),
         },
-        tokenUsagePerDay,
+        tokenUsagePerDay: tokenUsagePerDay.map((row) => {
+          return {
+            ...row,
+            dailyTokens: Number((row as any).dailyTokens || 0),
+            dailyPromptTokens: Number((row as any).dailyPromptTokens || 0),
+            dailyCompletionTokens: Number((row as any).dailyCompletionTokens || 0),
+            requests: Number((row as any).requests || 0),
+          }
+        }),
       }
     },
     {params: t.Object({id: t.String()})},
@@ -409,17 +417,17 @@ export const judgmentsJobsRoutes = new Elysia()
 
     const [totalUsage] = await db
       .select({
-        totalTokens: sql<number>`COALESCE(SUM(total_tokens), 0)::int`,
-        totalPromptTokens: sql<number>`COALESCE(SUM(total_prompt_tokens), 0)::int`,
-        totalCompletionTokens: sql<number>`COALESCE(SUM(total_completion_tokens), 0)::int`,
+        totalTokens: sum(tokenUse.totalTokens),
+        totalPromptTokens: sum(tokenUse.totalPromptTokens),
+        totalCompletionTokens: sum(tokenUse.totalCompletionTokens),
       })
       .from(tokenUse)
 
     return {
       data: {
-        totalTokens: totalUsage?.totalTokens || 0,
-        totalPromptTokens: totalUsage?.totalPromptTokens || 0,
-        totalCompletionTokens: totalUsage?.totalCompletionTokens || 0,
+        totalTokens: Number(totalUsage?.totalTokens || 0),
+        totalPromptTokens: Number(totalUsage?.totalPromptTokens || 0),
+        totalCompletionTokens: Number(totalUsage?.totalCompletionTokens || 0),
       },
       error: null,
     }
