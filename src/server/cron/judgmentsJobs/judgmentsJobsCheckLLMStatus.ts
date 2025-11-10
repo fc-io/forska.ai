@@ -3,11 +3,8 @@ import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../db/schema.ts'
 import {env} from '../../utils/env.ts'
+import {getMaxNumberOfInflightRequests} from './getMaxNumberOfInflightRequests.ts'
 import {getSGLangMetrics} from './judgmentsJobsAdjustBatchSize/getSGLangMetrics.ts'
-
-const clamp = (lo: number, hi: number, v: number): number => {
-  return Math.min(hi, Math.max(lo, v))
-}
 
 const ema = (prev: number | null | undefined, cur: number, alpha: number): number => {
   return prev == null ? cur : alpha * cur + (1 - alpha) * prev
@@ -88,11 +85,7 @@ const fallbackWorkerUrls = normalizeWorkerUrls(env.WORKER_URLS)
 // Initially feeds engine='vllm' using the existing vLLM metrics adapter.
 export const judgmentsJobsCheckLLMStatus = async (db: PostgresJsDatabase<typeof schema>) => {
   const runningJobConfigs = await db
-    .select({
-      modelName: schema.models.modelName,
-      baseURL: schema.models.baseURL,
-      workerUrls: schema.models.workerUrls,
-    })
+    .select({modelName: schema.models.modelName, baseURL: schema.models.baseURL, workerUrls: schema.models.workerUrls})
     .from(schema.judgmentsJobs)
     .leftJoin(schema.projects, eq(schema.judgmentsJobs.projectId, schema.projects.id))
     .leftJoin(schema.models, eq(schema.projects.modelId, schema.models.id))
@@ -187,7 +180,7 @@ export const judgmentsJobsCheckLLMStatus = async (db: PostgresJsDatabase<typeof 
       const tPre = isUnsafe ? targetPrefillFinal * 0.6 : targetPrefillFinal
 
       const inFlight = numQueueReqs + numRunningReqs
-      const maxInFlight = clamp(64, 4096, Math.round(Math.max(rps, 1) * 60))
+      const maxInFlight = getMaxNumberOfInflightRequests()
 
       const llmStatusData = {
         engine,
@@ -231,7 +224,6 @@ export const judgmentsJobsCheckLLMStatus = async (db: PostgresJsDatabase<typeof 
         targetPrefillTps: tPre,
         inFlight,
         maxInFlight,
-        lastAction: toJSON({bestGen, smallQueue: wasSmall, safety: isUnsafe}),
         timeToFirstTokenSeconds: m.timeToFirstTokenSeconds ?? null,
         e2eRequestLatencySeconds: m.e2eRequestLatencySeconds ?? null,
         interTokenLatencySeconds: m.interTokenLatencySeconds ?? null,
