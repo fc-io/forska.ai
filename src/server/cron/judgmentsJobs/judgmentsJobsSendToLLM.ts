@@ -1,6 +1,8 @@
+import {and, count, eq} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../db/schema.ts'
+import {getMaxNumberOfInflightRequests} from './getMaxNumberOfInflightRequests.ts'
 import type {judgmentsJobsGetJobs} from './judgmentsJobsGetJobs.ts'
 import {type ArticleToProcess, getAndUpdateReadyArticles} from './judgmentsJobsSendToLLM/getAndUpdateReadyArticles.ts'
 import {processArticleWithLLM} from './judgmentsJobsSendToLLM/processArticleWithLLM.ts'
@@ -21,45 +23,57 @@ const processArticles = async (db: PostgresJsDatabase<typeof schema>, articles: 
   }
 }
 
-// With the cron now running every 1s (was 9s), we scale the per-tick
-// batch size down to keep effective throughput roughly constant while
-// we evaluate smoother arrivals. Adjuster logic will still tune totals.
-const SEND_TO_LLM_TICK_DIVISOR = 9
-
-const sendToLLM = async (
+const getNumberOfArticlesInFlight = async (
   db: PostgresJsDatabase<typeof schema>,
   serverJobId: string,
-  jobId: string,
-  batchSize: number,
-): Promise<void> => {
-  const scaledBatch = Math.max(1, Math.ceil(batchSize / SEND_TO_LLM_TICK_DIVISOR))
-  const articlesToProcess = await getAndUpdateReadyArticles(db, serverJobId, jobId, scaledBatch)
-  const hasArticles = articlesToProcess.length > 0
+): Promise<number> => {
+  const result = await db
+    .select({count: count()})
+    .from(schema.judgmentsJobsArticles)
+    .where(and(eq(schema.judgmentsJobsArticles.status, 'sent'), eq(schema.judgmentsJobsArticles.serverId, serverJobId)))
 
-  if (hasArticles) {
-    // console.log('1 send to LLM')
-    await processArticles(db, articlesToProcess)
-  } else {
-    console.log('No articles to proces – this should not happen, prob bug if it does')
-  }
+  return result[0]?.count || 0
 }
 
 let hasLogged = false
+let isRunningJudgmentsJobsSendToLLM = false
+
 export const judgmentsJobsSendToLLM = async (
   db: PostgresJsDatabase<typeof schema>,
   allJobs: Awaited<ReturnType<typeof judgmentsJobsGetJobs>>,
   serverJobId: string,
 ): Promise<void> => {
+  if (isRunningJudgmentsJobsSendToLLM) return
   if (!hasLogged) {
     console.log(`1. send ${allJobs.length} jobs to LLM`)
-  }
-  await Promise.allSettled(
-    allJobs.map((job) => {
-      return sendToLLM(db, serverJobId, job.id, job.sendToLLMBatchSize)
-    }),
-  )
-  if (!hasLogged) {
-    console.log('2. send to LLM done')
     hasLogged = true
   }
+  isRunningJudgmentsJobsSendToLLM = true
+  const maxNumberOfInflightRequests = getMaxNumberOfInflightRequests()
+  const articlesInFlight = await getNumberOfArticlesInFlight(db, serverJobId)
+  const requestsToSend = Math.min(getMaxNumberOfInflightRequests(), maxNumberOfInflightRequests - articlesInFlight)
+
+  if (requestsToSend > 0) {
+    const requestsToSendPerJob = Math.max(1, Math.floor(requestsToSend / allJobs.length))
+
+    allJobs.forEach((job) => {
+      void (async () => {
+        // TODO: fix the bug with not enough articles sent when when too few articles in project
+        const articlesToProcess = await getAndUpdateReadyArticles(db, serverJobId, job.id, requestsToSendPerJob)
+        const hasArticles = articlesToProcess.length > 0
+        if (hasArticles) {
+          await processArticles(db, articlesToProcess)
+        } else {
+          console.log('No articles to process – this should not happen, prob bug if it does')
+        }
+      })().catch((error) => {
+        const safeError =
+          error instanceof Error
+            ? {name: error.name, message: error.message, stack: error.stack}
+            : {message: String(error)}
+        console.error('judgmentsJobsSendToLLM job failed', {jobId: job.id, error: safeError})
+      })
+    })
+  }
+  isRunningJudgmentsJobsSendToLLM = false
 }

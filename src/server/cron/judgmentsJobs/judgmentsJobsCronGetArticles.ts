@@ -12,13 +12,7 @@ export type ArticleProcessingData = {
   jobId?: string
 }
 
-const getQueryConditions = ({
-  jobId,
-  project,
-}: {
-  jobId: string
-  project: typeof schema.projects.$inferSelect
-}) => {
+const getQueryConditions = ({jobId, project}: {jobId: string; project: typeof schema.projects.$inferSelect}) => {
   const conditions = []
 
   // Exclude articles already claimed/processed by this job without expanding large NOT IN lists
@@ -114,11 +108,5 @@ export const judgmentsJobsCronGetArticles = async (
 
   return !project || projectPrompts.length === 0
     ? {articlesToJudgeIds: [], articlesToJudge: [], projectPrompts: []}
-    : await getArticleIdsToJudge({
-        db,
-        jobId,
-        project,
-        projectPrompts,
-        numberOfArticlesToGet,
-      })
+    : await getArticleIdsToJudge({db, jobId, project, projectPrompts, numberOfArticlesToGet})
 }

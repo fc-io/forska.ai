@@ -1,18 +1,15 @@
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../db/schema.ts'
+import {env} from '../../utils/env.ts'
 import {judgmentsJobsCronGetArticles} from './judgmentsJobsCronGetArticles.ts'
 import type {judgmentsJobsGetJobs} from './judgmentsJobsGetJobs.ts'
 
 type Job = Awaited<ReturnType<typeof judgmentsJobsGetJobs>>[number]
 
-let highestBatchSizePerJob = 0
-
-const fetchArticlesForJob = async (db: PostgresJsDatabase<typeof schema>, job: Job) => {
-  // Track the highest batch size seen and always use that to avoid queue starvation during ramp-up
-  highestBatchSizePerJob = Math.max(highestBatchSizePerJob, job.sendToLLMBatchSize)
-  const batchSize = Math.max(Math.ceil(highestBatchSizePerJob / 3), 1)
-  const articleData = await judgmentsJobsCronGetArticles(job.projectId, job.id, batchSize)
+const fetchArticlesForJob = async (job: Job) => {
+  const {SGLANG_MAX_RUNNING_REQUESTS} = env
+  const articleData = await judgmentsJobsCronGetArticles(job.projectId, job.id, SGLANG_MAX_RUNNING_REQUESTS)
 
   return {...articleData, job}
 }
@@ -25,7 +22,7 @@ const fetchSequentially = async (
   const [job, ...rest] = jobs
   return !job
     ? acc
-    : fetchArticlesForJob(db, job).then((res) => {
+    : fetchArticlesForJob(job).then((res) => {
         const nextAcc = [...acc, res]
         return fetchSequentially(db, rest, nextAcc)
       })

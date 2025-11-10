@@ -79,7 +79,10 @@ const loadEnv = (): typeof envShape.infer => {
     }
   })
   // Provide default for SGLANG_MAX_RUNNING_REQUESTS when not provided
-  if (merged.SGLANG_MAX_RUNNING_REQUESTS == null || (merged as Record<string, string>).SGLANG_MAX_RUNNING_REQUESTS === '') {
+  if (
+    merged.SGLANG_MAX_RUNNING_REQUESTS == null
+    || (merged as Record<string, string>).SGLANG_MAX_RUNNING_REQUESTS === ''
+  ) {
     ;(merged as Record<string, string>).SGLANG_MAX_RUNNING_REQUESTS = '0'
   }
   if (!('WORKER_URLS' in merged)) {
