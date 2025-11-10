@@ -11,6 +11,7 @@ declare module '@tanstack/solid-table' {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   interface TableMeta<TData> {
     projectId?: () => string
+    rowSelection?: Accessor<Record<string, boolean>>
   }
 }
 
@@ -34,12 +35,15 @@ const selectionColumn: ColumnDef<ArticleWithHumanJudgments, unknown> = {
   minSize: 15,
   enableSorting: false,
   cell: (info) => {
-    const selected = info.row.getIsSelected()
+    const selected = () => {
+      const rs = info.table.options.meta?.rowSelection?.()
+      return Boolean(rs && rs[info.row.id])
+    }
     return (
       <input
         type="checkbox"
         class="w-[15px] h-[15px]"
-        checked={selected}
+        checked={selected()}
         onChange={(e) => {
           info.row.toggleSelected(Boolean((e?.currentTarget as HTMLInputElement | undefined)?.checked))
         }}
@@ -184,7 +188,7 @@ export const ReviewsArticlesHumanTable = (props: ReviewsArticlesHumanTableProps)
     },
     columns,
     getCoreRowModel: getCoreRowModel(),
-    meta: {projectId},
+    meta: {projectId, rowSelection: props.rowSelection},
     enableRowSelection: true,
     enableMultiRowSelection: true,
     getRowId: (row) => {
