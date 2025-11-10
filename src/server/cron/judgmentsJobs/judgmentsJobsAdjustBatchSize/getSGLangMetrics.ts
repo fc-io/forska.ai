@@ -58,13 +58,6 @@ const sumByName = (metrics: PromSample[], names: string[]): number => {
   }, 0)
 }
 
-const maxByName = (metrics: PromSample[], names: string[]): number => {
-  const set = new Set(names)
-  let max = 0
-  for (const s of metrics) if (set.has(s.name) && s.value > max) max = s.value
-  return max
-}
-
 const pickOne = (metrics: PromSample[], names: string[], def = 0): number => {
   for (const n of names) {
     const s = metrics.find((x) => {
@@ -99,7 +92,12 @@ const strip = (labels: Record<string, string>, exclude: string[] = []): Record<s
   )
 }
 
-type HistogramSeries = {labels: Record<string, string>; sum?: number; count?: number; buckets: {le: string; value: number}[]}
+type HistogramSeries = {
+  labels: Record<string, string>
+  sum?: number
+  count?: number
+  buckets: {le: string; value: number}[]
+}
 
 const collectHistogram = (metrics: PromSample[], baseName: string): {series: HistogramSeries[]} => {
   const sumName = `${baseName}_sum`
@@ -127,7 +125,7 @@ const collectHistogram = (metrics: PromSample[], baseName: string): {series: His
     } else if (s.name === bucketName) {
       const labels = strip(s.labels, ['le'])
       const series = upsert(labels)
-      const le = String((s.labels as Record<string, string>).le ?? '+Inf')
+      const le = String(s.labels.le ?? '+Inf')
       series.buckets = [...series.buckets, {le, value: s.value}]
     }
   }
