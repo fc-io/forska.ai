@@ -2,6 +2,7 @@ import {eq} from 'drizzle-orm'
 
 import {session} from '../../../auth-schema.ts'
 import {tokenUse} from '../../db/schema.ts'
+import {env} from '../../server/utils/env.ts'
 import {apiClient} from '../../services/apiClient.ts'
 
 const isServerEnvironment = (): boolean => {
@@ -28,6 +29,12 @@ const storeTokenUseDirectly = async (
       userId: sessionData?.userId ?? null,
       sessionId,
       judgmentsJobId: judgmentsJobId ?? null,
+      gpuNnodes: env.GPU_NNODES,
+      gpuGpusPerNode: env.GPU_GPUS_PER_NODE,
+      gpuTotalGpus: env.GPU_TOTAL_GPUS,
+      tpSize: env.TP_SIZE,
+      dpSize: env.DP_SIZE,
+      gpuShape: env.GPU_SHAPE ?? null,
       requests: totalArticles,
       totalPromptTokens: totalTokenUse.totalPromptTokens,
       totalCompletionTokens: totalTokenUse.totalCompletionTokens,

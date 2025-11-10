@@ -78,6 +78,13 @@
       "when": 1762697738399,
       "tag": "0010_damp_deathstrike",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1762764610379,
+      "tag": "0011_closed_ricochet",
+      "breakpoints": true
     }
   ]
 }

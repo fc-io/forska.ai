@@ -596,6 +596,13 @@ export const tokenUse = pgTable(
     startedAt: timestamp('started_at', {withTimezone: true}),
     finishedAt: timestamp('finished_at', {withTimezone: true}),
     duration: integer('duration'),
+    // GPU / parallelism metadata captured at insert time
+    gpuNnodes: integer('gpu_nnodes'),
+    gpuGpusPerNode: integer('gpu_gpus_per_node'),
+    gpuTotalGpus: integer('gpu_total_gpus'),
+    tpSize: integer('tp_size'),
+    dpSize: integer('dp_size'),
+    gpuShape: text('gpu_shape'),
   },
   (table) => {
     return [index('token_use_job_created_idx').on(table.judgmentsJobId, table.createdAt)]

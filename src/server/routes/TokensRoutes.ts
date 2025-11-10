@@ -4,6 +4,7 @@ import {Elysia, t} from 'elysia'
 import {session} from '../../../auth-schema.ts'
 import {tokenUse} from '../../db/schema.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
+import {env} from '../utils/env.ts'
 import {tokensRoutesGetTimeline} from './tokensRoutes/tokensRoutesGetTimeline.ts'
 import {tokensRoutesGetTimelineAllJobs} from './tokensRoutes/tokensRoutesGetTimelineAllJobs.ts'
 
@@ -26,6 +27,13 @@ export const tokensRoutes = new Elysia()
           .values({
             userId: sessionData?.userId ?? null,
             sessionId: body.sessionId,
+            // GPU + parallelism metadata
+            gpuNnodes: env.GPU_NNODES,
+            gpuGpusPerNode: env.GPU_GPUS_PER_NODE,
+            gpuTotalGpus: env.GPU_TOTAL_GPUS,
+            tpSize: env.TP_SIZE,
+            dpSize: env.DP_SIZE,
+            gpuShape: env.GPU_SHAPE ?? null,
             requests: body.requests,
             totalPromptTokens: body.totalPromptTokens,
             totalCompletionTokens: body.totalCompletionTokens,
