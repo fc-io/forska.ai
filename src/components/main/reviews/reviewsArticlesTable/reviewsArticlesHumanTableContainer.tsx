@@ -1,6 +1,6 @@
 import {useQuery} from '@tanstack/solid-query'
 import type {Accessor, Setter} from 'solid-js'
-import {Show, Suspense} from 'solid-js'
+import {Show, Suspense, createSignal} from 'solid-js'
 
 import {createArticlesHumanReviewsQueryOptions} from '../../projects/projectsArticlesHumanReviewsQuery.ts'
 import {ReviewsPaginationControls} from '../reviewsPaginationControls.tsx'
@@ -18,6 +18,7 @@ interface ReviewsArticlesHumanTableContainerProps {
 }
 
 export const ReviewsArticlesHumanTableContainer = (props: ReviewsArticlesHumanTableContainerProps) => {
+  const [rowSelection, setRowSelection] = createSignal<Record<string, boolean>>({})
   const articlesQuery = useQuery(() => {
     return createArticlesHumanReviewsQueryOptions(
       props.projectId,
@@ -71,6 +72,11 @@ export const ReviewsArticlesHumanTableContainer = (props: ReviewsArticlesHumanTa
                     page={props.currentPage()}
                     totalPages={response().totalPages}
                     setCurrentPage={props.setCurrentPage}
+                    currentPageRowIds={response().data.map((a) => {
+                      return a.id
+                    })}
+                    rowSelection={rowSelection}
+                    setRowSelection={setRowSelection}
                   />
                 </Show>
 
@@ -86,7 +92,12 @@ export const ReviewsArticlesHumanTableContainer = (props: ReviewsArticlesHumanTa
                     </div>
                   }
                 >
-                  <ReviewsArticlesHumanTable projectId={props.projectId} articles={response().data} />
+                  <ReviewsArticlesHumanTable
+                    projectId={props.projectId}
+                    articles={response().data}
+                    rowSelection={rowSelection}
+                    setRowSelection={setRowSelection}
+                  />
                 </Show>
 
                 <Show when={response().totalPages > 1}>
@@ -94,6 +105,11 @@ export const ReviewsArticlesHumanTableContainer = (props: ReviewsArticlesHumanTa
                     page={props.currentPage()}
                     totalPages={response().totalPages}
                     setCurrentPage={props.setCurrentPage}
+                    currentPageRowIds={response().data.map((a) => {
+                      return a.id
+                    })}
+                    rowSelection={rowSelection}
+                    setRowSelection={setRowSelection}
                   />
                 </Show>
               </div>

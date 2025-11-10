@@ -1,6 +1,6 @@
 import {useQuery} from '@tanstack/solid-query'
 import type {Accessor, Setter} from 'solid-js'
-import {Show, Suspense} from 'solid-js'
+import {Show, Suspense, createSignal} from 'solid-js'
 
 import {createArticlesUnassessedQueryOptions} from '../../projects/projectsArticlesUnassessedQuery.ts'
 import {ReviewsPaginationControls} from '../reviewsPaginationControls.tsx'
@@ -17,6 +17,7 @@ interface ReviewsArticlesUnassessedTableContainerProps {
 }
 
 export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUnassessedTableContainerProps) => {
+  const [rowSelection, setRowSelection] = createSignal<Record<string, boolean>>({})
   const articlesQuery = useQuery(() => {
     return createArticlesUnassessedQueryOptions(
       props.projectId,
@@ -65,6 +66,11 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
                     page={props.currentPage()}
                     totalPages={response().totalPages}
                     setCurrentPage={props.setCurrentPage}
+                    currentPageRowIds={response().data.map((a) => {
+                      return a.id
+                    })}
+                    rowSelection={rowSelection}
+                    setRowSelection={setRowSelection}
                   />
                 </Show>
 
@@ -72,7 +78,12 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
                   when={response().data.length > 0}
                   fallback={<div class="p-8 text-center text-gray-500">No unassessed articles found</div>}
                 >
-                  <ReviewsArticlesTable projectId={props.projectId} articles={response().data} />
+                  <ReviewsArticlesTable
+                    projectId={props.projectId}
+                    articles={response().data}
+                    rowSelection={rowSelection}
+                    setRowSelection={setRowSelection}
+                  />
                 </Show>
 
                 <Show when={response().totalPages > 1}>
@@ -80,6 +91,11 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
                     page={props.currentPage()}
                     totalPages={response().totalPages}
                     setCurrentPage={props.setCurrentPage}
+                    currentPageRowIds={response().data.map((a) => {
+                      return a.id
+                    })}
+                    rowSelection={rowSelection}
+                    setRowSelection={setRowSelection}
                   />
                 </Show>
               </div>

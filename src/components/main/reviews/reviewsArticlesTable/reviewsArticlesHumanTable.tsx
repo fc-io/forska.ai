@@ -2,6 +2,7 @@ import {Link} from '@tanstack/solid-router'
 import {type ColumnDef, createSolidTable, flexRender, getCoreRowModel} from '@tanstack/solid-table'
 import {format} from 'date-fns'
 import {For, Show} from 'solid-js'
+import type {Accessor, Setter} from 'solid-js'
 
 import {getArticleUrl} from '../../../../app/utils/getArticleUrl.ts'
 import type {articles, judgmentsHuman} from '../../../../db/schema.ts'
@@ -20,9 +21,35 @@ type ArticleWithHumanJudgments = Omit<typeof articles.$inferSelect, 'judgments'>
 interface ReviewsArticlesHumanTableProps {
   articles: ArticleWithHumanJudgments[]
   projectId: string
+  rowSelection: Accessor<Record<string, boolean>>
+  setRowSelection: Setter<Record<string, boolean>>
+}
+
+const selectionColumn: ColumnDef<ArticleWithHumanJudgments, unknown> = {
+  id: 'select',
+  header: () => {
+    return <span class="sr-only">Select</span>
+  },
+  size: 15,
+  minSize: 15,
+  enableSorting: false,
+  cell: (info) => {
+    const selected = info.row.getIsSelected()
+    return (
+      <input
+        type="checkbox"
+        class="w-[15px] h-[15px]"
+        checked={selected}
+        onChange={(e) => {
+          info.row.toggleSelected(Boolean((e?.currentTarget as HTMLInputElement | undefined)?.checked))
+        }}
+      />
+    )
+  },
 }
 
 const columns: ColumnDef<ArticleWithHumanJudgments, unknown>[] = [
+  selectionColumn,
   {
     accessorKey: 'articleTitle',
     header: 'Title',
@@ -158,6 +185,19 @@ export const ReviewsArticlesHumanTable = (props: ReviewsArticlesHumanTableProps)
     columns,
     getCoreRowModel: getCoreRowModel(),
     meta: {projectId},
+    enableRowSelection: true,
+    enableMultiRowSelection: true,
+    getRowId: (row) => {
+      return (row as {id: string}).id
+    },
+    get state() {
+      return {rowSelection: props.rowSelection()}
+    },
+    onRowSelectionChange: (updater) => {
+      const current = props.rowSelection()
+      const next = typeof updater === 'function' ? (updater as (old: unknown) => unknown)(current) : updater
+      props.setRowSelection((next || {}) as Record<string, boolean>)
+    },
   })
 
   return (
@@ -172,7 +212,11 @@ export const ReviewsArticlesHumanTable = (props: ReviewsArticlesHumanTableProps)
                     {(header) => {
                       return (
                         <th
-                          class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                          class={
+                            header.column.id === 'select'
+                              ? 'px-1.5 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider'
+                              : 'px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider'
+                          }
                           style={{ width: `${header.getSize()}px` }}
                         >
                           {header.isPlaceholder
@@ -197,9 +241,11 @@ export const ReviewsArticlesHumanTable = (props: ReviewsArticlesHumanTableProps)
                       return (
                         <td
                           class={
-                            cell.column.id === 'articleTitle'
-                              ? 'px-6 py-4 text-sm text-gray-900'
-                              : 'px-6 py-4 whitespace-nowrap text-sm text-gray-900'
+                            cell.column.id === 'select'
+                              ? 'px-1.5 py-4 text-sm text-gray-900'
+                              : cell.column.id === 'articleTitle'
+                                ? 'px-6 py-4 text-sm text-gray-900'
+                                : 'px-6 py-4 whitespace-nowrap text-sm text-gray-900'
                           }
                           style={{ width: `${cell.column.getSize()}px` }}
                         >
