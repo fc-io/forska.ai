@@ -1,6 +1,6 @@
 import {useQuery} from '@tanstack/solid-query'
 import type {Accessor, Setter} from 'solid-js'
-import {Show, Suspense, createSignal} from 'solid-js'
+import {Show, Suspense, createSignal, createEffect} from 'solid-js'
 
 import {createArticlesBothReviewsQueryOptions} from '../../projects/projectsArticlesBothReviewsQuery.ts'
 import {ReviewsPaginationControls} from '../reviewsPaginationControls.tsx'
@@ -19,6 +19,17 @@ interface ReviewsArticlesBothTableContainerProps {
 
 export const ReviewsArticlesBothTableContainer = (props: ReviewsArticlesBothTableContainerProps) => {
   const [rowSelection, setRowSelection] = createSignal<Record<string, boolean>>({})
+  // Reset selection when filters/date/search/page size change
+  createEffect(() => {
+    // Access to track dependencies
+    props.promptFilters()
+    props.fromDate()
+    props.toDate()
+    props.searchTitle()
+    props.pageLimit()
+    props.currentPage()
+    setRowSelection({})
+  })
   const articlesQuery = useQuery(() => {
     return createArticlesBothReviewsQueryOptions(
       props.projectId,
