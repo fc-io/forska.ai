@@ -603,6 +603,7 @@ export const tokenUse = pgTable(
     tpSize: integer('tp_size'),
     dpSize: integer('dp_size'),
     gpuShape: text('gpu_shape'),
+    sglangMaxRunningRequests: integer('sglang_max_running_requests'),
   },
   (table) => {
     return [index('token_use_job_created_idx').on(table.judgmentsJobId, table.createdAt)]

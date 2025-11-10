@@ -34,6 +34,7 @@ export const tokensRoutes = new Elysia()
             tpSize: env.TP_SIZE,
             dpSize: env.DP_SIZE,
             gpuShape: env.GPU_SHAPE ?? null,
+            sglangMaxRunningRequests: env.SGLANG_MAX_RUNNING_REQUESTS,
             requests: body.requests,
             totalPromptTokens: body.totalPromptTokens,
             totalCompletionTokens: body.totalCompletionTokens,

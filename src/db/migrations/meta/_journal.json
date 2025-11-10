@@ -85,6 +85,13 @@
       "when": 1762764610379,
       "tag": "0011_closed_ricochet",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1762779024709,
+      "tag": "0012_abandoned_mephistopheles",
+      "breakpoints": true
     }
   ]
 }

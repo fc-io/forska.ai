@@ -21,13 +21,19 @@ const processArticles = async (db: PostgresJsDatabase<typeof schema>, articles: 
   }
 }
 
+// With the cron now running every 1s (was 9s), we scale the per-tick
+// batch size down to keep effective throughput roughly constant while
+// we evaluate smoother arrivals. Adjuster logic will still tune totals.
+const SEND_TO_LLM_TICK_DIVISOR = 9
+
 const sendToLLM = async (
   db: PostgresJsDatabase<typeof schema>,
   serverJobId: string,
   jobId: string,
   batchSize: number,
 ): Promise<void> => {
-  const articlesToProcess = await getAndUpdateReadyArticles(db, serverJobId, jobId, batchSize)
+  const scaledBatch = Math.max(1, Math.ceil(batchSize / SEND_TO_LLM_TICK_DIVISOR))
+  const articlesToProcess = await getAndUpdateReadyArticles(db, serverJobId, jobId, scaledBatch)
   const hasArticles = articlesToProcess.length > 0
 
   if (hasArticles) {

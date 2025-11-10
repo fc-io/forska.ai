@@ -1,0 +1,1 @@
+ALTER TABLE "token_use" ADD COLUMN "sglang_max_running_requests" integer;

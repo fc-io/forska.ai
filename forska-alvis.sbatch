@@ -243,9 +243,9 @@ echo "[forska] topology: nodes=$NNODES, gpus/node=$GPUS_PER_NODE, total_gpus=$TO
 echo "[forska] sglang parallelism per node: tp=$TP_SIZE, dp=$DP_SIZE (gpus_used_per_node=$GPUS_PER_ENGINE)"
 export TP_SIZE DP_SIZE TOTAL_GPUS NNODES GPUS_PER_NODE GPUS_PER_ENGINE
 
-# If user did not set an explicit concurrency cap, default to 128 per engine.
+# If user did not set an explicit concurrency cap, default to 256 per engine.
 if [[ -z "${SGLANG_MAX_RUNNING_REQUESTS:-}" ]]; then
-  SGLANG_MAX_RUNNING_REQUESTS=128
+  SGLANG_MAX_RUNNING_REQUESTS=256
   echo "[forska] defaulting max-running-requests to $SGLANG_MAX_RUNNING_REQUESTS (per engine)"
 fi
 
@@ -517,6 +517,7 @@ apptainer run --cleanenv \
   --env GPU_TOTAL_GPUS="$TOTAL_GPUS" \
   --env TP_SIZE="$TP_SIZE" \
   --env DP_SIZE="$DP_SIZE" \
+  --env SGLANG_MAX_RUNNING_REQUESTS="$SGLANG_MAX_RUNNING_REQUESTS" \
   --env WORKER_URLS="$WORKER_URLS_CSV" \
   "$SIF_API" \
   >"$LOG_DIR/api.log" 2>&1 &
