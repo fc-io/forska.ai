@@ -37,6 +37,10 @@ const runPsql = async (db: string, sql: string): Promise<void> => {
 }
 
 const sqlBackfill = `
+-- Ensure column and index exist (keeps script idempotent even if Drizzle migration hasn't run yet)
+ALTER TABLE "prompts" ADD COLUMN IF NOT EXISTS "content_hash" text;
+CREATE INDEX IF NOT EXISTS "prompts_content_hash_idx" ON "prompts" ("content_hash");
+
 -- Functions for normalization and hashing
 CREATE OR REPLACE FUNCTION public.normalize_text_for_hash(t text) RETURNS text AS $$
 BEGIN
@@ -104,4 +108,3 @@ const main = async (): Promise<void> => {
 }
 
 void main()
-

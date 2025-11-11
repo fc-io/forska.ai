@@ -32,6 +32,7 @@
     "db:r:p": "bun scripts/dbPush.ts --force --no-restore",
     "db:r:pull": "bun scripts/dbRemotePull.ts",
     "db:reset": "bun scripts/dbClear.ts --drop --force",
+    "db:validate-prompts": "bun --env-file=.env.local scripts/dbValidatePromptMigrations.ts",
     "f:p": "bun scripts/sbatchPut.ts"
   },
   "dependencies": {

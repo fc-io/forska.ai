@@ -6,25 +6,26 @@ Goal: Allow the concept of "subprojects" where we can take selected articles ass
 - Reuse the existing `prompts` table as the single canonical prompt entity; no parallel "subproject prompt" type will be created.
 - Prompts are global across all owners (no tenant scoping initially).
 - Make prompts global by layering association tables (`project_prompts`, `project_articles`) and migrating every read/write path to those joins.
-- Remove legacy prompt columns immediately (no dual-write): project-level metadata lives only in `project_prompts`.
+- Per‑project metadata lives only in `project_prompts` (order, archived). Global, immutable metadata lives on `prompts` (original_text, transformed_text, prompt_heading, type).
+- Include `prompt_heading` and `type` in the prompt content hash so identical text with different metadata does not collide.
 
 ## Phase 1 — Schema
 - [x] Create `project_articles(project_id, article_id)` with:
   - [x] FK to `projects.id`, FK to `articles.id`
   - [x] Unique `(project_id, article_id)`
   - [x] Indexes on `project_id` and `article_id`
-- [x] Create `project_prompts(id, project_id FK, prompt_id FK, order, prompt_heading, archived, type)` with:
+- [x] Create `project_prompts(id, project_id FK, prompt_id FK, order, archived)`
   - [x] Unique `(project_id, prompt_id)`
-  - [x] Indexes on `project_id`, `prompt_id`
+  - [x] Indexes on `project_id`, `prompt_id`, and `(project_id, order)`
 - [x] Add `prompts.content_hash TEXT` (nullable initially)
 - [x] Add non‑unique index on `prompts.content_hash`
-- [x] Add DB trigger to prevent UPDATE of `prompts.original_text` and `prompts.transformed_text` (immutability)
+- [x] Add DB trigger to prevent UPDATE of `prompts.original_text`, `prompts.transformed_text`, `prompts.prompt_heading`, and `prompts.type` (immutability)
 - [x] Change FK delete behavior for `judgments.prompt_id` and `judgments_human.prompt_id` to `ON DELETE RESTRICT` (from `CASCADE`) to prevent cross‑project data loss when prompts are global
 
 ## Phase 2 — Data Backfill
-- [ ] Backfill `content_hash = md5(normalize(original_text) || '|' || normalize(coalesce(transformed_text,'')))`
+- [ ] Backfill `content_hash = md5(normalize(original_text) || '|' || normalize(coalesce(transformed_text,'')) || '|' || normalize(coalesce(prompt_heading,'')) || '|' || normalize(coalesce(type,'')))`
 - [ ] Populate `project_prompts` from existing `prompts` using legacy fields:
-  - [ ] Insert `(project_id, prompt_id, order, prompt_heading, archived, type)`
+  - [ ] Insert `(project_id, prompt_id, order, archived)`
   - [ ] Ensure no duplicates per `(project_id, prompt_id)`
 - [ ] Validation queries:
   - [ ] List duplicate prompts by `content_hash` and count references in `judgments` and `judgments_human`
@@ -41,7 +42,7 @@ Goal: Allow the concept of "subprojects" where we can take selected articles ass
   - [x] Compute `content_hash` (normalize inputs)
   - [x] If `prompts.content_hash` exists, reuse existing `prompt_id`; else insert new prompt row
   - [x] Insert `project_prompts` row for current project with per-project metadata
-- [x] Block app-level edits of prompt text (mirror DB immutability). Existing edit flows may fail — acceptable.
+- [x] Block app-level edits of prompt text and metadata (prompt_heading, type) to mirror DB immutability. Existing edit flows may fail — acceptable.
 - [x] Update the current prompt creation/edit flows (API + UI) to call the shared upsert-by-hash service and update associations instead of editing prompt rows.
 
 ## Phase 5 — Dedup + Consistency (optional now; enforce later)
@@ -57,7 +58,7 @@ Goal: Allow the concept of "subprojects" where we can take selected articles ass
 - [x] On association, auto‑link prompts with prior judgments for that article
 
 ## Phase 7 — Clean‑up
-- [x] Legacy prompt columns dropped
+- [x] Legacy prompt columns dropped (drop `prompts.project_id`, `prompts.order`, `prompts.archived`; keep `prompts.prompt_heading` and `prompts.type` as global immutable metadata)
 - [ ] Ensure remaining callers are using joins only
   - [ ] Refactor HumanAssessment overview routes to use `project_prompts` association (replace `prompts.project_id` usage):
     - src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesGetOverviewBothProjects.ts:35–49
@@ -68,12 +69,12 @@ Goal: Allow the concept of "subprojects" where we can take selected articles ass
   - [x] `project_articles`
   - [x] `project_prompts`
   - [x] `prompts.content_hash` + index
-- [x] Immutability trigger on `prompts`
+- [x] Immutability triggers on `prompts` (text + metadata)
 - [x] Alter FKs: drop and recreate `judgments.prompt_id` and `judgments_human.prompt_id` constraints with `ON DELETE RESTRICT`
 - [ ] Generate/apply: `bun run db:gen` → `bun run db:mig`
 - [x] Backfill scripts:
-  - [x] Compute and set `content_hash` for existing prompts
-  - [x] Populate `project_prompts` from legacy prompt rows
+  - [x] Compute and set `content_hash` (hash includes text + metadata)
+  - [x] Populate `project_prompts` from legacy prompt rows (order, archived only)
 
 ## Quality Gates
 - [ ] Lint and tests: `bun run lint` and `bun test`

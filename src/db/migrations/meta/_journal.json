@@ -100,5 +100,55 @@
       "tag": "0013_lyrical_dust",
       "breakpoints": true
     }
+    ,
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1762780751900,
+      "tag": "0014_prompts_hash_and_triggers",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1762780751901,
+      "tag": "0015_project_association_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1762780751902,
+      "tag": "0016_fk_restrict_prompt_ids",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1762780751903,
+      "tag": "0017_backfill_and_populate_project_prompts",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1762780751904,
+      "tag": "0018_drop_legacy_prompt_columns",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1762780751905,
+      "tag": "0019_project_prompts_heading_type_immutable",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1762780751906,
+      "tag": "0020_move_metadata_to_prompts",
+      "breakpoints": true
+    }
   ]
 }
