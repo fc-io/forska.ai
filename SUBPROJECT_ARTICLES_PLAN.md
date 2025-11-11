@@ -72,7 +72,9 @@ Goal: Allow the concept of "subprojects" where we can take selected articles ass
   - [x] `prompts.content_hash` + index
 - [x] Immutability triggers on `prompts` (text + metadata)
 - [x] Alter FKs: drop and recreate `judgments.prompt_id` and `judgments_human.prompt_id` constraints with `ON DELETE RESTRICT`
-- [ ] Generate/apply: `bun run db:gen` → `bun run db:mig`
+- [x] Generate/apply: `bun run db:gen` → `bun run db:mig` (re-baseline)
+  - [x] Neutralized generated migration `0021_giant_nextwave.sql` with a baseline no-op to align Drizzle snapshots with current DB.
+  - [x] Applied migrations to advance journal without changing DB state.
 - [x] Backfill scripts:
   - [x] Compute and set `content_hash` (hash includes text + metadata) — function updated and backfilled via migration.
   - [x] Populate `project_prompts` from legacy prompt rows (order, archived only)

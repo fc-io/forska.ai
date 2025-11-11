@@ -99,8 +99,7 @@
       "when": 1762780751899,
       "tag": "0013_lyrical_dust",
       "breakpoints": true
-    }
-    ,
+    },
     {
       "idx": 14,
       "version": "7",
@@ -148,6 +147,13 @@
       "version": "7",
       "when": 1762780751906,
       "tag": "0020_move_metadata_to_prompts",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1762874757230,
+      "tag": "0021_giant_nextwave",
       "breakpoints": true
     }
   ]
