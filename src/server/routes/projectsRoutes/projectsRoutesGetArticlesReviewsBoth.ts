@@ -1,7 +1,16 @@
 import {and, desc, eq, gte, inArray, lte, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {articles, judgments, judgmentsHuman, prompts, projectPrompts} from '../../../db/schema.ts'
+import {
+  articleRouteLink,
+  articles,
+  judgments,
+  judgmentsHuman,
+  projectRouteLink,
+  projects,
+  prompts,
+  projectPrompts,
+} from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
 export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
@@ -65,10 +74,39 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
       filterConditions.push(sql`EXISTS (${subquery})`)
     }
 
-    const whereParts: Array<ReturnType<typeof sql>> = [fullyAssessedByHumanExists]
+    // Always scope to project's configured import routes and project date bounds
+    const [projectBounds] = await db
+      .select({dateFrom: projects.dateFrom, dateTo: projects.dateTo})
+      .from(projects)
+      .where(eq(projects.id, body.projectId))
+      .limit(1)
+
+    const projectImportRoutes = await db
+      .select({importRouteId: projectRouteLink.importRouteId})
+      .from(projectRouteLink)
+      .where(eq(projectRouteLink.projectId, body.projectId))
+
+    if (projectImportRoutes.length === 0) {
+      return {data: [], totalCount: 0, page, limit, totalPages: 0}
+    }
+
+    const routeIdArray = sql.join(
+      projectImportRoutes.map((r) => sql`${r.importRouteId}::uuid`),
+      sql`,`,
+    )
+
+    const hasMatchingImportRoute = sql`EXISTS (
+      SELECT 1 FROM ${articleRouteLink} arl
+      WHERE arl."article_id" = ${articles.id}
+        AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
+    )`
+
+    const whereParts: Array<ReturnType<typeof sql>> = [fullyAssessedByHumanExists, hasMatchingImportRoute]
     if (filterConditions.length > 0) whereParts.push(...filterConditions)
-    if (fromDate) whereParts.push(gte(articles.createdAt, fromDate))
-    if (toDate) whereParts.push(lte(articles.createdAt, toDate))
+    if (projectBounds?.dateFrom) whereParts.push(gte(articles.articleCreatedAt, projectBounds.dateFrom))
+    if (projectBounds?.dateTo) whereParts.push(lte(articles.articleCreatedAt, projectBounds.dateTo))
+    if (fromDate) whereParts.push(gte(articles.articleCreatedAt, fromDate))
+    if (toDate) whereParts.push(lte(articles.articleCreatedAt, toDate))
     if (searchTitle) whereParts.push(sql`${articles.articleTitle} ILIKE ${'%' + searchTitle + '%'}`)
 
     const combinedWhere = whereParts.length > 1 ? and(...whereParts) : whereParts[0]
@@ -100,7 +138,7 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
       .having(sql`COUNT(DISTINCT ${judgments.promptId}) = ${promptIds.length}`)
       .innerJoin(judgments, and(eq(judgments.articleId, articles.id), inArray(judgments.promptId, promptIds)))
       .groupBy(articles.id)
-      .orderBy(desc(articles.createdAt))
+      .orderBy(desc(articles.articleCreatedAt))
       .limit(limit)
       .offset(offset)
 

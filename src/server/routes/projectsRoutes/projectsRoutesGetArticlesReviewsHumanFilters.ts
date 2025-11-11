@@ -1,7 +1,15 @@
 import {and, eq, gte, lte, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {articles, judgmentsHuman, prompts, projectPrompts} from '../../../db/schema.ts'
+import {
+  articleRouteLink,
+  articles,
+  judgmentsHuman,
+  projectRouteLink,
+  projects,
+  prompts,
+  projectPrompts,
+} from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
 export const projectsRoutesGetArticlesReviewsHumanFilters = new Elysia().get(
@@ -33,18 +41,54 @@ export const projectsRoutesGetArticlesReviewsHumanFilters = new Elysia().get(
         return []
       }
 
+      // Always enforce project import routes and project date bounds; then apply optional UI date and search filters
+      const [projectBounds] = await db
+        .select({dateFrom: projects.dateFrom, dateTo: projects.dateTo})
+        .from(projects)
+        .where(eq(projects.id, query.projectId))
+        .limit(1)
+
+      const projectImportRoutes = await db
+        .select({importRouteId: projectRouteLink.importRouteId})
+        .from(projectRouteLink)
+        .where(eq(projectRouteLink.projectId, query.projectId))
+
+      if (projectImportRoutes.length === 0) {
+        return []
+      }
+
+      const routeIdArray = sql.join(
+        projectImportRoutes.map((r) => sql`${r.importRouteId}::uuid`),
+        sql`,`,
+      )
+
+      const hasMatchingImportRoute = sql`EXISTS (
+        SELECT 1 FROM ${articleRouteLink} arl
+        WHERE arl."article_id" = ${articles.id}
+          AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
+      )`
+
       const promptFilters = await Promise.all(
         projectPromptRows.map(async (prompt) => {
-          const base = sql`SELECT DISTINCT ${judgmentsHuman.answer} as answer
+          let scoped = sql`SELECT DISTINCT ${judgmentsHuman.answer} as answer
                 FROM ${judgmentsHuman}
                 INNER JOIN ${articles} ON ${articles.id} = ${judgmentsHuman.articleId}
                 WHERE ${judgmentsHuman.promptId} = ${prompt.id}::uuid
                 AND ${judgmentsHuman.isAnswered} = true
-                AND ${judgmentsHuman.answer} IS NOT NULL`
+                AND ${judgmentsHuman.answer} IS NOT NULL
+                AND ${hasMatchingImportRoute}`
 
-          let scoped = base
-          if (fromDate && toDate) {
-            scoped = sql`${scoped} AND ${and(gte(articles.createdAt, fromDate), lte(articles.createdAt, toDate))}`
+          if (projectBounds?.dateFrom) {
+            scoped = sql`${scoped} AND ${gte(articles.articleCreatedAt, projectBounds.dateFrom)}`
+          }
+          if (projectBounds?.dateTo) {
+            scoped = sql`${scoped} AND ${lte(articles.articleCreatedAt, projectBounds.dateTo)}`
+          }
+          if (fromDate) {
+            scoped = sql`${scoped} AND ${gte(articles.articleCreatedAt, fromDate)}`
+          }
+          if (toDate) {
+            scoped = sql`${scoped} AND ${lte(articles.articleCreatedAt, toDate)}`
           }
           if (searchTitle) {
             scoped = sql`${scoped} AND ${articles.articleTitle} ILIKE ${'%' + searchTitle + '%'}`

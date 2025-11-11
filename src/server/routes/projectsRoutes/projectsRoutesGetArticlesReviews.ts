@@ -1,7 +1,15 @@
 import {and, desc, eq, gte, inArray, lte, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {articles, judgments, prompts, projectPrompts} from '../../../db/schema.ts'
+import {
+  articleRouteLink,
+  articles,
+  judgments,
+  projectRouteLink,
+  projects,
+  prompts,
+  projectPrompts,
+} from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
 export const projectsRoutesGetArticlesReviews = new Elysia().post(
@@ -72,14 +80,54 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
           .where(and(eq(judgments.articleId, articles.id), inArray(judgments.promptId, promptIds)))}
       )`
 
-      // Build final where parts with optional date bounds
-      const whereParts: Array<ReturnType<typeof sql>> = conditions.length > 0 ? [...conditions] : [baseExistsCondition]
+      // Always scope to project's configured import routes and date bounds
+      const [projectBounds] = await db
+        .select({dateFrom: projects.dateFrom, dateTo: projects.dateTo})
+        .from(projects)
+        .where(eq(projects.id, body.projectId))
+        .limit(1)
 
+      const projectImportRoutes = await db
+        .select({importRouteId: projectRouteLink.importRouteId})
+        .from(projectRouteLink)
+        .where(eq(projectRouteLink.projectId, body.projectId))
+
+      if (projectImportRoutes.length === 0) {
+        return {data: [], totalCount: 0, page, limit, totalPages: 0}
+      }
+
+      const routeIdArray = sql.join(
+        projectImportRoutes.map((r) => {
+          return sql`${r.importRouteId}::uuid`
+        }),
+        sql`,`,
+      )
+
+      const hasMatchingImportRoute = sql`EXISTS (
+        SELECT 1 FROM ${articleRouteLink} arl
+        WHERE arl."article_id" = ${articles.id}
+          AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
+      )`
+
+      // Build final where parts with mandatory project scoping and optional additional filters
+      const whereParts: Array<ReturnType<typeof sql>> = [baseExistsCondition, hasMatchingImportRoute]
+      if (conditions.length > 0) {
+        whereParts.push(...conditions)
+      }
+
+      if (projectBounds?.dateFrom) {
+        whereParts.push(gte(articles.articleCreatedAt, projectBounds.dateFrom))
+      }
+      if (projectBounds?.dateTo) {
+        whereParts.push(lte(articles.articleCreatedAt, projectBounds.dateTo))
+      }
+
+      // Additional optional UI filters
       if (fromDate) {
-        whereParts.push(gte(articles.createdAt, fromDate))
+        whereParts.push(gte(articles.articleCreatedAt, fromDate))
       }
       if (toDate) {
-        whereParts.push(lte(articles.createdAt, toDate))
+        whereParts.push(lte(articles.articleCreatedAt, toDate))
       }
       if (searchTitle) {
         whereParts.push(sql`${articles.articleTitle} ILIKE ${'%' + searchTitle + '%'}`)
@@ -114,7 +162,7 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
         .having(sql`COUNT(DISTINCT ${judgments.promptId}) = ${promptIds.length}`)
         .innerJoin(judgments, and(eq(judgments.articleId, articles.id), inArray(judgments.promptId, promptIds)))
         .groupBy(articles.id)
-        .orderBy(desc(articles.createdAt))
+        .orderBy(desc(articles.articleCreatedAt))
         .limit(limit)
         .offset(offset)
 
