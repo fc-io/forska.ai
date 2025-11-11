@@ -24,11 +24,11 @@ Goal: Allow the concept of "subprojects" where we can take selected articles ass
 
 ## Phase 2 — Data Backfill
 - [x] Backfill `content_hash = md5(normalize(original_text) || '|' || normalize(coalesce(transformed_text,'')) || '|' || normalize(coalesce(prompt_heading,'')) || '|' || normalize(coalesce(type,'')))`
-- [ ] Populate `project_prompts` from existing `prompts` using legacy fields:
-  - [ ] Insert `(project_id, prompt_id, order, archived)`
-  - [ ] Ensure no duplicates per `(project_id, prompt_id)`
-- [ ] Validation queries:
-  - [ ] List duplicate prompts by `content_hash` and count references in `judgments` and `judgments_human`
+- [x] Populate `project_prompts` from existing `prompts` using legacy fields:
+  - [x] Insert `(project_id, prompt_id, order, archived)`
+  - [x] Ensure no duplicates per `(project_id, prompt_id)`
+- [x] Validation queries:
+  - [x] List duplicate prompts by `content_hash` and count references in `judgments` and `judgments_human`
 
 ## Phase 3 — Application Read Path
 - [x] Update API to fetch a project’s prompts via `project_prompts` join (not `prompts.project_id`)
