@@ -22,10 +22,10 @@ Goal: Allow the concept of "subprojects" where we can take selected articles ass
 - [x] Change FK delete behavior for `judgments.prompt_id` and `judgments_human.prompt_id` to `ON DELETE RESTRICT` (from `CASCADE`) to prevent cross‑project data loss when prompts are global
 
 ## Phase 2 — Data Backfill
-- [x] Backfill `content_hash = md5(normalize(original_text) || '|' || normalize(coalesce(transformed_text,'')))`
-- [x] Populate `project_prompts` from existing `prompts` using legacy fields:
-  - [x] Insert `(project_id, prompt_id, order, prompt_heading, archived, type)`
-  - [x] Ensure no duplicates per `(project_id, prompt_id)`
+- [ ] Backfill `content_hash = md5(normalize(original_text) || '|' || normalize(coalesce(transformed_text,'')))`
+- [ ] Populate `project_prompts` from existing `prompts` using legacy fields:
+  - [ ] Insert `(project_id, prompt_id, order, prompt_heading, archived, type)`
+  - [ ] Ensure no duplicates per `(project_id, prompt_id)`
 - [ ] Validation queries:
   - [ ] List duplicate prompts by `content_hash` and count references in `judgments` and `judgments_human`
 

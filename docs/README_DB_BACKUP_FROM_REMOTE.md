@@ -43,6 +43,14 @@ First make sure it is up
 docker compose up db
 ```
 
+Before merging, ensure the local database schema is migrated so required types (like `public.publication_status_enum`) exist locally. This is necessary for the foreign schema import to succeed.
+
+``` bash
+bun run db:mig
+# If you use Better Auth, also
+bun run db:ba-mig
+```
+
 Then merge the dump. This command will first create a dump of the local db and the merge the remote db with the local one. The latest remote dump will automatically be picked for merge.
 
 ``` bash

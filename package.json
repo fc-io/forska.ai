@@ -28,6 +28,7 @@
     "db:backup": "bun scripts/dbBackup.ts",
     "db:backup-from-remote": "bun scripts/dbRemoteBackup.ts",
     "db:merge-from-remote-dump": "bun scripts/dbMergeRemoteDump.ts",
+    "db:backfill-prompt-hash": "bun --env-file=.env.local scripts/dbBackfillPromptHash.ts",
     "db:r:p": "bun scripts/dbPush.ts --force --no-restore",
     "db:r:pull": "bun scripts/dbRemotePull.ts",
     "db:reset": "bun scripts/dbClear.ts --drop --force",

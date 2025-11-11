@@ -129,6 +129,23 @@ const setupFdw = async (localDb: string, tempDb: string): Promise<void> => {
   await runPsql(localDb, 'IMPORT FOREIGN SCHEMA public FROM SERVER temp_merge INTO import_tmp;')
 }
 
+const ensureLocalSchemaReady = async (db: string): Promise<void> => {
+  // Check for a known required enum type created by migrations
+  const out = await runPsql(
+    db,
+    `SELECT 1
+     FROM pg_type t
+     JOIN pg_namespace n ON n.oid = t.typnamespace
+     WHERE n.nspname = 'public' AND t.typname = 'publication_status_enum'
+     LIMIT 1;`,
+  )
+  if (!out) {
+    fail(
+      "Local DB schema missing required types (e.g., public.publication_status_enum). Run 'bun run db:mig' (and 'bun run db:ba-mig' if using auth) before merging.",
+    )
+  }
+}
+
 const listLocalTables = async (db: string): Promise<string[]> => {
   const out = await runPsql(
     db,
@@ -364,6 +381,7 @@ const cleanup = async (localDb: string, tempDb: string, containerDumpPath: strin
 
 const main = async (): Promise<void> => {
   await assertLocalDbRunning()
+  await ensureLocalSchemaReady(env.DB_NAME)
 
   const localDb = env.DB_NAME
   const localBackup = await backupLocal()
