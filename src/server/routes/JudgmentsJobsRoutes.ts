@@ -11,6 +11,7 @@ import {
   projectRouteLink,
   projects,
   prompts,
+  projectPrompts,
   tokenUse,
 } from '../../db/schema'
 import {getDatabase} from '../utils/getDatabase'
@@ -55,12 +56,12 @@ const buildProjectDateConditions = ({
 
 const buildProjectPromptCondition = (projectId: string): SQL => {
   return sql`EXISTS (
-    SELECT 1 FROM ${prompts} p
-    WHERE p.project_id = ${projectId}::uuid
+    SELECT 1 FROM ${projectPrompts} pp
+    WHERE pp.project_id = ${projectId}::uuid
     AND NOT EXISTS (
       SELECT 1 FROM ${judgments} j
       WHERE j."article_id" = ${articles.id}
-      AND j."prompt_id" = p.id
+      AND j."prompt_id" = pp."prompt_id"
     )
   )`
 }
@@ -225,8 +226,8 @@ const getUnassessedArticles = async ({
       articleUpdatedAt: articles.articleUpdatedAt,
     })
     .from(articles)
-    .innerJoin(prompts, eq(prompts.projectId, projectId))
-    .leftJoin(judgments, sql`${judgments.articleId} = ${articles.id} AND ${judgments.promptId} = ${prompts.id}`)
+    .innerJoin(projectPrompts, eq(projectPrompts.projectId, projectId))
+    .leftJoin(judgments, sql`${judgments.articleId} = ${articles.id} AND ${judgments.promptId} = ${projectPrompts.promptId}`)
     .groupBy(
       articles.id,
       articles.articleId,

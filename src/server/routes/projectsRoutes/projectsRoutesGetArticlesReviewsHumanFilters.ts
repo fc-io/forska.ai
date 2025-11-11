@@ -1,7 +1,7 @@
 import {and, eq, gte, lte, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {articles, judgmentsHuman, prompts} from '../../../db/schema.ts'
+import {articles, judgmentsHuman, prompts, projectPrompts} from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
 export const projectsRoutesGetArticlesReviewsHumanFilters = new Elysia().get(
@@ -20,9 +20,14 @@ export const projectsRoutesGetArticlesReviewsHumanFilters = new Elysia().get(
       const searchTitle = typeof query?.search === 'string' ? query.search.trim() : ''
 
       const projectPrompts = await db
-        .select({id: prompts.id, promptHeading: prompts.promptHeading, originalText: prompts.originalText})
-        .from(prompts)
-        .where(eq(prompts.projectId, query.projectId))
+        .select({
+          id: prompts.id,
+          promptHeading: projectPrompts.promptHeading,
+          originalText: prompts.originalText,
+        })
+        .from(projectPrompts)
+        .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
+        .where(eq(projectPrompts.projectId, query.projectId))
 
       if (projectPrompts.length === 0) {
         return []

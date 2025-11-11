@@ -413,6 +413,21 @@ export const prompts = pgTable(
     id: uuid('id').primaryKey().defaultRandom(),
     createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
+    originalText: text('original_text').notNull(),
+    transformedText: text('transformed_text'),
+    contentHash: text('content_hash'),
+  },
+  (table) => {
+    return [index('prompts_content_hash_idx').on(table.contentHash)]
+  },
+)
+
+export const projectPrompts = pgTable(
+  'project_prompts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
     projectId: uuid('project_id')
       .notNull()
       .references(
@@ -421,15 +436,27 @@ export const prompts = pgTable(
         },
         {onDelete: 'cascade'},
       ),
-    originalText: text('original_text').notNull(),
-    transformedText: text('transformed_text'),
+    promptId: uuid('prompt_id')
+      .notNull()
+      .references(
+        () => {
+          return prompts.id
+        },
+        {onDelete: 'cascade'},
+      ),
+    // per-project metadata for the prompt
     promptHeading: text('prompt_heading'),
     order: integer('order'),
     archived: boolean('archived').default(false).notNull(),
     type: text('type'),
   },
   (table) => {
-    return [index('prompts_project_idx').on(table.projectId)]
+    return [
+      uniqueIndex('project_prompts_unique').on(table.projectId, table.promptId),
+      index('project_prompts_project_idx').on(table.projectId),
+      index('project_prompts_prompt_idx').on(table.promptId),
+      index('project_prompts_project_order_idx').on(table.projectId, table.order),
+    ]
   },
 )
 
@@ -487,7 +514,7 @@ export const judgments = pgTable(
         () => {
           return prompts.id
         },
-        {onDelete: 'cascade'},
+        {onDelete: 'restrict'},
       ),
     reviewId: uuid('review_id').references(
       () => {
@@ -540,7 +567,7 @@ export const judgmentsHuman = pgTable(
         () => {
           return prompts.id
         },
-        {onDelete: 'cascade'},
+        {onDelete: 'restrict'},
       ),
     // Whether this human judgment has been answered (allows null answer for optional prompts)
     isAnswered: boolean('is_answered').default(false).notNull(),
@@ -560,6 +587,38 @@ export const judgmentsHuman = pgTable(
       index('judgments_human_article_prompt_idx').on(table.articleId, table.promptId),
       index('judgments_human_prompt_article_idx').on(table.promptId, table.articleId),
       index('judgments_human_project_idx').on(table.projectId),
+    ]
+  },
+)
+
+export const projectArticles = pgTable(
+  'project_articles',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
+    projectId: uuid('project_id')
+      .notNull()
+      .references(
+        () => {
+          return projects.id
+        },
+        {onDelete: 'cascade'},
+      ),
+    articleId: uuid('article_id')
+      .notNull()
+      .references(
+        () => {
+          return articles.id
+        },
+        {onDelete: 'cascade'},
+      ),
+  },
+  (table) => {
+    return [
+      uniqueIndex('project_articles_unique').on(table.projectId, table.articleId),
+      index('project_articles_project_idx').on(table.projectId),
+      index('project_articles_article_idx').on(table.articleId),
     ]
   },
 )

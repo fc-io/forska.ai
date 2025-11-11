@@ -2,7 +2,7 @@ import {and, desc, eq, gte, lte, sql} from 'drizzle-orm'
 import type {Context} from 'elysia'
 
 import {auth} from '../../../auth.ts'
-import {articleRouteLink, articles, judgmentsHuman, projectRouteLink, projects, prompts} from '../../../db/schema.ts'
+import {articleRouteLink, articles, judgmentsHuman, projectRouteLink, projects, prompts, projectPrompts} from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
 type InitResponse = {
@@ -47,13 +47,14 @@ export const humanAssessmentRoutesPostInit = async ({
     .select({
       id: prompts.id,
       originalText: prompts.originalText,
-      promptHeading: prompts.promptHeading,
-      order: prompts.order,
-      type: prompts.type,
+      promptHeading: projectPrompts.promptHeading,
+      order: projectPrompts.order,
+      type: projectPrompts.type,
     })
-    .from(prompts)
-    .where(eq(prompts.projectId, body.projectId))
-    .orderBy(prompts.order)
+    .from(projectPrompts)
+    .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
+    .where(eq(projectPrompts.projectId, body.projectId))
+    .orderBy(projectPrompts.order)
   console.log('projectPrompts', projectPrompts.length)
 
   if (projectPrompts.length === 0) {

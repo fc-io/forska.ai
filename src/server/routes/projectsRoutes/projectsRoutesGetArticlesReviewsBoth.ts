@@ -1,7 +1,7 @@
 import {and, desc, eq, gte, inArray, lte, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {articles, judgments, judgmentsHuman, prompts} from '../../../db/schema.ts'
+import {articles, judgments, judgmentsHuman, prompts, projectPrompts} from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
 export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
@@ -19,10 +19,11 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
 
     // Get prompts for project (ordered)
     const projectPrompts = await db
-      .select()
-      .from(prompts)
-      .where(eq(prompts.projectId, body.projectId))
-      .orderBy(prompts.order)
+      .select({id: prompts.id, order: projectPrompts.order})
+      .from(projectPrompts)
+      .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
+      .where(eq(projectPrompts.projectId, body.projectId))
+      .orderBy(projectPrompts.order)
     if (projectPrompts.length === 0) {
       return {data: [], totalCount: 0, page, limit, totalPages: 0}
     }
@@ -36,7 +37,6 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
       SELECT 1
       FROM ${judgmentsHuman} jh
       WHERE jh."article_id" = ${articles.id}
-        AND jh."project_id" = ${body.projectId}::uuid
         AND jh."answer" IS NOT NULL
       GROUP BY jh."article_id", jh."user"
       HAVING COUNT(DISTINCT jh."prompt_id") = ${promptIds.length}
@@ -158,7 +158,6 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
             .where(
               and(
                 inArray(judgmentsHuman.articleId, articleIds),
-                eq(judgmentsHuman.projectId, body.projectId),
                 // Only consider non-null answers when determining qualified humans
                 sql`${judgmentsHuman.answer} IS NOT NULL`,
               ),

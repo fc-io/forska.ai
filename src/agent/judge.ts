@@ -2,7 +2,7 @@ import OpenAI from 'openai'
 import type {ChatCompletion, ChatCompletionMessage} from 'openai/resources/chat/completions'
 
 import * as schema from '../db/schema.ts'
-import {judgeGetPrompt} from './judge/judgeGetPrompt.ts'
+import {judgeGetPrompt, type PromptForJudging} from './judge/judgeGetPrompt.ts'
 import {parseJudgment} from './judge/judgeParseJudgment.ts'
 import {AIResponseType} from './judge/judgeParseModelResponse.ts'
 import {judgeStoreJudgment} from './judge/judgeStoreJudgment.ts'
@@ -194,7 +194,7 @@ Please try again, ensuring you respond ONLY with valid JSON matching the schema.
 
 type ArticlesType = (typeof schema.articles.$inferSelect)[]
 
-type PromptsType = (typeof schema.prompts.$inferSelect)[]
+type PromptsType = PromptForJudging
 
 const attemptJudgment = async ({
   prompt,

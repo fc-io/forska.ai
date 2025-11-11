@@ -2,7 +2,7 @@ import {and, eq, inArray} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {user} from '../../../../auth-schema.ts'
-import {articles, judgmentAssessments, judgments, judgmentsHuman, prompts, reviews} from '../../../db/schema.ts'
+import {articles, judgmentAssessments, judgments, judgmentsHuman, prompts, projectPrompts, reviews} from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
 export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
@@ -26,12 +26,19 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         .where(and(eq(reviews.articleId, articleId), eq(reviews.projectId, projectId)))
         .limit(1)
 
-      // Get all prompts for this project
+      // Get all prompts for this project (association)
       const projectPrompts = await db
-        .select()
-        .from(prompts)
-        .where(eq(prompts.projectId, projectId))
-        .orderBy(prompts.order)
+        .select({
+          id: prompts.id,
+          originalText: prompts.originalText,
+          promptHeading: projectPrompts.promptHeading,
+          order: projectPrompts.order,
+          type: projectPrompts.type,
+        })
+        .from(projectPrompts)
+        .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
+        .where(eq(projectPrompts.projectId, projectId))
+        .orderBy(projectPrompts.order)
 
       // Get all judgments for this article that belong to prompts from this project
       const promptIds = projectPrompts.map((p) => {
@@ -43,8 +50,9 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
               .select({judgment: judgments, prompt: prompts})
               .from(judgments)
               .innerJoin(prompts, eq(judgments.promptId, prompts.id))
-              .where(and(eq(judgments.articleId, articleId), eq(prompts.projectId, projectId)))
-              .orderBy(prompts.order)
+              .innerJoin(projectPrompts, eq(projectPrompts.promptId, prompts.id))
+              .where(and(eq(judgments.articleId, articleId), eq(projectPrompts.projectId, projectId)))
+              .orderBy(projectPrompts.order)
           : []
 
       // Get judgment assessments for these judgments
@@ -80,13 +88,14 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
           answer: judgmentsHuman.answer,
           comment: judgmentsHuman.comment,
           promptOriginalText: prompts.originalText,
-          promptOrder: prompts.order,
+          promptOrder: projectPrompts.order,
         })
         .from(judgmentsHuman)
         .innerJoin(user, eq(user.id, judgmentsHuman.user))
         .innerJoin(prompts, eq(prompts.id, judgmentsHuman.promptId))
+        .innerJoin(projectPrompts, eq(projectPrompts.promptId, prompts.id))
         .where(and(eq(judgmentsHuman.articleId, articleId), eq(judgmentsHuman.projectId, projectId), eq(judgmentsHuman.isAnswered, true)))
-        .orderBy(user.name, prompts.order)
+        .orderBy(user.name, projectPrompts.order)
 
       const humanByUser = humanRows.reduce(
         (acc, row) => {

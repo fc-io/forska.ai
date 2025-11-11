@@ -7,7 +7,7 @@ import {getDatabase} from '../../utils/getDatabase.ts'
 export type ArticleProcessingData = {
   articlesToJudgeIds: string[]
   articlesToJudge: (typeof schema.articles.$inferSelect)[]
-  projectPrompts: (typeof schema.prompts.$inferSelect)[]
+  projectPrompts: Array<{id: string; originalText: string; promptHeading: string | null; order: number | null; type: string | null}>
   isSentToLLM?: boolean
   jobId?: string
 }
@@ -37,12 +37,12 @@ const getQueryConditions = ({jobId, project}: {jobId: string; project: typeof sc
   // This checks if there's at least one prompt in the project that doesn't have a judgment for the article
   conditions.push(
     sql`EXISTS (
-      SELECT 1 FROM ${schema.prompts} p
-      WHERE p."project_id" = ${project.id}
+      SELECT 1 FROM ${schema.projectPrompts} pp
+      WHERE pp."project_id" = ${project.id}
       AND NOT EXISTS (
         SELECT 1 FROM ${schema.judgments} j
         WHERE j."article_id" = ${schema.articles.id}
-        AND j."prompt_id" = p.id
+        AND j."prompt_id" = pp."prompt_id"
       )
     )`,
   )
@@ -71,7 +71,7 @@ const getArticleIdsToJudge = async ({
   db: PostgresJsDatabase<typeof schema>
   jobId: string
   project: typeof schema.projects.$inferSelect
-  projectPrompts: (typeof schema.prompts.$inferSelect)[]
+  projectPrompts: Array<{id: string; originalText: string; promptHeading: string | null; order: number | null; type: string | null}>
   numberOfArticlesToGet: number
 }): Promise<ArticleProcessingData> => {
   const queryConditions = getQueryConditions({jobId, project})
@@ -104,7 +104,18 @@ export const judgmentsJobsCronGetArticles = async (
   const db = getDatabase()
 
   const [project] = await db.select().from(schema.projects).where(eq(schema.projects.id, projectId)).limit(1)
-  const projectPrompts = await db.select().from(schema.prompts).where(eq(schema.prompts.projectId, projectId))
+  const projectPrompts = await db
+    .select({
+      id: schema.prompts.id,
+      originalText: schema.prompts.originalText,
+      promptHeading: schema.projectPrompts.promptHeading,
+      order: schema.projectPrompts.order,
+      type: schema.projectPrompts.type,
+    })
+    .from(schema.projectPrompts)
+    .innerJoin(schema.prompts, eq(schema.projectPrompts.promptId, schema.prompts.id))
+    .where(eq(schema.projectPrompts.projectId, projectId))
+    .orderBy(schema.projectPrompts.order)
 
   return !project || projectPrompts.length === 0
     ? {articlesToJudgeIds: [], articlesToJudge: [], projectPrompts: []}

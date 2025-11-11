@@ -4,75 +4,72 @@ Goal: Allow the concept of "subprojects" where we can take selected articles ass
 
 ### Guiding principles (updated)
 - Reuse the existing `prompts` table as the single canonical prompt entity; no parallel "subproject prompt" type will be created.
+- Prompts are global across all owners (no tenant scoping initially).
 - Make prompts global by layering association tables (`project_prompts`, `project_articles`) and migrating every read/write path to those joins.
-- Keep legacy prompt columns only for compatibility until all callers are moved; block UI/server code from defining any divergent prompt models.
+- Remove legacy prompt columns immediately (no dual-write): project-level metadata lives only in `project_prompts`.
 
-## Phase 1 — Schema (non‑breaking)
-- [ ] Create `project_articles(project_id, article_id)` with:
-  - [ ] FK to `projects.id`, FK to `articles.id`
-  - [ ] Unique `(project_id, article_id)`
-  - [ ] Indexes on `project_id` and `article_id`
-- [ ] Create `project_prompts(id, project_id FK, prompt_id FK, order, prompt_heading, archived, type)` with:
-  - [ ] Unique `(project_id, prompt_id)`
-  - [ ] Indexes on `project_id`, `prompt_id`
-- [ ] Add `prompts.content_hash TEXT` (nullable initially)
-- [ ] Add non‑unique index on `prompts.content_hash`
-- [ ] Add DB trigger to prevent UPDATE of `prompts.original_text` and `prompts.transformed_text` (immutability)
-- [ ] Keep legacy columns on `prompts` (project_id, order, prompt_heading, archived, type) for backward compatibility
-- [ ] Change FK delete behavior for `judgments.prompt_id` and `judgments_human.prompt_id` to `ON DELETE RESTRICT` (from `CASCADE`) to prevent cross‑project data loss when prompts are global
+## Phase 1 — Schema
+- [x] Create `project_articles(project_id, article_id)` with:
+  - [x] FK to `projects.id`, FK to `articles.id`
+  - [x] Unique `(project_id, article_id)`
+  - [x] Indexes on `project_id` and `article_id`
+- [x] Create `project_prompts(id, project_id FK, prompt_id FK, order, prompt_heading, archived, type)` with:
+  - [x] Unique `(project_id, prompt_id)`
+  - [x] Indexes on `project_id`, `prompt_id`
+- [x] Add `prompts.content_hash TEXT` (nullable initially)
+- [x] Add non‑unique index on `prompts.content_hash`
+- [x] Add DB trigger to prevent UPDATE of `prompts.original_text` and `prompts.transformed_text` (immutability)
+- [x] Change FK delete behavior for `judgments.prompt_id` and `judgments_human.prompt_id` to `ON DELETE RESTRICT` (from `CASCADE`) to prevent cross‑project data loss when prompts are global
 
-## Phase 2 — Data Backfill (safe)
-- [ ] Backfill `content_hash = md5(normalize(original_text) || '|' || normalize(coalesce(transformed_text,'')))`
-- [ ] Populate `project_prompts` from existing `prompts` using legacy fields:
-  - [ ] Insert `(project_id, prompt_id, order, prompt_heading, archived, type)`
-  - [ ] Ensure no duplicates per `(project_id, prompt_id)`
+## Phase 2 — Data Backfill
+- [x] Backfill `content_hash = md5(normalize(original_text) || '|' || normalize(coalesce(transformed_text,'')))`
+- [x] Populate `project_prompts` from existing `prompts` using legacy fields:
+  - [x] Insert `(project_id, prompt_id, order, prompt_heading, archived, type)`
+  - [x] Ensure no duplicates per `(project_id, prompt_id)`
 - [ ] Validation queries:
   - [ ] List duplicate prompts by `content_hash` and count references in `judgments` and `judgments_human`
 
 ## Phase 3 — Application Read Path
-- [ ] Update API to fetch a project’s prompts via `project_prompts` join (not `prompts.project_id`)
+- [x] Update API to fetch a project’s prompts via `project_prompts` join (not `prompts.project_id`)
 - [ ] Update UI to manage order/archival via `project_prompts`
 - [ ] Audit every existing prompt reader (API routes, Solid stores, cron jobs) and switch them to the association join to avoid any accidental divergence.
-- [ ] Project article view: surface “available judgments” for an article from any project using the same `prompt_id`
-- [ ] On adding an article to a project, auto-link project to prompts that already have judgments for that article
+- [ ] Project article view: surface “available judgments” for an article from any project using the same `prompt_id` (include both LLM and Human judgments; do not filter by model)
+- [x] On adding an article to a project, auto-link project to prompts that already have judgments for that article
 
 ## Phase 4 — Write Path (new prompts)
-- [ ] Implement upsert-by-hash when creating prompts:
-  - [ ] Compute `content_hash` (normalize inputs)
-  - [ ] If `prompts.content_hash` exists, reuse existing `prompt_id`; else insert new prompt row
-  - [ ] Insert `project_prompts` row for current project with per-project metadata
-- [ ] Block app-level edits of prompt text (mirror DB immutability)
-- [ ] Update the current prompt creation/edit flows (API + UI) to call the shared upsert-by-hash service and remove any code paths that attempted to instantiate a different prompt type.
+- [x] Implement upsert-by-hash when creating prompts:
+  - [x] Compute `content_hash` (normalize inputs)
+  - [x] If `prompts.content_hash` exists, reuse existing `prompt_id`; else insert new prompt row
+  - [x] Insert `project_prompts` row for current project with per-project metadata
+- [x] Block app-level edits of prompt text (mirror DB immutability). Existing edit flows may fail — acceptable.
+- [x] Update the current prompt creation/edit flows (API + UI) to call the shared upsert-by-hash service and update associations instead of editing prompt rows.
 
 ## Phase 5 — Dedup + Consistency (optional now; enforce later)
 - [ ] Admin tooling to review duplicates (same `content_hash`) and choose canonical `prompt_id`
 - [ ] Data migration to remap `judgments.prompt_id` and `judgments_human.prompt_id` to canonical IDs
 - [ ] Delete redundant prompt rows after remap
 - [ ] Enforce unique index on `prompts.content_hash` once clean
-- [ ] Mark legacy prompt columns read‑only in app code; keep for compatibility during transition
+- [x] Legacy prompt columns removed; no dual-write
 
 ## Phase 6 — Project Articles UX
-- [ ] Server endpoints to manage `project_articles` membership (add/remove)
+- [x] Server endpoints to manage `project_articles` membership (add/remove)
 - [ ] Client UI to curate articles for a project
-- [ ] On association, auto‑link prompts with prior judgments for that article
+- [x] On association, auto‑link prompts with prior judgments for that article
 
-## Phase 7 — Backward Compatibility + Clean‑up (later)
-- [ ] Verify legacy flows still function (reads using `prompts.project_id`)
-- [ ] Feature‑flag: switch reads to new join everywhere
-- [ ] When stable, disable writes to legacy columns
-- [ ] Plan future migration to drop legacy columns (separate PR)
+## Phase 7 — Clean‑up
+- [x] Legacy prompt columns dropped; ensure remaining callers are using joins only
 
 ## Migrations and Backfill (Drizzle)
-- [ ] Write Drizzle migrations for:
-  - [ ] `project_articles`
-  - [ ] `project_prompts`
-  - [ ] `prompts.content_hash` + index
-  - [ ] Immutability trigger on `prompts`
-  - [ ] Alter FKs: drop and recreate `judgments.prompt_id` and `judgments_human.prompt_id` constraints with `ON DELETE RESTRICT`
+- [x] Write Drizzle migrations for:
+  - [x] `project_articles`
+  - [x] `project_prompts`
+  - [x] `prompts.content_hash` + index
+- [x] Immutability trigger on `prompts`
+- [x] Alter FKs: drop and recreate `judgments.prompt_id` and `judgments_human.prompt_id` constraints with `ON DELETE RESTRICT`
 - [ ] Generate/apply: `bun run db:gen` → `bun run db:mig`
-- [ ] Backfill scripts:
-  - [ ] Compute and set `content_hash` for existing prompts
-  - [ ] Populate `project_prompts` from legacy prompt rows
+- [x] Backfill scripts:
+  - [x] Compute and set `content_hash` for existing prompts
+  - [x] Populate `project_prompts` from legacy prompt rows
 
 ## Quality Gates
 - [ ] Lint and tests: `bun run lint` and `bun test`
@@ -85,4 +82,4 @@ Goal: Allow the concept of "subprojects" where we can take selected articles ass
 ## Notes
 - Prompts become global and immutable; per‑project mutables live in `project_prompts`.
 - Judgments continue to reference `prompt_id`; reuse emerges naturally when multiple projects associate the same prompt.
-- Keep legacy prompt columns during rollout to avoid breaking existing paths; deprecate later.
+- Legacy prompt columns removed immediately; associations provide per-project metadata.

@@ -1,13 +1,19 @@
 import * as schema from '../../db/schema.ts'
 import {getShortId} from '../../utils/getShortId.ts'
 
-type PromptsType = (typeof schema.prompts.$inferSelect)[]
+export type PromptForJudging = Array<{
+  id: string
+  originalText: string
+  promptHeading: string | null
+  order: number | null
+  type: string | null
+}>
 
-export const getBaseHeading = (prompt: PromptsType[number]): string => {
+export const getBaseHeading = (prompt: PromptForJudging[number]): string => {
   return (prompt.promptHeading ?? `${prompt.order ?? 0}-${getShortId()}`) + `^^^${prompt.id}`
 }
 
-const getSections = (prompts: PromptsType): string => {
+const getSections = (prompts: PromptForJudging): string => {
   return prompts.reduce((acc, prompt) => {
     const baseHeading = getBaseHeading(prompt)
 
@@ -23,7 +29,7 @@ output_type: ${prompt.type}
 
 type ArticleType = typeof schema.articles.$inferSelect
 
-export const judgeGetPrompt = (article: ArticleType, prompts: PromptsType): string => {
+export const judgeGetPrompt = (article: ArticleType, prompts: PromptForJudging): string => {
   // const prompts = getSortedArticle(article)
   const sections = getSections(prompts)
 

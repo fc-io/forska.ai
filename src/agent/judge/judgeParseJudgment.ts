@@ -1,12 +1,9 @@
 import {type as arktype} from 'arktype'
 
-import * as schema from '../../db/schema.ts'
-import {getBaseHeading} from './judgeGetPrompt.ts'
+import {getBaseHeading, type PromptForJudging} from './judgeGetPrompt.ts'
 
 // Helper that parses and validates the model response against the JudgmentResult schema
-type PromptsType = (typeof schema.prompts.$inferSelect)[]
-
-export const parseJudgment = (response: string, prompts: PromptsType): Record<string, unknown> => {
+export const parseJudgment = (response: string, prompts: PromptForJudging): Record<string, unknown> => {
   const parsed: unknown = JSON.parse(response)
   const typeDefs = prompts.reduce((acc, prompt) => {
     const baseHeading = getBaseHeading(prompt)

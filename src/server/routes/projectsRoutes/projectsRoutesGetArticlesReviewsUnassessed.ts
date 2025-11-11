@@ -1,7 +1,7 @@
 import {and, desc, eq, gte, inArray, lte, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {articleRouteLink, articles, judgments, projectRouteLink, projects, prompts} from '../../../db/schema.ts'
+import {articleRouteLink, articles, judgments, projectRouteLink, projects, prompts, projectPrompts} from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
 export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
@@ -15,7 +15,11 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
       const offset = (page - 1) * limit
       const searchTitle = typeof body.search === 'string' ? body.search.trim() : ''
 
-      const projectPrompts = await db.select().from(prompts).where(eq(prompts.projectId, body.projectId))
+      const projectPrompts = await db
+        .select({id: prompts.id})
+        .from(projectPrompts)
+        .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
+        .where(eq(projectPrompts.projectId, body.projectId))
 
       if (projectPrompts.length === 0) {
         return {data: [], totalCount: 0, page, limit, totalPages: 0}

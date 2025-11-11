@@ -1,4 +1,4 @@
-import {desc, eq, inArray, isNull} from 'drizzle-orm'
+import {desc, eq, inArray, isNull, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {
@@ -9,6 +9,7 @@ import {
   projectRouteLink,
   projects,
   prompts,
+  projectPrompts,
 } from '../../db/schema.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
@@ -73,16 +74,25 @@ export const projectsRoutes = new Elysia()
       throw new Error('Project not found')
     }
 
-    const projectPrompts = await db
-      .select()
-      .from(prompts)
-      .where(eq(prompts.projectId, params.id))
-      .orderBy(prompts.order)
+    const projectPromptsList = await db
+      .select({
+        id: prompts.id,
+        originalText: prompts.originalText,
+        transformedText: prompts.transformedText,
+        promptHeading: projectPrompts.promptHeading,
+        order: projectPrompts.order,
+        archived: projectPrompts.archived,
+        type: projectPrompts.type,
+      })
+      .from(projectPrompts)
+      .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
+      .where(eq(projectPrompts.projectId, params.id))
+      .orderBy(projectPrompts.order)
 
     // Check if any judgments exist for these prompts
     let hasJudgedArticles = false
-    if (projectPrompts.length > 0) {
-      const promptIds = projectPrompts.map((p) => {
+    if (projectPromptsList.length > 0) {
+      const promptIds = projectPromptsList.map((p) => {
         return p.id
       })
       const existingJudgments = await db
@@ -119,7 +129,7 @@ export const projectsRoutes = new Elysia()
       return r.route
     })
 
-    return {data: {project, prompts: projectPrompts, hasJudgedArticles, model: projectModel ?? null, importRoutes}}
+    return {data: {project, prompts: projectPromptsList, hasJudgedArticles, model: projectModel ?? null, importRoutes}}
   })
   .post(
     '/api/projects',
@@ -154,24 +164,33 @@ export const projectsRoutes = new Elysia()
         })
         .returning()
 
-      // Create prompts if provided
+      // Create prompts associations if provided (global immutable prompts; upsert by hash)
       if (newProject && body.prompts && body.prompts.length > 0) {
-        await db.insert(prompts).values(
-          body.prompts.map(
-            (
-              prompt: string | {content: string; promptHeading?: string; type?: string; order: number},
-              index: number,
-            ) => {
-              return {
-                projectId: newProject.id,
-                originalText: typeof prompt === 'string' ? prompt : prompt.content,
-                promptHeading: typeof prompt === 'object' ? prompt.promptHeading || null : null,
-                type: typeof prompt === 'object' ? prompt.type || null : null,
-                order: typeof prompt === 'object' && prompt.order !== undefined ? prompt.order : index,
-              }
-            },
-          ),
-        )
+        for (let index = 0; index < body.prompts.length; index++) {
+          const prompt = body.prompts[index] as string | {content: string; promptHeading?: string; type?: string; order: number}
+          const content = typeof prompt === 'string' ? prompt : prompt.content
+          const heading = typeof prompt === 'object' ? prompt.promptHeading || null : null
+          const typeVal = typeof prompt === 'object' ? prompt.type || null : null
+          const orderVal = typeof prompt === 'object' && prompt.order !== undefined ? prompt.order : index
+
+          // Find existing prompt by DB-computed content hash
+          const existingByHash = await db
+            .execute<{id: string}>(sql`SELECT id FROM "prompts" WHERE content_hash = compute_prompt_content_hash(${content}, ${null}) LIMIT 1`)
+            .then((res) => res.rows)
+
+          const promptId = existingByHash[0]?.id
+            ? existingByHash[0]!.id
+            : (await db.insert(prompts).values({originalText: content, transformedText: null}).returning({id: prompts.id}))[0]!.id
+
+          await db.insert(projectPrompts).values({
+            projectId: newProject.id,
+            promptId,
+            promptHeading: heading,
+            order: orderVal,
+            archived: false,
+            type: typeVal,
+          })
+        }
       }
 
       // Link selected import routes to the project
@@ -289,64 +308,84 @@ export const projectsRoutes = new Elysia()
           throw new Error('Project not found')
         }
 
-        // Handle prompts updates
+        // Handle prompts updates against associations (immutable prompts)
         if (body.prompts !== undefined) {
-          // Get existing prompts
-          const existingPrompts = await tx.select().from(prompts).where(eq(prompts.projectId, params.id))
+          // Existing associations
+          const existing = await tx
+            .select({
+              id: projectPrompts.id,
+              promptId: projectPrompts.promptId,
+            })
+            .from(projectPrompts)
+            .where(eq(projectPrompts.projectId, params.id))
 
-          const existingPromptIds = new Set(
-            existingPrompts.map((p) => {
-              return p.id
-            }),
-          )
-          const receivedPromptIds = new Set(
+          const existingPromptIds = new Set(existing.map((p) => p.promptId))
+          const receivedOriginalIds = new Set(
             body.prompts
               .filter((p) => {
                 return p.originalId
               })
-              .map((p) => {
-                return p.originalId
-              }),
+              .map((p) => p.originalId!),
           )
 
-          // Delete prompts that are no longer in the list
-          const promptsToDelete = existingPrompts
-            .filter((p) => {
-              return !receivedPromptIds.has(p.id)
-            })
-            .map((p) => {
-              return p.id
-            })
-
-          for (const promptId of promptsToDelete) {
-            await tx.delete(prompts).where(eq(prompts.id, promptId))
+          // Delete associations removed by client
+          const toDeleteAssoc = existing.filter((e) => {
+            return !receivedOriginalIds.has(e.promptId)
+          })
+          if (toDeleteAssoc.length > 0) {
+            await tx
+              .delete(projectPrompts)
+              .where(
+                sql`${projectPrompts.projectId} = ${params.id} AND ${projectPrompts.promptId} = ANY(ARRAY[${sql.join(
+                  toDeleteAssoc.map((e) => sql`${e.promptId}::uuid`),
+                  sql`,`,
+                )}] )`,
+              )
           }
 
-          // Process each prompt
-          for (const prompt of body.prompts) {
-            if (prompt.originalId && existingPromptIds.has(prompt.originalId)) {
-              // Update existing prompt
+          // Upsert associations and prompt rows
+          for (const p of body.prompts) {
+            const heading = p.promptHeading || null
+            const typeVal = p.type || null
+            const orderVal = p.order
+            let targetPromptId: string
+            if (p.originalId) {
+              // If text unchanged, keep existing prompt id
+              const [existingPrompt] = await tx.select().from(prompts).where(eq(prompts.id, p.originalId)).limit(1)
+              const existingByHash = await tx
+                .execute<{id: string}>(sql`SELECT id FROM "prompts" WHERE content_hash = compute_prompt_content_hash(${p.originalText}, ${null}) LIMIT 1`)
+                .then((res) => res.rows)
+              if (existingPrompt && existingByHash[0]?.id === existingPrompt.id) {
+                targetPromptId = existingPrompt.id
+              } else {
+                const found = await tx
+                  .execute<{id: string}>(sql`SELECT id FROM "prompts" WHERE content_hash = compute_prompt_content_hash(${p.originalText}, ${null}) LIMIT 1`)
+                  .then((res) => res.rows)
+                targetPromptId = found[0]?.id
+                  ? found[0].id
+                  : (await tx.insert(prompts).values({originalText: p.originalText, transformedText: null}).returning({id: prompts.id}))[0]!.id
+              }
+              // Ensure association points to target prompt and metadata is updated
               await tx
-                .update(prompts)
-                .set({
-                  originalText: prompt.originalText,
-                  promptHeading: prompt.promptHeading || null,
-                  type: prompt.type || null,
-                  order: prompt.order,
-                  updatedAt: new Date(),
-                })
-                .where(eq(prompts.id, prompt.originalId))
-            } else if (!prompt.originalId && prompt.originalText) {
-              // Create new prompt
-              await tx
-                .insert(prompts)
-                .values({
-                  projectId: params.id,
-                  originalText: prompt.originalText,
-                  promptHeading: prompt.promptHeading || null,
-                  type: prompt.type || null,
-                  order: prompt.order,
-                })
+                .update(projectPrompts)
+                .set({promptId: targetPromptId, promptHeading: heading, type: typeVal, order: orderVal, updatedAt: new Date()})
+                .where(sql`${projectPrompts.projectId} = ${params.id} AND ${projectPrompts.promptId} = ${p.originalId}`)
+            } else {
+              const found = await tx
+                .execute<{id: string}>(sql`SELECT id FROM "prompts" WHERE content_hash = compute_prompt_content_hash(${p.originalText}, ${null}) LIMIT 1`)
+                .then((res) => res.rows)
+              targetPromptId = found[0]?.id
+                ? found[0].id
+                : (await tx.insert(prompts).values({originalText: p.originalText, transformedText: null}).returning({id: prompts.id}))[0]!.id
+
+              await tx.insert(projectPrompts).values({
+                projectId: params.id,
+                promptId: targetPromptId,
+                promptHeading: heading,
+                type: typeVal,
+                order: orderVal,
+                archived: false,
+              })
             }
           }
         }
@@ -384,10 +423,19 @@ export const projectsRoutes = new Elysia()
 
         // Fetch updated prompts
         const updatedPrompts = await tx
-          .select()
-          .from(prompts)
-          .where(eq(prompts.projectId, params.id))
-          .orderBy(prompts.order)
+          .select({
+            id: prompts.id,
+            originalText: prompts.originalText,
+            transformedText: prompts.transformedText,
+            promptHeading: projectPrompts.promptHeading,
+            order: projectPrompts.order,
+            archived: projectPrompts.archived,
+            type: projectPrompts.type,
+          })
+          .from(projectPrompts)
+          .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
+          .where(eq(projectPrompts.projectId, params.id))
+          .orderBy(projectPrompts.order)
 
         return {project: updatedProject, prompts: updatedPrompts}
       })

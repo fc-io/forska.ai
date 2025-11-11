@@ -7,6 +7,8 @@ const tablesWithUpdatedAt = [
   'models',
   'projects',
   'prompts',
+  'project_prompts',
+  'project_articles',
   'judgments',
   'judgments_human',
   'token_use',
