@@ -47,7 +47,7 @@ type LargestTokenUseRow = {
 }
 type LargestPerRequestResponse = {data: LargestTokenUseRow[]}
 
-const AdminModels = () => {
+const AdminConfiguration = () => {
   const sessionQuery = useQuery(() => {
     return {queryKey: ['session'], queryFn: fetchSession}
   })
@@ -146,9 +146,11 @@ const AdminModels = () => {
             </div>
           }
         >
-          <div class="flex justify-between items-center mb-6">
-            <h1 class="text-2xl font-bold">Models</h1>
+          <div class="flex justify-between items-center mb-4">
+            <h1 class="text-2xl font-bold">Configuration</h1>
           </div>
+
+          <h2 class="text-lg font-semibold mb-2">Models</h2>
 
           <Show when={modelsQuery.isLoading}>
             <p class="text-gray-500">Loading models…</p>
@@ -333,4 +335,4 @@ const AdminModels = () => {
   )
 }
 
-export const Route = createFileRoute('/admin/models/')({component: AdminModels})
+export const Route = createFileRoute('/admin/configuration/')({component: AdminConfiguration})
