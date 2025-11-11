@@ -12,6 +12,10 @@ interface ReviewsPaginationControlsProps {
   currentPageRowIds?: string[]
   rowSelection?: Accessor<Record<string, boolean>>
   setRowSelection?: Setter<Record<string, boolean>>
+  totalMatchingCount?: number
+  selectAllMatching?: Accessor<boolean>
+  setSelectAllMatching?: Setter<boolean>
+  fetchAllMatchingArticleIds?: () => Promise<string[]>
 }
 
 export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps) => {
@@ -60,6 +64,7 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
         for (const id of props.currentPageRowIds || []) {
           if (id in next) delete next[id]
         }
+        if (props.setSelectAllMatching) props.setSelectAllMatching(false)
       }
       return next
     })
@@ -140,21 +145,23 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
                                       <a
                                         href="#"
                                         class="block w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"
-                                        onClick={(e) => {
+                                        onClick={async (e) => {
                                           e.preventDefault()
-                                          const sel = props.rowSelection ? props.rowSelection() : {}
-                                          const selectedIds = Object.entries(sel)
-                                            .filter(([, v]) => {
-                                              return Boolean(v)
-                                            })
-                                            .map(([k]) => {
-                                              return k
-                                            })
-                                          console.log(
-                                            'selectedArticleIds: ',
-                                            selectedIds.length,
-                                            `${selectedIds[0]}...`,
-                                          )
+                                          const allAcross = props.selectAllMatching && props.selectAllMatching()
+                                          const ids =
+                                            allAcross && props.fetchAllMatchingArticleIds
+                                              ? await props.fetchAllMatchingArticleIds()
+                                              : (() => {
+                                                  const sel = props.rowSelection ? props.rowSelection() : {}
+                                                  return Object.entries(sel)
+                                                    .filter(([, v]) => {
+                                                      return Boolean(v)
+                                                    })
+                                                    .map(([k]) => {
+                                                      return k
+                                                    })
+                                                })()
+                                          console.log('selectedArticleIds:', ids)
                                         }}
                                       >
                                         {p.name}
@@ -223,7 +230,33 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
         </Show>
       </div>
       <Show when={allSelected()}>
-        <div class="mt-2 text-xs text-gray-700 p-2 bg-white rounded-lg shadow">{selectedCount()} rows selected</div>
+        {(() => {
+          const allAcross = props.selectAllMatching && props.selectAllMatching()
+          const total = props.totalMatchingCount || 0
+          return (
+            <>
+              {allAcross ? (
+                <div class="mt-2 text-xs text-gray-700 p-2 bg-white rounded-lg shadow">
+                  All {total} articles matching filter is selected.
+                </div>
+              ) : (
+                <div class="mt-2 text-xs text-gray-700 p-2 bg-white rounded-lg shadow flex items-center gap-2">
+                  <span>{selectedCount()} rows selected</span>
+                  <Show when={total > 0 && props.setSelectAllMatching}>
+                    <button
+                      class="text-blue-600 hover:underline"
+                      onClick={() => {
+                        if (props.setSelectAllMatching) props.setSelectAllMatching(true)
+                      }}
+                    >
+                      Select all {total} articles
+                    </button>
+                  </Show>
+                </div>
+              )}
+            </>
+          )
+        })()}
       </Show>
     </>
   )

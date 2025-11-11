@@ -3,6 +3,7 @@ import type {Accessor, Setter} from 'solid-js'
 import {Show, Suspense, createSignal, createEffect} from 'solid-js'
 
 import {createArticlesBothReviewsQueryOptions} from '../../projects/projectsArticlesBothReviewsQuery.ts'
+import {apiClient} from '../../../../services/apiClient.ts'
 import {ReviewsPaginationControls} from '../reviewsPaginationControls.tsx'
 import {ReviewsArticlesTable} from './reviewsArticlesTable.tsx'
 
@@ -19,6 +20,7 @@ interface ReviewsArticlesBothTableContainerProps {
 
 export const ReviewsArticlesBothTableContainer = (props: ReviewsArticlesBothTableContainerProps) => {
   const [rowSelection, setRowSelection] = createSignal<Record<string, boolean>>({})
+  const [selectAllMatching, setSelectAllMatching] = createSignal<boolean>(false)
   // Reset selection when filters/date/search/page size change
   createEffect(() => {
     // Access to track dependencies
@@ -29,6 +31,7 @@ export const ReviewsArticlesBothTableContainer = (props: ReviewsArticlesBothTabl
     props.pageLimit()
     props.currentPage()
     setRowSelection({})
+    setSelectAllMatching(false)
   })
   const articlesQuery = useQuery(() => {
     return createArticlesBothReviewsQueryOptions(
@@ -87,6 +90,32 @@ export const ReviewsArticlesBothTableContainer = (props: ReviewsArticlesBothTabl
                   })}
                   rowSelection={rowSelection}
                   setRowSelection={setRowSelection}
+                  totalMatchingCount={response().totalCount}
+                  selectAllMatching={selectAllMatching}
+                  setSelectAllMatching={setSelectAllMatching}
+                  fetchAllMatchingArticleIds={async () => {
+                    const body: Record<string, unknown> = {
+                      page: '1',
+                      limit: String(response().totalCount),
+                      projectId: props.projectId,
+                      prompts: Object.entries(props.promptFilters()).reduce(
+                        (acc, [promptId, value]) => {
+                          if (Array.isArray(value) && value.length > 0) acc[promptId] = value
+                          return acc
+                        },
+                        {} as Record<string, string[]>,
+                      ),
+                    }
+                    const from = props.fromDate().trim()
+                    const to = props.toDate().trim()
+                    if (from) body.from = from
+                    if (to) body.to = to
+                    const search = (props.searchTitle() || '').trim()
+                    if (search) body.search = search
+                    const r = await apiClient.api.articlesreviewsboth.post(body)
+                    const data = r.data && 'data' in r.data ? (r.data as {data: Array<{id: string}>}).data : []
+                    return data.map((a) => a.id)
+                  }}
                 />
 
                 <Show
@@ -118,6 +147,32 @@ export const ReviewsArticlesBothTableContainer = (props: ReviewsArticlesBothTabl
                   })}
                   rowSelection={rowSelection}
                   setRowSelection={setRowSelection}
+                  totalMatchingCount={response().totalCount}
+                  selectAllMatching={selectAllMatching}
+                  setSelectAllMatching={setSelectAllMatching}
+                  fetchAllMatchingArticleIds={async () => {
+                    const body: Record<string, unknown> = {
+                      page: '1',
+                      limit: String(response().totalCount),
+                      projectId: props.projectId,
+                      prompts: Object.entries(props.promptFilters()).reduce(
+                        (acc, [promptId, value]) => {
+                          if (Array.isArray(value) && value.length > 0) acc[promptId] = value
+                          return acc
+                        },
+                        {} as Record<string, string[]>,
+                      ),
+                    }
+                    const from = props.fromDate().trim()
+                    const to = props.toDate().trim()
+                    if (from) body.from = from
+                    if (to) body.to = to
+                    const search = (props.searchTitle() || '').trim()
+                    if (search) body.search = search
+                    const r = await apiClient.api.articlesreviewsboth.post(body)
+                    const data = r.data && 'data' in r.data ? (r.data as {data: Array<{id: string}>}).data : []
+                    return data.map((a) => a.id)
+                  }}
                 />
               </div>
             )
