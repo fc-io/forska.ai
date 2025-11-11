@@ -25,6 +25,7 @@ mkdir -p "$STACK_ROOT"/{pgdata,hf_cache,logs,.cache,.secrets}
 export XDG_CACHE_HOME=${XDG_CACHE_HOME:-$STACK_ROOT/.cache}
 export HF_HOME=${HF_HOME:-$STACK_ROOT/hf_cache}
 export SGLANG_CACHE_DIR=${SGLANG_CACHE_DIR:-$XDG_CACHE_HOME/sglang}
+export SGLANG_CONTEXT_LENGTH=${SGLANG_CONTEXT_LENGTH:-8192}
 
 # Service ports (host networking)
 export POSTGRES_PORT=${POSTGRES_PORT:-5432}
@@ -416,6 +417,7 @@ exec apptainer exec --cleanenv --nv \
   python -m sglang.launch_server \
     --model-path "${SGLANG_MODEL}" \
     --host 0.0.0.0 --port "${SGLANG_WORKER_PORT}" \
+    --context-length "${SGLANG_CONTEXT_LENGTH}" \
     --tensor-parallel-size "${TP_SIZE}" \
     --data-parallel-size "${DP_SIZE}" \
     --max-running-requests "${SGLANG_MAX_RUNNING_REQUESTS}" \
@@ -443,6 +445,7 @@ else
     python -m sglang.launch_server \
       --model-path "$SGLANG_MODEL" \
       --host 0.0.0.0 --port "$SGLANG_WORKER_PORT" \
+      --context-length "$SGLANG_CONTEXT_LENGTH" \
       --tensor-parallel-size "$TP_SIZE" \
       --data-parallel-size "$DP_SIZE" \
       --max-running-requests "$SGLANG_MAX_RUNNING_REQUESTS" \
@@ -517,6 +520,7 @@ apptainer run --cleanenv \
   --env GPU_TOTAL_GPUS="$TOTAL_GPUS" \
   --env TP_SIZE="$TP_SIZE" \
   --env DP_SIZE="$DP_SIZE" \
+  --env SGLANG_CONTEXT_LENGTH="$SGLANG_CONTEXT_LENGTH" \
   --env SGLANG_MAX_RUNNING_REQUESTS="$SGLANG_MAX_RUNNING_REQUESTS" \
   --env SGLANG_MODEL="$SGLANG_MODEL" \
   --env WORKER_URLS="$WORKER_URLS_CSV" \
