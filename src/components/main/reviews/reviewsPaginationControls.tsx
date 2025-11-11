@@ -150,7 +150,11 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
                                             .map(([k]) => {
                                               return k
                                             })
-                                          console.log('selectedArticleIds', selectedIds)
+                                          console.log(
+                                            'selectedArticleIds: ',
+                                            selectedIds.length,
+                                            `${selectedIds[0]}...`,
+                                          )
                                         }}
                                       >
                                         {p.name}
@@ -171,48 +175,52 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
           </Show>
         </div>
 
-        <div class="flex items-center justify-center gap-1">
-          <button
-            class="px-2 py-1 text-xs font-medium text-gray-700 bg-gray-100 border border-gray-300 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
-            disabled={props.page <= 1}
-            onClick={() => {
-              return handlePageChange(props.page - 1)
-            }}
-          >
-            Previous
-          </button>
+        <Show when={props.totalPages > 1}>
+          <div class="flex items-center justify-center gap-1">
+            <button
+              class="px-2 py-1 text-xs font-medium text-gray-700 bg-gray-100 border border-gray-300 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={props.page <= 1}
+              onClick={() => {
+                return handlePageChange(props.page - 1)
+              }}
+            >
+              Previous
+            </button>
 
-          <span class="mx-2 text-xs text-gray-700">
-            Page {props.page} of {props.totalPages}
-          </span>
+            <span class="mx-2 text-xs text-gray-700">
+              Page {props.page} of {props.totalPages}
+            </span>
 
-          <button
-            class="px-2 py-1 text-xs font-medium text-gray-700 bg-gray-100 border border-gray-300 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
-            disabled={props.page >= props.totalPages}
-            onClick={() => {
-              return handlePageChange(props.page + 1)
-            }}
-          >
-            Next
-          </button>
-        </div>
+            <button
+              class="px-2 py-1 text-xs font-medium text-gray-700 bg-gray-100 border border-gray-300 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={props.page >= props.totalPages}
+              onClick={() => {
+                return handlePageChange(props.page + 1)
+              }}
+            >
+              Next
+            </button>
+          </div>
+        </Show>
 
-        <div class="flex items-center gap-1">
-          <label class="text-xs text-gray-700">Go to page:</label>
-          <input
-            type="number"
-            min="1"
-            max={props.totalPages}
-            value={props.page}
-            class="w-12 px-1 py-0.5 text-xs border rounded"
-            onInput={(e) => {
-              const newPage = parseInt(e.target.value)
-              if (newPage >= 1 && newPage <= props.totalPages) {
-                handlePageChange(newPage)
-              }
-            }}
-          />
-        </div>
+        <Show when={props.totalPages > 1}>
+          <div class="flex items-center gap-1">
+            <label class="text-xs text-gray-700">Go to page:</label>
+            <input
+              type="number"
+              min="1"
+              max={props.totalPages}
+              value={props.page}
+              class="w-12 px-1 py-0.5 text-xs border rounded"
+              onInput={(e) => {
+                const newPage = parseInt(e.target.value)
+                if (newPage >= 1 && newPage <= props.totalPages) {
+                  handlePageChange(newPage)
+                }
+              }}
+            />
+          </div>
+        </Show>
       </div>
       <Show when={allSelected()}>
         <div class="mt-2 text-xs text-gray-700 p-2 bg-white rounded-lg shadow">{selectedCount()} rows selected</div>

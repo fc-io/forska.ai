@@ -78,18 +78,16 @@ export const ReviewsArticlesBothTableContainer = (props: ReviewsArticlesBothTabl
                   </p>
                 </div>
 
-                <Show when={response().totalPages > 1}>
-                  <ReviewsPaginationControls
-                    page={props.currentPage()}
-                    totalPages={response().totalPages}
-                    setCurrentPage={props.setCurrentPage}
-                    currentPageRowIds={response().data.map((a) => {
-                      return a.id
-                    })}
-                    rowSelection={rowSelection}
-                    setRowSelection={setRowSelection}
-                  />
-                </Show>
+                <ReviewsPaginationControls
+                  page={props.currentPage()}
+                  totalPages={response().totalPages}
+                  setCurrentPage={props.setCurrentPage}
+                  currentPageRowIds={response().data.map((a) => {
+                    return a.id
+                  })}
+                  rowSelection={rowSelection}
+                  setRowSelection={setRowSelection}
+                />
 
                 <Show
                   when={response().data.length > 0}
@@ -111,18 +109,16 @@ export const ReviewsArticlesBothTableContainer = (props: ReviewsArticlesBothTabl
                   />
                 </Show>
 
-                <Show when={response().totalPages > 1}>
-                  <ReviewsPaginationControls
-                    page={props.currentPage()}
-                    totalPages={response().totalPages}
-                    setCurrentPage={props.setCurrentPage}
-                    currentPageRowIds={response().data.map((a) => {
-                      return a.id
-                    })}
-                    rowSelection={rowSelection}
-                    setRowSelection={setRowSelection}
-                  />
-                </Show>
+                <ReviewsPaginationControls
+                  page={props.currentPage()}
+                  totalPages={response().totalPages}
+                  setCurrentPage={props.setCurrentPage}
+                  currentPageRowIds={response().data.map((a) => {
+                    return a.id
+                  })}
+                  rowSelection={rowSelection}
+                  setRowSelection={setRowSelection}
+                />
               </div>
             )
           }}
