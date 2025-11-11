@@ -43,6 +43,7 @@ Goal: Allow the concept of "subprojects" where we can take selected articles ass
   - [x] If `prompts.content_hash` exists, reuse existing `prompt_id`; else insert new prompt row
   - [x] Insert `project_prompts` row for current project with per-project metadata
 - [x] Block app-level edits of prompt text and metadata (prompt_heading, type) to mirror DB immutability. Existing edit flows may fail — acceptable.
+- [ ] Block app-level edits of prompt text and metadata (prompt_heading, type) to mirror DB immutability. Existing edit flows still allow editing via project_prompts; enforce at app boundary.
 - [x] Update the current prompt creation/edit flows (API + UI) to call the shared upsert-by-hash service and update associations instead of editing prompt rows.
 
 ## Phase 5 — Dedup + Consistency (optional now; enforce later)
@@ -58,7 +59,7 @@ Goal: Allow the concept of "subprojects" where we can take selected articles ass
 - [x] On association, auto‑link prompts with prior judgments for that article
 
 ## Phase 7 — Clean‑up
-- [x] Legacy prompt columns dropped (drop `prompts.project_id`, `prompts.order`, `prompts.archived`; keep `prompts.prompt_heading` and `prompts.type` as global immutable metadata)
+- [ ] Legacy prompt columns dropped (drop `prompts.project_id`, `prompts.order`, `prompts.archived`; keep `prompts.prompt_heading` and `prompts.type` as global immutable metadata) — DB migration exists to move metadata to `prompts`, but code/schema still read/write `prompt_heading`/`type` on `project_prompts`.
 - [ ] Ensure remaining callers are using joins only
   - [ ] Refactor HumanAssessment overview routes to use `project_prompts` association (replace `prompts.project_id` usage):
     - src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesGetOverviewBothProjects.ts:35–49
@@ -73,7 +74,7 @@ Goal: Allow the concept of "subprojects" where we can take selected articles ass
 - [x] Alter FKs: drop and recreate `judgments.prompt_id` and `judgments_human.prompt_id` constraints with `ON DELETE RESTRICT`
 - [ ] Generate/apply: `bun run db:gen` → `bun run db:mig`
 - [x] Backfill scripts:
-  - [x] Compute and set `content_hash` (hash includes text + metadata)
+  - [ ] Compute and set `content_hash` (hash includes text + metadata) — current hash only includes original/transformed text.
   - [x] Populate `project_prompts` from legacy prompt rows (order, archived only)
 
 ## Quality Gates
