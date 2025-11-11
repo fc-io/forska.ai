@@ -14,7 +14,7 @@ const serverJobId = `server-job-${crypto.randomUUID()}`
 const NEW_ARTICLES_INTERVAL = '*/1 * * * * *'
 const LLM_PROCESSING_INTERVAL = '*/1 * * * * *'
 const CHECK_LLM_STATUS = '*/30 * * * * *'
-const CLEANUP_STALE_REQUESTS = '0 */5 * * * *'
+const CLEANUP_STALE_REQUESTS = '0 */1 * * * *'
 const START_DELAY_MS = 1000
 
 let isRunningGetNewArticlesForJobs = false

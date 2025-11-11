@@ -25,7 +25,13 @@ const getOpenAIClient = (baseURL: string): OpenAI => {
   if (existingClient) {
     return existingClient
   }
-  const client = new OpenAI({apiKey: 'fake_key', dangerouslyAllowBrowser: true, baseURL})
+  const client = new OpenAI({
+    apiKey: 'fake_key',
+    dangerouslyAllowBrowser: true,
+    baseURL,
+    timeout: 900_000, // 15 minutes
+    maxRetries: 0, // Handle retries at application level
+  })
   openAIClients.set(baseURL, client)
   return client
 }
