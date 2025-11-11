@@ -24,6 +24,7 @@ export const humanAssessmentRoutesGetOverviewBothProjects = async ({request, set
     .innerJoin(projects, eq(projects.id, judgmentsHuman.projectId))
     .where(
       and(
+        // Human fully answered across that project's prompt set (derived from judgments_human associations)
         sql`EXISTS (
             SELECT 1
             FROM ${judgmentsHuman} jh2
@@ -33,19 +34,21 @@ export const humanAssessmentRoutesGetOverviewBothProjects = async ({request, set
               AND jh2."is_answered" = true
             GROUP BY jh2."project_id", jh2."article_id", jh2."user"
             HAVING COUNT(DISTINCT jh2."prompt_id") = (
-              SELECT COUNT(*) FROM ${prompts} p WHERE p."project_id" = jh2."project_id"
+              SELECT COUNT(DISTINCT jh3."prompt_id") FROM ${judgmentsHuman} jh3 WHERE jh3."project_id" = jh2."project_id"
             )
           )`,
+        // LLM judgments present for all prompts associated to this project (derived from judgments_human prompt set)
         sql`EXISTS (
             SELECT 1
             FROM ${judgments} j
-            INNER JOIN ${prompts} pr ON pr."id" = j."prompt_id"
-            WHERE pr."project_id" = ${judgmentsHuman.projectId}
-              AND j."article_id" = ${judgmentsHuman.articleId}
+            WHERE j."article_id" = ${judgmentsHuman.articleId}
               AND j."is_answered" = true
+              AND j."prompt_id" IN (
+                SELECT DISTINCT jh4."prompt_id" FROM ${judgmentsHuman} jh4 WHERE jh4."project_id" = ${judgmentsHuman.projectId}
+              )
             GROUP BY j."article_id"
             HAVING COUNT(DISTINCT j."prompt_id") = (
-              SELECT COUNT(*) FROM ${prompts} p2 WHERE p2."project_id" = ${judgmentsHuman.projectId}
+              SELECT COUNT(DISTINCT jh5."prompt_id") FROM ${judgmentsHuman} jh5 WHERE jh5."project_id" = ${judgmentsHuman.projectId}
             )
           )`,
       ),

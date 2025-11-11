@@ -17,6 +17,7 @@ type PromptItem = {
   isExisting: boolean
   originalId?: string
   order: number
+  archived: boolean
 }
 
 type ProjectPromptResponse = {
@@ -25,6 +26,7 @@ type ProjectPromptResponse = {
   promptHeading: string | null
   type: string | null
   order: number | null
+  archived: boolean | null
 }
 
 type ProjectSummary = {
@@ -52,6 +54,7 @@ type ProjectDetailsResponse = {
 type ParsedDateResult = {date: Date | null; normalized: string | null; error: string | null}
 
 type PromptPayload = {originalId?: string; originalText: string; promptHeading?: string; type?: string; order: number}
+type PromptPayloadWithArchived = PromptPayload & {archived?: boolean}
 
 const isNullableString = (value: unknown): value is string | null => {
   return value === null || typeof value === 'string'
@@ -94,11 +97,13 @@ const isProjectPromptResponse = (value: unknown): value is ProjectPromptResponse
   const promptHeading = prompt.promptHeading
   const type = prompt.type
   const order = prompt.order
+  const archived = prompt.archived
   const hasRequiredFields = typeof id === 'string' && typeof originalText === 'string'
   const hasOptionalFields =
     (promptHeading === null || typeof promptHeading === 'string')
     && (type === null || typeof type === 'string')
     && (order === null || typeof order === 'number')
+    && (archived === null || typeof archived === 'boolean')
   return hasRequiredFields && hasOptionalFields
 }
 
@@ -133,11 +138,20 @@ const buildExistingPrompt = (prompt: ProjectPromptResponse): PromptItem => {
     isExisting: true,
     originalId: prompt.id,
     order: prompt.order ?? 0,
+    archived: Boolean(prompt.archived ?? false),
   }
 }
 
 const buildEmptyPrompt = (order: number): PromptItem => {
-  return {id: crypto.randomUUID(), originalText: '', promptHeading: '', type: '', isExisting: false, order}
+  return {
+    id: crypto.randomUUID(),
+    originalText: '',
+    promptHeading: '',
+    type: '',
+    isExisting: false,
+    order,
+    archived: false,
+  }
 }
 
 const mapPromptsFromResponse = (promptList: ProjectPromptResponse[]): PromptItem[] => {
@@ -164,7 +178,7 @@ const getNextOrder = (items: PromptItem[]): number => {
   return getHighestOrder(items) + 1
 }
 
-const buildPromptsPayload = (items: PromptItem[]): PromptPayload[] => {
+const buildPromptsPayload = (items: PromptItem[]): PromptPayloadWithArchived[] => {
   return items
     .filter((prompt) => {
       return prompt.originalText.length > 0 || prompt.isExisting
@@ -176,6 +190,7 @@ const buildPromptsPayload = (items: PromptItem[]): PromptPayload[] => {
         promptHeading: prompt.promptHeading || undefined,
         type: prompt.type || undefined,
         order: prompt.order,
+        archived: prompt.archived || undefined,
       }
     })
 }
@@ -366,6 +381,50 @@ const EditProject = (): JSX.Element => {
       },
       field,
       value,
+    )
+  }
+
+  const setPromptArchived = (promptId: string, archived: boolean) => {
+    setPrompts(
+      (prompt) => {
+        return prompt.id === promptId
+      },
+      'archived',
+      archived,
+    )
+  }
+
+  const movePrompt = (promptId: string, direction: 'up' | 'down') => {
+    const list = prompts.slice().sort((a, b) => {
+      return a.order - b.order
+    })
+    const idx = list.findIndex((p) => {
+      return p.id === promptId
+    })
+    if (idx === -1) {
+      return
+    }
+    const swapWith = direction === 'up' ? idx - 1 : idx + 1
+    if (swapWith < 0 || swapWith >= list.length) {
+      return
+    }
+    const a = list[idx]!
+    const b = list[swapWith]!
+    const nextOrderA = b.order
+    const nextOrderB = a.order
+    setPrompts(
+      (p) => {
+        return p.id === a.id
+      },
+      'order',
+      nextOrderA,
+    )
+    setPrompts(
+      (p) => {
+        return p.id === b.id
+      },
+      'order',
+      nextOrderB,
     )
   }
 
@@ -759,21 +818,61 @@ const EditProject = (): JSX.Element => {
                               class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent resize-none ${fieldStateClass()}`}
                               disabled={isLocked()}
                             />
+                            <label class={`flex items-center gap-2 text-sm ${isLocked() ? 'opacity-60' : ''}`}>
+                              <input
+                                type="checkbox"
+                                checked={promptItem.archived}
+                                onChange={(e) => {
+                                  return setPromptArchived(promptItem.id, e.currentTarget.checked)
+                                }}
+                                disabled={isLocked()}
+                              />
+                              <span>Archived</span>
+                            </label>
                           </div>
-                          <Show when={prompts.length > 1}>
+                          <div class="flex flex-col gap-2 self-start mt-1">
                             <Button
                               type="button"
                               variant="outline"
                               size="sm"
                               onClick={() => {
-                                return removePromptInput(promptItem.id)
+                                return movePrompt(promptItem.id, 'up')
                               }}
-                              class={`self-start mt-1 ${actionStateClass()}`}
+                              class={actionStateClass()}
                               disabled={isLocked()}
+                              title="Move up"
                             >
-                              ×
+                              ↑
                             </Button>
-                          </Show>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                return movePrompt(promptItem.id, 'down')
+                              }}
+                              class={actionStateClass()}
+                              disabled={isLocked()}
+                              title="Move down"
+                            >
+                              ↓
+                            </Button>
+                            <Show when={prompts.length > 1}>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  return removePromptInput(promptItem.id)
+                                }}
+                                class={actionStateClass()}
+                                disabled={isLocked()}
+                                title="Remove"
+                              >
+                                ×
+                              </Button>
+                            </Show>
+                          </div>
                         </div>
                       )
                     }}

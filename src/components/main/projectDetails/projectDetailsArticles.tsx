@@ -64,6 +64,28 @@ export const ProjectDetailsArticles = (props: {projectId: string}) => {
     setCurrentPage(1) // Reset to first page when changing limit
   }
 
+  const addToProject = async (articleId: string) => {
+    try {
+      const response = await apiClient.api['project-articles'].post({projectId: props.projectId, articleId})
+      if (response.error) {
+        throw new Error('Failed to add to curated list')
+      }
+    } catch (err) {
+      console.error(err)
+    }
+  }
+
+  const removeFromProject = async (articleId: string) => {
+    try {
+      const response = await apiClient.api['project-articles'].delete({projectId: props.projectId, articleId})
+      if (response.error) {
+        throw new Error('Failed to remove from curated list')
+      }
+    } catch (err) {
+      console.error(err)
+    }
+  }
+
   return (
     <Suspense>
       <div class="flex items-center gap-4 p-4 bg-white rounded-lg shadow">
@@ -272,6 +294,24 @@ export const ProjectDetailsArticles = (props: {projectId: string}) => {
                                   </For>
                                 </div>
                               </Show>
+                            <div class="mt-3 flex gap-2">
+                              <button
+                                class="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700"
+                                onClick={() => {
+                                  return void addToProject(article.id)
+                                }}
+                              >
+                                Add to curated
+                              </button>
+                              <button
+                                class="px-3 py-1 text-xs bg-gray-200 text-gray-800 rounded hover:bg-gray-300"
+                                onClick={() => {
+                                  return void removeFromProject(article.id)
+                                }}
+                              >
+                                Remove
+                              </button>
+                            </div>
                             </div>
                           </div>
                         )

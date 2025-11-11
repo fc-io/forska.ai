@@ -256,6 +256,38 @@ export const articleRouteLink = pgTable(
   },
 )
 
+export const projectArticleLink = pgTable(
+  'project_article_link',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
+    projectId: uuid('project_id')
+      .notNull()
+      .references(
+        () => {
+          return projects.id
+        },
+        {onDelete: 'cascade'},
+      ),
+    articleId: uuid('article_id')
+      .notNull()
+      .references(
+        () => {
+          return articles.id
+        },
+        {onDelete: 'cascade'},
+      ),
+  },
+  (table) => {
+    return [
+      uniqueIndex('project_article_link_unique').on(table.projectId, table.articleId),
+      index('project_article_link_project_idx').on(table.projectId),
+      index('project_article_link_article_idx').on(table.articleId),
+    ]
+  },
+)
+
 export const dataSourceAccess = pgTable(
   'datasource_access',
   {
@@ -427,6 +459,7 @@ export const prompts = pgTable(
     order: integer('order'),
     archived: boolean('archived').default(false).notNull(),
     type: text('type'),
+    contentHash: text('content_hash'),
   },
   (table) => {
     return [index('prompts_project_idx').on(table.projectId)]

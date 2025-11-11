@@ -125,7 +125,35 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
 
       const humanAssessmentsByUser = Object.values(humanByUser)
 
-      return {article, review, prompts: projectPrompts, judgments: judgmentsWithDetails, humanAssessmentsByUser}
+      // Aggregated human answers per prompt (latest per user per prompt)
+      const latestByUserPrompt = new Map<string, {promptId: string; answer: string | null; updatedAt: Date | null}>()
+      for (const row of humanRows) {
+        const key = `${row.userId}::${row.promptId}`
+        const existing = latestByUserPrompt.get(key)
+        const updatedAt = null as unknown as Date | null // judgments_human.updatedAt not selected here
+        if (!existing || ((updatedAt?.getTime() || 0) > (existing.updatedAt?.getTime() || 0))) {
+          latestByUserPrompt.set(key, {promptId: row.promptId, answer: row.answer, updatedAt})
+        }
+      }
+
+      const humanAnswersByPrompt: Record<string, string[]> = {}
+      for (const p of projectPrompts) humanAnswersByPrompt[p.id] = []
+      for (const {promptId, answer} of latestByUserPrompt.values()) {
+        if (answer != null) {
+          const arr = humanAnswersByPrompt[promptId] ?? []
+          arr.push(answer)
+          humanAnswersByPrompt[promptId] = arr
+        }
+      }
+
+      return {
+        article,
+        review,
+        prompts: projectPrompts,
+        judgments: judgmentsWithDetails,
+        humanAssessmentsByUser,
+        humanAnswersByPrompt,
+      }
     } catch (error) {
       console.error('Error fetching article review details:', error)
       throw new Error(error instanceof Error ? error.message : 'Failed to fetch article review details')

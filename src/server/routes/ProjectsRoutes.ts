@@ -1,4 +1,4 @@
-import {desc, eq, inArray, isNull} from 'drizzle-orm'
+import {desc, eq, inArray, isNull, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {
@@ -159,7 +159,9 @@ export const projectsRoutes = new Elysia()
         await db.insert(prompts).values(
           body.prompts.map(
             (
-              prompt: string | {content: string; promptHeading?: string; type?: string; order: number},
+              prompt:
+                | string
+                | {content: string; promptHeading?: string; type?: string; order: number; archived?: boolean},
               index: number,
             ) => {
               return {
@@ -168,6 +170,8 @@ export const projectsRoutes = new Elysia()
                 promptHeading: typeof prompt === 'object' ? prompt.promptHeading || null : null,
                 type: typeof prompt === 'object' ? prompt.type || null : null,
                 order: typeof prompt === 'object' && prompt.order !== undefined ? prompt.order : index,
+                archived: typeof prompt === 'object' ? Boolean(prompt.archived) : false,
+                contentHash: sql`md5(lower(trim(${typeof prompt === 'string' ? prompt : prompt.content})))`,
               }
             },
           ),
@@ -227,6 +231,7 @@ export const projectsRoutes = new Elysia()
                 promptHeading: t.Optional(t.String()),
                 type: t.Optional(t.String()),
                 order: t.Number(),
+                archived: t.Optional(t.Boolean()),
               }),
             ),
           ]),
@@ -333,6 +338,8 @@ export const projectsRoutes = new Elysia()
                   promptHeading: prompt.promptHeading || null,
                   type: prompt.type || null,
                   order: prompt.order,
+                  archived: prompt.archived ?? false,
+                  contentHash: sql`md5(lower(trim(${prompt.originalText})))`,
                   updatedAt: new Date(),
                 })
                 .where(eq(prompts.id, prompt.originalId))
@@ -346,6 +353,8 @@ export const projectsRoutes = new Elysia()
                   promptHeading: prompt.promptHeading || null,
                   type: prompt.type || null,
                   order: prompt.order,
+                  archived: prompt.archived ?? false,
+                  contentHash: sql`md5(lower(trim(${prompt.originalText})))`,
                 })
             }
           }
@@ -413,6 +422,7 @@ export const projectsRoutes = new Elysia()
               promptHeading: t.Optional(t.String()),
               type: t.Optional(t.String()),
               order: t.Number(),
+              archived: t.Optional(t.Boolean()),
             }),
           ),
         ),
