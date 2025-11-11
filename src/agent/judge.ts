@@ -114,7 +114,7 @@ const generateModelResponse = async ({
         {role: 'system', content: SYSTEM_PROMPT},
         {role: 'user', content: prompt},
       ],
-      max_tokens: 4056,
+      max_completion_tokens: 6200,
       temperature: 0,
     })
 

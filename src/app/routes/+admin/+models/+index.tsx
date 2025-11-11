@@ -1,6 +1,7 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
 import {For, Show, Suspense} from 'solid-js'
+import {format, isValid} from 'date-fns'
 
 import {apiClient} from '../../../../services/apiClient.ts'
 import {fetchSession} from '../../../../services/fetchSession.ts'
@@ -33,6 +34,19 @@ type GpuInfo = {
 }
 type GpuInfoResponse = {data: GpuInfo}
 
+type LargestTokenUseRow = {
+  id: string
+  createdAt?: string | Date | null
+  updatedAt?: string | Date | null
+  judgmentsJobId?: string | null
+  requests: number
+  totalPromptTokens: number
+  totalCompletionTokens: number
+  totalTokens: number
+  duration?: number | null
+}
+type LargestPerRequestResponse = {data: LargestTokenUseRow[]}
+
 const AdminModels = () => {
   const sessionQuery = useQuery(() => {
     return {queryKey: ['session'], queryFn: fetchSession}
@@ -64,6 +78,22 @@ const AdminModels = () => {
     }
   })
 
+  const largestRequestQuery = useQuery(() => {
+    return {
+      queryKey: ['tokens', 'largest-per-request'],
+      queryFn: async () => {
+        const response = await apiClient.api.tokens['largest-per-request'].get()
+        const result = handleApiResponse<LargestPerRequestResponse>(
+          response,
+          'Failed to load largest token per request',
+        )
+        return result.data ?? []
+      },
+      staleTime: 1000 * 60 * 5,
+      refetchOnWindowFocus: true,
+    }
+  })
+
   const isAdmin = () => {
     return sessionQuery.data?.user?.role === 'admin'
   }
@@ -77,6 +107,12 @@ const AdminModels = () => {
       return '—'
     }
     return urls.join(', ')
+  }
+
+  const formatDate = (value?: string | Date | null) => {
+    if (!value) return '—'
+    const d = typeof value === 'string' ? new Date(value) : value
+    return isValid(d) ? format(d, 'yyyy-MM-dd HH:mm:ss') : '—'
   }
 
   return (
@@ -181,6 +217,61 @@ const AdminModels = () => {
               </table>
             </div>
           </Show>
+
+          <div class="mt-6">
+            <h2 class="text-lg font-semibold mb-2">Top 5 Largest Tokens per Request</h2>
+            <Show when={largestRequestQuery.isLoading}>
+              <p class="text-gray-500">Loading…</p>
+            </Show>
+            <Show when={largestRequestQuery.isError}>
+              <div class="p-3 rounded-md bg-red-50 border border-red-200 text-sm text-red-700">
+                Failed to load largest token per request
+              </div>
+            </Show>
+            <Show when={!largestRequestQuery.isLoading && !largestRequestQuery.isError}>
+              <div class="overflow-x-auto bg-white rounded-lg shadow">
+                <table class="min-w-full divide-y divide-gray-200">
+                  <thead class="bg-gray-50">
+                    <tr>
+                      <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID</th>
+                      <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Created</th>
+                      <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Updated</th>
+                      <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Judgments Job ID</th>
+                      <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Requests</th>
+                      <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Prompt</th>
+                      <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Completion</th>
+                      <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total</th>
+                      <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Duration (ms)</th>
+                    </tr>
+                  </thead>
+                  <tbody class="bg-white divide-y divide-gray-200">
+                    <Show
+                      when={(largestRequestQuery.data?.length ?? 0) > 0}
+                      fallback={<tr><td class="px-4 py-2 text-sm text-gray-600" colspan="9">No data</td></tr>}
+                    >
+                      <For each={largestRequestQuery.data}>
+                        {(row) => {
+                          return (
+                            <tr class="hover:bg-gray-50">
+                              <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500 break-all">{row.id}</td>
+                              <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{formatDate(row.createdAt)}</td>
+                              <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{formatDate(row.updatedAt)}</td>
+                              <td class="px-4 py-2 whitespace-pre-wrap text-sm text-gray-900 break-words">{row.judgmentsJobId ?? '—'}</td>
+                              <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{row.requests}</td>
+                              <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{row.totalPromptTokens}</td>
+                              <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{row.totalCompletionTokens}</td>
+                              <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900 font-semibold">{row.totalTokens}</td>
+                              <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{row.duration ?? '—'}</td>
+                            </tr>
+                          )
+                        }}
+                      </For>
+                    </Show>
+                  </tbody>
+                </table>
+              </div>
+            </Show>
+          </div>
 
           {/* GPU / Engine Info (moved below table) */}
           <div class="mt-6">

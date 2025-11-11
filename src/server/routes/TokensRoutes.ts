@@ -1,4 +1,4 @@
-import {and, eq, gte, lte, sum} from 'drizzle-orm'
+import {and, desc, eq, gte, lte, sum} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {session} from '../../../auth-schema.ts'
@@ -65,6 +65,33 @@ export const tokensRoutes = new Elysia()
       }),
     },
   )
+  .get('/api/tokens/largest-per-request', async () => {
+    try {
+      const db = getDatabase()
+
+      const rows = await db
+        .select({
+          id: tokenUse.id,
+          createdAt: tokenUse.createdAt,
+          updatedAt: tokenUse.updatedAt,
+          judgmentsJobId: tokenUse.judgmentsJobId,
+          requests: tokenUse.requests,
+          totalPromptTokens: tokenUse.totalPromptTokens,
+          totalCompletionTokens: tokenUse.totalCompletionTokens,
+          totalTokens: tokenUse.totalTokens,
+          duration: tokenUse.duration,
+        })
+        .from(tokenUse)
+        .where(eq(tokenUse.requests, 1))
+        .orderBy(desc(tokenUse.totalPromptTokens))
+        .limit(5)
+
+      return {data: rows}
+    } catch (error) {
+      console.error('Error fetching largest-per-request token usage:', error)
+      return {data: [], error: 'Failed to fetch largest-per-request token usage'}
+    }
+  })
   .get(
     '/api/tokens',
     async ({query}) => {
