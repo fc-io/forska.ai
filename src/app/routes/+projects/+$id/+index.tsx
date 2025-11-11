@@ -101,8 +101,8 @@ const ProjectDetail = () => {
 
               interface RawPrompt {
                 id: string
-                createdAt: Date
-                updatedAt: Date
+                createdAt?: Date
+                updatedAt?: Date
                 projectId: string
                 originalText: string
                 transformedText: string | null
@@ -118,7 +118,7 @@ const ProjectDetail = () => {
                   order: p.order ?? 0,
                   promptHeading: p.promptHeading ?? undefined,
                   type: p.type ?? undefined,
-                  created_at: p.createdAt.toString(),
+                  created_at: p.createdAt?.toString() ?? new Date().toISOString(),
                   original_text: p.originalText,
                   transformed_text: p.transformedText ?? undefined,
                   archived: p.archived ?? undefined,
