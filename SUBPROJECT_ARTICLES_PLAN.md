@@ -19,6 +19,7 @@ Goal: Allow the concept of "subprojects" where we can take selected articles ass
 - [ ] Add non‑unique index on `prompts.content_hash`
 - [ ] Add DB trigger to prevent UPDATE of `prompts.original_text` and `prompts.transformed_text` (immutability)
 - [ ] Keep legacy columns on `prompts` (project_id, order, prompt_heading, archived, type) for backward compatibility
+- [ ] Change FK delete behavior for `judgments.prompt_id` and `judgments_human.prompt_id` to `ON DELETE RESTRICT` (from `CASCADE`) to prevent cross‑project data loss when prompts are global
 
 ## Phase 2 — Data Backfill (safe)
 - [ ] Backfill `content_hash = md5(normalize(original_text) || '|' || normalize(coalesce(transformed_text,'')))`
@@ -67,6 +68,7 @@ Goal: Allow the concept of "subprojects" where we can take selected articles ass
   - [ ] `project_prompts`
   - [ ] `prompts.content_hash` + index
   - [ ] Immutability trigger on `prompts`
+  - [ ] Alter FKs: drop and recreate `judgments.prompt_id` and `judgments_human.prompt_id` constraints with `ON DELETE RESTRICT`
 - [ ] Generate/apply: `bun run db:gen` → `bun run db:mig`
 - [ ] Backfill scripts:
   - [ ] Compute and set `content_hash` for existing prompts
@@ -78,6 +80,7 @@ Goal: Allow the concept of "subprojects" where we can take selected articles ass
   - [ ] Read prompts via `project_prompts` path
   - [ ] Upsert‑by‑hash behavior reuses existing prompt
   - [ ] “Available judgments” appear cross‑project for shared prompt/article
+  - [ ] Attempting to delete a prompt referenced by any `judgments` or `judgments_human` row fails due to `RESTRICT`
 
 ## Notes
 - Prompts become global and immutable; per‑project mutables live in `project_prompts`.
