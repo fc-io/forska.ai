@@ -1,6 +1,6 @@
 # Global Immutable Prompts — Implementation Plan
 
-Goal: Allow many articles to be associated with a project and make prior prompts and judgments reusable across projects by using global, immutable prompts. Keep existing prompt columns for backward compatibility during rollout.
+Goal: Allow the concept of "subprojects" where we can take selected articles associated with a project and make them available in a new project. The articles can come from multiple projects and end up in the same new "subproject". To benefit from already ran promts and completed judgments we also we need to make prior prompts and judgments reusable for the subproject. We do this be making the prompts global and immutable. For now we also keep the existing prompt columns for backward compatibility during rollout.
 
 ## Phase 1 — Schema (non‑breaking)
 - [ ] Create `project_articles(project_id, article_id)` with:
