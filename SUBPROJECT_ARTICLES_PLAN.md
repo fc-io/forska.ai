@@ -57,7 +57,11 @@ Goal: Allow the concept of "subprojects" where we can take selected articles ass
 - [x] On association, auto‑link prompts with prior judgments for that article
 
 ## Phase 7 — Clean‑up
-- [x] Legacy prompt columns dropped; ensure remaining callers are using joins only
+- [x] Legacy prompt columns dropped
+- [ ] Ensure remaining callers are using joins only
+  - [ ] Refactor HumanAssessment overview routes to use `project_prompts` association (replace `prompts.project_id` usage):
+    - src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesGetOverviewBothProjects.ts:35–49
+    - src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesGetOverviewBothUsers.ts:43–57
 
 ## Migrations and Backfill (Drizzle)
 - [x] Write Drizzle migrations for:
