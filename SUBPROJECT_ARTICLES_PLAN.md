@@ -75,6 +75,7 @@ Goal: Allow the concept of "subprojects" where we can take selected articles ass
 - [x] Generate/apply: `bun run db:gen` → `bun run db:mig` (re-baseline)
   - [x] Neutralized generated migration `0021_giant_nextwave.sql` with a baseline no-op to align Drizzle snapshots with current DB.
   - [x] Applied migrations to advance journal without changing DB state.
+  - [x] Renamed earlier `0021_prompt_hash_includes_metadata.sql` to `0022_prompt_hash_includes_metadata.sql` and applied, keeping numbering sequential; script is idempotent.
 - [x] Backfill scripts:
   - [x] Compute and set `content_hash` (hash includes text + metadata) — function updated and backfilled via migration.
   - [x] Populate `project_prompts` from legacy prompt rows (order, archived only)
