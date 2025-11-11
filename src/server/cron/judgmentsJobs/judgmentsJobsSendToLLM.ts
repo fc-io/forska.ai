@@ -52,7 +52,8 @@ export const judgmentsJobsSendToLLM = async (
   isRunningJudgmentsJobsSendToLLM = true
   const maxNumberOfInflightRequests = getMaxNumberOfInflightRequests()
   const articlesInFlight = await getNumberOfArticlesInFlight(db, serverJobId)
-  const requestsToSend = Math.min(env.SGLANG_MAX_RUNNING_REQUESTS, maxNumberOfInflightRequests - articlesInFlight)
+  const maxNumberOfRequestsToSendAtOnce = Math.ceil(env.SGLANG_MAX_RUNNING_REQUESTS / 15)
+  const requestsToSend = Math.min(maxNumberOfRequestsToSendAtOnce, maxNumberOfInflightRequests - articlesInFlight)
   console.log('requestsToSend', requestsToSend)
   if (requestsToSend > 0 && allJobs.length > 0) {
     const requestsToSendPerJob = Math.max(1, Math.floor(requestsToSend / allJobs.length))
