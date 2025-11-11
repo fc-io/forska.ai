@@ -415,6 +415,9 @@ export const prompts = pgTable(
     updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
     originalText: text('original_text').notNull(),
     transformedText: text('transformed_text'),
+    // Global, immutable metadata
+    promptHeading: text('prompt_heading'),
+    type: text('type'),
     contentHash: text('content_hash'),
   },
   (table) => {
@@ -444,11 +447,8 @@ export const projectPrompts = pgTable(
         },
         {onDelete: 'cascade'},
       ),
-    // per-project metadata for the prompt
-    promptHeading: text('prompt_heading'),
     order: integer('order'),
     archived: boolean('archived').default(false).notNull(),
-    type: text('type'),
   },
   (table) => {
     return [

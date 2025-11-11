@@ -79,10 +79,10 @@ export const projectsRoutes = new Elysia()
         id: prompts.id,
         originalText: prompts.originalText,
         transformedText: prompts.transformedText,
-        promptHeading: projectPrompts.promptHeading,
+        promptHeading: prompts.promptHeading,
         order: projectPrompts.order,
         archived: projectPrompts.archived,
-        type: projectPrompts.type,
+        type: prompts.type,
       })
       .from(projectPrompts)
       .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
@@ -164,7 +164,7 @@ export const projectsRoutes = new Elysia()
         })
         .returning()
 
-      // Create prompts associations if provided (global immutable prompts; upsert by hash)
+      // Create prompts associations if provided (global immutable prompts; upsert by hash incl metadata)
       if (newProject && body.prompts && body.prompts.length > 0) {
         for (let index = 0; index < body.prompts.length; index++) {
           const prompt = body.prompts[index] as string | {content: string; promptHeading?: string; type?: string; order: number}
@@ -173,22 +173,27 @@ export const projectsRoutes = new Elysia()
           const typeVal = typeof prompt === 'object' ? prompt.type || null : null
           const orderVal = typeof prompt === 'object' && prompt.order !== undefined ? prompt.order : index
 
-          // Find existing prompt by DB-computed content hash
+          // Find existing prompt by DB-computed content hash (includes metadata)
           const existingByHash = await db
-            .execute<{id: string}>(sql`SELECT id FROM "prompts" WHERE content_hash = compute_prompt_content_hash(${content}, ${null}) LIMIT 1`)
+            .execute<{id: string}>(
+              sql`SELECT id FROM "prompts" WHERE content_hash = compute_prompt_content_hash(${content}, ${null}, ${heading}, ${typeVal}) LIMIT 1`,
+            )
             .then((res) => res.rows)
 
           const promptId = existingByHash[0]?.id
             ? existingByHash[0]!.id
-            : (await db.insert(prompts).values({originalText: content, transformedText: null}).returning({id: prompts.id}))[0]!.id
+            : (
+                await db
+                  .insert(prompts)
+                  .values({originalText: content, transformedText: null, promptHeading: heading, type: typeVal})
+                  .returning({id: prompts.id})
+              )[0]!.id
 
           await db.insert(projectPrompts).values({
             projectId: newProject.id,
             promptId,
-            promptHeading: heading,
             order: orderVal,
             archived: false,
-            type: typeVal,
           })
         }
       }
@@ -350,39 +355,57 @@ export const projectsRoutes = new Elysia()
             const orderVal = p.order
             let targetPromptId: string
             if (p.originalId) {
+              // Block attempts to edit immutable metadata for existing prompts via app
+              if (p.promptHeading !== undefined || p.type !== undefined) {
+                throw new Error('Editing prompt metadata is not allowed; prompts are global and immutable')
+              }
               // If text unchanged, keep existing prompt id
               const [existingPrompt] = await tx.select().from(prompts).where(eq(prompts.id, p.originalId)).limit(1)
               const existingByHash = await tx
-                .execute<{id: string}>(sql`SELECT id FROM "prompts" WHERE content_hash = compute_prompt_content_hash(${p.originalText}, ${null}) LIMIT 1`)
+                .execute<{id: string}>(
+                  sql`SELECT id FROM "prompts" WHERE content_hash = compute_prompt_content_hash(${p.originalText}, ${null}, ${existingPrompt?.promptHeading ?? null}, ${existingPrompt?.type ?? null}) LIMIT 1`,
+                )
                 .then((res) => res.rows)
               if (existingPrompt && existingByHash[0]?.id === existingPrompt.id) {
                 targetPromptId = existingPrompt.id
               } else {
                 const found = await tx
-                  .execute<{id: string}>(sql`SELECT id FROM "prompts" WHERE content_hash = compute_prompt_content_hash(${p.originalText}, ${null}) LIMIT 1`)
+                  .execute<{id: string}>(
+                    sql`SELECT id FROM "prompts" WHERE content_hash = compute_prompt_content_hash(${p.originalText}, ${null}, ${heading}, ${typeVal}) LIMIT 1`,
+                  )
                   .then((res) => res.rows)
                 targetPromptId = found[0]?.id
                   ? found[0].id
-                  : (await tx.insert(prompts).values({originalText: p.originalText, transformedText: null}).returning({id: prompts.id}))[0]!.id
+                  : (
+                      await tx
+                        .insert(prompts)
+                        .values({originalText: p.originalText, transformedText: null, promptHeading: heading, type: typeVal})
+                        .returning({id: prompts.id})
+                    )[0]!.id
               }
               // Ensure association points to target prompt and metadata is updated
               await tx
                 .update(projectPrompts)
-                .set({promptId: targetPromptId, promptHeading: heading, type: typeVal, order: orderVal, updatedAt: new Date()})
+                .set({promptId: targetPromptId, order: orderVal, updatedAt: new Date()})
                 .where(sql`${projectPrompts.projectId} = ${params.id} AND ${projectPrompts.promptId} = ${p.originalId}`)
             } else {
               const found = await tx
-                .execute<{id: string}>(sql`SELECT id FROM "prompts" WHERE content_hash = compute_prompt_content_hash(${p.originalText}, ${null}) LIMIT 1`)
+                .execute<{id: string}>(
+                  sql`SELECT id FROM "prompts" WHERE content_hash = compute_prompt_content_hash(${p.originalText}, ${null}, ${heading}, ${typeVal}) LIMIT 1`,
+                )
                 .then((res) => res.rows)
               targetPromptId = found[0]?.id
                 ? found[0].id
-                : (await tx.insert(prompts).values({originalText: p.originalText, transformedText: null}).returning({id: prompts.id}))[0]!.id
+                : (
+                    await tx
+                      .insert(prompts)
+                      .values({originalText: p.originalText, transformedText: null, promptHeading: heading, type: typeVal})
+                      .returning({id: prompts.id})
+                  )[0]!.id
 
               await tx.insert(projectPrompts).values({
                 projectId: params.id,
                 promptId: targetPromptId,
-                promptHeading: heading,
-                type: typeVal,
                 order: orderVal,
                 archived: false,
               })
@@ -427,10 +450,10 @@ export const projectsRoutes = new Elysia()
             id: prompts.id,
             originalText: prompts.originalText,
             transformedText: prompts.transformedText,
-            promptHeading: projectPrompts.promptHeading,
+            promptHeading: prompts.promptHeading,
             order: projectPrompts.order,
             archived: projectPrompts.archived,
-            type: projectPrompts.type,
+            type: prompts.type,
           })
           .from(projectPrompts)
           .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))

@@ -22,7 +22,7 @@ export const projectsRoutesGetArticlesReviewsHumanFilters = new Elysia().get(
       const projectPrompts = await db
         .select({
           id: prompts.id,
-          promptHeading: projectPrompts.promptHeading,
+          promptHeading: prompts.promptHeading,
           originalText: prompts.originalText,
         })
         .from(projectPrompts)

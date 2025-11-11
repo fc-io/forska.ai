@@ -65,8 +65,6 @@ export const projectArticlesRoutes = new Elysia()
                     return {
                       projectId,
                       promptId: pid,
-                      promptHeading: null,
-                      type: null,
                       order: index,
                       archived: false,
                     }
@@ -92,4 +90,3 @@ export const projectArticlesRoutes = new Elysia()
 
     return {success: true}
   })
-

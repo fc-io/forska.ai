@@ -28,7 +28,7 @@ export const humanAssessmentRoutesPostSubmit = async ({
       id: judgmentsHuman.id,
       promptId: judgmentsHuman.promptId,
       articleId: judgmentsHuman.articleId,
-      type: projectPrompts.type,
+      type: prompts.type,
     })
     .from(judgmentsHuman)
     .innerJoin(prompts, eq(judgmentsHuman.promptId, prompts.id))

@@ -47,9 +47,9 @@ export const humanAssessmentRoutesPostInit = async ({
     .select({
       id: prompts.id,
       originalText: prompts.originalText,
-      promptHeading: projectPrompts.promptHeading,
+      promptHeading: prompts.promptHeading,
       order: projectPrompts.order,
-      type: projectPrompts.type,
+      type: prompts.type,
     })
     .from(projectPrompts)
     .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))

@@ -45,9 +45,9 @@ export const processArticleWithLLM = async (
     .select({
       id: schema.prompts.id,
       originalText: schema.prompts.originalText,
-      promptHeading: schema.projectPrompts.promptHeading,
+      promptHeading: schema.prompts.promptHeading,
       order: schema.projectPrompts.order,
-      type: schema.projectPrompts.type,
+      type: schema.prompts.type,
     })
     .from(schema.projectPrompts)
     .innerJoin(schema.prompts, eq(schema.projectPrompts.promptId, schema.prompts.id))
