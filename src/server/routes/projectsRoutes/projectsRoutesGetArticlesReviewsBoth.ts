@@ -18,17 +18,17 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
     const searchTitle = typeof body.search === 'string' ? body.search.trim() : ''
 
     // Get prompts for project (ordered)
-    const projectPrompts = await db
+    const projectPromptRows = await db
       .select({id: prompts.id, order: projectPrompts.order})
       .from(projectPrompts)
       .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
       .where(eq(projectPrompts.projectId, body.projectId))
       .orderBy(projectPrompts.order)
-    if (projectPrompts.length === 0) {
+    if (projectPromptRows.length === 0) {
       return {data: [], totalCount: 0, page, limit, totalPages: 0}
     }
 
-    const promptIds = projectPrompts.map((p) => {
+    const promptIds = projectPromptRows.map((p) => {
       return p.id
     })
 
@@ -125,7 +125,7 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
     )
 
     // Build prompt order map for consistent ordering of judgments per article
-    const promptOrderMap = projectPrompts.reduce(
+    const promptOrderMap = projectPromptRows.reduce(
       (acc, p, idx) => {
         const ord = (p.order ?? idx) as number
         return {...acc, [p.id]: ord}

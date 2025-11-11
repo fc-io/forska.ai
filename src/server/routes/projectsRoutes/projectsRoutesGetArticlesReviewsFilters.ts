@@ -21,7 +21,7 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
       const searchTitle = typeof query?.search === 'string' ? query.search.trim() : ''
 
       // Get all prompts for this project
-      const projectPrompts = await db
+      const projectPromptRows = await db
         .select({
           id: prompts.id,
           promptHeading: prompts.promptHeading,
@@ -31,13 +31,13 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
         .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
         .where(eq(projectPrompts.projectId, query.projectId))
 
-      if (projectPrompts.length === 0) {
+      if (projectPromptRows.length === 0) {
         return []
       }
 
       // For each prompt, get unique answered_original values (optionally scoped by date range)
       const promptFilters = await Promise.all(
-        projectPrompts.map(async (prompt) => {
+        projectPromptRows.map(async (prompt) => {
           const base = sql`SELECT DISTINCT ${judgments.answeredOriginal} as answered_original
                 FROM ${judgments}
                 INNER JOIN ${articles} ON ${articles.id} = ${judgments.articleId}

@@ -19,7 +19,7 @@ export const projectsRoutesGetArticlesReviewsHumanFilters = new Elysia().get(
       const toDate = query?.to ? new Date(`${query.to}T23:59:59.999Z`) : null
       const searchTitle = typeof query?.search === 'string' ? query.search.trim() : ''
 
-      const projectPrompts = await db
+      const projectPromptRows = await db
         .select({
           id: prompts.id,
           promptHeading: prompts.promptHeading,
@@ -29,12 +29,12 @@ export const projectsRoutesGetArticlesReviewsHumanFilters = new Elysia().get(
         .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
         .where(eq(projectPrompts.projectId, query.projectId))
 
-      if (projectPrompts.length === 0) {
+      if (projectPromptRows.length === 0) {
         return []
       }
 
       const promptFilters = await Promise.all(
-        projectPrompts.map(async (prompt) => {
+        projectPromptRows.map(async (prompt) => {
           const base = sql`SELECT DISTINCT ${judgmentsHuman.answer} as answer
                 FROM ${judgmentsHuman}
                 INNER JOIN ${articles} ON ${articles.id} = ${judgmentsHuman.articleId}

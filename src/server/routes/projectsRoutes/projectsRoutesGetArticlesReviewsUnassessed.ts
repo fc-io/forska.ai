@@ -15,17 +15,17 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
       const offset = (page - 1) * limit
       const searchTitle = typeof body.search === 'string' ? body.search.trim() : ''
 
-      const projectPrompts = await db
+      const projectPromptRows = await db
         .select({id: prompts.id})
         .from(projectPrompts)
         .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
         .where(eq(projectPrompts.projectId, body.projectId))
 
-      if (projectPrompts.length === 0) {
+      if (projectPromptRows.length === 0) {
         return {data: [], totalCount: 0, page, limit, totalPages: 0}
       }
 
-      const promptIds = projectPrompts.map((p) => {
+      const promptIds = projectPromptRows.map((p) => {
         return p.id
       })
 

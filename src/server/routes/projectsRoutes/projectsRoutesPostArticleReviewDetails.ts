@@ -27,7 +27,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         .limit(1)
 
       // Get all prompts for this project (association)
-      const projectPrompts = await db
+      const projectPromptRows = await db
         .select({
           id: prompts.id,
           originalText: prompts.originalText,
@@ -41,7 +41,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         .orderBy(projectPrompts.order)
 
       // Get all judgments for this article that belong to prompts from this project
-      const promptIds = projectPrompts.map((p) => {
+      const promptIds = projectPromptRows.map((p) => {
         return p.id
       })
       const articleJudgments =
@@ -194,7 +194,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
       return {
         article,
         review,
-        prompts: projectPrompts,
+        prompts: projectPromptRows,
         judgments: judgmentsWithDetails,
         humanAssessmentsByUser,
         humanAnswersByPrompt,

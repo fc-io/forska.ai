@@ -16,18 +16,18 @@ export const projectsRoutesGetArticlesWithJudgments = new Elysia().get(
       const offset = (page - 1) * limit
 
       // First get all prompts for this project (via association)
-      const projectPrompts = await db
+      const projectPromptRows = await db
         .select({id: prompts.id})
         .from(projectPrompts)
         .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
         .where(eq(projectPrompts.projectId, params.id))
 
-      if (projectPrompts.length === 0) {
+      if (projectPromptRows.length === 0) {
         return {data: [], totalCount: 0, page, limit, error: null}
       }
 
       // Get articles that have judgments for ALL prompts of the project
-      const promptIds = projectPrompts.map((p) => {
+      const promptIds = projectPromptRows.map((p) => {
         return p.id
       })
 

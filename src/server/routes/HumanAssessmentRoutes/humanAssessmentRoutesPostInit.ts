@@ -43,7 +43,7 @@ export const humanAssessmentRoutesPostInit = async ({
   }
   console.log('project', project)
 
-  const projectPrompts = await db
+  const projectPromptRows = await db
     .select({
       id: prompts.id,
       originalText: prompts.originalText,
@@ -55,9 +55,9 @@ export const humanAssessmentRoutesPostInit = async ({
     .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
     .where(eq(projectPrompts.projectId, body.projectId))
     .orderBy(projectPrompts.order)
-  console.log('projectPrompts', projectPrompts.length)
+  console.log('projectPrompts', projectPromptRows.length)
 
-  if (projectPrompts.length === 0) {
+  if (projectPromptRows.length === 0) {
     set.status = 400
     return {data: null, error: 'Project has no prompts configured'}
   }
@@ -141,7 +141,7 @@ export const humanAssessmentRoutesPostInit = async ({
     targetArticleId = randomArticle.id
     articleRow = randomArticle
 
-    const insertValues = projectPrompts.map((p) => {
+    const insertValues = projectPromptRows.map((p) => {
       return {
         articleId: targetArticleId!,
         user: sessionUserId,
@@ -161,7 +161,7 @@ export const humanAssessmentRoutesPostInit = async ({
     const response: InitResponse = {
       project: {id: project.id, name: project.name},
       article: articleRow,
-      prompts: projectPrompts,
+      prompts: projectPromptRows,
       judgmentsHuman: inserted,
     }
 
@@ -192,7 +192,7 @@ export const humanAssessmentRoutesPostInit = async ({
   const response: InitResponse = {
     project: {id: project.id, name: project.name},
     article: articleRow!,
-    prompts: projectPrompts,
+    prompts: projectPromptRows,
     judgmentsHuman: pendingForArticle,
   }
 
