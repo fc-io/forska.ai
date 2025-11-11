@@ -421,7 +421,7 @@ export const prompts = pgTable(
     contentHash: text('content_hash'),
   },
   (table) => {
-    return [index('prompts_content_hash_idx').on(table.contentHash)]
+    return [uniqueIndex('prompts_content_hash_unique').on(table.contentHash)]
   },
 )
 

@@ -32,9 +32,9 @@ Goal: Allow the concept of "subprojects" where we can take selected articles ass
 
 ## Phase 3 — Application Read Path
 - [x] Update API to fetch a project’s prompts via `project_prompts` join (not `prompts.project_id`)
-- [ ] Update UI to manage order/archival via `project_prompts`
-- [ ] Audit every existing prompt reader (API routes, Solid stores, cron jobs) and switch them to the association join to avoid any accidental divergence.
-- [ ] Project article view: surface “available judgments” for an article from any project using the same `prompt_id` (include both LLM and Human judgments; do not filter by model)
+- [x] Update UI to manage order/archival via `project_prompts`
+- [x] Audit every existing prompt reader (API routes, Solid stores, cron jobs) and switch them to the association join to avoid any accidental divergence.
+- [x] Project article view: surface “available judgments” for an article from any project using the same `prompt_id` (include both LLM and Human judgments; do not filter by model)
 - [x] On adding an article to a project, auto-link project to prompts that already have judgments for that article
 
 ## Phase 4 — Write Path (new prompts)
@@ -47,23 +47,24 @@ Goal: Allow the concept of "subprojects" where we can take selected articles ass
 - [x] Update the current prompt creation/edit flows (API + UI) to call the shared upsert-by-hash service and update associations instead of editing prompt rows.
 
 ## Phase 5 — Dedup + Consistency (optional now; enforce later)
-- [ ] Admin tooling to review duplicates (same `content_hash`) and choose canonical `prompt_id`
-- [ ] Data migration to remap `judgments.prompt_id` and `judgments_human.prompt_id` to canonical IDs
-- [ ] Delete redundant prompt rows after remap
-- [ ] Enforce unique index on `prompts.content_hash` once clean
+- [x] Admin tooling to review duplicates (same `content_hash`) and choose canonical `prompt_id`
+- [x] Data migration to remap `judgments.prompt_id` and `judgments_human.prompt_id` to canonical IDs (implemented as admin route transaction)
+- [x] Delete redundant prompt rows after remap
+- [x] Enforce unique index on `prompts.content_hash` once clean (schema updated; DB migration still required)
 - [x] Legacy prompt columns removed; no dual-write
 
 ## Phase 6 — Project Articles UX
 - [x] Server endpoints to manage `project_articles` membership (add/remove)
-- [ ] Client UI to curate articles for a project
+- [x] Client UI to curate articles for a project
 - [x] On association, auto‑link prompts with prior judgments for that article
 
 ## Phase 7 — Clean‑up
 - [x] Legacy prompt columns dropped (drop `prompts.project_id`, `prompts.order`, `prompts.archived`; keep `prompts.prompt_heading` and `prompts.type` as global immutable metadata) — Code/schema now read metadata from `prompts`; `project_prompts` no longer has these columns.
-- [ ] Ensure remaining callers are using joins only
-  - [ ] Refactor HumanAssessment overview routes to use `project_prompts` association (replace `prompts.project_id` usage):
+- [x] Ensure remaining callers are using joins only
+  - [x] Refactor HumanAssessment overview routes to use `project_prompts` association (replace `prompts.project_id` usage):
     - src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesGetOverviewBothProjects.ts:35–49
     - src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesGetOverviewBothUsers.ts:43–57
+- [x] Remove temporary admin duplicates UI/routes after canonicalization; rely on unique index to prevent recurrence
 
 ## Migrations and Backfill (Drizzle)
 - [x] Write Drizzle migrations for:
@@ -81,7 +82,7 @@ Goal: Allow the concept of "subprojects" where we can take selected articles ass
   - [x] Populate `project_prompts` from legacy prompt rows (order, archived only)
 
 ## Quality Gates
-- [ ] Lint and tests: `bun run lint` and `bun test`
+- [ ] Lint and tests: `bun run lint` and `bun test` (tests pass; lint shows unrelated pre-existing issues)
 - [ ] Smoke tests:
   - [ ] Read prompts via `project_prompts` path
   - [ ] Upsert‑by‑hash behavior reuses existing prompt

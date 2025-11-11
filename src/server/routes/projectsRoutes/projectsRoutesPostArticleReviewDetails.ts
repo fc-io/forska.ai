@@ -1,4 +1,4 @@
-import {and, eq, inArray} from 'drizzle-orm'
+import {and, eq, inArray, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {user} from '../../../../auth-schema.ts'
@@ -134,7 +134,71 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
 
       const humanAssessmentsByUser = Object.values(humanByUser)
 
-      return {article, review, prompts: projectPrompts, judgments: judgmentsWithDetails, humanAssessmentsByUser}
+      // Cross-project human answers aggregated by prompt for users who answered all prompts for this project
+      // Replicates the logic used in articlesreviewsboth but scoped to a single article
+      let humanAnswersByPrompt: Record<string, string[]> | undefined = undefined
+      if (promptIds.length > 0) {
+        type HumanRow = {articleId: string; userId: string; promptId: string; answer: string | null; updatedAt: Date | null}
+        const rows: HumanRow[] = await db
+          .select({
+            articleId: judgmentsHuman.articleId,
+            userId: judgmentsHuman.user,
+            promptId: judgmentsHuman.promptId,
+            answer: judgmentsHuman.answer,
+            updatedAt: judgmentsHuman.updatedAt,
+          })
+          .from(judgmentsHuman)
+          .where(and(eq(judgmentsHuman.articleId, articleId), sql`${judgmentsHuman.answer} IS NOT NULL`))
+
+        // Deduplicate by latest updatedAt for (articleId, userId, promptId)
+        const latest = rows.reduce((acc, row) => {
+          const key = `${row.articleId}::${row.userId}::${row.promptId}`
+          const existing = acc.get(key)
+          if (!existing || ((row.updatedAt?.getTime() || 0) > (existing.updatedAt?.getTime() || 0))) {
+            acc.set(key, row)
+          }
+          return acc
+        }, new Map<string, HumanRow>())
+
+        // Group rows by user and check coverage
+        const byUser = new Map<string, HumanRow[]>()
+        for (const r of latest.values()) {
+          const arr = byUser.get(r.userId) || []
+          arr.push(r)
+          byUser.set(r.userId, arr)
+        }
+
+        const qualifyingUsers: string[] = []
+        for (const [uid, rowsArr] of byUser.entries()) {
+          const covered = new Set(rowsArr.map((r) => r.promptId))
+          if (covered.size === promptIds.length) {
+            qualifyingUsers.push(uid)
+          }
+        }
+
+        if (qualifyingUsers.length > 0) {
+          const map: Record<string, string[]> = {}
+          for (const pid of promptIds) map[pid] = []
+          for (const uid of qualifyingUsers) {
+            const rowsArr = byUser.get(uid) || []
+            for (const r of rowsArr) {
+              if (r.answer !== null && r.answer !== undefined) {
+                map[r.promptId].push(r.answer)
+              }
+            }
+          }
+          humanAnswersByPrompt = map
+        }
+      }
+
+      return {
+        article,
+        review,
+        prompts: projectPrompts,
+        judgments: judgmentsWithDetails,
+        humanAssessmentsByUser,
+        humanAnswersByPrompt,
+      }
     } catch (error) {
       console.error('Error fetching article review details:', error)
       throw new Error(error instanceof Error ? error.message : 'Failed to fetch article review details')

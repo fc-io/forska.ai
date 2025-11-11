@@ -13,8 +13,8 @@ import {judgmentsJobsRoutes} from './routes/JudgmentsJobsRoutes.ts'
 import {judgmentsRoutes} from './routes/JudgmentsRoutes.ts'
 import {llmStatusRoutes} from './routes/LlmStatusRoutes.ts'
 import {modelsRoutes} from './routes/ModelsRoutes.ts'
-import {projectsRoutes} from './routes/ProjectsRoutes.ts'
 import {projectArticlesRoutes} from './routes/ProjectArticlesRoutes.ts'
+import {projectsRoutes} from './routes/ProjectsRoutes.ts'
 import {tokensRoutes} from './routes/TokensRoutes.ts'
 import {usersRoutes} from './routes/UsersRoutes.ts'
 import {env} from './utils/env.ts'
@@ -51,5 +51,7 @@ const _app = new Elysia()
 console.log(
   `🦊 Elysia is running on :${env.API_SERVER_PORT} (nodes=${env.GPU_NNODES}, gpus/node=${env.GPU_GPUS_PER_NODE}, total_gpus=${env.GPU_TOTAL_GPUS}, shape=${env.GPU_SHAPE}, tp=${env.TP_SIZE}, dp=${env.DP_SIZE}, max_running_requests=${env.SGLANG_MAX_RUNNING_REQUESTS})`,
 )
-
+console.log('env', env.BETTER_AUTH_SECRET)
+console.log('env', env.BETTER_AUTH_URL)
+console.log('env', env.DATABASE_URL)
 export type App = typeof _app

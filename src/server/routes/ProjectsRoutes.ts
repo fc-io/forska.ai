@@ -353,6 +353,7 @@ export const projectsRoutes = new Elysia()
             const heading = p.promptHeading || null
             const typeVal = p.type || null
             const orderVal = p.order
+            const archivedVal = typeof p.archived === 'boolean' ? p.archived : undefined
             let targetPromptId: string
             if (p.originalId) {
               // Block attempts to edit immutable metadata for existing prompts via app
@@ -384,9 +385,17 @@ export const projectsRoutes = new Elysia()
                     )[0]!.id
               }
               // Ensure association points to target prompt and metadata is updated
+              const updateAssoc: Partial<typeof projectPrompts.$inferInsert> = {
+                promptId: targetPromptId,
+                order: orderVal,
+                updatedAt: new Date(),
+              }
+              if (archivedVal !== undefined) {
+                updateAssoc.archived = archivedVal
+              }
               await tx
                 .update(projectPrompts)
-                .set({promptId: targetPromptId, order: orderVal, updatedAt: new Date()})
+                .set(updateAssoc)
                 .where(sql`${projectPrompts.projectId} = ${params.id} AND ${projectPrompts.promptId} = ${p.originalId}`)
             } else {
               const found = await tx
@@ -407,7 +416,7 @@ export const projectsRoutes = new Elysia()
                 projectId: params.id,
                 promptId: targetPromptId,
                 order: orderVal,
-                archived: false,
+                archived: archivedVal ?? false,
               })
             }
           }
@@ -484,6 +493,7 @@ export const projectsRoutes = new Elysia()
               promptHeading: t.Optional(t.String()),
               type: t.Optional(t.String()),
               order: t.Number(),
+              archived: t.Optional(t.Boolean()),
             }),
           ),
         ),

@@ -2,7 +2,7 @@ import {and, eq, sql} from 'drizzle-orm'
 
 import {user} from '../../../../auth-schema.ts'
 import {auth} from '../../../auth.ts'
-import {judgments, judgmentsHuman, prompts} from '../../../db/schema.ts'
+import {judgments, judgmentsHuman, projectPrompts} from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
 export const humanAssessmentRoutesGetOverviewBothUsers = async ({
@@ -32,6 +32,7 @@ export const humanAssessmentRoutesGetOverviewBothUsers = async ({
     .innerJoin(user, eq(user.id, judgmentsHuman.user))
     .where(
       and(
+        // Human: user has answered all prompts linked to the project for the article
         sql`EXISTS (
             SELECT 1
             FROM ${judgmentsHuman} jh2
@@ -41,19 +42,19 @@ export const humanAssessmentRoutesGetOverviewBothUsers = async ({
               AND jh2."is_answered" = true
             GROUP BY jh2."project_id", jh2."article_id", jh2."user"
             HAVING COUNT(DISTINCT jh2."prompt_id") = (
-              SELECT COUNT(*) FROM ${prompts} p WHERE p."project_id" = jh2."project_id"
+              SELECT COUNT(*) FROM ${projectPrompts} pp WHERE pp."project_id" = jh2."project_id"
             )
           )`,
+        // LLM: article has judgments for all prompts linked to the project
         sql`EXISTS (
             SELECT 1
             FROM ${judgments} j
-            INNER JOIN ${prompts} pr ON pr."id" = j."prompt_id"
-            WHERE pr."project_id" = ${judgmentsHuman.projectId}
-              AND j."article_id" = ${judgmentsHuman.articleId}
+            INNER JOIN ${projectPrompts} pp2 ON pp2."prompt_id" = j."prompt_id" AND pp2."project_id" = ${judgmentsHuman.projectId}
+            WHERE j."article_id" = ${judgmentsHuman.articleId}
               AND j."is_answered" = true
             GROUP BY j."article_id"
             HAVING COUNT(DISTINCT j."prompt_id") = (
-              SELECT COUNT(*) FROM ${prompts} p2 WHERE p2."project_id" = ${judgmentsHuman.projectId}
+              SELECT COUNT(*) FROM ${projectPrompts} pp3 WHERE pp3."project_id" = ${judgmentsHuman.projectId}
             )
           )`,
       ),
