@@ -205,12 +205,22 @@ export const projectsRoutes = new Elysia()
                       .limit(1))[0]!.id
               })()
 
-          await db.insert(projectPrompts).values({
-            projectId: newProject.id,
-            promptId,
-            order: orderVal,
-            archived: false,
-          })
+          await db
+            .insert(projectPrompts)
+            .values({
+              projectId: newProject.id,
+              promptId,
+              order: orderVal,
+              archived: false,
+            })
+            .onConflictDoUpdate({
+              target: [projectPrompts.projectId, projectPrompts.promptId],
+              set: {
+                order: sql`EXCLUDED."order"`,
+                archived: sql`EXCLUDED.archived`,
+                updatedAt: sql`CURRENT_TIMESTAMP`,
+              },
+            })
         }
       }
 
@@ -469,12 +479,22 @@ export const projectsRoutes = new Elysia()
                     return r[0]!.id
                   })()
 
-              await tx.insert(projectPrompts).values({
-                projectId: params.id,
-                promptId: targetPromptId,
-                order: orderVal,
-                archived: archivedVal ?? false,
-              })
+              await tx
+                .insert(projectPrompts)
+                .values({
+                  projectId: params.id,
+                  promptId: targetPromptId,
+                  order: orderVal,
+                  archived: archivedVal ?? false,
+                })
+                .onConflictDoUpdate({
+                  target: [projectPrompts.projectId, projectPrompts.promptId],
+                  set: {
+                    order: sql`EXCLUDED."order"`,
+                    archived: sql`EXCLUDED.archived`,
+                    updatedAt: sql`CURRENT_TIMESTAMP`,
+                  },
+                })
             }
           }
         }
