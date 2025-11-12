@@ -4,7 +4,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=A100fat:2
-#SBATCH --time=05:00:00
+#SBATCH --time=08:00:00
 #SBATCH -o %x-%j.log
 #SBATCH --export=ALL
 # Send an early warning signal 2 minutes before time limit
@@ -245,7 +245,7 @@ export TP_SIZE DP_SIZE TOTAL_GPUS NNODES GPUS_PER_NODE GPUS_PER_ENGINE
 
 # If user did not set an explicit concurrency cap, default to 256 per engine.
 if [[ -z "${SGLANG_MAX_RUNNING_REQUESTS:-}" ]]; then
-  SGLANG_MAX_RUNNING_REQUESTS=256
+  SGLANG_MAX_RUNNING_REQUESTS=196
   echo "[forska] defaulting max-running-requests to $SGLANG_MAX_RUNNING_REQUESTS (per engine)"
 fi
 
