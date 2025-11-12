@@ -7,7 +7,7 @@
 #SBATCH --ntasks-per-core=1
 #SBATCH --cpus-per-task=16
 #SBATCH --gres=gpu:1
-#SBATCH --time=08:00:00
+#SBATCH --time=01:00:00
 #SBATCH -o %x-%j.log
 #SBATCH --export=ALL
 # Send an early warning signal 2 minutes before time limit so we can shut down services cleanly
