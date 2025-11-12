@@ -3,10 +3,10 @@ import {createFileRoute} from '@tanstack/solid-router'
 import {createSignal, For, Show, Suspense} from 'solid-js'
 
 import {ReviewArticleDetails} from '../../../../../../components/main/projects/reviews/review/reviewArticleDetails.tsx'
+import {ReviewAvailableJudgments} from '../../../../../../components/main/projects/reviews/review/reviewAvailableJudgments.tsx'
 import {ReviewHumanAssessments} from '../../../../../../components/main/projects/reviews/review/reviewHumanAssessments.tsx'
 import {ReviewJudgments} from '../../../../../../components/main/projects/reviews/review/reviewJudgments.tsx'
 import {ReviewStatus} from '../../../../../../components/main/projects/reviews/review/reviewStatus.tsx'
-import {ReviewAvailableJudgments} from '../../../../../../components/main/projects/reviews/review/reviewAvailableJudgments.tsx'
 import {apiClient} from '../../../../../../services/apiClient.ts'
 
 export const ReviewDetail = () => {
@@ -24,6 +24,7 @@ export const ReviewDetail = () => {
         if (!response.data) {
           throw new Error('Failed to fetch apiClient.api.projectsreview.pos')
         }
+        console.log(response.data)
         return response.data
       },
     }
@@ -70,7 +71,11 @@ export const ReviewDetail = () => {
                   <div class="w-96">
                     <ReviewJudgments judgments={data().judgments} setArticleViewToShow={setArticleViewToShow} />
                     <ReviewHumanAssessments groups={data().humanAssessmentsByUser} />
-                    <ReviewAvailableJudgments prompts={data().prompts} judgments={data().judgments} humanAnswersByPrompt={data().humanAnswersByPrompt} />
+                    <ReviewAvailableJudgments
+                      prompts={data().prompts}
+                      judgments={data().judgments}
+                      humanAnswersByPrompt={data().humanAnswersByPrompt}
+                    />
                   </div>
                 </div>
               )
