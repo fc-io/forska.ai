@@ -33,7 +33,11 @@
     "db:r:pull": "bun scripts/dbRemotePull.ts",
     "db:reset": "bun scripts/dbClear.ts --drop --force",
     "db:validate-prompts": "bun --env-file=.env.local scripts/dbValidatePromptMigrations.ts",
-    "f:p": "bun scripts/sbatchPut.ts"
+    "f:p": "bun scripts/sbatchPut.ts",
+    "db:backup-from-remote:dis": "SSH_ALIAS=dis STACK_ROOT=~/forska-stack bun scripts/dbRemotePull.ts",
+    "db:merge-from-remote-dump:dis": "bun scripts/dbMergeRemoteDump.ts",
+    "db:r:p:dis": "SSH_ALIAS=dis STACK_ROOT=~/forska-stack bun scripts/dbPush.ts --force --no-restore",
+    "f:p:dis": "SSH_ALIAS=dis STACK_ROOT=~/forska-stack SBATCH_FILE=forska-dis.sbatch bun scripts/sbatchPut.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^2.0.9",

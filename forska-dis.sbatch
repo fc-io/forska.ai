@@ -1,9 +1,10 @@
 #!/bin/bash
-#SBATCH -J forska-alvis
-#SBATCH -A NAISS2025-22-715 -p alvis
+#SBATCH -J forska-dis
+#SBATCH -p dgx
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --gpus-per-node=A100fat:2
+#SBATCH --gpus-per-node=2
+#SBATCH -C h200
 #SBATCH --time=08:00:00
 #SBATCH -o %x-%j.log
 #SBATCH --export=ALL
@@ -20,7 +21,8 @@ echo "[forska] starting on host $(hostname) at $(date)"
 # module load apptainer
 
 # Shared root and caches (see README.md)
-export STACK_ROOT=${STACK_ROOT:-/mimer/NOBACKUP/groups/clin-agent-bench/dev}
+# Default to a per-user path on DIS; override via --export STACK_ROOT=/path
+export STACK_ROOT=${STACK_ROOT:-$HOME/forska-stack}
 mkdir -p "$STACK_ROOT"/{pgdata,hf_cache,logs,.cache,.secrets}
 export XDG_CACHE_HOME=${XDG_CACHE_HOME:-$STACK_ROOT/.cache}
 export HF_HOME=${HF_HOME:-$STACK_ROOT/hf_cache}
@@ -172,7 +174,7 @@ if [[ -z "${HEAD_IP:-}" ]]; then
 fi
 if [[ -z "${HEAD_IP:-}" ]]; then
   echo "[forska] error: unable to resolve an IPv4 address for head node '$HEAD_NODE'." >&2
-  echo "         Set HEAD_IP=<ipv4> when submitting: sbatch --export=ALL,HEAD_IP=1.2.3.4 forska-alvis.sbatch" >&2
+  echo "         Set HEAD_IP=<ipv4> when submitting: sbatch --export=ALL,HEAD_IP=1.2.3.4 forska-dis.sbatch" >&2
   exit 2
 fi
 echo "[forska] resolved HEAD_IP=$HEAD_IP for head node $HEAD_NODE"
@@ -551,12 +553,12 @@ echo "  dist:        ${NNODES} node(s) × ${GPUS_PER_NODE} GPU(s) = $((NNODES*GP
 echo "  api:         http://127.0.0.1:$API_SERVER_PORT"
 echo "  app:         http://127.0.0.1:$PROD_SERVER"
 echo "[forska] tail logs in: $LOG_DIR"
-echo "[forska] for ssh tunnel to postgres"
-echo "  ssh -N -L 8432:$(hostname):$POSTGRES_PORT alvis2"
+echo "[forska] for ssh tunnel to postgres (from your laptop)"
+echo "  ssh -N -L 8432:$(hostname):$POSTGRES_PORT dis"
 echo "[forska] for ssh tunnel to the api"
-echo "  ssh -N -L 3001:$(hostname):$API_SERVER_PORT alvis2"
+echo "  ssh -N -L 3001:$(hostname):$API_SERVER_PORT dis"
 echo "[forska] for ssh tunnel to the sglang server"
-echo "  ssh -N -L ${SGLANG_PORT}:$(hostname):${SGLANG_PORT} alvis2"
+echo "  ssh -N -L ${SGLANG_PORT}:$(hostname):${SGLANG_PORT} dis"
 
 # Block until all background services exit
 wait

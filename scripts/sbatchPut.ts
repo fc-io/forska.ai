@@ -13,7 +13,7 @@ const fail = (s: string): never => {
 const main = async (): Promise<void> => {
   const ssh = process.env.SSH_ALIAS
   const stackRoot = process.env.STACK_ROOT
-  const localFile = 'forska-alvis.sbatch'
+  const localFile = process.env.SBATCH_FILE ?? 'forska-alvis.sbatch'
 
   if (!ssh) fail('Missing env SSH_ALIAS (e.g., user@hpc-host)')
   if (!stackRoot) fail('Missing env STACK_ROOT (remote shared path)')
