@@ -505,11 +505,14 @@ API_BINDS=(
 [[ -f "$BA_URL_FILE" ]] && API_BINDS+=(--bind "$BA_URL_FILE:/run/secrets/better_auth_url:ro")
 
 echo "[forska] starting API on :$API_SERVER_PORT"
+# Only pass optional Better Auth envs if corresponding files exist
+API_ENVS=(--env DATABASE_URL_FILE=/run/secrets/database_url)
+[[ -f "$BA_SECRET_FILE" ]] && API_ENVS+=(--env BETTER_AUTH_SECRET_FILE=/run/secrets/better_auth_secret)
+[[ -f "$BA_URL_FILE" ]] && API_ENVS+=(--env BETTER_AUTH_URL_FILE=/run/secrets/better_auth_url)
+
 apptainer run --cleanenv \
   "${API_BINDS[@]}" \
-  --env DATABASE_URL_FILE=/run/secrets/database_url \
-  --env BETTER_AUTH_SECRET_FILE=/run/secrets/better_auth_secret \
-  --env BETTER_AUTH_URL_FILE=/run/secrets/better_auth_url \
+  "${API_ENVS[@]}" \
   --env VITE_LLM_SERVER_URL="$VITE_LLM_SERVER_URL" \
   --env VITE_SERVER_API="http://localhost:${API_SERVER_PORT}" \
   --env API_SERVER_PORT="$API_SERVER_PORT" \

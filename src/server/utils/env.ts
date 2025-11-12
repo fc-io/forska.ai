@@ -1,5 +1,5 @@
 import {type as arktype} from 'arktype'
-import {readFileSync} from 'fs'
+import {existsSync, readFileSync} from 'fs'
 
 const CsvStringArray = arktype('string | null | undefined').pipe((value): string[] => {
   if (value == null) return []
@@ -20,7 +20,7 @@ const CsvStringArray = arktype('string | null | undefined').pipe((value): string
 const envShape = arktype({
   DATABASE_URL: 'string',
   BETTER_AUTH_SECRET: 'string',
-  BETTER_AUTH_URL: 'string',
+  BETTER_AUTH_URL: 'string | null | undefined',
   VITE_PORT: 'number | string.integer.parse',
   API_SERVER_PORT: 'number | string.integer.parse',
   RUN_SERVER_FULL_TEST_FETCHING: arktype('"true" | "false" | boolean').pipe((v) => {
@@ -43,7 +43,7 @@ const envShape = arktype({
 const readFromFileVar = (key: string): string | undefined => {
   const fileVar = `${key}_FILE`
   const filePath = process.env[fileVar]
-  return filePath ? readFileSync(filePath, 'utf8').trim() : undefined
+  return filePath && existsSync(filePath) ? readFileSync(filePath, 'utf8').trim() : undefined
 }
 
 const getEnvWithFileFallback = (): Record<string, string | undefined> => {
