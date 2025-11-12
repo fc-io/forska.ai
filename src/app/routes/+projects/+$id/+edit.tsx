@@ -253,8 +253,6 @@ const EditProject = (): JSX.Element => {
   const [useTitle, setUseTitle] = createSignal(true)
   const [useAbstract, setUseAbstract] = createSignal(true)
   const [useFulltext, setUseFulltext] = createSignal(false)
-  const [addArticleIdsInput, setAddArticleIdsInput] = createSignal('')
-  const [removeArticleIdInput, setRemoveArticleIdInput] = createSignal('')
 
   const modelsQuery = useQuery(() => {
     return {
@@ -457,38 +455,7 @@ const EditProject = (): JSX.Element => {
     )
   }
 
-  const addArticlesToProject = async () => {
-    const raw = addArticleIdsInput().trim()
-    if (!raw) {
-      return
-    }
-    const ids = raw
-      .split(/[\n,\s]+/)
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0)
-    if (ids.length === 0) {
-      return
-    }
-    const res = await apiClient.api.projects({id: projectId}).articles.post({articleIds: ids})
-    if (res.error) {
-      setErrorMessage(res.error.message || 'Failed to add articles')
-      return
-    }
-    setAddArticleIdsInput('')
-  }
-
-  const removeArticleFromProject = async () => {
-    const id = removeArticleIdInput().trim()
-    if (!id) {
-      return
-    }
-    const res = await apiClient.api.projects({id: projectId}).articles({articleId: id}).delete()
-    if (res.error) {
-      setErrorMessage(res.error.message || 'Failed to remove article')
-      return
-    }
-    setRemoveArticleIdInput('')
-  }
+  
 
   return (
     <div class="p-6 max-w-4xl mx-auto">
@@ -825,17 +792,6 @@ const EditProject = (): JSX.Element => {
                                   disabled={isLocked()}
                                 />
                               </label>
-                              <label class={`flex items-center gap-2 text-sm ${isLocked() ? 'opacity-60' : ''}`}>
-                                <input
-                                  type="checkbox"
-                                  checked={promptItem.archived}
-                                  onChange={(e) => {
-                                    return updatePromptInput(promptItem.id, 'archived', e.currentTarget.checked)
-                                  }}
-                                  disabled={isLocked()}
-                                />
-                                <span>Archived</span>
-                              </label>
                             </div>
                           </div>
                           <Show when={prompts.length > 1}>
@@ -859,58 +815,7 @@ const EditProject = (): JSX.Element => {
                 </div>
               </div>
 
-              <div>
-                <p class="block text-sm font-medium mb-2">Curate Project Articles</p>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div class="space-y-2">
-                    <label class="block text-xs text-muted-foreground">Add articles by ID (comma, space, or newline separated)</label>
-                    <textarea
-                      value={addArticleIdsInput()}
-                      onInput={(e) => {
-                        return setAddArticleIdsInput(e.currentTarget.value)
-                      }}
-                      rows="3"
-                      placeholder="e.g. 123e4567-e89b-12d3-a456-426614174000, 6b1a4..."
-                      class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent resize-none ${fieldStateClass()}`}
-                      disabled={isLocked()}
-                    />
-                    <Button
-                      type="button"
-                      onClick={() => {
-                        return void addArticlesToProject()
-                      }}
-                      class={actionStateClass()}
-                      disabled={isLocked()}
-                    >
-                      Add Articles
-                    </Button>
-                  </div>
-                  <div class="space-y-2">
-                    <label class="block text-xs text-muted-foreground">Remove article by ID</label>
-                    <input
-                      type="text"
-                      value={removeArticleIdInput()}
-                      onInput={(e) => {
-                        return setRemoveArticleIdInput(e.currentTarget.value)
-                      }}
-                      placeholder="article UUID"
-                      class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
-                      disabled={isLocked()}
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => {
-                        return void removeArticleFromProject()
-                      }}
-                      class={actionStateClass()}
-                      disabled={isLocked()}
-                    >
-                      Remove Article
-                    </Button>
-                  </div>
-                </div>
-              </div>
+              
 
               <div class="flex gap-3 pt-4">
                 <Button
