@@ -1,4 +1,4 @@
-import {useQuery} from '@tanstack/solid-query'
+import {useQuery, useQueryClient} from '@tanstack/solid-query'
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
 import type {JSX} from 'solid-js'
 import {createEffect, createMemo, createSignal, For, Show, Suspense} from 'solid-js'
@@ -231,6 +231,7 @@ const EditProject = (): JSX.Element => {
   const params = Route.useParams()
   const projectId = (params() as {id: string}).id
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
 
   const projectData = useQuery(() => {
     return {
@@ -413,6 +414,21 @@ const EditProject = (): JSX.Element => {
     setDateFrom(formatDateForInput(result.project.dateFrom))
     setDateTo(formatDateForInput(result.project.dateTo))
     setPrompts(mapPromptsFromResponse(result.prompts))
+
+    // Keep related caches in sync so subsequent views show fresh data immediately
+    queryClient.setQueryData(['project', projectId, 'with-prompts'], (prev: unknown) => {
+      const previous = (prev && typeof prev === 'object' ? (prev as Record<string, unknown>) : {})
+      return {
+        ...previous,
+        project: result.project,
+        prompts: result.prompts,
+        hasJudgedArticles: previous.hasOwnProperty('hasJudgedArticles') ? previous.hasJudgedArticles : false,
+        model: previous.hasOwnProperty('model') ? previous.model : null,
+        importRoutes: Array.isArray(previous.importRoutes) ? previous.importRoutes : [],
+      }
+    })
+    void queryClient.invalidateQueries({queryKey: ['project', projectId]})
+    void queryClient.invalidateQueries({queryKey: ['projects']})
   }
 
   const handleSubmit = (event: SubmitEvent) => {
