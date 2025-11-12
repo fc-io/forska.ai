@@ -13,6 +13,7 @@ import {
 } from '../../db/schema.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
+import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
 import {projectsRoutesGetArticlesReviews} from './projectsRoutes/projectsRoutesGetArticlesReviews.ts'
 import {projectsRoutesGetArticlesReviewsBoth} from './projectsRoutes/projectsRoutesGetArticlesReviewsBoth.ts'
 import {projectsRoutesGetArticlesReviewsFilters} from './projectsRoutes/projectsRoutesGetArticlesReviewsFilters.ts'
@@ -173,21 +174,36 @@ export const projectsRoutes = new Elysia()
           const typeVal = typeof prompt === 'object' ? prompt.type || null : null
           const orderVal = typeof prompt === 'object' && prompt.order !== undefined ? prompt.order : index
 
-          // Find existing prompt by DB-computed content hash (includes metadata)
+          // Find existing prompt by app-computed 4-arg content hash (matches DB logic)
+          const contentHash = computePromptContentHash(content, null, heading, typeVal)
           const existingByHash = await db
-            .execute<{id: string}>(
-              sql`SELECT id FROM "prompts" WHERE content_hash = compute_prompt_content_hash(${content}, ${null}, ${heading}, ${typeVal}) LIMIT 1`,
-            )
-            .then((res) => res.rows)
+            .select({id: prompts.id})
+            .from(prompts)
+            .where(eq(prompts.contentHash, contentHash))
+            .limit(1)
 
           const promptId = existingByHash[0]?.id
             ? existingByHash[0]!.id
-            : (
-                await db
+            : await (async () => {
+                const inserted = await db
                   .insert(prompts)
-                  .values({originalText: content, transformedText: null, promptHeading: heading, type: typeVal})
+                  .values({
+                    originalText: content,
+                    transformedText: null,
+                    promptHeading: heading,
+                    type: typeVal,
+                    contentHash,
+                  })
+                  .onConflictDoNothing({target: prompts.contentHash})
                   .returning({id: prompts.id})
-              )[0]!.id
+                return inserted[0]?.id
+                  ? inserted[0].id
+                  : (await db
+                      .select({id: prompts.id})
+                      .from(prompts)
+                      .where(eq(prompts.contentHash, contentHash))
+                      .limit(1))[0]!.id
+              })()
 
           await db.insert(projectPrompts).values({
             projectId: newProject.id,
@@ -362,27 +378,48 @@ export const projectsRoutes = new Elysia()
               }
               // If text unchanged, keep existing prompt id
               const [existingPrompt] = await tx.select().from(prompts).where(eq(prompts.id, p.originalId)).limit(1)
+              const hKeep = computePromptContentHash(
+                p.originalText,
+                null,
+                existingPrompt?.promptHeading ?? null,
+                existingPrompt?.type ?? null,
+              )
               const existingByHash = await tx
-                .execute<{id: string}>(
-                  sql`SELECT id FROM "prompts" WHERE content_hash = compute_prompt_content_hash(${p.originalText}, ${null}, ${existingPrompt?.promptHeading ?? null}, ${existingPrompt?.type ?? null}) LIMIT 1`,
-                )
-                .then((res) => res.rows)
+                .select({id: prompts.id})
+                .from(prompts)
+                .where(eq(prompts.contentHash, hKeep))
+                .limit(1)
               if (existingPrompt && existingByHash[0]?.id === existingPrompt.id) {
                 targetPromptId = existingPrompt.id
               } else {
+                const h4 = computePromptContentHash(p.originalText, null, heading, typeVal)
                 const found = await tx
-                  .execute<{id: string}>(
-                    sql`SELECT id FROM "prompts" WHERE content_hash = compute_prompt_content_hash(${p.originalText}, ${null}, ${heading}, ${typeVal}) LIMIT 1`,
-                  )
-                  .then((res) => res.rows)
+                  .select({id: prompts.id})
+                  .from(prompts)
+                  .where(eq(prompts.contentHash, h4))
+                  .limit(1)
                 targetPromptId = found[0]?.id
                   ? found[0].id
-                  : (
-                      await tx
+                  : await (async () => {
+                      const inserted = await tx
                         .insert(prompts)
-                        .values({originalText: p.originalText, transformedText: null, promptHeading: heading, type: typeVal})
+                        .values({
+                          originalText: p.originalText,
+                          transformedText: null,
+                          promptHeading: heading,
+                          type: typeVal,
+                          contentHash: h4,
+                        })
+                        .onConflictDoNothing({target: prompts.contentHash})
                         .returning({id: prompts.id})
-                    )[0]!.id
+                      if (inserted[0]?.id) return inserted[0].id
+                      const r = await tx
+                        .select({id: prompts.id})
+                        .from(prompts)
+                        .where(eq(prompts.contentHash, h4))
+                        .limit(1)
+                      return r[0]!.id
+                    })()
               }
               // Ensure association points to target prompt and metadata is updated
               const updateAssoc: Partial<typeof projectPrompts.$inferInsert> = {
@@ -398,19 +435,34 @@ export const projectsRoutes = new Elysia()
                 .set(updateAssoc)
                 .where(sql`${projectPrompts.projectId} = ${params.id} AND ${projectPrompts.promptId} = ${p.originalId}`)
             } else {
+              const h4b = computePromptContentHash(p.originalText, null, heading, typeVal)
               const found = await tx
-                .execute<{id: string}>(
-                  sql`SELECT id FROM "prompts" WHERE content_hash = compute_prompt_content_hash(${p.originalText}, ${null}, ${heading}, ${typeVal}) LIMIT 1`,
-                )
-                .then((res) => res.rows)
+                .select({id: prompts.id})
+                .from(prompts)
+                .where(eq(prompts.contentHash, h4b))
+                .limit(1)
               targetPromptId = found[0]?.id
                 ? found[0].id
-                : (
-                    await tx
+                : await (async () => {
+                    const inserted = await tx
                       .insert(prompts)
-                      .values({originalText: p.originalText, transformedText: null, promptHeading: heading, type: typeVal})
+                      .values({
+                        originalText: p.originalText,
+                        transformedText: null,
+                        promptHeading: heading,
+                        type: typeVal,
+                        contentHash: h4b,
+                      })
+                      .onConflictDoNothing({target: prompts.contentHash})
                       .returning({id: prompts.id})
-                  )[0]!.id
+                    if (inserted[0]?.id) return inserted[0].id
+                    const r = await tx
+                      .select({id: prompts.id})
+                      .from(prompts)
+                      .where(eq(prompts.contentHash, h4b))
+                      .limit(1)
+                    return r[0]!.id
+                  })()
 
               await tx.insert(projectPrompts).values({
                 projectId: params.id,
