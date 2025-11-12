@@ -19,6 +19,18 @@ apptainer run --cleanenv --writable-tmpfs \
   --bind ${STACK_ROOT:-.}/.secrets/db_password.txt:/run/secrets/db_password:ro \
   ${STACK_ROOT}/postgres_18.sif
 
+# to clear the db we can drop and recreate the schema to completely clear the database
+apptainer exec --cleanenv --writable-tmpfs \
+  --env POSTGRES_USER=postgres \
+  --env POSTGRES_PASSWORD_FILE=/run/secrets/db_password \
+  --env POSTGRES_DB=postgres \
+  --env PGPORT=${POSTGRES_PORT:-5433} \
+  --bind ${STACK_ROOT:-.}/pgdata:/var/lib/postgresql \
+  --bind ${STACK_ROOT:-.}/.secrets/db_password.txt:/run/secrets/db_password:ro \
+  ${STACK_ROOT}/postgres_18.sif \
+  psql -h localhost -p ${POSTGRES_PORT:-5433} -U postgres -d postgres \
+  -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+
 # then restore
 # replace the path to the dump
 
@@ -32,7 +44,7 @@ apptainer exec --cleanenv --writable-tmpfs \
   --bind ${STACK_ROOT:-.}/backups:/backups:ro \
   ${STACK_ROOT}/postgres_18.sif \
   pg_restore -h localhost -p ${POSTGRES_PORT:-5433} -U postgres -d postgres \
-  --clean --if-exists --no-owner --no-privileges --single-transaction /backups/dump_local_postgres_20251110_205815.dump
+  --clean --if-exists --no-owner --no-privileges --single-transaction /backups/dump_local_postgres_20251112_094538.dump
 ```
 
 ### Why this works

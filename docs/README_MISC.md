@@ -1,4 +1,5 @@
-how to list all running containers when using apptainer?
+## how to list all running containers when using apptainer?
+
 ``` bash
 apptainer instance list
 # or
@@ -18,4 +19,10 @@ those are just processes and wonâ€™t appear in instance list. To see those, youâ
 
 ``` bash
 ps aux | grep apptainer
+```
+
+## check time left with slurm
+
+``` bash
+squeue -u $USER -O jobid,state,timeused,timelimit,timeleft,nodelist
 ```

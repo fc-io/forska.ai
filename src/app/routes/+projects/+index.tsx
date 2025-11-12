@@ -3,7 +3,6 @@ import {createFileRoute, Link} from '@tanstack/solid-router'
 import {Show, Suspense} from 'solid-js'
 
 import {ProjectsGrid} from '../../../components/main/ProjectsGrid'
-import {ProjectStatistics} from '../../../components/main/ProjectStatistics'
 import {Button} from '../../../components/ui/button'
 import {fetchProjects} from '../../../services/projectsService'
 
@@ -40,7 +39,6 @@ export const ProjectsPage = () => {
 
         <Show when={projects.data && Array.isArray(projects.data) && (projects.data?.length ?? 0) > 0}>
           <ProjectsGrid projects={projects.data || []} />
-          <ProjectStatistics projectCount={projects.data?.length || 0} />
         </Show>
       </Suspense>
     </div>

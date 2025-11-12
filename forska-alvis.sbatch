@@ -3,8 +3,8 @@
 #SBATCH -A NAISS2025-22-715 -p alvis
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --gpus-per-node=A100:4
-#SBATCH --time=08:00:00
+#SBATCH --gpus-per-node=A100fat:2
+#SBATCH --time=05:00:00
 #SBATCH -o %x-%j.log
 #SBATCH --export=ALL
 # Send an early warning signal 2 minutes before time limit
