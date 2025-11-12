@@ -1,15 +1,16 @@
 #!/bin/bash
-#SBATCH -J forska-dis
-#SBATCH -p dgx
+#SBATCH --account=ehpc-aif-2025pg01-233
+#SBATCH --qos=ehpc-aif-2025pg01-233
+#SBATCH -p common
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --gpus-per-node=2
-#SBATCH -C h200
+#SBATCH --ntasks-per-core=1
+#SBATCH --cpus-per-task=16
+#SBATCH --gres=gpu:1
 #SBATCH --time=08:00:00
 #SBATCH -o %x-%j.log
 #SBATCH --export=ALL
-# Send an early warning signal 2 minutes before time limit
-# so we can shut down services cleanly
+# Send an early warning signal 2 minutes before time limit so we can shut down services cleanly
 #SBATCH --signal=B:USR1@120
 
 set -euo pipefail
@@ -21,12 +22,30 @@ echo "[forska] starting on host $(hostname) at $(date)"
 # module load apptainer
 
 # Shared root and caches (see README.md)
-# Default to a per-user path on DIS; override via --export STACK_ROOT=/path
-export STACK_ROOT=${STACK_ROOT:-$HOME/forska-stack}
+# Default to project space on DIS; override via --export STACK_ROOT=/path
+export STACK_ROOT=${STACK_ROOT:-/valhalla/projects/ehpc-aif-2025pg01-233/dev}
 mkdir -p "$STACK_ROOT"/{pgdata,hf_cache,logs,.cache,.secrets}
 export XDG_CACHE_HOME=${XDG_CACHE_HOME:-$STACK_ROOT/.cache}
 export HF_HOME=${HF_HOME:-$STACK_ROOT/hf_cache}
 export SGLANG_CACHE_DIR=${SGLANG_CACHE_DIR:-$XDG_CACHE_HOME/sglang}
+
+# Additional caches (useful for PyTorch/Triton/vLLM as referenced in your setup)
+export VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT:-$XDG_CACHE_HOME/vllm}
+export TORCHINDUCTOR_CACHE_DIR=${TORCHINDUCTOR_CACHE_DIR:-$VLLM_CACHE_ROOT/torchinductor}
+export TRITON_CACHE_DIR=${TRITON_CACHE_DIR:-$VLLM_CACHE_ROOT/triton}
+mkdir -p "$VLLM_CACHE_ROOT" "$TORCHINDUCTOR_CACHE_DIR" "$TRITON_CACHE_DIR"
+
+# Apptainer cache/tmp on local scratch to reduce pressure on shared FS
+export APPTAINER_TMPDIR=${APPTAINER_TMPDIR:-/tmp}
+export TMPDIR=${TMPDIR:-$APPTAINER_TMPDIR}
+export APPTAINER_CACHEDIR=${APPTAINER_CACHEDIR:-$STACK_ROOT/.apptainer/cache}
+export SINGULARITY_TMPDIR=${SINGULARITY_TMPDIR:-$APPTAINER_TMPDIR}
+export SINGULARITY_CACHEDIR=${SINGULARITY_CACHEDIR:-$APPTAINER_CACHEDIR}
+mkdir -p "$APPTAINER_TMPDIR" "$APPTAINER_CACHEDIR"
+
+# GHCR defaults to match your user settings (used for pulling SIFs, if needed)
+export GHCR_OWNER=${GHCR_OWNER:-fc-io}
+export GHCR_USER=${GHCR_USER:-fc-io}
 
 # Service ports (host networking)
 export POSTGRES_PORT=${POSTGRES_PORT:-5432}
@@ -36,7 +55,7 @@ export SGLANG_PORT=${SGLANG_PORT:-30000}
 
 # GPU shape overrides used to compute DP/TP; Slurm allocation must match
 # Autodetect GPUs per node from Slurm if available; override via --export GPUS_PER_NODE=<n>
-export GPUS_PER_NODE=${GPUS_PER_NODE:-${SLURM_GPUS_ON_NODE:-2}}
+export GPUS_PER_NODE=${GPUS_PER_NODE:-${SLURM_GPUS_ON_NODE:-1}}
 # NCCL tuning hints (override via --export as needed)
 export NCCL_DEBUG=${NCCL_DEBUG:-WARN}
 export NCCL_ASYNC_ERROR_HANDLING=${NCCL_ASYNC_ERROR_HANDLING:-1}
@@ -559,6 +578,8 @@ echo "[forska] for ssh tunnel to the api"
 echo "  ssh -N -L 3001:$(hostname):$API_SERVER_PORT dis"
 echo "[forska] for ssh tunnel to the sglang server"
 echo "  ssh -N -L ${SGLANG_PORT}:$(hostname):${SGLANG_PORT} dis"
+echo "[forska] (if running vLLM on :8000)"
+echo "  ssh -N -L 8000:$(hostname):8000 dis"
 
 # Block until all background services exit
 wait
