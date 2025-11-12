@@ -372,12 +372,17 @@ export const projectsRoutes = new Elysia()
             const archivedVal = typeof p.archived === 'boolean' ? p.archived : undefined
             let targetPromptId: string
             if (p.originalId) {
-              // Block attempts to edit immutable metadata for existing prompts via app
-              if (p.promptHeading !== undefined || p.type !== undefined) {
+              // If editing an existing prompt association, only block metadata edits when the prompt text is unchanged
+              const [existingPrompt] = await tx.select().from(prompts).where(eq(prompts.id, p.originalId)).limit(1)
+              const isSameText = existingPrompt?.originalText === p.originalText
+              const metaChangedOnSameText =
+                isSameText
+                && ((p.promptHeading !== undefined && p.promptHeading !== (existingPrompt?.promptHeading ?? null))
+                  || (p.type !== undefined && p.type !== (existingPrompt?.type ?? null)))
+              if (metaChangedOnSameText) {
                 throw new Error('Editing prompt metadata is not allowed; prompts are global and immutable')
               }
-              // If text unchanged, keep existing prompt id
-              const [existingPrompt] = await tx.select().from(prompts).where(eq(prompts.id, p.originalId)).limit(1)
+              // If text unchanged (and metadata unchanged or absent), keep existing prompt id; otherwise, create/find new by hash
               const hKeep = computePromptContentHash(
                 p.originalText,
                 null,

@@ -35,6 +35,7 @@ const getQueryConditions = ({jobId, project}: {jobId: string; project: typeof sc
 
   // Use EXISTS to find articles that haven't been judged by ALL prompts in this project
   // This checks if there's at least one prompt in the project that doesn't have a judgment for the article
+  // IMPORTANT: Differentiate by model; require that any existing judgment also matches the project's model_id
   conditions.push(
     sql`EXISTS (
       SELECT 1 FROM ${schema.projectPrompts} pp
@@ -43,6 +44,7 @@ const getQueryConditions = ({jobId, project}: {jobId: string; project: typeof sc
         SELECT 1 FROM ${schema.judgments} j
         WHERE j."article_id" = ${schema.articles.id}
         AND j."prompt_id" = pp."prompt_id"
+        AND j."model_id" = ${project.modelId}
       )
     )`,
   )

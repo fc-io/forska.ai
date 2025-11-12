@@ -29,21 +29,23 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
         return p.id
       })
 
-      // Condition: there are NO judgments for this article for any of the project's prompts
+      // Always enforce the project's date range and capture model for model-specific judgments
+      const [projectBounds] = await db
+        .select({dateFrom: projects.dateFrom, dateTo: projects.dateTo, modelId: projects.modelId})
+        .from(projects)
+        .where(eq(projects.id, body.projectId))
+        .limit(1)
+
+      // Condition: there are NO judgments for this article for any of the project's prompts for THIS project's model
       const noJudgmentsForProjectPrompts = sql`NOT EXISTS (
         ${db
           .select({exists: sql`1`})
           .from(judgments)
-          .where(and(eq(judgments.articleId, articles.id), inArray(judgments.promptId, promptIds)))
+          .where(
+            and(eq(judgments.articleId, articles.id), inArray(judgments.promptId, promptIds), eq(judgments.modelId, projectBounds.modelId)),
+          )
           .limit(1)}
       )`
-
-      // Always enforce the project's date range, regardless of provided start/end
-      const [projectBounds] = await db
-        .select({dateFrom: projects.dateFrom, dateTo: projects.dateTo})
-        .from(projects)
-        .where(eq(projects.id, body.projectId))
-        .limit(1)
 
       // Filter by project's linked import routes via EXISTS against article_route_link
       const projectImportRoutes = await db

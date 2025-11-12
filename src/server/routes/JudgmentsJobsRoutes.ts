@@ -24,6 +24,7 @@ const unassessedCountTTLms = 10_000
 const unassessedCountCache = new Map<string, UnassessedCountCacheValue>()
 const getUnassessedCountCacheKey = (
   projectId: string,
+  projectModelId: string,
   projectDateFrom: Date | null | undefined,
   projectDateTo: Date | null | undefined,
   importRouteIds: string[],
@@ -31,7 +32,7 @@ const getUnassessedCountCacheKey = (
   const from = projectDateFrom ? projectDateFrom.toISOString() : ''
   const to = projectDateTo ? projectDateTo.toISOString() : ''
   const routes = importRouteIds.slice().sort().join(',')
-  return `${projectId}|${from}|${to}|${routes}`
+  return `${projectId}|${projectModelId}|${from}|${to}|${routes}`
 }
 
 const buildProjectDateConditions = ({
@@ -54,7 +55,7 @@ const buildProjectDateConditions = ({
   return conditions
 }
 
-const buildProjectPromptCondition = (projectId: string): SQL => {
+const buildProjectPromptCondition = (projectId: string, projectModelId: string): SQL => {
   return sql`EXISTS (
     SELECT 1 FROM ${projectPrompts} pp
     WHERE pp.project_id = ${projectId}::uuid
@@ -62,6 +63,7 @@ const buildProjectPromptCondition = (projectId: string): SQL => {
       SELECT 1 FROM ${judgments} j
       WHERE j."article_id" = ${articles.id}
       AND j."prompt_id" = pp."prompt_id"
+      AND j."model_id" = ${projectModelId}::uuid
     )
   )`
 }
@@ -89,17 +91,19 @@ const buildProjectRouteCondition = (importRouteIds: string[]): SQL => {
 const getUnassessedArticlesCount = async ({
   db,
   projectId,
+  projectModelId,
   projectDateFrom,
   projectDateTo,
   importRouteIds,
 }: {
   db: Database
   projectId: string
+  projectModelId: string
   projectDateFrom: Date | null | undefined
   projectDateTo: Date | null | undefined
   importRouteIds: string[]
 }): Promise<number> => {
-  const cacheKey = getUnassessedCountCacheKey(projectId, projectDateFrom, projectDateTo, importRouteIds)
+  const cacheKey = getUnassessedCountCacheKey(projectId, projectModelId, projectDateFrom, projectDateTo, importRouteIds)
   const cached = unassessedCountCache.get(cacheKey)
   const now = Date.now()
   if (cached && cached.expiresAt > now) {
@@ -107,7 +111,7 @@ const getUnassessedArticlesCount = async ({
   }
 
   const dateConditions = buildProjectDateConditions({projectDateFrom, projectDateTo})
-  const conditions: SQL[] = [buildProjectPromptCondition(projectId), ...dateConditions]
+  const conditions: SQL[] = [buildProjectPromptCondition(projectId, projectModelId), ...dateConditions]
 
   if (importRouteIds.length > 0) {
     conditions.push(buildProjectRouteCondition(importRouteIds))
@@ -139,6 +143,7 @@ const getJobContext = async ({
     error: string[] | null
     projectName: string | null
   }
+  projectModelId: string
   projectDateFrom: Date | null
   projectDateTo: Date | null
   importRouteIds: string[]
@@ -152,6 +157,7 @@ const getJobContext = async ({
       status: judgmentsJobs.status,
       error: judgmentsJobs.error,
       projectName: projects.name,
+      projectModelId: projects.modelId,
       projectDateFrom: projects.dateFrom,
       projectDateTo: projects.dateTo,
     })
@@ -164,7 +170,7 @@ const getJobContext = async ({
     throw new Error('Job not found')
   }
 
-  const {projectDateFrom, projectDateTo, ...job} = jobWithProject
+  const {projectDateFrom, projectDateTo, projectModelId, ...job} = jobWithProject
 
   const projectImportRoutes = await db
     .select({importRouteId: projectRouteLink.importRouteId})
@@ -173,6 +179,7 @@ const getJobContext = async ({
 
   return {
     job,
+    projectModelId,
     projectDateFrom,
     projectDateTo,
     importRouteIds: projectImportRoutes.map((r) => {
@@ -184,12 +191,14 @@ const getJobContext = async ({
 const getUnassessedArticles = async ({
   db,
   projectId,
+  projectModelId,
   projectDateFrom,
   projectDateTo,
   importRouteIds,
 }: {
   db: Database
   projectId: string
+  projectModelId: string
   projectDateFrom: Date | null | undefined
   projectDateTo: Date | null | undefined
   importRouteIds: string[]
@@ -227,7 +236,10 @@ const getUnassessedArticles = async ({
     })
     .from(articles)
     .innerJoin(projectPrompts, eq(projectPrompts.projectId, projectId))
-    .leftJoin(judgments, sql`${judgments.articleId} = ${articles.id} AND ${judgments.promptId} = ${projectPrompts.promptId}`)
+    .leftJoin(
+      judgments,
+      sql`${judgments.articleId} = ${articles.id} AND ${judgments.promptId} = ${projectPrompts.promptId} AND ${judgments.modelId} = ${projectModelId}::uuid`,
+    )
     .groupBy(
       articles.id,
       articles.articleId,
@@ -361,11 +373,12 @@ export const judgmentsJobsRoutes = new Elysia()
     async ({query}) => {
       const db = getDatabase()
 
-      const {projectDateFrom, projectDateTo, importRouteIds, job} = await getJobContext({db, jobId: query.jobId})
+      const {projectDateFrom, projectDateTo, importRouteIds, projectModelId, job} = await getJobContext({db, jobId: query.jobId})
 
       const count = await getUnassessedArticlesCount({
         db,
         projectId: job.projectId,
+        projectModelId,
         projectDateFrom,
         projectDateTo,
         importRouteIds,
@@ -380,11 +393,12 @@ export const judgmentsJobsRoutes = new Elysia()
     async ({query}) => {
       const db = getDatabase()
 
-      const {projectDateFrom, projectDateTo, importRouteIds, job} = await getJobContext({db, jobId: query.jobId})
+      const {projectDateFrom, projectDateTo, importRouteIds, projectModelId, job} = await getJobContext({db, jobId: query.jobId})
 
       const unassessedArticles = await getUnassessedArticles({
         db,
         projectId: job.projectId,
+        projectModelId,
         projectDateFrom,
         projectDateTo,
         importRouteIds,
