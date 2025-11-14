@@ -1,6 +1,24 @@
 import {type as arktype} from 'arktype'
 import {existsSync, readFileSync} from 'fs'
 
+const parseDbHostPort = (url: string | undefined): {host: string; port: string} | null => {
+  const raw = String(url ?? '').trim()
+  if (!raw) return null
+  const afterScheme = raw.includes('://') ? raw.split('://')[1] : raw
+  const afterAt = afterScheme.includes('@') ? afterScheme.split('@')[1] : afterScheme
+  const hostPortPart = afterAt.split(/[/?]/)[0] || ''
+  if (!hostPortPart) return {host: '<empty>', port: '<none>'}
+  if (hostPortPart.startsWith('[')) {
+    // IPv6 like [::1]:5432 — keep as-is; best-effort port parse
+    const idx = hostPortPart.lastIndexOf(']:')
+    if (idx > -1) return {host: hostPortPart.slice(0, idx + 1), port: hostPortPart.slice(idx + 2) || '<none>'}
+    return {host: hostPortPart, port: '<none>'}
+  }
+  const i = hostPortPart.lastIndexOf(':')
+  if (i > -1) return {host: hostPortPart.slice(0, i), port: hostPortPart.slice(i + 1) || '<none>'}
+  return {host: hostPortPart, port: '<none>'}
+}
+
 const CsvStringArray = arktype('string | null | undefined').pipe((value): string[] => {
   if (value == null) return []
   const normalized = String(value).trim()
@@ -72,9 +90,12 @@ const loadEnv = (): typeof envShape.infer => {
   if (dbUrlRaw == null || isEmpty(dbUrlRaw)) {
     const fileInfo = fileVar ? `${fileVar} (exists: ${fileExists ? 'yes' : 'no'})` : 'unset'
     const envInfo = process.env.DATABASE_URL ? 'set (empty/whitespace)' : 'unset'
-    console.error(
-      `[env] DATABASE_URL missing; DATABASE_URL=${envInfo}; DATABASE_URL_FILE=${fileInfo}`,
-    )
+    console.error(`[env] DATABASE_URL missing; DATABASE_URL=${envInfo}; DATABASE_URL_FILE=${fileInfo}`)
+  } else {
+    const via = fileVar ? (fileExists ? `file:${fileVar}` : 'file:missing') : 'env'
+    const hp = parseDbHostPort(dbUrlRaw)
+    if (hp) console.log(`[env] DATABASE_URL host=${hp.host} port=${hp.port} via=${via}`)
+    console.log(`[env] DATABASE_URL raw=${dbUrlRaw}`)
   }
   // Default to true when not provided
   if (merged.RUN_SERVER_JUDGING == null || merged.RUN_SERVER_JUDGING === '') {
