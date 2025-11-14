@@ -10,10 +10,16 @@ const judgeAndMark = async (
   db: PostgresJsDatabase<typeof schema>,
   articleToProcess: ArticleToProcess,
   article: typeof schema.articles.$inferSelect,
-  prompts: Array<{id: string; originalText: string; promptHeading: string | null; order: number | null; type: string | null}>,
+  prompts: Array<{
+    id: string
+    originalText: string
+    promptHeading: string | null
+    order: number | null
+    type: string | null
+  }>,
 ): Promise<void> => {
   const sessionId = null
-  const randomDelay = Math.floor(Math.random() * (300 - 100 + 1)) + 100
+  const randomDelay = Math.floor(Math.random() * (150 - 100 + 1)) + 100
   await new Promise((resolve) => {
     return setTimeout(resolve, randomDelay)
   })
