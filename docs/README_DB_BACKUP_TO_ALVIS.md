@@ -44,7 +44,7 @@ apptainer exec --cleanenv --writable-tmpfs \
   --bind ${STACK_ROOT:-.}/backups:/backups:ro \
   ${STACK_ROOT}/postgres_18.sif \
   pg_restore -h localhost -p ${POSTGRES_PORT:-5433} -U postgres -d postgres \
-  --clean --if-exists --no-owner --no-privileges --single-transaction /backups/dump_local_postgres_20251113_210818.dump
+  --clean --if-exists --no-owner --no-privileges --single-transaction /backups/dump_local_postgres_20251114_155937.dump
 ```
 
 ### Why this works

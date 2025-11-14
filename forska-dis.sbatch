@@ -5,12 +5,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --ntasks-per-core=1
-# Prefer per-GPU workers via submit-time overrides:
-#   sbatch --ntasks-per-node=${GPUS_PER_NODE} --gpus-per-task=1 --cpus-per-task=8 --hint=nomultithread forska-dis.sbatch
-# Default to modest CPU per task to avoid cgroup contention when not overriding
-# (increase via submit-time if needed)
-#SBATCH --cpus-per-task=8
-#SBATCH --hint=nomultithread
+#SBATCH --cpus-per-task=28
 #SBATCH --gres=gpu:2
 #SBATCH --time=03:00:00
 #SBATCH -o %x-%j.log
