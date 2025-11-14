@@ -3,7 +3,7 @@
 #SBATCH --qos=ehpc-aif-2025pg01-233
 #SBATCH -p common
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=1
+#SBATCH --ntasks-per-node=2
 #SBATCH --ntasks-per-core=1
 #SBATCH --cpus-per-task=28
 #SBATCH --gres=gpu:2
@@ -228,41 +228,51 @@ detect_tp_per_node() {
 
 TOTAL_GPUS=$(( NNODES * GPUS_PER_NODE ))
 TP_AUTO_DEFAULT=$(detect_tp_per_node)
-if [[ -z "${TP_SIZE:-}" ]]; then
-  TP_SIZE=$TP_AUTO_DEFAULT
-  echo "[forska] deriving TP from GPU type: TP_SIZE=$TP_SIZE"
-fi
-if (( TP_SIZE < 1 )); then
-  echo "[forska] error: TP_SIZE must be >=1 (got $TP_SIZE)" >&2
-  exit 2
-fi
-if (( GPUS_PER_NODE < TP_SIZE )); then
-  echo "[forska] error: TP=${TP_SIZE} requires ${TP_SIZE} GPU(s) per node; only ${GPUS_PER_NODE} allocated per node" >&2
-  exit 2
-fi
-if [[ -z "${DP_SIZE:-}" ]]; then
-  if (( GPUS_PER_NODE % TP_SIZE == 0 )); then
-    DP_SIZE=$(( GPUS_PER_NODE / TP_SIZE ))
-    if (( DP_SIZE < 1 )); then DP_SIZE=1; fi
-    echo "[forska] deriving DP to fill node: DP_SIZE=$DP_SIZE"
-  else
-    DP_SIZE=1
-    echo "[forska] warning: gpus_per_node (${GPUS_PER_NODE}) not divisible by tp (${TP_SIZE}); defaulting DP=1 (some GPUs idle)" >&2
+
+# One-worker-per-GPU mode (no DP) defaults ON for DIS
+export SGLANG_ONE_WORKER_PER_GPU=${SGLANG_ONE_WORKER_PER_GPU:-1}
+if [[ "${SGLANG_ONE_WORKER_PER_GPU}" == "1" ]]; then
+  TP_SIZE=1
+  DP_SIZE=1
+  GPUS_PER_ENGINE=1
+  echo "[forska] per-GPU workers enabled: forcing tp=1, dp=1"
+else
+  if [[ -z "${TP_SIZE:-}" ]]; then
+    TP_SIZE=$TP_AUTO_DEFAULT
+    echo "[forska] deriving TP from GPU type: TP_SIZE=$TP_SIZE"
+  fi
+  if (( TP_SIZE < 1 )); then
+    echo "[forska] error: TP_SIZE must be >=1 (got $TP_SIZE)" >&2
+    exit 2
+  fi
+  if (( GPUS_PER_NODE < TP_SIZE )); then
+    echo "[forska] error: TP=${TP_SIZE} requires ${TP_SIZE} GPU(s) per node; only ${GPUS_PER_NODE} allocated per node" >&2
+    exit 2
+  fi
+  if [[ -z "${DP_SIZE:-}" ]]; then
+    if (( GPUS_PER_NODE % TP_SIZE == 0 )); then
+      DP_SIZE=$(( GPUS_PER_NODE / TP_SIZE ))
+      if (( DP_SIZE < 1 )); then DP_SIZE=1; fi
+      echo "[forska] deriving DP to fill node: DP_SIZE=$DP_SIZE"
+    else
+      DP_SIZE=1
+      echo "[forska] warning: gpus_per_node (${GPUS_PER_NODE}) not divisible by tp (${TP_SIZE}); defaulting DP=1 (some GPUs idle)" >&2
+    fi
+  fi
+  if (( DP_SIZE < 1 )); then DP_SIZE=1; fi
+  GPUS_PER_ENGINE=$(( TP_SIZE * DP_SIZE ))
+  if (( GPUS_PER_ENGINE > GPUS_PER_NODE )); then
+    echo "[forska] error: TP×DP=${GPUS_PER_ENGINE} exceeds GPUs per node (${GPUS_PER_NODE}); lower DP_SIZE or TP_SIZE" >&2
+    exit 2
+  fi
+  if (( GPUS_PER_ENGINE < GPUS_PER_NODE )); then
+    UNUSED=$(( GPUS_PER_NODE - GPUS_PER_ENGINE ))
+    echo "[forska] note: ${UNUSED} GPU(s) per node will remain idle (tp=${TP_SIZE}, dp=${DP_SIZE}). Adjust TP_SIZE/DP_SIZE or #SBATCH to match."
   fi
 fi
-if (( DP_SIZE < 1 )); then DP_SIZE=1; fi
-GPUS_PER_ENGINE=$(( TP_SIZE * DP_SIZE ))
-if (( GPUS_PER_ENGINE > GPUS_PER_NODE )); then
-  echo "[forska] error: TP×DP=${GPUS_PER_ENGINE} exceeds GPUs per node (${GPUS_PER_NODE}); lower DP_SIZE or TP_SIZE" >&2
-  exit 2
-fi
-if (( GPUS_PER_ENGINE < GPUS_PER_NODE )); then
-  UNUSED=$(( GPUS_PER_NODE - GPUS_PER_ENGINE ))
-  echo "[forska] note: ${UNUSED} GPU(s) per node will remain idle (tp=${TP_SIZE}, dp=${DP_SIZE}). Adjust TP_SIZE/DP_SIZE or #SBATCH to match."
-fi
 echo "[forska] topology: nodes=$NNODES, gpus/node=$GPUS_PER_NODE, total_gpus=$TOTAL_GPUS"
-echo "[forska] sglang parallelism per node: tp=$TP_SIZE, dp=$DP_SIZE (gpus_used_per_node=$GPUS_PER_ENGINE)"
-export TP_SIZE DP_SIZE TOTAL_GPUS NNODES GPUS_PER_NODE GPUS_PER_ENGINE
+echo "[forska] sglang per-node: tp=$TP_SIZE, dp=$DP_SIZE (gpus_used_per_engine=$GPUS_PER_ENGINE)"
+export TP_SIZE DP_SIZE TOTAL_GPUS NNODES GPUS_PER_NODE GPUS_PER_ENGINE SGLANG_ONE_WORKER_PER_GPU
 
 # If user did not set an explicit concurrency cap, default to 256 per engine.
 if [[ -z "${SGLANG_MAX_RUNNING_REQUESTS:-}" ]]; then
@@ -272,15 +282,20 @@ if [[ -z "${SGLANG_MAX_RUNNING_REQUESTS:-}" ]]; then
 fi
 
 # Propagate CUDA_VISIBLE_DEVICES into containers so NVML sees only the GPUs assigned on this node.
-if [[ -z "${CUDA_VISIBLE_DEVICES:-}" && ${GPUS_PER_NODE:-0} -gt 0 ]]; then
-  CUDA_VISIBLE_DEVICES=$(seq -s, 0 $((GPUS_PER_NODE - 1)))
-  export CUDA_VISIBLE_DEVICES
-  echo "[forska] defaulting CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
-elif [[ -n "${CUDA_VISIBLE_DEVICES:-}" ]]; then
-  export CUDA_VISIBLE_DEVICES
-  echo "[forska] detected CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
+# In per-GPU worker mode, let Slurm set CUDA_VISIBLE_DEVICES per task; avoid setting it globally here.
+if [[ "${SGLANG_ONE_WORKER_PER_GPU}" != "1" ]]; then
+  if [[ -z "${CUDA_VISIBLE_DEVICES:-}" && ${GPUS_PER_NODE:-0} -gt 0 ]]; then
+    CUDA_VISIBLE_DEVICES=$(seq -s, 0 $((GPUS_PER_NODE - 1)))
+    export CUDA_VISIBLE_DEVICES
+    echo "[forska] defaulting CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
+  elif [[ -n "${CUDA_VISIBLE_DEVICES:-}" ]]; then
+    export CUDA_VISIBLE_DEVICES
+    echo "[forska] detected CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
+  else
+    echo "[forska] CUDA_VISIBLE_DEVICES is unset; downstream containers may enumerate all visible GPUs"
+  fi
 else
-  echo "[forska] CUDA_VISIBLE_DEVICES is unset; downstream containers may enumerate all visible GPUs"
+  echo "[forska] per-GPU mode: deferring CUDA_VISIBLE_DEVICES to Slurm per-task binding"
 fi
 
 # Derive a descriptive GPU shape string for logging (e.g., "A100:4")
@@ -412,21 +427,77 @@ export SGLANG_MODEL=${SGLANG_MODEL:-Qwen/Qwen3-30B-A3B-Instruct-2507}
 export SGLANG_MAX_RUNNING_REQUESTS
 export SGLANG_MEM_FRACTION=${SGLANG_MEM_FRACTION:-0.92}
 export SGLANG_SCHEDULE_POLICY=${SGLANG_SCHEDULE_POLICY:-lpm}
-export SGLANG_ENABLE_ROUTER=${SGLANG_ENABLE_ROUTER:-0}
-export SGLANG_ROUTER_POLICY=${SGLANG_ROUTER_POLICY:-shortest_queue}
+# Router on by default when running per-GPU workers
+if [[ "${SGLANG_ONE_WORKER_PER_GPU}" == "1" ]]; then
+  export SGLANG_ENABLE_ROUTER=${SGLANG_ENABLE_ROUTER:-1}
+else
+  export SGLANG_ENABLE_ROUTER=${SGLANG_ENABLE_ROUTER:-0}
+fi
+export SGLANG_ROUTER_POLICY=${SGLANG_ROUTER_POLICY:-cache_aware}
 if [[ "${SGLANG_ENABLE_ROUTER}" == "1" ]]; then
-  export SGLANG_WORKER_PORT=${SGLANG_WORKER_PORT:-$((SGLANG_PORT + 1))}
+  # Validate router policy against supported options and fallback if invalid
+  VALID_ROUTER_POLICIES=(random round_robin cache_aware power_of_two)
+  if ! printf '%s\n' "${VALID_ROUTER_POLICIES[@]}" | grep -qx "${SGLANG_ROUTER_POLICY}"; then
+    echo "[forska] invalid SGLANG_ROUTER_POLICY='${SGLANG_ROUTER_POLICY}' — falling back to 'power_of_two'"
+    SGLANG_ROUTER_POLICY=power_of_two
+  fi
+  # Base port for workers; in per-GPU mode each worker uses base+idx
+  export SGLANG_WORKER_PORT_BASE=${SGLANG_WORKER_PORT_BASE:-$((SGLANG_PORT + 1))}
+  export SGLANG_WORKER_PORT=${SGLANG_WORKER_PORT:-$SGLANG_WORKER_PORT_BASE}
 else
   export SGLANG_WORKER_PORT=${SGLANG_PORT}
 fi
 
 mkdir -p "${HF_HOME}" "${SGLANG_CACHE_DIR}"
 
-if [[ $NNODES -gt 1 ]]; then
-  echo "[forska] starting independent SGLang worker per node (tp=$TP_SIZE, dp=$DP_SIZE)"
+if [[ "${SGLANG_ONE_WORKER_PER_GPU}" == "1" ]]; then
+  echo "[forska] starting one SGLang worker per GPU (tp=1, dp=1)"
   SGLANG_WORKER_SCRIPT="$STACK_ROOT/.cache/sglang/sglang-worker.sh"
   mkdir -p "$(dirname "$SGLANG_WORKER_SCRIPT")"
   cat >"$SGLANG_WORKER_SCRIPT" <<'SGLANG_WORKER'
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Determine this task's local index and port
+WORKER_IDX=${SLURM_LOCALID:-${LOCAL_RANK:-0}}
+WORKER_PORT=$(( ${SGLANG_WORKER_PORT_BASE:-${SGLANG_WORKER_PORT:-30001}} + WORKER_IDX ))
+
+exec apptainer exec --cleanenv --nv \
+  --env HF_HOME=/hf_cache \
+  --bind "$HF_HOME:/hf_cache:rw" \
+  --env SGLANG_CACHE_DIR=/sg_cache \
+  --bind "$SGLANG_CACHE_DIR:/sg_cache:rw" \
+  "${SIF_SGLANG}" \
+  python -m sglang.launch_server \
+    --model-path "${SGLANG_MODEL}" \
+    --host 0.0.0.0 --port "${WORKER_PORT}" \
+    --tensor-parallel-size 1 \
+    --data-parallel-size 1 \
+    --max-running-requests "${SGLANG_MAX_RUNNING_REQUESTS}" \
+    --mem-fraction-static "${SGLANG_MEM_FRACTION}" \
+    --schedule-policy "${SGLANG_SCHEDULE_POLICY}" \
+    --enable-metrics \
+    --download-dir /hf_cache
+SGLANG_WORKER
+  chmod +x "$SGLANG_WORKER_SCRIPT"
+
+  NODELIST=$(printf "%s," "${HOSTS[@]}" | sed 's/,$//')
+  # Launch one task per GPU per node; Slurm will bind each task to one GPU
+  srun --nodes="$NNODES" \
+       --ntasks-per-node="$GPUS_PER_NODE" \
+       --gpus-per-task=1 \
+       --gpu-bind=single:1 \
+       --nodelist="$NODELIST" \
+       --export=ALL \
+       --output "$LOG_DIR/sglang-%N-%t.log" \
+       bash -lc "$SGLANG_WORKER_SCRIPT" &
+  SGLANG_SRUN_PID=$!
+else
+  if [[ $NNODES -gt 1 ]]; then
+    echo "[forska] starting independent SGLang worker per node (tp=$TP_SIZE, dp=$DP_SIZE)"
+    SGLANG_WORKER_SCRIPT="$STACK_ROOT/.cache/sglang/sglang-worker.sh"
+    mkdir -p "$(dirname "$SGLANG_WORKER_SCRIPT")"
+    cat >"$SGLANG_WORKER_SCRIPT" <<'SGLANG_WORKER'
 #!/usr/bin/env bash
 set -euo pipefail
 exec apptainer exec --cleanenv --nv \
@@ -446,48 +517,68 @@ exec apptainer exec --cleanenv --nv \
     --enable-metrics \
     --download-dir /hf_cache
 SGLANG_WORKER
-  chmod +x "$SGLANG_WORKER_SCRIPT"
-  NODELIST=$(printf "%s," "${HOSTS[@]}" | sed 's/,$//')
-  srun --nodes="$NNODES" --ntasks="$NNODES" \
-    --nodelist="$NODELIST" \
-    --export=ALL \
-    --output "$LOG_DIR/sglang-%N.log" \
-    bash -lc "$SGLANG_WORKER_SCRIPT" &
-  SGLANG_SRUN_PID=$!
-else
-  echo "[forska] starting SGLang on single node (tp=$TP_SIZE, dp=$DP_SIZE)"
-  apptainer exec --cleanenv --nv \
-    --env HF_HOME=/hf_cache \
-    --bind "$HF_HOME:/hf_cache:rw" \
-    --env SGLANG_CACHE_DIR=/sg_cache \
-    --bind "$SGLANG_CACHE_DIR:/sg_cache:rw" \
-    "$SIF_SGLANG" \
-    python -m sglang.launch_server \
-      --model-path "$SGLANG_MODEL" \
-      --host 0.0.0.0 --port "$SGLANG_WORKER_PORT" \
-      --tensor-parallel-size "$TP_SIZE" \
-      --data-parallel-size "$DP_SIZE" \
-      --max-running-requests "$SGLANG_MAX_RUNNING_REQUESTS" \
-      --mem-fraction-static "$SGLANG_MEM_FRACTION" \
-      --schedule-policy "$SGLANG_SCHEDULE_POLICY" \
-      --enable-metrics \
-      --download-dir /hf_cache \
-    >"$LOG_DIR/sglang.log" 2>&1 &
-  SGLANG_PID=$!
+    chmod +x "$SGLANG_WORKER_SCRIPT"
+    NODELIST=$(printf "%s," "${HOSTS[@]}" | sed 's/,$//')
+    srun --nodes="$NNODES" --ntasks="$NNODES" \
+      --nodelist="$NODELIST" \
+      --export=ALL \
+      --output "$LOG_DIR/sglang-%N.log" \
+      bash -lc "$SGLANG_WORKER_SCRIPT" &
+    SGLANG_SRUN_PID=$!
+  else
+    echo "[forska] starting SGLang on single node (tp=$TP_SIZE, dp=$DP_SIZE)"
+    apptainer exec --cleanenv --nv \
+      --env HF_HOME=/hf_cache \
+      --bind "$HF_HOME:/hf_cache:rw" \
+      --env SGLANG_CACHE_DIR=/sg_cache \
+      --bind "$SGLANG_CACHE_DIR:/sg_cache:rw" \
+      "$SIF_SGLANG" \
+      python -m sglang.launch_server \
+        --model-path "$SGLANG_MODEL" \
+        --host 0.0.0.0 --port "$SGLANG_WORKER_PORT" \
+        --tensor-parallel-size "$TP_SIZE" \
+        --data-parallel-size "$DP_SIZE" \
+        --max-running-requests "$SGLANG_MAX_RUNNING_REQUESTS" \
+        --mem-fraction-static "$SGLANG_MEM_FRACTION" \
+        --schedule-policy "$SGLANG_SCHEDULE_POLICY" \
+        --enable-metrics \
+        --download-dir /hf_cache \
+      >"$LOG_DIR/sglang.log" 2>&1 &
+    SGLANG_PID=$!
+  fi
 fi
 
 WORKER_WAIT_PID="${SGLANG_PID:-${SGLANG_SRUN_PID:-}}"
-wait_for_http "SGLang worker" "http://localhost:${SGLANG_WORKER_PORT}/v1/models" 1200 "$WORKER_WAIT_PID" || true
+if [[ "${SGLANG_ONE_WORKER_PER_GPU}" == "1" ]]; then
+  # Probe first worker only
+  wait_for_http "SGLang worker[0]" "http://localhost:${SGLANG_WORKER_PORT_BASE}/v1/models" 1200 "$WORKER_WAIT_PID" || true
+else
+  wait_for_http "SGLang worker" "http://localhost:${SGLANG_WORKER_PORT}/v1/models" 1200 "$WORKER_WAIT_PID" || true
+fi
 
 if [[ "${SGLANG_ENABLE_ROUTER}" == "1" ]]; then
   if [[ -z "${SGLANG_ROUTER_WORKER_URLS:-}" ]]; then
     ROUTER_WORKERS_AUTO=()
-    if [[ $NNODES -gt 1 ]]; then
-      for node_host in "${HOSTS[@]}"; do
-        ROUTER_WORKERS_AUTO+=("http://${node_host}:${SGLANG_WORKER_PORT}")
-      done
+    if [[ "${SGLANG_ONE_WORKER_PER_GPU}" == "1" ]]; then
+      if [[ $NNODES -gt 1 ]]; then
+        for node_host in "${HOSTS[@]}"; do
+          for ((gi=0; gi<GPUS_PER_NODE; gi++)); do
+            ROUTER_WORKERS_AUTO+=("http://${node_host}:$((SGLANG_WORKER_PORT_BASE + gi))")
+          done
+        done
+      else
+        for ((gi=0; gi<GPUS_PER_NODE; gi++)); do
+          ROUTER_WORKERS_AUTO+=("http://127.0.0.1:$((SGLANG_WORKER_PORT_BASE + gi))")
+        done
+      fi
     else
-      ROUTER_WORKERS_AUTO+=("http://127.0.0.1:${SGLANG_WORKER_PORT}")
+      if [[ $NNODES -gt 1 ]]; then
+        for node_host in "${HOSTS[@]}"; do
+          ROUTER_WORKERS_AUTO+=("http://${node_host}:${SGLANG_WORKER_PORT}")
+        done
+      else
+        ROUTER_WORKERS_AUTO+=("http://127.0.0.1:${SGLANG_WORKER_PORT}")
+      fi
     fi
     SGLANG_ROUTER_WORKER_URLS="${ROUTER_WORKERS_AUTO[*]}"
     unset -v ROUTER_WORKERS_AUTO
