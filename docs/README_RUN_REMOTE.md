@@ -235,6 +235,7 @@ Environment variables
 - `SGLANG_MODEL` (default: `Qwen/Qwen3-30B-A3B-Instruct-2507`)
 - `SGLANG_PORT` (default: `30000`)
 - `SGLANG_MAX_RUNNING_REQUESTS` (default: `64`)
+- `SGLANG_CHUNKED_PREFILL_SIZE` (default: `4096`) – passed to `--chunked-prefill-size`
 - `SGLANG_MEM_FRACTION` (default: `0.92`)
 - `SGLANG_SCHEDULE_POLICY` (default: `lpm`)
 - `GPUS_PER_NODE` (auto from Slurm; override if needed)

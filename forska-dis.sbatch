@@ -427,6 +427,7 @@ export SGLANG_MODEL=${SGLANG_MODEL:-Qwen/Qwen3-30B-A3B-Instruct-2507}
 export SGLANG_MAX_RUNNING_REQUESTS
 export SGLANG_MEM_FRACTION=${SGLANG_MEM_FRACTION:-0.92}
 export SGLANG_SCHEDULE_POLICY=${SGLANG_SCHEDULE_POLICY:-lpm}
+export SGLANG_CHUNKED_PREFILL_SIZE=${SGLANG_CHUNKED_PREFILL_SIZE:-16384}
 # Router on by default when running per-GPU workers
 if [[ "${SGLANG_ONE_WORKER_PER_GPU}" == "1" ]]; then
   export SGLANG_ENABLE_ROUTER=${SGLANG_ENABLE_ROUTER:-1}
@@ -474,6 +475,7 @@ exec apptainer exec --cleanenv --nv \
     --tensor-parallel-size 1 \
     --data-parallel-size 1 \
     --max-running-requests "${SGLANG_MAX_RUNNING_REQUESTS}" \
+    --chunked-prefill-size "${SGLANG_CHUNKED_PREFILL_SIZE}" \
     --mem-fraction-static "${SGLANG_MEM_FRACTION}" \
     --schedule-policy "${SGLANG_SCHEDULE_POLICY}" \
     --enable-metrics \
@@ -512,6 +514,7 @@ exec apptainer exec --cleanenv --nv \
     --tensor-parallel-size "${TP_SIZE}" \
     --data-parallel-size "${DP_SIZE}" \
     --max-running-requests "${SGLANG_MAX_RUNNING_REQUESTS}" \
+    --chunked-prefill-size "${SGLANG_CHUNKED_PREFILL_SIZE}" \
     --mem-fraction-static "${SGLANG_MEM_FRACTION}" \
     --schedule-policy "${SGLANG_SCHEDULE_POLICY}" \
     --enable-metrics \
@@ -539,6 +542,7 @@ SGLANG_WORKER
         --tensor-parallel-size "$TP_SIZE" \
         --data-parallel-size "$DP_SIZE" \
         --max-running-requests "$SGLANG_MAX_RUNNING_REQUESTS" \
+        --chunked-prefill-size "$SGLANG_CHUNKED_PREFILL_SIZE" \
         --mem-fraction-static "$SGLANG_MEM_FRACTION" \
         --schedule-policy "$SGLANG_SCHEDULE_POLICY" \
         --enable-metrics \
