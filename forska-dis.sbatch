@@ -277,7 +277,7 @@ export TP_SIZE DP_SIZE TOTAL_GPUS NNODES GPUS_PER_NODE GPUS_PER_ENGINE SGLANG_ON
 # If user did not set an explicit concurrency cap, default to 256 per engine.
 if [[ -z "${SGLANG_MAX_RUNNING_REQUESTS:-}" ]]; then
   # A safer default for H200/A100‑80G with 30B class models
-  SGLANG_MAX_RUNNING_REQUESTS=800
+  SGLANG_MAX_RUNNING_REQUESTS=400
   echo "[forska] defaulting max-running-requests to $SGLANG_MAX_RUNNING_REQUESTS (per engine)"
 fi
 
