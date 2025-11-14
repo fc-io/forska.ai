@@ -88,6 +88,10 @@ const loadEnv = (): typeof envShape.infer => {
   if (!('WORKER_URLS' in merged)) {
     ;(merged as Record<string, undefined>).WORKER_URLS = undefined
   }
+  // Ensure optional BETTER_AUTH_URL key exists even when not provided
+  if (!('BETTER_AUTH_URL' in merged)) {
+    ;(merged as Record<string, undefined>).BETTER_AUTH_URL = undefined
+  }
   // Provide a stable default when GPU_SHAPE is not provided
   if (merged.GPU_SHAPE == null || String(merged.GPU_SHAPE).trim() === '') {
     ;(merged as Record<string, string>).GPU_SHAPE = 'not set'
