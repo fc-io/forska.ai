@@ -277,7 +277,7 @@ export TP_SIZE DP_SIZE TOTAL_GPUS NNODES GPUS_PER_NODE GPUS_PER_ENGINE SGLANG_ON
 # If user did not set an explicit concurrency cap, default to 256 per engine.
 if [[ -z "${SGLANG_MAX_RUNNING_REQUESTS:-}" ]]; then
   # A safer default for H200/A100‑80G with 30B class models
-  SGLANG_MAX_RUNNING_REQUESTS=400
+  SGLANG_MAX_RUNNING_REQUESTS=256
   echo "[forska] defaulting max-running-requests to $SGLANG_MAX_RUNNING_REQUESTS (per engine)"
 fi
 
@@ -396,6 +396,12 @@ graceful_shutdown() {
       jobs -pr | xargs -r kill -KILL || true
     fi
   fi
+
+  # Remove per-job worker script to avoid collisions across runs
+  if [[ -n "${SGLANG_WORKER_DIR:-}" && -d "${SGLANG_WORKER_DIR}" ]]; then
+    rm -f "${SGLANG_WORKER_DIR}/sglang-worker.sh" 2>/dev/null || true
+    rmdir "${SGLANG_WORKER_DIR}" 2>/dev/null || true
+  fi
 }
 trap 'graceful_shutdown EXIT' EXIT
 trap 'graceful_shutdown SIGNAL' INT TERM
@@ -453,8 +459,10 @@ mkdir -p "${HF_HOME}" "${SGLANG_CACHE_DIR}"
 
 if [[ "${SGLANG_ONE_WORKER_PER_GPU}" == "1" ]]; then
   echo "[forska] starting one SGLang worker per GPU (tp=1, dp=1)"
-  SGLANG_WORKER_SCRIPT="$STACK_ROOT/.cache/sglang/sglang-worker.sh"
-  mkdir -p "$(dirname "$SGLANG_WORKER_SCRIPT")"
+  # Use a per-job path to avoid ETXTBUSY if another job is executing the same script
+  SGLANG_WORKER_DIR="$STACK_ROOT/.cache/sglang/${SLURM_JOB_ID:-manual}"
+  SGLANG_WORKER_SCRIPT="$SGLANG_WORKER_DIR/sglang-worker.sh"
+  mkdir -p "$SGLANG_WORKER_DIR"
   cat >"$SGLANG_WORKER_SCRIPT" <<'SGLANG_WORKER'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -482,6 +490,8 @@ exec apptainer exec --cleanenv --nv \
     --download-dir /hf_cache
 SGLANG_WORKER
   chmod +x "$SGLANG_WORKER_SCRIPT"
+  # Help network FS flush metadata before distributed exec
+  sync || true
 
   NODELIST=$(printf "%s," "${HOSTS[@]}" | sed 's/,$//')
   # Launch one task per GPU per node; Slurm will bind each task to one GPU
@@ -497,8 +507,10 @@ SGLANG_WORKER
 else
   if [[ $NNODES -gt 1 ]]; then
     echo "[forska] starting independent SGLang worker per node (tp=$TP_SIZE, dp=$DP_SIZE)"
-    SGLANG_WORKER_SCRIPT="$STACK_ROOT/.cache/sglang/sglang-worker.sh"
-    mkdir -p "$(dirname "$SGLANG_WORKER_SCRIPT")"
+    # Use a per-job path to avoid ETXTBUSY if another job is executing the same script
+    SGLANG_WORKER_DIR="$STACK_ROOT/.cache/sglang/${SLURM_JOB_ID:-manual}"
+    SGLANG_WORKER_SCRIPT="$SGLANG_WORKER_DIR/sglang-worker.sh"
+    mkdir -p "$SGLANG_WORKER_DIR"
     cat >"$SGLANG_WORKER_SCRIPT" <<'SGLANG_WORKER'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -521,6 +533,8 @@ exec apptainer exec --cleanenv --nv \
     --download-dir /hf_cache
 SGLANG_WORKER
     chmod +x "$SGLANG_WORKER_SCRIPT"
+    # Help network FS flush metadata before distributed exec
+    sync || true
     NODELIST=$(printf "%s," "${HOSTS[@]}" | sed 's/,$//')
     srun --nodes="$NNODES" --ntasks="$NNODES" \
       --nodelist="$NODELIST" \

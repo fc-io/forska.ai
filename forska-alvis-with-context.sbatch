@@ -360,6 +360,11 @@ graceful_shutdown() {
       jobs -pr | xargs -r kill -KILL || true
     fi
   fi
+  # Remove per-job worker script to avoid collisions across runs
+  if [[ -n "${SGLANG_WORKER_DIR:-}" && -d "${SGLANG_WORKER_DIR}" ]]; then
+    rm -f "${SGLANG_WORKER_DIR}/sglang-worker.sh" 2>/dev/null || true
+    rmdir "${SGLANG_WORKER_DIR}" 2>/dev/null || true
+  fi
 }
 trap 'graceful_shutdown EXIT' EXIT
 trap 'graceful_shutdown SIGNAL' INT TERM
@@ -403,8 +408,10 @@ mkdir -p "${HF_HOME}" "${SGLANG_CACHE_DIR}"
 
 if [[ $NNODES -gt 1 ]]; then
   echo "[forska] starting independent SGLang worker per node (tp=$TP_SIZE, dp=$DP_SIZE)"
-  SGLANG_WORKER_SCRIPT="$STACK_ROOT/.cache/sglang/sglang-worker.sh"
-  mkdir -p "$(dirname "$SGLANG_WORKER_SCRIPT")"
+  # Use a per-job path to avoid ETXTBUSY if another job is executing the same script
+  SGLANG_WORKER_DIR="$STACK_ROOT/.cache/sglang/${SLURM_JOB_ID:-manual}"
+  SGLANG_WORKER_SCRIPT="$SGLANG_WORKER_DIR/sglang-worker.sh"
+  mkdir -p "$SGLANG_WORKER_DIR"
   cat >"$SGLANG_WORKER_SCRIPT" <<'SGLANG_WORKER'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -427,6 +434,8 @@ exec apptainer exec --cleanenv --nv \
     --download-dir /hf_cache
 SGLANG_WORKER
   chmod +x "$SGLANG_WORKER_SCRIPT"
+  # Help network FS flush metadata before distributed exec
+  sync || true
   NODELIST=$(printf "%s," "${HOSTS[@]}" | sed 's/,$//')
   srun --nodes="$NNODES" --ntasks="$NNODES" \
     --nodelist="$NODELIST" \
