@@ -62,6 +62,20 @@ const getEnvWithFileFallback = (): Record<string, string | undefined> => {
 
 const loadEnv = (): typeof envShape.infer => {
   const merged = getEnvWithFileFallback()
+  const dbUrlRaw = merged.DATABASE_URL
+  const fileVar = process.env.DATABASE_URL_FILE
+  const fileExists = fileVar ? existsSync(fileVar) : false
+  const isEmpty = (v: unknown): boolean => {
+    const s = String(v ?? '').trim()
+    return s.length === 0
+  }
+  if (dbUrlRaw == null || isEmpty(dbUrlRaw)) {
+    const fileInfo = fileVar ? `${fileVar} (exists: ${fileExists ? 'yes' : 'no'})` : 'unset'
+    const envInfo = process.env.DATABASE_URL ? 'set (empty/whitespace)' : 'unset'
+    console.error(
+      `[env] DATABASE_URL missing; DATABASE_URL=${envInfo}; DATABASE_URL_FILE=${fileInfo}`,
+    )
+  }
   // Default to true when not provided
   if (merged.RUN_SERVER_JUDGING == null || merged.RUN_SERVER_JUDGING === '') {
     // string form to satisfy shape before parsing to boolean via pipe
