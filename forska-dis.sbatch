@@ -627,6 +627,7 @@ API_ENVS=(--env DATABASE_URL_FILE=/run/secrets/database_url)
 apptainer run --cleanenv \
   "${API_BINDS[@]}" \
   "${API_ENVS[@]}" \
+  --env BUN_CONFIG_MAX_HTTP_REQUESTS="${BUN_CONFIG_MAX_HTTP_REQUESTS:-1024}" \
   --env VITE_LLM_SERVER_URL="$VITE_LLM_SERVER_URL" \
   --env VITE_SERVER_API="http://localhost:${API_SERVER_PORT}" \
   --env API_SERVER_PORT="$API_SERVER_PORT" \
