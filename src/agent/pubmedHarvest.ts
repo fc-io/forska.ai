@@ -141,13 +141,19 @@ const buildQuery = (from: string, to: string): string => {
 }
 
 const europePmcFetchTimeoutMs = 20_000
-const europePmcRetryDelayMs = 5_000
+const europePmcRetryDelays = [
+  10_000, // 10 seconds
+  60_000, // 1 minute
+  600_000, // 10 minutes
+  1_200_000, // 20 minutes
+  1_800_000, // 30 minutes
+  3_600_000, // 1 hour
+]
 
 const fetchWithTimeoutAndRetry = (
   url: URL,
   timeoutMs: number,
-  maxRetries: number,
-  retryDelayMs: number,
+  retryDelays: number[],
 ): Promise<Response> => {
   const attempt = (i: number): Promise<Response> => {
     const controller = new AbortController()
@@ -159,20 +165,28 @@ const fetchWithTimeoutAndRetry = (
     })
     return p.then(
       (res) => {
-        return res.ok
-          ? res
-          : i < maxRetries
-            ? sleep(retryDelayMs).then(() => {
-                return attempt(i + 1)
-              })
-            : Promise.reject(new Error(`Europe PMC HTTP ${res.status}`))
+        if (res.ok) return res
+
+        const delay = retryDelays[i]
+        if (delay === undefined) {
+          return Promise.reject(new Error(`Europe PMC HTTP ${res.status}`))
+        }
+
+        console.log(
+          `Request failed with status ${res.status}. Retrying in ${delay / 1000}s (attempt ${i + 1}/${retryDelays.length})`,
+        )
+        return sleep(delay).then(() => attempt(i + 1))
       },
       (err) => {
-        return i < maxRetries
-          ? sleep(retryDelayMs).then(() => {
-              return attempt(i + 1)
-            })
-          : Promise.reject(err)
+        const delay = retryDelays[i]
+        if (delay === undefined) {
+          return Promise.reject(err)
+        }
+
+        console.log(
+          `Request failed: ${String(err)}. Retrying in ${delay / 1000}s (attempt ${i + 1}/${retryDelays.length})`,
+        )
+        return sleep(delay).then(() => attempt(i + 1))
       },
     )
   }
@@ -191,7 +205,7 @@ const fetchEuropePmc = async (
   url.searchParams.set('pageSize', String(pageSize))
   if (cursorMark) url.searchParams.set('cursorMark', cursorMark)
   // console.log('fetching', url.toString())
-  const res = await fetchWithTimeoutAndRetry(url, europePmcFetchTimeoutMs, 1, europePmcRetryDelayMs)
+  const res = await fetchWithTimeoutAndRetry(url, europePmcFetchTimeoutMs, europePmcRetryDelays)
   const json: unknown = await res.json()
   const parsed = EuropePmcResponse(json)
   if (parsed instanceof type.errors) {
