@@ -12,7 +12,7 @@ const getGPUTypeMultiplier = (): number => {
   const gpuType = parseGpuFamily(env.GPU_SHAPE)
   console.log('gpuType', gpuType)
   if (gpuType === 'H200') {
-    return 3
+    return 4
   } else if (gpuType === 'A100-SXM4-80GB') {
     return 1.2
     // we only run A100 with tp=2

@@ -26,3 +26,8 @@ ps aux | grep apptainer
 ``` bash
 squeue -u $USER -O jobid,state,timeused,timelimit,timeleft,nodelist
 ```
+
+## how to run nvidia-smi for a node sbatch job
+``` bash
+ srun --jobid=2617 -N1 -n1 nvidia-smi
+ ```
