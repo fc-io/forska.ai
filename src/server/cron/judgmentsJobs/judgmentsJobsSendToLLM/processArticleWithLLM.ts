@@ -19,7 +19,7 @@ const judgeAndMark = async (
   }>,
 ): Promise<void> => {
   const sessionId = null
-  const randomDelay = Math.floor(Math.random() * (150 - 100 + 1)) + 100
+  const randomDelay = Math.floor(Math.random() * 1001)
   await new Promise((resolve) => {
     return setTimeout(resolve, randomDelay)
   })
