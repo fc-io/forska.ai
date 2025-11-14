@@ -6,7 +6,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --ntasks-per-core=1
 #SBATCH --cpus-per-task=16
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:8
 #SBATCH --time=01:00:00
 #SBATCH -o %x-%j.log
 #SBATCH --export=ALL
