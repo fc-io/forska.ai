@@ -12,9 +12,9 @@ apptainer run --cleanenv --writable-tmpfs \
   --env POSTGRES_PASSWORD_FILE=/run/secrets/db_password \
   --env POSTGRES_DB=postgres \
   --env PGPORT=5433 \
-  --bind /mimer/NOBACKUP/groups/clin-agent-bench/dev/pgdata:/var/lib/postgresql \
-  --bind /mimer/NOBACKUP/groups/clin-agent-bench/dev/.secrets/db_password.txt:/run/secrets/db_password:ro \
-  /mimer/NOBACKUP/groups/clin-agent-bench/dev/postgres_18.sif
+  --bind ${STACK_ROOT:-.}/pgdata:/var/lib/postgresql \
+  --bind ${STACK_ROOT:-.}/.secrets/db_password.txt:/run/secrets/db_password:ro \
+  ${STACK_ROOT:-.}/postgres_18.sif
 ```
 
 Make the remote postgres host/port available on the local machine:
@@ -22,6 +22,13 @@ Make the remote postgres host/port available on the local machine:
 ``` bash
 ssh -N -L 8432:127.0.0.1:5433 alvis2
 ```
+
+or
+
+``` bash
+ssh -N -L 8432:127.0.0.1:5433 dis
+```
+
 
 if something is conflicting with the local port check by:
 

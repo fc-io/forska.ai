@@ -5,7 +5,12 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --ntasks-per-core=1
-#SBATCH --cpus-per-task=28
+# Prefer per-GPU workers via submit-time overrides:
+#   sbatch --ntasks-per-node=${GPUS_PER_NODE} --gpus-per-task=1 --cpus-per-task=8 --hint=nomultithread forska-dis.sbatch
+# Default to modest CPU per task to avoid cgroup contention when not overriding
+# (increase via submit-time if needed)
+#SBATCH --cpus-per-task=8
+#SBATCH --hint=nomultithread
 #SBATCH --gres=gpu:2
 #SBATCH --time=03:00:00
 #SBATCH -o %x-%j.log
@@ -266,6 +271,7 @@ export TP_SIZE DP_SIZE TOTAL_GPUS NNODES GPUS_PER_NODE GPUS_PER_ENGINE
 
 # If user did not set an explicit concurrency cap, default to 256 per engine.
 if [[ -z "${SGLANG_MAX_RUNNING_REQUESTS:-}" ]]; then
+  # A safer default for H200/A100‑80G with 30B class models
   SGLANG_MAX_RUNNING_REQUESTS=800
   echo "[forska] defaulting max-running-requests to $SGLANG_MAX_RUNNING_REQUESTS (per engine)"
 fi
@@ -411,8 +417,8 @@ export SGLANG_MODEL=${SGLANG_MODEL:-Qwen/Qwen3-30B-A3B-Instruct-2507}
 export SGLANG_MAX_RUNNING_REQUESTS
 export SGLANG_MEM_FRACTION=${SGLANG_MEM_FRACTION:-0.92}
 export SGLANG_SCHEDULE_POLICY=${SGLANG_SCHEDULE_POLICY:-lpm}
-export SGLANG_ENABLE_ROUTER=${SGLANG_ENABLE_ROUTER:-1}
-export SGLANG_ROUTER_POLICY=${SGLANG_ROUTER_POLICY:-cache_aware}
+export SGLANG_ENABLE_ROUTER=${SGLANG_ENABLE_ROUTER:-0}
+export SGLANG_ROUTER_POLICY=${SGLANG_ROUTER_POLICY:-shortest_queue}
 if [[ "${SGLANG_ENABLE_ROUTER}" == "1" ]]; then
   export SGLANG_WORKER_PORT=${SGLANG_WORKER_PORT:-$((SGLANG_PORT + 1))}
 else

@@ -48,11 +48,13 @@ const main = async (): Promise<void> => {
   const stackRoot = env.STACK_ROOT
   const remote = parseDbUrl(env.REMOTE_DATABASE_URL)
   mkdirSync('backups', {recursive: true})
+  // Ensure remote backups directory exists (outside container)
   await $.nothrow()`ssh ${sshAlias} mkdir -p ${stackRoot}/backups`
   const remoteDump = `${stackRoot}/backups/dump_remote_${remote.db}_${nowStamp()}.dump`
   log('Creating remote dump via Apptainer (pg_dump)')
+  // Bind ${stackRoot} so the absolute path is visible inside the container
   const dump =
-    await $.nothrow()`ssh ${sshAlias} apptainer exec --env PGPASSWORD=${remote.pass} docker://postgres:18 pg_dump -h ${remote.host} -p ${remote.port} -U ${remote.user} -d ${remote.db} -Fc -Z 9 -f ${remoteDump}`
+    await $.nothrow()`ssh ${sshAlias} apptainer exec --bind ${stackRoot}:${stackRoot} --env PGPASSWORD=${remote.pass} docker://postgres:18 pg_dump -h ${remote.host} -p ${remote.port} -U ${remote.user} -d ${remote.db} -Fc -Z 9 -f ${remoteDump}`
   if (dump.exitCode !== 0) fail('remote pg_dump failed')
   log('Copying remote dump to local backups/')
   const pull = await $.nothrow()`scp ${sshAlias}:${remoteDump} backups/`

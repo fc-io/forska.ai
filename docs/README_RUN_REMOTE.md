@@ -157,7 +157,7 @@ apptainer exec --cleanenv --nv \
     --model-path Qwen/Qwen3-30B-A3B-Instruct-2507 \
     --host 0.0.0.0 --port 30000 \
     --tensor-parallel-size 1 \
-    --max-running-requests 64 \
+    --max-running-requests 196 \
     --mem-fraction-static 0.92 \
     --schedule-policy lpm \
     --enable-metrics \
@@ -176,7 +176,7 @@ apptainer exec --cleanenv --nv \
     --model-path Qwen/Qwen3-30B-A3B-Instruct-2507 \
     --host 0.0.0.0 --port 30000 \
     --tensor-parallel-size 2 \
-    --max-running-requests 64 \
+    --max-running-requests 128 \
     --mem-fraction-static 0.92 \
     --schedule-policy lpm \
     --enable-metrics \
