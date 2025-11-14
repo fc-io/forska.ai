@@ -5,7 +5,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --ntasks-per-core=1
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=28
 #SBATCH --gres=gpu:2
 #SBATCH --time=03:00:00
 #SBATCH -o %x-%j.log
@@ -266,7 +266,7 @@ export TP_SIZE DP_SIZE TOTAL_GPUS NNODES GPUS_PER_NODE GPUS_PER_ENGINE
 
 # If user did not set an explicit concurrency cap, default to 256 per engine.
 if [[ -z "${SGLANG_MAX_RUNNING_REQUESTS:-}" ]]; then
-  SGLANG_MAX_RUNNING_REQUESTS=400
+  SGLANG_MAX_RUNNING_REQUESTS=800
   echo "[forska] defaulting max-running-requests to $SGLANG_MAX_RUNNING_REQUESTS (per engine)"
 fi
 
