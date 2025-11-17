@@ -13,7 +13,6 @@
 - [ ] Indexes/constraints:
   - [ ] Unique index: `uniqueIndex('articles_openalex_id_unique').on(openalexId)`
   - [ ] Skip optional indexes on `doi` and `cited_by_count` for now (can revisit later).
-- [ ] Do not write to `articles.import_route`. Always link imports via `import_route` + `article_route_link` (as current arXiv/PubMed code does).
 - [ ] Generate + run migrations: `bun run db:gen && bun run db:mig`
 
 **Routes**
@@ -116,3 +115,6 @@
 - [ ] Register route in `src/server/routes/DataSourcesImportRoutes.ts`
 - [ ] Ensure `OPENALEX_MAILTO` in `.env.local`
 - [ ] Run: `bun run dev:server` and smoke test with a datasource id
+
+**Checks after implementation**
+- [ ] Do not write to `articles.import_route`. Always link imports via `import_route` + `article_route_link` (as current arXiv/PubMed code does).
