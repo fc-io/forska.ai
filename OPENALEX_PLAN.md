@@ -13,9 +13,6 @@
 - [ ] Update `src/db/schema.ts` to add OpenAlex columns on `articles`:
   - [ ] `openalexId: text('openalex_id')` (unique)
   - [ ] `openAccess: boolean('open_access').default(false)`
-  - [ ] `citedByCount: integer('cited_by_count').default(0)`
-  - [ ] `language: text('language')`
-  - [ ] `venue: text('venue')` (host venue/journal)
   - [ ] `updatedAtSource: timestamp('updated_at_source', { withTimezone: true })`
   - [ ] `concepts: jsonb('concepts')` (raw array from OpenAlex)
 - [ ] Indexes/constraints:
@@ -39,12 +36,10 @@
 - [ ] Signature: `export const openalexHarvest = async (input: InputData): Promise<void>` using `InputData` from `arxivWorkflow/arxivWorkflowHarvest.ts` (`{ fromDate: string; toDate: string; importRoute: string }` where dates are `yyyy-MM-dd`).
 - [ ] Build OpenAlex Works query:
   - [ ] Endpoint: `https://api.openalex.org/works`
-  - [ ] Required param: `mailto=${process.env.OPENALEX_MAILTO}`
+  - [ ] Required param: `mailto=${env.OPENALEX_MAILTO}`
   - [ ] `filter`: `from_publication_date:{fromDate},to_publication_date:{toDate},type:journal-article,is_paratext:false`
   - [ ] `per-page=200`, `cursor=*` (follow `meta.next_cursor` until exhausted)
   - [ ] `select`: `id,title,abstract,abstract_inverted_index,authorships,publication_date,updated_date,doi,primary_location,open_access,cited_by_count,language,host_venue,concepts`
-  - [ ] Example URL template:
-        `https://api.openalex.org/works?filter=from_publication_date:{fromDate},to_publication_date:{toDate},type:journal-article,is_paratext:false&per-page=200&cursor=*&mailto=${process.env.OPENALEX_MAILTO}&select=id,title,abstract,abstract_inverted_index,authorships,publication_date,updated_date,doi,primary_location,open_access,cited_by_count,language,host_venue,concepts`
 - [ ] Rate limiting/backoff:
   - [ ] Global rate limit: cap at 10 requests/second to OpenAlex.
   - [ ] On 429, honor `Retry-After` if present; otherwise use the exponential delays below.
