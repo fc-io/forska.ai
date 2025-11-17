@@ -1,3 +1,4 @@
+import {sql} from 'drizzle-orm'
 import {
   bigint,
   boolean,
@@ -12,7 +13,6 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core'
 import {primaryKey} from 'drizzle-orm/pg-core'
-import {sql} from 'drizzle-orm'
 import {index, uniqueIndex} from 'drizzle-orm/pg-core/indexes'
 
 import {session, user} from '../../auth-schema.ts'
