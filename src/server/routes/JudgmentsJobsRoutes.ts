@@ -8,10 +8,10 @@ import {
   judgments,
   judgmentsJobs,
   judgmentsJobsArticles,
+  projectPrompts,
   projectRouteLink,
   projects,
   prompts,
-  projectPrompts,
   tokenUse,
 } from '../../db/schema'
 import {getDatabase} from '../utils/getDatabase'
@@ -111,17 +111,39 @@ const getUnassessedArticlesCount = async ({
   }
 
   const dateConditions = buildProjectDateConditions({projectDateFrom, projectDateTo})
-  const conditions: SQL[] = [buildProjectPromptCondition(projectId, projectModelId), ...dateConditions]
+
+  // Join-based rewrite: project prompts + left join judgments; count DISTINCT articles missing a judgment
+  const allConditions: SQL[] = [sql`${judgments.id} IS NULL`, ...dateConditions]
+
+  console.time('getUnassessedArticlesCount')
+
+  let countQuery = db
+    .select({count: sql<number>`COUNT(DISTINCT ${articles.id})`})
+    .from(articles)
+    .innerJoin(projectPrompts, eq(projectPrompts.projectId, projectId))
+    .leftJoin(
+      judgments,
+      sql`${judgments.articleId} = ${articles.id} AND ${judgments.promptId} = ${projectPrompts.promptId} AND ${judgments.modelId} = ${projectModelId}::uuid`,
+    )
 
   if (importRouteIds.length > 0) {
-    conditions.push(buildProjectRouteCondition(importRouteIds))
+    // Restrict via article_route_link and allowed route ids
+    countQuery = countQuery
+      .innerJoin(articleRouteLink, eq(articleRouteLink.articleId, articles.id))
+      .where(
+        sql`${sql.join(allConditions, sql` AND `)} AND ${articleRouteLink.importRouteId} = ANY(ARRAY[${sql.join(
+          importRouteIds.map((id) => {
+            return sql`${id}::uuid`
+          }),
+          sql`,`,
+        )}])`,
+      )
+  } else {
+    countQuery = countQuery.where(sql`${sql.join(allConditions, sql` AND `)}`)
   }
 
-  const [{count: unassessedCount = 0} = {count: 0}] = await db
-    .select({count: sql<number>`COUNT(*)`})
-    .from(articles)
-    .where(sql`${sql.join(conditions, sql` AND `)}`)
-
+  const [{count: unassessedCount = 0} = {count: 0}] = await countQuery
+  console.timeEnd('getUnassessedArticlesCount')
   const value = Number(unassessedCount)
   unassessedCountCache.set(cacheKey, {value, expiresAt: now + unassessedCountTTLms})
   return value
@@ -373,7 +395,10 @@ export const judgmentsJobsRoutes = new Elysia()
     async ({query}) => {
       const db = getDatabase()
 
-      const {projectDateFrom, projectDateTo, importRouteIds, projectModelId, job} = await getJobContext({db, jobId: query.jobId})
+      const {projectDateFrom, projectDateTo, importRouteIds, projectModelId, job} = await getJobContext({
+        db,
+        jobId: query.jobId,
+      })
 
       const count = await getUnassessedArticlesCount({
         db,
@@ -393,7 +418,10 @@ export const judgmentsJobsRoutes = new Elysia()
     async ({query}) => {
       const db = getDatabase()
 
-      const {projectDateFrom, projectDateTo, importRouteIds, projectModelId, job} = await getJobContext({db, jobId: query.jobId})
+      const {projectDateFrom, projectDateTo, importRouteIds, projectModelId, job} = await getJobContext({
+        db,
+        jobId: query.jobId,
+      })
 
       const unassessedArticles = await getUnassessedArticles({
         db,
