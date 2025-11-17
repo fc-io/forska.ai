@@ -39,6 +39,7 @@ const envShape = arktype({
   DATABASE_URL: 'string',
   BETTER_AUTH_SECRET: 'string',
   BETTER_AUTH_URL: 'string | null | undefined',
+  OPENALEX_MAILTO: 'string',
   VITE_PORT: 'number | string.integer.parse',
   API_SERVER_PORT: 'number | string.integer.parse',
   RUN_SERVER_FULL_TEST_FETCHING: arktype('"true" | "false" | boolean').pipe((v) => {

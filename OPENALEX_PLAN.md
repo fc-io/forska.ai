@@ -5,7 +5,7 @@
 
 **Env & Config**
 - [x] Env: Requires only `OPENALEX_MAILTO`
-- [ ] Implement the use of OPENALEX_MAILTO in @src/server/utils/env.ts
+- [x] Implement the use of OPENALEX_MAILTO in @src/server/utils/env.ts
 
 **Data Model (No New Tables)**
 - [ ] Update `src/db/schema.ts` to add OpenAlex columns on `articles`:
