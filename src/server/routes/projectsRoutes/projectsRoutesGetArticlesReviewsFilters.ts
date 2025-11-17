@@ -1,14 +1,14 @@
-import {and, eq, gte, lte, sql} from 'drizzle-orm'
+import {and, eq, gte, inArray, lte, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {
   articleRouteLink,
   articles,
   judgments,
+  projectPrompts,
   projectRouteLink,
   projects,
   prompts,
-  projectPrompts,
 } from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
@@ -30,11 +30,7 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
 
       // Get all prompts for this project
       const projectPromptRows = await db
-        .select({
-          id: prompts.id,
-          promptHeading: prompts.promptHeading,
-          originalText: prompts.originalText,
-        })
+        .select({id: prompts.id, promptHeading: prompts.promptHeading, originalText: prompts.originalText})
         .from(projectPrompts)
         .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
         .where(eq(projectPrompts.projectId, query.projectId))
@@ -60,7 +56,9 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
       }
 
       const routeIdArray = sql.join(
-        projectImportRoutes.map((r) => sql`${r.importRouteId}::uuid`),
+        projectImportRoutes.map((r) => {
+          return sql`${r.importRouteId}::uuid`
+        }),
         sql`,`,
       )
 
@@ -70,45 +68,47 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
           AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
       )`
 
-      // For each prompt, get unique answered_original values (scoped by project constraints and optional filters)
-      const promptFilters = await Promise.all(
-        projectPromptRows.map(async (prompt) => {
-          let scoped = sql`SELECT DISTINCT ${judgments.answeredOriginal} as answered_original
-                FROM ${judgments}
-                INNER JOIN ${articles} ON ${articles.id} = ${judgments.articleId}
-                WHERE ${judgments.promptId} = ${prompt.id}::uuid
-                  AND ${hasMatchingImportRoute}`
+      // Single grouped query across all project prompts for distinct answered_original values
+      const promptIds = projectPromptRows.map((p) => {
+        return p.id
+      })
 
-          if (projectBounds?.dateFrom) {
-            scoped = sql`${scoped} AND ${gte(articles.articleCreatedAt, projectBounds.dateFrom)}`
-          }
-          if (projectBounds?.dateTo) {
-            scoped = sql`${scoped} AND ${lte(articles.articleCreatedAt, projectBounds.dateTo)}`
-          }
-          if (fromDate) {
-            scoped = sql`${scoped} AND ${gte(articles.articleCreatedAt, fromDate)}`
-          }
-          if (toDate) {
-            scoped = sql`${scoped} AND ${lte(articles.articleCreatedAt, toDate)}`
-          }
-          if (searchTitle) {
-            scoped = sql`${scoped} AND ${articles.articleTitle} ILIKE ${'%' + searchTitle + '%'}`
-          }
-          const dateScoped = sql`${scoped} ORDER BY ${judgments.answeredOriginal}`
+      const whereParts: Array<ReturnType<typeof sql>> = [inArray(judgments.promptId, promptIds), hasMatchingImportRoute]
+      if (projectBounds?.dateFrom) whereParts.push(gte(articles.articleCreatedAt, projectBounds.dateFrom))
+      if (projectBounds?.dateTo) whereParts.push(lte(articles.articleCreatedAt, projectBounds.dateTo))
+      if (fromDate) whereParts.push(gte(articles.articleCreatedAt, fromDate))
+      if (toDate) whereParts.push(lte(articles.articleCreatedAt, toDate))
+      if (searchTitle) whereParts.push(sql`${articles.articleTitle} ILIKE ${'%' + searchTitle + '%'}`)
 
-          const uniqueValues = await db.execute<{answered_original: string}>(dateScoped)
+      const grouped = await db
+        .select({promptId: judgments.promptId, answeredOriginal: judgments.answeredOriginal})
+        .from(judgments)
+        .innerJoin(articles, eq(articles.id, judgments.articleId))
+        .where(and(...whereParts))
+        .groupBy(judgments.promptId, judgments.answeredOriginal)
+        .orderBy(judgments.promptId, judgments.answeredOriginal)
 
-          return {
-            promptId: prompt.id,
-            promptName: prompt.promptHeading || prompt.originalText,
-            answeredOriginalValues: uniqueValues.rows.map((v) => {
-              return v.answered_original
-            }),
-          }
+      const promptNameMap = new Map(
+        projectPromptRows.map((p) => {
+          return [p.id, p.promptHeading || p.originalText]
         }),
       )
+      const byPrompt = new Map<string, string[]>()
+      for (const row of grouped) {
+        const arr = byPrompt.get(row.promptId) || []
+        if (row.answeredOriginal !== null) arr.push(row.answeredOriginal as unknown as string)
+        byPrompt.set(row.promptId, arr)
+      }
 
-      return promptFilters
+      const result = projectPromptRows.map((p) => {
+        return {
+          promptId: p.id,
+          promptName: promptNameMap.get(p.id) || p.id,
+          answeredOriginalValues: byPrompt.get(p.id) || [],
+        }
+      })
+
+      return result
     } catch (error) {
       console.error('Error fetching articles reviews filters:', error)
       set.status = 500

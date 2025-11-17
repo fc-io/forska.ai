@@ -135,16 +135,19 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
 
       const combinedWhereCondition = whereParts.length > 1 ? and(...whereParts) : whereParts[0]
 
-      // First, get the total count
-      const countQuery = await db
-        .select({count: sql<number>`COUNT(DISTINCT ${articles.id})`.as('count')})
+      // Build grouped base query once, then count rows in a subquery (fast COUNT(*))
+      const groupedBase = db
+        .select({id: articles.id})
         .from(articles)
         .where(combinedWhereCondition)
         .innerJoin(judgments, and(eq(judgments.articleId, articles.id), inArray(judgments.promptId, promptIds)))
         .groupBy(articles.id)
         .having(sql`COUNT(DISTINCT ${judgments.promptId}) = ${promptIds.length}`)
+        .as('grouped_articles')
 
-      const totalCount = countQuery.length
+      const [{count: totalCount = 0} = {count: 0}] = await db
+        .select({count: sql<number>`COUNT(*)`})
+        .from(groupedBase)
 
       // Query articles that have judgments for ALL prompts with pagination
       const articlesWithJudgments = await db

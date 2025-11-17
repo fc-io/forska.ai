@@ -1,0 +1,2 @@
+CREATE INDEX "judgments_prompt_article_answered_idx" ON "judgments" USING btree ("prompt_id","article_id","answered_original");--> statement-breakpoint
+CREATE INDEX "judgments_human_prompt_article_answer_idx" ON "judgments_human" USING btree ("prompt_id","article_id","answer");

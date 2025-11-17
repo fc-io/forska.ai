@@ -1,0 +1,1 @@
+CREATE INDEX "judgments_article_prompt_model_idx" ON "judgments" USING btree ("article_id","prompt_id","model_id");

@@ -535,6 +535,10 @@ export const judgments = pgTable(
       index('judgments_article_prompt_idx').on(table.articleId, table.promptId),
       index('judgments_article_prompt_answered_idx').on(table.articleId, table.promptId, table.answeredOriginal),
       index('judgments_prompt_article_idx').on(table.promptId, table.articleId),
+      // Cover common NOT EXISTS lookups by (article_id, prompt_id, model_id)
+      index('judgments_article_prompt_model_idx').on(table.articleId, table.promptId, table.modelId),
+      // Speed DISTINCT/ORDER BY answered_original with prompt-scoped joins
+      index('judgments_prompt_article_answered_idx').on(table.promptId, table.articleId, table.answeredOriginal),
     ]
   },
 )
@@ -587,6 +591,8 @@ export const judgmentsHuman = pgTable(
       index('judgments_human_article_prompt_idx').on(table.articleId, table.promptId),
       index('judgments_human_prompt_article_idx').on(table.promptId, table.articleId),
       index('judgments_human_project_idx').on(table.projectId),
+      // Speed DISTINCT answer lists per prompt under article constraints
+      index('judgments_human_prompt_article_answer_idx').on(table.promptId, table.articleId, table.answer),
     ]
   },
 )
