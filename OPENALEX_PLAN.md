@@ -6,15 +6,10 @@
 **Env & Config**
 - [x] Env: Requires only `OPENALEX_MAILTO`
 - [ ] Implement the use of OPENALEX_MAILTO in @src/server/utils/env.ts
-- [ ] Defaults in code: `perPage=200`, `cursor=*`, `timeoutMs=20_000`, `maxRps=10`, unlimited pages until cursor exhaustion, `retryDelays=[10_000, 60_000, 600_000, 1_200_000, 1_800_000, 3_600_000]`.
-- [ ] Use a single `filter` query param (comma-separated filters). Use `select` to trim response payload.
 
 **Data Model (No New Tables)**
 - [ ] Update `src/db/schema.ts` to add OpenAlex columns on `articles`:
   - [ ] `openalexId: text('openalex_id')` (unique)
-  - [ ] `openAccess: boolean('open_access').default(false)`
-  - [ ] `updatedAtSource: timestamp('updated_at_source', { withTimezone: true })`
-  - [ ] `concepts: jsonb('concepts')` (raw array from OpenAlex)
 - [ ] Indexes/constraints:
   - [ ] Unique index: `uniqueIndex('articles_openalex_id_unique').on(openalexId)`
   - [ ] Skip optional indexes on `doi` and `cited_by_count` for now (can revisit later).
@@ -30,6 +25,7 @@
   - [ ] Call `openalexHarvest({ fromDate, toDate, importRoute })`.
   - [ ] Count imported items using `article_route_link` + `import_route` logic and date window.
   - [ ] Update `dataSource.lastImportAt` and `itemsAfterLastImport` and return `{ success: true, data: updatedRecord }`.
+- [ ] Use a single `filter` query param (comma-separated filters). Use `select` to trim response payload.
 
 **Agent/Service**
 - [ ] New file: `src/agent/openalexHarvest.ts` (single named export; filename must match export per CLAUDE.md).
@@ -48,6 +44,8 @@
   - [ ] Map results to `DatabaseItem` (see Mapping).
   - [ ] `openalexWorkflowStoreEntries(entries)` in batches of 500 (same as arXiv/PubMed patterns).
   - [ ] Continue until cursor is exhausted or repeats.
+- [ ] Defaults in code: `perPage=200`, `cursor=*`, `timeoutMs=20_000`, `maxRps=10`, unlimited pages until cursor exhaustion, `retryDelays=[10_000, 60_000, 600_000, 1_200_000, 1_800_000, 3_600_000]`.
+
 
 **Storage**
 - [ ] New file: `src/agent/openalexWorkflowStoreEntries.ts`.
@@ -62,17 +60,13 @@
   - [ ] `article_version: string` (default `'1'`)
   - [ ] `doi?: string`
   - [ ] `openalex_id: string`
-  - [ ] `open_access: boolean`
-  - [ ] `cited_by_count: number`
   - [ ] `language: string`
   - [ ] `venue: string`
-  - [ ] `updated_at_source: string` (ISO8601)
-  - [ ] `concepts: unknown`
   - [ ] `import_route: string`
   - [ ] `original_data?: unknown`
 - [ ] Upsert into `articles` using `articles.articleId` as conflict target (`onConflictDoUpdate`) to refresh:
   - [ ] Core fields: `articleTitle`, `articleSummary`, `articleAuthors`, `articleUpdatedAt`, `articleVersion`
-  - [ ] OpenAlex fields: `doi`, `openalexId`, `openAccess`, `citedByCount`, `language`, `venue`, `updatedAtSource`, `concepts`, `originalData`, and `updatedAt = now()`
+  - [ ] OpenAlex fields: `doi`, `openalexId`, `originalData`, and `updatedAt = now()`
   - [ ] If approved (see Decision), also set `url` to preferred source URL
 - [ ] Ensure route linking:
   - [ ] Upsert/ensure `import_route` exists
@@ -80,6 +74,7 @@
   - [ ] Do not write to `articles.import_route`
 
 **Mapping (OpenAlex Work -> DatabaseItem)**
+- [ ] make sure the user logs out and paste in the actuall respose strucutre before implementing the mapping
 - [ ] `article_id`: `openalex:${work.id.replace('https://openalex.org/', '')}`
 - [ ] `article_title`: `work.title ?? ''`
 - [ ] `article_summary`: prefer `work.abstract`; otherwise reconstruct from `work.abstract_inverted_index` by placing each token at its positions across an array whose length is the max index+1, then `join(' ')`; fallback to `''` on malformed input
@@ -92,12 +87,6 @@
 - [ ] `original_data`: full `work` object
 - [ ] `import_route`: harvester route
 - [ ] `openalex_id`: `work.id.replace('https://openalex.org/', '')`
-- [ ] `open_access`: `Boolean(work.open_access?.is_oa)`
-- [ ] `cited_by_count`: `work.cited_by_count ?? 0`
-- [ ] `language`: `work.language ?? ''`
-- [ ] `venue`: `work.host_venue?.display_name ?? ''`
-- [ ] `updated_at_source`: `work.updated_date ?? work.publication_date ?? null`
-- [ ] `concepts`: `work.concepts ?? []` (store raw JSON array)
 
 **Testing**
 - [ ] Start server: `bun run dev:server`
