@@ -11,6 +11,8 @@ import {
   timestamp,
   uuid,
 } from 'drizzle-orm/pg-core'
+import {primaryKey} from 'drizzle-orm/pg-core'
+import {sql} from 'drizzle-orm'
 import {index, uniqueIndex} from 'drizzle-orm/pg-core/indexes'
 
 import {session, user} from '../../auth-schema.ts'
@@ -84,6 +86,7 @@ export const articles = pgTable(
       index('articles_created_idx').on(table.createdAt),
       index('articles_article_updated_idx').on(table.articleUpdatedAt),
       index('articles_import_route_article_created_idx').on(table.importRoute, table.articleCreatedAt),
+      index('articles_updated_idx').on(table.updatedAt),
     ]
   },
 )
@@ -252,6 +255,7 @@ export const articleRouteLink = pgTable(
       uniqueIndex('article_route_link_unique').on(table.articleId, table.importRouteId),
       index('article_route_link_article_idx').on(table.articleId),
       index('article_route_link_route_idx').on(table.importRouteId),
+      index('article_route_link_updated_idx').on(table.updatedAt),
     ]
   },
 )
@@ -539,6 +543,7 @@ export const judgments = pgTable(
       index('judgments_article_prompt_model_idx').on(table.articleId, table.promptId, table.modelId),
       // Speed DISTINCT/ORDER BY answered_original with prompt-scoped joins
       index('judgments_prompt_article_answered_idx').on(table.promptId, table.articleId, table.answeredOriginal),
+      index('judgments_updated_idx').on(table.updatedAt),
     ]
   },
 )
@@ -593,6 +598,7 @@ export const judgmentsHuman = pgTable(
       index('judgments_human_project_idx').on(table.projectId),
       // Speed DISTINCT answer lists per prompt under article constraints
       index('judgments_human_prompt_article_answer_idx').on(table.promptId, table.articleId, table.answer),
+      index('judgments_human_updated_idx').on(table.updatedAt),
     ]
   },
 )
@@ -672,7 +678,10 @@ export const tokenUse = pgTable(
     sglangModel: text('sglang_model'),
   },
   (table) => {
-    return [index('token_use_job_created_idx').on(table.judgmentsJobId, table.createdAt)]
+    return [
+      index('token_use_job_created_idx').on(table.judgmentsJobId, table.createdAt),
+      index('token_use_updated_idx').on(table.updatedAt),
+    ]
   },
 )
 
@@ -839,5 +848,19 @@ export const llmStatus = pgTable(
       uniqueIndex('llm_status_engine_instance_ts_idx').on(table.engine, table.instanceId, table.ts),
       index('llm_status_model_ts_idx').on(table.modelName, table.ts),
     ]
+  },
+)
+
+export const syncState = pgTable(
+  'sync_state',
+  {
+    remoteId: text('remote_id').notNull(),
+    tableName: text('table_name').notNull(),
+    lastSyncedAt: timestamp('last_synced_at', {withTimezone: true})
+      .notNull()
+      .default(sql`to_timestamp(0)`),
+  },
+  (table) => {
+    return {pk: primaryKey({columns: [table.remoteId, table.tableName]})}
   },
 )

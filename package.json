@@ -28,6 +28,7 @@
     "db:backup": "bun scripts/dbBackup.ts",
     "db:backup-from-remote": "bun scripts/dbRemoteBackup.ts",
     "db:merge-from-remote-dump": "bun scripts/dbMergeRemoteDump.ts",
+    "db:sync:remote": "bun scripts/dbSyncRemote.ts",
     "db:repair-judgments-index": "bun scripts/dbRepairJudgmentsIndex.ts",
     "db:reindex-all": "bun scripts/dbReindexAll.ts",
     "db:repair-all-indexes": "bun scripts/dbRepairAllIndexes.ts",
