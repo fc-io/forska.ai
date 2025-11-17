@@ -8,12 +8,12 @@
 - [x] Implement the use of OPENALEX_MAILTO in @src/server/utils/env.ts
 
 **Data Model (No New Tables)**
-- [ ] Update `src/db/schema.ts` to add OpenAlex columns on `articles`:
-  - [ ] `openalexId: text('openalex_id')` (unique)
-- [ ] Indexes/constraints:
-  - [ ] Unique index: `uniqueIndex('articles_openalex_id_unique').on(openalexId)`
-  - [ ] Skip optional indexes on `doi` and `cited_by_count` for now (can revisit later).
-- [ ] Generate + run migrations: `bun run db:gen && bun run db:mig`
+- [x] Update `src/db/schema.ts` to add OpenAlex columns on `articles`:
+  - [x] `openalexId: text('openalex_id')` (unique)
+- [x] Indexes/constraints:
+  - [x] Unique index: `uniqueIndex('articles_openalex_id_unique').on(openalexId)`
+  - [x] Skip optional indexes on `doi` and `cited_by_count` for now (can revisit later).
+- [x] Generate + run migrations: `bun run db:gen && bun run db:mig` (generated; apply pending until Postgres is running)
 
 **Routes**
 - [ ] Add POST `/api/datasources/import/openalex` in `src/server/routes/DataSourcesImportRoutes.ts` with `{ body: t.Object({ id: t.String() }) }`.

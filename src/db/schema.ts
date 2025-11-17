@@ -60,6 +60,7 @@ export const articles = pgTable(
     articleSummary: text('article_summary'),
     articleVersion: integer('article_version'),
     arxivId: text('arxiv_id'),
+    openalexId: text('openalex_id'),
     doi: text('doi'),
     pubmedId: text('pubmed_id'),
     url: text('url'),
@@ -87,6 +88,7 @@ export const articles = pgTable(
       index('articles_article_updated_idx').on(table.articleUpdatedAt),
       index('articles_import_route_article_created_idx').on(table.importRoute, table.articleCreatedAt),
       index('articles_updated_idx').on(table.updatedAt),
+      uniqueIndex('articles_openalex_id_unique').on(table.openalexId),
     ]
   },
 )
