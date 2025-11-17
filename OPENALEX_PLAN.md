@@ -3,18 +3,9 @@
 - [ ] Scope: Server only; reuse existing DB schema and add columns to `articles` if needed. No client/UI changes. No new docs.
 - [ ] Parity: Mirror `/api/datasources/import/arxiv` and `/api/datasources/import/pubmed` for route flow, counting, and linking via `import_route` + `article_route_link`.
 
-**Decisions**
-- [x] Indexes: Skip optional non-unique indexes for now. Keep only the unique index on `openalex_id`.
-- [ ] URL field: Populate `articles.url` in upsert?
-      - Why: Improves linking to source; helpful in UI and downstream tasks; OpenAlex often provides a stable landing page.
-      - Why not: Not required functionally; could introduce inconsistency across sources; landing pages can be missing/changed; can compute on read from `originalData` if needed.
-      - Decision: pending (please confirm Yes/No).
-- [x] Timeout: Use ~20s HTTP timeout for OpenAlex requests (match PubMed).
-- [x] arXiv filename typo: Keep existing `arxivWorkflowStoreEntires.ts` as-is.
-- [x] Rate limit: Enforce <= 10 requests/second to OpenAlex.
-
 **Env & Config**
-- [ ] Env: Requires only `OPENALEX_MAILTO` (read via `process.env.OPENALEX_MAILTO`). Throw a clear error if missing.
+- [x] Env: Requires only `OPENALEX_MAILTO`
+- [ ] Implement the use of OPENALEX_MAILTO in @src/server/utils/env.ts
 - [ ] Defaults in code: `perPage=200`, `cursor=*`, `timeoutMs=20_000`, `maxRps=10`, unlimited pages until cursor exhaustion, `retryDelays=[10_000, 60_000, 600_000, 1_200_000, 1_800_000, 3_600_000]`.
 - [ ] Use a single `filter` query param (comma-separated filters). Use `select` to trim response payload.
 
