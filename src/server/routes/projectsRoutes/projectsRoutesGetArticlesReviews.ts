@@ -141,11 +141,9 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
         .select({count: sql<number>`COUNT(*)`})
         .from(groupedBase)
 
-      // Query articles that have judgments for ALL prompts with pagination
-      const articlesWithJudgments = await db
-        .select({
-          article: articles,
-        })
+      // Build a paged set of qualifying article ids to avoid massive IN (...) parameter lists
+      const groupedPage = db
+        .select({id: articles.id})
         .from(articles)
         .innerJoin(articleRouteLink, eq(articleRouteLink.articleId, articles.id))
         .innerJoin(judgments, and(eq(judgments.articleId, articles.id), inArray(judgments.promptId, promptIds)))
@@ -154,24 +152,26 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
             ? and(combinedWhereCondition, sql`${articleRouteLink.importRouteId} = ANY(ARRAY[${routeIdArray}])`)
             : sql`${articleRouteLink.importRouteId} = ANY(ARRAY[${routeIdArray}])`,
         )
-        .having(havingParts.length > 1 ? and(...havingParts) : havingParts[0])
         .groupBy(articles.id)
+        .having(havingParts.length > 1 ? and(...havingParts) : havingParts[0])
         .orderBy(desc(articles.articleCreatedAt))
         .limit(limit)
         .offset(offset)
+        .as('page_articles')
 
-      // Get the judgments for each article
-      const articleIds = articlesWithJudgments.map((a) => {
-        return a.article.id
-      })
+      // Query the page of articles using the paged id set
+      const articlesWithJudgments = await db
+        .select({article: articles})
+        .from(articles)
+        .innerJoin(groupedPage, eq(groupedPage.id, articles.id))
+        .orderBy(desc(articles.articleCreatedAt))
 
-      const allJudgments =
-        articleIds.length > 0
-          ? await db
-              .select()
-              .from(judgments)
-              .where(and(inArray(judgments.articleId, articleIds), inArray(judgments.promptId, promptIds)))
-          : []
+      // Fetch all judgments for the paged articles via join to the paged id set
+      const allJudgments = await db
+        .select()
+        .from(judgments)
+        .innerJoin(groupedPage, eq(groupedPage.id, judgments.articleId))
+        .where(inArray(judgments.promptId, promptIds))
 
       // Group judgments by article
       const judgmentsByArticle = allJudgments.reduce(
