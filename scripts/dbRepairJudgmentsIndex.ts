@@ -141,4 +141,3 @@ const main = async (): Promise<number> => {
 main().then((code) => {
   process.exit(code)
 })
-

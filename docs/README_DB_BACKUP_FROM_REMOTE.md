@@ -19,11 +19,13 @@ apptainer run --cleanenv --writable-tmpfs \
 
 ## Make the remote postgres host/port available on the local machine:
 
+### Alvis
+
 ``` bash
 ssh -N -L 8432:127.0.0.1:5433 alvis2
 ```
 
-or
+### Discoverer
 
 ``` bash
 ssh -N -L 8432:127.0.0.1:5433 dis
