@@ -55,23 +55,6 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
 
       console.log('promptFilters', promptFilters)
 
-      // Apply prompt-specific filters using Drizzle subqueries
-      for (const [promptId, answeredValues] of promptFilters) {
-        const subquery = db
-          .select({exists: sql`1`})
-          .from(judgments)
-          .where(
-            and(
-              eq(judgments.articleId, articles.id),
-              eq(judgments.promptId, promptId),
-              inArray(judgments.answeredOriginal, answeredValues),
-            ),
-          )
-          .limit(1)
-
-        conditions.push(sql`EXISTS (${subquery})`)
-      }
-
       // Always scope to project's configured import routes and date bounds
       const [projectBounds] = await db
         .select({dateFrom: projects.dateFrom, dateTo: projects.dateTo})
@@ -122,6 +105,24 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
       const combinedWhereCondition = whereParts.length > 1 ? and(...whereParts) : whereParts[0]
 
       // Build grouped base query once, then count rows in a subquery (fast COUNT(*))
+      // Build HAVING conditions: require one judgment per prompt overall, and if prompt has filters,
+      // require at least one matching answered_original within that prompt for the article.
+      const havingParts: Array<ReturnType<typeof sql>> = [
+        sql`COUNT(DISTINCT ${judgments.promptId}) = ${promptIds.length}`,
+      ]
+      for (const [promptId, answeredValues] of promptFilters) {
+        if (answeredValues.length === 0) continue
+        const answeredValsArray = sql.join(
+          answeredValues.map((v) => {
+            return sql`${v}`
+          }),
+          sql`,`,
+        )
+        havingParts.push(
+          sql`SUM(CASE WHEN ${judgments.promptId} = ${promptId}::uuid AND ${judgments.answeredOriginal} = ANY(ARRAY[${answeredValsArray}]::text[]) THEN 1 ELSE 0 END) > 0`,
+        )
+      }
+
       const groupedBase = db
         .select({id: articles.id})
         .from(articles)
@@ -133,7 +134,7 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
             : sql`${articleRouteLink.importRouteId} = ANY(ARRAY[${routeIdArray}])`,
         )
         .groupBy(articles.id)
-        .having(sql`COUNT(DISTINCT ${judgments.promptId}) = ${promptIds.length}`)
+        .having(havingParts.length > 1 ? and(...havingParts) : havingParts[0])
         .as('grouped_articles')
 
       const [{count: totalCount = 0} = {count: 0}] = await db
@@ -153,7 +154,7 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
             ? and(combinedWhereCondition, sql`${articleRouteLink.importRouteId} = ANY(ARRAY[${routeIdArray}])`)
             : sql`${articleRouteLink.importRouteId} = ANY(ARRAY[${routeIdArray}])`,
         )
-        .having(sql`COUNT(DISTINCT ${judgments.promptId}) = ${promptIds.length}`)
+        .having(havingParts.length > 1 ? and(...havingParts) : havingParts[0])
         .groupBy(articles.id)
         .orderBy(desc(articles.articleCreatedAt))
         .limit(limit)
