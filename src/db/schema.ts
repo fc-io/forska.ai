@@ -1,3 +1,4 @@
+import {array} from 'better-auth'
 import {sql} from 'drizzle-orm'
 import {
   bigint,
@@ -531,6 +532,7 @@ export const judgments = pgTable(
     // Whether this LLM judgment has been answered (may have null answer fields in some cases)
     isAnswered: boolean('is_answered').default(false),
     answeredOriginal: text('answered_original'),
+    answeredOriginalAsArray: text('answered_original_as_array').array(),
     answeredTransformed: text('answered_transformed'),
     confidenceOriginal: integer('confidence_original'),
     explanation: text('explanation'),

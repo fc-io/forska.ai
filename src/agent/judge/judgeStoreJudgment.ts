@@ -1,6 +1,7 @@
 import {and, eq} from 'drizzle-orm'
 
 import {judgments} from '../../db/schema.ts'
+import {judgeStoreJudgmentGetStringAsArrayOfStrings} from './judgeStoreJudgment/judgeStoreJudgmentGetStringAsArrayOfStrings.ts'
 
 const findAnswer = <T>(entries: [string, unknown][], fragment: string): T => {
   const match = entries.find(([key]) => {
@@ -37,6 +38,8 @@ export const judgeStoreJudgment = async (
       const answeredOriginal = findAnswer<string>(answers, '---question')
       const answeredExplanation = findAnswer<string>(answers, '---explanation')
       const answeredQuotes = findAnswer<string[]>(answers, '---quotes')
+
+      const answeredOriginalAsArray = judgeStoreJudgmentGetStringAsArrayOfStrings(answeredOriginal)
       // ('test^^^a7aa21e8-d4e6-4e60-b39e-732085c56b00---explanation')
       // "test^^^a7aa21e8-d4e6-4e60-b39e-732085c56b00---quotes"
       const existing = await db
@@ -53,6 +56,7 @@ export const judgeStoreJudgment = async (
           .set({
             isAnswered: true,
             answeredOriginal,
+            answeredOriginalAsArray,
             answeredTransformed: null,
             confidenceOriginal: 50,
             explanation: answeredExplanation || null,
@@ -72,6 +76,7 @@ export const judgeStoreJudgment = async (
           promptId,
           isAnswered: true,
           answeredOriginal,
+          answeredOriginalAsArray,
           answeredTransformed: null,
           confidenceOriginal: 50,
           explanation: answeredExplanation || null,
