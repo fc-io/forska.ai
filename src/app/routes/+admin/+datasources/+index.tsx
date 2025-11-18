@@ -347,6 +347,19 @@ const AdminDataSources = () => {
                                           })
                                         return
                                       }
+                                      if (entry.importRoute === '/api/datasources/import/openalex') {
+                                        void apiClient.api.datasources.import.openalex
+                                          .post({id: entry.id})
+                                          .then((response) => {
+                                            if (response.error || !response.data?.success) {
+                                              console.error('Failed to start import', response.error)
+                                              alert('Failed to start import')
+                                              return
+                                            }
+                                            void dataSourcesQuery.refetch()
+                                          })
+                                        return
+                                      }
                                       alert(`Unknown import route: ${entry.importRoute}`)
                                     }}
                                     class="px-3 py-1.5 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
