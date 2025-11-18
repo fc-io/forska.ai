@@ -1,7 +1,7 @@
-import { and, eq } from 'drizzle-orm'
+import {and, eq} from 'drizzle-orm'
 
-import { judgments } from '../../db/schema.ts'
-import { judgeStoreJudgmentGetStringAsArrayOfStrings } from './judgeStoreJudgment/judgeStoreJudgmentGetStringAsArrayOfStrings.ts'
+import {judgments} from '../../db/schema.ts'
+import {judgeStoreJudgmentGetStringAsArrayOfStrings} from './judgeStoreJudgment/judgeStoreJudgmentGetStringAsArrayOfStrings.ts'
 
 const findAnswer = <T>(entries: [string, unknown][], fragment: string): T => {
   const match = entries.find(([key]) => {
@@ -28,7 +28,7 @@ export const judgeStoreJudgment = async (
       console.error('Warning: No modelId/promptIds provided, judgment not stored to database')
       return
     }
-    const { getDatabase } = await import('../../server/utils/getDatabase.ts')
+    const {getDatabase} = await import('../../server/utils/getDatabase.ts')
     const db = getDatabase()
     // Store judgment for each prompt
     const storePromises = promptIds.map(async (promptId) => {
@@ -46,7 +46,7 @@ export const judgeStoreJudgment = async (
       // ('test^^^a7aa21e8-d4e6-4e60-b39e-732085c56b00---explanation')
       // "test^^^a7aa21e8-d4e6-4e60-b39e-732085c56b00---quotes"
       const existing = await db
-        .select({ id: judgments.id })
+        .select({id: judgments.id})
         .from(judgments)
         .where(
           and(eq(judgments.articleId, articleId), eq(judgments.modelId, modelId), eq(judgments.promptId, promptId)),
