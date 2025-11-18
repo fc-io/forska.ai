@@ -534,9 +534,9 @@ export const judgments = pgTable(
     answeredOriginal: text('answered_original'),
     answeredOriginalAsArray: text('answered_original_as_array').array(),
     answeredTransformed: text('answered_transformed'),
-    confidenceOriginal: integer('confidence_original'),
+    confidenceOriginal: integer('confidence_original').default(50),
     explanation: text('explanation'),
-    quotes: jsonb('quotes'),
+    quotes: jsonb('quotes').default([]),
   },
   (table) => {
     return [

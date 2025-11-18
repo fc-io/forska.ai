@@ -1,3 +1,4 @@
+// feals a bit to strict to not allow other types, like numbers
 const isStringArray = (value: unknown): value is string[] => {
   return (
     Array.isArray(value)
@@ -7,17 +8,16 @@ const isStringArray = (value: unknown): value is string[] => {
   )
 }
 
-const parseStringArray = (text: string): string[] => {
+const parseStringArray = (text: string): string[] | null => {
   try {
     const value: unknown = JSON.parse(text)
-    return isStringArray(value) ? value : []
+
+    return isStringArray(value) ? value : null
   } catch {
-    return []
+    return null
   }
 }
 
-export const judgeStoreJudgmentGetStringAsArrayOfStrings = (answeredOriginal: string): string[] => {
-  const stringAsArray = parseStringArray(answeredOriginal)
-
-  return stringAsArray
+export const judgeStoreJudgmentGetStringAsArrayOfStrings = (answeredOriginal: string): string[] | null => {
+  return parseStringArray(answeredOriginal)
 }
