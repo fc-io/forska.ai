@@ -8,16 +8,14 @@ const isStringArray = (value: unknown): value is string[] => {
   )
 }
 
-const parseStringArray = (text: string): string[] | null => {
+const parseStringArray = (text: unknown): string[] | null => {
   try {
-    const value: unknown = JSON.parse(text)
-
-    return isStringArray(value) ? value : null
+    return isStringArray(text) ? text : null
   } catch {
     return null
   }
 }
 
-export const judgeStoreJudgmentGetStringAsArrayOfStrings = (answeredOriginal: string): string[] | null => {
+export const judgeStoreJudgmentGetStringAsArrayOfStrings = (answeredOriginal: unknown): string[] | null => {
   return parseStringArray(answeredOriginal)
 }
