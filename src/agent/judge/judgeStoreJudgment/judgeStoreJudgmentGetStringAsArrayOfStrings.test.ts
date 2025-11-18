@@ -4,7 +4,7 @@ import {judgeStoreJudgmentGetStringAsArrayOfStrings} from './judgeStoreJudgmentG
 
 describe('judgeStoreJudgmentGetStringAsArrayOfStrings', () => {
   it('returns array of strings for valid JSON array of strings', () => {
-    const input = '["alpha","beta","gamma"]'
+    const input = ['alpha', 'beta', 'gamma']
     const result = judgeStoreJudgmentGetStringAsArrayOfStrings(input)
     expect(result).toEqual(['alpha', 'beta', 'gamma'])
   })
@@ -16,20 +16,14 @@ describe('judgeStoreJudgmentGetStringAsArrayOfStrings', () => {
   })
 
   it('returns null for empty object', () => {
-    const input = '{}'
+    const input = {}
     const result = judgeStoreJudgmentGetStringAsArrayOfStrings(input)
     expect(result).toEqual(null)
   })
 
   it('returns null for object', () => {
-    const input = '{"Accident and emergency medicine","Cardiology","Internal medicine"}'
+    const input = {'Accident and emergency medicine': 'test'}
     const result = judgeStoreJudgmentGetStringAsArrayOfStrings(input)
     expect(result).toEqual(null)
-  })
-
-  it('tolerates whitespace around JSON', () => {
-    const input = `\n  [  "x" ,  "y" ]  `
-    const result = judgeStoreJudgmentGetStringAsArrayOfStrings(input)
-    expect(result).toEqual(['x', 'y'])
   })
 })
