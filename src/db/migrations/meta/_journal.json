@@ -190,6 +190,13 @@
       "when": 1763409242608,
       "tag": "0026_abnormal_jubilee",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1763494843520,
+      "tag": "0027_unique_vindicator",
+      "breakpoints": true
     }
   ]
 }
