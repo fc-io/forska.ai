@@ -86,21 +86,17 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
                   totalMatchingCount={response().totalCount}
                   selectAllMatching={selectAllMatching}
                   setSelectAllMatching={setSelectAllMatching}
-                  fetchAllMatchingArticleIds={async () => {
-                    const body: Record<string, unknown> = {
-                      page: '1',
-                      limit: String(response().totalCount),
-                      projectId: props.projectId,
-                    }
+                  sourceProjectId={props.projectId}
+                  listType={'unassessed'}
+                  buildAddAllFilterBody={() => {
                     const from = props.fromDate().trim()
                     const to = props.toDate().trim()
+                    const search = (props.searchTitle() || '').trim()
+                    const body: {from?: string; to?: string; search?: string} = {}
                     if (from) body.from = from
                     if (to) body.to = to
-                    const search = (props.searchTitle() || '').trim()
                     if (search) body.search = search
-                    const r = await apiClient.api.articlesreviewsunassessed.post(body)
-                    const data = r.data && 'data' in r.data ? (r.data as {data: Array<{id: string}>}).data : []
-                    return data.map((a) => a.id)
+                    return body
                   }}
                 />
 
@@ -128,21 +124,17 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
                   totalMatchingCount={response().totalCount}
                   selectAllMatching={selectAllMatching}
                   setSelectAllMatching={setSelectAllMatching}
-                  fetchAllMatchingArticleIds={async () => {
-                    const body: Record<string, unknown> = {
-                      page: '1',
-                      limit: String(response().totalCount),
-                      projectId: props.projectId,
-                    }
+                  sourceProjectId={props.projectId}
+                  listType={'unassessed'}
+                  buildAddAllFilterBody={() => {
                     const from = props.fromDate().trim()
                     const to = props.toDate().trim()
+                    const search = (props.searchTitle() || '').trim()
+                    const body: {from?: string; to?: string; search?: string} = {}
                     if (from) body.from = from
                     if (to) body.to = to
-                    const search = (props.searchTitle() || '').trim()
                     if (search) body.search = search
-                    const r = await apiClient.api.articlesreviewsunassessed.post(body)
-                    const data = r.data && 'data' in r.data ? (r.data as {data: Array<{id: string}>}).data : []
-                    return data.map((a) => a.id)
+                    return body
                   }}
                 />
               </div>

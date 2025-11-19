@@ -15,6 +15,7 @@ import {llmStatusRoutes} from './routes/LlmStatusRoutes.ts'
 import {modelsRoutes} from './routes/ModelsRoutes.ts'
 import {projectArticlesRoutes} from './routes/ProjectArticlesRoutes.ts'
 import {projectsRoutes} from './routes/ProjectsRoutes.ts'
+import {projectsAddArticlesRoutes} from './routes/ProjectsAddArticlesRoutes.ts'
 import {tokensRoutes} from './routes/TokensRoutes.ts'
 import {usersRoutes} from './routes/UsersRoutes.ts'
 import {env} from './utils/env.ts'
@@ -39,6 +40,7 @@ const _app = new Elysia()
   .use(humanAssessmentRoutes)
   .use(modelsRoutes)
   .use(projectsRoutes)
+  .use(projectsAddArticlesRoutes)
   .use(projectArticlesRoutes)
   .use(importRoutes)
   .use(dataSourcesRoutes)

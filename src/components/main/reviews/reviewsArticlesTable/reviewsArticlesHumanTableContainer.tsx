@@ -93,28 +93,22 @@ export const ReviewsArticlesHumanTableContainer = (props: ReviewsArticlesHumanTa
                   totalMatchingCount={response().totalCount}
                   selectAllMatching={selectAllMatching}
                   setSelectAllMatching={setSelectAllMatching}
-                  fetchAllMatchingArticleIds={async () => {
-                    const body: Record<string, unknown> = {
-                      page: '1',
-                      limit: String(response().totalCount),
-                      projectId: props.projectId,
-                      prompts: Object.entries(props.promptFilters()).reduce(
-                        (acc, [promptId, value]) => {
-                          if (Array.isArray(value) && value.length > 0) acc[promptId] = value
-                          return acc
-                        },
-                        {} as Record<string, string[]>,
-                      ),
-                    }
+                  sourceProjectId={props.projectId}
+                  listType={'human'}
+                  buildAddAllFilterBody={() => {
+                    const prompts = Object.entries(props.promptFilters()).reduce((acc, [pid, val]) => {
+                      if (Array.isArray(val) && val.length > 0) acc[pid] = val
+                      return acc
+                    }, {} as Record<string, string[]>)
                     const from = props.fromDate().trim()
                     const to = props.toDate().trim()
+                    const search = (props.searchTitle() || '').trim()
+                    const body: {prompts?: Record<string, string[]>; from?: string; to?: string; search?: string} = {}
+                    if (Object.keys(prompts).length > 0) body.prompts = prompts
                     if (from) body.from = from
                     if (to) body.to = to
-                    const search = (props.searchTitle() || '').trim()
                     if (search) body.search = search
-                    const r = await apiClient.api.articlesreviewshuman.post(body)
-                    const data = r.data && 'data' in r.data ? (r.data as {data: Array<{id: string}>}).data : []
-                    return data.map((a) => a.id)
+                    return body
                   }}
                 />
 
@@ -150,28 +144,22 @@ export const ReviewsArticlesHumanTableContainer = (props: ReviewsArticlesHumanTa
                   totalMatchingCount={response().totalCount}
                   selectAllMatching={selectAllMatching}
                   setSelectAllMatching={setSelectAllMatching}
-                  fetchAllMatchingArticleIds={async () => {
-                    const body: Record<string, unknown> = {
-                      page: '1',
-                      limit: String(response().totalCount),
-                      projectId: props.projectId,
-                      prompts: Object.entries(props.promptFilters()).reduce(
-                        (acc, [promptId, value]) => {
-                          if (Array.isArray(value) && value.length > 0) acc[promptId] = value
-                          return acc
-                        },
-                        {} as Record<string, string[]>,
-                      ),
-                    }
+                  sourceProjectId={props.projectId}
+                  listType={'human'}
+                  buildAddAllFilterBody={() => {
+                    const prompts = Object.entries(props.promptFilters()).reduce((acc, [pid, val]) => {
+                      if (Array.isArray(val) && val.length > 0) acc[pid] = val
+                      return acc
+                    }, {} as Record<string, string[]>)
                     const from = props.fromDate().trim()
                     const to = props.toDate().trim()
+                    const search = (props.searchTitle() || '').trim()
+                    const body: {prompts?: Record<string, string[]>; from?: string; to?: string; search?: string} = {}
+                    if (Object.keys(prompts).length > 0) body.prompts = prompts
                     if (from) body.from = from
                     if (to) body.to = to
-                    const search = (props.searchTitle() || '').trim()
                     if (search) body.search = search
-                    const r = await apiClient.api.articlesreviewshuman.post(body)
-                    const data = r.data && 'data' in r.data ? (r.data as {data: Array<{id: string}>}).data : []
-                    return data.map((a) => a.id)
+                    return body
                   }}
                 />
               </div>

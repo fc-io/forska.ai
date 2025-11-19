@@ -5,6 +5,8 @@ import {createEffect, createMemo, For, Show} from 'solid-js'
 
 import {apiClient} from '../../../services/apiClient.ts'
 
+type ListType = 'llm' | 'human' | 'both' | 'unassessed'
+
 interface ReviewsPaginationControlsProps {
   page: number
   totalPages: number
@@ -15,7 +17,11 @@ interface ReviewsPaginationControlsProps {
   totalMatchingCount?: number
   selectAllMatching?: Accessor<boolean>
   setSelectAllMatching?: Setter<boolean>
-  fetchAllMatchingArticleIds?: () => Promise<string[]>
+  // Source context
+  sourceProjectId?: string
+  listType?: ListType
+  // Provide filter payload for server-side selection when selecting across all matching
+  buildAddAllFilterBody?: () => {prompts?: Record<string, string[]>; from?: string; to?: string; search?: string}
 }
 
 export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps) => {
@@ -148,20 +154,27 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
                                         onClick={async (e) => {
                                           e.preventDefault()
                                           const allAcross = props.selectAllMatching && props.selectAllMatching()
-                                          const ids =
-                                            allAcross && props.fetchAllMatchingArticleIds
-                                              ? await props.fetchAllMatchingArticleIds()
-                                              : (() => {
-                                                  const sel = props.rowSelection ? props.rowSelection() : {}
-                                                  return Object.entries(sel)
-                                                    .filter(([, v]) => {
-                                                      return Boolean(v)
-                                                    })
-                                                    .map(([k]) => {
-                                                      return k
-                                                    })
-                                                })()
-                                          console.log('selectedArticleIds:', ids)
+                                          if (allAcross) {
+                                            const filter = props.buildAddAllFilterBody ? props.buildAddAllFilterBody() : {}
+                                            await apiClient.api.projects['add_articles_by_filter'].post({
+                                              targetProjectId: p.id,
+                                              sourceProjectId: props.sourceProjectId || '',
+                                              listType: (props.listType as ListType) || 'llm',
+                                              ...filter,
+                                            })
+                                          } else {
+                                            const sel = props.rowSelection ? props.rowSelection() : {}
+                                            const ids = Object.entries(sel)
+                                              .filter(([, v]) => Boolean(v))
+                                              .map(([k]) => k)
+                                            if (ids.length > 0) {
+                                              await apiClient.api.projects['add_artilces_by_ids'].post({
+                                                targetProjectId: p.id,
+                                                sourceProjectId: props.sourceProjectId || '',
+                                                articleIds: ids,
+                                              })
+                                            }
+                                          }
                                         }}
                                       >
                                         {p.name}
