@@ -133,7 +133,7 @@ const ProjectDetail = () => {
               return (
                 <div class="space-y-4">
                   <ProjectDetailsInformation project={project} importRoutes={importRoutes} model={model} />
-                  <ProjectDetailsPrompts prompts={prompts} formatDate={formatDate} />
+                  <ProjectDetailsPrompts projectId={project.id} prompts={prompts} formatDate={formatDate} />
                   <ProjectDetailsCuratedArticles projectId={projectId} />
                   <ProjectDetailsArticles projectId={projectId} />
                 </div>
