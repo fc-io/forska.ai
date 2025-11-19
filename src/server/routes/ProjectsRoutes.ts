@@ -90,20 +90,13 @@ export const projectsRoutes = new Elysia()
       .where(eq(projectPrompts.projectId, params.id))
       .orderBy(projectPrompts.order)
 
-    // Check if any judgments exist for these prompts
-    let hasJudgedArticles = false
-    if (projectPromptsList.length > 0) {
-      const promptIds = projectPromptsList.map((p) => {
-        return p.id
-      })
-      const existingJudgments = await db
-        .select({id: judgments.id})
-        .from(judgments)
-        .where(inArray(judgments.promptId, promptIds))
-        .limit(1)
-
-      hasJudgedArticles = existingJudgments.length > 0
-    }
+    // Lock projects for editing if a judgment job exists for the project
+    const existingJob = await db
+      .select({id: judgmentsJobs.id})
+      .from(judgmentsJobs)
+      .where(eq(judgmentsJobs.projectId, params.id))
+      .limit(1)
+    const hasJudgedArticles = existingJob.length > 0
 
     // Fetch selected model for this project
     const [projectModel] = await db
@@ -288,6 +281,15 @@ export const projectsRoutes = new Elysia()
     '/api/projects/:id',
     async ({params, body}) => {
       const db = getDatabase()
+      // Disallow edits when a judgments job exists for this project
+      const [job] = await db
+        .select({id: judgmentsJobs.id})
+        .from(judgmentsJobs)
+        .where(eq(judgmentsJobs.projectId, params.id))
+        .limit(1)
+      if (job?.id) {
+        throw new Error('Project is locked: a judgment job exists for this project')
+      }
 
       const updateData: Partial<typeof projects.$inferInsert> = {updatedAt: new Date()}
       if (body.name !== undefined) updateData.name = body.name
@@ -307,6 +309,15 @@ export const projectsRoutes = new Elysia()
     '/api/projects/:id/edit',
     async ({params, body}) => {
       const db = getDatabase()
+      // Disallow edits when a judgments job exists for this project
+      const [job] = await db
+        .select({id: judgmentsJobs.id})
+        .from(judgmentsJobs)
+        .where(eq(judgmentsJobs.projectId, params.id))
+        .limit(1)
+      if (job?.id) {
+        throw new Error('Project is locked: a judgment job exists for this project')
+      }
 
       const parsedDateFrom = body.dateFrom === undefined ? undefined : parseOptionalDate(body.dateFrom)
       const parsedDateTo = body.dateTo === undefined ? undefined : parseOptionalDate(body.dateTo)
@@ -579,6 +590,15 @@ export const projectsRoutes = new Elysia()
   )
   .delete('/api/projects/:id', async ({params}) => {
     const db = getDatabase()
+    // Disallow deletion when a judgments job exists for this project
+    const [job] = await db
+      .select({id: judgmentsJobs.id})
+      .from(judgmentsJobs)
+      .where(eq(judgmentsJobs.projectId, params.id))
+      .limit(1)
+    if (job?.id) {
+      throw new Error('Project is locked: a judgment job exists for this project')
+    }
 
     const result = await db.delete(projects).where(eq(projects.id, params.id)).returning()
 

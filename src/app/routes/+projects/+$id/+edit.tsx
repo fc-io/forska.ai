@@ -502,8 +502,8 @@ const EditProject = (): JSX.Element => {
                   <div>
                     <h3 class="font-semibold text-amber-900 mb-1">Project Locked for Editing</h3>
                     <p class="text-amber-800 text-sm">
-                      This project cannot be modified because articles have already been judged based on its prompts.
-                      All fields and buttons have been disabled to preserve the integrity of existing assessments.
+                      This project cannot be modified because a judgment job exists for it.
+                      All fields and buttons have been disabled to preserve the integrity of the running/finished job.
                     </p>
                   </div>
                 </div>
@@ -837,7 +837,7 @@ const EditProject = (): JSX.Element => {
                 <Button
                   type="submit"
                   disabled={!projectName().trim() || isLoading() || isLocked()}
-                  title={isLocked() ? 'Cannot update: articles have been judged based on this project' : undefined}
+                  title={isLocked() ? 'Cannot update: a judgment job exists for this project' : undefined}
                   class={actionStateClass()}
                 >
                   {isLoading() ? 'Updating...' : 'Update Project'}
