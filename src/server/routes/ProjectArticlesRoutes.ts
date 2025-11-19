@@ -12,7 +12,7 @@ export const projectArticlesRoutes = new Elysia()
       const db = getDatabase()
       const {id: projectId} = params
       const page = parseInt(query.page || '1', 10)
-      const limit = parseInt(query.limit || '50', 10)
+      const limit = parseInt(query.limit || '10', 10)
       const offset = (page - 1) * limit
 
       const totalCountResult = await db

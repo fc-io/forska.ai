@@ -11,7 +11,7 @@ type CuratedArticle = {id: string; articleTitle: string}
 
 export const ProjectDetailsCuratedArticles = (props: {projectId: string}) => {
   const [currentPage, setCurrentPage] = createSignal(1)
-  const [pageLimit, setPageLimit] = createSignal(50)
+  const [pageLimit, setPageLimit] = createSignal(10)
 
   const query = useQuery(() => {
     return {
@@ -75,12 +75,7 @@ export const ProjectDetailsCuratedArticles = (props: {projectId: string}) => {
 
   return (
     <div>
-      <div class="flex items-center justify-between mb-2">
-        <h2 class="text-lg font-semibold">Imported Articles</h2>
-        <Show when={query.data?.totalCount !== undefined}>
-          <div class="text-sm text-gray-600">Total: {query.data?.totalCount ?? 0}</div>
-        </Show>
-      </div>
+      <h2 class="text-lg font-semibold mb-2">Imported Articles</h2>
       <Show when={query.data}>
         <ImportedArticlesPaginationControls
           page={query.data!.page}
