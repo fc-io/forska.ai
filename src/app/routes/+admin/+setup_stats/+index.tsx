@@ -164,7 +164,7 @@ const AdminConfiguration = () => {
           }
         >
           <div class="flex justify-between items-center mb-4">
-            <h1 class="text-2xl font-bold">Configuration</h1>
+            <h1 class="text-2xl font-bold">Setup/Stats</h1>
           </div>
 
           <h2 class="text-lg font-semibold mb-2">Models</h2>
@@ -469,4 +469,4 @@ const AdminConfiguration = () => {
   )
 }
 
-export const Route = createFileRoute('/admin/configuration/')({component: AdminConfiguration})
+export const Route = createFileRoute('/admin/setup_stats/')({component: AdminConfiguration})
