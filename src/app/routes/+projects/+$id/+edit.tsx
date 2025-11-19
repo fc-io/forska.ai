@@ -18,6 +18,8 @@ type PromptItem = {
   originalId?: string
   order: number
   archived: boolean
+  enabled?: boolean
+  originProjectId?: string | null
 }
 
 type ProjectPromptResponse = {
@@ -27,6 +29,10 @@ type ProjectPromptResponse = {
   type: string | null
   order: number | null
   archived: boolean
+  enabled?: boolean
+  originProjectId?: string | null
+  provider?: string | null
+  modelName?: string | null
 }
 
 type ProjectSummary = {
@@ -60,6 +66,7 @@ type PromptPayload = {
   type?: string
   order: number
   archived?: boolean
+  enabled?: boolean
 }
 
 const isNullableString = (value: unknown): value is string | null => {
@@ -145,6 +152,8 @@ const buildExistingPrompt = (prompt: ProjectPromptResponse): PromptItem => {
     originalId: prompt.id,
     order: prompt.order ?? 0,
     archived: Boolean(prompt.archived),
+    enabled: typeof prompt.enabled === 'boolean' ? prompt.enabled : undefined,
+    originProjectId: prompt.originProjectId ?? null,
   }
 }
 
@@ -176,8 +185,8 @@ const getNextOrder = (items: PromptItem[]): number => {
   return getHighestOrder(items) + 1
 }
 
-const buildPromptsPayload = (items: PromptItem[]): PromptPayload[] => {
-  return items
+const buildPromptsPayload = (owned: PromptItem[], imported: PromptItem[]): PromptPayload[] => {
+  const ownedPayload = owned
     .filter((prompt) => {
       return prompt.originalText.length > 0 || prompt.isExisting
     })
@@ -189,8 +198,20 @@ const buildPromptsPayload = (items: PromptItem[]): PromptPayload[] => {
         type: prompt.type || undefined,
         order: prompt.order,
         archived: prompt.archived,
+        enabled: prompt.enabled,
       }
     })
+
+  const importedPayload = imported.map((prompt) => {
+    return {
+      originalId: prompt.originalId,
+      originalText: prompt.originalText,
+      order: prompt.order,
+      enabled: prompt.enabled,
+    }
+  })
+
+  return [...ownedPayload, ...importedPayload]
 }
 
 const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/
@@ -244,7 +265,8 @@ const EditProject = (): JSX.Element => {
 
   const [projectName, setProjectName] = createSignal('')
   const [description, setDescription] = createSignal('')
-  const [prompts, setPrompts] = createStore<PromptItem[]>([])
+  const [ownedPrompts, setOwnedPrompts] = createStore<PromptItem[]>([])
+  const [importedPrompts, setImportedPrompts] = createStore<PromptItem[]>([])
   const [dateFrom, setDateFrom] = createSignal('')
   const [dateTo, setDateTo] = createSignal('')
   const [isLoading, setIsLoading] = createSignal(false)
@@ -312,9 +334,14 @@ const EditProject = (): JSX.Element => {
     return isLocked() ? 'opacity-50 cursor-not-allowed' : ''
   })
 
-  const sortedPrompts = createMemo(() => {
-    // Avoid spreading a Solid store array (not guaranteed iterable)
-    return prompts.slice().sort((a, b) => {
+  const sortedOwnedPrompts = createMemo(() => {
+    return ownedPrompts.slice().sort((a, b) => {
+      return a.order - b.order
+    })
+  })
+
+  const sortedImportedPrompts = createMemo(() => {
+    return importedPrompts.slice().sort((a, b) => {
       return a.order - b.order
     })
   })
@@ -326,7 +353,15 @@ const EditProject = (): JSX.Element => {
       setDescription(details.project.description ?? '')
       setDateFrom(formatDateForInput(details.project.dateFrom))
       setDateTo(formatDateForInput(details.project.dateTo))
-      setPrompts(mapPromptsFromResponse(details.prompts))
+      const all = mapPromptsFromResponse(details.prompts)
+      const owned = all.filter((p) => {
+        return p.originProjectId === projectId
+      })
+      const imported = all.filter((p) => {
+        return p.originProjectId !== projectId
+      })
+      setOwnedPrompts(owned.length > 0 ? owned : [buildEmptyPrompt(1)])
+      setImportedPrompts(imported)
       setUseTitle(details.project.useTitle)
       setUseAbstract(details.project.useAbstract)
       setUseFulltext(details.project.useFulltext)
@@ -336,7 +371,8 @@ const EditProject = (): JSX.Element => {
       const routes = Array.isArray(details.importRoutes) ? details.importRoutes : []
       setSelectedImportRoutes(routes)
     } else if (projectData.isSuccess) {
-      setPrompts([buildEmptyPrompt(1)])
+      setOwnedPrompts([buildEmptyPrompt(1)])
+      setImportedPrompts([])
       setDateFrom('')
       setDateTo('')
     }
@@ -351,17 +387,17 @@ const EditProject = (): JSX.Element => {
   })
 
   const addPromptInput = () => {
-    const next = prompts.slice()
-    next.push(buildEmptyPrompt(prompts.length === 0 ? 1 : getNextOrder(prompts)))
-    setPrompts(next)
+    const next = ownedPrompts.slice()
+    next.push(buildEmptyPrompt(ownedPrompts.length === 0 ? 1 : getNextOrder(ownedPrompts)))
+    setOwnedPrompts(next)
   }
 
   const removePromptInput = (promptId: string) => {
-    if (prompts.length > 1) {
-      const next = prompts.slice().filter((prompt) => {
+    if (ownedPrompts.length > 1) {
+      const next = ownedPrompts.slice().filter((prompt) => {
         return prompt.id !== promptId
       })
-      setPrompts(next)
+      setOwnedPrompts(next)
     }
   }
 
@@ -381,7 +417,7 @@ const EditProject = (): JSX.Element => {
     field: 'originalText' | 'promptHeading' | 'type' | 'order' | 'archived',
     value: string | number | boolean,
   ) => {
-    setPrompts(
+    setOwnedPrompts(
       (prompt) => {
         return prompt.id === promptId
       },
@@ -390,8 +426,20 @@ const EditProject = (): JSX.Element => {
     )
   }
 
+  const toggleImportedPromptEnabled = (promptId: string) => {
+    setImportedPrompts(
+      (p) => {
+        return p.id === promptId
+      },
+      'enabled' as any,
+      (prev) => {
+        return !prev as any
+      },
+    )
+  }
+
   const sendUpdateRequest = async (startDate: string | null, endDate: string | null): Promise<void> => {
-    const promptsPayload = buildPromptsPayload(prompts)
+    const promptsPayload = buildPromptsPayload(ownedPrompts, importedPrompts)
     const response = await apiClient.api
       .projects({id: projectId})
       .edit.patch({
@@ -416,7 +464,15 @@ const EditProject = (): JSX.Element => {
     setDescription(result.project.description ?? '')
     setDateFrom(formatDateForInput(result.project.dateFrom))
     setDateTo(formatDateForInput(result.project.dateTo))
-    setPrompts(mapPromptsFromResponse(result.prompts))
+    const all = mapPromptsFromResponse(result.prompts)
+    const owned = all.filter((p) => {
+      return p.originProjectId === projectId
+    })
+    const imported = all.filter((p) => {
+      return p.originProjectId !== projectId
+    })
+    setOwnedPrompts(owned.length > 0 ? owned : [buildEmptyPrompt(1)])
+    setImportedPrompts(imported)
 
     // Keep related caches in sync so subsequent views show fresh data immediately
     queryClient.setQueryData(['project', projectId, 'with-prompts'], (prev: unknown) => {
@@ -762,7 +818,7 @@ const EditProject = (): JSX.Element => {
                   </Button>
                 </div>
                 <div class="space-y-3">
-                  <For each={sortedPrompts()} fallback={<div>No prompts</div>}>
+                  <For each={sortedOwnedPrompts()} fallback={<div>No prompts</div>}>
                     {(promptItem, index) => {
                       return (
                         <div class="flex gap-2">
@@ -813,7 +869,7 @@ const EditProject = (): JSX.Element => {
                               </label>
                             </div>
                           </div>
-                          <Show when={prompts.length > 1}>
+                          <Show when={ownedPrompts.length > 1}>
                             <Button
                               type="button"
                               variant="outline"
@@ -835,6 +891,72 @@ const EditProject = (): JSX.Element => {
               </div>
 
 
+
+              <Show when={sortedImportedPrompts().length > 0}>
+                <div>
+                  <div class="flex items-center justify-between mb-2">
+                    <label class="block text-sm font-medium">Importable prompts</label>
+                  </div>
+                  <div class="space-y-3">
+                    <For each={sortedImportedPrompts()}>
+                      {(promptItem) => {
+                        return (
+                          <div class="border rounded-lg p-4 bg-background" classList={{'opacity-40': promptItem.enabled === false}}>
+                            <div class="flex justify-between items-start mb-3">
+                              <div class="flex items-center gap-2">
+                                <span class="inline-flex items-center justify-center w-6 h-6 rounded-full bg-primary text-primary-foreground text-xs font-medium">
+                                  {promptItem.order}
+                                </span>
+                                <Show when={promptItem.promptHeading}>
+                                  <span class="font-medium">{promptItem.promptHeading}</span>
+                                </Show>
+                                <Show when={promptItem.type}>
+                                  <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                                    {promptItem.type}
+                                  </span>
+                                </Show>
+                                <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800">
+                                  Imported
+                                </span>
+                                <Show when={promptItem.enabled !== undefined}>
+                                  <span
+                                    class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium"
+                                    classList={{
+                                      'bg-green-100 text-green-800': promptItem.enabled,
+                                      'bg-gray-100 text-gray-800': !promptItem.enabled,
+                                    }}
+                                  >
+                                    {promptItem.enabled ? 'Enabled' : 'Disabled'}
+                                  </span>
+                                </Show>
+                              </div>
+                              <label class={`flex items-center gap-2 ${isLocked() ? 'opacity-60' : ''}`}>
+                                <input
+                                  type="checkbox"
+                                  class="mt-0.5"
+                                  checked={Boolean(promptItem.enabled)}
+                                  onChange={() => {
+                                    return toggleImportedPromptEnabled(promptItem.id)
+                                  }}
+                                  disabled={isLocked()}
+                                />
+                                <span class="text-sm">Enabled</span>
+                              </label>
+                            </div>
+
+                            <div class="space-y-3">
+                              <div>
+                                <label class="text-sm font-medium text-muted-foreground block mb-1">Original Text</label>
+                                <div class="bg-gray-50 rounded p-3 text-sm font-mono whitespace-pre-wrap">{promptItem.originalText}</div>
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      }}
+                    </For>
+                  </div>
+                </div>
+              </Show>
 
               <div class="flex gap-3 pt-4">
                 <Button

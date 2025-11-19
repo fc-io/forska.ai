@@ -1,4 +1,4 @@
-import {and, desc, eq, gte, inArray, lte, sql} from 'drizzle-orm'
+import {and, desc, eq, gte, inArray, lte, or, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {
@@ -6,10 +6,11 @@ import {
   articles,
   judgments,
   judgmentsHuman,
+  projectArticles,
+  projectPrompts,
   projectRouteLink,
   projects,
   prompts,
-  projectPrompts,
 } from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
@@ -86,22 +87,34 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
       .from(projectRouteLink)
       .where(eq(projectRouteLink.projectId, body.projectId))
 
-    if (projectImportRoutes.length === 0) {
-      return {data: [], totalCount: 0, page, limit, totalPages: 0}
-    }
+    const routeIdArray =
+      projectImportRoutes.length > 0
+        ? sql.join(
+            projectImportRoutes.map((r) => {
+              return sql`${r.importRouteId}::uuid`
+            }),
+            sql`,`,
+          )
+        : null
 
-    const routeIdArray = sql.join(
-      projectImportRoutes.map((r) => sql`${r.importRouteId}::uuid`),
-      sql`,`,
-    )
-
-    const hasMatchingImportRoute = sql`EXISTS (
-      SELECT 1 FROM ${articleRouteLink} arl
-      WHERE arl."article_id" = ${articles.id}
-        AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
+    const hasMatchingImportRoute =
+      routeIdArray !== null
+        ? sql`EXISTS (
+            SELECT 1 FROM ${articleRouteLink} arl
+            WHERE arl."article_id" = ${articles.id}
+              AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
+          )`
+        : null
+    const hasProjectArticle = sql`EXISTS (
+      SELECT 1 FROM ${projectArticles} pa
+      WHERE pa."article_id" = ${articles.id}
+        AND pa."project_id" = ${body.projectId}::uuid
     )`
 
-    const whereParts: Array<ReturnType<typeof sql>> = [fullyAssessedByHumanExists, hasMatchingImportRoute]
+    const whereParts: Array<ReturnType<typeof sql>> = [
+      fullyAssessedByHumanExists,
+      hasMatchingImportRoute ? or(hasMatchingImportRoute, hasProjectArticle) : hasProjectArticle,
+    ]
     if (filterConditions.length > 0) whereParts.push(...filterConditions)
     if (projectBounds?.dateFrom) whereParts.push(gte(articles.articleCreatedAt, projectBounds.dateFrom))
     if (projectBounds?.dateTo) whereParts.push(lte(articles.articleCreatedAt, projectBounds.dateTo))
@@ -165,7 +178,7 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
     // Build prompt order map for consistent ordering of judgments per article
     const promptOrderMap = projectPromptRows.reduce(
       (acc, p, idx) => {
-        const ord = (p.order ?? idx) as number
+        const ord = p.order ?? idx
         return {...acc, [p.id]: ord}
       },
       {} as Record<string, number>,
@@ -174,13 +187,7 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
     // Fetch human answers for qualifying humans: users who answered ALL prompts for the project on that article
     // Strategy: fetch all human rows with non-null answers, then in code select users per article who have
     // answers for all prompts, and aggregate answers per prompt for those qualifying users.
-    type HumanRow = {
-      articleId: string
-      userId: string
-      promptId: string
-      answer: string | null
-      updatedAt: Date | null
-    }
+    type HumanRow = {articleId: string; userId: string; promptId: string; answer: string | null; updatedAt: Date | null}
 
     const humanRows: HumanRow[] =
       articleIds.length > 0
@@ -203,17 +210,14 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
         : []
 
     // Deduplicate by latest updatedAt for (articleId, userId, promptId)
-    const latestByArticleUserPrompt = humanRows.reduce(
-      (acc, row) => {
-        const key = `${row.articleId}::${row.userId}::${row.promptId}`
-        const existing = acc.get(key)
-        if (!existing || ((row.updatedAt?.getTime() || 0) > (existing.updatedAt?.getTime() || 0))) {
-          acc.set(key, row)
-        }
-        return acc
-      },
-      new Map<string, HumanRow>(),
-    )
+    const latestByArticleUserPrompt = humanRows.reduce((acc, row) => {
+      const key = `${row.articleId}::${row.userId}::${row.promptId}`
+      const existing = acc.get(key)
+      if (!existing || (row.updatedAt?.getTime() || 0) > (existing.updatedAt?.getTime() || 0)) {
+        acc.set(key, row)
+      }
+      return acc
+    }, new Map<string, HumanRow>())
 
     // Group rows by (articleId, userId) and retain only users who covered ALL prompts
     const rowsByArticleUser = new Map<string, Map<string, HumanRow[]>>()
@@ -234,7 +238,11 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
       // Users who have answered all prompts (non-null answers) for this project
       const qualifyingUsers: string[] = []
       for (const [userId, rows] of byUser.entries()) {
-        const covered = new Set(rows.map((r) => r.promptId))
+        const covered = new Set(
+          rows.map((r) => {
+            return r.promptId
+          }),
+        )
         if (covered.size === promptIds.length) {
           qualifyingUsers.push(userId)
         }
@@ -265,11 +273,7 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
         const bo = promptOrderMap[b.promptId] ?? Number.MAX_SAFE_INTEGER
         return ao - bo
       })
-      return {
-        ...article,
-        judgments: sorted,
-        humanAnswersByPrompt: humanAnswersByArticlePrompt[article.id] || undefined,
-      }
+      return {...article, judgments: sorted, humanAnswersByPrompt: humanAnswersByArticlePrompt[article.id] || undefined}
     })
 
     return {data: result, totalCount, page, limit, totalPages: Math.ceil(totalCount / limit)}

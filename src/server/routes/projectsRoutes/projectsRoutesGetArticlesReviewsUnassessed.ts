@@ -1,7 +1,16 @@
-import {and, desc, eq, gte, inArray, lte, sql} from 'drizzle-orm'
+import {and, desc, eq, gte, inArray, lte, or, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {articleRouteLink, articles, judgments, projectRouteLink, projects, prompts, projectPrompts} from '../../../db/schema.ts'
+import {
+  articleRouteLink,
+  articles,
+  judgments,
+  projectArticles,
+  projectRouteLink,
+  projects,
+  prompts,
+  projectPrompts,
+} from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
 export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
@@ -53,24 +62,34 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
         .from(projectRouteLink)
         .where(eq(projectRouteLink.projectId, body.projectId))
 
-      if (projectImportRoutes.length === 0) {
-        return {data: [], totalCount: 0, page, limit, totalPages: 0}
-      }
+      const routeIdArray =
+        projectImportRoutes.length > 0
+          ? sql.join(
+              projectImportRoutes.map((r) => {
+                return sql`${r.importRouteId}::uuid`
+              }),
+              sql`,`,
+            )
+          : null
 
-      const routeIdArray = sql.join(
-        projectImportRoutes.map((r) => {
-          return sql`${r.importRouteId}::uuid`
-        }),
-        sql`,`,
-      )
-
-      const hasMatchingImportRoute = sql`EXISTS (
-        SELECT 1 FROM ${articleRouteLink} arl
-        WHERE arl."article_id" = ${articles.id}
-        AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
+      const hasMatchingImportRoute =
+        routeIdArray !== null
+          ? sql`EXISTS (
+              SELECT 1 FROM ${articleRouteLink} arl
+              WHERE arl."article_id" = ${articles.id}
+              AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
+            )`
+          : null
+      const hasProjectArticle = sql`EXISTS (
+        SELECT 1 FROM ${projectArticles} pa
+        WHERE pa."article_id" = ${articles.id}
+        AND pa."project_id" = ${body.projectId}::uuid
       )`
 
-      const whereParts: Array<ReturnType<typeof sql>> = [noJudgmentsForProjectPrompts, hasMatchingImportRoute]
+      const whereParts: Array<ReturnType<typeof sql>> = [
+        noJudgmentsForProjectPrompts,
+        hasMatchingImportRoute ? or(hasMatchingImportRoute, hasProjectArticle) : hasProjectArticle,
+      ]
       if (projectBounds?.dateFrom) {
         whereParts.push(gte(articles.articleCreatedAt, projectBounds.dateFrom))
       }

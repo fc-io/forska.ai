@@ -1,10 +1,11 @@
-import {and, desc, eq, gte, inArray, lte, sql} from 'drizzle-orm'
+import {and, desc, eq, gte, inArray, lte, or, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {
   articleRouteLink,
   articles,
   judgments,
+  projectArticles,
   projectRouteLink,
   projects,
   prompts,
@@ -67,16 +68,15 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
         .from(projectRouteLink)
         .where(eq(projectRouteLink.projectId, body.projectId))
 
-      if (projectImportRoutes.length === 0) {
-        return {data: [], totalCount: 0, page, limit, totalPages: 0}
-      }
-
-      const routeIdArray = sql.join(
-        projectImportRoutes.map((r) => {
-          return sql`${r.importRouteId}::uuid`
-        }),
-        sql`,`,
-      )
+      const routeIdArray =
+        projectImportRoutes.length > 0
+          ? sql.join(
+              projectImportRoutes.map((r) => {
+                return sql`${r.importRouteId}::uuid`
+              }),
+              sql`,`,
+            )
+          : null
 
       // Build final where parts with optional filters (route scoping applied via join)
       const whereParts: Array<ReturnType<typeof sql>> = []
@@ -104,6 +104,21 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
 
       const combinedWhereCondition = whereParts.length > 1 ? and(...whereParts) : whereParts[0]
 
+      const hasMatchingImportRoute =
+        routeIdArray !== null
+          ? sql`EXISTS (
+              SELECT 1 FROM ${articleRouteLink} arl
+              WHERE arl."article_id" = ${articles.id}
+              AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
+            )`
+          : null
+      const hasProjectArticle = sql`EXISTS (
+        SELECT 1 FROM ${projectArticles} pa
+        WHERE pa."article_id" = ${articles.id}
+        AND pa."project_id" = ${body.projectId}::uuid
+      )`
+      const scopeCondition = hasMatchingImportRoute ? or(hasMatchingImportRoute, hasProjectArticle) : hasProjectArticle
+
       // Build grouped base query once, then count rows in a subquery (fast COUNT(*))
       // Build HAVING conditions: require one judgment per prompt overall, and if prompt has filters,
       // require at least one matching answered_original within that prompt for the article.
@@ -126,13 +141,8 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
       const groupedBase = db
         .select({id: articles.id})
         .from(articles)
-        .innerJoin(articleRouteLink, eq(articleRouteLink.articleId, articles.id))
         .innerJoin(judgments, and(eq(judgments.articleId, articles.id), inArray(judgments.promptId, promptIds)))
-        .where(
-          combinedWhereCondition
-            ? and(combinedWhereCondition, sql`${articleRouteLink.importRouteId} = ANY(ARRAY[${routeIdArray}])`)
-            : sql`${articleRouteLink.importRouteId} = ANY(ARRAY[${routeIdArray}])`,
-        )
+        .where(combinedWhereCondition ? and(combinedWhereCondition, scopeCondition) : scopeCondition)
         .groupBy(articles.id)
         .having(havingParts.length > 1 ? and(...havingParts) : havingParts[0])
         .as('grouped_articles')
@@ -145,13 +155,8 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
       const groupedPage = db
         .select({id: articles.id})
         .from(articles)
-        .innerJoin(articleRouteLink, eq(articleRouteLink.articleId, articles.id))
         .innerJoin(judgments, and(eq(judgments.articleId, articles.id), inArray(judgments.promptId, promptIds)))
-        .where(
-          combinedWhereCondition
-            ? and(combinedWhereCondition, sql`${articleRouteLink.importRouteId} = ANY(ARRAY[${routeIdArray}])`)
-            : sql`${articleRouteLink.importRouteId} = ANY(ARRAY[${routeIdArray}])`,
-        )
+        .where(combinedWhereCondition ? and(combinedWhereCondition, scopeCondition) : scopeCondition)
         .groupBy(articles.id)
         .having(havingParts.length > 1 ? and(...havingParts) : havingParts[0])
         .orderBy(desc(articles.articleCreatedAt))
