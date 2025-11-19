@@ -158,7 +158,15 @@ const buildExistingPrompt = (prompt: ProjectPromptResponse): PromptItem => {
 }
 
 const buildEmptyPrompt = (order: number): PromptItem => {
-  return {id: crypto.randomUUID(), originalText: '', promptHeading: '', type: '', isExisting: false, order, archived: false}
+  return {
+    id: crypto.randomUUID(),
+    originalText: '',
+    promptHeading: '',
+    type: '',
+    isExisting: false,
+    order,
+    archived: false,
+  }
 }
 
 const mapPromptsFromResponse = (promptList: ProjectPromptResponse[]): PromptItem[] => {
@@ -476,7 +484,7 @@ const EditProject = (): JSX.Element => {
 
     // Keep related caches in sync so subsequent views show fresh data immediately
     queryClient.setQueryData(['project', projectId, 'with-prompts'], (prev: unknown) => {
-      const previous = (prev && typeof prev === 'object' ? (prev as Record<string, unknown>) : {})
+      const previous = prev && typeof prev === 'object' ? (prev as Record<string, unknown>) : {}
       return {
         ...previous,
         project: result.project,
@@ -530,8 +538,6 @@ const EditProject = (): JSX.Element => {
     )
   }
 
-
-
   return (
     <div class="p-6 max-w-4xl mx-auto">
       <div class="flex items-center gap-4 mb-6">
@@ -561,8 +567,8 @@ const EditProject = (): JSX.Element => {
                   <div>
                     <h3 class="font-semibold text-amber-900 mb-1">Project Locked for Editing</h3>
                     <p class="text-amber-800 text-sm">
-                      This project cannot be modified because a judgment job exists for it.
-                      All fields and buttons have been disabled to preserve the integrity of the running/finished job.
+                      This project cannot be modified because a judgment job exists for it. All fields and buttons have
+                      been disabled to preserve the integrity of the running/finished job.
                     </p>
                   </div>
                 </div>
@@ -890,8 +896,6 @@ const EditProject = (): JSX.Element => {
                 </div>
               </div>
 
-
-
               <Show when={sortedImportedPrompts().length > 0}>
                 <div>
                   <div class="flex items-center justify-between mb-2">
@@ -901,7 +905,10 @@ const EditProject = (): JSX.Element => {
                     <For each={sortedImportedPrompts()}>
                       {(promptItem) => {
                         return (
-                          <div class="border rounded-lg p-4 bg-background" classList={{'opacity-40': promptItem.enabled === false}}>
+                          <div
+                            class="border rounded-lg p-4 bg-background"
+                            classList={{'opacity-40': promptItem.enabled === false}}
+                          >
                             <div class="flex justify-between items-start mb-3">
                               <div class="flex items-center gap-2">
                                 <span class="inline-flex items-center justify-center w-6 h-6 rounded-full bg-primary text-primary-foreground text-xs font-medium">
@@ -946,8 +953,12 @@ const EditProject = (): JSX.Element => {
 
                             <div class="space-y-3">
                               <div>
-                                <label class="text-sm font-medium text-muted-foreground block mb-1">Original Text</label>
-                                <div class="bg-gray-50 rounded p-3 text-sm font-mono whitespace-pre-wrap">{promptItem.originalText}</div>
+                                <label class="text-sm font-medium text-muted-foreground block mb-1">
+                                  Original Text
+                                </label>
+                                <div class="bg-gray-50 rounded p-3 text-sm font-mono whitespace-pre-wrap">
+                                  {promptItem.originalText}
+                                </div>
                               </div>
                             </div>
                           </div>
