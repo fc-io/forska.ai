@@ -55,6 +55,7 @@ const ProjectDetail = () => {
             ← Back to Projects
           </Button>
           <h1 class="text-2xl font-bold">Project Details</h1>
+          <span class="text-sm text-gray-500">ID: {projectId}</span>
         </div>
         <Show when={projectData.isSuccess}>
           <div class="flex gap-2">

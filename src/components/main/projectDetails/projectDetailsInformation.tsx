@@ -2,6 +2,7 @@ import {format} from 'date-fns'
 import {createMemo, For, Show} from 'solid-js'
 
 interface ProjectDetailsInformationProject {
+  id: string
   name: string
   createdAt: Date | string
   updatedAt: Date | string
@@ -71,6 +72,10 @@ export const ProjectDetailsInformation = (props: ProjectDetailsInformationProps)
         <div class="flex gap-2 items-start">
           <label class="text-sm font-medium text-muted-foreground">Project Name:</label>
           <p class="text-sm">{props.project.name}</p>
+        </div>
+        <div class="flex gap-2 items-start">
+          <label class="text-sm font-medium text-muted-foreground">Project ID:</label>
+          <p class="text-sm break-all">{props.project.id}</p>
         </div>
         <div class="flex gap-2 items-start">
           <label class="text-sm font-medium text-muted-foreground">Created:</label>
