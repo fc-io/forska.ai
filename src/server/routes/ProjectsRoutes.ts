@@ -84,6 +84,8 @@ export const projectsRoutes = new Elysia()
         order: projectPrompts.order,
         archived: projectPrompts.archived,
         type: prompts.type,
+        enabled: projectPrompts.enabled,
+        originProjectId: projectPrompts.originProjectId,
       })
       .from(projectPrompts)
       .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
@@ -205,12 +207,15 @@ export const projectsRoutes = new Elysia()
               promptId,
               order: orderVal,
               archived: false,
+              enabled: true,
+              originProjectId: newProject.id,
             })
             .onConflictDoUpdate({
               target: [projectPrompts.projectId, projectPrompts.promptId],
               set: {
                 order: sql`EXCLUDED."order"`,
                 archived: sql`EXCLUDED.archived`,
+                enabled: sql`EXCLUDED.enabled`,
                 updatedAt: sql`CURRENT_TIMESTAMP`,
               },
             })
@@ -391,6 +396,7 @@ export const projectsRoutes = new Elysia()
             const typeVal = p.type || null
             const orderVal = p.order
             const archivedVal = typeof p.archived === 'boolean' ? p.archived : undefined
+            const enabledVal = typeof p.enabled === 'boolean' ? p.enabled : undefined
             let targetPromptId: string
             if (p.originalId) {
               // If editing an existing prompt association, only block metadata edits when the prompt text is unchanged
@@ -456,6 +462,9 @@ export const projectsRoutes = new Elysia()
               if (archivedVal !== undefined) {
                 updateAssoc.archived = archivedVal
               }
+              if (enabledVal !== undefined) {
+                updateAssoc.enabled = enabledVal
+              }
               await tx
                 .update(projectPrompts)
                 .set(updateAssoc)
@@ -497,12 +506,15 @@ export const projectsRoutes = new Elysia()
                   promptId: targetPromptId,
                   order: orderVal,
                   archived: archivedVal ?? false,
+                  enabled: enabledVal ?? true,
+                  originProjectId: params.id,
                 })
                 .onConflictDoUpdate({
                   target: [projectPrompts.projectId, projectPrompts.promptId],
                   set: {
                     order: sql`EXCLUDED."order"`,
                     archived: sql`EXCLUDED.archived`,
+                    enabled: sql`EXCLUDED.enabled`,
                     updatedAt: sql`CURRENT_TIMESTAMP`,
                   },
                 })
@@ -551,6 +563,8 @@ export const projectsRoutes = new Elysia()
             order: projectPrompts.order,
             archived: projectPrompts.archived,
             type: prompts.type,
+            enabled: projectPrompts.enabled,
+            originProjectId: projectPrompts.originProjectId,
           })
           .from(projectPrompts)
           .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
@@ -582,6 +596,7 @@ export const projectsRoutes = new Elysia()
               type: t.Optional(t.String()),
               order: t.Number(),
               archived: t.Optional(t.Boolean()),
+              enabled: t.Optional(t.Boolean()),
             }),
           ),
         ),

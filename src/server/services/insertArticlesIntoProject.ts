@@ -129,6 +129,9 @@ export const insertArticlesIntoProject = async (projectId: string, articleIdsInp
                 promptId: pid,
                 order: orderIndex + index,
                 archived: false,
+                // Auto-linked prompts are not created by this project and start disabled.
+                originProjectId: null,
+                enabled: false,
               }
             })
             orderIndex += promptChunk.length

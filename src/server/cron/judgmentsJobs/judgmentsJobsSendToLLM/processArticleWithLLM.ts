@@ -53,7 +53,7 @@ export const processArticleWithLLM = async (
     })
     .from(schema.projectPrompts)
     .innerJoin(schema.prompts, eq(schema.projectPrompts.promptId, schema.prompts.id))
-    .where(eq(schema.projectPrompts.projectId, articleToProcess.projectId))
+    .where(and(eq(schema.projectPrompts.projectId, articleToProcess.projectId), eq(schema.projectPrompts.enabled, true)))
     .orderBy(schema.projectPrompts.order)
 
   if (article && prompts.length > 0) {

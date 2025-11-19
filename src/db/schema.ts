@@ -456,6 +456,16 @@ export const projectPrompts = pgTable(
       ),
     order: integer('order'),
     archived: boolean('archived').default(false).notNull(),
+    // Provenance of this association: which project originally created this prompt link.
+    // null indicates auto-linked from external judgments (no single source project).
+    originProjectId: uuid('origin_project_id').references(
+      () => {
+        return projects.id
+      },
+      {onDelete: 'set null'},
+    ),
+    // Whether this prompt association is enabled for LLM judging.
+    enabled: boolean('enabled').default(true).notNull(),
   },
   (table) => {
     return [

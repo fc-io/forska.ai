@@ -13,7 +13,7 @@ const getProjectPromptIds = async (projectId: string) => {
     .select({id: prompts.id, order: projectPrompts.order})
     .from(projectPrompts)
     .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
-    .where(eq(projectPrompts.projectId, projectId))
+    .where(and(eq(projectPrompts.projectId, projectId), eq(projectPrompts.enabled, true)))
     .orderBy(projectPrompts.order)
   return rows.map((r) => r.id)
 }

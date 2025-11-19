@@ -31,7 +31,7 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
       .select({id: prompts.id, order: projectPrompts.order})
       .from(projectPrompts)
       .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
-      .where(eq(projectPrompts.projectId, body.projectId))
+      .where(and(eq(projectPrompts.projectId, body.projectId), eq(projectPrompts.enabled, true)))
       .orderBy(projectPrompts.order)
     if (projectPromptRows.length === 0) {
       return {data: [], totalCount: 0, page, limit, totalPages: 0}

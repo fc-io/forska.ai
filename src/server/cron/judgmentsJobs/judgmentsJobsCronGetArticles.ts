@@ -40,6 +40,7 @@ const getQueryConditions = ({jobId, project}: {jobId: string; project: typeof sc
     sql`EXISTS (
       SELECT 1 FROM ${schema.projectPrompts} pp
       WHERE pp."project_id" = ${project.id}
+      AND pp."enabled" = true
       AND NOT EXISTS (
         SELECT 1 FROM ${schema.judgments} j
         WHERE j."article_id" = ${schema.articles.id}
@@ -116,7 +117,7 @@ export const judgmentsJobsCronGetArticles = async (
     })
     .from(schema.projectPrompts)
     .innerJoin(schema.prompts, eq(schema.projectPrompts.promptId, schema.prompts.id))
-    .where(eq(schema.projectPrompts.projectId, projectId))
+    .where(and(eq(schema.projectPrompts.projectId, projectId), eq(schema.projectPrompts.enabled, true)))
     .orderBy(schema.projectPrompts.order)
 
   return !project || projectPrompts.length === 0

@@ -33,7 +33,7 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
         .select({id: prompts.id, promptHeading: prompts.promptHeading, originalText: prompts.originalText})
         .from(projectPrompts)
         .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
-        .where(eq(projectPrompts.projectId, query.projectId))
+        .where(and(eq(projectPrompts.projectId, query.projectId), eq(projectPrompts.enabled, true)))
 
       if (projectPromptRows.length === 0) {
         return []

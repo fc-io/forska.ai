@@ -111,6 +111,8 @@ const ProjectDetail = () => {
                 order: number | null
                 archived: boolean
                 type: string | null
+                enabled?: boolean
+                originProjectId?: string | null
               }
 
               const prompts = rawPrompts.map((p: RawPrompt) => {
@@ -123,6 +125,8 @@ const ProjectDetail = () => {
                   original_text: p.originalText,
                   transformed_text: p.transformedText ?? undefined,
                   archived: p.archived ?? undefined,
+                  enabled: p.enabled ?? true,
+                  originProjectId: p.originProjectId ?? null,
                 }
               })
               return (

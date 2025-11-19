@@ -8,6 +8,8 @@ type Prompt = {
   archived?: boolean
   original_text: string
   transformed_text?: string
+  enabled?: boolean
+  originProjectId?: string | null
 }
 
 type ProjectDetailsPromptsProps = {prompts: Prompt[]; formatDate: (dateString: string | null) => string}
@@ -43,6 +45,16 @@ export const ProjectDetailsPrompts = (props: ProjectDetailsPromptsProps) => {
                       <Show when={prompt.type}>
                         <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
                           {prompt.type}
+                        </span>
+                      </Show>
+                      <Show when={prompt.originProjectId === null}>
+                        <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800">
+                          Linked
+                        </span>
+                      </Show>
+                      <Show when={prompt.enabled !== undefined}>
+                        <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium" classList={{'bg-green-100 text-green-800': prompt.enabled, 'bg-gray-100 text-gray-800': !prompt.enabled}}>
+                          {prompt.enabled ? 'Enabled' : 'Disabled'}
                         </span>
                       </Show>
                       <span class="text-sm text-muted-foreground">Created {props.formatDate(prompt.created_at)}</span>

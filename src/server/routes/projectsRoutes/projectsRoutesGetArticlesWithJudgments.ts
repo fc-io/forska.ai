@@ -16,11 +16,11 @@ export const projectsRoutesGetArticlesWithJudgments = new Elysia().get(
       const offset = (page - 1) * limit
 
       // First get all prompts for this project (via association)
-      const projectPromptRows = await db
-        .select({id: prompts.id})
-        .from(projectPrompts)
-        .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
-        .where(eq(projectPrompts.projectId, params.id))
+  const projectPromptRows = await db
+    .select({id: prompts.id})
+    .from(projectPrompts)
+    .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
+    .where(and(eq(projectPrompts.projectId, params.id), eq(projectPrompts.enabled, true)))
 
       if (projectPromptRows.length === 0) {
         return {data: [], totalCount: 0, page, limit, error: null}
