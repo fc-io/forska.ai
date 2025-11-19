@@ -53,10 +53,16 @@ Goal: Allow the concept of "subprojects" where we can take selected articles ass
 - [x] Enforce unique index on `prompts.content_hash` once clean (schema updated; DB migration still required)
 - [x] Legacy prompt columns removed; no dual-write
 
-## Phase 6 — Project Articles UX
+## Phase 6 — Imported Articles UX
 - [x] Server endpoints to manage `project_articles` membership (add/remove)
 - [x] Client UI to curate articles for a project
 - [x] On association, auto‑link prompts with prior judgments for that article
+
+### Phase 6.2 — Read path & UI label
+
+- [x] Read endpoint: `GET /api/projects/:id/articles` returns `{ id, articleTitle }` for rows linked via `project_articles`.
+- [x] Project Details page renders an “Imported Articles” table (TanStack Table), listing article ID and Title.
+- [x] UI label uses “Imported Articles” (renamed from “Curated Articles”).
 
 ### Phase 6.1 — Membership write path (implemented)
 

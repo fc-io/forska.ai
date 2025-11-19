@@ -4,6 +4,7 @@ import {format} from 'date-fns'
 import {createSignal, Match, Show, Suspense, Switch} from 'solid-js'
 
 import {ProjectDetailsArticles} from '../../../../components/main/projectDetails/projectDetailsArticles'
+import {ProjectDetailsCuratedArticles} from '../../../../components/main/projectDetails/projectDetailsCuratedArticles'
 import {ProjectDetailsInformation} from '../../../../components/main/projectDetails/projectDetailsInformation'
 import {ProjectDetailsPrompts} from '../../../../components/main/projects/projectDetailsPrompts'
 import {Button} from '../../../../components/ui/button'
@@ -128,6 +129,7 @@ const ProjectDetail = () => {
                 <div class="space-y-4">
                   <ProjectDetailsInformation project={project} importRoutes={importRoutes} model={model} />
                   <ProjectDetailsPrompts prompts={prompts} formatDate={formatDate} />
+                  <ProjectDetailsCuratedArticles projectId={projectId} />
                   <ProjectDetailsArticles projectId={projectId} />
                 </div>
               )

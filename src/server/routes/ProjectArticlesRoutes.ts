@@ -1,11 +1,23 @@
 import {and, eq} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {projectArticles} from '../../db/schema.ts'
+import {articles, projectArticles} from '../../db/schema.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {insertArticlesIntoProject} from '../services/insertArticlesIntoProject.ts'
 
 export const projectArticlesRoutes = new Elysia()
+  .get('/api/projects/:id/articles', async ({params}) => {
+    const db = getDatabase()
+    const {id: projectId} = params
+
+    const rows = await db
+      .select({id: articles.id, articleTitle: articles.articleTitle})
+      .from(projectArticles)
+      .innerJoin(articles, eq(projectArticles.articleId, articles.id))
+      .where(eq(projectArticles.projectId, projectId))
+
+    return {articles: rows}
+  })
   .post(
     '/api/projects/:id/articles',
     async ({params, body}) => {
