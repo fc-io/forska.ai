@@ -40,27 +40,39 @@ export const ProjectDetailsPrompts = (props: ProjectDetailsPromptsProps) => {
               <span class="font-medium">{prompt.promptHeading}</span>
             </Show>
             <Show when={prompt.type}>
-              <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">{prompt.type}</span>
+              <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                {prompt.type}
+              </span>
             </Show>
             <Show when={props.projectId ? prompt.originProjectId !== props.projectId : prompt.originProjectId === null}>
-              <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800">Imported</span>
+              <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800">
+                Imported
+              </span>
             </Show>
             <Show when={props.projectId ? prompt.originProjectId !== props.projectId : prompt.originProjectId === null}>
               <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
-                {(prompt.provider || 'provider') + ' · ' + (prompt.modelName || 'model')}
+                {prompt.provider || 'no provider set'}
+              </span>
+              <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                {prompt.modelName || 'no model set'}
               </span>
             </Show>
             <Show when={prompt.enabled !== undefined}>
               <span
                 class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium"
-                classList={{'bg-green-100 text-green-800': prompt.enabled, 'bg-gray-100 text-gray-800': !prompt.enabled}}
+                classList={{
+                  'bg-green-100 text-green-800': prompt.enabled,
+                  'bg-gray-100 text-gray-800': !prompt.enabled,
+                }}
               >
                 {prompt.enabled ? 'Enabled' : 'Disabled'}
               </span>
             </Show>
             <span class="text-sm text-muted-foreground">Created {props.formatDate(prompt.created_at)}</span>
             <Show when={prompt.archived}>
-              <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800">Archived</span>
+              <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                Archived
+              </span>
             </Show>
           </div>
         </div>
@@ -84,7 +96,6 @@ export const ProjectDetailsPrompts = (props: ProjectDetailsPromptsProps) => {
 
   return (
     <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
-
       <Show when={props.prompts.length === 0}>
         <div class="text-center py-8 text-muted-foreground">
           <p class="text-lg mb-2">No prompts found for this project</p>
@@ -95,14 +106,22 @@ export const ProjectDetailsPrompts = (props: ProjectDetailsPromptsProps) => {
       <Show when={owned.length > 0}>
         <div class="space-y-4">
           <h3 class="text-lg font-semibold">Project Prompts ({owned.length})</h3>
-          <For each={owned}>{(p) => PromptCard(p)}</For>
+          <For each={owned}>
+            {(p) => {
+              return PromptCard(p)
+            }}
+          </For>
         </div>
       </Show>
 
       <Show when={linked.length > 0}>
         <div class="space-y-4 mt-6">
           <h3 class="text-lg font-semibold">Imported prompts on articles from other projects ({linked.length})</h3>
-          <For each={linked}>{(p) => PromptCard(p)}</For>
+          <For each={linked}>
+            {(p) => {
+              return PromptCard(p)
+            }}
+          </For>
         </div>
       </Show>
     </div>
