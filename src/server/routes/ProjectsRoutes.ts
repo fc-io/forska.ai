@@ -81,6 +81,8 @@ export const projectsRoutes = new Elysia()
         originalText: prompts.originalText,
         transformedText: prompts.transformedText,
         promptHeading: prompts.promptHeading,
+        provider: prompts.provider,
+        modelName: prompts.modelName,
         order: projectPrompts.order,
         archived: projectPrompts.archived,
         type: prompts.type,
@@ -162,6 +164,11 @@ export const projectsRoutes = new Elysia()
 
       // Create prompts associations if provided (global immutable prompts; upsert by hash incl metadata)
       if (newProject && body.prompts && body.prompts.length > 0) {
+        const [projModel] = await db
+          .select({provider: models.provider, modelName: models.modelName})
+          .from(models)
+          .where(eq(models.id, newProject.modelId))
+          .limit(1)
         for (let index = 0; index < body.prompts.length; index++) {
           const prompt = body.prompts[index] as string | {content: string; promptHeading?: string; type?: string; order: number}
           const content = typeof prompt === 'string' ? prompt : prompt.content
@@ -169,8 +176,14 @@ export const projectsRoutes = new Elysia()
           const typeVal = typeof prompt === 'object' ? prompt.type || null : null
           const orderVal = typeof prompt === 'object' && prompt.order !== undefined ? prompt.order : index
 
-          // Find existing prompt by app-computed 4-arg content hash (matches DB logic)
-          const contentHash = computePromptContentHash(content, null, heading, typeVal)
+          const contentHash = computePromptContentHash(
+            content,
+            null,
+            heading,
+            typeVal,
+            projModel?.provider ?? null,
+            projModel?.modelName ?? null,
+          )
           const existingByHash = await db
             .select({id: prompts.id})
             .from(prompts)
@@ -187,6 +200,8 @@ export const projectsRoutes = new Elysia()
                     transformedText: null,
                     promptHeading: heading,
                     type: typeVal,
+                    provider: projModel?.provider ?? null,
+                    modelName: projModel?.modelName ?? null,
                     contentHash,
                   })
                   .onConflictDoNothing({target: prompts.contentHash})
@@ -355,6 +370,12 @@ export const projectsRoutes = new Elysia()
           throw new Error('Project not found')
         }
 
+        const [projModel] = await tx
+          .select({provider: models.provider, modelName: models.modelName})
+          .from(models)
+          .where(eq(models.id, updatedProject.modelId))
+          .limit(1)
+
         // Handle prompts updates against associations (immutable prompts)
         if (body.prompts !== undefined) {
           // Existing associations
@@ -409,50 +430,43 @@ export const projectsRoutes = new Elysia()
               if (metaChangedOnSameText) {
                 throw new Error('Editing prompt metadata is not allowed; prompts are global and immutable')
               }
-              // If text unchanged (and metadata unchanged or absent), keep existing prompt id; otherwise, create/find new by hash
-              const hKeep = computePromptContentHash(
+              const h4 = computePromptContentHash(
                 p.originalText,
                 null,
-                existingPrompt?.promptHeading ?? null,
-                existingPrompt?.type ?? null,
+                heading,
+                typeVal,
+                projModel?.provider ?? null,
+                projModel?.modelName ?? null,
               )
-              const existingByHash = await tx
+              const found = await tx
                 .select({id: prompts.id})
                 .from(prompts)
-                .where(eq(prompts.contentHash, hKeep))
+                .where(eq(prompts.contentHash, h4))
                 .limit(1)
-              if (existingPrompt && existingByHash[0]?.id === existingPrompt.id) {
-                targetPromptId = existingPrompt.id
-              } else {
-                const h4 = computePromptContentHash(p.originalText, null, heading, typeVal)
-                const found = await tx
-                  .select({id: prompts.id})
-                  .from(prompts)
-                  .where(eq(prompts.contentHash, h4))
-                  .limit(1)
-                targetPromptId = found[0]?.id
-                  ? found[0].id
-                  : await (async () => {
-                      const inserted = await tx
-                        .insert(prompts)
-                        .values({
-                          originalText: p.originalText,
-                          transformedText: null,
-                          promptHeading: heading,
-                          type: typeVal,
-                          contentHash: h4,
-                        })
-                        .onConflictDoNothing({target: prompts.contentHash})
-                        .returning({id: prompts.id})
-                      if (inserted[0]?.id) return inserted[0].id
-                      const r = await tx
-                        .select({id: prompts.id})
-                        .from(prompts)
-                        .where(eq(prompts.contentHash, h4))
-                        .limit(1)
-                      return r[0]!.id
-                    })()
-              }
+              targetPromptId = found[0]?.id
+                ? found[0].id
+                : await (async () => {
+                    const inserted = await tx
+                      .insert(prompts)
+                      .values({
+                        originalText: p.originalText,
+                        transformedText: null,
+                        promptHeading: heading,
+                        type: typeVal,
+                        provider: projModel?.provider ?? null,
+                        modelName: projModel?.modelName ?? null,
+                        contentHash: h4,
+                      })
+                      .onConflictDoNothing({target: prompts.contentHash})
+                      .returning({id: prompts.id})
+                    if (inserted[0]?.id) return inserted[0].id
+                    const r = await tx
+                      .select({id: prompts.id})
+                      .from(prompts)
+                      .where(eq(prompts.contentHash, h4))
+                      .limit(1)
+                    return r[0]!.id
+                  })()
               // Ensure association points to target prompt and metadata is updated
               const updateAssoc: Partial<typeof projectPrompts.$inferInsert> = {
                 promptId: targetPromptId,
@@ -470,7 +484,14 @@ export const projectsRoutes = new Elysia()
                 .set(updateAssoc)
                 .where(sql`${projectPrompts.projectId} = ${params.id} AND ${projectPrompts.promptId} = ${p.originalId}`)
             } else {
-              const h4b = computePromptContentHash(p.originalText, null, heading, typeVal)
+              const h4b = computePromptContentHash(
+                p.originalText,
+                null,
+                heading,
+                typeVal,
+                projModel?.provider ?? null,
+                projModel?.modelName ?? null,
+              )
               const found = await tx
                 .select({id: prompts.id})
                 .from(prompts)
@@ -486,6 +507,8 @@ export const projectsRoutes = new Elysia()
                         transformedText: null,
                         promptHeading: heading,
                         type: typeVal,
+                        provider: projModel?.provider ?? null,
+                        modelName: projModel?.modelName ?? null,
                         contentHash: h4b,
                       })
                       .onConflictDoNothing({target: prompts.contentHash})
@@ -519,6 +542,63 @@ export const projectsRoutes = new Elysia()
                   },
                 })
             }
+          }
+        }
+
+        // If only the model changed, remap existing associations to provider/model-specific prompts
+        if (body.modelId !== undefined && body.prompts === undefined) {
+          const currentPrompts = await tx
+            .select({
+              promptId: projectPrompts.promptId,
+              originalText: prompts.originalText,
+              promptHeading: prompts.promptHeading,
+              type: prompts.type,
+              provider: prompts.provider,
+              modelName: prompts.modelName,
+              order: projectPrompts.order,
+              archived: projectPrompts.archived,
+              enabled: projectPrompts.enabled,
+            })
+            .from(projectPrompts)
+            .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
+            .where(eq(projectPrompts.projectId, params.id))
+
+          for (const cp of currentPrompts) {
+            const sameModel = cp.provider === (projModel?.provider ?? null) && cp.modelName === (projModel?.modelName ?? null)
+            if (sameModel) continue
+            const h = computePromptContentHash(
+              cp.originalText,
+              null,
+              cp.promptHeading ?? null,
+              cp.type ?? null,
+              projModel?.provider ?? null,
+              projModel?.modelName ?? null,
+            )
+            const found = await tx.select({id: prompts.id}).from(prompts).where(eq(prompts.contentHash, h)).limit(1)
+            const newPromptId = found[0]?.id
+              ? found[0].id
+              : await (async () => {
+                  const inserted = await tx
+                    .insert(prompts)
+                    .values({
+                      originalText: cp.originalText,
+                      transformedText: null,
+                      promptHeading: cp.promptHeading ?? null,
+                      type: cp.type ?? null,
+                      provider: projModel?.provider ?? null,
+                      modelName: projModel?.modelName ?? null,
+                      contentHash: h,
+                    })
+                    .onConflictDoNothing({target: prompts.contentHash})
+                    .returning({id: prompts.id})
+                  if (inserted[0]?.id) return inserted[0].id
+                  const r = await tx.select({id: prompts.id}).from(prompts).where(eq(prompts.contentHash, h)).limit(1)
+                  return r[0]!.id
+                })()
+            await tx
+              .update(projectPrompts)
+              .set({promptId: newPromptId, updatedAt: new Date()})
+              .where(sql`${projectPrompts.projectId} = ${params.id} AND ${projectPrompts.promptId} = ${cp.promptId}`)
           }
         }
 
@@ -560,6 +640,8 @@ export const projectsRoutes = new Elysia()
             originalText: prompts.originalText,
             transformedText: prompts.transformedText,
             promptHeading: prompts.promptHeading,
+            provider: prompts.provider,
+            modelName: prompts.modelName,
             order: projectPrompts.order,
             archived: projectPrompts.archived,
             type: prompts.type,

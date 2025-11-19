@@ -204,6 +204,13 @@
       "when": 1763562902460,
       "tag": "0028_cynical_bastion",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1763575345234,
+      "tag": "0029_closed_the_initiative",
+      "breakpoints": true
     }
   ]
 }

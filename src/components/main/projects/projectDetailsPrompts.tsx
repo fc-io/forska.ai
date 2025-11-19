@@ -10,6 +10,8 @@ type Prompt = {
   transformed_text?: string
   enabled?: boolean
   originProjectId?: string | null
+  provider?: string | null
+  modelName?: string | null
 }
 
 type ProjectDetailsPromptsProps = {
@@ -42,6 +44,11 @@ export const ProjectDetailsPrompts = (props: ProjectDetailsPromptsProps) => {
             </Show>
             <Show when={props.projectId ? prompt.originProjectId !== props.projectId : prompt.originProjectId === null}>
               <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800">Imported</span>
+            </Show>
+            <Show when={props.projectId ? prompt.originProjectId !== props.projectId : prompt.originProjectId === null}>
+              <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                {(prompt.provider || 'provider') + ' · ' + (prompt.modelName || 'model')}
+              </span>
             </Show>
             <Show when={prompt.enabled !== undefined}>
               <span

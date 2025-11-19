@@ -109,6 +109,8 @@ const ProjectDetail = () => {
                 originalText: string
                 transformedText: string | null
                 promptHeading: string | null
+                provider?: string | null
+                modelName?: string | null
                 order: number | null
                 archived: boolean
                 type: string | null
@@ -125,6 +127,8 @@ const ProjectDetail = () => {
                   created_at: p.createdAt?.toString() ?? new Date().toISOString(),
                   original_text: p.originalText,
                   transformed_text: p.transformedText ?? undefined,
+                  provider: p.provider ?? null,
+                  modelName: p.modelName ?? null,
                   archived: p.archived ?? undefined,
                   enabled: p.enabled ?? true,
                   originProjectId: p.originProjectId ?? null,

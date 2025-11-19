@@ -425,6 +425,8 @@ export const prompts = pgTable(
     // Global, immutable metadata
     promptHeading: text('prompt_heading'),
     type: text('type'),
+    provider: text('provider'),
+    modelName: text('model_name'),
     contentHash: text('content_hash'),
   },
   (table) => {
