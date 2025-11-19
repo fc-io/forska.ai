@@ -58,6 +58,54 @@ Goal: Allow the concept of "subprojects" where we can take selected articles ass
 - [x] Client UI to curate articles for a project
 - [x] On association, auto‑link prompts with prior judgments for that article
 
+### Phase 6.1 — Membership write path (implemented)
+
+- Shared service for consistent writes and prompt auto‑linking:
+  - Location: `src/server/services/insertArticlesIntoProject.ts`
+  - Responsibilities:
+    - Deduplicate and validate article IDs against `articles.id` (ignore unknown IDs).
+    - Upsert associations into `project_articles` with `ON CONFLICT DO NOTHING` (idempotent, concurrency‑safe).
+    - Auto‑link prompts that already have judgments (LLM or Human) for the added articles into `project_prompts` (default `archived: false`, sequential `order`).
+    - Chunk inserts (default 1000) for safety with large batches.
+    - Returns a summary object: `{ projectId, totalProvided, totalValid, invalidIds, existingAssociations, insertedCount, linkedPrompts }`.
+
+- Routes wired to the service:
+  - Add by filter (used by “Select all matching” in reviews):
+    - `POST /api/projects/add_articles_by_filter`
+    - Input: `{ targetProjectId, sourceProjectId, listType: 'llm'|'human'|'both'|'unassessed', prompts?, from?, to?, search? }`
+    - Behavior: resolves article IDs from the source project using existing selection logic, then calls the shared service to write membership + auto‑link prompts. Returns selection and write summary.
+  - Add by explicit IDs (used for page‑level selections):
+    - `POST /api/projects/add_artilces_by_ids` (typo preserved for backward compatibility)
+    - Input: `{ targetProjectId, sourceProjectId, articleIds: string[] | string }`
+    - Behavior: writes membership + auto‑links prompts via the shared service. Returns write summary.
+  - Existing route refactor (single canonical write path):
+    - `POST /api/projects/:id/articles` now delegates to `insertArticlesIntoProject(...)` to ensure identical behavior across all add flows.
+
+- Notes & guarantees:
+  - No schema changes required; aligns with `project_articles` + `project_prompts` model.
+  - Idempotent writes via unique `(project_id, article_id)` and `ON CONFLICT DO NOTHING`.
+  - Prompt auto‑linking is also idempotent via unique `(project_id, prompt_id)`.
+  - Sequential `order` is assigned during auto‑link; callers may re‑order later in UI.
+  - Large selections are chunked to avoid parameter/packet limits.
+
+### Testing & Quality Gates (server)
+
+- Manual smoke (suggested):
+  - POST `/api/projects/add_articles_by_filter` with a real filter → verify rows in `project_articles` and prompt links in `project_prompts`.
+  - POST `/api/projects/add_artilces_by_ids` with known article IDs → verify `insertedCount` and `linkedPrompts` in response and DB rows.
+  - POST `/api/projects/:id/articles` → confirm identical behavior.
+
+- Commands (run locally):
+  - `bun run lint`
+  - `bun test`
+
+### UI Integration
+
+- Reviews bulk add menu calls:
+  - “Select all matching” → `POST /api/projects/add_articles_by_filter`
+  - “Selected rows” → `POST /api/projects/add_artilces_by_ids`
+  - File references: `src/components/main/reviews/reviewsPaginationControls.tsx`
+
 ## Phase 7 — Clean‑up
 - [x] Legacy prompt columns dropped (drop `prompts.project_id`, `prompts.order`, `prompts.archived`; keep `prompts.prompt_heading` and `prompts.type` as global immutable metadata) — Code/schema now read metadata from `prompts`; `project_prompts` no longer has these columns.
 - [x] Ensure remaining callers are using joins only

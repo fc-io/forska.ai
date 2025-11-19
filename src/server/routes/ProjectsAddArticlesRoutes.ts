@@ -1,17 +1,9 @@
 import {and, desc, eq, gte, inArray, lte, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {
-  articleRouteLink,
-  articles,
-  judgments,
-  judgmentsHuman,
-  projectRouteLink,
-  projects,
-  prompts,
-  projectPrompts,
-} from '../../db/schema.ts'
+import {articleRouteLink, articles, judgments, judgmentsHuman, projectRouteLink, projects, prompts, projectPrompts} from '../../db/schema.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
+import {insertArticlesIntoProject} from '../services/insertArticlesIntoProject.ts'
 
 type ListType = 'llm' | 'human' | 'both' | 'unassessed'
 
@@ -247,16 +239,24 @@ export const projectsAddArticlesRoutes = new Elysia()
         body.search,
       )
 
-      console.log('[api/projects/add_articles_by_filter] selection', {
+      // Upsert associations + auto-link prompts
+      const result = await insertArticlesIntoProject(body.targetProjectId, articleIds)
+
+      console.log('[api/projects/add_articles_by_filter] applied', {
         targetProjectId: body.targetProjectId,
         sourceProjectId: body.sourceProjectId,
         listType: body.listType,
         filters: {from: body.from, to: body.to, search: body.search, prompts: body.prompts},
-        total: articleIds.length,
-        articleIds,
+        selectionTotal: articleIds.length,
+        ...result,
       })
 
-      return {success: true, total: articleIds.length, articleIds}
+      return {
+        success: true,
+        targetProjectId: body.targetProjectId,
+        selectionTotal: articleIds.length,
+        ...result,
+      }
     },
     {
       body: t.Object({
@@ -274,13 +274,21 @@ export const projectsAddArticlesRoutes = new Elysia()
     '/api/projects/add_artilces_by_ids',
     async ({body}) => {
       const ids = Array.isArray(body.articleIds) ? body.articleIds : [body.articleIds]
-      console.log('[api/projects/add_artilces_by_ids] selection', {
+      const result = await insertArticlesIntoProject(body.targetProjectId, ids)
+
+      console.log('[api/projects/add_artilces_by_ids] applied', {
         targetProjectId: body.targetProjectId,
         sourceProjectId: body.sourceProjectId,
-        total: ids.length,
-        articleIds: ids,
+        providedTotal: ids.length,
+        ...result,
       })
-      return {success: true, total: ids.length, articleIds: ids}
+
+      return {
+        success: true,
+        targetProjectId: body.targetProjectId,
+        providedTotal: ids.length,
+        ...result,
+      }
     },
     {
       body: t.Object({
