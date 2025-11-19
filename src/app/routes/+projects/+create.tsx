@@ -90,7 +90,10 @@ const CreateProject = () => {
   }
 
   const availableModels = () => {
-    return modelsQuery.data ?? []
+    const models = modelsQuery.data ?? []
+    return [...models].sort((a, b) => {
+      return a.name.localeCompare(b.name)
+    })
   }
 
   createEffect(() => {

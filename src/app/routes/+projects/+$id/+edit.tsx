@@ -285,7 +285,10 @@ const EditProject = (): JSX.Element => {
   }
 
   const availableModels = () => {
-    return modelsQuery.data ?? []
+    const models = modelsQuery.data ?? []
+    return [...models].sort((a, b) => {
+      return a.name.localeCompare(b.name)
+    })
   }
 
   const availableImportRoutes = () => {
@@ -471,7 +474,7 @@ const EditProject = (): JSX.Element => {
     )
   }
 
-  
+
 
   return (
     <div class="p-6 max-w-4xl mx-auto">
@@ -831,7 +834,7 @@ const EditProject = (): JSX.Element => {
                 </div>
               </div>
 
-              
+
 
               <div class="flex gap-3 pt-4">
                 <Button
