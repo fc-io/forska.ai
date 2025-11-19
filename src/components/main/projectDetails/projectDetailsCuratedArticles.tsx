@@ -1,21 +1,33 @@
 import {useQuery} from '@tanstack/solid-query'
 import {Link} from '@tanstack/solid-router'
 import {type ColumnDef, createSolidTable, flexRender, getCoreRowModel} from '@tanstack/solid-table'
-import {For, Show, Suspense} from 'solid-js'
+import {For, Show, Suspense, createSignal} from 'solid-js'
 
 import {apiClient} from '../../../services/apiClient.ts'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse.ts'
+import {ImportedArticlesPaginationControls} from './importedArticles/importedArticlesPaginationControls'
 
 type CuratedArticle = {id: string; articleTitle: string}
 
 export const ProjectDetailsCuratedArticles = (props: {projectId: string}) => {
+  const [currentPage, setCurrentPage] = createSignal(1)
+  const [pageLimit, setPageLimit] = createSignal(50)
+
   const query = useQuery(() => {
     return {
-      queryKey: ['project-curated-articles', props.projectId],
+      queryKey: ['project-curated-articles', props.projectId, currentPage(), pageLimit()],
       queryFn: async () => {
-        const response = await apiClient.api.projects({id: props.projectId}).articles.get()
-        const data = handleApiResponse(response, 'Failed to fetch project articles') as {articles: CuratedArticle[]}
-        return data.articles ?? []
+        const response = await apiClient.api
+          .projects({id: props.projectId})
+          .articles.get({query: {page: String(currentPage()), limit: String(pageLimit())}})
+        const data = handleApiResponse(response, 'Failed to fetch project articles') as {
+          articles: CuratedArticle[]
+          totalCount: number
+          page: number
+          limit: number
+          totalPages: number
+        }
+        return data
       },
       refetchOnWindowFocus: false,
     }
@@ -52,7 +64,7 @@ export const ProjectDetailsCuratedArticles = (props: {projectId: string}) => {
 
   const table = createSolidTable({
     get data() {
-      return query.data || []
+      return (query.data?.articles as CuratedArticle[]) || []
     },
     columns,
     getCoreRowModel: getCoreRowModel(),
@@ -63,7 +75,27 @@ export const ProjectDetailsCuratedArticles = (props: {projectId: string}) => {
 
   return (
     <div>
-      <h2 class="text-lg font-semibold mb-2">Imported Articles</h2>
+      <div class="flex items-center justify-between mb-2">
+        <h2 class="text-lg font-semibold">Imported Articles</h2>
+        <Show when={query.data?.totalCount !== undefined}>
+          <div class="text-sm text-gray-600">Total: {query.data?.totalCount ?? 0}</div>
+        </Show>
+      </div>
+      <Show when={query.data}>
+        <ImportedArticlesPaginationControls
+          page={query.data!.page}
+          totalPages={query.data!.totalPages}
+          totalCount={query.data!.totalCount}
+          limit={query.data!.limit}
+          onPageChange={(p) => {
+            setCurrentPage(p)
+          }}
+          onLimitChange={(l) => {
+            setPageLimit(l)
+            setCurrentPage(1)
+          }}
+        />
+      </Show>
       <Suspense>
         <Show when={query.isPending}>
           <div class="text-sm text-gray-500">Loading imported articles…</div>
@@ -125,12 +157,29 @@ export const ProjectDetailsCuratedArticles = (props: {projectId: string}) => {
                 </For>
               </tbody>
             </table>
-            <Show when={(query.data || []).length === 0}>
+            <Show when={(query.data?.totalCount ?? 0) === 0}>
               <div class="p-8 text-center text-gray-500">No articles linked.</div>
             </Show>
           </div>
         </Show>
       </Suspense>
+      <Show when={query.data}>
+        <div class="mt-3">
+          <ImportedArticlesPaginationControls
+            page={query.data!.page}
+            totalPages={query.data!.totalPages}
+            totalCount={query.data!.totalCount}
+            limit={query.data!.limit}
+            onPageChange={(p) => {
+              setCurrentPage(p)
+            }}
+            onLimitChange={(l) => {
+              setPageLimit(l)
+              setCurrentPage(1)
+            }}
+          />
+        </div>
+      </Show>
     </div>
   )
 }
