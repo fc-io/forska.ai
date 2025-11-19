@@ -108,8 +108,8 @@ const AdminDatasourcesIndexRoute = AdminDatasourcesIndexRouteImport.update({
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminConfigurationIndexRoute = AdminConfigurationIndexRouteImport.update({
-  id: '/admin/configuration/',
-  path: '/admin/configuration/',
+  id: '/admin/setup_stats/',
+  path: '/admin/setup_stats/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminAssessmentsIndexRoute = AdminAssessmentsIndexRouteImport.update({
@@ -183,7 +183,7 @@ export interface FileRoutesByFullPath {
   '/settings': typeof SettingsIndexRoute
   '/projects/create': typeof ProjectsCreateRoute
   '/admin/assessments': typeof AdminAssessmentsIndexRoute
-  '/admin/configuration': typeof AdminConfigurationIndexRoute
+  '/admin/setup_stats': typeof AdminConfigurationIndexRoute
   '/admin/datasources': typeof AdminDatasourcesIndexRoute
   '/admin/jobs': typeof AdminJobsIndexRoute
   '/admin/llm': typeof AdminLlmIndexRoute
@@ -211,7 +211,7 @@ export interface FileRoutesByTo {
   '/settings': typeof SettingsIndexRoute
   '/projects/create': typeof ProjectsCreateRoute
   '/admin/assessments': typeof AdminAssessmentsIndexRoute
-  '/admin/configuration': typeof AdminConfigurationIndexRoute
+  '/admin/setup_stats': typeof AdminConfigurationIndexRoute
   '/admin/datasources': typeof AdminDatasourcesIndexRoute
   '/admin/jobs': typeof AdminJobsIndexRoute
   '/admin/llm': typeof AdminLlmIndexRoute
@@ -240,7 +240,7 @@ export interface FileRoutesById {
   '/settings/': typeof SettingsIndexRoute
   '/projects/create': typeof ProjectsCreateRoute
   '/admin/assessments/': typeof AdminAssessmentsIndexRoute
-  '/admin/configuration/': typeof AdminConfigurationIndexRoute
+  '/admin/setup_stats/': typeof AdminConfigurationIndexRoute
   '/admin/datasources/': typeof AdminDatasourcesIndexRoute
   '/admin/jobs/': typeof AdminJobsIndexRoute
   '/admin/llm/': typeof AdminLlmIndexRoute
@@ -270,7 +270,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/projects/create'
     | '/admin/assessments'
-    | '/admin/configuration'
+    | '/admin/setup_stats'
     | '/admin/datasources'
     | '/admin/jobs'
     | '/admin/llm'
@@ -298,7 +298,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/projects/create'
     | '/admin/assessments'
-    | '/admin/configuration'
+    | '/admin/setup_stats'
     | '/admin/datasources'
     | '/admin/jobs'
     | '/admin/llm'
@@ -326,7 +326,7 @@ export interface FileRouteTypes {
     | '/settings/'
     | '/projects/create'
     | '/admin/assessments/'
-    | '/admin/configuration/'
+    | '/admin/setup_stats/'
     | '/admin/datasources/'
     | '/admin/jobs/'
     | '/admin/llm/'
@@ -476,10 +476,10 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof AdminDatasourcesIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/admin/configuration/': {
-      id: '/admin/configuration/'
-      path: '/admin/configuration'
-      fullPath: '/admin/configuration'
+    '/admin/setup_stats/': {
+      id: '/admin/setup_stats/'
+      path: '/admin/setup_stats'
+      fullPath: '/admin/setup_stats'
       preLoaderRoute: typeof AdminConfigurationIndexRouteImport
       parentRoute: typeof rootRouteImport
     }

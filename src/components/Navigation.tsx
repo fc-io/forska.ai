@@ -68,8 +68,8 @@ export const Navigation = (props: NavigationProps) => {
               <Link to="/admin/llm" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
                 LLM Metrics
               </Link>
-              <Link to="/admin/configuration" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
-                Configuration
+              <Link to="/admin/setup_stats" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
+                Setup/Stats
               </Link>
               <Link to="/admin/users" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
                 Users
