@@ -1,7 +1,7 @@
 import {useQuery} from '@tanstack/solid-query'
 import {Link} from '@tanstack/solid-router'
 import {type ColumnDef, createSolidTable, flexRender, getCoreRowModel} from '@tanstack/solid-table'
-import {For, Show, Suspense, createSignal} from 'solid-js'
+import {createSignal, For, Show, Suspense} from 'solid-js'
 
 import {apiClient} from '../../../services/apiClient.ts'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse.ts'
@@ -20,13 +20,7 @@ export const ProjectDetailsCuratedArticles = (props: {projectId: string}) => {
         const response = await apiClient.api
           .projects({id: props.projectId})
           .articles.get({query: {page: String(currentPage()), limit: String(pageLimit())}})
-        const data = handleApiResponse(response, 'Failed to fetch project articles') as {
-          articles: CuratedArticle[]
-          totalCount: number
-          page: number
-          limit: number
-          totalPages: number
-        }
+        const data = handleApiResponse(response, 'Failed to fetch project articles')
         return data
       },
       refetchOnWindowFocus: false,
@@ -69,14 +63,14 @@ export const ProjectDetailsCuratedArticles = (props: {projectId: string}) => {
     columns,
     getCoreRowModel: getCoreRowModel(),
     getRowId: (row) => {
-      return (row as CuratedArticle).id
+      return row.id
     },
   })
 
   return (
     <div>
       <h2 class="text-lg font-semibold mb-2">Imported Articles</h2>
-      <Show when={query.data}>
+      <Show when={query.data && Number(query.data.totalCount ?? 0) > 0}>
         <ImportedArticlesPaginationControls
           page={query.data!.page}
           totalPages={query.data!.totalPages}
@@ -98,7 +92,7 @@ export const ProjectDetailsCuratedArticles = (props: {projectId: string}) => {
         <Show when={query.error}>
           <div class="text-sm text-red-600">{(query.error as Error).message}</div>
         </Show>
-        <Show when={query.data}>
+        <Show when={query.data && Number(query.data.totalCount ?? 0) > 0}>
           <div class="overflow-x-auto bg-white rounded-lg shadow">
             <table class="min-w-full divide-y divide-gray-200">
               <thead class="bg-gray-50">
@@ -152,13 +146,13 @@ export const ProjectDetailsCuratedArticles = (props: {projectId: string}) => {
                 </For>
               </tbody>
             </table>
-            <Show when={(query.data?.totalCount ?? 0) === 0}>
-              <div class="p-8 text-center text-gray-500">No articles linked.</div>
-            </Show>
           </div>
         </Show>
+        <Show when={query.data && Number(query.data.totalCount ?? 0) <= 0}>
+          <div class="p-8 text-center text-gray-500">There are no imported articles from other projects.</div>
+        </Show>
       </Suspense>
-      <Show when={query.data}>
+      <Show when={query.data && Number(query.data.totalCount ?? 0) > 0}>
         <div class="mt-3">
           <ImportedArticlesPaginationControls
             page={query.data!.page}
