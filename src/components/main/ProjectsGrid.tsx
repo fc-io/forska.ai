@@ -52,27 +52,29 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
   }
 
   return (
-    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
+    <ul class="flex flex-col gap-6 mb-8 list-none p-0">
       {}
       <For each={props.projects}>
         {(project) => {
           return (
-            <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-              <h2 class="text-xl font-semibold mb-3">{project.name}</h2>
-              <p class="text-muted-foreground mb-4">
-                {(project.description && project.description.length > 100
-                  ? `${project.description?.slice(0, 100).trim()}…`
-                  : project.description) || 'No description provided'}
-              </p>
-              <div class="flex items-center gap-2 mb-3">
-                <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                  Active
-                </span>
-                <span class="text-sm text-muted-foreground">
-                  Created: {format(project.createdAt, 'yyyy-MM-dd HH:mm')}
-                </span>
-              </div>
-              <div class="flex flex-col gap-2">
+            <li>
+              <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+                <div class="flex items-start justify-between gap-3 mb-3">
+                  <h2 class="text-xl font-semibold">{project.name}</h2>
+                  <div class="flex items-center gap-2">
+                    <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                      Active
+                    </span>
+                    <span class="text-sm text-muted-foreground">
+                      Created: {format(project.createdAt, 'yyyy-MM-dd HH:mm')}
+                    </span>
+                  </div>
+                </div>
+                <p class="text-muted-foreground mb-4">
+                  {(project.description && project.description.length > 100
+                    ? `${project.description?.slice(0, 100).trim()}…`
+                    : project.description) || 'No description provided'}
+                </p>
                 <div class="flex gap-2">
                   <Button
                     as={Link}
@@ -114,8 +116,6 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
                   >
                     Edit
                   </Button>
-                </div>
-                <div class="flex gap-2">
                   <Button size="sm" variant="outline" class="px-3 py-1 text-sm">
                     Clone Project
                   </Button>
@@ -131,10 +131,10 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
                   </Button>
                 </div>
               </div>
-            </div>
+            </li>
           )
         }}
       </For>
-    </div>
+    </ul>
   )
 }
