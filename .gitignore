@@ -1,6 +1,7 @@
 # dependencies (bun install)
 node_modules
 backups
+openalex_snapshot
 
 pgdata/
 init-db/
