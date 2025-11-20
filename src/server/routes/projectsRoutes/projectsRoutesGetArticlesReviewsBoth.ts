@@ -203,6 +203,8 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
             .where(
               and(
                 inArray(judgmentsHuman.articleId, articleIds),
+                eq(judgmentsHuman.projectId, body.projectId),
+                inArray(judgmentsHuman.promptId, promptIds),
                 // Only consider non-null answers when determining qualified humans
                 sql`${judgmentsHuman.answer} IS NOT NULL`,
               ),
@@ -258,7 +260,8 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
         const rows = byUser.get(userId) || []
         for (const r of rows) {
           if (r.answer !== null && r.answer !== undefined) {
-            promptMap[r.promptId].push(r.answer)
+            const bucket = promptMap[r.promptId]
+            if (bucket) bucket.push(r.answer)
           }
         }
       }
