@@ -12,16 +12,12 @@ export const computePromptContentHash = (
   trans: string | null | undefined,
   heading: string | null | undefined,
   type: string | null | undefined,
-  provider: string | null | undefined,
-  modelName: string | null | undefined,
 ): string => {
   const src = [
     normalizeTextForHash(orig),
     normalizeTextForHash(trans ?? ''),
     normalizeTextForHash(heading ?? ''),
     normalizeTextForHash(type ?? ''),
-    normalizeTextForHash(provider ?? ''),
-    normalizeTextForHash(modelName ?? ''),
   ].join('|')
   return createHash('md5').update(src).digest('hex')
 }

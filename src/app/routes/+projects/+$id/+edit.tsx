@@ -31,8 +31,6 @@ type ProjectPromptResponse = {
   archived: boolean
   enabled?: boolean
   originProjectId?: string | null
-  provider?: string | null
-  modelName?: string | null
 }
 
 type ProjectSummary = {
