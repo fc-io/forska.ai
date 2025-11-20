@@ -29,6 +29,7 @@ const judgeAndMark = async (
       modelName: articleToProcess.modelName,
       baseURL: articleToProcess.modelBaseUrl,
     },
+    projectId: articleToProcess.projectId,
   })
   await markArticlesAsJudged(db, articleToProcess.jobId, [articleToProcess.articleId])
 }

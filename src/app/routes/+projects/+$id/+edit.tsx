@@ -370,6 +370,12 @@ const EditProject = (): JSX.Element => {
       })
       setOwnedPrompts(owned.length > 0 ? owned : [buildEmptyPrompt(1)])
       setImportedPrompts(imported)
+      console.log(
+        'Importable prompts debug',
+        imported.map((p) => {
+          return {order: p.order, heading: p.promptHeading, type: p.type, enabled: p.enabled}
+        }),
+      )
       setUseTitle(details.project.useTitle)
       setUseAbstract(details.project.useAbstract)
       setUseFulltext(details.project.useFulltext)
@@ -952,6 +958,18 @@ const EditProject = (): JSX.Element => {
                             </div>
 
                             <div class="space-y-3">
+                              <div>
+                                <label class="text-sm font-medium text-muted-foreground block mb-1">Heading</label>
+                                <div class="bg-gray-50 rounded p-3 text-sm whitespace-pre-wrap">
+                                  {promptItem.promptHeading || '—'}
+                                </div>
+                              </div>
+                              <div>
+                                <label class="text-sm font-medium text-muted-foreground block mb-1">Type</label>
+                                <div class="bg-gray-50 rounded p-3 text-sm whitespace-pre-wrap">
+                                  {promptItem.type || '—'}
+                                </div>
+                              </div>
                               <div>
                                 <label class="text-sm font-medium text-muted-foreground block mb-1">
                                   Original Text

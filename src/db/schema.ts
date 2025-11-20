@@ -549,6 +549,16 @@ export const judgments = pgTable(
     confidenceOriginal: integer('confidence_original').default(50),
     explanation: text('explanation'),
     quotes: jsonb('quotes').default([]),
+    // Snapshots
+    snapshotProjectId: uuid('snapshot_project_id'),
+    snapshotProjectOwnerId: text('snapshot_project_owner_id'),
+    snapshotProjectUseTitle: boolean('snapshot_project_use_title'),
+    snapshotProjectUseAbstract: boolean('snapshot_project_use_abstract'),
+    snapshotProjectUseFulltext: boolean('snapshot_project_use_fulltext'),
+    snapshotProjectModelName: text('snapshot_project_model_name'),
+    snapshotProjectProvider: text('snapshot_project_provider'),
+    snapshotArticleOriginalData: jsonb('snapshot_article_original_data'),
+    snapshotArticlePdfHash: text('snapshot_article_pdf_hash'),
   },
   (table) => {
     return [

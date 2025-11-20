@@ -203,6 +203,7 @@ const attemptJudgment = async ({
   article,
   prompts,
   modelId,
+  projectId,
 }: {
   prompt: string
   baseURL: string
@@ -210,6 +211,7 @@ const attemptJudgment = async ({
   article: ArticlesType[number]
   prompts: PromptsType
   modelId: string
+  projectId: string
 }): Promise<
   | {success: true; judgment: unknown; usage: {promptTokens: number; completionTokens: number; totalTokens: number}}
   | {success: false; error: string; lastResponse: string}
@@ -239,7 +241,7 @@ const attemptJudgment = async ({
     return p.id
   })
 
-  await judgeStoreJudgment(article.id, article.articleTitle, judgment, modelId, promptIds)
+  await judgeStoreJudgment(article.id, article.articleTitle, judgment, modelId, promptIds, projectId)
 
   return {
     success: true,
@@ -261,12 +263,14 @@ export const judge = async ({
   sessionId,
   judgmentsJobId,
   modelConfig,
+  projectId,
 }: {
   articles: ArticlesType
   prompts: PromptsType
   sessionId: string | null
   judgmentsJobId: string
   modelConfig: ModelConfigInput
+  projectId: string
 }): Promise<void> => {
   const {baseURL, modelName, modelId} = modelConfig
   if (!baseURL) {
@@ -286,7 +290,7 @@ export const judge = async ({
 
       while (attempts <= MAX_RETRIES) {
         attempts += 1
-        const result = await attemptJudgment({prompt, baseURL, modelName, article, prompts, modelId})
+        const result = await attemptJudgment({prompt, baseURL, modelName, article, prompts, modelId, projectId})
 
         if (result.success) {
           // console.log('judgment success')
