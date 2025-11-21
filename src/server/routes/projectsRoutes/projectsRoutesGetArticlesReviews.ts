@@ -120,11 +120,12 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
       const scopeCondition = hasMatchingImportRoute ? or(hasMatchingImportRoute, hasProjectArticle) : hasProjectArticle
 
       // Build grouped base query once, then count rows in a subquery (fast COUNT(*))
-      // Build HAVING conditions: require one judgment per prompt overall, and if prompt has filters,
-      // require at least one matching answered_original within that prompt for the article.
+      // Build HAVING conditions: require one judgment per prompt overall, and if a prompt has selected filters,
+      // require at least one element in normalized answer array to overlap the selected set for that prompt.
       const havingParts: Array<ReturnType<typeof sql>> = [
         sql`COUNT(DISTINCT ${judgments.promptId}) = ${promptIds.length}`,
       ]
+      const normalized = sql`COALESCE(${judgments.answeredOriginalAsArray}, CASE WHEN ${judgments.answeredOriginal} IS NOT NULL THEN ARRAY[${judgments.answeredOriginal}] ELSE ARRAY[]::text[] END)`
       for (const [promptId, answeredValues] of promptFilters) {
         if (answeredValues.length === 0) continue
         const answeredValsArray = sql.join(
@@ -134,7 +135,7 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
           sql`,`,
         )
         havingParts.push(
-          sql`SUM(CASE WHEN ${judgments.promptId} = ${promptId}::uuid AND ${judgments.answeredOriginal} = ANY(ARRAY[${answeredValsArray}]::text[]) THEN 1 ELSE 0 END) > 0`,
+          sql`SUM(CASE WHEN ${judgments.promptId} = ${promptId}::uuid AND (${normalized}) && ARRAY[${answeredValsArray}]::text[] THEN 1 ELSE 0 END) > 0`,
         )
       }
 

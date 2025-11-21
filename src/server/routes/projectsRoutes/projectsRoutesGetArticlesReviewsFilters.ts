@@ -76,7 +76,8 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
           AND pa."project_id" = ${query.projectId}::uuid
       )`
 
-      // Single grouped query across all project prompts for distinct answered_original values
+      // Single grouped query across all project prompts for distinct filter values
+      // Use normalized array: COALESCE(answered_original_as_array, ARRAY[answered_original])
       const promptIds = projectPromptRows.map((p) => {
         return p.id
       })
@@ -91,13 +92,21 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
       if (toDate) whereParts.push(lte(articles.articleCreatedAt, toDate))
       if (searchTitle) whereParts.push(sql`${articles.articleTitle} ILIKE ${'%' + searchTitle + '%'}`)
 
-      const grouped = await db
-        .select({promptId: judgments.promptId, answeredOriginal: judgments.answeredOriginal})
-        .from(judgments)
-        .innerJoin(articles, eq(articles.id, judgments.articleId))
-        .where(and(...whereParts))
-        .groupBy(judgments.promptId, judgments.answeredOriginal)
-        .orderBy(judgments.promptId, judgments.answeredOriginal)
+      const normalized = sql`COALESCE(${judgments.answeredOriginalAsArray}, CASE WHEN ${judgments.answeredOriginal} IS NOT NULL THEN ARRAY[${judgments.answeredOriginal}] ELSE ARRAY[]::text[] END)`
+
+      // Use raw SQL to UNNEST the normalized array per row and collect distinct elements
+      const combinedWhere = and(...whereParts)
+      const grouped = await db.execute(
+        sql`
+          SELECT ${judgments.promptId} AS "promptId", elem AS "value"
+          FROM ${judgments}
+          INNER JOIN ${articles} ON ${articles.id} = ${judgments.articleId}
+          CROSS JOIN LATERAL UNNEST(${normalized}) AS elem
+          WHERE ${combinedWhere}
+          GROUP BY ${judgments.promptId}, elem
+          ORDER BY ${judgments.promptId}, elem
+        `,
+      )
 
       const promptNameMap = new Map(
         projectPromptRows.map((p) => {
@@ -105,9 +114,9 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
         }),
       )
       const byPrompt = new Map<string, string[]>()
-      for (const row of grouped) {
+      for (const row of grouped.rows as Array<{promptId: string; value: string}>) {
         const arr = byPrompt.get(row.promptId) || []
-        if (row.answeredOriginal !== null) arr.push(row.answeredOriginal as unknown as string)
+        if (row.value !== null && row.value !== undefined) arr.push(row.value)
         byPrompt.set(row.promptId, arr)
       }
 

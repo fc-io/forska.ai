@@ -60,6 +60,13 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
     const filterConditions: Array<ReturnType<typeof sql>> = []
 
     for (const [promptId, answeredValues] of promptFilters) {
+      const answeredValsArray = sql.join(
+        answeredValues.map((v) => {
+          return sql`${v}`
+        }),
+        sql`,`,
+      )
+      const normalized = sql`COALESCE(${judgments.answeredOriginalAsArray}, CASE WHEN ${judgments.answeredOriginal} IS NOT NULL THEN ARRAY[${judgments.answeredOriginal}] ELSE ARRAY[]::text[] END)`
       const subquery = db
         .select({exists: sql`1`})
         .from(judgments)
@@ -67,7 +74,7 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
           and(
             eq(judgments.articleId, articles.id),
             eq(judgments.promptId, promptId),
-            inArray(judgments.answeredOriginal, answeredValues),
+            sql`(${normalized}) && ARRAY[${answeredValsArray}]::text[]`,
           ),
         )
         .limit(1)
