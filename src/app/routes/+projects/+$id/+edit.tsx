@@ -840,7 +840,7 @@ const EditProject = (): JSX.Element => {
                           <div class="flex-1 space-y-2">
                             <div class="text-[11px] text-gray-500">
                               {promptItem.originalId
-                                ? `ID: ${String(promptItem.originalId).slice(0, 8)}`
+                                ? `Prompt ID: ${String(promptItem.originalId).slice(0, 8)}`
                                 : 'New prompt'}
                             </div>
                             <input
@@ -939,7 +939,7 @@ const EditProject = (): JSX.Element => {
                                 </span>
                                 <Show when={promptItem.originalId}>
                                   <span class="inline-flex items-center px-2 py-1 rounded-full text-[11px] font-medium bg-gray-50 text-gray-600">
-                                    ID: {(promptItem.originalId || '').slice(0, 8)}
+                                    Prompt ID: {(promptItem.originalId || '').slice(0, 8)}
                                   </span>
                                 </Show>
                                 <Show when={promptItem.enabled !== undefined}>

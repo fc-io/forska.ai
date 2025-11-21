@@ -1,4 +1,4 @@
-import {desc, eq, inArray, isNull, sql} from 'drizzle-orm'
+import {and, desc, eq, inArray, isNull, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {
@@ -6,6 +6,7 @@ import {
   judgments,
   judgmentsJobs,
   models,
+  projectArticles,
   projectRouteLink,
   projects,
   prompts,
@@ -86,11 +87,48 @@ export const projectsRoutes = new Elysia()
         type: prompts.type,
         enabled: projectPrompts.enabled,
         originProjectId: projectPrompts.originProjectId,
+        contentHash: prompts.contentHash,
       })
       .from(projectPrompts)
       .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
       .where(eq(projectPrompts.projectId, params.id))
       .orderBy(projectPrompts.order)
+
+    // Importable prompts inferred from judgments on this project's articles
+    // that are not yet linked via project_prompts for this project
+    const importablePrompts = await db
+      .select({
+        id: prompts.id,
+        originalText: prompts.originalText,
+        transformedText: prompts.transformedText,
+        promptHeading: prompts.promptHeading,
+        // No explicit order yet; UI will place these after owned prompts
+        order: sql<number>`NULL`,
+        archived: sql<boolean>`FALSE`,
+        type: prompts.type,
+        enabled: sql<boolean>`FALSE`,
+        // null indicates auto-linked from external judgments (no single source project)
+        originProjectId: sql<string>`NULL`,
+        contentHash: prompts.contentHash,
+      })
+      .from(projectArticles)
+      .innerJoin(judgments, eq(judgments.articleId, projectArticles.articleId))
+      .innerJoin(prompts, eq(judgments.promptId, prompts.id))
+      .leftJoin(
+        projectPrompts,
+        and(eq(projectPrompts.projectId, params.id), eq(projectPrompts.promptId, prompts.id)),
+      )
+      .where(and(eq(projectArticles.projectId, params.id), isNull(projectPrompts.id)))
+      .groupBy(
+        prompts.id,
+        prompts.originalText,
+        prompts.transformedText,
+        prompts.promptHeading,
+        prompts.type,
+        prompts.contentHash,
+      )
+
+    const promptsCombined = [...projectPromptsList, ...importablePrompts]
 
     // Lock projects for editing if a judgment job exists for the project
     const existingJob = await db
@@ -125,7 +163,15 @@ export const projectsRoutes = new Elysia()
       return r.route
     })
 
-    return {data: {project, prompts: projectPromptsList, hasJudgedArticles, model: projectModel ?? null, importRoutes}}
+    return {
+      data: {
+        project,
+        prompts: promptsCombined,
+        hasJudgedArticles,
+        model: projectModel ?? null,
+        importRoutes,
+      },
+    }
   })
   .post(
     '/api/projects',

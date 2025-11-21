@@ -39,9 +39,9 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
         <p class="text-sm font-medium text-gray-900 line-clamp-2">{props.judgment.prompt.originalText}</p>
         <div class="mt-1 text-[11px] text-gray-500">
           <span>
-            {promptId() ? `ID: ${String(promptId()).slice(0, 8)}` : ''}
+            {promptId() ? `Prompt ID: ${String(promptId()).slice(0, 8)}` : ''}
             {promptId() && promptHash() ? ' • ' : ''}
-            {promptHash() ? `Hash: ${String(promptHash()).slice(0, 8)}` : ''}
+            {promptHash() ? `Prompt Hash: ${String(promptHash()).slice(0, 8)}` : ''}
           </span>
         </div>
       </div>

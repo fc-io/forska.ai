@@ -72,12 +72,12 @@ export const ProjectDetailsPrompts = (props: ProjectDetailsPromptsProps) => {
             </Show>
             <Show when={prompt.id}>
               <span class="inline-flex items-center px-2 py-1 rounded-full text-[11px] font-medium bg-gray-50 text-gray-600">
-                ID: {(prompt.id || '').slice(0, 8)}
+                Prompt ID: {(prompt.id || '').slice(0, 8)}
               </span>
             </Show>
             <Show when={prompt.contentHash}>
               <span class="inline-flex items-center px-2 py-1 rounded-full text-[11px] font-medium bg-gray-50 text-gray-600">
-                Hash: {(prompt.contentHash || '').slice(0, 8)}
+                Prompt Hash: {(prompt.contentHash || '').slice(0, 8)}
               </span>
             </Show>
             <span class="text-sm text-muted-foreground">Created {props.formatDate(prompt.created_at)}</span>
