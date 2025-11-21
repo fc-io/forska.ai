@@ -240,7 +240,7 @@ export const projectsAddArticlesRoutes = new Elysia()
       )
 
       // Upsert associations + auto-link prompts
-      const result = await insertArticlesIntoProject(body.targetProjectId, articleIds)
+      const result = await insertArticlesIntoProject(body.targetProjectId, articleIds, body.sourceProjectId)
 
       console.log('[api/projects/add_articles_by_filter] applied', {
         targetProjectId: body.targetProjectId,
@@ -274,7 +274,7 @@ export const projectsAddArticlesRoutes = new Elysia()
     '/api/projects/add_artilces_by_ids',
     async ({body}) => {
       const ids = Array.isArray(body.articleIds) ? body.articleIds : [body.articleIds]
-      const result = await insertArticlesIntoProject(body.targetProjectId, ids)
+      const result = await insertArticlesIntoProject(body.targetProjectId, ids, body.sourceProjectId)
 
       console.log('[api/projects/add_artilces_by_ids] applied', {
         targetProjectId: body.targetProjectId,

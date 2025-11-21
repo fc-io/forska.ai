@@ -225,6 +225,20 @@
       "when": 1763637957375,
       "tag": "0031_thin_doorman",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1763715610434,
+      "tag": "0032_perpetual_machine_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1763716313787,
+      "tag": "0033_spotty_monster_badoon",
+      "breakpoints": true
     }
   ]
 }

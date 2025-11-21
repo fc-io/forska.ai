@@ -640,6 +640,12 @@ export const projectArticles = pgTable(
         },
         {onDelete: 'cascade'},
       ),
+    importedFromProjectId: uuid('imported_from_project_id').references(
+      () => {
+        return projects.id
+      },
+      {onDelete: 'set null'},
+    ),
     articleId: uuid('article_id')
       .notNull()
       .references(
@@ -654,6 +660,7 @@ export const projectArticles = pgTable(
       uniqueIndex('project_articles_unique').on(table.projectId, table.articleId),
       index('project_articles_project_idx').on(table.projectId),
       index('project_articles_article_idx').on(table.articleId),
+      index('project_articles_imported_from_project_idx').on(table.importedFromProjectId),
     ]
   },
 )

@@ -7,7 +7,12 @@ import {apiClient} from '../../../services/apiClient.ts'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse.ts'
 import {ImportedArticlesPaginationControls} from './importedArticles/importedArticlesPaginationControls'
 
-type CuratedArticle = {id: string; articleTitle: string}
+type CuratedArticle = {
+  id: string
+  articleTitle: string
+  importedFromProjectId: string | null
+  importedFromProjectName: string | null
+}
 
 export const ProjectDetailsCuratedArticles = (props: {projectId: string}) => {
   const [currentPage, setCurrentPage] = createSignal(1)
@@ -51,6 +56,23 @@ export const ProjectDetailsCuratedArticles = (props: {projectId: string}) => {
           >
             {(info.getValue() as string) || 'Untitled'}
           </Link>
+        )
+      },
+    },
+    {
+      accessorKey: 'importedFromProjectId',
+      header: 'Imported From',
+      size: 320,
+      minSize: 200,
+      cell: (info) => {
+        const id = info.getValue() as string | null
+        const name = info.row.original.importedFromProjectName
+        return id ? (
+          <Link to="/projects/$id" params={{id}} class="text-blue-600 hover:underline">
+            {name || id}
+          </Link>
+        ) : (
+          <span class="text-gray-500">—</span>
         )
       },
     },

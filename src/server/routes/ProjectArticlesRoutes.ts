@@ -1,7 +1,7 @@
 import {and, desc, eq, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {articles, projectArticles} from '../../db/schema.ts'
+import {articles, projectArticles, projects} from '../../db/schema.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {insertArticlesIntoProject} from '../services/insertArticlesIntoProject.ts'
 
@@ -23,9 +23,15 @@ export const projectArticlesRoutes = new Elysia()
       const totalCount = totalCountResult?.[0]?.count ?? 0
 
       const rows = await db
-        .select({id: articles.id, articleTitle: articles.articleTitle})
+        .select({
+          id: articles.id,
+          articleTitle: articles.articleTitle,
+          importedFromProjectId: projectArticles.importedFromProjectId,
+          importedFromProjectName: projects.name,
+        })
         .from(projectArticles)
         .innerJoin(articles, eq(projectArticles.articleId, articles.id))
+        .leftJoin(projects, eq(projectArticles.importedFromProjectId, projects.id))
         .where(eq(projectArticles.projectId, projectId))
         .orderBy(desc(articles.createdAt), desc(articles.id))
         .limit(limit)
@@ -49,11 +55,15 @@ export const projectArticlesRoutes = new Elysia()
     async ({params, body}) => {
       const projectId = params.id
       const articleIds = Array.isArray(body.articleIds) ? body.articleIds : [body.articleIds]
+      const importedFromProjectId = body.importedFromProjectId ?? null
 
-      const result = await insertArticlesIntoProject(projectId, articleIds)
+      const result = await insertArticlesIntoProject(projectId, articleIds, importedFromProjectId)
       return {success: true, ...result}
     },
-    {body: t.Object({articleIds: t.Union([t.String(), t.Array(t.String())])})},
+    {body: t.Object({
+      articleIds: t.Union([t.String(), t.Array(t.String())]),
+      importedFromProjectId: t.Optional(t.String()),
+    })},
   )
   .delete('/api/projects/:id/articles/:articleId', async ({params}) => {
     const db = getDatabase()

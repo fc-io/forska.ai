@@ -23,7 +23,11 @@ export type InsertArticlesResult = {
  * Insert article associations into project_articles with ON CONFLICT DO NOTHING,
  * and auto-link prompts that already have judgments for these articles.
  */
-export const insertArticlesIntoProject = async (projectId: string, articleIdsInput: string[]): Promise<InsertArticlesResult> => {
+export const insertArticlesIntoProject = async (
+  projectId: string,
+  articleIdsInput: string[],
+  importedFromProjectId?: string | null,
+): Promise<InsertArticlesResult> => {
   const db = getDatabase()
 
   const uniqueIds = Array.from(
@@ -79,7 +83,7 @@ export const insertArticlesIntoProject = async (projectId: string, articleIdsInp
       .insert(projectArticles)
       .values(
         idsChunk.map((articleId) => {
-          return {projectId, articleId}
+          return {projectId, articleId, importedFromProjectId: importedFromProjectId ?? null}
         }),
       )
       .onConflictDoNothing({target: [projectArticles.projectId, projectArticles.articleId]})
