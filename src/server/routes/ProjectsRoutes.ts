@@ -405,8 +405,6 @@ export const projectsRoutes = new Elysia()
 
           // Upsert associations and prompt rows
           for (const p of submitted) {
-            const heading = p.promptHeading || null
-            const typeVal = p.type || null
             const orderVal = p.order
             const archivedVal = typeof p.archived === 'boolean' ? p.archived : undefined
             const enabledVal = typeof p.enabled === 'boolean' ? p.enabled : undefined
@@ -422,10 +420,14 @@ export const projectsRoutes = new Elysia()
               if (metaChangedOnSameText) {
                 throw new Error('Editing prompt metadata is not allowed; prompts are global and immutable')
               }
+              // Preserve existing metadata when not provided by the client
+              const headingVal =
+                p.promptHeading !== undefined ? (p.promptHeading || null) : (existingPrompt?.promptHeading ?? null)
+              const typeVal = p.type !== undefined ? (p.type || null) : (existingPrompt?.type ?? null)
               const h4 = computePromptContentHash(
                 p.originalText,
                 null,
-                heading,
+                headingVal,
                 typeVal,
               )
               const found = await tx
@@ -441,7 +443,7 @@ export const projectsRoutes = new Elysia()
                       .values({
                         originalText: p.originalText,
                         transformedText: null,
-                        promptHeading: heading,
+                        promptHeading: headingVal,
                         type: typeVal,
                         contentHash: h4,
                       })
@@ -472,12 +474,9 @@ export const projectsRoutes = new Elysia()
                 .set(updateAssoc)
                 .where(sql`${projectPrompts.projectId} = ${params.id} AND ${projectPrompts.promptId} = ${p.originalId}`)
             } else {
-              const h4b = computePromptContentHash(
-                p.originalText,
-                null,
-                heading,
-                typeVal,
-              )
+              const headingVal = p.promptHeading || null
+              const typeVal = p.type || null
+              const h4b = computePromptContentHash(p.originalText, null, headingVal, typeVal)
               const found = await tx
                 .select({id: prompts.id})
                 .from(prompts)
@@ -491,7 +490,7 @@ export const projectsRoutes = new Elysia()
                       .values({
                         originalText: p.originalText,
                         transformedText: null,
-                        promptHeading: heading,
+                        promptHeading: headingVal,
                         type: typeVal,
                         contentHash: h4b,
                       })

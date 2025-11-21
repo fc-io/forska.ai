@@ -212,6 +212,9 @@ const buildPromptsPayload = (owned: PromptItem[], imported: PromptItem[]): Promp
     return {
       originalId: prompt.originalId,
       originalText: prompt.originalText,
+      // Preserve metadata for imported prompts so server doesn't null them
+      promptHeading: prompt.promptHeading || undefined,
+      type: prompt.type || undefined,
       order: prompt.order,
       enabled: prompt.enabled,
     }
