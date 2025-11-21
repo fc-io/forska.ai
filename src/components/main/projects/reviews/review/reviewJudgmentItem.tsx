@@ -7,7 +7,8 @@ type SetArticleViewToShow = (articleViewToShow: string | undefined) => void
 type ReviewJudgmentItemProps = {
   judgment: {
     id: string
-    prompt: {originalText: string}
+    promptId?: string
+    prompt: {originalText: string; id?: string; contentHash?: string | null}
     answeredOriginal?: string | null
     confidenceOriginal?: number | null
     explanation?: string | null
@@ -18,6 +19,12 @@ type ReviewJudgmentItemProps = {
 }
 
 export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
+  const promptId = () => {
+    return props.judgment.prompt?.id || props.judgment.promptId || undefined
+  }
+  const promptHash = () => {
+    return props.judgment.prompt?.contentHash || undefined
+  }
   return (
     <div
       class="border-b last:border-b-0 p-3 hover:bg-gray-50 cursor-pointer transition-colors"
@@ -30,6 +37,13 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
     >
       <div class="mb-2">
         <p class="text-sm font-medium text-gray-900 line-clamp-2">{props.judgment.prompt.originalText}</p>
+        <div class="mt-1 text-[11px] text-gray-500">
+          <span>
+            {promptId() ? `ID: ${String(promptId()).slice(0, 8)}` : ''}
+            {promptId() && promptHash() ? ' • ' : ''}
+            {promptHash() ? `Hash: ${String(promptHash()).slice(0, 8)}` : ''}
+          </span>
+        </div>
       </div>
       <div class="flex items-center justify-between text-xs">
         <div class="flex items-center gap-2">

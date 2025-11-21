@@ -10,7 +10,7 @@ type Judgment = {
   explanation?: string | null
   quotes?: unknown
   snapshotProjectId?: string | null
-  prompt?: {originalText: string; promptHeading?: string | null}
+  prompt?: {id?: string; originalText: string; promptHeading?: string | null; contentHash?: string | null}
 }
 
 type SetArticleViewToShow = (articleViewToShow: string | undefined) => void
@@ -80,7 +80,12 @@ export const ReviewAvailableJudgments = (props: ReviewAvailableJudgmentsProps) =
                           <ReviewJudgmentItem
                             judgment={{
                               id: j.id,
-                              prompt: {originalText: j.prompt?.originalText || ''},
+                              promptId: j.promptId,
+                              prompt: {
+                                id: j.prompt?.id || j.promptId,
+                                originalText: j.prompt?.originalText || '',
+                                contentHash: j.prompt?.contentHash,
+                              },
                               answeredOriginal: j.answeredOriginal,
                               confidenceOriginal: j.confidenceOriginal ?? undefined,
                               explanation: j.explanation ?? undefined,

@@ -838,6 +838,11 @@ const EditProject = (): JSX.Element => {
                       return (
                         <div class="flex gap-2">
                           <div class="flex-1 space-y-2">
+                            <div class="text-[11px] text-gray-500">
+                              {promptItem.originalId
+                                ? `ID: ${String(promptItem.originalId).slice(0, 8)}`
+                                : 'New prompt'}
+                            </div>
                             <input
                               type="text"
                               value={promptItem.promptHeading}
@@ -932,6 +937,11 @@ const EditProject = (): JSX.Element => {
                                 <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800">
                                   Imported
                                 </span>
+                                <Show when={promptItem.originalId}>
+                                  <span class="inline-flex items-center px-2 py-1 rounded-full text-[11px] font-medium bg-gray-50 text-gray-600">
+                                    ID: {(promptItem.originalId || '').slice(0, 8)}
+                                  </span>
+                                </Show>
                                 <Show when={promptItem.enabled !== undefined}>
                                   <span
                                     class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium"
