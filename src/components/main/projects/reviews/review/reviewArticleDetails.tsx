@@ -22,6 +22,7 @@ const getHighlightedText = (text: string, judgment: Judgment) => {
       // replace leading ... and trailing ..., should be better stored in the database
       return quote.replace(/^\.{3}|\.{3}$/g, '')
     }),
+    {maxDistance: 1, caseInsensitive: true, fuzzyScanLimit: 'auto'},
   )
   return pieces.map(([text, isHit]) => {
     return isHit ? <span class="text-red-500 underline">{text}</span> : text

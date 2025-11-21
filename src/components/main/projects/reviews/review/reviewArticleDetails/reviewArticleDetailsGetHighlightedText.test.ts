@@ -526,9 +526,44 @@ describe('HTML tag-agnostic matching', () => {
         'As the use of artificial intelligence (AI) in healthcare is rapidly expanding, there is also growing recognition of the need for ongoing monitoring of AI after implementation, called <i>algorithmovigilance</i>.',
         true,
       ],
-      [' Yet, there remain few systems that support systematic monitoring and governance of AI used across a health system.', false],
+      [
+        ' Yet, there remain few systems that support systematic monitoring and governance of AI used across a health system.',
+        false,
+      ],
     ]
 
     expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys))
+  })
+})
+
+describe('Fuzzy scan window', () => {
+  const longHtml =
+    '<h4>Objectives</h4>As the use of artificial intelligence (AI) in healthcare is rapidly expanding, there is also growing recognition of the need for ongoing monitoring of AI after implementation, called <i>algorithmovigilance</i>. Yet, there remain few systems that support systematic monitoring and governance of AI used across a health system. In this study, we identify end-user needs for a novel AI monitoring system-the Vanderbilt Algorithmovigilance Monitoring and Operations System (VAMOS)-using human-centered design (HCD).<h4>Materials and methods</h4>We assembled a multidisciplinary team to plan AI monitoring and governance at Vanderbilt University Medical Center. We then conducted 9 participatory design sessions with diverse stakeholders to develop prototypes of VAMOS. Once we had a working prototype, we conducted 8 formative design interviews with key stakeholders to gather feedback on the system. We analyzed the interviews using a rapid qualitative analysis approach and revised the mock-ups. We then conducted a multidisciplinary heuristic evaluation to identify further improvements to the tool.<h4>Results</h4>Through an iterative, HCD process that engaged diverse end-users, we identified key components needed in AI monitoring systems. We identified specific data views and functionality required by end users across several user interfaces including a performance monitoring dashboard, accordion snapshots, and model-specific pages.<h4>Discussion</h4>We distilled general design requirements for systems to support AI monitoring throughout its lifecycle. One important consideration is how to support teams of health system leaders, clinical experts, and technical personnel that are distributed across the organization as they monitor and respond to algorithm deterioration.<h4>Conclusion</h4>VAMOS aims to support systematic and proactive monitoring of AI tools in healthcare organizations. Our findings and recommendations can support the design of AI monitoring systems to support health systems, improve quality of care, and ensure patient safety.'
+
+  const nearResultsPrefix =
+    '<h4>Objectives</h4>As the use of artificial intelligence (AI) in healthcare is rapidly expanding, there is also growing recognition of the need for ongoing monitoring of AI after implementation, called <i>algorithmovigilance</i>. Yet, there remain few systems that support systematic monitoring and governance of AI used across a health system. In this study, we identify end-user needs for a novel AI monitoring system-the Vanderbilt Algorithmovigilance Monitoring and Operations System (VAMOS)-using human-centered design (HCD).<h4>Materials and methods</h4>We assembled a multidisciplinary team to plan AI monitoring and governance at Vanderbilt University Medical Center. We then conducted 9 participatory design sessions with diverse stakeholders to develop prototypes of VAMOS. Once we had a working prototype, we conducted 8 formative design interviews with key stakeholders to gather feedback on the system. We analyzed the interviews using a rapid qualitative analysis approach and revised the mock-ups. We then conducted a multidisciplinary heuristic evaluation to identify further improvements to the tool.<h4>Results</h4>Through an iterative, HCD process that engaged diverse end-users, '
+
+  it('does not match with small default window when phrase is far ahead and has one substitution (AI vs Al)', () => {
+    const s = longHtml
+    const keys = ['We identified key components needed in Al monitoring systems.']
+    const expected: Piece[] = [[s, false]]
+    expect(reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 1, caseInsensitive: true})).toEqual(expected)
+  })
+
+  it('matches far-ahead phrase with auto window and one substitution (AI vs Al)', () => {
+    const s = longHtml
+    const keys = ['We identified key components needed in Al monitoring systems.']
+    const expected: Piece[] = [
+      [nearResultsPrefix, false],
+      ['we identified key components needed in AI monitoring systems.', true],
+      [
+        ' We identified specific data views and functionality required by end users across several user interfaces including a performance monitoring dashboard, accordion snapshots, and model-specific pages.<h4>Discussion</h4>We distilled general design requirements for systems to support AI monitoring throughout its lifecycle. One important consideration is how to support teams of health system leaders, clinical experts, and technical personnel that are distributed across the organization as they monitor and respond to algorithm deterioration.<h4>Conclusion</h4>VAMOS aims to support systematic and proactive monitoring of AI tools in healthcare organizations. Our findings and recommendations can support the design of AI monitoring systems to support health systems, improve quality of care, and ensure patient safety.',
+        false,
+      ],
+    ]
+
+    expect(
+      reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 1, caseInsensitive: true, fuzzyScanLimit: 'auto'}),
+    ).toEqual(expected)
   })
 })

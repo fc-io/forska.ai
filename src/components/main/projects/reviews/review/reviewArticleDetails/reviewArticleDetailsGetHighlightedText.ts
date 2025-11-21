@@ -9,6 +9,8 @@ export interface HighlightOptions {
   caseInsensitive?: boolean
   /** Minimum key length to allow fuzzy (distance>0) matching. Defaults to 2 to avoid noisy 1-char matches. */
   minFuzzyKeyLength?: number
+  /** Max start offset window for fuzzy scanning; 'auto' adapts to text/key length. Defaults to 100. */
+  fuzzyScanLimit?: number | 'auto'
 }
 
 export const reviewArticleDetailsGetHighlightedText = (
@@ -21,6 +23,7 @@ export const reviewArticleDetailsGetHighlightedText = (
   const maxDistance = opts.maxDistance ?? 0
   const caseInsensitive = !!opts.caseInsensitive
   const minFuzzyKeyLength = opts.minFuzzyKeyLength ?? 2
+  const fuzzyScanLimitOpt = opts.fuzzyScanLimit
 
   const norm = (t: string) => {
     return caseInsensitive ? t.toLowerCase() : t
@@ -133,7 +136,12 @@ export const reviewArticleDetailsGetHighlightedText = (
           const minLen = Math.max(1, L - maxDistance)
           const maxLen = Math.min(s.length - idx, L + maxDistance)
 
-          for (let start = idx; start < s.length && start < idx + 100; start++) {
+          // Determine scan window size
+          const scanLimit =
+            fuzzyScanLimitOpt === 'auto' ? s.length : typeof fuzzyScanLimitOpt === 'number' ? fuzzyScanLimitOpt : 100
+          const scanEnd = Math.min(s.length, idx + scanLimit)
+
+          for (let start = idx; start < s.length && start < scanEnd; start++) {
             if (start + minLen > s.length) break
 
             for (let len = minLen; len <= maxLen; len++) {
