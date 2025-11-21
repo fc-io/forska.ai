@@ -511,3 +511,24 @@ describe('global fuzzy substring (spaces are characters)', () => {
     expect(reviewArticleDetailsGetHighlightedText(s, keys, {maxDistance: 1})).toEqual(expected)
   })
 })
+
+describe('HTML tag-agnostic matching', () => {
+  it('matches across inline tags and headings', () => {
+    const s =
+      '<h4>Objectives</h4>As the use of artificial intelligence (AI) in healthcare is rapidly expanding, there is also growing recognition of the need for ongoing monitoring of AI after implementation, called <i>algorithmovigilance</i>. Yet, there remain few systems that support systematic monitoring and governance of AI used across a health system.'
+    const keys = [
+      'As the use of artificial intelligence (AI) in healthcare is rapidly expanding, there is also growing recognition of the need for ongoing monitoring of AI after implementation, called algorithmovigilance.',
+    ]
+
+    const expected: Piece[] = [
+      ['<h4>Objectives</h4>', false],
+      [
+        'As the use of artificial intelligence (AI) in healthcare is rapidly expanding, there is also growing recognition of the need for ongoing monitoring of AI after implementation, called <i>algorithmovigilance</i>.',
+        true,
+      ],
+      [' Yet, there remain few systems that support systematic monitoring and governance of AI used across a health system.', false],
+    ]
+
+    expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys))
+  })
+})

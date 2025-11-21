@@ -107,34 +107,55 @@ export const reviewArticleDetailsGetHighlightedText = (
         ) {
           bestMatch = candidate
         }
-      } else if (maxDistance > 0 && keyN.length >= minFuzzyKeyLength) {
-        // Try fuzzy match
-        const L = keyN.length
-        const minLen = Math.max(1, L - maxDistance)
-        const maxLen = Math.min(s.length - idx, L + maxDistance)
+      } else {
+        // Tag-agnostic regex pre-pass: allow HTML tags/entities/whitespace between tokens
+        const rx = buildTagAgnosticRegex(keyRaw, caseInsensitive)
+        if (rx) {
+          const slice = s.slice(idx)
+          const m = rx.exec(slice)
+          if (m && typeof m.index === 'number') {
+            const start = idx + m.index
+            const end = start + m[0].length
+            const candidate = {keyIdx: k, start, end, dist: 0}
+            if (
+              !bestMatch
+              || candidate.start < bestMatch.start
+              || (candidate.start === bestMatch.start && end - start > bestMatch.end - bestMatch.start)
+            ) {
+              bestMatch = candidate
+            }
+          }
+        }
 
-        for (let start = idx; start < s.length && start < idx + 100; start++) {
-          if (start + minLen > s.length) break
+        if (!bestMatch && maxDistance > 0 && keyN.length >= minFuzzyKeyLength) {
+          // Try fuzzy match
+          const L = keyN.length
+          const minLen = Math.max(1, L - maxDistance)
+          const maxLen = Math.min(s.length - idx, L + maxDistance)
 
-          for (let len = minLen; len <= maxLen; len++) {
-            const end = start + len
-            if (end > s.length) break
+          for (let start = idx; start < s.length && start < idx + 100; start++) {
+            if (start + minLen > s.length) break
 
-            const sub = sN.slice(start, end)
-            const d = dlOSA(keyN, sub, maxDistance)
+            for (let len = minLen; len <= maxLen; len++) {
+              const end = start + len
+              if (end > s.length) break
 
-            if (d <= maxDistance) {
-              const candidate = {keyIdx: k, start, end, dist: d}
+              const sub = sN.slice(start, end)
+              const d = dlOSA(keyN, sub, maxDistance)
 
-              if (
-                !bestMatch
-                || candidate.dist < bestMatch.dist
-                || (candidate.dist === bestMatch.dist && candidate.start < bestMatch.start)
-                || (candidate.dist === bestMatch.dist
-                  && candidate.start === bestMatch.start
-                  && end - start > bestMatch.end - bestMatch.start)
-              ) {
-                bestMatch = candidate
+              if (d <= maxDistance) {
+                const candidate = {keyIdx: k, start, end, dist: d}
+
+                if (
+                  !bestMatch
+                  || candidate.dist < bestMatch.dist
+                  || (candidate.dist === bestMatch.dist && candidate.start < bestMatch.start)
+                  || (candidate.dist === bestMatch.dist
+                    && candidate.start === bestMatch.start
+                    && end - start > bestMatch.end - bestMatch.start)
+                ) {
+                  bestMatch = candidate
+                }
               }
             }
           }
@@ -159,4 +180,35 @@ export const reviewArticleDetailsGetHighlightedText = (
   }
 
   return pieces
+}
+
+const escapeRegExp = (s: string) => {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+const buildTagAgnosticRegex = (key: string, caseInsensitive: boolean): RegExp | null => {
+  if (!key) return null
+  // Split into word and punctuation tokens, excluding whitespace, so we can
+  // allow tags/entities/whitespace between words and punctuation like '.'
+  const rawTokens = key.match(/([A-Za-z0-9]+|[^A-Za-z0-9\s]+)/g) || []
+  const tokens = rawTokens.filter((t) => t && !/^\s+$/.test(t)).map(escapeRegExp)
+  if (tokens.length === 0) return null
+  if (tokens.length === 1) {
+    // Single token adds no benefit over exact search
+    try {
+      return new RegExp(tokens[0]!, caseInsensitive ? 'i' : '')
+    } catch {
+      return null
+    }
+  }
+
+  // Allow zero or more whitespace/tags/entities between tokens so punctuation
+  // adjacent to words still matches while bridging across markup.
+  const gap = '(?:\\s|<[^>]*>|&[#a-zA-Z0-9]+;)*'
+  const pattern = tokens.join(gap)
+  try {
+    return new RegExp(pattern, caseInsensitive ? 'i' : '')
+  } catch {
+    return null
+  }
 }
