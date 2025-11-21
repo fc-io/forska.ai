@@ -2,7 +2,16 @@ import {and, eq, inArray, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {user} from '../../../../auth-schema.ts'
-import {articles, judgmentAssessments, judgments, judgmentsHuman, prompts, projectPrompts, reviews} from '../../../db/schema.ts'
+import {
+  articles,
+  judgmentAssessments,
+  judgments,
+  judgmentsHuman,
+  prompts,
+  projectPrompts,
+  projects,
+  reviews,
+} from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
 export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
@@ -73,10 +82,45 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         {} as Record<string, typeof assessments>,
       )
 
-      // Combine judgments with their assessments and prompts
+      // Combine judgments with their assessments and prompts (limited to this project's prompts)
       const judgmentsWithDetails = articleJudgments.map(({judgment, prompt}) => {
         return {...judgment, prompt, assessments: assessmentsByJudgment[judgment.id] || []}
       })
+
+      // Cross-project: include any LLM judgments for this article (regardless of project association)
+      const allArticleJudgments = await db
+        .select({judgment: judgments, prompt: prompts})
+        .from(judgments)
+        .innerJoin(prompts, eq(judgments.promptId, prompts.id))
+        .where(eq(judgments.articleId, articleId))
+
+      const allJudgments = allArticleJudgments.map(({judgment, prompt}) => {
+        return {...judgment, prompt}
+      })
+
+      // Resolve project names for snapshotProjectId when present
+      const snapshotProjectIds = Array.from(
+        new Set(
+          allJudgments
+            .map((j) => {
+              return j.snapshotProjectId as string | null
+            })
+            .filter((id): id is string => {
+              return Boolean(id)
+            }),
+        ),
+      )
+      const projectNameRows =
+        snapshotProjectIds.length > 0
+          ? await db
+              .select({id: projects.id, name: projects.name})
+              .from(projects)
+              .where(inArray(projects.id, snapshotProjectIds))
+          : []
+      const projectsById = projectNameRows.reduce<Record<string, {name: string}>>((acc, row) => {
+        acc[row.id] = {name: row.name}
+        return acc
+      }, {})
 
       // Fetch human judgments for this article within this project, grouped by user
       const humanRows = await db
@@ -196,6 +240,9 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         review,
         prompts: projectPromptRows,
         judgments: judgmentsWithDetails,
+        // Cross-project extras
+        allJudgments,
+        projectsById,
         humanAssessmentsByUser,
         humanAnswersByPrompt,
       }
