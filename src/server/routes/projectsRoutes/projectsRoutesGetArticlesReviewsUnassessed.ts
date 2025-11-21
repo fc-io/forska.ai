@@ -23,6 +23,8 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
       const limit = parseInt(body?.limit || '100', 10)
       const offset = (page - 1) * limit
       const searchTitle = typeof body.search === 'string' ? body.search.trim() : ''
+      const fromDate = body.from ? new Date(`${body.from}T00:00:00.000Z`) : null
+      const toDate = body.to ? new Date(`${body.to}T23:59:59.999Z`) : null
 
       const projectPromptRows = await db
         .select({id: prompts.id})
@@ -38,23 +40,12 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
         return p.id
       })
 
-      // Always enforce the project's date range and capture model for model-specific judgments
+      // Always enforce the project's date range and capture bounds
       const [projectBounds] = await db
-        .select({dateFrom: projects.dateFrom, dateTo: projects.dateTo, modelId: projects.modelId})
+        .select({dateFrom: projects.dateFrom, dateTo: projects.dateTo})
         .from(projects)
         .where(eq(projects.id, body.projectId))
         .limit(1)
-
-      // Condition: there are NO judgments for this article for any of the project's prompts for THIS project's model
-      const noJudgmentsForProjectPrompts = sql`NOT EXISTS (
-        ${db
-          .select({exists: sql`1`})
-          .from(judgments)
-          .where(
-            and(eq(judgments.articleId, articles.id), inArray(judgments.promptId, promptIds), eq(judgments.modelId, projectBounds.modelId)),
-          )
-          .limit(1)}
-      )`
 
       // Filter by project's linked import routes via EXISTS against article_route_link
       const projectImportRoutes = await db
@@ -86,35 +77,49 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
         AND pa."project_id" = ${body.projectId}::uuid
       )`
 
-      const whereParts: Array<ReturnType<typeof sql>> = [
-        noJudgmentsForProjectPrompts,
-        hasMatchingImportRoute ? or(hasMatchingImportRoute, hasProjectArticle) : hasProjectArticle,
-      ]
-      if (projectBounds?.dateFrom) {
-        whereParts.push(gte(articles.articleCreatedAt, projectBounds.dateFrom))
-      }
-      if (projectBounds?.dateTo) {
-        whereParts.push(lte(articles.articleCreatedAt, projectBounds.dateTo))
-      }
-      if (searchTitle) {
-        whereParts.push(sql`${articles.articleTitle} ILIKE ${'%' + searchTitle + '%'}`)
-      }
+      // Build scope condition (import route OR explicitly linked to project)
+      const scopeCondition = hasMatchingImportRoute ? or(hasMatchingImportRoute, hasProjectArticle) : hasProjectArticle
+
+      // Optional UI + project time bounds and search
+      const whereParts: Array<ReturnType<typeof sql>> = [scopeCondition]
+      if (projectBounds?.dateFrom) whereParts.push(gte(articles.articleCreatedAt, projectBounds.dateFrom))
+      if (projectBounds?.dateTo) whereParts.push(lte(articles.articleCreatedAt, projectBounds.dateTo))
+      if (fromDate) whereParts.push(gte(articles.articleCreatedAt, fromDate))
+      if (toDate) whereParts.push(lte(articles.articleCreatedAt, toDate))
+      if (searchTitle) whereParts.push(sql`${articles.articleTitle} ILIKE ${'%' + searchTitle + '%'}`)
       const combinedWhereCondition = whereParts.length > 1 ? and(...whereParts) : whereParts[0]
+
+      // Select articles that are NOT fully assessed by LLM for all project prompts
+      // Strategy: LEFT JOIN judgments filtered to this project's promptIds and HAVING count(distinct prompt_id) < total prompts
+      const groupedBase = db
+        .select({id: articles.id})
+        .from(articles)
+        .leftJoin(judgments, and(eq(judgments.articleId, articles.id), inArray(judgments.promptId, promptIds)))
+        .where(combinedWhereCondition)
+        .groupBy(articles.id)
+        .having(sql`COUNT(DISTINCT ${judgments.promptId}) < ${promptIds.length}`)
+        .as('grouped_unassessed')
 
       // Count total
       const [{count: totalCount = 0} = {count: 0}] = await db
         .select({count: sql<number>`COUNT(*)`.as('count')})
-        .from(articles)
-        .where(combinedWhereCondition)
+        .from(groupedBase)
 
       // Fetch paginated list
-      const unassessedArticles = await db
-        .select({article: articles})
-        .from(articles)
-        .where(combinedWhereCondition)
+      const pageBase = db
+        .select({id: groupedBase.id})
+        .from(groupedBase)
+        .innerJoin(articles, eq(groupedBase.id, articles.id))
         .orderBy(desc(articles.articleCreatedAt))
         .limit(limit)
         .offset(offset)
+        .as('page_unassessed')
+
+      const unassessedArticles = await db
+        .select({article: articles})
+        .from(articles)
+        .innerJoin(pageBase, eq(pageBase.id, articles.id))
+        .orderBy(desc(articles.articleCreatedAt))
 
       const result = unassessedArticles.map(({article}) => {
         return {...article, judgments: []}

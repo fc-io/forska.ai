@@ -76,19 +76,6 @@ const selectArticleIdsByFilter = async (
     const promptIds = await getProjectPromptIds(sourceProjectId)
     if (promptIds.length === 0) return []
     const whereParts: Array<ReturnType<typeof sql>> = [
-      sql`NOT EXISTS (
-        ${db
-          .select({exists: sql`1`})
-          .from(judgments)
-          .where(
-            and(
-              eq(judgments.articleId, articles.id),
-              inArray(judgments.promptId, promptIds),
-              eq(judgments.modelId, bounds?.modelId || sql`NULL`),
-            ),
-          )
-          .limit(1)}
-      )`,
       sql`EXISTS (
         SELECT 1 FROM ${articleRouteLink} arl
         WHERE arl."article_id" = ${articles.id}
@@ -97,8 +84,17 @@ const selectArticleIdsByFilter = async (
     ]
     addOptionalBounds(whereParts, bounds, fromDate, toDate, searchTitle)
     const combined = whereParts.length > 1 ? and(...whereParts) : whereParts[0]
-    const rows = await db.select({id: articles.id}).from(articles).where(combined).orderBy(desc(articles.articleCreatedAt))
-    return rows.map((r) => r.id)
+
+    const grouped = await db
+      .select({id: articles.id})
+      .from(articles)
+      .leftJoin(judgments, and(eq(judgments.articleId, articles.id), inArray(judgments.promptId, promptIds)))
+      .where(combined)
+      .groupBy(articles.id)
+      .having(sql`COUNT(DISTINCT ${judgments.promptId}) < ${promptIds.length}`)
+      .orderBy(desc(articles.articleCreatedAt))
+
+    return grouped.map((r) => r.id)
   }
 
   const promptIds = await getProjectPromptIds(sourceProjectId)

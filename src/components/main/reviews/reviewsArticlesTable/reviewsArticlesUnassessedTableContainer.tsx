@@ -70,7 +70,7 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
                     )
                   </h3>
                   <p class="text-sm text-gray-600">
-                    Showing articles that have no judgments for any prompts in this project
+                    Showing articles missing at least one LLM judgment for this project's prompts
                   </p>
                 </div>
 
