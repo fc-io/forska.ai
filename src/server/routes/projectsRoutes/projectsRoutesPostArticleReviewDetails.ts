@@ -1,4 +1,4 @@
-import {and, eq, inArray, sql} from 'drizzle-orm'
+import {and, eq, inArray, isNull, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {user} from '../../../../auth-schema.ts'
@@ -87,12 +87,16 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         return {...judgment, prompt, assessments: assessmentsByJudgment[judgment.id] || []}
       })
 
-      // Cross-project: include any LLM judgments for this article (regardless of project association)
+      // Cross-project: only include LLM judgments whose prompts are NOT part of this project's prompts (anti-join)
       const allArticleJudgments = await db
         .select({judgment: judgments, prompt: prompts})
         .from(judgments)
         .innerJoin(prompts, eq(judgments.promptId, prompts.id))
-        .where(eq(judgments.articleId, articleId))
+        .leftJoin(
+          projectPrompts,
+          and(eq(projectPrompts.promptId, prompts.id), eq(projectPrompts.projectId, projectId)),
+        )
+        .where(and(eq(judgments.articleId, articleId), isNull(projectPrompts.id)))
 
       const allJudgments = allArticleJudgments.map(({judgment, prompt}) => {
         return {...judgment, prompt}
