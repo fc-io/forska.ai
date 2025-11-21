@@ -7,14 +7,14 @@ import {
   judgmentsJobs,
   models,
   projectArticles,
+  projectPrompts,
   projectRouteLink,
   projects,
   prompts,
-  projectPrompts,
 } from '../../db/schema.ts'
+import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
-import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
 import {projectsRoutesGetArticlesReviews} from './projectsRoutes/projectsRoutesGetArticlesReviews.ts'
 import {projectsRoutesGetArticlesReviewsBoth} from './projectsRoutes/projectsRoutesGetArticlesReviewsBoth.ts'
 import {projectsRoutesGetArticlesReviewsFilters} from './projectsRoutes/projectsRoutesGetArticlesReviewsFilters.ts'
@@ -114,10 +114,7 @@ export const projectsRoutes = new Elysia()
       .from(projectArticles)
       .innerJoin(judgments, eq(judgments.articleId, projectArticles.articleId))
       .innerJoin(prompts, eq(judgments.promptId, prompts.id))
-      .leftJoin(
-        projectPrompts,
-        and(eq(projectPrompts.projectId, params.id), eq(projectPrompts.promptId, prompts.id)),
-      )
+      .leftJoin(projectPrompts, and(eq(projectPrompts.projectId, params.id), eq(projectPrompts.promptId, prompts.id)))
       .where(and(eq(projectArticles.projectId, params.id), isNull(projectPrompts.id)))
       .groupBy(
         prompts.id,
@@ -163,15 +160,7 @@ export const projectsRoutes = new Elysia()
       return r.route
     })
 
-    return {
-      data: {
-        project,
-        prompts: promptsCombined,
-        hasJudgedArticles,
-        model: projectModel ?? null,
-        importRoutes,
-      },
-    }
+    return {data: {project, prompts: promptsCombined, hasJudgedArticles, model: projectModel ?? null, importRoutes}}
   })
   .post(
     '/api/projects',
@@ -208,23 +197,21 @@ export const projectsRoutes = new Elysia()
 
       // Create prompts associations if provided (global immutable prompts; upsert by hash incl metadata)
       if (newProject && body.prompts && body.prompts.length > 0) {
-        const submittedPrompts = (body.prompts as Array<string | {content: string; promptHeading?: string; type?: string; order: number}>)
-          .filter((p) => {
-            return typeof p === 'string' ? p.trim() !== '' : (p.content ?? '').trim() !== ''
-          })
+        const submittedPrompts = (
+          body.prompts as Array<string | {content: string; promptHeading?: string; type?: string; order: number}>
+        ).filter((p) => {
+          return typeof p === 'string' ? p.trim() !== '' : (p.content ?? '').trim() !== ''
+        })
         for (let index = 0; index < submittedPrompts.length; index++) {
-          const prompt = submittedPrompts[index] as string | {content: string; promptHeading?: string; type?: string; order: number}
+          const prompt = submittedPrompts[index] as
+            | string
+            | {content: string; promptHeading?: string; type?: string; order: number}
           const content = typeof prompt === 'string' ? prompt : prompt.content
           const heading = typeof prompt === 'object' ? prompt.promptHeading || null : null
           const typeVal = typeof prompt === 'object' ? prompt.type || null : null
           const orderVal = typeof prompt === 'object' && prompt.order !== undefined ? prompt.order : index
 
-          const contentHash = computePromptContentHash(
-            content,
-            null,
-            heading,
-            typeVal,
-          )
+          const contentHash = computePromptContentHash(content, null, heading, typeVal)
           const existingByHash = await db
             .select({id: prompts.id})
             .from(prompts)
@@ -232,7 +219,7 @@ export const projectsRoutes = new Elysia()
             .limit(1)
 
           const promptId = existingByHash[0]?.id
-            ? existingByHash[0]!.id
+            ? existingByHash[0].id
             : await (async () => {
                 const inserted = await db
                   .insert(prompts)
@@ -247,11 +234,13 @@ export const projectsRoutes = new Elysia()
                   .returning({id: prompts.id})
                 return inserted[0]?.id
                   ? inserted[0].id
-                  : (await db
-                      .select({id: prompts.id})
-                      .from(prompts)
-                      .where(eq(prompts.contentHash, contentHash))
-                      .limit(1))[0]!.id
+                  : (
+                      await db
+                        .select({id: prompts.id})
+                        .from(prompts)
+                        .where(eq(prompts.contentHash, contentHash))
+                        .limit(1)
+                    )[0]!.id
               })()
 
           await db
@@ -418,20 +407,23 @@ export const projectsRoutes = new Elysia()
           })
           // Existing associations
           const existing = await tx
-            .select({
-              id: projectPrompts.id,
-              promptId: projectPrompts.promptId,
-            })
+            .select({id: projectPrompts.id, promptId: projectPrompts.promptId})
             .from(projectPrompts)
             .where(eq(projectPrompts.projectId, params.id))
 
-          const existingPromptIds = new Set(existing.map((p) => p.promptId))
+          const existingPromptIds = new Set(
+            existing.map((p) => {
+              return p.promptId
+            }),
+          )
           const receivedOriginalIds = new Set(
             submitted
               .filter((p) => {
                 return p.originalId
               })
-              .map((p) => p.originalId!),
+              .map((p) => {
+                return p.originalId!
+              }),
           )
 
           // Delete associations removed by client
@@ -439,95 +431,76 @@ export const projectsRoutes = new Elysia()
             return !receivedOriginalIds.has(e.promptId)
           })
           if (toDeleteAssoc.length > 0) {
-            await tx
-              .delete(projectPrompts)
-              .where(
-                sql`${projectPrompts.projectId} = ${params.id} AND ${projectPrompts.promptId} = ANY(ARRAY[${sql.join(
-                  toDeleteAssoc.map((e) => sql`${e.promptId}::uuid`),
-                  sql`,`,
-                )}] )`,
-              )
+            await tx.delete(projectPrompts).where(
+              sql`${projectPrompts.projectId} = ${params.id} AND ${projectPrompts.promptId} = ANY(ARRAY[${sql.join(
+                toDeleteAssoc.map((e) => {
+                  return sql`${e.promptId}::uuid`
+                }),
+                sql`,`,
+              )}] )`,
+            )
           }
 
-          // Upsert associations and prompt rows
+          // Upsert associations and prompt rows (works for both existing and importable prompts)
           for (const p of submitted) {
             const orderVal = p.order
             const archivedVal = typeof p.archived === 'boolean' ? p.archived : undefined
             const enabledVal = typeof p.enabled === 'boolean' ? p.enabled : undefined
+
+            // Resolve association
             let targetPromptId: string
             if (p.originalId) {
-              // If editing an existing prompt association, only block metadata edits when the prompt text is unchanged
+              const isAlreadyAssociated = existingPromptIds.has(p.originalId)
+              // Avoid creating disabled associations for importables that weren't enabled
+              if (!isAlreadyAssociated && enabledVal !== true) {
+                continue
+              }
+              // Associate exactly the clicked prompt ID; do not canonicalize by content hash
               const [existingPrompt] = await tx.select().from(prompts).where(eq(prompts.id, p.originalId)).limit(1)
-              const isSameText = existingPrompt?.originalText === p.originalText
+              if (!existingPrompt) {
+                throw new Error('Prompt not found')
+              }
+              // Disallow editing text or metadata on existing global prompts
+              if (existingPrompt.originalText !== p.originalText) {
+                throw new Error('Editing prompt text is not allowed; prompts are global and immutable')
+              }
               const metaChangedOnSameText =
-                isSameText
-                && ((p.promptHeading !== undefined && p.promptHeading !== (existingPrompt?.promptHeading ?? null))
-                  || (p.type !== undefined && p.type !== (existingPrompt?.type ?? null)))
+                (p.promptHeading !== undefined && p.promptHeading !== (existingPrompt.promptHeading ?? null))
+                || (p.type !== undefined && p.type !== (existingPrompt.type ?? null))
               if (metaChangedOnSameText) {
                 throw new Error('Editing prompt metadata is not allowed; prompts are global and immutable')
               }
-              // Preserve existing metadata when not provided by the client
-              const headingVal =
-                p.promptHeading !== undefined ? (p.promptHeading || null) : (existingPrompt?.promptHeading ?? null)
-              const typeVal = p.type !== undefined ? (p.type || null) : (existingPrompt?.type ?? null)
-              const h4 = computePromptContentHash(
-                p.originalText,
-                null,
-                headingVal,
-                typeVal,
-              )
-              const found = await tx
-                .select({id: prompts.id})
-                .from(prompts)
-                .where(eq(prompts.contentHash, h4))
-                .limit(1)
-              targetPromptId = found[0]?.id
-                ? found[0].id
-                : await (async () => {
-                    const inserted = await tx
-                      .insert(prompts)
-                      .values({
-                        originalText: p.originalText,
-                        transformedText: null,
-                        promptHeading: headingVal,
-                        type: typeVal,
-                        contentHash: h4,
-                      })
-                      .onConflictDoNothing({target: prompts.contentHash})
-                      .returning({id: prompts.id})
-                    if (inserted[0]?.id) return inserted[0].id
-                    const r = await tx
-                      .select({id: prompts.id})
-                      .from(prompts)
-                      .where(eq(prompts.contentHash, h4))
-                      .limit(1)
-                    return r[0]!.id
-                  })()
-              // Ensure association points to target prompt and metadata is updated
-              const updateAssoc: Partial<typeof projectPrompts.$inferInsert> = {
+
+              targetPromptId = p.originalId
+
+              const insertValues: Partial<typeof projectPrompts.$inferInsert> = {
+                projectId: params.id,
                 promptId: targetPromptId,
                 order: orderVal,
-                updatedAt: new Date(),
+                originProjectId: params.id,
               }
-              if (archivedVal !== undefined) {
-                updateAssoc.archived = archivedVal
+              if (archivedVal !== undefined) insertValues.archived = archivedVal
+              if (enabledVal !== undefined) insertValues.enabled = enabledVal
+
+              const setValues: Record<string, unknown> = {
+                order: sql`EXCLUDED."order"`,
+                updatedAt: sql`CURRENT_TIMESTAMP`,
               }
-              if (enabledVal !== undefined) {
-                updateAssoc.enabled = enabledVal
-              }
+              if (archivedVal !== undefined) setValues.archived = sql`EXCLUDED.archived`
+              if (enabledVal !== undefined) setValues.enabled = sql`EXCLUDED.enabled`
+
               await tx
-                .update(projectPrompts)
-                .set(updateAssoc)
-                .where(sql`${projectPrompts.projectId} = ${params.id} AND ${projectPrompts.promptId} = ${p.originalId}`)
+                .insert(projectPrompts)
+                .values(insertValues)
+                .onConflictDoUpdate({
+                  target: [projectPrompts.projectId, projectPrompts.promptId],
+                  set: setValues as any,
+                })
             } else {
               const headingVal = p.promptHeading || null
               const typeVal = p.type || null
               const h4b = computePromptContentHash(p.originalText, null, headingVal, typeVal)
-              const found = await tx
-                .select({id: prompts.id})
-                .from(prompts)
-                .where(eq(prompts.contentHash, h4b))
-                .limit(1)
+              const found = await tx.select({id: prompts.id}).from(prompts).where(eq(prompts.contentHash, h4b)).limit(1)
               targetPromptId = found[0]?.id
                 ? found[0].id
                 : await (async () => {
@@ -551,24 +524,28 @@ export const projectsRoutes = new Elysia()
                     return r[0]!.id
                   })()
 
+              const insertValues: Partial<typeof projectPrompts.$inferInsert> = {
+                projectId: params.id,
+                promptId: targetPromptId,
+                order: orderVal,
+                originProjectId: params.id,
+              }
+              if (archivedVal !== undefined) insertValues.archived = archivedVal
+              if (enabledVal !== undefined) insertValues.enabled = enabledVal
+
+              const setValues: Record<string, unknown> = {
+                order: sql`EXCLUDED."order"`,
+                updatedAt: sql`CURRENT_TIMESTAMP`,
+              }
+              if (archivedVal !== undefined) setValues.archived = sql`EXCLUDED.archived`
+              if (enabledVal !== undefined) setValues.enabled = sql`EXCLUDED.enabled`
+
               await tx
                 .insert(projectPrompts)
-                .values({
-                  projectId: params.id,
-                  promptId: targetPromptId,
-                  order: orderVal,
-                  archived: archivedVal ?? false,
-                  enabled: enabledVal ?? true,
-                  originProjectId: params.id,
-                })
+                .values(insertValues)
                 .onConflictDoUpdate({
                   target: [projectPrompts.projectId, projectPrompts.promptId],
-                  set: {
-                    order: sql`EXCLUDED."order"`,
-                    archived: sql`EXCLUDED.archived`,
-                    enabled: sql`EXCLUDED.enabled`,
-                    updatedAt: sql`CURRENT_TIMESTAMP`,
-                  },
+                  set: setValues as any,
                 })
             }
           }
