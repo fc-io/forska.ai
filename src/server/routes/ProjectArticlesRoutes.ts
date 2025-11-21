@@ -2,8 +2,8 @@ import {and, desc, eq, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {articles, projectArticles, projects} from '../../db/schema.ts'
-import {getDatabase} from '../utils/getDatabase.ts'
 import {insertArticlesIntoProject} from '../services/insertArticlesIntoProject.ts'
+import {getDatabase} from '../utils/getDatabase.ts'
 
 export const projectArticlesRoutes = new Elysia()
   .get(
@@ -37,13 +37,7 @@ export const projectArticlesRoutes = new Elysia()
         .limit(limit)
         .offset(offset)
 
-      return {
-        articles: rows,
-        totalCount,
-        page,
-        limit,
-        totalPages: Math.ceil(totalCount / limit),
-      }
+      return {articles: rows, totalCount, page, limit, totalPages: Math.ceil(totalCount / limit)}
     },
     {
       params: t.Object({id: t.String()}),
@@ -60,10 +54,12 @@ export const projectArticlesRoutes = new Elysia()
       const result = await insertArticlesIntoProject(projectId, articleIds, importedFromProjectId)
       return {success: true, ...result}
     },
-    {body: t.Object({
-      articleIds: t.Union([t.String(), t.Array(t.String())]),
-      importedFromProjectId: t.Optional(t.String()),
-    })},
+    {
+      body: t.Object({
+        articleIds: t.Union([t.String(), t.Array(t.String())]),
+        importedFromProjectId: t.Optional(t.String()),
+      }),
+    },
   )
   .delete('/api/projects/:id/articles/:articleId', async ({params}) => {
     const db = getDatabase()
