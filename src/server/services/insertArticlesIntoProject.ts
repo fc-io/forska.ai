@@ -3,7 +3,7 @@ import {and, eq, inArray} from 'drizzle-orm'
 import {articles, judgments, judgmentsHuman, projectArticles, projectPrompts, prompts} from '../../db/schema.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 
-const chunk = <T,>(arr: T[], size: number): T[][] => {
+const chunk = <T>(arr: T[], size: number): T[][] => {
   const out: T[][] = []
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
   return out
@@ -31,9 +31,11 @@ export const insertArticlesIntoProject = async (
   const db = getDatabase()
 
   const uniqueIds = Array.from(
-    new Set((Array.isArray(articleIdsInput) ? articleIdsInput : [articleIdsInput]).filter((v): v is string => {
-      return typeof v === 'string' && v.trim().length > 0
-    })),
+    new Set(
+      (Array.isArray(articleIdsInput) ? articleIdsInput : [articleIdsInput]).filter((v): v is string => {
+        return typeof v === 'string' && v.trim().length > 0
+      }),
+    ),
   )
 
   if (uniqueIds.length === 0) {
@@ -50,9 +52,17 @@ export const insertArticlesIntoProject = async (
 
   // Filter to IDs that exist in articles to avoid FK errors
   const existingArticleRows = await db.select({id: articles.id}).from(articles).where(inArray(articles.id, uniqueIds))
-  const existingArticleSet = new Set(existingArticleRows.map((r) => r.id))
-  const validIds = uniqueIds.filter((id) => existingArticleSet.has(id))
-  const invalidIds = uniqueIds.filter((id) => !existingArticleSet.has(id))
+  const existingArticleSet = new Set(
+    existingArticleRows.map((r) => {
+      return r.id
+    }),
+  )
+  const validIds = uniqueIds.filter((id) => {
+    return existingArticleSet.has(id)
+  })
+  const invalidIds = uniqueIds.filter((id) => {
+    return !existingArticleSet.has(id)
+  })
 
   if (validIds.length === 0) {
     return {
@@ -72,8 +82,14 @@ export const insertArticlesIntoProject = async (
     .from(projectArticles)
     .where(and(eq(projectArticles.projectId, projectId), inArray(projectArticles.articleId, validIds)))
 
-  const existingAssocSet = new Set(existingAssocRows.map((r) => r.articleId))
-  const toInsert = validIds.filter((id) => !existingAssocSet.has(id))
+  const existingAssocSet = new Set(
+    existingAssocRows.map((r) => {
+      return r.articleId
+    }),
+  )
+  const toInsert = validIds.filter((id) => {
+    return !existingAssocSet.has(id)
+  })
 
   // Insert associations in chunks, ignoring duplicates just in case concurrent requests race
   const batchSize = 1000
@@ -103,7 +119,14 @@ export const insertArticlesIntoProject = async (
       .where(inArray(judgmentsHuman.articleId, validIds))
       .groupBy(judgmentsHuman.promptId)
 
-    const promptIdSet = new Set<string>([...llmPromptIds.map((r) => r.pid), ...humanPromptIds.map((r) => r.pid)])
+    const promptIdSet = new Set<string>([
+      ...llmPromptIds.map((r) => {
+        return r.pid
+      }),
+      ...humanPromptIds.map((r) => {
+        return r.pid
+      }),
+    ])
     const promptIds = Array.from(promptIdSet).filter((id): id is string => {
       return typeof id === 'string' && id.length > 0
     })
@@ -114,13 +137,21 @@ export const insertArticlesIntoProject = async (
         .select({pid: projectPrompts.promptId})
         .from(projectPrompts)
         .where(eq(projectPrompts.projectId, projectId))
-      const existingProjectPromptSet = new Set(existingProjectPromptRows.map((r) => r.pid))
-      const toLink = promptIds.filter((pid) => !existingProjectPromptSet.has(pid))
+      const existingProjectPromptSet = new Set(
+        existingProjectPromptRows.map((r) => {
+          return r.pid
+        }),
+      )
+      const toLink = promptIds.filter((pid) => {
+        return !existingProjectPromptSet.has(pid)
+      })
 
       if (toLink.length > 0) {
         // Ensure prompts exist, then link with default metadata
         const ensurePrompts = await db.select({id: prompts.id}).from(prompts).where(inArray(prompts.id, toLink))
-        const ensureIds = ensurePrompts.map((r) => r.id)
+        const ensureIds = ensurePrompts.map((r) => {
+          return r.id
+        })
         if (ensureIds.length > 0) {
           linkedPrompts = ensureIds.length
           // Insert in chunks to be safe for very large prompt sets.
@@ -139,9 +170,10 @@ export const insertArticlesIntoProject = async (
               }
             })
             orderIndex += promptChunk.length
-            await db.insert(projectPrompts).values(values).onConflictDoNothing({
-              target: [projectPrompts.projectId, projectPrompts.promptId],
-            })
+            await db
+              .insert(projectPrompts)
+              .values(values)
+              .onConflictDoNothing({target: [projectPrompts.projectId, projectPrompts.promptId]})
           }
         }
       }
