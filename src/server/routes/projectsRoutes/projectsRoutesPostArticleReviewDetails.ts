@@ -1,4 +1,4 @@
-import {and, eq, inArray, isNull, sql} from 'drizzle-orm'
+import {and, eq, inArray, isNull, or, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {user} from '../../../../auth-schema.ts'
@@ -7,9 +7,9 @@ import {
   judgmentAssessments,
   judgments,
   judgmentsHuman,
-  prompts,
   projectPrompts,
   projects,
+  prompts,
   reviews,
 } from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
@@ -43,6 +43,8 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
           promptHeading: prompts.promptHeading,
           order: projectPrompts.order,
           type: prompts.type,
+          enabled: projectPrompts.enabled,
+          originProjectId: projectPrompts.originProjectId,
         })
         .from(projectPrompts)
         .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
@@ -60,7 +62,13 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
               .from(judgments)
               .innerJoin(prompts, eq(judgments.promptId, prompts.id))
               .innerJoin(projectPrompts, eq(projectPrompts.promptId, prompts.id))
-              .where(and(eq(judgments.articleId, articleId), eq(projectPrompts.projectId, projectId)))
+              .where(
+                and(
+                  eq(judgments.articleId, articleId),
+                  eq(projectPrompts.projectId, projectId),
+                  eq(projectPrompts.enabled, true), // Only enabled prompts in LLM assessment
+                ),
+              )
               .orderBy(projectPrompts.order)
           : []
 
@@ -82,21 +90,78 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         {} as Record<string, typeof assessments>,
       )
 
-      // Combine judgments with their assessments and prompts (limited to this project's prompts)
+      // Combine judgments with their assessments and prompts (limited to this project's ENABLED prompts)
       const judgmentsWithDetails = articleJudgments.map(({judgment, prompt}) => {
         return {...judgment, prompt, assessments: assessmentsByJudgment[judgment.id] || []}
       })
 
-      // Cross-project: only include LLM judgments whose prompts are NOT part of this project's prompts (anti-join)
+      // Add placeholders for enabled prompts with no LLM judgment yet
+      // If there are judgments for a prompt, do NOT add a placeholder for that prompt
+      const enabledPromptRows = projectPromptRows.filter((p) => {
+        return p.enabled === true
+      })
+      const presentPromptIds = new Set(
+        articleJudgments.map(({judgment}) => {
+          return judgment.promptId
+        }),
+      )
+      const promptOrderMap = projectPromptRows.reduce(
+        (acc, p, idx) => {
+          const ord = p.order ?? idx
+          acc[p.id] = ord
+          return acc
+        },
+        {} as Record<string, number>,
+      )
+
+      for (const p of enabledPromptRows) {
+        if (!presentPromptIds.has(p.id)) {
+          // Placeholder judgment object for display in LLM assessment
+          const placeholder = {
+            id: `placeholder:${p.id}`,
+            promptId: p.id,
+            answeredOriginal: 'not answer' as const,
+            confidenceOriginal: null,
+            explanation: null,
+            quotes: [],
+            prompt: {originalText: p.originalText, promptHeading: p.promptHeading},
+            assessments: [] as Array<unknown>,
+          }
+          ;(judgmentsWithDetails as Array<any>).push(placeholder)
+        }
+      }
+
+      // Ensure stable ordering by project prompt order
+      ;(judgmentsWithDetails as Array<any>).sort((a, b) => {
+        const ao = promptOrderMap[a.promptId] ?? Number.MAX_SAFE_INTEGER
+        const bo = promptOrderMap[b.promptId] ?? Number.MAX_SAFE_INTEGER
+        if (ao !== bo) return ao - bo
+        // Secondary: newer first if timestamps exist
+        const at = a.createdAt ? new Date(a.createdAt).getTime() : 0
+        const bt = b.createdAt ? new Date(b.createdAt).getTime() : 0
+        return bt - at
+      })
+
+      // Cross-project:
+      // - Include LLM judgments whose prompts are NOT linked to this project (anti-join)
+      // - Include LLM judgments for imported prompts that are linked but DISABLED in this project
+      //   (imported = origin_project_id IS NULL, enabled = false)
       const allArticleJudgments = await db
         .select({judgment: judgments, prompt: prompts})
         .from(judgments)
         .innerJoin(prompts, eq(judgments.promptId, prompts.id))
-        .leftJoin(
-          projectPrompts,
-          and(eq(projectPrompts.promptId, prompts.id), eq(projectPrompts.projectId, projectId)),
+        .leftJoin(projectPrompts, and(eq(projectPrompts.promptId, prompts.id), eq(projectPrompts.projectId, projectId)))
+        .where(
+          and(
+            eq(judgments.articleId, articleId),
+            or(
+              // Not linked to this project at all
+              isNull(projectPrompts.id),
+              // Linked but disabled, and imported (not created by this project)
+              and(eq(projectPrompts.enabled, false), isNull(projectPrompts.originProjectId)),
+            ),
+          ),
         )
-        .where(and(eq(judgments.articleId, articleId), isNull(projectPrompts.id)))
 
       const allJudgments = allArticleJudgments.map(({judgment, prompt}) => {
         return {...judgment, prompt}
@@ -107,7 +172,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         new Set(
           allJudgments
             .map((j) => {
-              return j.snapshotProjectId as string | null
+              return j.snapshotProjectId
             })
             .filter((id): id is string => {
               return Boolean(id)
@@ -142,7 +207,13 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         .innerJoin(user, eq(user.id, judgmentsHuman.user))
         .innerJoin(prompts, eq(prompts.id, judgmentsHuman.promptId))
         .innerJoin(projectPrompts, eq(projectPrompts.promptId, prompts.id))
-        .where(and(eq(judgmentsHuman.articleId, articleId), eq(judgmentsHuman.projectId, projectId), eq(judgmentsHuman.isAnswered, true)))
+        .where(
+          and(
+            eq(judgmentsHuman.articleId, articleId),
+            eq(judgmentsHuman.projectId, projectId),
+            eq(judgmentsHuman.isAnswered, true),
+          ),
+        )
         .orderBy(user.name, projectPrompts.order)
 
       const humanByUser = humanRows.reduce(
@@ -186,7 +257,13 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
       // Replicates the logic used in articlesreviewsboth but scoped to a single article
       let humanAnswersByPrompt: Record<string, string[]> | undefined = undefined
       if (promptIds.length > 0) {
-        type HumanRow = {articleId: string; userId: string; promptId: string; answer: string | null; updatedAt: Date | null}
+        type HumanRow = {
+          articleId: string
+          userId: string
+          promptId: string
+          answer: string | null
+          updatedAt: Date | null
+        }
         const rows: HumanRow[] = await db
           .select({
             articleId: judgmentsHuman.articleId,
@@ -202,7 +279,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         const latest = rows.reduce((acc, row) => {
           const key = `${row.articleId}::${row.userId}::${row.promptId}`
           const existing = acc.get(key)
-          if (!existing || ((row.updatedAt?.getTime() || 0) > (existing.updatedAt?.getTime() || 0))) {
+          if (!existing || (row.updatedAt?.getTime() || 0) > (existing.updatedAt?.getTime() || 0)) {
             acc.set(key, row)
           }
           return acc
@@ -218,7 +295,11 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
 
         const qualifyingUsers: string[] = []
         for (const [uid, rowsArr] of byUser.entries()) {
-          const covered = new Set(rowsArr.map((r) => r.promptId))
+          const covered = new Set(
+            rowsArr.map((r) => {
+              return r.promptId
+            }),
+          )
           if (covered.size === promptIds.length) {
             qualifyingUsers.push(uid)
           }
