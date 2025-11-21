@@ -1,6 +1,6 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute} from '@tanstack/solid-router'
-import {createSignal, For, Show, Suspense} from 'solid-js'
+import {createSignal, Show, Suspense} from 'solid-js'
 
 import {ReviewArticleDetails} from '../../../../../../components/main/projects/reviews/review/reviewArticleDetails.tsx'
 import {ReviewAvailableJudgments} from '../../../../../../components/main/projects/reviews/review/reviewAvailableJudgments.tsx'
@@ -54,16 +54,15 @@ export const ReviewDetail = () => {
                     <Show when={articleViewToShow() === undefined}>
                       <ReviewArticleDetails article={data().article} />
                     </Show>
-                    <For each={data().judgments}>
-                      {(judgment) => {
-                        console.log(judgment.id)
-                        return (
-                          <Show when={articleViewToShow() === judgment.id}>
-                            <ReviewArticleDetails article={data().article} judgment={judgment} />
-                          </Show>
-                        )
+                    <Show
+                      when={[...(data().judgments || []), ...(data().allJudgments || [])].find(
+                        (j) => j.id === articleViewToShow(),
+                      )}
+                    >
+                      {(selected) => {
+                        return <ReviewArticleDetails article={data().article} judgment={selected()} />
                       }}
-                    </For>
+                    </Show>
                     <Show when={data().review}>
                       <ReviewStatus review={data().review} />
                     </Show>
@@ -71,7 +70,11 @@ export const ReviewDetail = () => {
                   <div class="w-96">
                     <ReviewJudgments judgments={data().judgments} setArticleViewToShow={setArticleViewToShow} />
                     <ReviewHumanAssessments groups={data().humanAssessmentsByUser} />
-                    <ReviewAvailableJudgments judgments={data().allJudgments} projectsById={data().projectsById} />
+                    <ReviewAvailableJudgments
+                      judgments={data().allJudgments}
+                      projectsById={data().projectsById}
+                      setArticleViewToShow={setArticleViewToShow}
+                    />
                   </div>
                 </div>
               )

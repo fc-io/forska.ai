@@ -13,7 +13,13 @@ type Judgment = {
   prompt?: {originalText: string; promptHeading?: string | null}
 }
 
-type ReviewAvailableJudgmentsProps = {judgments?: Judgment[]; projectsById?: Record<string, {name: string}>}
+type SetArticleViewToShow = (articleViewToShow: string | undefined) => void
+
+type ReviewAvailableJudgmentsProps = {
+  judgments?: Judgment[]
+  projectsById?: Record<string, {name: string}>
+  setArticleViewToShow: SetArticleViewToShow
+}
 
 export const ReviewAvailableJudgments = (props: ReviewAvailableJudgmentsProps) => {
   const projectName = (projectId: string) => {
@@ -49,8 +55,6 @@ export const ReviewAvailableJudgments = (props: ReviewAvailableJudgmentsProps) =
     return copy
   }
 
-  const noop = () => {}
-
   return (
     <div class="bg-white rounded-lg shadow h-fit mt-6">
       <div class="p-4 border-b">
@@ -82,7 +86,7 @@ export const ReviewAvailableJudgments = (props: ReviewAvailableJudgmentsProps) =
                               explanation: j.explanation ?? undefined,
                               quotes: j.quotes,
                             }}
-                            setArticleViewToShow={noop}
+                            setArticleViewToShow={props.setArticleViewToShow}
                           />
                         )
                       }}
