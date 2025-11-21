@@ -162,8 +162,12 @@ export const projectsRoutes = new Elysia()
 
       // Create prompts associations if provided (global immutable prompts; upsert by hash incl metadata)
       if (newProject && body.prompts && body.prompts.length > 0) {
-        for (let index = 0; index < body.prompts.length; index++) {
-          const prompt = body.prompts[index] as string | {content: string; promptHeading?: string; type?: string; order: number}
+        const submittedPrompts = (body.prompts as Array<string | {content: string; promptHeading?: string; type?: string; order: number}>)
+          .filter((p) => {
+            return typeof p === 'string' ? p.trim() !== '' : (p.content ?? '').trim() !== ''
+          })
+        for (let index = 0; index < submittedPrompts.length; index++) {
+          const prompt = submittedPrompts[index] as string | {content: string; promptHeading?: string; type?: string; order: number}
           const content = typeof prompt === 'string' ? prompt : prompt.content
           const heading = typeof prompt === 'object' ? prompt.promptHeading || null : null
           const typeVal = typeof prompt === 'object' ? prompt.type || null : null
@@ -363,6 +367,9 @@ export const projectsRoutes = new Elysia()
 
         // Handle prompts updates against associations (immutable prompts)
         if (body.prompts !== undefined) {
+          const submitted = body.prompts.filter((p) => {
+            return (p.originalText ?? '').trim() !== ''
+          })
           // Existing associations
           const existing = await tx
             .select({
@@ -374,7 +381,7 @@ export const projectsRoutes = new Elysia()
 
           const existingPromptIds = new Set(existing.map((p) => p.promptId))
           const receivedOriginalIds = new Set(
-            body.prompts
+            submitted
               .filter((p) => {
                 return p.originalId
               })
@@ -397,7 +404,7 @@ export const projectsRoutes = new Elysia()
           }
 
           // Upsert associations and prompt rows
-          for (const p of body.prompts) {
+          for (const p of submitted) {
             const heading = p.promptHeading || null
             const typeVal = p.type || null
             const orderVal = p.order

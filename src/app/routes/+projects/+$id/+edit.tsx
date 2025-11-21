@@ -194,7 +194,7 @@ const getNextOrder = (items: PromptItem[]): number => {
 const buildPromptsPayload = (owned: PromptItem[], imported: PromptItem[]): PromptPayload[] => {
   const ownedPayload = owned
     .filter((prompt) => {
-      return prompt.originalText.length > 0 || prompt.isExisting
+      return prompt.originalText.trim().length > 0
     })
     .map((prompt) => {
       return {
@@ -410,7 +410,9 @@ const EditProject = (): JSX.Element => {
         return prompt.id !== promptId
       })
       setOwnedPrompts(next)
+      return
     }
+    setOwnedPrompts([buildEmptyPrompt(1)])
   }
 
   const toggleImportRouteSelection = (route: string) => {
@@ -879,20 +881,18 @@ const EditProject = (): JSX.Element => {
                               </label>
                             </div>
                           </div>
-                          <Show when={ownedPrompts.length > 1}>
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              onClick={() => {
-                                return removePromptInput(promptItem.id)
-                              }}
-                              class={`self-start mt-1 ${actionStateClass()}`}
-                              disabled={isLocked()}
-                            >
-                              ×
-                            </Button>
-                          </Show>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              return removePromptInput(promptItem.id)
+                            }}
+                            class={`self-start mt-1 ${actionStateClass()}`}
+                            disabled={isLocked()}
+                          >
+                            ×
+                          </Button>
                         </div>
                       )
                     }}
