@@ -39,85 +39,50 @@ Why this is easiest:
 - [x] DB name should be`openalex_snapshot`.
 - [x] resuse existing DB user: postgres
 
-## 3. Start Postgres + import all snapshot JSON via `openalex-dis-db.sbatch`
+## 3. Flatten JSONL to CSV + load into Postgres via `openalex-dis-db.sbatch`
 
-On Discoverer, everything runs from a single batch job: it starts Postgres via Apptainer and then runs a container‑side script that creates the `openalex_snapshot` database (if needed) and imports all JSON snapshot files under `openalex-snapshot/data/**.gz` into a raw table. No manual `psql`, no extra scripts.
+On Discoverer, everything runs from a single batch job: it first flattens the OpenAlex snapshot JSONL files into CSV files using the official `flatten-openalex-jsonl.py` script, then starts Postgres via Apptainer, creates the `openalex_snapshot` database (if needed), applies the OpenAlex schema (if available), and finally loads the CSV files using `copy-openalex-csv.sql` (if available). No manual `psql` needed.
 
-**3.A. Submit the Postgres + import job**
+**3.A. Prepare scripts and snapshot layout on Discoverer**
 
-- [ ] From `login-plus` in this repo, submit:
+- [ ] Ensure snapshot is located at:
+  - `$STACK_ROOT/openalex-snapshot` (as shown in your directory listing).
+- [ ] Copy `flatten-openalex-jsonl.py` into the same folder as `openalex-dis-db.sbatch`:
+  - `"$STACK_ROOT/flatten-openalex-jsonl.py"`
+- [ ] (Optional but recommended) Also copy the official SQL scripts from the OpenAlex docs into `$STACK_ROOT`:
+  - `openalex-pg-schema.sql`
+  - `copy-openalex-csv.sql`
+
+**3.B. Submit the flatten + Postgres import job**
+
+-- [ ] From `login-plus` in this repo, submit:
   - `sbatch openalex-dis-db.sbatch`
-- [ ] Monitor the job:
+-- [ ] Monitor the job:
   - `squeue -u $USER`
-- [ ] The job writes logs under:
+-- [ ] The job writes logs under:
   - `$STACK_ROOT/logs/openalex-pg-<jobid>/db.log`
-  where you can follow Postgres startup and import progress.
+  where you can follow flattening, Postgres startup, schema application, and CSV import progress.
 
-**3.B. What the job does automatically**
+**3.C. What the job does automatically**
 
-Inside the Postgres container, the generated script:
+Inside the job:
 
-- [x] Reads the DB password from `/run/secrets/db_password`.
-- [x] Ensures database `openalex_snapshot` exists (creates it if missing).
-- [x] Ensures schema and table exist:
-  - `CREATE SCHEMA IF NOT EXISTS openalex;`
-  - `CREATE TABLE IF NOT EXISTS openalex.raw_json_lines (entity text, source text, line text);`
-- [x] Walks all `.gz` files under:
-  - `/data/openalex/data/**`
-  - `/data/openalex/legacy-data/**` (if present)
-- [x] For each `.gz` file:
-  - Computes a relative path `source` (e.g. `data/works/...gz` or `legacy-data/works/...gz`).
-  - Derives `entity` from the path (`works`, `authors`, etc.; falls back to `"unknown"` if the layout is unexpected).
-  - Deletes any existing rows with that `source` to keep the import idempotent.
-  - Decompresses the file with `gzip -dc`, prefixes each JSON line with `entity` and `source` (tab‑separated), and streams it into:
-    - `COPY openalex.raw_json_lines (entity, source, line) FROM STDIN WITH (FORMAT text);`
-- [x] Logs progress with human‑friendly messages like:
-  - `[openalex-pg] [import] scanning /data/openalex/data for .gz files (current)`
-  - `[openalex-pg] [import] [current] loading file: data/works/...gz (entity=works)`
-  - `[openalex-pg] [import] processed N file(s) under /data/openalex/data (current)`
-- [x] On successful completion, shuts down Postgres cleanly and exits.
-
----
-
-## 4. Create the `openalex_snapshot` database and credentials
-
-For the fully batch path, add these `psql` commands to `openalex_import.sql`. For manual runs, you can also execute them interactively in `psql`.
-
-- [ ] In `openalex_import.sql`, create the new database:
-  - `CREATE DATABASE openalex_snapshot;`
-- [ ] (Optional) Create a read‑only user (can also be done manually later):
-  - `CREATE USER openalex_app WITH PASSWORD '<reuse-or-new-password>';`
-  - Grant privileges:
-    - `GRANT CONNECT ON DATABASE openalex_snapshot TO openalex_app;`
-    - After schema is created (next section), run:
-      - `GRANT USAGE ON SCHEMA public TO openalex_app;`
-      - `GRANT SELECT ON ALL TABLES IN SCHEMA public TO openalex_app;`
-      - `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO openalex_app;`
-
----
-
-## 5. Load the OpenAlex schema into `openalex_snapshot`
-
-- [ ] From the OpenAlex docs / downloads, obtain the **Postgres schema SQL** for the snapshot (usually one or more `.sql` files with `CREATE TABLE` and `CREATE INDEX` statements).
-- [ ] Copy the schema SQL into `$STACK_ROOT/openalex-snapshot/schema/` (or similar).
-- [ ] In `openalex_import.sql`, after `\c openalex_snapshot`, load the schema:
-  - `\i /data/openalex/schema/openalex_schema.sql`
-- [ ] When the batch job runs, this will be executed via `psql` inside the container. Afterwards, you can verify tables with:
-  - `\dt` (if you also run `psql` interactively at some point).
-
----
-
-## 6. Load snapshot data files (works, authors, etc.)
-
-The OpenAlex instructions use bulk `COPY`/`\copy` into each table from the JSON/TSV snapshot files. For the batch job, add the relevant `\copy` commands directly into `openalex_import.sql`.
-
-- [ ] Confirm snapshot layout under `$STACK_ROOT/openalex-snapshot` (e.g. `works/*.gz`, `authors/*.gz`).
-- [ ] In `openalex_import.sql`, for each entity (e.g. `works`):
-  - Decompress if needed:
-    - Either pre‑decompress to `.jsonl`/`.tsv` in `$STACK_ROOT/openalex-snapshot/works/`, or:
-    - Use `\copy` with `PROGRAM 'zcat …'`.
-  - Example pattern (adapt to actual OpenAlex docs):
-    - `\copy works FROM PROGRAM 'zcat /data/openalex/works/works-part-1.gz' WITH (FORMAT text);`
+- [x] On the host (before starting Postgres):
+  - Logs and verifies host `python`:
+    - Prints `python --version` to the sbatch log.
+    - Aborts with a clear message if `python` is missing.
+  - Verifies `flatten-openalex-jsonl.py` exists at `$STACK_ROOT/flatten-openalex-jsonl.py`.
+  - Runs `python flatten-openalex-jsonl.py` from `$STACK_ROOT`, writing logs to:
+    - `$STACK_ROOT/logs/openalex-pg-<jobid>/flatten.log`
+  - Creates or reuses `$STACK_ROOT/csv-files` where gzipped CSV files like `authors.csv.gz`, `works.csv.gz`, etc. are written.
+  - If flattening fails, logs the exit code and aborts the job.
+- [x] Inside the Postgres container:
+  - Reads the DB password from `/run/secrets/db_password`.
+  - Ensures database `openalex_snapshot` exists (creates it if missing).
+  - If `openalex-pg-schema.sql` is present at `$STACK_ROOT/openalex-pg-schema.sql`, applies it against `openalex_snapshot` to create all `openalex.*` tables and indexes.
+  - If `copy-openalex-csv.sql` is present at `$STACK_ROOT/copy-openalex-csv.sql`, runs it from `/stack` so that the `\copy ... from program 'gunzip -c csv-files/...'` commands can see the CSV files under `csv-files/`.
+  - Logs the exit codes of both the schema and copy scripts; if either fails, logs a clear error and stops Postgres.
+  - On successful completion, shuts down Postgres cleanly and exits.
 - [ ] Repeat for other OpenAlex tables (authors, venues, institutions, concepts, etc.) following the exact `COPY` statements in the OpenAlex docs.
 - [ ] Submit `openalex-dis-db.sbatch`; the job will execute all of `openalex_import.sql` via `psql` inside the container and write progress/output to the log.
 

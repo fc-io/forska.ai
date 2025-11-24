@@ -40,6 +40,48 @@ need "$DB_PW_FILE"
 LOG_DIR="$STACK_ROOT/logs/openalex-pg-${SLURM_JOB_ID:-manual}"
 mkdir -p "$LOG_DIR"
 
+# Flatten JSONL to CSV using the official OpenAlex script on the host
+echo "[openalex-pg] [flatten] checking host python"
+if ! command -v python >/dev/null 2>&1; then
+  echo "[openalex-pg] [flatten] python not found on host; aborting" >&2
+  exit 2
+fi
+echo "[openalex-pg] [flatten] python version: $(python --version 2>&1)"
+
+FLATTEN_SCRIPT="$STACK_ROOT/flatten-openalex-jsonl.py"
+if [ ! -f "$FLATTEN_SCRIPT" ]; then
+  echo "[openalex-pg] [flatten] missing flatten script at $FLATTEN_SCRIPT; aborting" >&2
+  exit 2
+fi
+
+echo "[openalex-pg] [flatten] running flatten-openalex-jsonl.py (this may take hours)"
+cd "$STACK_ROOT"
+mkdir -p csv-files
+
+set +e
+# Run non-works entities and works in parallel, as recommended by OpenAlex docs
+python "flatten-openalex-jsonl.py" topics authors concepts institutions publishers sources >>"$LOG_DIR/flatten-entities.log" 2>&1 &
+FLATTEN_ENTITIES_PID=$!
+python "flatten-openalex-jsonl.py" works >>"$LOG_DIR/flatten-works.log" 2>&1 &
+FLATTEN_WORKS_PID=$!
+
+wait "$FLATTEN_ENTITIES_PID"
+FLATTEN_ENTITIES_EXIT=$?
+wait "$FLATTEN_WORKS_PID"
+FLATTEN_WORKS_EXIT=$?
+set -e
+
+echo "[openalex-pg] [flatten] entities flatten exit code: $FLATTEN_ENTITIES_EXIT"
+echo "[openalex-pg] [flatten] works flatten exit code: $FLATTEN_WORKS_EXIT"
+
+if [ "$FLATTEN_ENTITIES_EXIT" -ne 0 ] || [ "$FLATTEN_WORKS_EXIT" -ne 0 ]; then
+  echo "[openalex-pg] [flatten] flatten script failed; see $LOG_DIR/flatten-entities.log and $LOG_DIR/flatten-works.log" >&2
+  exit 2
+fi
+
+echo "[openalex-pg] [flatten] flatten script completed; CSV files should be under $STACK_ROOT/csv-files"
+cd - >/dev/null 2>&1 || true
+
 postgres_ping() {
   if apptainer exec --cleanenv "$SIF_DB" pg_isready \
     -h 127.0.0.1 \
@@ -112,111 +154,95 @@ echo "  host: $(hostname)"
 echo "  port: $POSTGRES_PORT"
 echo "  logs: $LOG_DIR/db.log"
 
-# Generate a container-side import script that loads all snapshot JSON
-IMPORT_SH_HOST="$STACK_ROOT/openalex-snapshot/openalex_import.sh"
-
-cat >"$IMPORT_SH_HOST" <<'EOSH'
-#!/usr/bin/env bash
+# Ensure openalex_snapshot database exists
+echo "[openalex-pg] ensuring database openalex_snapshot exists"
+set +e
+apptainer exec --cleanenv \
+  --bind "$DB_PW_FILE:/run/secrets/db_password:ro" \
+  "$SIF_DB" bash <<'EOSQL' >>"$LOG_DIR/db.log" 2>&1
 set -euo pipefail
-
-echo "[openalex-pg] [import] starting import script inside container"
-
-if [ ! -f /run/secrets/db_password ]; then
-  echo "[openalex-pg] [import] missing /run/secrets/db_password inside container" >&2
+export PGPASSWORD="$(cat /run/secrets/db_password)"
+psql_base="psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -p 5432 -U postgres"
+if ! $psql_base -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = 'openalex_snapshot'" | grep -q 1; then
+  echo "[openalex-pg] [schema] creating database openalex_snapshot"
+  $psql_base -d postgres -c "CREATE DATABASE openalex_snapshot;"
+else
+  echo "[openalex-pg] [schema] database openalex_snapshot already exists"
+fi
+EOSQL
+DB_CREATE_EXIT=$?
+set -e
+if [ "$DB_CREATE_EXIT" -ne 0 ]; then
+  echo "[openalex-pg] failed to ensure openalex_snapshot exists; see $LOG_DIR/db.log" >&2
+  kill -TERM "$DB_PID" 2>/dev/null || true
+  wait "$DB_PID" || true
   exit 2
 fi
 
+# Apply OpenAlex schema if available
+SCHEMA_SQL_HOST="$STACK_ROOT/openalex-pg-schema.sql"
+if [ -f "$SCHEMA_SQL_HOST" ]; then
+  echo "[openalex-pg] applying schema from $SCHEMA_SQL_HOST"
+  set +e
+  apptainer exec --cleanenv \
+    --bind "$STACK_ROOT:/stack" \
+    --bind "$DB_PW_FILE:/run/secrets/db_password:ro" \
+    "$SIF_DB" bash <<'EOSCHEMA' >>"$LOG_DIR/db.log" 2>&1
+set -euo pipefail
 export PGPASSWORD="$(cat /run/secrets/db_password)"
-psql_base="psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -p 5432 -U postgres"
-
-echo "[openalex-pg] [import] ensuring database openalex_snapshot exists"
-if ! $psql_base -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = 'openalex_snapshot'" | grep -q 1; then
-  echo "[openalex-pg] [import] creating database openalex_snapshot"
-  $psql_base -d postgres -c "CREATE DATABASE openalex_snapshot;"
+cd /stack
+psql -v ON_ERROR_STOP=1 \
+  -h 127.0.0.1 \
+  -p 5432 \
+  -U postgres \
+  -d openalex_snapshot \
+  -f openalex-pg-schema.sql
+EOSCHEMA
+  SCHEMA_EXIT=$?
+  set -e
+  echo "[openalex-pg] schema script exited with code $SCHEMA_EXIT"
+  if [ "$SCHEMA_EXIT" -ne 0 ]; then
+    echo "[openalex-pg] schema application failed; see $LOG_DIR/db.log" >&2
+    kill -TERM "$DB_PID" 2>/dev/null || true
+    wait "$DB_PID" || true
+    exit 2
+  fi
 else
-  echo "[openalex-pg] [import] database openalex_snapshot already exists"
+  echo "[openalex-pg] no schema file found at $SCHEMA_SQL_HOST; skipping schema application"
 fi
 
-echo "[openalex-pg] [import] ensuring schema and raw_json_lines table exist"
-$psql_base -d openalex_snapshot <<'EOSQL'
-CREATE SCHEMA IF NOT EXISTS openalex;
-CREATE TABLE IF NOT EXISTS openalex.raw_json_lines (
-  entity text NOT NULL,
-  source text NOT NULL,
-  line   text NOT NULL
-);
-EOSQL
-
-root="/data/openalex"
-
-import_root() {
-  local base="$1"
-  local label="$2"
-
-  if [ ! -d "$base" ]; then
-    echo "[openalex-pg] [import] no directory found at $base; skipping $label"
-    return 0
+# Load CSV data using copy-openalex-csv.sql if available
+COPY_SQL_HOST="$STACK_ROOT/copy-openalex-csv.sql"
+if [ -f "$COPY_SQL_HOST" ]; then
+  echo "[openalex-pg] loading CSV data using $COPY_SQL_HOST"
+  set +e
+  apptainer exec --cleanenv \
+    --bind "$STACK_ROOT:/stack" \
+    --bind "$DB_PW_FILE:/run/secrets/db_password:ro" \
+    "$SIF_DB" bash <<'EOCOPY' >>"$LOG_DIR/db.log" 2>&1
+set -euo pipefail
+export PGPASSWORD="$(cat /run/secrets/db_password)"
+cd /stack
+psql -v ON_ERROR_STOP=1 \
+  -h 127.0.0.1 \
+  -p 5432 \
+  -U postgres \
+  -d openalex_snapshot \
+  -f copy-openalex-csv.sql
+EOCOPY
+  COPY_EXIT=$?
+  set -e
+  echo "[openalex-pg] copy script exited with code $COPY_EXIT"
+  if [ "$COPY_EXIT" -ne 0 ]; then
+    echo "[openalex-pg] copy script failed; see $LOG_DIR/db.log" >&2
+    kill -TERM "$DB_PID" 2>/dev/null || true
+    wait "$DB_PID" || true
+    exit 2
   fi
+else
+  echo "[openalex-pg] no copy script found at $COPY_SQL_HOST; skipping CSV load"
+fi
 
-  echo "[openalex-pg] [import] scanning $base for .gz files ($label)"
-  local count=0
-
-  while IFS= read -r -d '' gz; do
-    count=$((count + 1))
-    rel="${gz#$root/}"        # e.g. data/works/..., legacy-data/works/...
-
-    case "$rel" in
-      data/*)
-        entity="$(printf '%s' "$rel" | cut -d/ -f2)"
-        ;;
-      legacy-data/*)
-        entity="$(printf '%s' "$rel" | cut -d/ -f2)"
-        ;;
-      *)
-        entity="unknown"
-        ;;
-    esac
-
-    echo "[openalex-pg] [import] [$label] loading file: $rel (entity=${entity})"
-
-    # Remove any previous rows for this file to make the import idempotent
-    $psql_base -d openalex_snapshot <<EOSQL2
-DELETE FROM openalex.raw_json_lines
-WHERE source = '$(printf "%s" "$rel" | sed "s/'/''/g")';
-EOSQL2
-
-    # Stream JSON lines into COPY, prefixing entity and source as tab-separated fields
-    if ! gzip -dc "$gz" 2>/dev/null | sed "s/^/${entity}\t${rel}\t/" | \
-      $psql_base -d openalex_snapshot -c "COPY openalex.raw_json_lines (entity, source, line) FROM STDIN WITH (FORMAT text)"; then
-      echo "[openalex-pg] [import] ERROR while loading $rel; aborting import" >&2
-      exit 1
-    fi
-
-    echo "[openalex-pg] [import] [$label] finished file: $rel"
-  done < <(find "$base" -type f -name '*.gz' -print0)
-
-  if [ "$count" -eq 0 ]; then
-    echo "[openalex-pg] [import] no .gz files found under $base; skipping $label"
-  else
-    echo "[openalex-pg] [import] processed $count file(s) under $base ($label)"
-  fi
-}
-
-import_root "$root/data" "current"
-import_root "$root/legacy-data" "legacy"
-
-echo "[openalex-pg] [import] completed import from $root"
-EOSH
-
-chmod +x "$IMPORT_SH_HOST"
-
-echo "[openalex-pg] invoking import script inside container"
-apptainer exec --cleanenv \
-  --bind "$STACK_ROOT/openalex-snapshot:/data/openalex:ro" \
-  --bind "$DB_PW_FILE:/run/secrets/db_password:ro" \
-  "$SIF_DB" /data/openalex/openalex_import.sh \
-  >>"$LOG_DIR/db.log" 2>&1
-
-echo "[openalex-pg] import script finished; stopping postgres"
+echo "[openalex-pg] stopping postgres"
 kill -TERM "$DB_PID" 2>/dev/null || true
 wait "$DB_PID" || true

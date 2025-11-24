@@ -41,7 +41,8 @@
     "dis:db:merge-from-remote-dump": "bun scripts/dbMergeRemoteDump.ts",
     "dis:db:r:p": "SSH_ALIAS=dis STACK_ROOT=/valhalla/projects/ehpc-aif-2025pg01-233/dev bun scripts/dbPush.ts --force --no-restore",
     "dis:f:p": "SSH_ALIAS=dis STACK_ROOT=/valhalla/projects/ehpc-aif-2025pg01-233/dev SBATCH_FILE=forska-dis.sbatch bun scripts/sbatchPut.ts",
-    "dis:oa:p": "SSH_ALIAS=dis STACK_ROOT=/valhalla/projects/ehpc-aif-2025pg01-233/dev SBATCH_FILE=openalex-dis-db.sbatch bun scripts/sbatchPut.ts"
+    "dis:oa:p": "SSH_ALIAS=dis STACK_ROOT=/valhalla/projects/ehpc-aif-2025pg01-233/dev SBATCH_FILE=openalex-dis-db.sbatch bun scripts/sbatchPut.ts",
+    "dis:fl:p": "SSH_ALIAS=dis STACK_ROOT=/valhalla/projects/ehpc-aif-2025pg01-233/dev SBATCH_FILE=flatten-openalex-jsonl.py bun scripts/sbatchPut.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^2.0.9",
