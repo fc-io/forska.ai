@@ -16,7 +16,7 @@ Goal: load the full OpenAlex snapshot into its own Postgres database on the HPC,
 
 **Recommendation (easiest): reuse Apptainer Postgres instance**
 
-- [x] Reuse the existing `postgres_18.sif` Apptainer image and `$STACK_ROOT/pgdata` that you already use in `forska-alvis.sbatch`.
+- [x] Reuse the existing `postgres_18.sif` Apptainer image and `$STACK_ROOT/pgdata` that you already use in your Discoverer setup (see `forska-dis.sbatch`).
 - [x] Run **one Postgres instance** (as you do today) and create a **second database** (e.g. `openalex_snapshot`) inside that instance.
 - [x] Reuse the existing Postgres superuser/password from `$STACK_ROOT/.secrets/db_password.txt` (no new secret management).
 - [ ] Optionally add a separate DB user/role (e.g. `openalex_app`) for read‑only access from Forska.
@@ -33,55 +33,59 @@ Why this is easiest:
 ## 2. Preconditions and directories
 
 - [x] Confirm shared HPC root:
-  - `STACK_ROOT=/mimer/NOBACKUP/groups/clin-agent-bench/dev` (as in `forska-alvis.sbatch`).
+  - `STACK_ROOT=/valhalla/projects/ehpc-aif-2025pg01-233/dev` (as in `forska-dis.sbatch` and `openalex-dis-db.sbatch`).
 - [x] Ensure OpenAlex snapshot is present (already done per your note):
   - Example: `$STACK_ROOT/openalex-snapshot/works/*.gz`, `authors/*.gz`, etc.
 - [x] DB name should be`openalex_snapshot`.
 - [x] resuse existing DB user: postgres
 
-## 3. Start Postgres via Apptainer for maintenance / loading
+## 3. Start Postgres + import all snapshot JSON via `openalex-dis-db.sbatch`
 
-You have two patterns:
-- **A. Reuse the running Postgres** from a Forska job (if you already have a job with Postgres up).
-- **B. Launch a small, DB‑only job** (no GPUs) dedicated to snapshot loading.
+On Discoverer, everything runs from a single batch job: it starts Postgres via Apptainer and then runs a container‑side script that creates the `openalex_snapshot` database (if needed) and imports all JSON snapshot files under `openalex-snapshot/data/**.gz` into a raw table. No manual `psql`, no extra scripts.
 
-**3.A. Use existing Forska job’s Postgres**
+**3.A. Submit the Postgres + import job**
 
-- [ ] Submit `forska-alvis.sbatch` (or similar) as usual to start Postgres and your services.
-- [ ] From a login node, open a tunnel to the node running the job if you want local `psql` access:
-  - `ssh -N -L 8432:<job-host>:5432 alvis2` (see the hints at the bottom of `forska-alvis.sbatch`).
-- [ ] Use `psql` from your laptop or inside Apptainer to create the OpenAlex DB (see Section 4).
+- [ ] From `login-plus` in this repo, submit:
+  - `sbatch openalex-dis-db.sbatch`
+- [ ] Monitor the job:
+  - `squeue -u $USER`
+- [ ] The job writes logs under:
+  - `$STACK_ROOT/logs/openalex-pg-<jobid>/db.log`
+  where you can follow Postgres startup and import progress.
 
-**3.B. Create a dedicated DB‑only job for loading (recommended for long imports)**
+**3.B. What the job does automatically**
 
-- [ ] Copy `forska-alvis.sbatch` to e.g. `openalex-load-db.sbatch`.
-- [ ] Strip out all SGLang/API/App parts; keep only:
-  - `STACK_ROOT` setup.
-  - `SIF_DB`, `DB_PW_FILE`, `DB_URL_FILE`.
-  - The `apptainer run ... "$SIF_DB"` block that starts Postgres on `$POSTGRES_PORT`.
-- [ ] Remove GPU directives and request a simple CPU job, e.g.:
-  - `#SBATCH -p <cpu-partition>`
-  - `#SBATCH --gpus-per-node=0` (or omit GPUs entirely).
-- [ ] Submit this job and keep it running while you create the DB and load data.
+Inside the Postgres container, the generated script:
+
+- [x] Reads the DB password from `/run/secrets/db_password`.
+- [x] Ensures database `openalex_snapshot` exists (creates it if missing).
+- [x] Ensures schema and table exist:
+  - `CREATE SCHEMA IF NOT EXISTS openalex;`
+  - `CREATE TABLE IF NOT EXISTS openalex.raw_json_lines (entity text, source text, line text);`
+- [x] Walks all `.gz` files under:
+  - `/data/openalex/data/**`
+  - `/data/openalex/legacy-data/**` (if present)
+- [x] For each `.gz` file:
+  - Computes a relative path `source` (e.g. `data/works/...gz` or `legacy-data/works/...gz`).
+  - Derives `entity` from the path (`works`, `authors`, etc.; falls back to `"unknown"` if the layout is unexpected).
+  - Deletes any existing rows with that `source` to keep the import idempotent.
+  - Decompresses the file with `gzip -dc`, prefixes each JSON line with `entity` and `source` (tab‑separated), and streams it into:
+    - `COPY openalex.raw_json_lines (entity, source, line) FROM STDIN WITH (FORMAT text);`
+- [x] Logs progress with human‑friendly messages like:
+  - `[openalex-pg] [import] scanning /data/openalex/data for .gz files (current)`
+  - `[openalex-pg] [import] [current] loading file: data/works/...gz (entity=works)`
+  - `[openalex-pg] [import] processed N file(s) under /data/openalex/data (current)`
+- [x] On successful completion, shuts down Postgres cleanly and exits.
 
 ---
 
 ## 4. Create the `openalex_snapshot` database and credentials
 
-Assuming Postgres is running via Apptainer as in `forska-alvis.sbatch`:
+For the fully batch path, add these `psql` commands to `openalex_import.sql`. For manual runs, you can also execute them interactively in `psql`.
 
-- [ ] Get the connection info:
-  - Host: `127.0.0.1`
-  - Port: `$POSTGRES_PORT` (defaults to `5432` unless overridden).
-  - User: `${DB_USER:-postgres}`.
-  - Password: from `$STACK_ROOT/.secrets/db_password.txt`.
-- [ ] Either:
-  - SSH to the node and run `psql` inside Apptainer:
-    - `apptainer exec --cleanenv "$SIF_DB" psql -h 127.0.0.1 -p "$POSTGRES_PORT" -U "${DB_USER:-postgres}" postgres`
-  - Or tunnel from your laptop to `127.0.0.1:$POSTGRES_PORT` and use local `psql`.
-- [ ] Create the new database:
+- [ ] In `openalex_import.sql`, create the new database:
   - `CREATE DATABASE openalex_snapshot;`
-- [ ] (Optional) Create a read‑only user:
+- [ ] (Optional) Create a read‑only user (can also be done manually later):
   - `CREATE USER openalex_app WITH PASSWORD '<reuse-or-new-password>';`
   - Grant privileges:
     - `GRANT CONNECT ON DATABASE openalex_snapshot TO openalex_app;`
@@ -96,35 +100,26 @@ Assuming Postgres is running via Apptainer as in `forska-alvis.sbatch`:
 
 - [ ] From the OpenAlex docs / downloads, obtain the **Postgres schema SQL** for the snapshot (usually one or more `.sql` files with `CREATE TABLE` and `CREATE INDEX` statements).
 - [ ] Copy the schema SQL into `$STACK_ROOT/openalex-snapshot/schema/` (or similar).
-- [ ] Start an interactive shell inside the DB container with the snapshot directory bound:
-  - `apptainer exec --cleanenv --bind "$STACK_ROOT/openalex-snapshot:/data/openalex:ro" "$SIF_DB" bash`
-- [ ] Inside the container, load the schema:
-  - `psql -h 127.0.0.1 -p "$POSTGRES_PORT" -U "${DB_USER:-postgres}" -d openalex_snapshot -f /data/openalex/schema/openalex_schema.sql`
-- [ ] Verify tables exist:
-  - In `psql`: `\dt` and check for tables like `works`, `authors`, `venues`, etc.
+- [ ] In `openalex_import.sql`, after `\c openalex_snapshot`, load the schema:
+  - `\i /data/openalex/schema/openalex_schema.sql`
+- [ ] When the batch job runs, this will be executed via `psql` inside the container. Afterwards, you can verify tables with:
+  - `\dt` (if you also run `psql` interactively at some point).
 
 ---
 
 ## 6. Load snapshot data files (works, authors, etc.)
 
-The OpenAlex instructions use bulk `COPY`/`\copy` into each table from the JSON/TSV snapshot files.
+The OpenAlex instructions use bulk `COPY`/`\copy` into each table from the JSON/TSV snapshot files. For the batch job, add the relevant `\copy` commands directly into `openalex_import.sql`.
 
 - [ ] Confirm snapshot layout under `$STACK_ROOT/openalex-snapshot` (e.g. `works/*.gz`, `authors/*.gz`).
-- [ ] Create a small shell script (or sbatch job) that:
-  - Binds the snapshot directory into the DB container:
-    - `--bind "$STACK_ROOT/openalex-snapshot:/data/openalex:ro"`.
-  - Runs `psql` commands to `\copy` data into each table.
-
-Example loading workflow (pseudo‑script, adapt to actual file formats from OpenAlex docs):
-
-- [ ] For each entity (e.g. `works`):
+- [ ] In `openalex_import.sql`, for each entity (e.g. `works`):
   - Decompress if needed:
     - Either pre‑decompress to `.jsonl`/`.tsv` in `$STACK_ROOT/openalex-snapshot/works/`, or:
-    - Use a pipeline: `zcat file.gz | psql -c "\copy works FROM STDIN WITH (FORMAT csv or text, ...)"`.
-  - Use `psql` inside Apptainer:
-    - `apptainer exec --cleanenv --bind "$STACK_ROOT/openalex-snapshot:/data/openalex:ro" "$SIF_DB" psql -h 127.0.0.1 -p "$POSTGRES_PORT" -U "${DB_USER:-postgres}" -d openalex_snapshot -c '\copy works FROM PROGRAM '\''zcat /data/openalex/works/works-part-1.gz'\'' WITH (FORMAT text)'`
+    - Use `\copy` with `PROGRAM 'zcat …'`.
+  - Example pattern (adapt to actual OpenAlex docs):
+    - `\copy works FROM PROGRAM 'zcat /data/openalex/works/works-part-1.gz' WITH (FORMAT text);`
 - [ ] Repeat for other OpenAlex tables (authors, venues, institutions, concepts, etc.) following the exact `COPY` statements in the OpenAlex docs.
-- [ ] Run these loads in a **CPU job** with enough wall‑time and I/O quota, not on the GPU job that serves the app.
+- [ ] Submit `openalex-dis-db.sbatch`; the job will execute all of `openalex_import.sql` via `psql` inside the container and write progress/output to the log.
 
 ---
 
@@ -161,7 +156,7 @@ Once the OpenAlex snapshot is in `openalex_snapshot`, treat it as a read‑only 
 ## 9. Checklist summary
 
 - [ ] Confirm OpenAlex snapshot location under `$STACK_ROOT/openalex-snapshot`.
-- [ ] Start Postgres via Apptainer (Forska job or dedicated DB job).
+- [ ] Start Postgres via Apptainer using `openalex-dis-db.sbatch` (or another Forska Postgres job).
 - [ ] Create `openalex_snapshot` database (and optional `openalex_app` user).
 - [ ] Load OpenAlex schema into `openalex_snapshot`.
 - [ ] Bulk `COPY` / `\copy` all snapshot files into the corresponding tables.
