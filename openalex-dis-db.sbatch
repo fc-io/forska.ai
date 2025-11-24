@@ -59,23 +59,33 @@ cd "$STACK_ROOT"
 mkdir -p csv-files
 
 set +e
-# Run non-works entities and works in parallel, as recommended by OpenAlex docs
-python "flatten-openalex-jsonl.py" topics authors concepts institutions publishers sources >>"$LOG_DIR/flatten-entities.log" 2>&1 &
-FLATTEN_ENTITIES_PID=$!
-python "flatten-openalex-jsonl.py" works >>"$LOG_DIR/flatten-works.log" 2>&1 &
-FLATTEN_WORKS_PID=$!
+# Run each entity in parallel (separate processes, separate logs)
+declare -A PIDS
+declare -A EXITS
+ENTITIES=(topics authors concepts institutions publishers sources works)
 
-wait "$FLATTEN_ENTITIES_PID"
-FLATTEN_ENTITIES_EXIT=$?
-wait "$FLATTEN_WORKS_PID"
-FLATTEN_WORKS_EXIT=$?
+for ent in "${ENTITIES[@]}"; do
+  echo "[openalex-pg] [flatten] starting ${ent}"
+  python "flatten-openalex-jsonl.py" "${ent}" >>"$LOG_DIR/flatten-${ent}.log" 2>&1 &
+  PIDS["$ent"]=$!
+done
+
+for ent in "${ENTITIES[@]}"; do
+  wait "${PIDS[$ent]}"
+  EXITS["$ent"]=$?
+  echo "[openalex-pg] [flatten] ${ent} exit code: ${EXITS[$ent]}"
+done
 set -e
 
-echo "[openalex-pg] [flatten] entities flatten exit code: $FLATTEN_ENTITIES_EXIT"
-echo "[openalex-pg] [flatten] works flatten exit code: $FLATTEN_WORKS_EXIT"
+FAILED=0
+for ent in "${ENTITIES[@]}"; do
+  if [ "${EXITS[$ent]}" -ne 0 ]; then
+    FAILED=1
+  fi
+done
 
-if [ "$FLATTEN_ENTITIES_EXIT" -ne 0 ] || [ "$FLATTEN_WORKS_EXIT" -ne 0 ]; then
-  echo "[openalex-pg] [flatten] flatten script failed; see $LOG_DIR/flatten-entities.log and $LOG_DIR/flatten-works.log" >&2
+if [ "$FAILED" -ne 0 ]; then
+  echo "[openalex-pg] [flatten] one or more entities failed; see per-entity logs in $LOG_DIR/flatten-*.log" >&2
   exit 2
 fi
 

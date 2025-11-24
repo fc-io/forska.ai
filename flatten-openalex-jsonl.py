@@ -315,9 +315,11 @@ def flatten_authors():
 def flatten_topics():
     with gzip.open(csv_files['topics']['topics']['name'], 'wt',
                    encoding='utf-8') as topics_csv:
-        topics_writer = csv.DictWriter(topics_csv,
-                                       fieldnames=csv_files['topics']['topics'][
-                                           'columns'])
+        topics_writer = csv.DictWriter(
+            topics_csv,
+            fieldnames=csv_files['topics']['topics']['columns'],
+            extrasaction='ignore'
+        )
         topics_writer.writeheader()
 
         seen_topic_ids = set()
@@ -339,8 +341,10 @@ def flatten_topics():
                         topic[f'{key}_id'] = topic[key]['id']
                         topic[f'{key}_display_name'] = topic[key]['display_name']
                         del topic[key]
-                    topic['updated_date'] = topic['updated']
-                    del topic['updated']
+                    updated_value = topic.get('updated') or topic.get('updated_date') or ''
+                    topic['updated_date'] = updated_value
+                    if 'updated' in topic:
+                        del topic['updated']
                     topic['wikipedia_id'] = topic['ids'].get('wikipedia')
                     del topic['ids']
                     del topic['created_date']
