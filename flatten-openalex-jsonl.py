@@ -249,34 +249,67 @@ csv_files = {
     },
 }
 
+def sorted_jsonl_files(entity):
+    return sorted(
+        glob.glob(os.path.join(SNAPSHOT_DIR, 'data', entity, '*', '*.gz')),
+        key=lambda path: (os.path.dirname(path), os.path.basename(path))
+    )
+
+
+def progress_path(entity):
+    return os.path.join(CSV_DIR, f'{entity}_progress.txt')
+
+
+def last_completed(entity):
+    path = progress_path(entity)
+    if not os.path.exists(path):
+        return None
+    with open(path, 'r', encoding='utf-8') as progress_file:
+        marker = progress_file.read().strip()
+    return marker or None
+
+
+def update_progress(entity, jsonl_path):
+    with open(progress_path(entity), 'w', encoding='utf-8') as progress_file:
+        progress_file.write(jsonl_path)
+
+
+def start_index(entity, files):
+    marker = last_completed(entity)
+    if not marker:
+        return 0
+    try:
+        return files.index(marker) + 1
+    except ValueError:
+        return 0
+
+
+def init_writer(file_spec, extrasaction=None):
+    path = file_spec['name']
+    mode = 'at' if os.path.exists(path) and os.path.getsize(path) > 0 else 'wt'
+    csv_file = gzip.open(path, mode, encoding='utf-8')
+    writer = csv.DictWriter(csv_file, fieldnames=file_spec['columns'],
+                            extrasaction=extrasaction)
+    if mode == 'wt':
+        writer.writeheader()
+    return csv_file, writer
+
 
 def flatten_authors():
     file_spec = csv_files['authors']
 
-    with gzip.open(file_spec['authors']['name'], 'wt',
-                   encoding='utf-8') as authors_csv, \
-            gzip.open(file_spec['ids']['name'], 'wt',
-                      encoding='utf-8') as ids_csv, \
-            gzip.open(file_spec['counts_by_year']['name'], 'wt',
-                      encoding='utf-8') as counts_by_year_csv:
+    authors_csv, authors_writer = init_writer(
+        file_spec['authors'], extrasaction='ignore')
+    ids_csv, ids_writer = init_writer(file_spec['ids'])
+    counts_by_year_csv, counts_by_year_writer = init_writer(
+        file_spec['counts_by_year'])
 
-        authors_writer = csv.DictWriter(
-            authors_csv, fieldnames=file_spec['authors']['columns'],
-            extrasaction='ignore'
-        )
-        authors_writer.writeheader()
-
-        ids_writer = csv.DictWriter(ids_csv,
-                                    fieldnames=file_spec['ids']['columns'])
-        ids_writer.writeheader()
-
-        counts_by_year_writer = csv.DictWriter(counts_by_year_csv, fieldnames=
-        file_spec['counts_by_year']['columns'])
-        counts_by_year_writer.writeheader()
+    with authors_csv, ids_csv, counts_by_year_csv:
+        files = sorted_jsonl_files('authors')
+        index = start_index('authors', files)
 
         files_done = 0
-        for jsonl_file_name in glob.glob(
-                os.path.join(SNAPSHOT_DIR, 'data', 'authors', '*', '*.gz')):
+        for jsonl_file_name in files[index:]:
             print(jsonl_file_name)
             with gzip.open(jsonl_file_name, 'r') as authors_jsonl:
                 for author_json in authors_jsonl:
@@ -307,25 +340,22 @@ def flatten_authors():
                         for count_by_year in counts_by_year:
                             count_by_year['author_id'] = author_id
                             counts_by_year_writer.writerow(count_by_year)
+            update_progress('authors', jsonl_file_name)
             files_done += 1
             if FILES_PER_ENTITY and files_done >= FILES_PER_ENTITY:
                 break
 
 
 def flatten_topics():
-    with gzip.open(csv_files['topics']['topics']['name'], 'wt',
-                   encoding='utf-8') as topics_csv:
-        topics_writer = csv.DictWriter(
-            topics_csv,
-            fieldnames=csv_files['topics']['topics']['columns'],
-            extrasaction='ignore'
-        )
-        topics_writer.writeheader()
+    topics_csv, topics_writer = init_writer(
+        csv_files['topics']['topics'], extrasaction='ignore')
 
+    with topics_csv:
+        files = sorted_jsonl_files('topics')
+        index = start_index('topics', files)
         seen_topic_ids = set()
         files_done = 0
-        for jsonl_file_name in glob.glob(
-                os.path.join(SNAPSHOT_DIR, 'data', 'topics', '*', '*.gz')):
+        for jsonl_file_name in files[index:]:
             print(jsonl_file_name)
             with gzip.open(jsonl_file_name, 'r') as topics_jsonl:
                 for line in topics_jsonl:
@@ -349,55 +379,30 @@ def flatten_topics():
                     del topic['ids']
                     del topic['created_date']
                     topics_writer.writerow(topic)
+            update_progress('topics', jsonl_file_name)
             files_done += 1
             if FILES_PER_ENTITY and files_done >= FILES_PER_ENTITY:
                 break
 
 
 def flatten_concepts():
-    with gzip.open(csv_files['concepts']['concepts']['name'], 'wt',
-                   encoding='utf-8') as concepts_csv, \
-            gzip.open(csv_files['concepts']['ancestors']['name'], 'wt',
-                      encoding='utf-8') as ancestors_csv, \
-            gzip.open(csv_files['concepts']['counts_by_year']['name'], 'wt',
-                      encoding='utf-8') as counts_by_year_csv, \
-            gzip.open(csv_files['concepts']['ids']['name'], 'wt',
-                      encoding='utf-8') as ids_csv, \
-            gzip.open(csv_files['concepts']['related_concepts']['name'], 'wt',
-                      encoding='utf-8') as related_concepts_csv:
+    concepts_csv, concepts_writer = init_writer(
+        csv_files['concepts']['concepts'], extrasaction='ignore')
+    ancestors_csv, ancestors_writer = init_writer(
+        csv_files['concepts']['ancestors'])
+    counts_by_year_csv, counts_by_year_writer = init_writer(
+        csv_files['concepts']['counts_by_year'])
+    ids_csv, ids_writer = init_writer(csv_files['concepts']['ids'])
+    related_concepts_csv, related_concepts_writer = init_writer(
+        csv_files['concepts']['related_concepts'])
 
-        concepts_writer = csv.DictWriter(
-            concepts_csv,
-            fieldnames=csv_files['concepts']['concepts']['columns'],
-            extrasaction='ignore'
-        )
-        concepts_writer.writeheader()
-
-        ancestors_writer = csv.DictWriter(ancestors_csv, fieldnames=
-        csv_files['concepts']['ancestors']['columns'])
-        ancestors_writer.writeheader()
-
-        counts_by_year_writer = csv.DictWriter(counts_by_year_csv, fieldnames=
-        csv_files['concepts']['counts_by_year']['columns'])
-        counts_by_year_writer.writeheader()
-
-        ids_writer = csv.DictWriter(ids_csv,
-                                    fieldnames=csv_files['concepts']['ids'][
-                                        'columns'])
-        ids_writer.writeheader()
-
-        related_concepts_writer = csv.DictWriter(related_concepts_csv,
-                                                 fieldnames=
-                                                 csv_files['concepts'][
-                                                     'related_concepts'][
-                                                     'columns'])
-        related_concepts_writer.writeheader()
-
+    with concepts_csv, ancestors_csv, counts_by_year_csv, ids_csv, related_concepts_csv:
+        files = sorted_jsonl_files('concepts')
+        index = start_index('concepts', files)
         seen_concept_ids = set()
 
         files_done = 0
-        for jsonl_file_name in glob.glob(
-                os.path.join(SNAPSHOT_DIR, 'data', 'concepts', '*', '*.gz')):
+        for jsonl_file_name in files[index:]:
             print(jsonl_file_name)
             with gzip.open(jsonl_file_name, 'r') as concepts_jsonl:
                 for concept_json in concepts_jsonl:
@@ -444,6 +449,7 @@ def flatten_concepts():
                                     'score': related_concept.get('score')
                                 })
 
+            update_progress('concepts', jsonl_file_name)
             files_done += 1
             if FILES_PER_ENTITY and files_done >= FILES_PER_ENTITY:
                 break
@@ -452,47 +458,22 @@ def flatten_concepts():
 def flatten_institutions():
     file_spec = csv_files['institutions']
 
-    with gzip.open(file_spec['institutions']['name'], 'wt',
-                   encoding='utf-8') as institutions_csv, \
-            gzip.open(file_spec['ids']['name'], 'wt',
-                      encoding='utf-8') as ids_csv, \
-            gzip.open(file_spec['geo']['name'], 'wt',
-                      encoding='utf-8') as geo_csv, \
-            gzip.open(file_spec['associated_institutions']['name'], 'wt',
-                      encoding='utf-8') as associated_institutions_csv, \
-            gzip.open(file_spec['counts_by_year']['name'], 'wt',
-                      encoding='utf-8') as counts_by_year_csv:
+    institutions_csv, institutions_writer = init_writer(
+        file_spec['institutions'], extrasaction='ignore')
+    ids_csv, ids_writer = init_writer(file_spec['ids'])
+    geo_csv, geo_writer = init_writer(file_spec['geo'])
+    associated_institutions_csv, associated_institutions_writer = init_writer(
+        file_spec['associated_institutions'])
+    counts_by_year_csv, counts_by_year_writer = init_writer(
+        file_spec['counts_by_year'])
 
-        institutions_writer = csv.DictWriter(
-            institutions_csv, fieldnames=file_spec['institutions']['columns'],
-            extrasaction='ignore'
-        )
-        institutions_writer.writeheader()
-
-        ids_writer = csv.DictWriter(ids_csv,
-                                    fieldnames=file_spec['ids']['columns'])
-        ids_writer.writeheader()
-
-        geo_writer = csv.DictWriter(geo_csv,
-                                    fieldnames=file_spec['geo']['columns'])
-        geo_writer.writeheader()
-
-        associated_institutions_writer = csv.DictWriter(
-            associated_institutions_csv,
-            fieldnames=file_spec['associated_institutions']['columns']
-        )
-        associated_institutions_writer.writeheader()
-
-        counts_by_year_writer = csv.DictWriter(counts_by_year_csv, fieldnames=
-        file_spec['counts_by_year']['columns'])
-        counts_by_year_writer.writeheader()
-
+    with institutions_csv, ids_csv, geo_csv, associated_institutions_csv, counts_by_year_csv:
+        files = sorted_jsonl_files('institutions')
+        index = start_index('institutions', files)
         seen_institution_ids = set()
 
         files_done = 0
-        for jsonl_file_name in glob.glob(
-                os.path.join(SNAPSHOT_DIR, 'data', 'institutions', '*',
-                             '*.gz')):
+        for jsonl_file_name in files[index:]:
             print(jsonl_file_name)
             with gzip.open(jsonl_file_name, 'r') as institutions_jsonl:
                 for institution_json in institutions_jsonl:
@@ -548,40 +529,26 @@ def flatten_institutions():
                             count_by_year['institution_id'] = institution_id
                             counts_by_year_writer.writerow(count_by_year)
 
+            update_progress('institutions', jsonl_file_name)
             files_done += 1
             if FILES_PER_ENTITY and files_done >= FILES_PER_ENTITY:
                 break
 
 
 def flatten_publishers():
-    with gzip.open(csv_files['publishers']['publishers']['name'], 'wt',
-                   encoding='utf-8') as publishers_csv, \
-            gzip.open(csv_files['publishers']['counts_by_year']['name'], 'wt',
-                      encoding='utf-8') as counts_by_year_csv, \
-            gzip.open(csv_files['publishers']['ids']['name'], 'wt',
-                      encoding='utf-8') as ids_csv:
+    publishers_csv, publishers_writer = init_writer(
+        csv_files['publishers']['publishers'], extrasaction='ignore')
+    counts_by_year_csv, counts_by_year_writer = init_writer(
+        csv_files['publishers']['counts_by_year'])
+    ids_csv, ids_writer = init_writer(csv_files['publishers']['ids'])
 
-        publishers_writer = csv.DictWriter(
-            publishers_csv,
-            fieldnames=csv_files['publishers']['publishers']['columns'],
-            extrasaction='ignore'
-        )
-        publishers_writer.writeheader()
-
-        counts_by_year_writer = csv.DictWriter(counts_by_year_csv, fieldnames=
-        csv_files['publishers']['counts_by_year']['columns'])
-        counts_by_year_writer.writeheader()
-
-        ids_writer = csv.DictWriter(ids_csv,
-                                    fieldnames=csv_files['publishers']['ids'][
-                                        'columns'])
-        ids_writer.writeheader()
-
+    with publishers_csv, counts_by_year_csv, ids_csv:
+        files = sorted_jsonl_files('publishers')
+        index = start_index('publishers', files)
         seen_publisher_ids = set()
 
         files_done = 0
-        for jsonl_file_name in glob.glob(
-                os.path.join(SNAPSHOT_DIR, 'data', 'publishers', '*', '*.gz')):
+        for jsonl_file_name in files[index:]:
             print(jsonl_file_name)
             with gzip.open(jsonl_file_name, 'r') as concepts_jsonl:
                 for publisher_json in concepts_jsonl:
@@ -612,39 +579,26 @@ def flatten_publishers():
                             count_by_year['publisher_id'] = publisher_id
                             counts_by_year_writer.writerow(count_by_year)
 
+            update_progress('publishers', jsonl_file_name)
             files_done += 1
             if FILES_PER_ENTITY and files_done >= FILES_PER_ENTITY:
                 break
 
 
 def flatten_sources():
-    with gzip.open(csv_files['sources']['sources']['name'], 'wt',
-                   encoding='utf-8') as sources_csv, \
-            gzip.open(csv_files['sources']['ids']['name'], 'wt',
-                      encoding='utf-8') as ids_csv, \
-            gzip.open(csv_files['sources']['counts_by_year']['name'], 'wt',
-                      encoding='utf-8') as counts_by_year_csv:
+    sources_csv, sources_writer = init_writer(
+        csv_files['sources']['sources'], extrasaction='ignore')
+    ids_csv, ids_writer = init_writer(csv_files['sources']['ids'])
+    counts_by_year_csv, counts_by_year_writer = init_writer(
+        csv_files['sources']['counts_by_year'])
 
-        sources_writer = csv.DictWriter(
-            sources_csv, fieldnames=csv_files['sources']['sources']['columns'],
-            extrasaction='ignore'
-        )
-        sources_writer.writeheader()
-
-        ids_writer = csv.DictWriter(ids_csv,
-                                    fieldnames=csv_files['sources']['ids'][
-                                        'columns'])
-        ids_writer.writeheader()
-
-        counts_by_year_writer = csv.DictWriter(counts_by_year_csv, fieldnames=
-        csv_files['sources']['counts_by_year']['columns'])
-        counts_by_year_writer.writeheader()
-
+    with sources_csv, ids_csv, counts_by_year_csv:
+        files = sorted_jsonl_files('sources')
+        index = start_index('sources', files)
         seen_source_ids = set()
 
         files_done = 0
-        for jsonl_file_name in glob.glob(
-                os.path.join(SNAPSHOT_DIR, 'data', 'sources', '*', '*.gz')):
+        for jsonl_file_name in files[index:]:
             print(jsonl_file_name)
             with gzip.open(jsonl_file_name, 'r') as sources_jsonl:
                 for source_json in sources_jsonl:
@@ -672,6 +626,7 @@ def flatten_sources():
                             count_by_year['source_id'] = source_id
                             counts_by_year_writer.writerow(count_by_year)
 
+            update_progress('sources', jsonl_file_name)
             files_done += 1
             if FILES_PER_ENTITY and files_done >= FILES_PER_ENTITY:
                 break
@@ -680,61 +635,34 @@ def flatten_sources():
 def flatten_works():
     file_spec = csv_files['works']
 
-    with gzip.open(file_spec['works']['name'], 'wt',
-                   encoding='utf-8') as works_csv, \
-            gzip.open(file_spec['primary_locations']['name'], 'wt',
-                      encoding='utf-8') as primary_locations_csv, \
-            gzip.open(file_spec['locations']['name'], 'wt',
-                      encoding='utf-8') as locations, \
-            gzip.open(file_spec['best_oa_locations']['name'], 'wt',
-                      encoding='utf-8') as best_oa_locations, \
-            gzip.open(file_spec['authorships']['name'], 'wt',
-                      encoding='utf-8') as authorships_csv, \
-            gzip.open(file_spec['biblio']['name'], 'wt',
-                      encoding='utf-8') as biblio_csv, \
-            gzip.open(file_spec['topics']['name'], 'wt',
-                      encoding='utf-8') as topics_csv, \
-            gzip.open(file_spec['concepts']['name'], 'wt',
-                      encoding='utf-8') as concepts_csv, \
-            gzip.open(file_spec['ids']['name'], 'wt',
-                      encoding='utf-8') as ids_csv, \
-            gzip.open(file_spec['mesh']['name'], 'wt',
-                      encoding='utf-8') as mesh_csv, \
-            gzip.open(file_spec['open_access']['name'], 'wt',
-                      encoding='utf-8') as open_access_csv, \
-            gzip.open(file_spec['referenced_works']['name'], 'wt',
-                      encoding='utf-8') as referenced_works_csv, \
-            gzip.open(file_spec['related_works']['name'], 'wt',
-                      encoding='utf-8') as related_works_csv:
+    works_csv, works_writer = init_writer(file_spec['works'],
+                                          extrasaction='ignore')
+    primary_locations_csv, primary_locations_writer = init_writer(
+        file_spec['primary_locations'])
+    locations_csv, locations_writer = init_writer(file_spec['locations'])
+    best_oa_locations_csv, best_oa_locations_writer = init_writer(
+        file_spec['best_oa_locations'])
+    authorships_csv, authorships_writer = init_writer(file_spec['authorships'])
+    biblio_csv, biblio_writer = init_writer(file_spec['biblio'])
+    topics_csv, topics_writer = init_writer(file_spec['topics'])
+    concepts_csv, concepts_writer = init_writer(file_spec['concepts'])
+    ids_csv, ids_writer = init_writer(file_spec['ids'], extrasaction='ignore')
+    mesh_csv, mesh_writer = init_writer(file_spec['mesh'])
+    open_access_csv, open_access_writer = init_writer(file_spec['open_access'])
+    referenced_works_csv, referenced_works_writer = init_writer(
+        file_spec['referenced_works'])
+    related_works_csv, related_works_writer = init_writer(
+        file_spec['related_works'])
 
-        works_writer = init_dict_writer(works_csv, file_spec['works'],
-                                        extrasaction='ignore')
-        primary_locations_writer = init_dict_writer(primary_locations_csv,
-                                                    file_spec[
-                                                        'primary_locations'])
-        locations_writer = init_dict_writer(locations, file_spec['locations'])
-        best_oa_locations_writer = init_dict_writer(best_oa_locations,
-                                                    file_spec[
-                                                        'best_oa_locations'])
-        authorships_writer = init_dict_writer(authorships_csv,
-                                              file_spec['authorships'])
-        biblio_writer = init_dict_writer(biblio_csv, file_spec['biblio'])
-        topics_writer = init_dict_writer(topics_csv, file_spec['topics'])
-        concepts_writer = init_dict_writer(concepts_csv, file_spec['concepts'])
-        ids_writer = init_dict_writer(ids_csv, file_spec['ids'],
-                                      extrasaction='ignore')
-        mesh_writer = init_dict_writer(mesh_csv, file_spec['mesh'])
-        open_access_writer = init_dict_writer(open_access_csv,
-                                              file_spec['open_access'])
-        referenced_works_writer = init_dict_writer(referenced_works_csv,
-                                                   file_spec[
-                                                       'referenced_works'])
-        related_works_writer = init_dict_writer(related_works_csv,
-                                                file_spec['related_works'])
+    with works_csv, primary_locations_csv, locations_csv, best_oa_locations_csv, \
+            authorships_csv, biblio_csv, topics_csv, concepts_csv, ids_csv, \
+            mesh_csv, open_access_csv, referenced_works_csv, \
+            related_works_csv:
+        files = sorted_jsonl_files('works')
+        index = start_index('works', files)
 
         files_done = 0
-        for jsonl_file_name in glob.glob(
-                os.path.join(SNAPSHOT_DIR, 'data', 'works', '*', '*.gz')):
+        for jsonl_file_name in files[index:]:
             print(jsonl_file_name)
             with gzip.open(jsonl_file_name, 'r') as works_jsonl:
                 for work_json in works_jsonl:
@@ -746,7 +674,6 @@ def flatten_works():
                     if not (work_id := work.get('id')):
                         continue
 
-                    # works
                     if (abstract := work.get(
                             'abstract_inverted_index')) is not None:
                         work['abstract_inverted_index'] = json.dumps(abstract,
@@ -754,7 +681,6 @@ def flatten_works():
 
                     works_writer.writerow(work)
 
-                    # primary_locations
                     if primary_location := (work.get('primary_location') or {}):
                         if primary_location.get(
                                 'source') and primary_location.get(
@@ -770,7 +696,6 @@ def flatten_works():
                                 'license': primary_location.get('license'),
                             })
 
-                    # locations
                     if locations := work.get('locations'):
                         for location in locations:
                             if location.get('source') and location.get(
@@ -786,7 +711,6 @@ def flatten_works():
                                     'license': location.get('license'),
                                 })
 
-                    # best_oa_locations
                     if best_oa_location := (work.get('best_oa_location') or {}):
                         if best_oa_location.get(
                                 'source') and best_oa_location.get(
@@ -802,7 +726,6 @@ def flatten_works():
                                 'license': best_oa_location.get('license'),
                             })
 
-                    # authorships
                     if authorships := work.get('authorships'):
                         for authorship in authorships:
                             if author_id := authorship.get('author', {}).get(
@@ -825,12 +748,10 @@ def flatten_works():
                                             'raw_affiliation_string'),
                                     })
 
-                    # biblio
                     if biblio := work.get('biblio'):
                         biblio['work_id'] = work_id
                         biblio_writer.writerow(biblio)
 
-                    # topics
                     for topic in work.get('topics', []):
                         if topic_id := topic.get('id'):
                             topics_writer.writerow({
@@ -839,7 +760,6 @@ def flatten_works():
                                 'score': topic.get('score')
                             })
 
-                    # concepts
                     for concept in work.get('concepts'):
                         if concept_id := concept.get('id'):
                             concepts_writer.writerow({
@@ -848,22 +768,18 @@ def flatten_works():
                                 'score': concept.get('score'),
                             })
 
-                    # ids
                     if ids := work.get('ids'):
                         ids['work_id'] = work_id
                         ids_writer.writerow(ids)
 
-                    # mesh
                     for mesh in work.get('mesh'):
                         mesh['work_id'] = work_id
                         mesh_writer.writerow(mesh)
 
-                    # open_access
                     if open_access := work.get('open_access'):
                         open_access['work_id'] = work_id
                         open_access_writer.writerow(open_access)
 
-                    # referenced_works
                     for referenced_work in work.get('referenced_works'):
                         if referenced_work:
                             referenced_works_writer.writerow({
@@ -871,7 +787,6 @@ def flatten_works():
                                 'referenced_work_id': referenced_work
                             })
 
-                    # related_works
                     for related_work in work.get('related_works'):
                         if related_work:
                             related_works_writer.writerow({
@@ -879,18 +794,10 @@ def flatten_works():
                                 'related_work_id': related_work
                             })
 
+            update_progress('works', jsonl_file_name)
             files_done += 1
             if FILES_PER_ENTITY and files_done >= FILES_PER_ENTITY:
                 break
-
-
-def init_dict_writer(csv_file, file_spec, **kwargs):
-    writer = csv.DictWriter(
-        csv_file, fieldnames=file_spec['columns'], **kwargs
-    )
-    writer.writeheader()
-    return writer
-
 
 if __name__ == '__main__':
     tasks = {
