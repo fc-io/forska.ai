@@ -12,12 +12,14 @@ type ReviewArticleDetailsProps = {
   article: {articleTitle: string; articleAuthors?: string[] | null; articleSummary?: string | null; articleId: string}
   judgment?: Judgment
 }
+import {decodeAndSanitize} from '../../../../../app/utils/decodeAndSanitize'
 import {getArticleUrl} from '../../../../../app/utils/getArticleUrl.ts'
 import {reviewArticleDetailsGetHighlightedText} from './reviewArticleDetails/reviewArticleDetailsGetHighlightedText.ts'
 
 const getHighlightedText = (text: string, judgment: Judgment) => {
+  const sanitizedText = decodeAndSanitize(text)
   const pieces = reviewArticleDetailsGetHighlightedText(
-    text,
+    sanitizedText,
     new Array(...(judgment.quotes || [])).map((quote) => {
       // replace leading ... and trailing ..., should be better stored in the database
       return quote.replace(/^\.{3}|\.{3}$/g, '')
@@ -25,7 +27,8 @@ const getHighlightedText = (text: string, judgment: Judgment) => {
     {maxDistance: 1, caseInsensitive: true, fuzzyScanLimit: 'auto'},
   )
   return pieces.map(([text, isHit]) => {
-    return isHit ? <span class="text-red-500 underline">{text}</span> : text
+    // eslint-disable-next-line solid/no-innerhtml
+    return isHit ? <span class="text-red-500 underline" innerHTML={text} /> : <span innerHTML={text} />
   })
 }
 
@@ -35,7 +38,12 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
       <h1 class="text-2xl font-bold mb-4">Article Details</h1>
       <div class="space-y-2">
         <p class="text-lg font-semibold">
-          {props.judgment ? getHighlightedText(props.article.articleTitle, props.judgment) : props.article.articleTitle}
+          {props.judgment ? (
+            getHighlightedText(props.article.articleTitle, props.judgment)
+          ) : (
+            // eslint-disable-next-line solid/no-innerhtml
+            <span innerHTML={decodeAndSanitize(props.article.articleTitle)} />
+          )}
         </p>
         <p class="text-gray-600">
           <a
@@ -53,11 +61,14 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
         <Show when={props.article.articleSummary}>
           <div class="mt-4">
             <h3 class="font-semibold mb-2">Summary</h3>
-            <p class="text-gray-700">
-              {props.judgment && props.article.articleSummary
-                ? getHighlightedText(props.article.articleSummary, props.judgment)
-                : props.article.articleSummary}
-            </p>
+            <div class="text-gray-700 assessment-container leading-relaxed">
+              {props.judgment && props.article.articleSummary ? (
+                getHighlightedText(props.article.articleSummary, props.judgment)
+              ) : (
+                // eslint-disable-next-line solid/no-innerhtml
+                <span innerHTML={decodeAndSanitize(props.article.articleSummary ?? '')} />
+              )}
+            </div>
           </div>
         </Show>
       </div>

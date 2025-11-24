@@ -1,19 +1,11 @@
 import {createForm} from '@tanstack/solid-form'
 import {useMutation, useQuery, useQueryClient} from '@tanstack/solid-query'
 import {createFileRoute} from '@tanstack/solid-router'
-import DOMPurify from 'dompurify'
 import {For, Suspense} from 'solid-js'
 
 import {apiClient} from '../../../../services/apiClient'
 import {handleApiResponse} from '../../../../services/utils/handleApiResponse'
-
-const decodeAndSanitize = (html: string) => {
-  const textarea = document.createElement('textarea')
-  textarea.innerHTML = html
-  // Convert newlines to <br> tags before sanitizing
-  const withBreaks = textarea.value.replace(/\n/g, '<br>')
-  return DOMPurify.sanitize(withBreaks)
-}
+import {decodeAndSanitize} from '../../../utils/decodeAndSanitize'
 
 export const HumanAssessment = () => {
   const params = Route.useParams()
