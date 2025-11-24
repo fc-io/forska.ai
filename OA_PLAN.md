@@ -33,21 +33,23 @@ Why this is easiest:
 ## 2. Preconditions and directories
 
 - [x] Confirm shared HPC root:
-  - `STACK_ROOT=/valhalla/projects/ehpc-aif-2025pg01-233/dev` (as in `forska-dis.sbatch` and `openalex-dis-db.sbatch`).
+  - `STACK_ROOT=/valhalla/projects/ehpc-aif-2025pg01-233/dev` (as in `forska-dis.sbatch` and `08-openalex-dis-db-rest.sbatch`).
 - [x] Ensure OpenAlex snapshot is present (already done per your note):
   - Example: `$STACK_ROOT/openalex-snapshot/works/*.gz`, `authors/*.gz`, etc.
 - [x] DB name should be`openalex_snapshot`.
 - [x] resuse existing DB user: postgres
 
-## 3. Flatten JSONL to CSV + load into Postgres via `openalex-dis-db.sbatch`
+## 3. Flatten JSONL to CSV + load into Postgres via split sbatch jobs
 
-On Discoverer, everything runs from a single batch job: it first flattens the OpenAlex snapshot JSONL files into CSV files using the official `flatten-openalex-jsonl.py` script, then starts Postgres via Apptainer, creates the `openalex_snapshot` database (if needed), applies the OpenAlex schema (if available), and finally loads the CSV files using `copy-openalex-csv.sql` (if available). No manual `psql` needed.
+Use the numbered sbatch files in this repo:
+- `01-openalex-flatten-topics.sbatch` through `07-openalex-flatten-works.sbatch` (one per flatten task)
+- `08-openalex-dis-db-rest.sbatch` (Postgres startup + schema + CSV load)
 
 **3.A. Prepare scripts and snapshot layout on Discoverer**
 
 - [ ] Ensure snapshot is located at:
   - `$STACK_ROOT/openalex-snapshot` (as shown in your directory listing).
-- [ ] Copy `flatten-openalex-jsonl.py` into the same folder as `openalex-dis-db.sbatch`:
+- [ ] Copy `flatten-openalex-jsonl.py` into the same folder as the sbatch files:
   - `"$STACK_ROOT/flatten-openalex-jsonl.py"`
 - [ ] (Optional but recommended) Also copy the official SQL scripts from the OpenAlex docs into `$STACK_ROOT`:
   - `openalex-pg-schema.sql`
@@ -55,36 +57,36 @@ On Discoverer, everything runs from a single batch job: it first flattens the Op
 
 **3.B. Submit the flatten + Postgres import job**
 
--- [ ] From `login-plus` in this repo, submit:
-  - `sbatch openalex-dis-db.sbatch`
--- [ ] Monitor the job:
+- [ ] From `login-plus` in this repo, submit the flatten jobs (parallel is fine):
+  - `sbatch 01-openalex-flatten-topics.sbatch`
+  - `sbatch 02-openalex-flatten-authors.sbatch`
+  - `sbatch 03-openalex-flatten-concepts.sbatch`
+  - `sbatch 04-openalex-flatten-institutions.sbatch`
+  - `sbatch 05-openalex-flatten-publishers.sbatch`
+  - `sbatch 06-openalex-flatten-sources.sbatch`
+  - `sbatch 07-openalex-flatten-works.sbatch`
+- [ ] After flattening completes, submit:
+  - `sbatch 08-openalex-dis-db-rest.sbatch`
+- [ ] Monitor the jobs:
   - `squeue -u $USER`
--- [ ] The job writes logs under:
-  - `$STACK_ROOT/logs/openalex-pg-<jobid>/db.log`
-  where you can follow flattening, Postgres startup, schema application, and CSV import progress.
+- [ ] Logs:
+  - `$STACK_ROOT/logs/openalex-pg-<jobid>/flatten-<entity>.log` (per flatten job)
+  - `$STACK_ROOT/logs/openalex-pg-<jobid>/db.log` (DB job)
 
 **3.C. What the job does automatically**
 
-Inside the job:
-
-- [x] On the host (before starting Postgres):
-  - Logs and verifies host `python`:
-    - Prints `python --version` to the sbatch log.
-    - Aborts with a clear message if `python` is missing.
-  - Verifies `flatten-openalex-jsonl.py` exists at `$STACK_ROOT/flatten-openalex-jsonl.py`.
-  - Runs `python flatten-openalex-jsonl.py` from `$STACK_ROOT`, writing logs to:
-    - `$STACK_ROOT/logs/openalex-pg-<jobid>/flatten.log`
-  - Creates or reuses `$STACK_ROOT/csv-files` where gzipped CSV files like `authors.csv.gz`, `works.csv.gz`, etc. are written.
-  - If flattening fails, logs the exit code and aborts the job.
-- [x] Inside the Postgres container:
+- [x] Flatten jobs (01-07):
+  - Verify host `python` and log `python --version`.
+  - Check `flatten-openalex-jsonl.py` at `$STACK_ROOT/flatten-openalex-jsonl.py`.
+  - Run `python flatten-openalex-jsonl.py <entity>` from `$STACK_ROOT`, writing logs to `$STACK_ROOT/logs/openalex-pg-<jobid>/flatten-<entity>.log`.
+  - Create or reuse `$STACK_ROOT/csv-files` for gzipped CSV outputs.
+- [x] Inside the Postgres container (`08-openalex-dis-db-rest.sbatch`):
   - Reads the DB password from `/run/secrets/db_password`.
   - Ensures database `openalex_snapshot` exists (creates it if missing).
   - If `openalex-pg-schema.sql` is present at `$STACK_ROOT/openalex-pg-schema.sql`, applies it against `openalex_snapshot` to create all `openalex.*` tables and indexes.
   - If `copy-openalex-csv.sql` is present at `$STACK_ROOT/copy-openalex-csv.sql`, runs it from `/stack` so that the `\copy ... from program 'gunzip -c csv-files/...'` commands can see the CSV files under `csv-files/`.
   - Logs the exit codes of both the schema and copy scripts; if either fails, logs a clear error and stops Postgres.
   - On successful completion, shuts down Postgres cleanly and exits.
-- [ ] Repeat for other OpenAlex tables (authors, venues, institutions, concepts, etc.) following the exact `COPY` statements in the OpenAlex docs.
-- [ ] Submit `openalex-dis-db.sbatch`; the job will execute all of `openalex_import.sql` via `psql` inside the container and write progress/output to the log.
 
 ---
 
@@ -121,7 +123,7 @@ Once the OpenAlex snapshot is in `openalex_snapshot`, treat it as a read‑only 
 ## 9. Checklist summary
 
 - [ ] Confirm OpenAlex snapshot location under `$STACK_ROOT/openalex-snapshot`.
-- [ ] Start Postgres via Apptainer using `openalex-dis-db.sbatch` (or another Forska Postgres job).
+- [ ] Start Postgres via Apptainer using `08-openalex-dis-db-rest.sbatch` (or another Forska Postgres job).
 - [ ] Create `openalex_snapshot` database (and optional `openalex_app` user).
 - [ ] Load OpenAlex schema into `openalex_snapshot`.
 - [ ] Bulk `COPY` / `\copy` all snapshot files into the corresponding tables.

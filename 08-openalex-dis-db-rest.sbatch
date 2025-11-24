@@ -6,8 +6,8 @@
 #SBATCH --ntasks-per-node=2
 #SBATCH --ntasks-per-core=1
 #SBATCH --cpus-per-task=28
-#SBATCH --gres=gpu:2
-#SBATCH --time=08:00:00
+#SBATCH --gres=gpu:1
+#SBATCH --time=24:00:00
 #SBATCH -o %x-%j.log
 #SBATCH --export=ALL
 #SBATCH --signal=B:USR1@120
@@ -16,9 +16,8 @@ set -euo pipefail
 
 echo "[openalex-pg] starting on host $(hostname) at $(date)"
 
-# Shared root and secrets (DIS)
 export STACK_ROOT=${STACK_ROOT:-/valhalla/projects/ehpc-aif-2025pg01-233/dev}
-mkdir -p "$STACK_ROOT"/{pgdata,logs,.secrets,openalex-snapshot}
+mkdir -p "$STACK_ROOT"/{pgdata,logs,.secrets,openalex-snapshot,csv-files}
 
 # Postgres port (can be overridden when submitting)
 export POSTGRES_PORT=${POSTGRES_PORT:-5432}
@@ -40,57 +39,7 @@ need "$DB_PW_FILE"
 LOG_DIR="$STACK_ROOT/logs/openalex-pg-${SLURM_JOB_ID:-manual}"
 mkdir -p "$LOG_DIR"
 
-# Flatten JSONL to CSV using the official OpenAlex script on the host
-echo "[openalex-pg] [flatten] checking host python"
-if ! command -v python >/dev/null 2>&1; then
-  echo "[openalex-pg] [flatten] python not found on host; aborting" >&2
-  exit 2
-fi
-echo "[openalex-pg] [flatten] python version: $(python --version 2>&1)"
-
-FLATTEN_SCRIPT="$STACK_ROOT/flatten-openalex-jsonl.py"
-if [ ! -f "$FLATTEN_SCRIPT" ]; then
-  echo "[openalex-pg] [flatten] missing flatten script at $FLATTEN_SCRIPT; aborting" >&2
-  exit 2
-fi
-
-echo "[openalex-pg] [flatten] running flatten-openalex-jsonl.py (this may take hours)"
-cd "$STACK_ROOT"
-mkdir -p csv-files
-
-set +e
-# Run each entity in parallel (separate processes, separate logs)
-declare -A PIDS
-declare -A EXITS
-ENTITIES=(topics authors concepts institutions publishers sources works)
-
-for ent in "${ENTITIES[@]}"; do
-  echo "[openalex-pg] [flatten] starting ${ent}"
-  python "flatten-openalex-jsonl.py" "${ent}" >>"$LOG_DIR/flatten-${ent}.log" 2>&1 &
-  PIDS["$ent"]=$!
-done
-
-for ent in "${ENTITIES[@]}"; do
-  wait "${PIDS[$ent]}"
-  EXITS["$ent"]=$?
-  echo "[openalex-pg] [flatten] ${ent} exit code: ${EXITS[$ent]}"
-done
-set -e
-
-FAILED=0
-for ent in "${ENTITIES[@]}"; do
-  if [ "${EXITS[$ent]}" -ne 0 ]; then
-    FAILED=1
-  fi
-done
-
-if [ "$FAILED" -ne 0 ]; then
-  echo "[openalex-pg] [flatten] one or more entities failed; see per-entity logs in $LOG_DIR/flatten-*.log" >&2
-  exit 2
-fi
-
-echo "[openalex-pg] [flatten] flatten script completed; CSV files should be under $STACK_ROOT/csv-files"
-cd - >/dev/null 2>&1 || true
+echo "[openalex-pg] using existing CSV files under $STACK_ROOT/csv-files"
 
 postgres_ping() {
   if apptainer exec --cleanenv "$SIF_DB" pg_isready \
