@@ -26,10 +26,15 @@ const getHighlightedText = (text: string, judgment: Judgment) => {
     }),
     {maxDistance: 1, caseInsensitive: true, fuzzyScanLimit: 'auto'},
   )
-  return pieces.map(([text, isHit]) => {
-    // eslint-disable-next-line solid/no-innerhtml
-    return isHit ? <span class="text-red-500 underline" innerHTML={text} /> : <span innerHTML={text} />
-  })
+
+  const html = pieces
+    .map(([text, isHit]) => {
+      return isHit ? `<span class="text-red-500 underline">${text}</span>` : text
+    })
+    .join('')
+
+  // eslint-disable-next-line solid/no-innerhtml
+  return <span innerHTML={html} />
 }
 
 export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
