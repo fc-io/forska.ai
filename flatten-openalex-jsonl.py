@@ -284,12 +284,14 @@ def start_index(entity, files):
         return 0
 
 
-def init_writer(file_spec, extrasaction=None):
+def init_writer(file_spec, extrasaction='raise'):
     path = file_spec['name']
     mode = 'at' if os.path.exists(path) and os.path.getsize(path) > 0 else 'wt'
     csv_file = gzip.open(path, mode, encoding='utf-8')
-    writer = csv.DictWriter(csv_file, fieldnames=file_spec['columns'],
-                            extrasaction=extrasaction)
+    writer_kwargs = {'fieldnames': file_spec['columns']}
+    if extrasaction is not None:
+        writer_kwargs['extrasaction'] = extrasaction
+    writer = csv.DictWriter(csv_file, **writer_kwargs)
     if mode == 'wt':
         writer.writeheader()
     return csv_file, writer

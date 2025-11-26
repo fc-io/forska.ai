@@ -31,3 +31,22 @@ squeue -u $USER -O jobid,state,timeused,timelimit,timeleft,nodelist
 ``` bash
  srun --jobid=2617 -N1 -n1 nvidia-smi
  ```
+
+## projinfo on discoverer
+
+``` bash
+accountcheck ehpc-aif-2025pg01-233
+```
+
+``` bash
+scontrol show job 2822 | egrep 'Account=|QOS=|TRES=|TimeLimit=|Reason='
+```
+
+``` bash
+sacctmgr show association where user=fcarlsson account=ehpc-aif-2025pg01-233 format=Cluster,Account,User,QOS,GrpTRES,GrpTRESMins,GrpTRESRunMins%30
+```
+
+``` bash
+module load accountcheck
+accountcheck --all-accounts
+```

@@ -3,11 +3,10 @@
 #SBATCH --qos=ehpc-aif-2025pg01-233
 #SBATCH -p common
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=2
+#SBATCH --ntasks-per-node=1
 #SBATCH --ntasks-per-core=1
-#SBATCH --cpus-per-task=28
 #SBATCH --gres=gpu:1
-#SBATCH --time=17:30:00
+#SBATCH --time=00:59:00
 #SBATCH -o %x-%j.log
 #SBATCH --export=ALL
 #SBATCH --signal=B:USR1@120
