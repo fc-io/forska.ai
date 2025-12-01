@@ -334,6 +334,32 @@ const AdminDataSources = () => {
                                           })
                                         return
                                       }
+                                      if (entry.importRoute === '/api/datasources/import/biorxiv') {
+                                        void apiClient.api.datasources.import.biorxiv
+                                          .post({id: entry.id})
+                                          .then((response) => {
+                                            if (response.error || !response.data?.success) {
+                                              console.error('Failed to start import', response.error)
+                                              alert('Failed to start import')
+                                              return
+                                            }
+                                            void dataSourcesQuery.refetch()
+                                          })
+                                        return
+                                      }
+                                      if (entry.importRoute === '/api/datasources/import/medrxiv') {
+                                        void apiClient.api.datasources.import.medrxiv
+                                          .post({id: entry.id})
+                                          .then((response) => {
+                                            if (response.error || !response.data?.success) {
+                                              console.error('Failed to start import', response.error)
+                                              alert('Failed to start import')
+                                              return
+                                            }
+                                            void dataSourcesQuery.refetch()
+                                          })
+                                        return
+                                      }
                                       if (entry.importRoute === '/api/datasources/import/pubmed') {
                                         void apiClient.api.datasources.import.pubmed
                                           .post({id: entry.id})

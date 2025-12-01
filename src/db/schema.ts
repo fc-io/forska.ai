@@ -61,6 +61,8 @@ export const articles = pgTable(
     articleVersion: integer('article_version'),
     arxivId: text('arxiv_id'),
     openalexId: text('openalex_id'),
+    biorxivId: text('biorxiv_id'),
+    medrxivId: text('medrxiv_id'),
     doi: text('doi'),
     pubmedId: text('pubmed_id'),
     url: text('url'),

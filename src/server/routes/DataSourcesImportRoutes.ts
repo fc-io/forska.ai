@@ -2,6 +2,8 @@ import {Elysia, t} from 'elysia'
 
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {dataSourcesImportRoutesPostArxiv} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostArxiv.ts'
+import {dataSourcesImportRoutesPostBiorxiv} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostBiorxiv.ts'
+import {dataSourcesImportRoutesPostMedrxiv} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostMedrxiv.ts'
 import {dataSourcesImportRoutesPostPubmed} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostPubmed.ts'
 import {dataSourcesImportRoutesPostOpenalex} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostOpenalex.ts'
 
@@ -11,6 +13,20 @@ export const dataSourcesImportRoutes = new Elysia()
     '/api/datasources/import/arxiv',
     async ({body}) => {
       return await dataSourcesImportRoutesPostArxiv(body)
+    },
+    {body: t.Object({id: t.String()})},
+  )
+  .post(
+    '/api/datasources/import/biorxiv',
+    async ({body}) => {
+      return await dataSourcesImportRoutesPostBiorxiv(body)
+    },
+    {body: t.Object({id: t.String()})},
+  )
+  .post(
+    '/api/datasources/import/medrxiv',
+    async ({body}) => {
+      return await dataSourcesImportRoutesPostMedrxiv(body)
     },
     {body: t.Object({id: t.String()})},
   )

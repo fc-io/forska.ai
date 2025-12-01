@@ -239,6 +239,13 @@
       "when": 1763716313787,
       "tag": "0033_spotty_monster_badoon",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1764171292106,
+      "tag": "0034_bitter_may_parker",
+      "breakpoints": true
     }
   ]
 }

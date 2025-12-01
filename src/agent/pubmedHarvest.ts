@@ -150,11 +150,7 @@ const europePmcRetryDelays = [
   3_600_000, // 1 hour
 ]
 
-const fetchWithTimeoutAndRetry = (
-  url: URL,
-  timeoutMs: number,
-  retryDelays: number[],
-): Promise<Response> => {
+const fetchWithTimeoutAndRetry = (url: URL, timeoutMs: number, retryDelays: number[]): Promise<Response> => {
   const attempt = (i: number): Promise<Response> => {
     const controller = new AbortController()
     const timer = setTimeout(() => {
@@ -175,7 +171,9 @@ const fetchWithTimeoutAndRetry = (
         console.log(
           `Request failed with status ${res.status}. Retrying in ${delay / 1000}s (attempt ${i + 1}/${retryDelays.length})`,
         )
-        return sleep(delay).then(() => attempt(i + 1))
+        return sleep(delay).then(() => {
+          return attempt(i + 1)
+        })
       },
       (err) => {
         const delay = retryDelays[i]
@@ -186,7 +184,9 @@ const fetchWithTimeoutAndRetry = (
         console.log(
           `Request failed: ${String(err)}. Retrying in ${delay / 1000}s (attempt ${i + 1}/${retryDelays.length})`,
         )
-        return sleep(delay).then(() => attempt(i + 1))
+        return sleep(delay).then(() => {
+          return attempt(i + 1)
+        })
       },
     )
   }
