@@ -14,7 +14,7 @@ const medrxivRetryDelays = [
   1_800_000, // 30 minutes
   3_600_000, // 1 hour
 ]
-const medrxivRequestDelayMs = 1_000
+const medrxivRequestDelayMs = 1
 const medrxivMaxPerPage = 100
 
 const toStringOr = (value: unknown, fallback = ''): string => {

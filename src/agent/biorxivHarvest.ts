@@ -14,7 +14,7 @@ const biorxivRetryDelays = [
   1_800_000, // 30 minutes
   3_600_000, // 1 hour
 ]
-const biorxivRequestDelayMs = 1_000
+const biorxivRequestDelayMs = 1
 const biorxivMaxPerPage = 100
 
 const toStringOr = (value: unknown, fallback = ''): string => {
