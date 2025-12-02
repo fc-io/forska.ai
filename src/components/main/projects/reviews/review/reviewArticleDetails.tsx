@@ -1,4 +1,8 @@
-import {Show, createSignal, onCleanup, onMount} from 'solid-js'
+import {createSignal, onCleanup, onMount, Show} from 'solid-js'
+
+import {decodeAndSanitize} from '../../../../../app/utils/decodeAndSanitize'
+import {getArticleUrl} from '../../../../../app/utils/getArticleUrl.ts'
+import {reviewArticleDetailsGetHighlightedText} from './reviewArticleDetails/reviewArticleDetailsGetHighlightedText.ts'
 
 type Judgment = {
   id: string
@@ -12,14 +16,8 @@ type ReviewArticleDetailsProps = {
   article: {articleTitle: string; articleAuthors?: string[] | null; articleSummary?: string | null; articleId: string}
   judgment?: Judgment
 }
-import {decodeAndSanitize} from '../../../../../app/utils/decodeAndSanitize'
-import {getArticleUrl} from '../../../../../app/utils/getArticleUrl.ts'
-import {reviewArticleDetailsGetHighlightedText} from './reviewArticleDetails/reviewArticleDetailsGetHighlightedText.ts'
 
-const stickyOffsets = {
-  top: 24,
-  bottom: 24,
-}
+const stickyOffsets = {top: 24, bottom: 24}
 
 const getHighlightedText = (text: string, judgment: Judgment) => {
   const sanitizedText = decodeAndSanitize(text)
@@ -43,19 +41,21 @@ const getHighlightedText = (text: string, judgment: Judgment) => {
 }
 
 export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
-  const [stickMode, setStickMode] = createSignal<'top' | 'bottom' | undefined>(undefined)
+  const [stickyTop, setStickyTop] = createSignal<number | undefined>(undefined)
   let containerRef: HTMLDivElement | undefined
-
-  const getStickinessMode = (height: number | undefined) => {
-    if (!height) {
-      return undefined
-    }
-    return height <= window.innerHeight - stickyOffsets.top ? 'top' : 'bottom'
-  }
 
   const setStickiness = () => {
     const containerHeight = containerRef?.getBoundingClientRect().height
-    setStickMode(getStickinessMode(containerHeight))
+    if (!containerHeight) {
+      setStickyTop(undefined)
+      return
+    }
+
+    if (containerHeight <= window.innerHeight - stickyOffsets.top) {
+      setStickyTop(stickyOffsets.top)
+    } else {
+      setStickyTop(window.innerHeight - containerHeight - stickyOffsets.bottom)
+    }
   }
 
   onMount(() => {
@@ -82,10 +82,8 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
         containerRef = element
       }}
       class="space-y-4"
-      classList={{
-        'sticky top-6 self-start': stickMode() === 'top',
-        'sticky bottom-6 self-start': stickMode() === 'bottom',
-      }}
+      classList={{'sticky self-start': stickyTop() !== undefined}}
+      style={{top: stickyTop() !== undefined ? `${stickyTop()}px` : undefined}}
     >
       <h1 class="text-2xl font-bold">Article Details</h1>
       <div class="p-6 bg-white rounded-lg shadow">
