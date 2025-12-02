@@ -1,10 +1,15 @@
 import {createHash} from 'crypto'
 
-const normalizeTextForHash = (t: string | null | undefined): string => {
-  const s = t == null ? '' : String(t)
-  const unified = s.replaceAll('\r\n', '\n').replaceAll('\r', '\n')
-  const trimmed = unified.trim()
-  return trimmed.replace(/\s+$/u, '')
+const trimEdgeSpaces = (value: string) => {
+  const withoutLeadingSpaces = value.replace(/^ +/, '')
+  return withoutLeadingSpaces.replace(/ +$/, '')
+}
+
+const normalizeTextForHash = (value: string | null | undefined): string => {
+  const source = value == null ? '' : String(value)
+  const unified = source.replaceAll('\r\n', '\n').replaceAll('\r', '\n')
+  const withoutEdgeSpaces = trimEdgeSpaces(unified)
+  return withoutEdgeSpaces.replace(/\s+$/u, '')
 }
 
 export const computePromptContentHash = (
