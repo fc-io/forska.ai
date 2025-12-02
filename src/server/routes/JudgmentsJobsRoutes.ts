@@ -14,6 +14,7 @@ import {
   prompts,
   tokenUse,
 } from '../../db/schema'
+import {requireAdminAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
@@ -293,6 +294,7 @@ const getUnassessedArticles = async ({
 
 export const judgmentsJobsRoutes = new Elysia()
   .use(withErrorHandler())
+  .use(requireAdminAuth())
   .post(
     '/api/judgmentsjobs',
     async ({body}) => {

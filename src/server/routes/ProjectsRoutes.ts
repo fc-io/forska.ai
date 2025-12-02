@@ -14,6 +14,7 @@ import {
   prompts,
 } from '../../db/schema.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
+import {requireAdminAuth, requireUserAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {projectsRoutesGetArticlesReviews} from './projectsRoutes/projectsRoutesGetArticlesReviews.ts'
@@ -76,6 +77,7 @@ const getOrphanPromptIds = async (tx: ReturnType<typeof getDatabase>, promptIds:
 
 export const projectsRoutes = new Elysia()
   .use(withErrorHandler())
+  .use(requireUserAuth())
   .use(projectsRoutesGetArticlesWithJudgments)
   .use(projectsRoutesGetArticlesReviews)
   .use(projectsRoutesGetArticlesReviewsBoth)
@@ -84,17 +86,19 @@ export const projectsRoutes = new Elysia()
   .use(projectsRoutesGetArticlesReviewsFilters)
   .use(projectsRoutesGetArticlesReviewsHumanFilters)
   .use(projectsRoutesPostArticleReviewDetails)
-  .get('/api/projects-without-jobs', async () => {
-    const db = getDatabase()
-    const rows = await db
-      .select({id: projects.id, name: projects.name, description: projects.description})
-      .from(projects)
-      .leftJoin(judgmentsJobs, eq(judgmentsJobs.projectId, projects.id))
-      .where(isNull(judgmentsJobs.id))
-      .orderBy(desc(projects.createdAt))
+  .use(
+    new Elysia().use(requireAdminAuth()).get('/api/projects-without-jobs', async () => {
+      const db = getDatabase()
+      const rows = await db
+        .select({id: projects.id, name: projects.name, description: projects.description})
+        .from(projects)
+        .leftJoin(judgmentsJobs, eq(judgmentsJobs.projectId, projects.id))
+        .where(isNull(judgmentsJobs.id))
+        .orderBy(desc(projects.createdAt))
 
-    return {data: rows}
-  })
+      return {data: rows}
+    }),
+  )
   .get('/api/projects', async () => {
     const db = getDatabase()
     const projectsList = await db.select().from(projects).orderBy(desc(projects.createdAt))

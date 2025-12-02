@@ -2,10 +2,11 @@ import {asc, eq} from 'drizzle-orm'
 import {Elysia} from 'elysia'
 
 import {importRoute as importRouteTable} from '../../db/schema.ts'
+import {requireAdminAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
-export const importRoutes = new Elysia().use(withErrorHandler()).get('/api/importroutes', async () => {
+export const importRoutes = new Elysia().use(withErrorHandler()).use(requireAdminAuth()).get('/api/importroutes', async () => {
   const db = getDatabase()
 
   const rows = await db

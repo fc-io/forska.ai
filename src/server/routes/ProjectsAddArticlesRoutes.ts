@@ -12,6 +12,7 @@ import {
   prompts,
 } from '../../db/schema.ts'
 import {insertArticlesIntoProject} from '../services/insertArticlesIntoProject.ts'
+import {requireUserAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 
 type ListType = 'llm' | 'human' | 'both' | 'unassessed'
@@ -262,6 +263,7 @@ const selectArticleIdsByFilter = async (
 }
 
 export const projectsAddArticlesRoutes = new Elysia()
+  .use(requireUserAuth())
   .post(
     '/api/projects/add_articles_by_filter',
     async ({body}) => {

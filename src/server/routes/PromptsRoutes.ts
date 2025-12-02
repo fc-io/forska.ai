@@ -3,6 +3,7 @@ import {Elysia, t} from 'elysia'
 
 import {judgments, judgmentsHuman, projectPrompts, prompts} from '../../db/schema'
 import {computePromptContentHash} from '../utils/computePromptContentHash'
+import {requireAdminAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase'
 
 type PromptRow = Pick<
@@ -82,6 +83,7 @@ const applyHashUpdates = async (db: ReturnType<typeof getDatabase>, updates: Pro
 }
 
 export const promptsRoutes = new Elysia({prefix: '/api/prompts'})
+  .use(requireAdminAuth())
   .get('/duplicates', async () => {
     const db = getDatabase()
     const allPrompts = await db.select().from(prompts)

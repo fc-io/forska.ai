@@ -2,11 +2,13 @@ import {count, eq, inArray, isNull, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {articleRouteLink, articles, importRoute as importRouteTable, judgments} from '../../db/schema.ts'
+import {requireAdminAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
 export const articlesRoutes = new Elysia()
   .use(withErrorHandler())
+  .use(requireAdminAuth())
   .get('/api/unassessed-count', async () => {
     const db = getDatabase()
     const result = await db

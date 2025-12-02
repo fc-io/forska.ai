@@ -3,6 +3,7 @@ import {Elysia} from 'elysia'
 
 import {models} from '../../db/schema.ts'
 import {env} from '../utils/env.ts'
+import {requireAdminAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 
 type ModelRow = typeof models.$inferSelect
@@ -41,7 +42,7 @@ const syncWorkerUrls = async (db: ReturnType<typeof getDatabase>, modelRow: Mode
   return updated ?? modelRow
 }
 
-export const judgmentsRoutes = new Elysia().get('/api/judgments/model', async ({query}) => {
+export const judgmentsRoutes = new Elysia().use(requireAdminAuth()).get('/api/judgments/model', async ({query}) => {
   try {
     const db = getDatabase()
     const modelName = query.name || 'Qwen3-32B-FP8'

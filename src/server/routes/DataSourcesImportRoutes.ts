@@ -1,6 +1,7 @@
 import {Elysia, t} from 'elysia'
 
 import {withErrorHandler} from '../utils/routeErrorHandler'
+import {requireAdminAuth} from '../utils/authGuard.ts'
 import {dataSourcesImportRoutesPostArxiv} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostArxiv.ts'
 import {dataSourcesImportRoutesPostBiorxiv} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostBiorxiv.ts'
 import {dataSourcesImportRoutesPostMedrxiv} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostMedrxiv.ts'
@@ -9,6 +10,7 @@ import {dataSourcesImportRoutesPostPubmed} from './DataSourcesImportRoutes/dataS
 
 export const dataSourcesImportRoutes = new Elysia()
   .use(withErrorHandler())
+  .use(requireAdminAuth())
   .post(
     '/api/datasources/import/arxiv',
     async ({body}) => {

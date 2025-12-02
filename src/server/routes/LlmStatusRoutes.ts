@@ -3,10 +3,14 @@ import {Elysia} from 'elysia'
 
 import {auth} from '../../auth.ts'
 import {llmStatus} from '../../db/schema.ts'
+import {requireAdminAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
-export const llmStatusRoutes = new Elysia().use(withErrorHandler()).get('/api/llmstatus', async ({request, set}) => {
+export const llmStatusRoutes = new Elysia()
+  .use(withErrorHandler())
+  .use(requireAdminAuth())
+  .get('/api/llmstatus', async ({request, set}) => {
   const session = await auth.api.getSession({headers: request.headers})
   const role = session?.user?.role ?? null
   if (role !== 'admin') {

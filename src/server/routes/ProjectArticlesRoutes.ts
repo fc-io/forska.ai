@@ -3,9 +3,11 @@ import {Elysia, t} from 'elysia'
 
 import {articles, projectArticles, projects} from '../../db/schema.ts'
 import {insertArticlesIntoProject} from '../services/insertArticlesIntoProject.ts'
+import {requireUserAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 
 export const projectArticlesRoutes = new Elysia()
+  .use(requireUserAuth())
   .get(
     '/api/projects/:id/articles',
     async ({params, query}) => {
