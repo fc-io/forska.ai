@@ -1,9 +1,9 @@
 import {useQuery} from '@tanstack/solid-query'
 import type {Accessor, Setter} from 'solid-js'
-import {Show, Suspense, createSignal, createEffect} from 'solid-js'
+import {createEffect, createSignal, Show, Suspense} from 'solid-js'
 
-import {createArticlesBothReviewsQueryOptions} from '../../projects/projectsArticlesBothReviewsQuery.ts'
 import {apiClient} from '../../../../services/apiClient.ts'
+import {createArticlesBothReviewsQueryOptions} from '../../projects/projectsArticlesBothReviewsQuery.ts'
 import {ReviewsPaginationControls} from '../reviewsPaginationControls.tsx'
 import {ReviewsArticlesTable} from './reviewsArticlesTable.tsx'
 
@@ -96,10 +96,13 @@ export const ReviewsArticlesBothTableContainer = (props: ReviewsArticlesBothTabl
                   sourceProjectId={props.projectId}
                   listType={'both'}
                   buildAddAllFilterBody={() => {
-                    const prompts = Object.entries(props.promptFilters()).reduce((acc, [pid, val]) => {
-                      if (Array.isArray(val) && val.length > 0) acc[pid] = val
-                      return acc
-                    }, {} as Record<string, string[]>)
+                    const prompts = Object.entries(props.promptFilters()).reduce(
+                      (acc, [pid, val]) => {
+                        if (Array.isArray(val) && val.length > 0) acc[pid] = val
+                        return acc
+                      },
+                      {} as Record<string, string[]>,
+                    )
                     const from = props.fromDate().trim()
                     const to = props.toDate().trim()
                     const search = (props.searchTitle() || '').trim()
@@ -147,10 +150,13 @@ export const ReviewsArticlesBothTableContainer = (props: ReviewsArticlesBothTabl
                   sourceProjectId={props.projectId}
                   listType={'both'}
                   buildAddAllFilterBody={() => {
-                    const prompts = Object.entries(props.promptFilters()).reduce((acc, [pid, val]) => {
-                      if (Array.isArray(val) && val.length > 0) acc[pid] = val
-                      return acc
-                    }, {} as Record<string, string[]>)
+                    const prompts = Object.entries(props.promptFilters()).reduce(
+                      (acc, [pid, val]) => {
+                        if (Array.isArray(val) && val.length > 0) acc[pid] = val
+                        return acc
+                      },
+                      {} as Record<string, string[]>,
+                    )
                     const from = props.fromDate().trim()
                     const to = props.toDate().trim()
                     const search = (props.searchTitle() || '').trim()

@@ -1,8 +1,8 @@
 import {Link} from '@tanstack/solid-router'
 import {type ColumnDef, createSolidTable, flexRender, getCoreRowModel} from '@tanstack/solid-table'
 import {format} from 'date-fns'
-import {For, Show} from 'solid-js'
 import type {Accessor, Setter} from 'solid-js'
+import {For, Match, Show, Switch} from 'solid-js'
 
 import {getArticleUrl} from '../../../../app/utils/getArticleUrl.ts'
 import type {articles, judgments} from '../../../../db/schema.ts'
@@ -123,8 +123,9 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
     cell: (info) => {
       const pdf = (info.getValue() as string | null) || ''
       const fetched = Boolean((info.row.original as {fullTextFetchedAt?: unknown}).fullTextFetchedAt)
-      return pdf
-        ? (
+      return (
+        <Switch fallback={<span class="text-gray-400">—</span>}>
+          <Match when={pdf}>
             <a
               href={pdf.startsWith('/') ? pdf : `/${pdf}`}
               target="_blank"
@@ -134,16 +135,14 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
             >
               PDF
             </a>
-          )
-        : fetched
-          ? (
-              <span class="px-1.5 py-0.5 text-xs rounded bg-yellow-100 text-yellow-800" title="Fetched, no PDF available">
-                No PDF
-              </span>
-            )
-          : (
-              <span class="text-gray-400">—</span>
-            )
+          </Match>
+          <Match when={fetched}>
+            <span class="px-1.5 py-0.5 text-xs rounded bg-yellow-100 text-yellow-800" title="Fetched, no PDF available">
+              No PDF
+            </span>
+          </Match>
+        </Switch>
+      )
     },
   },
   {
@@ -153,7 +152,7 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
     minSize: 140,
     cell: (info) => {
       const judgmentsData = info.getValue() as JudgmentType[]
-      const row = info.row.original as ArticleWithJudgments
+      const row = info.row.original
 
       const norm = (s?: string | null) => {
         return (s ?? '').toString().trim().toLowerCase()
@@ -200,13 +199,16 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
                   })()
 
                   const text = (() => {
-                    const hasHuman = Array.isArray(row.humanAnswersByPrompt?.[judgment.promptId])
+                    const hasHuman =
+                      Array.isArray(row.humanAnswersByPrompt?.[judgment.promptId])
                       && (row.humanAnswersByPrompt?.[judgment.promptId] || []).length > 0
                     if (!hasHuman) return labelFor(judgment.answeredOriginal)
 
-                    const humans = (row.humanAnswersByPrompt?.[judgment.promptId] || [])
+                    const humans = row.humanAnswersByPrompt?.[judgment.promptId] || []
                     const normalizedHumans = humans.map(norm)
-                    const firstDiff = normalizedHumans.find((h) => h !== llmAns)
+                    const firstDiff = normalizedHumans.find((h) => {
+                      return h !== llmAns
+                    })
                     const humanLetter = labelFor(firstDiff ?? llmAns)
                     const llmLetter = labelFor(judgment.answeredOriginal)
                     return `${llmLetter}/${humanLetter}`
@@ -273,7 +275,7 @@ export const ReviewsArticlesTable = (props: ReviewsArticlesTableProps) => {
                               ? 'px-1.5 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider'
                               : 'px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider'
                           }
-                          style={{ width: `${header.getSize()}px` }}
+                          style={{width: `${header.getSize()}px`}}
                         >
                           {header.isPlaceholder
                             ? null
@@ -303,7 +305,7 @@ export const ReviewsArticlesTable = (props: ReviewsArticlesTableProps) => {
                                 ? 'px-6 py-4 text-sm text-gray-900'
                                 : 'px-6 py-4 whitespace-nowrap text-sm text-gray-900'
                           }
-                          style={{ width: `${cell.column.getSize()}px` }}
+                          style={{width: `${cell.column.getSize()}px`}}
                         >
                           {flexRender(cell.column.columnDef.cell, cell.getContext())}
                         </td>

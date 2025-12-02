@@ -1,4 +1,3 @@
-
 interface ImportedArticlesPaginationControlsProps {
   page: number
   totalPages: number
@@ -36,7 +35,9 @@ export const ImportedArticlesPaginationControls = (props: ImportedArticlesPagina
         >
           Previous
         </button>
-        <span class="text-sm text-gray-700">Page {props.page} of {Math.max(props.totalPages, 1)}</span>
+        <span class="text-sm text-gray-700">
+          Page {props.page} of {Math.max(props.totalPages, 1)}
+        </span>
         <button
           class="px-3 py-2 text-sm font-medium text-gray-700 bg-gray-100 border border-gray-300 rounded-md hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
           disabled={props.page >= props.totalPages}

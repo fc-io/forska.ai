@@ -59,11 +59,7 @@ export const ProjectDetailsInformation = (props: ProjectDetailsInformationProps)
     return props.model?.name ?? 'Unknown'
   })
   const useFlags = createMemo(() => {
-    return {
-      title: props.project.useTitle,
-      abstract: props.project.useAbstract,
-      fulltext: props.project.useFulltext,
-    }
+    return {title: props.project.useTitle, abstract: props.project.useAbstract, fulltext: props.project.useFulltext}
   })
 
   return (

@@ -1,9 +1,18 @@
 import {and, desc, eq, gte, inArray, lte, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {articleRouteLink, articles, judgments, judgmentsHuman, projectRouteLink, projects, prompts, projectPrompts} from '../../db/schema.ts'
-import {getDatabase} from '../utils/getDatabase.ts'
+import {
+  articleRouteLink,
+  articles,
+  judgments,
+  judgmentsHuman,
+  projectPrompts,
+  projectRouteLink,
+  projects,
+  prompts,
+} from '../../db/schema.ts'
 import {insertArticlesIntoProject} from '../services/insertArticlesIntoProject.ts'
+import {getDatabase} from '../utils/getDatabase.ts'
 
 type ListType = 'llm' | 'human' | 'both' | 'unassessed'
 
@@ -15,7 +24,9 @@ const getProjectPromptIds = async (projectId: string) => {
     .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
     .where(and(eq(projectPrompts.projectId, projectId), eq(projectPrompts.enabled, true)))
     .orderBy(projectPrompts.order)
-  return rows.map((r) => r.id)
+  return rows.map((r) => {
+    return r.id
+  })
 }
 
 const getProjectRouteIdSqlArray = async (projectId: string) => {
@@ -94,7 +105,9 @@ const selectArticleIdsByFilter = async (
       .having(sql`COUNT(DISTINCT ${judgments.promptId}) < ${promptIds.length}`)
       .orderBy(desc(articles.articleCreatedAt))
 
-    return grouped.map((r) => r.id)
+    return grouped.map((r) => {
+      return r.id
+    })
   }
 
   const promptIds = await getProjectPromptIds(sourceProjectId)
@@ -127,14 +140,26 @@ const selectArticleIdsByFilter = async (
       const sub = db
         .select({exists: sql`1`})
         .from(judgmentsHuman)
-        .where(and(eq(judgmentsHuman.articleId, articles.id), eq(judgmentsHuman.promptId, promptId), inArray(judgmentsHuman.answer, answers)))
+        .where(
+          and(
+            eq(judgmentsHuman.articleId, articles.id),
+            eq(judgmentsHuman.promptId, promptId),
+            inArray(judgmentsHuman.answer, answers),
+          ),
+        )
         .limit(1)
       whereParts.push(sql`EXISTS (${sub})`)
     }
     addOptionalBounds(whereParts, bounds, fromDate, toDate, searchTitle)
     const combined = whereParts.length > 1 ? and(...whereParts) : whereParts[0]
-    const rows = await db.select({id: articles.id}).from(articles).where(combined).orderBy(desc(articles.articleCreatedAt))
-    return rows.map((r) => r.id)
+    const rows = await db
+      .select({id: articles.id})
+      .from(articles)
+      .where(combined)
+      .orderBy(desc(articles.articleCreatedAt))
+    return rows.map((r) => {
+      return r.id
+    })
   }
 
   if (listType === 'llm') {
@@ -146,11 +171,15 @@ const selectArticleIdsByFilter = async (
     addOptionalBounds(whereParts, bounds, fromDate, toDate, searchTitle)
     const baseWhere = whereParts.length > 1 ? and(...whereParts) : whereParts[0]
 
-    const havingParts: Array<ReturnType<typeof sql>> = [sql`COUNT(DISTINCT ${judgments.promptId}) = ${promptIds.length}`]
+    const havingParts: Array<ReturnType<typeof sql>> = [
+      sql`COUNT(DISTINCT ${judgments.promptId}) = ${promptIds.length}`,
+    ]
     for (const [promptId, answeredValues] of promptFilters) {
       if (!answeredValues || answeredValues.length === 0) continue
       const answeredValsArray = sql.join(
-        answeredValues.map((v) => sql`${v}`),
+        answeredValues.map((v) => {
+          return sql`${v}`
+        }),
         sql`,`,
       )
       havingParts.push(
@@ -172,7 +201,9 @@ const selectArticleIdsByFilter = async (
       .having(havingParts.length > 1 ? and(...havingParts) : havingParts[0])
       .orderBy(desc(articles.articleCreatedAt))
 
-    return grouped.map((r) => r.id)
+    return grouped.map((r) => {
+      return r.id
+    })
   }
 
   // both
@@ -193,7 +224,13 @@ const selectArticleIdsByFilter = async (
     const sub = db
       .select({exists: sql`1`})
       .from(judgments)
-      .where(and(eq(judgments.articleId, articles.id), eq(judgments.promptId, promptId), inArray(judgments.answeredOriginal, answeredValues)))
+      .where(
+        and(
+          eq(judgments.articleId, articles.id),
+          eq(judgments.promptId, promptId),
+          inArray(judgments.answeredOriginal, answeredValues),
+        ),
+      )
       .limit(1)
     filterConditions.push(sql`EXISTS (${sub})`)
   }
@@ -219,7 +256,9 @@ const selectArticleIdsByFilter = async (
     .having(sql`COUNT(DISTINCT ${judgments.promptId}) = ${promptIds.length}`)
     .orderBy(desc(articles.articleCreatedAt))
 
-  return rows.map((r) => r.id)
+  return rows.map((r) => {
+    return r.id
+  })
 }
 
 export const projectsAddArticlesRoutes = new Elysia()
@@ -247,12 +286,7 @@ export const projectsAddArticlesRoutes = new Elysia()
         ...result,
       })
 
-      return {
-        success: true,
-        targetProjectId: body.targetProjectId,
-        selectionTotal: articleIds.length,
-        ...result,
-      }
+      return {success: true, targetProjectId: body.targetProjectId, selectionTotal: articleIds.length, ...result}
     },
     {
       body: t.Object({
@@ -279,12 +313,7 @@ export const projectsAddArticlesRoutes = new Elysia()
         ...result,
       })
 
-      return {
-        success: true,
-        targetProjectId: body.targetProjectId,
-        providedTotal: ids.length,
-        ...result,
-      }
+      return {success: true, targetProjectId: body.targetProjectId, providedTotal: ids.length, ...result}
     },
     {
       body: t.Object({

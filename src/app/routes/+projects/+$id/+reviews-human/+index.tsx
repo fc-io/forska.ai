@@ -6,8 +6,8 @@ import {ReviewsArticlesHumanTableContainer} from '../../../../../components/main
 import {ReviewsHumanFilterControls} from '../../../../../components/main/reviews/reviewsHumanFilterControls.tsx'
 import {ReviewsTabs} from '../../../../../components/main/reviews/reviewsTabs.tsx'
 import {Button} from '../../../../../components/ui/button'
-import {deleteProject, fetchProjectWithPrompts} from '../../../../../services/projectsService'
 import {fetchSession} from '../../../../../services/fetchSession'
+import {deleteProject, fetchProjectWithPrompts} from '../../../../../services/projectsService'
 
 const ReviewsHuman = () => {
   const params = Route.useParams()

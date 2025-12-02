@@ -155,7 +155,9 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
                                           e.preventDefault()
                                           const allAcross = props.selectAllMatching && props.selectAllMatching()
                                           if (allAcross) {
-                                            const filter = props.buildAddAllFilterBody ? props.buildAddAllFilterBody() : {}
+                                            const filter = props.buildAddAllFilterBody
+                                              ? props.buildAddAllFilterBody()
+                                              : {}
                                             await apiClient.api.projects['add_articles_by_filter'].post({
                                               targetProjectId: p.id,
                                               sourceProjectId: props.sourceProjectId || '',
@@ -165,8 +167,12 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
                                           } else {
                                             const sel = props.rowSelection ? props.rowSelection() : {}
                                             const ids = Object.entries(sel)
-                                              .filter(([, v]) => Boolean(v))
-                                              .map(([k]) => k)
+                                              .filter(([, v]) => {
+                                                return Boolean(v)
+                                              })
+                                              .map(([k]) => {
+                                                return k
+                                              })
                                             if (ids.length > 0) {
                                               await apiClient.api.projects['add_artilces_by_ids'].post({
                                                 targetProjectId: p.id,

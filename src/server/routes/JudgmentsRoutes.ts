@@ -2,8 +2,8 @@ import {and, eq} from 'drizzle-orm'
 import {Elysia} from 'elysia'
 
 import {models} from '../../db/schema.ts'
-import {getDatabase} from '../utils/getDatabase.ts'
 import {env} from '../utils/env.ts'
+import {getDatabase} from '../utils/getDatabase.ts'
 
 type ModelRow = typeof models.$inferSelect
 
@@ -28,8 +28,8 @@ const syncWorkerUrls = async (db: ReturnType<typeof getDatabase>, modelRow: Mode
   if (envWorkerUrls.length === 0) return modelRow
   const existing = normalizeWorkerUrls(modelRow.workerUrls)
   const differs =
-    existing.length !== envWorkerUrls.length ||
-    envWorkerUrls.some((url) => {
+    existing.length !== envWorkerUrls.length
+    || envWorkerUrls.some((url) => {
       return !existing.includes(url)
     })
   if (!differs) return modelRow
@@ -56,11 +56,13 @@ export const judgmentsRoutes = new Elysia().get('/api/judgments/model', async ({
       .limit(1)
 
     const persistedModel =
-      existingModel ??
-      (await db
-        .insert(models)
-        .values({name: modelName, provider, baseURL, modelName: '/models/Qwen3-32B-FP8', version: '1.0.0'})
-        .returning())[0]
+      existingModel
+      ?? (
+        await db
+          .insert(models)
+          .values({name: modelName, provider, baseURL, modelName: '/models/Qwen3-32B-FP8', version: '1.0.0'})
+          .returning()
+      )[0]
 
     if (!persistedModel) {
       throw new Error('Failed to ensure model record')

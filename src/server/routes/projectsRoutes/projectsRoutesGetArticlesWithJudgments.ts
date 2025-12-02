@@ -1,7 +1,7 @@
 import {and, desc, eq, gte, lte, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {articles, judgments, prompts, projectPrompts} from '../../../db/schema.ts'
+import {articles, judgments, projectPrompts, prompts} from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
 export const projectsRoutesGetArticlesWithJudgments = new Elysia().get(
@@ -16,11 +16,11 @@ export const projectsRoutesGetArticlesWithJudgments = new Elysia().get(
       const offset = (page - 1) * limit
 
       // First get all prompts for this project (via association)
-  const projectPromptRows = await db
-    .select({id: prompts.id})
-    .from(projectPrompts)
-    .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
-    .where(and(eq(projectPrompts.projectId, params.id), eq(projectPrompts.enabled, true)))
+      const projectPromptRows = await db
+        .select({id: prompts.id})
+        .from(projectPrompts)
+        .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
+        .where(and(eq(projectPrompts.projectId, params.id), eq(projectPrompts.enabled, true)))
 
       if (projectPromptRows.length === 0) {
         return {data: [], totalCount: 0, page, limit, error: null}

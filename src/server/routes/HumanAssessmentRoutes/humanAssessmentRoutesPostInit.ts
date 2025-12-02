@@ -2,7 +2,15 @@ import {and, desc, eq, gte, lte, sql} from 'drizzle-orm'
 import type {Context} from 'elysia'
 
 import {auth} from '../../../auth.ts'
-import {articleRouteLink, articles, judgmentsHuman, projectRouteLink, projects, prompts, projectPrompts} from '../../../db/schema.ts'
+import {
+  articleRouteLink,
+  articles,
+  judgmentsHuman,
+  projectPrompts,
+  projectRouteLink,
+  projects,
+  prompts,
+} from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
 type InitResponse = {
@@ -66,7 +74,13 @@ export const humanAssessmentRoutesPostInit = async ({
     .select({id: judgmentsHuman.id, articleId: judgmentsHuman.articleId})
     .from(judgmentsHuman)
     .innerJoin(prompts, eq(prompts.id, judgmentsHuman.promptId))
-    .where(and(eq(judgmentsHuman.projectId, body.projectId), eq(judgmentsHuman.user, sessionUserId), eq(judgmentsHuman.isAnswered, false)))
+    .where(
+      and(
+        eq(judgmentsHuman.projectId, body.projectId),
+        eq(judgmentsHuman.user, sessionUserId),
+        eq(judgmentsHuman.isAnswered, false),
+      ),
+    )
     .orderBy(desc(judgmentsHuman.createdAt))
     .limit(50)
   console.log('existingUnanswered', existingUnanswered.length)

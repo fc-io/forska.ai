@@ -101,7 +101,9 @@ const fetchWithTimeoutAndRetry = (url: URL, timeoutMs: number, retryDelays: numb
         if (delay === undefined) {
           return Promise.reject(new Error(`medRxiv HTTP ${res.status}`))
         }
-        console.log(`medRxiv retry ${i + 1}/${retryDelays.length} after HTTP ${res.status} — waiting ${delay}ms — ${url}`)
+        console.log(
+          `medRxiv retry ${i + 1}/${retryDelays.length} after HTTP ${res.status} — waiting ${delay}ms — ${url}`,
+        )
         return sleep(delay).then(() => {
           return attempt(i + 1)
         })
@@ -111,7 +113,9 @@ const fetchWithTimeoutAndRetry = (url: URL, timeoutMs: number, retryDelays: numb
         if (delay === undefined) {
           return Promise.reject(err)
         }
-        console.log(`medRxiv retry ${i + 1}/${retryDelays.length} after error ${String(err)} — waiting ${delay}ms — ${url}`)
+        console.log(
+          `medRxiv retry ${i + 1}/${retryDelays.length} after error ${String(err)} — waiting ${delay}ms — ${url}`,
+        )
         return sleep(delay).then(() => {
           return attempt(i + 1)
         })

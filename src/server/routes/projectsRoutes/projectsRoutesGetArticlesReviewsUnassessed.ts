@@ -6,10 +6,10 @@ import {
   articles,
   judgments,
   projectArticles,
+  projectPrompts,
   projectRouteLink,
   projects,
   prompts,
-  projectPrompts,
 } from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 

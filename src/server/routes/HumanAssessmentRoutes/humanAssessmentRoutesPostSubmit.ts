@@ -2,7 +2,7 @@ import {type as arktype} from 'arktype'
 import {and, eq, inArray, sql} from 'drizzle-orm'
 
 import {auth} from '../../../auth.ts'
-import {judgments, judgmentsHuman, prompts, projectPrompts} from '../../../db/schema.ts'
+import {judgments, judgmentsHuman, projectPrompts, prompts} from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
 export const humanAssessmentRoutesPostSubmit = async ({
@@ -32,8 +32,17 @@ export const humanAssessmentRoutesPostSubmit = async ({
     })
     .from(judgmentsHuman)
     .innerJoin(prompts, eq(judgmentsHuman.promptId, prompts.id))
-    .innerJoin(projectPrompts, and(eq(projectPrompts.promptId, prompts.id), eq(projectPrompts.projectId, body.projectId)))
-    .where(and(eq(judgmentsHuman.projectId, body.projectId), eq(judgmentsHuman.user, sessionUserId), eq(judgmentsHuman.isAnswered, false)))
+    .innerJoin(
+      projectPrompts,
+      and(eq(projectPrompts.promptId, prompts.id), eq(projectPrompts.projectId, body.projectId)),
+    )
+    .where(
+      and(
+        eq(judgmentsHuman.projectId, body.projectId),
+        eq(judgmentsHuman.user, sessionUserId),
+        eq(judgmentsHuman.isAnswered, false),
+      ),
+    )
 
   if (pending.length === 0) {
     set.status = 400
@@ -149,12 +158,7 @@ export const humanAssessmentRoutesPostSubmit = async ({
       const preparedAnswer = value.trim() === '' ? null : value
       await tx
         .update(judgmentsHuman)
-        .set({
-          answer: preparedAnswer,
-          isAnswered: true,
-          comment: payload.comment ?? null,
-          updatedAt: new Date(),
-        })
+        .set({answer: preparedAnswer, isAnswered: true, comment: payload.comment ?? null, updatedAt: new Date()})
         .where(
           and(
             eq(judgmentsHuman.id, id),

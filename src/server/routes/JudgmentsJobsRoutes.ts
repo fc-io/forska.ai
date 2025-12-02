@@ -128,16 +128,14 @@ const getUnassessedArticlesCount = async ({
 
   if (importRouteIds.length > 0) {
     // Restrict via article_route_link and allowed route ids
-    countQuery = countQuery
-      .innerJoin(articleRouteLink, eq(articleRouteLink.articleId, articles.id))
-      .where(
-        sql`${sql.join(allConditions, sql` AND `)} AND ${articleRouteLink.importRouteId} = ANY(ARRAY[${sql.join(
-          importRouteIds.map((id) => {
-            return sql`${id}::uuid`
-          }),
-          sql`,`,
-        )}])`,
-      )
+    countQuery = countQuery.innerJoin(articleRouteLink, eq(articleRouteLink.articleId, articles.id)).where(
+      sql`${sql.join(allConditions, sql` AND `)} AND ${articleRouteLink.importRouteId} = ANY(ARRAY[${sql.join(
+        importRouteIds.map((id) => {
+          return sql`${id}::uuid`
+        }),
+        sql`,`,
+      )}])`,
+    )
   } else {
     countQuery = countQuery.where(sql`${sql.join(allConditions, sql` AND `)}`)
   }

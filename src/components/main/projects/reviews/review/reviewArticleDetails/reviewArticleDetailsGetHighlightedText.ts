@@ -199,7 +199,11 @@ const buildTagAgnosticRegex = (key: string, caseInsensitive: boolean): RegExp | 
   // Split into word and punctuation tokens, excluding whitespace, so we can
   // allow tags/entities/whitespace between words and punctuation like '.'
   const rawTokens = key.match(/([A-Za-z0-9]+|[^A-Za-z0-9\s]+)/g) || []
-  const tokens = rawTokens.filter((t) => t && !/^\s+$/.test(t)).map(escapeRegExp)
+  const tokens = rawTokens
+    .filter((t) => {
+      return t && !/^\s+$/.test(t)
+    })
+    .map(escapeRegExp)
   if (tokens.length === 0) return null
   if (tokens.length === 1) {
     // Single token adds no benefit over exact search

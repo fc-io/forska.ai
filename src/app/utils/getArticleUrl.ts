@@ -1,7 +1,4 @@
-type ArticleUrlStrategy = {
-  isMatch: (articleId: string) => boolean
-  buildUrl: (articleId: string) => string
-}
+type ArticleUrlStrategy = {isMatch: (articleId: string) => boolean; buildUrl: (articleId: string) => string}
 
 const articleUrlStrategies: ArticleUrlStrategy[] = [
   {

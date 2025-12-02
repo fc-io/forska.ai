@@ -55,9 +55,9 @@ export const ReviewDetail = () => {
                       <ReviewArticleDetails article={data().article} />
                     </Show>
                     <Show
-                      when={[...(data().judgments || []), ...(data().allJudgments || [])].find(
-                        (j) => j.id === articleViewToShow(),
-                      )}
+                      when={[...(data().judgments || []), ...(data().allJudgments || [])].find((j) => {
+                        return j.id === articleViewToShow()
+                      })}
                     >
                       {(selected) => {
                         return <ReviewArticleDetails article={data().article} judgment={selected()} />

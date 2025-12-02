@@ -1,7 +1,7 @@
 import {and, eq, sql} from 'drizzle-orm'
 
 import {auth} from '../../../auth.ts'
-import {judgments, judgmentsHuman, projects, projectPrompts} from '../../../db/schema.ts'
+import {judgments, judgmentsHuman, projectPrompts, projects} from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
 export const humanAssessmentRoutesGetOverviewBothProjects = async ({request, set}: {request: Request; set: any}) => {

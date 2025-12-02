@@ -67,12 +67,12 @@ export const ProjectDetailsCuratedArticles = (props: {projectId: string}) => {
       cell: (info) => {
         const id = info.getValue() as string | null
         const name = info.row.original.importedFromProjectName
-        return id ? (
-          <Link to="/projects/$id" params={{id}} class="text-blue-600 hover:underline">
-            {name || id}
-          </Link>
-        ) : (
-          <span class="text-gray-500">—</span>
+        return (
+          <Show when={id} fallback={<span class="text-gray-500">—</span>}>
+            <Link to="/projects/$id" params={{id}} class="text-blue-600 hover:underline">
+              {name || id}
+            </Link>
+          </Show>
         )
       },
     },

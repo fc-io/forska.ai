@@ -17,6 +17,7 @@ import { Route as LoginIndexRouteImport } from './routes/+login/+index'
 import { Route as LatestArticlesIndexRouteImport } from './routes/+latest-articles/+index'
 import { Route as ProjectsIdHumanAssessmentRouteImport } from './routes/+projects/+$id/+humanAssessment'
 import { Route as ProjectsIdEditRouteImport } from './routes/+projects/+$id/+edit'
+import { Route as AdminPromptsDeduplicateRouteImport } from './routes/+admin/+prompts/+deduplicate'
 import { Route as AdminDatasourcesCreateRouteImport } from './routes/+admin/+datasources/+create'
 import { Route as ProjectsIdIndexRouteImport } from './routes/+projects/+$id/+index'
 import { Route as AdminUsersIndexRouteImport } from './routes/+admin/+users/+index'
@@ -75,6 +76,11 @@ const ProjectsIdHumanAssessmentRoute =
 const ProjectsIdEditRoute = ProjectsIdEditRouteImport.update({
   id: '/projects/$id/edit',
   path: '/projects/$id/edit',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminPromptsDeduplicateRoute = AdminPromptsDeduplicateRouteImport.update({
+  id: '/admin/prompts/deduplicate',
+  path: '/admin/prompts/deduplicate',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminDatasourcesCreateRoute = AdminDatasourcesCreateRouteImport.update({
@@ -190,6 +196,7 @@ export interface FileRoutesByFullPath {
   '/admin/users': typeof AdminUsersIndexRoute
   '/projects/$id': typeof ProjectsIdIndexRoute
   '/admin/datasources/create': typeof AdminDatasourcesCreateRoute
+  '/admin/prompts/deduplicate': typeof AdminPromptsDeduplicateRoute
   '/projects/$id/edit': typeof ProjectsIdEditRoute
   '/projects/$id/humanAssessment': typeof ProjectsIdHumanAssessmentRoute
   '/admin/jobs/$id': typeof AdminJobsIdIndexRoute
@@ -218,6 +225,7 @@ export interface FileRoutesByTo {
   '/admin/users': typeof AdminUsersIndexRoute
   '/projects/$id': typeof ProjectsIdIndexRoute
   '/admin/datasources/create': typeof AdminDatasourcesCreateRoute
+  '/admin/prompts/deduplicate': typeof AdminPromptsDeduplicateRoute
   '/projects/$id/edit': typeof ProjectsIdEditRoute
   '/projects/$id/humanAssessment': typeof ProjectsIdHumanAssessmentRoute
   '/admin/jobs/$id': typeof AdminJobsIdIndexRoute
@@ -247,6 +255,7 @@ export interface FileRoutesById {
   '/admin/users/': typeof AdminUsersIndexRoute
   '/projects/$id/': typeof ProjectsIdIndexRoute
   '/admin/datasources/create': typeof AdminDatasourcesCreateRoute
+  '/admin/prompts/deduplicate': typeof AdminPromptsDeduplicateRoute
   '/projects/$id/edit': typeof ProjectsIdEditRoute
   '/projects/$id/humanAssessment': typeof ProjectsIdHumanAssessmentRoute
   '/admin/jobs/$id/': typeof AdminJobsIdIndexRoute
@@ -277,6 +286,7 @@ export interface FileRouteTypes {
     | '/admin/users'
     | '/projects/$id'
     | '/admin/datasources/create'
+    | '/admin/prompts/deduplicate'
     | '/projects/$id/edit'
     | '/projects/$id/humanAssessment'
     | '/admin/jobs/$id'
@@ -305,6 +315,7 @@ export interface FileRouteTypes {
     | '/admin/users'
     | '/projects/$id'
     | '/admin/datasources/create'
+    | '/admin/prompts/deduplicate'
     | '/projects/$id/edit'
     | '/projects/$id/humanAssessment'
     | '/admin/jobs/$id'
@@ -333,6 +344,7 @@ export interface FileRouteTypes {
     | '/admin/users/'
     | '/projects/$id/'
     | '/admin/datasources/create'
+    | '/admin/prompts/deduplicate'
     | '/projects/$id/edit'
     | '/projects/$id/humanAssessment'
     | '/admin/jobs/$id/'
@@ -362,6 +374,7 @@ export interface RootRouteChildren {
   AdminUsersIndexRoute: typeof AdminUsersIndexRoute
   ProjectsIdIndexRoute: typeof ProjectsIdIndexRoute
   AdminDatasourcesCreateRoute: typeof AdminDatasourcesCreateRoute
+  AdminPromptsDeduplicateRoute: typeof AdminPromptsDeduplicateRoute
   ProjectsIdEditRoute: typeof ProjectsIdEditRoute
   ProjectsIdHumanAssessmentRoute: typeof ProjectsIdHumanAssessmentRoute
   AdminJobsIdIndexRoute: typeof AdminJobsIdIndexRoute
@@ -432,6 +445,13 @@ declare module '@tanstack/solid-router' {
       path: '/projects/$id/edit'
       fullPath: '/projects/$id/edit'
       preLoaderRoute: typeof ProjectsIdEditRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/prompts/deduplicate': {
+      id: '/admin/prompts/deduplicate'
+      path: '/admin/prompts/deduplicate'
+      fullPath: '/admin/prompts/deduplicate'
+      preLoaderRoute: typeof AdminPromptsDeduplicateRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/datasources/create': {
@@ -578,6 +598,7 @@ const rootRouteChildren: RootRouteChildren = {
   AdminUsersIndexRoute: AdminUsersIndexRoute,
   ProjectsIdIndexRoute: ProjectsIdIndexRoute,
   AdminDatasourcesCreateRoute: AdminDatasourcesCreateRoute,
+  AdminPromptsDeduplicateRoute: AdminPromptsDeduplicateRoute,
   ProjectsIdEditRoute: ProjectsIdEditRoute,
   ProjectsIdHumanAssessmentRoute: ProjectsIdHumanAssessmentRoute,
   AdminJobsIdIndexRoute: AdminJobsIdIndexRoute,

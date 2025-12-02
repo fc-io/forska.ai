@@ -74,6 +74,9 @@ export const Navigation = (props: NavigationProps) => {
               <Link to="/admin/users" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
                 Users
               </Link>
+              <Link to="/admin/prompts/deduplicate" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
+                Deduplicate Prompts
+              </Link>
             </Show>
             <Show when={props.user}>
               <Menu.Root positioning={{placement: 'bottom-end'}}>
@@ -83,7 +86,7 @@ export const Navigation = (props: NavigationProps) => {
                 </Menu.Trigger>
                 <Menu.Positioner>
                   <Menu.Content class="mt-2 w-40 rounded-md bg-white py-2 shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none">
-                    <Menu.Item id="settings" class="p-0">
+                    <Menu.Item id="settings" value="settings" class="p-0">
                       <Link
                         to="/settings"
                         class="block w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"
@@ -91,7 +94,7 @@ export const Navigation = (props: NavigationProps) => {
                         Settings
                       </Link>
                     </Menu.Item>
-                    <Menu.Item id="sign-out" class="p-0">
+                    <Menu.Item id="sign-out" value="sign-out" class="p-0">
                       <Link
                         to="/login"
                         class="block w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"

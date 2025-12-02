@@ -6,10 +6,10 @@ import {
   articles,
   judgmentsHuman,
   projectArticles,
+  projectPrompts,
   projectRouteLink,
   projects,
   prompts,
-  projectPrompts,
 } from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
@@ -91,7 +91,9 @@ export const projectsRoutesGetArticlesReviewsHuman = new Elysia().post(
       const routeIdArray =
         projectImportRoutes.length > 0
           ? sql.join(
-              projectImportRoutes.map((r) => sql`${r.importRouteId}::uuid`),
+              projectImportRoutes.map((r) => {
+                return sql`${r.importRouteId}::uuid`
+              }),
               sql`,`,
             )
           : null
@@ -180,7 +182,7 @@ export const projectsRoutesGetArticlesReviewsHuman = new Elysia().post(
       // Build prompt order map and sort judgments accordingly
       const promptOrderMap = projectPromptRows.reduce(
         (acc, p, idx) => {
-          const ord = (p.order ?? idx) as number
+          const ord = p.order ?? idx
           return {...acc, [p.id]: ord}
         },
         {} as Record<string, number>,

@@ -6,10 +6,10 @@ import {
   articles,
   judgments,
   projectArticles,
+  projectPrompts,
   projectRouteLink,
   projects,
   prompts,
-  projectPrompts,
 } from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
@@ -148,9 +148,7 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
         .having(havingParts.length > 1 ? and(...havingParts) : havingParts[0])
         .as('grouped_articles')
 
-      const [{count: totalCount = 0} = {count: 0}] = await db
-        .select({count: sql<number>`COUNT(*)`})
-        .from(groupedBase)
+      const [{count: totalCount = 0} = {count: 0}] = await db.select({count: sql<number>`COUNT(*)`}).from(groupedBase)
 
       // Build a paged set of qualifying article ids to avoid massive IN (...) parameter lists
       const groupedPage = db
@@ -191,7 +189,7 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
       // Build prompt order map and sort judgments accordingly
       const promptOrderMap = projectPromptRows.reduce(
         (acc, p, idx) => {
-          const ord = (p.order ?? idx) as number
+          const ord = p.order ?? idx
           return {...acc, [p.id]: ord}
         },
         {} as Record<string, number>,

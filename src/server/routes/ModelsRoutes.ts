@@ -2,9 +2,9 @@ import {asc} from 'drizzle-orm'
 import {Elysia} from 'elysia'
 
 import {models} from '../../db/schema.ts'
+import {env} from '../utils/env.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
-import {env} from '../utils/env.ts'
 
 export const modelsRoutes = new Elysia()
   .use(withErrorHandler())

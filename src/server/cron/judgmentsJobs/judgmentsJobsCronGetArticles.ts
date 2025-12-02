@@ -7,7 +7,13 @@ import {getDatabase} from '../../utils/getDatabase.ts'
 export type ArticleProcessingData = {
   articlesToJudgeIds: string[]
   articlesToJudge: (typeof schema.articles.$inferSelect)[]
-  projectPrompts: Array<{id: string; originalText: string; promptHeading: string | null; order: number | null; type: string | null}>
+  projectPrompts: Array<{
+    id: string
+    originalText: string
+    promptHeading: string | null
+    order: number | null
+    type: string | null
+  }>
   isSentToLLM?: boolean
   jobId?: string
 }
@@ -74,7 +80,13 @@ const getArticleIdsToJudge = async ({
   db: PostgresJsDatabase<typeof schema>
   jobId: string
   project: typeof schema.projects.$inferSelect
-  projectPrompts: Array<{id: string; originalText: string; promptHeading: string | null; order: number | null; type: string | null}>
+  projectPrompts: Array<{
+    id: string
+    originalText: string
+    promptHeading: string | null
+    order: number | null
+    type: string | null
+  }>
   numberOfArticlesToGet: number
 }): Promise<ArticleProcessingData> => {
   const queryConditions = getQueryConditions({jobId, project})

@@ -5,13 +5,7 @@ import {auth} from '../../../auth.ts'
 import {judgments, judgmentsHuman, projectPrompts} from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
-export const humanAssessmentRoutesGetOverviewBothUsers = async ({
-  request,
-  set,
-}: {
-  request: Request
-  set: any
-}) => {
+export const humanAssessmentRoutesGetOverviewBothUsers = async ({request, set}: {request: Request; set: any}) => {
   const session = await auth.api.getSession({headers: request.headers})
   const role = session?.user?.role ?? null
   if (role !== 'admin') {

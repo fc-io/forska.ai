@@ -170,4 +170,3 @@ export const openalexWorkflowStoreEntries = async (entries: DatabaseEntry[]): Pr
 
 export type {DatabaseEntry}
 export {DatabaseItem}
-

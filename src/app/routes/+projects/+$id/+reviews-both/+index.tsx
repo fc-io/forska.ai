@@ -6,8 +6,8 @@ import {ReviewsArticlesBothTableContainer} from '../../../../../components/main/
 import {ReviewsFilterControls} from '../../../../../components/main/reviews/reviewsFilterControls.tsx'
 import {ReviewsTabs} from '../../../../../components/main/reviews/reviewsTabs.tsx'
 import {Button} from '../../../../../components/ui/button'
-import {deleteProject, fetchProjectWithPrompts} from '../../../../../services/projectsService'
 import {fetchSession} from '../../../../../services/fetchSession'
+import {deleteProject, fetchProjectWithPrompts} from '../../../../../services/projectsService'
 
 const ReviewsBoth = () => {
   const params = Route.useParams()
