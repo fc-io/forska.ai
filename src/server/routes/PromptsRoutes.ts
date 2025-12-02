@@ -2,24 +2,18 @@ import {and, eq, inArray, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {judgments, judgmentsHuman, projectPrompts, prompts} from '../../db/schema'
-import {computePromptContentHash} from '../utils/computePromptContentHash'
 import {requireAdminAuth} from '../utils/authGuard.ts'
+import {computePromptContentHash} from '../utils/computePromptContentHash'
 import {getDatabase} from '../utils/getDatabase'
 
-type PromptRow = Pick<
-  typeof prompts.$inferSelect,
-  'id' | 'originalText' | 'transformedText' | 'promptHeading' | 'type'
->
+type PromptRow = Pick<typeof prompts.$inferSelect, 'id' | 'originalText' | 'transformedText' | 'promptHeading' | 'type'>
 
 type PromptCollision = {hash: string; promptIds: string[]}
 type PromptHashUpdate = {id: string; hash: string}
 
 const withHashes = (rows: PromptRow[]) => {
   return rows.map((row) => {
-    return {
-      ...row,
-      hash: computePromptContentHash(row.originalText, row.transformedText, row.promptHeading, row.type),
-    }
+    return {...row, hash: computePromptContentHash(row.originalText, row.transformedText, row.promptHeading, row.type)}
   })
 }
 
