@@ -4,6 +4,7 @@ import {Elysia, t} from 'elysia'
 import {
   importRoute as importRouteTable,
   judgments,
+  judgmentsHuman,
   judgmentsJobs,
   models,
   projectArticles,
@@ -40,6 +41,37 @@ const parseOptionalDate = (value?: string | null) => {
     throw new Error('Invalid date value provided')
   }
   return parsedDate
+}
+
+const getOrphanPromptIds = async (tx: ReturnType<typeof getDatabase>, promptIds: string[]) => {
+  if (promptIds.length === 0) {
+    return []
+  }
+
+  const linkedToProjects = await tx
+    .select({promptId: projectPrompts.promptId})
+    .from(projectPrompts)
+    .where(inArray(projectPrompts.promptId, promptIds))
+
+  const usedInJudgments = await tx
+    .select({promptId: judgments.promptId})
+    .from(judgments)
+    .where(inArray(judgments.promptId, promptIds))
+
+  const usedInHumanJudgments = await tx
+    .select({promptId: judgmentsHuman.promptId})
+    .from(judgmentsHuman)
+    .where(inArray(judgmentsHuman.promptId, promptIds))
+
+  const usedPromptIds = new Set(
+    [...linkedToProjects, ...usedInJudgments, ...usedInHumanJudgments].map((row) => {
+      return row.promptId
+    }),
+  )
+
+  return promptIds.filter((id) => {
+    return !usedPromptIds.has(id)
+  })
 }
 
 export const projectsRoutes = new Elysia()
@@ -646,11 +678,28 @@ export const projectsRoutes = new Elysia()
       throw new Error('Project is locked: a judgment job exists for this project')
     }
 
-    const result = await db.delete(projects).where(eq(projects.id, params.id)).returning()
+    await db.transaction(async (tx) => {
+      const promptRows = await tx
+        .select({promptId: projectPrompts.promptId})
+        .from(projectPrompts)
+        .where(eq(projectPrompts.projectId, params.id))
 
-    if (result.length === 0) {
-      throw new Error('Project not found')
-    }
+      const promptIds = promptRows.map((row) => {
+        return row.promptId
+      })
+
+      const result = await tx.delete(projects).where(eq(projects.id, params.id)).returning()
+
+      if (result.length === 0) {
+        throw new Error('Project not found')
+      }
+
+      const orphanPromptIds = await getOrphanPromptIds(tx, promptIds)
+
+      if (orphanPromptIds.length > 0) {
+        await tx.delete(prompts).where(inArray(prompts.id, orphanPromptIds))
+      }
+    })
 
     return {success: true}
   })
