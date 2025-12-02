@@ -188,7 +188,7 @@ export const medrxivWorkflowStoreEntries = async (entries: DatabaseEntry[]): Pro
   for (let i = 0; i < batches.length; i++) {
     const batch = batches[i]
     if (!batch) continue
-    globalThis.console.log(`Storing medRxiv batch ${i + 1}/${batches.length} (${batch.length} records)`)
+
     await storeBatch(batch)
     if (i < batches.length - 1) {
       await new Promise((resolve) => {

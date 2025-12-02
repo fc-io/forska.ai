@@ -91,14 +91,17 @@ const fetchWithTimeoutAndRetry = (url: URL, timeoutMs: number, retryDelays: numb
     const timer = setTimeout(() => {
       controller.abort()
     }, timeoutMs)
+    console.log(`Fetching medRxiv URL: ${url}`)
     const request = fetch(url, {signal: controller.signal}).finally(() => {
       clearTimeout(timer)
     })
     return request.then(
       (res) => {
+        console.log(`medRxiv response: ${res.status} ${res.statusText}`)
         if (res.ok) return res
         const delay = retryDelays[i]
         if (delay === undefined) {
+          console.error(`medRxiv final failure: HTTP ${res.status} — ${url}`)
           return Promise.reject(new Error(`medRxiv HTTP ${res.status}`))
         }
         console.log(
@@ -111,6 +114,7 @@ const fetchWithTimeoutAndRetry = (url: URL, timeoutMs: number, retryDelays: numb
       (err) => {
         const delay = retryDelays[i]
         if (delay === undefined) {
+          console.error(`medRxiv final failure: ${String(err)} — ${url}`)
           return Promise.reject(err)
         }
         console.log(
