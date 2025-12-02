@@ -1,4 +1,4 @@
-import {Show} from 'solid-js'
+import {Show, createSignal, onCleanup, onMount} from 'solid-js'
 
 type Judgment = {
   id: string
@@ -15,6 +15,11 @@ type ReviewArticleDetailsProps = {
 import {decodeAndSanitize} from '../../../../../app/utils/decodeAndSanitize'
 import {getArticleUrl} from '../../../../../app/utils/getArticleUrl.ts'
 import {reviewArticleDetailsGetHighlightedText} from './reviewArticleDetails/reviewArticleDetailsGetHighlightedText.ts'
+
+const stickyOffsets = {
+  top: 24,
+  bottom: 24,
+}
 
 const getHighlightedText = (text: string, judgment: Judgment) => {
   const sanitizedText = decodeAndSanitize(text)
@@ -38,8 +43,50 @@ const getHighlightedText = (text: string, judgment: Judgment) => {
 }
 
 export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
+  const [stickMode, setStickMode] = createSignal<'top' | 'bottom' | undefined>(undefined)
+  let containerRef: HTMLDivElement | undefined
+
+  const getStickinessMode = (height: number | undefined) => {
+    if (!height) {
+      return undefined
+    }
+    return height <= window.innerHeight - stickyOffsets.top ? 'top' : 'bottom'
+  }
+
+  const setStickiness = () => {
+    const containerHeight = containerRef?.getBoundingClientRect().height
+    setStickMode(getStickinessMode(containerHeight))
+  }
+
+  onMount(() => {
+    setStickiness()
+    const resizeObserver = new ResizeObserver(() => {
+      setStickiness()
+    })
+    if (containerRef) {
+      resizeObserver.observe(containerRef)
+    }
+    const handleResize = () => {
+      setStickiness()
+    }
+    window.addEventListener('resize', handleResize)
+    onCleanup(() => {
+      resizeObserver.disconnect()
+      window.removeEventListener('resize', handleResize)
+    })
+  })
+
   return (
-    <div class="space-y-4">
+    <div
+      ref={(element) => {
+        containerRef = element
+      }}
+      class="space-y-4"
+      classList={{
+        'sticky top-6 self-start': stickMode() === 'top',
+        'sticky bottom-6 self-start': stickMode() === 'bottom',
+      }}
+    >
       <h1 class="text-2xl font-bold">Article Details</h1>
       <div class="p-6 bg-white rounded-lg shadow">
         <div class="space-y-2">
