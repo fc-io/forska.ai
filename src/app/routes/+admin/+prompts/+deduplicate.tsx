@@ -37,6 +37,10 @@ const DeduplicatePrompts = () => {
     return {queryKey: ['prompts', 'duplicates'], queryFn: fetchDuplicates}
   })
 
+  const hasDuplicateGroups = () => {
+    return (duplicatesQuery.data ?? []).length > 0
+  }
+
   const orphansQuery = useQuery(() => {
     return {queryKey: ['prompts', 'orphans'], queryFn: fetchOrphans}
   })
@@ -48,6 +52,7 @@ const DeduplicatePrompts = () => {
   const [selectedKeepIds, setSelectedKeepIds] = createSignal<Record<string, string>>({})
   const [processingGroups, setProcessingGroups] = createSignal<Record<string, boolean>>({})
   const [deletingPrompts, setDeletingPrompts] = createSignal<Record<string, boolean>>({})
+  const [regeneratingHashes, setRegeneratingHashes] = createSignal(false)
   const [expandedSections, setExpandedSections] = createSignal<Record<string, boolean>>({
     noProjects: true,
     noJudgments: true,
@@ -148,6 +153,28 @@ const DeduplicatePrompts = () => {
     return inNoProjects && inNoJudgments
   }
 
+  const regenerateHashes = async () => {
+    setRegeneratingHashes(true)
+    try {
+      const response = await apiClient.api.prompts['regenerate-hashes'].post()
+
+      if (response.error) {
+        console.error('Regenerate hashes failed:', response.error)
+        alert('Failed to regenerate prompt hashes.')
+        return
+      }
+
+      alert('Prompt hashes regenerated.')
+      void duplicatesQuery.refetch()
+      void orphansQuery.refetch()
+    } catch (error) {
+      console.error('Regenerate hashes error:', error)
+      alert('An error occurred while regenerating hashes.')
+    } finally {
+      setRegeneratingHashes(false)
+    }
+  }
+
   return (
     <div class="min-h-screen bg-gray-50 p-6 mx-auto max-w-7xl">
       <Suspense
@@ -174,6 +201,19 @@ const DeduplicatePrompts = () => {
         >
           <div class="flex justify-between items-center mb-6">
             <h1 class="text-2xl font-bold">Deduplicate Prompts</h1>
+            <button
+              onClick={() => {
+                return void regenerateHashes()
+              }}
+              disabled={hasDuplicateGroups() || duplicatesQuery.isLoading || regeneratingHashes()}
+              class={`inline-flex items-center px-4 py-2 rounded-md text-sm font-medium focus:outline-none focus:ring-2 focus:ring-offset-1 ${
+                hasDuplicateGroups() || duplicatesQuery.isLoading || regeneratingHashes()
+                  ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
+                  : 'bg-blue-600 text-white hover:bg-blue-700 focus:ring-blue-500'
+              }`}
+            >
+              {regeneratingHashes() ? 'Regenerating...' : 'Regenerate Prompt Hashes'}
+            </button>
           </div>
 
           <div class="space-y-8">

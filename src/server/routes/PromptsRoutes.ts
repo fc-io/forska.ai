@@ -77,6 +77,24 @@ export const promptsRoutes = new Elysia({prefix: '/api/prompts'})
 
     return {success: true, data: result}
   })
+  .post('/regenerate-hashes', async () => {
+    const db = getDatabase()
+    const updated = await db
+      .update(prompts)
+      .set({
+        contentHash: sql`
+          compute_prompt_content_hash(
+            ${prompts.originalText},
+            ${prompts.transformedText},
+            ${prompts.promptHeading},
+            ${prompts.type}
+          )
+        `,
+      })
+      .returning({id: prompts.id})
+
+    return {success: true, data: {updatedCount: updated.length}}
+  })
   .delete('/:id', async ({params}) => {
     const db = getDatabase()
     const {id} = params
