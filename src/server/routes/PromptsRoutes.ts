@@ -2,7 +2,84 @@ import {and, eq, inArray, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {judgments, judgmentsHuman, projectPrompts, prompts} from '../../db/schema'
+import {computePromptContentHash} from '../utils/computePromptContentHash'
 import {getDatabase} from '../utils/getDatabase'
+
+type PromptRow = Pick<
+  typeof prompts.$inferSelect,
+  'id' | 'originalText' | 'transformedText' | 'promptHeading' | 'type'
+>
+
+type PromptCollision = {hash: string; promptIds: string[]}
+type PromptHashUpdate = {id: string; hash: string}
+
+const withHashes = (rows: PromptRow[]) => {
+  return rows.map((row) => {
+    return {
+      ...row,
+      hash: computePromptContentHash(row.originalText, row.transformedText, row.promptHeading, row.type),
+    }
+  })
+}
+
+const groupCollisions = (rows: Array<PromptRow & {hash: string}>) => {
+  return rows.reduce<Map<string, string[]>>((map, row) => {
+    const current = map.get(row.hash) ?? []
+    current.push(row.id)
+    map.set(row.hash, current)
+    return map
+  }, new Map<string, string[]>())
+}
+
+const getCollisions = (groups: Map<string, string[]>) => {
+  return Array.from(groups.entries())
+    .filter(([, ids]) => {
+      return ids.length > 1
+    })
+    .map<PromptCollision>(([hash, ids]) => {
+      return {hash, promptIds: ids}
+    })
+}
+
+const safeUpdates = (rows: Array<PromptRow & {hash: string}>, collisions: PromptCollision[]) => {
+  const blocked = new Set(
+    collisions.map((collision) => {
+      return collision.hash
+    }),
+  )
+  return rows
+    .filter((row) => {
+      return !blocked.has(row.hash)
+    })
+    .map<PromptHashUpdate>((row) => {
+      return {id: row.id, hash: row.hash}
+    })
+}
+
+const applyHashUpdates = async (db: ReturnType<typeof getDatabase>, updates: PromptHashUpdate[]) => {
+  if (updates.length === 0) {
+    return 0
+  }
+
+  const values = sql.join(
+    updates.map((update) => {
+      return sql`(${update.id}::uuid, ${update.hash})`
+    }),
+    sql`,`,
+  )
+
+  const result = await db.execute(
+    sql<{id: string}>`
+      UPDATE "prompts" AS p
+      SET "content_hash" = v.content_hash
+      FROM (VALUES ${values}) AS v(id, content_hash)
+      WHERE p.id = v.id
+      RETURNING p.id
+    `,
+  )
+
+  return result.rows.length
+}
 
 export const promptsRoutes = new Elysia({prefix: '/api/prompts'})
   .get('/duplicates', async () => {
@@ -79,21 +156,23 @@ export const promptsRoutes = new Elysia({prefix: '/api/prompts'})
   })
   .post('/regenerate-hashes', async () => {
     const db = getDatabase()
-    const updated = await db
-      .update(prompts)
-      .set({
-        contentHash: sql`
-          compute_prompt_content_hash(
-            ${prompts.originalText},
-            ${prompts.transformedText},
-            ${prompts.promptHeading},
-            ${prompts.type}
-          )
-        `,
+    const promptRows = await db
+      .select({
+        id: prompts.id,
+        originalText: prompts.originalText,
+        transformedText: prompts.transformedText,
+        promptHeading: prompts.promptHeading,
+        type: prompts.type,
       })
-      .returning({id: prompts.id})
+      .from(prompts)
 
-    return {success: true, data: {updatedCount: updated.length}}
+    const hashed = withHashes(promptRows)
+    const groups = groupCollisions(hashed)
+    const collisions = getCollisions(groups)
+    const updates = safeUpdates(hashed, collisions)
+    const updatedCount = await applyHashUpdates(db, updates)
+
+    return {success: true, data: {updatedCount, skippedCollisions: collisions}}
   })
   .delete('/:id', async ({params}) => {
     const db = getDatabase()
