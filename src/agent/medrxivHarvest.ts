@@ -151,6 +151,7 @@ const fetchMedrxivPage = async (
 
 const harvestPage = async (input: InputData, cursor: number, shouldThrottle: boolean): Promise<void> => {
   const records = await fetchMedrxivPage(input.fromDate, input.toDate, cursor, shouldThrottle)
+  const nextCursor = records.length ? cursor + records.length : cursor
   if (!records.length) {
     return
   }
@@ -169,7 +170,7 @@ const harvestPage = async (input: InputData, cursor: number, shouldThrottle: boo
     await medrxivWorkflowStoreEntries(entries)
   }
 
-  await harvestPage(input, cursor + 1, true)
+  await harvestPage(input, nextCursor, true)
 }
 
 export const medrxivHarvest = async (input: InputData): Promise<void> => {
