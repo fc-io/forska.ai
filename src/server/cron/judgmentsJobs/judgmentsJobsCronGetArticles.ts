@@ -57,13 +57,22 @@ const getQueryConditions = ({jobId, project}: {jobId: string; project: typeof sc
   )
 
   // Restrict to articles that belong to any of the project's import routes (via project_route_link)
+  // OR articles that are directly linked to the project via project_articles
   conditions.push(
-    sql`EXISTS (
-      SELECT 1
-      FROM ${schema.articleRouteLink} arl
-      JOIN ${schema.projectRouteLink} prl ON prl."import_route_id" = arl."import_route_id"
-      WHERE arl."article_id" = ${schema.articles.id}
-      AND prl."project_id" = ${project.id}
+    sql`(
+      EXISTS (
+        SELECT 1
+        FROM ${schema.articleRouteLink} arl
+        JOIN ${schema.projectRouteLink} prl ON prl."import_route_id" = arl."import_route_id"
+        WHERE arl."article_id" = ${schema.articles.id}
+        AND prl."project_id" = ${project.id}
+      )
+      OR EXISTS (
+        SELECT 1
+        FROM ${schema.projectArticles} pa
+        WHERE pa."article_id" = ${schema.articles.id}
+        AND pa."project_id" = ${project.id}
+      )
     )`,
   )
 

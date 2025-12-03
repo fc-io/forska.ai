@@ -8,6 +8,7 @@ import {
   judgments,
   judgmentsJobs,
   judgmentsJobsArticles,
+  projectArticles,
   projectPrompts,
   projectRouteLink,
   projects,
@@ -93,19 +94,29 @@ const getUnassessedArticlesCount = async ({
       sql`${judgments.articleId} = ${articles.id} AND ${judgments.promptId} = ${projectPrompts.promptId} AND ${judgments.modelId} = ${projectModelId}::uuid`,
     )
 
-  if (importRouteIds.length > 0) {
-    // Restrict via article_route_link and allowed route ids
-    countQuery = countQuery.innerJoin(articleRouteLink, eq(articleRouteLink.articleId, articles.id)).where(
-      sql`${sql.join(allConditions, sql` AND `)} AND ${articleRouteLink.importRouteId} = ANY(ARRAY[${sql.join(
+  const routeCondition =
+    importRouteIds.length > 0
+      ? sql`EXISTS (
+      SELECT 1 FROM ${articleRouteLink} arl
+      WHERE arl."article_id" = ${articles.id}
+      AND arl."import_route_id" = ANY(ARRAY[${sql.join(
         importRouteIds.map((id) => {
           return sql`${id}::uuid`
         }),
         sql`,`,
-      )}])`,
-    )
-  } else {
-    countQuery = countQuery.where(sql`${sql.join(allConditions, sql` AND `)}`)
-  }
+      )}])
+    )`
+      : sql`FALSE`
+
+  const projectArticleCondition = sql`EXISTS (
+    SELECT 1 FROM ${projectArticles} pa
+    WHERE pa."article_id" = ${articles.id}
+    AND pa."project_id" = ${projectId}
+  )`
+
+  countQuery = countQuery.where(
+    sql`${sql.join(allConditions, sql` AND `)} AND (${routeCondition} OR ${projectArticleCondition})`,
+  )
 
   const [{count: unassessedCount = 0} = {count: 0}] = await countQuery
   console.timeEnd('getUnassessedArticlesCount')
@@ -158,6 +169,10 @@ const getJobContext = async ({
   }
 
   const {projectDateFrom, projectDateTo, projectModelId, ...job} = jobWithProject
+
+  if (!projectModelId) {
+    throw new Error('Project model ID not found')
+  }
 
   const projectImportRoutes = await db
     .select({importRouteId: projectRouteLink.importRouteId})
@@ -236,18 +251,27 @@ const getUnassessedArticles = async ({
       articles.articleUpdatedAt,
     )
 
-  if (importRouteIds.length > 0) {
-    query = query.innerJoin(articleRouteLink, eq(articleRouteLink.articleId, articles.id)).where(
-      sql`${sql.join(allConditions, sql` AND `)} AND ${articleRouteLink.importRouteId} = ANY(ARRAY[${sql.join(
+  const routeCondition =
+    importRouteIds.length > 0
+      ? sql`EXISTS (
+      SELECT 1 FROM ${articleRouteLink} arl
+      WHERE arl."article_id" = ${articles.id}
+      AND arl."import_route_id" = ANY(ARRAY[${sql.join(
         importRouteIds.map((id) => {
           return sql`${id}::uuid`
         }),
         sql`,`,
-      )}])`,
-    )
-  } else {
-    query = query.where(sql`${sql.join(allConditions, sql` AND `)}`)
-  }
+      )}])
+    )`
+      : sql`FALSE`
+
+  const projectArticleCondition = sql`EXISTS (
+    SELECT 1 FROM ${projectArticles} pa
+    WHERE pa."article_id" = ${articles.id}
+    AND pa."project_id" = ${projectId}
+  )`
+
+  query = query.where(sql`${sql.join(allConditions, sql` AND `)} AND (${routeCondition} OR ${projectArticleCondition})`)
 
   const articlesToAssess = await query
     .orderBy(
