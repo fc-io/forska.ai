@@ -14,6 +14,25 @@ import {
 } from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
+type JudgmentWithPromptAndAssessments = typeof judgments.$inferSelect & {
+  prompt: typeof prompts.$inferSelect
+  assessments: Array<typeof judgmentAssessments.$inferSelect>
+}
+
+type PlaceholderJudgment = {
+  id: string
+  promptId: string
+  answeredOriginal: 'not answer'
+  confidenceOriginal: null
+  explanation: null
+  quotes: (typeof judgments.$inferSelect)['quotes']
+  prompt: Pick<typeof prompts.$inferSelect, 'originalText' | 'promptHeading'>
+  assessments: Array<typeof judgmentAssessments.$inferSelect>
+  createdAt: null
+}
+
+type ReviewJudgment = JudgmentWithPromptAndAssessments | PlaceholderJudgment
+
 export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
   '/api/projectsreview',
   async ({body}) => {
@@ -82,17 +101,18 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
           : []
 
       // Group assessments by judgment ID
-      const assessmentsByJudgment = assessments.reduce(
+      const assessmentsByJudgment = assessments.reduce<Record<string, Array<typeof judgmentAssessments.$inferSelect>>>(
         (acc, assessment) => {
           const judgmentAssessments = acc[assessment.judgmentId] ?? []
           return {...acc, [assessment.judgmentId]: [...judgmentAssessments, assessment]}
         },
-        {} as Record<string, typeof assessments>,
+        {},
       )
 
       // Combine judgments with their assessments and prompts (limited to this project's ENABLED prompts)
-      const judgmentsWithDetails = articleJudgments.map(({judgment, prompt}) => {
-        return {...judgment, prompt, assessments: assessmentsByJudgment[judgment.id] || []}
+      const judgmentsWithDetails: ReviewJudgment[] = articleJudgments.map(({judgment, prompt}) => {
+        const judgmentAssessments = assessmentsByJudgment[judgment.id] ?? []
+        return {...judgment, prompt, assessments: judgmentAssessments}
       })
 
       // Add placeholders for enabled prompts with no LLM judgment yet
@@ -114,25 +134,28 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         {} as Record<string, number>,
       )
 
-      for (const p of enabledPromptRows) {
-        if (!presentPromptIds.has(p.id)) {
-          // Placeholder judgment object for display in LLM assessment
-          const placeholder = {
+      const placeholders: PlaceholderJudgment[] = enabledPromptRows
+        .filter((p) => {
+          return !presentPromptIds.has(p.id)
+        })
+        .map((p) => {
+          return {
             id: `placeholder:${p.id}`,
             promptId: p.id,
-            answeredOriginal: 'not answer' as const,
+            answeredOriginal: 'not answer',
             confidenceOriginal: null,
             explanation: null,
-            quotes: [],
+            quotes: [] as (typeof judgments.$inferSelect)['quotes'],
             prompt: {originalText: p.originalText, promptHeading: p.promptHeading},
-            assessments: [] as Array<unknown>,
+            assessments: [] as Array<typeof judgmentAssessments.$inferSelect>,
+            createdAt: null,
           }
-          ;(judgmentsWithDetails as Array<any>).push(placeholder)
-        }
-      }
+        })
+
+      const judgmentsWithPlaceholders: ReviewJudgment[] = [...judgmentsWithDetails, ...placeholders]
 
       // Ensure stable ordering by project prompt order
-      ;(judgmentsWithDetails as Array<any>).sort((a, b) => {
+      judgmentsWithPlaceholders.sort((a, b) => {
         const ao = promptOrderMap[a.promptId] ?? Number.MAX_SAFE_INTEGER
         const bo = promptOrderMap[b.promptId] ?? Number.MAX_SAFE_INTEGER
         if (ao !== bo) return ao - bo
@@ -324,7 +347,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         article,
         review,
         prompts: projectPromptRows,
-        judgments: judgmentsWithDetails,
+        judgments: judgmentsWithPlaceholders,
         // Cross-project extras
         allJudgments,
         projectsById,

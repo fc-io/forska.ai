@@ -88,10 +88,12 @@ export const promptsRoutes = new Elysia({prefix: '/api/prompts'})
       // Create a key based on content fields
       const key = JSON.stringify({originalText: p.originalText, promptHeading: p.promptHeading, type: p.type})
 
-      if (!groups.has(key)) {
-        groups.set(key, [])
+      const group = groups.get(key)
+      if (group) {
+        group.push(p)
+      } else {
+        groups.set(key, [p])
       }
-      groups.get(key)!.push(p)
     }
 
     // Filter for duplicates

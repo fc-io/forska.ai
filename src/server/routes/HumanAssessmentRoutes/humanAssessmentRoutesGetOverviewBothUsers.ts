@@ -1,11 +1,18 @@
 import {and, eq, sql} from 'drizzle-orm'
+import type {Context} from 'elysia'
 
 import {user} from '../../../../auth-schema.ts'
 import {auth} from '../../../auth.ts'
 import {judgments, judgmentsHuman, projectPrompts} from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
-export const humanAssessmentRoutesGetOverviewBothUsers = async ({request, set}: {request: Request; set: any}) => {
+export const humanAssessmentRoutesGetOverviewBothUsers = async ({
+  request,
+  set,
+}: {
+  request: Request
+  set: Context['set']
+}) => {
   const session = await auth.api.getSession({headers: request.headers})
   const role = session?.user?.role ?? null
   if (role !== 'admin') {

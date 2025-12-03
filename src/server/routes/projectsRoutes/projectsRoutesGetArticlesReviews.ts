@@ -171,19 +171,23 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
         .orderBy(desc(articles.articleCreatedAt))
 
       // Fetch all judgments for the paged articles via join to the paged id set
-      const allJudgments = await db
-        .select()
+      const allJudgmentRows = await db
+        .select({judgment: judgments})
         .from(judgments)
         .innerJoin(groupedPage, eq(groupedPage.id, judgments.articleId))
         .where(inArray(judgments.promptId, promptIds))
 
+      const judgmentsRows = allJudgmentRows.map(({judgment}) => {
+        return judgment
+      })
+
       // Group judgments by article
-      const judgmentsByArticle = allJudgments.reduce(
+      const judgmentsByArticle = judgmentsRows.reduce<Record<string, Array<(typeof judgmentsRows)[number]>>>(
         (acc, judgment) => {
           const articleJudgments = acc[judgment.articleId] ?? []
           return {...acc, [judgment.articleId]: [...articleJudgments, judgment]}
         },
-        {} as Record<string, typeof allJudgments>,
+        {},
       )
 
       // Build prompt order map and sort judgments accordingly

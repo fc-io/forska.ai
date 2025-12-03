@@ -85,7 +85,7 @@ export const articlesRoutes = new Elysia()
           articleVersion: parseInt(entry.article_version),
           arxivId: entry.arxiv_id,
           pubmedId: entry.pubmed_id,
-          originalData: entry.original_data,
+          originalData: entry.original_data as unknown,
         }
       })
 

@@ -1,5 +1,6 @@
 import {type as arktype} from 'arktype'
 import {and, eq, inArray} from 'drizzle-orm'
+import type {Context} from 'elysia'
 
 import {auth} from '../../../auth.ts'
 import {judgmentsHuman, projectPrompts, prompts} from '../../../db/schema.ts'
@@ -12,7 +13,7 @@ export const humanAssessmentRoutesPostSubmit = async ({
 }: {
   body: {projectId: string; answers: Array<{judgmentHumanId: string; answer: string; comment?: string}>}
   request: Request
-  set: any
+  set: Context['set']
 }) => {
   const db = getDatabase()
   const session = await auth.api.getSession({headers: request.headers})
@@ -152,7 +153,7 @@ export const humanAssessmentRoutesPostSubmit = async ({
     }
 
     for (const id of idsToUpdate) {
-      const payload = byId[id]!
+      const payload = byId[id]
       const raw = payload?.answer
       const value = typeof raw === 'string' ? raw : raw == null ? '' : String(raw)
       const preparedAnswer = value.trim() === '' ? null : value

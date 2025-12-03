@@ -1,10 +1,30 @@
 import {Elysia} from 'elysia'
 
+const getCause = (value: unknown) => {
+  if (typeof value !== 'object' || value === null || !('cause' in value)) {
+    return undefined
+  }
+  return (value as {cause?: unknown}).cause
+}
+
+const getErrorMessage = (value: unknown) => {
+  if (typeof value === 'string') {
+    return value
+  }
+  if (typeof value === 'object' && value !== null && 'message' in value) {
+    const message = (value as {message?: unknown}).message
+    return typeof message === 'string' ? message : undefined
+  }
+  return undefined
+}
+
 export const withErrorHandler = () => {
   return new Elysia().onError(({code, error, set}) => {
-    const cause = (error as any)?.cause
+    const cause = getCause(error)
+    const message = error instanceof Error ? error.message : (getErrorMessage(error) ?? 'Unknown error')
+    const causeMessage = getErrorMessage(cause)
     if (cause) {
-      console.error(`Route error [${code}]`, {message: (error as Error).message, cause})
+      console.error(`Route error [${code}]`, {message, cause})
     } else {
       console.error(`Route error [${code}]:`, error)
     }
@@ -32,8 +52,7 @@ export const withErrorHandler = () => {
       }
 
       // Include underlying DB error details when present (useful for debugging)
-      const causeMsg = typeof (error as any)?.cause?.message === 'string' ? (error as any).cause.message : undefined
-      const combined = causeMsg ? `${error.message} — ${causeMsg}` : error.message
+      const combined = causeMessage ? `${error.message} — ${causeMessage}` : error.message
       // Default error response
       set.status = 500
       return {data: null, error: combined || 'An unexpected error occurred'}

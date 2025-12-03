@@ -11,7 +11,6 @@ import {
   projectPrompts,
   projectRouteLink,
   projects,
-  prompts,
   tokenUse,
 } from '../../db/schema'
 import {requireAdminAuth} from '../utils/authGuard.ts'
@@ -54,39 +53,6 @@ const buildProjectDateConditions = ({
   }
 
   return conditions
-}
-
-const buildProjectPromptCondition = (projectId: string, projectModelId: string): SQL => {
-  return sql`EXISTS (
-    SELECT 1 FROM ${projectPrompts} pp
-    WHERE pp.project_id = ${projectId}::uuid
-    AND NOT EXISTS (
-      SELECT 1 FROM ${judgments} j
-      WHERE j."article_id" = ${articles.id}
-      AND j."prompt_id" = pp."prompt_id"
-      AND j."model_id" = ${projectModelId}::uuid
-    )
-  )`
-}
-
-const buildProjectRouteCondition = (importRouteIds: string[]): SQL => {
-  if (importRouteIds.length === 0) {
-    return sql`FALSE`
-  }
-
-  const routeIdArray = sql.join(
-    importRouteIds.map((routeId) => {
-      return sql`${routeId}::uuid`
-    }),
-    sql`,`,
-  )
-
-  return sql`EXISTS (
-    SELECT 1
-    FROM ${articleRouteLink} arl
-    WHERE arl."article_id" = ${articles.id}
-    AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
-  )`
 }
 
 const getUnassessedArticlesCount = async ({
@@ -331,7 +297,7 @@ export const judgmentsJobsRoutes = new Elysia()
     async ({params}) => {
       const db = getDatabase()
 
-      const {job, projectDateFrom, projectDateTo, importRouteIds} = await getJobContext({db, jobId: params.id})
+      const {job} = await getJobContext({db, jobId: params.id})
 
       const [articleStats, totalTokenUsage, tokenUsagePerDay] = await Promise.all([
         db
@@ -378,13 +344,11 @@ export const judgmentsJobsRoutes = new Elysia()
           totalCompletionTokens: Number(totalTokenUsage[0]?.totalCompletionTokens || 0),
         },
         tokenUsagePerDay: tokenUsagePerDay.map((row) => {
-          return {
-            ...row,
-            dailyTokens: Number((row as any).dailyTokens || 0),
-            dailyPromptTokens: Number((row as any).dailyPromptTokens || 0),
-            dailyCompletionTokens: Number((row as any).dailyCompletionTokens || 0),
-            requests: Number((row as any).requests || 0),
-          }
+          const dailyTokens = Number(row.dailyTokens ?? 0)
+          const dailyPromptTokens = Number(row.dailyPromptTokens ?? 0)
+          const dailyCompletionTokens = Number(row.dailyCompletionTokens ?? 0)
+          const requests = Number(row.requests ?? 0)
+          return {...row, dailyTokens, dailyPromptTokens, dailyCompletionTokens, requests}
         }),
       }
     },

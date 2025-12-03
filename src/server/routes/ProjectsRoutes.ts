@@ -254,30 +254,34 @@ export const projectsRoutes = new Elysia()
             .where(eq(prompts.contentHash, contentHash))
             .limit(1)
 
-          const promptId = existingByHash[0]?.id
-            ? existingByHash[0].id
-            : await (async () => {
-                const inserted = await db
-                  .insert(prompts)
-                  .values({
-                    originalText: content,
-                    transformedText: null,
-                    promptHeading: heading,
-                    type: typeVal,
-                    contentHash,
-                  })
-                  .onConflictDoNothing({target: prompts.contentHash})
-                  .returning({id: prompts.id})
-                return inserted[0]?.id
-                  ? inserted[0].id
-                  : (
-                      await db
-                        .select({id: prompts.id})
-                        .from(prompts)
-                        .where(eq(prompts.contentHash, contentHash))
-                        .limit(1)
-                    )[0]!.id
-              })()
+          const promptId = await (async () => {
+            if (existingByHash[0]?.id) {
+              return existingByHash[0].id
+            }
+            const inserted = await db
+              .insert(prompts)
+              .values({
+                originalText: content,
+                transformedText: null,
+                promptHeading: heading,
+                type: typeVal,
+                contentHash,
+              })
+              .onConflictDoNothing({target: prompts.contentHash})
+              .returning({id: prompts.id})
+            if (inserted[0]?.id) {
+              return inserted[0].id
+            }
+            const [fallbackPrompt] = await db
+              .select({id: prompts.id})
+              .from(prompts)
+              .where(eq(prompts.contentHash, contentHash))
+              .limit(1)
+            if (!fallbackPrompt) {
+              throw new Error('Prompt not found after insert')
+            }
+            return fallbackPrompt.id
+          })()
 
           await db
             .insert(projectPrompts)
@@ -454,11 +458,11 @@ export const projectsRoutes = new Elysia()
           )
           const receivedOriginalIds = new Set(
             submitted
-              .filter((p) => {
+              .map((p) => {
                 return p.originalId
               })
-              .map((p) => {
-                return p.originalId!
+              .filter((id): id is string => {
+                return typeof id === 'string'
               }),
           )
 
@@ -518,47 +522,50 @@ export const projectsRoutes = new Elysia()
               if (archivedVal !== undefined) insertValues.archived = archivedVal
               if (enabledVal !== undefined) insertValues.enabled = enabledVal
 
-              const setValues: Record<string, unknown> = {
+              const setValues = {
                 order: sql`EXCLUDED."order"`,
                 updatedAt: sql`CURRENT_TIMESTAMP`,
+                ...(archivedVal !== undefined ? {archived: sql`EXCLUDED.archived`} : {}),
+                ...(enabledVal !== undefined ? {enabled: sql`EXCLUDED.enabled`} : {}),
               }
-              if (archivedVal !== undefined) setValues.archived = sql`EXCLUDED.archived`
-              if (enabledVal !== undefined) setValues.enabled = sql`EXCLUDED.enabled`
 
               await tx
                 .insert(projectPrompts)
                 .values(insertValues)
-                .onConflictDoUpdate({
-                  target: [projectPrompts.projectId, projectPrompts.promptId],
-                  set: setValues as any,
-                })
+                .onConflictDoUpdate({target: [projectPrompts.projectId, projectPrompts.promptId], set: setValues})
             } else {
               const headingVal = p.promptHeading || null
               const typeVal = p.type || null
               const h4b = computePromptContentHash(p.originalText, null, headingVal, typeVal)
               const found = await tx.select({id: prompts.id}).from(prompts).where(eq(prompts.contentHash, h4b)).limit(1)
-              targetPromptId = found[0]?.id
-                ? found[0].id
-                : await (async () => {
-                    const inserted = await tx
-                      .insert(prompts)
-                      .values({
-                        originalText: p.originalText,
-                        transformedText: null,
-                        promptHeading: headingVal,
-                        type: typeVal,
-                        contentHash: h4b,
-                      })
-                      .onConflictDoNothing({target: prompts.contentHash})
-                      .returning({id: prompts.id})
-                    if (inserted[0]?.id) return inserted[0].id
-                    const r = await tx
-                      .select({id: prompts.id})
-                      .from(prompts)
-                      .where(eq(prompts.contentHash, h4b))
-                      .limit(1)
-                    return r[0]!.id
-                  })()
+              targetPromptId = await (async () => {
+                if (found[0]?.id) {
+                  return found[0].id
+                }
+                const inserted = await tx
+                  .insert(prompts)
+                  .values({
+                    originalText: p.originalText,
+                    transformedText: null,
+                    promptHeading: headingVal,
+                    type: typeVal,
+                    contentHash: h4b,
+                  })
+                  .onConflictDoNothing({target: prompts.contentHash})
+                  .returning({id: prompts.id})
+                if (inserted[0]?.id) {
+                  return inserted[0].id
+                }
+                const [fallbackPrompt] = await tx
+                  .select({id: prompts.id})
+                  .from(prompts)
+                  .where(eq(prompts.contentHash, h4b))
+                  .limit(1)
+                if (!fallbackPrompt) {
+                  throw new Error('Prompt not found after insert')
+                }
+                return fallbackPrompt.id
+              })()
 
               const insertValues: Partial<typeof projectPrompts.$inferInsert> = {
                 projectId: params.id,
@@ -569,20 +576,17 @@ export const projectsRoutes = new Elysia()
               if (archivedVal !== undefined) insertValues.archived = archivedVal
               if (enabledVal !== undefined) insertValues.enabled = enabledVal
 
-              const setValues: Record<string, unknown> = {
+              const setValues = {
                 order: sql`EXCLUDED."order"`,
                 updatedAt: sql`CURRENT_TIMESTAMP`,
+                ...(archivedVal !== undefined ? {archived: sql`EXCLUDED.archived`} : {}),
+                ...(enabledVal !== undefined ? {enabled: sql`EXCLUDED.enabled`} : {}),
               }
-              if (archivedVal !== undefined) setValues.archived = sql`EXCLUDED.archived`
-              if (enabledVal !== undefined) setValues.enabled = sql`EXCLUDED.enabled`
 
               await tx
                 .insert(projectPrompts)
                 .values(insertValues)
-                .onConflictDoUpdate({
-                  target: [projectPrompts.projectId, projectPrompts.promptId],
-                  set: setValues as any,
-                })
+                .onConflictDoUpdate({target: [projectPrompts.projectId, projectPrompts.promptId], set: setValues})
             }
           }
         }

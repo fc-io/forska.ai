@@ -85,8 +85,9 @@ export const humanAssessmentRoutesPostInit = async ({
     .limit(50)
   console.log('existingUnanswered', existingUnanswered.length)
   let targetArticleId: string | null = null
-  if (existingUnanswered.length > 0) {
-    targetArticleId = existingUnanswered[0]!.articleId
+  const firstUnanswered = existingUnanswered[0]
+  if (firstUnanswered) {
+    targetArticleId = firstUnanswered.articleId
   }
 
   let articleRow: {id: string; articleTitle: string; articleSummary: string | null} | null = null
@@ -152,12 +153,13 @@ export const humanAssessmentRoutesPostInit = async ({
       return {data: null, error: 'No eligible articles found for this project'}
     }
 
-    targetArticleId = randomArticle.id
+    const articleId = randomArticle.id
+    targetArticleId = articleId
     articleRow = randomArticle
 
     const insertValues = projectPromptRows.map((p) => {
       return {
-        articleId: targetArticleId!,
+        articleId,
         user: sessionUserId,
         promptId: p.id,
         isAnswered: false,
@@ -183,6 +185,10 @@ export const humanAssessmentRoutesPostInit = async ({
   }
 
   const targetId = targetArticleId
+  if (!targetId) {
+    set.status = 404
+    return {data: null, error: 'No pending human assessments found'}
+  }
   const [article] = await db
     .select({id: articles.id, articleTitle: articles.articleTitle, articleSummary: articles.articleSummary})
     .from(articles)
@@ -190,6 +196,11 @@ export const humanAssessmentRoutesPostInit = async ({
     .limit(1)
 
   articleRow = article ?? null
+
+  if (!articleRow) {
+    set.status = 404
+    return {data: null, error: 'Article not found'}
+  }
 
   const pendingForArticle = await db
     .select({id: judgmentsHuman.id, promptId: judgmentsHuman.promptId})
@@ -205,7 +216,7 @@ export const humanAssessmentRoutesPostInit = async ({
 
   const response: InitResponse = {
     project: {id: project.id, name: project.name},
-    article: articleRow!,
+    article: articleRow,
     prompts: projectPromptRows,
     judgmentsHuman: pendingForArticle,
   }

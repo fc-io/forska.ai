@@ -20,6 +20,10 @@ export const usersRoutes = new Elysia()
     new Elysia().use(requireUserAuth()).patch(
       '/api/users/:id',
       async ({params, body, set, sessionUserId}) => {
+        if (typeof sessionUserId !== 'string') {
+          set.status = 401
+          return {data: null, error: 'You must be signed in'}
+        }
         if (sessionUserId !== params.id) {
           set.status = 403
           return {data: null, error: 'You are not allowed to update this user'}
