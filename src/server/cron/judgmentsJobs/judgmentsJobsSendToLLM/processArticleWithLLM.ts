@@ -1,4 +1,4 @@
-import {eq} from 'drizzle-orm'
+import {and, eq} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import {judge} from '../../../../agent/judge.ts'
