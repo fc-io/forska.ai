@@ -3,7 +3,7 @@
 #SBATCH -A NAISS2025-22-715 -p alvis
 #SBATCH --nodes=2
 #SBATCH --ntasks-per-node=4
-#SBATCH --gpus-per-node=A100fat:4
+#SBATCH --gpus-per-node=A100fat:2
 #SBATCH --time=08:00:00
 #SBATCH -o %x-%j.log
 #SBATCH --export=ALL
@@ -93,8 +93,9 @@ LOG_DIR="$STACK_ROOT/logs/${SLURM_JOB_ID:-manual}"
 mkdir -p "$LOG_DIR"
 
 # Multi-node topology (no Ray)
-NNODES=${NNODES:-${SLURM_NNODES:-1}}
-HOSTS=( $(scontrol show hostnames "${SLURM_NODELIST:-$(hostname -s)}") )
+NODELIST_SRC=${SLURM_JOB_NODELIST:-${SLURM_NODELIST:-${SLURM_STEP_NODELIST:-$(hostname -s)}}}
+HOSTS=( $(scontrol show hostnames "$NODELIST_SRC") )
+NNODES=${NNODES:-${SLURM_JOB_NUM_NODES:-${SLURM_NNODES:-${SLURM_STEP_NUM_NODES:-${#HOSTS[@]}}}}}
 HEAD_NODE=${HOSTS[0]:-$(hostname -s)}
 THIS_NODE=$(hostname -s)
 WORKER_NODES=( "${HOSTS[@]:1}" )
