@@ -7,28 +7,23 @@ import type {judgmentsJobsGetJobs} from './judgmentsJobsGetJobs.ts'
 
 type Job = Awaited<ReturnType<typeof judgmentsJobsGetJobs>>[number]
 
-const fetchArticlesForJob = async (job: Job) => {
+export const judgmentsJobsGetNewArticles = async (_db: PostgresJsDatabase<typeof schema>, allJobs: Job[]) => {
   const {SGLANG_MAX_RUNNING_REQUESTS} = env
-  const articleData = await judgmentsJobsCronGetArticles(job.projectId, job.id, SGLANG_MAX_RUNNING_REQUESTS)
+  // Fetch more articles per job to ensure we have enough buffer
+  // Since we are fetching in parallel now, this will be much faster
+  const articlesPerJob = Math.max(1, Number(SGLANG_MAX_RUNNING_REQUESTS || 1) * 5)
+
+  const results = await Promise.all(
+    allJobs.map((job) => {
+      return fetchArticlesForJob(job, articlesPerJob)
+    }),
+  )
+
+  return results
+}
+
+const fetchArticlesForJob = async (job: Job, numberOfArticlesToGet: number) => {
+  const articleData = await judgmentsJobsCronGetArticles(job.projectId, job.id, numberOfArticlesToGet)
 
   return {...articleData, job}
-}
-
-const fetchSequentially = async (
-  db: PostgresJsDatabase<typeof schema>,
-  jobs: Job[],
-  acc: Array<Awaited<ReturnType<typeof fetchArticlesForJob>>>,
-): Promise<Array<Awaited<ReturnType<typeof fetchArticlesForJob>>>> => {
-  const [job, ...rest] = jobs
-  return !job
-    ? acc
-    : fetchArticlesForJob(job).then((res) => {
-        const nextAcc = [...acc, res]
-        return fetchSequentially(db, rest, nextAcc)
-      })
-}
-
-export const judgmentsJobsGetNewArticles = async (db: PostgresJsDatabase<typeof schema>, allJobs: Job[]) => {
-  const result = await fetchSequentially(db, allJobs, [])
-  return result
 }
