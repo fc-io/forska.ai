@@ -32,6 +32,10 @@ apptainer exec --cleanenv --writable-tmpfs \
   psql -h localhost -p ${POSTGRES_PORT:-5433} -U postgres -d postgres \
   -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
 
+# or
+mv pgdata pgdata_old
+mkdir pgdata
+
 # then restore
 # replace the path to the dump
 
