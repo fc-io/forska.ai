@@ -204,8 +204,6 @@ const attemptJudgment = async ({
   prompts,
   modelId,
   projectId,
-  judgmentsJobId,
-  attempt,
 }: {
   prompt: string
   baseURL: string
@@ -214,26 +212,10 @@ const attemptJudgment = async ({
   prompts: PromptsType
   modelId: string
   projectId: string
-  judgmentsJobId: string
-  attempt: number
 }): Promise<
   | {success: true; judgment: unknown; usage: {promptTokens: number; completionTokens: number; totalTokens: number}}
   | {success: false; error: string; lastResponse: string}
 > => {
-  console.log(
-    JSON.stringify({
-      at: 'judge.llm_request',
-      jobId: judgmentsJobId,
-      articleId: article.id,
-      projectId,
-      modelId,
-      modelName,
-      baseURL,
-      attempt,
-      promptLength: prompt.length,
-      promptsCount: prompts.length,
-    }),
-  )
   const modelResponse = await generateModelResponse({prompt, baseURL, modelName}).catch((error) => {
     return {error: error instanceof Error ? error.message : 'Unknown error'}
   })
@@ -308,16 +290,6 @@ export const judge = async ({
 
       while (attempts <= MAX_RETRIES) {
         attempts += 1
-        console.log(
-          JSON.stringify({
-            at: 'judge.send',
-            jobId: judgmentsJobId,
-            articleId: article.id,
-            model: modelName,
-            baseURL,
-            attempt: attempts,
-          }),
-        )
         const result = await attemptJudgment({
           prompt,
           baseURL,
@@ -326,8 +298,6 @@ export const judge = async ({
           prompts,
           modelId,
           projectId,
-          judgmentsJobId,
-          attempt: attempts,
         })
 
         if (result.success) {

@@ -36,7 +36,6 @@ const getNumberOfArticlesInFlight = async (
   return result[0]?.count || 0
 }
 
-let hasLogged = false
 let isRunningJudgmentsJobsSendToLLM = false
 
 export const judgmentsJobsSendToLLM = async (
@@ -45,10 +44,6 @@ export const judgmentsJobsSendToLLM = async (
   serverJobId: string,
 ): Promise<void> => {
   if (isRunningJudgmentsJobsSendToLLM) return
-  if (!hasLogged) {
-    console.log(`1. send ${allJobs.length} jobs to LLM`)
-    hasLogged = true
-  }
   isRunningJudgmentsJobsSendToLLM = true
   const maxNumberOfInflightRequests = getMaxNumberOfInflightRequests()
   const articlesInFlight = await getNumberOfArticlesInFlight(db, serverJobId)
