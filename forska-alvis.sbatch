@@ -3,7 +3,7 @@
 #SBATCH -A NAISS2025-22-715 -p alvis
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --gpus-per-node=A100fat:2
+#SBATCH --gpus-per-node=A100fat:1
 #SBATCH --time=08:00:00
 #SBATCH -o %x-%j.log
 #SBATCH --export=ALL
@@ -533,6 +533,7 @@ apptainer run --cleanenv \
   --env SGLANG_MAX_RUNNING_REQUESTS="$SGLANG_MAX_RUNNING_REQUESTS" \
   --env SGLANG_MODEL="$SGLANG_MODEL" \
   --env WORKER_URLS="$WORKER_URLS_CSV" \
+  --env OPENALEX_MAILTO="fredrik.carlsson@gu.se" \
   "$SIF_API" \
   >"$LOG_DIR/api.log" 2>&1 &
 API_PID=$!
