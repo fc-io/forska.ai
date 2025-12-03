@@ -1,6 +1,7 @@
-# Copy Local Databse To Remote
+# How to Transfer local Database Backup to Alvis
 
-Manual restore alternative (this is what I used last)
+Manual restore alternative
+
 ``` bash
 # start the local database to copy from
 docker compose up db
@@ -44,12 +45,8 @@ apptainer exec --cleanenv --writable-tmpfs \
   --bind ${STACK_ROOT:-.}/backups:/backups:ro \
   ${STACK_ROOT}/postgres_18.sif \
   pg_restore -h localhost -p ${POSTGRES_PORT:-5433} -U postgres -d postgres \
-  --clean --if-exists --no-owner --no-privileges --single-transaction /backups/dump_local_postgres_20251114_155937.dump
+  --clean --if-exists --no-owner --no-privileges --single-transaction /backups/dump_local_postgres_20251203_095526.dump
 ```
-
-### Why this works
-- Postgres 18 expects a major-version layout under `/var/lib/postgresql`; a fresh, empty `${STACK_ROOT}/pgdata` avoids the legacy `/data` structure that triggers the safety check.
-- `db:r:p` verifies the local dump and remote upload path; the `--restore` run completes the cycle by loading into the fresh cluster.
 
 ## Common problems
 
