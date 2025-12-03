@@ -1,4 +1,4 @@
-import {eq, gte, lte, sql} from 'drizzle-orm'
+import {and, eq, gte, lte, sql} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../db/schema.ts'
