@@ -6,7 +6,53 @@ import {createSignal, For, Show, Suspense} from 'solid-js'
 import {apiClient} from '../../../../services/apiClient.ts'
 import {fetchSession} from '../../../../services/fetchSession.ts'
 
-const fetchDuplicates = async () => {
+type PromptUsage = {projects: number; judgments: number; humanJudgments: number}
+type PromptSummary = {
+  id: string
+  promptHeading: string | null
+  originalText: string | null
+  type: string | null
+  createdAt: string | Date
+  usage: PromptUsage
+}
+
+type DuplicateGroup = PromptSummary[]
+type OrphansResponse = {noProjects: PromptSummary[]; noJudgments: PromptSummary[]}
+
+const readUsage = (value: unknown): PromptUsage => {
+  if (!value || typeof value !== 'object') return {projects: 0, judgments: 0, humanJudgments: 0}
+  const obj = value as Record<string, unknown>
+  const readCount = (n: unknown) => {
+    return typeof n === 'number' ? n : 0
+  }
+  return {
+    projects: readCount(obj.projects),
+    judgments: readCount(obj.judgments),
+    humanJudgments: readCount(obj.humanJudgments),
+  }
+}
+
+const toPromptSummary = (value: unknown): PromptSummary | null => {
+  if (!value || typeof value !== 'object') return null
+  const obj = value as Record<string, unknown>
+  const id = typeof obj.id === 'string' ? obj.id : ''
+  if (!id) return null
+  const createdAt = obj.createdAt instanceof Date || typeof obj.createdAt === 'string' ? obj.createdAt : ''
+  return {
+    id,
+    promptHeading: typeof obj.promptHeading === 'string' ? obj.promptHeading : null,
+    originalText: typeof obj.originalText === 'string' ? obj.originalText : null,
+    type: typeof obj.type === 'string' ? obj.type : null,
+    createdAt,
+    usage: readUsage(obj.usage),
+  }
+}
+
+const isPromptSummary = (value: PromptSummary | null): value is PromptSummary => {
+  return Boolean(value)
+}
+
+const fetchDuplicates = async (): Promise<DuplicateGroup[]> => {
   const response = await apiClient.api.prompts.duplicates.get()
 
   if (response.error) {
@@ -14,10 +60,19 @@ const fetchDuplicates = async () => {
     throw new Error('Failed to fetch duplicates')
   }
 
-  return response.data?.data ?? []
+  const data = response.data?.data
+  if (!Array.isArray(data)) return []
+  return data
+    .map((group) => {
+      if (!Array.isArray(group)) return []
+      return group.map(toPromptSummary).filter(isPromptSummary)
+    })
+    .filter((group) => {
+      return group.length > 0
+    })
 }
 
-const fetchOrphans = async () => {
+const fetchOrphans = async (): Promise<OrphansResponse> => {
   const response = await apiClient.api.prompts.orphans.get()
 
   if (response.error) {
@@ -25,7 +80,14 @@ const fetchOrphans = async () => {
     throw new Error('Failed to fetch orphans')
   }
 
-  return response.data?.data ?? {noProjects: [], noJudgments: []}
+  const data = response.data?.data
+  if (!data || typeof data !== 'object') return {noProjects: [], noJudgments: []}
+  const obj = data as Record<string, unknown>
+  const readList = (value: unknown): PromptSummary[] => {
+    if (!Array.isArray(value)) return []
+    return value.map(toPromptSummary).filter(isPromptSummary)
+  }
+  return {noProjects: readList(obj.noProjects), noJudgments: readList(obj.noJudgments)}
 }
 
 const DeduplicatePrompts = () => {
@@ -65,7 +127,7 @@ const DeduplicatePrompts = () => {
     })
   }
 
-  const handleMerge = async (groupIndex: number, prompts: any[]) => {
+  const handleMerge = async (groupIndex: number, prompts: PromptSummary[]) => {
     const keepId = selectedKeepIds()[groupIndex]
     if (!keepId) {
       alert('Please select a prompt to keep.')
@@ -307,13 +369,13 @@ const DeduplicatePrompts = () => {
                                     {formatDate(new Date(prompt.createdAt), 'yyyy-MM-dd HH:mm')}
                                   </td>
                                   <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                    {prompt.usage?.projects ?? 0}
+                                    {prompt.usage.projects}
                                   </td>
                                   <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                    {prompt.usage?.judgments ?? 0}
+                                    {prompt.usage.judgments}
                                   </td>
                                   <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                    {prompt.usage?.humanJudgments ?? 0}
+                                    {prompt.usage.humanJudgments}
                                   </td>
                                 </tr>
                               )

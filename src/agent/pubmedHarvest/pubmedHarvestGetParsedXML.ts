@@ -175,6 +175,19 @@ const readArticlesArray = (maybeArray: unknown): unknown[] => {
   return maybeArray ? [maybeArray] : []
 }
 
+const toRecord = (value: unknown): Record<string, unknown> | undefined => {
+  return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : undefined
+}
+
+const readDatePart = (value: unknown): string | number | undefined => {
+  return typeof value === 'string' || typeof value === 'number' ? value : undefined
+}
+
+const parseXml = (input: unknown): unknown => {
+  const xml = typeof input === 'string' ? input : String(input ?? '')
+  return parser.parse(xml) as unknown
+}
+
 const extractTitle = (value: unknown): string => {
   if (!value) return ''
   if (typeof value === 'string') return value
@@ -199,19 +212,26 @@ const extractTitle = (value: unknown): string => {
   return ''
 }
 
-const buildPayload = (it: any, importRoute: string): ArticlesUpsertPayload | undefined => {
-  const pmidRaw = it?.MedlineCitation?.PMID
+const buildPayload = (it: unknown, importRoute: string): ArticlesUpsertPayload | undefined => {
+  const medline = toRecord(toRecord(it)?.MedlineCitation)
+  if (!medline) return undefined
+
+  const pmidRaw = medline.PMID
   const pmid = typeof pmidRaw === 'number' ? String(pmidRaw) : typeof pmidRaw === 'string' ? pmidRaw : ''
   if (!pmid) return undefined
 
-  const article = it?.MedlineCitation?.Article ?? {}
-  const title = article?.ArticleTitle ?? ''
-  const abstract = extractAbstract(article?.Abstract)
-  const authors = extractAuthors(article?.AuthorList)
-  const dr = it?.MedlineCitation?.DateRevised
-  const ad = article?.ArticleDate
-  const createdAt = ad ? toIsoDate(ad.Year, ad.Month, ad.Day) : toIsoDate(dr?.Year, dr?.Month, dr?.Day)
-  const updatedAt = dr ? toIsoDate(dr.Year, dr.Month, dr.Day) : createdAt
+  const article = toRecord(medline.Article) ?? {}
+  const title = article.ArticleTitle ?? ''
+  const abstract = extractAbstract(article.Abstract)
+  const authors = extractAuthors(article.AuthorList)
+  const dr = toRecord(medline.DateRevised)
+  const ad = toRecord(article.ArticleDate)
+  const createdAt = ad
+    ? toIsoDate(readDatePart(ad.Year), readDatePart(ad.Month), readDatePart(ad.Day))
+    : toIsoDate(readDatePart(dr?.Year), readDatePart(dr?.Month), readDatePart(dr?.Day))
+  const updatedAt = dr
+    ? toIsoDate(readDatePart(dr.Year), readDatePart(dr.Month), readDatePart(dr.Day))
+    : createdAt
 
   return {
     article_id: `pmid:${pmid}`,
@@ -230,8 +250,7 @@ const pubmedHarvestGetParsedXML = async (
   responseData: unknown,
   importRoute: string,
 ): Promise<ArticlesUpsertPayload[]> => {
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-  const root = parser.parse(responseData as string)
+  const root = parseXml(responseData)
   const doc = PubmedDocument(root)
   const results: ArticlesUpsertPayload[] = []
 
@@ -248,8 +267,8 @@ const pubmedHarvestGetParsedXML = async (
     return payloads
   }
 
-  const set = (root && root.PubmedArticleSet && root.PubmedArticleSet.PubmedArticle) || []
-  const arts = readArticlesArray(set)
+  const set = toRecord(root)?.PubmedArticleSet
+  const arts = readArticlesArray(toRecord(set)?.PubmedArticle)
   for (const it of arts) {
     const payload = buildPayload(it, importRoute)
     if (payload) results.push(payload)

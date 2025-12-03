@@ -1,6 +1,6 @@
 import {useQuery} from '@tanstack/solid-query'
 import {format} from 'date-fns'
-import {For, type JSX, Show, Suspense} from 'solid-js'
+import {For, type JSX, Suspense} from 'solid-js'
 
 import {apiClient} from '../../services/apiClient.ts'
 // import {fetchLatestArticles} from '../../services/articlesService.ts'

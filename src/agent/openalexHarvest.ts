@@ -94,7 +94,7 @@ const mapWorkToEntry = (work: unknown, importRoute: string) => {
   const obj = typeof work === 'object' && work ? (work as Record<string, unknown>) : {}
   const shortId = getShortId(obj.id)
   const articleId = `openalex:${shortId}`
-  const title = toStringOr(obj.title, toStringOr((obj as any).display_name, ''))
+  const title = toStringOr(obj.title, toStringOr(obj.display_name, ''))
   const abstract = reconstructAbstract(obj.abstract_inverted_index)
   const authorships = Array.isArray(obj.authorships) ? (obj.authorships as unknown[]) : []
   const authors = authorships
@@ -107,10 +107,9 @@ const mapWorkToEntry = (work: unknown, importRoute: string) => {
     .filter((s) => {
       return s.length > 0
     })
-  const created = toIsoDate(obj.publication_date, (obj as any)?.publication_year)
-  const updated = toStringOr((obj as any)?.updated_date, '')
-    ? `${toStringOr((obj as any)?.updated_date)}T00:00:00.000Z`
-    : created
+  const created = toIsoDate(obj.publication_date, obj.publication_year)
+  const updatedDate = toStringOr(obj.updated_date, '')
+  const updated = updatedDate ? `${updatedDate}T00:00:00.000Z` : created
   const doi = normalizeDoi(obj.doi)
   const language = toStringOr(obj.language, '')
   const venue = pickVenue(obj)

@@ -53,14 +53,6 @@ const safetyTriggered = (waiting: number, running: number): boolean => {
   return waiting > 4 * thr
 }
 
-const toJSON = (data: unknown): string => {
-  try {
-    return JSON.stringify(data)
-  } catch (_e) {
-    return ''
-  }
-}
-
 const normalizeWorkerUrls = (urls: string[] | null | undefined): string[] => {
   return Array.from(
     new Set(

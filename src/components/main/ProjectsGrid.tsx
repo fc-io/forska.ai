@@ -1,9 +1,7 @@
-import {useQuery} from '@tanstack/solid-query'
 import {Link} from '@tanstack/solid-router'
 import {format} from 'date-fns'
 import {createSignal, For} from 'solid-js'
 
-import {fetchSession} from '../../services/fetchSession'
 import {createJudgmentsJob} from '../../services/judgmentsJobsService'
 import {Button} from '../ui/button'
 
@@ -20,19 +18,6 @@ interface IndexProjectsGridProps {
 
 export const ProjectsGrid = (props: IndexProjectsGridProps) => {
   const [creatingJobs, setCreatingJobs] = createSignal<Set<string>>(new Set())
-  const sessionQuery = useQuery(() => {
-    return {
-      queryKey: ['session'],
-      queryFn: fetchSession,
-      staleTime: 1000 * 60 * 1, // Consider data fresh for 5 minutes
-      // refetchInterval: 1000 * 60 * 5, // Refetch every 5 minutes
-      // refetchIntervalInBackground: true,
-      // refetchOnWindowFocus: true,
-    }
-  })
-  // const t = () => {
-  //   return console.log('sessionQuery.data', sessionQuery.data.session.id)
-  // }
   const handleCreateJudgmentsJob = async (projectId: string) => {
     setCreatingJobs((prev) => {
       return new Set([...prev, projectId])

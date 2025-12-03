@@ -41,8 +41,13 @@ const app = new Elysia()
   .get('*', () => {
     return file(path.join(distDir, 'index.html'))
   })
-  .listen(port)
 
-console.log(`🦊 App static server running at ${app.server?.hostname}:${app.server?.port}`)
+const listener = app.listen(port)
+
+if (listener instanceof Error) {
+  console.error('🦊 App static server failed to start', listener.message)
+} else {
+  console.log(`🦊 App static server running at ${listener.server?.hostname}:${listener.server?.port}`)
+}
 
 export type App = typeof app

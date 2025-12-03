@@ -2,8 +2,8 @@ import {and, eq} from 'drizzle-orm'
 import {Elysia} from 'elysia'
 
 import {models} from '../../db/schema.ts'
-import {env} from '../utils/env.ts'
 import {requireAdminAuth} from '../utils/authGuard.ts'
+import {env} from '../utils/env.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 
 type ModelRow = typeof models.$inferSelect

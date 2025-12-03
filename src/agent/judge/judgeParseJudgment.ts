@@ -2,8 +2,16 @@ import {type as arktype} from 'arktype'
 
 import {getBaseHeading, type PromptForJudging} from './judgeGetPrompt.ts'
 
+type JudgmentFlag = 'yes' | 'no' | 'unsure' | 'undecided' | string
+export type JudgmentResultType = {
+  article_judged_as_ai?: JudgmentFlag
+  article_judged_as_ai_agent?: JudgmentFlag
+  article_judged_as_healthcare?: JudgmentFlag
+  [key: string]: unknown
+}
+
 // Helper that parses and validates the model response against the JudgmentResult schema
-export const parseJudgment = (response: string, prompts: PromptForJudging): Record<string, unknown> => {
+export const parseJudgment = (response: string, prompts: PromptForJudging): JudgmentResultType => {
   const parsed: unknown = JSON.parse(response)
   const typeDefs = prompts.reduce((acc, prompt) => {
     const baseHeading = getBaseHeading(prompt)

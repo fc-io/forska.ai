@@ -1,8 +1,8 @@
 import {type as arktype} from 'arktype'
-import {and, eq, inArray, sql} from 'drizzle-orm'
+import {and, eq, inArray} from 'drizzle-orm'
 
 import {auth} from '../../../auth.ts'
-import {judgments, judgmentsHuman, projectPrompts, prompts} from '../../../db/schema.ts'
+import {judgmentsHuman, projectPrompts, prompts} from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
 export const humanAssessmentRoutesPostSubmit = async ({

@@ -11,33 +11,33 @@ export const llmStatusRoutes = new Elysia()
   .use(withErrorHandler())
   .use(requireAdminAuth())
   .get('/api/llmstatus', async ({request, set}) => {
-  const session = await auth.api.getSession({headers: request.headers})
-  const role = session?.user?.role ?? null
-  if (role !== 'admin') {
-    set.status = 403
-    return {data: null, error: 'Administrator access required'}
-  }
+    const session = await auth.api.getSession({headers: request.headers})
+    const role = session?.user?.role ?? null
+    if (role !== 'admin') {
+      set.status = 403
+      return {data: null, error: 'Administrator access required'}
+    }
 
-  const db = getDatabase()
-  const data = await db
-    .select({
-      ts: llmStatus.ts,
-      instanceId: llmStatus.instanceId,
-      modelName: llmStatus.modelName,
-      engineVersion: llmStatus.engineVersion,
-      prefillTps: llmStatus.prefillTps,
-      genTps: llmStatus.genTps,
-      rps: llmStatus.rps,
-      numQueueReqs: llmStatus.numQueueReqs,
-      numRunningReqs: llmStatus.numRunningReqs,
-      cacheHitRate: llmStatus.cacheHitRate,
-      inFlight: llmStatus.inFlight,
-      maxInFlight: llmStatus.maxInFlight,
-    })
-    .from(llmStatus)
-    .where(eq(llmStatus.engine, 'sglang'))
-    .orderBy(desc(llmStatus.ts))
-    .limit(30)
+    const db = getDatabase()
+    const data = await db
+      .select({
+        ts: llmStatus.ts,
+        instanceId: llmStatus.instanceId,
+        modelName: llmStatus.modelName,
+        engineVersion: llmStatus.engineVersion,
+        prefillTps: llmStatus.prefillTps,
+        genTps: llmStatus.genTps,
+        rps: llmStatus.rps,
+        numQueueReqs: llmStatus.numQueueReqs,
+        numRunningReqs: llmStatus.numRunningReqs,
+        cacheHitRate: llmStatus.cacheHitRate,
+        inFlight: llmStatus.inFlight,
+        maxInFlight: llmStatus.maxInFlight,
+      })
+      .from(llmStatus)
+      .where(eq(llmStatus.engine, 'sglang'))
+      .orderBy(desc(llmStatus.ts))
+      .limit(30)
 
-  return {data}
-})
+    return {data}
+  })

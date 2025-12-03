@@ -2,7 +2,6 @@ import {useQuery} from '@tanstack/solid-query'
 import type {Accessor, Setter} from 'solid-js'
 import {createEffect, createSignal, Show, Suspense} from 'solid-js'
 
-import {apiClient} from '../../../../services/apiClient.ts'
 import {createArticlesReviewsQueryOptions} from '../../projects/projectsArticlesReviewsQuery.ts'
 import {ReviewsPaginationControls} from '../reviewsPaginationControls.tsx'
 import {ReviewsArticlesTable} from './reviewsArticlesTable.tsx'

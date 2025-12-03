@@ -13,8 +13,8 @@ import {
   projects,
   prompts,
 } from '../../db/schema.ts'
-import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
 import {requireAdminAuth, requireUserAuth} from '../utils/authGuard.ts'
+import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {projectsRoutesGetArticlesReviews} from './projectsRoutes/projectsRoutesGetArticlesReviews.ts'

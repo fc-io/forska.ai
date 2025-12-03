@@ -107,7 +107,7 @@ export const judgeStoreJudgment = async (
         .limit(1)
 
       if (existing.length > 0) {
-        const existingId = existing[0]!.id
+        const existingId = existing[0].id
         const [updated] = await db
           .update(judgments)
           .set({

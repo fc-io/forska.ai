@@ -290,15 +290,7 @@ export const judge = async ({
 
       while (attempts <= MAX_RETRIES) {
         attempts += 1
-        const result = await attemptJudgment({
-          prompt,
-          baseURL,
-          modelName,
-          article,
-          prompts,
-          modelId,
-          projectId,
-        })
+        const result = await attemptJudgment({prompt, baseURL, modelName, article, prompts, modelId, projectId})
 
         if (result.success) {
           // console.log('judgment success')

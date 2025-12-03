@@ -1,4 +1,4 @@
-import {Elysia, type Context} from 'elysia'
+import {type Context, Elysia} from 'elysia'
 
 import {auth} from '../../auth.ts'
 
@@ -12,7 +12,12 @@ const forbidden = (set: Context['set']) => {
   return {data: null, error: 'Administrator access required'}
 }
 
-const guardResponse = (sessionUserId: string | null, role: string | null, requireAdmin: boolean, set: Context['set']) => {
+const guardResponse = (
+  sessionUserId: string | null,
+  role: string | null,
+  requireAdmin: boolean,
+  set: Context['set'],
+) => {
   return !sessionUserId ? unauthorized(set) : requireAdmin && role !== 'admin' ? forbidden(set) : null
 }
 

@@ -1,7 +1,7 @@
 import {Elysia, t} from 'elysia'
 
-import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 import {requireAdminAuth, requireUserAuth} from '../utils/authGuard.ts'
+import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 import {humanAssessmentRoutesGetOverview} from './HumanAssessmentRoutes/humanAssessmentRoutesGetOverview.ts'
 import {humanAssessmentRoutesGetOverviewBothProjects} from './HumanAssessmentRoutes/humanAssessmentRoutesGetOverviewBothProjects.ts'
 import {humanAssessmentRoutesGetOverviewBothUsers} from './HumanAssessmentRoutes/humanAssessmentRoutesGetOverviewBothUsers.ts'
