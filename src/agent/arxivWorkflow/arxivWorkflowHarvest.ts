@@ -206,7 +206,7 @@ const extractCategories = (categories: unknown): string | string[] => {
 }
 
 const fetchRecords = async (arxivQueryUrl: string): Promise<typeof arxivFeedSchema.infer> => {
-  console.log('Fetching ArXiv URL:', arxivQueryUrl)
+  console.log('Fetching ArXiv URL:', decodeURIComponent(arxivQueryUrl))
   const response = await fetch(arxivQueryUrl)
   console.log('ArXiv response:', response.status, response.statusText)
   const xml = await response.text()
