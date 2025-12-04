@@ -336,7 +336,7 @@ export const judge = async ({
             prompt = buildRetryPrompt(basePrompt, lastError, lastResponse)
           } else {
             abortCount += 1
-            // console.error(`${article.id} | Aborting: ${lastError}`)
+            console.error(`${article.id} | Aborting: ${lastError}`)
           }
         }
       }

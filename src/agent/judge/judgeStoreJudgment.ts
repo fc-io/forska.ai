@@ -91,11 +91,11 @@ export const judgeStoreJudgment = async (
       const answeredOriginal = findAnswer<string>(answers, '---question')
       const answeredExplanation = findAnswer<string>(answers, '---explanation')
       const answeredQuotes = findAnswer<string[]>(answers, '---quotes')
-      console.log('answeredOriginal', typeof answeredOriginal)
-      console.log(answeredOriginal)
+      // console.log('answeredOriginal', typeof answeredOriginal)
+      // console.log(answeredOriginal)
       const answeredOriginalAsArray = judgeStoreJudgmentGetStringAsArrayOfStrings(answeredOriginal)
-      console.log('answeredOriginalAsArray', typeof answeredOriginalAsArray)
-      console.log(answeredOriginalAsArray)
+      // console.log('answeredOriginalAsArray', typeof answeredOriginalAsArray)
+      // console.log(answeredOriginalAsArray)
       // ('test^^^a7aa21e8-d4e6-4e60-b39e-732085c56b00---explanation')
       // "test^^^a7aa21e8-d4e6-4e60-b39e-732085c56b00---quotes"
       const existing = await db
