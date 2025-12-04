@@ -5,6 +5,7 @@ import type {InputData} from './arxivWorkflow/arxivWorkflowHarvest.ts'
 import {medrxivWorkflowStoreEntries} from './medrxivWorkflowStoreEntries.ts'
 
 const MedrxivResponse = type({'collection?': 'unknown[]', 'messages?': 'unknown'})
+type HarvestOptions = {cursor?: string | null; onCursorUpdate?: (cursor: string | null) => Promise<void>}
 const medrxivTimeoutMs = 20_000
 const medrxivRetryDelays = [
   10_000, // 10 seconds
@@ -149,9 +150,19 @@ const fetchMedrxivPage = async (
   return collection.slice(0, medrxivMaxPerPage)
 }
 
-const harvestPage = async (input: InputData, cursor: number, shouldThrottle: boolean): Promise<void> => {
+const harvestPage = async (
+  input: InputData & HarvestOptions,
+  cursor: number,
+  shouldThrottle: boolean,
+): Promise<void> => {
+  const saveCursor = async (value: number) => {
+    const cursorString = String(value)
+    await input.onCursorUpdate?.(cursorString)
+  }
+
   const records = await fetchMedrxivPage(input.fromDate, input.toDate, cursor, shouldThrottle)
   const nextCursor = records.length ? cursor + records.length : cursor
+  await saveCursor(nextCursor)
   if (!records.length) {
     return
   }
@@ -173,8 +184,14 @@ const harvestPage = async (input: InputData, cursor: number, shouldThrottle: boo
   await harvestPage(input, nextCursor, true)
 }
 
-export const medrxivHarvest = async (input: InputData): Promise<void> => {
+const getStartCursor = (cursor?: string | null) => {
+  const parsed = Number.parseInt(cursor ?? '', 10)
+  return Number.isNaN(parsed) ? 0 : parsed
+}
+
+export const medrxivHarvest = async (input: InputData & HarvestOptions): Promise<void> => {
   console.log('medRxiv harvest start', input)
-  await harvestPage(input, 0, false)
+  const startCursor = getStartCursor(input.cursor)
+  await harvestPage(input, startCursor, false)
   console.log('medRxiv harvest complete')
 }

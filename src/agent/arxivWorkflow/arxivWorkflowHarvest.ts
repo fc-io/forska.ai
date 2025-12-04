@@ -7,6 +7,8 @@ import {arxivEntry} from './arxivWorkflowStoreEntires.ts'
 import {arxivWorkflowStoreEntires} from './arxivWorkflowStoreEntires.ts'
 
 export type InputData = {fromDate: string; toDate: string; importRoute: string}
+type HarvestOptions = {cursor?: string | null; onCursorUpdate?: (cursor: string | null) => Promise<void>}
+type HarvestInput = InputData & HarvestOptions
 
 const fxp = new XMLParser({
   ignoreAttributes: false,
@@ -227,10 +229,17 @@ const fetchRecords = async (arxivQueryUrl: string): Promise<typeof arxivFeedSche
   }
 }
 
-const arxivWorkflowHarvest = async (input: InputData, resumptionToken?: string): Promise<void> => {
-  const arxivQueryUrl = arxivWorkflowGetQuery(input, resumptionToken)
+const getStartResumptionToken = (cursor?: string | null) => {
+  const trimmed = cursor?.trim() ?? ''
+  return trimmed || undefined
+}
+
+const arxivWorkflowHarvest = async (input: HarvestInput, resumptionToken?: string): Promise<void> => {
+  const token = resumptionToken ?? getStartResumptionToken(input.cursor)
+  const arxivQueryUrl = arxivWorkflowGetQuery(input, token)
   const result = await fetchRecords(arxivQueryUrl)
   await arxivWorkflowStoreEntires(result.records, input.importRoute)
+  await input.onCursorUpdate?.(result.resumptionToken ?? null)
 
   if (result.resumptionToken) {
     await sleep(5000)

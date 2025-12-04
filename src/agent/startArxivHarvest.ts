@@ -1,6 +1,6 @@
-import {arxivWorkflowHarvest, type InputData} from './arxivWorkflow/arxivWorkflowHarvest.ts'
+import {arxivWorkflowHarvest} from './arxivWorkflow/arxivWorkflowHarvest.ts'
 
-export const startArxivHarvest = async (input: InputData) => {
+export const startArxivHarvest = async (input: Parameters<typeof arxivWorkflowHarvest>[0]) => {
   console.log('startArxivHarvest', input)
   await arxivWorkflowHarvest(input)
 }

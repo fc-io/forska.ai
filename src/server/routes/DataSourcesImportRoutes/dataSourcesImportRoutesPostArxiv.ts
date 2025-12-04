@@ -4,6 +4,7 @@ import {and, count, eq, gte, lte, sql} from 'drizzle-orm'
 import {startArxivHarvest} from '../../../agent/startArxivHarvest.ts'
 import {articleRouteLink, articles, dataSource, importRoute as importRouteTable} from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
+import {createCursorUpdater} from './dataSourcesImportCursor.ts'
 
 type Database = ReturnType<typeof getDatabase>
 type DataSourceRecord = typeof dataSource.$inferSelect
@@ -52,7 +53,7 @@ const updateDataSourceAfterImport = async (
   const updatedAt = new Date()
   const [updated] = await db
     .update(dataSource)
-    .set({lastImportAt: updatedAt, itemsAfterLastImport: importedCount})
+    .set({lastImportAt: updatedAt, itemsAfterLastImport: importedCount, cursor: null, updatedAt})
     .where(eq(dataSource.id, id))
     .returning()
 
@@ -77,7 +78,8 @@ export const dataSourcesImportRoutesPostArxiv = async (body: {id: string}) => {
   if (!record.dateTo) {
     console.warn('dataSourcesImportRoutesPostArxiv – To date is good to have')
   }
-  await startArxivHarvest({fromDate, toDate, importRoute})
+  const saveCursor = createCursorUpdater(db, record.id)
+  await startArxivHarvest({fromDate, toDate, importRoute, cursor: record.cursor ?? null, onCursorUpdate: saveCursor})
   console.log('`````start count')
   const importedCount = await countArticlesInRange(db, importRoute, record)
   console.log('`````after count', importedCount)

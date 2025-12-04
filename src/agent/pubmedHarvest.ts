@@ -46,6 +46,7 @@ const EuropePmcResponse = type({
   'nextPageUrl?': 'string',
   'request?': EuropePmcRequest,
 })
+type HarvestOptions = {cursor?: string | null; onCursorUpdate?: (cursor: string | null) => Promise<void>}
 
 const toIsoDate = (y?: number | string, m?: number | string, d?: number | string): string => {
   const toInt = (v: unknown): number | undefined => {
@@ -87,11 +88,11 @@ const readArray = <T>(x: T | T[] | undefined): T[] => {
 }
 
 const logMissingIds = (items: (typeof EuropePmcItem.infer)[], i = 0): void => {
-  const it = items[i]
-  if (it) {
-    const hasId = typeof it.id === 'string' || typeof it.id === 'number'
+  const current = items[i]
+  if (current) {
+    const hasId = typeof current.id === 'string' || typeof current.id === 'number'
     if (!hasId) {
-      console.log('Europe PMC item missing id. Full item:', it)
+      console.log('Europe PMC item missing id. Full item:', current)
     }
     logMissingIds(items, i + 1)
   }
@@ -255,12 +256,16 @@ const harvestPage = async (
   cursorMark?: string,
   importedCount = 0,
   fetchedCount = 0,
+  onCursorUpdate?: (cursor: string | null) => Promise<void>,
 ): Promise<number> => {
   const isInitialRun = cursorMark === '*'
   const baseImportedCount = isInitialRun ? 0 : importedCount
   const baseFetchedCount = isInitialRun ? 0 : fetchedCount
 
   const {items, nextCursor, hitCount} = await fetchEuropePmc(query, pageSize, cursorMark)
+  if (onCursorUpdate) {
+    await onCursorUpdate(nextCursor ?? null)
+  }
   const remaining = Math.max(0, maxResults - baseImportedCount)
   const slice = items.slice(0, remaining)
   const hasAnyId = (it: typeof EuropePmcItem.infer) => {
@@ -282,15 +287,39 @@ const harvestPage = async (
   return doneByLimit || noMoreByCursor || doneByExhaustion
     ? newFetchedCount
     : (await sleep(100),
-      harvestPage(query, importRoute, pageSize, maxResults, nextCursor, newImportedCount, newFetchedCount))
+      harvestPage(
+        query,
+        importRoute,
+        pageSize,
+        maxResults,
+        nextCursor,
+        newImportedCount,
+        newFetchedCount,
+        onCursorUpdate,
+      ))
 }
 
-const pubmedHarvest = async (input: InputData): Promise<void> => {
+const getStartCursor = (cursor?: string | null) => {
+  const normalized = cursor?.trim() ?? ''
+  return normalized ? normalized : '*'
+}
+
+const pubmedHarvest = async (input: InputData & HarvestOptions): Promise<void> => {
   const idParams = pubmedHarvestGetIdParams(input)
   const sp = idParams.searchParams
   const query = buildQuery(sp.mindate, sp.maxdate)
   const pageSize = 1000
-  const fetchedTotal = await harvestPage(query, input.importRoute, pageSize, Number.POSITIVE_INFINITY, '*')
+  const startCursor = getStartCursor(input.cursor)
+  const fetchedTotal = await harvestPage(
+    query,
+    input.importRoute,
+    pageSize,
+    Number.POSITIVE_INFINITY,
+    startCursor,
+    0,
+    0,
+    input.onCursorUpdate,
+  )
   console.log(`Europe PMC harvest complete. Fetched ${fetchedTotal} articles.`)
 }
 

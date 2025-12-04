@@ -4,6 +4,7 @@ import {and, count, eq, gte, lte, sql} from 'drizzle-orm'
 import {pubmedHarvest} from '../../../agent/pubmedHarvest.ts'
 import {articleRouteLink, articles, dataSource, importRoute as importRouteTable} from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
+import {createCursorUpdater} from './dataSourcesImportCursor.ts'
 
 type Database = ReturnType<typeof getDatabase>
 type DataSourceRecord = typeof dataSource.$inferSelect
@@ -52,7 +53,7 @@ const updateDataSourceAfterImport = async (
   const updatedAt = new Date()
   const [updated] = await db
     .update(dataSource)
-    .set({lastImportAt: updatedAt, itemsAfterLastImport: importedCount})
+    .set({lastImportAt: updatedAt, itemsAfterLastImport: importedCount, cursor: null, updatedAt})
     .where(eq(dataSource.id, id))
     .returning()
 
@@ -78,7 +79,8 @@ export const dataSourcesImportRoutesPostPubmed = async (body: {id: string}) => {
   if (!record.dateTo) {
     console.warn('dataSourcesImportRoutesPostPubmed – To date is good to have')
   }
-  await pubmedHarvest({fromDate, toDate, importRoute})
+  const saveCursor = createCursorUpdater(db, record.id)
+  await pubmedHarvest({fromDate, toDate, importRoute, cursor: record.cursor ?? null, onCursorUpdate: saveCursor})
   const importedCount = await countArticlesInRange(db, importRoute, record)
   const updatedDataSource = await updateDataSourceAfterImport(db, record.id, importedCount)
 

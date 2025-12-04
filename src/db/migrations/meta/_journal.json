@@ -246,6 +246,13 @@
       "when": 1764171292106,
       "tag": "0034_bitter_may_parker",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1764852057470,
+      "tag": "0035_wealthy_iron_patriot",
+      "breakpoints": true
     }
   ]
 }
