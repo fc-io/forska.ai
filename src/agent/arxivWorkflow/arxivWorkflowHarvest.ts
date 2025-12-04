@@ -206,8 +206,9 @@ const extractCategories = (categories: unknown): string | string[] => {
 }
 
 const fetchRecords = async (arxivQueryUrl: string): Promise<typeof arxivFeedSchema.infer> => {
-  console.log('fetching', arxivQueryUrl)
+  console.log('Fetching ArXiv URL:', arxivQueryUrl)
   const response = await fetch(arxivQueryUrl)
+  console.log('ArXiv response:', response.status, response.statusText)
   const xml = await response.text()
   const raw: unknown = fxp.parse(xml)
 
@@ -235,6 +236,7 @@ const getStartResumptionToken = (cursor?: string | null) => {
 }
 
 const arxivWorkflowHarvest = async (input: HarvestInput, resumptionToken?: string): Promise<void> => {
+  console.log('Arxiv harvest start', input)
   const token = resumptionToken ?? getStartResumptionToken(input.cursor)
   const arxivQueryUrl = arxivWorkflowGetQuery(input, token)
   const result = await fetchRecords(arxivQueryUrl)

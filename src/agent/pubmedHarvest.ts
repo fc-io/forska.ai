@@ -157,11 +157,13 @@ const fetchWithTimeoutAndRetry = (url: URL, timeoutMs: number, retryDelays: numb
     const timer = setTimeout(() => {
       controller.abort()
     }, timeoutMs)
+    console.log(`Fetching Europe PMC URL: ${url.toString()}`)
     const p = fetch(url, {signal: controller.signal}).finally(() => {
       clearTimeout(timer)
     })
     return p.then(
       (res) => {
+        console.log(`Europe PMC response: ${res.status} ${res.statusText}`)
         if (res.ok) return res
 
         const delay = retryDelays[i]
@@ -305,6 +307,7 @@ const getStartCursor = (cursor?: string | null) => {
 }
 
 const pubmedHarvest = async (input: InputData & HarvestOptions): Promise<void> => {
+  console.log('Europe PMC harvest start', input)
   const idParams = pubmedHarvestGetIdParams(input)
   const sp = idParams.searchParams
   const query = buildQuery(sp.mindate, sp.maxdate)

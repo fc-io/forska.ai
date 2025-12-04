@@ -203,7 +203,7 @@ const arxivWorkflowStoreEntires = async (records: (typeof arxivEntry.infer)[], i
     // Batch records (max 500 at a time)
     const batches = batchEntries(transformedEntries, 500)
 
-    console.log(`Storing ${records.length} records in ${batches.length} batches`)
+    console.log(`Storing ${records.length} ArXiv records in ${batches.length} batches`)
 
     // Store each batch
     for (let i = 0; i < batches.length; i++) {
@@ -212,7 +212,7 @@ const arxivWorkflowStoreEntires = async (records: (typeof arxivEntry.infer)[], i
         continue
       }
 
-      console.log(`Storing batch ${i + 1}/${batches.length} (${batch.length} records)`)
+      console.log(`Storing ArXiv batch ${i + 1}/${batches.length} (${batch.length} records)`)
 
       await storeBatch(batch)
 
@@ -224,7 +224,7 @@ const arxivWorkflowStoreEntires = async (records: (typeof arxivEntry.infer)[], i
       }
     }
 
-    console.log(`Successfully stored ${records.length} records to server`)
+    console.log(`Successfully stored ${records.length} ArXiv records to server`)
   } catch (error) {
     console.error('Error storing records:', error)
     throw error
