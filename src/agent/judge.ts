@@ -6,7 +6,7 @@ import {judgeGetPrompt, type PromptForJudging} from './judge/judgeGetPrompt.ts'
 import {parseJudgment} from './judge/judgeParseJudgment.ts'
 import {AIResponseType} from './judge/judgeParseModelResponse.ts'
 import {judgeStoreJudgment} from './judge/judgeStoreJudgment.ts'
-import {judgeStoreTokenUse} from './judge/judgeStoreTokenUse.ts'
+import {judgeStoreTokenUse, type JudgeTokenUsageEntry} from './judge/judgeStoreTokenUse.ts'
 import {SYSTEM_PROMPT} from './judge/judgeSystemPrompt.ts'
 
 const openAIClients = new Map<string, OpenAI>()
@@ -196,6 +196,8 @@ type ArticlesType = (typeof schema.articles.$inferSelect)[]
 
 type PromptsType = PromptForJudging
 
+type AttemptUsage = {promptTokens: number; completionTokens: number; totalTokens: number}
+
 const attemptJudgment = async ({
   prompt,
   baseURL,
@@ -213,8 +215,8 @@ const attemptJudgment = async ({
   modelId: string
   projectId: string
 }): Promise<
-  | {success: true; judgment: unknown; usage: {promptTokens: number; completionTokens: number; totalTokens: number}}
-  | {success: false; error: string; lastResponse: string}
+  | {success: true; judgment: unknown; usage: AttemptUsage}
+  | {success: false; error: string; lastResponse: string; usage?: AttemptUsage}
 > => {
   const modelResponse = await generateModelResponse({prompt, baseURL, modelName}).catch((error) => {
     return {error: error instanceof Error ? error.message : 'Unknown error'}
@@ -233,7 +235,16 @@ const attemptJudgment = async ({
     })
 
   if (!parseResult.success) {
-    return {success: false, error: parseResult.error, lastResponse: modelResponse.text}
+    return {
+      success: false,
+      error: parseResult.error,
+      lastResponse: modelResponse.text,
+      usage: {
+        promptTokens: modelResponse.usage.promptTokens,
+        completionTokens: modelResponse.usage.completionTokens,
+        totalTokens: modelResponse.usage.totalTokens,
+      },
+    }
   }
 
   const judgment = parseResult.value
@@ -276,13 +287,16 @@ export const judge = async ({
   if (!baseURL) {
     console.log('missing baseURL', modelConfig, baseURL)
   }
-  const tokenUse: {promptTokens: number; completionTokens: number; totalTokens: number}[] = []
+  const tokenUse: JudgeTokenUsageEntry[] = []
   const startedAt = new Date().toISOString()
   const startDuration = performance.now()
 
   await Promise.allSettled(
     articles.map(async (article) => {
       const basePrompt = judgeGetPrompt(article, prompts)
+      const promptIds = prompts.map((prompt) => {
+        return prompt.id
+      })
       let prompt = basePrompt
       let attempts = 0
       let lastError: string | null = null
@@ -292,10 +306,24 @@ export const judge = async ({
         attempts += 1
         const result = await attemptJudgment({prompt, baseURL, modelName, article, prompts, modelId, projectId})
 
+        if ('usage' in result && result.usage) {
+          const outcome: JudgeTokenUsageEntry['outcome'] = result.success ? 'success' : 'failure'
+          tokenUse.push({
+            articleId: article.id,
+            promptIds,
+            modelId,
+            modelName,
+            baseURL,
+            promptTokens: result.usage.promptTokens,
+            completionTokens: result.usage.completionTokens,
+            totalTokens: result.usage.totalTokens,
+            outcome,
+          })
+        }
+
         if (result.success) {
           // console.log('judgment success')
           successCount += 1
-          tokenUse.push(result.usage)
           return result.judgment
         } else {
           // console.log('judgment error')
@@ -324,7 +352,9 @@ export const judge = async ({
   ) {
     console.log(`Total: ${errorCount} errorCount,${abortCount} aborts, ${successCount} successes`)
   }
-  await judgeStoreTokenUse(tokenUse, sessionId, {startedAt, finishedAt, duration}, judgmentsJobId).catch((error) => {
+  await judgeStoreTokenUse(tokenUse, sessionId, {startedAt, finishedAt, duration}, judgmentsJobId, {
+    totalRequests: articles.length,
+  }).catch((error) => {
     console.error('judgeStoreTokenUse failed; continuing', error instanceof Error ? error.message : error)
   })
 }

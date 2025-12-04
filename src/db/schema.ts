@@ -708,6 +708,16 @@ export const tokenUse = pgTable(
     gpuShape: text('gpu_shape'),
     sglangMaxRunningRequests: integer('sglang_max_running_requests'),
     sglangModel: text('sglang_model'),
+    successfulRequests: integer('successful_requests'),
+    failedRequests: integer('failed_requests'),
+    hasFailedRequests: boolean('has_failed_requests').default(false).notNull(),
+    failedRequestsDetails: jsonb('failed_requests_details'),
+    totalSuccessPromptTokens: integer('total_success_prompt_tokens'),
+    totalSuccessCompletionTokens: integer('total_success_completion_tokens'),
+    totalSuccessTokens: integer('total_success_tokens'),
+    totalFailedPromptTokens: integer('total_failed_prompt_tokens'),
+    totalFailedCompletionTokens: integer('total_failed_completion_tokens'),
+    totalFailedTokens: integer('total_failed_tokens'),
   },
   (table) => {
     return [

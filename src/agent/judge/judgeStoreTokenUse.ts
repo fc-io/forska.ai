@@ -5,13 +5,59 @@ import {tokenUse} from '../../db/schema.ts'
 import {env} from '../../server/utils/env.ts'
 import {apiClient} from '../../services/apiClient.ts'
 
+export type JudgeTokenUsageEntry = {
+  articleId: string
+  promptIds: string[]
+  modelId: string
+  modelName: string
+  baseURL: string
+  promptTokens: number
+  completionTokens: number
+  totalTokens: number
+  outcome: 'success' | 'failure'
+}
+
+type FailedRequestDetail = {
+  articleId: string
+  promptIds: string[]
+  modelId: string
+  modelName: string
+  baseURL: string
+  failureType: 'retry' | 'total_failure'
+  attempts: number
+  failedAttempts: number
+  failedPromptTokens: number
+  failedCompletionTokens: number
+  failedTotalTokens: number
+}
+
+type TokenUseTotals = {
+  totalPromptTokens: number
+  totalCompletionTokens: number
+  totalTokens: number
+  totalSuccessPromptTokens: number
+  totalSuccessCompletionTokens: number
+  totalSuccessTokens: number
+  totalFailedPromptTokens: number
+  totalFailedCompletionTokens: number
+  totalFailedTokens: number
+  successfulRequests: number
+  failedRequests: number
+  hasFailedRequests: boolean
+  failedRequestsDetails: FailedRequestDetail[]
+}
+
+type JudgeTokenUseContext = {
+  totalRequests: number
+}
+
 const isServerEnvironment = (): boolean => {
   return typeof window === 'undefined' || typeof Bun !== 'undefined'
 }
 
 const storeTokenUseDirectly = async (
-  totalArticles: number,
-  totalTokenUse: {totalPromptTokens: number; totalCompletionTokens: number; totalTokens: number},
+  totalRequests: number,
+  totalTokenUse: TokenUseTotals,
   sessionId: string | null,
   {startedAt, finishedAt, duration}: {startedAt: string; finishedAt: string; duration: number},
   judgmentsJobId?: string,
@@ -37,10 +83,21 @@ const storeTokenUseDirectly = async (
       gpuShape: env.GPU_SHAPE ?? null,
       sglangMaxRunningRequests: env.SGLANG_MAX_RUNNING_REQUESTS,
       sglangModel: env.SGLANG_MODEL ?? null,
-      requests: totalArticles,
+      requests: totalRequests,
       totalPromptTokens: totalTokenUse.totalPromptTokens,
       totalCompletionTokens: totalTokenUse.totalCompletionTokens,
       totalTokens: totalTokenUse.totalTokens,
+      successfulRequests: totalTokenUse.successfulRequests,
+      failedRequests: totalTokenUse.failedRequests,
+      hasFailedRequests: totalTokenUse.hasFailedRequests,
+      failedRequestsDetails:
+        totalTokenUse.failedRequestsDetails.length > 0 ? totalTokenUse.failedRequestsDetails : null,
+      totalSuccessPromptTokens: totalTokenUse.totalSuccessPromptTokens,
+      totalSuccessCompletionTokens: totalTokenUse.totalSuccessCompletionTokens,
+      totalSuccessTokens: totalTokenUse.totalSuccessTokens,
+      totalFailedPromptTokens: totalTokenUse.totalFailedPromptTokens,
+      totalFailedCompletionTokens: totalTokenUse.totalFailedCompletionTokens,
+      totalFailedTokens: totalTokenUse.totalFailedTokens,
       startedAt: new Date(startedAt),
       finishedAt: new Date(finishedAt),
       duration: Math.round(duration),
@@ -53,17 +110,27 @@ const storeTokenUseDirectly = async (
 }
 
 const storeTokenUseViaAPI = async (
-  totalArticles: number,
-  totalTokenUse: {totalPromptTokens: number; totalCompletionTokens: number; totalTokens: number},
+  totalRequests: number,
+  totalTokenUse: TokenUseTotals,
   sessionId: string,
   {startedAt, finishedAt, duration}: {startedAt: string; finishedAt: string; duration: number},
 ): Promise<void> => {
   const response = await apiClient.api.tokens.usage.post({
     sessionId,
-    requests: totalArticles,
+    requests: totalRequests,
     totalPromptTokens: totalTokenUse.totalPromptTokens,
     totalCompletionTokens: totalTokenUse.totalCompletionTokens,
     totalTokens: totalTokenUse.totalTokens,
+    successfulRequests: totalTokenUse.successfulRequests,
+    failedRequests: totalTokenUse.failedRequests,
+    hasFailedRequests: totalTokenUse.hasFailedRequests,
+    failedRequestsDetails: totalTokenUse.failedRequestsDetails,
+    totalSuccessPromptTokens: totalTokenUse.totalSuccessPromptTokens,
+    totalSuccessCompletionTokens: totalTokenUse.totalSuccessCompletionTokens,
+    totalSuccessTokens: totalTokenUse.totalSuccessTokens,
+    totalFailedPromptTokens: totalTokenUse.totalFailedPromptTokens,
+    totalFailedCompletionTokens: totalTokenUse.totalFailedCompletionTokens,
+    totalFailedTokens: totalTokenUse.totalFailedTokens,
     startedAt,
     finishedAt,
     duration: Math.round(duration),
@@ -84,30 +151,162 @@ const storeTokenUseViaAPI = async (
   }
 }
 
-export const judgeStoreTokenUse = async (
-  tokenUse: {promptTokens: number; completionTokens: number; totalTokens: number}[],
-  sessionId: string | null,
-  {startedAt, finishedAt, duration}: {startedAt: string; finishedAt: string; duration: number},
-  judgmentsJobId?: string,
-): Promise<void> => {
-  const totalArticles = tokenUse.length
-  const totalTokenUse = tokenUse.reduce(
-    (acc, {promptTokens, completionTokens, totalTokens}) => {
+const buildTokenUseTotals = (
+  tokenUseEntries: JudgeTokenUsageEntry[],
+  context: JudgeTokenUseContext,
+): TokenUseTotals => {
+  const totals = tokenUseEntries.reduce(
+    (acc, entry) => {
+      const totalPromptTokens = acc.totalPromptTokens + entry.promptTokens
+      const totalCompletionTokens = acc.totalCompletionTokens + entry.completionTokens
+      const totalTokens = acc.totalTokens + entry.totalTokens
+      const isFailure = entry.outcome === 'failure'
+      const totalSuccessPromptTokens = acc.totalSuccessPromptTokens + (isFailure ? 0 : entry.promptTokens)
+      const totalSuccessCompletionTokens =
+        acc.totalSuccessCompletionTokens + (isFailure ? 0 : entry.completionTokens)
+      const totalSuccessTokens = acc.totalSuccessTokens + (isFailure ? 0 : entry.totalTokens)
+      const totalFailedPromptTokens = acc.totalFailedPromptTokens + (isFailure ? entry.promptTokens : 0)
+      const totalFailedCompletionTokens =
+        acc.totalFailedCompletionTokens + (isFailure ? entry.completionTokens : 0)
+      const totalFailedTokens = acc.totalFailedTokens + (isFailure ? entry.totalTokens : 0)
+
       return {
-        totalPromptTokens: acc.totalPromptTokens + promptTokens,
-        totalCompletionTokens: acc.totalCompletionTokens + completionTokens,
-        totalTokens: acc.totalTokens + totalTokens,
+        totalPromptTokens,
+        totalCompletionTokens,
+        totalTokens,
+        totalSuccessPromptTokens,
+        totalSuccessCompletionTokens,
+        totalSuccessTokens,
+        totalFailedPromptTokens,
+        totalFailedCompletionTokens,
+        totalFailedTokens,
+        successfulRequests: acc.successfulRequests,
+        failedRequests: acc.failedRequests,
+        hasFailedRequests: acc.hasFailedRequests,
+        failedRequestsDetails: acc.failedRequestsDetails,
       }
     },
-    {totalPromptTokens: 0, totalCompletionTokens: 0, totalTokens: 0},
+    {
+      totalPromptTokens: 0,
+      totalCompletionTokens: 0,
+      totalTokens: 0,
+      totalSuccessPromptTokens: 0,
+      totalSuccessCompletionTokens: 0,
+      totalSuccessTokens: 0,
+      totalFailedPromptTokens: 0,
+      totalFailedCompletionTokens: 0,
+      totalFailedTokens: 0,
+      successfulRequests: 0,
+      failedRequests: 0,
+      hasFailedRequests: false,
+      failedRequestsDetails: [] as FailedRequestDetail[],
+    },
   )
 
+  const groupedByRequest = tokenUseEntries.reduce((map, entry) => {
+    const key = `${entry.articleId}|${entry.modelId}|${entry.baseURL}`
+    const existing = map.get(key) ?? {
+      articleId: entry.articleId,
+      promptIds: entry.promptIds,
+      modelId: entry.modelId,
+      modelName: entry.modelName,
+      baseURL: entry.baseURL,
+      attempts: 0,
+      failedAttempts: 0,
+      hasSuccess: false,
+      failedPromptTokens: 0,
+      failedCompletionTokens: 0,
+      failedTotalTokens: 0,
+    }
+
+    const attempts = existing.attempts + 1
+    const failedAttempts = existing.failedAttempts + (entry.outcome === 'failure' ? 1 : 0)
+    const hasSuccess = existing.hasSuccess || entry.outcome === 'success'
+    const failedPromptTokens =
+      existing.failedPromptTokens + (entry.outcome === 'failure' ? entry.promptTokens : 0)
+    const failedCompletionTokens =
+      existing.failedCompletionTokens + (entry.outcome === 'failure' ? entry.completionTokens : 0)
+    const failedTotalTokens =
+      existing.failedTotalTokens + (entry.outcome === 'failure' ? entry.totalTokens : 0)
+
+    map.set(key, {
+      articleId: existing.articleId,
+      promptIds: existing.promptIds,
+      modelId: existing.modelId,
+      modelName: existing.modelName,
+      baseURL: existing.baseURL,
+      attempts,
+      failedAttempts,
+      hasSuccess,
+      failedPromptTokens,
+      failedCompletionTokens,
+      failedTotalTokens,
+    })
+
+    return map
+  }, new Map<string, {articleId: string; promptIds: string[]; modelId: string; modelName: string; baseURL: string; attempts: number; failedAttempts: number; hasSuccess: boolean; failedPromptTokens: number; failedCompletionTokens: number; failedTotalTokens: number}>())
+
+  const failedRequestsDetails: FailedRequestDetail[] = Array.from(groupedByRequest.values())
+    .filter((request) => {
+      return request.failedAttempts > 0
+    })
+    .map((request) => {
+      const failureType: FailedRequestDetail['failureType'] = request.hasSuccess ? 'retry' : 'total_failure'
+
+      return {
+        articleId: request.articleId,
+        promptIds: request.promptIds,
+        modelId: request.modelId,
+        modelName: request.modelName,
+        baseURL: request.baseURL,
+        failureType,
+        attempts: request.attempts,
+        failedAttempts: request.failedAttempts,
+        failedPromptTokens: request.failedPromptTokens,
+        failedCompletionTokens: request.failedCompletionTokens,
+        failedTotalTokens: request.failedTotalTokens,
+      }
+    })
+
+  const failedRequests = failedRequestsDetails.filter((request) => {
+    return request.failureType === 'total_failure'
+  }).length
+
+  const successfulRequests = context.totalRequests - failedRequests
+  const hasFailedRequests = failedRequestsDetails.length > 0
+
+  return {
+    totalPromptTokens: totals.totalPromptTokens,
+    totalCompletionTokens: totals.totalCompletionTokens,
+    totalTokens: totals.totalTokens,
+    totalSuccessPromptTokens: totals.totalSuccessPromptTokens,
+    totalSuccessCompletionTokens: totals.totalSuccessCompletionTokens,
+    totalSuccessTokens: totals.totalSuccessTokens,
+    totalFailedPromptTokens: totals.totalFailedPromptTokens,
+    totalFailedCompletionTokens: totals.totalFailedCompletionTokens,
+    totalFailedTokens: totals.totalFailedTokens,
+    successfulRequests,
+    failedRequests,
+    hasFailedRequests,
+    failedRequestsDetails,
+  }
+}
+
+export const judgeStoreTokenUse = async (
+  tokenUseEntries: JudgeTokenUsageEntry[],
+  sessionId: string | null,
+  {startedAt, finishedAt, duration}: {startedAt: string; finishedAt: string; duration: number},
+  judgmentsJobId: string,
+  context: JudgeTokenUseContext,
+): Promise<void> => {
+  const totalTokenUse = buildTokenUseTotals(tokenUseEntries, context)
+
   if (isServerEnvironment()) {
-    await storeTokenUseDirectly(totalArticles, totalTokenUse, null, {startedAt, finishedAt, duration}, judgmentsJobId)
+    await storeTokenUseDirectly(context.totalRequests, totalTokenUse, null, {startedAt, finishedAt, duration}, judgmentsJobId)
   } else {
     if (!sessionId) {
       throw new Error('sessionId is required when running in client environment')
     }
-    await storeTokenUseViaAPI(totalArticles, totalTokenUse, sessionId, {startedAt, finishedAt, duration})
+    await storeTokenUseViaAPI(context.totalRequests, totalTokenUse, sessionId, {startedAt, finishedAt, duration})
   }
 }
