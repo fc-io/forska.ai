@@ -1,5 +1,5 @@
 {
-  "id": "2b27d1a6-cdfc-4656-805c-3c19a31043df",
+  "id": "6750d368-4958-448d-acde-860e6f4575ec",
   "prevId": "2a916bb3-d67a-4e95-9058-cf08209bde82",
   "version": "7",
   "dialect": "postgresql",
@@ -512,12 +512,6 @@
         },
         "import_route": {
           "name": "import_route",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "cursor": {
-          "name": "cursor",
           "type": "text",
           "primaryKey": false,
           "notNull": false
