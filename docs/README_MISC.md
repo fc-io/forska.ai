@@ -50,3 +50,9 @@ sacctmgr show association where user=fcarlsson account=ehpc-aif-2025pg01-233 for
 module load accountcheck
 accountcheck --all-accounts
 ```
+
+## check storage quota
+
+``` bash
+C3SE_quota
+```
