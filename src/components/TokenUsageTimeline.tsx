@@ -477,11 +477,14 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
             const endStr = format(range.end, 'MMM d HH:mm')
             return `${startStr} – ${endStr}`
           },
-          label: (context: {dataset: {label?: string}; parsed: {y: number}}) => {
-            const label = (context.dataset.label || '').replace(' Tokens', '')
-            const value = context.parsed.y.toLocaleString()
-
-            return `${label}: ${value}`
+          label: (context: {dataset: {label?: string}; parsed: {y: number}}): string | undefined => {
+            const rawLabel = context.dataset.label || ''
+            const value = context.parsed.y
+            if (rawLabel.startsWith('Failed') && value <= 0) {
+              return undefined
+            }
+            const label = rawLabel.replace(' Tokens', '')
+            return `${label}: ${value.toLocaleString()}`
           },
           footer: (tooltipItems: {dataIndex: number; parsed: {y: number}}[]) => {
             const idx = tooltipItems?.[0]?.dataIndex
