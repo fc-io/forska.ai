@@ -1,0 +1,1 @@
+ALTER TABLE "datasource" ADD COLUMN "cursor" text;

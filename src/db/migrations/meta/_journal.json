@@ -253,6 +253,13 @@
       "when": 1764851731038,
       "tag": "0035_modern_silvermane",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1764862545546,
+      "tag": "0036_workable_rhodey",
+      "breakpoints": true
     }
   ]
 }
