@@ -461,6 +461,13 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
         labels: {boxWidth: 12, padding: 10, font: {size: 11}},
       },
       tooltip: {
+        filter: (tooltipItem: {dataset: {label?: string}; parsed: {y: number}}) => {
+          const rawLabel = tooltipItem.dataset.label || ''
+          if (rawLabel.startsWith('Failed') && tooltipItem.parsed.y <= 0) {
+            return false
+          }
+          return true
+        },
         callbacks: {
           title: (tooltipItems: {dataIndex: number}[]) => {
             const idx = tooltipItems?.[0]?.dataIndex
@@ -477,14 +484,10 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
             const endStr = format(range.end, 'MMM d HH:mm')
             return `${startStr} – ${endStr}`
           },
-          label: (context: {dataset: {label?: string}; parsed: {y: number}}): string | undefined => {
-            const rawLabel = context.dataset.label || ''
-            const value = context.parsed.y
-            if (rawLabel.startsWith('Failed') && value <= 0) {
-              return undefined
-            }
-            const label = rawLabel.replace(' Tokens', '')
-            return `${label}: ${value.toLocaleString()}`
+          label: (context: {dataset: {label?: string}; parsed: {y: number}}): string => {
+            const label = (context.dataset.label || '').replace(' Tokens', '')
+            const value = context.parsed.y.toLocaleString()
+            return `${label}: ${value}`
           },
           footer: (tooltipItems: {dataIndex: number; parsed: {y: number}}[]) => {
             const idx = tooltipItems?.[0]?.dataIndex
