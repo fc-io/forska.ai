@@ -196,11 +196,36 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
                 <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   <For each={filters}>
                     {(promptFilter) => {
-                      const current = createMemo(() => {
+                      const currentValues = createMemo(() => {
                         return props.promptFilters()[promptFilter.promptId] ?? []
                       })
-                      const options = createMemo(() => {
+                      const optionValues = createMemo(() => {
                         return promptFilter.answeredOriginalValues
+                      })
+                      const optionObjects = createMemo(() => {
+                        return optionValues().map((value, index) => {
+                          return {key: String(index), value}
+                        })
+                      })
+                      const valueToKey = createMemo(() => {
+                        return optionObjects().reduce((acc, option) => {
+                          return {...acc, [option.value]: option.key}
+                        }, {} as Record<string, string>)
+                      })
+                      const keyToValue = createMemo(() => {
+                        return optionObjects().reduce((acc, option) => {
+                          return {...acc, [option.key]: option.value}
+                        }, {} as Record<string, string>)
+                      })
+                      const currentKeys = createMemo(() => {
+                        const mapping = valueToKey()
+                        return currentValues()
+                          .map((value) => {
+                            return mapping[value]
+                          })
+                          .filter((key) => {
+                            return Boolean(key)
+                          }) as string[]
                       })
                       return (
                         <div class="flex flex-col gap-2">
@@ -212,19 +237,30 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
                           </label>
                           <Select.Root
                             multiple
-                            value={current()}
-                            onChange={(vals) => {
-                              return setPromptMulti(promptFilter.promptId, vals.length ? vals : null)
+                            value={currentKeys()}
+                            onChange={(keys) => {
+                              const mapping = keyToValue()
+                              const values = keys
+                                .map((key) => {
+                                  return mapping[key]
+                                })
+                                .filter((value) => {
+                                  return Boolean(value)
+                                }) as string[]
+                              return setPromptMulti(
+                                promptFilter.promptId,
+                                values.length ? values : null,
+                              )
                             }}
-                            options={options()}
-                            optionValue={(v) => {
-                              return v
+                            options={optionObjects()}
+                            optionValue={(option) => {
+                              return option.key
                             }}
-                            optionLabel={(v) => {
-                              return v
+                            optionLabel={(option) => {
+                              return option.value
                             }}
-                            optionTextValue={(v) => {
-                              return v
+                            optionTextValue={(option) => {
+                              return option.value
                             }}
                             name={promptFilter.promptId}
                             itemComponent={(itemProps) => {
@@ -233,7 +269,9 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
                                   item={itemProps.item}
                                   class="relative flex select-none items-center justify-between gap-2 rounded-md px-2 py-1.5 text-sm outline-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[highlighted]:bg-blue-600 data-[highlighted]:text-white"
                                 >
-                                  <Select.ItemLabel class="truncate">{itemProps.item.rawValue}</Select.ItemLabel>
+                                  <Select.ItemLabel class="truncate">
+                                    {itemProps.item.rawValue.value}
+                                  </Select.ItemLabel>
                                   <Select.ItemIndicator class="ml-2 text-current">
                                     <svg
                                       xmlns="http://www.w3.org/2000/svg"
@@ -258,10 +296,10 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
                             >
                               <div class="flex flex-wrap gap-2 grow">
                                 <Show
-                                  when={current().length > 0}
+                                  when={currentValues().length > 0}
                                   fallback={<span class="text-muted-foreground">All</span>}
                                 >
-                                  <For each={current()}>
+                                  <For each={currentValues()}>
                                     {(val) => {
                                       return (
                                         <span class="inline-flex items-center gap-1 rounded-md border border-input bg-muted/70 px-2 py-1 text-sm text-foreground">
@@ -273,7 +311,7 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
                                             class="inline-flex size-4 items-center justify-center rounded hover:bg-muted-foreground/10"
                                             aria-label={`Remove ${val}`}
                                             onClick={() => {
-                                              const next = current().filter((v) => {
+                                              const next = currentValues().filter((v) => {
                                                 return v !== val
                                               })
                                               setPromptMulti(promptFilter.promptId, next.length ? next : null)
