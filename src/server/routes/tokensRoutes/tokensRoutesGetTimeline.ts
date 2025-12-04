@@ -80,6 +80,10 @@ export const tokensRoutesGetTimeline = async ({projectId, interval, startDate, e
       totalCompletionTokens: sum(tokenUse.totalCompletionTokens),
       totalTokens: sum(tokenUse.totalTokens),
       totalRequests: sum(tokenUse.requests),
+      totalSuccessPromptTokens: sum(tokenUse.totalSuccessPromptTokens),
+      totalSuccessCompletionTokens: sum(tokenUse.totalSuccessCompletionTokens),
+      totalSuccessTokens: sum(tokenUse.totalSuccessTokens),
+      totalFailedTokens: sum(tokenUse.totalFailedTokens),
       count: sql<number>`count(*)::int`,
     })
     .from(tokenUse)
@@ -135,6 +139,10 @@ export const tokensRoutesGetTimeline = async ({projectId, interval, startDate, e
       totalCompletionTokens: number
       totalTokens: number
       totalRequests: number
+      totalSuccessPromptTokens: number
+      totalSuccessCompletionTokens: number
+      totalSuccessTokens: number
+      totalFailedTokens: number
       count: number
     }
   >(
@@ -149,6 +157,10 @@ export const tokensRoutesGetTimeline = async ({projectId, interval, startDate, e
           totalCompletionTokens: Number(row.totalCompletionTokens || 0),
           totalTokens: Number(row.totalTokens || 0),
           totalRequests: Number(row.totalRequests || 0),
+          totalSuccessPromptTokens: Number(row.totalSuccessPromptTokens || 0),
+          totalSuccessCompletionTokens: Number(row.totalSuccessCompletionTokens || 0),
+          totalSuccessTokens: Number(row.totalSuccessTokens || 0),
+          totalFailedTokens: Number(row.totalFailedTokens || 0),
           count: row.count,
         },
       ]
@@ -166,6 +178,10 @@ export const tokensRoutesGetTimeline = async ({projectId, interval, startDate, e
         totalCompletionTokens: 0,
         totalTokens: 0,
         totalRequests: 0,
+        totalSuccessPromptTokens: 0,
+        totalSuccessCompletionTokens: 0,
+        totalSuccessTokens: 0,
+        totalFailedTokens: 0,
         count: 0,
       }
     )

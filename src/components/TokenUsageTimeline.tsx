@@ -30,6 +30,10 @@ type TokenTimelineData = {
   totalCompletionTokens: number
   totalTokens: number
   totalRequests: number
+  totalSuccessPromptTokens?: number
+  totalSuccessCompletionTokens?: number
+  totalSuccessTokens?: number
+  totalFailedTokens?: number
   count: number
 }
 
@@ -346,6 +350,37 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
       return null
     }
 
+    const barThickness =
+      selectedInterval() === '1min'
+        ? 3
+        : selectedInterval() === '5min'
+          ? 4
+          : selectedInterval() === '15min'
+            ? 6
+            : 8
+
+    const promptData: number[] = []
+    const completionData: number[] = []
+    const failedData: number[] = []
+
+    data.forEach((bucket) => {
+      const successPrompt = bucket.totalSuccessPromptTokens ?? 0
+      const successCompletion = bucket.totalSuccessCompletionTokens ?? 0
+      const failedTokens = bucket.totalFailedTokens ?? 0
+
+      const hasNewSplits = successPrompt + successCompletion + failedTokens > 0
+
+      if (hasNewSplits) {
+        promptData.push(successPrompt)
+        completionData.push(successCompletion)
+        failedData.push(failedTokens)
+      } else {
+        promptData.push(bucket.totalPromptTokens ?? 0)
+        completionData.push(bucket.totalCompletionTokens ?? 0)
+        failedData.push(0)
+      }
+    })
+
     return {
       labels: data.map((d) => {
         const date = new Date(d.timestamp)
@@ -360,37 +395,27 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
       datasets: [
         {
           label: 'Prompt Tokens',
-          data: data.map((d) => {
-            return d.totalPromptTokens
-          }),
+          data: promptData,
           backgroundColor: 'rgb(59, 130, 246)',
           borderColor: 'rgb(59, 130, 246)',
           borderWidth: 0,
-          barThickness:
-            selectedInterval() === '1min'
-              ? 3
-              : selectedInterval() === '5min'
-                ? 4
-                : selectedInterval() === '15min'
-                  ? 6
-                  : 8,
+          barThickness,
         },
         {
           label: 'Completion Tokens',
-          data: data.map((d) => {
-            return d.totalCompletionTokens
-          }),
+          data: completionData,
           backgroundColor: 'rgb(147, 197, 253)',
           borderColor: 'rgb(147, 197, 253)',
           borderWidth: 0,
-          barThickness:
-            selectedInterval() === '1min'
-              ? 3
-              : selectedInterval() === '5min'
-                ? 4
-                : selectedInterval() === '15min'
-                  ? 6
-                  : 8,
+          barThickness,
+        },
+        {
+          label: 'Failed Tokens',
+          data: failedData,
+          backgroundColor: 'rgb(239, 68, 68)',
+          borderColor: 'rgb(239, 68, 68)',
+          borderWidth: 0,
+          barThickness,
         },
       ],
     }
