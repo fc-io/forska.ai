@@ -56,14 +56,14 @@ const AdminJudgmentJobDetail = () => {
 
         return response
       },
-      refetchInterval: 1000 * 2, // Refresh every 30 seconds
+      refetchInterval: 1000 * 30, // Refresh every 30 seconds
     }
   })
   const unassessedCountQuery = useQuery(() => {
     return {
       queryKey: ['judgments-job-unassessed-count', id()],
       enabled: Boolean(id()),
-      refetchInterval: 1000 * 2,
+      refetchInterval: 1000 * 30,
       queryFn: async () => {
         const response = await apiClient.api['judgmentsjobs-unassessed-count'].get({query: {jobId: id()}})
         const data = handleApiResponse(response, 'Failed to fetch unassessed count') as {count?: number}
