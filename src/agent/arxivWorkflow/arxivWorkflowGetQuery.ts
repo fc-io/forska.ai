@@ -17,7 +17,7 @@ const getArxivIdsQueryUrl = (fromDate: Date, toDate: Date, resumptionToken?: str
   // }
 
   return resumptionToken
-    ? `${baseUrl}/oai?verb=ListRecords&resumptionToken=${resumptionToken}`
+    ? `${baseUrl}/oai?verb=ListRecords&resumptionToken=${encodeURIComponent(resumptionToken)}`
     : `${baseUrl}/oai?verb=ListRecords&metadataPrefix=arXiv&from=${from}&until=${to}`
 }
 
