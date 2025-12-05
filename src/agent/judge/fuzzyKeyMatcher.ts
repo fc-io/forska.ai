@@ -27,7 +27,8 @@ const levenshtein = (a: string, b: string): number => {
 }
 
 // Maximum allowed edit distance for fuzzy matching
-const MAX_EDIT_DISTANCE = 3
+// Set to 1 since we use short 4-char IDs - catches single typos without false matches
+const MAX_EDIT_DISTANCE = 1
 
 /**
  * Remaps keys in a parsed JSON object to their closest expected keys
