@@ -78,12 +78,6 @@ export const judgmentsJobsAddToQueue = async (
     }),
   )
 
-  const totalPrompts = newPromptsData.reduce((sum, data) => {
-    return sum + data.promptIds.length
-  }, 0)
-
-  if (totalPrompts === 0) return
-
   await Promise.all(
     newPromptsData.map(({job, promptIds}) => {
       return addPromptsToQueue(db, job.id, promptIds, serverJobId)

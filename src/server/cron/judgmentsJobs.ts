@@ -27,7 +27,7 @@ const runAddToQueue = async (): Promise<void> => {
   isAddingToQueue = false
 }
 
-const sendToLLMCron = async (): Promise<void> => {
+const sendToLLM = async (): Promise<void> => {
   if (!env.RUN_SERVER_JUDGING || env.GPU_TOTAL_GPUS === 0) return
 
   const db = getDatabase()
@@ -61,7 +61,7 @@ export const judgmentsJobsCron = new Elysia()
       name: 'judgments-jobs-send-to-llm',
       pattern: LLM_PROCESSING_INTERVAL,
       startAt: new Date(Date.now() + START_DELAY_MS),
-      run: sendToLLMCron,
+      run: sendToLLM,
     }),
   )
   .use(
