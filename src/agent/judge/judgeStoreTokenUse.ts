@@ -15,6 +15,8 @@ export type JudgeTokenUsageEntry = {
   completionTokens: number
   totalTokens: number
   outcome: 'success' | 'failure'
+  error: string | null
+  lastResponse: string | null
 }
 
 type FailedRequestDetail = {
@@ -29,6 +31,24 @@ type FailedRequestDetail = {
   failedPromptTokens: number
   failedCompletionTokens: number
   failedTotalTokens: number
+  error: string | null
+  lastResponse: string | null
+}
+
+type FailedRequestAggregation = {
+  articleId: string
+  promptIds: string[]
+  modelId: string
+  modelName: string
+  baseURL: string
+  attempts: number
+  failedAttempts: number
+  hasSuccess: boolean
+  failedPromptTokens: number
+  failedCompletionTokens: number
+  failedTotalTokens: number
+  lastError: string | null
+  lastResponse: string | null
 }
 
 type TokenUseTotals = {
@@ -205,19 +225,23 @@ const buildTokenUseTotals = (
 
   const groupedByRequest = tokenUseEntries.reduce((map, entry) => {
     const key = `${entry.articleId}|${entry.modelId}|${entry.baseURL}`
-    const existing = map.get(key) ?? {
-      articleId: entry.articleId,
-      promptIds: entry.promptIds,
-      modelId: entry.modelId,
-      modelName: entry.modelName,
-      baseURL: entry.baseURL,
-      attempts: 0,
-      failedAttempts: 0,
-      hasSuccess: false,
-      failedPromptTokens: 0,
-      failedCompletionTokens: 0,
-      failedTotalTokens: 0,
-    }
+    const existing =
+      map.get(key) ??
+      ({
+        articleId: entry.articleId,
+        promptIds: entry.promptIds,
+        modelId: entry.modelId,
+        modelName: entry.modelName,
+        baseURL: entry.baseURL,
+        attempts: 0,
+        failedAttempts: 0,
+        hasSuccess: false,
+        failedPromptTokens: 0,
+        failedCompletionTokens: 0,
+        failedTotalTokens: 0,
+        lastError: null,
+        lastResponse: null,
+      } satisfies FailedRequestAggregation)
 
     const attempts = existing.attempts + 1
     const failedAttempts = existing.failedAttempts + (entry.outcome === 'failure' ? 1 : 0)
@@ -228,6 +252,9 @@ const buildTokenUseTotals = (
       existing.failedCompletionTokens + (entry.outcome === 'failure' ? entry.completionTokens : 0)
     const failedTotalTokens =
       existing.failedTotalTokens + (entry.outcome === 'failure' ? entry.totalTokens : 0)
+    const lastError = entry.outcome === 'failure' ? entry.error ?? existing.lastError : existing.lastError
+    const lastResponse =
+      entry.outcome === 'failure' ? entry.lastResponse ?? existing.lastResponse : existing.lastResponse
 
     map.set(key, {
       articleId: existing.articleId,
@@ -241,10 +268,12 @@ const buildTokenUseTotals = (
       failedPromptTokens,
       failedCompletionTokens,
       failedTotalTokens,
+      lastError,
+      lastResponse,
     })
 
     return map
-  }, new Map<string, {articleId: string; promptIds: string[]; modelId: string; modelName: string; baseURL: string; attempts: number; failedAttempts: number; hasSuccess: boolean; failedPromptTokens: number; failedCompletionTokens: number; failedTotalTokens: number}>())
+  }, new Map<string, FailedRequestAggregation>())
 
   const failedRequestsDetails: FailedRequestDetail[] = Array.from(groupedByRequest.values())
     .filter((request) => {
@@ -265,6 +294,8 @@ const buildTokenUseTotals = (
         failedPromptTokens: request.failedPromptTokens,
         failedCompletionTokens: request.failedCompletionTokens,
         failedTotalTokens: request.failedTotalTokens,
+        error: request.lastError,
+        lastResponse: request.lastResponse,
       }
     })
 

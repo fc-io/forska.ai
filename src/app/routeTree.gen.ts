@@ -35,6 +35,7 @@ import { Route as ProjectsIdReviewsLlmIndexRouteImport } from './routes/+project
 import { Route as ProjectsIdReviewsHumanIndexRouteImport } from './routes/+projects/+$id/+reviews-human/+index'
 import { Route as ProjectsIdReviewsBothIndexRouteImport } from './routes/+projects/+$id/+reviews-both/+index'
 import { Route as AdminJobsIdIndexRouteImport } from './routes/+admin/+jobs/+$id/+index'
+import { Route as AdminFailed_requestsIdIndexRouteImport } from './routes/+admin/+failed_requests/+$id/+index'
 import { Route as ProjectsIdReviewsArticleIdIndexRouteImport } from './routes/+projects/+$id/+reviews/+$articleId/+index'
 import { Route as ProjectsIdReviewsLlmArticleIdIndexRouteImport } from './routes/+projects/+$id/+reviews-llm/+$articleId/+index'
 
@@ -175,6 +176,12 @@ const AdminJobsIdIndexRoute = AdminJobsIdIndexRouteImport.update({
   path: '/admin/jobs/$id/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminFailed_requestsIdIndexRoute =
+  AdminFailed_requestsIdIndexRouteImport.update({
+    id: '/admin/failed_requests/$id/',
+    path: '/admin/failed_requests/$id/',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ProjectsIdReviewsArticleIdIndexRoute =
   ProjectsIdReviewsArticleIdIndexRouteImport.update({
     id: '/projects/$id/reviews/$articleId/',
@@ -207,6 +214,7 @@ export interface FileRoutesByFullPath {
   '/admin/prompts/deduplicate': typeof AdminPromptsDeduplicateRoute
   '/projects/$id/edit': typeof ProjectsIdEditRoute
   '/projects/$id/humanAssessment': typeof ProjectsIdHumanAssessmentRoute
+  '/admin/failed_requests/$id': typeof AdminFailed_requestsIdIndexRoute
   '/admin/jobs/$id': typeof AdminJobsIdIndexRoute
   '/projects/$id/reviews-both': typeof ProjectsIdReviewsBothIndexRoute
   '/projects/$id/reviews-human': typeof ProjectsIdReviewsHumanIndexRoute
@@ -237,6 +245,7 @@ export interface FileRoutesByTo {
   '/admin/prompts/deduplicate': typeof AdminPromptsDeduplicateRoute
   '/projects/$id/edit': typeof ProjectsIdEditRoute
   '/projects/$id/humanAssessment': typeof ProjectsIdHumanAssessmentRoute
+  '/admin/failed_requests/$id': typeof AdminFailed_requestsIdIndexRoute
   '/admin/jobs/$id': typeof AdminJobsIdIndexRoute
   '/projects/$id/reviews-both': typeof ProjectsIdReviewsBothIndexRoute
   '/projects/$id/reviews-human': typeof ProjectsIdReviewsHumanIndexRoute
@@ -268,6 +277,7 @@ export interface FileRoutesById {
   '/admin/prompts/deduplicate': typeof AdminPromptsDeduplicateRoute
   '/projects/$id/edit': typeof ProjectsIdEditRoute
   '/projects/$id/humanAssessment': typeof ProjectsIdHumanAssessmentRoute
+  '/admin/failed_requests/$id/': typeof AdminFailed_requestsIdIndexRoute
   '/admin/jobs/$id/': typeof AdminJobsIdIndexRoute
   '/projects/$id/reviews-both/': typeof ProjectsIdReviewsBothIndexRoute
   '/projects/$id/reviews-human/': typeof ProjectsIdReviewsHumanIndexRoute
@@ -300,6 +310,7 @@ export interface FileRouteTypes {
     | '/admin/prompts/deduplicate'
     | '/projects/$id/edit'
     | '/projects/$id/humanAssessment'
+    | '/admin/failed_requests/$id'
     | '/admin/jobs/$id'
     | '/projects/$id/reviews-both'
     | '/projects/$id/reviews-human'
@@ -330,6 +341,7 @@ export interface FileRouteTypes {
     | '/admin/prompts/deduplicate'
     | '/projects/$id/edit'
     | '/projects/$id/humanAssessment'
+    | '/admin/failed_requests/$id'
     | '/admin/jobs/$id'
     | '/projects/$id/reviews-both'
     | '/projects/$id/reviews-human'
@@ -360,6 +372,7 @@ export interface FileRouteTypes {
     | '/admin/prompts/deduplicate'
     | '/projects/$id/edit'
     | '/projects/$id/humanAssessment'
+    | '/admin/failed_requests/$id/'
     | '/admin/jobs/$id/'
     | '/projects/$id/reviews-both/'
     | '/projects/$id/reviews-human/'
@@ -391,6 +404,7 @@ export interface RootRouteChildren {
   AdminPromptsDeduplicateRoute: typeof AdminPromptsDeduplicateRoute
   ProjectsIdEditRoute: typeof ProjectsIdEditRoute
   ProjectsIdHumanAssessmentRoute: typeof ProjectsIdHumanAssessmentRoute
+  AdminFailed_requestsIdIndexRoute: typeof AdminFailed_requestsIdIndexRoute
   AdminJobsIdIndexRoute: typeof AdminJobsIdIndexRoute
   ProjectsIdReviewsBothIndexRoute: typeof ProjectsIdReviewsBothIndexRoute
   ProjectsIdReviewsHumanIndexRoute: typeof ProjectsIdReviewsHumanIndexRoute
@@ -587,6 +601,13 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof AdminJobsIdIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/failed_requests/$id/': {
+      id: '/admin/failed_requests/$id/'
+      path: '/admin/failed_requests/$id'
+      fullPath: '/admin/failed_requests/$id'
+      preLoaderRoute: typeof AdminFailed_requestsIdIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/projects/$id/reviews/$articleId/': {
       id: '/projects/$id/reviews/$articleId/'
       path: '/projects/$id/reviews/$articleId'
@@ -623,6 +644,7 @@ const rootRouteChildren: RootRouteChildren = {
   AdminPromptsDeduplicateRoute: AdminPromptsDeduplicateRoute,
   ProjectsIdEditRoute: ProjectsIdEditRoute,
   ProjectsIdHumanAssessmentRoute: ProjectsIdHumanAssessmentRoute,
+  AdminFailed_requestsIdIndexRoute: AdminFailed_requestsIdIndexRoute,
   AdminJobsIdIndexRoute: AdminJobsIdIndexRoute,
   ProjectsIdReviewsBothIndexRoute: ProjectsIdReviewsBothIndexRoute,
   ProjectsIdReviewsHumanIndexRoute: ProjectsIdReviewsHumanIndexRoute,

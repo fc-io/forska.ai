@@ -119,13 +119,18 @@ const AdminFailedRequests = () => {
                       return (
                         <tr class="hover:bg-gray-50">
                           <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono text-xs">
-                            {row.id.slice(0, 8)}...
+                            <Link
+                              to={`/admin/failed_requests/${row.id}`}
+                              class="text-blue-600 hover:text-blue-900 underline"
+                            >
+                              {row.id}
+                            </Link>
                           </td>
                           <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                             {format(new Date(row.createdAt), 'yyyy-MM-dd HH:mm:ss')}
                           </td>
                           <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono text-xs">
-                            {row.judgmentsJobId ?? '—'}
+                            {row.judgmentsJobId?.split('-')[0] ?? '—'}
                           </td>
                           <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{row.modelName ?? '—'}</td>
                           <td class="px-6 py-4 whitespace-nowrap text-sm text-red-600 font-medium">

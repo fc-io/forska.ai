@@ -306,26 +306,45 @@ export const judge = async ({
         attempts += 1
         const result = await attemptJudgment({prompt, baseURL, modelName, article, prompts, modelId, projectId})
 
-        if ('usage' in result && result.usage) {
-          const outcome: JudgeTokenUsageEntry['outcome'] = result.success ? 'success' : 'failure'
+        if (result.success) {
+          const usage = result.usage
           tokenUse.push({
             articleId: article.id,
             promptIds,
             modelId,
             modelName,
             baseURL,
-            promptTokens: result.usage.promptTokens,
-            completionTokens: result.usage.completionTokens,
-            totalTokens: result.usage.totalTokens,
-            outcome,
+            promptTokens: usage.promptTokens,
+            completionTokens: usage.completionTokens,
+            totalTokens: usage.totalTokens,
+            outcome: 'success',
+            error: null,
+            lastResponse: null,
           })
-        }
-
-        if (result.success) {
           // console.log('judgment success')
           successCount += 1
           return result.judgment
         } else {
+          const usage =
+            result.usage ??
+            ({
+              promptTokens: 0,
+              completionTokens: 0,
+              totalTokens: 0,
+            } satisfies AttemptUsage)
+          tokenUse.push({
+            articleId: article.id,
+            promptIds,
+            modelId,
+            modelName,
+            baseURL,
+            promptTokens: usage.promptTokens,
+            completionTokens: usage.completionTokens,
+            totalTokens: usage.totalTokens,
+            outcome: 'failure',
+            error: result.error,
+            lastResponse: result.lastResponse,
+          })
           // console.log('judgment error')
           errorCount += 1
 
