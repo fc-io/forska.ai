@@ -1,7 +1,7 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
 import {format} from 'date-fns'
-import {For, Show, Suspense} from 'solid-js'
+import {createSignal, For, Show, Suspense} from 'solid-js'
 
 import {apiClient} from '../../../../../services/apiClient.ts'
 
@@ -55,13 +55,38 @@ const fetchFailedRequest = async (id: string) => {
   return response.data.data as FailedRequest
 }
 
-const copyJsonToClipboard = (data: FailedRequest) => {
+const copyTextToClipboard = (text: string | null | undefined) => {
+  if (!text) return
   const clipboard = typeof navigator === 'undefined' ? null : navigator.clipboard
   if (!clipboard) {
     return
   }
-  const json = JSON.stringify(data, null, 2)
-  return clipboard.writeText(json)
+  return clipboard.writeText(text)
+}
+
+const CopyButton = (props: {text: string | null | undefined; label?: string}) => {
+  const [copied, setCopied] = createSignal(false)
+
+  const handleCopy = () => {
+    if (!props.text) return
+    void copyTextToClipboard(props.text)
+    setCopied(true)
+    setTimeout(() => {
+      setCopied(false)
+    }, 2000)
+  }
+
+  return (
+    <button
+      class="px-2 py-1 text-xs font-medium rounded transition-all duration-200"
+      classList={{'bg-green-100 text-green-700': copied(), 'bg-gray-200 text-gray-600 hover:bg-gray-300': !copied()}}
+      onClick={handleCopy}
+    >
+      <Show when={copied()} fallback={props.label ?? 'Copy'}>
+        ✓ Copied!
+      </Show>
+    </button>
+  )
 }
 
 const FailedRequestDetail = () => {
@@ -246,7 +271,10 @@ const FailedRequestDetail = () => {
                                 </Show>
                                 <Show when={detail.systemPrompt}>
                                   <div class="sm:col-span-2">
-                                    <dt class="text-sm font-medium text-gray-500">System Prompt</dt>
+                                    <div class="flex items-center justify-between">
+                                      <dt class="text-sm font-medium text-gray-500">System Prompt</dt>
+                                      <CopyButton text={detail.systemPrompt} />
+                                    </div>
                                     <dd class="mt-1 text-sm text-gray-900 whitespace-pre-wrap break-words bg-gray-50 p-3 rounded-md border border-gray-200 max-h-64 overflow-y-auto">
                                       {detail.systemPrompt}
                                     </dd>
@@ -254,7 +282,10 @@ const FailedRequestDetail = () => {
                                 </Show>
                                 <Show when={detail.userPrompt}>
                                   <div class="sm:col-span-2">
-                                    <dt class="text-sm font-medium text-gray-500">User Prompt</dt>
+                                    <div class="flex items-center justify-between">
+                                      <dt class="text-sm font-medium text-gray-500">User Prompt</dt>
+                                      <CopyButton text={detail.userPrompt} />
+                                    </div>
                                     <dd class="mt-1 text-sm text-gray-900 whitespace-pre-wrap break-words bg-gray-50 p-3 rounded-md border border-gray-200 max-h-64 overflow-y-auto">
                                       {detail.userPrompt}
                                     </dd>
@@ -272,14 +303,7 @@ const FailedRequestDetail = () => {
                 <div class="mt-6">
                   <div class="flex items-center justify-between mb-2">
                     <h3 class="text-lg font-medium text-gray-900">Raw JSON Data</h3>
-                    <button
-                      class="px-3 py-1.5 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700"
-                      onClick={() => {
-                        return copyJsonToClipboard(request())
-                      }}
-                    >
-                      Copy
-                    </button>
+                    <CopyButton text={JSON.stringify(request(), null, 2)} />
                   </div>
                   <pre class="bg-gray-100 p-4 rounded-md overflow-x-auto text-xs">
                     {JSON.stringify(request(), null, 2)}
