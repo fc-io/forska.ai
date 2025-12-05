@@ -30,27 +30,9 @@ question: Is this article about AI?
 
 output_type: 'yes' | 'no' | 'unsure'
 
-### is-ai-agent---question
-
-question: Is this article about AI Agents?
-
-output_type: 'yes' | 'no' | 'unsure'
-
-### is-healthcare---question
-
-question: Is this article about healthcare?
-
-output_type: 'yes' | 'no' | 'unsure'
-
 Example your output message:
 {
   "is-ai---question": "yes",
   "is-ai---explanation": "The title mentiones Agents a concepts that could refer to AI agents. And AI Agents (not only agents) is also mentioned in the summary.",
   "is-ai---quotes": ["Agents: Evolution, Architecture, and Real-World Applications", "This paper examines the evolution, architecture, and practical applications of AI agents...", "...for more resilient and adaptive AI agent systems."]
-  "is-ai-agent---question": "yes",
-  "is-ai-agent---explanation": "The title mentiones Agents. And AI Agents (not only agents) is also mentioned in the summary.",
-  "is-ai-agent---quotes": ["Agents: Evolution, Architecture, and Real-World Applications", "This paper examines the evolution, architecture, and practical applications of AI agents...", "...for more resilient and adaptive AI agent systems."]
-  "is-healthcare---question": "no",
-  "is-healthcare---explanation": "No mention of healthcare or any healthcare related topics.",
-  "is-healthcare---quotes": []
 }`

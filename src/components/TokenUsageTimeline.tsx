@@ -493,7 +493,7 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
                 return sum + item.parsed.y
               }, 0)
             const requests = data[idx].totalRequests ?? 0
-            return `Total: ${total.toLocaleString()}\nArticles Judged: ${requests.toLocaleString()}`
+            return `Total: ${total.toLocaleString()}\nPrompts Judged: ${requests.toLocaleString()}`
           },
         },
       },

@@ -73,6 +73,10 @@ type TokenUseTotals = {
   failedRequestsDetails: FailedRequestDetail[]
 }
 
+/**
+ * Context for storing token usage.
+ * totalRequests is the number of prompts being processed (one LLM request per prompt).
+ */
 type JudgeTokenUseContext = {totalRequests: number}
 
 const isServerEnvironment = (): boolean => {
