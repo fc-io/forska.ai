@@ -46,6 +46,5 @@ export const parseJudgment = (
   const Types = arktype(typeDefs)
   Types.assert(parsed)
 
-  return parsed as Record<string, unknown>
+  return parsed
 }
-

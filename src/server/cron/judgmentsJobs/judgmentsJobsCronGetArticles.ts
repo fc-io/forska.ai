@@ -4,9 +4,9 @@ import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 import * as schema from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
-export type ArticleProcessingData = {
-  articlesToJudgeIds: string[]
-  articlesToJudge: (typeof schema.articles.$inferSelect)[]
+export type QueuePrompt = {
+  promptIds: string[]
+  prompts: (typeof schema.articles.$inferSelect)[]
   projectPrompts: Array<{
     id: string
     originalText: string
@@ -79,12 +79,12 @@ const getQueryConditions = ({jobId, project}: {jobId: string; project: typeof sc
   return conditions
 }
 
-const getArticleIdsToJudge = async ({
+const getItemsToQueue = async ({
   db,
   jobId,
   project,
   projectPrompts,
-  numberOfArticlesToGet,
+  numberOfItemsToGet,
 }: {
   db: PostgresJsDatabase<typeof schema>
   jobId: string
@@ -96,8 +96,8 @@ const getArticleIdsToJudge = async ({
     order: number | null
     type: string | null
   }>
-  numberOfArticlesToGet: number
-}): Promise<ArticleProcessingData> => {
+  numberOfItemsToGet: number
+}): Promise<QueuePrompt> => {
   const queryConditions = getQueryConditions({jobId, project})
 
   const query = db
@@ -107,15 +107,15 @@ const getArticleIdsToJudge = async ({
     .orderBy(
       sql`COALESCE(${schema.articles.articleUpdatedAt}, ${schema.articles.articleCreatedAt}, ${schema.articles.createdAt}) DESC, ${schema.articles.id} DESC`,
     )
-    .limit(numberOfArticlesToGet)
+    .limit(numberOfItemsToGet)
 
-  const articlesToJudge = await query
+  const prompts = await query
 
   return {
-    articlesToJudgeIds: articlesToJudge.map((article) => {
-      return article.id
+    promptIds: prompts.map((p) => {
+      return p.id
     }),
-    articlesToJudge,
+    prompts,
     projectPrompts,
   }
 }
@@ -123,8 +123,8 @@ const getArticleIdsToJudge = async ({
 export const judgmentsJobsCronGetArticles = async (
   projectId: string,
   jobId: string,
-  numberOfArticlesToGet: number,
-): Promise<ArticleProcessingData> => {
+  numberOfItemsToGet: number,
+): Promise<QueuePrompt> => {
   const db = getDatabase()
 
   const [project] = await db.select().from(schema.projects).where(eq(schema.projects.id, projectId)).limit(1)
@@ -142,6 +142,6 @@ export const judgmentsJobsCronGetArticles = async (
     .orderBy(schema.projectPrompts.order)
 
   return !project || projectPrompts.length === 0
-    ? {articlesToJudgeIds: [], articlesToJudge: [], projectPrompts: []}
-    : await getArticleIdsToJudge({db, jobId, project, projectPrompts, numberOfArticlesToGet})
+    ? {promptIds: [], prompts: [], projectPrompts: []}
+    : await getItemsToQueue({db, jobId, project, projectPrompts, numberOfItemsToGet})
 }

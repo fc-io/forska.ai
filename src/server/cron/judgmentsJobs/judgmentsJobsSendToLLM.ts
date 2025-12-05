@@ -5,13 +5,13 @@ import * as schema from '../../../db/schema.ts'
 import {env} from '../../utils/env.ts'
 import {getMaxNumberOfInflightRequests} from './getMaxNumberOfInflightRequests.ts'
 import type {judgmentsJobsGetJobs} from './judgmentsJobsGetJobs.ts'
-import {type ArticleToProcess, getAndUpdateReadyArticles} from './judgmentsJobsSendToLLM/getAndUpdateReadyArticles.ts'
-import {processArticleWithLLM} from './judgmentsJobsSendToLLM/processArticleWithLLM.ts'
+import {getAndUpdateReadyPrompts, type PromptToProcess} from './judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts'
+import {processPromptWithLLM} from './judgmentsJobsSendToLLM/processPromptWithLLM.ts'
 
-const processArticles = async (db: PostgresJsDatabase<typeof schema>, articles: ArticleToProcess[]): Promise<void> => {
+const processPrompts = async (db: PostgresJsDatabase<typeof schema>, prompts: PromptToProcess[]): Promise<void> => {
   const results = await Promise.allSettled(
-    articles.map((article) => {
-      return processArticleWithLLM(db, article)
+    prompts.map((prompt) => {
+      return processPromptWithLLM(db, prompt)
     }),
   )
 
@@ -24,7 +24,7 @@ const processArticles = async (db: PostgresJsDatabase<typeof schema>, articles: 
   }
 }
 
-const getNumberOfArticlesInFlight = async (
+const getNumberOfPromptsInFlight = async (
   db: PostgresJsDatabase<typeof schema>,
   serverJobId: string,
 ): Promise<number> => {
@@ -46,17 +46,17 @@ export const judgmentsJobsSendToLLM = async (
   if (isRunningJudgmentsJobsSendToLLM) return
   isRunningJudgmentsJobsSendToLLM = true
   const maxNumberOfInflightRequests = getMaxNumberOfInflightRequests()
-  const articlesInFlight = await getNumberOfArticlesInFlight(db, serverJobId)
-  const deficit = Math.max(0, maxNumberOfInflightRequests - articlesInFlight)
+  const promptsInFlight = await getNumberOfPromptsInFlight(db, serverJobId)
+  const deficit = Math.max(0, maxNumberOfInflightRequests - promptsInFlight)
   const maxBurst = Math.max(1, Number(env.SGLANG_MAX_RUNNING_REQUESTS || 0))
   const requestsToSend = Math.min(deficit, maxBurst)
   console.log('requestsToSend', requestsToSend)
   if (requestsToSend > 0 && allJobs.length > 0) {
     const requestsToSendPerJob = Math.max(1, Math.floor(requestsToSend / allJobs.length))
 
-    const articlesToProcess = await Promise.allSettled(
+    const promptsToProcess = await Promise.allSettled(
       allJobs.map((job) => {
-        return getAndUpdateReadyArticles(db, serverJobId, job.id, requestsToSendPerJob)
+        return getAndUpdateReadyPrompts(db, serverJobId, job.id, requestsToSendPerJob)
       }),
     ).then((results) => {
       return results
@@ -68,13 +68,12 @@ export const judgmentsJobsSendToLLM = async (
         })
     })
 
-    articlesToProcess.forEach((articles) => {
+    promptsToProcess.map((prompts) => {
       void (async () => {
-        // TODO: fix the bug with not enough articles sent when when too few articles in project
-        if (articles.length > 0) {
-          await processArticles(db, articles)
+        if (prompts.length > 0) {
+          await processPrompts(db, prompts)
         } else {
-          console.log('No articles to process – this should not happen, prob bug if it does')
+          console.log('No prompts to process – this should not happen, prob bug if it does')
         }
       })().catch((error) => {
         const safeError =

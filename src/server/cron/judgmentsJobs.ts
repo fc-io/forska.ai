@@ -3,7 +3,7 @@ import {Elysia} from 'elysia'
 
 import {env} from '../utils/env.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
-import {getNewArticlesForJobs} from './judgmentsJobs/getNewArticlesForJobs.ts'
+import {judgmentsJobsAddToQueue} from './judgmentsJobs/judgmentsJobsAddToQueue.ts'
 import {judgmentsJobsCheckLLMStatus} from './judgmentsJobs/judgmentsJobsCheckLLMStatus.ts'
 import {judgmentsJobsCleanupStale} from './judgmentsJobs/judgmentsJobsCleanupStale.ts'
 import {judgmentsJobsGetJobs} from './judgmentsJobs/judgmentsJobsGetJobs.ts'
@@ -17,14 +17,14 @@ const CHECK_LLM_STATUS = '*/30 * * * * *'
 const CLEANUP_STALE_REQUESTS = '0 */1 * * * *'
 const START_DELAY_MS = 1000
 
-let isRunningGetNewArticlesForJobs = false
+let isAddingToQueue = false
 
-const runGetNewArticlesForJobs = async (): Promise<void> => {
-  if (!env.RUN_SERVER_JUDGING || env.GPU_TOTAL_GPUS === 0 || isRunningGetNewArticlesForJobs) return
-  isRunningGetNewArticlesForJobs = true
+const runAddToQueue = async (): Promise<void> => {
+  if (!env.RUN_SERVER_JUDGING || env.GPU_TOTAL_GPUS === 0 || isAddingToQueue) return
+  isAddingToQueue = true
   const db = getDatabase()
-  await getNewArticlesForJobs(db, serverJobId)
-  isRunningGetNewArticlesForJobs = false
+  await judgmentsJobsAddToQueue(db, serverJobId)
+  isAddingToQueue = false
 }
 
 const sendToLLMCron = async (): Promise<void> => {
@@ -50,10 +50,10 @@ const cleanupStaleQueueCron = async (): Promise<void> => {
 export const judgmentsJobsCron = new Elysia()
   .use(
     cron({
-      name: 'judgments-jobs-fetch-articles',
+      name: 'judgments-jobs-add-to-queue',
       pattern: NEW_ARTICLES_INTERVAL,
       startAt: new Date(Date.now() + START_DELAY_MS),
-      run: runGetNewArticlesForJobs,
+      run: runAddToQueue,
     }),
   )
   .use(

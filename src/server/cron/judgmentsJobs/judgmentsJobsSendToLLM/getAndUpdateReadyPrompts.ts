@@ -3,7 +3,7 @@ import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../../db/schema.ts'
 
-export type ArticleToProcess = {
+export type PromptToProcess = {
   jobId: string
   articleId: string
   recordId: string
@@ -17,12 +17,12 @@ const processReadyRows = async (
   db: PostgresJsDatabase<typeof schema>,
   serverJobId: string,
   readyRows: {id: string; articleId: string; jobId: string}[],
-): Promise<ArticleToProcess[]> => {
+): Promise<PromptToProcess[]> => {
   const readyIds = readyRows.map((r) => {
     return r.id
   })
 
-  const articlesWithJobs = await db
+  const promptsWithJobs = await db
     .update(schema.judgmentsJobsArticles)
     .set({status: 'sent', sentAt: new Date(), updatedAt: new Date()})
     .where(
@@ -35,14 +35,14 @@ const processReadyRows = async (
     })
 
   const selectedMap = new Set(readyIds)
-  const selectedArticles = articlesWithJobs.filter((row) => {
+  const selectedPrompts = promptsWithJobs.filter((row) => {
     return selectedMap.has(row.recordId)
   })
 
   const uniqueJobIds = [
     ...new Set(
-      selectedArticles.map((article) => {
-        return article.jobId
+      selectedPrompts.map((prompt) => {
+        return prompt.jobId
       }),
     ),
   ]
@@ -68,13 +68,13 @@ const processReadyRows = async (
   })
   const jobConfigMap = new Map(jobConfigPairs)
 
-  const articlesWithProjects = selectedArticles
-    .map((article) => {
-      const config = jobConfigMap.get(article.jobId)
+  const promptsWithProjects = selectedPrompts
+    .map((prompt) => {
+      const config = jobConfigMap.get(prompt.jobId)
       if (!config?.projectId || !config?.modelId || !config?.modelName || !config?.modelBaseUrl) {
-        console.error('Article missing required model config:', {
-          articleId: article.articleId,
-          jobId: article.jobId,
+        console.error('Prompt missing required model config:', {
+          articleId: prompt.articleId,
+          jobId: prompt.jobId,
           hasConfig: !!config,
           projectId: config?.projectId,
           modelId: config?.modelId,
@@ -84,26 +84,26 @@ const processReadyRows = async (
         return null
       }
       return {
-        ...article,
+        ...prompt,
         projectId: config.projectId,
         modelId: config.modelId,
         modelName: config.modelName,
         modelBaseUrl: config.modelBaseUrl,
       }
     })
-    .filter((article): article is ArticleToProcess => {
-      return article !== null
+    .filter((prompt): prompt is PromptToProcess => {
+      return prompt !== null
     })
 
-  return articlesWithProjects
+  return promptsWithProjects
 }
 
-export const getAndUpdateReadyArticles = async (
+export const getAndUpdateReadyPrompts = async (
   db: PostgresJsDatabase<typeof schema>,
   serverJobId: string,
   jobId: string,
   limit: number,
-): Promise<ArticleToProcess[]> => {
+): Promise<PromptToProcess[]> => {
   const readyRows = await db
     .select({
       id: schema.judgmentsJobsArticles.id,
@@ -121,6 +121,5 @@ export const getAndUpdateReadyArticles = async (
     .orderBy(schema.judgmentsJobsArticles.createdAt)
     .limit(limit)
 
-  const isEmpty = readyRows.length === 0
-  return isEmpty ? Promise.resolve([] as ArticleToProcess[]) : processReadyRows(db, serverJobId, readyRows)
+  return readyRows.length === 0 ? [] : processReadyRows(db, serverJobId, readyRows)
 }
