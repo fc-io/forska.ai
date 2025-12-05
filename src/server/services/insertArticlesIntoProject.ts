@@ -50,13 +50,17 @@ export const insertArticlesIntoProject = async (
     }
   }
 
-  // Filter to IDs that exist in articles to avoid FK errors
-  const existingArticleRows = await db.select({id: articles.id}).from(articles).where(inArray(articles.id, uniqueIds))
-  const existingArticleSet = new Set(
-    existingArticleRows.map((r) => {
-      return r.id
-    }),
-  )
+  // Filter to IDs that exist in articles to avoid FK errors.
+  // Chunk queries to avoid exceeding PostgreSQL's parameter limit (~32k).
+  const existingArticleSet = new Set<string>()
+  const lookupBatchSize = 10000
+  for (const idsChunk of chunk(uniqueIds, lookupBatchSize)) {
+    if (idsChunk.length === 0) continue
+    const rows = await db.select({id: articles.id}).from(articles).where(inArray(articles.id, idsChunk))
+    for (const r of rows) {
+      existingArticleSet.add(r.id)
+    }
+  }
   const validIds = uniqueIds.filter((id) => {
     return existingArticleSet.has(id)
   })
@@ -76,17 +80,19 @@ export const insertArticlesIntoProject = async (
     }
   }
 
-  // Count existing associations to compute inserted count deterministically
-  const existingAssocRows = await db
-    .select({articleId: projectArticles.articleId})
-    .from(projectArticles)
-    .where(and(eq(projectArticles.projectId, projectId), inArray(projectArticles.articleId, validIds)))
-
-  const existingAssocSet = new Set(
-    existingAssocRows.map((r) => {
-      return r.articleId
-    }),
-  )
+  // Count existing associations to compute inserted count deterministically.
+  // Chunk queries to avoid exceeding PostgreSQL's parameter limit.
+  const existingAssocSet = new Set<string>()
+  for (const idsChunk of chunk(validIds, lookupBatchSize)) {
+    if (idsChunk.length === 0) continue
+    const rows = await db
+      .select({articleId: projectArticles.articleId})
+      .from(projectArticles)
+      .where(and(eq(projectArticles.projectId, projectId), inArray(projectArticles.articleId, idsChunk)))
+    for (const r of rows) {
+      existingAssocSet.add(r.articleId)
+    }
+  }
   const toInsert = validIds.filter((id) => {
     return !existingAssocSet.has(id)
   })
@@ -108,28 +114,34 @@ export const insertArticlesIntoProject = async (
   // Auto-link prompts that already have judgments (AI or human) for these articles
   let linkedPrompts = 0
   if (validIds.length > 0) {
-    const llmPromptIds = await db
-      .select({pid: judgments.promptId})
-      .from(judgments)
-      .where(inArray(judgments.articleId, validIds))
-      .groupBy(judgments.promptId)
-    const humanPromptIds = await db
-      .select({pid: judgmentsHuman.promptId})
-      .from(judgmentsHuman)
-      .where(inArray(judgmentsHuman.articleId, validIds))
-      .groupBy(judgmentsHuman.promptId)
+    // Query prompts with judgments in chunks to avoid parameter limits.
+    const llmPromptIdSet = new Set<string>()
+    const humanPromptIdSet = new Set<string>()
+    for (const idsChunk of chunk(validIds, lookupBatchSize)) {
+      if (idsChunk.length === 0) continue
+      const llmRows = await db
+        .select({pid: judgments.promptId})
+        .from(judgments)
+        .where(inArray(judgments.articleId, idsChunk))
+        .groupBy(judgments.promptId)
+      for (const r of llmRows) {
+        if (r.pid) llmPromptIdSet.add(r.pid)
+      }
+      const humanRows = await db
+        .select({pid: judgmentsHuman.promptId})
+        .from(judgmentsHuman)
+        .where(inArray(judgmentsHuman.articleId, idsChunk))
+        .groupBy(judgmentsHuman.promptId)
+      for (const r of humanRows) {
+        if (r.pid) humanPromptIdSet.add(r.pid)
+      }
+    }
 
-    const promptIdSet = new Set<string>([
-      ...llmPromptIds.map((r) => {
-        return r.pid
-      }),
-      ...humanPromptIds.map((r) => {
-        return r.pid
-      }),
-    ])
-    const promptIds = Array.from(promptIdSet).filter((id): id is string => {
-      return typeof id === 'string' && id.length > 0
-    })
+    const promptIds = Array.from(new Set([...Array.from(llmPromptIdSet), ...Array.from(humanPromptIdSet)])).filter(
+      (id): id is string => {
+        return typeof id === 'string' && id.length > 0
+      },
+    )
 
     if (promptIds.length > 0) {
       // Exclude prompts already linked to this project
