@@ -217,32 +217,30 @@ const AdminJudgmentJobDetail = () => {
                       </Show>
                     </div>
                   </div>
-                  <Show when={data() && 'articleStats' in (data() as any) && (data() as any).articleStats}>
+                  <Show when={data() && 'promptStats' in (data() as any) && (data() as any).promptStats}>
                     <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
                       <h2 class="text-lg font-semibold mb-4">Job Queue</h2>
                       <div class="grid grid-cols-3 gap-4">
                         <div class="bg-gray-50 rounded-lg p-4">
                           <p class="text-sm text-gray-500 mb-1">Ready</p>
                           <p class="text-2xl font-bold text-gray-900">
-                            {data() && 'articleStats' in (data() as any) ? (data() as any).articleStats?.ready || 0 : 0}
+                            {data() && 'promptStats' in (data() as any) ? (data() as any).promptStats?.ready || 0 : 0}
                           </p>
-                          <p class="text-xs text-gray-500 mt-1">Articles queued for judgment</p>
+                          <p class="text-xs text-gray-500 mt-1">Prompts queued for judgment</p>
                         </div>
                         <div class="bg-blue-50 rounded-lg p-4">
                           <p class="text-sm text-blue-600 mb-1">Sent</p>
                           <p class="text-2xl font-bold text-blue-900">
-                            {data() && 'articleStats' in (data() as any) ? (data() as any).articleStats?.sent || 0 : 0}
+                            {data() && 'promptStats' in (data() as any) ? (data() as any).promptStats?.sent || 0 : 0}
                           </p>
-                          <p class="text-xs text-blue-600 mt-1">Articles with prompts in-flight</p>
+                          <p class="text-xs text-blue-600 mt-1">Prompts in-flight to LLM</p>
                         </div>
                         <div class="bg-green-50 rounded-lg p-4">
                           <p class="text-sm text-green-600 mb-1">Judged</p>
                           <p class="text-2xl font-bold text-green-900">
-                            {data() && 'articleStats' in (data() as any)
-                              ? (data() as any).articleStats?.judged || 0
-                              : 0}
+                            {data() && 'promptStats' in (data() as any) ? (data() as any).promptStats?.judged || 0 : 0}
                           </p>
-                          <p class="text-xs text-green-600 mt-1">Articles with all prompts judged</p>
+                          <p class="text-xs text-green-600 mt-1">Prompts with judgments completed</p>
                         </div>
                       </div>
                     </div>

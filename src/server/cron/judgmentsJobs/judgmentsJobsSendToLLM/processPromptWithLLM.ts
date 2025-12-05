@@ -1,4 +1,4 @@
-import {and, eq, inArray} from 'drizzle-orm'
+import {and, eq} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import {judgeSinglePrompt} from '../../../../agent/judge.ts'
@@ -13,29 +13,26 @@ type PromptDefinition = {
   type: string | null
 }
 
-const getExistingJudgmentPromptIds = async (
+const checkIfAlreadyJudged = async (
   db: PostgresJsDatabase<typeof schema>,
   articleId: string,
   modelId: string,
-  promptIds: string[],
-): Promise<Set<string>> => {
-  const existingJudgments = await db
-    .select({promptId: schema.judgments.promptId})
+  promptId: string,
+): Promise<boolean> => {
+  const existingJudgment = await db
+    .select({id: schema.judgments.id})
     .from(schema.judgments)
     .where(
       and(
         eq(schema.judgments.articleId, articleId),
         eq(schema.judgments.modelId, modelId),
-        inArray(schema.judgments.promptId, promptIds),
+        eq(schema.judgments.promptId, promptId),
         eq(schema.judgments.isAnswered, true),
       ),
     )
+    .limit(1)
 
-  return new Set(
-    existingJudgments.map((j) => {
-      return j.promptId
-    }),
-  )
+  return existingJudgment.length > 0
 }
 
 const processSinglePrompt = async (
@@ -58,47 +55,22 @@ const processSinglePrompt = async (
   })
 }
 
-const markAsJudged = async (db: PostgresJsDatabase<typeof schema>, jobId: string, articleId: string): Promise<void> => {
-  await db
-    .update(schema.judgmentsJobsArticles)
-    .set({status: 'judged', judgedAt: new Date(), updatedAt: new Date()})
-    .where(and(eq(schema.judgmentsJobsArticles.jobId, jobId), eq(schema.judgmentsJobsArticles.articleId, articleId)))
-}
-
-const processPromptsForQueue = async (
+const markAsJudged = async (
   db: PostgresJsDatabase<typeof schema>,
-  promptToProcess: PromptToProcess,
-  article: typeof schema.articles.$inferSelect,
-  promptsToJudge: PromptDefinition[],
-  allPromptsCount: number,
-  existingCount: number,
+  jobId: string,
+  articleId: string,
+  promptId: string,
 ): Promise<void> => {
-  console.log(
-    `Processing ${promptsToJudge.length}/${allPromptsCount} prompts for article ${promptToProcess.articleId} (${existingCount} already judged)`,
-  )
-
-  const results = await Promise.allSettled(
-    promptsToJudge.map((prompt) => {
-      return processSinglePrompt(promptToProcess, article, prompt)
-    }),
-  )
-
-  const failed = results.filter((r): r is PromiseRejectedResult => {
-    return r.status === 'rejected'
-  })
-
-  if (failed.length > 0) {
-    const errorReasons = failed.map((r) => {
-      const reason: unknown = r.reason
-      return reason instanceof Error ? reason.message : String(reason)
-    })
-    console.error(`Failed to process ${failed.length}/${promptsToJudge.length} prompts for article:`, {
-      articleId: promptToProcess.articleId,
-      errors: errorReasons,
-    })
-  }
-
-  await markAsJudged(db, promptToProcess.jobId, promptToProcess.articleId)
+  await db
+    .update(schema.judgmentsJobsPrompts)
+    .set({status: 'judged', judgedAt: new Date(), updatedAt: new Date()})
+    .where(
+      and(
+        eq(schema.judgmentsJobsPrompts.jobId, jobId),
+        eq(schema.judgmentsJobsPrompts.articleId, articleId),
+        eq(schema.judgmentsJobsPrompts.promptId, promptId),
+      ),
+    )
 }
 
 export const processPromptWithLLM = async (
@@ -116,7 +88,8 @@ export const processPromptWithLLM = async (
     return
   }
 
-  const allPrompts = await db
+  // Get the specific prompt to judge
+  const [prompt] = await db
     .select({
       id: schema.prompts.id,
       originalText: schema.prompts.originalText,
@@ -124,43 +97,53 @@ export const processPromptWithLLM = async (
       order: schema.projectPrompts.order,
       type: schema.prompts.type,
     })
-    .from(schema.projectPrompts)
-    .innerJoin(schema.prompts, eq(schema.projectPrompts.promptId, schema.prompts.id))
-    .where(and(eq(schema.projectPrompts.projectId, promptToProcess.projectId), eq(schema.projectPrompts.enabled, true)))
-    .orderBy(schema.projectPrompts.order)
+    .from(schema.prompts)
+    .innerJoin(schema.projectPrompts, eq(schema.projectPrompts.promptId, schema.prompts.id))
+    .where(
+      and(
+        eq(schema.prompts.id, promptToProcess.promptId),
+        eq(schema.projectPrompts.projectId, promptToProcess.projectId),
+        eq(schema.projectPrompts.enabled, true),
+      ),
+    )
+    .limit(1)
 
-  if (allPrompts.length === 0) {
-    console.log('No prompts to process for article:', promptToProcess.articleId)
-    await markAsJudged(db, promptToProcess.jobId, promptToProcess.articleId)
+  if (!prompt) {
+    console.log('Prompt not found or not enabled:', promptToProcess.promptId)
+    await markAsJudged(db, promptToProcess.jobId, promptToProcess.articleId, promptToProcess.promptId)
     return
   }
 
-  const promptIds = allPrompts.map((p) => {
-    return p.id
-  })
-  const existingJudgmentPromptIds = await getExistingJudgmentPromptIds(
+  // Check if this specific prompt has already been judged
+  const alreadyJudged = await checkIfAlreadyJudged(
     db,
     promptToProcess.articleId,
     promptToProcess.modelId,
-    promptIds,
+    promptToProcess.promptId,
   )
 
-  const promptsToJudge = allPrompts.filter((p) => {
-    return !existingJudgmentPromptIds.has(p.id)
-  })
-
-  if (promptsToJudge.length === 0) {
-    console.log('All prompts already judged for article:', promptToProcess.articleId)
-    await markAsJudged(db, promptToProcess.jobId, promptToProcess.articleId)
+  if (alreadyJudged) {
+    console.log('Prompt already judged for article:', {
+      articleId: promptToProcess.articleId,
+      promptId: promptToProcess.promptId,
+    })
+    await markAsJudged(db, promptToProcess.jobId, promptToProcess.articleId, promptToProcess.promptId)
     return
   }
 
-  await processPromptsForQueue(
-    db,
-    promptToProcess,
-    article,
-    promptsToJudge,
-    allPrompts.length,
-    existingJudgmentPromptIds.size,
-  )
+  // Process the single prompt
+  console.log(`Processing prompt ${promptToProcess.promptId} for article ${promptToProcess.articleId}`)
+
+  try {
+    await processSinglePrompt(promptToProcess, article, prompt)
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error)
+    console.error('Failed to process prompt for article:', {
+      articleId: promptToProcess.articleId,
+      promptId: promptToProcess.promptId,
+      error: errorMessage,
+    })
+  }
+
+  await markAsJudged(db, promptToProcess.jobId, promptToProcess.articleId, promptToProcess.promptId)
 }

@@ -30,8 +30,8 @@ const getNumberOfPromptsInFlight = async (
 ): Promise<number> => {
   const result = await db
     .select({count: count()})
-    .from(schema.judgmentsJobsArticles)
-    .where(and(eq(schema.judgmentsJobsArticles.status, 'sent'), eq(schema.judgmentsJobsArticles.serverId, serverJobId)))
+    .from(schema.judgmentsJobsPrompts)
+    .where(and(eq(schema.judgmentsJobsPrompts.status, 'sent'), eq(schema.judgmentsJobsPrompts.serverId, serverJobId)))
 
   return result[0]?.count || 0
 }

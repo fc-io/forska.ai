@@ -6,5 +6,5 @@ import * as schema from '../../../db/schema.ts'
 export const judgmentsJobsCleanupStale = async (db: PostgresJsDatabase<typeof schema>): Promise<void> => {
   const sixteenMinutesAgo = new Date(Date.now() - 16 * 60 * 1000)
 
-  await db.delete(schema.judgmentsJobsArticles).where(lt(schema.judgmentsJobsArticles.updatedAt, sixteenMinutesAgo))
+  await db.delete(schema.judgmentsJobsPrompts).where(lt(schema.judgmentsJobsPrompts.updatedAt, sixteenMinutesAgo))
 }

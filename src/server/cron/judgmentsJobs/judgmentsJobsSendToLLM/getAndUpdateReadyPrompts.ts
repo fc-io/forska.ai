@@ -6,6 +6,7 @@ import * as schema from '../../../../db/schema.ts'
 export type PromptToProcess = {
   jobId: string
   articleId: string
+  promptId: string
   recordId: string
   projectId: string
   modelId: string
@@ -16,22 +17,23 @@ export type PromptToProcess = {
 const processReadyRows = async (
   db: PostgresJsDatabase<typeof schema>,
   serverJobId: string,
-  readyRows: {id: string; articleId: string; jobId: string}[],
+  readyRows: {id: string; articleId: string; promptId: string; jobId: string}[],
 ): Promise<PromptToProcess[]> => {
   const readyIds = readyRows.map((r) => {
     return r.id
   })
 
   const promptsWithJobs = await db
-    .update(schema.judgmentsJobsArticles)
+    .update(schema.judgmentsJobsPrompts)
     .set({status: 'sent', sentAt: new Date(), updatedAt: new Date()})
     .where(
-      and(eq(schema.judgmentsJobsArticles.serverId, serverJobId), inArray(schema.judgmentsJobsArticles.id, readyIds)),
+      and(eq(schema.judgmentsJobsPrompts.serverId, serverJobId), inArray(schema.judgmentsJobsPrompts.id, readyIds)),
     )
     .returning({
-      recordId: schema.judgmentsJobsArticles.id,
-      articleId: schema.judgmentsJobsArticles.articleId,
-      jobId: schema.judgmentsJobsArticles.jobId,
+      recordId: schema.judgmentsJobsPrompts.id,
+      articleId: schema.judgmentsJobsPrompts.articleId,
+      promptId: schema.judgmentsJobsPrompts.promptId,
+      jobId: schema.judgmentsJobsPrompts.jobId,
     })
 
   const uniqueJobIds = [
@@ -69,6 +71,7 @@ const processReadyRows = async (
       if (!config?.projectId || !config?.modelId || !config?.modelName || !config?.modelBaseUrl) {
         console.error('Prompt missing required model config:', {
           articleId: prompt.articleId,
+          promptId: prompt.promptId,
           jobId: prompt.jobId,
           hasConfig: !!config,
           projectId: config?.projectId,
@@ -101,19 +104,20 @@ export const getAndUpdateReadyPrompts = async (
 ): Promise<PromptToProcess[]> => {
   const readyRows = await db
     .select({
-      id: schema.judgmentsJobsArticles.id,
-      articleId: schema.judgmentsJobsArticles.articleId,
-      jobId: schema.judgmentsJobsArticles.jobId,
+      id: schema.judgmentsJobsPrompts.id,
+      articleId: schema.judgmentsJobsPrompts.articleId,
+      promptId: schema.judgmentsJobsPrompts.promptId,
+      jobId: schema.judgmentsJobsPrompts.jobId,
     })
-    .from(schema.judgmentsJobsArticles)
+    .from(schema.judgmentsJobsPrompts)
     .where(
       and(
-        eq(schema.judgmentsJobsArticles.serverId, serverJobId),
-        eq(schema.judgmentsJobsArticles.jobId, jobId),
-        eq(schema.judgmentsJobsArticles.status, 'ready'),
+        eq(schema.judgmentsJobsPrompts.serverId, serverJobId),
+        eq(schema.judgmentsJobsPrompts.jobId, jobId),
+        eq(schema.judgmentsJobsPrompts.status, 'ready'),
       ),
     )
-    .orderBy(schema.judgmentsJobsArticles.createdAt)
+    .orderBy(schema.judgmentsJobsPrompts.createdAt)
     .limit(limit)
 
   return readyRows.length === 0 ? [] : processReadyRows(db, serverJobId, readyRows)

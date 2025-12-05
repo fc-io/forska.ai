@@ -4,24 +4,25 @@ import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 import * as schema from '../../../db/schema.ts'
 import {env} from '../../utils/env.ts'
 import {getMaxNumberOfInflightRequests} from './getMaxNumberOfInflightRequests.ts'
-import {judgmentsJobsCronGetArticles} from './judgmentsJobsCronGetArticles.ts'
+import {judgmentsJobsCronGetPrompts} from './judgmentsJobsCronGetPrompts.ts'
 import {judgmentsJobsGetRunningJobs} from './judgmentsJobsGetRunningJobs.ts'
 
 type Job = Awaited<ReturnType<typeof judgmentsJobsGetRunningJobs>>[number]
 
-const getCountOfReadyArticles = async (
+/** Counts the number of prompts in 'ready' status for a given job and server */
+const getCountOfReadyPrompts = async (
   db: PostgresJsDatabase<typeof schema>,
   serverJobId: string,
   jobId: string,
 ): Promise<number> => {
   const result = await db
     .select({count: count()})
-    .from(schema.judgmentsJobsArticles)
+    .from(schema.judgmentsJobsPrompts)
     .where(
       and(
-        eq(schema.judgmentsJobsArticles.status, 'ready'),
-        eq(schema.judgmentsJobsArticles.serverId, serverJobId),
-        eq(schema.judgmentsJobsArticles.jobId, jobId),
+        eq(schema.judgmentsJobsPrompts.status, 'ready'),
+        eq(schema.judgmentsJobsPrompts.serverId, serverJobId),
+        eq(schema.judgmentsJobsPrompts.jobId, jobId),
       ),
     )
 
@@ -32,23 +33,31 @@ const needsMorePrompts = (readyCount: number): boolean => {
   return readyCount < getMaxNumberOfInflightRequests() * 20
 }
 
+type PromptQueueEntry = {articleId: string; promptId: string}
+
 const addPromptsToQueue = async (
   db: PostgresJsDatabase<typeof schema>,
   jobId: string,
-  promptIds: string[],
+  promptEntries: PromptQueueEntry[],
   serverJobId: string,
 ): Promise<void> => {
-  if (promptIds.length === 0) return
+  if (promptEntries.length === 0) return
 
-  await db.insert(schema.judgmentsJobsArticles).values(
-    promptIds.map((articleId) => {
-      return {jobId, articleId, status: 'ready' as const, serverId: serverJobId}
+  await db.insert(schema.judgmentsJobsPrompts).values(
+    promptEntries.map((entry) => {
+      return {
+        jobId,
+        articleId: entry.articleId,
+        promptId: entry.promptId,
+        status: 'ready' as const,
+        serverId: serverJobId,
+      }
     }),
   )
 }
 
 const fetchPromptsForJob = async (job: Job, numberOfPromptsToGet: number) => {
-  const promptData = await judgmentsJobsCronGetArticles(job.projectId, job.id, numberOfPromptsToGet)
+  const promptData = await judgmentsJobsCronGetPrompts(job.projectId, job.id, numberOfPromptsToGet)
   return {...promptData, job}
 }
 
@@ -58,10 +67,8 @@ const getNewPromptsForJob = async (
   serverJobId: string,
   promptsPerJob: number,
 ) => {
-  const countOfReadyArticles = await getCountOfReadyArticles(db, serverJobId, job.id)
-  return needsMorePrompts(countOfReadyArticles)
-    ? fetchPromptsForJob(job, promptsPerJob)
-    : {promptIds: [], prompts: [], projectPrompts: [], job}
+  const countOfReadyPrompts = await getCountOfReadyPrompts(db, serverJobId, job.id)
+  return needsMorePrompts(countOfReadyPrompts) ? fetchPromptsForJob(job, promptsPerJob) : {promptEntries: [], job}
 }
 
 export const judgmentsJobsAddToQueue = async (
@@ -74,8 +81,8 @@ export const judgmentsJobsAddToQueue = async (
 
   await Promise.all(
     runningJobs.map(async (job) => {
-      const {promptIds} = await getNewPromptsForJob(db, job, serverJobId, promptsPerJob)
-      await addPromptsToQueue(db, job.id, promptIds, serverJobId)
+      const {promptEntries} = await getNewPromptsForJob(db, job, serverJobId, promptsPerJob)
+      await addPromptsToQueue(db, job.id, promptEntries, serverJobId)
     }),
   )
 }

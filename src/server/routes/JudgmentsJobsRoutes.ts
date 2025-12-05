@@ -7,7 +7,7 @@ import {
   articles,
   judgments,
   judgmentsJobs,
-  judgmentsJobsArticles,
+  judgmentsJobsPrompts,
   projectArticles,
   projectPrompts,
   projectRouteLink,
@@ -323,12 +323,12 @@ export const judgmentsJobsRoutes = new Elysia()
 
       const {job} = await getJobContext({db, jobId: params.id})
 
-      const [articleStats, totalTokenUsage, tokenUsagePerDay] = await Promise.all([
+      const [promptStats, totalTokenUsage, tokenUsagePerDay] = await Promise.all([
         db
-          .select({status: judgmentsJobsArticles.status, count: sql<number>`count(*)::int`})
-          .from(judgmentsJobsArticles)
-          .where(eq(judgmentsJobsArticles.jobId, job.id))
-          .groupBy(judgmentsJobsArticles.status),
+          .select({status: judgmentsJobsPrompts.status, count: sql<number>`count(*)::int`})
+          .from(judgmentsJobsPrompts)
+          .where(eq(judgmentsJobsPrompts.jobId, job.id))
+          .groupBy(judgmentsJobsPrompts.status),
         db
           .select({
             totalTokens: sum(tokenUse.totalTokens),
@@ -353,7 +353,7 @@ export const judgmentsJobsRoutes = new Elysia()
 
       const stats = {ready: 0, sent: 0, judged: 0}
 
-      articleStats.forEach((stat) => {
+      promptStats.forEach((stat) => {
         if (stat.status === 'ready') stats.ready = stat.count
         if (stat.status === 'sent') stats.sent = stat.count
         if (stat.status === 'judged') stats.judged = stat.count
@@ -361,7 +361,7 @@ export const judgmentsJobsRoutes = new Elysia()
 
       return {
         ...job,
-        articleStats: stats,
+        promptStats: stats,
         totalTokenUsage: {
           totalTokens: Number(totalTokenUsage[0]?.totalTokens || 0),
           totalPromptTokens: Number(totalTokenUsage[0]?.totalPromptTokens || 0),

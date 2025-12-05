@@ -37,7 +37,7 @@ export const judgmentsJobStatusEnum = pgEnum('judgments_job_status_enum', [
   'project_removed',
 ])
 
-export const judgmentsJobsArticlesStatusEnum = pgEnum('judgments_jobs_articles_status_enum', [
+export const judgmentsJobsPromptsStatusEnum = pgEnum('judgments_jobs_prompts_status_enum', [
   'ready',
   'sent',
   'judged',
@@ -381,8 +381,8 @@ export const judgmentsJobs = pgTable(
   },
 )
 
-export const judgmentsJobsArticles = pgTable(
-  'judgments_jobs_articles',
+export const judgmentsJobsPrompts = pgTable(
+  'judgments_jobs_prompts',
   {
     id: uuid('id').primaryKey().defaultRandom(),
     createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
@@ -403,15 +403,23 @@ export const judgmentsJobsArticles = pgTable(
         },
         {onDelete: 'cascade'},
       ),
+    promptId: uuid('prompt_id')
+      .notNull()
+      .references(
+        () => {
+          return prompts.id
+        },
+        {onDelete: 'cascade'},
+      ),
     serverId: text('server_id'),
     sentAt: timestamp('sent_at', {withTimezone: true}),
     judgedAt: timestamp('judged_at', {withTimezone: true}),
-    status: judgmentsJobsArticlesStatusEnum('status').default('ready').notNull(),
+    status: judgmentsJobsPromptsStatusEnum('status').default('ready').notNull(),
   },
   (table) => {
     return [
-      index('judgments_jobs_articles_job_idx').on(table.jobId),
-      index('judgments_jobs_articles_job_status_idx').on(table.jobId, table.status),
+      index('judgments_jobs_prompts_job_idx').on(table.jobId),
+      index('judgments_jobs_prompts_job_status_idx').on(table.jobId, table.status),
     ]
   },
 )
