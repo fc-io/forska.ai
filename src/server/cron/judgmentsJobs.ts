@@ -31,8 +31,8 @@ const sendToLLM = async (): Promise<void> => {
   if (!env.RUN_SERVER_JUDGING || env.GPU_TOTAL_GPUS === 0) return
 
   const db = getDatabase()
-  const allJobs = await judgmentsJobsGetRunningJobs(db)
-  await judgmentsJobsSendToLLM(db, allJobs, serverJobId)
+  const runningJobs = await judgmentsJobsGetRunningJobs(db)
+  await judgmentsJobsSendToLLM(db, runningJobs, serverJobId)
 }
 
 const checkLLMStatusCron = async (): Promise<void> => {

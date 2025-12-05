@@ -9,7 +9,7 @@ import {judgmentsJobsGetRunningJobs} from './judgmentsJobsGetRunningJobs.ts'
 
 type Job = Awaited<ReturnType<typeof judgmentsJobsGetRunningJobs>>[number]
 
-const getReadyCount = async (
+const getCountOfReadyArticles = async (
   db: PostgresJsDatabase<typeof schema>,
   serverJobId: string,
   jobId: string,
@@ -58,8 +58,8 @@ const getNewPromptsForJob = async (
   serverJobId: string,
   promptsPerJob: number,
 ) => {
-  const readyCount = await getReadyCount(db, serverJobId, job.id)
-  return needsMorePrompts(readyCount)
+  const countOfReadyArticles = await getCountOfReadyArticles(db, serverJobId, job.id)
+  return needsMorePrompts(countOfReadyArticles)
     ? fetchPromptsForJob(job, promptsPerJob)
     : {promptIds: [], prompts: [], projectPrompts: [], job}
 }
@@ -68,12 +68,12 @@ export const judgmentsJobsAddToQueue = async (
   db: PostgresJsDatabase<typeof schema>,
   serverJobId: string,
 ): Promise<void> => {
-  const allJobs = await judgmentsJobsGetRunningJobs(db)
   const {SGLANG_MAX_RUNNING_REQUESTS} = env
   const promptsPerJob = Math.max(1, Number(SGLANG_MAX_RUNNING_REQUESTS || 1) * 5)
+  const runningJobs = await judgmentsJobsGetRunningJobs(db)
 
   await Promise.all(
-    allJobs.map(async (job) => {
+    runningJobs.map(async (job) => {
       const {promptIds} = await getNewPromptsForJob(db, job, serverJobId, promptsPerJob)
       await addPromptsToQueue(db, job.id, promptIds, serverJobId)
     }),
