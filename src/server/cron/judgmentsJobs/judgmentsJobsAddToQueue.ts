@@ -3,7 +3,6 @@ import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../db/schema.ts'
 import {env} from '../../utils/env.ts'
-import {getDatabase} from '../../utils/getDatabase.ts'
 import {getMaxNumberOfInflightRequests} from './getMaxNumberOfInflightRequests.ts'
 import {judgmentsJobsCronGetArticles} from './judgmentsJobsCronGetArticles.ts'
 import {judgmentsJobsGetJobs} from './judgmentsJobsGetJobs.ts'
@@ -90,12 +89,4 @@ export const judgmentsJobsAddToQueue = async (
       return addPromptsToQueue(db, job.id, promptIds, serverJobId)
     }),
   )
-}
-
-export const judgmentsJobsAddToQueueLegacy = async (
-  db: PostgresJsDatabase<typeof schema>,
-  serverJobId: string,
-): Promise<void> => {
-  const dbInstance = db ?? getDatabase()
-  await judgmentsJobsAddToQueue(dbInstance, serverJobId)
 }
