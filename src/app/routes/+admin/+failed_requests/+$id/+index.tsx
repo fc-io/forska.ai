@@ -53,6 +53,15 @@ const fetchFailedRequest = async (id: string) => {
   return response.data.data as FailedRequest
 }
 
+const copyJsonToClipboard = (data: FailedRequest) => {
+  const clipboard = typeof navigator === 'undefined' ? null : navigator.clipboard
+  if (!clipboard) {
+    return
+  }
+  const json = JSON.stringify(data, null, 2)
+  return clipboard.writeText(json)
+}
+
 const FailedRequestDetail = () => {
   const params = Route.useParams()
   const id = () => {
@@ -243,10 +252,18 @@ const FailedRequestDetail = () => {
                 </Show>
 
                 <div class="mt-6">
-                  <h3 class="text-lg font-medium text-gray-900 mb-2">Raw JSON Data</h3>
-                  <pre class="bg-gray-100 p-4 rounded-md overflow-x-auto text-xs">
-                    {JSON.stringify(request(), null, 2)}
-                  </pre>
+                  <div class="flex items-center justify-between mb-2">
+                    <h3 class="text-lg font-medium text-gray-900">Raw JSON Data</h3>
+                    <button
+                      class="px-3 py-1.5 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700"
+                      onClick={() => {
+                        return copyJsonToClipboard(request())
+                      }}
+                    >
+                      Copy
+                    </button>
+                  </div>
+                  <pre class="bg-gray-100 p-4 rounded-md overflow-x-auto text-xs">{JSON.stringify(request(), null, 2)}</pre>
                 </div>
               </div>
             )
