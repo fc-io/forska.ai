@@ -530,7 +530,7 @@ else
   export SGLANG_ENABLE_ROUTER=${SGLANG_ENABLE_ROUTER:-0}
 fi
 echo "[forska] router default: ${SGLANG_ENABLE_ROUTER} (workers=$WORKER_COUNT, per_gpu=${SGLANG_ONE_WORKER_PER_GPU})"
-export SGLANG_ROUTER_POLICY=${SGLANG_ROUTER_POLICY:-cache_aware}
+export SGLANG_ROUTER_POLICY=${SGLANG_ROUTER_POLICY:-power_of_two}
 if [[ "${SGLANG_ENABLE_ROUTER}" == "1" ]]; then
   # Validate router policy against supported options and fallback if invalid
   VALID_ROUTER_POLICIES=(random round_robin cache_aware power_of_two)
