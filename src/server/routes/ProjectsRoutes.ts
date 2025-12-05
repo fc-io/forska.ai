@@ -500,18 +500,59 @@ export const projectsRoutes = new Elysia()
               if (!existingPrompt) {
                 throw new Error('Prompt not found')
               }
-              // Disallow editing text or metadata on existing global prompts
-              if (existingPrompt.originalText !== p.originalText) {
-                throw new Error('Editing prompt text is not allowed; prompts are global and immutable')
-              }
-              const metaChangedOnSameText =
+
+              // Check if text or metadata changed - if so, create a new prompt
+              const textChanged = existingPrompt.originalText !== p.originalText
+              const metaChanged =
                 (p.promptHeading !== undefined && p.promptHeading !== (existingPrompt.promptHeading ?? null))
                 || (p.type !== undefined && p.type !== (existingPrompt.type ?? null))
-              if (metaChangedOnSameText) {
-                throw new Error('Editing prompt metadata is not allowed; prompts are global and immutable')
-              }
 
-              targetPromptId = p.originalId
+              if (textChanged || metaChanged) {
+                // Create a new prompt with the new text/metadata
+                const headingVal = p.promptHeading || null
+                const typeVal = p.type || null
+                const h4b = computePromptContentHash(p.originalText, null, headingVal, typeVal)
+                const found = await tx
+                  .select({id: prompts.id})
+                  .from(prompts)
+                  .where(eq(prompts.contentHash, h4b))
+                  .limit(1)
+                targetPromptId = await (async () => {
+                  if (found[0]?.id) {
+                    return found[0].id
+                  }
+                  const inserted = await tx
+                    .insert(prompts)
+                    .values({
+                      originalText: p.originalText,
+                      transformedText: null,
+                      promptHeading: headingVal,
+                      type: typeVal,
+                      contentHash: h4b,
+                    })
+                    .onConflictDoNothing({target: prompts.contentHash})
+                    .returning({id: prompts.id})
+                  if (inserted[0]?.id) {
+                    return inserted[0].id
+                  }
+                  const [fallbackPrompt] = await tx
+                    .select({id: prompts.id})
+                    .from(prompts)
+                    .where(eq(prompts.contentHash, h4b))
+                    .limit(1)
+                  if (!fallbackPrompt) {
+                    throw new Error('Prompt not found after insert')
+                  }
+                  return fallbackPrompt.id
+                })()
+
+                // Delete the old association (will be replaced with new prompt association below)
+                await tx
+                  .delete(projectPrompts)
+                  .where(and(eq(projectPrompts.projectId, params.id), eq(projectPrompts.promptId, p.originalId)))
+              } else {
+                targetPromptId = p.originalId
+              }
 
               const insertValues: Partial<typeof projectPrompts.$inferInsert> = {
                 projectId: params.id,
