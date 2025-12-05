@@ -214,9 +214,13 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
                           </label>
                           <Select.Root
                             multiple
-                            value={current().map((v) => encodeURIComponent(v))}
+                            value={current().map((v) => {
+                              return encodeURIComponent(v)
+                            })}
                             onChange={(vals: any) => {
-                              const values = vals.map((v: any) => v.value)
+                              const values = vals.map((v: any) => {
+                                return v.value
+                              })
                               return setPromptMulti(promptFilter.promptId, values.length ? values : null)
                             }}
                             options={options()}

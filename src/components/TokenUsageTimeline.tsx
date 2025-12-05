@@ -351,13 +351,7 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
     }
 
     const barThickness =
-      selectedInterval() === '1min'
-        ? 3
-        : selectedInterval() === '5min'
-          ? 4
-          : selectedInterval() === '15min'
-            ? 6
-            : 8
+      selectedInterval() === '1min' ? 3 : selectedInterval() === '5min' ? 4 : selectedInterval() === '15min' ? 6 : 8
 
     const promptData: number[] = []
     const completionData: number[] = []

@@ -331,6 +331,8 @@ export const judge = async ({
             outcome: 'success',
             error: null,
             lastResponse: null,
+            systemPrompt: null,
+            userPrompt: null,
           })
           // console.log('judgment success')
           successCount += 1
@@ -349,6 +351,8 @@ export const judge = async ({
             outcome: 'failure',
             error: result.error,
             lastResponse: result.lastResponse,
+            systemPrompt: SYSTEM_PROMPT,
+            userPrompt: prompt,
           })
           // console.log('judgment error')
           errorCount += 1

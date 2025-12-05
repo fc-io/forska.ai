@@ -19,6 +19,8 @@ type FailedRequestDetailItem = {
   failedTotalTokens: number
   error?: string | null
   lastResponse?: string | null
+  systemPrompt?: string | null
+  userPrompt?: string | null
 }
 
 type FailedRequest = {
@@ -242,6 +244,22 @@ const FailedRequestDetail = () => {
                                     </dd>
                                   </div>
                                 </Show>
+                                <Show when={detail.systemPrompt}>
+                                  <div class="sm:col-span-2">
+                                    <dt class="text-sm font-medium text-gray-500">System Prompt</dt>
+                                    <dd class="mt-1 text-sm text-gray-900 whitespace-pre-wrap break-words bg-gray-50 p-3 rounded-md border border-gray-200 max-h-64 overflow-y-auto">
+                                      {detail.systemPrompt}
+                                    </dd>
+                                  </div>
+                                </Show>
+                                <Show when={detail.userPrompt}>
+                                  <div class="sm:col-span-2">
+                                    <dt class="text-sm font-medium text-gray-500">User Prompt</dt>
+                                    <dd class="mt-1 text-sm text-gray-900 whitespace-pre-wrap break-words bg-gray-50 p-3 rounded-md border border-gray-200 max-h-64 overflow-y-auto">
+                                      {detail.userPrompt}
+                                    </dd>
+                                  </div>
+                                </Show>
                               </dl>
                             </div>
                           </div>
@@ -263,7 +281,9 @@ const FailedRequestDetail = () => {
                       Copy
                     </button>
                   </div>
-                  <pre class="bg-gray-100 p-4 rounded-md overflow-x-auto text-xs">{JSON.stringify(request(), null, 2)}</pre>
+                  <pre class="bg-gray-100 p-4 rounded-md overflow-x-auto text-xs">
+                    {JSON.stringify(request(), null, 2)}
+                  </pre>
                 </div>
               </div>
             )

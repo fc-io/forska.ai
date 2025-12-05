@@ -229,9 +229,7 @@ const buildPayload = (it: unknown, importRoute: string): ArticlesUpsertPayload |
   const createdAt = ad
     ? toIsoDate(readDatePart(ad.Year), readDatePart(ad.Month), readDatePart(ad.Day))
     : toIsoDate(readDatePart(dr?.Year), readDatePart(dr?.Month), readDatePart(dr?.Day))
-  const updatedAt = dr
-    ? toIsoDate(readDatePart(dr.Year), readDatePart(dr.Month), readDatePart(dr.Day))
-    : createdAt
+  const updatedAt = dr ? toIsoDate(readDatePart(dr.Year), readDatePart(dr.Month), readDatePart(dr.Day)) : createdAt
 
   return {
     article_id: `pmid:${pmid}`,

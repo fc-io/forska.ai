@@ -17,6 +17,8 @@ export type JudgeTokenUsageEntry = {
   outcome: 'success' | 'failure'
   error: string | null
   lastResponse: string | null
+  systemPrompt: string | null
+  userPrompt: string | null
 }
 
 type FailedRequestDetail = {
@@ -33,6 +35,8 @@ type FailedRequestDetail = {
   failedTotalTokens: number
   error: string | null
   lastResponse: string | null
+  systemPrompt: string | null
+  userPrompt: string | null
 }
 
 type FailedRequestAggregation = {
@@ -49,6 +53,8 @@ type FailedRequestAggregation = {
   failedTotalTokens: number
   lastError: string | null
   lastResponse: string | null
+  systemPrompt: string | null
+  userPrompt: string | null
 }
 
 type TokenUseTotals = {
@@ -67,9 +73,7 @@ type TokenUseTotals = {
   failedRequestsDetails: FailedRequestDetail[]
 }
 
-type JudgeTokenUseContext = {
-  totalRequests: number
-}
+type JudgeTokenUseContext = {totalRequests: number}
 
 const isServerEnvironment = (): boolean => {
   return typeof window === 'undefined' || typeof Bun !== 'undefined'
@@ -182,12 +186,10 @@ const buildTokenUseTotals = (
       const totalTokens = acc.totalTokens + entry.totalTokens
       const isFailure = entry.outcome === 'failure'
       const totalSuccessPromptTokens = acc.totalSuccessPromptTokens + (isFailure ? 0 : entry.promptTokens)
-      const totalSuccessCompletionTokens =
-        acc.totalSuccessCompletionTokens + (isFailure ? 0 : entry.completionTokens)
+      const totalSuccessCompletionTokens = acc.totalSuccessCompletionTokens + (isFailure ? 0 : entry.completionTokens)
       const totalSuccessTokens = acc.totalSuccessTokens + (isFailure ? 0 : entry.totalTokens)
       const totalFailedPromptTokens = acc.totalFailedPromptTokens + (isFailure ? entry.promptTokens : 0)
-      const totalFailedCompletionTokens =
-        acc.totalFailedCompletionTokens + (isFailure ? entry.completionTokens : 0)
+      const totalFailedCompletionTokens = acc.totalFailedCompletionTokens + (isFailure ? entry.completionTokens : 0)
       const totalFailedTokens = acc.totalFailedTokens + (isFailure ? entry.totalTokens : 0)
 
       return {
@@ -226,8 +228,8 @@ const buildTokenUseTotals = (
   const groupedByRequest = tokenUseEntries.reduce((map, entry) => {
     const key = `${entry.articleId}|${entry.modelId}|${entry.baseURL}`
     const existing =
-      map.get(key) ??
-      ({
+      map.get(key)
+      ?? ({
         articleId: entry.articleId,
         promptIds: entry.promptIds,
         modelId: entry.modelId,
@@ -241,20 +243,23 @@ const buildTokenUseTotals = (
         failedTotalTokens: 0,
         lastError: null,
         lastResponse: null,
+        systemPrompt: null,
+        userPrompt: null,
       } satisfies FailedRequestAggregation)
 
     const attempts = existing.attempts + 1
     const failedAttempts = existing.failedAttempts + (entry.outcome === 'failure' ? 1 : 0)
     const hasSuccess = existing.hasSuccess || entry.outcome === 'success'
-    const failedPromptTokens =
-      existing.failedPromptTokens + (entry.outcome === 'failure' ? entry.promptTokens : 0)
+    const failedPromptTokens = existing.failedPromptTokens + (entry.outcome === 'failure' ? entry.promptTokens : 0)
     const failedCompletionTokens =
       existing.failedCompletionTokens + (entry.outcome === 'failure' ? entry.completionTokens : 0)
-    const failedTotalTokens =
-      existing.failedTotalTokens + (entry.outcome === 'failure' ? entry.totalTokens : 0)
-    const lastError = entry.outcome === 'failure' ? entry.error ?? existing.lastError : existing.lastError
+    const failedTotalTokens = existing.failedTotalTokens + (entry.outcome === 'failure' ? entry.totalTokens : 0)
+    const lastError = entry.outcome === 'failure' ? (entry.error ?? existing.lastError) : existing.lastError
     const lastResponse =
-      entry.outcome === 'failure' ? entry.lastResponse ?? existing.lastResponse : existing.lastResponse
+      entry.outcome === 'failure' ? (entry.lastResponse ?? existing.lastResponse) : existing.lastResponse
+    const systemPrompt =
+      entry.outcome === 'failure' ? (entry.systemPrompt ?? existing.systemPrompt) : existing.systemPrompt
+    const userPrompt = entry.outcome === 'failure' ? (entry.userPrompt ?? existing.userPrompt) : existing.userPrompt
 
     map.set(key, {
       articleId: existing.articleId,
@@ -270,6 +275,8 @@ const buildTokenUseTotals = (
       failedTotalTokens,
       lastError,
       lastResponse,
+      systemPrompt,
+      userPrompt,
     })
 
     return map
@@ -296,6 +303,8 @@ const buildTokenUseTotals = (
         failedTotalTokens: request.failedTotalTokens,
         error: request.lastError,
         lastResponse: request.lastResponse,
+        systemPrompt: request.systemPrompt,
+        userPrompt: request.userPrompt,
       }
     })
 
@@ -333,7 +342,13 @@ export const judgeStoreTokenUse = async (
   const totalTokenUse = buildTokenUseTotals(tokenUseEntries, context)
 
   if (isServerEnvironment()) {
-    await storeTokenUseDirectly(context.totalRequests, totalTokenUse, null, {startedAt, finishedAt, duration}, judgmentsJobId)
+    await storeTokenUseDirectly(
+      context.totalRequests,
+      totalTokenUse,
+      null,
+      {startedAt, finishedAt, duration},
+      judgmentsJobId,
+    )
   } else {
     if (!sessionId) {
       throw new Error('sessionId is required when running in client environment')
