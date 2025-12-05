@@ -10,9 +10,12 @@ import {
 } from './judge/judgeGetPrompt.ts'
 import {parseJudgment} from './judge/judgeParseJudgment.ts'
 import {AIResponseType} from './judge/judgeParseModelResponse.ts'
+import {SINGLE_PROMPT_SYSTEM_PROMPT} from './judge/judgeSinglePromptSystemPrompt.ts'
 import {judgeStoreJudgment} from './judge/judgeStoreJudgment.ts'
 import {judgeStoreTokenUse, type JudgeTokenUsageEntry} from './judge/judgeStoreTokenUse.ts'
 import {SYSTEM_PROMPT} from './judge/judgeSystemPrompt.ts'
+import {parseSinglePromptJudgment} from './judge/parseSinglePromptJudgment.ts'
+import {storeSinglePromptJudgment} from './judge/storeSinglePromptJudgment.ts'
 
 const openAIClients = new Map<string, OpenAI>()
 
@@ -401,11 +404,50 @@ type SinglePromptInput = {
 }
 
 /**
+ * Helper to generate a single-prompt response from the LLM.
+ */
+const generateSinglePromptResponse = async ({
+  prompt,
+  baseURL,
+  modelName,
+}: {
+  prompt: string
+  baseURL: string
+  modelName: string
+}): Promise<{text: string; usage: {promptTokens: number; completionTokens: number; totalTokens: number}}> => {
+  const client = getOpenAIClient(baseURL)
+  const modelToUse = normalizeVllmModelName(modelName)
+  const response = await client.chat.completions.create({
+    model: modelToUse,
+    messages: [
+      {role: 'system', content: SINGLE_PROMPT_SYSTEM_PROMPT},
+      {role: 'user', content: prompt},
+    ],
+    max_completion_tokens: 2000, // Single prompt needs less tokens
+    temperature: 0,
+  })
+
+  const message = response.choices[0]?.message
+  if (!message) throw new Error('No message in response')
+  const assistantMessage = formatAssistantMessage(message)
+
+  return {
+    text: assistantMessage.content,
+    usage: {
+      promptTokens: response.usage?.prompt_tokens || 0,
+      completionTokens: response.usage?.completion_tokens || 0,
+      totalTokens: response.usage?.total_tokens || 0,
+    },
+  }
+}
+
+/**
  * Process a single prompt for a single article.
  * This function sends one prompt at a time to the LLM, which allows for:
  * - Skipping prompts that already have judgments
  * - Better isolation of failures
  * - More granular retry logic per prompt
+ * - Simpler response format (answer/explanation/quotes)
  */
 export const judgeSinglePrompt = async ({
   article,
@@ -432,7 +474,7 @@ export const judgeSinglePrompt = async ({
   const startedAt = new Date().toISOString()
   const startDuration = performance.now()
 
-  const {prompt: basePrompt, shortIdMapping} = judgeGetSinglePrompt(article, prompt)
+  const basePrompt = judgeGetSinglePrompt(article, prompt)
   const promptIds = [prompt.id]
   let userPrompt = basePrompt
   let attempts = 0
@@ -441,28 +483,25 @@ export const judgeSinglePrompt = async ({
 
   while (attempts <= MAX_RETRIES) {
     attempts += 1
-    const result = await attemptJudgment({
-      prompt: userPrompt,
-      baseURL,
-      modelName,
-      article,
-      prompts: [prompt],
-      modelId,
-      projectId,
-      shortIdMapping,
-    })
 
-    if (result.success) {
-      const usage = result.usage
+    try {
+      const response = await generateSinglePromptResponse({prompt: userPrompt, baseURL, modelName})
+
+      // Try to parse the response
+      const judgment = parseSinglePromptJudgment(response.text)
+
+      // Store the judgment
+      await storeSinglePromptJudgment({articleId: article.id, promptId: prompt.id, modelId, projectId, judgment})
+
       tokenUse.push({
         articleId: article.id,
         promptIds,
         modelId,
         modelName,
         baseURL,
-        promptTokens: usage.promptTokens,
-        completionTokens: usage.completionTokens,
-        totalTokens: usage.totalTokens,
+        promptTokens: response.usage.promptTokens,
+        completionTokens: response.usage.completionTokens,
+        totalTokens: response.usage.totalTokens,
         outcome: 'success',
         error: null,
         lastResponse: null,
@@ -471,27 +510,29 @@ export const judgeSinglePrompt = async ({
       })
       successCount += 1
       break
-    } else {
-      const usage = result.usage ?? ({promptTokens: 0, completionTokens: 0, totalTokens: 0} satisfies AttemptUsage)
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      const responseText = lastResponse || ''
+
       tokenUse.push({
         articleId: article.id,
         promptIds,
         modelId,
         modelName,
         baseURL,
-        promptTokens: usage.promptTokens,
-        completionTokens: usage.completionTokens,
-        totalTokens: usage.totalTokens,
+        promptTokens: 0,
+        completionTokens: 0,
+        totalTokens: 0,
         outcome: 'failure',
-        error: result.error,
-        lastResponse: result.lastResponse,
-        systemPrompt: SYSTEM_PROMPT,
+        error: errorMessage,
+        lastResponse: responseText,
+        systemPrompt: SINGLE_PROMPT_SYSTEM_PROMPT,
         userPrompt,
       })
       errorCount += 1
 
-      lastError = result.error
-      lastResponse = result.lastResponse
+      lastError = errorMessage
+      lastResponse = responseText
 
       if (attempts < MAX_RETRIES) {
         userPrompt = buildRetryPrompt(basePrompt, lastError, lastResponse)
@@ -515,7 +556,7 @@ export const judgeSinglePrompt = async ({
 
   await judgeStoreTokenUse(tokenUse, sessionId, {startedAt, finishedAt, duration}, judgmentsJobId, {
     totalRequests: 1,
-  }).catch((error) => {
-    console.error('judgeStoreTokenUse failed; continuing', error instanceof Error ? error.message : error)
+  }).catch((err) => {
+    console.error('judgeStoreTokenUse failed; continuing', err instanceof Error ? err.message : err)
   })
 }

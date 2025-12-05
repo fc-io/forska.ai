@@ -97,16 +97,10 @@ export type SinglePromptType = {
 
 /**
  * Generate a prompt for a single question about an article.
- * This function is optimized for sending individual prompts to the LLM.
+ * Uses simplified output keys (answer, explanation, quotes) since there's only one question.
  */
-export const judgeGetSinglePrompt = (article: ArticleType, singlePrompt: SinglePromptType): JudgePromptResult => {
-  const shortIdMapping = createShortIdMapping([singlePrompt])
-  const shortId = getShortIdForPrompt(singlePrompt.id, shortIdMapping)
-  const baseHeading = getBaseHeading(singlePrompt, shortId)
-
-  const prompt = `# id: ${article.articleId}
-
-## article_title
+export const judgeGetSinglePrompt = (article: ArticleType, singlePrompt: SinglePromptType): string => {
+  const prompt = `## article_title
 
 ${article.articleTitle}
 
@@ -114,13 +108,11 @@ ${article.articleTitle}
 
 ${article.articleSummary}
 
-## Below is a question from the user for you to answer about the title and summary provided above:
+## Question
 
-### ${baseHeading}---question
-
-question: ${singlePrompt.originalText}
+${singlePrompt.originalText}
 
 output_type: ${singlePrompt.type}`
 
-  return {prompt, shortIdMapping}
+  return prompt
 }
