@@ -19,8 +19,6 @@ const getExistingJudgmentPromptIds = async (
   modelId: string,
   promptIds: string[],
 ): Promise<Set<string>> => {
-  if (promptIds.length === 0) return new Set()
-
   const existingJudgments = await db
     .select({promptId: schema.judgments.promptId})
     .from(schema.judgments)

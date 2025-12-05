@@ -72,15 +72,10 @@ export const judgmentsJobsAddToQueue = async (
   const {SGLANG_MAX_RUNNING_REQUESTS} = env
   const promptsPerJob = Math.max(1, Number(SGLANG_MAX_RUNNING_REQUESTS || 1) * 5)
 
-  const newPromptsData = await Promise.all(
-    allJobs.map((job) => {
-      return getNewPromptsForJob(db, job, serverJobId, promptsPerJob)
-    }),
-  )
-
   await Promise.all(
-    newPromptsData.map(({job, promptIds}) => {
-      return addPromptsToQueue(db, job.id, promptIds, serverJobId)
+    allJobs.map(async (job) => {
+      const {promptIds} = await getNewPromptsForJob(db, job, serverJobId, promptsPerJob)
+      await addPromptsToQueue(db, job.id, promptIds, serverJobId)
     }),
   )
 }

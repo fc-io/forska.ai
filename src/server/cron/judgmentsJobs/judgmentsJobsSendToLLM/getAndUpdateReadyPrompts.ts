@@ -34,14 +34,9 @@ const processReadyRows = async (
       jobId: schema.judgmentsJobsArticles.jobId,
     })
 
-  const selectedMap = new Set(readyIds)
-  const selectedPrompts = promptsWithJobs.filter((row) => {
-    return selectedMap.has(row.recordId)
-  })
-
   const uniqueJobIds = [
     ...new Set(
-      selectedPrompts.map((prompt) => {
+      promptsWithJobs.map((prompt) => {
         return prompt.jobId
       }),
     ),
@@ -68,7 +63,7 @@ const processReadyRows = async (
   })
   const jobConfigMap = new Map(jobConfigPairs)
 
-  const promptsWithProjects = selectedPrompts
+  const promptsWithProjects = promptsWithJobs
     .map((prompt) => {
       const config = jobConfigMap.get(prompt.jobId)
       if (!config?.projectId || !config?.modelId || !config?.modelName || !config?.modelBaseUrl) {
