@@ -6,6 +6,7 @@ import {tokenUse} from '../../db/schema.ts'
 import {requireAdminAuth} from '../utils/authGuard.ts'
 import {env} from '../utils/env.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
+import {tokensRoutesGetFailedRequests} from './tokensRoutes/tokensRoutesGetFailedRequests.ts'
 import {tokensRoutesGetTimeline} from './tokensRoutes/tokensRoutesGetTimeline.ts'
 import {tokensRoutesGetTimelineAllJobs} from './tokensRoutes/tokensRoutesGetTimelineAllJobs.ts'
 
@@ -224,4 +225,11 @@ export const tokensRoutes = new Elysia()
         endDate: t.String(),
       }),
     },
+  )
+  .post(
+    '/api/tokens/failed-requests',
+    async ({body}) => {
+      return await tokensRoutesGetFailedRequests(body)
+    },
+    {body: t.Object({limit: t.Optional(t.Number()), offset: t.Optional(t.Number())})},
   )

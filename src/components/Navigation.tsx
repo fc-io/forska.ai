@@ -77,6 +77,9 @@ export const Navigation = (props: NavigationProps) => {
               <Link to="/admin/prompts/deduplicate" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
                 Deduplicate Prompts
               </Link>
+              <Link to="/admin/failed_requests" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
+                Failed Requests
+              </Link>
             </Show>
             <Show when={props.user}>
               <Menu.Root positioning={{placement: 'bottom-end'}}>

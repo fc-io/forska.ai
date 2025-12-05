@@ -24,6 +24,7 @@ import { Route as AdminUsersIndexRouteImport } from './routes/+admin/+users/+ind
 import { Route as AdminSetup_statsIndexRouteImport } from './routes/+admin/+setup_stats/+index'
 import { Route as AdminLlmIndexRouteImport } from './routes/+admin/+llm/+index'
 import { Route as AdminJobsIndexRouteImport } from './routes/+admin/+jobs/+index'
+import { Route as AdminFailed_requestsIndexRouteImport } from './routes/+admin/+failed_requests/+index'
 import { Route as AdminDatasourcesIndexRouteImport } from './routes/+admin/+datasources/+index'
 import { Route as AdminAssessmentsIndexRouteImport } from './routes/+admin/+assessments/+index'
 import { Route as AdminJobsIdUnassessed_articlesRouteImport } from './routes/+admin/+jobs/+$id/+unassessed_articles'
@@ -113,6 +114,12 @@ const AdminJobsIndexRoute = AdminJobsIndexRouteImport.update({
   path: '/admin/jobs/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminFailed_requestsIndexRoute =
+  AdminFailed_requestsIndexRouteImport.update({
+    id: '/admin/failed_requests/',
+    path: '/admin/failed_requests/',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const AdminDatasourcesIndexRoute = AdminDatasourcesIndexRouteImport.update({
   id: '/admin/datasources/',
   path: '/admin/datasources/',
@@ -190,6 +197,7 @@ export interface FileRoutesByFullPath {
   '/projects/create': typeof ProjectsCreateRoute
   '/admin/assessments': typeof AdminAssessmentsIndexRoute
   '/admin/datasources': typeof AdminDatasourcesIndexRoute
+  '/admin/failed_requests': typeof AdminFailed_requestsIndexRoute
   '/admin/jobs': typeof AdminJobsIndexRoute
   '/admin/llm': typeof AdminLlmIndexRoute
   '/admin/setup_stats': typeof AdminSetup_statsIndexRoute
@@ -219,6 +227,7 @@ export interface FileRoutesByTo {
   '/projects/create': typeof ProjectsCreateRoute
   '/admin/assessments': typeof AdminAssessmentsIndexRoute
   '/admin/datasources': typeof AdminDatasourcesIndexRoute
+  '/admin/failed_requests': typeof AdminFailed_requestsIndexRoute
   '/admin/jobs': typeof AdminJobsIndexRoute
   '/admin/llm': typeof AdminLlmIndexRoute
   '/admin/setup_stats': typeof AdminSetup_statsIndexRoute
@@ -249,6 +258,7 @@ export interface FileRoutesById {
   '/projects/create': typeof ProjectsCreateRoute
   '/admin/assessments/': typeof AdminAssessmentsIndexRoute
   '/admin/datasources/': typeof AdminDatasourcesIndexRoute
+  '/admin/failed_requests/': typeof AdminFailed_requestsIndexRoute
   '/admin/jobs/': typeof AdminJobsIndexRoute
   '/admin/llm/': typeof AdminLlmIndexRoute
   '/admin/setup_stats/': typeof AdminSetup_statsIndexRoute
@@ -280,6 +290,7 @@ export interface FileRouteTypes {
     | '/projects/create'
     | '/admin/assessments'
     | '/admin/datasources'
+    | '/admin/failed_requests'
     | '/admin/jobs'
     | '/admin/llm'
     | '/admin/setup_stats'
@@ -309,6 +320,7 @@ export interface FileRouteTypes {
     | '/projects/create'
     | '/admin/assessments'
     | '/admin/datasources'
+    | '/admin/failed_requests'
     | '/admin/jobs'
     | '/admin/llm'
     | '/admin/setup_stats'
@@ -338,6 +350,7 @@ export interface FileRouteTypes {
     | '/projects/create'
     | '/admin/assessments/'
     | '/admin/datasources/'
+    | '/admin/failed_requests/'
     | '/admin/jobs/'
     | '/admin/llm/'
     | '/admin/setup_stats/'
@@ -368,6 +381,7 @@ export interface RootRouteChildren {
   ProjectsCreateRoute: typeof ProjectsCreateRoute
   AdminAssessmentsIndexRoute: typeof AdminAssessmentsIndexRoute
   AdminDatasourcesIndexRoute: typeof AdminDatasourcesIndexRoute
+  AdminFailed_requestsIndexRoute: typeof AdminFailed_requestsIndexRoute
   AdminJobsIndexRoute: typeof AdminJobsIndexRoute
   AdminLlmIndexRoute: typeof AdminLlmIndexRoute
   AdminSetup_statsIndexRoute: typeof AdminSetup_statsIndexRoute
@@ -496,6 +510,13 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof AdminJobsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/failed_requests/': {
+      id: '/admin/failed_requests/'
+      path: '/admin/failed_requests'
+      fullPath: '/admin/failed_requests'
+      preLoaderRoute: typeof AdminFailed_requestsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/admin/datasources/': {
       id: '/admin/datasources/'
       path: '/admin/datasources'
@@ -592,6 +613,7 @@ const rootRouteChildren: RootRouteChildren = {
   ProjectsCreateRoute: ProjectsCreateRoute,
   AdminAssessmentsIndexRoute: AdminAssessmentsIndexRoute,
   AdminDatasourcesIndexRoute: AdminDatasourcesIndexRoute,
+  AdminFailed_requestsIndexRoute: AdminFailed_requestsIndexRoute,
   AdminJobsIndexRoute: AdminJobsIndexRoute,
   AdminLlmIndexRoute: AdminLlmIndexRoute,
   AdminSetup_statsIndexRoute: AdminSetup_statsIndexRoute,
