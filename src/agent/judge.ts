@@ -2,7 +2,12 @@ import OpenAI from 'openai'
 import type {ChatCompletion, ChatCompletionMessage} from 'openai/resources/chat/completions'
 
 import * as schema from '../db/schema.ts'
-import {judgeGetPrompt, type PromptForJudging, type ShortIdMapping} from './judge/judgeGetPrompt.ts'
+import {
+  judgeGetPrompt,
+  judgeGetSinglePrompt,
+  type PromptForJudging,
+  type ShortIdMapping,
+} from './judge/judgeGetPrompt.ts'
 import {parseJudgment} from './judge/judgeParseJudgment.ts'
 import {AIResponseType} from './judge/judgeParseModelResponse.ts'
 import {judgeStoreJudgment} from './judge/judgeStoreJudgment.ts'
@@ -382,6 +387,134 @@ export const judge = async ({
   }
   await judgeStoreTokenUse(tokenUse, sessionId, {startedAt, finishedAt, duration}, judgmentsJobId, {
     totalRequests: articles.length,
+  }).catch((error) => {
+    console.error('judgeStoreTokenUse failed; continuing', error instanceof Error ? error.message : error)
+  })
+}
+
+type SinglePromptInput = {
+  id: string
+  originalText: string
+  promptHeading: string | null
+  order: number | null
+  type: string | null
+}
+
+/**
+ * Process a single prompt for a single article.
+ * This function sends one prompt at a time to the LLM, which allows for:
+ * - Skipping prompts that already have judgments
+ * - Better isolation of failures
+ * - More granular retry logic per prompt
+ */
+export const judgeSinglePrompt = async ({
+  article,
+  prompt,
+  sessionId,
+  judgmentsJobId,
+  modelConfig,
+  projectId,
+}: {
+  article: ArticlesType[number]
+  prompt: SinglePromptInput
+  sessionId: string | null
+  judgmentsJobId: string
+  modelConfig: ModelConfigInput
+  projectId: string
+}): Promise<void> => {
+  const {baseURL, modelName, modelId} = modelConfig
+  if (!baseURL) {
+    console.log('missing baseURL', modelConfig, baseURL)
+    return
+  }
+
+  const tokenUse: JudgeTokenUsageEntry[] = []
+  const startedAt = new Date().toISOString()
+  const startDuration = performance.now()
+
+  const {prompt: basePrompt, shortIdMapping} = judgeGetSinglePrompt(article, prompt)
+  const promptIds = [prompt.id]
+  let userPrompt = basePrompt
+  let attempts = 0
+  let lastError: string | null = null
+  let lastResponse = ''
+
+  while (attempts <= MAX_RETRIES) {
+    attempts += 1
+    const result = await attemptJudgment({
+      prompt: userPrompt,
+      baseURL,
+      modelName,
+      article,
+      prompts: [prompt],
+      modelId,
+      projectId,
+      shortIdMapping,
+    })
+
+    if (result.success) {
+      const usage = result.usage
+      tokenUse.push({
+        articleId: article.id,
+        promptIds,
+        modelId,
+        modelName,
+        baseURL,
+        promptTokens: usage.promptTokens,
+        completionTokens: usage.completionTokens,
+        totalTokens: usage.totalTokens,
+        outcome: 'success',
+        error: null,
+        lastResponse: null,
+        systemPrompt: null,
+        userPrompt: null,
+      })
+      successCount += 1
+      break
+    } else {
+      const usage = result.usage ?? ({promptTokens: 0, completionTokens: 0, totalTokens: 0} satisfies AttemptUsage)
+      tokenUse.push({
+        articleId: article.id,
+        promptIds,
+        modelId,
+        modelName,
+        baseURL,
+        promptTokens: usage.promptTokens,
+        completionTokens: usage.completionTokens,
+        totalTokens: usage.totalTokens,
+        outcome: 'failure',
+        error: result.error,
+        lastResponse: result.lastResponse,
+        systemPrompt: SYSTEM_PROMPT,
+        userPrompt,
+      })
+      errorCount += 1
+
+      lastError = result.error
+      lastResponse = result.lastResponse
+
+      if (attempts < MAX_RETRIES) {
+        userPrompt = buildRetryPrompt(basePrompt, lastError, lastResponse)
+      } else {
+        abortCount += 1
+        console.error(`${article.id} | Prompt ${prompt.id} | Aborting: ${lastError}`)
+      }
+    }
+  }
+
+  const duration = performance.now() - startDuration
+  const finishedAt = new Date().toISOString()
+
+  if (
+    (errorCount % 100 === 0 && errorCount > 0)
+    || (abortCount % 100 === 0 && abortCount > 0)
+    || successCount % 100 === 0
+  ) {
+    console.log(`Total: ${errorCount} errorCount,${abortCount} aborts, ${successCount} successes`)
+  }
+
+  await judgeStoreTokenUse(tokenUse, sessionId, {startedAt, finishedAt, duration}, judgmentsJobId, {
+    totalRequests: 1,
   }).catch((error) => {
     console.error('judgeStoreTokenUse failed; continuing', error instanceof Error ? error.message : error)
   })

@@ -86,3 +86,41 @@ ${sections}`
 
   return {prompt, shortIdMapping}
 }
+
+export type SinglePromptType = {
+  id: string
+  originalText: string
+  promptHeading: string | null
+  order: number | null
+  type: string | null
+}
+
+/**
+ * Generate a prompt for a single question about an article.
+ * This function is optimized for sending individual prompts to the LLM.
+ */
+export const judgeGetSinglePrompt = (article: ArticleType, singlePrompt: SinglePromptType): JudgePromptResult => {
+  const shortIdMapping = createShortIdMapping([singlePrompt])
+  const shortId = getShortIdForPrompt(singlePrompt.id, shortIdMapping)
+  const baseHeading = getBaseHeading(singlePrompt, shortId)
+
+  const prompt = `# id: ${article.articleId}
+
+## article_title
+
+${article.articleTitle}
+
+## article_summary
+
+${article.articleSummary}
+
+## Below is a question from the user for you to answer about the title and summary provided above:
+
+### ${baseHeading}---question
+
+question: ${singlePrompt.originalText}
+
+output_type: ${singlePrompt.type}`
+
+  return {prompt, shortIdMapping}
+}
