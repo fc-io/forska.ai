@@ -24,8 +24,8 @@ If the port is taken:
 ```bash
 lsof -iTCP:8432 -sTCP:LISTEN -Pn
 kill <pid>
-# and/or
-> ControlSocket /Users/fredrc/.ssh/176468423119685_conlicting_socket already exists, disabling multiplexing
+# and/or if:
+# ControlSocket /Users/fredrc/.ssh/176468423119685_conlicting_socket already exists, disabling multiplexing
 rm /Users/fredrc/.ssh/176468423119685_conlicting_socket
 ```
 
