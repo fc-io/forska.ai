@@ -55,7 +55,7 @@ apptainer run --cleanenv --writable-tmpfs \
 
 ## Run the sync
 ```bash
-bun run db:sync:remote
+bun run db:sync:remote-to-local
 ```
 - Delta mode: Tables with `updated_at` only pull rows where remote `updated_at` > last watermark.
 - Full mode: Use `--full` to upsert all rows for all tables (skips the watermark).
@@ -64,13 +64,13 @@ bun run db:sync:remote
 Examples:
 ```bash
 # Delta sync everything (default)
-bun run db:sync:remote
+bun run db:sync:remote-to-local
 
 # Full upsert of all tables
-bun run db:sync:remote --full
+bun run db:sync:remote-to-local --full
 
 # Only a couple of tables (delta)
-bun run db:sync:remote --tables=articles,judgments
+bun run db:sync:remote-to-local --tables=articles,judgments
 ```
 
 ## What it does
