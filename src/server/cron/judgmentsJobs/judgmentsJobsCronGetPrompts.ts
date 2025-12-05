@@ -41,6 +41,7 @@ const getQueryConditions = ({jobId, project}: {jobId: string; project: typeof sc
       WHERE j."article_id" = ${schema.articles.id}
       AND j."prompt_id" = ${schema.projectPrompts.promptId}
       AND j."model_id" = ${project.modelId}
+      AND j."is_answered" = true
     )`,
   )
 
@@ -107,17 +108,20 @@ export const judgmentsJobsCronGetPrompts = async (
 ): Promise<QueuePromptsResult> => {
   const db = getDatabase()
 
-  const [project] = await db.select().from(schema.projects).where(eq(schema.projects.id, projectId)).limit(1)
+  // Run project fetch and enabled prompt count in parallel
+  const [projectResult, enabledPromptCount] = await Promise.all([
+    db.select().from(schema.projects).where(eq(schema.projects.id, projectId)).limit(1),
+    db
+      .select({count: sql<number>`count(*)`})
+      .from(schema.projectPrompts)
+      .where(and(eq(schema.projectPrompts.projectId, projectId), eq(schema.projectPrompts.enabled, true))),
+  ])
+
+  const [project] = projectResult
 
   if (!project) {
     return {promptEntries: []}
   }
-
-  // Check if project has any enabled prompts
-  const enabledPromptCount = await db
-    .select({count: sql<number>`count(*)`})
-    .from(schema.projectPrompts)
-    .where(and(eq(schema.projectPrompts.projectId, projectId), eq(schema.projectPrompts.enabled, true)))
 
   if (!enabledPromptCount[0] || enabledPromptCount[0].count === 0) {
     return {promptEntries: []}

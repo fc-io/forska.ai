@@ -13,28 +13,6 @@ type PromptDefinition = {
   type: string | null
 }
 
-const checkIfAlreadyJudged = async (
-  db: PostgresJsDatabase<typeof schema>,
-  articleId: string,
-  modelId: string,
-  promptId: string,
-): Promise<boolean> => {
-  const existingJudgment = await db
-    .select({id: schema.judgments.id})
-    .from(schema.judgments)
-    .where(
-      and(
-        eq(schema.judgments.articleId, articleId),
-        eq(schema.judgments.modelId, modelId),
-        eq(schema.judgments.promptId, promptId),
-        eq(schema.judgments.isAnswered, true),
-      ),
-    )
-    .limit(1)
-
-  return existingJudgment.length > 0
-}
-
 const processSinglePrompt = async (
   promptToProcess: PromptToProcess,
   article: typeof schema.articles.$inferSelect,
@@ -113,24 +91,6 @@ export const processPromptWithLLM = async (
     await markAsJudged(db, promptToProcess.jobId, promptToProcess.articleId, promptToProcess.promptId)
     return
   }
-
-  // Check if this specific prompt has already been judged
-  const alreadyJudged = await checkIfAlreadyJudged(
-    db,
-    promptToProcess.articleId,
-    promptToProcess.modelId,
-    promptToProcess.promptId,
-  )
-
-  if (alreadyJudged) {
-    console.log('Prompt already judged for article:', {
-      articleId: promptToProcess.articleId,
-      promptId: promptToProcess.promptId,
-    })
-    await markAsJudged(db, promptToProcess.jobId, promptToProcess.articleId, promptToProcess.promptId)
-    return
-  }
-
   // Process the single prompt
   console.log(`Processing prompt ${promptToProcess.promptId} for article ${promptToProcess.articleId}`)
 

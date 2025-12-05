@@ -267,6 +267,13 @@
       "when": 1764967533424,
       "tag": "0037_shocking_tattoo",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1764968061982,
+      "tag": "0038_useful_salo",
+      "breakpoints": true
     }
   ]
 }
