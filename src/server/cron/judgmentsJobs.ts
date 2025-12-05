@@ -6,7 +6,7 @@ import {getDatabase} from '../utils/getDatabase.ts'
 import {judgmentsJobsAddToQueue} from './judgmentsJobs/judgmentsJobsAddToQueue.ts'
 import {judgmentsJobsCheckLLMStatus} from './judgmentsJobs/judgmentsJobsCheckLLMStatus.ts'
 import {judgmentsJobsCleanupStale} from './judgmentsJobs/judgmentsJobsCleanupStale.ts'
-import {judgmentsJobsGetJobs} from './judgmentsJobs/judgmentsJobsGetJobs.ts'
+import {judgmentsJobsGetRunningJobs} from './judgmentsJobs/judgmentsJobsGetRunningJobs.ts'
 import {judgmentsJobsSendToLLM} from './judgmentsJobs/judgmentsJobsSendToLLM.ts'
 
 const serverJobId = `server-job-${crypto.randomUUID()}`
@@ -31,7 +31,7 @@ const sendToLLM = async (): Promise<void> => {
   if (!env.RUN_SERVER_JUDGING || env.GPU_TOTAL_GPUS === 0) return
 
   const db = getDatabase()
-  const allJobs = await judgmentsJobsGetJobs(db)
+  const allJobs = await judgmentsJobsGetRunningJobs(db)
   await judgmentsJobsSendToLLM(db, allJobs, serverJobId)
 }
 

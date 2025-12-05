@@ -4,7 +4,7 @@ import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 import * as schema from '../../../db/schema.ts'
 import {env} from '../../utils/env.ts'
 import {getMaxNumberOfInflightRequests} from './getMaxNumberOfInflightRequests.ts'
-import type {judgmentsJobsGetJobs} from './judgmentsJobsGetJobs.ts'
+import type {judgmentsJobsGetRunningJobs} from './judgmentsJobsGetRunningJobs.ts'
 import {getAndUpdateReadyPrompts, type PromptToProcess} from './judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts'
 import {processPromptWithLLM} from './judgmentsJobsSendToLLM/processPromptWithLLM.ts'
 
@@ -40,7 +40,7 @@ let isRunningJudgmentsJobsSendToLLM = false
 
 export const judgmentsJobsSendToLLM = async (
   db: PostgresJsDatabase<typeof schema>,
-  allJobs: Awaited<ReturnType<typeof judgmentsJobsGetJobs>>,
+  allJobs: Awaited<ReturnType<typeof judgmentsJobsGetRunningJobs>>,
   serverJobId: string,
 ): Promise<void> => {
   if (isRunningJudgmentsJobsSendToLLM) return

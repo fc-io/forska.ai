@@ -3,8 +3,8 @@ import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../db/schema.ts'
 
-export const judgmentsJobsGetJobs = async (db: PostgresJsDatabase<typeof schema>) => {
-  const result = await db
+export const judgmentsJobsGetRunningJobs = (db: PostgresJsDatabase<typeof schema>) => {
+  return db
     .select({
       id: schema.judgmentsJobs.id,
       status: schema.judgmentsJobs.status,
@@ -16,6 +16,4 @@ export const judgmentsJobsGetJobs = async (db: PostgresJsDatabase<typeof schema>
     .from(schema.judgmentsJobs)
     .innerJoin(schema.projects, eq(schema.judgmentsJobs.projectId, schema.projects.id))
     .where(eq(schema.judgmentsJobs.status, 'running'))
-
-  return result
 }

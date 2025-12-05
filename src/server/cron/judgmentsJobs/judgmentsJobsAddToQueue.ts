@@ -5,9 +5,9 @@ import * as schema from '../../../db/schema.ts'
 import {env} from '../../utils/env.ts'
 import {getMaxNumberOfInflightRequests} from './getMaxNumberOfInflightRequests.ts'
 import {judgmentsJobsCronGetArticles} from './judgmentsJobsCronGetArticles.ts'
-import {judgmentsJobsGetJobs} from './judgmentsJobsGetJobs.ts'
+import {judgmentsJobsGetRunningJobs} from './judgmentsJobsGetRunningJobs.ts'
 
-type Job = Awaited<ReturnType<typeof judgmentsJobsGetJobs>>[number]
+type Job = Awaited<ReturnType<typeof judgmentsJobsGetRunningJobs>>[number]
 
 const getReadyCount = async (
   db: PostgresJsDatabase<typeof schema>,
@@ -68,7 +68,7 @@ export const judgmentsJobsAddToQueue = async (
   db: PostgresJsDatabase<typeof schema>,
   serverJobId: string,
 ): Promise<void> => {
-  const allJobs = await judgmentsJobsGetJobs(db)
+  const allJobs = await judgmentsJobsGetRunningJobs(db)
   const {SGLANG_MAX_RUNNING_REQUESTS} = env
   const promptsPerJob = Math.max(1, Number(SGLANG_MAX_RUNNING_REQUESTS || 1) * 5)
 
