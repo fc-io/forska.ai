@@ -226,14 +226,14 @@ const AdminJudgmentJobDetail = () => {
                           <p class="text-2xl font-bold text-gray-900">
                             {data() && 'articleStats' in (data() as any) ? (data() as any).articleStats?.ready || 0 : 0}
                           </p>
-                          <p class="text-xs text-gray-500 mt-1">Articles ready to process</p>
+                          <p class="text-xs text-gray-500 mt-1">Articles queued for judgment</p>
                         </div>
                         <div class="bg-blue-50 rounded-lg p-4">
                           <p class="text-sm text-blue-600 mb-1">Sent</p>
                           <p class="text-2xl font-bold text-blue-900">
                             {data() && 'articleStats' in (data() as any) ? (data() as any).articleStats?.sent || 0 : 0}
                           </p>
-                          <p class="text-xs text-blue-600 mt-1">Articles sent for judgment</p>
+                          <p class="text-xs text-blue-600 mt-1">Articles with prompts in-flight</p>
                         </div>
                         <div class="bg-green-50 rounded-lg p-4">
                           <p class="text-sm text-green-600 mb-1">Judged</p>
@@ -242,7 +242,7 @@ const AdminJudgmentJobDetail = () => {
                               ? (data() as any).articleStats?.judged || 0
                               : 0}
                           </p>
-                          <p class="text-xs text-green-600 mt-1">Articles completed</p>
+                          <p class="text-xs text-green-600 mt-1">Articles with all prompts judged</p>
                         </div>
                       </div>
                     </div>
