@@ -4,6 +4,7 @@ import {readFile} from 'fs/promises'
 import path from 'path'
 
 import {articles, judgments, models, projects} from '../../db/schema.ts'
+import {getShortIdForPrompt, type ShortIdMapping} from './judgeGetPrompt.ts'
 import {judgeStoreJudgmentGetStringAsArrayOfStrings} from './judgeStoreJudgment/judgeStoreJudgmentGetStringAsArrayOfStrings.ts'
 
 const findAnswer = <T>(entries: [string, unknown][], fragment: string): T => {
@@ -36,8 +37,9 @@ export const judgeStoreJudgment = async (
   articleTitle: string,
   judgment: Record<string, unknown>,
   modelId: string,
-  promptIds?: string[],
-  projectId?: string,
+  promptIds: string[] | undefined,
+  projectId: string | undefined,
+  shortIdMapping: ShortIdMapping,
 ): Promise<void> => {
   try {
     if (!modelId || !promptIds || promptIds.length === 0) {
@@ -85,8 +87,10 @@ export const judgeStoreJudgment = async (
     } as const
     // Store judgment for each prompt
     const storePromises = promptIds.map(async (promptId) => {
+      // Use short ID to find the answers in the judgment object
+      const shortId = getShortIdForPrompt(promptId, shortIdMapping)
       const answers = Object.entries(judgment).filter(([key]) => {
-        return key.includes(promptId)
+        return key.includes(shortId)
       })
       const answeredOriginal = findAnswer<string>(answers, '---question')
       const answeredExplanation = findAnswer<string>(answers, '---explanation')

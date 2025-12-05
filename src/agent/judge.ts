@@ -2,7 +2,7 @@ import OpenAI from 'openai'
 import type {ChatCompletion, ChatCompletionMessage} from 'openai/resources/chat/completions'
 
 import * as schema from '../db/schema.ts'
-import {judgeGetPrompt, type PromptForJudging} from './judge/judgeGetPrompt.ts'
+import {judgeGetPrompt, type PromptForJudging, type ShortIdMapping} from './judge/judgeGetPrompt.ts'
 import {parseJudgment} from './judge/judgeParseJudgment.ts'
 import {AIResponseType} from './judge/judgeParseModelResponse.ts'
 import {judgeStoreJudgment} from './judge/judgeStoreJudgment.ts'
@@ -206,6 +206,7 @@ const attemptJudgment = async ({
   prompts,
   modelId,
   projectId,
+  shortIdMapping,
 }: {
   prompt: string
   baseURL: string
@@ -214,6 +215,7 @@ const attemptJudgment = async ({
   prompts: PromptsType
   modelId: string
   projectId: string
+  shortIdMapping: ShortIdMapping
 }): Promise<
   | {success: true; judgment: unknown; usage: AttemptUsage}
   | {success: false; error: string; lastResponse: string; usage?: AttemptUsage}
@@ -228,7 +230,7 @@ const attemptJudgment = async ({
 
   const parseResult = await Promise.resolve()
     .then(() => {
-      return {success: true as const, value: parseJudgment(modelResponse.text, prompts)}
+      return {success: true as const, value: parseJudgment(modelResponse.text, prompts, shortIdMapping)}
     })
     .catch((error) => {
       return {success: false as const, error: error instanceof Error ? error.message : 'Parse error'}
@@ -252,7 +254,7 @@ const attemptJudgment = async ({
     return p.id
   })
 
-  await judgeStoreJudgment(article.id, article.articleTitle, judgment, modelId, promptIds, projectId)
+  await judgeStoreJudgment(article.id, article.articleTitle, judgment, modelId, promptIds, projectId, shortIdMapping)
 
   return {
     success: true,
@@ -293,7 +295,7 @@ export const judge = async ({
 
   await Promise.allSettled(
     articles.map(async (article) => {
-      const basePrompt = judgeGetPrompt(article, prompts)
+      const {prompt: basePrompt, shortIdMapping} = judgeGetPrompt(article, prompts)
       const promptIds = prompts.map((prompt) => {
         return prompt.id
       })
@@ -304,7 +306,16 @@ export const judge = async ({
 
       while (attempts <= MAX_RETRIES) {
         attempts += 1
-        const result = await attemptJudgment({prompt, baseURL, modelName, article, prompts, modelId, projectId})
+        const result = await attemptJudgment({
+          prompt,
+          baseURL,
+          modelName,
+          article,
+          prompts,
+          modelId,
+          projectId,
+          shortIdMapping,
+        })
 
         if (result.success) {
           const usage = result.usage
@@ -325,13 +336,7 @@ export const judge = async ({
           successCount += 1
           return result.judgment
         } else {
-          const usage =
-            result.usage ??
-            ({
-              promptTokens: 0,
-              completionTokens: 0,
-              totalTokens: 0,
-            } satisfies AttemptUsage)
+          const usage = result.usage ?? ({promptTokens: 0, completionTokens: 0, totalTokens: 0} satisfies AttemptUsage)
           tokenUse.push({
             articleId: article.id,
             promptIds,
