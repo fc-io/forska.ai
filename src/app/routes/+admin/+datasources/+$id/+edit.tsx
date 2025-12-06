@@ -1,5 +1,5 @@
 import {useQuery} from '@tanstack/solid-query'
-import {createFileRoute, Link} from '@tanstack/solid-router'
+import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
 import {createEffect, createSignal, Show, Suspense} from 'solid-js'
 
 import {apiClient} from '../../../../../services/apiClient.ts'
@@ -82,8 +82,18 @@ const updateDataSource = async (
   }
 }
 
+const deleteDataSource = async (id: string): Promise<void> => {
+  const response = await apiClient.api.datasources({id}).delete()
+
+  if (response.error) {
+    console.error('Error deleting data source:', response.error)
+    throw new Error('Failed to delete data source')
+  }
+}
+
 const AdminEditDataSource = () => {
   const params = Route.useParams()
+  const navigate = useNavigate()
   const dataSourceId = () => {
     return (params() as {id: string}).id
   }
@@ -103,6 +113,8 @@ const AdminEditDataSource = () => {
   const [dateFrom, setDateFrom] = createSignal('')
   const [dateTo, setDateTo] = createSignal('')
   const [isSaving, setIsSaving] = createSignal(false)
+  const [isDeleting, setIsDeleting] = createSignal(false)
+  const [showDeleteConfirm, setShowDeleteConfirm] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
   const [successMessage, setSuccessMessage] = createSignal<string | null>(null)
 
@@ -186,6 +198,23 @@ const AdminEditDataSource = () => {
         const message = updateError instanceof Error ? updateError.message : 'Failed to update data source'
         setError(message)
         setIsSaving(false)
+      })
+  }
+
+  const handleDelete = () => {
+    setError(null)
+    setSuccessMessage(null)
+    setIsDeleting(true)
+
+    void deleteDataSource(dataSourceId())
+      .then(() => {
+        void navigate({to: '/admin/datasources'})
+      })
+      .catch((deleteError) => {
+        const message = deleteError instanceof Error ? deleteError.message : 'Failed to delete data source'
+        setError(message)
+        setIsDeleting(false)
+        setShowDeleteConfirm(false)
       })
   }
 
@@ -300,7 +329,52 @@ const AdminEditDataSource = () => {
                 >
                   Cancel
                 </Link>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowDeleteConfirm(true)
+                  }}
+                  class="ml-auto px-4 py-2 rounded-md bg-red-600 text-white text-sm font-medium hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500"
+                >
+                  Delete Data Source
+                </button>
               </div>
+
+              {/* Delete Confirmation Dialog */}
+              <Show when={showDeleteConfirm()}>
+                <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                  <div class="bg-white rounded-lg shadow-xl p-6 max-w-md mx-4">
+                    <h2 class="text-lg font-semibold text-gray-900 mb-2">Delete Data Source</h2>
+                    <p class="text-gray-600 mb-4">
+                      Are you sure you want to delete this data source? This action cannot be undone.
+                    </p>
+                    <p class="text-sm text-gray-500 mb-6">
+                      Note: This will only delete the data source record. Articles imported through this data source
+                      will not be affected.
+                    </p>
+                    <div class="flex justify-end gap-3">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowDeleteConfirm(false)
+                        }}
+                        class="px-4 py-2 rounded-md border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                        disabled={isDeleting()}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleDelete}
+                        class="px-4 py-2 rounded-md bg-red-600 text-white text-sm font-medium hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500"
+                        disabled={isDeleting()}
+                      >
+                        {isDeleting() ? 'Deleting...' : 'Delete'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </Show>
             </form>
           </Show>
         </Suspense>

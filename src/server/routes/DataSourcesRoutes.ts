@@ -172,3 +172,14 @@ export const dataSourcesRoutes = new Elysia()
       }),
     },
   )
+  .delete('/api/datasources/:id', async ({params}) => {
+    const db = getDatabase()
+
+    const [deleted] = await db.delete(dataSource).where(eq(dataSource.id, params.id)).returning({id: dataSource.id})
+
+    if (!deleted) {
+      throw new Error('Data source not found')
+    }
+
+    return {message: 'Data source deleted successfully', id: deleted.id}
+  })
