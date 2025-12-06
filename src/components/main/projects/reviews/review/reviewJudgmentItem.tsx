@@ -10,6 +10,7 @@ type ReviewJudgmentItemProps = {
     promptId?: string
     prompt: {originalText: string; id?: string; contentHash?: string | null}
     answeredOriginal?: string | null
+    answeredOriginalAsArray?: string[] | null
     confidenceOriginal?: number | null
     explanation?: string | null
     quotes?: unknown
@@ -57,7 +58,35 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
                   : 'text-yellow-600 font-semibold'
             }
           >
-            {props.judgment.answeredOriginal?.toUpperCase()}
+            {(() => {
+              const asArray = props.judgment.answeredOriginalAsArray
+              if (asArray && Array.isArray(asArray) && asArray.length > 0) {
+                // Show full array contents on Article Details page
+                return asArray
+                  .map((v) => {
+                    return v.toUpperCase()
+                  })
+                  .join(', ')
+              }
+              const raw = props.judgment.answeredOriginal ?? ''
+              const trimmed = raw.trim()
+              if (trimmed.startsWith('[')) {
+                try {
+                  const parsed = JSON.parse(trimmed) as unknown
+                  if (Array.isArray(parsed)) {
+                    // Show full array contents on Article Details page
+                    return (parsed as string[])
+                      .map((v) => {
+                        return String(v).toUpperCase()
+                      })
+                      .join(', ')
+                  }
+                } catch {
+                  /* not valid JSON */
+                }
+              }
+              return raw.toUpperCase()
+            })()}
           </span>
         </div>
         <Show when={props.judgment.confidenceOriginal}>

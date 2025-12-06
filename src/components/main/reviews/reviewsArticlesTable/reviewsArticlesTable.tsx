@@ -158,7 +158,23 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
         return (s ?? '').toString().trim().toLowerCase()
       }
 
-      const labelFor = (s?: string | null) => {
+      const labelFor = (s?: string | null, asArray?: string[] | null) => {
+        // If we have an array representation, show count
+        if (asArray && Array.isArray(asArray) && asArray.length > 0) {
+          return `[x${asArray.length}]`
+        }
+        // Check if the string looks like a JSON array (starts with '[')
+        const trimmed = (s ?? '').toString().trim()
+        if (trimmed.startsWith('[')) {
+          try {
+            const parsed = JSON.parse(trimmed) as unknown
+            if (Array.isArray(parsed)) {
+              return `[x${parsed.length}]`
+            }
+          } catch {
+            // Not valid JSON, fall through
+          }
+        }
         const n = norm(s)
         if (!n) return '—'
         if (n === 'yes') return 'Y'
@@ -202,7 +218,7 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
                     const hasHuman =
                       Array.isArray(row.humanAnswersByPrompt?.[judgment.promptId])
                       && (row.humanAnswersByPrompt?.[judgment.promptId] || []).length > 0
-                    if (!hasHuman) return labelFor(judgment.answeredOriginal)
+                    if (!hasHuman) return labelFor(judgment.answeredOriginal, judgment.answeredOriginalAsArray)
 
                     const humans = row.humanAnswersByPrompt?.[judgment.promptId] || []
                     const normalizedHumans = humans.map(norm)
@@ -210,7 +226,7 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
                       return h !== llmAns
                     })
                     const humanLetter = labelFor(firstDiff ?? llmAns)
-                    const llmLetter = labelFor(judgment.answeredOriginal)
+                    const llmLetter = labelFor(judgment.answeredOriginal, judgment.answeredOriginalAsArray)
                     return `${llmLetter}/${humanLetter}`
                   })()
 
