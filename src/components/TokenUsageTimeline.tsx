@@ -375,6 +375,40 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
       }
     })
 
+    // Only include Failed Tokens dataset if there are actually failed tokens
+    const hasAnyFailedTokens = failedData.some((val) => val > 0)
+
+    const datasets = [
+      {
+        label: 'Prompt Tokens',
+        data: promptData,
+        backgroundColor: 'rgb(59, 130, 246)',
+        borderColor: 'rgb(59, 130, 246)',
+        borderWidth: 0,
+        barThickness,
+      },
+      {
+        label: 'Completion Tokens',
+        data: completionData,
+        backgroundColor: 'rgb(147, 197, 253)',
+        borderColor: 'rgb(147, 197, 253)',
+        borderWidth: 0,
+        barThickness,
+      },
+    ]
+
+    // Only add the Failed Tokens dataset when there are actual failures
+    if (hasAnyFailedTokens) {
+      datasets.push({
+        label: 'Failed Tokens',
+        data: failedData,
+        backgroundColor: 'rgb(239, 68, 68)',
+        borderColor: 'rgb(239, 68, 68)',
+        borderWidth: 0,
+        barThickness,
+      })
+    }
+
     return {
       labels: data.map((d) => {
         const date = new Date(d.timestamp)
@@ -386,32 +420,7 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
               ? format(new Date(date.getFullYear(), date.getMonth(), 1), 'MMM yyyy')
               : format(date, 'MMM d')
       }),
-      datasets: [
-        {
-          label: 'Prompt Tokens',
-          data: promptData,
-          backgroundColor: 'rgb(59, 130, 246)',
-          borderColor: 'rgb(59, 130, 246)',
-          borderWidth: 0,
-          barThickness,
-        },
-        {
-          label: 'Completion Tokens',
-          data: completionData,
-          backgroundColor: 'rgb(147, 197, 253)',
-          borderColor: 'rgb(147, 197, 253)',
-          borderWidth: 0,
-          barThickness,
-        },
-        {
-          label: 'Failed Tokens',
-          data: failedData,
-          backgroundColor: 'rgb(239, 68, 68)',
-          borderColor: 'rgb(239, 68, 68)',
-          borderWidth: 0,
-          barThickness,
-        },
-      ],
+      datasets,
     }
   })
 
