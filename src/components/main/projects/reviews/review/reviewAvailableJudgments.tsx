@@ -60,7 +60,7 @@ export const ReviewAvailableJudgments = (props: ReviewAvailableJudgmentsProps) =
   return (
     <div class="bg-white rounded-lg shadow h-fit mt-6">
       <div class="p-4 border-b">
-        <h2 class="text-lg font-bold">Available Judgments (Cross-Project)</h2>
+        <h2 class="text-lg font-bold">LLM assessment (Cross-Project)</h2>
       </div>
       <Show
         when={(props.judgments?.length || 0) > 0}
