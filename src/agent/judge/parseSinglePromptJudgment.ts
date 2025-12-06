@@ -21,10 +21,48 @@ export type SinglePromptJudgmentResult = {answer: string | string[]; explanation
  * making it a literal backslash. This is useful for LLM responses that contain
  * LaTeX (e.g., \varepsilon) which produces invalid escape sequences like \v.
  */
-const sanitizeJsonEscapes = (rawJson: string): string => {
+export const sanitizeJsonEscapes = (rawJson: string): string => {
   // Match backslash followed by a character that's NOT a valid JSON escape
   // Valid JSON escapes: " \ / b f n r t u
   return rawJson.replace(/\\(?!["\\/bfnrtu])/g, '\\\\')
+}
+
+/**
+ * Result of attempting to parse JSON with sanitization fallback.
+ */
+export type ParseAttemptResult =
+  | {success: true; data: unknown; sanitizationUsed: boolean}
+  | {success: false; originalError: string; sanitizationAttempted: boolean; sanitizedError: string | null}
+
+/**
+ * Attempts to parse JSON, falling back to sanitization if needed.
+ * Returns detailed info about what was attempted for error tracking.
+ */
+export const tryParseJsonWithSanitization = (response: string): ParseAttemptResult => {
+  // First, try normal JSON parsing
+  try {
+    const data: unknown = JSON.parse(response)
+    return {success: true, data, sanitizationUsed: false}
+  } catch (originalErr) {
+    const originalError = originalErr instanceof Error ? originalErr.message : String(originalErr)
+
+    // Try sanitizing invalid escape sequences
+    try {
+      const sanitized = sanitizeJsonEscapes(response)
+      const data: unknown = JSON.parse(sanitized)
+      console.log('JSON parse succeeded after sanitizing invalid escape sequences')
+      return {success: true, data, sanitizationUsed: true}
+    } catch (sanitizedErr) {
+      const sanitizedError = sanitizedErr instanceof Error ? sanitizedErr.message : String(sanitizedErr)
+      // Return info about both errors
+      return {
+        success: false,
+        originalError,
+        sanitizationAttempted: true,
+        sanitizedError: sanitizedError !== originalError ? sanitizedError : null,
+      }
+    }
+  }
 }
 
 /**
@@ -36,23 +74,13 @@ const sanitizeJsonEscapes = (rawJson: string): string => {
  * and retries. If sanitization also fails, the original error is thrown.
  */
 export const parseSinglePromptJudgment = (response: string): SinglePromptJudgmentResult => {
-  let parsed: unknown
+  const parseResult = tryParseJsonWithSanitization(response)
 
-  // First, try normal JSON parsing
-  try {
-    parsed = JSON.parse(response)
-  } catch (originalError) {
-    // If normal parsing fails, try sanitizing invalid escape sequences
-    try {
-      const sanitized = sanitizeJsonEscapes(response)
-      parsed = JSON.parse(sanitized)
-      console.log('JSON parse succeeded after sanitizing invalid escape sequences')
-    } catch {
-      // If sanitization also fails, throw the original error for proper retry messaging
-      throw originalError
-    }
+  if (!parseResult.success) {
+    // Throw original error for retry messaging
+    throw new Error(parseResult.originalError)
   }
 
-  SinglePromptResponseSchema.assert(parsed)
-  return parsed as SinglePromptJudgmentResult
+  SinglePromptResponseSchema.assert(parseResult.data)
+  return parseResult.data as SinglePromptJudgmentResult
 }

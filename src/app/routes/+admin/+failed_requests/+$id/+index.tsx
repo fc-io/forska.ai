@@ -18,6 +18,8 @@ type FailedRequestDetailItem = {
   failedCompletionTokens: number
   failedTotalTokens: number
   error?: string | null
+  sanitizationAttempted?: boolean
+  sanitizedError?: string | null
   lastResponse?: string | null
   systemPrompt?: string | null
   userPrompt?: string | null
@@ -255,9 +257,24 @@ const FailedRequestDetail = () => {
                                 </div>
                                 <Show when={detail.error}>
                                   <div class="sm:col-span-2">
-                                    <dt class="text-sm font-medium text-gray-500">Error</dt>
+                                    <dt class="text-sm font-medium text-gray-500 flex items-center gap-2">
+                                      Original Error
+                                      <Show when={detail.sanitizationAttempted}>
+                                        <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800">
+                                          Sanitization attempted
+                                        </span>
+                                      </Show>
+                                    </dt>
                                     <dd class="mt-1 text-sm text-gray-900 whitespace-pre-wrap break-words">
                                       {detail.error}
+                                    </dd>
+                                  </div>
+                                </Show>
+                                <Show when={detail.sanitizedError}>
+                                  <div class="sm:col-span-2">
+                                    <dt class="text-sm font-medium text-gray-500">Error After Sanitization</dt>
+                                    <dd class="mt-1 text-sm text-gray-900 whitespace-pre-wrap break-words">
+                                      {detail.sanitizedError}
                                     </dd>
                                   </div>
                                 </Show>

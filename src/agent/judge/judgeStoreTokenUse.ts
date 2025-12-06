@@ -16,6 +16,8 @@ export type JudgeTokenUsageEntry = {
   totalTokens: number
   outcome: 'success' | 'failure'
   error: string | null
+  sanitizationAttempted: boolean
+  sanitizedError: string | null
   lastResponse: string | null
   systemPrompt: string | null
   userPrompt: string | null
@@ -34,6 +36,8 @@ type FailedRequestDetail = {
   failedCompletionTokens: number
   failedTotalTokens: number
   error: string | null
+  sanitizationAttempted: boolean
+  sanitizedError: string | null
   lastResponse: string | null
   systemPrompt: string | null
   userPrompt: string | null
@@ -52,6 +56,8 @@ type FailedRequestAggregation = {
   failedCompletionTokens: number
   failedTotalTokens: number
   lastError: string | null
+  sanitizationAttempted: boolean
+  sanitizedError: string | null
   lastResponse: string | null
   systemPrompt: string | null
   userPrompt: string | null
@@ -246,6 +252,8 @@ const buildTokenUseTotals = (
         failedCompletionTokens: 0,
         failedTotalTokens: 0,
         lastError: null,
+        sanitizationAttempted: false,
+        sanitizedError: null,
         lastResponse: null,
         systemPrompt: null,
         userPrompt: null,
@@ -265,6 +273,11 @@ const buildTokenUseTotals = (
       entry.outcome === 'failure' ? (entry.systemPrompt ?? existing.systemPrompt) : existing.systemPrompt
     const userPrompt = entry.outcome === 'failure' ? (entry.userPrompt ?? existing.userPrompt) : existing.userPrompt
 
+    const sanitizationAttempted =
+      entry.outcome === 'failure' ? entry.sanitizationAttempted : existing.sanitizationAttempted
+    const sanitizedError =
+      entry.outcome === 'failure' ? (entry.sanitizedError ?? existing.sanitizedError) : existing.sanitizedError
+
     map.set(key, {
       articleId: existing.articleId,
       promptIds: existing.promptIds,
@@ -278,6 +291,8 @@ const buildTokenUseTotals = (
       failedCompletionTokens,
       failedTotalTokens,
       lastError,
+      sanitizationAttempted,
+      sanitizedError,
       lastResponse,
       systemPrompt,
       userPrompt,
@@ -306,6 +321,8 @@ const buildTokenUseTotals = (
         failedCompletionTokens: request.failedCompletionTokens,
         failedTotalTokens: request.failedTotalTokens,
         error: request.lastError,
+        sanitizationAttempted: request.sanitizationAttempted,
+        sanitizedError: request.sanitizedError,
         lastResponse: request.lastResponse,
         systemPrompt: request.systemPrompt,
         userPrompt: request.userPrompt,

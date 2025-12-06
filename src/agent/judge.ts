@@ -5,7 +5,11 @@ import * as schema from '../db/schema.ts'
 import {judgeGetSinglePrompt} from './judge/judgeGetPrompt.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT} from './judge/judgeSinglePromptSystemPrompt.ts'
 import {judgeStoreTokenUse, type JudgeTokenUsageEntry} from './judge/judgeStoreTokenUse.ts'
-import {parseSinglePromptJudgment} from './judge/parseSinglePromptJudgment.ts'
+import {
+  type ParseAttemptResult,
+  parseSinglePromptJudgment,
+  tryParseJsonWithSanitization,
+} from './judge/parseSinglePromptJudgment.ts'
 import {storeSinglePromptJudgment} from './judge/storeSinglePromptJudgment.ts'
 
 const openAIClients = new Map<string, OpenAI>()
@@ -204,6 +208,8 @@ export const judgeSinglePrompt = async ({
         totalTokens: currentResponse.usage.totalTokens,
         outcome: 'success',
         error: null,
+        sanitizationAttempted: false,
+        sanitizedError: null,
         lastResponse: null,
         systemPrompt: null,
         userPrompt: null,
@@ -216,6 +222,17 @@ export const judgeSinglePrompt = async ({
       const responseText = currentResponse?.text ?? lastResponse
       const usage = currentResponse?.usage ?? {promptTokens: 0, completionTokens: 0, totalTokens: 0}
 
+      // Get sanitization details for error tracking
+      let sanitizationAttempted = false
+      let sanitizedError: string | null = null
+      if (responseText) {
+        const parseAttempt: ParseAttemptResult = tryParseJsonWithSanitization(responseText)
+        if (!parseAttempt.success) {
+          sanitizationAttempted = parseAttempt.sanitizationAttempted
+          sanitizedError = parseAttempt.sanitizedError
+        }
+      }
+
       tokenUse.push({
         articleId: article.id,
         promptIds,
@@ -227,6 +244,8 @@ export const judgeSinglePrompt = async ({
         totalTokens: usage.totalTokens,
         outcome: 'failure',
         error: errorMessage,
+        sanitizationAttempted,
+        sanitizedError,
         lastResponse: responseText,
         systemPrompt: SINGLE_PROMPT_SYSTEM_PROMPT,
         userPrompt,
