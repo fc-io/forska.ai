@@ -484,11 +484,17 @@ export const judgeSinglePrompt = async ({
   while (attempts <= MAX_RETRIES) {
     attempts += 1
 
+    // Track current attempt's response for error handling
+    let currentResponse: {
+      text: string
+      usage: {promptTokens: number; completionTokens: number; totalTokens: number}
+    } | null = null
+
     try {
-      const response = await generateSinglePromptResponse({prompt: userPrompt, baseURL, modelName})
+      currentResponse = await generateSinglePromptResponse({prompt: userPrompt, baseURL, modelName})
 
       // Try to parse the response
-      const judgment = parseSinglePromptJudgment(response.text)
+      const judgment = parseSinglePromptJudgment(currentResponse.text)
 
       // Store the judgment
       await storeSinglePromptJudgment({articleId: article.id, promptId: prompt.id, modelId, projectId, judgment})
@@ -499,9 +505,9 @@ export const judgeSinglePrompt = async ({
         modelId,
         modelName,
         baseURL,
-        promptTokens: response.usage.promptTokens,
-        completionTokens: response.usage.completionTokens,
-        totalTokens: response.usage.totalTokens,
+        promptTokens: currentResponse.usage.promptTokens,
+        completionTokens: currentResponse.usage.completionTokens,
+        totalTokens: currentResponse.usage.totalTokens,
         outcome: 'success',
         error: null,
         lastResponse: null,
@@ -512,7 +518,9 @@ export const judgeSinglePrompt = async ({
       break
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error'
-      const responseText = lastResponse || ''
+      // Use actual response if available, otherwise fall back to previous response
+      const responseText = currentResponse?.text ?? lastResponse
+      const usage = currentResponse?.usage ?? {promptTokens: 0, completionTokens: 0, totalTokens: 0}
 
       tokenUse.push({
         articleId: article.id,
@@ -520,9 +528,9 @@ export const judgeSinglePrompt = async ({
         modelId,
         modelName,
         baseURL,
-        promptTokens: 0,
-        completionTokens: 0,
-        totalTokens: 0,
+        promptTokens: usage.promptTokens,
+        completionTokens: usage.completionTokens,
+        totalTokens: usage.totalTokens,
         outcome: 'failure',
         error: errorMessage,
         lastResponse: responseText,

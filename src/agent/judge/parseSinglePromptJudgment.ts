@@ -3,10 +3,16 @@ import {type as arktype} from 'arktype'
 /**
  * Schema for single-prompt LLM responses.
  * The response has simple, standardized keys since there's only one question.
+ * The 'answer' field accepts both strings and string arrays to support
+ * prompts with array output_types (e.g., specialty classification).
  */
-const SinglePromptResponseSchema = arktype({answer: 'string', explanation: 'string', quotes: 'string[] | null'})
+const SinglePromptResponseSchema = arktype({
+  answer: 'string | string[]',
+  explanation: 'string',
+  quotes: 'string[] | null',
+})
 
-export type SinglePromptJudgmentResult = {answer: string; explanation: string; quotes: string[] | null}
+export type SinglePromptJudgmentResult = {answer: string | string[]; explanation: string; quotes: string[] | null}
 
 /**
  * Parses and validates a single-prompt response from the LLM.

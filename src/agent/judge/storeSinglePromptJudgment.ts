@@ -54,8 +54,10 @@ export const storeSinglePromptJudgment = async ({
       snapshotProjectProvider: modelRow?.provider ?? null,
     } as const
 
-    const answeredOriginal = judgment.answer
-    const answeredOriginalAsArray = judgeStoreJudgmentGetStringAsArrayOfStrings(answeredOriginal)
+    const rawAnswer = judgment.answer
+    // Serialize array answers to JSON for the text column
+    const answeredOriginal = Array.isArray(rawAnswer) ? JSON.stringify(rawAnswer) : rawAnswer
+    const answeredOriginalAsArray = judgeStoreJudgmentGetStringAsArrayOfStrings(rawAnswer)
     const answeredExplanation = judgment.explanation
     const answeredQuotes = judgment.quotes
 
