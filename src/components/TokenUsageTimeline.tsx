@@ -355,7 +355,7 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
 
     const promptData: number[] = []
     const completionData: number[] = []
-    const failedData: number[] = []
+    const failedData: (number | null)[] = []
 
     data.forEach((bucket) => {
       const successPrompt = bucket.totalSuccessPromptTokens ?? 0
@@ -367,18 +367,28 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
       if (hasNewSplits) {
         promptData.push(successPrompt)
         completionData.push(successCompletion)
-        failedData.push(failedTokens)
+        // Use null for 0 failed tokens so Chart.js doesn't render any segment
+        failedData.push(failedTokens > 0 ? failedTokens : null)
       } else {
         promptData.push(bucket.totalPromptTokens ?? 0)
         completionData.push(bucket.totalCompletionTokens ?? 0)
-        failedData.push(0)
+        failedData.push(null)
       }
     })
 
     // Only include Failed Tokens dataset if there are actually failed tokens
-    const hasAnyFailedTokens = failedData.some((val) => val > 0)
+    const hasAnyFailedTokens = failedData.some((val) => {
+      return val !== null && val > 0
+    })
 
-    const datasets = [
+    const datasets: {
+      label: string
+      data: (number | null)[]
+      backgroundColor: string
+      borderColor: string
+      borderWidth: number
+      barThickness: number
+    }[] = [
       {
         label: 'Prompt Tokens',
         data: promptData,
