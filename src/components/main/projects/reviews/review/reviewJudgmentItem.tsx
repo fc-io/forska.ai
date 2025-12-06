@@ -40,12 +40,9 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
     >
       <div class="mb-2">
         <p class="text-sm font-medium text-gray-900 line-clamp-2">{props.judgment.prompt.originalText}</p>
-        <div class="mt-1 text-[11px] text-gray-500">
-          <span>
-            {promptId() ? `Prompt ID: ${String(promptId()).slice(0, 8)}` : ''}
-            {promptId() && modelName() ? ' • ' : ''}
-            {modelName() ? `Model: ${modelName()}` : ''}
-          </span>
+        <div class="mt-1 text-[11px] text-gray-500 space-y-0.5">
+          {promptId() ? <div>Prompt ID: {String(promptId()).slice(0, 8)}</div> : null}
+          {modelName() ? <div>Model: {modelName()}</div> : null}
         </div>
       </div>
       <div class="flex items-center justify-between text-xs">
