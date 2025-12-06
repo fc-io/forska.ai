@@ -92,7 +92,7 @@ export const processPromptWithLLM = async (
     return
   }
   // Process the single prompt
-  console.log(`Processing prompt ${promptToProcess.promptId} for article ${promptToProcess.articleId}`)
+  // console.log(`Processing prompt ${promptToProcess.promptId} for article ${promptToProcess.articleId}`)
 
   try {
     await processSinglePrompt(promptToProcess, article, prompt)
