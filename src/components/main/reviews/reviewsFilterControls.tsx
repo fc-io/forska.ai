@@ -200,9 +200,7 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
                         return props.promptFilters()[promptFilter.promptId] ?? []
                       })
                       const options = createMemo(() => {
-                        return promptFilter.answeredOriginalValues.map((v) => {
-                          return {value: v, label: v, encoded: encodeURIComponent(v)}
-                        })
+                        return promptFilter.answeredOriginalValues
                       })
                       return (
                         <div class="flex flex-col gap-2">
@@ -214,28 +212,27 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
                           </label>
                           <Select.Root
                             multiple
-                            value={current().map((v) => {
-                              return encodeURIComponent(v)
-                            })}
-                            onChange={(vals: any) => {
-                              const values = vals.map((v: any) => {
-                                return v.value
-                              })
-                              return setPromptMulti(promptFilter.promptId, values.length ? values : null)
+                            value={current()}
+                            onChange={(vals) => {
+                              return setPromptMulti(promptFilter.promptId, vals.length ? vals : null)
                             }}
                             options={options()}
-                            optionValue="encoded"
-                            optionLabel="label"
-                            optionTextValue="label"
+                            optionValue={(v) => {
+                              return v
+                            }}
+                            optionTextValue={(v) => {
+                              return v
+                            }}
+                            placeholder="All"
                             name={promptFilter.promptId}
-                            itemComponent={(itemProps) => {
+                            itemComponent={(props) => {
                               return (
                                 <Select.Item
-                                  item={itemProps.item}
-                                  class="relative flex select-none items-center justify-between gap-2 rounded-md px-2 py-1.5 text-sm outline-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[highlighted]:bg-blue-600 data-[highlighted]:text-white"
+                                  item={props.item}
+                                  class="relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-2 pr-8 text-sm outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-muted data-[disabled]:opacity-50"
                                 >
-                                  <Select.ItemLabel class="truncate">{itemProps.item.rawValue.label}</Select.ItemLabel>
-                                  <Select.ItemIndicator class="ml-2 text-current">
+                                  <Select.ItemLabel class="truncate">{props.item.rawValue as string}</Select.ItemLabel>
+                                  <Select.ItemIndicator class="absolute right-2 flex h-3.5 w-3.5 items-center justify-center">
                                     <svg
                                       xmlns="http://www.w3.org/2000/svg"
                                       viewBox="0 0 24 24"
