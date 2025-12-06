@@ -2,7 +2,7 @@
 #SBATCH -J forska-alvis
 #SBATCH -A NAISS2025-22-715 -p alvis
 #SBATCH --nodes=1
-#SBATCH --gpus-per-node=A100fat:2
+#SBATCH --gpus-per-node=A100fat:3
 #SBATCH --time=08:00:00
 #SBATCH -o %x-%j.log
 #SBATCH --export=ALL
@@ -335,7 +335,7 @@ fi
 # If user did not set an explicit concurrency cap, default to 256 per engine.
 if [[ -z "${SGLANG_MAX_RUNNING_REQUESTS:-}" ]]; then
   # A safer default for H200/A100-80G with 30B class models
-  SGLANG_MAX_RUNNING_REQUESTS=256
+  SGLANG_MAX_RUNNING_REQUESTS=300
   echo "[forska] defaulting max-running-requests to $SGLANG_MAX_RUNNING_REQUESTS (per engine)"
 fi
 
