@@ -210,6 +210,7 @@ export const judgeSinglePrompt = async ({
         error: null,
         sanitizationAttempted: false,
         sanitizedError: null,
+        sanitizedResponse: null,
         lastResponse: null,
         systemPrompt: null,
         userPrompt: null,
@@ -225,11 +226,13 @@ export const judgeSinglePrompt = async ({
       // Get sanitization details for error tracking
       let sanitizationAttempted = false
       let sanitizedError: string | null = null
+      let sanitizedResponse: string | null = null
       if (responseText) {
         const parseAttempt: ParseAttemptResult = tryParseJsonWithSanitization(responseText)
         if (!parseAttempt.success) {
           sanitizationAttempted = parseAttempt.sanitizationAttempted
           sanitizedError = parseAttempt.sanitizedError
+          sanitizedResponse = parseAttempt.sanitizedResponse
         }
       }
 
@@ -246,6 +249,7 @@ export const judgeSinglePrompt = async ({
         error: errorMessage,
         sanitizationAttempted,
         sanitizedError,
+        sanitizedResponse,
         lastResponse: responseText,
         systemPrompt: SINGLE_PROMPT_SYSTEM_PROMPT,
         userPrompt,

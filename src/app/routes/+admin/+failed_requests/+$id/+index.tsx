@@ -20,6 +20,7 @@ type FailedRequestDetailItem = {
   error?: string | null
   sanitizationAttempted?: boolean
   sanitizedError?: string | null
+  sanitizedResponse?: string | null
   lastResponse?: string | null
   systemPrompt?: string | null
   userPrompt?: string | null
@@ -275,6 +276,17 @@ const FailedRequestDetail = () => {
                                     <dt class="text-sm font-medium text-gray-500">Error After Sanitization</dt>
                                     <dd class="mt-1 text-sm text-gray-900 whitespace-pre-wrap break-words">
                                       {detail.sanitizedError}
+                                    </dd>
+                                  </div>
+                                </Show>
+                                <Show when={detail.sanitizedResponse}>
+                                  <div class="sm:col-span-2">
+                                    <div class="flex items-center justify-between">
+                                      <dt class="text-sm font-medium text-gray-500">Sanitized Response</dt>
+                                      <CopyButton text={detail.sanitizedResponse} />
+                                    </div>
+                                    <dd class="mt-1 text-sm text-gray-900 whitespace-pre-wrap break-words bg-yellow-50 p-3 rounded-md border border-yellow-200 max-h-64 overflow-y-auto">
+                                      {detail.sanitizedResponse}
                                     </dd>
                                   </div>
                                 </Show>

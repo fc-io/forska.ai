@@ -18,6 +18,7 @@ export type JudgeTokenUsageEntry = {
   error: string | null
   sanitizationAttempted: boolean
   sanitizedError: string | null
+  sanitizedResponse: string | null
   lastResponse: string | null
   systemPrompt: string | null
   userPrompt: string | null
@@ -38,6 +39,7 @@ type FailedRequestDetail = {
   error: string | null
   sanitizationAttempted: boolean
   sanitizedError: string | null
+  sanitizedResponse: string | null
   lastResponse: string | null
   systemPrompt: string | null
   userPrompt: string | null
@@ -58,6 +60,7 @@ type FailedRequestAggregation = {
   lastError: string | null
   sanitizationAttempted: boolean
   sanitizedError: string | null
+  sanitizedResponse: string | null
   lastResponse: string | null
   systemPrompt: string | null
   userPrompt: string | null
@@ -254,6 +257,7 @@ const buildTokenUseTotals = (
         lastError: null,
         sanitizationAttempted: false,
         sanitizedError: null,
+        sanitizedResponse: null,
         lastResponse: null,
         systemPrompt: null,
         userPrompt: null,
@@ -277,6 +281,8 @@ const buildTokenUseTotals = (
       entry.outcome === 'failure' ? entry.sanitizationAttempted : existing.sanitizationAttempted
     const sanitizedError =
       entry.outcome === 'failure' ? (entry.sanitizedError ?? existing.sanitizedError) : existing.sanitizedError
+    const sanitizedResponse =
+      entry.outcome === 'failure' ? (entry.sanitizedResponse ?? existing.sanitizedResponse) : existing.sanitizedResponse
 
     map.set(key, {
       articleId: existing.articleId,
@@ -293,6 +299,7 @@ const buildTokenUseTotals = (
       lastError,
       sanitizationAttempted,
       sanitizedError,
+      sanitizedResponse,
       lastResponse,
       systemPrompt,
       userPrompt,
@@ -323,6 +330,7 @@ const buildTokenUseTotals = (
         error: request.lastError,
         sanitizationAttempted: request.sanitizationAttempted,
         sanitizedError: request.sanitizedError,
+        sanitizedResponse: request.sanitizedResponse,
         lastResponse: request.lastResponse,
         systemPrompt: request.systemPrompt,
         userPrompt: request.userPrompt,
