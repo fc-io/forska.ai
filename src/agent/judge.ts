@@ -17,6 +17,8 @@ import {SYSTEM_PROMPT} from './judge/judgeSystemPrompt.ts'
 import {parseSinglePromptJudgment} from './judge/parseSinglePromptJudgment.ts'
 import {storeSinglePromptJudgment} from './judge/storeSinglePromptJudgment.ts'
 
+const openAIClients = new Map<string, OpenAI>()
+
 type ModelConfigInput = {modelId: string; modelName: string; baseURL: string}
 
 type AssistantMessageShape = {
@@ -26,21 +28,20 @@ type AssistantMessageShape = {
   reasoning_content?: string
 }
 
-/**
- * Create a fresh OpenAI client for each request.
- * We intentionally do NOT cache clients so that each request opens a new
- * TCP connection, allowing the SGLang router to properly load balance
- * across workers. Caching clients with HTTP Keep-Alive causes all requests
- * to be routed to the same worker due to connection affinity.
- */
 const getOpenAIClient = (baseURL: string): OpenAI => {
-  return new OpenAI({
+  const existingClient = openAIClients.get(baseURL)
+  if (existingClient) {
+    return existingClient
+  }
+  const client = new OpenAI({
     apiKey: 'fake_key',
     dangerouslyAllowBrowser: true,
     baseURL,
     timeout: 900_000, // 15 minutes
     maxRetries: 0, // Handle retries at application level
   })
+  openAIClients.set(baseURL, client)
+  return client
 }
 
 const normalizeVllmModelName = (name: string): string => {
