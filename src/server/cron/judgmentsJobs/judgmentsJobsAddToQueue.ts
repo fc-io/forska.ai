@@ -30,7 +30,7 @@ const getCountOfReadyPrompts = async (
 }
 
 const needsMorePrompts = (readyCount: number): boolean => {
-  return readyCount < getMaxNumberOfInflightRequests() * 20
+  return readyCount < getMaxNumberOfInflightRequests() * 50
 }
 
 type PromptQueueEntry = {articleId: string; promptId: string}
@@ -76,7 +76,7 @@ export const judgmentsJobsAddToQueue = async (
   serverJobId: string,
 ): Promise<void> => {
   const {SGLANG_MAX_RUNNING_REQUESTS} = env
-  const promptsPerJob = Math.max(1, Number(SGLANG_MAX_RUNNING_REQUESTS || 1) * 5)
+  const promptsPerJob = Math.max(1, Number(SGLANG_MAX_RUNNING_REQUESTS || 1) * 20)
   const runningJobs = await judgmentsJobsGetRunningJobs(db)
 
   await Promise.all(
