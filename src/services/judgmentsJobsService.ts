@@ -61,6 +61,11 @@ export const startJudgmentsJob = (jobId: string) => {
   return updateJudgmentsJobStatus(jobId, 'running')
 }
 
+export const deleteJudgmentsJob = async (jobId: string) => {
+  const response = await apiClient.api.judgmentsjobs({id: jobId}).delete()
+  return handleApiResponse(response, 'Failed to delete job')
+}
+
 export const getJudgmentsJobUnassessedArticles = async (jobId: string) => {
   const response = await apiClient.api['judgmentsjobs-unassessed-articles'].get({query: {jobId}})
   const result = handleApiResponse(response, 'Failed to fetch unassessed articles for job')

@@ -1,11 +1,11 @@
 import {useQuery} from '@tanstack/solid-query'
-import {createFileRoute, Link} from '@tanstack/solid-router'
+import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
 import {formatDate} from 'date-fns'
-import {For, Show, Suspense} from 'solid-js'
+import {createSignal, For, Show, Suspense} from 'solid-js'
 
 import {TokenUsageTimeline} from '../../../../../components/TokenUsageTimeline'
 import {apiClient} from '../../../../../services/apiClient.ts'
-import {getJudgmentsJobById, pauseJudgmentsJob, startJudgmentsJob} from '../../../../../services/judgmentsJobsService'
+import {deleteJudgmentsJob, getJudgmentsJobById, pauseJudgmentsJob, startJudgmentsJob} from '../../../../../services/judgmentsJobsService'
 import {handleApiResponse} from '../../../../../services/utils/handleApiResponse'
 
 const getStatusColor = (status: string | null) => {
@@ -43,6 +43,8 @@ const formatStatus = (status: string | null) => {
 
 const AdminJudgmentJobDetail = () => {
   const params = Route.useParams()
+  const navigate = useNavigate()
+  const [isDeleting, setIsDeleting] = createSignal(false)
 
   const id = () => {
     return params().id
@@ -301,6 +303,26 @@ const AdminJudgmentJobDetail = () => {
                       <Show when={data()?.status === 'failed'}>
                         <button class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">Retry Job</button>
                       </Show>
+                      <button
+                        class="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled={isDeleting()}
+                        onClick={() => {
+                          const jobId = data()?.id
+                          if (!jobId) return
+                          if (!confirm('Are you sure you want to delete this job? This action cannot be undone.')) return
+                          setIsDeleting(true)
+                          deleteJudgmentsJob(jobId)
+                            .then(() => {
+                              void navigate({to: '/admin/jobs'})
+                            })
+                            .catch((error) => {
+                              console.error('Failed to delete job:', error)
+                              setIsDeleting(false)
+                            })
+                        }}
+                      >
+                        {isDeleting() ? 'Deleting...' : 'Delete Job'}
+                      </button>
                     </div>
                   </div>
                 </>
