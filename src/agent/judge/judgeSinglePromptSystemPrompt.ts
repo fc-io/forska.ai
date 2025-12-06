@@ -13,6 +13,13 @@ Your response must be valid JSON with exactly these keys:
 - "explanation": A brief explanation of your reasoning
 - "quotes": An array of up to 3 quotes from the article that support your answer (empty array if none)
 
+IMPORTANT: Properly escape all special characters in your JSON string values to ensure valid JSON output:
+- Use \\" for double quotes within strings
+- Use \\\\ for backslashes
+- Use \\n for newlines
+- Use \\t for tabs
+Failure to escape these characters will result in invalid JSON that cannot be parsed.
+
 Example user message:
 
 ## article_title

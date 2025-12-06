@@ -335,7 +335,7 @@ fi
 # If user did not set an explicit concurrency cap, default to 256 per engine.
 if [[ -z "${SGLANG_MAX_RUNNING_REQUESTS:-}" ]]; then
   # A safer default for H200/A100-80G with 30B class models
-  SGLANG_MAX_RUNNING_REQUESTS=300
+  SGLANG_MAX_RUNNING_REQUESTS=400
   echo "[forska] defaulting max-running-requests to $SGLANG_MAX_RUNNING_REQUESTS (per engine)"
 fi
 
