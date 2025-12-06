@@ -118,7 +118,7 @@ const generateSinglePromptResponse = async ({
       {role: 'user', content: prompt},
     ],
     max_completion_tokens: 2000, // Single prompt needs less tokens
-    temperature: 0,
+    temperature: 0.1,
   })
 
   const message = response.choices[0]?.message
