@@ -303,7 +303,7 @@ export const TokenUsageTimelineDatePicker = (props: TokenUsageTimelineDatePicker
                           return resetSelection({api, onReset: props.onReset})
                         }}
                       >
-                        Show current range
+                        Show Live
                       </button>
                     </div>
                   </>

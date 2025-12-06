@@ -1,33 +1,59 @@
-import {Dialog} from '@ark-ui/solid'
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
 import {format} from 'date-fns'
-import {createSignal, For, Show, Suspense} from 'solid-js'
-import {Portal} from 'solid-js/web'
+import {For, Show, Suspense} from 'solid-js'
 
 import {apiClient} from '../../../../services/apiClient.ts'
 import {fetchSession} from '../../../../services/fetchSession.ts'
+
+type FailedRequestDetailItem = {failureType: 'retry' | 'total_failure'; error: string | null}
 
 type FailedRequestRow = {
   id: string
   createdAt: string | Date
   judgmentsJobId: string | null
+  projectId: string | null
+  projectName: string | null
+  promptHeadings: string | null
   modelName: string | null
   failedRequests: number | null
-  failedRequestsDetails: unknown
+  failedRequestsDetails: FailedRequestDetailItem[] | null
   totalTokens: number
 }
 
 const fetchFailedRequests = async () => {
   const response = await apiClient.api.tokens['failed-requests'].post({limit: 50, offset: 0})
   if (response.error) throw new Error('Failed to fetch failed requests')
-  return response.data.data
+  return response.data.data as FailedRequestRow[]
+}
+
+/** Extract unique failure types from details array */
+const getFailureTypes = (details: FailedRequestDetailItem[] | null): string => {
+  if (!details || details.length === 0) return '—'
+  const types = [
+    ...new Set(
+      details.map((d) => {
+        return d.failureType
+      }),
+    ),
+  ]
+  return types
+    .map((t) => {
+      return t === 'total_failure' ? 'Total Failure' : 'Retry'
+    })
+    .join(', ')
+}
+
+/** Get the first non-null error message */
+const getFirstError = (details: FailedRequestDetailItem[] | null): string | null => {
+  if (!details || details.length === 0) return null
+  const first = details.find((d) => {
+    return d.error != null
+  })
+  return first?.error ?? null
 }
 
 const AdminFailedRequests = () => {
-  const [selectedDetails, setSelectedDetails] = createSignal<unknown>(null)
-  const [isOpen, setIsOpen] = createSignal(false)
-
   const sessionQuery = useQuery(() => {
     return {queryKey: ['session'], queryFn: fetchSession}
   })
@@ -38,11 +64,6 @@ const AdminFailedRequests = () => {
 
   const isAdmin = () => {
     return sessionQuery.data?.user?.role === 'admin'
-  }
-
-  const openDetails = (details: unknown) => {
-    setSelectedDetails(details)
-    setIsOpen(true)
   }
 
   return (
@@ -92,24 +113,32 @@ const AdminFailedRequests = () => {
 
           <Show when={!failedRequestsQuery.isLoading && !failedRequestsQuery.isError}>
             <div class="overflow-x-auto bg-white rounded-lg shadow">
-              <table class="min-w-full divide-y divide-gray-200">
+              <table class="w-full table-fixed divide-y divide-gray-200">
                 <thead class="bg-gray-50">
                   <tr>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    <th class="w-[280px] px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Token ID
                     </th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Time</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    <th class="w-[150px] px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Time
+                    </th>
+                    <th class="w-[130px] px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Project
+                    </th>
+                    <th class="w-[150px] px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Prompt
+                    </th>
+                    <th class="w-[100px] px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Job ID
                     </th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Model
-                    </th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    <th class="w-[100px] px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Failures
                     </th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Actions
+                    <th class="w-[100px] px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Failed Type
+                    </th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Error
                     </th>
                   </tr>
                 </thead>
@@ -118,7 +147,7 @@ const AdminFailedRequests = () => {
                     {(row: FailedRequestRow) => {
                       return (
                         <tr class="hover:bg-gray-50">
-                          <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono text-xs">
+                          <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-500 font-mono text-xs">
                             <Link
                               to={`/admin/failed_requests/${row.id}`}
                               class="text-blue-600 hover:text-blue-900 underline"
@@ -126,25 +155,47 @@ const AdminFailedRequests = () => {
                               {row.id}
                             </Link>
                           </td>
-                          <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                          <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
                             {format(new Date(row.createdAt), 'yyyy-MM-dd HH:mm:ss')}
                           </td>
-                          <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono text-xs">
+                          <td
+                            class="px-4 py-4 text-sm text-gray-700 overflow-hidden text-ellipsis whitespace-nowrap"
+                            title={row.projectName ?? ''}
+                          >
+                            <Show when={row.projectId} fallback={row.projectName ?? '—'}>
+                              {(projectId) => {
+                                return (
+                                  <Link
+                                    to="/projects/$id"
+                                    params={{id: projectId()}}
+                                    class="text-blue-600 hover:text-blue-900 underline"
+                                  >
+                                    {row.projectName}
+                                  </Link>
+                                )
+                              }}
+                            </Show>
+                          </td>
+                          <td
+                            class="px-4 py-4 text-sm text-gray-700 overflow-hidden text-ellipsis whitespace-nowrap"
+                            title={row.promptHeadings ?? ''}
+                          >
+                            {row.promptHeadings ?? '—'}
+                          </td>
+                          <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-500 font-mono text-xs">
                             {row.judgmentsJobId?.split('-')[0] ?? '—'}
                           </td>
-                          <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{row.modelName ?? '—'}</td>
-                          <td class="px-6 py-4 whitespace-nowrap text-sm text-red-600 font-medium">
+                          <td class="px-4 py-4 whitespace-nowrap text-sm text-red-600 font-medium">
                             {row.failedRequests ?? 0}
                           </td>
-                          <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                            <button
-                              onClick={() => {
-                                return openDetails(row.failedRequestsDetails)
-                              }}
-                              class="text-blue-600 hover:text-blue-900"
-                            >
-                              View Details
-                            </button>
+                          <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-700">
+                            {getFailureTypes(row.failedRequestsDetails)}
+                          </td>
+                          <td
+                            class="px-4 py-4 text-sm text-gray-600 overflow-hidden text-ellipsis whitespace-nowrap"
+                            title={getFirstError(row.failedRequestsDetails) ?? ''}
+                          >
+                            {getFirstError(row.failedRequestsDetails) ?? '—'}
                           </td>
                         </tr>
                       )
@@ -156,40 +207,6 @@ const AdminFailedRequests = () => {
           </Show>
         </Show>
       </Suspense>
-
-      <Dialog.Root
-        open={isOpen()}
-        onOpenChange={(e) => {
-          return setIsOpen(e.open)
-        }}
-      >
-        <Portal>
-          <Dialog.Backdrop class="fixed inset-0 bg-black/50 z-40" />
-          <Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <Dialog.Content class="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[80vh] flex flex-col">
-              <div class="p-6 border-b border-gray-200 flex justify-between items-center">
-                <Dialog.Title class="text-lg font-semibold text-gray-900">Failure Details</Dialog.Title>
-                <Dialog.CloseTrigger class="text-gray-400 hover:text-gray-500">
-                  <span class="sr-only">Close</span>
-                  <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </Dialog.CloseTrigger>
-              </div>
-              <div class="p-6 overflow-auto">
-                <pre class="bg-gray-50 p-4 rounded-md text-xs font-mono overflow-x-auto">
-                  {JSON.stringify(selectedDetails(), null, 2)}
-                </pre>
-              </div>
-              <div class="p-6 border-t border-gray-200 flex justify-end">
-                <Dialog.CloseTrigger class="px-4 py-2 bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 text-sm font-medium">
-                  Close
-                </Dialog.CloseTrigger>
-              </div>
-            </Dialog.Content>
-          </Dialog.Positioner>
-        </Portal>
-      </Dialog.Root>
     </div>
   )
 }
