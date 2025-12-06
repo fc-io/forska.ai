@@ -8,18 +8,15 @@ import {ReviewsTabs} from '../../../../../components/main/reviews/reviewsTabs.ts
 import {Button} from '../../../../../components/ui/button'
 import {fetchSession} from '../../../../../services/fetchSession'
 import {deleteProject, fetchProjectWithPrompts} from '../../../../../services/projectsService'
+import {useUrlFilters} from '../../../../../utils/useUrlFilters.ts'
 
 const ReviewsUnassessed = () => {
-  const [fromDate, setFromDate] = createSignal('')
-  const [toDate, setToDate] = createSignal('')
   const params = Route.useParams()
   const navigate = useNavigate()
   const projectId = (params() as {id: string}).id
-  const [currentPage, setCurrentPage] = createSignal(1)
-  const [pageLimit, setPageLimit] = createSignal(100)
-  const [searchTitle, setSearchTitle] = createSignal('')
-  const [appliedSearchTitle, setAppliedSearchTitle] = createSignal('')
   const [deletingProject, setDeletingProject] = createSignal(false)
+
+  const filters = useUrlFilters({routePath: '/projects/$id/reviews-unassessed/', routeParams: {id: projectId}})
 
   const sessionQuery = useQuery(() => {
     return {queryKey: ['session'], queryFn: fetchSession}
@@ -104,31 +101,28 @@ const ReviewsUnassessed = () => {
           setPromptFilters={() => {
             return
           }}
-          pageLimit={pageLimit}
-          setPageLimit={setPageLimit}
-          setCurrentPage={setCurrentPage}
-          fromDate={fromDate()}
-          toDate={toDate()}
-          setFromDate={setFromDate}
-          setToDate={setToDate}
+          pageLimit={filters.pageLimit}
+          setPageLimit={filters.setPageLimit}
+          setCurrentPage={filters.setCurrentPage}
+          fromDate={filters.fromDate()}
+          toDate={filters.toDate()}
+          setFromDate={filters.setFromDate}
+          setToDate={filters.setToDate}
           hidePromptSelectors={true}
-          searchTitle={searchTitle()}
-          setSearchTitle={setSearchTitle}
-          appliedSearchTitle={appliedSearchTitle()}
-          onSubmitSearch={() => {
-            setAppliedSearchTitle(searchTitle())
-            setCurrentPage(1)
-          }}
+          searchTitle={filters.searchTitle()}
+          setSearchTitle={filters.setSearchTitle}
+          appliedSearchTitle={filters.appliedSearchTitle()}
+          onSubmitSearch={filters.onSubmitSearch}
         />
 
         <ReviewsArticlesUnassessedTableContainer
           projectId={projectId}
-          currentPage={currentPage}
-          setCurrentPage={setCurrentPage}
-          pageLimit={pageLimit}
-          fromDate={fromDate}
-          toDate={toDate}
-          searchTitle={appliedSearchTitle}
+          currentPage={filters.currentPage}
+          setCurrentPage={filters.setCurrentPage}
+          pageLimit={filters.pageLimit}
+          fromDate={filters.fromDate}
+          toDate={filters.toDate}
+          searchTitle={filters.appliedSearchTitle}
         />
       </Suspense>
     </div>

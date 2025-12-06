@@ -8,18 +8,14 @@ import {ReviewsTabs} from '../../../../../components/main/reviews/reviewsTabs.ts
 import {Button} from '../../../../../components/ui/button'
 import {fetchSession} from '../../../../../services/fetchSession'
 import {deleteProject, fetchProjectWithPrompts} from '../../../../../services/projectsService'
+import {useUrlFilters} from '../../../../../utils/useUrlFilters.ts'
 
 const ReviewsBoth = () => {
   const params = Route.useParams()
   const navigate = useNavigate()
-  const [fromDate, setFromDate] = createSignal('')
-  const [toDate, setToDate] = createSignal('')
-  const [promptFilters, setPromptFilters] = createSignal<Record<string, string[] | null>>({})
-  const [currentPage, setCurrentPage] = createSignal(1)
-  const [pageLimit, setPageLimit] = createSignal(100)
-  const [searchTitle, setSearchTitle] = createSignal('')
-  const [appliedSearchTitle, setAppliedSearchTitle] = createSignal('')
   const [deletingProject, setDeletingProject] = createSignal(false)
+
+  const filters = useUrlFilters({routePath: '/projects/$id/reviews-both/', routeParams: {id: params().id}})
 
   const sessionQuery = useQuery(() => {
     return {queryKey: ['session'], queryFn: fetchSession}
@@ -96,33 +92,30 @@ const ReviewsBoth = () => {
 
         <ReviewsFilterControls
           projectId={params().id}
-          promptFilters={promptFilters}
-          setPromptFilters={setPromptFilters}
-          pageLimit={pageLimit}
-          setPageLimit={setPageLimit}
-          setCurrentPage={setCurrentPage}
-          fromDate={fromDate()}
-          toDate={toDate()}
-          setFromDate={setFromDate}
-          setToDate={setToDate}
-          searchTitle={searchTitle()}
-          setSearchTitle={setSearchTitle}
-          appliedSearchTitle={appliedSearchTitle()}
-          onSubmitSearch={() => {
-            setAppliedSearchTitle(searchTitle())
-            setCurrentPage(1)
-          }}
+          promptFilters={filters.promptFilters}
+          setPromptFilters={filters.setPromptFilters}
+          pageLimit={filters.pageLimit}
+          setPageLimit={filters.setPageLimit}
+          setCurrentPage={filters.setCurrentPage}
+          fromDate={filters.fromDate()}
+          toDate={filters.toDate()}
+          setFromDate={filters.setFromDate}
+          setToDate={filters.setToDate}
+          searchTitle={filters.searchTitle()}
+          setSearchTitle={filters.setSearchTitle}
+          appliedSearchTitle={filters.appliedSearchTitle()}
+          onSubmitSearch={filters.onSubmitSearch}
         />
 
         <ReviewsArticlesBothTableContainer
           projectId={params().id}
-          promptFilters={promptFilters}
-          currentPage={currentPage}
-          setCurrentPage={setCurrentPage}
-          pageLimit={pageLimit}
-          fromDate={fromDate}
-          toDate={toDate}
-          searchTitle={appliedSearchTitle}
+          promptFilters={filters.promptFilters}
+          currentPage={filters.currentPage}
+          setCurrentPage={filters.setCurrentPage}
+          pageLimit={filters.pageLimit}
+          fromDate={filters.fromDate}
+          toDate={filters.toDate}
+          searchTitle={filters.appliedSearchTitle}
         />
       </Suspense>
     </div>
