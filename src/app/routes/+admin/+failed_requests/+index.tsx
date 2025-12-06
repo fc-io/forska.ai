@@ -122,7 +122,7 @@ const AdminFailedRequests = () => {
                     <th class="w-[150px] px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Time
                     </th>
-                    <th class="w-[130px] px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    <th class="w-[260px] px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Project
                     </th>
                     <th class="w-[150px] px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -183,7 +183,19 @@ const AdminFailedRequests = () => {
                             {row.promptHeadings ?? '—'}
                           </td>
                           <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-500 font-mono text-xs">
-                            {row.judgmentsJobId?.split('-')[0] ?? '—'}
+                            <Show when={row.judgmentsJobId} fallback={'—'}>
+                              {(jobId) => {
+                                return (
+                                  <Link
+                                    to="/admin/jobs/$id"
+                                    params={{id: jobId()}}
+                                    class="text-blue-600 hover:text-blue-900 underline"
+                                  >
+                                    {jobId().split('-')[0]}
+                                  </Link>
+                                )
+                              }}
+                            </Show>
                           </td>
                           <td class="px-4 py-4 whitespace-nowrap text-sm text-red-600 font-medium">
                             {row.failedRequests ?? 0}
