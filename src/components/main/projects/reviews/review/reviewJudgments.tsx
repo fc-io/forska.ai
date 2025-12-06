@@ -13,6 +13,8 @@ type ReviewJudgmentsProps = {
     explanation?: string | null
     quotes?: unknown
     assessments?: Array<{assessmentIsCorrect?: boolean | null; assessmentComment?: string | null}>
+    modelName?: string | null
+    snapshotProjectModelName?: string | null
   }>
   setArticleViewToShow: SetArticleViewToShow
 }

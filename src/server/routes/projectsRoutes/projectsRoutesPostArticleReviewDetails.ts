@@ -7,6 +7,7 @@ import {
   judgmentAssessments,
   judgments,
   judgmentsHuman,
+  models,
   projectPrompts,
   projects,
   prompts,
@@ -17,6 +18,7 @@ import {getDatabase} from '../../utils/getDatabase.ts'
 type JudgmentWithPromptAndAssessments = typeof judgments.$inferSelect & {
   prompt: typeof prompts.$inferSelect
   assessments: Array<typeof judgmentAssessments.$inferSelect>
+  modelName?: string | null
 }
 
 type PlaceholderJudgment = {
@@ -29,6 +31,7 @@ type PlaceholderJudgment = {
   prompt: Pick<typeof prompts.$inferSelect, 'originalText' | 'promptHeading'>
   assessments: Array<typeof judgmentAssessments.$inferSelect>
   createdAt: null
+  modelName?: string | null
 }
 
 type ReviewJudgment = JudgmentWithPromptAndAssessments | PlaceholderJudgment
@@ -77,10 +80,11 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
       const articleJudgments =
         promptIds.length > 0
           ? await db
-              .select({judgment: judgments, prompt: prompts})
+              .select({judgment: judgments, prompt: prompts, modelName: models.modelName})
               .from(judgments)
               .innerJoin(prompts, eq(judgments.promptId, prompts.id))
               .innerJoin(projectPrompts, eq(projectPrompts.promptId, prompts.id))
+              .leftJoin(models, eq(judgments.modelId, models.id))
               .where(
                 and(
                   eq(judgments.articleId, articleId),
@@ -110,9 +114,9 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
       )
 
       // Combine judgments with their assessments and prompts (limited to this project's ENABLED prompts)
-      const judgmentsWithDetails: ReviewJudgment[] = articleJudgments.map(({judgment, prompt}) => {
+      const judgmentsWithDetails: ReviewJudgment[] = articleJudgments.map(({judgment, prompt, modelName}) => {
         const judgmentAssessments = assessmentsByJudgment[judgment.id] ?? []
-        return {...judgment, prompt, assessments: judgmentAssessments}
+        return {...judgment, prompt, assessments: judgmentAssessments, modelName}
       })
 
       // Add placeholders for enabled prompts with no LLM judgment yet
@@ -170,10 +174,11 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
       // - Include LLM judgments for imported prompts that are linked but DISABLED in this project
       //   (imported = origin_project_id IS NULL, enabled = false)
       const allArticleJudgments = await db
-        .select({judgment: judgments, prompt: prompts})
+        .select({judgment: judgments, prompt: prompts, modelName: models.modelName})
         .from(judgments)
         .innerJoin(prompts, eq(judgments.promptId, prompts.id))
         .leftJoin(projectPrompts, and(eq(projectPrompts.promptId, prompts.id), eq(projectPrompts.projectId, projectId)))
+        .leftJoin(models, eq(judgments.modelId, models.id))
         .where(
           and(
             eq(judgments.articleId, articleId),
@@ -186,8 +191,8 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
           ),
         )
 
-      const allJudgments = allArticleJudgments.map(({judgment, prompt}) => {
-        return {...judgment, prompt}
+      const allJudgments = allArticleJudgments.map(({judgment, prompt, modelName}) => {
+        return {...judgment, prompt, modelName}
       })
 
       // Resolve project names for snapshotProjectId when present

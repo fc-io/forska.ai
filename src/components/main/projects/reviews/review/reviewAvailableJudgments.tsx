@@ -10,6 +10,8 @@ type Judgment = {
   explanation?: string | null
   quotes?: unknown
   snapshotProjectId?: string | null
+  snapshotProjectModelName?: string | null
+  modelName?: string | null
   prompt?: {id?: string; originalText: string; promptHeading?: string | null; contentHash?: string | null}
 }
 
@@ -90,6 +92,8 @@ export const ReviewAvailableJudgments = (props: ReviewAvailableJudgmentsProps) =
                               confidenceOriginal: j.confidenceOriginal ?? undefined,
                               explanation: j.explanation ?? undefined,
                               quotes: j.quotes,
+                              modelName: j.modelName,
+                              snapshotProjectModelName: j.snapshotProjectModelName,
                             }}
                             setArticleViewToShow={props.setArticleViewToShow}
                           />

@@ -14,6 +14,8 @@ type ReviewJudgmentItemProps = {
     explanation?: string | null
     quotes?: unknown
     assessments?: Array<{assessmentIsCorrect?: boolean | null; assessmentComment?: string | null}>
+    modelName?: string | null
+    snapshotProjectModelName?: string | null
   }
   setArticleViewToShow: SetArticleViewToShow
 }
@@ -22,8 +24,9 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
   const promptId = () => {
     return props.judgment.prompt?.id || props.judgment.promptId || undefined
   }
-  const promptHash = () => {
-    return props.judgment.prompt?.contentHash || undefined
+  const modelName = () => {
+    // Use modelName (from joined models table) or fall back to snapshotProjectModelName
+    return props.judgment.modelName || props.judgment.snapshotProjectModelName || undefined
   }
   return (
     <div
@@ -40,8 +43,8 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
         <div class="mt-1 text-[11px] text-gray-500">
           <span>
             {promptId() ? `Prompt ID: ${String(promptId()).slice(0, 8)}` : ''}
-            {promptId() && promptHash() ? ' • ' : ''}
-            {promptHash() ? `Prompt Hash: ${String(promptHash()).slice(0, 8)}` : ''}
+            {promptId() && modelName() ? ' • ' : ''}
+            {modelName() ? `Model: ${modelName()}` : ''}
           </span>
         </div>
       </div>
