@@ -32,7 +32,6 @@ const Reviews = () => {
         return fetchProjectWithPrompts(params().id)
       },
       refetchOnWindowFocus: true,
-      enabled: isAdmin(),
     }
   })
 
@@ -63,7 +62,7 @@ const Reviews = () => {
               ← Back to Projects
             </Button>
             <h1 class="text-2xl font-bold">Project Reviews</h1>
-            <span class="text-sm text-gray-500">ID: {params().id}</span>
+            <span class="text-sm text-gray-500">{projectQuery.data?.project?.name ?? 'Loading...'}</span>
           </div>
           <Show when={isAdmin()}>
             <div class="flex gap-2">
