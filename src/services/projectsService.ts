@@ -20,16 +20,16 @@ export const fetchProjects = async () => {
   }
 }
 
-export const deleteProject = async (projectId: string): Promise<void> => {
+export const archiveProject = async (projectId: string): Promise<void> => {
   try {
     const response = await apiClient.api.projects({id: projectId}).delete()
 
     if (response.error || !response.data?.success) {
-      console.error('Error deleting project:', response.error)
-      throw new Error('Failed to delete project')
+      console.error('Error archiving project:', response.error)
+      throw new Error('Failed to archive project')
     }
   } catch (err) {
-    console.error('Error deleting project:', err)
+    console.error('Error archiving project:', err)
     throw err
   }
 }

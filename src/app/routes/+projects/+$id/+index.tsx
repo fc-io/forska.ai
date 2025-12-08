@@ -8,12 +8,12 @@ import {ProjectDetailsCuratedArticles} from '../../../../components/main/project
 import {ProjectDetailsInformation} from '../../../../components/main/projectDetails/projectDetailsInformation'
 import {ProjectDetailsPrompts} from '../../../../components/main/projects/projectDetailsPrompts'
 import {Button} from '../../../../components/ui/button'
-import {deleteProject, fetchProjectWithPrompts} from '../../../../services/projectsService'
+import {archiveProject, fetchProjectWithPrompts} from '../../../../services/projectsService'
 const ProjectDetail = () => {
   const params = Route.useParams()
   const projectId = (params() as {id: string}).id
   const navigate = useNavigate()
-  const [deletingProject, setDeletingProject] = createSignal(false)
+  const [archivingProject, setArchivingProject] = createSignal(false)
   const projectData = useQuery(() => {
     return {
       queryKey: ['project', projectId, 'with-prompts'],
@@ -29,21 +29,25 @@ const ProjectDetail = () => {
     return format(new Date(dateString), 'PPpp')
   }
 
-  const handleDeleteProject = async () => {
+  const handleArchiveProject = async () => {
     const projectName = projectData.data?.project.name
-    if (!confirm(`Are you sure you want to delete the project "${projectName}"? This action cannot be undone.`)) {
+    if (
+      !confirm(
+        `Are you sure you want to archive the project "${projectName}"? The project will be hidden from project lists but can be restored later.`,
+      )
+    ) {
       return
     }
 
-    setDeletingProject(true)
+    setArchivingProject(true)
     try {
-      await deleteProject(projectId)
+      await archiveProject(projectId)
       void navigate({to: '/projects'})
     } catch (error) {
-      console.error('Failed to delete project:', error)
-      alert(`Failed to delete project: ${error instanceof Error ? error.message : 'Unknown error'}`)
+      console.error('Failed to archive project:', error)
+      alert(`Failed to archive project: ${error instanceof Error ? error.message : 'Unknown error'}`)
     } finally {
-      setDeletingProject(false)
+      setArchivingProject(false)
     }
   }
 
@@ -69,14 +73,12 @@ const ProjectDetail = () => {
               Edit Project
             </Button>
             <Button
-              variant="destructive"
+              variant="outline"
               onClick={() => {
-                return void handleDeleteProject()
+                return void handleArchiveProject()
               }}
-              // TODO: makke this check on the server side as well
-              disabled={projectData.data?.hasJudgedArticles}
             >
-              {deletingProject() ? 'Deleting...' : 'Delete Project'}
+              {archivingProject() ? 'Archiving...' : 'Archive Project'}
             </Button>
           </div>
         </Show>

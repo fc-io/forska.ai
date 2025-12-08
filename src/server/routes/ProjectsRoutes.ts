@@ -44,7 +44,7 @@ const parseOptionalDate = (value?: string | null) => {
   return parsedDate
 }
 
-const getOrphanPromptIds = async (tx: ReturnType<typeof getDatabase>, promptIds: string[]) => {
+const _getOrphanPromptIds = async (tx: ReturnType<typeof getDatabase>, promptIds: string[]) => {
   if (promptIds.length === 0) {
     return []
   }
@@ -101,7 +101,12 @@ export const projectsRoutes = new Elysia()
   )
   .get('/api/projects', async () => {
     const db = getDatabase()
-    const projectsList = await db.select().from(projects).orderBy(desc(projects.createdAt))
+    // Filter out archived projects by default
+    const projectsList = await db
+      .select()
+      .from(projects)
+      .where(eq(projects.archived, false))
+      .orderBy(desc(projects.createdAt))
     return {data: projectsList}
   })
   .get('/api/projects/:id', async ({params}) => {
@@ -717,38 +722,16 @@ export const projectsRoutes = new Elysia()
   )
   .delete('/api/projects/:id', async ({params}) => {
     const db = getDatabase()
-    // Disallow deletion when a judgments job exists for this project
-    const [job] = await db
-      .select({id: judgmentsJobs.id})
-      .from(judgmentsJobs)
-      .where(eq(judgmentsJobs.projectId, params.id))
-      .limit(1)
-    if (job?.id) {
-      throw new Error('Project is locked: a judgment job exists for this project')
+    // Archive the project instead of deleting it
+    const [archivedProject] = await db
+      .update(projects)
+      .set({archived: true, updatedAt: new Date()})
+      .where(eq(projects.id, params.id))
+      .returning()
+
+    if (!archivedProject) {
+      throw new Error('Project not found')
     }
-
-    await db.transaction(async (tx) => {
-      const promptRows = await tx
-        .select({promptId: projectPrompts.promptId})
-        .from(projectPrompts)
-        .where(eq(projectPrompts.projectId, params.id))
-
-      const promptIds = promptRows.map((row) => {
-        return row.promptId
-      })
-
-      const result = await tx.delete(projects).where(eq(projects.id, params.id)).returning()
-
-      if (result.length === 0) {
-        throw new Error('Project not found')
-      }
-
-      const orphanPromptIds = await getOrphanPromptIds(tx, promptIds)
-
-      if (orphanPromptIds.length > 0) {
-        await tx.delete(prompts).where(inArray(prompts.id, orphanPromptIds))
-      }
-    })
 
     return {success: true}
   })

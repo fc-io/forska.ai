@@ -7,13 +7,13 @@ import {ReviewsHumanFilterControls} from '../../../../../components/main/reviews
 import {ReviewsTabs} from '../../../../../components/main/reviews/reviewsTabs.tsx'
 import {Button} from '../../../../../components/ui/button'
 import {fetchSession} from '../../../../../services/fetchSession'
-import {deleteProject, fetchProjectWithPrompts} from '../../../../../services/projectsService'
+import {archiveProject, fetchProjectWithPrompts} from '../../../../../services/projectsService'
 import {useUrlFilters} from '../../../../../utils/useUrlFilters.ts'
 
 const ReviewsHuman = () => {
   const params = Route.useParams()
   const navigate = useNavigate()
-  const [deletingProject, setDeletingProject] = createSignal(false)
+  const [archivingProject, setArchivingProject] = createSignal(false)
 
   const filters = useUrlFilters({routePath: '/projects/$id/reviews-human/', routeParams: {id: params().id}})
 
@@ -35,21 +35,25 @@ const ReviewsHuman = () => {
     }
   })
 
-  const handleDeleteProject = async () => {
+  const handleArchiveProject = async () => {
     const projectName = projectQuery.data?.project.name ?? 'this project'
-    if (!confirm(`Are you sure you want to delete the project "${projectName}"? This action cannot be undone.`)) {
+    if (
+      !confirm(
+        `Are you sure you want to archive the project "${projectName}"? The project will be hidden from project lists but can be restored later.`,
+      )
+    ) {
       return
     }
 
-    setDeletingProject(true)
+    setArchivingProject(true)
     try {
-      await deleteProject(params().id)
+      await archiveProject(params().id)
       void navigate({to: '/projects'})
     } catch (error) {
-      console.error('Failed to delete project:', error)
-      alert(`Failed to delete project: ${error instanceof Error ? error.message : 'Unknown error'}`)
+      console.error('Failed to archive project:', error)
+      alert(`Failed to archive project: ${error instanceof Error ? error.message : 'Unknown error'}`)
     } finally {
-      setDeletingProject(false)
+      setArchivingProject(false)
     }
   }
 
@@ -76,13 +80,12 @@ const ReviewsHuman = () => {
                 Edit Project
               </Button>
               <Button
-                variant="destructive"
+                variant="outline"
                 onClick={() => {
-                  return void handleDeleteProject()
+                  return void handleArchiveProject()
                 }}
-                disabled={projectQuery.data?.hasJudgedArticles}
               >
-                {deletingProject() ? 'Deleting...' : 'Delete Project'}
+                {archivingProject() ? 'Archiving...' : 'Archive Project'}
               </Button>
             </div>
           </Show>

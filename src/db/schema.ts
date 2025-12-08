@@ -353,6 +353,7 @@ export const projects = pgTable('projects', {
   useFulltext: boolean('use_fulltext').default(false).notNull(),
   dateFrom: timestamp('date_from', {withTimezone: true}),
   dateTo: timestamp('date_to', {withTimezone: true}),
+  archived: boolean('archived').default(false).notNull(),
   createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
 })

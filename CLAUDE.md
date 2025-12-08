@@ -3,6 +3,7 @@ alwaysApply: true
 ---
 ## Important
 
+IMPORTANT: Please don't create postgres migration files for me. I want to create migrations using the Drizzle CLI (bun db:gen, bun db:migrate) if possible.
 IMPORTANT: We use Eden/RPC so derive the types from the API when possible and don't make up new types.
 IMPORTANT: I don't like try, catch, finally, throw. Only use when absolutely necessary.
 IMPORTANT: Avoid branching. If something can be done without, please do without. For example have an type ArrayThatWillLop = array and initalize with an empty array, instead of type LopIfArray = [] | null.
