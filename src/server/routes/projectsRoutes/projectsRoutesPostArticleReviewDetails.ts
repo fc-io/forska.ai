@@ -24,7 +24,7 @@ type JudgmentWithPromptAndAssessments = typeof judgments.$inferSelect & {
 type PlaceholderJudgment = {
   id: string
   promptId: string
-  answeredOriginal: 'not answer'
+  answeredOriginal: 'not answered'
   confidenceOriginal: null
   explanation: null
   quotes: (typeof judgments.$inferSelect)['quotes']
@@ -146,7 +146,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
           return {
             id: `placeholder:${p.id}`,
             promptId: p.id,
-            answeredOriginal: 'not answer',
+            answeredOriginal: 'not answered',
             confidenceOriginal: null,
             explanation: null,
             quotes: [] as (typeof judgments.$inferSelect)['quotes'],
