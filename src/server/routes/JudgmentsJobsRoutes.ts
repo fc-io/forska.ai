@@ -427,6 +427,7 @@ export const judgmentsJobsRoutes = new Elysia()
   .get('/api/judgmentsjobs', async () => {
     const db = getDatabase()
 
+    // Filter out jobs from archived projects
     const jobs = await db
       .select({
         id: judgmentsJobs.id,
@@ -438,7 +439,8 @@ export const judgmentsJobsRoutes = new Elysia()
         projectName: projects.name,
       })
       .from(judgmentsJobs)
-      .leftJoin(projects, eq(judgmentsJobs.projectId, projects.id))
+      .innerJoin(projects, eq(judgmentsJobs.projectId, projects.id))
+      .where(eq(projects.archived, false))
       .orderBy(judgmentsJobs.createdAt)
 
     return {data: jobs, error: null}

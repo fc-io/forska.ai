@@ -123,6 +123,11 @@ export const judgmentsJobsCronGetPrompts = async (
     return {promptEntries: []}
   }
 
+  // Skip archived projects
+  if (project.archived) {
+    return {promptEntries: []}
+  }
+
   if (!enabledPromptCount[0] || enabledPromptCount[0].count === 0) {
     return {promptEntries: []}
   }
