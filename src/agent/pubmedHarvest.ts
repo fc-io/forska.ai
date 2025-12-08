@@ -41,7 +41,7 @@ const EuropePmcResultList = type({'result?': EuropePmcItem.or(EuropePmcItem.arra
 const EuropePmcResponse = type({
   'version?': 'string | number',
   'hitCount?': 'string | number',
-  resultList: EuropePmcResultList,
+  'resultList?': EuropePmcResultList,
   'nextCursorMark?': 'string',
   'nextPageUrl?': 'string',
   'request?': EuropePmcRequest,
@@ -212,11 +212,11 @@ const fetchEuropePmc = async (
   const json: unknown = await res.json()
   const parsed = EuropePmcResponse(json)
   if (parsed instanceof type.errors) {
-    console.error('Invalid response from Europe PMC')
+    console.error('Invalid response from Europe PMC. Raw JSON:', JSON.stringify(json, null, 2))
     throw new Error(parsed.join('\n'))
   }
   console.log('hitCount', parsed.hitCount)
-  const items = readArray(parsed.resultList.result)
+  const items = readArray(parsed.resultList?.result)
   logMissingIds(items)
   const hitCount = (() => {
     if (typeof parsed.hitCount === 'number') return parsed.hitCount
