@@ -392,9 +392,15 @@ const main = async (): Promise<void> => {
   const remote = parseDbUrl(remoteUrl)
   const remoteId = process.env.REMOTE_ID || `${remote.host}:${remote.port}/${remote.db}`
   const fullSync = process.argv.includes('--full')
+  const migOnly = process.argv.includes('--mig-only')
 
   // 1. Run Migrations on Remote
   await runRemoteMigrations(remoteUrl)
+
+  if (migOnly) {
+    log('Migration-only mode: skipping data sync.')
+    return
+  }
 
   // 2. Setup FDW for Data Sync
   await setupFdw(env.DB_NAME, remote)
