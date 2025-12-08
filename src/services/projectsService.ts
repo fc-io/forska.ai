@@ -1,23 +1,25 @@
 import {apiClient} from './apiClient.ts'
 
 export const fetchProjects = async () => {
-  try {
-    const response = await apiClient.api.projects.get()
+  const response = await apiClient.api.projects.get()
 
-    if (response.error) {
-      console.error('Error fetching projects:', response.error)
-      throw new Error('Failed to fetch projects')
-    }
-
-    if (!response.data?.data) {
-      return []
-    }
-
-    return response.data.data
-  } catch (err) {
-    console.error('Error fetching projects:', err)
-    throw err
+  if (response.error) {
+    console.error('Error fetching projects:', response.error)
+    throw new Error('Failed to fetch projects')
   }
+
+  return response.data?.data ?? []
+}
+
+export const fetchArchivedProjects = async () => {
+  const response = await apiClient.api.projects.archived.get()
+
+  if (response.error) {
+    console.error('Error fetching archived projects:', response.error)
+    throw new Error('Failed to fetch archived projects')
+  }
+
+  return response.data?.data ?? []
 }
 
 export const archiveProject = async (projectId: string): Promise<void> => {

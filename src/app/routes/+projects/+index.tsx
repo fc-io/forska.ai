@@ -15,9 +15,14 @@ export const ProjectsPage = () => {
     <div class="min-h-screen bg-gray-50 p-6 mx-auto">
       <div class="flex justify-between items-center mb-6">
         <h1 class="text-2xl font-bold">Projects</h1>
-        <Button as={Link} to="/projects/create">
-          Create New Project
-        </Button>
+        <div class="flex gap-2">
+          <Button as={Link} to="/projects/archived" variant="outline">
+            Show Archived
+          </Button>
+          <Button as={Link} to="/projects/create">
+            Create New Project
+          </Button>
+        </div>
       </div>
 
       <Suspense fallback={<div class="text-center py-8">Loading projects...</div>}>

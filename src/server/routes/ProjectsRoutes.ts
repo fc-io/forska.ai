@@ -109,6 +109,16 @@ export const projectsRoutes = new Elysia()
       .orderBy(desc(projects.createdAt))
     return {data: projectsList}
   })
+  .get('/api/projects/archived', async () => {
+    const db = getDatabase()
+    // Return only archived projects
+    const projectsList = await db
+      .select()
+      .from(projects)
+      .where(eq(projects.archived, true))
+      .orderBy(desc(projects.createdAt))
+    return {data: projectsList}
+  })
   .get('/api/projects/:id', async ({params}) => {
     const db = getDatabase()
     const [project] = await db.select().from(projects).where(eq(projects.id, params.id)).limit(1)

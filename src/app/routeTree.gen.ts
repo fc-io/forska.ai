@@ -19,6 +19,7 @@ import { Route as ProjectsIdHumanAssessmentRouteImport } from './routes/+project
 import { Route as ProjectsIdEditRouteImport } from './routes/+projects/+$id/+edit'
 import { Route as AdminPromptsDeduplicateRouteImport } from './routes/+admin/+prompts/+deduplicate'
 import { Route as AdminDatasourcesCreateRouteImport } from './routes/+admin/+datasources/+create'
+import { Route as ProjectsArchivedIndexRouteImport } from './routes/+projects/+archived/+index'
 import { Route as ProjectsIdIndexRouteImport } from './routes/+projects/+$id/+index'
 import { Route as AdminUsersIndexRouteImport } from './routes/+admin/+users/+index'
 import { Route as AdminSetup_statsIndexRouteImport } from './routes/+admin/+setup_stats/+index'
@@ -88,6 +89,11 @@ const AdminPromptsDeduplicateRoute = AdminPromptsDeduplicateRouteImport.update({
 const AdminDatasourcesCreateRoute = AdminDatasourcesCreateRouteImport.update({
   id: '/admin/datasources/create',
   path: '/admin/datasources/create',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProjectsArchivedIndexRoute = ProjectsArchivedIndexRouteImport.update({
+  id: '/projects/archived/',
+  path: '/projects/archived/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ProjectsIdIndexRoute = ProjectsIdIndexRouteImport.update({
@@ -210,6 +216,7 @@ export interface FileRoutesByFullPath {
   '/admin/setup_stats': typeof AdminSetup_statsIndexRoute
   '/admin/users': typeof AdminUsersIndexRoute
   '/projects/$id': typeof ProjectsIdIndexRoute
+  '/projects/archived': typeof ProjectsArchivedIndexRoute
   '/admin/datasources/create': typeof AdminDatasourcesCreateRoute
   '/admin/prompts/deduplicate': typeof AdminPromptsDeduplicateRoute
   '/projects/$id/edit': typeof ProjectsIdEditRoute
@@ -241,6 +248,7 @@ export interface FileRoutesByTo {
   '/admin/setup_stats': typeof AdminSetup_statsIndexRoute
   '/admin/users': typeof AdminUsersIndexRoute
   '/projects/$id': typeof ProjectsIdIndexRoute
+  '/projects/archived': typeof ProjectsArchivedIndexRoute
   '/admin/datasources/create': typeof AdminDatasourcesCreateRoute
   '/admin/prompts/deduplicate': typeof AdminPromptsDeduplicateRoute
   '/projects/$id/edit': typeof ProjectsIdEditRoute
@@ -273,6 +281,7 @@ export interface FileRoutesById {
   '/admin/setup_stats/': typeof AdminSetup_statsIndexRoute
   '/admin/users/': typeof AdminUsersIndexRoute
   '/projects/$id/': typeof ProjectsIdIndexRoute
+  '/projects/archived/': typeof ProjectsArchivedIndexRoute
   '/admin/datasources/create': typeof AdminDatasourcesCreateRoute
   '/admin/prompts/deduplicate': typeof AdminPromptsDeduplicateRoute
   '/projects/$id/edit': typeof ProjectsIdEditRoute
@@ -306,6 +315,7 @@ export interface FileRouteTypes {
     | '/admin/setup_stats'
     | '/admin/users'
     | '/projects/$id'
+    | '/projects/archived'
     | '/admin/datasources/create'
     | '/admin/prompts/deduplicate'
     | '/projects/$id/edit'
@@ -337,6 +347,7 @@ export interface FileRouteTypes {
     | '/admin/setup_stats'
     | '/admin/users'
     | '/projects/$id'
+    | '/projects/archived'
     | '/admin/datasources/create'
     | '/admin/prompts/deduplicate'
     | '/projects/$id/edit'
@@ -368,6 +379,7 @@ export interface FileRouteTypes {
     | '/admin/setup_stats/'
     | '/admin/users/'
     | '/projects/$id/'
+    | '/projects/archived/'
     | '/admin/datasources/create'
     | '/admin/prompts/deduplicate'
     | '/projects/$id/edit'
@@ -400,6 +412,7 @@ export interface RootRouteChildren {
   AdminSetup_statsIndexRoute: typeof AdminSetup_statsIndexRoute
   AdminUsersIndexRoute: typeof AdminUsersIndexRoute
   ProjectsIdIndexRoute: typeof ProjectsIdIndexRoute
+  ProjectsArchivedIndexRoute: typeof ProjectsArchivedIndexRoute
   AdminDatasourcesCreateRoute: typeof AdminDatasourcesCreateRoute
   AdminPromptsDeduplicateRoute: typeof AdminPromptsDeduplicateRoute
   ProjectsIdEditRoute: typeof ProjectsIdEditRoute
@@ -487,6 +500,13 @@ declare module '@tanstack/solid-router' {
       path: '/admin/datasources/create'
       fullPath: '/admin/datasources/create'
       preLoaderRoute: typeof AdminDatasourcesCreateRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/projects/archived/': {
+      id: '/projects/archived/'
+      path: '/projects/archived'
+      fullPath: '/projects/archived'
+      preLoaderRoute: typeof ProjectsArchivedIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/projects/$id/': {
@@ -640,6 +660,7 @@ const rootRouteChildren: RootRouteChildren = {
   AdminSetup_statsIndexRoute: AdminSetup_statsIndexRoute,
   AdminUsersIndexRoute: AdminUsersIndexRoute,
   ProjectsIdIndexRoute: ProjectsIdIndexRoute,
+  ProjectsArchivedIndexRoute: ProjectsArchivedIndexRoute,
   AdminDatasourcesCreateRoute: AdminDatasourcesCreateRoute,
   AdminPromptsDeduplicateRoute: AdminPromptsDeduplicateRoute,
   ProjectsIdEditRoute: ProjectsIdEditRoute,
