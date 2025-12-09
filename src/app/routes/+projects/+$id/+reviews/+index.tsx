@@ -5,7 +5,7 @@ const RedirectReviews = () => {
   const params = Route.useParams()
   const navigate = useNavigate()
   createEffect(() => {
-    void navigate({to: '/projects/$id/reviews-both', params: {id: params().id}})
+    void navigate({to: '/projects/$id/reviews-llm', params: {id: params().id}})
   })
   return null
 }

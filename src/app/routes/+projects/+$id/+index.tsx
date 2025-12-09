@@ -63,7 +63,7 @@ const ProjectDetail = () => {
         </div>
         <Show when={projectData.isSuccess}>
           <div class="flex gap-2">
-            <Button as={Link} to="/projects/$id/reviews-both" params={{id: projectId}} variant="outline">
+            <Button as={Link} to="/projects/$id/reviews-llm" params={{id: projectId}} variant="outline">
               Project Reviews
             </Button>
             <Button as={Link} to="/projects/$id/humanAssessment" params={{id: projectId}} variant="outline">
