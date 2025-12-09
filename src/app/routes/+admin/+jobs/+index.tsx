@@ -193,7 +193,11 @@ const AdminJobs = () => {
                   </tr>
                 </thead>
                 <tbody class="bg-white divide-y divide-gray-200">
-                  <For each={jobs.data}>
+                  <For
+                    each={jobs.data?.slice().sort((a, b) => {
+                      return (a.projectName ?? 'Unknown Project').localeCompare(b.projectName ?? 'Unknown Project')
+                    })}
+                  >
                     {(job) => {
                       return (
                         <tr class="hover:bg-gray-50">
