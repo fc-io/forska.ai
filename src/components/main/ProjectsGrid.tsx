@@ -1,6 +1,6 @@
 import {Link} from '@tanstack/solid-router'
 import {format} from 'date-fns'
-import {createSignal, For} from 'solid-js'
+import {createMemo, createSignal, For} from 'solid-js'
 
 import {createJudgmentsJob} from '../../services/judgmentsJobsService'
 import {Button} from '../ui/button'
@@ -17,6 +17,12 @@ interface IndexProjectsGridProps {
 }
 
 export const ProjectsGrid = (props: IndexProjectsGridProps) => {
+  const sortedProjects = createMemo(() => {
+    return [...props.projects].sort((a, b) => {
+      return a.name.localeCompare(b.name)
+    })
+  })
+
   const [creatingJobs, setCreatingJobs] = createSignal<Set<string>>(new Set())
   const handleCreateJudgmentsJob = async (projectId: string) => {
     setCreatingJobs((prev) => {
@@ -39,7 +45,7 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
   return (
     <ul class="flex flex-col gap-6 mb-8 list-none p-0">
       {}
-      <For each={props.projects}>
+      <For each={sortedProjects()}>
         {(project) => {
           return (
             <li>
@@ -55,11 +61,13 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
                     </span>
                   </div>
                 </div>
-                <p class="text-muted-foreground mb-4">
-                  {(project.description && project.description.length > 100
-                    ? `${project.description?.slice(0, 100).trim()}…`
-                    : project.description) || 'No description provided'}
-                </p>
+                {project.description && (
+                  <p class="text-muted-foreground mb-4">
+                    {project.description.length > 100
+                      ? `${project.description.slice(0, 100).trim()}…`
+                      : project.description}
+                  </p>
+                )}
                 <div class="flex gap-2">
                   <Button
                     as={Link}
