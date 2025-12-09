@@ -75,20 +75,24 @@ const AdminDataSources = () => {
     const term = searchTerm().toLowerCase()
     const userId = currentUserId()
 
-    return list.filter((entry) => {
-      const matchesSearch =
-        term === ''
-        || entry.title.toLowerCase().includes(term)
-        || (entry.description?.toLowerCase().includes(term) ?? false)
-        || (entry.ownerName?.toLowerCase().includes(term) ?? false)
+    return list
+      .filter((entry) => {
+        const matchesSearch =
+          term === ''
+          || entry.title.toLowerCase().includes(term)
+          || (entry.description?.toLowerCase().includes(term) ?? false)
+          || (entry.ownerName?.toLowerCase().includes(term) ?? false)
 
-      const matchesFilter =
-        selectedFilter() === 'all'
-        || (selectedFilter() === 'owned' && entry.ownerId === userId)
-        || (selectedFilter() === 'shared' && Number(entry.accessCount) > 1)
+        const matchesFilter =
+          selectedFilter() === 'all'
+          || (selectedFilter() === 'owned' && entry.ownerId === userId)
+          || (selectedFilter() === 'shared' && Number(entry.accessCount) > 1)
 
-      return matchesSearch && matchesFilter
-    })
+        return matchesSearch && matchesFilter
+      })
+      .sort((a, b) => {
+        return a.title.localeCompare(b.title)
+      })
   }
 
   const ownedCount = () => {
