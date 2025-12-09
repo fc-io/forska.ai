@@ -1,4 +1,4 @@
-import {and, desc, eq, inArray, isNull, sql} from 'drizzle-orm'
+import {and, asc, desc, eq, inArray, isNull, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {
@@ -106,7 +106,7 @@ export const projectsRoutes = new Elysia()
       .select()
       .from(projects)
       .where(eq(projects.archived, false))
-      .orderBy(desc(projects.createdAt))
+      .orderBy(asc(projects.name))
     return {data: projectsList}
   })
   .get('/api/projects/archived', async () => {
