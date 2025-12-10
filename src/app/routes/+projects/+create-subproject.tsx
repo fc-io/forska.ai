@@ -205,6 +205,7 @@ const CreateSubproject = () => {
         dateFrom: dateFrom() || undefined,
         dateTo: dateTo() || undefined,
         promptSelections,
+        sourceProjectIds: selectedProjects(),
       })
 
       const result = handleApiResponse(response, 'Failed to create subproject')
@@ -400,7 +401,9 @@ const CreateSubproject = () => {
                           <div class="mb-3">
                             <p class="text-sm font-medium text-gray-900">{prompt.promptHeading || 'Untitled Prompt'}</p>
                             <Show when={prompt.originalText}>
-                              <p class="text-xs text-muted-foreground mt-1 whitespace-pre-wrap">{prompt.originalText}</p>
+                              <p class="text-xs text-muted-foreground mt-1 whitespace-pre-wrap">
+                                {prompt.originalText}
+                              </p>
                             </Show>
                             <Show when={prompt.type}>
                               <p class="text-xs text-muted-foreground mt-1">Type: {prompt.type}</p>

@@ -1,7 +1,17 @@
-import {and, eq, gte, inArray, lte, sql} from 'drizzle-orm'
+import {and, eq, gte, inArray, lte, or, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {articles, judgments, models, projectArticles, projectPrompts, projects, prompts} from '../../db/schema.ts'
+import {
+  articleRouteLink,
+  articles,
+  judgments,
+  models,
+  projectArticles,
+  projectPrompts,
+  projectRouteLink,
+  projects,
+  prompts,
+} from '../../db/schema.ts'
 import {requireUserAuth} from '../utils/authGuard.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
@@ -30,12 +40,7 @@ export const subprojectsRoutes = new Elysia()
 
     // Get all non-archived projects with their model name
     const projectsList = await db
-      .select({
-        id: projects.id,
-        name: projects.name,
-        description: projects.description,
-        modelName: models.name,
-      })
+      .select({id: projects.id, name: projects.name, description: projects.description, modelName: models.name})
       .from(projects)
       .innerJoin(models, eq(projects.modelId, models.id))
       .where(eq(projects.archived, false))
@@ -153,65 +158,173 @@ export const subprojectsRoutes = new Elysia()
         }
       }
 
-      // Build filter conditions - ALL prompts must match (AND logic)
-      // Similar to projectsRoutesGetArticlesReviewsBoth.ts
-      const filterConditions: Array<ReturnType<typeof sql>> = []
+      // Build filter conditions matching the Reviews LLM page behavior:
+      // 1. Scope articles to source projects (via import routes or project_articles)
+      // 2. Require articles to be fully assessed for ALL prompts on each source project
+      // 3. Apply the answer type filters
 
-      for (const selection of body.promptSelections) {
-        if (selection.types.length === 0) continue
+      if (body.sourceProjectIds.length === 0) {
+        console.log(`[subprojects] No source projects selected, no articles added`)
+        return {data: {project: newProject, articleCount: 0}}
+      }
 
+      // For each source project, get its import routes and prompts
+      const projectImportRoutes = await db
+        .select({projectId: projectRouteLink.projectId, importRouteId: projectRouteLink.importRouteId})
+        .from(projectRouteLink)
+        .where(inArray(projectRouteLink.projectId, body.sourceProjectIds))
+
+      // Group import routes by project
+      const routesByProject = new Map<string, string[]>()
+      for (const row of projectImportRoutes) {
+        const routes = routesByProject.get(row.projectId) || []
+        routes.push(row.importRouteId)
+        routesByProject.set(row.projectId, routes)
+      }
+
+      // Get all prompts for each source project
+      const sourceProjectPrompts = await db
+        .select({projectId: projectPrompts.projectId, promptId: prompts.id})
+        .from(projectPrompts)
+        .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
+        .where(and(inArray(projectPrompts.projectId, body.sourceProjectIds), eq(projectPrompts.enabled, true)))
+
+      // Group prompts by project
+      const promptsByProject = new Map<string, string[]>()
+      for (const row of sourceProjectPrompts) {
+        const prompts = promptsByProject.get(row.projectId) || []
+        prompts.push(row.promptId)
+        promptsByProject.set(row.projectId, prompts)
+      }
+
+      // Get project date bounds
+      const projectBounds = await db
+        .select({id: projects.id, dateFrom: projects.dateFrom, dateTo: projects.dateTo})
+        .from(projects)
+        .where(inArray(projects.id, body.sourceProjectIds))
+
+      const boundsByProject = new Map<string, {dateFrom: Date | null; dateTo: Date | null}>()
+      for (const row of projectBounds) {
+        boundsByProject.set(row.id, {dateFrom: row.dateFrom, dateTo: row.dateTo})
+      }
+
+      // Build prompt filter conditions (for the specific answer types selected)
+      const promptFilters = body.promptSelections.filter((s) => {
+        return s.types.length > 0
+      })
+
+      // Use HAVING-based filtering like the Reviews LLM page
+      // This requires: COUNT(DISTINCT judgments.promptId) = promptIds.length for full assessment
+      // AND SUM(CASE WHEN ...) > 0 for answer type filters
+
+      const normalized = sql`COALESCE(${judgments.answeredOriginalAsArray}, CASE WHEN ${judgments.answeredOriginal} IS NOT NULL THEN ARRAY[${judgments.answeredOriginal}] ELSE ARRAY[]::text[] END)`
+
+      // Build HAVING conditions for selected prompt/type filters
+      const havingParts: Array<ReturnType<typeof sql>> = []
+      for (const filter of promptFilters) {
         const answeredValsArray = sql.join(
-          selection.types.map((v) => {
+          filter.types.map((v) => {
             return sql`${v}`
           }),
           sql`,`,
         )
-
-        // Normalized array handling: COALESCE(answered_original_as_array, ARRAY[answered_original])
-        const normalized = sql`COALESCE(${judgments.answeredOriginalAsArray}, CASE WHEN ${judgments.answeredOriginal} IS NOT NULL THEN ARRAY[${judgments.answeredOriginal}] ELSE ARRAY[]::text[] END)`
-
-        // Create EXISTS subquery for this prompt
-        const subquery = db
-          .select({exists: sql`1`})
-          .from(judgments)
-          .where(
-            and(
-              eq(judgments.articleId, articles.id),
-              eq(judgments.promptId, selection.promptId),
-              sql`(${normalized}) && ARRAY[${answeredValsArray}]::text[]`,
-            ),
-          )
-          .limit(1)
-
-        filterConditions.push(sql`EXISTS (${subquery})`)
+        havingParts.push(
+          sql`SUM(CASE WHEN ${judgments.promptId} = ${filter.promptId}::uuid AND (${normalized}) && ARRAY[${answeredValsArray}]::text[] THEN 1 ELSE 0 END) > 0`,
+        )
       }
 
-      if (filterConditions.length === 0) {
+      if (havingParts.length === 0) {
         console.log(`[subprojects] No valid prompt selections, no articles added`)
         return {data: {project: newProject, articleCount: 0}}
       }
 
-      // Build where clause: all filter conditions must be true (AND logic)
-      const whereParts: Array<ReturnType<typeof sql>> = [...filterConditions]
+      // Collect all matching article IDs across all source projects
+      const allMatchingArticleIds: string[] = []
 
-      // Add optional date range filter
-      if (body.dateFrom) {
-        const fromDate = new Date(`${body.dateFrom}T00:00:00.000Z`)
-        whereParts.push(gte(articles.articleCreatedAt, fromDate))
+      for (const sourceProjectId of body.sourceProjectIds) {
+        const projectPromptIds = promptsByProject.get(sourceProjectId) || []
+        if (projectPromptIds.length === 0) continue
+
+        const projectRoutes = routesByProject.get(sourceProjectId) || []
+        const bounds = boundsByProject.get(sourceProjectId)
+
+        // Build scope condition: articles accessible via import routes OR project_articles
+        const routeIdArray =
+          projectRoutes.length > 0
+            ? sql.join(
+                projectRoutes.map((r) => {
+                  return sql`${r}::uuid`
+                }),
+                sql`,`,
+              )
+            : null
+
+        const hasMatchingImportRoute =
+          routeIdArray !== null
+            ? sql`EXISTS (
+                SELECT 1 FROM ${articleRouteLink} arl
+                WHERE arl."article_id" = ${articles.id}
+                  AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
+              )`
+            : null
+        const hasProjectArticle = sql`EXISTS (
+          SELECT 1 FROM ${projectArticles} pa
+          WHERE pa."article_id" = ${articles.id}
+            AND pa."project_id" = ${sourceProjectId}::uuid
+        )`
+        const scopeCondition = hasMatchingImportRoute
+          ? or(hasMatchingImportRoute, hasProjectArticle)
+          : hasProjectArticle
+
+        // Build where conditions
+        const whereParts: Array<ReturnType<typeof sql>> = []
+
+        // Project date bounds
+        if (bounds?.dateFrom) {
+          whereParts.push(gte(articles.articleCreatedAt, bounds.dateFrom))
+        }
+        if (bounds?.dateTo) {
+          whereParts.push(lte(articles.articleCreatedAt, bounds.dateTo))
+        }
+
+        // User-specified date range
+        if (body.dateFrom) {
+          const fromDate = new Date(`${body.dateFrom}T00:00:00.000Z`)
+          whereParts.push(gte(articles.articleCreatedAt, fromDate))
+        }
+        if (body.dateTo) {
+          const toDate = new Date(`${body.dateTo}T23:59:59.999Z`)
+          whereParts.push(lte(articles.articleCreatedAt, toDate))
+        }
+
+        const combinedWhereCondition = whereParts.length > 1 ? and(...whereParts) : whereParts[0]
+
+        // Build the full HAVING: require full assessment for ALL project prompts + answer type filters
+        const fullHavingParts: Array<ReturnType<typeof sql>> = [
+          sql`COUNT(DISTINCT ${judgments.promptId}) = ${projectPromptIds.length}`,
+          ...havingParts,
+        ]
+
+        // Query matching articles for this project using grouped query with HAVING (like Reviews LLM page)
+        const groupedQuery = db
+          .select({id: articles.id})
+          .from(articles)
+          .innerJoin(
+            judgments,
+            and(eq(judgments.articleId, articles.id), inArray(judgments.promptId, projectPromptIds)),
+          )
+          .where(combinedWhereCondition ? and(combinedWhereCondition, scopeCondition) : scopeCondition)
+          .groupBy(articles.id)
+          .having(fullHavingParts.length > 1 ? and(...fullHavingParts) : fullHavingParts[0])
+
+        const matchingArticles = await groupedQuery
+        for (const row of matchingArticles) {
+          allMatchingArticleIds.push(row.id)
+        }
       }
-      if (body.dateTo) {
-        const toDate = new Date(`${body.dateTo}T23:59:59.999Z`)
-        whereParts.push(lte(articles.articleCreatedAt, toDate))
-      }
 
-      const combinedWhere = whereParts.length > 1 ? and(...whereParts) : whereParts[0]
-
-      // Find articles that match ALL filter conditions
-      const matchingArticles = await db.selectDistinct({id: articles.id}).from(articles).where(combinedWhere)
-
-      const articleIds = matchingArticles.map((a) => {
-        return a.id
-      })
+      // Deduplicate article IDs (in case a single article appears in multiple source projects)
+      const articleIds = [...new Set(allMatchingArticleIds)]
       console.log(`[subprojects] Found ${articleIds.length} articles matching ALL criteria`)
 
       // Insert articles into the new project in batches
@@ -243,6 +356,7 @@ export const subprojectsRoutes = new Elysia()
         dateFrom: t.Optional(t.String()),
         dateTo: t.Optional(t.String()),
         promptSelections: t.Array(t.Object({promptId: t.String(), types: t.Array(t.String())})),
+        sourceProjectIds: t.Array(t.String()),
       }),
     },
   )
