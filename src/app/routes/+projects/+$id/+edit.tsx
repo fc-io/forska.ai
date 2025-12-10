@@ -269,6 +269,9 @@ const EditProject = (): JSX.Element => {
       queryFn: () => {
         return fetchProjectWithPrompts(projectId)
       },
+      // Disable auto-refetch on window focus since this is a form with user-editable state.
+      // Otherwise, refetches would overwrite the user's local changes (e.g., enabled checkbox).
+      refetchOnWindowFocus: false,
     }
   })
 
