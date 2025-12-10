@@ -21,6 +21,12 @@ those are just processes and wonâ€™t appear in instance list. To see those, youâ
 ps aux | grep apptainer
 ```
 
+## check space used/left on Alvis
+
+``` bash
+C3SE_quota
+```
+
 ## check time left with slurm
 
 ``` bash
