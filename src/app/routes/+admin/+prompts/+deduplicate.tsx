@@ -331,7 +331,7 @@ const DeduplicatePrompts = () => {
           }
         >
           <div class="flex justify-between items-center mb-6">
-            <h1 class="text-2xl font-bold">Deduplicate Prompts</h1>
+            <h1 class="text-2xl font-bold">Prompts</h1>
             <button
               onClick={() => {
                 return void regenerateHashes()

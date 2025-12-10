@@ -75,7 +75,7 @@ export const Navigation = (props: NavigationProps) => {
                 Users
               </Link>
               <Link to="/admin/prompts/deduplicate" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
-                Deduplicate Prompts
+                Prompts
               </Link>
               <Link to="/admin/failed_requests" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
                 Failed Requests
