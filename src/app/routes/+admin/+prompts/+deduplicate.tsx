@@ -573,9 +573,7 @@ const DeduplicatePrompts = () => {
                             {(judgment) => {
                               return (
                                 <tr class="hover:bg-gray-50">
-                                  <td class="px-6 py-4 text-sm text-gray-500 font-mono break-all w-32">
-                                    {judgment.id.slice(0, 8)}...
-                                  </td>
+                                  <td class="px-6 py-4 text-sm text-gray-500 font-mono break-all">{judgment.id}</td>
                                   <td class="px-6 py-4 text-sm text-gray-900 break-words">
                                     <div class="max-h-[60px] overflow-y-auto">
                                       {judgment.promptHeading || judgment.promptId.slice(0, 8)}
