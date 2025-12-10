@@ -7,14 +7,33 @@ import {apiClient} from '../../../services/apiClient'
 import {fetchSession} from '../../../services/fetchSession'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse'
 
-type PromptInfo = {id: string; promptHeading: string | null; type: string | null}
+type PromptInfo = {id: string; promptHeading: string | null; originalText: string; type: string | null}
 
-type ProjectSource = {id: string; name: string; description: string | null; prompts: PromptInfo[]}
+type ProjectSource = {
+  id: string
+  name: string
+  description: string | null
+  modelName: string | null
+  prompts: PromptInfo[]
+}
 
 type SourcesResponse = {data: ProjectSource[]}
 
 type ModelOption = {id: string; name: string; provider: string | null; modelName: string | null}
 type ModelsResponse = {data: ModelOption[]}
+
+// Parse arktype definition like "'yes' | 'no' | 'unsure' | 'potentially' | 'marginally'" into array
+const parseArktypeOptions = (typeStr: string | null): string[] => {
+  if (!typeStr) return []
+
+  // Match quoted strings: 'value' or "value"
+  const matches = typeStr.match(/['"]([^'"]+)['"]/g)
+  if (!matches) return []
+
+  return matches.map((m) => {
+    return m.slice(1, -1) // Remove quotes
+  })
+}
 
 const CreateSubproject = () => {
   const sessionQuery = useQuery(() => {
@@ -56,10 +75,12 @@ const CreateSubproject = () => {
   const [description, setDescription] = createSignal('')
   const [selectedModelId, setSelectedModelId] = createSignal('')
   const [selectedProjects, setSelectedProjects] = createSignal<string[]>([])
-  // Map of promptId -> selected (boolean, since each prompt has only one type)
-  const [selectedPrompts, setSelectedPrompts] = createSignal<Set<string>>(new Set())
+  // Map of promptId -> selected answer types
+  const [promptAnswerTypes, setPromptAnswerTypes] = createSignal<Record<string, string[]>>({})
   const [isLoading, setIsLoading] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
+  const [dateFrom, setDateFrom] = createSignal('')
+  const [dateTo, setDateTo] = createSignal('')
 
   const availableModels = () => {
     const models = modelsQuery.data ?? []
@@ -81,16 +102,16 @@ const CreateSubproject = () => {
       const has = current.includes(projectId)
       if (has) {
         // Remove project and its prompt selections
-        const newSelectedPrompts = new Set(selectedPrompts())
+        const newAnswerTypes = {...promptAnswerTypes()}
         const project = sourcesQuery.data?.find((p) => {
           return p.id === projectId
         })
         if (project) {
           for (const prompt of project.prompts) {
-            newSelectedPrompts.delete(prompt.id)
+            delete newAnswerTypes[prompt.id]
           }
         }
-        setSelectedPrompts(newSelectedPrompts)
+        setPromptAnswerTypes(newAnswerTypes)
         return current.filter((v) => {
           return v !== projectId
         })
@@ -101,7 +122,7 @@ const CreateSubproject = () => {
 
   // Get unique prompts from selected projects (deduplicated by id)
   const availablePrompts = () => {
-    const promptMap = new Map<string, PromptInfo & {projectIds: string[]}>()
+    const promptMap = new Map<string, PromptInfo & {projectIds: string[]; options: string[]}>()
     for (const projectId of selectedProjects()) {
       const project = sourcesQuery.data?.find((p) => {
         return p.id === projectId
@@ -114,7 +135,7 @@ const CreateSubproject = () => {
               existing.projectIds.push(projectId)
             }
           } else {
-            promptMap.set(prompt.id, {...prompt, projectIds: [projectId]})
+            promptMap.set(prompt.id, {...prompt, projectIds: [projectId], options: parseArktypeOptions(prompt.type)})
           }
         }
       }
@@ -122,24 +143,31 @@ const CreateSubproject = () => {
     return Array.from(promptMap.values())
   }
 
-  const togglePromptSelection = (promptId: string) => {
-    setSelectedPrompts((current) => {
-      const newSet = new Set(current)
-      if (newSet.has(promptId)) {
-        newSet.delete(promptId)
-      } else {
-        newSet.add(promptId)
+  const toggleAnswerType = (promptId: string, answerType: string) => {
+    setPromptAnswerTypes((current) => {
+      const currentTypes = current[promptId] || []
+      const has = currentTypes.includes(answerType)
+      if (has) {
+        const newTypes = currentTypes.filter((t) => {
+          return t !== answerType
+        })
+        if (newTypes.length === 0) {
+          const {[promptId]: _, ...rest} = current
+          return rest
+        }
+        return {...current, [promptId]: newTypes}
       }
-      return newSet
+      return {...current, [promptId]: [...currentTypes, answerType]}
     })
   }
 
-  const isPromptSelected = (promptId: string) => {
-    return selectedPrompts().has(promptId)
+  const isAnswerTypeSelected = (promptId: string, answerType: string) => {
+    const types = promptAnswerTypes()[promptId] || []
+    return types.includes(answerType)
   }
 
   const hasAnySelections = () => {
-    return selectedPrompts().size > 0
+    return Object.keys(promptAnswerTypes()).length > 0
   }
 
   const handleSubmit = async (e: Event) => {
@@ -157,21 +185,15 @@ const CreateSubproject = () => {
     }
 
     if (!hasAnySelections()) {
-      setError('Please select at least one prompt')
+      setError('Please select at least one answer type for a prompt')
       return
     }
 
     setIsLoading(true)
 
     try {
-      // Build prompt selections from selected prompts
-      // Each prompt has its type from the prompts table
-      const promptSelections = Array.from(selectedPrompts()).map((promptId) => {
-        const prompt = availablePrompts().find((p) => {
-          return p.id === promptId
-        })
-        // Use the prompt's type if available, otherwise use empty array
-        const types = prompt?.type ? [prompt.type] : []
+      // Build prompt selections from selected answer types
+      const promptSelections = Object.entries(promptAnswerTypes()).map(([promptId, types]) => {
         return {promptId, types}
       })
 
@@ -180,6 +202,8 @@ const CreateSubproject = () => {
         description: description().trim() || undefined,
         ownerId: sessionQuery.data.user.id,
         modelId: selectedModelId(),
+        dateFrom: dateFrom() || undefined,
+        dateTo: dateTo() || undefined,
         promptSelections,
       })
 
@@ -283,6 +307,37 @@ const CreateSubproject = () => {
               />
             </div>
 
+            <div class="grid grid-cols-2 gap-4">
+              <div>
+                <label for="date-from" class="block text-sm font-medium mb-2">
+                  Date From (optional)
+                </label>
+                <input
+                  id="date-from"
+                  type="date"
+                  value={dateFrom()}
+                  onInput={(e) => {
+                    return setDateFrom(e.currentTarget.value)
+                  }}
+                  class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+                />
+              </div>
+              <div>
+                <label for="date-to" class="block text-sm font-medium mb-2">
+                  Date To (optional)
+                </label>
+                <input
+                  id="date-to"
+                  type="date"
+                  value={dateTo()}
+                  onInput={(e) => {
+                    return setDateTo(e.currentTarget.value)
+                  }}
+                  class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+                />
+              </div>
+            </div>
+
             <div>
               <p class="block text-sm font-medium mb-2">Import from Projects</p>
               <Show when={sourcesQuery.isLoading}>
@@ -297,7 +352,7 @@ const CreateSubproject = () => {
                 <p class="text-sm text-muted-foreground">No projects with prompts available.</p>
               </Show>
               <Show when={!sourcesQuery.isLoading && !sourcesQuery.isError && (sourcesQuery.data?.length ?? 0) > 0}>
-                <div class="space-y-2 max-h-64 overflow-y-auto">
+                <div class="space-y-2">
                   <For each={sourcesQuery.data}>
                     {(project) => {
                       return (
@@ -312,6 +367,9 @@ const CreateSubproject = () => {
                           />
                           <div class="flex-1">
                             <p class="text-sm font-medium text-gray-900">{project.name}</p>
+                            <Show when={project.modelName}>
+                              <p class="text-xs text-muted-foreground mt-1">Model: {project.modelName}</p>
+                            </Show>
                             <Show when={project.description}>
                               <p class="text-xs text-muted-foreground mt-1">{project.description}</p>
                             </Show>
@@ -329,29 +387,49 @@ const CreateSubproject = () => {
 
             <Show when={selectedProjects().length > 0}>
               <div>
-                <p class="block text-sm font-medium mb-2">Select Prompts</p>
-                <div class="space-y-2">
+                <p class="block text-sm font-medium mb-2">Select Prompts and Answer Types</p>
+                <p class="text-xs text-muted-foreground mb-3">
+                  For each prompt, select which answer types to filter by. Articles must match ALL selected prompt/type
+                  combinations to be included.
+                </p>
+                <div class="space-y-4">
                   <For each={availablePrompts()}>
                     {(prompt) => {
                       return (
-                        <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer hover:bg-muted/50">
-                          <input
-                            type="checkbox"
-                            class="mt-1"
-                            checked={isPromptSelected(prompt.id)}
-                            onChange={() => {
-                              return togglePromptSelection(prompt.id)
-                            }}
-                          />
-                          <div class="flex-1">
-                            <p class="text-sm font-medium text-gray-900">
-                              {prompt.promptHeading || prompt.type || 'Untitled Prompt'}
-                            </p>
+                        <div class="border border-input rounded-md p-4">
+                          <div class="mb-3">
+                            <p class="text-sm font-medium text-gray-900">{prompt.promptHeading || 'Untitled Prompt'}</p>
+                            <Show when={prompt.originalText}>
+                              <p class="text-xs text-muted-foreground mt-1 whitespace-pre-wrap">{prompt.originalText}</p>
+                            </Show>
                             <Show when={prompt.type}>
-                              <p class="text-xs text-muted-foreground">Type: {prompt.type}</p>
+                              <p class="text-xs text-muted-foreground mt-1">Type: {prompt.type}</p>
                             </Show>
                           </div>
-                        </label>
+                          <Show when={prompt.options.length > 0}>
+                            <div class="flex flex-col gap-2">
+                              <For each={prompt.options}>
+                                {(answerType) => {
+                                  return (
+                                    <label class="flex items-center gap-2 cursor-pointer">
+                                      <input
+                                        type="checkbox"
+                                        checked={isAnswerTypeSelected(prompt.id, answerType)}
+                                        onChange={() => {
+                                          toggleAnswerType(prompt.id, answerType)
+                                        }}
+                                      />
+                                      <span class="text-sm">{answerType}</span>
+                                    </label>
+                                  )
+                                }}
+                              </For>
+                            </div>
+                          </Show>
+                          <Show when={prompt.options.length === 0}>
+                            <p class="text-xs text-muted-foreground italic">No type options defined for this prompt</p>
+                          </Show>
+                        </div>
                       )
                     }}
                   </For>

@@ -1,7 +1,7 @@
-import {and, eq, inArray} from 'drizzle-orm'
+import {and, eq, gte, inArray, lte, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {judgments, models, projectArticles, projectPrompts, projects, prompts} from '../../db/schema.ts'
+import {articles, judgments, models, projectArticles, projectPrompts, projects, prompts} from '../../db/schema.ts'
 import {requireUserAuth} from '../utils/authGuard.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
@@ -11,11 +11,8 @@ type ProjectWithPrompts = {
   id: string
   name: string
   description: string | null
-  prompts: Array<{
-    id: string
-    promptHeading: string | null
-    type: string | null
-  }>
+  modelName: string | null
+  prompts: Array<{id: string; promptHeading: string | null; originalText: string; type: string | null}>
 }
 
 const chunk = <T>(arr: T[], size: number): T[][] => {
@@ -31,20 +28,31 @@ export const subprojectsRoutes = new Elysia()
   .get('/api/subprojects/sources', async () => {
     const db = getDatabase()
 
-    // Get all non-archived projects
+    // Get all non-archived projects with their model name
     const projectsList = await db
-      .select({id: projects.id, name: projects.name, description: projects.description})
+      .select({
+        id: projects.id,
+        name: projects.name,
+        description: projects.description,
+        modelName: models.name,
+      })
       .from(projects)
+      .innerJoin(models, eq(projects.modelId, models.id))
       .where(eq(projects.archived, false))
       .orderBy(projects.name)
 
-    // For each project, get prompts with their type
+    // For each project, get prompts with their type and originalText
     const projectsWithPrompts: ProjectWithPrompts[] = []
 
     for (const project of projectsList) {
       // Get prompts for this project
       const projectPromptsList = await db
-        .select({id: prompts.id, promptHeading: prompts.promptHeading, type: prompts.type})
+        .select({
+          id: prompts.id,
+          promptHeading: prompts.promptHeading,
+          originalText: prompts.originalText,
+          type: prompts.type,
+        })
         .from(projectPrompts)
         .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
         .where(and(eq(projectPrompts.projectId, project.id), eq(projectPrompts.enabled, true)))
@@ -55,7 +63,7 @@ export const subprojectsRoutes = new Elysia()
         projectsWithPrompts.push({
           ...project,
           prompts: projectPromptsList.map((p) => {
-            return {id: p.id, promptHeading: p.promptHeading, type: p.type}
+            return {id: p.id, promptHeading: p.promptHeading, originalText: p.originalText, type: p.type}
           }),
         })
       }
@@ -86,6 +94,8 @@ export const subprojectsRoutes = new Elysia()
           useTitle: true,
           useAbstract: true,
           useFulltext: false,
+          dateFrom: body.dateFrom ? new Date(body.dateFrom) : null,
+          dateTo: body.dateTo ? new Date(body.dateTo) : null,
         })
         .returning()
 
@@ -143,43 +153,66 @@ export const subprojectsRoutes = new Elysia()
         }
       }
 
-      // Build a map of promptId -> selected types
-      const promptTypeMap = new Map<string, Set<string>>()
+      // Build filter conditions - ALL prompts must match (AND logic)
+      // Similar to projectsRoutesGetArticlesReviewsBoth.ts
+      const filterConditions: Array<ReturnType<typeof sql>> = []
+
       for (const selection of body.promptSelections) {
-        if (!promptTypeMap.has(selection.promptId)) {
-          promptTypeMap.set(selection.promptId, new Set())
-        }
-        const typeSet = promptTypeMap.get(selection.promptId)
-        if (typeSet) {
-          for (const type of selection.types) {
-            typeSet.add(type)
-          }
-        }
-      }
+        if (selection.types.length === 0) continue
 
-      // Find articles that have judgments matching the selected prompts and types
-      // This needs to handle potentially many articles, so we batch the inserts
-      const articleIdSet = new Set<string>()
+        const answeredValsArray = sql.join(
+          selection.types.map((v) => {
+            return sql`${v}`
+          }),
+          sql`,`,
+        )
 
-      // Query articles with matching judgments for each prompt/type combination
-      for (const [promptId, types] of promptTypeMap) {
-        const typesArray = Array.from(types)
-        if (typesArray.length === 0) continue
+        // Normalized array handling: COALESCE(answered_original_as_array, ARRAY[answered_original])
+        const normalized = sql`COALESCE(${judgments.answeredOriginalAsArray}, CASE WHEN ${judgments.answeredOriginal} IS NOT NULL THEN ARRAY[${judgments.answeredOriginal}] ELSE ARRAY[]::text[] END)`
 
-        // Get article IDs that have judgments with matching answers
-        const matchingArticles = await db
-          .select({articleId: judgments.articleId})
+        // Create EXISTS subquery for this prompt
+        const subquery = db
+          .select({exists: sql`1`})
           .from(judgments)
-          .where(and(eq(judgments.promptId, promptId), inArray(judgments.answeredOriginal, typesArray)))
-          .groupBy(judgments.articleId)
+          .where(
+            and(
+              eq(judgments.articleId, articles.id),
+              eq(judgments.promptId, selection.promptId),
+              sql`(${normalized}) && ARRAY[${answeredValsArray}]::text[]`,
+            ),
+          )
+          .limit(1)
 
-        for (const row of matchingArticles) {
-          articleIdSet.add(row.articleId)
-        }
+        filterConditions.push(sql`EXISTS (${subquery})`)
       }
 
-      const articleIds = Array.from(articleIdSet)
-      console.log(`[subprojects] Found ${articleIds.length} articles matching criteria`)
+      if (filterConditions.length === 0) {
+        console.log(`[subprojects] No valid prompt selections, no articles added`)
+        return {data: {project: newProject, articleCount: 0}}
+      }
+
+      // Build where clause: all filter conditions must be true (AND logic)
+      const whereParts: Array<ReturnType<typeof sql>> = [...filterConditions]
+
+      // Add optional date range filter
+      if (body.dateFrom) {
+        const fromDate = new Date(`${body.dateFrom}T00:00:00.000Z`)
+        whereParts.push(gte(articles.articleCreatedAt, fromDate))
+      }
+      if (body.dateTo) {
+        const toDate = new Date(`${body.dateTo}T23:59:59.999Z`)
+        whereParts.push(lte(articles.articleCreatedAt, toDate))
+      }
+
+      const combinedWhere = whereParts.length > 1 ? and(...whereParts) : whereParts[0]
+
+      // Find articles that match ALL filter conditions
+      const matchingArticles = await db.selectDistinct({id: articles.id}).from(articles).where(combinedWhere)
+
+      const articleIds = matchingArticles.map((a) => {
+        return a.id
+      })
+      console.log(`[subprojects] Found ${articleIds.length} articles matching ALL criteria`)
 
       // Insert articles into the new project in batches
       const batchSize = 1000
@@ -207,6 +240,8 @@ export const subprojectsRoutes = new Elysia()
         description: t.Optional(t.String()),
         ownerId: t.String(),
         modelId: t.String(),
+        dateFrom: t.Optional(t.String()),
+        dateTo: t.Optional(t.String()),
         promptSelections: t.Array(t.Object({promptId: t.String(), types: t.Array(t.String())})),
       }),
     },
