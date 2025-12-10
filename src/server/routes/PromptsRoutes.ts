@@ -291,3 +291,123 @@ export const promptsRoutes = new Elysia({prefix: '/api/prompts'})
     },
     {body: t.Object({keepPromptId: t.String(), mergePromptIds: t.Array(t.String())})},
   )
+  .get('/invalid-judgments', async () => {
+    const db = getDatabase()
+
+    // Get prompts with enum types (containing quotes like 'yes' | 'no' | 'unsure')
+    const promptsWithTypes = await db
+      .select({id: prompts.id, promptHeading: prompts.promptHeading, type: prompts.type})
+      .from(prompts)
+      .where(sql`${prompts.type} IS NOT NULL AND ${prompts.type} != ''`)
+
+    // Parse enum options from prompt types
+    const parseEnumOptions = (typeStr: string): string[] | null => {
+      // Match quoted strings like 'yes' | 'no' | 'unsure'
+      if (!typeStr.includes("'") && !typeStr.includes('"')) return null
+      const matches = typeStr.match(/['"]([^'"]+)['"]/g)
+      if (!matches || matches.length === 0) return null
+      return matches.map((m) => {
+        return m.slice(1, -1)
+      }) // Remove quotes
+    }
+
+    const invalidJudgments: Array<{
+      id: string
+      articleId: string
+      promptId: string
+      promptHeading: string | null
+      promptType: string | null
+      answeredOriginal: string | null
+      createdAt: Date
+    }> = []
+
+    // Check each prompt with an enum type
+    for (const prompt of promptsWithTypes) {
+      if (!prompt.type) continue
+      const validOptions = parseEnumOptions(prompt.type)
+      if (!validOptions) continue // Skip if not an enum type
+
+      // Find judgments for this prompt where the answer is not in the valid options
+      const judgmentRows = await db
+        .select({
+          id: judgments.id,
+          articleId: judgments.articleId,
+          promptId: judgments.promptId,
+          answeredOriginal: judgments.answeredOriginal,
+          createdAt: judgments.createdAt,
+        })
+        .from(judgments)
+        .where(
+          and(
+            eq(judgments.promptId, prompt.id),
+            sql`${judgments.answeredOriginal} IS NOT NULL`,
+            sql`${judgments.isAnswered} = true`,
+          ),
+        )
+        .limit(200) // Get more than 100 to account for valid ones
+
+      for (const judgment of judgmentRows) {
+        if (invalidJudgments.length >= 100) break
+
+        const answer = judgment.answeredOriginal
+        if (!answer) continue
+
+        // Check if answer is valid
+        // Handle array answers (stored as JSON strings)
+        let isValid = false
+        if (answer.startsWith('[')) {
+          try {
+            const parsed = JSON.parse(answer) as unknown
+            if (Array.isArray(parsed)) {
+              isValid = parsed.every((item) => {
+                return typeof item === 'string' && validOptions.includes(item)
+              })
+            }
+          } catch {
+            isValid = false
+          }
+        } else {
+          isValid = validOptions.includes(answer)
+        }
+
+        if (!isValid) {
+          invalidJudgments.push({
+            id: judgment.id,
+            articleId: judgment.articleId,
+            promptId: judgment.promptId,
+            promptHeading: prompt.promptHeading,
+            promptType: prompt.type,
+            answeredOriginal: answer,
+            createdAt: judgment.createdAt,
+          })
+        }
+      }
+
+      if (invalidJudgments.length >= 100) break
+    }
+
+    return {success: true, data: invalidJudgments}
+  })
+  .post(
+    '/delete-invalid-judgments',
+    async ({body}) => {
+      const db = getDatabase()
+      const {judgmentIds} = body
+
+      if (judgmentIds.length === 0) {
+        return {success: true, data: {deletedCount: 0}}
+      }
+
+      await db.delete(judgments).where(
+        sql`${judgments.id} = ANY(ARRAY[${sql.join(
+          judgmentIds.map((id) => {
+            return sql`${id}::uuid`
+          }),
+          sql`,`,
+        )}])`,
+      )
+
+      return {success: true, data: {deletedCount: judgmentIds.length}}
+    },
+    {body: t.Object({judgmentIds: t.Array(t.String())})},
+  )

@@ -17,7 +17,11 @@ type PromptSummary = {
 }
 
 type DuplicateGroup = PromptSummary[]
-type OrphansResponse = {noProjects: PromptSummary[]; noJudgments: PromptSummary[]}
+type OrphansResponse = {
+  noProjects: PromptSummary[]
+  noJudgments: PromptSummary[]
+  noProjectsAndJudgments?: PromptSummary[]
+}
 
 const readUsage = (value: unknown): PromptUsage => {
   if (!value || typeof value !== 'object') return {projects: 0, judgments: 0, humanJudgments: 0}
@@ -90,6 +94,29 @@ const fetchOrphans = async (): Promise<OrphansResponse> => {
   return {noProjects: readList(obj.noProjects), noJudgments: readList(obj.noJudgments)}
 }
 
+type InvalidJudgment = {
+  id: string
+  articleId: string
+  promptId: string
+  promptHeading: string | null
+  promptType: string | null
+  answeredOriginal: string | null
+  createdAt: string | Date
+}
+
+const fetchInvalidJudgments = async (): Promise<InvalidJudgment[]> => {
+  const response = await apiClient.api.prompts['invalid-judgments'].get()
+
+  if (response.error) {
+    console.error('Error fetching invalid judgments:', response.error)
+    throw new Error('Failed to fetch invalid judgments')
+  }
+
+  const data = response.data?.data
+  if (!Array.isArray(data)) return []
+  return data as InvalidJudgment[]
+}
+
 const DeduplicatePrompts = () => {
   const sessionQuery = useQuery(() => {
     return {queryKey: ['session'], queryFn: fetchSession}
@@ -107,6 +134,10 @@ const DeduplicatePrompts = () => {
     return {queryKey: ['prompts', 'orphans'], queryFn: fetchOrphans}
   })
 
+  const invalidJudgmentsQuery = useQuery(() => {
+    return {queryKey: ['prompts', 'invalid-judgments'], queryFn: fetchInvalidJudgments}
+  })
+
   const isAdmin = () => {
     return sessionQuery.data?.user?.role === 'admin'
   }
@@ -114,8 +145,10 @@ const DeduplicatePrompts = () => {
   const [selectedKeepIds, setSelectedKeepIds] = createSignal<Record<string, string>>({})
   const [processingGroups, setProcessingGroups] = createSignal<Record<string, boolean>>({})
   const [deletingPrompts, setDeletingPrompts] = createSignal<Record<string, boolean>>({})
+  const [deletingInvalidJudgments, setDeletingInvalidJudgments] = createSignal(false)
   const [regeneratingHashes, setRegeneratingHashes] = createSignal(false)
   const [expandedSections, setExpandedSections] = createSignal<Record<string, boolean>>({
+    invalidJudgments: true,
     noProjects: true,
     noJudgments: true,
     noProjectsAndJudgments: true,
@@ -234,6 +267,42 @@ const DeduplicatePrompts = () => {
       alert('An error occurred while regenerating hashes.')
     } finally {
       setRegeneratingHashes(false)
+    }
+  }
+
+  const handleDeleteInvalidJudgments = async () => {
+    const judgments = invalidJudgmentsQuery.data ?? []
+    if (judgments.length === 0) {
+      alert('No invalid judgments to delete.')
+      return
+    }
+
+    if (
+      !confirm(`Are you sure you want to delete ${judgments.length} invalid judgments? This action cannot be undone.`)
+    ) {
+      return
+    }
+
+    setDeletingInvalidJudgments(true)
+    try {
+      const judgmentIds = judgments.map((j) => {
+        return j.id
+      })
+      const response = await apiClient.api.prompts['delete-invalid-judgments'].post({judgmentIds})
+
+      if (response.error) {
+        console.error('Delete invalid judgments failed:', response.error)
+        alert('Failed to delete invalid judgments.')
+        return
+      }
+
+      alert(`Successfully deleted ${judgments.length} invalid judgments.`)
+      void invalidJudgmentsQuery.refetch()
+    } catch (error) {
+      console.error('Delete invalid judgments error:', error)
+      alert('An error occurred while deleting invalid judgments.')
+    } finally {
+      setDeletingInvalidJudgments(false)
     }
   }
 
@@ -404,6 +473,136 @@ const DeduplicatePrompts = () => {
                 )
               }}
             </For>
+
+            <div class="mt-12 space-y-8">
+              <h2 class="text-xl font-bold text-gray-900">Invalid Judgments</h2>
+              <p class="text-sm text-gray-500">
+                Judgments where the answer doesn't match the expected prompt type (e.g., 'maybe' when the type is 'yes'
+                | 'no' | 'unsure').
+              </p>
+
+              <div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+                <div
+                  class="px-6 py-4 border-b border-gray-200 bg-gray-50 flex justify-between items-center cursor-pointer"
+                  onClick={() => {
+                    return toggleSection('invalidJudgments')
+                  }}
+                >
+                  <h3 class="text-lg font-semibold text-gray-900">
+                    Judgments with Mismatched Answer Types ({invalidJudgmentsQuery.data?.length ?? 0})
+                  </h3>
+                  <button class="text-gray-500 hover:text-gray-700">
+                    {expandedSections().invalidJudgments ? (
+                      <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                        <path
+                          fill-rule="evenodd"
+                          d="M14.707 12.707a1 1 0 01-1.414 0L10 9.414l-3.293 3.293a1 1 0 01-1.414-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 010 1.414z"
+                          clip-rule="evenodd"
+                        />
+                      </svg>
+                    ) : (
+                      <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                        <path
+                          fill-rule="evenodd"
+                          d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
+                          clip-rule="evenodd"
+                        />
+                      </svg>
+                    )}
+                  </button>
+                </div>
+                <Show when={expandedSections().invalidJudgments}>
+                  <div class="p-4 border-b border-gray-200 bg-gray-50">
+                    <button
+                      onClick={() => {
+                        return void handleDeleteInvalidJudgments()
+                      }}
+                      disabled={
+                        deletingInvalidJudgments()
+                        || invalidJudgmentsQuery.isLoading
+                        || (invalidJudgmentsQuery.data?.length ?? 0) === 0
+                      }
+                      class={`px-4 py-2 rounded-md text-white text-sm font-medium focus:outline-none focus:ring-2 focus:ring-offset-1 ${
+                        deletingInvalidJudgments()
+                        || invalidJudgmentsQuery.isLoading
+                        || (invalidJudgmentsQuery.data?.length ?? 0) === 0
+                          ? 'bg-gray-400 cursor-not-allowed'
+                          : 'bg-red-600 hover:bg-red-700 focus:ring-red-500'
+                      }`}
+                    >
+                      {deletingInvalidJudgments()
+                        ? 'Deleting...'
+                        : `Delete All ${invalidJudgmentsQuery.data?.length ?? 0} Invalid Judgments`}
+                    </button>
+                  </div>
+                  <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-gray-200 table-fixed w-full">
+                      <thead class="bg-gray-50">
+                        <tr>
+                          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Judgment ID
+                          </th>
+                          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Prompt
+                          </th>
+                          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Expected Type
+                          </th>
+                          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Actual Answer
+                          </th>
+                          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Created At
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody class="bg-white divide-y divide-gray-200">
+                        <Show
+                          when={invalidJudgmentsQuery.data && invalidJudgmentsQuery.data.length > 0}
+                          fallback={
+                            <tr>
+                              <td colspan="5" class="px-6 py-4 text-center text-sm text-gray-500">
+                                {invalidJudgmentsQuery.isLoading
+                                  ? 'Loading...'
+                                  : 'No invalid judgments found. All judgment answers match their prompt types.'}
+                              </td>
+                            </tr>
+                          }
+                        >
+                          <For each={invalidJudgmentsQuery.data}>
+                            {(judgment) => {
+                              return (
+                                <tr class="hover:bg-gray-50">
+                                  <td class="px-6 py-4 text-sm text-gray-500 font-mono break-all w-32">
+                                    {judgment.id.slice(0, 8)}...
+                                  </td>
+                                  <td class="px-6 py-4 text-sm text-gray-900 break-words">
+                                    <div class="max-h-[60px] overflow-y-auto">
+                                      {judgment.promptHeading || judgment.promptId.slice(0, 8)}
+                                    </div>
+                                  </td>
+                                  <td class="px-6 py-4 text-sm text-gray-500 break-words">
+                                    <div class="max-h-[60px] overflow-y-auto font-mono text-xs">
+                                      {judgment.promptType || 'N/A'}
+                                    </div>
+                                  </td>
+                                  <td class="px-6 py-4 text-sm text-red-600 font-medium break-words">
+                                    <div class="max-h-[60px] overflow-y-auto">{judgment.answeredOriginal || 'N/A'}</div>
+                                  </td>
+                                  <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                    {formatDate(new Date(judgment.createdAt), 'yyyy-MM-dd HH:mm')}
+                                  </td>
+                                </tr>
+                              )
+                            }}
+                          </For>
+                        </Show>
+                      </tbody>
+                    </table>
+                  </div>
+                </Show>
+              </div>
+            </div>
 
             <div class="mt-12 space-y-8">
               <h2 class="text-xl font-bold text-gray-900">Orphaned Prompts</h2>
