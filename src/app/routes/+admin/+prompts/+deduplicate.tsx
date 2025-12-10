@@ -238,7 +238,7 @@ const DeduplicatePrompts = () => {
   }
 
   return (
-    <div class="min-h-screen bg-gray-50 p-6 mx-auto max-w-7xl">
+    <div class="min-h-screen bg-gray-50 p-6 mx-auto">
       <Suspense
         fallback={
           <div class="flex items-center justify-center h-64">
