@@ -17,6 +17,7 @@ import {projectArticlesRoutes} from './routes/ProjectArticlesRoutes.ts'
 import {projectsAddArticlesRoutes} from './routes/ProjectsAddArticlesRoutes.ts'
 import {projectsRoutes} from './routes/ProjectsRoutes.ts'
 import {promptsRoutes} from './routes/PromptsRoutes.ts'
+import {subprojectsRoutes} from './routes/SubprojectsRoutes.ts'
 import {tokensRoutes} from './routes/TokensRoutes.ts'
 import {usersRoutes} from './routes/UsersRoutes.ts'
 import {env} from './utils/env.ts'
@@ -50,6 +51,7 @@ const _app = new Elysia()
   .use(tokensRoutes)
   .use(usersRoutes)
   .use(llmStatusRoutes)
+  .use(subprojectsRoutes)
   .listen(env.API_SERVER_PORT)
 
 console.log(

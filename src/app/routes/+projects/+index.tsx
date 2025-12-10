@@ -19,6 +19,9 @@ export const ProjectsPage = () => {
           <Button as={Link} to="/projects/archived" variant="outline">
             Show Archived
           </Button>
+          <Button as={Link} to="/projects/create-subproject" variant="outline">
+            Create Subproject
+          </Button>
           <Button as={Link} to="/projects/create">
             Create New Project
           </Button>

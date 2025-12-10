@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/+__root'
 import { Route as IndexRouteImport } from './routes/+index'
+import { Route as ProjectsCreateSubprojectRouteImport } from './routes/+projects/+create-subproject'
 import { Route as ProjectsCreateRouteImport } from './routes/+projects/+create'
 import { Route as SettingsIndexRouteImport } from './routes/+settings/+index'
 import { Route as ProjectsIndexRouteImport } from './routes/+projects/+index'
@@ -45,6 +46,12 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ProjectsCreateSubprojectRoute =
+  ProjectsCreateSubprojectRouteImport.update({
+    id: '/projects/create-subproject',
+    path: '/projects/create-subproject',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ProjectsCreateRoute = ProjectsCreateRouteImport.update({
   id: '/projects/create',
   path: '/projects/create',
@@ -208,6 +215,7 @@ export interface FileRoutesByFullPath {
   '/projects': typeof ProjectsIndexRoute
   '/settings': typeof SettingsIndexRoute
   '/projects/create': typeof ProjectsCreateRoute
+  '/projects/create-subproject': typeof ProjectsCreateSubprojectRoute
   '/admin/assessments': typeof AdminAssessmentsIndexRoute
   '/admin/datasources': typeof AdminDatasourcesIndexRoute
   '/admin/failed_requests': typeof AdminFailed_requestsIndexRoute
@@ -240,6 +248,7 @@ export interface FileRoutesByTo {
   '/projects': typeof ProjectsIndexRoute
   '/settings': typeof SettingsIndexRoute
   '/projects/create': typeof ProjectsCreateRoute
+  '/projects/create-subproject': typeof ProjectsCreateSubprojectRoute
   '/admin/assessments': typeof AdminAssessmentsIndexRoute
   '/admin/datasources': typeof AdminDatasourcesIndexRoute
   '/admin/failed_requests': typeof AdminFailed_requestsIndexRoute
@@ -273,6 +282,7 @@ export interface FileRoutesById {
   '/projects/': typeof ProjectsIndexRoute
   '/settings/': typeof SettingsIndexRoute
   '/projects/create': typeof ProjectsCreateRoute
+  '/projects/create-subproject': typeof ProjectsCreateSubprojectRoute
   '/admin/assessments/': typeof AdminAssessmentsIndexRoute
   '/admin/datasources/': typeof AdminDatasourcesIndexRoute
   '/admin/failed_requests/': typeof AdminFailed_requestsIndexRoute
@@ -307,6 +317,7 @@ export interface FileRouteTypes {
     | '/projects'
     | '/settings'
     | '/projects/create'
+    | '/projects/create-subproject'
     | '/admin/assessments'
     | '/admin/datasources'
     | '/admin/failed_requests'
@@ -339,6 +350,7 @@ export interface FileRouteTypes {
     | '/projects'
     | '/settings'
     | '/projects/create'
+    | '/projects/create-subproject'
     | '/admin/assessments'
     | '/admin/datasources'
     | '/admin/failed_requests'
@@ -371,6 +383,7 @@ export interface FileRouteTypes {
     | '/projects/'
     | '/settings/'
     | '/projects/create'
+    | '/projects/create-subproject'
     | '/admin/assessments/'
     | '/admin/datasources/'
     | '/admin/failed_requests/'
@@ -404,6 +417,7 @@ export interface RootRouteChildren {
   ProjectsIndexRoute: typeof ProjectsIndexRoute
   SettingsIndexRoute: typeof SettingsIndexRoute
   ProjectsCreateRoute: typeof ProjectsCreateRoute
+  ProjectsCreateSubprojectRoute: typeof ProjectsCreateSubprojectRoute
   AdminAssessmentsIndexRoute: typeof AdminAssessmentsIndexRoute
   AdminDatasourcesIndexRoute: typeof AdminDatasourcesIndexRoute
   AdminFailed_requestsIndexRoute: typeof AdminFailed_requestsIndexRoute
@@ -437,6 +451,13 @@ declare module '@tanstack/solid-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/projects/create-subproject': {
+      id: '/projects/create-subproject'
+      path: '/projects/create-subproject'
+      fullPath: '/projects/create-subproject'
+      preLoaderRoute: typeof ProjectsCreateSubprojectRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/projects/create': {
@@ -652,6 +673,7 @@ const rootRouteChildren: RootRouteChildren = {
   ProjectsIndexRoute: ProjectsIndexRoute,
   SettingsIndexRoute: SettingsIndexRoute,
   ProjectsCreateRoute: ProjectsCreateRoute,
+  ProjectsCreateSubprojectRoute: ProjectsCreateSubprojectRoute,
   AdminAssessmentsIndexRoute: AdminAssessmentsIndexRoute,
   AdminDatasourcesIndexRoute: AdminDatasourcesIndexRoute,
   AdminFailed_requestsIndexRoute: AdminFailed_requestsIndexRoute,
