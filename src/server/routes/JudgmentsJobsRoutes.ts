@@ -1,5 +1,5 @@
 import type {SQL} from 'drizzle-orm'
-import {eq, gte, lte, sql, sum} from 'drizzle-orm'
+import {and, eq, gte, lte, sql, sum} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {
@@ -88,15 +88,25 @@ const getUnassessedArticlesCount = async ({
   let countQuery = db
     .select({count: sql<number>`COUNT(DISTINCT ${articles.id})`})
     .from(articles)
+    .$dynamic()
+
+  // Optimization: If no import routes, strictly limit to project_articles via INNER JOIN
+  if (importRouteIds.length === 0) {
+    countQuery = countQuery.innerJoin(
+      projectArticles,
+      and(eq(projectArticles.articleId, articles.id), eq(projectArticles.projectId, projectId)),
+    )
+  }
+
+  countQuery = countQuery
     .innerJoin(projectPrompts, eq(projectPrompts.projectId, projectId))
     .leftJoin(
       judgments,
       sql`${judgments.articleId} = ${articles.id} AND ${judgments.promptId} = ${projectPrompts.promptId} AND ${judgments.modelId} = ${projectModelId}::uuid`,
     )
 
-  const routeCondition =
-    importRouteIds.length > 0
-      ? sql`EXISTS (
+  if (importRouteIds.length > 0) {
+    const routeCondition = sql`EXISTS (
       SELECT 1 FROM ${articleRouteLink} arl
       WHERE arl."article_id" = ${articles.id}
       AND arl."import_route_id" = ANY(ARRAY[${sql.join(
@@ -106,17 +116,20 @@ const getUnassessedArticlesCount = async ({
         sql`,`,
       )}])
     )`
-      : sql`FALSE`
 
-  const projectArticleCondition = sql`EXISTS (
-    SELECT 1 FROM ${projectArticles} pa
-    WHERE pa."article_id" = ${articles.id}
-    AND pa."project_id" = ${projectId}
-  )`
+    const projectArticleCondition = sql`EXISTS (
+      SELECT 1 FROM ${projectArticles} pa
+      WHERE pa."article_id" = ${articles.id}
+      AND pa."project_id" = ${projectId}
+    )`
 
-  countQuery = countQuery.where(
-    sql`${sql.join(allConditions, sql` AND `)} AND (${routeCondition} OR ${projectArticleCondition})`,
-  )
+    countQuery = countQuery.where(
+      sql`${sql.join(allConditions, sql` AND `)} AND (${routeCondition} OR ${projectArticleCondition})`,
+    )
+  } else {
+    // If we optimized with INNER JOIN, we just need the base conditions
+    countQuery = countQuery.where(sql`${sql.join(allConditions, sql` AND `)}`)
+  }
 
   const [{count: unassessedCount = 0} = {count: 0}] = await countQuery
   console.timeEnd('getUnassessedArticlesCount')
@@ -237,6 +250,17 @@ const getUnassessedArticles = async ({
       articleUpdatedAt: articles.articleUpdatedAt,
     })
     .from(articles)
+    .$dynamic()
+
+  // Optimization: If no import routes, strictly limit to project_articles via INNER JOIN
+  if (importRouteIds.length === 0) {
+    query = query.innerJoin(
+      projectArticles,
+      and(eq(projectArticles.articleId, articles.id), eq(projectArticles.projectId, projectId)),
+    )
+  }
+
+  query = query
     .innerJoin(projectPrompts, eq(projectPrompts.projectId, projectId))
     .leftJoin(
       judgments,
@@ -251,9 +275,8 @@ const getUnassessedArticles = async ({
       articles.articleUpdatedAt,
     )
 
-  const routeCondition =
-    importRouteIds.length > 0
-      ? sql`EXISTS (
+  if (importRouteIds.length > 0) {
+    const routeCondition = sql`EXISTS (
       SELECT 1 FROM ${articleRouteLink} arl
       WHERE arl."article_id" = ${articles.id}
       AND arl."import_route_id" = ANY(ARRAY[${sql.join(
@@ -263,15 +286,20 @@ const getUnassessedArticles = async ({
         sql`,`,
       )}])
     )`
-      : sql`FALSE`
 
-  const projectArticleCondition = sql`EXISTS (
-    SELECT 1 FROM ${projectArticles} pa
-    WHERE pa."article_id" = ${articles.id}
-    AND pa."project_id" = ${projectId}
-  )`
+    const projectArticleCondition = sql`EXISTS (
+      SELECT 1 FROM ${projectArticles} pa
+      WHERE pa."article_id" = ${articles.id}
+      AND pa."project_id" = ${projectId}
+    )`
 
-  query = query.where(sql`${sql.join(allConditions, sql` AND `)} AND (${routeCondition} OR ${projectArticleCondition})`)
+    query = query.where(
+      sql`${sql.join(allConditions, sql` AND `)} AND (${routeCondition} OR ${projectArticleCondition})`,
+    )
+  } else {
+    // If we optimized with INNER JOIN, we just need the base conditions
+    query = query.where(sql`${sql.join(allConditions, sql` AND `)}`)
+  }
 
   const articlesToAssess = await query
     .orderBy(
