@@ -318,6 +318,7 @@ export const promptsRoutes = new Elysia({prefix: '/api/prompts'})
       promptHeading: string | null
       promptType: string | null
       answeredOriginal: string | null
+      answeredOriginalAsArray: string[] | null
       createdAt: Date
     }> = []
 
@@ -328,19 +329,22 @@ export const promptsRoutes = new Elysia({prefix: '/api/prompts'})
       if (!validOptions) continue // Skip if not an enum type
 
       // Find judgments for this prompt where the answer is not in the valid options
+      // Include answeredOriginalAsArray for proper validation
       const judgmentRows = await db
         .select({
           id: judgments.id,
           articleId: judgments.articleId,
           promptId: judgments.promptId,
           answeredOriginal: judgments.answeredOriginal,
+          answeredOriginalAsArray: judgments.answeredOriginalAsArray,
           createdAt: judgments.createdAt,
         })
         .from(judgments)
         .where(
           and(
             eq(judgments.promptId, prompt.id),
-            sql`${judgments.answeredOriginal} IS NOT NULL`,
+            // Check if either answeredOriginal OR answeredOriginalAsArray is present
+            sql`(${judgments.answeredOriginal} IS NOT NULL OR ${judgments.answeredOriginalAsArray} IS NOT NULL)`,
             sql`${judgments.isAnswered} = true`,
           ),
         )
@@ -349,25 +353,34 @@ export const promptsRoutes = new Elysia({prefix: '/api/prompts'})
       for (const judgment of judgmentRows) {
         if (invalidJudgments.length >= 100) break
 
-        const answer = judgment.answeredOriginal
-        if (!answer) continue
-
-        // Check if answer is valid
-        // Handle array answers (stored as JSON strings)
         let isValid = false
-        if (answer.startsWith('[')) {
-          try {
-            const parsed = JSON.parse(answer) as unknown
-            if (Array.isArray(parsed)) {
-              isValid = parsed.every((item) => {
-                return typeof item === 'string' && validOptions.includes(item)
-              })
+
+        // If answeredOriginalAsArray is not null, validate against that array
+        // (the prompt type expects array values in this case)
+        if (judgment.answeredOriginalAsArray !== null) {
+          // Validate each item in the array against valid options
+          isValid = judgment.answeredOriginalAsArray.every((item) => {
+            return validOptions.includes(item)
+          })
+        } else if (judgment.answeredOriginal) {
+          // Fall back to answeredOriginal for single-value prompts
+          const answer = judgment.answeredOriginal
+
+          // Handle legacy array answers stored as JSON strings in answeredOriginal
+          if (answer.startsWith('[')) {
+            try {
+              const parsed = JSON.parse(answer) as unknown
+              if (Array.isArray(parsed)) {
+                isValid = parsed.every((item) => {
+                  return typeof item === 'string' && validOptions.includes(item)
+                })
+              }
+            } catch {
+              isValid = false
             }
-          } catch {
-            isValid = false
+          } else {
+            isValid = validOptions.includes(answer)
           }
-        } else {
-          isValid = validOptions.includes(answer)
         }
 
         if (!isValid) {
@@ -377,7 +390,8 @@ export const promptsRoutes = new Elysia({prefix: '/api/prompts'})
             promptId: judgment.promptId,
             promptHeading: prompt.promptHeading,
             promptType: prompt.type,
-            answeredOriginal: answer,
+            answeredOriginal: judgment.answeredOriginal,
+            answeredOriginalAsArray: judgment.answeredOriginalAsArray,
             createdAt: judgment.createdAt,
           })
         }

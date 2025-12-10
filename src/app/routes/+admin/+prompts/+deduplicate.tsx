@@ -101,6 +101,7 @@ type InvalidJudgment = {
   promptHeading: string | null
   promptType: string | null
   answeredOriginal: string | null
+  answeredOriginalAsArray: string[] | null
   createdAt: string | Date
 }
 
@@ -585,7 +586,11 @@ const DeduplicatePrompts = () => {
                                     </div>
                                   </td>
                                   <td class="px-6 py-4 text-sm text-red-600 font-medium break-words">
-                                    <div class="max-h-[60px] overflow-y-auto">{judgment.answeredOriginal || 'N/A'}</div>
+                                    <div class="max-h-[60px] overflow-y-auto">
+                                      {judgment.answeredOriginalAsArray && judgment.answeredOriginalAsArray.length > 0
+                                        ? `[${judgment.answeredOriginalAsArray.join(', ')}]`
+                                        : judgment.answeredOriginal || 'N/A'}
+                                    </div>
                                   </td>
                                   <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                                     {formatDate(new Date(judgment.createdAt), 'yyyy-MM-dd HH:mm')}
