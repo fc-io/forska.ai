@@ -1,18 +1,21 @@
 import {type as arktype} from 'arktype'
 
-/**
- * Schema for single-prompt LLM responses.
- * The response has simple, standardized keys since there's only one question.
- * The 'answer' field accepts both strings and string arrays to support
- * prompts with array output_types (e.g., specialty classification).
- */
-const SinglePromptResponseSchema = arktype({
-  answer: 'string | string[]',
-  explanation: 'string',
-  quotes: 'string[] | null',
-})
-
 export type SinglePromptJudgmentResult = {answer: string | string[]; explanation: string; quotes: string[] | null}
+
+/**
+ * Builds an arktype schema for single-prompt LLM responses.
+ * The 'answer' field type is determined by the prompt's type definition.
+ * If no type is specified, falls back to 'string | string[]' for flexibility.
+ */
+const buildSinglePromptResponseSchema = (promptType: string | null) => {
+  // Use the prompt type if provided, otherwise fall back to flexible string/array
+  const answerType = promptType && promptType.trim() ? promptType : 'string | string[]'
+
+  // Use record-based definition with type casting for dynamic types
+  const typeDefs: Record<string, string> = {answer: answerType, explanation: 'string', quotes: 'string[] | null'}
+
+  return arktype(typeDefs)
+}
 
 /**
  * Sanitizes a JSON string by escaping invalid escape sequences.
@@ -111,8 +114,11 @@ export const tryParseJsonWithSanitization = (response: string): ParseAttemptResu
  * Attempts normal JSON parsing first. If that fails (e.g., due to invalid
  * escape sequences from LaTeX like \varepsilon), it sanitizes the JSON
  * and retries. If sanitization also fails, the original error is thrown.
+ *
+ * @param response - The raw LLM response string
+ * @param promptType - The expected type for the answer (e.g., "'yes' | 'no' | 'unsure'")
  */
-export const parseSinglePromptJudgment = (response: string): SinglePromptJudgmentResult => {
+export const parseSinglePromptJudgment = (response: string, promptType: string | null): SinglePromptJudgmentResult => {
   const parseResult = tryParseJsonWithSanitization(response)
 
   if (!parseResult.success) {
@@ -120,6 +126,8 @@ export const parseSinglePromptJudgment = (response: string): SinglePromptJudgmen
     throw new Error(parseResult.originalError)
   }
 
-  SinglePromptResponseSchema.assert(parseResult.data)
+  // Build schema dynamically based on prompt type
+  const schema = buildSinglePromptResponseSchema(promptType)
+  schema.assert(parseResult.data)
   return parseResult.data as SinglePromptJudgmentResult
 }

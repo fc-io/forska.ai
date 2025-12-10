@@ -191,8 +191,8 @@ export const judgeSinglePrompt = async ({
     try {
       currentResponse = await generateSinglePromptResponse({prompt: userPrompt, baseURL, modelName})
 
-      // Try to parse the response
-      const judgment = parseSinglePromptJudgment(currentResponse.text)
+      // Try to parse the response - validate against prompt type
+      const judgment = parseSinglePromptJudgment(currentResponse.text, prompt.type)
 
       // Store the judgment
       await storeSinglePromptJudgment({articleId: article.id, promptId: prompt.id, modelId, projectId, judgment})
