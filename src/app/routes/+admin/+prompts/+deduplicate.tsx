@@ -550,7 +550,10 @@ const DeduplicatePrompts = () => {
                             Expected Type
                           </th>
                           <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Actual Answer
+                            answeredOriginal
+                          </th>
+                          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            answeredOriginalAsArray
                           </th>
                           <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                             Created At
@@ -562,7 +565,7 @@ const DeduplicatePrompts = () => {
                           when={invalidJudgmentsQuery.data && invalidJudgmentsQuery.data.length > 0}
                           fallback={
                             <tr>
-                              <td colspan="5" class="px-6 py-4 text-center text-sm text-gray-500">
+                              <td colspan="6" class="px-6 py-4 text-center text-sm text-gray-500">
                                 {invalidJudgmentsQuery.isLoading
                                   ? 'Loading...'
                                   : 'No invalid judgments found. All judgment answers match their prompt types.'}
@@ -587,9 +590,16 @@ const DeduplicatePrompts = () => {
                                   </td>
                                   <td class="px-6 py-4 text-sm text-red-600 font-medium break-words">
                                     <div class="max-h-[60px] overflow-y-auto">
-                                      {judgment.answeredOriginalAsArray && judgment.answeredOriginalAsArray.length > 0
-                                        ? `[${judgment.answeredOriginalAsArray.join(', ')}]`
-                                        : judgment.answeredOriginal || 'N/A'}
+                                      {judgment.answeredOriginal || <span class="text-gray-400 italic">null</span>}
+                                    </div>
+                                  </td>
+                                  <td class="px-6 py-4 text-sm text-red-600 font-medium break-words">
+                                    <div class="max-h-[60px] overflow-y-auto">
+                                      {judgment.answeredOriginalAsArray !== null ? (
+                                        `[${judgment.answeredOriginalAsArray.join(', ')}]`
+                                      ) : (
+                                        <span class="text-gray-400 italic">null</span>
+                                      )}
                                     </div>
                                   </td>
                                   <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
