@@ -139,6 +139,7 @@ export const projectsRoutes = new Elysia()
         enabled: projectPrompts.enabled,
         originProjectId: projectPrompts.originProjectId,
         contentHash: prompts.contentHash,
+        createdAt: prompts.createdAt,
       })
       .from(projectPrompts)
       .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
@@ -161,6 +162,7 @@ export const projectsRoutes = new Elysia()
         // null indicates auto-linked from external judgments (no single source project)
         originProjectId: sql<string>`NULL`,
         contentHash: prompts.contentHash,
+        createdAt: prompts.createdAt,
       })
       .from(projectArticles)
       .innerJoin(judgments, eq(judgments.articleId, projectArticles.articleId))
@@ -174,6 +176,7 @@ export const projectsRoutes = new Elysia()
         prompts.promptHeading,
         prompts.type,
         prompts.contentHash,
+        prompts.createdAt,
       )
 
     const promptsCombined = [...projectPromptsList, ...importablePrompts]

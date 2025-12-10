@@ -20,6 +20,7 @@ type PromptItem = {
   archived: boolean
   enabled?: boolean
   originProjectId?: string | null
+  createdAt?: Date | string | null
 }
 
 type ProjectPromptResponse = {
@@ -31,6 +32,7 @@ type ProjectPromptResponse = {
   archived: boolean
   enabled?: boolean
   originProjectId?: string | null
+  createdAt?: Date | string | null
 }
 
 type ProjectSummary = {
@@ -152,6 +154,7 @@ const buildExistingPrompt = (prompt: ProjectPromptResponse): PromptItem => {
     archived: Boolean(prompt.archived),
     enabled: typeof prompt.enabled === 'boolean' ? prompt.enabled : undefined,
     originProjectId: prompt.originProjectId ?? null,
+    createdAt: prompt.createdAt ?? null,
   }
 }
 
@@ -941,8 +944,13 @@ const EditProject = (): JSX.Element => {
                                   Imported
                                 </span>
                                 <Show when={promptItem.originalId}>
+                                  <span class="inline-flex items-center px-2 py-1 rounded-full text-[11px] font-medium bg-gray-50 text-gray-600 font-mono">
+                                    {promptItem.originalId}
+                                  </span>
+                                </Show>
+                                <Show when={promptItem.createdAt}>
                                   <span class="inline-flex items-center px-2 py-1 rounded-full text-[11px] font-medium bg-gray-50 text-gray-600">
-                                    Prompt ID: {(promptItem.originalId || '').slice(0, 8)}
+                                    Created: {new Date(promptItem.createdAt as string | Date).toLocaleDateString()}
                                   </span>
                                 </Show>
                                 <Show when={promptItem.enabled !== undefined}>
