@@ -292,6 +292,9 @@ const EditProject = (): JSX.Element => {
   const [useAbstract, setUseAbstract] = createSignal(true)
   const [useFulltext, setUseFulltext] = createSignal(false)
 
+  // Track whether we've loaded initial data to avoid overwriting local changes on refetch
+  let initialDataLoaded = false
+
   const modelsQuery = useQuery(() => {
     return {
       queryKey: ['models'],
@@ -376,13 +379,19 @@ const EditProject = (): JSX.Element => {
         return p.originProjectId !== projectId
       })
       setOwnedPrompts(owned.length > 0 ? owned : [buildEmptyPrompt(1)])
-      setImportedPrompts(imported)
-      console.log(
-        'Importable prompts debug',
-        imported.map((p) => {
-          return {order: p.order, heading: p.promptHeading, type: p.type, enabled: p.enabled}
-        }),
-      )
+
+      // Only set importedPrompts on initial load to preserve user's local checkbox changes
+      if (!initialDataLoaded) {
+        setImportedPrompts(imported)
+        initialDataLoaded = true
+        console.log(
+          'Importable prompts initial load',
+          imported.map((p) => {
+            return {order: p.order, heading: p.promptHeading, type: p.type, enabled: p.enabled}
+          }),
+        )
+      }
+
       setUseTitle(details.project.useTitle)
       setUseAbstract(details.project.useAbstract)
       setUseFulltext(details.project.useFulltext)
@@ -393,7 +402,9 @@ const EditProject = (): JSX.Element => {
       setSelectedImportRoutes(routes)
     } else if (projectData.isSuccess) {
       setOwnedPrompts([buildEmptyPrompt(1)])
-      setImportedPrompts([])
+      if (!initialDataLoaded) {
+        setImportedPrompts([])
+      }
       setDateFrom('')
       setDateTo('')
     }
