@@ -23,7 +23,6 @@ import {projectsRoutesGetArticlesReviewsFilters} from './projectsRoutes/projects
 import {projectsRoutesGetArticlesReviewsHuman} from './projectsRoutes/projectsRoutesGetArticlesReviewsHuman.ts'
 import {projectsRoutesGetArticlesReviewsHumanFilters} from './projectsRoutes/projectsRoutesGetArticlesReviewsHumanFilters.ts'
 import {projectsRoutesGetArticlesReviewsUnassessed} from './projectsRoutes/projectsRoutesGetArticlesReviewsUnassessed.ts'
-import {projectsRoutesGetArticlesWithJudgments} from './projectsRoutes/projectsRoutesGetArticlesWithJudgments.ts'
 import {projectsRoutesPostArticleReviewDetails} from './projectsRoutes/projectsRoutesPostArticleReviewDetails.ts'
 
 const parseOptionalDate = (value?: string | null) => {
@@ -78,7 +77,6 @@ const _getOrphanPromptIds = async (tx: ReturnType<typeof getDatabase>, promptIds
 export const projectsRoutes = new Elysia()
   .use(withErrorHandler())
   .use(requireUserAuth())
-  .use(projectsRoutesGetArticlesWithJudgments)
   .use(projectsRoutesGetArticlesReviews)
   .use(projectsRoutesGetArticlesReviewsBoth)
   .use(projectsRoutesGetArticlesReviewsHuman)

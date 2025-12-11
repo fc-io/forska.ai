@@ -91,7 +91,7 @@ export const ProjectDetailsCuratedArticles = (props: {projectId: string}) => {
 
   return (
     <div>
-      <h2 class="text-lg font-semibold mb-2">Imported Articles</h2>
+      <h2 class="text-lg font-semibold mb-2">Individually Imported Articles</h2>
       <Show when={query.data && Number(query.data.totalCount ?? 0) > 0}>
         <ImportedArticlesPaginationControls
           page={query.data!.page}
