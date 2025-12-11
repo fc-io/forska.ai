@@ -62,19 +62,23 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
           )
         : null
 
-      const hasMatchingImportRoute =
-        routeIdArray !== null
-          ? sql`EXISTS (
-              SELECT 1 FROM ${articleRouteLink} arl
-              WHERE arl."article_id" = ${articles.id}
-                AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
-            )`
-          : undefined
+      // For projects WITH import routes: use OR between import route and project_articles
+      // For projects WITHOUT import routes: just use project_articles directly
+      const hasMatchingImportRoute = hasImportRoutes
+        ? sql`EXISTS (
+            SELECT 1 FROM ${articleRouteLink} arl
+            WHERE arl."article_id" = ${articles.id}
+              AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
+          )`
+        : undefined
       const hasProjectArticle = sql`EXISTS (
         SELECT 1 FROM ${projectArticles} pa
         WHERE pa."article_id" = ${articles.id}
           AND pa."project_id" = ${query.projectId}::uuid
       )`
+      // Use OR when we have import routes, otherwise just check project_articles directly
+      const orResult = hasImportRoutes ? or(hasMatchingImportRoute, hasProjectArticle) : undefined
+      const scopeCondition = orResult ?? hasProjectArticle
 
       // Single grouped query across all project prompts for distinct filter values
       // Use normalized array: COALESCE(answered_original_as_array, ARRAY[answered_original])
@@ -83,12 +87,7 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
       })
 
       // Build WHERE conditions
-      const whereParts: Array<ReturnType<typeof sql>> = [inArray(judgments.promptId, promptIds)]
-      // Only add EXISTS conditions when we have import routes (need the OR logic)
-      if (hasImportRoutes && hasMatchingImportRoute) {
-        const scopeCondition = or(hasMatchingImportRoute, hasProjectArticle)
-        if (scopeCondition) whereParts.push(scopeCondition)
-      }
+      const whereParts: Array<ReturnType<typeof sql>> = [inArray(judgments.promptId, promptIds), scopeCondition]
       if (projectBounds?.dateFrom) whereParts.push(gte(articles.articleCreatedAt, projectBounds.dateFrom))
       if (projectBounds?.dateTo) whereParts.push(lte(articles.articleCreatedAt, projectBounds.dateTo))
       if (fromDate) whereParts.push(gte(articles.articleCreatedAt, fromDate))
@@ -100,18 +99,11 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
       // Use raw SQL to UNNEST the normalized array per row and collect distinct elements
       const combinedWhere = and(...whereParts)
 
-      // Optimization: For projects without import routes, use INNER JOIN on project_articles
-      // instead of EXISTS subquery which is much faster
-      const projectArticlesJoin = !hasImportRoutes
-        ? sql`INNER JOIN ${projectArticles} pa ON pa."article_id" = ${articles.id} AND pa."project_id" = ${query.projectId}::uuid`
-        : sql``
-
       const grouped = await db.execute(
         sql`
           SELECT ${judgments.promptId} AS "promptId", elem AS "value"
           FROM ${judgments}
           INNER JOIN ${articles} ON ${articles.id} = ${judgments.articleId}
-          ${projectArticlesJoin}
           CROSS JOIN LATERAL UNNEST(${normalized}) AS elem
           WHERE ${combinedWhere}
           GROUP BY ${judgments.promptId}, elem
