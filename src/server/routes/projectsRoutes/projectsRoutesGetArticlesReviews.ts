@@ -68,15 +68,15 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
         .from(projectRouteLink)
         .where(eq(projectRouteLink.projectId, body.projectId))
 
-      const routeIdArray =
-        projectImportRoutes.length > 0
-          ? sql.join(
-              projectImportRoutes.map((r) => {
-                return sql`${r.importRouteId}::uuid`
-              }),
-              sql`,`,
-            )
-          : null
+      const hasImportRoutes = projectImportRoutes.length > 0
+      const routeIdArray = hasImportRoutes
+        ? sql.join(
+            projectImportRoutes.map((r) => {
+              return sql`${r.importRouteId}::uuid`
+            }),
+            sql`,`,
+          )
+        : null
 
       // Build final where parts with optional filters (route scoping applied via join)
       const whereParts: Array<ReturnType<typeof sql>> = []
@@ -104,6 +104,8 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
 
       const combinedWhereCondition = whereParts.length > 1 ? and(...whereParts) : whereParts[0]
 
+      // Optimization: For projects with import routes, we need OR EXISTS checks.
+      // For projects WITHOUT import routes (only project_articles), we use INNER JOIN which is much faster.
       const hasMatchingImportRoute =
         routeIdArray !== null
           ? sql`EXISTS (
@@ -111,13 +113,14 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
               WHERE arl."article_id" = ${articles.id}
               AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
             )`
-          : null
+          : undefined
       const hasProjectArticle = sql`EXISTS (
         SELECT 1 FROM ${projectArticles} pa
         WHERE pa."article_id" = ${articles.id}
         AND pa."project_id" = ${body.projectId}::uuid
       )`
-      const scopeCondition = hasMatchingImportRoute ? or(hasMatchingImportRoute, hasProjectArticle) : hasProjectArticle
+      // Only use EXISTS conditions when we have import routes (need the OR logic)
+      const scopeCondition = hasImportRoutes ? or(hasMatchingImportRoute, hasProjectArticle) : undefined
 
       // Build grouped base query once, then count rows in a subquery (fast COUNT(*))
       // Build HAVING conditions: require one judgment per prompt overall, and if a prompt has selected filters,
@@ -139,11 +142,26 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
         )
       }
 
-      const groupedBase = db
-        .select({id: articles.id})
-        .from(articles)
+      // Build the base query dynamically based on whether we have import routes
+      let baseQuery = db.select({id: articles.id}).from(articles).$dynamic()
+
+      // Optimization: If no import routes, use INNER JOIN on project_articles instead of EXISTS subquery
+      if (!hasImportRoutes) {
+        baseQuery = baseQuery.innerJoin(
+          projectArticles,
+          and(eq(projectArticles.articleId, articles.id), eq(projectArticles.projectId, body.projectId)),
+        )
+      }
+
+      const groupedBase = baseQuery
         .innerJoin(judgments, and(eq(judgments.articleId, articles.id), inArray(judgments.promptId, promptIds)))
-        .where(combinedWhereCondition ? and(combinedWhereCondition, scopeCondition) : scopeCondition)
+        .where(
+          scopeCondition
+            ? combinedWhereCondition
+              ? and(combinedWhereCondition, scopeCondition)
+              : scopeCondition
+            : combinedWhereCondition,
+        )
         .groupBy(articles.id)
         .having(havingParts.length > 1 ? and(...havingParts) : havingParts[0])
         .as('grouped_articles')
@@ -151,11 +169,26 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
       const [{count: totalCount = 0} = {count: 0}] = await db.select({count: sql<number>`COUNT(*)`}).from(groupedBase)
 
       // Build a paged set of qualifying article ids to avoid massive IN (...) parameter lists
-      const groupedPage = db
-        .select({id: articles.id})
-        .from(articles)
+      // Note: We need to rebuild the query for pagination with the same logic
+      let pagedQuery = db.select({id: articles.id}).from(articles).$dynamic()
+
+      // Apply same INNER JOIN optimization for pagination query
+      if (!hasImportRoutes) {
+        pagedQuery = pagedQuery.innerJoin(
+          projectArticles,
+          and(eq(projectArticles.articleId, articles.id), eq(projectArticles.projectId, body.projectId)),
+        )
+      }
+
+      const groupedPage = pagedQuery
         .innerJoin(judgments, and(eq(judgments.articleId, articles.id), inArray(judgments.promptId, promptIds)))
-        .where(combinedWhereCondition ? and(combinedWhereCondition, scopeCondition) : scopeCondition)
+        .where(
+          scopeCondition
+            ? combinedWhereCondition
+              ? and(combinedWhereCondition, scopeCondition)
+              : scopeCondition
+            : combinedWhereCondition,
+        )
         .groupBy(articles.id)
         .having(havingParts.length > 1 ? and(...havingParts) : havingParts[0])
         .orderBy(desc(articles.articleCreatedAt))
