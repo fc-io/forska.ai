@@ -56,6 +56,25 @@ docker compose up db
 
 This command will first create a dump of the local db and the merge the remote db with the local one. The latest remote dump will automatically be picked for merge.
 
+### Recommended: Safe merge (handles index size issues)
+
+Use this version if you encounter B-tree index size errors (e.g., "index row size exceeds btree maximum"):
+
+``` bash
+bun run db:merge-from-remote-dump-safe
+```
+
+This version automatically drops problematic indexes before the merge and recreates them with expression-based prefixes afterward.
+
+### Standard merge
+
 ``` bash
 bun run db:merge-from-remote-dump
 ```
+
+**Note:** If the standard merge fails with an error like:
+```
+ERROR: index row size 2720 exceeds btree version 4 maximum 2704 for index "judgments_..."
+```
+
+This is because some `answered_original` values are too large for B-tree indexes. Use the safe merge command instead, or run the migration `0041_fix_judgments_answered_index_size.sql` to permanently fix the indexes.

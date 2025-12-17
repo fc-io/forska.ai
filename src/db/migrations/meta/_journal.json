@@ -281,6 +281,13 @@
       "when": 1765209220187,
       "tag": "0039_dear_earthquake",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1734444000000,
+      "tag": "0040_fix_judgments_answered_index_size",
+      "breakpoints": true
     }
   ]
 }

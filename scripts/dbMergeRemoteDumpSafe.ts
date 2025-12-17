@@ -49,6 +49,7 @@ const assertLocalDbRunning = async (): Promise<void> => {
 const escapeShell = (s: string): string => {
   return s.replace(/'/g, "'\\''")
 }
+
 const hasArg = (a: string): boolean => {
   return process.argv.includes(a)
 }
@@ -108,6 +109,12 @@ const runPsql = async (db: string, sql: string): Promise<string> => {
   const res = await $.nothrow()`bash -lc ${cmd}`
   if (res.exitCode !== 0) fail(`psql failed: ${sql}`)
   return res.text().trim()
+}
+
+const runPsqlNoFail = async (db: string, sql: string): Promise<{ok: boolean; output: string}> => {
+  const cmd = `docker compose exec -T -e PGPASSWORD='${escapeShell(env.DB_PASS)}' db psql -U ${env.DB_USER} -d ${db} -v ON_ERROR_STOP=1 -At <<'__SQL__'\n${sql}\n__SQL__`
+  const res = await $.nothrow()`bash -lc ${cmd}`
+  return {ok: res.exitCode === 0, output: res.text().trim()}
 }
 
 const setupFdw = async (localDb: string, tempDb: string): Promise<void> => {
@@ -184,10 +191,11 @@ const getForeignKeyEdges = async (db: string): Promise<Array<{table: string; ref
     .split('\n')
     .filter(Boolean)
     .map((l) => {
-      return l.split('|')
+      const parts = l.split('|')
+      return {table: parts[0] || '', referencedTable: parts[1] || ''}
     })
-    .map(([table, referencedTable]) => {
-      return {table, referencedTable}
+    .filter((e) => {
+      return e.table && e.referencedTable
     })
 }
 
@@ -203,16 +211,20 @@ const topoSortTables = (tables: string[], edges: Array<{table: string; reference
   for (const e of edges) {
     if (!set.has(e.table) || !set.has(e.referencedTable)) continue
     // Edge: referencedTable -> table (parent before child)
-    if (!adj.get(e.referencedTable)!.has(e.table)) {
-      adj.get(e.referencedTable)!.add(e.table)
+    const adjSet = adj.get(e.referencedTable)
+    if (adjSet && !adjSet.has(e.table)) {
+      adjSet.add(e.table)
       indeg.set(e.table, (indeg.get(e.table) || 0) + 1)
     }
   }
   const queue: string[] = []
-  for (const [t, d] of indeg.entries()) if (d === 0) queue.push(t)
+  for (const [t, d] of indeg.entries()) {
+    if (d === 0) queue.push(t)
+  }
   const out: string[] = []
   while (queue.length) {
-    const n = queue.shift()!
+    const n = queue.shift()
+    if (!n) continue
     out.push(n)
     for (const m of adj.get(n) || []) {
       const d = (indeg.get(m) || 0) - 1
@@ -270,15 +282,23 @@ const getTableMeta = async (db: string, table: string): Promise<TableMeta> => {
   const updatable = updatableRaw ? updatableRaw.split('\n').filter(Boolean) : []
 
   // Only use columns that exist in both local AND imported tables
-  const commonCols = localCols.filter((c) => importCols.includes(c))
-  const commonUpdatable = updatable.filter((c) => importCols.includes(c))
+  const commonCols = localCols.filter((c) => {
+    return importCols.includes(c)
+  })
+  const commonUpdatable = updatable.filter((c) => {
+    return importCols.includes(c)
+  })
 
   if (commonCols.length !== localCols.length) {
-    const missing = localCols.filter((c) => !importCols.includes(c))
+    const missing = localCols.filter((c) => {
+      return !importCols.includes(c)
+    })
     log(`  Schema mismatch for ${table}: local has ${missing.length} extra columns: ${missing.join(', ')}`)
   }
   if (importCols.length !== localCols.length) {
-    const extra = importCols.filter((c) => !localCols.includes(c))
+    const extra = importCols.filter((c) => {
+      return !localCols.includes(c)
+    })
     if (extra.length > 0) {
       log(`  Schema mismatch for ${table}: import has ${extra.length} extra columns: ${extra.join(', ')}`)
     }
@@ -350,7 +370,7 @@ const adjustSequences = async (db: string, tables: string[]): Promise<void> => {
     : []
   const entries = rows
     .map((r) => {
-      return {table: r[0], col: r[1], seq: r[2]}
+      return {table: r[0] || '', col: r[1] || '', seq: r[2] || ''}
     })
     .filter((e) => {
       return e.table && e.col && e.seq
@@ -361,6 +381,7 @@ const adjustSequences = async (db: string, tables: string[]): Promise<void> => {
   const apply = async (i: number): Promise<void> => {
     if (i >= entries.length) return
     const e = entries[i]
+    if (!e) return
     log(`Adjust sequence for ${e.table}.${e.col}`)
     const set = `SELECT setval('${e.seq}', COALESCE((SELECT MAX("${e.col}") FROM public."${e.table}"), 0), true);`
     await runPsql(db, set)
@@ -379,11 +400,67 @@ const cleanup = async (localDb: string, tempDb: string, containerDumpPath: strin
   await $.nothrow()`docker compose exec -T db rm -f ${containerDumpPath}`
 }
 
+// ============================================================================
+// PROBLEMATIC INDEXES - These indexes include text columns that can exceed
+// PostgreSQL's B-tree maximum row size (~2704 bytes)
+// ============================================================================
+
+const PROBLEMATIC_INDEXES = [
+  {
+    name: 'judgments_article_prompt_answered_idx',
+    table: 'judgments',
+    // Recreate with a prefix to limit indexed value size
+    recreateSql: `CREATE INDEX IF NOT EXISTS judgments_article_prompt_answered_idx
+      ON public.judgments (article_id, prompt_id, (LEFT(answered_original, 100)));`,
+  },
+  {
+    name: 'judgments_prompt_article_answered_idx',
+    table: 'judgments',
+    recreateSql: `CREATE INDEX IF NOT EXISTS judgments_prompt_article_answered_idx
+      ON public.judgments (prompt_id, article_id, (LEFT(answered_original, 100)));`,
+  },
+  {
+    name: 'judgments_prompt_article_covering_idx',
+    table: 'judgments',
+    // This covering index likely includes answered_original - recreate without it or with prefix
+    // The index is used for covering queries, so we keep the core columns but use prefix for text
+    recreateSql: `CREATE INDEX IF NOT EXISTS judgments_prompt_article_covering_idx
+      ON public.judgments (prompt_id, article_id, (LEFT(answered_original, 100)));`,
+  },
+]
+
+const dropProblematicIndexes = async (db: string): Promise<void> => {
+  log('Dropping problematic indexes that may cause B-tree size errors...')
+  for (const idx of PROBLEMATIC_INDEXES) {
+    log(`  Dropping index: ${idx.name}`)
+    await runPsqlNoFail(db, `DROP INDEX IF EXISTS public.${idx.name};`)
+  }
+}
+
+const recreateProblematicIndexes = async (db: string): Promise<void> => {
+  log('Recreating indexes with expression-based prefixes to avoid size issues...')
+  for (const idx of PROBLEMATIC_INDEXES) {
+    log(`  Creating index: ${idx.name}`)
+    const result = await runPsqlNoFail(db, idx.recreateSql)
+    if (!result.ok) {
+      log(`  Warning: Failed to create index ${idx.name}: ${result.output}`)
+    }
+  }
+}
+
+// ============================================================================
+// MAIN
+// ============================================================================
+
 const main = async (): Promise<void> => {
   await assertLocalDbRunning()
-  await ensureLocalSchemaReady(env.DB_NAME)
+  const dbName = env.DB_NAME
+  if (!dbName) {
+    fail('DB_NAME environment variable is not set')
+  }
+  await ensureLocalSchemaReady(dbName)
 
-  const localDb = env.DB_NAME
+  const localDb = dbName
 
   // Skip backup if --no-backup flag is passed
   if (hasArg('--no-backup')) {
@@ -419,9 +496,15 @@ const main = async (): Promise<void> => {
 
   log(`Tables to merge (${mergeTables.length}): ${mergeTables.join(', ')}`)
 
+  // =========================================================================
+  // DROP PROBLEMATIC INDEXES BEFORE MERGE
+  // =========================================================================
+  await dropProblematicIndexes(localDb)
+
   const processTable = async (idx: number): Promise<void> => {
     if (idx >= mergeTables.length) return
     const table = mergeTables[idx]
+    if (!table) return
     const meta = await getTableMeta(localDb, table)
     if (meta.pkeys.length === 0) {
       log(`Skip ${table}: no primary key`)
@@ -438,6 +521,11 @@ const main = async (): Promise<void> => {
   }
 
   await processTable(0)
+
+  // =========================================================================
+  // RECREATE INDEXES WITH PREFIX EXPRESSIONS
+  // =========================================================================
+  await recreateProblematicIndexes(localDb)
 
   await adjustSequences(localDb, mergeTables)
   await cleanup(localDb, tempDb, inContainer)
