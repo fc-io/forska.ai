@@ -47,7 +47,7 @@
 ## Why This Architecture?
 
 ### Problems with Current PostgreSQL Setup
-- Complex JOINs on 2M+ articles × 10M+ judgments are slow (2-30 seconds)
+- Complex JOINs on 10M+ articles × 25M+ judgments are slow (20-300 seconds)
 - Row-oriented storage inefficient for analytical queries
 - Scaling to 100M+ judgments will make queries unusable
 
