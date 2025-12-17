@@ -288,6 +288,13 @@
       "when": 1734444000000,
       "tag": "0040_fix_judgments_answered_index_size",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1734472656000,
+      "tag": "0042_drop_materialized_views",
+      "breakpoints": true
     }
   ]
 }
