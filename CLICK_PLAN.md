@@ -30,24 +30,17 @@
 │   ┌────────────┐                      │                               │ │
 │   │  Parquet   │─────  append  ──────▶│  /data/judgments/             │ │
 │   │  Writer    │                      │    year=2024/                 │ │
-│   │  (DuckDB)  │                      │      month=12/                │ │
+│   │ (parquetjs)│                      │      month=12/                │ │
 │   └────────────┘                      │        project=xxx/           │ │
 │                                       │          data.parquet         │ │
 │                                       └───────────────────────────────┘ │
-│                                                     │                    │
-│                                                     │ also readable by   │
-│                                                     ▼                    │
-│                                              ┌────────────┐             │
-│                                              │  DuckDB    │             │
-│                                              │ (Ad-hoc)   │             │
-│                                              └────────────┘             │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Why This Architecture?
 
 ### Problems with Current PostgreSQL Setup
-- Complex JOINs on 10M+ articles × 25M+ judgments are slow (20-300 seconds)
+- Complex JOINs on 10.5M articles × 24.9M judgments are slow (20-300 seconds)
 - Row-oriented storage inefficient for analytical queries
 - Scaling to 100M+ judgments will make queries unusable
 
@@ -56,7 +49,7 @@
 |--------|---------|
 | **No sync needed** | Parquet IS the source of truth for judgments |
 | **Columnar storage** | 10-100x faster aggregations |
-| **Portable** | Readable by ClickHouse, DuckDB, Polars, Spark |
+| **Portable** | Readable by ClickHouse, Polars, Spark, and other tools |
 | **Durable** | Files are immutable, easy to backup |
 | **Denormalized** | No JOINs needed at query time |
 
@@ -78,7 +71,7 @@
 5. On flush: Append to Parquet file (partitioned)
         │
         ▼
-6. ClickHouse/DuckDB queries Parquet files directly
+6. ClickHouse queries Parquet files directly
         │
         ▼
 7. API returns results
@@ -185,44 +178,104 @@ interface DenormalizedJudgment {
 
 # Implementation Checklist
 
-## Phase 1: Parquet Writer (Start Here)
+## Phase 0: Denormalize PostgreSQL Judgments Table
+
+Before migrating to Parquet, add denormalized columns to the existing `judgments` table. This allows:
+- Backfilling existing judgments with denormalized data
+- Testing the denormalized schema in PostgreSQL before committing to Parquet
+- Easier export to Parquet (no JOINs needed during export)
+
+### 0.1 Columns to Add (Database Migration)
+
+**Currently in `judgments` table:**
+- ✅ `id`, `created_at`, `updated_at`
+- ✅ `article_id`, `prompt_id`, `model_id`
+- ✅ `is_answered`, `answered_original`, `answered_original_as_array`
+- ✅ `snapshot_project_id` (can use as `projectId`)
+- ✅ `snapshot_project_owner_id` (can use as `projectOwnerId`)
+- ✅ `snapshot_project_use_title/abstract/fulltext`
+- ✅ `snapshot_project_model_name` (can use as `modelName`)
+- ✅ `snapshot_project_provider` (can use as `modelProvider`)
+
+**Columns to ADD:**
+
+| Column | Type | Source |
+|--------|------|--------|
+| `denorm_article_title` | `text` | `articles.article_title` |
+| `denorm_article_summary` | `text` | `articles.article_summary` |
+| `denorm_article_created_at` | `timestamptz` | `articles.article_created_at` |
+| `denorm_article_updated_at` | `timestamptz` | `articles.article_updated_at` |
+| `denorm_article_arxiv_id` | `text` | `articles.arxiv_id` |
+| `denorm_article_openalex_id` | `text` | `articles.openalex_id` |
+| `denorm_article_import_route` | `text` | `articles.import_route` |
+| `denorm_prompt_heading` | `text` | `prompts.prompt_heading` |
+| `denorm_prompt_type` | `text` | `prompts.type` |
+| `denorm_prompt_content_hash` | `text` | `prompts.content_hash` |
+| `denorm_project_name` | `text` | `projects.name` |
+
+### 0.2 Migration Steps
+
+- [ ] Create migration file `src/db/migrations/00XX_denormalize_judgments.sql`
+- [ ] Add new columns (all nullable initially)
+- [ ] Create indexes on new columns for efficient queries:
+  - `denorm_article_created_at` (for date range filtering)
+  - `denorm_article_title` with trigram (for ILIKE search)
+  - `denorm_prompt_heading` (for display)
+
+### 0.3 Backfill Script
+
+- [ ] Create `scripts/backfill-denormalized-judgments.ts`
+- [ ] Batch update existing judgments with denormalized data
+- [ ] Use batches of ~10,000 rows to avoid long locks
+- [ ] Add progress logging (24.9M rows will take time)
+- [ ] Handle NULL cases gracefully (deleted articles/prompts)
+
+### 0.4 Update LLM Worker
+
+- [ ] Modify judgment creation to populate denormalized columns at write time
+- [ ] Fetch article/prompt data once, write to both normalized + denormalized columns
+- [ ] Test with new judgments before running backfill
+
+### 0.5 Validate Denormalization
+
+- [ ] Verify denormalized data matches JOINed data
+- [ ] Spot-check sample of rows across different projects
+- [ ] Confirm no data corruption
+
+---
+
+## Phase 1: Parquet Writer
 
 ### 1.1 Setup & Dependencies
-- [ ] Install DuckDB for Bun: `bun add duckdb-async` or equivalent
+- [ ] Install Parquet library: `bun add @dsnp/parquetjs`
 - [ ] Create `/data/judgments/` directory structure
 - [ ] Add `/data/` to `.gitignore`
 
 ### 1.2 Parquet Writer Service
 - [ ] Create `src/services/parquet/types.ts` with `DenormalizedJudgment` interface
-- [ ] Create `src/services/parquet/parquetWriter.ts` with DuckDB-based writer
+- [ ] Create `src/services/parquet/parquetWriter.ts` using `@dsnp/parquetjs`
+- [ ] Define Parquet schema matching `DenormalizedJudgment`
 - [ ] Implement `appendToParquet(partition, records)` function
 - [ ] Add ZSTD compression for Parquet files
 - [ ] Add error handling and retry logic
 
-### 1.3 Judgment Denormalizer
-- [ ] Create `src/services/parquet/denormalizer.ts`
-- [ ] Implement `denormalizeJudgment(judgment, articleId, promptId, projectId)`
-- [ ] Add caching for article/prompt lookups (avoid repeated DB queries)
-- [ ] Consider Redis or in-memory LRU cache for hot data
-
-### 1.4 Batch Buffer
+### 1.3 Batch Buffer
 - [ ] Create `src/services/parquet/judgmentBatcher.ts`
 - [ ] Implement buffer with configurable batch size (default: 1000)
 - [ ] Implement flush interval (default: 10 seconds)
 - [ ] Add graceful shutdown handler to flush on SIGTERM
 - [ ] Add metrics/logging for batch operations
 
-### 1.5 Integration with LLM Worker
-- [ ] Modify judgment creation flow to use Parquet writer
-- [ ] Keep PostgreSQL write as fallback/audit log (optional)
+### 1.4 Integration with LLM Worker
+- [ ] Modify judgment creation flow to also write to Parquet
+- [ ] Use denormalized columns from PostgreSQL (already populated)
 - [ ] Test with small batch of judgments
 - [ ] Verify Parquet files are created correctly
 
-### 1.6 Parquet Reader (for DuckDB queries)
+### 1.5 Parquet Reader (for validation)
 - [ ] Create `src/services/parquet/parquetReader.ts`
-- [ ] Implement basic query functions using DuckDB
+- [ ] Implement basic read functions for testing
 - [ ] Test reading back written judgments
-- [ ] Benchmark query performance vs PostgreSQL
 
 ---
 
@@ -232,7 +285,7 @@ interface DenormalizedJudgment {
 - [ ] Create `scripts/export-judgments-to-parquet.ts`
 - [ ] Export existing PostgreSQL judgments with denormalization
 - [ ] Partition by year/month/project during export
-- [ ] Add progress logging (10M+ rows will take time)
+- [ ] Add progress logging (24.9M rows will take time)
 - [ ] Verify row counts match after export
 
 ### 2.2 Validate Migration
@@ -246,7 +299,7 @@ interface DenormalizedJudgment {
 
 ### 3.1 Query Routing
 - [ ] Create abstraction layer for judgment queries
-- [ ] Route analytics queries to Parquet/DuckDB
+- [ ] Route analytics queries to ClickHouse
 - [ ] Keep transaction queries on PostgreSQL (if any)
 
 ### 3.2 Update API Routes
@@ -272,12 +325,11 @@ interface DenormalizedJudgment {
 ### 4.2 External Table Setup
 - [ ] Create ClickHouse external table pointing to Parquet files
 - [ ] Test queries via ClickHouse
-- [ ] Compare performance: DuckDB vs ClickHouse on Parquet
+- [ ] Benchmark ClickHouse query performance on Parquet files
 
 ### 4.3 API Migration to ClickHouse
 - [ ] Create ClickHouse client wrapper
-- [ ] Migrate analytics queries from DuckDB to ClickHouse
-- [ ] Keep DuckDB as fallback for ad-hoc research queries
+- [ ] Migrate analytics queries to use ClickHouse
 
 ### 4.4 Optional: Materialized Views
 - [ ] Evaluate if materialized views are needed
@@ -325,12 +377,12 @@ tar -czvf judgments-backup-$(date +%Y%m%d).tar.gz /data/judgments/
 
 ## Expected Performance Improvements
 
-| Query | PostgreSQL (current) | DuckDB/Parquet | ClickHouse/Parquet |
+| Query | PostgreSQL (current) | ClickHouse/Parquet |
 |-------|---------------------|----------------|-------------------|
-| Reviews page (filter + paginate) | 2-5 seconds | 200-500ms | 50-200ms |
-| Count by answer type | 5-15 seconds | 50-100ms | 20-50ms |
-| Aggregate across projects | 30-60 seconds | 200-500ms | 100-300ms |
-| Full table scan (100M rows) | Minutes | 2-5 seconds | 1-2 seconds |
+| Reviews page (filter + paginate) | 20-300 seconds | 50-200ms |
+| Count by answer type | 5-15 seconds | 20-50ms |
+| Aggregate across projects | 30-60 seconds | 100-300ms |
+| Full table scan (100M rows) | Minutes | 1-2 seconds |
 
 ---
 
@@ -345,6 +397,6 @@ tar -czvf judgments-backup-$(date +%Y%m%d).tar.gz /data/judgments/
 
 ## References
 
-- [DuckDB Parquet documentation](https://duckdb.org/docs/data/parquet/overview)
+- [@dsnp/parquetjs](https://github.com/dsnp/parquetjs)
 - [ClickHouse external tables](https://clickhouse.com/docs/en/engines/table-engines/integrations/s3)
 - [Parquet file format](https://parquet.apache.org/)
