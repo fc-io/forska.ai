@@ -309,10 +309,9 @@ Build the new storage engine's write path first.
 
 - [ ] **Schema**: Define the `DenormalizedJudgment` TypeScript interface (as above).
 - [ ] **Parquet Writer**: Create `src/services/parquet/parquetWriter.ts`.
-  - [ ] Use `parquet-wasm` or `apache-arrow` for Parquet serialization.
+  - [ ] Use `@dsnp/parquetjs` for Parquet serialization.
   - [ ] Implement `writeBatch(judgments)` to `/data/judgments/year=YYYY/month=MM/{ulid}.parquet`.
-  - [ ] Implement a buffer/flush mechanism (flush every 5s or 100 items).
-  - [ ] **Durability**: Write to a `pending/` directory first, then atomically move to the final location after successful flush.
+  - [ ] **Durability**: Write to a `pending/` directory first, then atomically move to the final location.
 
 ## Phase 2: Infrastructure & ClickHouse Setup
 - [ ] **Object Storage**: Add MinIO to `docker-compose.yml` (S3-compatible, for `S3Queue`).
