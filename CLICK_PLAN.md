@@ -129,8 +129,12 @@ interface DenormalizedJudgmentAnalytics {
   projectId: string
   articleId: string
   articleTitle: string
-  articleYear: number | null // Publication year for filtering
+  articleCreatedAt: Date | null
+  articleUpdatedAt: Date | null
+  articleCreatedYear: number | null
+  articleUpdatedYear: number | null
   articleImportRoute: string | null
+  articleImportedBy: string | null
   promptId: string
   modelId: string
 
@@ -159,8 +163,12 @@ CREATE TABLE judgments_queue (
     projectId String,
     articleId String,
     articleTitle String,
-    articleYear Nullable(Int16),
+    articleCreatedAt Nullable(DateTime64(3)),
+    articleUpdatedAt Nullable(DateTime64(3)),
+    articleCreatedYear Nullable(Int16),
+    articleUpdatedYear Nullable(Int16),
     articleImportRoute Nullable(String),
+    articleImportedBy Nullable(String),
     promptId String,
     modelId String,
     answeredOriginal Nullable(String),
@@ -187,8 +195,12 @@ CREATE TABLE judgments (
     projectId String,
     articleId String,
     articleTitle String,
-    articleYear Nullable(Int16),
+    articleCreatedAt Nullable(DateTime64(3)),
+    articleUpdatedAt Nullable(DateTime64(3)),
+    articleCreatedYear Nullable(Int16),
+    articleUpdatedYear Nullable(Int16),
     articleImportRoute Nullable(String),
+    articleImportedBy Nullable(String),
     promptId String,
     modelId String,
     answeredOriginal Nullable(String),

@@ -302,6 +302,20 @@
       "when": 1766000000000,
       "tag": "0043_add_denormalized_judgment_fields",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1766100000000,
+      "tag": "0044_add_article_date_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1766200000000,
+      "tag": "0045_add_article_imported_by",
+      "breakpoints": true
     }
   ]
 }

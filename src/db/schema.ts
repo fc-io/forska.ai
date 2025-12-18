@@ -571,8 +571,12 @@ export const judgments = pgTable(
     quotes: jsonb('quotes').default([]),
     // Denormalized article fields (for Parquet/ClickHouse compatibility)
     articleTitle: text('article_title'),
-    articleYear: integer('article_year'),
+    articleCreatedAt: timestamp('article_created_at', {withTimezone: true}),
+    articleUpdatedAt: timestamp('article_updated_at', {withTimezone: true}),
+    articleCreatedYear: integer('article_created_year'),
+    articleUpdatedYear: integer('article_updated_year'),
     articleImportRoute: text('article_import_route'),
+    articleImportedBy: text('article_imported_by'),
     // Snapshots
     snapshotProjectId: uuid('snapshot_project_id'),
     snapshotProjectOwnerId: text('snapshot_project_owner_id'),
