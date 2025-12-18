@@ -1,6 +1,6 @@
 # ClickHouse + Parquet Migration Plan
 
-> **Goal**: Migrate judgments storage from PostgreSQL to a Parquet-first architecture with ClickHouse as the query engine for analytics AND detail lookups.
+> **Goal**: Migrate judgments analytics from PostgreSQL to a Parquet-first architecture with ClickHouse as the query engine, while keeping PostgreSQL (or another K/V store) for fast judgment `id` lookups (detail page).
 
 ## Architecture Overview
 
@@ -23,6 +23,7 @@
 │   │ • projects │                      │ Table ─────┼──┐                 │
 │   │ • prompts  │                      └────────────┘  │                 │
 │   │ • articles │                                      │ reads           │
+│   │ • judgments│                                      ▼                 │
 │   └────────────┘                                      ▼                 │
 │        │                              ┌───────────────────────────────┐ │
 │        │ denormalize                  │        Parquet Files          │ │
@@ -37,6 +38,8 @@
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
+Detail page reads from PostgreSQL by `id`. Analytics reads from ClickHouse over Parquet.
+
 ## Why This Architecture?
 
 ### Problems with Current PostgreSQL Setup
@@ -47,7 +50,7 @@
 ### Benefits of Parquet-First
 | Aspect | Benefit |
 |--------|---------|
-| **No sync needed** | Parquet IS the source of truth for judgments |
+| **Simple dual-write** | PostgreSQL remains write + point-lookup store; Parquet is an append-only analytics mirror |
 | **Columnar storage** | 10-100x faster aggregations |
 | **Portable** | Readable by ClickHouse, Polars, Spark, and other tools |
 | **Durable** | Files are immutable, easy to backup |
@@ -59,10 +62,10 @@
 1. LLM returns judgment
         │
         ▼
-2. Lookup article/prompt/project from PostgreSQL (cached)
+2. Write judgment to PostgreSQL (authoritative, supports fast `id` lookups)
         │
         ▼
-3. Build denormalized record (including explanation/quotes)
+3. Lookup article/prompt/project from PostgreSQL (cached) and build denormalized analytics record
         │
         ▼
 4. Add to batch buffer
@@ -75,7 +78,7 @@
 6. ClickHouse queries Parquet files directly via External Table
         │
         ▼
-7. API returns results
+7. API returns results (Analytics → ClickHouse, Detail → PostgreSQL)
 ```
 
 ## Database Responsibilities
@@ -86,7 +89,7 @@
 | `projects` | ✅ Primary | ❌ |
 | `prompts` | ✅ Primary | ❌ |
 | `articles` | ✅ Primary | Denormalized copy in judgments |
-| `judgments` | ❌ Audit/Backup only | ✅ Primary for analytics AND details |
+| `judgments` | ✅ Primary (writes + point lookups) | ✅ Analytics copy (denormalized) |
 | `judgments_jobs` | ✅ Primary | ❌ |
 | `project_articles` | ✅ Primary | ❌ |
 
@@ -95,15 +98,15 @@
 | Query Type | Database | Notes |
 |------------|----------|---------|
 | **Analytics** (list, filter, aggregate) | ClickHouse | Fast aggregations via columnar storage |
-| **Detail page** (single judgment) | ClickHouse | ClickHouse handles point lookups well with proper keys |
-| **Writes** | PostgreSQL → Parquet | LLM judgment creation writes to Parquet |
+| **Detail page** (single judgment by `id`) | PostgreSQL | Fast point lookup (B-tree PK), avoids scanning Parquet |
+| **Writes** | PostgreSQL + Parquet | Dual-write: canonical row in Postgres, denormalized row in Parquet |
 
 ## Denormalized Judgment Schema
 
-Each Parquet record contains ALL fields needed for both analytics and detail views.
+Each Parquet record contains fields needed for analytics and list views. Detail-only fields (e.g. `explanation`, `quotes`) stay in PostgreSQL for fast point lookups.
 
 ```typescript
-interface DenormalizedJudgment {
+interface DenormalizedJudgmentAnalytics {
   // Primary identifiers
   id: string
   createdAt: Date
@@ -116,11 +119,6 @@ interface DenormalizedJudgment {
   isAnswered: boolean
   answeredOriginal: string | null
   answeredOriginalAsArray: string[] | null
-
-  // "Heavy" data (now included based on request)
-  explanation: string | null
-  quotes: string | null // JSON string or Array<string>
-  confidenceOriginal: number | null
 
   // Denormalized: Article fields
   articleTitle: string
@@ -136,7 +134,6 @@ interface DenormalizedJudgment {
   promptHeading: string | null
   promptType: string | null
   promptContentHash: string | null
-  promptOriginalText: string | null // Optional if needed for display without join
 
   // Denormalized: Project fields
   projectId: string
@@ -177,7 +174,7 @@ interface DenormalizedJudgment {
 ## Phase 0: Denormalize PostgreSQL Judgments Table
 (Temporary step to facilitate easy export and dual-write testing)
 
-- [ ] Create migration: `src/db/migrations/00XX_denormalize_judgments.sql` adding all denorm fields + `explanation`/`quotes`.
+- [ ] Create a Drizzle migration (via Drizzle CLI) adding the denorm fields needed for Parquet analytics (no need to add `explanation`/`quotes` — they already exist in `judgments`).
 - [ ] Create `scripts/backfill-denormalized-judgments.ts` to update existing rows.
 - [ ] Update LLM Worker to write to these new columns.
 - [ ] Validate data matches joined queries.
@@ -192,7 +189,7 @@ interface DenormalizedJudgment {
 
 ### 1.2 Parquet Writer Service
 - [ ] Install `@dsnp/parquetjs`
-- [ ] Create `src/services/parquet/types.ts` (Full Schema)
+- [ ] Create `src/services/parquet/types.ts` (Analytics Schema)
 - [ ] Create `src/services/parquet/parquetWriter.ts`
   - [ ] Implement `writeBatch(partition, records)`
   - [ ] Use naming convention: `part-{timestamp}-{uuid}.parquet`
@@ -208,7 +205,7 @@ interface DenormalizedJudgment {
 
 ### 2.1 Integration
 - [ ] Modify LLM Worker: Write to Postgres (Safety) AND Parquet Batcher
-- [ ] Ensure `explanation` and `quotes` are written to Parquet
+- [ ] Ensure the Parquet record contains analytics/list fields; keep `explanation`/`quotes` in Postgres for detail page
 
 ### 2.2 Export History
 - [ ] Create `scripts/export-judgments-to-parquet.ts`
@@ -224,23 +221,22 @@ interface DenormalizedJudgment {
 ### 3.2 API Layer Migration
 - [ ] Install ClickHouse client for Node.js
 - [ ] Refactor `/api/articlesreviews` to generate SQL and query ClickHouse
-- [ ] Refactor Detail Page to query ClickHouse by ID (benchmarking required)
+- [ ] Keep Detail Page querying Postgres by `id` (avoid Parquet scans)
 - [ ] Verify performance
 
 ## Phase 4: Cleanup
 
 ### 4.1 Switch & Deprecate
-- [ ] Make Parquet path the primary Read path
-- [ ] Remove `judgments` table dependency
-- [ ] (Optional) Retain `judgments` table as "Write-Only" audit log for a few weeks
-- [ ] Finally drop Postgres `judgments` table
+- [ ] Make Parquet/ClickHouse the primary read path for analytics routes
+- [ ] Keep `judgments` in Postgres for point lookups (detail page)
+- [ ] (Optional) Remove denorm columns/indexes from Postgres once ClickHouse analytics is stable
 
 ---
 
 ## Performance Notes
-- **Point Lookups:** ClickHouse is not a K-V store, but with the right Primary Key (e.g. `id`), lookups for a single judgment among 100M rows should still be under 20-50ms, which is acceptable for a detail page.
+- **Point Lookups:** ClickHouse/DuckDB over Parquet is not O(1); keep Postgres (or a K/V store) for `where id = ?` detail lookups.
 - **Concurrency:** The `part-{timestamp}-{uuid}` strategy allows multiple workers to write simultaneously without locking.
 
 ## Open Questions
-- [ ] ClickHouse Primary Key definition for optimal `where id = ?` performance?
+- [ ] Keep `judgments` as-is in Postgres, or split into a smaller `judgment_details` table keyed by `id`?
 - [ ] S3/MinIO strategy for Production? (To be decided later)
