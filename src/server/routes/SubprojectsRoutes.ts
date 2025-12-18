@@ -158,54 +158,12 @@ export const subprojectsRoutes = new Elysia()
         }
       }
 
-      // Build filter conditions matching the Reviews LLM page behavior:
-      // 1. Scope articles to source projects (via import routes or project_articles)
-      // 2. Require articles to be fully assessed for ALL prompts on each source project
-      // 3. Apply the answer type filters
+      // Build filter conditions: articles must match ALL selected prompt/type combinations
+      // across all source projects (AND logic, not OR)
 
       if (body.sourceProjectIds.length === 0) {
         console.log(`[subprojects] No source projects selected, no articles added`)
         return {data: {project: newProject, articleCount: 0}}
-      }
-
-      // For each source project, get its import routes and prompts
-      const projectImportRoutes = await db
-        .select({projectId: projectRouteLink.projectId, importRouteId: projectRouteLink.importRouteId})
-        .from(projectRouteLink)
-        .where(inArray(projectRouteLink.projectId, body.sourceProjectIds))
-
-      // Group import routes by project
-      const routesByProject = new Map<string, string[]>()
-      for (const row of projectImportRoutes) {
-        const routes = routesByProject.get(row.projectId) || []
-        routes.push(row.importRouteId)
-        routesByProject.set(row.projectId, routes)
-      }
-
-      // Get all prompts for each source project
-      const sourceProjectPrompts = await db
-        .select({projectId: projectPrompts.projectId, promptId: prompts.id})
-        .from(projectPrompts)
-        .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
-        .where(and(inArray(projectPrompts.projectId, body.sourceProjectIds), eq(projectPrompts.enabled, true)))
-
-      // Group prompts by project
-      const promptsByProject = new Map<string, string[]>()
-      for (const row of sourceProjectPrompts) {
-        const prompts = promptsByProject.get(row.projectId) || []
-        prompts.push(row.promptId)
-        promptsByProject.set(row.projectId, prompts)
-      }
-
-      // Get project date bounds
-      const projectBounds = await db
-        .select({id: projects.id, dateFrom: projects.dateFrom, dateTo: projects.dateTo})
-        .from(projects)
-        .where(inArray(projects.id, body.sourceProjectIds))
-
-      const boundsByProject = new Map<string, {dateFrom: Date | null; dateTo: Date | null}>()
-      for (const row of projectBounds) {
-        boundsByProject.set(row.id, {dateFrom: row.dateFrom, dateTo: row.dateTo})
       }
 
       // Build prompt filter conditions (for the specific answer types selected)
@@ -213,13 +171,51 @@ export const subprojectsRoutes = new Elysia()
         return s.types.length > 0
       })
 
-      // Use HAVING-based filtering like the Reviews LLM page
-      // This requires: COUNT(DISTINCT judgments.promptId) = promptIds.length for full assessment
-      // AND SUM(CASE WHEN ...) > 0 for answer type filters
+      if (promptFilters.length === 0) {
+        console.log(`[subprojects] No valid prompt selections, no articles added`)
+        return {data: {project: newProject, articleCount: 0}}
+      }
 
+      // Get all prompt IDs that we're filtering on
+      const allSelectedPromptIds = promptFilters.map((f) => {
+        return f.promptId
+      })
+
+      // For each source project, get its import routes
+      const projectImportRoutes = await db
+        .select({projectId: projectRouteLink.projectId, importRouteId: projectRouteLink.importRouteId})
+        .from(projectRouteLink)
+        .where(inArray(projectRouteLink.projectId, body.sourceProjectIds))
+
+      // Collect all import route IDs
+      const allImportRouteIds = projectImportRoutes.map((r) => {
+        return r.importRouteId
+      })
+
+      // Get project date bounds
+      const projectBounds = await db
+        .select({id: projects.id, dateFrom: projects.dateFrom, dateTo: projects.dateTo})
+        .from(projects)
+        .where(inArray(projects.id, body.sourceProjectIds))
+
+      // Calculate the most restrictive date bounds across all source projects
+      let effectiveDateFrom: Date | null = null
+      let effectiveDateTo: Date | null = null
+      for (const row of projectBounds) {
+        if (row.dateFrom && (!effectiveDateFrom || row.dateFrom > effectiveDateFrom)) {
+          effectiveDateFrom = row.dateFrom
+        }
+        if (row.dateTo && (!effectiveDateTo || row.dateTo < effectiveDateTo)) {
+          effectiveDateTo = row.dateTo
+        }
+      }
+
+      // Use HAVING-based filtering: articles must match ALL prompt/type filters
       const normalized = sql`COALESCE(${judgments.answeredOriginalAsArray}, CASE WHEN ${judgments.answeredOriginal} IS NOT NULL THEN ARRAY[${judgments.answeredOriginal}] ELSE ARRAY[]::text[] END)`
 
-      // Build HAVING conditions for selected prompt/type filters
+      // Build HAVING conditions for ALL selected prompt/type filters
+      // Each condition requires that the article has at least one judgment for that prompt
+      // with an answer matching one of the selected types
       const havingParts: Array<ReturnType<typeof sql>> = []
       for (const filter of promptFilters) {
         const answeredValsArray = sql.join(
@@ -233,98 +229,84 @@ export const subprojectsRoutes = new Elysia()
         )
       }
 
-      if (havingParts.length === 0) {
-        console.log(`[subprojects] No valid prompt selections, no articles added`)
-        return {data: {project: newProject, articleCount: 0}}
+      // Build scope condition: articles accessible via ANY source project's import routes or project_articles
+      const scopeParts: Array<ReturnType<typeof sql>> = []
+
+      // Add import route scope if any exist
+      if (allImportRouteIds.length > 0) {
+        const routeIdArray = sql.join(
+          allImportRouteIds.map((r) => {
+            return sql`${r}::uuid`
+          }),
+          sql`,`,
+        )
+        scopeParts.push(
+          sql`EXISTS (
+            SELECT 1 FROM ${articleRouteLink} arl
+            WHERE arl."article_id" = ${articles.id}
+              AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
+          )`,
+        )
       }
 
-      // Collect all matching article IDs across all source projects
-      const allMatchingArticleIds: string[] = []
-
+      // Add project_articles scope for each source project
       for (const sourceProjectId of body.sourceProjectIds) {
-        const projectPromptIds = promptsByProject.get(sourceProjectId) || []
-        if (projectPromptIds.length === 0) continue
-
-        const projectRoutes = routesByProject.get(sourceProjectId) || []
-        const bounds = boundsByProject.get(sourceProjectId)
-
-        // Build scope condition: articles accessible via import routes OR project_articles
-        const routeIdArray =
-          projectRoutes.length > 0
-            ? sql.join(
-                projectRoutes.map((r) => {
-                  return sql`${r}::uuid`
-                }),
-                sql`,`,
-              )
-            : null
-
-        const hasMatchingImportRoute =
-          routeIdArray !== null
-            ? sql`EXISTS (
-                SELECT 1 FROM ${articleRouteLink} arl
-                WHERE arl."article_id" = ${articles.id}
-                  AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
-              )`
-            : null
-        const hasProjectArticle = sql`EXISTS (
-          SELECT 1 FROM ${projectArticles} pa
-          WHERE pa."article_id" = ${articles.id}
-            AND pa."project_id" = ${sourceProjectId}::uuid
-        )`
-        const scopeCondition = hasMatchingImportRoute
-          ? or(hasMatchingImportRoute, hasProjectArticle)
-          : hasProjectArticle
-
-        // Build where conditions
-        const whereParts: Array<ReturnType<typeof sql>> = []
-
-        // Project date bounds
-        if (bounds?.dateFrom) {
-          whereParts.push(gte(articles.articleCreatedAt, bounds.dateFrom))
-        }
-        if (bounds?.dateTo) {
-          whereParts.push(lte(articles.articleCreatedAt, bounds.dateTo))
-        }
-
-        // User-specified date range
-        if (body.dateFrom) {
-          const fromDate = new Date(`${body.dateFrom}T00:00:00.000Z`)
-          whereParts.push(gte(articles.articleCreatedAt, fromDate))
-        }
-        if (body.dateTo) {
-          const toDate = new Date(`${body.dateTo}T23:59:59.999Z`)
-          whereParts.push(lte(articles.articleCreatedAt, toDate))
-        }
-
-        const combinedWhereCondition = whereParts.length > 1 ? and(...whereParts) : whereParts[0]
-
-        // Build the full HAVING: require full assessment for ALL project prompts + answer type filters
-        const fullHavingParts: Array<ReturnType<typeof sql>> = [
-          sql`COUNT(DISTINCT ${judgments.promptId}) = ${projectPromptIds.length}`,
-          ...havingParts,
-        ]
-
-        // Query matching articles for this project using grouped query with HAVING (like Reviews LLM page)
-        const groupedQuery = db
-          .select({id: articles.id})
-          .from(articles)
-          .innerJoin(
-            judgments,
-            and(eq(judgments.articleId, articles.id), inArray(judgments.promptId, projectPromptIds)),
-          )
-          .where(combinedWhereCondition ? and(combinedWhereCondition, scopeCondition) : scopeCondition)
-          .groupBy(articles.id)
-          .having(fullHavingParts.length > 1 ? and(...fullHavingParts) : fullHavingParts[0])
-
-        const matchingArticles = await groupedQuery
-        for (const row of matchingArticles) {
-          allMatchingArticleIds.push(row.id)
-        }
+        scopeParts.push(
+          sql`EXISTS (
+            SELECT 1 FROM ${projectArticles} pa
+            WHERE pa."article_id" = ${articles.id}
+              AND pa."project_id" = ${sourceProjectId}::uuid
+          )`,
+        )
       }
 
-      // Deduplicate article IDs (in case a single article appears in multiple source projects)
-      const articleIds = [...new Set(allMatchingArticleIds)]
+      const scopeCondition = scopeParts.length > 1 ? or(...scopeParts) : scopeParts[0]
+
+      // Build where conditions
+      const whereParts: Array<ReturnType<typeof sql>> = []
+
+      // Apply most restrictive date bounds from source projects
+      if (effectiveDateFrom) {
+        whereParts.push(gte(articles.articleCreatedAt, effectiveDateFrom))
+      }
+      if (effectiveDateTo) {
+        whereParts.push(lte(articles.articleCreatedAt, effectiveDateTo))
+      }
+
+      // User-specified date range
+      if (body.dateFrom) {
+        const fromDate = new Date(`${body.dateFrom}T00:00:00.000Z`)
+        whereParts.push(gte(articles.articleCreatedAt, fromDate))
+      }
+      if (body.dateTo) {
+        const toDate = new Date(`${body.dateTo}T23:59:59.999Z`)
+        whereParts.push(lte(articles.articleCreatedAt, toDate))
+      }
+
+      // Add scope condition
+      if (scopeCondition) {
+        whereParts.push(scopeCondition)
+      }
+
+      const combinedWhereCondition = whereParts.length > 1 ? and(...whereParts) : whereParts[0]
+
+      // Single query: find all articles that match ALL prompt/type combinations
+      // Join on all selected prompts and use HAVING to ensure ALL conditions are met
+      const groupedQuery = db
+        .select({id: articles.id})
+        .from(articles)
+        .innerJoin(
+          judgments,
+          and(eq(judgments.articleId, articles.id), inArray(judgments.promptId, allSelectedPromptIds)),
+        )
+        .where(combinedWhereCondition)
+        .groupBy(articles.id)
+        .having(and(...havingParts))
+
+      const matchingArticles = await groupedQuery
+      const articleIds = matchingArticles.map((row) => {
+        return row.id
+      })
       console.log(`[subprojects] Found ${articleIds.length} articles matching ALL criteria`)
 
       // Insert articles into the new project in batches
