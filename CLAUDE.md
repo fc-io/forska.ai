@@ -214,6 +214,11 @@ We use "eslint-plugin-prettier" so there is no need to run prettier separately.
 * Use prepared statements for frequently executed queries
 * Handle database errors with proper logging and user-friendly messages
 
+### Database migrations
+
+* IMPORTANT: When manually adding entries to `_journal.json`, the `when` timestamp MUST be greater than the latest existing migration's timestamp in the database (`SELECT MAX(created_at) FROM drizzle.__drizzle_migrations`). If the timestamp is in the past, Drizzle will silently skip the migration thinking it was already applied.
+* IMPORTANT: Prefer Drizzle-compatible index syntax over raw SQL. Avoid partial indexes (`WHERE` clauses) since Drizzle doesn't support them directly – use regular indexes instead. A regular index on a nullable column like `deleted_at` works fine for filtering `IS NULL`.
+
 ## Data validation
 
 * Use ArkType for runtime type validation at API boundaries when working above the Eden/RPC/Elysia stack

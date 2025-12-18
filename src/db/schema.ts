@@ -522,6 +522,8 @@ export const judgments = pgTable(
     id: uuid('id').primaryKey().defaultRandom(),
     createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
+    // Soft delete support (for Parquet/ClickHouse compatibility)
+    deletedAt: timestamp('deleted_at', {withTimezone: true}),
     articleId: uuid('article_id')
       .notNull()
       .references(
@@ -546,6 +548,13 @@ export const judgments = pgTable(
         },
         {onDelete: 'restrict'},
       ),
+    // Direct project reference (denormalized for Parquet/ClickHouse)
+    projectId: uuid('project_id').references(
+      () => {
+        return projects.id
+      },
+      {onDelete: 'set null'},
+    ),
     reviewId: uuid('review_id').references(
       () => {
         return reviews.id
@@ -560,6 +569,10 @@ export const judgments = pgTable(
     confidenceOriginal: integer('confidence_original').default(50),
     explanation: text('explanation'),
     quotes: jsonb('quotes').default([]),
+    // Denormalized article fields (for Parquet/ClickHouse compatibility)
+    articleTitle: text('article_title'),
+    articleYear: integer('article_year'),
+    articleImportRoute: text('article_import_route'),
     // Snapshots
     snapshotProjectId: uuid('snapshot_project_id'),
     snapshotProjectOwnerId: text('snapshot_project_owner_id'),
@@ -582,6 +595,10 @@ export const judgments = pgTable(
       index('judgments_article_prompt_model_idx').on(table.articleId, table.promptId, table.modelId),
       // Note: judgments_prompt_article_answered_idx is also managed via raw SQL migration
       index('judgments_updated_idx').on(table.updatedAt),
+      // Denormalized project lookups (for Parquet/ClickHouse compatibility)
+      index('judgments_project_idx').on(table.projectId),
+      // Soft delete queries (for Parquet/ClickHouse compatibility)
+      index('judgments_deleted_at_idx').on(table.deletedAt),
     ]
   },
 )
