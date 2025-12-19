@@ -33,13 +33,7 @@ export const projectsRoutesGetArticlesReviewsCount = new Elysia().post(
       // Build query context
       console.time('count: query preparation')
       const queryContext = buildArticlesReviewsQueryContext(
-        {
-          projectId: body.projectId,
-          from: body.from,
-          to: body.to,
-          search: body.search,
-          prompts: body.prompts,
-        },
+        {projectId: body.projectId, from: body.from, to: body.to, search: body.search, prompts: body.prompts},
         metadata,
       )
       console.timeEnd('count: query preparation')
@@ -52,21 +46,22 @@ export const projectsRoutesGetArticlesReviewsCount = new Elysia().post(
 
       // Execute count query
       console.time('count: count query')
+
+      // Use sql`1=1` as a no-op HAVING when no answer filters exist
+      const effectiveHaving = havingCondition ?? sql`1=1`
+
       const groupedBase = db
         .select({articleId: judgments.articleId})
         .from(judgments)
         .where(combinedWhereCondition)
         .groupBy(judgments.articleId)
-        .having(havingCondition)
+        .having(effectiveHaving)
         .as('grouped_articles')
 
       const [{count: totalCount = 0} = {count: 0}] = await db.select({count: sql<number>`COUNT(*)`}).from(groupedBase)
       console.timeEnd('count: count query')
 
-      return {
-        totalCount,
-        totalPages: Math.ceil(totalCount / limit),
-      }
+      return {totalCount, totalPages: Math.ceil(totalCount / limit)}
     } catch (error) {
       console.error('Error fetching articles reviews count:', error)
       throw new Error(error instanceof Error ? error.message : 'Failed to fetch articles reviews count')

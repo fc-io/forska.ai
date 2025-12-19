@@ -31,6 +31,9 @@ type ArticleWithJudgments = {
   fullTextFetchedAt?: Date | null
   // Present for "Assessed by Both" view: per-prompt human answers from all qualifying humans
   humanAnswersByPrompt?: Record<string, string[]>
+  // Judged status (from new API response)
+  judgedPromptIds?: string[]
+  isFullyJudged?: boolean
 }
 
 interface ReviewsArticlesTableProps {
@@ -68,6 +71,37 @@ const selectionColumn: ColumnDef<ArticleWithJudgments, unknown> = {
 
 const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
   selectionColumn,
+  {
+    id: 'status',
+    header: 'Status',
+    size: 80,
+    minSize: 60,
+    cell: (info) => {
+      const isFullyJudged = info.row.original.isFullyJudged
+      const judgedCount = info.row.original.judgedPromptIds?.length ?? 0
+      const totalJudgments = info.row.original.judgments?.length ?? 0
+
+      return (
+        <Show when={isFullyJudged !== undefined} fallback={<span class="text-gray-400">—</span>}>
+          <Show
+            when={isFullyJudged}
+            fallback={
+              <span
+                class="px-1.5 py-0.5 text-xs rounded bg-yellow-100 text-yellow-800"
+                title={`${judgedCount} prompt(s) judged, ${totalJudgments} judgment(s)`}
+              >
+                Partial
+              </span>
+            }
+          >
+            <span class="px-1.5 py-0.5 text-xs rounded bg-green-100 text-green-800" title="All prompts judged">
+              Complete
+            </span>
+          </Show>
+        </Show>
+      )
+    },
+  },
   {
     accessorKey: 'articleTitle',
     header: 'Title',

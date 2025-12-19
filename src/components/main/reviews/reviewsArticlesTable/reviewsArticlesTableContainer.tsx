@@ -98,7 +98,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
               <div class="space-y-4">
                 <div class="p-4 bg-white rounded-lg shadow">
                   <h3 class="text-lg font-semibold mb-2">
-                    Articles with Complete Judgments (
+                    Articles with Judgments (
                     <Show
                       when={totalCount() !== null}
                       fallback={<span class="text-gray-400 animate-pulse">Counting...</span>}
@@ -114,7 +114,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
                     )
                   </h3>
                   <p class="text-sm text-gray-600">
-                    Showing articles that have judgments for all prompts in this project
+                    Showing articles that have been judged by at least one prompt in this project
                     {Object.keys(props.promptFilters()).some((k) => {
                       const v = props.promptFilters()[k]
                       return Array.isArray(v) && v.length > 0
@@ -160,7 +160,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
                   when={response().data.length > 0}
                   fallback={
                     <div class="p-8 text-center text-gray-500">
-                      No articles found with complete judgments
+                      No articles found with judgments
                       {Object.keys(props.promptFilters()).some((k) => {
                         const v = props.promptFilters()[k]
                         return Array.isArray(v) && v.length > 0

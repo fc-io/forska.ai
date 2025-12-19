@@ -52,18 +52,22 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
       const {promptIds, promptOrderMap, combinedWhereCondition, havingCondition} = queryContext
 
       // === TWO-PHASE FETCH ===
-      // Phase 1: Get just the article IDs (GROUP BY + HAVING + pagination)
+      // Phase 1: Get just the article IDs (GROUP BY + optional HAVING + pagination)
       // Phase 2: Fetch judgments for those specific articles (direct IN clause)
       // This guarantees optimal query plan by giving PostgreSQL literal UUIDs instead of a subquery.
 
       // === PHASE 1: Get article IDs ===
       console.time('phase1: article ids')
+
+      // Use sql`1=1` as a no-op HAVING when no answer filters exist
+      const effectiveHaving = havingCondition ?? sql`1=1`
+
       const articleIdsResult = await db
         .select({articleId: judgments.articleId})
         .from(judgments)
         .where(combinedWhereCondition)
         .groupBy(judgments.articleId)
-        .having(havingCondition)
+        .having(effectiveHaving)
         .orderBy(desc(sql`MAX(${judgments.articleCreatedAt})`))
         .limit(limit)
         .offset(offset)
@@ -120,12 +124,25 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
         // Use denormalized article data from any judgment (they all have the same values)
         const firstJudgment = sorted[0]
 
+        // Compute judged status for frontend display
+        const judgedPromptIds = [
+          ...new Set(
+            sorted.map((j) => {
+              return j.promptId
+            }),
+          ),
+        ]
+        const isFullyJudged = judgedPromptIds.length === promptIds.length
+
         return {
           id: articleId,
           articleTitle: firstJudgment?.articleTitle ?? null,
           articleCreatedAt: firstJudgment?.articleCreatedAt ?? null,
           articleUpdatedAt: firstJudgment?.articleUpdatedAt ?? null,
           judgments: sorted,
+          // Judged status for frontend display
+          judgedPromptIds,
+          isFullyJudged,
         }
       })
 

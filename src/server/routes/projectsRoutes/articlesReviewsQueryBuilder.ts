@@ -30,7 +30,8 @@ export interface ArticlesReviewsQueryContext {
   promptIds: string[]
   promptOrderMap: Record<string, number>
   combinedWhereCondition: ReturnType<typeof and>
-  havingCondition: ReturnType<typeof and> | ReturnType<typeof sql>
+  // undefined when no answer filters are applied (no HAVING needed)
+  havingCondition: ReturnType<typeof and> | ReturnType<typeof sql> | undefined
 }
 
 /**
@@ -165,7 +166,10 @@ export const buildArticlesReviewsQueryContext = (
   const combinedWhereCondition = and(...whereParts)
 
   // === HAVING CONDITIONS ===
-  const havingParts: Array<ReturnType<typeof sql>> = [sql`COUNT(DISTINCT ${judgments.promptId}) = ${promptIds.length}`]
+  // Note: Removed COUNT(DISTINCT prompt_id) = N check to allow partially-judged articles.
+  // The frontend will show judged status per prompt based on the judgments actually fetched.
+  // Only answer filters (if any) are applied via HAVING.
+  const havingParts: Array<ReturnType<typeof sql>> = []
 
   const normalized = sql`COALESCE(${judgments.answeredOriginalAsArray}, CASE WHEN ${judgments.answeredOriginal} IS NOT NULL THEN ARRAY[${judgments.answeredOriginal}] ELSE ARRAY[]::text[] END)`
 
@@ -182,7 +186,9 @@ export const buildArticlesReviewsQueryContext = (
     )
   }
 
-  const havingCondition = havingParts.length > 1 ? and(...havingParts) : havingParts[0]
+  // havingCondition is undefined if no answer filters are applied
+  const havingCondition =
+    havingParts.length > 0 ? (havingParts.length > 1 ? and(...havingParts) : havingParts[0]) : undefined
 
   // Build prompt order map
   const promptOrderMap = projectPromptRows.reduce(
