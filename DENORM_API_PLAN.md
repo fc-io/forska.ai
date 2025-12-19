@@ -214,6 +214,109 @@ The count query (`COUNT(*)` over grouped articles) was taking ~60s and blocking 
 - "Counting..." shows in header and pagination
 - Count updates asynchronously when ready
 
+### Phase 2.6: Two-Phase Fetch & HAVING Simplification (Completed)
+
+The Phase 1 GROUP BY query was still slow (~49s) due to:
+1. Single query with subquery join causing PostgreSQL to potentially scan the entire judgments table twice
+2. `COUNT(DISTINCT prompt_id) = N` HAVING clause requiring expensive aggregation over all rows
+
+**Changes made:**
+
+1. **Two-Phase Fetch Pattern**
+   - [x] Phase 1: Get article IDs only (GROUP BY + pagination)
+   - [x] Phase 2: Fetch judgments with literal UUIDs (`WHERE article_id IN (uuid1, uuid2, ...)`)
+   - [x] Guarantees PostgreSQL uses Index Scan (O(L×J×P)) instead of Seq Scan (O(N))
+
+2. **Removed `COUNT(DISTINCT prompt_id) = N` from HAVING**
+   - [x] No longer filter to "only fully-judged articles"
+   - [x] HAVING is now only applied when answer filters exist (otherwise `HAVING 1=1`)
+   - [x] Dramatically simplifies the aggregation work
+
+3. **Added judged status to response**
+   - [x] `judgedPromptIds: string[]` — which prompts have been judged for each article
+   - [x] `isFullyJudged: boolean` — true if all project prompts have judgments
+
+4. **Removed `deleted_at IS NULL` filter**
+   - [x] Soft deletes not currently used, removing filter simplifies query
+
+5. **Frontend updates**
+   - [x] Added "Status" column showing "Complete" (green) or "Partial" (yellow)
+   - [x] Updated header: "Articles with Judgments" (was "Articles with Complete Judgments")
+   - [x] Updated description to reflect partial judgments are now shown
+
+**Big O Analysis:**
+
+| Query Part | Before | After |
+|------------|--------|-------|
+| Phase 1 (article IDs) | O(N) with `COUNT(DISTINCT)` + sort | O(N) with simple hash aggregate |
+| Phase 2 (fetch judgments) | O(N) or O(L×J×P) (subquery join) | O(L×J×P) guaranteed (literal UUIDs) |
+
+Where: N = total matching rows, L = limit (100), J = judgments per article, P = prompts
+
+### Phase 2.7: PostgreSQL Optimization Conclusion (2024-12-19)
+
+After extensive investigation, we've concluded that **PostgreSQL cannot make this query fast** for our use case. This section documents what was tried so that future developers don't repeat the same investigations.
+
+#### The Core Problem
+
+The query requires:
+1. **Filter** by cross-prompt answer conditions (HAVING clause)
+2. **Sort** by `article_created_at DESC`
+3. **Paginate** with LIMIT/OFFSET
+
+The HAVING clause filters on aggregates across multiple prompts:
+```sql
+HAVING
+  SUM(CASE WHEN prompt_id = 'A' AND answer = 'Yes' THEN 1 ELSE 0 END) > 0
+  AND SUM(CASE WHEN prompt_id = 'B' AND answer = 'No' THEN 1 ELSE 0 END) > 0
+```
+
+This requires scanning ALL matching judgment rows to compute the aggregates before filtering and sorting.
+
+#### Optimizations Attempted
+
+| Approach | Result | Why It Failed |
+|----------|--------|---------------|
+| **Two-Phase Fetch** | ✅ Phase 2 fast, ❌ Phase 1 still slow | Phase 1 still requires GROUP BY + aggregate + sort |
+| **Remove COUNT(DISTINCT)** | ⚠️ Partial improvement | Still need HAVING for answer filters (always used) |
+| **EXISTS on articles table** | ❌ Not applicable | Answer filters require aggregation, EXISTS can't help |
+| **Pre-computed stats table** | ❌ Doesn't scale | Cross-prompt answer filters require JSONB + GIN, which doesn't combine well with ORDER BY |
+| **Flattened answer table** | ❌ Cross-prompt joins | Filtering multiple prompts requires self-joins, potentially slower |
+| **Partial indexes** | ❌ Marginal improvement | Index speeds up row access but doesn't help aggregation |
+| **Covering indexes** | ❌ Marginal improvement | Same issue — aggregation is the bottleneck, not row access |
+
+#### Big O Analysis: Why It's Inherently Slow
+
+```
+Current complexity: O(M × aggregate × sort)
+
+Where:
+- M = rows matching prompt_id filter (~2M for large projects)
+- aggregate = hash grouping + CASE/SUM per group
+- sort = O(A log A) where A = number of distinct articles (~500K)
+
+Even with perfect indexes, the query must:
+1. Scan M rows
+2. Group into A buckets
+3. Compute aggregates per bucket
+4. Filter by HAVING
+5. Sort remaining buckets
+6. Return top 100
+
+Steps 2-5 cannot be optimized with indexes because they operate on aggregated data.
+```
+
+#### Conclusion
+
+**PostgreSQL is not the right tool for this query pattern.**
+
+The answer filters (HAVING on cross-prompt aggregates) combined with ORDER BY + pagination is a fundamental mismatch with PostgreSQL's row-based processing model.
+
+**Recommended solutions:**
+1. **ClickHouse** (see CLICK_PLAN.md) — Columnar storage handles aggregations efficiently
+2. **Aggressive caching** — Cache query results for common filter combinations
+3. **Accept latency** — Show loading spinner for complex queries (~10-50s)
+
 ### Phase 3: Validation
 
 - [ ] Compare query plans before/after

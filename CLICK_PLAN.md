@@ -2,6 +2,50 @@
 
 > **Goal**: Migrate judgments analytics from PostgreSQL to a Parquet-first architecture with ClickHouse as the query engine, while keeping PostgreSQL for fast judgment `id` lookups (detail page).
 
+## Why ClickHouse? PostgreSQL Optimization Exhausted (2024-12-19)
+
+After extensive investigation, we've concluded that **PostgreSQL cannot efficiently serve the `/api/articlesreviews` query pattern**. This query requires:
+
+1. **Cross-prompt answer filters** (HAVING clause aggregating multiple prompts)
+2. **Sorting** by `article_created_at DESC`
+3. **Pagination** with LIMIT/OFFSET
+
+### Optimizations Attempted (All Failed to Achieve <5s)
+
+| Approach | Result |
+|----------|--------|
+| Denormalized fields (removed JOINs) | ⚠️ Reduced from ~120s to ~50s |
+| Two-Phase Fetch (literal UUIDs) | ⚠️ Phase 2 fast (~200ms), Phase 1 still ~50s |
+| Removed COUNT(DISTINCT) from HAVING | ⚠️ Minor improvement, still ~40s |
+| EXISTS on articles table | ❌ Answer filters require aggregation, EXISTS can't help |
+| Pre-computed stats table (JSONB) | ❌ GIN index + ORDER BY don't combine well |
+| Flattened answer table | ❌ Cross-prompt filters require self-joins |
+| Partial/Covering indexes | ❌ Index helps row access, not aggregation |
+| Async count endpoint | ✅ UX improvement only (data loads faster) |
+
+### The Fundamental Problem
+
+The query must:
+1. Scan millions of judgment rows matching the prompt filter
+2. Group by `article_id` (~500K groups)
+3. Compute HAVING aggregates per group
+4. Sort all groups by `article_created_at`
+5. Return top 100
+
+Steps 2-5 operate on aggregated data and **cannot be optimized by indexes**. PostgreSQL's row-based engine must process all matching rows before returning results.
+
+### Why ClickHouse Solves This
+
+ClickHouse is designed for exactly this pattern:
+- **Columnar storage**: Only reads columns needed for the query
+- **Vectorized execution**: Processes data in batches, not row-by-row
+- **Parallel aggregation**: Distributes GROUP BY across CPU cores
+- **Efficient sorting**: Sorts during merge, not as a separate step
+
+Expected improvement: **~50s → <2s**
+
+For detailed investigation, see `DENORM_API_PLAN.md` Phase 2.7.
+
 ## Architecture Overview (Parquet-First, ClickHouse-Managed)
 
 ```
