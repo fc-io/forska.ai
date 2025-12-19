@@ -64,11 +64,12 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
           .where(eq(projectRouteLink.projectId, body.projectId)),
       ])
       console.timeEnd('parallel metadata queries')
-      console.time('the rest')
+
       if (projectPromptRows.length === 0) {
         return {data: [], totalCount: 0, page, limit, totalPages: 0}
       }
 
+      console.time('query preparation')
       const promptIds = projectPromptRows.map((p) => {
         return p.id
       })
@@ -166,9 +167,11 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
       }
 
       const havingCondition = havingParts.length > 1 ? and(...havingParts) : havingParts[0]
+      console.timeEnd('query preparation')
 
       // === COUNT QUERY ===
       // Group by articleId directly from judgments (no articles table join!)
+      console.time('count query')
       const groupedBase = db
         .select({articleId: judgments.articleId})
         .from(judgments)
@@ -178,9 +181,11 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
         .as('grouped_articles')
 
       const [{count: totalCount = 0} = {count: 0}] = await db.select({count: sql<number>`COUNT(*)`}).from(groupedBase)
+      console.timeEnd('count query')
 
       // === PAGINATED QUERY ===
       // Get page of article IDs, ordered by articleCreatedAt (denormalized)
+      console.time('paginated judgments fetch')
       const groupedPage = db
         .select({
           articleId: judgments.articleId,
@@ -202,7 +207,9 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
         .from(judgments)
         .innerJoin(groupedPage, eq(groupedPage.articleId, judgments.articleId))
         .where(and(inArray(judgments.promptId, promptIds), isNull(judgments.deletedAt)))
+      console.timeEnd('paginated judgments fetch')
 
+      console.time('result processing')
       const judgmentsRows = allJudgmentRows.map(({judgment}) => {
         return judgment
       })
@@ -253,8 +260,7 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
         const bDate = b.articleCreatedAt?.getTime() ?? 0
         return bDate - aDate
       })
-
-      console.timeEnd('the rest')
+      console.timeEnd('result processing')
       return {data: result, totalCount, page, limit, totalPages: Math.ceil(totalCount / limit)}
     } catch (error) {
       console.error('Error fetching articles reviews:', error)

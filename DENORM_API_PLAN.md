@@ -174,7 +174,7 @@ WHERE deleted_at IS NULL;
   - `article_import_route = ANY($routeTexts)` for import route matching
   - `article_id IN (SELECT ... FROM project_articles)` subquery for curated articles
 - [x] Use `article_created_at` and `article_title` from judgments (no JOIN)
-- [ ] Add new indexes (requires migration - see schema.ts for definitions)
+- [x] Add new indexes (`0046_illegal_la_nuit.sql` migration applied)
 - [ ] Test with large projects to verify performance improvement
 
 ### Phase 2: `/api/articlesreviewsfilters` Optimization
