@@ -9,12 +9,12 @@ type ListType = 'llm' | 'human' | 'both' | 'unassessed'
 
 interface ReviewsPaginationControlsProps {
   page: number
-  totalPages: number
+  totalPages: number | null // null when count is still loading
   setCurrentPage: Setter<number>
   currentPageRowIds?: string[]
   rowSelection?: Accessor<Record<string, boolean>>
   setRowSelection?: Setter<Record<string, boolean>>
-  totalMatchingCount?: number
+  totalMatchingCount?: number | null // null when count is still loading
   selectAllMatching?: Accessor<boolean>
   setSelectAllMatching?: Setter<boolean>
   // Source context
@@ -201,7 +201,7 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
           </Show>
         </div>
 
-        <Show when={props.totalPages > 1}>
+        <Show when={props.totalPages === null || props.totalPages > 1}>
           <div class="flex items-center justify-center gap-1">
             <button
               class="px-2 py-1 text-xs font-medium text-gray-700 bg-gray-100 border border-gray-300 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -214,12 +214,14 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
             </button>
 
             <span class="mx-2 text-xs text-gray-700">
-              Page {props.page} of {props.totalPages}
+              <Show when={props.totalPages !== null} fallback={<span class="text-gray-400 animate-pulse">Page {props.page} of ...</span>}>
+                Page {props.page} of {props.totalPages}
+              </Show>
             </span>
 
             <button
               class="px-2 py-1 text-xs font-medium text-gray-700 bg-gray-100 border border-gray-300 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
-              disabled={props.page >= props.totalPages}
+              disabled={props.totalPages !== null && props.page >= props.totalPages}
               onClick={() => {
                 return handlePageChange(props.page + 1)
               }}
@@ -229,18 +231,18 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
           </div>
         </Show>
 
-        <Show when={props.totalPages > 1}>
+        <Show when={props.totalPages !== null && props.totalPages > 1}>
           <div class="flex items-center gap-1">
             <label class="text-xs text-gray-700">Go to page:</label>
             <input
               type="number"
               min="1"
-              max={props.totalPages}
+              max={props.totalPages ?? undefined}
               value={props.page}
               class="w-12 px-1 py-0.5 text-xs border rounded"
               onInput={(e) => {
                 const newPage = parseInt(e.target.value)
-                if (newPage >= 1 && newPage <= props.totalPages) {
+                if (newPage >= 1 && (props.totalPages === null || newPage <= props.totalPages)) {
                   handlePageChange(newPage)
                 }
               }}
@@ -251,17 +253,19 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
       <Show when={allSelected()}>
         {(() => {
           const allAcross = props.selectAllMatching && props.selectAllMatching()
-          const total = props.totalMatchingCount || 0
+          const total = props.totalMatchingCount ?? null
           return (
             <>
               {allAcross ? (
                 <div class="mt-2 text-xs text-gray-700 p-2 bg-white rounded-lg shadow">
-                  All {total} articles matching filter is selected.
+                  <Show when={total !== null} fallback={<span class="text-gray-400 animate-pulse">Counting selected articles...</span>}>
+                    All {total} articles matching filter is selected.
+                  </Show>
                 </div>
               ) : (
                 <div class="mt-2 text-xs text-gray-700 p-2 bg-white rounded-lg shadow flex items-center gap-2">
                   <span>{selectedCount()} rows selected</span>
-                  <Show when={total > 0 && props.setSelectAllMatching}>
+                  <Show when={total !== null && total > 0 && props.setSelectAllMatching}>
                     <button
                       class="text-blue-600 hover:underline"
                       onClick={() => {
@@ -270,6 +274,9 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
                     >
                       Select all {total} articles
                     </button>
+                  </Show>
+                  <Show when={total === null}>
+                    <span class="text-gray-400 animate-pulse">Counting...</span>
                   </Show>
                 </div>
               )}

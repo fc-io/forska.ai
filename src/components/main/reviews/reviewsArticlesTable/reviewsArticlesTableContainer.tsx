@@ -2,6 +2,7 @@ import {useQuery} from '@tanstack/solid-query'
 import type {Accessor, Setter} from 'solid-js'
 import {createEffect, createSignal, Show, Suspense} from 'solid-js'
 
+import {createArticlesReviewsCountQueryOptions} from '../../projects/projectsArticlesReviewsCountQuery.ts'
 import {createArticlesReviewsQueryOptions} from '../../projects/projectsArticlesReviewsQuery.ts'
 import {ReviewsPaginationControls} from '../reviewsPaginationControls.tsx'
 import {ReviewsArticlesTable} from './reviewsArticlesTable.tsx'
@@ -32,6 +33,8 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
     setRowSelection({})
     setSelectAllMatching(false)
   })
+
+  // Main data query - returns data immediately without waiting for count
   const articlesQuery = useQuery(() => {
     return createArticlesReviewsQueryOptions(
       props.projectId,
@@ -43,6 +46,26 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
       props.searchTitle,
     )
   })
+
+  // Separate count query - loads asynchronously
+  const countQuery = useQuery(() => {
+    return createArticlesReviewsCountQueryOptions(
+      props.projectId,
+      props.promptFilters,
+      props.pageLimit,
+      props.fromDate,
+      props.toDate,
+      props.searchTitle,
+    )
+  })
+
+  // Helper to get count values from either the count query or fall back to data response
+  const totalCount = () => {
+    return countQuery.data?.totalCount ?? null
+  }
+  const totalPages = () => {
+    return countQuery.data?.totalPages ?? null
+  }
 
   return (
     <Suspense>
@@ -66,9 +89,18 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
                 <div class="p-4 bg-white rounded-lg shadow">
                   <h3 class="text-lg font-semibold mb-2">
                     Articles with Complete Judgments (
-                    {response().totalCount > 0
-                      ? `Showing ${Math.min((response().page - 1) * props.pageLimit() + 1, response().totalCount)}-${Math.min(response().page * props.pageLimit(), response().totalCount)} of ${response().totalCount}`
-                      : '0'}
+                    <Show
+                      when={totalCount() !== null}
+                      fallback={<span class="text-gray-400 animate-pulse">Counting...</span>}
+                    >
+                      {(() => {
+                        const count = totalCount()
+                        if (count === null) return '0'
+                        return count > 0
+                          ? `Showing ${Math.min((response().page - 1) * props.pageLimit() + 1, count)}-${Math.min(response().page * props.pageLimit(), count)} of ${count}`
+                          : '0'
+                      })()}
+                    </Show>
                     )
                   </h3>
                   <p class="text-sm text-gray-600">
@@ -82,14 +114,14 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
 
                 <ReviewsPaginationControls
                   page={props.currentPage()}
-                  totalPages={response().totalPages}
+                  totalPages={totalPages()}
                   setCurrentPage={props.setCurrentPage}
                   currentPageRowIds={response().data.map((a) => {
                     return a.id
                   })}
                   rowSelection={rowSelection}
                   setRowSelection={setRowSelection}
-                  totalMatchingCount={response().totalCount}
+                  totalMatchingCount={totalCount()}
                   selectAllMatching={selectAllMatching}
                   setSelectAllMatching={setSelectAllMatching}
                   sourceProjectId={props.projectId}
@@ -136,14 +168,14 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
 
                 <ReviewsPaginationControls
                   page={props.currentPage()}
-                  totalPages={response().totalPages}
+                  totalPages={totalPages()}
                   setCurrentPage={props.setCurrentPage}
                   currentPageRowIds={response().data.map((a) => {
                     return a.id
                   })}
                   rowSelection={rowSelection}
                   setRowSelection={setRowSelection}
-                  totalMatchingCount={response().totalCount}
+                  totalMatchingCount={totalCount()}
                   selectAllMatching={selectAllMatching}
                   setSelectAllMatching={setSelectAllMatching}
                   sourceProjectId={props.projectId}

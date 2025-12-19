@@ -183,6 +183,37 @@ WHERE deleted_at IS NULL;
 - [ ] Remove JOIN to articles table
 - [ ] Use denormalized `article_import_route` for scope filtering
 
+### Phase 2.5: Async Count Endpoint (Completed)
+
+The count query (`COUNT(*)` over grouped articles) was taking ~60s and blocking initial data load. This was extracted to a separate endpoint.
+
+**Changes made:**
+
+1. **New endpoint: `POST /api/articlesreviewscount`**
+   - Returns `{ totalCount, totalPages }`
+   - Same request body as `/api/articlesreviews` (minus `page`)
+   - Cached for 5 minutes on the frontend (expensive to compute)
+
+2. **Shared query builder: `articlesReviewsQueryBuilder.ts`**
+   - `fetchProjectMetadata()` - Parallel fetch of prompts, bounds, import routes
+   - `buildArticlesReviewsQueryContext()` - Builds WHERE/HAVING conditions
+   - Used by both `/api/articlesreviews` and `/api/articlesreviewscount`
+
+3. **Updated main endpoint: `/api/articlesreviews`**
+   - Now returns `totalCount: null, totalPages: null`
+   - Data loads immediately without waiting for count
+
+4. **Frontend changes:**
+   - `projectsArticlesReviewsCountQuery.ts` - Separate count query hook
+   - `reviewsArticlesTableContainer.tsx` - Fetches data and count in parallel
+   - `reviewsPaginationControls.tsx` - Handles `null` totalPages gracefully
+   - Shows "Counting..." animation while count loads
+
+**User experience:**
+- Data table loads immediately (fast perceived load)
+- "Counting..." shows in header and pagination
+- Count updates asynchronously when ready
+
 ### Phase 3: Validation
 
 - [ ] Compare query plans before/after

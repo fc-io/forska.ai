@@ -19,6 +19,7 @@ import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {projectsRoutesGetArticlesReviews} from './projectsRoutes/projectsRoutesGetArticlesReviews.ts'
 import {projectsRoutesGetArticlesReviewsBoth} from './projectsRoutes/projectsRoutesGetArticlesReviewsBoth.ts'
+import {projectsRoutesGetArticlesReviewsCount} from './projectsRoutes/projectsRoutesGetArticlesReviewsCount.ts'
 import {projectsRoutesGetArticlesReviewsFilters} from './projectsRoutes/projectsRoutesGetArticlesReviewsFilters.ts'
 import {projectsRoutesGetArticlesReviewsHuman} from './projectsRoutes/projectsRoutesGetArticlesReviewsHuman.ts'
 import {projectsRoutesGetArticlesReviewsHumanFilters} from './projectsRoutes/projectsRoutesGetArticlesReviewsHumanFilters.ts'
@@ -78,6 +79,7 @@ export const projectsRoutes = new Elysia()
   .use(withErrorHandler())
   .use(requireUserAuth())
   .use(projectsRoutesGetArticlesReviews)
+  .use(projectsRoutesGetArticlesReviewsCount)
   .use(projectsRoutesGetArticlesReviewsBoth)
   .use(projectsRoutesGetArticlesReviewsHuman)
   .use(projectsRoutesGetArticlesReviewsUnassessed)

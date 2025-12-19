@@ -5,7 +5,7 @@ import type {Accessor, Setter} from 'solid-js'
 import {For, Match, Show, Switch} from 'solid-js'
 
 import {getArticleUrl} from '../../../../app/utils/getArticleUrl.ts'
-import type {articles, judgments} from '../../../../db/schema.ts'
+import type {judgments} from '../../../../db/schema.ts'
 
 declare module '@tanstack/solid-table' {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -17,8 +17,18 @@ declare module '@tanstack/solid-table' {
 
 type JudgmentType = typeof judgments.$inferSelect
 
-type ArticleWithJudgments = Omit<typeof articles.$inferSelect, 'judgments'> & {
+// Minimal article data required for the reviews table
+// This supports both the full article schema and the denormalized API response
+type ArticleWithJudgments = {
+  id: string
+  articleTitle: string | null
+  articleCreatedAt: Date | null
+  articleUpdatedAt: Date | null
   judgments: Array<JudgmentType>
+  // Optional fields from full article schema
+  url?: string | null
+  fullTextPDF?: string | null
+  fullTextFetchedAt?: Date | null
   // Present for "Assessed by Both" view: per-prompt human answers from all qualifying humans
   humanAnswersByPrompt?: Record<string, string[]>
 }
