@@ -1,6 +1,6 @@
 # ClickHouse + Parquet Migration Plan
 
-> **Goal**: Migrate judgments analytics from PostgreSQL to a Parquet-first architecture with ClickHouse as the query engine, while keeping PostgreSQL for fast judgment `id` lookups (detail page).
+> **Goal**: Migrate judgments analytics from PostgreSQL to a Parquet-first architecture with ClickHouse as the query engine, while keeping PostgreSQL for fast judgment `id` lookups (detail page) with a **slimmed-down schema**.
 
 ## Why ClickHouse? PostgreSQL Optimization Exhausted (2024-12-19)
 
@@ -46,6 +46,8 @@ Expected improvement: **~50s → <2s**
 
 For detailed investigation, see `DENORM_API_PLAN.md` Phase 2.7.
 
+---
+
 ## Architecture Overview (Parquet-First, ClickHouse-Managed)
 
 ```
@@ -58,39 +60,50 @@ For detailed investigation, see `DENORM_API_PLAN.md` Phase 2.7.
 │                                                                          │
 │   LLM Worker                                                             │
 │       │                                                                  │
-│       ▼                                                                  │
-│   ┌────────────┐              ┌────────────────────────────────┐        │
-│   │  Parquet   │──  write ───▶│  S3 / MinIO / Local Disk       │        │
-│   │  Writer    │              │  (Parquet Files - SoT)         │        │
-│   └────────────┘              └────────────────────────────────┘        │
-│                                          │                              │
-│                                          │ S3Queue / File Engine        │
-│                                          ▼                              │
-│                               ┌────────────────────────────────┐        │
-│                               │         ClickHouse             │        │
-│                               │  ┌──────────────────────────┐  │        │
-│                               │  │ judgments_queue          │  │        │
-│                               │  │ (S3Queue Engine)         │  │        │
-│                               │  └──────────────────────────┘  │        │
-│                               │              │                 │        │
-│                               │              │ Materialized    │        │
-│                               │              │ Views           │        │
-│                               │              ▼                 │        │
-│                               │  ┌──────────────────────────┐  │        │
-│                               │  │ judgments                │◀─┼─ Analytics
-│                               │  │ (MergeTree)              │  │   Queries
-│                               │  └──────────────────────────┘  │        │
-│                               │              │                 │        │
-│                               │              │ MV to PG        │        │
-│                               │              ▼                 │        │
-│                               │  ┌──────────────────────────┐  │        │
-│                               │  │ pg_judgments_sink        │──┼──▶ PostgreSQL
-│                               │  │ (PostgreSQL Engine)      │  │    (Detail View)
-│                               │  └──────────────────────────┘  │        │
-│                               └────────────────────────────────┘        │
+│       ├──────────────────────────────────────────────────────────┐      │
+│       │                                                          │      │
+│       ▼                                                          ▼      │
+│   ┌────────────┐         ┌──────────────────────────────┐   PostgreSQL  │
+│   │  Parquet   │── S3 ──▶│  SeaweedFS (local dev)       │   (slim)      │
+│   │  Writer    │         │  Ceph RGW (OpenShift prod)   │   └─ Detail   │
+│   └────────────┘         │  (Parquet Files - SoT)       │      View     │
+│                          └──────────────────────────────┘               │
+│                                     │                                    │
+│                                     │ S3Queue Engine                     │
+│                                     ▼                                    │
+│                          ┌──────────────────────────────┐               │
+│                          │         ClickHouse           │◀── Analytics  │
+│                          │  ┌────────────────────────┐  │    Queries    │
+│                          │  │ judgments_queue        │  │               │
+│                          │  │ (S3Queue Engine)       │  │               │
+│                          │  └────────────────────────┘  │               │
+│                          │              │               │               │
+│                          │              │ Materialized  │               │
+│                          │              │ View          │               │
+│                          │              ▼               │               │
+│                          │  ┌────────────────────────┐  │               │
+│                          │  │ judgments              │  │               │
+│                          │  │ (MergeTree)            │  │               │
+│                          │  └────────────────────────┘  │               │
+│                          └──────────────────────────────┘               │
 │                                                                          │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## Environment-Specific S3 Storage
+
+| Environment | S3 Provider | Notes |
+|-------------|-------------|-------|
+| **Local Dev (Mac)** | **SeaweedFS** | Lightweight, S3-compatible, single container |
+| **Production (OpenShift)** | **Ceph RGW via ODF** | Native OpenShift Data Foundation integration |
+
+**Why not MinIO?** MinIO's community edition entered maintenance mode in 2024 (no new features, case-by-case security fixes only). SeaweedFS and Ceph RGW are actively maintained alternatives.
+
+**Dev/Prod Parity**: Both use identical S3 API — only the endpoint URL and credentials change between environments. Same code, same ClickHouse DDL.
+
+---
 
 ## Core Design Decisions
 
@@ -115,9 +128,25 @@ For detailed investigation, see `DENORM_API_PLAN.md` Phase 2.7.
 **Decision**: ClickHouse handles *all* downstream synchronization via Materialized Views and table engines.
 - **No custom Node.js "Tailer"**: We eliminate the unreliability of `fs.watch`/`chokidar`.
 - **S3Queue Engine**: Processes each new Parquet file exactly once, with built-in checkpointing.
-- **Materialized Views**: Automatically route new data to:
-    1. The main `MergeTree` analytics table.
-    2. A `PostgreSQL` engine table that syncs to Postgres.
+- **Materialized Views**: Automatically route new data to the main `MergeTree` analytics table.
+
+### 5. PostgreSQL Stays Slim
+**Decision**: PostgreSQL `judgments` table keeps only fields needed for the detail view. All denormalized and snapshot fields move exclusively to Parquet/ClickHouse.
+
+**Fields to KEEP in PostgreSQL** (for detail view):
+- `id`, `createdAt`, `updatedAt`, `deletedAt`
+- `articleId`, `modelId`, `promptId`, `projectId`, `reviewId`
+- `isAnswered`
+- `answeredOriginal`, `answeredOriginalAsArray`, `answeredTransformed`
+- `confidenceOriginal`, `explanation`, `quotes`
+
+**Fields to REMOVE from PostgreSQL** (analytics only, live in ClickHouse):
+- `articleTitle`, `articleCreatedAt`, `articleUpdatedAt`
+- `articleCreatedYear`, `articleUpdatedYear`
+- `articleImportRoute`, `articleImportedBy`
+- All `snapshot*` fields
+
+**Estimated savings**: ~800-5500 bytes per row → **~8-55 GB** for 10M judgments.
 
 ---
 
@@ -125,9 +154,9 @@ For detailed investigation, see `DENORM_API_PLAN.md` Phase 2.7.
 
 Instead of a Node.js service, ClickHouse itself orchestrates the sync:
 
-1.  **Ingest**: The `S3Queue` (or `File`) engine watches for new Parquet files.
+1.  **Ingest**: The `S3Queue` engine watches for new Parquet files in SeaweedFS/Ceph RGW.
 2.  **Store**: Data flows via Materialized View into the main `MergeTree` analytics table.
-3.  **Sync to Postgres**: A second Materialized View pipes data to a `PostgreSQL` engine table, which INSERTs into Postgres.
+3.  **No PG Sync from ClickHouse**: PostgreSQL receives writes directly from the LLM worker (core fields only).
 
 **Benefits**:
 - **Exactly-once processing**: `S3Queue` tracks consumed files internally.
@@ -139,20 +168,65 @@ Instead of a Node.js service, ClickHouse itself orchestrates the sync:
 
 ## Database Responsibilities
 
-- **`users`, `projects`, `prompts`, `models`**
+- **`users`, `projects`, `prompts`, `models`, `articles`**
   - PostgreSQL: ✅ Primary
   - Parquet: ❌
   - ClickHouse: ❌
 
-- **`articles`**
-  - PostgreSQL: ✅ Primary
-  - Parquet: Denormalized copy in `judgments`
-  - ClickHouse: Denormalized copy
+- **`judgments` (core fields: answers, explanation, quotes)**
+  - PostgreSQL: ✅ **Primary for detail view** (slim schema)
+  - Parquet: ✅ **Primary Source of Truth** (full denormalized)
+  - ClickHouse: ✅ **Analytics Engine** (full denormalized)
 
-- **`judgments`**
-  - PostgreSQL: ⚠️ **Read Replica** (for ID lookup)
-  - Parquet: ✅ **Primary Source of Truth**
-  - ClickHouse: ✅ **Analytics Engine**
+- **`judgments` (denormalized fields: article metadata, snapshots)**
+  - PostgreSQL: ❌ **Removed** (saves ~8-55 GB)
+  - Parquet: ✅ **Primary**
+  - ClickHouse: ✅ **Analytics**
+
+---
+
+## PostgreSQL Schema: Before & After
+
+### Before (Current — 25+ columns, large)
+```typescript
+judgments = {
+  // Core (keep)
+  id, createdAt, updatedAt, deletedAt,
+  articleId, modelId, promptId, projectId, reviewId,
+  isAnswered,
+  answeredOriginal, answeredOriginalAsArray, answeredTransformed,
+  confidenceOriginal, explanation, quotes,
+
+  // Denormalized article fields (REMOVE - 7 columns)
+  articleTitle, articleCreatedAt, articleUpdatedAt,
+  articleCreatedYear, articleUpdatedYear,
+  articleImportRoute, articleImportedBy,
+
+  // Snapshots (REMOVE - 9 columns)
+  snapshotProjectId, snapshotProjectOwnerId,
+  snapshotProjectUseTitle, snapshotProjectUseAbstract, snapshotProjectUseFulltext,
+  snapshotProjectModelName, snapshotProjectProvider,
+  snapshotArticleOriginalData, snapshotArticlePdfHash,
+}
+```
+
+### After (Slim — 16 columns)
+```typescript
+judgments = {
+  // Core identifiers
+  id, createdAt, updatedAt, deletedAt,
+  articleId, modelId, promptId, projectId, reviewId,
+
+  // Answer data (for detail view)
+  isAnswered,
+  answeredOriginal,
+  answeredOriginalAsArray,
+  answeredTransformed,
+  confidenceOriginal,
+  explanation,
+  quotes,
+}
+```
 
 ---
 
@@ -220,10 +294,16 @@ CREATE TABLE judgments_queue (
     explanation Nullable(String),
     quotes Nullable(String)
 ) ENGINE = S3Queue(
-    'http://minio:9000/data/judgments/**/*.parquet',
-    'minio_access_key',
-    'minio_secret_key',
+    -- Local dev: SeaweedFS
+    'http://seaweedfs:8333/forska-judgments/**/*.parquet',
+    'admin',
+    'admin',
     'Parquet'
+    -- Production: Replace with Ceph RGW endpoint
+    -- 'http://ceph-rgw.openshift-storage.svc:8080/forska-judgments/**/*.parquet',
+    -- '<ceph_access_key>',
+    -- '<ceph_secret_key>',
+    -- 'Parquet'
 )
 SETTINGS
     mode = 'ordered',
@@ -261,50 +341,9 @@ ORDER BY (projectId, articleId, promptId, id);
 -- ============================================================
 CREATE MATERIALIZED VIEW judgments_mv TO judgments AS
 SELECT * FROM judgments_queue;
-
--- ============================================================
--- 4. POSTGRESQL SINK: For Detail View cache
--- ============================================================
-CREATE TABLE pg_judgments_sink (
-    id String,
-    createdAt DateTime64(3),
-    deletedAt Nullable(DateTime64(3)),
-    projectId String,
-    articleId String,
-    promptId String,
-    modelId String,
-    answeredOriginal Nullable(String),
-    answeredOriginalAsArray Array(String),
-    explanation Nullable(String),
-    quotes Nullable(String)
-) ENGINE = PostgreSQL(
-    'postgres:5432',
-    'forska',
-    'judgments_denormalized', -- Target table in Postgres
-    'clickhouse_user',
-    'clickhouse_password'
-);
-
--- ============================================================
--- 5. MATERIALIZED VIEW: Route from Queue to PostgreSQL
--- ============================================================
-CREATE MATERIALIZED VIEW pg_sync_mv TO pg_judgments_sink AS
-SELECT
-    id,
-    createdAt,
-    deletedAt,
-    projectId,
-    articleId,
-    promptId,
-    modelId,
-    answeredOriginal,
-    answeredOriginalAsArray,
-    explanation,
-    quotes
-FROM judgments_queue;
 ```
 
-**Note on Postgres Inserts**: Since each judgment is unique, ClickHouse's `PostgreSQL` engine simple `INSERT` behavior works directly without needing upsert logic.
+**Note**: No PostgreSQL sink from ClickHouse. PostgreSQL receives writes directly from the LLM worker.
 
 ---
 
@@ -326,8 +365,7 @@ WHERE projectId = 'xxx'
 ```sql
 SELECT
     projectId,
-    any(projectName) AS projectName,
-    countIf(isAnswered = true) AS answeredCount,
+    countIf(answeredOriginal IS NOT NULL) AS answeredCount,
     count() AS totalCount
 FROM judgments
 WHERE deletedAt IS NULL
@@ -344,7 +382,7 @@ SELECT
 FROM judgments
 WHERE projectId = 'xxx'
   AND promptId = 'yyy'
-  AND isAnswered = true
+  AND answeredOriginal IS NOT NULL
   AND deletedAt IS NULL
 ORDER BY createdAt DESC;
 ```
@@ -459,58 +497,127 @@ LIMIT 100
 
 # Implementation Checklist
 
-## Phase 1: Parquet Writer (The Core)
-Build the new storage engine's write path first.
+## Phase 1: Infrastructure Setup (SeaweedFS + ClickHouse)
 
-- [ ] **Schema**: Define the `DenormalizedJudgment` TypeScript interface (as above).
-- [ ] **Parquet Writer**: Create `src/services/parquet/parquetWriter.ts`.
-  - [ ] Use `@dsnp/parquetjs` for Parquet serialization.
-  - [ ] Implement `writeBatch(judgments)` to `/data/judgments/year=YYYY/month=MM/{ulid}.parquet`.
-  - [ ] **Durability**: Write to a `pending/` directory first, then atomically move to the final location.
+Set up the new infrastructure **before** modifying any existing code or schema.
 
-## Phase 2: Infrastructure & ClickHouse Setup
-- [ ] **Object Storage**: Add MinIO to `docker-compose.yml` (S3-compatible, for `S3Queue`).
-  - [ ] Configure bucket `forska-data` with path `/judgments/`.
-- [ ] **ClickHouse**: Add ClickHouse to `docker-compose.yml`.
-  - [ ] Configure user/password for PostgreSQL integration.
-- [ ] **ClickHouse DDL**: Run the DDL above to create:
-  - [ ] `judgments_queue` (S3Queue)
+- [ ] **docker-compose.yml**: Add SeaweedFS container
+  - [ ] Image: `chrislusf/seaweedfs:latest`
+  - [ ] Command: `server -s3 -dir=/data -s3.port=8333`
+  - [ ] Ports: `8333:8333` (S3 API), `9333:9333` (Master UI)
+  - [ ] Volume: `./data/seaweedfs:/data`
+- [ ] **docker-compose.yml**: Add ClickHouse container
+  - [ ] Image: `clickhouse/clickhouse-server:24.9` (LTS)
+  - [ ] Ports: `8123:8123` (HTTP), `9000:9000` (Native)
+  - [ ] Volume: `./data/clickhouse:/var/lib/clickhouse`
+  - [ ] Environment: `CLICKHOUSE_DB=forska`, `CLICKHOUSE_USER=default`, `CLICKHOUSE_PASSWORD=clickhouse`
+- [ ] **Verify local setup**: Both containers running and accessible
+
+## Phase 2: ClickHouse DDL & Initial Testing
+
+Deploy ClickHouse schema and verify S3Queue ingestion works.
+
+- [ ] **Create ClickHouse tables** (run DDL above):
+  - [ ] `judgments_queue` (S3Queue watching SeaweedFS)
   - [ ] `judgments` (MergeTree)
   - [ ] `judgments_mv` (Materialized View)
-- [ ] **PostgreSQL Schema**: Add `judgments_denormalized` table to Postgres.
-  - [ ] Include all fields needed for the Detail View.
-  - [ ] Add a trigger or use `ON CONFLICT` for upsert behavior.
-- [ ] **ClickHouse PG Sync**: Create:
-  - [ ] `pg_judgments_sink` (PostgreSQL Engine)
-  - [ ] `pg_sync_mv` (Materialized View)
+- [ ] **Test ingestion manually**: Upload a test Parquet file to SeaweedFS and verify it appears in ClickHouse
+- [ ] **Test queries**: Run sample queries against the empty `judgments` table
 
-## Phase 3: Dual-Write & Validation
+## Phase 3: Parquet Writer
+
+Build the Parquet writer that will become the new write path.
+
+- [ ] **Schema**: Define `DenormalizedJudgmentAnalytics` TypeScript interface
+- [ ] **Parquet Writer**: Create `src/services/parquet/parquetWriter.ts`
+  - [ ] Use `@dsnp/parquetjs` for Parquet serialization
+  - [ ] Implement `writeBatch(judgments)` that writes to S3 (SeaweedFS)
+  - [ ] Path format: `forska-judgments/year=YYYY/month=MM/{ulid}.parquet`
+  - [ ] **Durability**: Consider writing to a temp key first, then renaming
+- [ ] **S3 Client**: Create `src/services/s3/s3Client.ts`
+  - [ ] Use `@aws-sdk/client-s3` configured for SeaweedFS/Ceph RGW endpoints
+  - [ ] Environment-based configuration: `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET`
+
+## Phase 4: Backfill Existing PostgreSQL Data to Parquet
+
+Migrate all existing judgments from PostgreSQL to Parquet **before** modifying the PostgreSQL schema.
+
+- [ ] **Script**: Create `scripts/backfill-postgres-to-parquet.ts`
+  - [ ] Stream all rows from PostgreSQL `judgments` table (with JOINs to get article metadata)
+  - [ ] Denormalize each judgment into `DenormalizedJudgmentAnalytics` format
+  - [ ] Write batches to Parquet files in SeaweedFS
+  - [ ] Use judgment's `createdAt` for partitioning
+  - [ ] Log progress (e.g., every 100K rows)
+- [ ] **Run backfill**: Execute script against production database backup locally
+- [ ] **Verify in ClickHouse**: Confirm row counts match PostgreSQL
+- [ ] **Validate queries**: Run `/api/articlesreviews` equivalent query in ClickHouse and verify results
+
+## Phase 5: Dual-Write & Validation
+
 A safe transition phase where both paths are active.
 
 - [ ] **LLM Worker (Dual Write)**: Modify the worker to:
-  - [ ] Write to **both** PostgreSQL (existing path) AND Parquet (new path).
-  - [ ] The worker fetches article/project/prompt data and packages it into `DenormalizedJudgment`.
+  - [ ] Write to **both** PostgreSQL (existing path) AND Parquet/S3 (new path)
+  - [ ] The worker fetches article/project/prompt data and packages it into `DenormalizedJudgmentAnalytics`
 - [ ] **Monitoring**: Add metrics/alerts to compare:
-  - [ ] Row counts in Postgres `judgments` vs ClickHouse `judgments`.
-  - [ ] Sync latency (time from Parquet write to Postgres `judgments_denormalized` update).
-- [ ] **Validation Queries**: Ensure analytics queries return consistent results from both systems.
+  - [ ] Row counts in PostgreSQL `judgments` vs ClickHouse `judgments`
+  - [ ] Ingestion latency (time from Parquet write to ClickHouse availability)
+- [ ] **Validation Queries**: Ensure analytics queries return consistent results from both systems
 
-## Phase 4: Switch Write Path (Cutover)
-- [ ] **Disable Postgres Direct Write**: Modify the worker to write ONLY to Parquet.
-- [ ] **Update Detail View API**: Read from `judgments_denormalized` (Postgres) for ID lookups.
-- [ ] **Update Analytics APIs**: Read from ClickHouse for all list/aggregate/filter queries.
+## Phase 6: Switch Analytics Queries to ClickHouse
 
-## Phase 5: Backfill (Legacy Data)
-- [ ] **Script**: Create `scripts/legacy-postgres-to-parquet.ts`.
-  - [ ] Reads current Postgres `judgments` rows, JOINing with articles/projects/prompts/models.
-  - [ ] Writes them to Parquet files in `/data/judgments/year=YYYY/month=MM/`.
-  - [ ] Use the judgment's `createdAt` for partitioning.
-- [ ] **Re-ingest in ClickHouse**: The `S3Queue` will pick up backfilled files automatically.
-- [ ] **Verification**: Confirm total row counts match between Postgres and ClickHouse.
+- [ ] **Update `/api/articlesreviews`**: Query ClickHouse instead of PostgreSQL
+- [ ] **Update `/api/articlesreviewsfilters`**: Query ClickHouse
+- [ ] **Update any other analytics endpoints**: Stats, aggregations, etc.
+- [ ] **Performance testing**: Verify <5s response times on production-like data
+- [ ] **Rollback plan**: Keep PostgreSQL query code available (feature flag or environment variable)
 
-## Phase 6: Cleanup
-- [ ] **Remove Old Code**: Delete the direct Postgres write path in the LLM worker.
-- [ ] **Archive/Drop Old Table**: Once confident, the original normalized `judgments` table in Postgres can be deprecated.
+## Phase 7: Disable PostgreSQL Direct Write for New Judgments
+
+- [ ] **Modify LLM Worker**: Write ONLY to Parquet (stop dual-write to PostgreSQL)
+- [ ] **Update Detail View API**: Confirm it still works with existing PostgreSQL data
+- [ ] **Monitor**: Ensure ClickHouse receives all new judgments
+
+## Phase 8: Shrink PostgreSQL `judgments` Schema (THE GOAL 🎯)
+
+**This is the payoff**: Remove denormalized columns from PostgreSQL to reclaim storage.
+
+- [ ] **Create migration**: Drop columns from PostgreSQL `judgments` table
+  - [ ] Remove: `articleTitle`, `articleCreatedAt`, `articleUpdatedAt`
+  - [ ] Remove: `articleCreatedYear`, `articleUpdatedYear`
+  - [ ] Remove: `articleImportRoute`, `articleImportedBy`
+  - [ ] Remove: All `snapshot*` columns (9 columns)
+- [ ] **Remove unused indexes**: Drop indexes that only served analytics queries
+  - [ ] Drop: `judgments_prompt_article_created_idx`
+  - [ ] Drop: `judgments_prompt_import_route_idx`
+- [ ] **Run migration**: Apply schema changes (will be fast since just dropping columns)
+- [ ] **Verify detail view**: Confirm GET `/api/judgment/:id` still works
+- [ ] **Verify storage savings**: Check PostgreSQL database size reduction
+
+**Expected savings**: ~8-55 GB for 10M judgments (depending on data).
+
+## Phase 9: Cleanup & Documentation
+
+- [ ] **Remove old code**:
+  - [ ] Delete PostgreSQL analytics query code from `/api/articlesreviews`
+  - [ ] Delete dual-write code from LLM worker
+  - [ ] Remove denormalized column definitions from `schema.ts`
+- [ ] **Update documentation**: Update README, architecture docs
+- [ ] **Production deployment checklist**: Prepare runbook for OpenShift deployment
+  - [ ] Switch SeaweedFS endpoint to Ceph RGW
+  - [ ] Configure ObjectBucketClaim for `forska-judgments` bucket
+  - [ ] Update ClickHouse DDL with production S3 endpoint
+
+---
+
+## Query Routing Summary
+
+| API Endpoint | Data Source | Notes |
+|--------------|-------------|-------|
+| `GET /api/judgment/:id` | **PostgreSQL** | O(1) lookup, core answer data |
+| `GET /api/articlesreviews` | **ClickHouse** | GROUP BY, ORDER BY, filters |
+| `GET /api/articlesreviewsfilters` | **ClickHouse** | Aggregation queries |
+| Stats/analytics | **ClickHouse** | All aggregation queries |
 
 ---
 
@@ -519,5 +626,7 @@ A safe transition phase where both paths are active.
 - [ ] **Compaction**: For very old partitions, periodically rewrite Parquet files to:
   - Physically remove soft-deleted records.
   - Merge many small files into fewer large files.
-- [ ] **Local Disk vs. S3**: For development, can use `File` engine instead of `S3Queue`. Decide if production uses S3/MinIO or a mounted volume.
-- [ ] **Postgres Upsert Strategy**: Finalize whether to use a Postgres trigger, a staging table, or rely on ClickHouse's insert behavior with conflict handling.
+- [ ] **OpenShift Deployment**: Finalize Ceph RGW configuration via ODF
+  - Use `ObjectBucketClaim` CRD for bucket provisioning
+  - Configure ClickHouse `S3Queue` with Ceph RGW credentials
+- [ ] **Detail View from ClickHouse?**: If PostgreSQL detail view is too slow after schema changes, consider querying ClickHouse for `id` lookups (~10-50ms acceptable?)
