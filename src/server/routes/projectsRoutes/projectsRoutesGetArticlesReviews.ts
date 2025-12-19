@@ -1,4 +1,4 @@
-import {and, desc, eq, inArray, isNull, sql} from 'drizzle-orm'
+import {and, desc, inArray, isNull, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {judgments} from '../../../db/schema.ts'
@@ -14,6 +14,8 @@ import {buildArticlesReviewsQueryContext, fetchProjectMetadata} from './articles
  * 3. Use subquery for project_articles (scales well for large curated article sets)
  * 4. Match import routes by TEXT instead of UUID EXISTS
  * 5. Count query moved to separate endpoint (/api/articlesreviewscount) for faster initial load
+ * 6. TWO-PHASE FETCH: Phase 1 gets article IDs, Phase 2 fetches judgments with literal UUIDs
+ *    This guarantees PostgreSQL uses Index Scan instead of Seq Scan on the judgments table.
  */
 export const projectsRoutesGetArticlesReviews = new Elysia().post(
   '/api/articlesreviews',
@@ -49,15 +51,15 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
 
       const {promptIds, promptOrderMap, combinedWhereCondition, havingCondition} = queryContext
 
-      // === PAGINATED QUERY ===
-      // Get page of article IDs, ordered by articleCreatedAt (denormalized)
-      // NOTE: Count query is now in a separate endpoint for faster initial load
-      console.time('grouped judgments')
-      const groupedPage = db
-        .select({
-          articleId: judgments.articleId,
-          articleCreatedAt: sql<Date>`MAX(${judgments.articleCreatedAt})`.as('article_created_at'),
-        })
+      // === TWO-PHASE FETCH ===
+      // Phase 1: Get just the article IDs (GROUP BY + HAVING + pagination)
+      // Phase 2: Fetch judgments for those specific articles (direct IN clause)
+      // This guarantees optimal query plan by giving PostgreSQL literal UUIDs instead of a subquery.
+
+      // === PHASE 1: Get article IDs ===
+      console.time('phase1: article ids')
+      const articleIdsResult = await db
+        .select({articleId: judgments.articleId})
         .from(judgments)
         .where(combinedWhereCondition)
         .groupBy(judgments.articleId)
@@ -65,32 +67,32 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
         .orderBy(desc(sql`MAX(${judgments.articleCreatedAt})`))
         .limit(limit)
         .offset(offset)
-        .as('page_articles')
-      console.timeEnd('grouped judgments')
-      console.time('judgments fetch')
-      // === FETCH JUDGMENTS FOR PAGE ===
-      // Get all judgments for the paged articles
+      console.timeEnd('phase1: article ids')
 
-      // DEBUG: Log the SQL for EXPLAIN ANALYZE
-      const debugQuery = db
-        .select({judgment: judgments})
-        .from(judgments)
-        .innerJoin(groupedPage, eq(groupedPage.articleId, judgments.articleId))
-        .where(and(inArray(judgments.promptId, promptIds), isNull(judgments.deletedAt)))
-        .toSQL()
-      console.log('\n=== COPY THIS SQL FOR EXPLAIN ANALYZE ===')
-      console.log('EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT)')
-      console.log(debugQuery.sql)
-      console.log('\n=== PARAMETERS ===')
-      console.log(JSON.stringify(debugQuery.params, null, 2))
-      console.log('=== END ===\n')
+      // Extract article IDs as literal strings
+      const articleIds = articleIdsResult.map((row) => {
+        return row.articleId
+      })
 
+      // Short-circuit if no articles found
+      if (articleIds.length === 0) {
+        return {data: [], totalCount: null, page, limit, totalPages: null}
+      }
+
+      // === PHASE 2: Fetch judgments for those articles ===
+      // PostgreSQL sees literal UUIDs here, guaranteeing index usage on (article_id, prompt_id)
+      console.time('phase2: judgments fetch')
       const allJudgmentRows = await db
         .select({judgment: judgments})
         .from(judgments)
-        .innerJoin(groupedPage, eq(groupedPage.articleId, judgments.articleId))
-        .where(and(inArray(judgments.promptId, promptIds), isNull(judgments.deletedAt)))
-      console.timeEnd('judgments fetch')
+        .where(
+          and(
+            inArray(judgments.articleId, articleIds), // Literal UUIDs!
+            inArray(judgments.promptId, promptIds),
+            isNull(judgments.deletedAt),
+          ),
+        )
+      console.timeEnd('phase2: judgments fetch')
       console.time('result processing')
       const judgmentsRows = allJudgmentRows.map(({judgment}) => {
         return judgment
