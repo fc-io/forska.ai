@@ -349,12 +349,111 @@ WHERE projectId = 'xxx'
 ORDER BY createdAt DESC;
 ```
 
+### Pattern 4: `/api/articlesreviews` Query (The Hard One)
+
+This is the query pattern that PostgreSQL couldn't handle efficiently (~50s). In ClickHouse, it should run in **1-5 seconds**.
+
+```sql
+SELECT
+    articleId,
+    any(articleTitle) AS articleTitle,
+    max(articleCreatedAt) AS articleCreatedAt,
+    groupArray((promptId, answeredOriginal)) AS answers
+FROM judgments
+WHERE promptId IN ('promptA', 'promptB')  -- Project's enabled prompts
+  AND deletedAt IS NULL
+  AND (
+    articleImportRoute IN ('route1', 'route2')  -- Import routes
+    OR articleId IN (SELECT article_id FROM project_articles WHERE project_id = 'xxx')  -- Curated
+  )
+GROUP BY articleId
+HAVING
+    -- Answer filters: "promptA answered 'Yes' AND promptB answered 'No'"
+    sumIf(1, promptId = 'promptA' AND hasAny(answeredOriginalAsArray, ['Yes'])) > 0
+    AND sumIf(1, promptId = 'promptB' AND hasAny(answeredOriginalAsArray, ['No'])) > 0
+ORDER BY articleCreatedAt DESC
+LIMIT 100 OFFSET 0
+```
+
+**Why this is fast in ClickHouse:**
+- **Columnar storage**: Only reads needed columns (not entire rows)
+- **Vectorized execution**: Processes millions of rows in SIMD batches
+- **Parallel aggregation**: GROUP BY uses all CPU cores
+- **Partition pruning**: Can skip irrelevant date partitions
+
+**Expected performance**: 1-5 seconds (vs ~50s in PostgreSQL)
+
 ### Why This is Simpler
 
 - **No `argMax()` needed**: Each row is unique, no version deduplication
 - **No `ReplacingMergeTree`**: Simple `MergeTree` engine with better performance
 - **No `FINAL` clause**: No deduplication overhead at query time
 - **Direct filtering**: Just use standard `WHERE` clauses
+
+---
+
+## Future Optimization: Pre-Aggregated Article Table
+
+If the 1-5 second latency for Pattern 4 is not acceptable, we can add a **pre-aggregated table** that stores one row per article with all prompt answers embedded.
+
+### Schema
+
+```sql
+CREATE TABLE article_answers (
+    articleId String,
+    articleTitle String,
+    articleCreatedAt DateTime64(3),
+    articleImportRoute Nullable(String),
+
+    -- Map of promptId -> answers (dynamic, handles new prompts automatically)
+    promptAnswers Map(String, Array(String)),
+
+    updatedAt DateTime64(3)
+)
+ENGINE = ReplacingMergeTree(updatedAt)
+PARTITION BY toYYYYMM(articleCreatedAt)
+ORDER BY (articleCreatedAt, articleId);  -- Pre-sorted for ORDER BY DESC!
+```
+
+### Materialized View to Populate
+
+```sql
+CREATE MATERIALIZED VIEW article_answers_mv TO article_answers AS
+SELECT
+    articleId,
+    anyLast(articleTitle) AS articleTitle,
+    max(articleCreatedAt) AS articleCreatedAt,
+    anyLast(articleImportRoute) AS articleImportRoute,
+    mapFromArrays(
+        groupArray(promptId),
+        groupArray(coalesce(answeredOriginalAsArray, [answeredOriginal]))
+    ) AS promptAnswers,
+    max(createdAt) AS updatedAt
+FROM judgments
+GROUP BY articleId;
+```
+
+### Optimized Query
+
+```sql
+SELECT articleId, articleTitle, articleCreatedAt, promptAnswers
+FROM article_answers
+WHERE
+    (articleImportRoute IN ('route1', 'route2') OR articleId IN (...))
+    AND hasAny(promptAnswers['promptA'], ['Yes'])
+    AND hasAny(promptAnswers['promptB'], ['No'])
+ORDER BY articleCreatedAt DESC
+LIMIT 100
+```
+
+**Expected performance**: <100ms (no aggregation, uses ORDER BY index)
+
+### When to Implement
+
+- **Start with** the simple `judgments` table (Pattern 4)
+- **Measure** actual query latency with production data
+- **If >5 seconds**, implement the `article_answers` table
+- **Trade-off**: Additional complexity for ~50x speed improvement
 
 ---
 
