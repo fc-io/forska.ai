@@ -1,4 +1,4 @@
-import {and, eq, gte, inArray, isNull, lte, or, sql} from 'drizzle-orm'
+import {and, eq, gte, inArray, lte, or, sql} from 'drizzle-orm'
 
 import {
   importRoute,
@@ -104,7 +104,7 @@ export const buildArticlesReviewsQueryContext = (
   // === BUILD WHERE CONDITIONS ===
   const whereParts: Array<ReturnType<typeof sql>> = [
     inArray(judgments.promptId, promptIds),
-    isNull(judgments.deletedAt),
+    // Note: deleted_at filter removed - soft deletes not currently used
   ]
 
   // Date filtering: use the most restrictive bounds

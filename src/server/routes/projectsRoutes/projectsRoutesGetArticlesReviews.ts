@@ -1,4 +1,4 @@
-import {and, desc, inArray, isNull, sql} from 'drizzle-orm'
+import {and, desc, inArray, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {judgments} from '../../../db/schema.ts'
@@ -89,7 +89,7 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
           and(
             inArray(judgments.articleId, articleIds), // Literal UUIDs!
             inArray(judgments.promptId, promptIds),
-            isNull(judgments.deletedAt),
+            // Note: deleted_at filter removed - soft deletes not currently used
           ),
         )
       console.timeEnd('phase2: judgments fetch')
