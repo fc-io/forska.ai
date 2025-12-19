@@ -16,6 +16,8 @@ interface ReviewsArticlesTableContainerProps {
   fromDate: Accessor<string>
   toDate: Accessor<string>
   searchTitle: Accessor<string>
+  /** Whether URL filters have been initialized - queries will wait until true */
+  initialized: Accessor<boolean>
 }
 
 export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContainerProps) => {
@@ -36,27 +38,35 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
 
   // Main data query - returns data immediately without waiting for count
   const articlesQuery = useQuery(() => {
-    return createArticlesReviewsQueryOptions(
-      props.projectId,
-      props.promptFilters,
-      props.currentPage,
-      props.pageLimit,
-      props.fromDate,
-      props.toDate,
-      props.searchTitle,
-    )
+    return {
+      ...createArticlesReviewsQueryOptions(
+        props.projectId,
+        props.promptFilters,
+        props.currentPage,
+        props.pageLimit,
+        props.fromDate,
+        props.toDate,
+        props.searchTitle,
+      ),
+      // Wait until URL filters are initialized to avoid duplicate calls
+      enabled: props.initialized(),
+    }
   })
 
   // Separate count query - loads asynchronously
   const countQuery = useQuery(() => {
-    return createArticlesReviewsCountQueryOptions(
-      props.projectId,
-      props.promptFilters,
-      props.pageLimit,
-      props.fromDate,
-      props.toDate,
-      props.searchTitle,
-    )
+    return {
+      ...createArticlesReviewsCountQueryOptions(
+        props.projectId,
+        props.promptFilters,
+        props.pageLimit,
+        props.fromDate,
+        props.toDate,
+        props.searchTitle,
+      ),
+      // Wait until URL filters are initialized to avoid duplicate calls
+      enabled: props.initialized(),
+    }
   })
 
   // Helper to get count values from either the count query or fall back to data response

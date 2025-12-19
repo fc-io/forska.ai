@@ -118,6 +118,7 @@ const Reviews = () => {
           fromDate={filters.fromDate}
           toDate={filters.toDate}
           searchTitle={filters.appliedSearchTitle}
+          initialized={filters.initialized}
         />
       </Suspense>
     </div>
