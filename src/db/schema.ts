@@ -606,6 +606,10 @@ export const judgments = pgTable(
       index('judgments_project_idx').on(table.projectId),
       // Soft delete queries (for Parquet/ClickHouse compatibility)
       index('judgments_deleted_at_idx').on(table.deletedAt),
+      // Optimized denormalized query pattern: filter by promptId and articleCreatedAt
+      index('judgments_prompt_article_created_idx').on(table.promptId, table.articleCreatedAt),
+      // Optimized import route matching using denormalized articleImportRoute
+      index('judgments_prompt_import_route_idx').on(table.promptId, table.articleImportRoute),
     ]
   },
 )

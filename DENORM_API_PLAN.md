@@ -168,13 +168,13 @@ WHERE deleted_at IS NULL;
 
 ### Phase 1: `/api/articlesreviews` Optimization
 
-- [ ] Refactor metadata queries to run in parallel (prompts, bounds, routes, curated IDs)
-- [ ] Replace `articles JOIN judgments` with direct `judgments` query using denormalized fields
-- [ ] Replace EXISTS subqueries with:
+- [x] Refactor metadata queries to run in parallel (prompts, bounds, routes)
+- [x] Replace `articles JOIN judgments` with direct `judgments` query using denormalized fields
+- [x] Replace EXISTS subqueries with:
   - `article_import_route = ANY($routeTexts)` for import route matching
   - `article_id IN (SELECT ... FROM project_articles)` subquery for curated articles
-- [ ] Use `article_created_at` and `article_title` from judgments (no JOIN)
-- [ ] Add new indexes
+- [x] Use `article_created_at` and `article_title` from judgments (no JOIN)
+- [ ] Add new indexes (requires migration - see schema.ts for definitions)
 - [ ] Test with large projects to verify performance improvement
 
 ### Phase 2: `/api/articlesreviewsfilters` Optimization

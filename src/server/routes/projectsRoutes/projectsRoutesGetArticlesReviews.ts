@@ -1,9 +1,8 @@
-import {and, desc, eq, gte, inArray, lte, or, sql} from 'drizzle-orm'
+import {and, desc, eq, gte, inArray, isNull, lte, or, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {
-  articleRouteLink,
-  articles,
+  importRoute,
   judgments,
   projectArticles,
   projectPrompts,
@@ -13,6 +12,15 @@ import {
 } from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
+/**
+ * Optimized articles reviews API using denormalized judgment fields.
+ *
+ * Key optimizations:
+ * 1. Query judgments directly (no JOIN to articles table)
+ * 2. Use denormalized fields: articleTitle, articleCreatedAt, articleImportRoute
+ * 3. Use subquery for project_articles (scales well for large curated article sets)
+ * 4. Match import routes by TEXT instead of UUID EXISTS
+ */
 export const projectsRoutesGetArticlesReviews = new Elysia().post(
   '/api/articlesreviews',
   async ({body}) => {
@@ -29,105 +37,121 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
       const toDate = body.to ? new Date(`${body.to}T23:59:59.999Z`) : null
       const searchTitle = typeof body.search === 'string' ? body.search.trim() : ''
 
-      // First get all prompts for this project (ordered)
-      const projectPromptRows = await db
-        .select({id: prompts.id, order: projectPrompts.order})
-        .from(projectPrompts)
-        .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
-        .where(and(eq(projectPrompts.projectId, body.projectId), eq(projectPrompts.enabled, true)))
-        .orderBy(projectPrompts.order)
+      // === PARALLEL METADATA QUERIES ===
+      // Run these concurrently for better performance
+      console.time('parallel metadata queries')
+      const [projectPromptRows, projectBoundsResult, projectImportRouteTexts] = await Promise.all([
+        // 1a. Get enabled prompts for project
+        db
+          .select({id: prompts.id, order: projectPrompts.order})
+          .from(projectPrompts)
+          .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
+          .where(and(eq(projectPrompts.projectId, body.projectId), eq(projectPrompts.enabled, true)))
+          .orderBy(projectPrompts.order),
 
+        // 1b. Get project date bounds
+        db
+          .select({dateFrom: projects.dateFrom, dateTo: projects.dateTo})
+          .from(projects)
+          .where(eq(projects.id, body.projectId))
+          .limit(1),
+
+        // 1c. Get import routes as TEXT (not UUID!)
+        db
+          .select({route: importRoute.route})
+          .from(projectRouteLink)
+          .innerJoin(importRoute, eq(projectRouteLink.importRouteId, importRoute.id))
+          .where(eq(projectRouteLink.projectId, body.projectId)),
+      ])
+      console.timeEnd('parallel metadata queries')
+      console.time('the rest')
       if (projectPromptRows.length === 0) {
         return {data: [], totalCount: 0, page, limit, totalPages: 0}
       }
 
-      // Get articles that have judgments for ALL prompts of the project
       const promptIds = projectPromptRows.map((p) => {
         return p.id
       })
+      const projectBounds = projectBoundsResult[0]
+      const routeTexts = projectImportRouteTexts.map((r) => {
+        return r.route
+      })
+      const hasImportRoutes = routeTexts.length > 0
 
-      // Build the base query conditions
-      const conditions: Array<ReturnType<typeof sql>> = []
-
-      // Add filters for each prompt's answered_original if provided (multiple values allowed)
+      // Add filters for each prompt's answered_original if provided
       const promptFilters = Object.entries(body.prompts || {}).map(([key, values]) => {
         return [key, Array.isArray(values) ? values : [String(values)]] as const
       })
 
       console.log('promptFilters', promptFilters)
 
-      // Always scope to project's configured import routes and date bounds
-      const [projectBounds] = await db
-        .select({dateFrom: projects.dateFrom, dateTo: projects.dateTo})
-        .from(projects)
-        .where(eq(projects.id, body.projectId))
-        .limit(1)
+      // === BUILD WHERE CONDITIONS ===
+      // All conditions now use denormalized judgment fields (no articles table!)
+      const whereParts: Array<ReturnType<typeof sql>> = [
+        inArray(judgments.promptId, promptIds),
+        isNull(judgments.deletedAt), // Soft delete filter
+      ]
 
-      const projectImportRoutes = await db
-        .select({importRouteId: projectRouteLink.importRouteId})
-        .from(projectRouteLink)
-        .where(eq(projectRouteLink.projectId, body.projectId))
-
-      const hasImportRoutes = projectImportRoutes.length > 0
-      const routeIdArray = hasImportRoutes
-        ? sql.join(
-            projectImportRoutes.map((r) => {
-              return sql`${r.importRouteId}::uuid`
-            }),
-            sql`,`,
-          )
-        : null
-
-      // Build final where parts with optional filters (route scoping applied via join)
-      const whereParts: Array<ReturnType<typeof sql>> = []
-      if (conditions.length > 0) {
-        whereParts.push(...conditions)
-      }
-
+      // Project date bounds (using denormalized articleCreatedAt)
       if (projectBounds?.dateFrom) {
-        whereParts.push(gte(articles.articleCreatedAt, projectBounds.dateFrom))
+        whereParts.push(gte(judgments.articleCreatedAt, projectBounds.dateFrom))
       }
       if (projectBounds?.dateTo) {
-        whereParts.push(lte(articles.articleCreatedAt, projectBounds.dateTo))
+        whereParts.push(lte(judgments.articleCreatedAt, projectBounds.dateTo))
       }
 
-      // Additional optional UI filters
+      // UI date filters
       if (fromDate) {
-        whereParts.push(gte(articles.articleCreatedAt, fromDate))
+        whereParts.push(gte(judgments.articleCreatedAt, fromDate))
       }
       if (toDate) {
-        whereParts.push(lte(articles.articleCreatedAt, toDate))
+        whereParts.push(lte(judgments.articleCreatedAt, toDate))
       }
+
+      // Search filter (using denormalized articleTitle)
       if (searchTitle) {
-        whereParts.push(sql`${articles.articleTitle} ILIKE ${'%' + searchTitle + '%'}`)
+        whereParts.push(sql`${judgments.articleTitle} ILIKE ${'%' + searchTitle + '%'}`)
       }
 
-      const combinedWhereCondition = whereParts.length > 1 ? and(...whereParts) : whereParts[0]
+      // === SCOPE CONDITION ===
+      // Match by import route TEXT or curated articles subquery
+      const scopeConditions: Array<ReturnType<typeof sql>> = []
 
-      // For projects WITH import routes: use OR between import route and project_articles
-      // For projects WITHOUT import routes: just use project_articles directly
-      const hasMatchingImportRoute = hasImportRoutes
-        ? sql`EXISTS (
-            SELECT 1 FROM ${articleRouteLink} arl
-            WHERE arl."article_id" = ${articles.id}
-            AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
-          )`
-        : undefined
-      const hasProjectArticle = sql`EXISTS (
-        SELECT 1 FROM ${projectArticles} pa
-        WHERE pa."article_id" = ${articles.id}
-        AND pa."project_id" = ${body.projectId}::uuid
-      )`
-      // Use OR when we have import routes, otherwise just check project_articles directly
-      const scopeCondition = hasImportRoutes ? or(hasMatchingImportRoute, hasProjectArticle) : hasProjectArticle
+      // Import route match using denormalized articleImportRoute
+      if (hasImportRoutes) {
+        const routeTextsArray = sql.join(
+          routeTexts.map((r) => {
+            return sql`${r}`
+          }),
+          sql`,`,
+        )
+        scopeConditions.push(sql`${judgments.articleImportRoute} = ANY(ARRAY[${routeTextsArray}])`)
+      }
 
-      // Build grouped base query once, then count rows in a subquery (fast COUNT(*))
-      // Build HAVING conditions: require one judgment per prompt overall, and if a prompt has selected filters,
-      // require at least one element in normalized answer array to overlap the selected set for that prompt.
+      // Curated articles - use subquery (scales well for large sets)
+      scopeConditions.push(
+        sql`${judgments.articleId} IN (
+          SELECT pa."article_id" FROM ${projectArticles} pa
+          WHERE pa."project_id" = ${body.projectId}::uuid
+        )`,
+      )
+
+      // Combine scope with OR (scopeConditions always has at least 1 element)
+      const scopeOr = scopeConditions.length > 1 ? or(...scopeConditions) : scopeConditions[0]
+      if (scopeOr) {
+        whereParts.push(scopeOr)
+      }
+
+      const combinedWhereCondition = and(...whereParts)
+
+      // === HAVING CONDITIONS ===
+      // Require all prompts answered, and filter by selected answer values
       const havingParts: Array<ReturnType<typeof sql>> = [
         sql`COUNT(DISTINCT ${judgments.promptId}) = ${promptIds.length}`,
       ]
+
       const normalized = sql`COALESCE(${judgments.answeredOriginalAsArray}, CASE WHEN ${judgments.answeredOriginal} IS NOT NULL THEN ARRAY[${judgments.answeredOriginal}] ELSE ARRAY[]::text[] END)`
+
       for (const [promptId, answeredValues] of promptFilters) {
         if (answeredValues.length === 0) continue
         const answeredValsArray = sql.join(
@@ -141,43 +165,43 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
         )
       }
 
+      const havingCondition = havingParts.length > 1 ? and(...havingParts) : havingParts[0]
+
+      // === COUNT QUERY ===
+      // Group by articleId directly from judgments (no articles table join!)
       const groupedBase = db
-        .select({id: articles.id})
-        .from(articles)
-        .innerJoin(judgments, and(eq(judgments.articleId, articles.id), inArray(judgments.promptId, promptIds)))
-        .where(combinedWhereCondition ? and(combinedWhereCondition, scopeCondition) : scopeCondition)
-        .groupBy(articles.id)
-        .having(havingParts.length > 1 ? and(...havingParts) : havingParts[0])
+        .select({articleId: judgments.articleId})
+        .from(judgments)
+        .where(combinedWhereCondition)
+        .groupBy(judgments.articleId)
+        .having(havingCondition)
         .as('grouped_articles')
 
       const [{count: totalCount = 0} = {count: 0}] = await db.select({count: sql<number>`COUNT(*)`}).from(groupedBase)
 
-      // Build a paged set of qualifying article ids to avoid massive IN (...) parameter lists
+      // === PAGINATED QUERY ===
+      // Get page of article IDs, ordered by articleCreatedAt (denormalized)
       const groupedPage = db
-        .select({id: articles.id})
-        .from(articles)
-        .innerJoin(judgments, and(eq(judgments.articleId, articles.id), inArray(judgments.promptId, promptIds)))
-        .where(combinedWhereCondition ? and(combinedWhereCondition, scopeCondition) : scopeCondition)
-        .groupBy(articles.id)
-        .having(havingParts.length > 1 ? and(...havingParts) : havingParts[0])
-        .orderBy(desc(articles.articleCreatedAt))
+        .select({
+          articleId: judgments.articleId,
+          articleCreatedAt: sql<Date>`MAX(${judgments.articleCreatedAt})`.as('article_created_at'),
+        })
+        .from(judgments)
+        .where(combinedWhereCondition)
+        .groupBy(judgments.articleId)
+        .having(havingCondition)
+        .orderBy(desc(sql`MAX(${judgments.articleCreatedAt})`))
         .limit(limit)
         .offset(offset)
         .as('page_articles')
 
-      // Query the page of articles using the paged id set
-      const articlesWithJudgments = await db
-        .select({article: articles})
-        .from(articles)
-        .innerJoin(groupedPage, eq(groupedPage.id, articles.id))
-        .orderBy(desc(articles.articleCreatedAt))
-
-      // Fetch all judgments for the paged articles via join to the paged id set
+      // === FETCH JUDGMENTS FOR PAGE ===
+      // Get all judgments for the paged articles
       const allJudgmentRows = await db
         .select({judgment: judgments})
         .from(judgments)
-        .innerJoin(groupedPage, eq(groupedPage.id, judgments.articleId))
-        .where(inArray(judgments.promptId, promptIds))
+        .innerJoin(groupedPage, eq(groupedPage.articleId, judgments.articleId))
+        .where(and(inArray(judgments.promptId, promptIds), isNull(judgments.deletedAt)))
 
       const judgmentsRows = allJudgmentRows.map(({judgment}) => {
         return judgment
@@ -201,17 +225,36 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
         {} as Record<string, number>,
       )
 
-      // Combine articles with their judgments sorted by prompt order
-      const result = articlesWithJudgments.map(({article}) => {
-        const unsorted = judgmentsByArticle[article.id] || []
-        const sorted = [...unsorted].sort((a, b) => {
+      // === BUILD RESULT ===
+      // Use denormalized fields from judgments to construct article data
+      const result = Object.entries(judgmentsByArticle).map(([articleId, articleJudgments]) => {
+        // Sort judgments by prompt order
+        const sorted = [...articleJudgments].sort((a, b) => {
           const ao = promptOrderMap[a.promptId] ?? Number.MAX_SAFE_INTEGER
           const bo = promptOrderMap[b.promptId] ?? Number.MAX_SAFE_INTEGER
           return ao - bo
         })
-        return {...article, judgments: sorted}
+
+        // Use denormalized article data from any judgment (they all have the same values)
+        const firstJudgment = sorted[0]
+
+        return {
+          id: articleId,
+          articleTitle: firstJudgment?.articleTitle ?? null,
+          articleCreatedAt: firstJudgment?.articleCreatedAt ?? null,
+          articleUpdatedAt: firstJudgment?.articleUpdatedAt ?? null,
+          judgments: sorted,
+        }
       })
 
+      // Sort result by articleCreatedAt descending (to match pagination order)
+      result.sort((a, b) => {
+        const aDate = a.articleCreatedAt?.getTime() ?? 0
+        const bDate = b.articleCreatedAt?.getTime() ?? 0
+        return bDate - aDate
+      })
+
+      console.timeEnd('the rest')
       return {data: result, totalCount, page, limit, totalPages: Math.ceil(totalCount / limit)}
     } catch (error) {
       console.error('Error fetching articles reviews:', error)
