@@ -1,0 +1,212 @@
+# Denormalized API Optimization Plan
+
+> **Goal**: Optimize `/api/articlesreviews` and `/api/articlesreviewsfilters` to use denormalized fields on the `judgments` table, eliminating expensive JOINs and EXISTS subqueries.
+
+## Background
+
+The `judgments` table has been denormalized with the following fields that APIs can now leverage:
+
+| Field | Purpose |
+|-------|---------|
+| `promptId` | Primary query anchor - immutable, used to find judgments for a project's prompts |
+| `articleTitle` | Eliminates JOIN to `articles` for display |
+| `articleCreatedAt` | Eliminates JOIN to `articles` for date filtering |
+| `articleUpdatedAt` | Eliminates JOIN to `articles` for date filtering |
+| `articleImportRoute` | Eliminates EXISTS on `article_route_link` - immutable |
+| `projectId` | Indicates originating project (informational only - judgments can be shared) |
+
+**Key Constraint**: `projectId` indicates where a judgment was *created*, but judgments/articles can be shared across projects. Use `articleImportRoute` and `project_articles` for scope determination.
+
+---
+
+## Current Flow (Slow)
+
+```
+1. Get project's enabled prompts → promptIds[]
+2. Get project's date bounds
+3. Get project's import routes → routeIdArray (UUIDs)
+4. Build scope condition:
+   - EXISTS (SELECT 1 FROM article_route_link WHERE article_id = articles.id AND import_route_id = ANY(...))
+   - OR EXISTS (SELECT 1 FROM project_articles WHERE article_id = articles.id AND project_id = ...)
+5. Query: articles JOIN judgments WHERE <scope> GROUP BY article HAVING all prompts answered
+6. Paginate and fetch judgments for matched articles
+```
+
+**Problems**:
+- Two EXISTS subqueries evaluated per article row
+- JOIN to `articles` table for title and date filtering
+- UUID-based import route matching through link table
+
+---
+
+## Optimized Flow
+
+### Step 1: Parallel Metadata Queries
+
+Execute these in parallel:
+
+```sql
+-- 1a. Get enabled prompts for project
+SELECT prompts.id, project_prompts.order
+FROM project_prompts
+JOIN prompts ON prompts.id = project_prompts.prompt_id
+WHERE project_prompts.project_id = $projectId
+  AND project_prompts.enabled = true
+ORDER BY project_prompts.order
+
+-- 1b. Get project date bounds
+SELECT date_from, date_to
+FROM projects
+WHERE id = $projectId
+
+-- 1c. Get import routes as TEXT (not UUID!)
+SELECT ir.route
+FROM project_route_link prl
+JOIN import_route ir ON ir.id = prl.import_route_id
+WHERE prl.project_id = $projectId
+
+-- NOTE: Do NOT pre-fetch curated article IDs here!
+-- Projects can have many curated articles. Use a subquery instead (see Step 2).
+```
+
+### Step 2: Query Judgments Directly
+
+**No JOIN to `articles` needed!** Use denormalized fields:
+
+```sql
+SELECT
+  j.article_id,
+  j.article_title,              -- denormalized
+  j.article_created_at,         -- denormalized
+  j.prompt_id,
+  j.answered_original,
+  j.answered_original_as_array,
+  j.explanation,
+  j.quotes
+FROM judgments j
+WHERE j.prompt_id = ANY($promptIds)
+  AND j.deleted_at IS NULL
+  AND (
+    j.article_import_route = ANY($routeTexts)   -- Import route match (TEXT comparison)
+    OR j.article_id IN (                         -- Curated articles (subquery, not pre-fetched)
+        SELECT article_id FROM project_articles WHERE project_id = $projectId
+    )
+  )
+  -- Project date bounds
+  AND ($dateFrom IS NULL OR j.article_created_at >= $dateFrom)
+  AND ($dateTo IS NULL OR j.article_created_at <= $dateTo)
+  -- UI filters
+  AND ($uiFromDate IS NULL OR j.article_created_at >= $uiFromDate)
+  AND ($uiToDate IS NULL OR j.article_created_at <= $uiToDate)
+  AND ($search IS NULL OR j.article_title ILIKE '%' || $search || '%')
+```
+
+### Step 3: Group and Filter for Complete Judgments
+
+```sql
+WITH matching_judgments AS (
+  -- Step 2 query
+)
+SELECT
+  article_id,
+  MAX(article_title) AS article_title,
+  MAX(article_created_at) AS article_created_at
+FROM matching_judgments
+GROUP BY article_id
+HAVING COUNT(DISTINCT prompt_id) = $promptCount  -- All prompts answered
+ORDER BY MAX(article_created_at) DESC
+```
+
+### Step 4: Paginate and Fetch Full Judgments
+
+```sql
+-- Get page of article IDs
+WITH complete_articles AS (
+  -- Step 3 query with LIMIT/OFFSET
+)
+SELECT j.*
+FROM judgments j
+WHERE j.article_id = ANY(SELECT article_id FROM complete_articles)
+  AND j.prompt_id = ANY($promptIds)
+  AND j.deleted_at IS NULL
+```
+
+---
+
+## Performance Comparison
+
+| Aspect | Before | After |
+|--------|--------|-------|
+| Tables in main query | `articles`, `judgments`, `project_articles`, `article_route_link` | `judgments` only |
+| EXISTS subqueries | 2 per row | 0 |
+| JOIN to articles | Required | Not needed |
+| Import route check | UUID EXISTS on link table | TEXT = ANY() on denormalized field |
+| Curated articles check | Double EXISTS in OR | Simple subquery (query planner optimizes) |
+
+---
+
+## Required Indexes
+
+Add these indexes for optimal performance:
+
+```sql
+-- Primary query pattern: filter by prompt, route, date
+CREATE INDEX CONCURRENTLY judgments_prompt_route_created_idx
+ON judgments(prompt_id, article_import_route, article_created_at)
+WHERE deleted_at IS NULL;
+
+-- Alternative: if searching by title frequently
+CREATE INDEX CONCURRENTLY judgments_prompt_created_title_idx
+ON judgments(prompt_id, article_created_at)
+INCLUDE (article_title, article_import_route, article_id)
+WHERE deleted_at IS NULL;
+```
+
+---
+
+## Implementation Checklist
+
+### Phase 1: `/api/articlesreviews` Optimization
+
+- [ ] Refactor metadata queries to run in parallel (prompts, bounds, routes, curated IDs)
+- [ ] Replace `articles JOIN judgments` with direct `judgments` query using denormalized fields
+- [ ] Replace EXISTS subqueries with:
+  - `article_import_route = ANY($routeTexts)` for import route matching
+  - `article_id IN (SELECT ... FROM project_articles)` subquery for curated articles
+- [ ] Use `article_created_at` and `article_title` from judgments (no JOIN)
+- [ ] Add new indexes
+- [ ] Test with large projects to verify performance improvement
+
+### Phase 2: `/api/articlesreviewsfilters` Optimization
+
+- [ ] Apply same pattern for filter discovery queries
+- [ ] Remove JOIN to articles table
+- [ ] Use denormalized `article_import_route` for scope filtering
+
+### Phase 3: Validation
+
+- [ ] Compare query plans before/after
+- [ ] Benchmark with production-like data
+- [ ] Verify result correctness matches old implementation
+
+---
+
+## Edge Cases
+
+1. **Empty import routes**: If project has no linked import routes, `$routeTexts` is empty array. Query relies on curated articles subquery only.
+
+2. **Empty curated articles**: If project has no curated articles, subquery returns nothing. Query relies on `articleImportRoute` only.
+
+3. **Both empty**: Return empty result (no articles in scope).
+
+4. **NULL articleImportRoute**: Curated articles may have NULL import route. They're matched via the `project_articles` subquery.
+
+5. **Large project_articles**: The curated articles check uses a subquery rather than pre-fetching IDs. This allows the query planner to choose optimal execution (hash semi-join, index scan, etc.) regardless of how many curated articles exist.
+
+---
+
+## Notes
+
+- `projectId` on judgments is **informational only** - it indicates where the judgment was created, but judgments can be shared/reused across projects
+- Import routes and curated articles are the source of truth for project scope
+- Prompts can be shared across projects; `promptId` filter is always combined with scope filter

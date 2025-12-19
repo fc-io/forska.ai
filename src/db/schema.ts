@@ -548,7 +548,10 @@ export const judgments = pgTable(
         },
         {onDelete: 'restrict'},
       ),
-    // Direct project reference (denormalized for Parquet/ClickHouse)
+    // Project that *created* this judgment (denormalized for Parquet/ClickHouse).
+    // NOTE: This is the originating project only. Judgments can be shared/reused across
+    // multiple projects via import routes (articleImportRoute) and curated articles
+    // (project_articles). Do NOT use projectId for scoping queries to a project's articles.
     projectId: uuid('project_id').references(
       () => {
         return projects.id
