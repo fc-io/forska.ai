@@ -70,6 +70,21 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
       console.time('judgments fetch')
       // === FETCH JUDGMENTS FOR PAGE ===
       // Get all judgments for the paged articles
+
+      // DEBUG: Log the SQL for EXPLAIN ANALYZE
+      const debugQuery = db
+        .select({judgment: judgments})
+        .from(judgments)
+        .innerJoin(groupedPage, eq(groupedPage.articleId, judgments.articleId))
+        .where(and(inArray(judgments.promptId, promptIds), isNull(judgments.deletedAt)))
+        .toSQL()
+      console.log('\n=== COPY THIS SQL FOR EXPLAIN ANALYZE ===')
+      console.log('EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT)')
+      console.log(debugQuery.sql)
+      console.log('\n=== PARAMETERS ===')
+      console.log(JSON.stringify(debugQuery.params, null, 2))
+      console.log('=== END ===\n')
+
       const allJudgmentRows = await db
         .select({judgment: judgments})
         .from(judgments)
