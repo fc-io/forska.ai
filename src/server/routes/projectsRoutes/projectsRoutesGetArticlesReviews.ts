@@ -62,8 +62,8 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
       // and filter in memory. Much faster for large tables.
       console.time('progressive fetch')
 
-      const BATCH_SIZE = limit * 5 // Fetch 5x limit to account for filtering
-      const MAX_ITERATIONS = 50 // Safety limit
+      const BATCH_SIZE = 2000 // Large batches since index scan is fast (~50ms)
+      const MAX_ITERATIONS = 100 // Safety limit for sparse-scope projects
       const ARTICLES_NEEDED = page * limit // Need enough articles to reach the requested page
 
       // Type for judgment row from the database
