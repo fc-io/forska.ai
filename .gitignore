@@ -6,6 +6,9 @@ openalex_snapshot
 pgdata/
 init-db/
 
+# Analytics infrastructure data (SeaweedFS, ClickHouse)
+data/
+
 # output
 out
 dist

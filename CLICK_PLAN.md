@@ -497,21 +497,24 @@ LIMIT 100
 
 # Implementation Checklist
 
-## Phase 1: Infrastructure Setup (SeaweedFS + ClickHouse)
+## Phase 1: Infrastructure Setup (SeaweedFS + ClickHouse) ✅ COMPLETE
 
 Set up the new infrastructure **before** modifying any existing code or schema.
 
-- [ ] **docker-compose.yml**: Add SeaweedFS container
-  - [ ] Image: `chrislusf/seaweedfs:latest`
-  - [ ] Command: `server -s3 -dir=/data -s3.port=8333`
-  - [ ] Ports: `8333:8333` (S3 API), `9333:9333` (Master UI)
-  - [ ] Volume: `./data/seaweedfs:/data`
-- [ ] **docker-compose.yml**: Add ClickHouse container
-  - [ ] Image: `clickhouse/clickhouse-server:24.9` (LTS)
-  - [ ] Ports: `8123:8123` (HTTP), `9000:9000` (Native)
-  - [ ] Volume: `./data/clickhouse:/var/lib/clickhouse`
-  - [ ] Environment: `CLICKHOUSE_DB=forska`, `CLICKHOUSE_USER=default`, `CLICKHOUSE_PASSWORD=clickhouse`
-- [ ] **Verify local setup**: Both containers running and accessible
+- [x] **docker-compose.yml**: Add SeaweedFS container *(2024-12-19)*
+  - [x] Image: `chrislusf/seaweedfs:latest`
+  - [x] Command: `server -s3 -dir=/data -s3.port=8333`
+  - [x] Ports: `8333:8333` (S3 API), `9333:9333` (Master UI)
+  - [x] Volume: `./data/seaweedfs:/data`
+- [x] **docker-compose.yml**: Add ClickHouse container *(2024-12-19)*
+  - [x] Image: `clickhouse/clickhouse-server:24.9` (LTS)
+  - [x] Ports: `8123:8123` (HTTP), `9000:9000` (Native)
+  - [x] Volume: `./data/clickhouse:/var/lib/clickhouse`
+  - [x] Environment: `CLICKHOUSE_DB=forska`, `CLICKHOUSE_USER=default`, `CLICKHOUSE_PASSWORD=clickhouse`
+- [x] **Verify local setup**: Both containers running and accessible *(2024-12-19)*
+  - SeaweedFS: S3 API at `localhost:8333`, Master UI at `localhost:9333`
+  - ClickHouse: HTTP API at `localhost:8123`, Native at `localhost:9000`
+  - Bucket `forska-judgments` created in SeaweedFS
 
 ## Phase 2: ClickHouse DDL & Initial Testing
 
