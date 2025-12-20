@@ -317,6 +317,107 @@ The answer filters (HAVING on cross-prompt aggregates) combined with ORDER BY + 
 2. **Aggressive caching** — Cache query results for common filter combinations
 3. **Accept latency** — Show loading spinner for complex queries (~10-50s)
 
+### Phase 2.8: Progressive Fetch Approach (2024-12-20) ✅ IMPLEMENTED
+
+After further analysis, we discovered a fundamentally different approach that avoids GROUP BY entirely.
+
+#### The Insight
+
+The previous approaches all used `GROUP BY article_id` which forces PostgreSQL to:
+1. Scan all matching rows (millions)
+2. Hash-aggregate into ~500K groups
+3. Apply HAVING filters
+4. Sort all groups
+5. Return top N
+
+**The key insight**: We can avoid the full table scan by using index-ordered batched fetches with in-memory filtering.
+
+#### Progressive Fetch Algorithm
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  Index: (prompt_id, article_id)                                      │
+│  Query: WHERE prompt_id IN (...) AND article_id > cursor             │
+│         ORDER BY article_id LIMIT batch_size                         │
+│                                                                      │
+│  Batch 1: [articles A-F] → filter → found 40 matching               │
+│  Batch 2: [articles G-L] → filter → found 35 matching (total: 75)   │
+│  Batch 3: [articles M-R] → filter → found 30 matching (total: 105)  │
+│  STOP: We have > 100 results for page 1                             │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+#### How It Works
+
+1. **Fetch batches** ordered by `article_id` using the `(prompt_id, article_id)` index
+2. **Group by article in memory** (judgments for same article are consecutive due to ordering)
+3. **Apply answer filters in memory** (the equivalent of HAVING)
+4. **Repeat until we have enough matching articles** for the requested page
+5. **Use cursor-based pagination** (`WHERE article_id > last_seen_id`)
+
+#### Implementation Details
+
+**Query used:**
+```sql
+SELECT *
+FROM judgments
+WHERE prompt_id IN ($promptIds)
+  AND article_id > $cursor  -- cursor pagination
+  AND <scope conditions>    -- import routes OR curated articles
+  AND <date filters>
+ORDER BY article_id ASC
+LIMIT $batchSize           -- typically 500
+```
+
+**In-memory filtering:**
+```typescript
+const passesAnswerFilters = (judgments, filters) => {
+  for (const {promptId, answeredValues} of filters) {
+    const hasMatch = judgments.some(j =>
+      j.promptId === promptId &&
+      j.answeredOriginalAsArray?.some(a => answeredValues.includes(a))
+    )
+    if (!hasMatch) return false
+  }
+  return true
+}
+```
+
+#### Performance Characteristics
+
+| Scenario | Batches Needed | Expected Time |
+|----------|----------------|---------------|
+| No answer filters | 1-2 | ~100-300ms |
+| Filters match ~50% of articles | 2-4 | ~200-500ms |
+| Filters match ~10% of articles | ~10 | ~500-1500ms |
+| Filters match ~1% of articles | ~50 | ~2-5s |
+
+**Worst case**: If filters match very few articles, we may need many batches. This is bounded by `MAX_ITERATIONS = 50`, so worst case is ~50 index scans.
+
+**Best case**: If most articles match, we get the page in 1-2 batches using pure index scans.
+
+#### Trade-offs
+
+| Aspect | Before (GROUP BY) | After (Progressive Fetch) |
+|--------|-------------------|---------------------------|
+| Query complexity | Complex SQL with HAVING | Simple SELECT + LIMIT |
+| Filter location | Database (HAVING) | Application code |
+| Consistency | Fixed ~50s regardless | Variable: 100ms-5s |
+| Ordering | By article_created_at DESC | By article_id (stable, but not by date) |
+| Memory usage | Database holds all groups | App holds only batches |
+
+#### Files Changed
+
+- `projectsRoutesGetArticlesReviews.ts` - Rewrote to use progressive fetch
+- `articlesReviewsQueryBuilder.ts` - Added `buildProgressiveFetchContext()` and `passesAnswerFilters()`
+
+#### Note: Count Endpoint
+
+The `/api/articlesreviewscount` endpoint still uses GROUP BY. This is acceptable because:
+1. It runs async (doesn't block data display)
+2. The count is cached on the frontend
+3. Users see data immediately, count appears later
+
 ### Phase 3: Validation
 
 - [ ] Compare query plans before/after
