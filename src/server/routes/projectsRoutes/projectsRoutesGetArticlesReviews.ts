@@ -1,14 +1,9 @@
-import {and, asc, gt, type SQL} from 'drizzle-orm'
+import {and, asc, gt, inArray, type SQL} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {judgments} from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
-import {
-  buildProgressiveFetchContext,
-  fetchProjectMetadata,
-  isInScope,
-  passesAnswerFilters,
-} from './articlesReviewsQueryBuilder.ts'
+import {buildProgressiveFetchContext, fetchProjectMetadata, passesAnswerFilters} from './articlesReviewsQueryBuilder.ts'
 
 /**
  * Progressive fetch articles reviews API.
@@ -16,13 +11,12 @@ import {
  * Key optimizations:
  * 1. NO GROUP BY on the database - use index scan with LIMIT
  * 2. Fetch batches ordered by article_id (uses index: prompt_id, article_id)
- * 3. Apply scope + answer filters in memory (fast - only processes batches)
+ * 3. Apply scope + answer filters in memory
  * 4. Cursor-based pagination using article_id for stability
  *
- * Why this is fast:
- * - PostgreSQL uses Index Scan with early termination (LIMIT)
- * - Never scans the full table - fetches only what's needed
- * - Scope filtering in memory avoids slow OR/subquery in DB
+ * Two-phase approach for sparse-scope projects:
+ * - Phase 1: Get in-scope article IDs (from curated + import routes)
+ * - Phase 2: Fetch judgments only for in-scope articles (uses IN clause)
  */
 export const projectsRoutesGetArticlesReviews = new Elysia().post(
   '/api/articlesreviews',
@@ -57,14 +51,13 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
 
       const {promptIds, promptOrderMap, whereCondition, answerFilters, scopeFilter} = context
 
-      // === PROGRESSIVE FETCH ===
-      // Instead of GROUP BY (scans all rows), fetch batches using index scan
-      // and filter in memory. Much faster for large tables.
-      console.time('progressive fetch')
+      // === DETERMINE SCOPE STRATEGY ===
+      // If we have curated articles, we know the exact article IDs upfront
+      // This is much faster than filtering all judgments in memory
+      const hasCuratedArticles = scopeFilter.curatedArticleIds.size > 0
+      const hasImportRoutes = scopeFilter.routeTexts.length > 0
 
-      const BATCH_SIZE = 2000 // Large batches since index scan is fast (~50ms)
-      const MAX_ITERATIONS = 100 // Safety limit for sparse-scope projects
-      const ARTICLES_NEEDED = page * limit // Need enough articles to reach the requested page
+      console.time('progressive fetch')
 
       // Type for judgment row from the database
       type JudgmentRow = typeof judgments.$inferSelect
@@ -78,102 +71,150 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
       }
 
       const matchingArticles: ArticleResult[] = []
-      let cursor: string | null = null
-      let iterations = 0
-      let noMoreData = false
 
-      while (matchingArticles.length < ARTICLES_NEEDED && iterations < MAX_ITERATIONS && !noMoreData) {
-        iterations++
+      if (hasCuratedArticles && !hasImportRoutes) {
+        // === FAST PATH: Curated articles only ===
+        // We know all article IDs upfront - fetch directly with IN clause
+        console.log(`⚡ Fast path: ${scopeFilter.curatedArticleIds.size} curated articles`)
 
-        // Build WHERE condition with cursor
-        const cursorCondition: SQL | undefined = cursor ? gt(judgments.articleId, cursor) : undefined
-        const batchWhere: SQL = cursorCondition
-          ? (and(whereCondition, cursorCondition) ?? whereCondition)
-          : whereCondition
+        const curatedIds = [...scopeFilter.curatedArticleIds]
+        const BATCH_SIZE = 100 // Process in batches of article IDs
+        const ARTICLES_NEEDED = page * limit
 
-        // Fetch batch using index scan (fast!)
-        // Order by article_id for stable pagination and to group judgments naturally
-        const batch = await db
-          .select({judgment: judgments})
-          .from(judgments)
-          .where(batchWhere)
-          .orderBy(asc(judgments.articleId))
-          .limit(BATCH_SIZE)
+        for (let i = 0; i < curatedIds.length && matchingArticles.length < ARTICLES_NEEDED; i += BATCH_SIZE) {
+          const batchIds = curatedIds.slice(i, i + BATCH_SIZE)
 
-        if (batch.length === 0) {
-          noMoreData = true
-          break
-        }
+          // Fetch judgments for this batch of articles
+          const judgmentRows = await db
+            .select({judgment: judgments})
+            .from(judgments)
+            .where(and(whereCondition, inArray(judgments.articleId, batchIds)))
 
-        // Group by article in memory
-        const grouped = new Map<string, JudgmentRow[]>()
-        for (const row of batch) {
-          const existing = grouped.get(row.judgment.articleId) ?? []
-          existing.push(row.judgment)
-          grouped.set(row.judgment.articleId, existing)
-        }
-
-        // Apply scope and answer filters in memory
-        for (const [articleId, articleJudgments] of grouped) {
-          // First: Check if article is in scope (replaces slow OR/subquery)
-          const inScopeJudgments = articleJudgments.filter((j) => {
-            return isInScope(j, scopeFilter)
-          })
-
-          if (inScopeJudgments.length === 0) {
-            continue // Article not in scope, skip
+          // Group by article
+          const grouped = new Map<string, JudgmentRow[]>()
+          for (const row of judgmentRows) {
+            const existing = grouped.get(row.judgment.articleId) ?? []
+            existing.push(row.judgment)
+            grouped.set(row.judgment.articleId, existing)
           }
 
-          // Second: Check if article passes answer filters
-          if (!passesAnswerFilters(inScopeJudgments, answerFilters)) {
-            continue
-          }
+          // Apply answer filters
+          for (const [articleId, articleJudgments] of grouped) {
+            if (!passesAnswerFilters(articleJudgments, answerFilters)) {
+              continue
+            }
 
-          // Only keep judgments for the project's enabled prompts
-          const relevantJudgments = inScopeJudgments.filter((j) => {
-            return promptIds.includes(j.promptId)
-          })
-
-          if (relevantJudgments.length > 0) {
-            const firstJudgment = relevantJudgments[0]
-            matchingArticles.push({
-              articleId,
-              judgments: relevantJudgments,
-              articleTitle: firstJudgment?.articleTitle ?? null,
-              articleCreatedAt: firstJudgment?.articleCreatedAt ?? null,
-              articleUpdatedAt: firstJudgment?.articleUpdatedAt ?? null,
+            const relevantJudgments = articleJudgments.filter((j) => {
+              return promptIds.includes(j.promptId)
             })
+
+            if (relevantJudgments.length > 0) {
+              const firstJudgment = relevantJudgments[0]
+              matchingArticles.push({
+                articleId,
+                judgments: relevantJudgments,
+                articleTitle: firstJudgment?.articleTitle ?? null,
+                articleCreatedAt: firstJudgment?.articleCreatedAt ?? null,
+                articleUpdatedAt: firstJudgment?.articleUpdatedAt ?? null,
+              })
+            }
+          }
+        }
+      } else {
+        // === GENERAL PATH: Import routes and/or curated ===
+        // Need to scan through judgments and filter by scope in memory
+        const BATCH_SIZE = 2000
+        const MAX_ITERATIONS = 100
+        const ARTICLES_NEEDED = page * limit
+
+        let cursor: string | null = null
+        let iterations = 0
+        let noMoreData = false
+
+        while (matchingArticles.length < ARTICLES_NEEDED && iterations < MAX_ITERATIONS && !noMoreData) {
+          iterations++
+
+          const cursorCondition: SQL | undefined = cursor ? gt(judgments.articleId, cursor) : undefined
+          const batchWhere: SQL = cursorCondition
+            ? (and(whereCondition, cursorCondition) ?? whereCondition)
+            : whereCondition
+
+          const batch = await db
+            .select({judgment: judgments})
+            .from(judgments)
+            .where(batchWhere)
+            .orderBy(asc(judgments.articleId))
+            .limit(BATCH_SIZE)
+
+          if (batch.length === 0) {
+            noMoreData = true
+            break
+          }
+
+          // Group by article in memory
+          const grouped = new Map<string, JudgmentRow[]>()
+          for (const row of batch) {
+            const existing = grouped.get(row.judgment.articleId) ?? []
+            existing.push(row.judgment)
+            grouped.set(row.judgment.articleId, existing)
+          }
+
+          // Apply scope and answer filters
+          for (const [articleId, articleJudgments] of grouped) {
+            // Check scope: import route match OR curated article
+            const firstJudgment = articleJudgments[0]
+            const isInScope =
+              (firstJudgment?.articleImportRoute && scopeFilter.routeTexts.includes(firstJudgment.articleImportRoute))
+              || scopeFilter.curatedArticleIds.has(articleId)
+
+            if (!isInScope) {
+              continue
+            }
+
+            if (!passesAnswerFilters(articleJudgments, answerFilters)) {
+              continue
+            }
+
+            const relevantJudgments = articleJudgments.filter((j) => {
+              return promptIds.includes(j.promptId)
+            })
+
+            if (relevantJudgments.length > 0) {
+              matchingArticles.push({
+                articleId,
+                judgments: relevantJudgments,
+                articleTitle: firstJudgment?.articleTitle ?? null,
+                articleCreatedAt: firstJudgment?.articleCreatedAt ?? null,
+                articleUpdatedAt: firstJudgment?.articleUpdatedAt ?? null,
+              })
+            }
+          }
+
+          const lastRow = batch[batch.length - 1]
+          if (lastRow) {
+            cursor = lastRow.judgment.articleId
           }
         }
 
-        // Update cursor to last article_id we saw
-        const lastRow = batch[batch.length - 1]
-        if (lastRow) {
-          cursor = lastRow.judgment.articleId
-        }
+        console.log(`🔄 Progressive fetch: ${iterations} batches`)
       }
 
       console.timeEnd('progressive fetch')
-      console.log(
-        `🔄 Progressive fetch: ${iterations} batches, ${matchingArticles.length} articles found, page ${page}`,
-      )
+      console.log(`📄 Found ${matchingArticles.length} articles for page ${page}`)
 
       // === PAGINATION ===
-      // Extract the page we need from the accumulated results
       const startIndex = (page - 1) * limit
       const pageArticles = matchingArticles.slice(startIndex, startIndex + limit)
 
       // === BUILD RESULT ===
       console.time('result processing')
       const result = pageArticles.map((article) => {
-        // Sort judgments by prompt order
         const sorted = [...article.judgments].sort((a, b) => {
           const ao = promptOrderMap[a.promptId] ?? Number.MAX_SAFE_INTEGER
           const bo = promptOrderMap[b.promptId] ?? Number.MAX_SAFE_INTEGER
           return ao - bo
         })
 
-        // Compute judged status for frontend display
         const judgedPromptIds = [
           ...new Set(
             sorted.map((j) => {
@@ -195,7 +236,6 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
       })
       console.timeEnd('result processing')
 
-      // Return data immediately - totalCount/totalPages come from separate endpoint
       return {data: result, totalCount: null, page, limit, totalPages: null}
     } catch (error) {
       console.error('Error fetching articles reviews:', error)
