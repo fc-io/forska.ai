@@ -138,7 +138,9 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
       }
 
       console.timeEnd('progressive fetch')
-      console.log(`Progressive fetch: ${iterations} iterations, ${matchingArticles.length} matching articles found`)
+      console.log(
+        `🔄 Progressive fetch: ${iterations} batches, ${matchingArticles.length} articles found, page ${page}`,
+      )
 
       // === PAGINATION ===
       // Extract the page we need from the accumulated results
