@@ -3,7 +3,12 @@ import {Elysia, t} from 'elysia'
 
 import {judgments} from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
-import {buildProgressiveFetchContext, fetchProjectMetadata, passesAnswerFilters} from './articlesReviewsQueryBuilder.ts'
+import {
+  buildProgressiveFetchContext,
+  fetchProjectMetadata,
+  isInScope,
+  passesAnswerFilters,
+} from './articlesReviewsQueryBuilder.ts'
 
 /**
  * Progressive fetch articles reviews API.
@@ -11,13 +16,13 @@ import {buildProgressiveFetchContext, fetchProjectMetadata, passesAnswerFilters}
  * Key optimizations:
  * 1. NO GROUP BY on the database - use index scan with LIMIT
  * 2. Fetch batches ordered by article_id (uses index: prompt_id, article_id)
- * 3. Apply answer filters in memory (fast - only processes batches, not millions of rows)
+ * 3. Apply scope + answer filters in memory (fast - only processes batches)
  * 4. Cursor-based pagination using article_id for stability
  *
  * Why this is fast:
  * - PostgreSQL uses Index Scan with early termination (LIMIT)
  * - Never scans the full table - fetches only what's needed
- * - Answer filtering in memory is O(batch_size), not O(table_size)
+ * - Scope filtering in memory avoids slow OR/subquery in DB
  */
 export const projectsRoutesGetArticlesReviews = new Elysia().post(
   '/api/articlesreviews',
@@ -50,7 +55,7 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
         return {data: [], totalCount: null, page, limit, totalPages: null}
       }
 
-      const {promptIds, promptOrderMap, whereCondition, answerFilters} = context
+      const {promptIds, promptOrderMap, whereCondition, answerFilters, scopeFilter} = context
 
       // === PROGRESSIVE FETCH ===
       // Instead of GROUP BY (scans all rows), fetch batches using index scan
@@ -108,25 +113,36 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
           grouped.set(row.judgment.articleId, existing)
         }
 
-        // Apply answer filters in memory and collect matching articles
+        // Apply scope and answer filters in memory
         for (const [articleId, articleJudgments] of grouped) {
-          // Check if this article passes the answer filters
-          if (passesAnswerFilters(articleJudgments, answerFilters)) {
-            // Only keep judgments for the project's enabled prompts
-            const relevantJudgments = articleJudgments.filter((j) => {
-              return promptIds.includes(j.promptId)
-            })
+          // First: Check if article is in scope (replaces slow OR/subquery)
+          const inScopeJudgments = articleJudgments.filter((j) => {
+            return isInScope(j, scopeFilter)
+          })
 
-            if (relevantJudgments.length > 0) {
-              const firstJudgment = relevantJudgments[0]
-              matchingArticles.push({
-                articleId,
-                judgments: relevantJudgments,
-                articleTitle: firstJudgment?.articleTitle ?? null,
-                articleCreatedAt: firstJudgment?.articleCreatedAt ?? null,
-                articleUpdatedAt: firstJudgment?.articleUpdatedAt ?? null,
-              })
-            }
+          if (inScopeJudgments.length === 0) {
+            continue // Article not in scope, skip
+          }
+
+          // Second: Check if article passes answer filters
+          if (!passesAnswerFilters(inScopeJudgments, answerFilters)) {
+            continue
+          }
+
+          // Only keep judgments for the project's enabled prompts
+          const relevantJudgments = inScopeJudgments.filter((j) => {
+            return promptIds.includes(j.promptId)
+          })
+
+          if (relevantJudgments.length > 0) {
+            const firstJudgment = relevantJudgments[0]
+            matchingArticles.push({
+              articleId,
+              judgments: relevantJudgments,
+              articleTitle: firstJudgment?.articleTitle ?? null,
+              articleCreatedAt: firstJudgment?.articleCreatedAt ?? null,
+              articleUpdatedAt: firstJudgment?.articleUpdatedAt ?? null,
+            })
           }
         }
 

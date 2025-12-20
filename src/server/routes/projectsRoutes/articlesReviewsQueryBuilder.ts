@@ -36,6 +36,14 @@ export interface AnswerFilter {
 }
 
 /**
+ * Scope filter configuration for in-memory filtering
+ */
+export interface ScopeFilter {
+  routeTexts: string[]
+  curatedArticleIds: Set<string>
+}
+
+/**
  * Context for progressive fetch approach
  */
 export interface ProgressiveFetchContext {
@@ -43,6 +51,7 @@ export interface ProgressiveFetchContext {
   promptOrderMap: Record<string, number>
   whereCondition: SQL
   answerFilters: AnswerFilter[]
+  scopeFilter: ScopeFilter
 }
 
 /**
@@ -60,7 +69,7 @@ export interface ArticlesReviewsQueryContext {
  * Runs queries in parallel for better performance.
  */
 export const fetchProjectMetadata = async (db: ReturnType<typeof getDatabase>, projectId: string) => {
-  const [projectPromptRows, projectBoundsResult, projectImportRouteTexts] = await Promise.all([
+  const [projectPromptRows, projectBoundsResult, projectImportRouteTexts, curatedArticleRows] = await Promise.all([
     // Get enabled prompts for project
     db
       .select({id: prompts.id, order: projectPrompts.order})
@@ -82,6 +91,12 @@ export const fetchProjectMetadata = async (db: ReturnType<typeof getDatabase>, p
       .from(projectRouteLink)
       .innerJoin(importRoute, eq(projectRouteLink.importRouteId, importRoute.id))
       .where(eq(projectRouteLink.projectId, projectId)),
+
+    // Get curated article IDs (for in-memory scope filtering)
+    db
+      .select({articleId: projectArticles.articleId})
+      .from(projectArticles)
+      .where(eq(projectArticles.projectId, projectId)),
   ])
 
   return {
@@ -90,6 +105,11 @@ export const fetchProjectMetadata = async (db: ReturnType<typeof getDatabase>, p
     routeTexts: projectImportRouteTexts.map((r) => {
       return r.route
     }),
+    curatedArticleIds: new Set(
+      curatedArticleRows.map((r) => {
+        return r.articleId
+      }),
+    ),
   }
 }
 
@@ -110,7 +130,7 @@ export const buildProgressiveFetchContext = (
   const promptIds = projectPromptRows.map((p) => {
     return p.id
   })
-  const hasImportRoutes = routeTexts.length > 0
+  const _hasImportRoutes = routeTexts.length > 0 // Unused - scope filtering moved to memory
 
   // Parse dates
   const fromDate = params.from ? new Date(`${params.from}T00:00:00.000Z`) : null
@@ -159,33 +179,11 @@ export const buildProgressiveFetchContext = (
     whereParts.push(sql`${judgments.articleTitle} ILIKE ${'%' + searchTitle + '%'}`)
   }
 
-  // === SCOPE CONDITION ===
-  const scopeConditions: Array<ReturnType<typeof sql>> = []
-
-  // Import route match using denormalized articleImportRoute
-  if (hasImportRoutes) {
-    const routeTextsArray = sql.join(
-      routeTexts.map((r) => {
-        return sql`${r}`
-      }),
-      sql`,`,
-    )
-    scopeConditions.push(sql`${judgments.articleImportRoute} = ANY(ARRAY[${routeTextsArray}])`)
-  }
-
-  // Curated articles - use subquery
-  scopeConditions.push(
-    sql`${judgments.articleId} IN (
-      SELECT pa."article_id" FROM ${projectArticles} pa
-      WHERE pa."project_id" = ${params.projectId}::uuid
-    )`,
-  )
-
-  // Combine scope with OR
-  const scopeOr = scopeConditions.length > 1 ? or(...scopeConditions) : scopeConditions[0]
-  if (scopeOr) {
-    whereParts.push(scopeOr)
-  }
+  // === SCOPE FILTERING MOVED TO IN-MEMORY ===
+  // The OR condition with subquery kills index performance.
+  // Instead, we filter scope in memory using denormalized articleImportRoute
+  // and pre-fetched curated article IDs.
+  const scopeFilter: ScopeFilter = {routeTexts, curatedArticleIds: metadata.curatedArticleIds}
 
   // Fallback to trivially-true condition (shouldn't happen since whereParts is never empty)
   const whereCondition: SQL = and(...whereParts) ?? sql`1=1`
@@ -199,7 +197,7 @@ export const buildProgressiveFetchContext = (
     {} as Record<string, number>,
   )
 
-  return {whereCondition, answerFilters, promptIds, promptOrderMap}
+  return {whereCondition, answerFilters, promptIds, promptOrderMap, scopeFilter}
 }
 
 /**
@@ -243,6 +241,25 @@ export const passesAnswerFilters = (judgmentsForArticle: JudgmentRow[], answerFi
   }
 
   return true
+}
+
+/**
+ * Checks if a judgment is in scope for the project.
+ * Uses denormalized articleImportRoute and pre-fetched curated article IDs.
+ * This replaces the slow OR/subquery in the database.
+ */
+export const isInScope = (judgment: JudgmentRow, scopeFilter: ScopeFilter): boolean => {
+  // Check if article's import route matches any of the project's routes
+  if (judgment.articleImportRoute && scopeFilter.routeTexts.includes(judgment.articleImportRoute)) {
+    return true
+  }
+
+  // Check if article is in the curated articles set
+  if (scopeFilter.curatedArticleIds.has(judgment.articleId)) {
+    return true
+  }
+
+  return false
 }
 
 /**
