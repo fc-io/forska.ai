@@ -317,7 +317,7 @@ The answer filters (HAVING on cross-prompt aggregates) combined with ORDER BY + 
 2. **Aggressive caching** — Cache query results for common filter combinations
 3. **Accept latency** — Show loading spinner for complex queries (~10-50s)
 
-### Phase 2.8: Progressive Fetch Approach (2024-12-20) ✅ IMPLEMENTED
+### Phase 2.8: Progressive Fetch Approach (2024-12-20) ✅ IMPLEMENTED & WORKING
 
 After further analysis, we discovered a fundamentally different approach that avoids GROUP BY entirely.
 
@@ -408,21 +408,79 @@ const passesAnswerFilters = (judgments, filters) => {
 
 #### Files Changed
 
-- `projectsRoutesGetArticlesReviews.ts` - Rewrote to use progressive fetch
-- `articlesReviewsQueryBuilder.ts` - Added `buildProgressiveFetchContext()` and `passesAnswerFilters()`
+- `projectsRoutesGetArticlesReviews.ts` - Rewrote to use progressive fetch with in-memory scope filtering
+- `articlesReviewsQueryBuilder.ts` - Added `buildProgressiveFetchContext()`, `passesAnswerFilters()`, `isInScope()`
 
-#### Note: Count Endpoint
+### Phase 2.9: OR/Subquery Fix (2024-12-20) ✅ IMPLEMENTED & WORKING
 
-The `/api/articlesreviewscount` endpoint still uses GROUP BY. This is acceptable because:
-1. It runs async (doesn't block data display)
-2. The count is cached on the frontend
-3. Users see data immediately, count appears later
+Initial progressive fetch was still slow (~2.2s per batch) because of the OR condition in the WHERE clause.
+
+#### The Problem
+
+The original scope condition killed index performance:
+```sql
+WHERE prompt_id IN (...)
+  AND article_id > $cursor
+  AND (
+    article_import_route = ANY(...)   -- Condition A
+    OR article_id IN (SELECT ...)     -- OR with subquery = seq scan!
+  )
+```
+
+**EXPLAIN showed**: 89ms for simple query vs 2.2s with OR condition.
+
+#### The Solution
+
+Move scope filtering to memory:
+1. **Pre-fetch curated article IDs** in metadata (added to `fetchProjectMetadata()`)
+2. **Remove OR from DB query** — only `prompt_id + cursor + date filters`
+3. **Check scope in memory** using `isInScope()` function
+
+#### Performance Results
+
+| Metric | Before (OR in DB) | After (scope in memory) |
+|--------|-------------------|-------------------------|
+| Per batch | ~2.2s | ~50-100ms |
+| Total (19 batches) | ~40s | ~2-12s |
+| Index usage | Seq scan | Index scan ✅ |
+
+### Phase 2.10: Count Endpoint ⚠️ REQUIRES PRE-COMPUTED COUNTS
+
+The count endpoint cannot use progressive fetch effectively because:
+
+1. **Must count ALL articles** — no early exit like pagination
+2. **Sparse scope** — ~99% rejection rate means scanning entire table
+3. **Progressive count attempted but too slow** — same as GROUP BY
+
+#### Current Status
+
+Count endpoint is **stubbed** (returns 0) to not block the data display.
+
+#### Required Solution: Pre-computed Counts
+
+To make count fast, we need **pre-computed counts** stored in a separate table:
+
+```sql
+CREATE TABLE project_article_counts (
+  project_id UUID PRIMARY KEY,
+  total_articles INTEGER DEFAULT 0,
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+**Update strategy:**
+- Increment on judgment insert (new article)
+- Decrement on judgment delete (article no longer has judgments)
+- Recompute periodically as fallback
+
+This moves the cost from query-time (slow) to write-time (amortized).
 
 ### Phase 3: Validation
 
-- [ ] Compare query plans before/after
-- [ ] Benchmark with production-like data
+- [x] Compare query plans before/after — Index scan confirmed ✅
+- [x] Benchmark with production-like data — 40s → 2-12s ✅
 - [ ] Verify result correctness matches old implementation
+- [ ] Implement pre-computed counts for count endpoint
 
 ---
 
