@@ -7,6 +7,87 @@
 
 Deploy SGLang inference server to MareNostrum 5 at Barcelona Supercomputing Center (BSC). Due to MN5's restriction on outbound network calls, we pre-download models and containers locally, then transfer them via the `tlog` transfer node.
 
+---
+
+## 🚀 Quick Start: First-Time Setup (Step-by-Step)
+
+Follow these steps in order to get inference running on MN5:
+
+### Step 1: Download model + container locally, transfer to MN5
+```bash
+# This handles: HuggingFace model download, Docker container save, rsync to MN5
+bun run scripts/mn5Transfer.ts
+```
+> ⏱️ Takes 30-60 min depending on network (downloads ~40GB, uploads ~50GB)
+
+### Step 2: Upload the sbatch script
+```bash
+scp forska-mn5-sglang.sbatch tlog:/gpfs/projects/ehpc482/dev/
+```
+
+### Step 3: Submit the job on MN5
+```bash
+ssh alog "cd /gpfs/projects/ehpc482/dev && sbatch --export=ALL forska-mn5-sglang.sbatch"
+```
+
+### Step 4: Wait for job to start, then check status
+```bash
+# Check if job is running
+ssh alog "squeue -u hrev337517"
+
+# Once RUNNING, get the compute node name
+ssh alog "squeue -u hrev337517 -h -o '%N' -t RUNNING"
+```
+
+### Step 5: Establish SSH tunnel to MN5 SGLang
+```bash
+# Auto-detects compute node from running job
+./scripts/mn5Tunnel.sh
+```
+> Keep this terminal open - it's your connection to SGLang
+
+### Step 6: Test inference locally
+```bash
+# In a new terminal - list models
+curl http://localhost:30000/v1/models | jq .
+
+# Send a test request
+curl http://localhost:30000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "Qwen/Qwen3-30B-A3B-Instruct-2507",
+    "messages": [{"role": "user", "content": "Hello!"}],
+    "max_tokens": 50
+  }' | jq .
+```
+
+### Step 7: Configure forska.ai to use MN5
+```bash
+# Edit .env.local
+VITE_LLM_SERVER_URL=http://localhost:30000/v1
+```
+
+Then restart your local API server - it will now route inference to MN5!
+
+---
+
+## 🔄 Daily Usage (After Initial Setup)
+
+Once everything is set up, daily usage is just:
+
+```bash
+# 1. Submit job (if not already running)
+ssh alog "cd /gpfs/projects/ehpc482/dev && sbatch --export=ALL forska-mn5-sglang.sbatch"
+
+# 2. Wait ~5-10 min for model to load, then connect
+./scripts/mn5Tunnel.sh
+
+# 3. Start your local forska.ai
+bun run dev
+```
+
+---
+
 ## Architecture
 
 ```
