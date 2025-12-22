@@ -550,37 +550,40 @@ Build the Parquet writer that will become the new write path.
   - [x] Environment-based configuration: `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET`
   - [x] Utility functions: `ensureBucket`, `uploadToS3`, `downloadFromS3`, `listObjects`, `deleteFromS3`
 
-## Phase 3: Test Pipeline with Small Subset + ClickHouse DDL
+## Phase 3: Full Backfill PostgreSQL → Parquet
 
-Validate the entire pipeline with a small subset (~1000 rows) before committing to the full backfill.
+Backfill all existing judgments to Parquet first, so we have real data to test ClickHouse with.
 
-- [ ] **Test Script**: Create `scripts/test-parquet-pipeline.ts`
-  - [ ] Fetch ~1000 judgments from PostgreSQL (with JOINs to get article metadata)
-  - [ ] Denormalize into `DenormalizedJudgmentAnalytics` format
-  - [ ] Write to SeaweedFS using the Parquet Writer from Phase 2
-  - [ ] Log the file path written
-- [ ] **Run test script**: Write test Parquet file(s) to SeaweedFS
+> **Note**: Originally Phase 4, moved earlier because using real ~25M judgments for testing is more practical than a synthetic 1000-row subset.
+
+- [x] **Script**: Create `scripts/backfillPostgresToParquet.ts` *(2024-12-22)*
+  - [x] Stream rows from PostgreSQL `judgments` table (with JOINs to get article metadata)
+  - [x] Denormalize each judgment into `DenormalizedJudgmentAnalytics` format
+  - [x] Write batches to Parquet files in SeaweedFS
+  - [x] Use judgment's `createdAt` for partitioning
+  - [x] Log progress with rate and ETA
+  - [x] Configurable: `LIMIT` (default 1000), `BATCH_SIZE`, `OFFSET`, `DRY_RUN`
+- [ ] **Test run (1000 rows)**: Verify script works with limited subset
+  - [ ] Set S3 env vars: `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET`
+  - [ ] Run: `bun scripts/backfillPostgresToParquet.ts` (defaults to LIMIT=1000)
+  - [ ] Verify Parquet file written to SeaweedFS
+  - [ ] Inspect with DuckDB/pandas (see script output for commands)
+- [ ] **Full backfill**: Run with `LIMIT=0` to process all ~25M rows
+- [ ] **Verify files**: Confirm Parquet files are written to SeaweedFS with expected partitioning
+
+## Phase 4: ClickHouse DDL & Testing
+
+Set up ClickHouse tables and verify ingestion using the real backfilled data.
+
+> **Note**: Originally Phase 3's "test script" was skipped — we use the real backfilled Parquet files instead.
+
 - [ ] **Create ClickHouse tables** (run DDL from above):
   - [ ] `judgments_queue` (S3Queue watching SeaweedFS)
   - [ ] `judgments` (MergeTree)
   - [ ] `judgments_mv` (Materialized View)
-- [ ] **Verify ingestion**: Confirm the ~1000 rows appear in ClickHouse `judgments` table
-- [ ] **Test queries**: Run sample queries (Pattern 1-4 from above) against the test data
-- [ ] **Validate correctness**: Compare ClickHouse results with PostgreSQL for the same subset
-
-## Phase 4: Full Backfill PostgreSQL → Parquet
-
-Once Phase 3 validates the pipeline works, migrate all ~25M judgments.
-
-- [ ] **Script**: Create `scripts/backfill-postgres-to-parquet.ts`
-  - [ ] Stream all rows from PostgreSQL `judgments` table (with JOINs to get article metadata)
-  - [ ] Denormalize each judgment into `DenormalizedJudgmentAnalytics` format
-  - [ ] Write batches to Parquet files in SeaweedFS
-  - [ ] Use judgment's `createdAt` for partitioning
-  - [ ] Log progress (e.g., every 100K rows)
-- [ ] **Run backfill**: Execute script against production database backup locally
-- [ ] **Verify in ClickHouse**: Confirm row counts match PostgreSQL
-- [ ] **Validate queries**: Run `/api/articlesreviews` equivalent query in ClickHouse and verify results
+- [ ] **Verify ingestion**: Confirm row counts in ClickHouse match PostgreSQL
+- [ ] **Test queries**: Run sample queries (Pattern 1-4 from above) against the real data
+- [ ] **Validate correctness**: Compare ClickHouse results with PostgreSQL for spot-check queries
 
 ## Phase 5: Dual-Write & Validation
 
