@@ -112,12 +112,12 @@ For detailed investigation, see `DENORM_API_PLAN.md` Phase 2.7.
 - **Benefit**: Decouples the core data asset from the operational database.
 - **Tradeoff**: **Eventual Consistency**. There will be a slight delay (seconds) between a judgment being written and it appearing in the PostgreSQL-backed Detail page.
 
-### 2. Immutability & Uniqueness
-**Decision**: Every judgment stored in Parquet is **unique and immutable**.
-- **No Updates**: Judgments are never modified after creation. Each judgment record is a permanent, unique entry.
-- **No Versioning**: There is no `updatedAt` column for deduplication - each row is inherently unique by its `id`.
-- **Deletes**: Use **soft deletes** via a `deletedAt` column. Downstream consumers filter by `WHERE deletedAt IS NULL`.
-- **Simplicity**: ClickHouse uses a simple `MergeTree` engine since no row deduplication is needed.
+### 2. Immutability & Soft Deletes (Tombstone Pattern)
+**Decision**: Parquet files are **append-only and immutable**. Logical deletes are handled via **tombstone records**.
+- **Append-Only**: Each Parquet file, once written, is never modified.
+- **Soft Deletes via Tombstones**: To delete a judgment, write a new record with the same `id` but with `deletedAt` set to the deletion timestamp. The original record remains in Parquet, but downstream queries see the "tombstone" as the current state.
+- **Deduplication Required**: Since the same `id` can appear multiple times (original + tombstone), ClickHouse uses `ReplacingMergeTree(deletedAt)` to deduplicate. Queries use `FINAL` or subquery patterns to get the latest state.
+- **Query Filtering**: After deduplication, filter with `WHERE deletedAt IS NULL` to exclude soft-deleted judgments.
 
 ### 3. Partitioning Strategy
 **Decision**: Partition strictly by time using Hive-style partitioning.
@@ -311,7 +311,7 @@ SETTINGS
     s3queue_processing_threads_num = 4;
 
 -- ============================================================
--- 2. MAIN ANALYTICS TABLE: Simple append-only, each judgment is unique
+-- 2. MAIN ANALYTICS TABLE: ReplacingMergeTree for tombstone deduplication
 -- ============================================================
 CREATE TABLE judgments (
     id String,
@@ -331,10 +331,11 @@ CREATE TABLE judgments (
     answeredOriginalAsArray Array(String),
     explanation Nullable(String),
     quotes Nullable(String)
-) ENGINE = MergeTree()
+) ENGINE = ReplacingMergeTree(deletedAt)
 PARTITION BY toYYYYMM(createdAt)
-ORDER BY (promptId, articleId, id);
--- NOTE: No deduplication needed - each judgment is unique.
+ORDER BY (id);  -- ORDER BY must include the dedup key (id)
+-- NOTE: ReplacingMergeTree keeps the row with the MAX deletedAt value.
+-- Tombstones (deletedAt IS NOT NULL) will replace originals (deletedAt IS NULL).
 
 -- ============================================================
 -- 3. MATERIALIZED VIEW: Route from Queue to Main Table
@@ -347,28 +348,43 @@ SELECT * FROM judgments_queue;
 
 ---
 
-## Query Patterns (Simple!)
+## Query Patterns (With Deduplication)
 
-Since each judgment is unique and immutable, queries are straightforward - no deduplication needed.
+Since soft deletes use tombstone records, queries must deduplicate to get the latest state of each `id`.
 
 ### Pattern 1: Fetching Judgments with Filters
 
 ```sql
--- Project scoping is done via promptIds (derived from project_prompts in PostgreSQL)
+-- Option A: Use FINAL (simple but slower for large tables)
 SELECT *
-FROM judgments
+FROM judgments FINAL
 WHERE promptId IN ('promptA', 'promptB')  -- Project's enabled prompts
-  AND deletedAt IS NULL; -- Exclude soft-deleted
+  AND deletedAt IS NULL;  -- Exclude soft-deleted (tombstones)
+
+-- Option B: Subquery with argMax (faster for analytics)
+SELECT *
+FROM (
+    SELECT
+        argMax(id, coalesce(deletedAt, toDateTime64(0, 3))) AS id,
+        argMax(createdAt, coalesce(deletedAt, toDateTime64(0, 3))) AS createdAt,
+        max(deletedAt) AS deletedAt,
+        -- ... other columns with argMax
+    FROM judgments
+    WHERE promptId IN ('promptA', 'promptB')
+    GROUP BY id
+)
+WHERE deletedAt IS NULL;
 ```
 
 ### Pattern 2: Aggregation Queries (e.g., Count by Prompt)
 
 ```sql
+-- Use FINAL to ensure tombstones are applied before aggregation
 SELECT
     promptId,
     countIf(answeredOriginal IS NOT NULL) AS answeredCount,
     count() AS totalCount
-FROM judgments
+FROM judgments FINAL
 WHERE deletedAt IS NULL
 GROUP BY promptId;
 ```
@@ -380,7 +396,7 @@ SELECT
     articleId,
     articleTitle,
     answeredOriginal
-FROM judgments
+FROM judgments FINAL
 WHERE promptId = 'yyy'
   AND answeredOriginal IS NOT NULL
   AND deletedAt IS NULL
@@ -398,9 +414,9 @@ SELECT
     any(articleTitle) AS articleTitle,
     max(articleCreatedAt) AS articleCreatedAt,
     groupArray((promptId, answeredOriginal)) AS answers
-FROM judgments
+FROM judgments FINAL  -- Deduplicate to apply tombstones
 WHERE promptId IN ('promptA', 'promptB')  -- Project's enabled prompts
-  AND deletedAt IS NULL
+  AND deletedAt IS NULL  -- Exclude soft-deleted
   AND (
     articleImportRoute IN ('route1', 'route2')  -- Import routes
     OR articleId IN (SELECT article_id FROM project_articles WHERE project_id = 'xxx')  -- Curated
@@ -422,12 +438,12 @@ LIMIT 100 OFFSET 0
 
 **Expected performance**: 1-5 seconds (vs ~50s in PostgreSQL)
 
-### Why This is Simpler
+### FINAL vs Subquery Trade-off
 
-- **No `argMax()` needed**: Each row is unique, no version deduplication
-- **No `ReplacingMergeTree`**: Simple `MergeTree` engine with better performance
-- **No `FINAL` clause**: No deduplication overhead at query time
-- **Direct filtering**: Just use standard `WHERE` clauses
+- **`FINAL` clause**: Simple to write, but reads all data before deduplicating. Good for small-to-medium tables or when combined with aggressive `WHERE` filtering.
+- **Subquery with `argMax()`**: More complex SQL, but can be faster for very large tables when you only need specific columns.
+- **Background merges**: `ReplacingMergeTree` merges duplicate rows in the background. Over time, fewer duplicates remain, making `FINAL` cheaper.
+- **Recommendation**: Start with `FINAL` for simplicity. Optimize to subquery only if performance is insufficient.
 
 ---
 
