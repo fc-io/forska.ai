@@ -244,7 +244,9 @@ interface DenormalizedJudgmentAnalytics {
   deletedAt: Date | null // Soft delete support
 
   // Analytic Dimensions
-  projectId: string
+  // NOTE: No projectId - project scoping is done via promptIds (derived from
+  // project_prompts table) and articleImportRoute (for scope filtering).
+  // This avoids redundancy since projectId is never used directly in WHERE clauses.
   articleId: string
   articleTitle: string
   articleCreatedAt: Date | null
@@ -278,7 +280,6 @@ CREATE TABLE judgments_queue (
     id String,
     createdAt DateTime64(3),
     deletedAt Nullable(DateTime64(3)),
-    projectId String,
     articleId String,
     articleTitle String,
     articleCreatedAt Nullable(DateTime64(3)),
@@ -316,7 +317,6 @@ CREATE TABLE judgments (
     id String,
     createdAt DateTime64(3),
     deletedAt Nullable(DateTime64(3)),
-    projectId String,
     articleId String,
     articleTitle String,
     articleCreatedAt Nullable(DateTime64(3)),
@@ -333,7 +333,7 @@ CREATE TABLE judgments (
     quotes Nullable(String)
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMM(createdAt)
-ORDER BY (projectId, articleId, promptId, id);
+ORDER BY (promptId, articleId, id);
 -- NOTE: No deduplication needed - each judgment is unique.
 
 -- ============================================================
@@ -354,22 +354,23 @@ Since each judgment is unique and immutable, queries are straightforward - no de
 ### Pattern 1: Fetching Judgments with Filters
 
 ```sql
+-- Project scoping is done via promptIds (derived from project_prompts in PostgreSQL)
 SELECT *
 FROM judgments
-WHERE projectId = 'xxx'
+WHERE promptId IN ('promptA', 'promptB')  -- Project's enabled prompts
   AND deletedAt IS NULL; -- Exclude soft-deleted
 ```
 
-### Pattern 2: Aggregation Queries (e.g., Count by Project)
+### Pattern 2: Aggregation Queries (e.g., Count by Prompt)
 
 ```sql
 SELECT
-    projectId,
+    promptId,
     countIf(answeredOriginal IS NOT NULL) AS answeredCount,
     count() AS totalCount
 FROM judgments
 WHERE deletedAt IS NULL
-GROUP BY projectId;
+GROUP BY promptId;
 ```
 
 ### Pattern 3: Filtering by Prompt and Answer
@@ -380,12 +381,12 @@ SELECT
     articleTitle,
     answeredOriginal
 FROM judgments
-WHERE projectId = 'xxx'
-  AND promptId = 'yyy'
+WHERE promptId = 'yyy'
   AND answeredOriginal IS NOT NULL
   AND deletedAt IS NULL
 ORDER BY createdAt DESC;
 ```
+
 
 ### Pattern 4: `/api/articlesreviews` Query (The Hard One)
 

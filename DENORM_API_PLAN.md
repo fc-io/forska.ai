@@ -503,3 +503,19 @@ This moves the cost from query-time (slow) to write-time (amortized).
 - `projectId` on judgments is **informational only** - it indicates where the judgment was created, but judgments can be shared/reused across projects
 - Import routes and curated articles are the source of truth for project scope
 - Prompts can be shared across projects; `promptId` filter is always combined with scope filter
+
+### Backfill Completion (2024-12-22)
+
+The denormalized fields were backfilled using `scripts/backfillJudgmentsDenormalizedFast.ts`:
+
+| Field | Filled | Status |
+|-------|--------|--------|
+| `article_title` | 24,946,050 (100%) | ✅ Complete |
+| `article_created_at` | 24,946,050 (100%) | ✅ Complete |
+| `project_id` | 19,986,558 (80.1%) | ✅ Expected |
+
+**~5 million judgments (20%) have NULL `project_id`** — this is expected and acceptable because:
+1. `project_id` is purely informational (indicates where judgment was *created*)
+2. These judgments were created before project association was tracked, or via bulk imports
+3. Project scope is determined by `article_import_route` and `project_articles`, not `project_id`
+4. No functionality depends on `project_id` being filled
