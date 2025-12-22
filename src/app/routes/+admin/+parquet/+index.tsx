@@ -46,40 +46,46 @@ const AdminParquet = () => {
   }>({type: null})
 
   // Delete file mutation
-  const deleteFileMutation = createMutation(() => ({
-    mutationFn: async (key: string) => {
-      const response = await apiClient.api.parquet.file.delete({key})
-      return handleApiResponse<DeleteResponse>(response, 'Failed to delete file')
-    },
-    onSuccess: () => {
-      setDeleteModal({type: null})
-      void parquetQuery.refetch()
-    },
-  }))
+  const deleteFileMutation = createMutation(() => {
+    return {
+      mutationFn: async (key: string) => {
+        const response = await apiClient.api.parquet.file.delete({key})
+        return handleApiResponse<DeleteResponse>(response, 'Failed to delete file')
+      },
+      onSuccess: () => {
+        setDeleteModal({type: null})
+        void parquetQuery.refetch()
+      },
+    }
+  })
 
   // Delete partition mutation
-  const deletePartitionMutation = createMutation(() => ({
-    mutationFn: async ({year, month}: {year: string; month: string}) => {
-      const response = await apiClient.api.parquet.partition.delete({year, month})
-      return handleApiResponse<DeleteResponse>(response, 'Failed to delete partition')
-    },
-    onSuccess: () => {
-      setDeleteModal({type: null})
-      void parquetQuery.refetch()
-    },
-  }))
+  const deletePartitionMutation = createMutation(() => {
+    return {
+      mutationFn: async ({year, month}: {year: string; month: string}) => {
+        const response = await apiClient.api.parquet.partition.delete({year, month})
+        return handleApiResponse<DeleteResponse>(response, 'Failed to delete partition')
+      },
+      onSuccess: () => {
+        setDeleteModal({type: null})
+        void parquetQuery.refetch()
+      },
+    }
+  })
 
   // Delete all mutation
-  const deleteAllMutation = createMutation(() => ({
-    mutationFn: async () => {
-      const response = await apiClient.api.parquet.all.delete()
-      return handleApiResponse<DeleteResponse>(response, 'Failed to delete all files')
-    },
-    onSuccess: () => {
-      setDeleteModal({type: null})
-      void parquetQuery.refetch()
-    },
-  }))
+  const deleteAllMutation = createMutation(() => {
+    return {
+      mutationFn: async () => {
+        const response = await apiClient.api.parquet.all.delete()
+        return handleApiResponse<DeleteResponse>(response, 'Failed to delete all files')
+      },
+      onSuccess: () => {
+        setDeleteModal({type: null})
+        void parquetQuery.refetch()
+      },
+    }
+  })
 
   const isAdmin = () => {
     return sessionQuery.data?.user?.role === 'admin'
@@ -127,9 +133,7 @@ const AdminParquet = () => {
                     Year: {deleteModal().target?.year}, Month: {deleteModal().target?.month}
                   </span>
                 </p>
-                <p class="mt-1 text-sm text-red-600">
-                  This will delete {deleteModal().target?.count} file(s).
-                </p>
+                <p class="mt-1 text-sm text-red-600">This will delete {deleteModal().target?.count} file(s).</p>
               </Show>
               <Show when={deleteModal().type === 'all'}>
                 <p class="text-red-600 font-semibold">⚠️ DANGER: This will delete ALL parquet files!</p>
@@ -156,7 +160,15 @@ const AdminParquet = () => {
               >
                 <Show when={isDeleting()}>
                   <svg class="animate-spin h-4 w-4" viewBox="0 0 24 24">
-                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none" />
+                    <circle
+                      class="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      stroke-width="4"
+                      fill="none"
+                    />
                     <path
                       class="opacity-75"
                       fill="currentColor"
@@ -202,26 +214,16 @@ const AdminParquet = () => {
         >
           <div class="flex justify-between items-center mb-6">
             <h1 class="text-2xl font-bold">Parquet Files</h1>
-            <div class="flex gap-2">
+            <Show when={(stats()?.totalFiles ?? 0) > 0}>
               <button
                 onClick={() => {
-                  return void parquetQuery.refetch()
+                  return setDeleteModal({type: 'all'})
                 }}
-                class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm"
+                class="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 text-sm"
               >
-                Refresh
+                Delete All
               </button>
-              <Show when={(stats()?.totalFiles ?? 0) > 0}>
-                <button
-                  onClick={() => {
-                    return setDeleteModal({type: 'all'})
-                  }}
-                  class="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 text-sm"
-                >
-                  Delete All
-                </button>
-              </Show>
-            </div>
+            </Show>
           </div>
 
           <Show when={parquetQuery.isLoading}>
