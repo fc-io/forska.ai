@@ -8,8 +8,8 @@ import {existsSync, mkdirSync} from 'fs'
 import {basename, join} from 'path'
 
 const MN5_ROOT = '/gpfs/projects/ehpc482/dev'
-const TLOG = 'tlog'
-const ALOG = 'alog'
+const TLOG = 'tlog' // Transfer login (for rsync, any login node)
+const GLOG = 'glog' // General purpose login (has singularity module) - add to ~/.ssh/config
 const MODELS_DIR = './models'
 const DEFAULT_MODEL = 'XiaomiMiMo/MiMo-V2-Flash'
 
@@ -70,8 +70,16 @@ const main = async () => {
   if (!skipContainer) {
     log('Transferring container...')
     await $`rsync -avzP ${tarball} ${TLOG}:${MN5_ROOT}/`
-    log('Converting to SIF (this takes a while)...')
-    await $`ssh ${ALOG} "cd ${MN5_ROOT} && module load apptainer 2>/dev/null || true && apptainer build sglang_latest.sif docker-archive:sglang_latest.tar.gz && rm sglang_latest.tar.gz"`
+    log('Converting to SIF on general login node (this takes a while)...')
+    // Note: Must use glogin (general purpose) - alogin (ACC) doesn't have singularity module
+    const convertCmd = `
+      cd ${MN5_ROOT} && \\
+      module load singularity/4.1.5 && \\
+      which singularity || which apptainer || (echo "ERROR: Neither singularity nor apptainer found" && exit 1) && \\
+      singularity build sglang_latest.sif docker-archive:sglang_latest.tar.gz && \\
+      rm sglang_latest.tar.gz
+    `
+    await $`ssh ${GLOG} ${convertCmd}`
   }
 
   log('Done! Next: scp forska-mn5-sglang.sbatch tlog:/gpfs/projects/ehpc482/dev/')
