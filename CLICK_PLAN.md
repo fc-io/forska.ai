@@ -533,34 +533,44 @@ Set up the new infrastructure **before** modifying any existing code or schema.
   - ClickHouse: HTTP API at `localhost:8123`, Native at `localhost:9000`
   - Bucket `forska-judgments` created in SeaweedFS
 
-## Phase 2: ClickHouse DDL & Initial Testing
-
-Deploy ClickHouse schema and verify S3Queue ingestion works.
-
-- [ ] **Create ClickHouse tables** (run DDL above):
-  - [ ] `judgments_queue` (S3Queue watching SeaweedFS)
-  - [ ] `judgments` (MergeTree)
-  - [ ] `judgments_mv` (Materialized View)
-- [ ] **Test ingestion manually**: Upload a test Parquet file to SeaweedFS and verify it appears in ClickHouse
-- [ ] **Test queries**: Run sample queries against the empty `judgments` table
-
-## Phase 3: Parquet Writer
+## Phase 2: Parquet Writer ✅ COMPLETE
 
 Build the Parquet writer that will become the new write path.
 
-- [ ] **Schema**: Define `DenormalizedJudgmentAnalytics` TypeScript interface
-- [ ] **Parquet Writer**: Create `src/services/parquet/parquetWriter.ts`
-  - [ ] Use `@dsnp/parquetjs` for Parquet serialization
-  - [ ] Implement `writeBatch(judgments)` that writes to S3 (SeaweedFS)
-  - [ ] Path format: `forska-judgments/year=YYYY/month=MM/{ulid}.parquet`
-  - [ ] **Durability**: Consider writing to a temp key first, then renaming
-- [ ] **S3 Client**: Create `src/services/s3/s3Client.ts`
-  - [ ] Use `@aws-sdk/client-s3` configured for SeaweedFS/Ceph RGW endpoints
-  - [ ] Environment-based configuration: `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET`
+- [x] **Schema**: Define `DenormalizedJudgmentAnalytics` TypeScript interface *(2024-12-22)*
+  - Created `src/services/parquet/types.ts` with full schema
+- [x] **Parquet Writer**: Create `src/services/parquet/parquetWriter.ts` *(2024-12-22)*
+  - [x] Use `@dsnp/parquetjs` for Parquet serialization
+  - [x] Implement `writeBatch(judgments)` that writes to S3 (SeaweedFS)
+  - [x] Path format: `{bucket}/year=YYYY/month=MM/{ulid}.parquet`
+  - [x] Includes `JudgmentParquetWriter` class for streaming/batched writes
+  - [x] Supports tombstone records for soft deletes via `writeTombstone()`
+- [x] **S3 Client**: Create `src/services/s3/s3Client.ts` *(2024-12-22)*
+  - [x] Use `@aws-sdk/client-s3` configured for SeaweedFS/Ceph RGW endpoints
+  - [x] Environment-based configuration: `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET`
+  - [x] Utility functions: `ensureBucket`, `uploadToS3`, `downloadFromS3`, `listObjects`, `deleteFromS3`
 
-## Phase 4: Backfill Existing PostgreSQL Data to Parquet
+## Phase 3: Test Pipeline with Small Subset + ClickHouse DDL
 
-Migrate all existing judgments from PostgreSQL to Parquet **before** modifying the PostgreSQL schema.
+Validate the entire pipeline with a small subset (~1000 rows) before committing to the full backfill.
+
+- [ ] **Test Script**: Create `scripts/test-parquet-pipeline.ts`
+  - [ ] Fetch ~1000 judgments from PostgreSQL (with JOINs to get article metadata)
+  - [ ] Denormalize into `DenormalizedJudgmentAnalytics` format
+  - [ ] Write to SeaweedFS using the Parquet Writer from Phase 2
+  - [ ] Log the file path written
+- [ ] **Run test script**: Write test Parquet file(s) to SeaweedFS
+- [ ] **Create ClickHouse tables** (run DDL from above):
+  - [ ] `judgments_queue` (S3Queue watching SeaweedFS)
+  - [ ] `judgments` (MergeTree)
+  - [ ] `judgments_mv` (Materialized View)
+- [ ] **Verify ingestion**: Confirm the ~1000 rows appear in ClickHouse `judgments` table
+- [ ] **Test queries**: Run sample queries (Pattern 1-4 from above) against the test data
+- [ ] **Validate correctness**: Compare ClickHouse results with PostgreSQL for the same subset
+
+## Phase 4: Full Backfill PostgreSQL → Parquet
+
+Once Phase 3 validates the pipeline works, migrate all ~25M judgments.
 
 - [ ] **Script**: Create `scripts/backfill-postgres-to-parquet.ts`
   - [ ] Stream all rows from PostgreSQL `judgments` table (with JOINs to get article metadata)
