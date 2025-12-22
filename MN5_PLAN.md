@@ -20,6 +20,10 @@ bun run scripts/mn5Transfer.ts
 ```
 > ⏱️ Takes 30-60 min depending on network (downloads ~40GB, uploads ~50GB)
 
+**Stored on MN5 at:**
+- Model: `/gpfs/projects/ehpc482/dev/hf_cache/models--XiaomiMiMo--MiMo-V2-Flash/`
+- Container: `/gpfs/projects/ehpc482/dev/sglang_latest.sif`
+
 ### Step 2: Upload the sbatch script
 ```bash
 scp forska-mn5-sglang.sbatch tlog:/gpfs/projects/ehpc482/dev/
@@ -55,7 +59,7 @@ curl http://localhost:30000/v1/models | jq .
 curl http://localhost:30000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "Qwen/Qwen3-30B-A3B-Instruct-2507",
+    "model": "XiaomiMiMo/MiMo-V2-Flash",
     "messages": [{"role": "user", "content": "Hello!"}],
     "max_tokens": 50
   }' | jq .
@@ -134,7 +138,7 @@ bun run dev
 
 - [ ] **1.1** Install HuggingFace CLI locally
   ```bash
-  pip install huggingface-hub[cli]
+  uv pip install huggingface-hub[cli]
   # or: brew install huggingface-cli
   ```
 
@@ -145,8 +149,8 @@ bun run dev
 
 - [ ] **1.3** Download target model locally
   ```bash
-  huggingface-cli download Qwen/Qwen3-30B-A3B-Instruct-2507 \
-    --local-dir ./models/Qwen3-30B-A3B-Instruct-2507
+  huggingface-cli download XiaomiMiMo/MiMo-V2-Flash \
+    --local-dir ./models/MiMo-V2-Flash
   ```
 
 - [ ] **1.4** Pull SGLang container locally (requires Docker)
@@ -170,8 +174,8 @@ bun run dev
 - [ ] **2.3** Transfer model to MN5 via tlog
   ```bash
   rsync -avzP --info=progress2 \
-    ./models/Qwen3-30B-A3B-Instruct-2507/ \
-    tlog:/gpfs/projects/ehpc482/dev/hf_cache/models--Qwen--Qwen3-30B-A3B-Instruct-2507/
+    ./models/MiMo-V2-Flash/ \
+    tlog:/gpfs/projects/ehpc482/dev/hf_cache/models--XiaomiMiMo--MiMo-V2-Flash/
   ```
 
 - [ ] **2.4** Transfer container tarball to MN5
@@ -349,7 +353,47 @@ curl http://localhost:30000/v1/models | jq .
 
 ## Notes
 
-- MareNostrum 5 has **no outbound internet access** on compute nodes
-- All models and containers must be pre-downloaded and transferred via `tlog`
+- **MareNostrum 5 has NO outbound internet access** - this applies to ALL nodes (login, compute, and transfer)
+- All models and containers must be pre-downloaded locally and transferred via `tlog`
 - Shared storage at `/gpfs/projects/ehpc482/dev` is accessible from all nodes
 - Each compute node has **4× H100 GPUs** (assumed 80GB each)
+
+---
+
+## Alternative: SSHFS Streaming (No Local Storage)
+
+Instead of downloading to your local machine first, you can mount MN5 storage locally and stream directly:
+
+### Setup (one-time)
+```bash
+# macOS: Install macFUSE and sshfs
+brew install macfuse sshfs
+
+# Create mount point
+mkdir -p ~/mnt/mn5
+```
+
+### Stream model directly to MN5
+```bash
+# Mount MN5 storage
+sshfs tlog:/gpfs/projects/ehpc482/dev ~/mnt/mn5 \
+  -o reconnect,ServerAliveInterval=15,ServerAliveCountMax=3
+
+# Download directly to MN5 (no local storage used)
+huggingface-cli download XiaomiMiMo/MiMo-V2-Flash \
+  --local-dir ~/mnt/mn5/hf_cache/models--XiaomiMiMo--MiMo-V2-Flash \
+  --local-dir-use-symlinks False
+
+# Unmount when done
+umount ~/mnt/mn5
+```
+
+**Pros:**
+- No local disk space required
+- Files go directly to MN5
+
+**Cons:**
+- Slower than download + rsync (SSH overhead on every write)
+- macFUSE can be finicky on newer macOS versions
+- If connection drops, download may need to restart
+

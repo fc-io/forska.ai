@@ -21,7 +21,7 @@ import pg from 'pg'
 
 import {env} from '../src/server/utils/env.ts'
 
-const BATCH_SIZE = parseInt(process.env.BATCH_SIZE ?? '10000', 10)
+const BATCH_SIZE = parseInt(process.env.BATCH_SIZE ?? '1500', 10) // Max ~1664 due to PG array limit
 const WORKERS = parseInt(process.env.WORKERS ?? '4', 10)
 const DRY_RUN = process.env.DRY_RUN === 'true'
 const PHASE = process.env.PHASE ?? 'all'
@@ -38,11 +38,6 @@ const pool = new pg.Pool({
 
 const db = drizzle(pool, {logger: false})
 
-interface BatchStats {
-  processedRows: number
-  batchNumber: number
-}
-
 const formatDuration = (seconds: number): string => {
   const mins = Math.floor(seconds / 60)
   const secs = Math.floor(seconds % 60)
@@ -50,13 +45,18 @@ const formatDuration = (seconds: number): string => {
 }
 
 /**
+ * Format array of UUIDs as a PostgreSQL array literal
+ * Drizzle doesn't handle array interpolation correctly, so we need to format manually
+ */
+const uuidArray = (ids: string[]) => {
+  return sql.raw(`ARRAY['${ids.join("','")}'::uuid]`)
+}
+
+/**
  * Fetch all IDs needing update in chunks
  * This is much faster than ORDER BY in each batch
  */
-const fetchIdsToUpdate = async (
-  whereCondition: ReturnType<typeof sql>,
-  description: string,
-): Promise<string[][]> => {
+const fetchIdsToUpdate = async (whereCondition: ReturnType<typeof sql>, description: string): Promise<string[][]> => {
   log(`Fetching IDs for: ${description}`)
   const startTime = Date.now()
 
@@ -65,7 +65,9 @@ const fetchIdsToUpdate = async (
     SELECT id::text FROM judgments WHERE ${whereCondition}
   `)
 
-  const allIds = result.rows.map((r) => r.id)
+  const allIds = result.rows.map((r) => {
+    return r.id
+  })
   log(`Fetched ${allIds.length.toLocaleString()} IDs in ${formatDuration((Date.now() - startTime) / 1000)}`)
 
   // Split into batches
@@ -86,7 +88,9 @@ const processInParallel = async (
   updateFn: (ids: string[], workerNum: number) => Promise<number>,
   description: string,
 ): Promise<void> => {
-  const totalRows = batches.reduce((sum, b) => sum + b.length, 0)
+  const totalRows = batches.reduce((sum, b) => {
+    return sum + b.length
+  }, 0)
   let processedRows = 0
   let batchesCompleted = 0
   const startTime = Date.now()
@@ -126,11 +130,15 @@ const processInParallel = async (
   }
 
   // Start workers
-  const workers = Array.from({length: WORKERS}, (_, i) => worker(i + 1))
+  const workers = Array.from({length: WORKERS}, (_, i) => {
+    return worker(i + 1)
+  })
   await Promise.all(workers)
 
   const totalTime = (Date.now() - startTime) / 1000
-  log(`${description} complete: ${processedRows.toLocaleString()} rows in ${formatDuration(totalTime)} (avg ${(processedRows / totalTime).toFixed(0)}/s)`)
+  log(
+    `${description} complete: ${processedRows.toLocaleString()} rows in ${formatDuration(totalTime)} (avg ${(processedRows / totalTime).toFixed(0)}/s)`,
+  )
 }
 
 /**
@@ -139,10 +147,7 @@ const processInParallel = async (
 const runPhase1ArticleFields = async () => {
   log('=== Phase 1: Backfilling article fields ===')
 
-  const batches = await fetchIdsToUpdate(
-    sql`article_title IS NULL`,
-    'judgments needing article field backfill',
-  )
+  const batches = await fetchIdsToUpdate(sql`article_title IS NULL`, 'judgments needing article field backfill')
 
   if (batches.length === 0) {
     log('No rows to update for Phase 1')
@@ -163,7 +168,7 @@ const runPhase1ArticleFields = async () => {
         article_import_route = a.import_route,
         article_imported_by = a.imported_by
       FROM articles a
-      WHERE j.id = ANY(${ids}::uuid[])
+      WHERE j.id = ANY(${uuidArray(ids)})
         AND j.article_id = a.id
     `)
 
@@ -195,7 +200,7 @@ const runPhase2ProjectIdFromSnapshot = async () => {
     const result = await db.execute(sql`
       UPDATE judgments
       SET project_id = snapshot_project_id
-      WHERE id = ANY(${ids}::uuid[])
+      WHERE id = ANY(${uuidArray(ids)})
     `)
 
     return result.rowCount ?? 0
@@ -221,7 +226,9 @@ const runPhase3ProjectIdFromReviews = async () => {
     WHERE j.project_id IS NULL
   `)
 
-  const allIds = result.rows.map((r) => r.id)
+  const allIds = result.rows.map((r) => {
+    return r.id
+  })
   log(`Fetched ${allIds.length.toLocaleString()} IDs in ${formatDuration((Date.now() - startTime) / 1000)}`)
 
   if (allIds.length === 0) {
@@ -243,7 +250,7 @@ const runPhase3ProjectIdFromReviews = async () => {
       UPDATE judgments j
       SET project_id = r.project_id
       FROM reviews r
-      WHERE j.id = ANY(${ids}::uuid[])
+      WHERE j.id = ANY(${uuidArray(ids)})
         AND j.review_id = r.id
     `)
 
@@ -299,7 +306,9 @@ const main = async () => {
   log('Starting FAST backfill script')
   log(`Configuration: BATCH_SIZE=${BATCH_SIZE}, WORKERS=${WORKERS}, DRY_RUN=${DRY_RUN}, PHASE=${PHASE}`)
 
-  const shouldRunPhase = (phase: string) => PHASE === 'all' || PHASE === phase
+  const shouldRunPhase = (phase: string) => {
+    return PHASE === 'all' || PHASE === phase
+  }
 
   if (shouldRunPhase('1')) await runPhase1ArticleFields()
   if (shouldRunPhase('2')) await runPhase2ProjectIdFromSnapshot()

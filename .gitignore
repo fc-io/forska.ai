@@ -2,6 +2,7 @@
 node_modules
 backups
 openalex_snapshot
+models
 
 pgdata/
 init-db/

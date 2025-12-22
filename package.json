@@ -45,7 +45,14 @@
     "dis:f:p": "SSH_ALIAS=dis STACK_ROOT=/valhalla/projects/ehpc-aif-2025pg01-233/dev SBATCH_FILE=forska-dis.sbatch bun scripts/sbatchPut.ts",
     "dis:oa:p": "SSH_ALIAS=dis STACK_ROOT=/valhalla/projects/ehpc-aif-2025pg01-233/dev SBATCH_FILE=08-openalex-dis-db-rest.sbatch bun scripts/sbatchPut.ts",
     "dis:07:p": "SSH_ALIAS=dis STACK_ROOT=/valhalla/projects/ehpc-aif-2025pg01-233/dev SBATCH_FILE=07-openalex-flatten-works.sbatch bun scripts/sbatchPut.ts",
-    "dis:flatten:p": "SSH_ALIAS=dis STACK_ROOT=/valhalla/projects/ehpc-aif-2025pg01-233/dev SBATCH_FILE=flatten-openalex-jsonl.py bun scripts/sbatchPut.ts"
+    "dis:flatten:p": "SSH_ALIAS=dis STACK_ROOT=/valhalla/projects/ehpc-aif-2025pg01-233/dev SBATCH_FILE=flatten-openalex-jsonl.py bun scripts/sbatchPut.ts",
+    "mn5:transfer": "bun scripts/mn5Transfer.ts",
+    "mn5:sbatch:push": "scp forska-mn5-sglang.sbatch tlog:/gpfs/projects/ehpc482/dev/",
+    "mn5:submit": "ssh alog 'cd /gpfs/projects/ehpc482/dev && sbatch --export=ALL forska-mn5-sglang.sbatch'",
+    "mn5:status": "ssh alog 'squeue -u $USER'",
+    "mn5:tunnel": "./scripts/mn5Tunnel.sh",
+    "mn5:mount": "mkdir -p ~/mnt/mn5 && sshfs tlog:/gpfs/projects/ehpc482/dev ~/mnt/mn5 -o reconnect,ServerAliveInterval=15,ServerAliveCountMax=3 && echo 'Mounted at ~/mnt/mn5'",
+    "mn5:unmount": "umount ~/mnt/mn5 && echo 'Unmounted'"
   },
   "dependencies": {
     "@ai-sdk/openai": "^2.0.9",

@@ -11,7 +11,7 @@ const MN5_ROOT = '/gpfs/projects/ehpc482/dev'
 const TLOG = 'tlog'
 const ALOG = 'alog'
 const MODELS_DIR = './models'
-const DEFAULT_MODEL = 'Qwen/Qwen3-30B-A3B-Instruct-2507'
+const DEFAULT_MODEL = 'XiaomiMiMo/MiMo-V2-Flash'
 
 const log = (m: string): void => {
   console.log(`[mn5] ${m}`)
@@ -59,7 +59,7 @@ const main = async () => {
 
   // 3. Create remote dirs
   log('Creating remote directories...')
-  await $`ssh ${TLOG} mkdir -p ${MN5_ROOT}/{hf_cache,logs,.cache,.secrets,tmp}`
+  await $`ssh ${TLOG} mkdir -p ${MN5_ROOT}/{hf_cache,logs,.cache,.cache/sglang,.secrets,tmp}`
 
   // 4. Transfer model
   log('Transferring model...')
