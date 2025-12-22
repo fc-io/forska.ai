@@ -1,6 +1,6 @@
-import {useQuery} from '@tanstack/solid-query'
+import {createMutation, useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
-import {For, Show, Suspense} from 'solid-js'
+import {createSignal, For, Show, Suspense} from 'solid-js'
 
 import {apiClient} from '../../../../services/apiClient'
 import {fetchSession} from '../../../../services/fetchSession'
@@ -18,6 +18,8 @@ type ParquetStats = {
 }
 
 type ParquetStatsResponse = {data: ParquetStats}
+
+type DeleteResponse = {data: {deleted: string | string[]; count?: number; message?: string} | null; error?: string}
 
 const AdminParquet = () => {
   const sessionQuery = useQuery(() => {
@@ -37,6 +39,48 @@ const AdminParquet = () => {
     }
   })
 
+  // Confirmation modal state
+  const [deleteModal, setDeleteModal] = createSignal<{
+    type: 'file' | 'partition' | 'all' | null
+    target?: {key?: string; year?: string; month?: string; count?: number}
+  }>({type: null})
+
+  // Delete file mutation
+  const deleteFileMutation = createMutation(() => ({
+    mutationFn: async (key: string) => {
+      const response = await apiClient.api.parquet.file.delete({key})
+      return handleApiResponse<DeleteResponse>(response, 'Failed to delete file')
+    },
+    onSuccess: () => {
+      setDeleteModal({type: null})
+      void parquetQuery.refetch()
+    },
+  }))
+
+  // Delete partition mutation
+  const deletePartitionMutation = createMutation(() => ({
+    mutationFn: async ({year, month}: {year: string; month: string}) => {
+      const response = await apiClient.api.parquet.partition.delete({year, month})
+      return handleApiResponse<DeleteResponse>(response, 'Failed to delete partition')
+    },
+    onSuccess: () => {
+      setDeleteModal({type: null})
+      void parquetQuery.refetch()
+    },
+  }))
+
+  // Delete all mutation
+  const deleteAllMutation = createMutation(() => ({
+    mutationFn: async () => {
+      const response = await apiClient.api.parquet.all.delete()
+      return handleApiResponse<DeleteResponse>(response, 'Failed to delete all files')
+    },
+    onSuccess: () => {
+      setDeleteModal({type: null})
+      void parquetQuery.refetch()
+    },
+  }))
+
   const isAdmin = () => {
     return sessionQuery.data?.user?.role === 'admin'
   }
@@ -45,8 +89,88 @@ const AdminParquet = () => {
     return parquetQuery.data
   }
 
+  const isDeleting = () => {
+    return deleteFileMutation.isPending || deletePartitionMutation.isPending || deleteAllMutation.isPending
+  }
+
+  const handleConfirmDelete = () => {
+    const modal = deleteModal()
+    if (!modal.type) return
+
+    if (modal.type === 'file' && modal.target?.key) {
+      deleteFileMutation.mutate(modal.target.key)
+    } else if (modal.type === 'partition' && modal.target?.year && modal.target.month) {
+      deletePartitionMutation.mutate({year: modal.target.year, month: modal.target.month})
+    } else if (modal.type === 'all') {
+      deleteAllMutation.mutate()
+    }
+  }
+
   return (
     <div class="min-h-screen bg-gray-50 p-6 mx-auto">
+      {/* Confirmation Modal */}
+      <Show when={deleteModal().type}>
+        <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div class="bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4">
+            <h3 class="text-lg font-semibold text-gray-900 mb-2">Confirm Delete</h3>
+            <div class="text-gray-600 mb-4">
+              <Show when={deleteModal().type === 'file'}>
+                <p>Are you sure you want to delete this file?</p>
+                <p class="mt-2 font-mono text-sm bg-gray-100 p-2 rounded break-all">{deleteModal().target?.key}</p>
+              </Show>
+              <Show when={deleteModal().type === 'partition'}>
+                <p>
+                  Are you sure you want to delete <strong>all files</strong> in this partition?
+                </p>
+                <p class="mt-2">
+                  <span class="font-semibold">
+                    Year: {deleteModal().target?.year}, Month: {deleteModal().target?.month}
+                  </span>
+                </p>
+                <p class="mt-1 text-sm text-red-600">
+                  This will delete {deleteModal().target?.count} file(s).
+                </p>
+              </Show>
+              <Show when={deleteModal().type === 'all'}>
+                <p class="text-red-600 font-semibold">⚠️ DANGER: This will delete ALL parquet files!</p>
+                <p class="mt-2">
+                  Total files to delete: <strong>{stats()?.totalFiles}</strong>
+                </p>
+                <p class="mt-1 text-sm">This action cannot be undone. You will need to run the backfill again.</p>
+              </Show>
+            </div>
+            <div class="flex gap-3 justify-end">
+              <button
+                onClick={() => {
+                  return setDeleteModal({type: null})
+                }}
+                disabled={isDeleting()}
+                class="px-4 py-2 text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmDelete}
+                disabled={isDeleting()}
+                class="px-4 py-2 text-white bg-red-600 rounded-md hover:bg-red-700 disabled:opacity-50 flex items-center gap-2"
+              >
+                <Show when={isDeleting()}>
+                  <svg class="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none" />
+                    <path
+                      class="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                    />
+                  </svg>
+                </Show>
+                {isDeleting() ? 'Deleting...' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      </Show>
+
       <Suspense
         fallback={
           <div class="flex items-center justify-center h-64">
@@ -78,14 +202,26 @@ const AdminParquet = () => {
         >
           <div class="flex justify-between items-center mb-6">
             <h1 class="text-2xl font-bold">Parquet Files</h1>
-            <button
-              onClick={() => {
-                return void parquetQuery.refetch()
-              }}
-              class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm"
-            >
-              Refresh
-            </button>
+            <div class="flex gap-2">
+              <button
+                onClick={() => {
+                  return void parquetQuery.refetch()
+                }}
+                class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm"
+              >
+                Refresh
+              </button>
+              <Show when={(stats()?.totalFiles ?? 0) > 0}>
+                <button
+                  onClick={() => {
+                    return setDeleteModal({type: 'all'})
+                  }}
+                  class="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 text-sm"
+                >
+                  Delete All
+                </button>
+              </Show>
+            </div>
           </div>
 
           <Show when={parquetQuery.isLoading}>
@@ -149,6 +285,9 @@ const AdminParquet = () => {
                         <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                           Files
                         </th>
+                        <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Actions
+                        </th>
                       </tr>
                     </thead>
                     <tbody class="bg-white divide-y divide-gray-200">
@@ -160,6 +299,19 @@ const AdminParquet = () => {
                               <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{partition.month}</td>
                               <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900 font-semibold">
                                 {partition.count.toLocaleString()}
+                              </td>
+                              <td class="px-4 py-2 whitespace-nowrap text-sm text-right">
+                                <button
+                                  onClick={() => {
+                                    return setDeleteModal({
+                                      type: 'partition',
+                                      target: {year: partition.year, month: partition.month, count: partition.count},
+                                    })
+                                  }}
+                                  class="text-red-600 hover:text-red-800 font-medium"
+                                >
+                                  Delete
+                                </button>
                               </td>
                             </tr>
                           )
@@ -194,6 +346,9 @@ const AdminParquet = () => {
                         <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                           Full Path
                         </th>
+                        <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Actions
+                        </th>
                       </tr>
                     </thead>
                     <tbody class="bg-white divide-y divide-gray-200">
@@ -207,6 +362,16 @@ const AdminParquet = () => {
                               <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{file.year ?? '—'}</td>
                               <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{file.month ?? '—'}</td>
                               <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500 font-mono">{file.key}</td>
+                              <td class="px-4 py-2 whitespace-nowrap text-sm text-right">
+                                <button
+                                  onClick={() => {
+                                    return setDeleteModal({type: 'file', target: {key: file.key}})
+                                  }}
+                                  class="text-red-600 hover:text-red-800 font-medium"
+                                >
+                                  Delete
+                                </button>
+                              </td>
                             </tr>
                           )
                         }}

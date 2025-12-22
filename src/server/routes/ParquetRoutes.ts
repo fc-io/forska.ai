@@ -1,11 +1,11 @@
 /**
- * Parquet Files Routes - Admin API for viewing Parquet file stats in S3
+ * Parquet Files Routes - Admin API for viewing and managing Parquet files in S3
  */
 
-import {Elysia} from 'elysia'
+import {Elysia, t} from 'elysia'
 
 import {auth} from '../../auth'
-import {getS3Client, getS3Config, listObjects} from '../../services/s3/s3Client'
+import {deleteFromS3, getS3Client, getS3Config, listObjects} from '../../services/s3/s3Client'
 import {requireAdminAuth} from '../utils/authGuard'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
@@ -39,6 +39,142 @@ const parseParquetPath = (key: string): ParquetFileInfo => {
 export const parquetRoutes = new Elysia()
   .use(withErrorHandler())
   .use(requireAdminAuth())
+  // Delete a single file
+  .delete(
+    '/api/parquet/file',
+    async ({request, set, body}) => {
+      const session = await auth.api.getSession({headers: request.headers})
+      const role = session?.user?.role ?? null
+      if (role !== 'admin') {
+        set.status = 403
+        return {data: null, error: 'Administrator access required'}
+      }
+
+      const {key} = body
+
+      if (!key || typeof key !== 'string') {
+        set.status = 400
+        return {data: null, error: 'File key is required'}
+      }
+
+      // Security: Only allow deleting .parquet files in the judgments prefix
+      if (!key.endsWith('.parquet') || !key.startsWith('judgments/')) {
+        set.status = 400
+        return {data: null, error: 'Invalid file key. Only .parquet files in judgments/ can be deleted.'}
+      }
+
+      try {
+        const s3Config = getS3Config()
+        const client = getS3Client()
+
+        await deleteFromS3(s3Config.bucket, key, client)
+        console.log(`Deleted Parquet file: ${key}`)
+
+        return {data: {deleted: key}}
+      } catch (error) {
+        console.error('Failed to delete Parquet file:', error)
+        set.status = 500
+        return {data: null, error: error instanceof Error ? error.message : 'Failed to delete file'}
+      }
+    },
+    {body: t.Object({key: t.String()})},
+  )
+  // Delete all files in a partition (year/month)
+  .delete(
+    '/api/parquet/partition',
+    async ({request, set, body}) => {
+      const session = await auth.api.getSession({headers: request.headers})
+      const role = session?.user?.role ?? null
+      if (role !== 'admin') {
+        set.status = 403
+        return {data: null, error: 'Administrator access required'}
+      }
+
+      const {year, month} = body
+
+      if (!year || !month) {
+        set.status = 400
+        return {data: null, error: 'Year and month are required'}
+      }
+
+      // Validate format
+      if (!/^\d{4}$/.test(year) || !/^\d{2}$/.test(month)) {
+        set.status = 400
+        return {data: null, error: 'Invalid year (YYYY) or month (MM) format'}
+      }
+
+      try {
+        const s3Config = getS3Config()
+        const client = getS3Client()
+
+        // List all files in the partition
+        const prefix = `judgments/year=${year}/month=${month}/`
+        const keys = await listObjects(s3Config.bucket, prefix, client)
+        const parquetKeys = keys.filter((k) => {
+          return k.endsWith('.parquet')
+        })
+
+        if (parquetKeys.length === 0) {
+          return {data: {deleted: [], count: 0, message: 'No files found in this partition'}}
+        }
+
+        // Delete each file
+        const deleted: string[] = []
+        for (const key of parquetKeys) {
+          await deleteFromS3(s3Config.bucket, key, client)
+          deleted.push(key)
+        }
+
+        console.log(`Deleted ${deleted.length} Parquet files from partition year=${year}/month=${month}`)
+
+        return {data: {deleted, count: deleted.length}}
+      } catch (error) {
+        console.error('Failed to delete Parquet partition:', error)
+        set.status = 500
+        return {data: null, error: error instanceof Error ? error.message : 'Failed to delete partition'}
+      }
+    },
+    {body: t.Object({year: t.String(), month: t.String()})},
+  )
+  // Delete ALL parquet files (dangerous!)
+  .delete('/api/parquet/all', async ({request, set}) => {
+    const session = await auth.api.getSession({headers: request.headers})
+    const role = session?.user?.role ?? null
+    if (role !== 'admin') {
+      set.status = 403
+      return {data: null, error: 'Administrator access required'}
+    }
+
+    try {
+      const s3Config = getS3Config()
+      const client = getS3Client()
+
+      // List all parquet files
+      const keys = await listObjects(s3Config.bucket, 'judgments/', client)
+      const parquetKeys = keys.filter((k) => {
+        return k.endsWith('.parquet')
+      })
+
+      if (parquetKeys.length === 0) {
+        return {data: {deleted: [], count: 0, message: 'No files found'}}
+      }
+
+      // Delete each file
+      const deleted: string[] = []
+      for (const key of parquetKeys) {
+        await deleteFromS3(s3Config.bucket, key, client)
+        deleted.push(key)
+      }
+
+      console.log(`Deleted ALL ${deleted.length} Parquet files`)
+
+      return {data: {deleted, count: deleted.length}}
+    } catch (error) {
+      console.error('Failed to delete all Parquet files:', error)
+      set.status = 500
+      return {data: null, error: error instanceof Error ? error.message : 'Failed to delete all files'}
+    }
+  })
   .get('/api/parquet/stats', async ({request, set}) => {
     const session = await auth.api.getSession({headers: request.headers})
     const role = session?.user?.role ?? null
