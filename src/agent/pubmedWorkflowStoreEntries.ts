@@ -41,6 +41,7 @@ const storeBatch = async (batch: DatabaseEntry[]): Promise<void> => {
       articleVersion: Number.parseInt(entry.article_version, 10),
       pubmedId: entry.pubmed_id,
       originalData: entry.original_data,
+      importRoute: entry.import_route,
     }
   })
 
@@ -57,6 +58,7 @@ const storeBatch = async (batch: DatabaseEntry[]): Promise<void> => {
         articleVersion: sql`EXCLUDED.article_version`,
         pubmedId: sql`EXCLUDED.pubmed_id`,
         originalData: sql`EXCLUDED.original_data`,
+        importRoute: sql`EXCLUDED.import_route`,
         updatedAt: sql`CURRENT_TIMESTAMP`,
       },
     })

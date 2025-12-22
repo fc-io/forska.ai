@@ -519,3 +519,77 @@ The denormalized fields were backfilled using `scripts/backfillJudgmentsDenormal
 2. These judgments were created before project association was tracked, or via bulk imports
 3. Project scope is determined by `article_import_route` and `project_articles`, not `project_id`
 4. No functionality depends on `project_id` being filled
+
+### Backfill Issue: `article_import_route` (2024-12-22) ⚠️ NEEDS FIX
+
+**Discovery**: The `article_import_route` field on judgments is NULL for ~93% of rows.
+
+#### Root Cause
+
+The backfill script was using `articles.import_route` directly:
+```sql
+article_import_route = a.import_route
+```
+
+However, `articles.import_route` is **NULL for most articles** because:
+
+| Workflow | Sets `articles.import_route`? | Sets `article_route_link`? |
+|----------|-------------------------------|---------------------------|
+| **pubmedWorkflowStoreEntries.ts** | ❌ **NO** (bug) | ✅ Yes |
+| **medrxivWorkflowStoreEntries.ts** | ✅ Yes | ✅ Yes |
+| **biorxivWorkflowStoreEntries.ts** | ✅ Yes | ✅ Yes |
+
+**Stats** (2024-12-22):
+- Articles with `import_route = NULL`: **9,780,508** (93%)
+- Articles with `import_route` populated: **727,053** (7%)
+- **All** articles have `article_route_link` entries ✅
+
+#### The Fix
+
+**Phase 1 of backfill must be updated** to resolve import route via the junction table:
+
+```sql
+-- OLD (incorrect): pulls from often-NULL column
+article_import_route = a.import_route
+
+-- NEW (correct): resolves via junction table
+article_import_route = ir.route
+FROM articles a
+LEFT JOIN article_route_link arl ON arl.article_id = a.id
+LEFT JOIN import_route ir ON ir.id = arl.import_route_id
+```
+
+**NOTE**: An article can have multiple route links (imported via multiple routes). The query uses `LIMIT 1` to pick one deterministically. For denormalization purposes, having *any* valid route is sufficient for scope filtering.
+
+#### Implementation Status ✅
+
+**Fixes applied (2024-12-22):**
+
+1. **`pubmedWorkflowStoreEntries.ts`** — Added `importRoute` to article upserts:
+   ```typescript
+   // In articlesToUpsert:
+   importRoute: entry.import_route,
+
+   // In onConflictDoUpdate set:
+   importRoute: sql`EXCLUDED.import_route`,
+   ```
+
+2. **`backfillJudgmentsDenormalizedFast.ts`** — Added Phase 4 to fix existing data:
+   - Phase 1 updated to resolve via junction table
+   - New Phase 4 specifically targets judgments with NULL `article_import_route`
+
+#### Running the Fix
+
+To backfill `article_import_route` for existing judgments:
+
+```bash
+# Run only Phase 4 (import route fix)
+PHASE=import_route bun scripts/backfillJudgmentsDenormalizedFast.ts
+
+# Or run as Phase 4
+PHASE=4 bun scripts/backfillJudgmentsDenormalizedFast.ts
+
+# Dry run first to see stats
+DRY_RUN=true PHASE=import_route bun scripts/backfillJudgmentsDenormalizedFast.ts
+```
+

@@ -24,6 +24,7 @@ import { Route as ProjectsArchivedIndexRouteImport } from './routes/+projects/+a
 import { Route as ProjectsIdIndexRouteImport } from './routes/+projects/+$id/+index'
 import { Route as AdminUsersIndexRouteImport } from './routes/+admin/+users/+index'
 import { Route as AdminSetup_statsIndexRouteImport } from './routes/+admin/+setup_stats/+index'
+import { Route as AdminParquetIndexRouteImport } from './routes/+admin/+parquet/+index'
 import { Route as AdminLlmIndexRouteImport } from './routes/+admin/+llm/+index'
 import { Route as AdminJobsIndexRouteImport } from './routes/+admin/+jobs/+index'
 import { Route as AdminFailed_requestsIndexRouteImport } from './routes/+admin/+failed_requests/+index'
@@ -116,6 +117,11 @@ const AdminUsersIndexRoute = AdminUsersIndexRouteImport.update({
 const AdminSetup_statsIndexRoute = AdminSetup_statsIndexRouteImport.update({
   id: '/admin/setup_stats/',
   path: '/admin/setup_stats/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminParquetIndexRoute = AdminParquetIndexRouteImport.update({
+  id: '/admin/parquet/',
+  path: '/admin/parquet/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminLlmIndexRoute = AdminLlmIndexRouteImport.update({
@@ -221,6 +227,7 @@ export interface FileRoutesByFullPath {
   '/admin/failed_requests': typeof AdminFailed_requestsIndexRoute
   '/admin/jobs': typeof AdminJobsIndexRoute
   '/admin/llm': typeof AdminLlmIndexRoute
+  '/admin/parquet': typeof AdminParquetIndexRoute
   '/admin/setup_stats': typeof AdminSetup_statsIndexRoute
   '/admin/users': typeof AdminUsersIndexRoute
   '/projects/$id': typeof ProjectsIdIndexRoute
@@ -254,6 +261,7 @@ export interface FileRoutesByTo {
   '/admin/failed_requests': typeof AdminFailed_requestsIndexRoute
   '/admin/jobs': typeof AdminJobsIndexRoute
   '/admin/llm': typeof AdminLlmIndexRoute
+  '/admin/parquet': typeof AdminParquetIndexRoute
   '/admin/setup_stats': typeof AdminSetup_statsIndexRoute
   '/admin/users': typeof AdminUsersIndexRoute
   '/projects/$id': typeof ProjectsIdIndexRoute
@@ -288,6 +296,7 @@ export interface FileRoutesById {
   '/admin/failed_requests/': typeof AdminFailed_requestsIndexRoute
   '/admin/jobs/': typeof AdminJobsIndexRoute
   '/admin/llm/': typeof AdminLlmIndexRoute
+  '/admin/parquet/': typeof AdminParquetIndexRoute
   '/admin/setup_stats/': typeof AdminSetup_statsIndexRoute
   '/admin/users/': typeof AdminUsersIndexRoute
   '/projects/$id/': typeof ProjectsIdIndexRoute
@@ -323,6 +332,7 @@ export interface FileRouteTypes {
     | '/admin/failed_requests'
     | '/admin/jobs'
     | '/admin/llm'
+    | '/admin/parquet'
     | '/admin/setup_stats'
     | '/admin/users'
     | '/projects/$id'
@@ -356,6 +366,7 @@ export interface FileRouteTypes {
     | '/admin/failed_requests'
     | '/admin/jobs'
     | '/admin/llm'
+    | '/admin/parquet'
     | '/admin/setup_stats'
     | '/admin/users'
     | '/projects/$id'
@@ -389,6 +400,7 @@ export interface FileRouteTypes {
     | '/admin/failed_requests/'
     | '/admin/jobs/'
     | '/admin/llm/'
+    | '/admin/parquet/'
     | '/admin/setup_stats/'
     | '/admin/users/'
     | '/projects/$id/'
@@ -423,6 +435,7 @@ export interface RootRouteChildren {
   AdminFailed_requestsIndexRoute: typeof AdminFailed_requestsIndexRoute
   AdminJobsIndexRoute: typeof AdminJobsIndexRoute
   AdminLlmIndexRoute: typeof AdminLlmIndexRoute
+  AdminParquetIndexRoute: typeof AdminParquetIndexRoute
   AdminSetup_statsIndexRoute: typeof AdminSetup_statsIndexRoute
   AdminUsersIndexRoute: typeof AdminUsersIndexRoute
   ProjectsIdIndexRoute: typeof ProjectsIdIndexRoute
@@ -549,6 +562,13 @@ declare module '@tanstack/solid-router' {
       path: '/admin/setup_stats'
       fullPath: '/admin/setup_stats'
       preLoaderRoute: typeof AdminSetup_statsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/parquet/': {
+      id: '/admin/parquet/'
+      path: '/admin/parquet'
+      fullPath: '/admin/parquet'
+      preLoaderRoute: typeof AdminParquetIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/llm/': {
@@ -679,6 +699,7 @@ const rootRouteChildren: RootRouteChildren = {
   AdminFailed_requestsIndexRoute: AdminFailed_requestsIndexRoute,
   AdminJobsIndexRoute: AdminJobsIndexRoute,
   AdminLlmIndexRoute: AdminLlmIndexRoute,
+  AdminParquetIndexRoute: AdminParquetIndexRoute,
   AdminSetup_statsIndexRoute: AdminSetup_statsIndexRoute,
   AdminUsersIndexRoute: AdminUsersIndexRoute,
   ProjectsIdIndexRoute: ProjectsIdIndexRoute,

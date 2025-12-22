@@ -157,6 +157,9 @@ const runPhase1ArticleFields = async () => {
   const updateBatch = async (ids: string[], _workerNum: number): Promise<number> => {
     if (DRY_RUN) return ids.length
 
+    // NOTE: articles.import_route is NULL for ~93% of articles (PubMed imports bug).
+    // We resolve the import route via article_route_link → import_route junction instead.
+    // Articles can have multiple route links; we pick one deterministically with LIMIT 1.
     const result = await db.execute(sql`
       UPDATE judgments j
       SET
@@ -165,7 +168,14 @@ const runPhase1ArticleFields = async () => {
         article_updated_at = a.article_updated_at,
         article_created_year = EXTRACT(YEAR FROM a.article_created_at)::integer,
         article_updated_year = EXTRACT(YEAR FROM a.article_updated_at)::integer,
-        article_import_route = a.import_route,
+        article_import_route = (
+          SELECT ir.route
+          FROM article_route_link arl
+          JOIN import_route ir ON ir.id = arl.import_route_id
+          WHERE arl.article_id = a.id
+          ORDER BY arl.created_at ASC
+          LIMIT 1
+        ),
         article_imported_by = a.imported_by
       FROM articles a
       WHERE j.id = ANY(${uuidArray(ids)})
@@ -261,6 +271,50 @@ const runPhase3ProjectIdFromReviews = async () => {
 }
 
 /**
+ * Phase 4: Backfill article_import_route via article_route_link junction
+ *
+ * This fixes judgments where article_import_route is NULL because the original
+ * backfill used articles.import_route (which is NULL for 93% of articles due to
+ * the PubMed workflow bug).
+ */
+const runPhase4ImportRoute = async () => {
+  log('=== Phase 4: Backfilling article_import_route via junction table ===')
+
+  const batches = await fetchIdsToUpdate(
+    sql`article_import_route IS NULL`,
+    'judgments needing article_import_route backfill',
+  )
+
+  if (batches.length === 0) {
+    log('No rows to update for Phase 4')
+    return
+  }
+
+  const updateBatch = async (ids: string[], _workerNum: number): Promise<number> => {
+    if (DRY_RUN) return ids.length
+
+    // Resolve import route via article_route_link → import_route junction
+    // Articles can have multiple route links; pick one deterministically with LIMIT 1
+    const result = await db.execute(sql`
+      UPDATE judgments j
+      SET article_import_route = (
+        SELECT ir.route
+        FROM article_route_link arl
+        JOIN import_route ir ON ir.id = arl.import_route_id
+        WHERE arl.article_id = j.article_id
+        ORDER BY arl.created_at ASC
+        LIMIT 1
+      )
+      WHERE j.id = ANY(${uuidArray(ids)})
+    `)
+
+    return result.rowCount ?? 0
+  }
+
+  await processInParallel(batches, updateBatch, 'Phase 4 (article_import_route via junction)')
+}
+
+/**
  * Summary: Show final stats
  */
 const showSummary = async () => {
@@ -271,12 +325,14 @@ const showSummary = async () => {
     has_article_title: string
     has_project_id: string
     has_article_created_at: string
+    has_article_import_route: string
   }>(sql`
     SELECT
       COUNT(*) as total,
       COUNT(article_title) as has_article_title,
       COUNT(project_id) as has_project_id,
-      COUNT(article_created_at) as has_article_created_at
+      COUNT(article_created_at) as has_article_created_at,
+      COUNT(article_import_route) as has_article_import_route
     FROM judgments
   `)
 
@@ -285,6 +341,7 @@ const showSummary = async () => {
   const hasArticleTitle = parseInt(row?.has_article_title ?? '0', 10)
   const hasProjectId = parseInt(row?.has_project_id ?? '0', 10)
   const hasArticleCreatedAt = parseInt(row?.has_article_created_at ?? '0', 10)
+  const hasArticleImportRoute = parseInt(row?.has_article_import_route ?? '0', 10)
 
   log(`Total judgments: ${total.toLocaleString()}`)
   log(
@@ -293,7 +350,16 @@ const showSummary = async () => {
   log(
     `  - article_created_at filled: ${hasArticleCreatedAt.toLocaleString()} (${((hasArticleCreatedAt / total) * 100).toFixed(1)}%)`,
   )
+  log(
+    `  - article_import_route filled: ${hasArticleImportRoute.toLocaleString()} (${((hasArticleImportRoute / total) * 100).toFixed(1)}%)`,
+  )
   log(`  - project_id filled: ${hasProjectId.toLocaleString()} (${((hasProjectId / total) * 100).toFixed(1)}%)`)
+
+  const remainingRoute = await db.execute<{count: string}>(sql`
+    SELECT COUNT(*) as count FROM judgments WHERE article_import_route IS NULL
+  `)
+  const remainingRouteNull = parseInt(remainingRoute.rows[0]?.count ?? '0', 10)
+  log(`  - article_import_route still NULL: ${remainingRouteNull.toLocaleString()}`)
 
   const remaining = await db.execute<{count: string}>(sql`
     SELECT COUNT(*) as count FROM judgments WHERE project_id IS NULL
@@ -310,9 +376,11 @@ const main = async () => {
     return PHASE === 'all' || PHASE === phase
   }
 
+  // PHASE=4 or PHASE=import_route runs only Phase 4 (import route fix)
   if (shouldRunPhase('1')) await runPhase1ArticleFields()
   if (shouldRunPhase('2')) await runPhase2ProjectIdFromSnapshot()
   if (shouldRunPhase('3')) await runPhase3ProjectIdFromReviews()
+  if (shouldRunPhase('4') || PHASE === 'import_route') await runPhase4ImportRoute()
 
   await showSummary()
 
