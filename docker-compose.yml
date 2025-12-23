@@ -37,9 +37,11 @@ services:
     ports:
       - "8123:8123"   # HTTP API
       - "9000:9000"   # Native protocol
+      - "9181:9181"   # Keeper (for S3Queue coordination)
     volumes:
       - ./data/clickhouse:/var/lib/clickhouse
       - ./data/clickhouse-logs:/var/log/clickhouse-server
+      - ./config/clickhouse/keeper-config.xml:/etc/clickhouse-server/config.d/keeper-config.xml:ro
     environment:
       CLICKHOUSE_DB: forska
       CLICKHOUSE_USER: default

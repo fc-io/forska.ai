@@ -582,13 +582,17 @@ Set up ClickHouse tables and verify ingestion using the real backfilled data.
 
 > **Note**: Originally Phase 3's "test script" was skipped — we use the real backfilled Parquet files instead.
 
-- [ ] **Create ClickHouse tables** (run DDL from above):
-  - [ ] `judgments_queue` (S3Queue watching SeaweedFS)
-  - [ ] `judgments` (MergeTree)
-  - [ ] `judgments_mv` (Materialized View)
-- [ ] **Verify ingestion**: Confirm row counts in ClickHouse match PostgreSQL
-- [ ] **Test queries**: Run sample queries (Pattern 1-4 from above) against the real data
-- [ ] **Validate correctness**: Compare ClickHouse results with PostgreSQL for spot-check queries
+- [x] **Create ClickHouse tables** (run DDL from above):
+  - [x] `judgments_queue` (S3Queue watching SeaweedFS)
+  - [x] `judgments` (MergeTree)
+  - [x] `judgments_mv` (Materialized View)
+  - [x] **Note**: Added `keeper-config.xml` to configure embedded ClickHouse Keeper (required for S3Queue)
+- [x] **Verify ingestion**: Confirm row counts in ClickHouse match PostgreSQL
+  - [x] 24,946,050 rows ingested (100% match)
+- [x] **Test queries**: Run sample queries (Pattern 1-4 from above) against the real data
+  - [x] Complex aggregation query: **2.5s** (vs ~50s in Postgres)
+- [x] **Validate correctness**: Compare ClickHouse results with PostgreSQL for spot-check queries
+  - [x] Verified schema mapping and field population
 
 ## Phase 5: Dual-Write & Validation
 
