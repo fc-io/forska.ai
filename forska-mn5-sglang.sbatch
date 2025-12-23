@@ -147,10 +147,9 @@ if (( NNODES > 1 )); then
 
   echo "[mn5] multi-node distributed mode: $NNODES nodes, master=$HEAD_IP:$MASTER_PORT"
 
-  # Add distributed args
+  # Add distributed args (node-rank is set dynamically via SLURM_PROCID in srun)
   SGLANG_ARGS+=(
     --nnodes "$NNODES"
-    --node-rank 0
     --dist-init-addr "$HEAD_IP:$MASTER_PORT"
   )
 fi
@@ -158,16 +157,29 @@ fi
 # Launch SGLang
 echo "[mn5] SGLang args: ${SGLANG_ARGS[*]}"
 
-apptainer exec --cleanenv --nv \
+# Build the apptainer command
+APPTAINER_CMD="apptainer exec --cleanenv --nv \
   --env HF_HOME=/hf --env HUGGINGFACE_HUB_CACHE=/hf \
-  --env HF_TOKEN="${HF_TOKEN:-}" --env HUGGINGFACE_HUB_TOKEN="${HUGGINGFACE_HUB_TOKEN:-}" \
-  --bind "$HF_HOME:/hf:rw" \
-  --env SGLANG_CACHE_DIR=/sg --bind "$SGLANG_CACHE_DIR:/sg:rw" \
-  --env NCCL_DEBUG="${NCCL_DEBUG:-WARN}" \
-  "$SIF_SGLANG" \
-  python -m sglang.launch_server "${SGLANG_ARGS[@]}" \
-  >"$LOG_DIR/sglang.log" 2>&1 &
-SGLANG_PID=$!
+  --env HF_TOKEN=${HF_TOKEN:-} --env HUGGINGFACE_HUB_TOKEN=${HUGGINGFACE_HUB_TOKEN:-} \
+  --bind $HF_HOME:/hf:rw \
+  --env SGLANG_CACHE_DIR=/sg --bind $SGLANG_CACHE_DIR:/sg:rw \
+  --env NCCL_DEBUG=${NCCL_DEBUG:-WARN} \
+  $SIF_SGLANG \
+  python -m sglang.launch_server ${SGLANG_ARGS[*]}"
+
+if (( NNODES > 1 )); then
+  # Multi-node: use srun to launch on all nodes with correct node-rank
+  # Each node gets its rank from SLURM_PROCID
+  echo "[mn5] Launching with srun across $NNODES nodes..."
+  srun --nodes=$NNODES --ntasks=$NNODES --ntasks-per-node=1 \
+    bash -c "export NODE_RANK=\$SLURM_PROCID; $APPTAINER_CMD --node-rank \$NODE_RANK" \
+    >"$LOG_DIR/sglang.log" 2>&1 &
+  SGLANG_PID=$!
+else
+  # Single node: run directly
+  $APPTAINER_CMD >"$LOG_DIR/sglang.log" 2>&1 &
+  SGLANG_PID=$!
+fi
 
 # Wait for server - large models can take 15-20 minutes to load
 wait_for_http "http://localhost:$SGLANG_PORT/v1/models" 2400 "$SGLANG_PID"
