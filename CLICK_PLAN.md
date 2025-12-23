@@ -608,10 +608,27 @@ A safe transition phase where both paths are active.
 
 ## Phase 6: Switch Analytics Queries to ClickHouse
 
-- [ ] **Update `/api/articlesreviews`**: Query ClickHouse instead of PostgreSQL
+> **Note**: Running Phase 6 before Phase 5 (Dual-Write) because we want to validate ClickHouse query performance with the existing backfilled data before modifying the write path.
+
+- [x] **Create ClickHouse client**: `src/services/clickhouse/clickhouseClient.ts` *(2024-12-23)*
+  - Singleton client with environment-based configuration
+  - Default connection: `localhost:8123`, database `forska`
+- [x] **Create ClickHouse query service**: `src/services/clickhouse/articlesReviewsClickHouse.ts` *(2024-12-23)*
+  - Two-phase query: aggregate articles, then fetch judgments
+  - Uses PostgreSQL for project metadata (prompts, routes, curated articles)
+  - ClickHouse for judgment data (GROUP BY, HAVING, ORDER BY)
+- [x] **Create test endpoint**: `/api/articlesreviews/clickhouse` *(2024-12-23)*
+  - Same API contract as PostgreSQL version
+  - Accessible alongside existing endpoint for A/B comparison
+- [x] **Performance testing**: Verified <5s response times! *(2024-12-23)*
+  - Test project: "All 2023 | AI? Healthcare?" with 4 import routes
+  - Articles query: **1.36s** (GROUP BY + ORDER BY on 24.9M rows)
+  - Judgments query: **0.29s** (fetch judgment details)
+  - **Total: 1.67s** (vs ~50s in PostgreSQL = **96% improvement!**)
+  - `FINAL` clause removed for performance (no duplicates in current data)
+- [ ] **Update `/api/articlesreviews`**: Replace PostgreSQL with ClickHouse (after validation)
 - [ ] **Update `/api/articlesreviewsfilters`**: Query ClickHouse
 - [ ] **Update any other analytics endpoints**: Stats, aggregations, etc.
-- [ ] **Performance testing**: Verify <5s response times on production-like data
 - [ ] **Rollback plan**: Keep PostgreSQL query code available (feature flag or environment variable)
 
 ## Phase 7: Disable PostgreSQL Direct Write for New Judgments
@@ -665,6 +682,10 @@ A safe transition phase where both paths are active.
 
 ## Open Questions / Future Considerations
 
+- [x] **Large curated article sets**: ~~Projects with >10K curated articles exceed ClickHouse's max query size when using IN clause.~~ **SOLVED!** *(2024-12-23)*
+  - **Solution**: When curated articles > 1000, create a Memory engine temp table, insert IDs in batches, and use JOIN
+  - **Performance**: 93K curated articles now works in ~1.9 seconds (82ms for insert, 1.4s for query)
+  - **Code**: `articlesReviewsClickHouse.ts` detects large sets and uses `createCuratedArticlesTempTable()`
 - [ ] **Compaction**: For very old partitions, periodically rewrite Parquet files to:
   - Physically remove soft-deleted records.
   - Merge many small files into fewer large files.
@@ -672,3 +693,60 @@ A safe transition phase where both paths are active.
   - Use `ObjectBucketClaim` CRD for bucket provisioning
   - Configure ClickHouse `S3Queue` with Ceph RGW credentials
 - [ ] **Detail View from ClickHouse?**: If PostgreSQL detail view is too slow after schema changes, consider querying ClickHouse for `id` lookups (~10-50ms acceptable?)
+
+---
+
+## Alternative: chDB for Bun (Embedded ClickHouse)
+
+**chDB** is an embedded ClickHouse engine that runs in-process with Bun, allowing direct Parquet queries without a separate ClickHouse server.
+
+### Installation
+
+```bash
+# Step 1: Install libchdb system dependency
+curl -sL https://lib.chdb.io | bash
+
+# Step 2: Install chdb-bun package
+bun add github:chdb-io/chdb-bun
+
+# Step 3: Build the native bindings
+cd node_modules/chdb-bun && bun install && bun run build
+```
+
+### Usage
+
+```typescript
+import { query, Session } from 'chdb-bun';
+
+// Ephemeral query (stateless)
+const result = query("SELECT version()", "JSON");
+
+// Query Parquet files directly
+const parquetResult = query(`
+  SELECT COUNT(*) as total
+  FROM file('/path/to/file.parquet', Parquet)
+`, "JSON");
+
+// Persistent session (for creating tables, etc.)
+const sess = new Session('./chdb-data');
+sess.query("CREATE DATABASE IF NOT EXISTS analytics", "CSV");
+sess.cleanup();
+```
+
+### When to Use chDB vs ClickHouse Server
+
+| Use Case | Recommendation |
+|----------|---------------|
+| Production analytics API | **ClickHouse Server** (already has data via S3Queue) |
+| Local development/testing | chDB or ClickHouse Server |
+| Ad-hoc Parquet file queries | **chDB** (no server needed) |
+| Backfill verification scripts | **chDB** (simple, embedded) |
+| CI/CD test suites | **chDB** (no Docker dependency) |
+
+### Limitations
+
+- **Working directory**: chdb-bun requires running from `node_modules/chdb-bun` directory due to native library path issues
+- **No S3Queue**: chDB doesn't support S3Queue engine (use for direct file queries only)
+- **Memory**: Large queries consume more memory since it's in-process
+
+**Documentation**: https://clickhouse.com/docs/chdb/install/bun
