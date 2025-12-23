@@ -94,21 +94,23 @@ export const projectsRoutesGetArticlesReviewsCount = new Elysia().post(
       const hasImportRoutes = routeTexts.length > 0
       const hasCuratedArticles = curatedArticleIds.length > 0
 
-      if (hasImportRoutes || hasCuratedArticles) {
-        const scopeParts: string[] = []
-
-        if (hasImportRoutes) {
-          scopeParts.push(`"articleImportRoute" IN (${buildInClause(routeTexts)})`)
-        }
-
-        if (hasCuratedArticles) {
-          scopeParts.push(`"articleId" IN (${buildInClause(curatedArticleIds)})`)
-        }
-
-        if (scopeParts.length > 0) {
-          whereClauses.push(`(${scopeParts.join(' OR ')})`)
-        }
+      // CRITICAL: If no scope is defined, return 0 (don't count all articles!)
+      if (!hasImportRoutes && !hasCuratedArticles) {
+        console.log('🦆 No scope defined (no import routes or curated articles), returning 0')
+        return {totalCount: 0, totalPages: 0}
       }
+
+      const scopeParts: string[] = []
+
+      if (hasImportRoutes) {
+        scopeParts.push(`"articleImportRoute" IN (${buildInClause(routeTexts)})`)
+      }
+
+      if (hasCuratedArticles) {
+        scopeParts.push(`"articleId" IN (${buildInClause(curatedArticleIds)})`)
+      }
+
+      whereClauses.push(`(${scopeParts.join(' OR ')})`)
 
       // Build answer filter HAVING clauses
       const havingClauses: string[] = []
