@@ -1,0 +1,63 @@
+{
+  "$schema": "./hpc_config_schema.json",
+  "name": "alvis",
+  "displayName": "Alvis",
+  "description": "Chalmers/NAISS Alvis GPU cluster",
+  "provider": "NAISS / Chalmers University",
+
+  "hardware": {
+    "node": {
+      "cpuModel": "AMD EPYC",
+      "memoryGb": 512
+    },
+    "gpu": {
+      "model": "NVIDIA A100",
+      "memoryGb": 80,
+      "memoryType": "HBM2e",
+      "gpusPerNode": 4,
+      "variant": "A100fat"
+    },
+    "network": {
+      "type": "InfiniBand",
+      "model": "HDR"
+    }
+  },
+
+  "defaults": {
+    "GPU_NNODES": 1,
+    "GPU_GPUS_PER_NODE": 3,
+    "GPU_TOTAL_GPUS": 3,
+    "TP_SIZE": 1,
+    "DP_SIZE": 1,
+    "GPU_SHAPE": "A100:3",
+    "SGLANG_MAX_RUNNING_REQUESTS": 400,
+    "SGLANG_MODEL": "Qwen/Qwen3-30B-A3B-Instruct-2507"
+  },
+
+  "sglang": {
+    "model": "Qwen/Qwen3-30B-A3B-Instruct-2507",
+    "port": 30000,
+    "tensorParallelSize": 1,
+    "dataParallelSize": 1,
+    "contextLength": 32768,
+    "chunkedPrefillSize": 16384,
+    "maxRunningRequests": 400,
+    "memFractionStatic": 0.92,
+    "schedulePolicy": "lpm"
+  },
+
+  "connection": {
+    "sshConfigHosts": {
+      "login": "alvis2"
+    },
+    "storageRoot": "/mimer/NOBACKUP/groups/clin-agent-bench/dev",
+    "slurmAccount": "NAISS2025-22-715",
+    "slurmPartition": "alvis"
+  },
+
+  "notes": [
+    "One-worker-per-GPU mode enabled by default",
+    "A100fat (80GB) allows larger models with tp=1",
+    "Standard job allocation: 3x A100fat per node"
+  ]
+}
