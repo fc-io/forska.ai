@@ -4,7 +4,7 @@
  */
 
 import {$} from 'bun'
-import {existsSync, mkdirSync} from 'fs'
+import {existsSync, mkdirSync, statSync} from 'fs'
 import {basename, join} from 'path'
 
 const MN5_ROOT = '/gpfs/projects/ehpc482/dev'
@@ -52,9 +52,24 @@ const main = async () => {
 
   // 2. Prepare container
   if (!skipDl && !skipContainer && !existsSync(tarball)) {
-    log('Pulling and saving container...')
-    await $`docker pull lmsysorg/sglang:latest`
+    log('Pulling and saving container (linux/amd64 for MN5)...')
+    // Must explicitly specify amd64 platform since we might be on Apple Silicon
+    await $`docker pull --platform linux/amd64 lmsysorg/sglang:latest`
     await $`docker save lmsysorg/sglang:latest | gzip > ${tarball}`
+
+    // Validate the tarball was created correctly (should be ~14GB, fail if < 1GB)
+    const MIN_SIZE_BYTES = 1_000_000_000 // 1GB minimum
+    const actualSize = statSync(tarball).size
+    if (actualSize < MIN_SIZE_BYTES) {
+      // Delete the corrupted file
+      await $`rm -f ${tarball}`
+      fail(
+        `Container tarball is too small (${(actualSize / 1_000_000).toFixed(1)}MB). `
+          + `Expected ~14GB. This usually means Docker disconnected during save. `
+          + `Please restart OrbStack/Docker and try again.`,
+      )
+    }
+    log(`Container saved successfully (${(actualSize / 1_000_000_000).toFixed(1)}GB)`)
   }
 
   // 3. Create remote dirs
@@ -72,12 +87,16 @@ const main = async () => {
     await $`rsync -avzP ${tarball} ${TLOG}:${MN5_ROOT}/`
     log('Converting to SIF on general login node (this takes a while)...')
     // Note: Must use glogin (general purpose) - alogin (ACC) doesn't have singularity module
+    // Singularity docker-archive: doesn't support gzipped tar, must decompress first
     const convertCmd = `
       cd ${MN5_ROOT} && \\
+      echo "Decompressing tarball..." && \\
+      gzip -d sglang_latest.tar.gz && \\
       module load singularity/4.1.5 && \\
       which singularity || which apptainer || (echo "ERROR: Neither singularity nor apptainer found" && exit 1) && \\
-      singularity build sglang_latest.sif docker-archive:sglang_latest.tar.gz && \\
-      rm sglang_latest.tar.gz
+      echo "Building SIF from tar..." && \\
+      singularity build sglang_latest.sif docker-archive:sglang_latest.tar && \\
+      rm sglang_latest.tar
     `
     await $`ssh ${GLOG} ${convertCmd}`
   }
