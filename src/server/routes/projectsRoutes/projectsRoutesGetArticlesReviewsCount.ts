@@ -1,7 +1,7 @@
 import {and, eq} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {importRoute, projectArticles, projectPrompts, projectRouteLink, prompts} from '../../../db/schema'
+import {importRoute, projectArticles, projectPrompts, projectRouteLink, projects, prompts} from '../../../db/schema'
 import {
   buildInClause,
   escapeSqlString,
@@ -27,20 +27,24 @@ export const projectsRoutesGetArticlesReviewsCount = new Elysia().post(
     try {
       const db = getDatabase()
 
-      // Get project's enabled prompt IDs
-      const projectPromptRows = await db
-        .select({id: prompts.id})
-        .from(projectPrompts)
-        .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
-        .where(and(eq(projectPrompts.projectId, body.projectId), eq(projectPrompts.enabled, true)))
+      // Get project's enabled prompt IDs and modelId
+      const [projectPromptRows, projectRow] = await Promise.all([
+        db
+          .select({id: prompts.id})
+          .from(projectPrompts)
+          .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
+          .where(and(eq(projectPrompts.projectId, body.projectId), eq(projectPrompts.enabled, true))),
+        db.select({modelId: projects.modelId}).from(projects).where(eq(projects.id, body.projectId)).limit(1),
+      ])
 
-      if (projectPromptRows.length === 0) {
+      if (projectPromptRows.length === 0 || !projectRow[0]) {
         return {totalCount: 0, totalPages: 0}
       }
 
       const promptIds = projectPromptRows.map((p) => {
         return p.id
       })
+      const projectModelId = projectRow[0].modelId
 
       // Get import route TEXTS for this project
       const importRouteRows = await db
@@ -67,7 +71,11 @@ export const projectsRoutesGetArticlesReviewsCount = new Elysia().post(
       const parquetPath = getJudgmentsParquetPath()
 
       // Build WHERE clauses
-      const whereClauses: string[] = [`"promptId" IN (${buildInClause(promptIds)})`, `"deletedAt" IS NULL`]
+      const whereClauses: string[] = [
+        `"promptId" IN (${buildInClause(promptIds)})`,
+        `"modelId" = '${escapeSqlString(projectModelId)}'`,
+        `"deletedAt" IS NULL`,
+      ]
 
       // Date filters
       if (body.from) {
