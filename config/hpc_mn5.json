@@ -77,9 +77,7 @@
     "MiMo-V2-Flash requires 2 nodes (tp=8) for inference",
     "Large models can take 15-20 minutes to load",
     "SSH tunnel required for local API server to reach SGLang",
-    "Using dp=1 (not dp=2): simpler multi-node coordination, fewer failure modes",
-    "Request-level parallelism via max_running_requests=128 is sufficient for batch judging workload",
-    "dp=2 would require --enable-dp-attention which adds inter-node communication complexity",
-    "LMSYS dp=2 benchmark config is for peak throughput; dp=1 is better for production stability"
+    "Using dp=1 (not dp=2): request-level parallelism via max_running_requests=128 is sufficient for batch judging",
+    "LMSYS dp=2 benchmark config is for peak throughput; dp=1 is simpler and better for production stability"
   ]
 }
