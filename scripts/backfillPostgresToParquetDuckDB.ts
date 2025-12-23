@@ -5,26 +5,29 @@
  * which is 10-100x faster than row-by-row processing in Node.js.
  *
  * Prerequisites:
- *   brew install duckdb  (or download from duckdb.org)
+ *   brew install duckdb   (or download from duckdb.org)
+ *   brew install awscli   (for S3 upload with multipart support)
  *
  * Usage: bun scripts/backfillPostgresToParquetDuckDB.ts
  *
  * Options (via env vars):
  *   LIMIT=0               - Number of rows to process (default: 0 = ALL)
- *   OUTPUT_DIR=./data/parquet-local  - Where to write Parquet files
+ *   OUTPUT_DIR=./data/parquet-local  - Where to write Parquet files locally
  *   UPLOAD_TO_S3=true     - Whether to upload to S3 after generation
+ *   CLEANUP_LOCAL=true    - Remove local files after successful S3 upload (default: true)
  */
 
 import {spawn} from 'child_process'
-import {mkdir, readdir} from 'fs/promises'
+import {mkdir, readdir, rm} from 'fs/promises'
 import path from 'path'
 
 import {env} from '../src/server/utils/env'
-import {ensureBucket, getS3Config, uploadToS3} from '../src/services/s3/s3Client'
+import {ensureBucket, getS3Config} from '../src/services/s3/s3Client'
 
 const LIMIT = parseInt(process.env.LIMIT ?? '0', 10)
 const OUTPUT_DIR = process.env.OUTPUT_DIR ?? './data/parquet-local'
 const UPLOAD_TO_S3 = process.env.UPLOAD_TO_S3 !== 'false'
+const CLEANUP_LOCAL = process.env.CLEANUP_LOCAL !== 'false' // Remove local files after S3 upload
 
 const log = (message: string) => {
   console.log(`[${new Date().toISOString()}] ${message}`)
@@ -43,15 +46,13 @@ const formatDuration = (seconds: number): string => {
  */
 const runDuckDB = (sqlCommands: string): Promise<void> => {
   return new Promise((resolve, reject) => {
-    const duckdb = spawn('duckdb', ['-c', sqlCommands], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-    })
+    const duckdb = spawn('duckdb', ['-c', sqlCommands], {stdio: ['pipe', 'pipe', 'pipe']})
 
-    duckdb.stdout.on('data', (data) => {
+    duckdb.stdout.on('data', (data: Buffer) => {
       process.stdout.write(data)
     })
 
-    duckdb.stderr.on('data', (data) => {
+    duckdb.stderr.on('data', (data: Buffer) => {
       process.stderr.write(data)
     })
 
@@ -70,7 +71,45 @@ const runDuckDB = (sqlCommands: string): Promise<void> => {
 }
 
 /**
- * Upload Parquet files from local directory to S3
+ * Upload a single file to S3 using AWS CLI (supports multipart upload for large files)
+ */
+const uploadFileWithAwsCli = (localPath: string, s3Uri: string, endpoint: string): Promise<void> => {
+  return new Promise((resolve, reject) => {
+    const awsProcess = spawn(
+      'aws',
+      ['--endpoint-url', endpoint, 's3', 'cp', localPath, s3Uri, '--content-type', 'application/vnd.apache.parquet'],
+      {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: {
+          ...process.env,
+          AWS_ACCESS_KEY_ID: process.env.S3_ACCESS_KEY || 'admin',
+          AWS_SECRET_ACCESS_KEY: process.env.S3_SECRET_KEY || 'admin',
+        },
+      },
+    )
+
+    let stderr = ''
+    awsProcess.stderr.on('data', (data: Buffer) => {
+      stderr += data.toString()
+    })
+
+    awsProcess.on('close', (code) => {
+      if (code === 0) {
+        resolve()
+      } else {
+        reject(new Error(`AWS CLI upload failed: ${stderr}`))
+      }
+    })
+
+    awsProcess.on('error', (err) => {
+      reject(new Error(`Failed to start AWS CLI: ${err.message}. Is AWS CLI installed? Run: brew install awscli`))
+    })
+  })
+}
+
+/**
+ * Upload Parquet files from local directory to S3 using AWS CLI.
+ * AWS CLI handles multipart uploads automatically for large files.
  */
 const uploadParquetFilesToS3 = async (localDir: string): Promise<string[]> => {
   const s3Config = getS3Config()
@@ -79,7 +118,8 @@ const uploadParquetFilesToS3 = async (localDir: string): Promise<string[]> => {
   const uploadedKeys: string[] = []
 
   // Walk the directory structure
-  const walkDir = async (dir: string, prefix: string = '') => {
+  // Files are uploaded with 'judgments/' prefix to match expected path: judgments/year=YYYY/month=MM/*.parquet
+  const walkDir = async (dir: string, prefix = 'judgments') => {
     const entries = await readdir(dir, {withFileTypes: true})
 
     for (const entry of entries) {
@@ -89,10 +129,10 @@ const uploadParquetFilesToS3 = async (localDir: string): Promise<string[]> => {
       if (entry.isDirectory()) {
         await walkDir(localPath, s3Key)
       } else if (entry.name.endsWith('.parquet')) {
-        const fileBuffer = await Bun.file(localPath).arrayBuffer()
-        await uploadToS3(s3Config.bucket, s3Key, Buffer.from(fileBuffer), 'application/vnd.apache.parquet')
+        const s3Uri = `s3://${s3Config.bucket}/${s3Key}`
+        await uploadFileWithAwsCli(localPath, s3Uri, s3Config.endpoint)
         uploadedKeys.push(s3Key)
-        log(`  Uploaded: s3://${s3Config.bucket}/${s3Key}`)
+        log(`  Uploaded: ${s3Uri}`)
       }
     }
   }
@@ -205,6 +245,14 @@ SELECT 'Export complete!' as status;
       log('')
       log('=== Upload Complete ===')
       log(`Uploaded ${uploadedFiles.length} files in ${formatDuration(uploadTime)}`)
+
+      // Cleanup local files after successful upload
+      if (CLEANUP_LOCAL) {
+        log('')
+        log('Cleaning up local Parquet files...')
+        await rm(judgmentsDir, {recursive: true, force: true})
+        log(`Removed: ${judgmentsDir}`)
+      }
     } catch (error) {
       console.error('S3 upload failed:', error)
       log('Files are still available locally at: ' + OUTPUT_DIR)

@@ -563,13 +563,18 @@ Backfill all existing judgments to Parquet first, so we have real data to test C
   - [x] Use judgment's `createdAt` for partitioning
   - [x] Log progress with rate and ETA
   - [x] Configurable: `LIMIT` (default 1000), `BATCH_SIZE`, `OFFSET`, `DRY_RUN`
-- [ ] **Test run (1000 rows)**: Verify script works with limited subset
-  - [ ] Set S3 env vars: `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET`
-  - [ ] Run: `bun scripts/backfillPostgresToParquet.ts` (defaults to LIMIT=1000)
-  - [ ] Verify Parquet file written to SeaweedFS
-  - [ ] Inspect with DuckDB/pandas (see script output for commands)
-- [ ] **Full backfill**: Run with `LIMIT=0` to process all ~25M rows
-- [ ] **Verify files**: Confirm Parquet files are written to SeaweedFS with expected partitioning
+  - [x] **Optimized**: Created `scripts/backfillPostgresToParquetDuckDB.ts` using DuckDB for ~2750x faster export *(2024-12-23)*
+- [x] **Test run (1000 rows)**: Verify script works with limited subset *(2024-12-23)*
+  - [x] Set S3 env vars: `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET`
+  - [x] Run: `bun scripts/backfillPostgresToParquetDuckDB.ts`
+  - [x] Verify Parquet file written to SeaweedFS
+  - [x] Inspect with DuckDB/pandas (see script output for commands)
+- [x] **Full backfill**: Run with `LIMIT=0` to process all ~25M rows *(2024-12-23)*
+  - Completed in **6 minutes 19 seconds** using DuckDB script
+  - **24,946,050 rows** exported to 5 Parquet files (~10.3 GB total, ~2.5 GB compressed in S3)
+- [x] **Verify files**: Confirm Parquet files are written to SeaweedFS with expected partitioning *(2024-12-23)*
+  - Files at: `s3://forska-judgments/judgments/year=2025/month={08,09,10,11,12}/data_0.parquet`
+  - Verified with DuckDB: `SELECT COUNT(*) FROM read_parquet('s3://...')` returns 24,946,050
 
 ## Phase 4: ClickHouse DDL & Testing
 
