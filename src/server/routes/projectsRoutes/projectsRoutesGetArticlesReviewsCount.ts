@@ -27,14 +27,18 @@ export const projectsRoutesGetArticlesReviewsCount = new Elysia().post(
     try {
       const db = getDatabase()
 
-      // Get project's enabled prompt IDs and modelId
+      // Get project's enabled prompt IDs, modelId, and date bounds
       const [projectPromptRows, projectRow] = await Promise.all([
         db
           .select({id: prompts.id})
           .from(projectPrompts)
           .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
           .where(and(eq(projectPrompts.projectId, body.projectId), eq(projectPrompts.enabled, true))),
-        db.select({modelId: projects.modelId}).from(projects).where(eq(projects.id, body.projectId)).limit(1),
+        db
+          .select({modelId: projects.modelId, dateFrom: projects.dateFrom, dateTo: projects.dateTo})
+          .from(projects)
+          .where(eq(projects.id, body.projectId))
+          .limit(1),
       ])
 
       if (projectPromptRows.length === 0 || !projectRow[0]) {
@@ -45,6 +49,8 @@ export const projectsRoutesGetArticlesReviewsCount = new Elysia().post(
         return p.id
       })
       const projectModelId = projectRow[0].modelId
+      const projectDateFrom = projectRow[0].dateFrom
+      const projectDateTo = projectRow[0].dateTo
 
       // Get import route TEXTS for this project
       const importRouteRows = await db
@@ -77,12 +83,33 @@ export const projectsRoutesGetArticlesReviewsCount = new Elysia().post(
         `"deletedAt" IS NULL`,
       ]
 
-      // Date filters
-      if (body.from) {
-        whereClauses.push(`"articleCreatedAt" >= '${escapeSqlString(body.from)}T00:00:00'::TIMESTAMP`)
+      // Date filters - combine project bounds with request params (use most restrictive)
+      const requestFrom = body.from ? new Date(`${body.from}T00:00:00Z`) : null
+      const requestTo = body.to ? new Date(`${body.to}T23:59:59Z`) : null
+
+      // Effective from: use the later of project.dateFrom and request.from
+      const effectiveFrom =
+        projectDateFrom && requestFrom
+          ? projectDateFrom > requestFrom
+            ? projectDateFrom
+            : requestFrom
+          : (projectDateFrom ?? requestFrom)
+
+      // Effective to: use the earlier of project.dateTo and request.to
+      const effectiveTo =
+        projectDateTo && requestTo
+          ? projectDateTo < requestTo
+            ? projectDateTo
+            : requestTo
+          : (projectDateTo ?? requestTo)
+
+      if (effectiveFrom) {
+        const fromStr = effectiveFrom.toISOString().replace('T', ' ').substring(0, 23)
+        whereClauses.push(`"articleCreatedAt" >= '${fromStr}'::TIMESTAMP`)
       }
-      if (body.to) {
-        whereClauses.push(`"articleCreatedAt" <= '${escapeSqlString(body.to)}T23:59:59'::TIMESTAMP`)
+      if (effectiveTo) {
+        const toStr = effectiveTo.toISOString().replace('T', ' ').substring(0, 23)
+        whereClauses.push(`"articleCreatedAt" <= '${toStr}'::TIMESTAMP`)
       }
 
       // Search filter
