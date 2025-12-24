@@ -339,8 +339,9 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
           for (const uid of qualifyingUsers) {
             const rowsArr = byUser.get(uid) || []
             for (const r of rowsArr) {
-              if (r.answer !== null && r.answer !== undefined) {
-                map[r.promptId].push(r.answer)
+              const arr = map[r.promptId]
+              if (r.answer !== null && r.answer !== undefined && arr) {
+                arr.push(r.answer)
               }
             }
           }
