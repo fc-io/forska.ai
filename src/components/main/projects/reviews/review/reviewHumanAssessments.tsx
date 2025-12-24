@@ -8,11 +8,7 @@ type HumanGroup = {
   judgments: Array<{id: string; prompt: {originalText: string}; answer: string | null; comment: string | null}>
 }
 
-type ReviewHumanAssessmentsProps = {
-  groups?: HumanGroup[]
-  onSelectJudgment?: (judgmentId: string | undefined, userName: string) => void
-  selectedJudgmentId?: string
-}
+type ReviewHumanAssessmentsProps = {groups?: HumanGroup[]}
 
 export const ReviewHumanAssessments = (props: ReviewHumanAssessmentsProps) => {
   return (
@@ -28,24 +24,7 @@ export const ReviewHumanAssessments = (props: ReviewHumanAssessmentsProps) => {
                 <div class="p-2">
                   <For each={group.judgments}>
                     {(judgment) => {
-                      return (
-                        <ReviewHumanJudgmentItem
-                          judgment={judgment}
-                          onClick={
-                            props.onSelectJudgment
-                              ? (id) => {
-                                  // Toggle selection: if already selected, clear it
-                                  if (props.selectedJudgmentId === id) {
-                                    props.onSelectJudgment?.(undefined, '')
-                                  } else {
-                                    props.onSelectJudgment?.(id, group.userName)
-                                  }
-                                }
-                              : undefined
-                          }
-                          isSelected={props.selectedJudgmentId === judgment.id}
-                        />
-                      )
+                      return <ReviewHumanJudgmentItem judgment={judgment} />
                     }}
                   </For>
                 </div>

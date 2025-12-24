@@ -14,8 +14,6 @@ export const ReviewDetail = () => {
   const projectId = (params() as {id: string; articleId: string}).id
   const articleId = (params() as {id: string; articleId: string}).articleId
   const [articleViewToShow, setArticleViewToShow] = createSignal<string | undefined>(undefined)
-  const [selectedHumanJudgmentId, setSelectedHumanJudgmentId] = createSignal<string | undefined>(undefined)
-  const [selectedHumanUserName, setSelectedHumanUserName] = createSignal<string>('')
 
   const articleQuery = useQuery(() => {
     return {
@@ -31,24 +29,6 @@ export const ReviewDetail = () => {
       },
     }
   })
-
-  // Helper to find human judgment by ID across all groups
-  const findHumanJudgment = (
-    groups: Array<{
-      userId: string
-      userName: string
-      judgments: Array<{id: string; prompt: {originalText: string}; answer: string | null; comment: string | null}>
-    }>,
-    id: string,
-  ) => {
-    for (const group of groups) {
-      const judgment = group.judgments.find((j) => {
-        return j.id === id
-      })
-      if (judgment) return judgment
-    }
-    return undefined
-  }
 
   return (
     <div class="min-h-screen bg-gray-50 p-6">
@@ -68,18 +48,11 @@ export const ReviewDetail = () => {
 
           <Show when={articleQuery.data}>
             {(data) => {
-              // Find selected human judgment if applicable
-              const selectedHumanJudgment = () => {
-                const id = selectedHumanJudgmentId()
-                if (!id || !data().humanAssessmentsByUser) return undefined
-                return findHumanJudgment(data().humanAssessmentsByUser, id)
-              }
-
               return (
                 <div class="flex gap-6">
                   <div class="flex-1 space-y-6">
                     {/* Default view: no selection */}
-                    <Show when={articleViewToShow() === undefined && !selectedHumanJudgmentId()}>
+                    <Show when={articleViewToShow() === undefined}>
                       <ReviewArticleDetails article={data().article} />
                     </Show>
 
@@ -97,46 +70,17 @@ export const ReviewDetail = () => {
                       }}
                     </Show>
 
-                    {/* Human judgment selected */}
-                    <Show when={selectedHumanJudgment()}>
-                      {(humanJudgment) => {
-                        return (
-                          <ReviewArticleDetails
-                            article={data().article}
-                            humanJudgment={{...humanJudgment(), userName: selectedHumanUserName()}}
-                          />
-                        )
-                      }}
-                    </Show>
-
                     <Show when={data().review}>
                       <ReviewStatus review={data().review} />
                     </Show>
                   </div>
                   <div class="w-96">
-                    <ReviewJudgments
-                      judgments={data().judgments}
-                      setArticleViewToShow={(id) => {
-                        setSelectedHumanJudgmentId(undefined) // Clear human selection when LLM is selected
-                        setArticleViewToShow(id)
-                      }}
-                    />
-                    <ReviewHumanAssessments
-                      groups={data().humanAssessmentsByUser}
-                      selectedJudgmentId={selectedHumanJudgmentId()}
-                      onSelectJudgment={(id, userName) => {
-                        setArticleViewToShow(undefined) // Clear LLM selection when human is selected
-                        setSelectedHumanJudgmentId(id)
-                        setSelectedHumanUserName(userName)
-                      }}
-                    />
+                    <ReviewJudgments judgments={data().judgments} setArticleViewToShow={setArticleViewToShow} />
+                    <ReviewHumanAssessments groups={data().humanAssessmentsByUser} />
                     <ReviewAvailableJudgments
                       judgments={data().allJudgments}
                       projectsById={data().projectsById}
-                      setArticleViewToShow={(id) => {
-                        setSelectedHumanJudgmentId(undefined) // Clear human selection when LLM is selected
-                        setArticleViewToShow(id)
-                      }}
+                      setArticleViewToShow={setArticleViewToShow}
                     />
                   </div>
                 </div>

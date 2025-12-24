@@ -234,7 +234,10 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         .from(judgmentsHuman)
         .innerJoin(user, eq(user.id, judgmentsHuman.user))
         .innerJoin(prompts, eq(prompts.id, judgmentsHuman.promptId))
-        .innerJoin(projectPrompts, eq(projectPrompts.promptId, prompts.id))
+        .innerJoin(
+          projectPrompts,
+          and(eq(projectPrompts.promptId, prompts.id), eq(projectPrompts.projectId, projectId)),
+        )
         .where(
           and(
             eq(judgmentsHuman.articleId, articleId),
