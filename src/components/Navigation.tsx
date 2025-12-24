@@ -80,6 +80,9 @@ export const Navigation = (props: NavigationProps) => {
               <Link to="/admin/parquet" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
                 Parquet
               </Link>
+              <Link to="/admin/aa-models" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
+                AI Models
+              </Link>
               <Link to="/admin/failed_requests" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
                 Failed Requests
               </Link>

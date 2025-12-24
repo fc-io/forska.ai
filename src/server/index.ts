@@ -3,6 +3,7 @@ import {Elysia} from 'elysia'
 
 import {fullTextJobsCron} from './cron/fullTextJobs.ts'
 import {judgmentsJobsCron} from './cron/judgmentsJobs.ts'
+import {aaModelsRoutes} from './routes/AaModelsRoutes'
 import {articlesRoutes} from './routes/ArticlesRoutes.ts'
 import {authRoutes} from './routes/AuthRoutes.ts'
 import {dataSourcesImportRoutes} from './routes/DataSourcesImportRoutes.ts'
@@ -54,6 +55,7 @@ const _app = new Elysia()
   .use(llmStatusRoutes)
   .use(subprojectsRoutes)
   .use(parquetRoutes)
+  .use(aaModelsRoutes)
   .listen(env.API_SERVER_PORT)
 
 console.log(
