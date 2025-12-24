@@ -1,4 +1,4 @@
-import {and, desc, eq, gte, lte, sql} from 'drizzle-orm'
+import {and, desc, eq, gte, inArray, lte, or, sql} from 'drizzle-orm'
 import type {Context} from 'elysia'
 
 import {auth} from '../../../auth.ts'
@@ -6,6 +6,7 @@ import {
   articleRouteLink,
   articles,
   judgmentsHuman,
+  projectArticles,
   projectPrompts,
   projectRouteLink,
   projects,
@@ -93,30 +94,65 @@ export const humanAssessmentRoutesPostInit = async ({
   let articleRow: {id: string; articleTitle: string; articleSummary: string | null} | null = null
 
   if (!targetArticleId) {
+    // Fetch import routes linked to this project
     const projectImportRoutes = await db
       .select({importRouteId: projectRouteLink.importRouteId})
       .from(projectRouteLink)
       .where(eq(projectRouteLink.projectId, body.projectId))
 
-    if (projectImportRoutes.length === 0) {
-      set.status = 404
-      return {data: null, error: 'Project has no linked import routes'}
+    // Fetch curated articles for this project
+    const curatedArticleRows = await db
+      .select({articleId: projectArticles.articleId})
+      .from(projectArticles)
+      .where(eq(projectArticles.projectId, body.projectId))
+
+    const hasCuratedArticles = curatedArticleRows.length > 0
+    const hasImportRoutes = projectImportRoutes.length > 0
+
+    // Build article scope conditions
+    const articleScopeConditions: Array<ReturnType<typeof sql>> = []
+
+    if (hasImportRoutes) {
+      // Use inArray for import routes - typically a small set
+      const routeIds = projectImportRoutes.map((r) => {
+        return r.importRouteId
+      })
+      articleScopeConditions.push(sql`EXISTS (
+        SELECT 1 FROM ${articleRouteLink} arl
+        WHERE arl."article_id" = ${articles.id}
+        AND ${inArray(articleRouteLink.importRouteId, routeIds)}
+      )`)
     }
 
-    const routeIdArray = sql.join(
-      projectImportRoutes.map((r) => {
-        return sql`${r.importRouteId}::uuid`
-      }),
-      sql`,`,
-    )
+    if (hasCuratedArticles) {
+      // For large curated article sets, use raw SQL with array literal to avoid parameter explosion
+      // Drizzle's inArray would still expand each ID as a parameter
+      const curatedIds = curatedArticleRows.map((r) => {
+        return r.articleId
+      })
+      // Format as PostgreSQL array literal: '{uuid1,uuid2,...}'
+      const arrayLiteral = `{${curatedIds.join(',')}}`
+      articleScopeConditions.push(sql`${articles.id} = ANY(${sql.raw(`'${arrayLiteral}'`)}::uuid[])`)
+    }
 
-    const hasMatchingImportRoute = sql`EXISTS (
-          SELECT 1 FROM ${articleRouteLink} arl
-          WHERE arl."article_id" = ${articles.id}
-          AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
-        )`
+    // If no import routes and no curated articles, return no articles
+    if (articleScopeConditions.length === 0) {
+      set.status = 404
+      return {data: null, error: 'No import routes AND no curated articles'}
+    }
 
-    const whereParts: Array<ReturnType<typeof sql>> = [hasMatchingImportRoute]
+    // Combine article scope with OR (article is in import routes OR is curated)
+    const articleScopeCondition =
+      articleScopeConditions.length > 1 ? or(...articleScopeConditions) : articleScopeConditions[0]
+
+    // We know articleScopeCondition is defined here because we checked length > 0 above
+    if (!articleScopeCondition) {
+      set.status = 404
+      return {data: null, error: 'No articles left to judge'}
+    }
+
+    const whereParts: Array<ReturnType<typeof sql | typeof or>> = [articleScopeCondition]
+
     if (project.dateFrom) {
       whereParts.push(gte(articles.articleCreatedAt, project.dateFrom))
     }
@@ -150,7 +186,7 @@ export const humanAssessmentRoutesPostInit = async ({
 
     if (!randomArticle) {
       set.status = 404
-      return {data: null, error: 'No eligible articles found for this project'}
+      return {data: null, error: 'No articles left to judge'}
     }
 
     const articleId = randomArticle.id
