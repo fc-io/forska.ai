@@ -239,15 +239,32 @@ export const queryArticlesReviewsFromClickHouse = async (
     return {data: [], totalCount: null, page: params.page, limit: params.limit, totalPages: null}
   }
 
+  // Check if we have any scope defined (required!)
+  const hasImportRoutes = metadata.routeTexts.length > 0
+  const hasCuratedArticles = metadata.curatedArticleIds.length > 0
+
+  if (!hasImportRoutes && !hasCuratedArticles) {
+    console.log('[ClickHouse] No scope defined (no import routes or curated articles), returning empty')
+    return {data: [], totalCount: null, page: params.page, limit: params.limit, totalPages: null}
+  }
+
+  // Log page/offset for debugging pagination issues
+  const offset = (params.page - 1) * params.limit
+  console.log(`[ClickHouse] Page ${params.page}, limit ${params.limit}, offset ${offset}`)
+  console.log(
+    `[ClickHouse] Scope: ${hasImportRoutes ? metadata.routeTexts.length + ' import routes' : 'no import routes'}, ${hasCuratedArticles ? metadata.curatedArticleIds.length + ' curated articles' : 'no curated articles'}`,
+  )
+
   // Determine if we need a temp table for curated articles
-  const useTempTable =
-    metadata.curatedArticleIds.length > CURATED_ARTICLES_TEMP_TABLE_THRESHOLD && metadata.routeTexts.length === 0
+  // Use temp table whenever curated articles exceed threshold, regardless of import routes
+  // This prevents query size issues caused by large IN clauses
+  const useCuratedTempTable = metadata.curatedArticleIds.length > CURATED_ARTICLES_TEMP_TABLE_THRESHOLD
 
   let tempTableInfo: {tableName: string; cleanup: () => Promise<void>} | null = null
 
   try {
-    // Create temp table if needed
-    if (useTempTable) {
+    // Create temp table if needed for curated articles
+    if (useCuratedTempTable && hasCuratedArticles) {
       tempTableInfo = await createCuratedArticlesTempTable(metadata.curatedArticleIds)
     }
 
@@ -296,33 +313,49 @@ export const queryArticlesReviewsFromClickHouse = async (
     }
 
     // Scope filter: import routes OR curated articles
-    // When using temp table, we use JOIN instead of IN clause
-    if (!useTempTable) {
-      const scopeParts: string[] = []
+    // Two approaches depending on curated article count:
+    // 1. If curated articles are below threshold: use IN clauses for both
+    // 2. If curated articles are above threshold: use LEFT JOIN on temp table for curated + OR with import routes
 
-      if (metadata.routeTexts.length > 0) {
-        const routesQuoted = metadata.routeTexts
-          .map((r) => {
-            return `'${escapeClickHouseString(r)}'`
-          })
-          .join(', ')
-        scopeParts.push(`articleImportRoute IN (${routesQuoted})`)
-      }
+    const scopeParts: string[] = []
 
-      if (metadata.curatedArticleIds.length > 0) {
-        const curatedIdsQuoted = metadata.curatedArticleIds
-          .map((id) => {
-            return `'${id}'`
-          })
-          .join(', ')
-        scopeParts.push(`articleId IN (${curatedIdsQuoted})`)
-      }
+    // Import routes always use IN clause (they're usually small)
+    if (hasImportRoutes) {
+      const routesQuoted = metadata.routeTexts
+        .map((r) => {
+          return `'${escapeClickHouseString(r)}'`
+        })
+        .join(', ')
+      scopeParts.push(`articleImportRoute IN (${routesQuoted})`)
+    }
 
-      // If no scope (neither routes nor curated), return empty
-      if (scopeParts.length === 0) {
-        return {data: [], totalCount: null, page: params.page, limit: params.limit, totalPages: null}
-      }
+    // Curated articles: IN clause if small, handled via JOIN if large
+    if (hasCuratedArticles && !useCuratedTempTable) {
+      // Small number of curated articles - use IN clause
+      const curatedIdsQuoted = metadata.curatedArticleIds
+        .map((id) => {
+          return `'${id}'`
+        })
+        .join(', ')
+      scopeParts.push(`articleId IN (${curatedIdsQuoted})`)
+    }
 
+    // If using temp table for curated articles, we need a different query structure
+    // We'll use a LEFT JOIN and check if the article is in the temp table OR matches import routes
+    if (useCuratedTempTable && tempTableInfo) {
+      // We'll use LEFT JOIN and add OR condition for temp table match
+      // This is handled below in the FROM clause
+      // Add condition here for temp table match
+      scopeParts.push(`t.articleId IS NOT NULL`)
+    }
+
+    // If no scope parts at all (shouldn't happen due to early return), return empty
+    if (scopeParts.length === 0 && !useCuratedTempTable) {
+      return {data: [], totalCount: null, page: params.page, limit: params.limit, totalPages: null}
+    }
+
+    // Add scope filter to WHERE
+    if (scopeParts.length > 0) {
       whereParts.push(`(${scopeParts.join(' OR ')})`)
     }
 
@@ -349,30 +382,29 @@ export const queryArticlesReviewsFromClickHouse = async (
     const whereClause = whereParts.join(' AND ')
     const havingClause = havingParts.length > 0 ? `HAVING ${havingParts.join(' AND ')}` : ''
 
-    const offset = (params.page - 1) * params.limit
-
     // Query to get article IDs with aggregated data
     // Note: We use different aliases (title_, created_, updated_) to avoid conflicts with WHERE clause
-    // When using temp table, we add an INNER JOIN
+    // When using temp table for curated articles, we add a LEFT JOIN (to allow OR with import routes)
     const tempTableName = tempTableInfo?.tableName ?? ''
-    const fromClause = useTempTable
-      ? `judgments j INNER JOIN ${tempTableName} t ON j.articleId = t.articleId`
+    const useTempTableJoin = useCuratedTempTable && tempTableInfo !== null
+    const fromClause = useTempTableJoin
+      ? `judgments j LEFT JOIN ${tempTableName} t ON j.articleId = t.articleId`
       : 'judgments'
 
-    const columnPrefix = useTempTable ? 'j.' : ''
+    const columnPrefix = useTempTableJoin ? 'j.' : ''
 
     const articlesQuery = `
       SELECT
         ${columnPrefix}articleId,
         any(${columnPrefix}articleTitle) AS title_,
-        any(${columnPrefix}articleCreatedAt) AS created_,
-        any(${columnPrefix}articleUpdatedAt) AS updated_,
+        max(${columnPrefix}articleCreatedAt) AS created_,
+        max(${columnPrefix}articleUpdatedAt) AS updated_,
         groupArray(${columnPrefix}promptId) AS promptIds
       FROM ${fromClause}
       WHERE ${whereClause}
       GROUP BY ${columnPrefix}articleId
       ${havingClause}
-      ORDER BY created_ DESC NULLS LAST
+      ORDER BY created_ DESC NULLS LAST, ${columnPrefix}articleId ASC
       LIMIT ${params.limit}
       OFFSET ${offset}
     `
@@ -553,14 +585,14 @@ export const countArticlesReviewsFromClickHouse = async (
     }
 
     // Determine if we need a temp table for curated articles
-    const useTempTable =
-      metadata.curatedArticleIds.length > CURATED_ARTICLES_TEMP_TABLE_THRESHOLD && metadata.routeTexts.length === 0
+    // Use temp table whenever curated articles exceed threshold, regardless of import routes
+    const useCuratedTempTable = metadata.curatedArticleIds.length > CURATED_ARTICLES_TEMP_TABLE_THRESHOLD
 
     let tempTableInfo: {tableName: string; cleanup: () => Promise<void>} | null = null
 
     try {
-      // Create temp table if needed
-      if (useTempTable) {
+      // Create temp table if needed for curated articles
+      if (useCuratedTempTable && hasCuratedArticles) {
         tempTableInfo = await createCuratedArticlesTempTable(metadata.curatedArticleIds)
       }
 
@@ -608,28 +640,37 @@ export const countArticlesReviewsFromClickHouse = async (
         whereParts.push(`articleTitle ILIKE '%${searchEscaped}%'`)
       }
 
-      // Scope filter (same as articles query)
-      if (!useTempTable) {
-        const scopeParts: string[] = []
+      // Scope filter: import routes OR curated articles
+      // Same logic as articles query
+      const scopeParts: string[] = []
 
-        if (hasImportRoutes) {
-          const routesQuoted = metadata.routeTexts
-            .map((r) => {
-              return `'${escapeClickHouseString(r)}'`
-            })
-            .join(', ')
-          scopeParts.push(`articleImportRoute IN (${routesQuoted})`)
-        }
+      // Import routes always use IN clause
+      if (hasImportRoutes) {
+        const routesQuoted = metadata.routeTexts
+          .map((r) => {
+            return `'${escapeClickHouseString(r)}'`
+          })
+          .join(', ')
+        scopeParts.push(`articleImportRoute IN (${routesQuoted})`)
+      }
 
-        if (hasCuratedArticles) {
-          const curatedIdsQuoted = metadata.curatedArticleIds
-            .map((id) => {
-              return `'${id}'`
-            })
-            .join(', ')
-          scopeParts.push(`articleId IN (${curatedIdsQuoted})`)
-        }
+      // Curated articles: IN clause if small, handled via JOIN if large
+      if (hasCuratedArticles && !useCuratedTempTable) {
+        const curatedIdsQuoted = metadata.curatedArticleIds
+          .map((id) => {
+            return `'${id}'`
+          })
+          .join(', ')
+        scopeParts.push(`articleId IN (${curatedIdsQuoted})`)
+      }
 
+      // If using temp table for curated articles
+      if (useCuratedTempTable && tempTableInfo) {
+        scopeParts.push(`t.articleId IS NOT NULL`)
+      }
+
+      // Add scope filter to WHERE
+      if (scopeParts.length > 0) {
         whereParts.push(`(${scopeParts.join(' OR ')})`)
       }
 
@@ -656,11 +697,12 @@ export const countArticlesReviewsFromClickHouse = async (
       const havingClause = havingParts.length > 0 ? `HAVING ${havingParts.join(' AND ')}` : ''
 
       const tempTableName = tempTableInfo?.tableName ?? ''
-      const fromClause = useTempTable
-        ? `judgments j INNER JOIN ${tempTableName} t ON j.articleId = t.articleId`
+      const useTempTableJoin = useCuratedTempTable && tempTableInfo !== null
+      const fromClause = useTempTableJoin
+        ? `judgments j LEFT JOIN ${tempTableName} t ON j.articleId = t.articleId`
         : 'judgments'
 
-      const columnPrefix = useTempTable ? 'j.' : ''
+      const columnPrefix = useTempTableJoin ? 'j.' : ''
 
       // Count distinct articles (using subquery)
       const countQuery = `
