@@ -74,6 +74,20 @@ const AA_ENDPOINT = 'https://artificialanalysis.ai/api/v2/data/llms/models'
 const HF_API_BASE = 'https://huggingface.co/api'
 const HF_RAW_BASE = 'https://huggingface.co'
 
+// Rate limiting helpers
+const delay = (ms: number): Promise<void> => {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms)
+  })
+}
+const HF_DELAY_MS = 150 // Delay between HF requests per worker
+const MAX_RETRIES = 3
+
+// Request deduplication - only process one request at a time
+let inFlightRequest: Promise<ModelRow[]> | null = null
+let cachedResult: {models: ModelRow[]; timestamp: number} | null = null
+const CACHE_TTL_MS = 5 * 60 * 1000 // 5 minutes
+
 const norm = (s: string): string => {
   return s
     .toLowerCase()
@@ -144,14 +158,30 @@ const extractParamsFromName = (name: string): {params: number | null; label: str
 // ─────────────────────────────────────────────────────────────────────────────
 
 const fetchJson = async <T>(url: string, init?: RequestInit): Promise<T> => {
-  const r = await fetch(url, init)
-  if (!r.ok) {
+  let lastError: Error | null = null
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const r = await fetch(url, init)
+
+    if (r.ok) {
+      return (await r.json()) as T
+    }
+
+    // Rate limited - wait and retry
+    if (r.status === 429 && attempt < MAX_RETRIES) {
+      const retryAfter = r.headers.get('retry-after')
+      const waitMs = retryAfter ? parseInt(retryAfter, 10) * 1000 : (attempt + 1) * 2000
+      await delay(waitMs)
+      continue
+    }
+
     const txt = await r.text().catch(() => {
       return ''
     })
-    throw new Error(`HTTP ${r.status} for ${url}\n${txt.slice(0, 400)}`)
+    lastError = new Error(`HTTP ${r.status} for ${url}\n${txt.slice(0, 400)}`)
   }
-  return (await r.json()) as T
+
+  throw lastError ?? new Error(`Failed to fetch ${url}`)
 }
 
 const fetchText = async (url: string, init?: RequestInit): Promise<string> => {
@@ -340,41 +370,8 @@ export const aaModelsRoutes = new Elysia()
       return {data: null, error: 'AA_API_KEY environment variable not set'}
     }
 
-    try {
-      console.log('[AA Models] Fetching from Artificial Analysis API...')
-      const aaResp = await fetchJson<AAResponse>(AA_ENDPOINT, {headers: {'x-api-key': aaKey}})
-
-      const aaModels = aaResp.data ?? []
-      console.log(`[AA Models] Got ${aaModels.length} models from AA API`)
-
-      // Process models with limited concurrency
-      const concurrency = 6
-      const rows: ModelRow[] = []
-      const queue = aaModels.slice()
-      let processed = 0
-
-      const workers = Array.from({length: concurrency}, async () => {
-        while (queue.length) {
-          const m = queue.shift()
-          if (!m) break
-          processed++
-          if (processed % 20 === 0) {
-            console.log(`[AA Models] Processed ${processed}/${aaModels.length}`)
-          }
-          const row = await processOneModel(m, hfToken, skipHf)
-          rows.push(row)
-        }
-      })
-
-      await Promise.all(workers)
-
-      // Sort by intelligence index descending
-      rows.sort((a, b) => {
-        return (b.aa_intelligence_index ?? -1) - (a.aa_intelligence_index ?? -1)
-      })
-
-      console.log(`[AA Models] Complete. Returning ${rows.length} models.`)
-
+    // Helper to build response from model rows
+    const buildResponse = (rows: ModelRow[]) => {
       return {
         data: {
           models: rows,
@@ -393,6 +390,72 @@ export const aaModelsRoutes = new Elysia()
           },
         },
       }
+    }
+
+    try {
+      // Check if we have a fresh cached result
+      if (cachedResult && Date.now() - cachedResult.timestamp < CACHE_TTL_MS) {
+        console.log('[AA Models] Returning cached result')
+        return buildResponse(cachedResult.models)
+      }
+
+      // If there's already a request in flight, wait for it
+      if (inFlightRequest) {
+        console.log('[AA Models] Request already in flight, waiting...')
+        const rows = await inFlightRequest
+        return buildResponse(rows)
+      }
+
+      // Start new processing
+      inFlightRequest = (async (): Promise<ModelRow[]> => {
+        console.log('[AA Models] Fetching from Artificial Analysis API...')
+        console.log(
+          `[AA Models] HF_TOKEN present: ${!!hfToken}, length: ${hfToken?.length ?? 0}, starts with hf_: ${hfToken?.startsWith('hf_') ?? false}`,
+        )
+        const aaResp = await fetchJson<AAResponse>(AA_ENDPOINT, {headers: {'x-api-key': aaKey}})
+
+        const aaModels = aaResp.data ?? []
+        console.log(`[AA Models] Got ${aaModels.length} models from AA API`)
+
+        // Process models with limited concurrency and rate limiting
+        const concurrency = 3 // Reduced to avoid HF rate limits
+        const rows: ModelRow[] = []
+        const queue = aaModels.slice()
+        let processed = 0
+
+        const workers = Array.from({length: concurrency}, async () => {
+          while (queue.length) {
+            const m = queue.shift()
+            if (!m) break
+            processed++
+            if (processed % 20 === 0) {
+              console.log(`[AA Models] Processed ${processed}/${aaModels.length}`)
+            }
+            const row = await processOneModel(m, hfToken, skipHf)
+            rows.push(row)
+            // Rate limiting delay between models
+            if (!skipHf) await delay(HF_DELAY_MS)
+          }
+        })
+
+        await Promise.all(workers)
+
+        // Sort by intelligence index descending
+        rows.sort((a, b) => {
+          return (b.aa_intelligence_index ?? -1) - (a.aa_intelligence_index ?? -1)
+        })
+
+        console.log(`[AA Models] Complete. Returning ${rows.length} models.`)
+        return rows
+      })()
+
+      const rows = await inFlightRequest
+
+      // Cache the result
+      cachedResult = {models: rows, timestamp: Date.now()}
+      inFlightRequest = null
+
+      return buildResponse(rows)
     } catch (error) {
       console.error('[AA Models] Failed to fetch models:', error)
       set.status = 500
