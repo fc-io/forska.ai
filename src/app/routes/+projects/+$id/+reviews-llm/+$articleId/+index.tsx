@@ -75,7 +75,11 @@ export const ReviewDetail = () => {
                     </Show>
                   </div>
                   <div class="w-96">
-                    <ReviewJudgments judgments={data().judgments} setArticleViewToShow={setArticleViewToShow} />
+                    <ReviewJudgments
+                      judgments={data().judgments}
+                      setArticleViewToShow={setArticleViewToShow}
+                      humanAnswersByPrompt={data().humanAnswersByPrompt}
+                    />
                     <ReviewHumanAssessments groups={data().humanAssessmentsByUser} />
                     <ReviewAvailableJudgments
                       judgments={data().allJudgments}

@@ -4,22 +4,32 @@ import {ReviewJudgmentItem} from './reviewJudgmentItem.tsx'
 
 type SetArticleViewToShow = (articleViewToShow: string | undefined) => void
 
+type HumanAnswer = {userName: string; answer: string}
+
+type Judgment = {
+  id: string
+  promptId?: string
+  prompt: {originalText: string; id?: string}
+  answeredOriginal?: string | null
+  confidenceOriginal?: number | null
+  explanation?: string | null
+  quotes?: unknown
+  assessments?: Array<{assessmentIsCorrect?: boolean | null; assessmentComment?: string | null}>
+  modelName?: string | null
+  snapshotProjectModelName?: string | null
+}
+
 type ReviewJudgmentsProps = {
-  judgments?: Array<{
-    id: string
-    prompt: {originalText: string}
-    answeredOriginal?: string | null
-    confidenceOriginal?: number | null
-    explanation?: string | null
-    quotes?: unknown
-    assessments?: Array<{assessmentIsCorrect?: boolean | null; assessmentComment?: string | null}>
-    modelName?: string | null
-    snapshotProjectModelName?: string | null
-  }>
+  judgments?: Judgment[]
   setArticleViewToShow: SetArticleViewToShow
+  humanAnswersByPrompt?: Record<string, HumanAnswer[]>
 }
 
 export const ReviewJudgments = (props: ReviewJudgmentsProps) => {
+  const getPromptId = (judgment: Judgment) => {
+    return judgment.prompt?.id || judgment.promptId || undefined
+  }
+
   return (
     <div class="bg-white rounded-lg shadow h-fit">
       <div class="p-4 border-b">
@@ -32,7 +42,17 @@ export const ReviewJudgments = (props: ReviewJudgmentsProps) => {
         <div class="p-2">
           <For each={props.judgments}>
             {(judgment) => {
-              return <ReviewJudgmentItem judgment={judgment} setArticleViewToShow={props.setArticleViewToShow} />
+              const promptId = getPromptId(judgment)
+              const humanAnswers = () => {
+                return promptId ? props.humanAnswersByPrompt?.[promptId] : undefined
+              }
+              return (
+                <ReviewJudgmentItem
+                  judgment={judgment}
+                  setArticleViewToShow={props.setArticleViewToShow}
+                  humanAnswers={humanAnswers()}
+                />
+              )
             }}
           </For>
         </div>

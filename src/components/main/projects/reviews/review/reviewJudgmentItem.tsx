@@ -1,8 +1,10 @@
-import {For, Show} from 'solid-js'
+import {createSignal, For, Show} from 'solid-js'
 
 import {ReviewJudgmentAssessments} from './reviewJudgmentAssessments.tsx'
 
 type SetArticleViewToShow = (articleViewToShow: string | undefined) => void
+
+type HumanAnswer = {userName: string; answer: string}
 
 type ReviewJudgmentItemProps = {
   judgment: {
@@ -19,9 +21,12 @@ type ReviewJudgmentItemProps = {
     snapshotProjectModelName?: string | null
   }
   setArticleViewToShow: SetArticleViewToShow
+  humanAnswers?: HumanAnswer[]
 }
 
 export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
+  const [showAllHumanAnswers, setShowAllHumanAnswers] = createSignal(false)
+
   const promptId = () => {
     return props.judgment.prompt?.id || props.judgment.promptId || undefined
   }
@@ -29,6 +34,24 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
     // Use modelName (from joined models table) or fall back to snapshotProjectModelName
     return props.judgment.modelName || props.judgment.snapshotProjectModelName || undefined
   }
+
+  // Determine which human answers to display
+  const visibleHumanAnswers = () => {
+    const answers = props.humanAnswers || []
+    if (answers.length <= 3 || showAllHumanAnswers()) {
+      return answers
+    }
+    return answers.slice(0, 2)
+  }
+
+  const hiddenCount = () => {
+    const answers = props.humanAnswers || []
+    if (answers.length <= 3 || showAllHumanAnswers()) {
+      return 0
+    }
+    return answers.length - 2
+  }
+
   return (
     <div
       class="border-b last:border-b-0 p-3 hover:bg-gray-50 cursor-pointer transition-colors"
@@ -95,6 +118,46 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
           <div class="text-gray-500">{props.judgment.confidenceOriginal}%</div>
         </Show>
       </div>
+
+      {/* Human answers displayed under the LLM answer */}
+      <Show when={props.humanAnswers && props.humanAnswers.length > 0}>
+        <div class="mt-1 pl-4 border-l-2 border-purple-200">
+          <For each={visibleHumanAnswers()}>
+            {(humanAnswer) => {
+              return (
+                <div class="text-xs text-purple-700">
+                  {humanAnswer.userName}: {humanAnswer.answer}
+                </div>
+              )
+            }}
+          </For>
+          <Show when={hiddenCount() > 0}>
+            <button
+              type="button"
+              class="text-xs text-purple-500 hover:text-purple-700 underline cursor-pointer"
+              onClick={(e) => {
+                e.stopPropagation()
+                setShowAllHumanAnswers(true)
+              }}
+            >
+              show {hiddenCount()} more...
+            </button>
+          </Show>
+          <Show when={showAllHumanAnswers() && (props.humanAnswers?.length || 0) > 3}>
+            <button
+              type="button"
+              class="text-xs text-purple-500 hover:text-purple-700 underline cursor-pointer"
+              onClick={(e) => {
+                e.stopPropagation()
+                setShowAllHumanAnswers(false)
+              }}
+            >
+              show less
+            </button>
+          </Show>
+        </div>
+      </Show>
+
       <Show when={props.judgment.explanation}>
         <p class="text-xs text-gray-600 mt-2">{props.judgment.explanation}</p>
       </Show>

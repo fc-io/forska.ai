@@ -286,7 +286,8 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
 
       // Cross-project human answers aggregated by prompt for users who answered all prompts for this project
       // Replicates the logic used in articlesreviewsboth but scoped to a single article
-      let humanAnswersByPrompt: Record<string, string[]> | undefined = undefined
+      // Now includes user display names so UI can show "UserName: Answer"
+      let humanAnswersByPrompt: Record<string, Array<{userName: string; answer: string}>> | undefined = undefined
       if (promptIds.length > 0) {
         type HumanRow = {
           articleId: string
@@ -294,6 +295,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
           promptId: string
           answer: string | null
           updatedAt: Date | null
+          userName: string
         }
         const rows: HumanRow[] = await db
           .select({
@@ -302,8 +304,10 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
             promptId: judgmentsHuman.promptId,
             answer: judgmentsHuman.answer,
             updatedAt: judgmentsHuman.updatedAt,
+            userName: user.name,
           })
           .from(judgmentsHuman)
+          .innerJoin(user, eq(user.id, judgmentsHuman.user))
           .where(and(eq(judgmentsHuman.articleId, articleId), sql`${judgmentsHuman.answer} IS NOT NULL`))
 
         // Deduplicate by latest updatedAt for (articleId, userId, promptId)
@@ -337,14 +341,14 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         }
 
         if (qualifyingUsers.length > 0) {
-          const map: Record<string, string[]> = {}
+          const map: Record<string, Array<{userName: string; answer: string}>> = {}
           for (const pid of promptIds) map[pid] = []
           for (const uid of qualifyingUsers) {
             const rowsArr = byUser.get(uid) || []
             for (const r of rowsArr) {
               const arr = map[r.promptId]
               if (r.answer !== null && r.answer !== undefined && arr) {
-                arr.push(r.answer)
+                arr.push({userName: r.userName, answer: r.answer})
               }
             }
           }
