@@ -104,9 +104,9 @@ const fetchProjectMetadataForClickHouse = async (projectId: string) => {
       .where(and(eq(projectPrompts.projectId, projectId), eq(projectPrompts.enabled, true)))
       .orderBy(projectPrompts.order),
 
-    // Get project date bounds
+    // Get project date bounds and modelId
     db
-      .select({dateFrom: projects.dateFrom, dateTo: projects.dateTo})
+      .select({dateFrom: projects.dateFrom, dateTo: projects.dateTo, modelId: projects.modelId})
       .from(projects)
       .where(eq(projects.id, projectId))
       .limit(1),
@@ -137,6 +137,7 @@ const fetchProjectMetadataForClickHouse = async (projectId: string) => {
       {} as Record<string, number>,
     ),
     projectBounds: projectBoundsResult[0] ?? null,
+    modelId: projectBoundsResult[0]?.modelId ?? null,
     routeTexts: projectImportRouteTexts.map((r) => {
       return r.route
     }),
@@ -261,8 +262,10 @@ export const queryArticlesReviewsFromClickHouse = async (
       .join(', ')
     whereParts.push(`promptId IN (${promptIdsQuoted})`)
 
-    // Soft delete filter - exclude tombstones
-    whereParts.push(`deletedAt IS NULL`)
+    // Model filter - must match project's model
+    if (metadata.modelId) {
+      whereParts.push(`modelId = '${escapeClickHouseString(metadata.modelId)}'`)
+    }
 
     // Date bounds
     const effectiveFromDate =
@@ -427,7 +430,6 @@ export const queryArticlesReviewsFromClickHouse = async (
       FROM judgments
       WHERE articleId IN (${articleIdsQuoted})
         AND promptId IN (${promptIdsQuoted})
-        AND deletedAt IS NULL
       ORDER BY articleId, createdAt DESC
     `
 
@@ -492,5 +494,209 @@ export const queryArticlesReviewsFromClickHouse = async (
     if (tempTableInfo) {
       await tempTableInfo.cleanup()
     }
+  }
+}
+
+/**
+ * Count input parameters (subset of articles query params)
+ */
+export interface ArticlesReviewsCountParams {
+  projectId: string
+  limit: number
+  from?: string | null
+  to?: string | null
+  search?: string | null
+  /** Map of promptId -> array of required answer values */
+  prompts?: Record<string, string[]>
+}
+
+/**
+ * Count response
+ */
+export interface ArticlesReviewsCountResponse {
+  totalCount: number
+  totalPages: number
+  error?: string
+}
+
+/**
+ * Counts articles matching the filters from ClickHouse.
+ *
+ * Uses the same filtering logic as queryArticlesReviewsFromClickHouse
+ * but only returns the count for efficiency.
+ *
+ * Expected performance: 1-3 seconds for ~25M rows
+ */
+export const countArticlesReviewsFromClickHouse = async (
+  params: ArticlesReviewsCountParams,
+): Promise<ArticlesReviewsCountResponse> => {
+  const startTime = performance.now()
+  const client = getClickhouseClient()
+
+  try {
+    // Fetch metadata from PostgreSQL
+    console.time('ch:count:metadata')
+    const metadata = await fetchProjectMetadataForClickHouse(params.projectId)
+    console.timeEnd('ch:count:metadata')
+
+    if (metadata.promptIds.length === 0) {
+      return {totalCount: 0, totalPages: 0}
+    }
+
+    // Check if we have any scope defined
+    const hasImportRoutes = metadata.routeTexts.length > 0
+    const hasCuratedArticles = metadata.curatedArticleIds.length > 0
+
+    if (!hasImportRoutes && !hasCuratedArticles) {
+      console.log('[ClickHouse Count] No scope defined, returning 0')
+      return {totalCount: 0, totalPages: 0}
+    }
+
+    // Determine if we need a temp table for curated articles
+    const useTempTable =
+      metadata.curatedArticleIds.length > CURATED_ARTICLES_TEMP_TABLE_THRESHOLD && metadata.routeTexts.length === 0
+
+    let tempTableInfo: {tableName: string; cleanup: () => Promise<void>} | null = null
+
+    try {
+      // Create temp table if needed
+      if (useTempTable) {
+        tempTableInfo = await createCuratedArticlesTempTable(metadata.curatedArticleIds)
+      }
+
+      // Build WHERE conditions (same as articles query)
+      const whereParts: string[] = []
+
+      // Prompt filter
+      const promptIdsQuoted = metadata.promptIds
+        .map((id) => {
+          return `'${id}'`
+        })
+        .join(', ')
+      whereParts.push(`promptId IN (${promptIdsQuoted})`)
+
+      // Model filter
+      if (metadata.modelId) {
+        whereParts.push(`modelId = '${escapeClickHouseString(metadata.modelId)}'`)
+      }
+
+      // Date bounds
+      const effectiveFromDate =
+        metadata.projectBounds?.dateFrom && params.from
+          ? metadata.projectBounds.dateFrom > new Date(`${params.from}T00:00:00.000Z`)
+            ? metadata.projectBounds.dateFrom
+            : new Date(`${params.from}T00:00:00.000Z`)
+          : (metadata.projectBounds?.dateFrom ?? (params.from ? new Date(`${params.from}T00:00:00.000Z`) : null))
+
+      const effectiveToDate =
+        metadata.projectBounds?.dateTo && params.to
+          ? metadata.projectBounds.dateTo < new Date(`${params.to}T23:59:59.999Z`)
+            ? metadata.projectBounds.dateTo
+            : new Date(`${params.to}T23:59:59.999Z`)
+          : (metadata.projectBounds?.dateTo ?? (params.to ? new Date(`${params.to}T23:59:59.999Z`) : null))
+
+      if (effectiveFromDate) {
+        whereParts.push(`articleCreatedAt >= toDateTime64('${formatDateForClickHouse(effectiveFromDate)}', 3)`)
+      }
+      if (effectiveToDate) {
+        whereParts.push(`articleCreatedAt <= toDateTime64('${formatDateForClickHouse(effectiveToDate)}', 3)`)
+      }
+
+      // Search filter
+      if (params.search && params.search.trim()) {
+        const searchEscaped = escapeClickHouseString(params.search.trim())
+        whereParts.push(`articleTitle ILIKE '%${searchEscaped}%'`)
+      }
+
+      // Scope filter (same as articles query)
+      if (!useTempTable) {
+        const scopeParts: string[] = []
+
+        if (hasImportRoutes) {
+          const routesQuoted = metadata.routeTexts
+            .map((r) => {
+              return `'${escapeClickHouseString(r)}'`
+            })
+            .join(', ')
+          scopeParts.push(`articleImportRoute IN (${routesQuoted})`)
+        }
+
+        if (hasCuratedArticles) {
+          const curatedIdsQuoted = metadata.curatedArticleIds
+            .map((id) => {
+              return `'${id}'`
+            })
+            .join(', ')
+          scopeParts.push(`articleId IN (${curatedIdsQuoted})`)
+        }
+
+        whereParts.push(`(${scopeParts.join(' OR ')})`)
+      }
+
+      // Build HAVING conditions for answer filters
+      const havingParts: string[] = []
+
+      if (params.prompts) {
+        for (const [promptId, answeredValues] of Object.entries(params.prompts)) {
+          if (!answeredValues || answeredValues.length === 0) continue
+
+          const valuesQuoted = answeredValues
+            .map((v) => {
+              return `'${escapeClickHouseString(v)}'`
+            })
+            .join(', ')
+          havingParts.push(
+            `sumIf(1, promptId = '${promptId}' AND hasAny(answeredOriginalAsArray, [${valuesQuoted}])) > 0`,
+          )
+        }
+      }
+
+      // Build the count query
+      const whereClause = whereParts.join(' AND ')
+      const havingClause = havingParts.length > 0 ? `HAVING ${havingParts.join(' AND ')}` : ''
+
+      const tempTableName = tempTableInfo?.tableName ?? ''
+      const fromClause = useTempTable
+        ? `judgments j INNER JOIN ${tempTableName} t ON j.articleId = t.articleId`
+        : 'judgments'
+
+      const columnPrefix = useTempTable ? 'j.' : ''
+
+      // Count distinct articles (using subquery)
+      const countQuery = `
+        SELECT COUNT(*) as totalCount
+        FROM (
+          SELECT ${columnPrefix}articleId
+          FROM ${fromClause}
+          WHERE ${whereClause}
+          GROUP BY ${columnPrefix}articleId
+          ${havingClause}
+        ) subquery
+      `
+
+      console.log('[ClickHouse Count] Query:', countQuery.trim().substring(0, 500) + '...')
+      console.time('ch:count:query')
+
+      const result = await client.query({query: countQuery, format: 'JSONEachRow'})
+      const data = await result.json<{totalCount: string}>()
+
+      console.timeEnd('ch:count:query')
+
+      const totalCount = parseInt(data[0]?.totalCount ?? '0', 10)
+      const totalPages = Math.ceil(totalCount / params.limit)
+
+      const elapsed = performance.now() - startTime
+      console.log(`[ClickHouse Count] ${totalCount.toLocaleString()} articles in ${elapsed.toFixed(0)}ms`)
+
+      return {totalCount, totalPages}
+    } finally {
+      // Always clean up temp table
+      if (tempTableInfo) {
+        await tempTableInfo.cleanup()
+      }
+    }
+  } catch (error) {
+    console.error('[ClickHouse Count] Error:', error)
+    return {totalCount: 0, totalPages: 0, error: error instanceof Error ? error.message : 'Unknown error'}
   }
 }
