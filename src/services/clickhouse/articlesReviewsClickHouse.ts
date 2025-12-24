@@ -372,8 +372,15 @@ export const queryArticlesReviewsFromClickHouse = async (
           })
           .join(', ')
         // Check if any judgment for this prompt has any of the required answers
+        // IMPORTANT: answeredOriginalAsArray is empty for most rows (~98%), so we need to:
+        // 1. Check answeredOriginalAsArray if it's not empty (using hasAny)
+        // 2. OR check answeredOriginal directly (the single-value fallback)
+        // This mirrors the PostgreSQL COALESCE logic in articlesReviewsQueryBuilder.ts
         havingParts.push(
-          `sumIf(1, promptId = '${promptId}' AND hasAny(answeredOriginalAsArray, [${valuesQuoted}])) > 0`,
+          `sumIf(1, promptId = '${promptId}' AND (
+            (length(answeredOriginalAsArray) > 0 AND hasAny(arrayMap(x -> assumeNotNull(x), arrayFilter(x -> x IS NOT NULL, answeredOriginalAsArray)), [${valuesQuoted}]))
+            OR (length(answeredOriginalAsArray) = 0 AND answeredOriginal IN (${valuesQuoted}))
+          )) > 0`,
         )
       }
     }
@@ -686,8 +693,16 @@ export const countArticlesReviewsFromClickHouse = async (
               return `'${escapeClickHouseString(v)}'`
             })
             .join(', ')
+          // Check if any judgment for this prompt has any of the required answers
+          // IMPORTANT: answeredOriginalAsArray is empty for most rows (~98%), so we need to:
+          // 1. Check answeredOriginalAsArray if it's not empty (using hasAny)
+          // 2. OR check answeredOriginal directly (the single-value fallback)
+          // This mirrors the PostgreSQL COALESCE logic in articlesReviewsQueryBuilder.ts
           havingParts.push(
-            `sumIf(1, promptId = '${promptId}' AND hasAny(answeredOriginalAsArray, [${valuesQuoted}])) > 0`,
+            `sumIf(1, promptId = '${promptId}' AND (
+              (length(answeredOriginalAsArray) > 0 AND hasAny(arrayMap(x -> assumeNotNull(x), arrayFilter(x -> x IS NOT NULL, answeredOriginalAsArray)), [${valuesQuoted}]))
+              OR (length(answeredOriginalAsArray) = 0 AND answeredOriginal IN (${valuesQuoted}))
+            )) > 0`,
           )
         }
       }
