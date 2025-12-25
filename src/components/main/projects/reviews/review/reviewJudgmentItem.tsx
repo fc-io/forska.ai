@@ -24,6 +24,11 @@ type ReviewJudgmentItemProps = {
   humanAnswers?: HumanAnswer[]
 }
 
+// Normalize an answer for comparison (lowercase, trim)
+const normalizeAnswer = (answer: string | null | undefined): string => {
+  return (answer ?? '').toLowerCase().trim()
+}
+
 export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
   const [showAllHumanAnswers, setShowAllHumanAnswers] = createSignal(false)
 
@@ -33,6 +38,45 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
   const modelName = () => {
     // Use modelName (from joined models table) or fall back to snapshotProjectModelName
     return props.judgment.modelName || props.judgment.snapshotProjectModelName || undefined
+  }
+
+  // Get the LLM answer as a normalized string for comparison
+  const llmAnswer = () => {
+    return normalizeAnswer(props.judgment.answeredOriginal)
+  }
+
+  // Compute agreement status: 'none' | 'all' | 'some' | 'no-humans'
+  const agreementStatus = () => {
+    const humans = props.humanAnswers || []
+    if (humans.length === 0) {
+      return 'no-humans'
+    }
+    const llm = llmAnswer()
+    const matchCount = humans.filter((h) => {
+      return normalizeAnswer(h.answer) === llm
+    }).length
+    if (matchCount === humans.length) {
+      return 'all'
+    }
+    if (matchCount === 0) {
+      return 'none'
+    }
+    return 'some'
+  }
+
+  // Get color class based on agreement status
+  const getAnswerColorClass = () => {
+    const status = agreementStatus()
+    switch (status) {
+      case 'all':
+        return 'text-green-600 font-semibold'
+      case 'none':
+        return 'text-red-600 font-semibold'
+      case 'some':
+        return 'text-orange-500 font-semibold'
+      default:
+        return 'text-black font-semibold'
+    }
   }
 
   // Determine which human answers to display
@@ -50,6 +94,35 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
       return 0
     }
     return answers.length - 2
+  }
+
+  // Get display text for the LLM answer
+  const llmAnswerDisplay = () => {
+    const asArray = props.judgment.answeredOriginalAsArray
+    if (asArray && Array.isArray(asArray) && asArray.length > 0) {
+      return asArray
+        .map((v) => {
+          return v.toUpperCase()
+        })
+        .join(', ')
+    }
+    const raw = props.judgment.answeredOriginal ?? ''
+    const trimmed = raw.trim()
+    if (trimmed.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(trimmed) as unknown
+        if (Array.isArray(parsed)) {
+          return (parsed as string[])
+            .map((v) => {
+              return String(v).toUpperCase()
+            })
+            .join(', ')
+        }
+      } catch {
+        /* not valid JSON */
+      }
+    }
+    return raw.toUpperCase()
   }
 
   return (
@@ -71,62 +144,29 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
           {modelName() ? <div>Model: {modelName()}</div> : null}
         </div>
       </div>
+
+      {/* LLM Answer row */}
       <div class="flex items-center justify-between text-xs">
         <div class="flex items-center gap-2">
-          <span class="font-medium">Answer:</span>
-          <span
-            class={
-              props.judgment.answeredOriginal === 'yes'
-                ? 'text-green-600 font-semibold'
-                : props.judgment.answeredOriginal === 'no'
-                  ? 'text-red-600 font-semibold'
-                  : 'text-yellow-600 font-semibold'
-            }
-          >
-            {(() => {
-              const asArray = props.judgment.answeredOriginalAsArray
-              if (asArray && Array.isArray(asArray) && asArray.length > 0) {
-                // Show full array contents on Article Details page
-                return asArray
-                  .map((v) => {
-                    return v.toUpperCase()
-                  })
-                  .join(', ')
-              }
-              const raw = props.judgment.answeredOriginal ?? ''
-              const trimmed = raw.trim()
-              if (trimmed.startsWith('[')) {
-                try {
-                  const parsed = JSON.parse(trimmed) as unknown
-                  if (Array.isArray(parsed)) {
-                    // Show full array contents on Article Details page
-                    return (parsed as string[])
-                      .map((v) => {
-                        return String(v).toUpperCase()
-                      })
-                      .join(', ')
-                  }
-                } catch {
-                  /* not valid JSON */
-                }
-              }
-              return raw.toUpperCase()
-            })()}
-          </span>
+          <span class="font-medium w-[70px] text-right shrink-0">Answer:</span>
+          <span class={getAnswerColorClass()}>{llmAnswerDisplay()}</span>
         </div>
         <Show when={props.judgment.confidenceOriginal}>
           <div class="text-gray-500">{props.judgment.confidenceOriginal}%</div>
         </Show>
       </div>
 
-      {/* Human answers displayed under the LLM answer */}
+      {/* Human answers displayed under the LLM answer - matching styling */}
       <Show when={props.humanAnswers && props.humanAnswers.length > 0}>
-        <div class="mt-1 pl-4 border-l-2 border-purple-200">
+        <div class="mt-1">
           <For each={visibleHumanAnswers()}>
             {(humanAnswer) => {
               return (
-                <div class="text-xs text-purple-700">
-                  {humanAnswer.userName}: {humanAnswer.answer}
+                <div class="flex items-center gap-2 text-xs">
+                  <span class="font-medium w-[70px] text-right shrink-0">{humanAnswer.userName}:</span>
+                  <span class={getAnswerColorClass()} style={{'text-transform': 'uppercase'}}>
+                    {humanAnswer.answer}
+                  </span>
                 </div>
               )
             }}
@@ -134,7 +174,7 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
           <Show when={hiddenCount() > 0}>
             <button
               type="button"
-              class="text-xs text-purple-500 hover:text-purple-700 underline cursor-pointer"
+              class="text-xs text-gray-500 hover:text-gray-700 underline cursor-pointer"
               onClick={(e) => {
                 e.stopPropagation()
                 setShowAllHumanAnswers(true)
@@ -146,7 +186,7 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
           <Show when={showAllHumanAnswers() && (props.humanAnswers?.length || 0) > 3}>
             <button
               type="button"
-              class="text-xs text-purple-500 hover:text-purple-700 underline cursor-pointer"
+              class="text-xs text-gray-500 hover:text-gray-700 underline cursor-pointer"
               onClick={(e) => {
                 e.stopPropagation()
                 setShowAllHumanAnswers(false)
