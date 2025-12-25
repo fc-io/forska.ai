@@ -86,7 +86,65 @@ const MAX_RETRIES = 3
 // Request deduplication - only process one request at a time
 let inFlightRequest: Promise<ModelRow[]> | null = null
 let cachedResult: {models: ModelRow[]; timestamp: number} | null = null
-const CACHE_TTL_MS = 5 * 60 * 1000 // 5 minutes
+const CACHE_TTL_MS = 30 * 60 * 1000 // 30 minutes (models don't change often)
+
+// Known HuggingFace repo mappings for models where search fails
+// Key: normalized AA model name (lowercase, alphanumeric with hyphens)
+// Value: exact HuggingFace repo ID
+const KNOWN_HF_REPOS: Record<string, string> = {
+  // Xiaomi MiMo
+  'mimo-v2-flash': 'XiaomiMiMo/MiMo-V2-Flash',
+  'mimo-v2-flash-reasoning': 'XiaomiMiMo/MiMo-V2-Flash',
+  'mimo-v2-flash-non-reasoning': 'XiaomiMiMo/MiMo-V2-Flash',
+  // DeepSeek
+  'deepseek-v3': 'deepseek-ai/DeepSeek-V3',
+  'deepseek-v3-reasoning': 'deepseek-ai/DeepSeek-V3',
+  'deepseek-v3-2': 'deepseek-ai/DeepSeek-V3',
+  'deepseek-v3-2-reasoning': 'deepseek-ai/DeepSeek-V3',
+  'deepseek-r1': 'deepseek-ai/DeepSeek-R1',
+  'deepseek-r1-distill-llama-70b': 'deepseek-ai/DeepSeek-R1-Distill-Llama-70B',
+  'deepseek-r1-distill-qwen-32b': 'deepseek-ai/DeepSeek-R1-Distill-Qwen-32B',
+  // ServiceNow Apriel
+  'apriel-v1-6-15b-thinker': 'ServiceNow-AI/Apriel-Nemotron-15b-Thinker',
+  'apriel-nemotron-15b-thinker': 'ServiceNow-AI/Apriel-Nemotron-15b-Thinker',
+  // MiniMax
+  'minimax-m2': 'MiniMaxAI/MiniMax-M2',
+  'minimax-m2-1': 'MiniMaxAI/MiniMax-M2',
+  // Qwen
+  'qwen3-235b-a22b': 'Qwen/Qwen3-235B-A22B',
+  'qwen3-235b-a22b-instruct': 'Qwen/Qwen3-235B-A22B-Instruct',
+  'qwen3-235b-a22b-instruct-2507': 'Qwen/Qwen3-235B-A22B-Instruct',
+  'qwen3-235b-a22b-instruct-2507-reasoning': 'Qwen/Qwen3-235B-A22B-Instruct',
+  'qwen3-next-80b-a3b-reasoning': 'Qwen/Qwen3-235B-A22B-Instruct',
+  'qwen3-vl-235b-a22b-reasoning': 'Qwen/Qwen2.5-VL-72B-Instruct',
+  'qwen-2-5-max': 'Qwen/Qwen2.5-72B-Instruct',
+  'qwen-2-5-plus': 'Qwen/Qwen2.5-72B-Instruct',
+  'qwq-32b': 'Qwen/QwQ-32B',
+  // GLM
+  'glm-4-6-reasoning': 'THUDM/GLM-4-32B',
+  'glm-4-32b': 'THUDM/GLM-4-32B',
+  // Mistral
+  'mistral-large-2': 'mistralai/Mistral-Large-Instruct-2411',
+  'mistral-small-3-1': 'mistralai/Mistral-Small-3.1-24B-Instruct-2503',
+  'codestral-25-01': 'mistralai/Codestral-2501',
+  // Llama
+  'llama-4-maverick': 'meta-llama/Llama-4-Maverick-17B-128E-Instruct',
+  'llama-4-scout': 'meta-llama/Llama-4-Scout-17B-16E-Instruct',
+  'llama-3-3-70b': 'meta-llama/Llama-3.3-70B-Instruct',
+  'llama-3-1-405b': 'meta-llama/Llama-3.1-405B-Instruct',
+  // Gemma
+  'gemma-3-27b': 'google/gemma-3-27b-it',
+  'gemma-2-27b': 'google/gemma-2-27b-it',
+  // Command
+  'command-a': 'CohereForAI/c4ai-command-a-03-2025',
+  'command-r-plus': 'CohereForAI/c4ai-command-r-plus',
+  // Phi
+  'phi-4': 'microsoft/phi-4',
+  'phi-4-reasoning': 'microsoft/Phi-4-reasoning',
+  // Kimi
+  'kimi-k2': 'moonshotai/Kimi-K2-Instruct',
+  'kimi-k2-thinking': 'moonshotai/Kimi-K2-Instruct',
+}
 
 const norm = (s: string): string => {
   return s
@@ -287,18 +345,28 @@ const processOneModel = async (m: AAModel, hfToken: string | null, skipHf: boole
 
   if (!skipHf) {
     try {
-      const q1 = creatorSlug ? `${creatorSlug}/${norm(m.name)}` : norm(m.name)
-      const hits1 = await hfSearch(q1, hfToken, 8)
-      const hits2 = await hfSearch(m.name, hfToken, 8)
-      const hits = [...hits1, ...hits2]
+      // First check for known repo mappings (handles models with non-obvious HF repos)
+      const normalizedName = norm(m.name)
+      const knownRepo = KNOWN_HF_REPOS[normalizedName]
 
-      let best: {id: string; score: number} | null = null
-      for (const h of hits) {
-        const s = scoreHF(h, m.name, creatorSlug)
-        if (!best || s > best.score) best = {id: h.id, score: s}
+      if (knownRepo) {
+        console.log(`[AA Models] Using known mapping for "${m.name}" → ${knownRepo}`)
+        hfRepo = knownRepo
+      } else {
+        // Fall back to HF search
+        const q1 = creatorSlug ? `${creatorSlug}/${normalizedName}` : normalizedName
+        const hits1 = await hfSearch(q1, hfToken, 8)
+        const hits2 = await hfSearch(m.name, hfToken, 8)
+        const hits = [...hits1, ...hits2]
+
+        let best: {id: string; score: number} | null = null
+        for (const h of hits) {
+          const s = scoreHF(h, m.name, creatorSlug)
+          if (!best || s > best.score) best = {id: h.id, score: s}
+        }
+
+        if (best && best.score >= 120) hfRepo = best.id
       }
-
-      if (best && best.score >= 120) hfRepo = best.id
 
       if (hfRepo) {
         hfInfo = await hfModelInfo(hfRepo, hfToken)
@@ -393,6 +461,23 @@ export const aaModelsRoutes = new Elysia()
     }
 
     try {
+      // Support ?refresh=true to force cache refresh
+      const url = new URL(request.url)
+      const forceRefresh = url.searchParams.get('refresh') === 'true'
+
+      if (forceRefresh) {
+        console.log('[AA Models] Force refresh requested, clearing cache')
+        cachedResult = null
+        inFlightRequest = null
+      }
+
+      // Log HF token status prominently
+      if (skipHf) {
+        console.warn('[AA Models] ⚠️ HF_TOKEN not set - HuggingFace enrichment DISABLED')
+      } else {
+        console.log(`[AA Models] ✓ HF_TOKEN found (${hfToken?.length} chars) - HuggingFace enrichment ENABLED`)
+      }
+
       // Check if we have a fresh cached result
       if (cachedResult && Date.now() - cachedResult.timestamp < CACHE_TTL_MS) {
         console.log('[AA Models] Returning cached result')
@@ -402,11 +487,19 @@ export const aaModelsRoutes = new Elysia()
       // If there's already a request in flight, wait for it
       if (inFlightRequest) {
         console.log('[AA Models] Request already in flight, waiting...')
-        const rows = await inFlightRequest
-        return buildResponse(rows)
+        try {
+          const rows = await inFlightRequest
+          return buildResponse(rows)
+        } catch (e) {
+          // The in-flight request failed, clear it and let caller get fresh error
+          console.error('[AA Models] In-flight request failed:', e)
+          inFlightRequest = null
+          throw e
+        }
       }
 
       // Start new processing
+      console.log('[AA Models] Starting new request...')
       inFlightRequest = (async (): Promise<ModelRow[]> => {
         console.log('[AA Models] Fetching from Artificial Analysis API...')
         console.log(
@@ -449,14 +542,21 @@ export const aaModelsRoutes = new Elysia()
         return rows
       })()
 
-      const rows = await inFlightRequest
+      let rows: ModelRow[]
+      try {
+        rows = await inFlightRequest
+      } finally {
+        // Always clear in-flight request when done (success or failure)
+        inFlightRequest = null
+      }
 
       // Cache the result
       cachedResult = {models: rows, timestamp: Date.now()}
-      inFlightRequest = null
 
       return buildResponse(rows)
     } catch (error) {
+      // Ensure in-flight request is cleared on any error
+      inFlightRequest = null
       console.error('[AA Models] Failed to fetch models:', error)
       set.status = 500
       return {data: null, error: error instanceof Error ? error.message : 'Failed to fetch AI models'}
