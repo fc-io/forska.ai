@@ -42,32 +42,63 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
       return p.id
     })
 
-    // Fully assessed by a single human for ALL prompts in this project
-    const promptIdsSqlArray = sql.join(
-      promptIds.map((id) => {
-        return sql`${id}::uuid`
-      }),
-      sql`,`,
-    )
-    const fullyAssessedByHumanExists = sql`EXISTS (
-      SELECT 1
-      FROM ${judgmentsHuman} jh
-      WHERE jh."article_id" = ${articles.id}
-        AND jh."project_id" = ${body.projectId}::uuid
-        AND jh."prompt_id" = ANY(ARRAY[${promptIdsSqlArray}])
-        AND jh."answer" IS NOT NULL
-      GROUP BY jh."article_id", jh."user"
-      HAVING COUNT(DISTINCT jh."prompt_id") = ${promptIds.length}
-    )`
+    // OPTIMIZATION: Start from the small judgmentsHuman table instead of the large articles table.
+    // Step 1: Find all article IDs that are fully assessed by at least one human user.
+    //         "Fully assessed" = a single user has answered ALL project prompts for that article (non-null answer).
+    const fullyAssessedArticleIdsQuery = await db
+      .select({articleId: judgmentsHuman.articleId})
+      .from(judgmentsHuman)
+      .where(
+        and(
+          eq(judgmentsHuman.projectId, body.projectId),
+          inArray(judgmentsHuman.promptId, promptIds),
+          sql`${judgmentsHuman.answer} IS NOT NULL`,
+        ),
+      )
+      .groupBy(judgmentsHuman.articleId, judgmentsHuman.user)
+      .having(sql`COUNT(DISTINCT ${judgmentsHuman.promptId}) = ${promptIds.length}`)
 
-    // Prompt-specific filters for LLM judgments (answered_original)
+    const humanAssessedArticleIds = [
+      ...new Set(
+        fullyAssessedArticleIdsQuery.map((r) => {
+          return r.articleId
+        }),
+      ),
+    ]
+
+    // If no articles are fully assessed by humans, return early
+    if (humanAssessedArticleIds.length === 0) {
+      return {data: [], totalCount: 0, page, limit, totalPages: 0}
+    }
+
+    // Step 2: Among human-assessed articles, find those that also have LLM judgments for ALL prompts
+    const llmAssessedQuery = await db
+      .select({articleId: judgments.articleId})
+      .from(judgments)
+      .where(and(inArray(judgments.articleId, humanAssessedArticleIds), inArray(judgments.promptId, promptIds)))
+      .groupBy(judgments.articleId)
+      .having(sql`COUNT(DISTINCT ${judgments.promptId}) = ${promptIds.length}`)
+
+    let candidateArticleIds = [
+      ...new Set(
+        llmAssessedQuery.map((r) => {
+          return r.articleId
+        }),
+      ),
+    ]
+
+    // If no articles have both human AND LLM assessments for all prompts, return early
+    if (candidateArticleIds.length === 0) {
+      return {data: [], totalCount: 0, page, limit, totalPages: 0}
+    }
+
+    // Step 3: Apply prompt-specific LLM answer filters (if any) to narrow down the article set
     const promptFilters = Object.entries(body.prompts || {}).map(([key, values]) => {
       return [key, Array.isArray(values) ? values : [String(values)]] as const
     })
 
-    const filterConditions: Array<ReturnType<typeof sql>> = []
-
     for (const [promptId, answeredValues] of promptFilters) {
+      // Find articles in candidateArticleIds that have a matching LLM answer for this prompt
       const answeredValsArray = sql.join(
         answeredValues.map((v) => {
           return sql`${v}`
@@ -75,22 +106,31 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
         sql`,`,
       )
       const normalized = sql`COALESCE(${judgments.answeredOriginalAsArray}, CASE WHEN ${judgments.answeredOriginal} IS NOT NULL THEN ARRAY[${judgments.answeredOriginal}] ELSE ARRAY[]::text[] END)`
-      const subquery = db
-        .select({exists: sql`1`})
+
+      const matchingArticles = await db
+        .select({articleId: judgments.articleId})
         .from(judgments)
         .where(
           and(
-            eq(judgments.articleId, articles.id),
+            inArray(judgments.articleId, candidateArticleIds),
             eq(judgments.promptId, promptId),
             sql`(${normalized}) && ARRAY[${answeredValsArray}]::text[]`,
           ),
         )
-        .limit(1)
 
-      filterConditions.push(sql`EXISTS (${subquery})`)
+      candidateArticleIds = [
+        ...new Set(
+          matchingArticles.map((r) => {
+            return r.articleId
+          }),
+        ),
+      ]
+      if (candidateArticleIds.length === 0) {
+        return {data: [], totalCount: 0, page, limit, totalPages: 0}
+      }
     }
 
-    // Always scope to project's configured import routes and project date bounds
+    // Step 4: Get project bounds and import routes for article scoping
     const [projectBounds] = await db
       .select({dateFrom: projects.dateFrom, dateTo: projects.dateTo})
       .from(projects)
@@ -126,11 +166,17 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
         AND pa."project_id" = ${body.projectId}::uuid
     )`
 
-    const whereParts: Array<ReturnType<typeof sql>> = [
-      fullyAssessedByHumanExists,
-      hasMatchingImportRoute ? or(hasMatchingImportRoute, hasProjectArticle) : hasProjectArticle,
-    ]
-    if (filterConditions.length > 0) whereParts.push(...filterConditions)
+    // Step 5: Build final WHERE conditions for articles (using the pre-filtered candidate IDs)
+    const whereParts: Array<ReturnType<typeof sql>> = [inArray(articles.id, candidateArticleIds)]
+    // Scope to project's import routes or curated project articles
+    if (hasMatchingImportRoute) {
+      const scopeCondition = or(hasMatchingImportRoute, hasProjectArticle)
+      if (scopeCondition) {
+        whereParts.push(scopeCondition)
+      }
+    } else {
+      whereParts.push(hasProjectArticle)
+    }
     if (projectBounds?.dateFrom) whereParts.push(gte(articles.articleCreatedAt, projectBounds.dateFrom))
     if (projectBounds?.dateTo) whereParts.push(lte(articles.articleCreatedAt, projectBounds.dateTo))
     if (fromDate) whereParts.push(gte(articles.articleCreatedAt, fromDate))
@@ -139,33 +185,19 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
 
     const combinedWhere = whereParts.length > 1 ? and(...whereParts) : whereParts[0]
 
-    // Count articles that have LLM judgments for ALL prompts AND satisfy human condition
+    // Count articles (now much faster since we're filtering by pre-computed candidateArticleIds)
     const countQuery = await db
       .select({count: sql<number>`COUNT(DISTINCT ${articles.id})`.as('count')})
       .from(articles)
       .where(combinedWhere)
-      .innerJoin(judgments, and(eq(judgments.articleId, articles.id), inArray(judgments.promptId, promptIds)))
-      .groupBy(articles.id)
-      .having(sql`COUNT(DISTINCT ${judgments.promptId}) = ${promptIds.length}`)
 
-    const totalCount = countQuery.length
+    const totalCount = countQuery[0]?.count ?? 0
 
     // Fetch paginated list
     const articlesWithBoth = await db
-      .select({
-        article: articles,
-        judgmentCount: sql<number>`(
-          ${db
-            .select({count: sql`COUNT(DISTINCT ${judgments.promptId})`})
-            .from(judgments)
-            .where(and(eq(judgments.articleId, articles.id), inArray(judgments.promptId, promptIds)))}
-        )`.as('judgment_count'),
-      })
+      .select({article: articles})
       .from(articles)
       .where(combinedWhere)
-      .having(sql`COUNT(DISTINCT ${judgments.promptId}) = ${promptIds.length}`)
-      .innerJoin(judgments, and(eq(judgments.articleId, articles.id), inArray(judgments.promptId, promptIds)))
-      .groupBy(articles.id)
       .orderBy(desc(articles.articleCreatedAt))
       .limit(limit)
       .offset(offset)

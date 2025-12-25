@@ -42,41 +42,67 @@ export const projectsRoutesGetArticlesReviewsHuman = new Elysia().post(
         return p.id
       })
 
-      // Base condition: Article is fully assessed by at least one human user for all project prompts
-      const fullyAssessedByHumanExists = sql`EXISTS (
-        SELECT 1
-        FROM ${judgmentsHuman} jh
-        WHERE jh."article_id" = ${articles.id}
-          AND jh."project_id" = ${body.projectId}::uuid
-          AND jh."is_answered" = true
-        GROUP BY jh."article_id", jh."user"
-        HAVING COUNT(DISTINCT jh."prompt_id") = ${promptIds.length}
-      )`
+      // OPTIMIZATION: Start from the small judgmentsHuman table instead of the large articles table.
+      // Step 1: Find all article IDs that are fully assessed by at least one human user.
+      //         "Fully assessed" = a single user has answered ALL project prompts for that article.
+      const fullyAssessedArticleIdsQuery = await db
+        .select({articleId: judgmentsHuman.articleId})
+        .from(judgmentsHuman)
+        .where(
+          and(
+            eq(judgmentsHuman.projectId, body.projectId),
+            eq(judgmentsHuman.isAnswered, true),
+            inArray(judgmentsHuman.promptId, promptIds),
+          ),
+        )
+        .groupBy(judgmentsHuman.articleId, judgmentsHuman.user)
+        .having(sql`COUNT(DISTINCT ${judgmentsHuman.promptId}) = ${promptIds.length}`)
 
-      // Prompt-specific filters (answers)
+      const fullyAssessedArticleIds = [
+        ...new Set(
+          fullyAssessedArticleIdsQuery.map((r) => {
+            return r.articleId
+          }),
+        ),
+      ]
+
+      // If no articles are fully assessed by humans, return early
+      if (fullyAssessedArticleIds.length === 0) {
+        return {data: [], totalCount: 0, page, limit, totalPages: 0}
+      }
+
+      // Step 2: Apply prompt-specific answer filters (if any) to narrow down the article set
       const promptFilters = Object.entries(body.prompts || {}).map(([key, values]) => {
         return [key, Array.isArray(values) ? values : [String(values)]] as const
       })
 
-      const conditions: Array<ReturnType<typeof sql>> = []
+      let candidateArticleIds = fullyAssessedArticleIds
 
       for (const [promptId, answers] of promptFilters) {
-        const subquery = db
-          .select({exists: sql`1`})
+        // Find articles in candidateArticleIds that have a matching human answer for this prompt
+        const matchingArticles = await db
+          .select({articleId: judgmentsHuman.articleId})
           .from(judgmentsHuman)
           .where(
             and(
-              eq(judgmentsHuman.articleId, articles.id),
+              inArray(judgmentsHuman.articleId, candidateArticleIds),
               eq(judgmentsHuman.promptId, promptId),
               inArray(judgmentsHuman.answer, answers),
             ),
           )
-          .limit(1)
-
-        conditions.push(sql`EXISTS (${subquery})`)
+        candidateArticleIds = [
+          ...new Set(
+            matchingArticles.map((r) => {
+              return r.articleId
+            }),
+          ),
+        ]
+        if (candidateArticleIds.length === 0) {
+          return {data: [], totalCount: 0, page, limit, totalPages: 0}
+        }
       }
 
-      // Always scope to project's configured import routes and project date bounds
+      // Step 3: Get project bounds and import routes for article scoping
       const [projectBounds] = await db
         .select({dateFrom: projects.dateFrom, dateTo: projects.dateTo})
         .from(projects)
@@ -112,17 +138,17 @@ export const projectsRoutesGetArticlesReviewsHuman = new Elysia().post(
           AND pa."project_id" = ${body.projectId}::uuid
       )`
 
-      const whereParts: Array<ReturnType<typeof sql>> =
-        conditions.length > 0
-          ? [
-              fullyAssessedByHumanExists,
-              hasMatchingImportRoute ? or(hasMatchingImportRoute, hasProjectArticle) : hasProjectArticle,
-              ...conditions,
-            ]
-          : [
-              fullyAssessedByHumanExists,
-              hasMatchingImportRoute ? or(hasMatchingImportRoute, hasProjectArticle) : hasProjectArticle,
-            ]
+      // Step 4: Build final WHERE conditions for articles (using the pre-filtered candidate IDs)
+      const whereParts: Array<ReturnType<typeof sql>> = [inArray(articles.id, candidateArticleIds)]
+      // Scope to project's import routes or curated project articles
+      if (hasMatchingImportRoute) {
+        const scopeCondition = or(hasMatchingImportRoute, hasProjectArticle)
+        if (scopeCondition) {
+          whereParts.push(scopeCondition)
+        }
+      } else {
+        whereParts.push(hasProjectArticle)
+      }
 
       if (projectBounds?.dateFrom) {
         whereParts.push(gte(articles.articleCreatedAt, projectBounds.dateFrom))
@@ -142,7 +168,7 @@ export const projectsRoutesGetArticlesReviewsHuman = new Elysia().post(
 
       const combinedWhereCondition = whereParts.length > 1 ? and(...whereParts) : whereParts[0]
 
-      // Count total distinct articles
+      // Count total distinct articles (now much faster since we're filtering by candidateArticleIds)
       const countQuery = await db
         .select({count: sql<number>`COUNT(DISTINCT ${articles.id})`.as('count')})
         .from(articles)
