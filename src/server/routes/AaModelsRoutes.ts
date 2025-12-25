@@ -169,8 +169,50 @@ const weightsGiB = (params: number, bpp: number): number => {
   return (params * bpp) / 1024 ** 3
 }
 
+// Known parameter counts for models where name doesn't include params
+// Key: normalized AA model name, Value: {params: number in billions, dtype: default dtype}
+const KNOWN_PARAMS: Record<string, {paramsB: number; dtype?: string}> = {
+  // Kimi K2 - 1T MoE, ~32B active
+  'kimi-k2': {paramsB: 1000, dtype: 'bfloat16'},
+  'kimi-k2-thinking': {paramsB: 1000, dtype: 'bfloat16'},
+  // MiMo - 7B model
+  'mimo-v2-flash': {paramsB: 7, dtype: 'bfloat16'},
+  'mimo-v2-flash-reasoning': {paramsB: 7, dtype: 'bfloat16'},
+  'mimo-v2-flash-non-reasoning': {paramsB: 7, dtype: 'bfloat16'},
+  // DeepSeek V3 - 671B MoE
+  'deepseek-v3': {paramsB: 671, dtype: 'bfloat16'},
+  'deepseek-v3-reasoning': {paramsB: 671, dtype: 'bfloat16'},
+  'deepseek-v3-2': {paramsB: 671, dtype: 'bfloat16'},
+  'deepseek-v3-2-reasoning': {paramsB: 671, dtype: 'bfloat16'},
+  // DeepSeek R1 - 671B MoE
+  'deepseek-r1': {paramsB: 671, dtype: 'bfloat16'},
+  // MiniMax - 456B MoE
+  'minimax-m2': {paramsB: 456, dtype: 'bfloat16'},
+  'minimax-m2-1': {paramsB: 456, dtype: 'bfloat16'},
+  // GPT-OSS (rumored sizes)
+  'gpt-oss-120b-high': {paramsB: 120, dtype: 'bfloat16'},
+  'gpt-oss-20b': {paramsB: 20, dtype: 'bfloat16'},
+  // GLM-4
+  'glm-4-6-reasoning': {paramsB: 32, dtype: 'bfloat16'},
+  // Mistral Large 2 - 123B
+  'mistral-large-2': {paramsB: 123, dtype: 'bfloat16'},
+  // Command A - 111B
+  'command-a': {paramsB: 111, dtype: 'bfloat16'},
+  'command-r-plus': {paramsB: 104, dtype: 'bfloat16'},
+  // Phi-4
+  'phi-4': {paramsB: 14, dtype: 'bfloat16'},
+  'phi-4-reasoning': {paramsB: 14, dtype: 'bfloat16'},
+}
+
 const extractParamsFromName = (name: string): {params: number | null; label: string | null} => {
   const s = name.replace(/\s+/g, ' ').trim()
+  const normalized = norm(s)
+
+  // First check known params mapping
+  const known = KNOWN_PARAMS[normalized]
+  if (known) {
+    return {params: Math.round(known.paramsB * 1e9), label: `${known.paramsB}B`}
+  }
 
   // 8x7B style (MoE naming)
   {
@@ -209,6 +251,12 @@ const extractParamsFromName = (name: string): {params: number | null; label: str
   }
 
   return {params: null, label: null}
+}
+
+// Get default dtype from known params if HF config.json doesn't have it
+const getKnownDtype = (name: string): string | null => {
+  const normalized = norm(name)
+  return KNOWN_PARAMS[normalized]?.dtype ?? null
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -383,6 +431,11 @@ const processOneModel = async (m: AAModel, hfToken: string | null, skipHf: boole
   if (hfRepo && hfHasWeights) openClass = 'Open weights'
   else if (!hfRepo) openClass = 'Proprietary'
   else if (hfRepo && hfHasWeights === false) openClass = 'Proprietary'
+
+  // Fall back to known dtype if HF config.json didn't have it
+  if (!dtype) {
+    dtype = getKnownDtype(m.name)
+  }
 
   let vramGiB: number | null = null
   let fits256: boolean | null = null
