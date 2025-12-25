@@ -44,6 +44,11 @@ interface HFModelInfo {
   license?: string
   cardData?: {license?: string}
   siblings?: Array<{rfilename: string}>
+  // Safetensors metadata contains accurate parameter counts
+  safetensors?: {
+    parameters?: Record<string, number> // e.g. {"F32": 68012416, "BF16": 3062303360, "F8_E4M3": 306655002624}
+    total?: number // Total parameter count across all dtypes
+  }
 }
 
 export interface ModelRow {
@@ -169,39 +174,26 @@ const weightsGiB = (params: number, bpp: number): number => {
   return (params * bpp) / 1024 ** 3
 }
 
-// Known parameter counts for models where name doesn't include params
+// Known parameter counts for PROPRIETARY models (not on HuggingFace)
+// Open-source models get accurate params from HuggingFace safetensors.total
 // Key: normalized AA model name, Value: {params: number in billions, dtype: default dtype}
 const KNOWN_PARAMS: Record<string, {paramsB: number; dtype?: string}> = {
-  // Kimi K2 - 1T MoE, ~32B active
-  'kimi-k2': {paramsB: 1000, dtype: 'bfloat16'},
-  'kimi-k2-thinking': {paramsB: 1000, dtype: 'bfloat16'},
-  // MiMo - 7B model
-  'mimo-v2-flash': {paramsB: 7, dtype: 'bfloat16'},
-  'mimo-v2-flash-reasoning': {paramsB: 7, dtype: 'bfloat16'},
-  'mimo-v2-flash-non-reasoning': {paramsB: 7, dtype: 'bfloat16'},
-  // DeepSeek V3 - 671B MoE
-  'deepseek-v3': {paramsB: 671, dtype: 'bfloat16'},
-  'deepseek-v3-reasoning': {paramsB: 671, dtype: 'bfloat16'},
-  'deepseek-v3-2': {paramsB: 671, dtype: 'bfloat16'},
-  'deepseek-v3-2-reasoning': {paramsB: 671, dtype: 'bfloat16'},
-  // DeepSeek R1 - 671B MoE
-  'deepseek-r1': {paramsB: 671, dtype: 'bfloat16'},
-  // MiniMax - 456B MoE
-  'minimax-m2': {paramsB: 456, dtype: 'bfloat16'},
-  'minimax-m2-1': {paramsB: 456, dtype: 'bfloat16'},
-  // GPT-OSS (rumored sizes)
+  // GPT-4 family (proprietary)
+  'gpt-4o': {paramsB: 200, dtype: 'bfloat16'}, // Estimated
+  'gpt-4o-mini': {paramsB: 8, dtype: 'bfloat16'}, // Estimated
+  'gpt-4-turbo': {paramsB: 200, dtype: 'bfloat16'}, // Estimated
+  'gpt-4': {paramsB: 200, dtype: 'bfloat16'}, // Estimated (rumored 1.76T MoE but ~200B active)
+  // GPT-OSS (not on HuggingFace yet)
   'gpt-oss-120b-high': {paramsB: 120, dtype: 'bfloat16'},
   'gpt-oss-20b': {paramsB: 20, dtype: 'bfloat16'},
-  // GLM-4
-  'glm-4-6-reasoning': {paramsB: 32, dtype: 'bfloat16'},
-  // Mistral Large 2 - 123B
-  'mistral-large-2': {paramsB: 123, dtype: 'bfloat16'},
-  // Command A - 111B
-  'command-a': {paramsB: 111, dtype: 'bfloat16'},
-  'command-r-plus': {paramsB: 104, dtype: 'bfloat16'},
-  // Phi-4
-  'phi-4': {paramsB: 14, dtype: 'bfloat16'},
-  'phi-4-reasoning': {paramsB: 14, dtype: 'bfloat16'},
+  // Claude family (proprietary)
+  'claude-3-5-sonnet': {paramsB: 175, dtype: 'bfloat16'}, // Estimated
+  'claude-3-opus': {paramsB: 300, dtype: 'bfloat16'}, // Estimated
+  'claude-3-5-haiku': {paramsB: 20, dtype: 'bfloat16'}, // Estimated
+  // Gemini family (proprietary)
+  'gemini-2-0-flash': {paramsB: 100, dtype: 'bfloat16'}, // Estimated
+  'gemini-1-5-pro': {paramsB: 175, dtype: 'bfloat16'}, // Estimated
+  'gemini-2-5-pro': {paramsB: 300, dtype: 'bfloat16'}, // Estimated
 }
 
 const extractParamsFromName = (name: string): {params: number | null; label: string | null} => {
@@ -432,17 +424,62 @@ const processOneModel = async (m: AAModel, hfToken: string | null, skipHf: boole
   else if (!hfRepo) openClass = 'Proprietary'
   else if (hfRepo && hfHasWeights === false) openClass = 'Proprietary'
 
-  // Fall back to known dtype if HF config.json didn't have it
-  if (!dtype) {
-    dtype = getKnownDtype(m.name)
+  // Use HuggingFace safetensors data for accurate parameter counts
+  let finalParams = params
+  let finalLabel = label
+  let finalDtype = dtype
+
+  if (hfInfo?.safetensors?.total) {
+    finalParams = hfInfo.safetensors.total
+    // Format label nicely
+    const totalB = finalParams / 1e9
+    if (totalB >= 1000) {
+      finalLabel = `${(totalB / 1000).toFixed(1)}T`
+    } else if (totalB >= 1) {
+      finalLabel = `${Math.round(totalB)}B`
+    } else {
+      finalLabel = `${(totalB * 1000).toFixed(0)}M`
+    }
+    console.log(`[AA Models] Got params from safetensors for "${m.name}": ${finalLabel}`)
+  }
+
+  // Infer dtype from safetensors.parameters (use the dtype with most params)
+  if (!finalDtype && hfInfo?.safetensors?.parameters) {
+    const params = hfInfo.safetensors.parameters
+    let maxDtype = ''
+    let maxCount = 0
+    for (const [dt, count] of Object.entries(params)) {
+      if (count > maxCount) {
+        maxCount = count
+        maxDtype = dt
+      }
+    }
+    // Map HF dtype names to our format
+    if (maxDtype) {
+      const dtypeMap: Record<string, string> = {
+        BF16: 'bfloat16',
+        F16: 'float16',
+        F32: 'float32',
+        F8_E4M3: 'float8',
+        F8_E5M2: 'float8',
+        I8: 'int8',
+        I4: 'int4',
+      }
+      finalDtype = dtypeMap[maxDtype] ?? maxDtype.toLowerCase()
+    }
+  }
+
+  // Fall back to known dtype if HF didn't have it
+  if (!finalDtype) {
+    finalDtype = getKnownDtype(m.name)
   }
 
   let vramGiB: number | null = null
   let fits256: boolean | null = null
 
-  const bpp = bytesPerParam(dtype)
-  if (params && bpp) {
-    vramGiB = weightsGiB(params, bpp)
+  const bpp = bytesPerParam(finalDtype)
+  if (finalParams && bpp) {
+    vramGiB = weightsGiB(finalParams, bpp)
     fits256 = vramGiB <= 256
   }
 
@@ -458,9 +495,9 @@ const processOneModel = async (m: AAModel, hfToken: string | null, skipHf: boole
     hf_has_weights: hfHasWeights,
     open_source_or_proprietary: openClass,
 
-    model_params: params,
-    model_params_label: label,
-    default_tensor_type: dtype,
+    model_params: finalParams,
+    model_params_label: finalLabel,
+    default_tensor_type: finalDtype,
 
     weights_vram_gib_est: vramGiB ? Math.round(vramGiB * 10) / 10 : null,
     fits_256gb_gpu_weights_only: fits256,
