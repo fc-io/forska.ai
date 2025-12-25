@@ -65,6 +65,7 @@ export interface ModelRow {
 
   model_params: number | null
   model_params_label: string | null
+  model_params_source: 'safetensors' | 'name' | 'known' | null // Where params came from
   default_tensor_type: string | null
 
   weights_vram_gib_est: number | null
@@ -428,9 +429,23 @@ const processOneModel = async (m: AAModel, hfToken: string | null, skipHf: boole
   let finalParams = params
   let finalLabel = label
   let finalDtype = dtype
+  let paramsSource: ModelRow['model_params_source'] = null
 
+  // Determine source of params
+  if (params) {
+    // params came from extractParamsFromName (which checks KNOWN_PARAMS first, then name parsing)
+    const normalized = norm(m.name)
+    if (KNOWN_PARAMS[normalized]) {
+      paramsSource = 'known'
+    } else {
+      paramsSource = 'name'
+    }
+  }
+
+  // Override with safetensors if available (most accurate)
   if (hfInfo?.safetensors?.total) {
     finalParams = hfInfo.safetensors.total
+    paramsSource = 'safetensors'
     // Format label nicely
     const totalB = finalParams / 1e9
     if (totalB >= 1000) {
@@ -497,6 +512,7 @@ const processOneModel = async (m: AAModel, hfToken: string | null, skipHf: boole
 
     model_params: finalParams,
     model_params_label: finalLabel,
+    model_params_source: paramsSource,
     default_tensor_type: finalDtype,
 
     weights_vram_gib_est: vramGiB ? Math.round(vramGiB * 10) / 10 : null,
