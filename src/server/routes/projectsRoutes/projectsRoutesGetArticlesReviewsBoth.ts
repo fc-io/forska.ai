@@ -42,11 +42,19 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
       return p.id
     })
 
-    // Fully assessed by a single human for ALL prompts
+    // Fully assessed by a single human for ALL prompts in this project
+    const promptIdsSqlArray = sql.join(
+      promptIds.map((id) => {
+        return sql`${id}::uuid`
+      }),
+      sql`,`,
+    )
     const fullyAssessedByHumanExists = sql`EXISTS (
       SELECT 1
       FROM ${judgmentsHuman} jh
       WHERE jh."article_id" = ${articles.id}
+        AND jh."project_id" = ${body.projectId}::uuid
+        AND jh."prompt_id" = ANY(ARRAY[${promptIdsSqlArray}])
         AND jh."answer" IS NOT NULL
       GROUP BY jh."article_id", jh."user"
       HAVING COUNT(DISTINCT jh."prompt_id") = ${promptIds.length}
