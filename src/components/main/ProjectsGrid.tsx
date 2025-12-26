@@ -109,6 +109,16 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
                   >
                     Edit
                   </Button>
+                  <Button
+                    as={Link}
+                    to="/projects/$id/export"
+                    params={{id: project.id}}
+                    size="sm"
+                    variant="outline"
+                    class="px-3 py-1 text-sm"
+                  >
+                    Export data
+                  </Button>
                   <Button size="sm" variant="outline" class="px-3 py-1 text-sm">
                     Clone Project
                   </Button>
