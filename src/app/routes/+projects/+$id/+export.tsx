@@ -4,8 +4,8 @@ import {format} from 'date-fns'
 import {createEffect, createSignal, For, Show, Suspense} from 'solid-js'
 
 import {Button} from '../../../../components/ui/button'
-import {apiClient} from '../../../../services/apiClient'
 import {fetchProjectWithPrompts} from '../../../../services/projectsService'
+import {env} from '../../../utils/client-env'
 
 type PromptInfo = {id: string; promptHeading: string | null; originalText: string; type: string | null}
 
@@ -26,6 +26,8 @@ const ExportData = () => {
 
   // Map of promptId -> selected (boolean)
   const [selectedPrompts, setSelectedPrompts] = createSignal<Record<string, boolean>>({})
+  const [includeExplanation, setIncludeExplanation] = createSignal(false)
+  const [includeQuotes, setIncludeQuotes] = createSignal(false)
   const [isExporting, setIsExporting] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
 
@@ -83,25 +85,41 @@ const ExportData = () => {
         return
       }
 
-      const response = await apiClient.api
-        .projects({id: projectId})
-        .export.post({promptIds: selectedPromptIds, sourceProjectIds: [projectId]})
+      // Use native fetch for streaming response
+      const response = await fetch(`${env.VITE_SERVER_API}/api/projects/${projectId}/export`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        credentials: 'include',
+        body: JSON.stringify({
+          promptIds: selectedPromptIds,
+          sourceProjectIds: [projectId],
+          includeExplanation: includeExplanation(),
+          includeQuotes: includeQuotes(),
+        }),
+      })
 
-      if (response.error || !response.data) {
+      if (!response.ok) {
         throw new Error('Export failed')
       }
 
-      const data = response.data as {csv: string; filename: string}
-      if (!data?.csv) {
-        throw new Error('No data returned from export')
+      // Get filename from Content-Disposition header
+      const contentDisposition = response.headers.get('Content-Disposition')
+      let filename = `export-${projectId}.csv`
+      if (contentDisposition) {
+        const filenameMatch = contentDisposition.match(/filename="([^"]+)"/)
+        if (filenameMatch && filenameMatch[1]) {
+          filename = filenameMatch[1]
+        }
       }
 
+      // Stream the response directly to a blob
+      const blob = await response.blob()
+
       // Create and download CSV file
-      const blob = new Blob([data.csv], {type: 'text/csv;charset=utf-8;'})
       const url = URL.createObjectURL(blob)
       const link = document.createElement('a')
       link.href = url
-      link.download = data.filename || `export-${projectId}.csv`
+      link.download = filename
       document.body.appendChild(link)
       link.click()
       document.body.removeChild(link)
@@ -206,6 +224,44 @@ const ExportData = () => {
                 </For>
               </div>
             </div>
+
+            {/* Additional Export Options */}
+            <div class="mb-6">
+              <p class="block text-sm font-medium mb-2">Additional Columns</p>
+              <p class="text-xs text-muted-foreground mb-3">
+                Optionally include explanation and quotes for each prompt answer.
+              </p>
+              <div class="space-y-2">
+                <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer hover:bg-muted/50">
+                  <input
+                    type="checkbox"
+                    class="mt-1"
+                    checked={includeExplanation()}
+                    onChange={(e) => {
+                      setIncludeExplanation(e.currentTarget.checked)
+                    }}
+                  />
+                  <div class="flex-1">
+                    <p class="text-sm font-medium text-gray-900">Include Explanation</p>
+                    <p class="text-xs text-muted-foreground">Adds an explanation column for each selected prompt</p>
+                  </div>
+                </label>
+                <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer hover:bg-muted/50">
+                  <input
+                    type="checkbox"
+                    class="mt-1"
+                    checked={includeQuotes()}
+                    onChange={(e) => {
+                      setIncludeQuotes(e.currentTarget.checked)
+                    }}
+                  />
+                  <div class="flex-1">
+                    <p class="text-sm font-medium text-gray-900">Include Quotes</p>
+                    <p class="text-xs text-muted-foreground">Adds a quotes column for each selected prompt</p>
+                  </div>
+                </label>
+              </div>
+            </div>
           </Show>
 
           {/* Export Button */}
@@ -216,7 +272,7 @@ const ExportData = () => {
               }}
               disabled={!hasAnyPromptSelected() || isExporting()}
             >
-              {isExporting() ? 'Exporting...' : 'Export'}
+              {isExporting() ? 'Exporting...' : 'Export to CSV'}
             </Button>
           </div>
         </div>

@@ -1,27 +1,31 @@
 import {and, eq, inArray, isNull, or, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {
-  articleRouteLink,
-  articles,
-  judgments,
-  projectArticles,
-  projectRouteLink,
-  projects,
-  prompts,
-} from '../../db/schema.ts'
+import {articleRouteLink, articles, judgments, projectArticles, projectRouteLink, projects, prompts} from '../../db/schema.ts'
 import {requireUserAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
+
+const BATCH_SIZE = 500
+
+// Escape CSV field
+const escapeCSV = (value: string): string => {
+  if (value.includes(',') || value.includes('"') || value.includes('\n') || value.includes('\r')) {
+    return `"${value.replace(/"/g, '""')}"`
+  }
+  return value
+}
 
 export const projectExportRoutes = new Elysia()
   .use(withErrorHandler())
   .use(requireUserAuth())
   .post(
     '/api/projects/:id/export',
-    async ({params, body}) => {
+    async ({params, body, set}) => {
       const db = getDatabase()
       const projectId = params.id
+      const includeExplanation = body.includeExplanation ?? false
+      const includeQuotes = body.includeQuotes ?? false
 
       // Verify project exists
       const [project] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1)
@@ -40,17 +44,14 @@ export const projectExportRoutes = new Elysia()
         .from(prompts)
         .where(inArray(prompts.id, promptIds))
 
-      // Create a map of promptId to header
       const promptHeaderMap = new Map<string, string>()
       for (const p of promptDetails) {
         promptHeaderMap.set(p.id, p.promptHeading || p.originalText.substring(0, 50))
       }
 
       // Build scope condition for articles
-      // Articles accessible via source projects' import routes or project_articles
       const sourceProjectIds = body.sourceProjectIds || [projectId]
 
-      // Get import routes for source projects
       const projectImportRoutes = await db
         .select({projectId: projectRouteLink.projectId, importRouteId: projectRouteLink.importRouteId})
         .from(projectRouteLink)
@@ -60,10 +61,8 @@ export const projectExportRoutes = new Elysia()
         return r.importRouteId
       })
 
-      // Build scope parts
       const scopeParts: Array<ReturnType<typeof sql>> = []
 
-      // Add import route scope if any exist
       if (allImportRouteIds.length > 0) {
         const routeIdArray = sql.join(
           allImportRouteIds.map((r) => {
@@ -80,7 +79,6 @@ export const projectExportRoutes = new Elysia()
         )
       }
 
-      // Add project_articles scope for each source project
       for (const sourceProjectId of sourceProjectIds) {
         scopeParts.push(
           sql`EXISTS (
@@ -93,82 +91,178 @@ export const projectExportRoutes = new Elysia()
 
       const scopeCondition = scopeParts.length > 1 ? or(...scopeParts) : scopeParts[0]
 
-      // Get all articles in scope with their judgments for selected prompts
-      const articlesWithJudgments = await db
-        .select({
-          articleId: articles.id,
-          articleTitle: articles.articleTitle,
-          promptId: judgments.promptId,
-          answeredOriginal: judgments.answeredOriginal,
-          answeredOriginalAsArray: judgments.answeredOriginalAsArray,
-        })
-        .from(articles)
-        .innerJoin(
-          judgments,
-          and(
-            eq(judgments.articleId, articles.id),
-            inArray(judgments.promptId, promptIds),
-            isNull(judgments.deletedAt),
-          ),
-        )
-        .where(scopeCondition)
-        .orderBy(articles.id)
-
-      // Group by article
-      const articleMap = new Map<string, {title: string; answers: Map<string, string>}>()
-
-      for (const row of articlesWithJudgments) {
-        if (!articleMap.has(row.articleId)) {
-          articleMap.set(row.articleId, {title: row.articleTitle || 'Untitled', answers: new Map()})
-        }
-        const article = articleMap.get(row.articleId)
-        if (article) {
-          // Get the answer - prefer array format if available, else original
-          let answer = row.answeredOriginal || ''
-          if (row.answeredOriginalAsArray && row.answeredOriginalAsArray.length > 0) {
-            answer = row.answeredOriginalAsArray.join('; ')
-          }
-          article.answers.set(row.promptId, answer)
-        }
-      }
-
-      // Build CSV
-      // Header row: Title, then each prompt heading
+      // Build CSV header
       const orderedPromptIds = promptIds.filter((id) => {
         return promptHeaderMap.has(id)
       })
-      const headers = [
-        'Title',
-        ...orderedPromptIds.map((id) => {
-          return promptHeaderMap.get(id) || id
-        }),
-      ]
 
-      // Escape CSV field
-      const escapeCSV = (value: string): string => {
-        if (value.includes(',') || value.includes('"') || value.includes('\n') || value.includes('\r')) {
-          return `"${value.replace(/"/g, '""')}"`
+      const headers: string[] = ['Title']
+      for (const id of orderedPromptIds) {
+        const heading = promptHeaderMap.get(id) || id
+        headers.push(heading)
+        if (includeExplanation) {
+          headers.push(`${heading} - Explanation`)
         }
-        return value
+        if (includeQuotes) {
+          headers.push(`${heading} - Quotes`)
+        }
       }
 
-      const rows: string[] = []
-      rows.push(headers.map(escapeCSV).join(','))
-
-      for (const [_, articleData] of articleMap) {
-        const row = [
-          articleData.title,
-          ...orderedPromptIds.map((promptId) => {
-            return articleData.answers.get(promptId) || ''
-          }),
-        ]
-        rows.push(row.map(escapeCSV).join(','))
-      }
-
-      const csv = rows.join('\n')
       const filename = `${project.name.replace(/[^a-zA-Z0-9]/g, '_')}_export_${new Date().toISOString().slice(0, 10)}.csv`
 
-      return {csv, filename}
+      // Set response headers for streaming CSV download
+      set.headers['Content-Type'] = 'text/csv; charset=utf-8'
+      set.headers['Content-Disposition'] = `attachment; filename="${filename}"`
+
+      // Create a streaming response using ReadableStream
+      const stream = new ReadableStream({
+        async start(controller) {
+          try {
+            // Send header row
+            controller.enqueue(headers.map(escapeCSV).join(',') + '\n')
+
+            // Get article count first with a lightweight query
+            const countResult = await db
+              .select({count: sql<number>`count(DISTINCT ${articles.id})`})
+              .from(articles)
+              .innerJoin(
+                judgments,
+                and(
+                  eq(judgments.articleId, articles.id),
+                  inArray(judgments.promptId, promptIds),
+                  isNull(judgments.deletedAt),
+                ),
+              )
+              .where(scopeCondition)
+
+            const totalCount = Number(countResult[0]?.count ?? 0)
+            console.log(`[export] Starting export of ~${totalCount} articles`)
+
+            let offset = 0
+            let processedCount = 0
+
+            while (true) {
+              // Fetch batch of articles with their judgments using OFFSET/LIMIT
+              const batchData = await db
+                .select({
+                  articleId: articles.id,
+                  articleTitle: articles.articleTitle,
+                  promptId: judgments.promptId,
+                  answeredOriginal: judgments.answeredOriginal,
+                  answeredOriginalAsArray: judgments.answeredOriginalAsArray,
+                  explanation: judgments.explanation,
+                  quotes: judgments.quotes,
+                })
+                .from(articles)
+                .innerJoin(
+                  judgments,
+                  and(
+                    eq(judgments.articleId, articles.id),
+                    inArray(judgments.promptId, promptIds),
+                    isNull(judgments.deletedAt),
+                  ),
+                )
+                .where(scopeCondition)
+                .orderBy(articles.id)
+                .limit(BATCH_SIZE * promptIds.length) // Account for multiple rows per article
+                .offset(offset)
+
+              if (batchData.length === 0) {
+                break
+              }
+
+              // Group batch data by article
+              const batchArticleMap = new Map<
+                string,
+                {
+                  title: string
+                  answers: Map<string, string>
+                  explanations: Map<string, string>
+                  quotes: Map<string, string>
+                }
+              >()
+
+              for (const row of batchData) {
+                if (!batchArticleMap.has(row.articleId)) {
+                  batchArticleMap.set(row.articleId, {
+                    title: row.articleTitle || 'Untitled',
+                    answers: new Map(),
+                    explanations: new Map(),
+                    quotes: new Map(),
+                  })
+                }
+                const article = batchArticleMap.get(row.articleId)
+                if (article) {
+                  let answer = row.answeredOriginal || ''
+                  if (row.answeredOriginalAsArray && row.answeredOriginalAsArray.length > 0) {
+                    answer = row.answeredOriginalAsArray.join('; ')
+                  }
+                  article.answers.set(row.promptId, answer)
+
+                  if (includeExplanation && row.explanation) {
+                    article.explanations.set(row.promptId, row.explanation)
+                  }
+
+                  if (includeQuotes && row.quotes) {
+                    const quotesValue = row.quotes
+                    if (Array.isArray(quotesValue)) {
+                      article.quotes.set(row.promptId, quotesValue.join('; '))
+                    } else if (typeof quotesValue === 'string') {
+                      article.quotes.set(row.promptId, quotesValue)
+                    } else {
+                      article.quotes.set(row.promptId, JSON.stringify(quotesValue))
+                    }
+                  }
+                }
+              }
+
+              // Stream CSV rows for this batch
+              for (const [_, articleData] of batchArticleMap) {
+                const row: string[] = [articleData.title]
+                for (const promptId of orderedPromptIds) {
+                  row.push(articleData.answers.get(promptId) || '')
+                  if (includeExplanation) {
+                    row.push(articleData.explanations.get(promptId) || '')
+                  }
+                  if (includeQuotes) {
+                    row.push(articleData.quotes.get(promptId) || '')
+                  }
+                }
+                controller.enqueue(row.map(escapeCSV).join(',') + '\n')
+                processedCount++
+              }
+
+              offset += batchData.length
+              console.log(`[export] Streamed ${processedCount} articles`)
+
+              // Check if we got fewer rows than expected (end of data)
+              if (batchData.length < BATCH_SIZE * promptIds.length) {
+                break
+              }
+            }
+
+            console.log(`[export] Export complete: ${processedCount} articles`)
+            controller.close()
+          } catch (err) {
+            console.error('[export] Error:', err)
+            controller.error(err)
+          }
+        },
+      })
+
+      return new Response(stream, {
+        headers: {
+          'Content-Type': 'text/csv; charset=utf-8',
+          'Content-Disposition': `attachment; filename="${filename}"`,
+        },
+      })
     },
-    {body: t.Object({promptIds: t.Array(t.String()), sourceProjectIds: t.Optional(t.Array(t.String()))})},
+    {
+      body: t.Object({
+        promptIds: t.Array(t.String()),
+        sourceProjectIds: t.Optional(t.Array(t.String())),
+        includeExplanation: t.Optional(t.Boolean()),
+        includeQuotes: t.Optional(t.Boolean()),
+      }),
+    },
   )
