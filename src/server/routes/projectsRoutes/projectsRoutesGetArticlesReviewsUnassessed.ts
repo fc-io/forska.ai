@@ -40,9 +40,9 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
         return p.id
       })
 
-      // Always enforce the project's date range and capture bounds
+      // Always enforce the project's date range, modelId, and capture bounds
       const [projectBounds] = await db
-        .select({dateFrom: projects.dateFrom, dateTo: projects.dateTo})
+        .select({dateFrom: projects.dateFrom, dateTo: projects.dateTo, modelId: projects.modelId})
         .from(projects)
         .where(eq(projects.id, body.projectId))
         .limit(1)
@@ -78,7 +78,10 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
       )`
 
       // Build scope condition (import route OR explicitly linked to project)
-      const scopeCondition = hasMatchingImportRoute ? or(hasMatchingImportRoute, hasProjectArticle) : hasProjectArticle
+      // Note: or() can return undefined, so we use hasProjectArticle as explicit fallback
+      const scopeCondition = hasMatchingImportRoute
+        ? (or(hasMatchingImportRoute, hasProjectArticle) ?? hasProjectArticle)
+        : hasProjectArticle
 
       // Optional UI + project time bounds and search
       const whereParts: Array<ReturnType<typeof sql>> = [scopeCondition]
@@ -90,11 +93,20 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
       const combinedWhereCondition = whereParts.length > 1 ? and(...whereParts) : whereParts[0]
 
       // Select articles that are NOT fully assessed by LLM for all project prompts
-      // Strategy: LEFT JOIN judgments filtered to this project's promptIds and HAVING count(distinct prompt_id) < total prompts
+      // Strategy: LEFT JOIN judgments filtered to this project's promptIds (and modelId if set) and HAVING count(distinct prompt_id) < total prompts
+      // Build judgment join conditions: articleId match, promptId in project prompts, and optionally modelId match
+      const judgmentJoinConditions = projectBounds?.modelId
+        ? and(
+            eq(judgments.articleId, articles.id),
+            inArray(judgments.promptId, promptIds),
+            eq(judgments.modelId, projectBounds.modelId),
+          )
+        : and(eq(judgments.articleId, articles.id), inArray(judgments.promptId, promptIds))
+
       const groupedBase = db
         .select({id: articles.id})
         .from(articles)
-        .leftJoin(judgments, and(eq(judgments.articleId, articles.id), inArray(judgments.promptId, promptIds)))
+        .leftJoin(judgments, judgmentJoinConditions)
         .where(combinedWhereCondition)
         .groupBy(articles.id)
         .having(sql`COUNT(DISTINCT ${judgments.promptId}) < ${promptIds.length}`)
