@@ -312,24 +312,16 @@ export const queryArticlesReviewsFromClickHouse = async (
       whereParts.push(`articleTitle ILIKE '%${searchEscaped}%'`)
     }
 
-    // Scope filter: import routes OR curated articles
+    // Scope filter: curated articles OR import routes
+    // Priority: curated articles first, then import routes
     // Two approaches depending on curated article count:
     // 1. If curated articles are below threshold: use IN clauses for both
     // 2. If curated articles are above threshold: use LEFT JOIN on temp table for curated + OR with import routes
 
     const scopeParts: string[] = []
 
-    // Import routes always use IN clause (they're usually small)
-    if (hasImportRoutes) {
-      const routesQuoted = metadata.routeTexts
-        .map((r) => {
-          return `'${escapeClickHouseString(r)}'`
-        })
-        .join(', ')
-      scopeParts.push(`articleImportRoute IN (${routesQuoted})`)
-    }
-
     // Curated articles: IN clause if small, handled via JOIN if large
+    // Listed first to prioritize curated articles over import routes
     if (hasCuratedArticles && !useCuratedTempTable) {
       // Small number of curated articles - use IN clause
       const curatedIdsQuoted = metadata.curatedArticleIds
@@ -338,6 +330,16 @@ export const queryArticlesReviewsFromClickHouse = async (
         })
         .join(', ')
       scopeParts.push(`articleId IN (${curatedIdsQuoted})`)
+    }
+
+    // Import routes use IN clause (they're usually small)
+    if (hasImportRoutes) {
+      const routesQuoted = metadata.routeTexts
+        .map((r) => {
+          return `'${escapeClickHouseString(r)}'`
+        })
+        .join(', ')
+      scopeParts.push(`articleImportRoute IN (${routesQuoted})`)
     }
 
     // If using temp table for curated articles, we need a different query structure
@@ -359,9 +361,14 @@ export const queryArticlesReviewsFromClickHouse = async (
       whereParts.push(`(${scopeParts.join(' OR ')})`)
     }
 
-    // Build HAVING conditions for answer filters
+    // Build HAVING conditions
     const havingParts: string[] = []
 
+    // REQUIRED: Article must have ALL prompts answered (not just any)
+    // This ensures we only count/return articles that are fully judged
+    havingParts.push(`COUNT(DISTINCT promptId) = ${metadata.promptIds.length}`)
+
+    // Additional answer filters (if user selected specific answer values)
     if (params.prompts) {
       for (const [promptId, answeredValues] of Object.entries(params.prompts)) {
         if (!answeredValues || answeredValues.length === 0) continue
@@ -387,7 +394,8 @@ export const queryArticlesReviewsFromClickHouse = async (
 
     // Build the query
     const whereClause = whereParts.join(' AND ')
-    const havingClause = havingParts.length > 0 ? `HAVING ${havingParts.join(' AND ')}` : ''
+    // HAVING is always present now (at minimum, the "all prompts answered" requirement)
+    const havingClause = `HAVING ${havingParts.join(' AND ')}`
 
     // Query to get article IDs with aggregated data
     // Note: We use different aliases (title_, created_, updated_) to avoid conflicts with WHERE clause
@@ -647,21 +655,12 @@ export const countArticlesReviewsFromClickHouse = async (
         whereParts.push(`articleTitle ILIKE '%${searchEscaped}%'`)
       }
 
-      // Scope filter: import routes OR curated articles
-      // Same logic as articles query
+      // Scope filter: curated articles OR import routes
+      // Priority: curated articles first, then import routes (same logic as articles query)
       const scopeParts: string[] = []
 
-      // Import routes always use IN clause
-      if (hasImportRoutes) {
-        const routesQuoted = metadata.routeTexts
-          .map((r) => {
-            return `'${escapeClickHouseString(r)}'`
-          })
-          .join(', ')
-        scopeParts.push(`articleImportRoute IN (${routesQuoted})`)
-      }
-
       // Curated articles: IN clause if small, handled via JOIN if large
+      // Listed first to prioritize curated articles over import routes
       if (hasCuratedArticles && !useCuratedTempTable) {
         const curatedIdsQuoted = metadata.curatedArticleIds
           .map((id) => {
@@ -669,6 +668,16 @@ export const countArticlesReviewsFromClickHouse = async (
           })
           .join(', ')
         scopeParts.push(`articleId IN (${curatedIdsQuoted})`)
+      }
+
+      // Import routes use IN clause
+      if (hasImportRoutes) {
+        const routesQuoted = metadata.routeTexts
+          .map((r) => {
+            return `'${escapeClickHouseString(r)}'`
+          })
+          .join(', ')
+        scopeParts.push(`articleImportRoute IN (${routesQuoted})`)
       }
 
       // If using temp table for curated articles
@@ -681,9 +690,14 @@ export const countArticlesReviewsFromClickHouse = async (
         whereParts.push(`(${scopeParts.join(' OR ')})`)
       }
 
-      // Build HAVING conditions for answer filters
+      // Build HAVING conditions
       const havingParts: string[] = []
 
+      // REQUIRED: Article must have ALL prompts answered (not just any)
+      // This ensures we only count articles that are fully judged
+      havingParts.push(`COUNT(DISTINCT promptId) = ${metadata.promptIds.length}`)
+
+      // Additional answer filters (if user selected specific answer values)
       if (params.prompts) {
         for (const [promptId, answeredValues] of Object.entries(params.prompts)) {
           if (!answeredValues || answeredValues.length === 0) continue
@@ -709,7 +723,8 @@ export const countArticlesReviewsFromClickHouse = async (
 
       // Build the count query
       const whereClause = whereParts.join(' AND ')
-      const havingClause = havingParts.length > 0 ? `HAVING ${havingParts.join(' AND ')}` : ''
+      // HAVING is always present now (at minimum, the "all prompts answered" requirement)
+      const havingClause = `HAVING ${havingParts.join(' AND ')}`
 
       const tempTableName = tempTableInfo?.tableName ?? ''
       const useTempTableJoin = useCuratedTempTable && tempTableInfo !== null
