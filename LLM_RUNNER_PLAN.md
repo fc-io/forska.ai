@@ -1,18 +1,16 @@
-# LLM Runner Server (Option A) — Plan
+# LLM Runner Server — Plan
 
 **Status**: 🟡 Draft
 **Last Updated**: 2025-12-29
 
 ## Goal
 
-Create a dedicated Bun/Elysia “llm-server” that can:
+Create a dedicated Bun/Elysia `llm-runner` that can:
 
 - Submit and monitor Slurm `sbatch` jobs running SGLang on **multiple HPCs** (and multiple concurrent runs per HPC)
 - Manage and health-check **SSH local-forward tunnels** to each running SGLang instance
 - Provide the API server with **connection info** (`url/port`) + **capabilities** (model + settings) for each run
 - Keep **all state in-memory only** (no DB, no local persistence, no UI)
-
-This plan is specifically for **Option A: control-plane + direct tunnels** (API server talks directly to the forwarded local port).
 
 ## Non-goals (for first iteration)
 
@@ -24,51 +22,33 @@ This plan is specifically for **Option A: control-plane + direct tunnels** (API 
 ## Constraints / Style
 
 - Follow `CLAUDE.md` rules (functional style, avoid classes, prefer recursion over loops, minimize branching, avoid try/catch unless necessary, named exports)
+- Never use `any` — use `unknown` with type guards or proper types
+- Use [ArkType](https://arktype.io/) for runtime validation
+- Use [Effect](https://effect.website/) for typed effects, error handling, and concurrency
+- Use Bun shell (`Bun.spawn` / `Bun.$`) for running bash commands (ssh, sbatch, squeue, etc)
 - No DB migrations; no new storage
 - Network access is via existing local `ssh` config/credentials
-
-## Architecture (Option A)
-
-```
-┌──────────────────────────────────────────────────────────────────────────┐
-│ LOCAL HOST                                                               │
-│                                                                          │
-│  ┌──────────────────────────┐        ┌───────────────────────────────┐  │
-│  │ API server (existing)     │        │ llm-server (new)              │  │
-│  │ - creates judging jobs    │  HTTP  │ - sbatch submit               │  │
-│  │ - uses returned URL/port  │◄──────►│ - squeue/sacct monitor        │  │
-│  │ - calls SGLang directly   │        │ - tail logs                   │  │
-│  └───────────────┬──────────┘        │ - ssh -L tunnel manager        │  │
-│                  │                   └───────────────┬───────────────┘  │
-│                  │ direct HTTP to localhost:PORT                      │
-│                  ▼                                                    │
-│         http://127.0.0.1:<allocatedPort>/v1/...                       │
-│                                                                          │
-└──────────────────────────────────────────────────────────────────────────┘
-                                   │
-                                   │ SSH to HPC login nodes
-                                   ▼
-┌──────────────────────────────────────────────────────────────────────────┐
-│ HPC (per cluster)                                                        │
-│ - Slurm login node(s): sbatch/squeue/scontrol                            │
-│ - Compute node(s): SGLang listens on remotePort (e.g. 30000)             │
-└──────────────────────────────────────────────────────────────────────────┘
-```
 
 ## Config Strategy (multiple config files)
 
 ### Inputs
 
-Use existing HPC configs in `config/hpc_*.json` as the core source of truth (they already include:
-cluster identity, ssh aliases, storageRoot, default model, and SGLang settings).
+Use existing HPC configs in `config/hpc_*.json` as the core source of truth.
 
-Add an llm-runner-specific overlay per HPC (either as optional fields in the same JSON, or as a separate JSON “runner config”).
+Add runner-specific fields directly to each `hpc_*.json` file.
 
 ### Recommended: repeatable `--config`
 
-Run llm-server with multiple configs:
+Run llm-runner with multiple configs:
 
 ```bash
+# Minimal (no env file required):
+bun run src/llmServer/index.ts \
+  --config config/hpc_mn5.json \
+  --config config/hpc_alvis.json \
+  --config config/hpc_dis.json
+
+# Or with optional env file (for LLM_RUNNER_AUTH_TOKEN shared secret):
 bun --env-file=.env.local run src/llmServer/index.ts \
   --config config/hpc_mn5.json \
   --config config/hpc_alvis.json \
@@ -81,9 +61,9 @@ Merge semantics:
 - On conflict: `last-config-wins` for scalar defaults; **additive** for model catalogs
 - Reject duplicate `name` unless explicitly allowed via a `--allow-override` flag (to prevent footguns)
 
-### Minimal runner overlay (per HPC)
+### Runner fields in `hpc_*.json`
 
-Needed in addition to current schema:
+Additional fields to add to existing schema:
 
 - Which SSH host alias to use for:
   - `sbatch` submission (`general` vs `acc`)
@@ -94,6 +74,20 @@ Needed in addition to current schema:
 - Local tunnel policy:
   - local bind host (`127.0.0.1` default)
   - allowed local port range (to avoid collisions with the API server and other tools)
+
+### Sbatch settings export & validation
+
+llm-runner exports env vars for the sbatch script via `--export=`:
+
+```bash
+SGLANG_MODEL, SGLANG_PORT, TP_SIZE, DP_SIZE, GPU_NNODES, GPU_GPUS_PER_NODE,
+GPU_TOTAL_GPUS, GPU_SHAPE, SGLANG_MAX_RUNNING_REQUESTS, ...
+```
+
+**Validation**: Before submitting, llm-runner should validate that:
+- Config values match sbatch script expectations (e.g. `#SBATCH --nodes` matches `GPU_NNODES`)
+- Required env vars are defined in config
+- sbatch script exists on the cluster (or upload it first)
 
 ## In-memory Domain Model
 
@@ -116,46 +110,117 @@ Needed in addition to current schema:
 ### Registries
 
 - `runsById: Map<string, Run>`
-- `portsInUse: Set<number>` (owned by llm-server only; plus OS-level availability checks)
+- `portsInUse: Set<number>` (owned by llm-runner only; plus OS-level availability checks)
 
-## Public API (llm-server)
+## Public API (llm-runner)
 
-Prefix all routes with `/api/llm-runner`.
+### Models
 
-### Discovery
+Models are loaded from config files. Each model has a lifecycle state the API server can poll.
 
-- `GET /health` → `{ok: true}`
-- `GET /hpcs` → list loaded HPC configs (sanitized; no secrets)
-- `GET /hpcs/:hpcName/models` → model catalog (from config)
+- `GET /models` → list all models with current state
 
-### Runs
+Response per model:
 
-- `POST /runs`
-  - body: `{hpcName, modelId?, overrides?}`
-  - returns: `{runId, slurmJobId?, state, endpointUrl?, localPort?, capabilities}`
-- `GET /runs` → list runs (lightweight summary)
-- `GET /runs/:runId` → full run details (status, tunnel info, capabilities)
-- `POST /runs/:runId/cancel` → cancels Slurm job + tears down tunnel
-- `POST /runs/:runId/tunnel/restart` → restart tunnel + re-check health
+```ts
+{
+  // Lifecycle state
+  state:
+    | "idle"                    // not running, ready to start
+    | "transferring"            // transferring files to remote host
+    | "initializing"            // submitting sbatch
+    | "pending"                 // queued in Slurm (PENDING)
+    | "started"                // sbatch stared, tunnel not up
+    | "loading_model"           // log: model weights being loaded
+    | "warming_up"              // log: warmup/cuda graph capture in progress
+    | "available"               // log: server ready message + tunnel up + /v1/models responds
+    // === Terminal states ===
+    | "completing"              // Slurm job ending (COMPLETING), tearing down tunnel
+    | "completed"               // Slurm job finished normally (time limit, clean exit)
+    | "failed"                  // error detected, or Slurm job ended unexpectedly
+    | "cancelled",              // manually stopped
 
-### Logs / status
+  error?: string,               // if state === "failed"
 
-- `GET /runs/:runId/slurm` → raw `scontrol show job` (sanitized) + parsed fields
-- `GET /runs/:runId/logs?which=stdout|stderr&tail=200`
-  - read from Slurm `StdOut`/`StdErr` paths (from `scontrol show job`)
-  - return last N lines (no storage)
-- Optional later: `GET /runs/:runId/logs/stream` via SSE
+  slurmInfo:{
+    slurmJobId?: string,
+    startTime?: Date,
+    expectedEndTime?: Date,
+    endTime?: Date,
+  },
+
+  logs: {
+    sbatchLogTail?: string,         // latest progress message from logs (e.g. "Loading layer 45/80")
+    routerLogTail?: string,         // latest progress message from router logs
+    workerLogTail?: string[],       // latest progress message from worker logs
+    nvidiaSmiLatest?: string,       // latest progress message from nvidia-smi
+  },
+
+  tunnelUrls:{
+  // Connection (only when state === "available")
+    routerUrl?: string,         // e.g. "http://127.0.0.1:31234"
+    workerUrls?: string[],      // e.g. "http://127.0.0.1:31234"
+  },
+
+  config: {
+    modelId: string,              // from config
+    modelName: string,            // from config
+    hpcName: string,              // which HPC this model runs on
+
+    // GPU allocation
+    gpuNodes: number,             // GPU_NNODES
+    gpusPerNode: number,          // GPU_GPUS_PER_NODE
+    totalGpus: number,            // GPU_TOTAL_GPUS
+    gpuShape: string,             // GPU_SHAPE (e.g. "H100")
+
+    // SGLang parameters
+    tensorParallelSize: number,   // TP_SIZE
+    dataParallelSize: number,     // DP_SIZE
+    maxRunningRequests: number,   // SGLANG_MAX_RUNNING_REQUESTS
+  }
+}
+```
+
+**Log parsing requirements**: The sbatch script must produce parseable log output. Validate that logs contain:
+- Model loading progress indicators
+- Clear "server ready" message (e.g. SGLang's `"The server is fired up"`)
+- Error messages with identifiable patterns
+
+- `POST /models/:modelId/start` → submit sbatch, begin lifecycle
+- `POST /models/:modelId/stop` → cancel Slurm job + tear down tunnel
+- `GET /models/:modelId/logs?which=stdout|stderr&tail=200` → tail Slurm logs
+
+### Auto-restart
+
+After a model reaches `completed` state (sbatch finished normally), llm-runner can automatically restart it:
+- Transition: `completed` → `idle` → `submitting` → ...
+- Configurable via `autoRestart: boolean` in model config
+- Useful for long-running inference workloads that exceed Slurm time limits
+
+### API server coordination
+
+llm-runner can optionally poll the API server to optimize HPC resource usage:
+
+**Idle cancellation** (`--poll-api-server` flag):
+- Periodically check API server for active jobs / pending requests
+- If a model has been `available` with no requests for N minutes → `scancel` and free the allocation
+- Prevents wasting HPC credits when there's no work
+
+**Demand-driven launching** (`--demand-driven` flag):
+- Poll API server: "which models are needed to finish active jobs?"
+- Automatically start models that are `idle` but have pending work
+- Automatically stop models that have no pending work
+
+API server must expose:
+- `GET /api/llm-runner/demand` → `{ modelsNeeded: string[], pendingRequestsByModel: Record<string, number> }`
 
 ## Slurm integration approach
 
 ### Submit
 
-Per run:
-
-1. Decide remote working directory (from `connection.storageRoot`)
-2. Submit:
-   - `ssh <submitHost> "cd <storageRoot> && sbatch --export=ALL,<ENV...> <SBATCH_FILE>"`
-3. Parse `Submitted batch job <id>`
+- Decide remote working directory (from `connection.storageRoot`)
+- Submit with `ssh <submitHost> "cd <storageRoot> && sbatch --export=ALL,<ENV...> <SBATCH_FILE>"`
+- Parse `Submitted batch job <id>`
 
 ### Monitor
 
@@ -209,7 +274,7 @@ Requirements:
 
 Strategy:
 
-- Configure a port range (e.g. `31000-31999`) for llm-server to allocate from
+- Configure a port range (e.g. `31000-31999`) for llm-runner to allocate from
 - For each candidate port:
   - check “not in `portsInUse`”
   - check OS availability by attempting to bind a TCP server briefly
@@ -225,7 +290,7 @@ Return to API server:
 
 ### Restart behavior
 
-If llm-server restarts:
+If llm-runner restarts:
 
 - default: forget all runs (pure in-memory)
 - optional: “re-discover mode” on startup:
@@ -236,7 +301,7 @@ This stays within “no persistence” because the source of truth is Slurm.
 
 ## Security considerations
 
-- Require an auth token for all llm-server endpoints (shared secret in env)
+- Require an auth token for all llm-runner endpoints (shared secret in env)
 - Never accept arbitrary command strings from clients
 - Validate all user-provided overrides (ArkType at request boundary)
 - Sanitize logs returned via API (paths/identities as needed)
@@ -251,12 +316,12 @@ This stays within “no persistence” because the source of truth is Slurm.
   - which login node to use for `sbatch` vs tunneling
   - whether compute node port is reachable from the chosen login node
 
-### Phase 1 — Scaffold llm-server
+### Phase 1 — Scaffold llm-runner
 
 - Create new entrypoint `src/llmServer/index.ts`
 - Add `bun` scripts:
-  - `dev:llm-server`
-  - `start:llm-server`
+  - `dev:llm-runner`
+  - `start:llm-runner`
 - Add basic Elysia app with `/api/llm-runner/health`
 
 ### Phase 2 — Config loader
@@ -285,7 +350,7 @@ This stays within “no persistence” because the source of truth is Slurm.
 
 ### Phase 6 — API server integration
 
-- Add a small Eden client in the API server to talk to llm-server:
+- Add a small Eden client in the API server to talk to llm-runner:
   - request a run, store returned `endpointUrl` per job
   - expose current connectivity/status to existing routes (e.g. `JudgmentsJobsRoutes.ts`)
 
@@ -296,11 +361,10 @@ This stays within “no persistence” because the source of truth is Slurm.
 
 ## Open questions (need answers before coding)
 
-1. Will llm-server run on the **same host** as the API server (so `127.0.0.1:<port>` is usable)?
+1. Will llm-runner run on the **same host** as the API server (so `127.0.0.1:<port>` is usable)?
 2. For each HPC, which SSH alias should be used for:
    - `sbatch` submission
    - `squeue/scontrol` polling
    - tunnels to compute nodes
 3. Does each cluster allow login→compute connectivity on the SGLang port (e.g. `30000`)?
 4. How many concurrent runs do we expect (to size the local port range and polling frequency)?
-
