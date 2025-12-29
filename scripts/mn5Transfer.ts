@@ -30,28 +30,34 @@ const main = async () => {
   let model = DEFAULT_MODEL
   let skipDl = false
   let skipContainer = false
+  let containerOnly = false
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--model') model = args[++i] ?? fail('--model needs value')
     else if (args[i] === '--skip-download') skipDl = true
     else if (args[i] === '--skip-container') skipContainer = true
+    else if (args[i] === '--container-only') containerOnly = true
   }
 
   const localModel = join(MODELS_DIR, basename(model))
   const tarball = join(MODELS_DIR, 'sglang_latest.tar.gz')
 
-  log(`Model: ${model}`)
+  if (containerOnly) {
+    log('Container-only mode: updating SGLang container')
+  } else {
+    log(`Model: ${model}`)
+  }
   log(`Target: ${TLOG}:${MN5_ROOT}`)
 
-  // 1. Download model
-  if (!skipDl && !existsSync(localModel)) {
+  // 1. Download model (skip in container-only mode)
+  if (!containerOnly && !skipDl && !existsSync(localModel)) {
     log('Downloading model...')
     mkdirSync(MODELS_DIR, {recursive: true})
     await $`huggingface-cli download ${model} --local-dir ${localModel} --local-dir-use-symlinks False`
   }
 
   // 2. Prepare container
-  if (!skipDl && !skipContainer && !existsSync(tarball)) {
+  if (!skipContainer && !existsSync(tarball)) {
     log('Pulling and saving container (linux/amd64 for MN5)...')
     // Must explicitly specify amd64 platform since we might be on Apple Silicon
     await $`docker pull --platform linux/amd64 lmsysorg/sglang:latest`
@@ -76,10 +82,12 @@ const main = async () => {
   log('Creating remote directories...')
   await $`ssh ${TLOG} mkdir -p ${MN5_ROOT}/{hf_cache,logs,.cache,.cache/sglang,.secrets,tmp}`
 
-  // 4. Transfer model
-  log('Transferring model...')
-  const remotePath = `${MN5_ROOT}/hf_cache/${modelToCacheName(model)}/`
-  await $`rsync -avzP ${localModel}/ ${TLOG}:${remotePath}`
+  // 4. Transfer model (skip in container-only mode)
+  if (!containerOnly) {
+    log('Transferring model...')
+    const remotePath = `${MN5_ROOT}/hf_cache/${modelToCacheName(model)}/`
+    await $`rsync -avzP ${localModel}/ ${TLOG}:${remotePath}`
+  }
 
   // 5. Transfer and convert container
   if (!skipContainer) {
@@ -95,7 +103,7 @@ const main = async () => {
       module load singularity/4.1.5 && \\
       which singularity || which apptainer || (echo "ERROR: Neither singularity nor apptainer found" && exit 1) && \\
       echo "Building SIF from tar..." && \\
-      singularity build sglang_latest.sif docker-archive:sglang_latest.tar && \\
+      singularity build --force sglang_latest.sif docker-archive:sglang_latest.tar && \\
       rm sglang_latest.tar
     `
     await $`ssh ${GLOG} ${convertCmd}`
