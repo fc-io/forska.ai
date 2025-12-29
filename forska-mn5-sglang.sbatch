@@ -120,12 +120,12 @@ export CUDA_DEVICE_ORDER=PCI_BUS_ID
 
 echo "[mn5] launching SGLang with tp=$TP_SIZE dp=$DP_SIZE"
 
-# Build SGLang command with MiMo-V2-Flash recommended settings
+# Build SGLang command with model-specific settings
 # Note: Some flags like --moe-a2a-backend, --attention-backend, --speculative-*
 # may require specific SGLang versions - using conservative defaults
 SGLANG_ARGS=(
   --model-path "$SGLANG_MODEL"
-  --served-model-name mimo-v2-flash
+  --served-model-name "$SGLANG_MODEL"
   --host 0.0.0.0
   --port "$SGLANG_PORT"
   --tensor-parallel-size "$TP_SIZE"
@@ -189,7 +189,7 @@ echo "=============================================="
 echo "[mn5] SGLang ready!"
 echo "  Host:     $(hostname)"
 echo "  Endpoint: http://$(hostname):$SGLANG_PORT/v1"
-echo "  Model:    $SGLANG_MODEL (served as mimo-v2-flash)"
+echo "  Model:    $SGLANG_MODEL"
 echo "  Config:   tp=$TP_SIZE dp=$DP_SIZE on $TOTAL_GPUS GPUs ($NNODES nodes)"
 echo ""
 echo "SSH tunnel from local machine:"
@@ -199,12 +199,12 @@ echo "Test:"
 echo "  curl http://localhost:$SGLANG_PORT/v1/models"
 echo ""
 echo "Example request (with thinking mode):"
-cat << 'EOF'
-  curl http://localhost:30000/v1/chat/completions \
-    -H "Content-Type: application/json" \
+cat << EOF
+  curl http://localhost:30000/v1/chat/completions \\
+    -H "Content-Type: application/json" \\
     -d '{
-      "model": "mimo-v2-flash",
-      "messages": [{"role": "user", "content": "Hello MiMo!"}],
+      "model": "$SGLANG_MODEL",
+      "messages": [{"role": "user", "content": "Hello!"}],
       "max_tokens": 4096,
       "temperature": 0.8,
       "top_p": 0.95,

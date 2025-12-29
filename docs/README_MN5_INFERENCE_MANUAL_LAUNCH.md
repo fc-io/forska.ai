@@ -2,22 +2,6 @@
 
 **Purpose**: Step-by-step manual instructions for launching SGLang inference on MN5, replicating what `bun run mn5:launch` does automatically. Useful for **debugging** and **understanding** the process.
 
----
-
-## Overview
-
-The automated `bun run mn5:launch` command performs 5 main steps:
-
-1. **Deploy** the sbatch script to MN5
-2. **Submit** the job to the Slurm queue
-3. **Wait** for the job to start running
-4. **Wait** for SGLang to be ready
-5. **Establish** an SSH tunnel
-
-This guide walks through each step manually.
-
----
-
 ## Prerequisites
 
 Before starting, ensure:
@@ -155,7 +139,7 @@ NOTREADY
 
 **When ready (you'll see model data):**
 ```json
-{"object":"list","data":[{"id":"mimo-v2-flash",... }]}
+{"object":"list","data":[{"id":"XiaomiMiMo/MiMo-V2-Flash",... }]}
 OK
 ```
 
@@ -230,7 +214,7 @@ curl http://localhost:30000/v1/models | jq .
 curl http://localhost:30000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "mimo-v2-flash",
+    "model": "XiaomiMiMo/MiMo-V2-Flash",
     "messages": [{"role": "user", "content": "What is 2+2?"}],
     "max_tokens": 256
   }' | jq .
@@ -241,7 +225,7 @@ curl http://localhost:30000/v1/chat/completions \
 curl http://localhost:30000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "mimo-v2-flash",
+    "model": "XiaomiMiMo/MiMo-V2-Flash",
     "messages": [{"role": "user", "content": "Explain recursion briefly"}],
     "max_tokens": 4096,
     "temperature": 0.8,

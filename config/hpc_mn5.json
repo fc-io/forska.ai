@@ -47,7 +47,7 @@
 
   "sglang": {
     "model": "XiaomiMiMo/MiMo-V2-Flash",
-    "servedModelName": "mimo-v2-flash",
+    "servedModelName": "XiaomiMiMo/MiMo-V2-Flash",
     "port": 30000,
     "tensorParallelSize": 8,
     "dataParallelSize": 1,

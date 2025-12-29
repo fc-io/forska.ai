@@ -213,7 +213,7 @@ curl http://localhost:30000/v1/models | jq .
 curl http://localhost:30000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "mimo-v2-flash",
+    "model": "XiaomiMiMo/MiMo-V2-Flash",
     "messages": [{"role": "user", "content": "What is 2+2?"}],
     "max_tokens": 256
   }' | jq .
@@ -227,7 +227,7 @@ The MiMo-V2-Flash model supports thinking/reasoning mode:
 curl http://localhost:30000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "mimo-v2-flash",
+    "model": "XiaomiMiMo/MiMo-V2-Flash",
     "messages": [{"role": "user", "content": "Explain the concept of recursion"}],
     "max_tokens": 4096,
     "temperature": 0.8,
@@ -241,7 +241,7 @@ curl http://localhost:30000/v1/chat/completions \
 curl http://localhost:30000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "mimo-v2-flash",
+    "model": "XiaomiMiMo/MiMo-V2-Flash",
     "messages": [{"role": "user", "content": "Write a haiku about computing"}],
     "max_tokens": 256,
     "stream": true

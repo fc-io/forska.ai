@@ -39,7 +39,12 @@ const getOpenAIClient = (baseURL: string): OpenAI => {
   return client
 }
 
-const normalizeVllmModelName = (name: string): string => {
+/**
+ * Normalize model name for the OpenAI API request.
+ * - HuggingFace IDs (e.g., "XiaomiMiMo/MiMo-V2-Flash") pass through unchanged
+ * - Legacy local paths (e.g., "./models/...") are normalized to absolute paths
+ */
+const normalizeModelName = (name: string): string => {
   if (name.startsWith('./models/')) {
     return `/${name.slice(2)}`
   }
@@ -114,7 +119,7 @@ const generateSinglePromptResponse = async ({
   modelName: string
 }): Promise<{text: string; usage: {promptTokens: number; completionTokens: number; totalTokens: number}}> => {
   const client = getOpenAIClient(baseURL)
-  const modelToUse = normalizeVllmModelName(modelName)
+  const modelToUse = normalizeModelName(modelName)
   const response = await client.chat.completions.create({
     model: modelToUse,
     messages: [
