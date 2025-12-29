@@ -101,12 +101,6 @@ This will:
 
 > **Note**: This takes ~1 hour depending on your internet connection. The MiMo-V2-Flash model is ~313GB.
 
-### Step 2: Launch SGLang
-
-```bash
-bun run mn5:launch
-```
-
 ### Transfer Options
 
 ```bash
@@ -120,7 +114,11 @@ bun run mn5:transfer -- --skip-download
 bun run mn5:transfer -- --skip-container
 ```
 
----
+### Step 2: Launch SGLang
+
+```bash
+bun run mn5:launch
+```
 
 ## Establishing the SSH Tunnel
 
