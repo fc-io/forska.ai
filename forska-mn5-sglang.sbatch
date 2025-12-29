@@ -68,6 +68,46 @@ echo "[mn5] HEAD_NODE=$HEAD_NODE HEAD_IP=$HEAD_IP"
 export SGLANG_MODEL=${SGLANG_MODEL:-XiaomiMiMo/MiMo-V2-Flash}
 export SGLANG_PORT=${SGLANG_PORT:-30000}
 
+# Resolve model path: if it looks like a HuggingFace ID (contains /), try to find it in the cache
+# Otherwise assume it's already a local path
+if [[ "$SGLANG_MODEL" == */* && ! -d "$SGLANG_MODEL" ]]; then
+  # Convert HF ID to cache directory format: org/model -> models--org--model
+  HF_CACHE_NAME="models--$(echo "$SGLANG_MODEL" | tr '/' '--')"
+
+  # Check multiple possible locations:
+  # 1. Direct download: $HF_HOME/models--org--model/
+  # 2. Standard HF cache: $HF_HOME/hub/models--org--model/snapshots/<hash>/
+
+  if [[ -d "$HF_HOME/$HF_CACHE_NAME" && -f "$HF_HOME/$HF_CACHE_NAME/config.json" ]]; then
+    # Direct download structure (what user has)
+    SGLANG_MODEL_PATH="$HF_HOME/$HF_CACHE_NAME"
+    echo "[mn5] resolved model to: $SGLANG_MODEL_PATH"
+  elif [[ -d "$HF_HOME/hub/$HF_CACHE_NAME/snapshots" ]]; then
+    # Standard HF cache structure
+    SNAPSHOT_DIR=$(ls -t "$HF_HOME/hub/$HF_CACHE_NAME/snapshots" 2>/dev/null | head -1)
+    if [[ -n "$SNAPSHOT_DIR" && -d "$HF_HOME/hub/$HF_CACHE_NAME/snapshots/$SNAPSHOT_DIR" ]]; then
+      SGLANG_MODEL_PATH="$HF_HOME/hub/$HF_CACHE_NAME/snapshots/$SNAPSHOT_DIR"
+      echo "[mn5] resolved model to: $SGLANG_MODEL_PATH"
+    else
+      echo "[mn5] ERROR: Model cache exists but no snapshots found" >&2
+      exit 1
+    fi
+  else
+    echo "[mn5] ERROR: Model not found: $SGLANG_MODEL" >&2
+    echo "[mn5] Searched in:" >&2
+    echo "  - $HF_HOME/$HF_CACHE_NAME/" >&2
+    echo "  - $HF_HOME/hub/$HF_CACHE_NAME/snapshots/" >&2
+    echo "" >&2
+    echo "[mn5] Available models:" >&2
+    ls -d "$HF_HOME"/models--* 2>/dev/null | xargs -n1 basename || echo "  (none in $HF_HOME)" >&2
+    ls -d "$HF_HOME"/hub/models--* 2>/dev/null | xargs -n1 basename || true
+    exit 1
+  fi
+else
+  # Already a local path or doesn't contain /
+  SGLANG_MODEL_PATH="$SGLANG_MODEL"
+fi
+
 # MiMo-V2-Flash requires tp=8 (2 nodes x 4 GPUs)
 # For single node, use tp=4
 export TP_SIZE=${TP_SIZE:-$TOTAL_GPUS}
@@ -79,7 +119,7 @@ export SGLANG_MEM_FRACTION=${SGLANG_MEM_FRACTION:-0.75}
 export SGLANG_CHUNKED_PREFILL_SIZE=${SGLANG_CHUNKED_PREFILL_SIZE:-16384}
 export SGLANG_CONTEXT_LENGTH=${SGLANG_CONTEXT_LENGTH:-131072}
 
-echo "[mn5] model=$SGLANG_MODEL"
+echo "[mn5] model=$SGLANG_MODEL (path: $SGLANG_MODEL_PATH)"
 echo "[mn5] nodes=$NNODES gpus/node=$GPUS_PER_NODE total_gpus=$TOTAL_GPUS tp=$TP_SIZE dp=$DP_SIZE"
 
 # GPU detection
@@ -125,7 +165,7 @@ echo "[mn5] launching SGLang with tp=$TP_SIZE dp=$DP_SIZE"
 # Note: Some flags like --moe-a2a-backend, --attention-backend, --speculative-*
 # may require specific SGLang versions - using conservative defaults
 SGLANG_ARGS=(
-  --model-path "$SGLANG_MODEL"
+  --model-path "$SGLANG_MODEL_PATH"
   --served-model-name "$SGLANG_MODEL"
   --host 0.0.0.0
   --port "$SGLANG_PORT"
