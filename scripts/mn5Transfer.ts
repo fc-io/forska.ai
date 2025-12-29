@@ -40,7 +40,7 @@ const main = async () => {
   }
 
   const localModel = join(MODELS_DIR, basename(model))
-  const tarball = join(MODELS_DIR, 'sglang_latest.tar.gz')
+  const tarball = join(MODELS_DIR, 'sglang_latest.tar')
 
   if (containerOnly) {
     log('Container-only mode: updating SGLang container')
@@ -61,7 +61,7 @@ const main = async () => {
     log('Pulling and saving container (linux/amd64 for MN5)...')
     // Must explicitly specify amd64 platform since we might be on Apple Silicon
     await $`docker pull --platform linux/amd64 lmsysorg/sglang:latest`
-    await $`docker save lmsysorg/sglang:latest | gzip > ${tarball}`
+    await $`docker save lmsysorg/sglang:latest -o ${tarball}`
 
     // Validate the tarball was created correctly (should be ~14GB, fail if < 1GB)
     const MIN_SIZE_BYTES = 1_000_000_000 // 1GB minimum
@@ -98,8 +98,6 @@ const main = async () => {
     // Singularity docker-archive: doesn't support gzipped tar, must decompress first
     const convertCmd = `
       cd ${MN5_ROOT} && \\
-      echo "Decompressing tarball..." && \\
-      gzip -d sglang_latest.tar.gz && \\
       module load singularity/4.1.5 && \\
       which singularity || which apptainer || (echo "ERROR: Neither singularity nor apptainer found" && exit 1) && \\
       echo "Building SIF from tar..." && \\
