@@ -109,6 +109,19 @@ else
   SGLANG_MODEL_PATH="$SGLANG_MODEL"
 fi
 
+if [[ -f "$SGLANG_MODEL_PATH/config.json" && -f "$SGLANG_MODEL_PATH/modeling_mimo_v2_flash.py" ]]; then
+  if grep -q "class MiMoV2FlashForCausalLM" "$SGLANG_MODEL_PATH/modeling_mimo_v2_flash.py"; then
+    if ! grep -q "MiMoV2FlashModel" "$SGLANG_MODEL_PATH/modeling_mimo_v2_flash.py"; then
+      printf '\nMiMoV2FlashModel = MiMoV2FlashForCausalLM\n' >> "$SGLANG_MODEL_PATH/modeling_mimo_v2_flash.py"
+      echo "[mn5] patched modeling_mimo_v2_flash.py with MiMoV2FlashModel alias"
+    fi
+    if grep -q "MiMoV2FlashForCausalLM" "$SGLANG_MODEL_PATH/config.json"; then
+      sed -i 's/MiMoV2FlashForCausalLM/MiMoV2FlashModel/g' "$SGLANG_MODEL_PATH/config.json"
+      echo "[mn5] patched config.json architectures to MiMoV2FlashModel"
+    fi
+  fi
+fi
+
 # MiMo-V2-Flash requires tp=8 (2 nodes x 4 GPUs)
 # For single node, use tp=4
 export TP_SIZE=${TP_SIZE:-$TOTAL_GPUS}
