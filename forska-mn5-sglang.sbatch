@@ -34,16 +34,14 @@ export XDG_CACHE_HOME=$STACK_ROOT/.cache
 export SGLANG_CACHE_DIR=$STACK_ROOT/.cache/sglang
 export TMPDIR=$STACK_ROOT/tmp
 
-# Load modules
-module load apptainer 2>/dev/null || module load singularity 2>/dev/null || true
-
-# HuggingFace token (optional)
-HF_TOKEN_FILE=$STACK_ROOT/.secrets/hf_token.txt
-if [[ -f "$HF_TOKEN_FILE" ]]; then
-  export HF_TOKEN=$(<"$HF_TOKEN_FILE")
-  export HUGGINGFACE_HUB_TOKEN=$HF_TOKEN
-  echo "[mn5] loaded HF token"
+# Load singularity module and resolve absolute path (needed for srun on worker nodes)
+module load singularity/4.1.5
+SINGULARITY_BIN=$(which singularity)
+if [[ -z "$SINGULARITY_BIN" ]]; then
+  echo "[mn5] ERROR: singularity not found after module load" >&2
+  exit 1
 fi
+echo "[mn5] using container runtime: $SINGULARITY_BIN"
 
 # Container
 SIF_SGLANG="$STACK_ROOT/sglang_latest.sif"
@@ -160,10 +158,12 @@ fi
 # Launch SGLang
 echo "[mn5] SGLang args: ${SGLANG_ARGS[*]}"
 
-# Build the apptainer command
-APPTAINER_CMD="apptainer exec --cleanenv --nv \
+# Build the container command (using absolute path resolved earlier)
+# Note: No HF token needed - models are pre-downloaded and no outbound access
+# HF_HUB_OFFLINE=1 ensures no download attempts are made
+CONTAINER_CMD="$SINGULARITY_BIN exec --cleanenv --nv \
   --env HF_HOME=/hf --env HUGGINGFACE_HUB_CACHE=/hf \
-  --env HF_TOKEN=${HF_TOKEN:-} --env HUGGINGFACE_HUB_TOKEN=${HUGGINGFACE_HUB_TOKEN:-} \
+  --env HF_HUB_OFFLINE=1 \
   --bind $HF_HOME:/hf:rw \
   --env SGLANG_CACHE_DIR=/sg --bind $SGLANG_CACHE_DIR:/sg:rw \
   --env NCCL_DEBUG=${NCCL_DEBUG:-WARN} \
@@ -172,16 +172,15 @@ APPTAINER_CMD="apptainer exec --cleanenv --nv \
 
 if (( NNODES > 1 )); then
   # Multi-node: use srun to launch on all nodes with correct node-rank
-  # Each node gets its rank from SLURM_PROCID
-  # Note: Module environment must be sourced inside srun since it doesn't propagate automatically
+  # Using absolute path to singularity binary - no module load needed on worker nodes
   echo "[mn5] Launching with srun across $NNODES nodes..."
   srun --nodes=$NNODES --ntasks=$NNODES --ntasks-per-node=1 \
-    bash -c "source /etc/profile.d/modules.sh 2>/dev/null || true; module load apptainer 2>/dev/null || module load singularity 2>/dev/null || true; export NODE_RANK=\$SLURM_PROCID; $APPTAINER_CMD --node-rank \$NODE_RANK" \
+    bash -c "export NODE_RANK=\$SLURM_PROCID; $CONTAINER_CMD --node-rank \$NODE_RANK" \
     >"$LOG_DIR/sglang.log" 2>&1 &
   SGLANG_PID=$!
 else
   # Single node: run directly
-  $APPTAINER_CMD >"$LOG_DIR/sglang.log" 2>&1 &
+  $CONTAINER_CMD >"$LOG_DIR/sglang.log" 2>&1 &
   SGLANG_PID=$!
 fi
 
