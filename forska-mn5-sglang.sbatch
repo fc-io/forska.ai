@@ -111,21 +111,80 @@ fi
 
 if [[ -f "$SGLANG_MODEL_PATH/config.json" && -f "$SGLANG_MODEL_PATH/modeling_mimo_v2_flash.py" ]]; then
   if grep -q "class MiMoV2FlashForCausalLM" "$SGLANG_MODEL_PATH/modeling_mimo_v2_flash.py"; then
-    if ! grep -q "MiMoV2FlashModel" "$SGLANG_MODEL_PATH/modeling_mimo_v2_flash.py"; then
-      printf '\nMiMoV2FlashModel = MiMoV2FlashForCausalLM\n' >> "$SGLANG_MODEL_PATH/modeling_mimo_v2_flash.py"
-      echo "[mn5] patched modeling_mimo_v2_flash.py with MiMoV2FlashModel alias"
+    if ! grep -q "MiMoForCausalLM" "$SGLANG_MODEL_PATH/modeling_mimo_v2_flash.py"; then
+      printf '\nMiMoForCausalLM = MiMoV2FlashForCausalLM\n' >> "$SGLANG_MODEL_PATH/modeling_mimo_v2_flash.py"
+      echo "[mn5] patched modeling_mimo_v2_flash.py with MiMoForCausalLM alias"
     fi
-    if grep -q "MiMoV2FlashForCausalLM" "$SGLANG_MODEL_PATH/config.json"; then
-      sed -i 's/MiMoV2FlashForCausalLM/MiMoV2FlashModel/g' "$SGLANG_MODEL_PATH/config.json"
-      echo "[mn5] patched config.json architectures to MiMoV2FlashModel"
+    if grep -q "MiMoV2FlashModel" "$SGLANG_MODEL_PATH/config.json" || grep -q "MiMoV2FlashForCausalLM" "$SGLANG_MODEL_PATH/config.json"; then
+      sed -i 's/MiMoV2FlashModel/MiMoForCausalLM/g; s/MiMoV2FlashForCausalLM/MiMoForCausalLM/g' "$SGLANG_MODEL_PATH/config.json"
+      echo "[mn5] patched config.json architectures to MiMoForCausalLM"
     fi
   fi
 fi
 
 # MiMo-V2-Flash requires tp=8 (2 nodes x 4 GPUs)
 # For single node, use tp=4
+TP_SIZE_SET=0
+DP_SIZE_SET=0
+[[ -n "${TP_SIZE+x}" ]] && TP_SIZE_SET=1
+[[ -n "${DP_SIZE+x}" ]] && DP_SIZE_SET=1
 export TP_SIZE=${TP_SIZE:-$TOTAL_GPUS}
 export DP_SIZE=${DP_SIZE:-1}
+
+FP8_TP_RECOMMENDED=$(
+  SGLANG_MODEL_PATH="$SGLANG_MODEL_PATH" TOTAL_GPUS="$TOTAL_GPUS" python - <<'PY'
+import json
+import os
+
+config_path = os.path.join(os.environ.get("SGLANG_MODEL_PATH", ""), "config.json")
+total_gpus = int(os.environ.get("TOTAL_GPUS", "0") or 0)
+if not config_path or not os.path.isfile(config_path) or not total_gpus:
+    print("")
+    raise SystemExit
+data = json.load(open(config_path))
+quant = data.get("quantization_config") or {}
+if quant.get("quant_method") != "fp8":
+    print("")
+    raise SystemExit
+block = quant.get("weight_block_size") or []
+block_n = block[1] if len(block) > 1 else None
+qkv_candidates = []
+prefixes = []
+for key in data.keys():
+    if key.endswith("num_attention_heads"):
+        prefixes.append(key[: -len("num_attention_heads")])
+for prefix in prefixes:
+    num_heads = data.get(f"{prefix}num_attention_heads")
+    num_kv_heads = data.get(f"{prefix}num_key_value_heads") or data.get(f"{prefix}num_kv_heads") or num_heads
+    hidden = data.get(f"{prefix}hidden_size") or data.get(f"{prefix}n_embd") or data.get(f"{prefix}d_model")
+    head_dim = data.get(f"{prefix}head_dim") or (int(hidden // num_heads) if hidden and num_heads and hidden % num_heads == 0 else None)
+    if num_heads and head_dim:
+        qkv_candidates.append((int(num_heads) + 2 * int(num_kv_heads or num_heads)) * int(head_dim))
+if not qkv_candidates:
+    for key, val in data.items():
+        if key in ("hidden_size", "d_model", "n_embd") or key.endswith("hidden_size"):
+            if isinstance(val, int):
+                qkv_candidates.append(int(val) * 3)
+if not block_n or not qkv_candidates:
+    print("")
+    raise SystemExit
+for d in range(total_gpus, 0, -1):
+    if total_gpus % d != 0:
+        continue
+    if all((qkv_out % (block_n * d) == 0) for qkv_out in qkv_candidates):
+        print(d)
+        raise SystemExit
+print("")
+PY
+)
+
+if [[ -n "$FP8_TP_RECOMMENDED" && "$TP_SIZE_SET" -eq 0 && "$FP8_TP_RECOMMENDED" -ne "$TP_SIZE" ]]; then
+  export TP_SIZE="$FP8_TP_RECOMMENDED"
+  if [[ "$DP_SIZE_SET" -eq 0 ]]; then
+    export DP_SIZE=$((TOTAL_GPUS / TP_SIZE))
+  fi
+  echo "[mn5] adjusted tp/dp for fp8 block size: tp=$TP_SIZE dp=$DP_SIZE"
+fi
 
 # MiMo-V2-Flash specific settings from HuggingFace
 export SGLANG_MAX_RUNNING_REQUESTS=${SGLANG_MAX_RUNNING_REQUESTS:-128}
@@ -194,6 +253,10 @@ SGLANG_ARGS=(
   --download-dir /hf
   --reasoning-parser qwen3
 )
+
+if (( NNODES > 1 && DP_SIZE > 1 )); then
+  [[ "${SGLANG_ENABLE_DP_ATTENTION:-1}" -eq 1 ]] && SGLANG_ARGS+=( --enable-dp-attention )
+fi
 
 # Multi-node distributed setup
 if (( NNODES > 1 )); then
