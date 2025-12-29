@@ -72,7 +72,8 @@ export SGLANG_PORT=${SGLANG_PORT:-30000}
 # Otherwise assume it's already a local path
 if [[ "$SGLANG_MODEL" == */* && ! -d "$SGLANG_MODEL" ]]; then
   # Convert HF ID to cache directory format: org/model -> models--org--model
-  HF_CACHE_NAME="models--$(echo "$SGLANG_MODEL" | tr '/' '--')"
+  # Note: tr cannot replace single char with multiple chars, use sed instead
+  HF_CACHE_NAME="models--$(echo "$SGLANG_MODEL" | sed 's|/|--|g')"
 
   # Check multiple possible locations:
   # 1. Direct download: $HF_HOME/models--org--model/
