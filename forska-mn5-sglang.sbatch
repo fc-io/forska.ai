@@ -173,9 +173,10 @@ APPTAINER_CMD="apptainer exec --cleanenv --nv \
 if (( NNODES > 1 )); then
   # Multi-node: use srun to launch on all nodes with correct node-rank
   # Each node gets its rank from SLURM_PROCID
+  # Note: Module environment must be sourced inside srun since it doesn't propagate automatically
   echo "[mn5] Launching with srun across $NNODES nodes..."
   srun --nodes=$NNODES --ntasks=$NNODES --ntasks-per-node=1 \
-    bash -c "export NODE_RANK=\$SLURM_PROCID; $APPTAINER_CMD --node-rank \$NODE_RANK" \
+    bash -c "source /etc/profile.d/modules.sh 2>/dev/null || true; module load apptainer 2>/dev/null || module load singularity 2>/dev/null || true; export NODE_RANK=\$SLURM_PROCID; $APPTAINER_CMD --node-rank \$NODE_RANK" \
     >"$LOG_DIR/sglang.log" 2>&1 &
   SGLANG_PID=$!
 else
