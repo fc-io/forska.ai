@@ -30,31 +30,12 @@ Copy the Slurm batch script from your local machine to MN5 via the **transfer lo
 scp forska-mn5-sglang.sbatch tlog:/gpfs/projects/ehpc482/dev/
 ```
 
-**What this does:**
-- Uploads `forska-mn5-sglang.sbatch` to the MN5 development directory
-- Uses the transfer node (`transfer4.bsc.es`) which is optimized for file transfers
-
-**Expected output:**
-```
-forska-mn5-sglang.sbatch         100% 7041    XX.XKB/s   00:00
-```
-
----
-
 ## Step 2: Submit the Job to Slurm
 
 Connect to the **general login node** (`glog`) and submit the batch job.
 
-### Standard submission (MiMo-V2-Flash, 2 nodes, 8 GPUs):
-
 ```bash
 ssh glog "cd /gpfs/projects/ehpc482/dev && sbatch --export=ALL forska-mn5-sglang.sbatch"
-```
-
-### Submission with a different model:
-
-```bash
-ssh glog "cd /gpfs/projects/ehpc482/dev && sbatch --export=ALL,SGLANG_MODEL=Qwen/Qwen3-30B-A3B-Instruct-2507 forska-mn5-sglang.sbatch"
 ```
 
 **What this does:**
