@@ -626,8 +626,10 @@ A safe transition phase where both paths are active.
   - Judgments query: **0.29s** (fetch judgment details)
   - **Total: 1.67s** (vs ~50s in PostgreSQL = **96% improvement!**)
   - `FINAL` clause removed for performance (no duplicates in current data)
-- [ ] **Update `/api/articlesreviews`**: Replace PostgreSQL with ClickHouse (after validation)
-- [ ] **Update `/api/articlesreviewsfilters`**: Query ClickHouse
+- [x] **Update `/api/articlesreviews`**: Replace PostgreSQL with ClickHouse (after validation) *(2024-12-30)*
+- [x] **Update `/api/articlesreviewsfilters`**: Query ClickHouse *(2024-12-30)*
+  - Enum-based prompts: No database query needed (parsed from type definition)
+  - Database-based prompts: Query ClickHouse for distinct answer values
 - [ ] **Update any other analytics endpoints**: Stats, aggregations, etc.
 - [ ] **Rollback plan**: Keep PostgreSQL query code available (feature flag or environment variable)
 

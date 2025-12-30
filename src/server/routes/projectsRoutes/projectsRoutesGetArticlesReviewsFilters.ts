@@ -1,17 +1,22 @@
-import {and, eq, or, sql} from 'drizzle-orm'
+/**
+ * Articles reviews filters API endpoint - ClickHouse implementation.
+ *
+ * This endpoint returns filter options for the articles reviews page.
+ * Two strategies are used:
+ * 1. Enum-based: Parse the prompt's arktype `type` field (no database query)
+ * 2. Database-based: Query ClickHouse for distinct answer values (open-ended prompts)
+ *
+ * Phase 6 migration: Database queries moved from PostgreSQL to ClickHouse.
+ */
+import {and, eq} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
+import {projectPrompts, prompts} from '../../../db/schema.ts'
 import {
-  articleRouteLink,
-  articles,
-  projectArticles,
-  projectPrompts,
-  projectRouteLink,
-  projects,
-  prompts,
-} from '../../../db/schema.ts'
+  type ClickHouseFilterResult,
+  getDatabaseBasedFiltersFromClickHouse,
+} from '../../../services/clickhouse/articlesReviewsFiltersClickHouse.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
-import {type DatabaseFilterResult, getDatabaseBasedFilters} from './articlesReviewsFiltersDatabase.ts'
 import {type EnumFilterResult, getEnumBasedFilters} from './articlesReviewsFiltersEnum.ts'
 import {analyzePromptTypes} from './articlesReviewsFiltersUtils.ts'
 
@@ -50,59 +55,20 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
       // Analyze each prompt's type to determine filter strategy
       const analyzedPrompts = analyzePromptTypes(projectPromptRows)
 
-      // Get enum-based filter options (from prompt type definitions)
+      // Get enum-based filter options (from prompt type definitions - no DB query needed)
       const enumFilters = getEnumBasedFilters(analyzedPrompts)
 
-      // For prompts with database strategy, we need to query the database
+      // For prompts with database strategy, query ClickHouse for distinct answer values
       const databasePrompts = analyzedPrompts.filter((p) => {
         return p.strategy === 'database'
       })
-      let databaseFilters: DatabaseFilterResult[] = []
+      let databaseFilters: ClickHouseFilterResult[] = []
 
       if (databasePrompts.length > 0) {
-        // Get project bounds and import routes for database queries
-        const [projectBounds] = await db
-          .select({dateFrom: projects.dateFrom, dateTo: projects.dateTo})
-          .from(projects)
-          .where(eq(projects.id, query.projectId))
-          .limit(1)
-
-        const projectImportRoutes = await db
-          .select({importRouteId: projectRouteLink.importRouteId})
-          .from(projectRouteLink)
-          .where(eq(projectRouteLink.projectId, query.projectId))
-
-        const hasImportRoutes = projectImportRoutes.length > 0
-        const routeIdArray = hasImportRoutes
-          ? sql.join(
-              projectImportRoutes.map((r) => {
-                return sql`${r.importRouteId}::uuid`
-              }),
-              sql`,`,
-            )
-          : null
-
-        // Build scope condition
-        const hasMatchingImportRoute = hasImportRoutes
-          ? sql`EXISTS (
-              SELECT 1 FROM ${articleRouteLink} arl
-              WHERE arl."article_id" = ${articles.id}
-                AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
-            )`
-          : undefined
-        const hasProjectArticle = sql`EXISTS (
-          SELECT 1 FROM ${projectArticles} pa
-          WHERE pa."article_id" = ${articles.id}
-            AND pa."project_id" = ${query.projectId}::uuid
-        )`
-        const orResult = hasImportRoutes ? or(hasMatchingImportRoute, hasProjectArticle) : undefined
-        const scopeCondition = orResult ?? hasProjectArticle
-
-        // Query database for open-ended prompt filters
-        databaseFilters = await getDatabaseBasedFilters(db, {
+        // Query ClickHouse for open-ended prompt filter values
+        databaseFilters = await getDatabaseBasedFiltersFromClickHouse({
+          projectId: query.projectId,
           prompts: analyzedPrompts,
-          scopeCondition,
-          projectBounds,
           fromDate,
           toDate,
           searchTitle,
@@ -110,7 +76,7 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
       }
 
       // Combine results, maintaining original prompt order
-      const resultMap = new Map<string, EnumFilterResult | DatabaseFilterResult>()
+      const resultMap = new Map<string, EnumFilterResult | ClickHouseFilterResult>()
       for (const filter of enumFilters) {
         resultMap.set(filter.promptId, filter)
       }
