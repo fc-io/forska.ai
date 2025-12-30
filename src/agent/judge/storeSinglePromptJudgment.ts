@@ -25,18 +25,8 @@ export const storeSinglePromptJudgment = async ({
     const {getDatabase} = await import('../../server/utils/getDatabase.ts')
     const db = getDatabase()
 
-    // Prepare snapshot context (best-effort)
-    const [projectRow] = await db
-      .select({
-        id: projects.id,
-        ownerId: projects.ownerId,
-        useTitle: projects.useTitle,
-        useAbstract: projects.useAbstract,
-        useFulltext: projects.useFulltext,
-      })
-      .from(projects)
-      .where(eq(projects.id, projectId))
-      .limit(1)
+    // Prepare snapshot context (best-effort, only fetching fields we still store)
+    const [projectRow] = await db.select({id: projects.id}).from(projects).where(eq(projects.id, projectId)).limit(1)
 
     const [modelRow] = await db
       .select({modelName: models.modelName, provider: models.provider})
@@ -46,12 +36,7 @@ export const storeSinglePromptJudgment = async ({
 
     const snapshotValues = {
       snapshotProjectId: projectRow?.id ?? null,
-      snapshotProjectOwnerId: projectRow?.ownerId ?? null,
-      snapshotProjectUseTitle: projectRow?.useTitle ?? null,
-      snapshotProjectUseAbstract: projectRow?.useAbstract ?? null,
-      snapshotProjectUseFulltext: projectRow?.useFulltext ?? null,
       snapshotProjectModelName: modelRow?.modelName ?? null,
-      snapshotProjectProvider: modelRow?.provider ?? null,
     } as const
 
     const rawAnswer = judgment.answer
@@ -77,7 +62,6 @@ export const storeSinglePromptJudgment = async ({
             isAnswered: true,
             answeredOriginal,
             answeredOriginalAsArray,
-            answeredTransformed: null,
             confidenceOriginal: 50,
             explanation: answeredExplanation || null,
             quotes: answeredQuotes || null,
@@ -93,18 +77,12 @@ export const storeSinglePromptJudgment = async ({
         isAnswered: true,
         answeredOriginal,
         answeredOriginalAsArray,
-        answeredTransformed: null,
         confidenceOriginal: 50,
         explanation: answeredExplanation || null,
         quotes: answeredQuotes || null,
-        // Snapshots
+        // Snapshots (kept for cross-project display)
         snapshotProjectId: snapshotValues.snapshotProjectId,
-        snapshotProjectOwnerId: snapshotValues.snapshotProjectOwnerId,
-        snapshotProjectUseTitle: snapshotValues.snapshotProjectUseTitle,
-        snapshotProjectUseAbstract: snapshotValues.snapshotProjectUseAbstract,
-        snapshotProjectUseFulltext: snapshotValues.snapshotProjectUseFulltext,
         snapshotProjectModelName: snapshotValues.snapshotProjectModelName,
-        snapshotProjectProvider: snapshotValues.snapshotProjectProvider,
       })
     }
   } catch (error) {

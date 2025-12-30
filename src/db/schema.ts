@@ -558,38 +558,22 @@ export const judgments = pgTable(
       },
       {onDelete: 'set null'},
     ),
-    reviewId: uuid('review_id').references(
-      () => {
-        return reviews.id
-      },
-      {onDelete: 'cascade'},
-    ),
+
     // Whether this LLM judgment has been answered (may have null answer fields in some cases)
     isAnswered: boolean('is_answered').default(false),
     answeredOriginal: text('answered_original'),
     answeredOriginalAsArray: text('answered_original_as_array').array(),
-    answeredTransformed: text('answered_transformed'),
+
     confidenceOriginal: integer('confidence_original').default(50),
     explanation: text('explanation'),
     quotes: jsonb('quotes').default([]),
     // Denormalized article fields (for Parquet/ClickHouse compatibility)
     articleTitle: text('article_title'),
     articleCreatedAt: timestamp('article_created_at', {withTimezone: true}),
-    articleUpdatedAt: timestamp('article_updated_at', {withTimezone: true}),
-    articleCreatedYear: integer('article_created_year'),
-    articleUpdatedYear: integer('article_updated_year'),
     articleImportRoute: text('article_import_route'),
-    articleImportedBy: text('article_imported_by'),
     // Snapshots
     snapshotProjectId: uuid('snapshot_project_id'),
-    snapshotProjectOwnerId: text('snapshot_project_owner_id'),
-    snapshotProjectUseTitle: boolean('snapshot_project_use_title'),
-    snapshotProjectUseAbstract: boolean('snapshot_project_use_abstract'),
-    snapshotProjectUseFulltext: boolean('snapshot_project_use_fulltext'),
     snapshotProjectModelName: text('snapshot_project_model_name'),
-    snapshotProjectProvider: text('snapshot_project_provider'),
-    snapshotArticleOriginalData: jsonb('snapshot_article_original_data'),
-    snapshotArticlePdfHash: text('snapshot_article_pdf_hash'),
   },
   (table) => {
     return [

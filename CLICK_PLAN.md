@@ -134,17 +134,17 @@ For detailed investigation, see `DENORM_API_PLAN.md` Phase 2.7.
 **Decision**: PostgreSQL `judgments` table keeps only fields needed for the detail view. All denormalized and snapshot fields move exclusively to Parquet/ClickHouse.
 
 **Fields to KEEP in PostgreSQL** (for detail view):
-- `id`, `createdAt`, `updatedAt`, `deletedAt`
-- `articleId`, `modelId`, `promptId`, `projectId`, `reviewId`
-- `isAnswered`
-- `answeredOriginal`, `answeredOriginalAsArray`, `answeredTransformed`
-- `confidenceOriginal`, `explanation`, `quotes`
+-   `id`, `createdAt`, `updatedAt`, `deletedAt`
+-   `articleId`, `modelId`, `promptId`, `projectId`, `reviewId`
+-   `isAnswered`
+-   `answeredOriginal`, `answeredOriginalAsArray`, `answeredTransformed`
+-   `confidenceOriginal`, `explanation`, `quotes`
 
 **Fields to REMOVE from PostgreSQL** (analytics only, live in ClickHouse):
-- `articleTitle`, `articleCreatedAt`, `articleUpdatedAt`
-- `articleCreatedYear`, `articleUpdatedYear`
-- `articleImportRoute`, `articleImportedBy`
-- All `snapshot*` fields
+-   `articleTitle`, `articleCreatedAt`, `articleUpdatedAt`
+-   `articleCreatedYear`, `articleUpdatedYear`
+-   `articleImportRoute`, `articleImportedBy`
+-   All `snapshot*` fields
 
 **Estimated savings**: ~800-5500 bytes per row → **~8-55 GB** for 10M judgments.
 
@@ -720,20 +720,20 @@ These are currently queried from PostgreSQL but were **already migrated** in Pha
 
 ### Migration Plan (Updated)
 
-- [ ] **Phase 8a: Safe removals (13 columns)** — No code changes needed:
-  - [ ] `reviewId`
-  - [ ] `answeredTransformed`
-  - [ ] `articleUpdatedAt`
-  - [ ] `articleCreatedYear`
-  - [ ] `articleUpdatedYear`
-  - [ ] `articleImportedBy`
-  - [ ] `snapshotProjectOwnerId`
-  - [ ] `snapshotProjectUseTitle`
-  - [ ] `snapshotProjectUseAbstract`
-  - [ ] `snapshotProjectUseFulltext`
-  - [ ] `snapshotProjectProvider`
-  - [ ] `snapshotArticleOriginalData`
-  - [ ] `snapshotArticlePdfHash`
+- [x] **Phase 8a: Safe removals (13 columns)** — No code changes needed:
+  - [x] `reviewId`
+  - [x] `answeredTransformed`
+  - [x] `articleUpdatedAt`
+  - [x] `articleCreatedYear`
+  - [x] `articleUpdatedYear`
+  - [x] `articleImportedBy`
+  - [x] `snapshotProjectOwnerId`
+  - [x] `snapshotProjectUseTitle`
+  - [x] `snapshotProjectUseAbstract`
+  - [x] `snapshotProjectUseFulltext`
+  - [x] `snapshotProjectProvider`
+  - [x] `snapshotArticleOriginalData`
+  - [x] `snapshotArticlePdfHash`
 
 - [ ] **Phase 8b: Requires code changes (3 columns)**:
   - [ ] `articleTitle` — Migrate search filter to ClickHouse or JOIN with `articles`

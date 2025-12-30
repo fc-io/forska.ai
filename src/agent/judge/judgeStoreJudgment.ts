@@ -1,9 +1,6 @@
-import {createHash} from 'crypto'
 import {and, eq} from 'drizzle-orm'
-import {readFile} from 'fs/promises'
-import path from 'path'
 
-import {articles, judgments, models, projects} from '../../db/schema.ts'
+import {judgments, models, projects} from '../../db/schema.ts'
 import {getShortIdForPrompt, type ShortIdMapping} from './judgeGetPrompt.ts'
 import {judgeStoreJudgmentGetStringAsArrayOfStrings} from './judgeStoreJudgment/judgeStoreJudgmentGetStringAsArrayOfStrings.ts'
 
@@ -17,18 +14,6 @@ const findAnswer = <T>(entries: [string, unknown][], fragment: string): T => {
   }
 
   return match[1] as T
-}
-
-const computeFileSha256IfExists = async (relativePath: string | null): Promise<string | null> => {
-  if (!relativePath) return null
-  try {
-    const absPath = path.join(process.cwd(), relativePath)
-    const buf = await readFile(absPath)
-    const hash = createHash('sha256').update(buf).digest('hex')
-    return hash
-  } catch {
-    return null
-  }
 }
 
 // Helper that stores a validated judgment via RPC to our server and logs the outcome
@@ -68,22 +53,9 @@ export const judgeStoreJudgment = async (
       .from(models)
       .where(eq(models.id, modelId))
       .limit(1)
-    const [articleRow] = await db
-      .select({originalData: articles.originalData, fullTextPDF: articles.fullTextPDF})
-      .from(articles)
-      .where(eq(articles.id, articleId))
-      .limit(1)
-    const pdfHash = await computeFileSha256IfExists(articleRow?.fullTextPDF ?? null)
     const snapshotValues = {
       snapshotProjectId: projectRow?.id ?? null,
-      snapshotProjectOwnerId: projectRow?.ownerId ?? null,
-      snapshotProjectUseTitle: projectRow?.useTitle ?? null,
-      snapshotProjectUseAbstract: projectRow?.useAbstract ?? null,
-      snapshotProjectUseFulltext: projectRow?.useFulltext ?? null,
       snapshotProjectModelName: modelRow?.modelName ?? null,
-      snapshotProjectProvider: modelRow?.provider ?? null,
-      snapshotArticleOriginalData: articleRow?.originalData ?? null,
-      snapshotArticlePdfHash: pdfHash,
     } as const
     // Store judgment for each prompt
     const storePromises = promptIds.map(async (promptId) => {
@@ -118,7 +90,6 @@ export const judgeStoreJudgment = async (
             isAnswered: true,
             answeredOriginal,
             answeredOriginalAsArray,
-            answeredTransformed: null,
             confidenceOriginal: 50,
             explanation: answeredExplanation || null,
             quotes: answeredQuotes || null,
@@ -138,20 +109,12 @@ export const judgeStoreJudgment = async (
           isAnswered: true,
           answeredOriginal,
           answeredOriginalAsArray,
-          answeredTransformed: null,
           confidenceOriginal: 50,
           explanation: answeredExplanation || null,
           quotes: answeredQuotes || null,
-          // Snapshots (captured at insert time)
+          // Snapshots (kept for cross-project display)
           snapshotProjectId: snapshotValues.snapshotProjectId,
-          snapshotProjectOwnerId: snapshotValues.snapshotProjectOwnerId,
-          snapshotProjectUseTitle: snapshotValues.snapshotProjectUseTitle,
-          snapshotProjectUseAbstract: snapshotValues.snapshotProjectUseAbstract,
-          snapshotProjectUseFulltext: snapshotValues.snapshotProjectUseFulltext,
           snapshotProjectModelName: snapshotValues.snapshotProjectModelName,
-          snapshotProjectProvider: snapshotValues.snapshotProjectProvider,
-          snapshotArticleOriginalData: snapshotValues.snapshotArticleOriginalData,
-          snapshotArticlePdfHash: snapshotValues.snapshotArticlePdfHash,
         })
         .returning()
       return inserted
