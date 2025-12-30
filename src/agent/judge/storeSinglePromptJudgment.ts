@@ -1,21 +1,74 @@
+import {randomUUID} from 'crypto'
 import {and, eq} from 'drizzle-orm'
 
-import {judgments, models, projects} from '../../db/schema.ts'
+import {articles, judgments, models, projects} from '../../db/schema.ts'
+import type {DenormalizedJudgmentAnalytics} from '../../services/parquet'
+import {writeJudgmentAnalyticsToParquet} from '../../services/parquet/judgmentsParquetDualWrite.ts'
 import {judgeStoreJudgmentGetStringAsArrayOfStrings} from './judgeStoreJudgment/judgeStoreJudgmentGetStringAsArrayOfStrings.ts'
 import type {SinglePromptJudgmentResult} from './parseSinglePromptJudgment.ts'
+
+const getYearFromDate = (date: Date | null): number | null => {
+  return date ? date.getUTCFullYear() : null
+}
+
+const getQuotesAsJsonString = (quotes: string[] | null): string | null => {
+  return quotes ? JSON.stringify(quotes) : null
+}
+
+const buildDenormalizedJudgmentAnalyticsRecord = ({
+  id,
+  createdAt,
+  article,
+  promptId,
+  modelId,
+  answeredOriginal,
+  answeredOriginalAsArray,
+  explanation,
+  quotes,
+}: {
+  id: string
+  createdAt: Date
+  article: typeof articles.$inferSelect
+  promptId: string
+  modelId: string
+  answeredOriginal: string | null
+  answeredOriginalAsArray: string[] | null
+  explanation: string | null
+  quotes: string[] | null
+}): DenormalizedJudgmentAnalytics => {
+  return {
+    id,
+    createdAt,
+    deletedAt: null,
+    articleId: article.id,
+    articleTitle: article.articleTitle,
+    articleCreatedAt: article.articleCreatedAt,
+    articleUpdatedAt: article.articleUpdatedAt,
+    articleCreatedYear: getYearFromDate(article.articleCreatedAt),
+    articleUpdatedYear: getYearFromDate(article.articleUpdatedAt),
+    articleImportRoute: article.importRoute,
+    articleImportedBy: article.importedBy,
+    promptId,
+    modelId,
+    answeredOriginal,
+    answeredOriginalAsArray,
+    explanation,
+    quotes: getQuotesAsJsonString(quotes),
+  }
+}
 
 /**
  * Stores a judgment for a single prompt.
  * Simplified version of judgeStoreJudgment for single-prompt processing.
  */
 export const storeSinglePromptJudgment = async ({
-  articleId,
+  article,
   promptId,
   modelId,
   projectId,
   judgment,
 }: {
-  articleId: string
+  article: typeof articles.$inferSelect
   promptId: string
   modelId: string
   projectId: string
@@ -50,30 +103,39 @@ export const storeSinglePromptJudgment = async ({
     const existing = await db
       .select({id: judgments.id})
       .from(judgments)
-      .where(and(eq(judgments.articleId, articleId), eq(judgments.modelId, modelId), eq(judgments.promptId, promptId)))
+      .where(and(eq(judgments.articleId, article.id), eq(judgments.modelId, modelId), eq(judgments.promptId, promptId)))
       .limit(1)
 
-    if (existing.length > 0) {
-      const existingId = existing[0]?.id
-      if (existingId) {
-        await db
-          .update(judgments)
-          .set({
-            isAnswered: true,
-            answeredOriginal,
-            answeredOriginalAsArray,
-            confidenceOriginal: 50,
-            explanation: answeredExplanation || null,
-            quotes: answeredQuotes || null,
-            updatedAt: new Date(),
-          })
-          .where(eq(judgments.id, existingId))
-      }
+    const existingId = existing[0]?.id ?? null
+
+    if (existingId) {
+      await db
+        .update(judgments)
+        .set({
+          projectId,
+          isAnswered: true,
+          answeredOriginal,
+          answeredOriginalAsArray,
+          confidenceOriginal: 50,
+          explanation: answeredExplanation || null,
+          quotes: answeredQuotes || null,
+          snapshotProjectId: snapshotValues.snapshotProjectId,
+          snapshotProjectModelName: snapshotValues.snapshotProjectModelName,
+          updatedAt: new Date(),
+        })
+        .where(eq(judgments.id, existingId))
     } else {
+      const id = randomUUID()
+      const createdAt = new Date()
+
       await db.insert(judgments).values({
-        articleId,
+        id,
+        createdAt,
+        updatedAt: createdAt,
+        articleId: article.id,
         modelId,
         promptId,
+        projectId,
         isAnswered: true,
         answeredOriginal,
         answeredOriginalAsArray,
@@ -84,10 +146,24 @@ export const storeSinglePromptJudgment = async ({
         snapshotProjectId: snapshotValues.snapshotProjectId,
         snapshotProjectModelName: snapshotValues.snapshotProjectModelName,
       })
+
+      const denormalizedRecord = buildDenormalizedJudgmentAnalyticsRecord({
+        id,
+        createdAt,
+        article,
+        promptId,
+        modelId,
+        answeredOriginal,
+        answeredOriginalAsArray,
+        explanation: answeredExplanation || null,
+        quotes: answeredQuotes,
+      })
+
+      await writeJudgmentAnalyticsToParquet(denormalizedRecord)
     }
   } catch (error) {
     console.error(
-      `${articleId} | Failed to store judgment for prompt ${promptId}`,
+      `${article.id} | Failed to store judgment for prompt ${promptId}`,
       error instanceof Error ? error.message : 'Unknown error',
     )
     throw error

@@ -2,11 +2,17 @@
  * Parquet Files Routes - Admin API for viewing and managing Parquet files in S3
  */
 
+import {count, isNull, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {auth} from '../../auth'
+import {judgments} from '../../db/schema.ts'
+import {getClickhouseClient, pingClickhouse} from '../../services/clickhouse/clickhouseClient'
+import {getJudgmentsParquetDualWriteConfig} from '../../services/parquet/judgmentsParquetDualWrite.ts'
+import {getDefaultWriterPendingCount} from '../../services/parquet/parquetWriter'
 import {deleteFromS3, getS3Client, getS3Config, listObjects} from '../../services/s3/s3Client'
 import {requireAdminAuth} from '../utils/authGuard'
+import {getDatabase} from '../utils/getDatabase'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
 interface ParquetFileInfo {
@@ -231,5 +237,69 @@ export const parquetRoutes = new Elysia()
       console.error('Failed to get parquet stats:', error)
       set.status = 500
       return {data: null, error: error instanceof Error ? error.message : 'Failed to get parquet stats'}
+    }
+  })
+  .get('/api/parquet/dualwrite/status', async ({request, set}) => {
+    const session = await auth.api.getSession({headers: request.headers})
+    const role = session?.user?.role ?? null
+    if (role !== 'admin') {
+      set.status = 403
+      return {data: null, error: 'Administrator access required'}
+    }
+
+    try {
+      const db = getDatabase()
+      const [postgresStats] = await db
+        .select({count: count(), maxCreatedAt: sql<Date | null>`max(${judgments.createdAt})`})
+        .from(judgments)
+        .where(isNull(judgments.deletedAt))
+
+      const postgresCount = postgresStats?.count ?? 0
+      const postgresMaxCreatedAt = postgresStats?.maxCreatedAt ?? null
+
+      const clickhouseReachable = await pingClickhouse()
+      const clickhouseStats = clickhouseReachable
+        ? await getClickhouseClient()
+            .query({
+              query: `SELECT count() AS count, max(createdAt) AS maxCreatedAt FROM judgments WHERE deletedAt IS NULL`,
+              format: 'JSONEachRow',
+            })
+            .then((result) => {
+              return result.json<{count: number; maxCreatedAt: string | null}>()
+            })
+            .then((rows) => {
+              return rows[0] ?? null
+            })
+        : null
+
+      const clickhouseCount = clickhouseStats?.count ?? null
+      const clickhouseMaxCreatedAt = clickhouseStats?.maxCreatedAt ?? null
+
+      const ingestionLagMs =
+        postgresMaxCreatedAt && clickhouseMaxCreatedAt
+          ? postgresMaxCreatedAt.getTime() - new Date(clickhouseMaxCreatedAt).getTime()
+          : null
+
+      const parquetConfig = getJudgmentsParquetDualWriteConfig()
+      const parquetPendingCount = getDefaultWriterPendingCount()
+
+      return {
+        data: {
+          postgres: {count: postgresCount, maxCreatedAt: postgresMaxCreatedAt},
+          clickhouse: {reachable: clickhouseReachable, count: clickhouseCount, maxCreatedAt: clickhouseMaxCreatedAt},
+          parquet: {
+            dualWriteEnabled: parquetConfig.enabled,
+            s3Configured: parquetConfig.s3Configured,
+            batchSize: parquetConfig.batchSize,
+            flushIntervalMs: parquetConfig.flushIntervalMs,
+            pendingCount: parquetPendingCount,
+          },
+          ingestionLagMs,
+        },
+      }
+    } catch (error) {
+      console.error('Failed to get parquet dual-write status:', error)
+      set.status = 500
+      return {data: null, error: error instanceof Error ? error.message : 'Failed to get status'}
     }
   })

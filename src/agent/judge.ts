@@ -200,7 +200,7 @@ export const judgeSinglePrompt = async ({
       const judgment = parseSinglePromptJudgment(currentResponse.text, prompt.type)
 
       // Store the judgment
-      await storeSinglePromptJudgment({articleId: article.id, promptId: prompt.id, modelId, projectId, judgment})
+      await storeSinglePromptJudgment({article, promptId: prompt.id, modelId, projectId, judgment})
 
       tokenUse.push({
         articleId: article.id,

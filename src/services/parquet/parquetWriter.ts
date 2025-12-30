@@ -301,3 +301,15 @@ export const getDefaultWriter = (config?: Partial<ParquetWriterConfig>): Judgmen
   }
   return _defaultWriter
 }
+
+export const getDefaultWriterPendingCount = (): number => {
+  return _defaultWriter?.pendingCount ?? 0
+}
+
+export const flushDefaultWriterIfPresent = async (): Promise<void> => {
+  if (!_defaultWriter) {
+    return
+  }
+
+  await _defaultWriter.flush()
+}

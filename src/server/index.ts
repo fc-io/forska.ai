@@ -1,6 +1,7 @@
 import {cors} from '@elysiajs/cors'
 import {Elysia} from 'elysia'
 
+import {flushDefaultWriterIfPresent} from '../services/parquet/parquetWriter'
 import {fullTextJobsCron} from './cron/fullTextJobs.ts'
 import {judgmentsJobsCron} from './cron/judgmentsJobs.ts'
 import {aaModelsRoutes} from './routes/AaModelsRoutes'
@@ -63,5 +64,24 @@ const _app = new Elysia()
 console.log(
   `🦊 Elysia is running on :${env.API_SERVER_PORT} (nodes=${env.GPU_NNODES}, gpus/node=${env.GPU_GPUS_PER_NODE}, total_gpus=${env.GPU_TOTAL_GPUS}, shape=${env.GPU_SHAPE}, tp=${env.TP_SIZE}, dp=${env.DP_SIZE}, max_running_requests=${env.SGLANG_MAX_RUNNING_REQUESTS})`,
 )
+
+const flushParquetAndExit = (signal: string) => {
+  console.log(`[Shutdown] ${signal} received; flushing pending Parquet writes...`)
+  return flushDefaultWriterIfPresent()
+    .catch((error) => {
+      console.error('[Shutdown] Failed to flush Parquet writer', error)
+    })
+    .finally(() => {
+      process.exit(0)
+    })
+}
+
+process.on('SIGINT', () => {
+  void flushParquetAndExit('SIGINT')
+})
+
+process.on('SIGTERM', () => {
+  void flushParquetAndExit('SIGTERM')
+})
 
 export type App = typeof _app
