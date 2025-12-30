@@ -4,6 +4,9 @@ import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 import * as schema from '../../../db/schema.ts'
 import {env} from '../../utils/env.ts'
 
+// Track if we've already logged the SGLANG_MODEL message
+let hasLoggedSglangModel = false
+
 /**
  * Get running judgment jobs, filtered to only include projects
  * that use the model currently running on the inference server.
@@ -31,7 +34,10 @@ export const judgmentsJobsGetRunningJobs = (db: PostgresJsDatabase<typeof schema
   const sglangModelLower = sglangModel.toLowerCase()
   const sglangModelBaseName = sglangModel.split('/').pop() ?? sglangModel
 
-  console.log(`[getRunningJobs] Filtering jobs for SGLANG_MODEL: ${sglangModel}`)
+  if (!hasLoggedSglangModel) {
+    console.log(`[getRunningJobs] Filtering jobs for SGLANG_MODEL: ${sglangModel}`)
+    hasLoggedSglangModel = true
+  }
 
   // Filter jobs to only include those whose project uses the matching model
   // Primary match: exact HuggingFace ID
