@@ -16,22 +16,14 @@ const CIRCUIT_BREAKER_THRESHOLD = 5 // Number of consecutive failures to open ci
 const COOLDOWN_MS = 30_000 // 30 seconds before attempting retry
 
 // State tracking (per baseURL to handle multiple inference servers)
-type CircuitState = {
-  consecutiveFailures: number
-  lastFailureTime: Date | null
-  isOpen: boolean
-}
+type CircuitState = {consecutiveFailures: number; lastFailureTime: Date | null; isOpen: boolean}
 
 const circuitStates = new Map<string, CircuitState>()
 
 const getOrCreateState = (baseURL: string): CircuitState => {
   let state = circuitStates.get(baseURL)
   if (!state) {
-    state = {
-      consecutiveFailures: 0,
-      lastFailureTime: null,
-      isOpen: false,
-    }
+    state = {consecutiveFailures: 0, lastFailureTime: null, isOpen: false}
     circuitStates.set(baseURL, state)
   }
   return state
@@ -95,9 +87,7 @@ export const recordConnectionFailure = (baseURL: string): void => {
   state.lastFailureTime = new Date()
 
   if (state.consecutiveFailures >= CIRCUIT_BREAKER_THRESHOLD && !state.isOpen) {
-    console.log(
-      `Circuit breaker threshold reached for ${baseURL} (${state.consecutiveFailures} consecutive failures)`,
-    )
+    console.log(`Circuit breaker threshold reached for ${baseURL} (${state.consecutiveFailures} consecutive failures)`)
   }
 }
 
@@ -106,12 +96,7 @@ export const recordConnectionFailure = (baseURL: string): void => {
  */
 export const getCircuitStatus = (
   baseURL: string,
-): {
-  isOpen: boolean
-  consecutiveFailures: number
-  lastFailureTime: Date | null
-  cooldownRemainingMs: number | null
-} => {
+): {isOpen: boolean; consecutiveFailures: number; lastFailureTime: Date | null; cooldownRemainingMs: number | null} => {
   const state = getOrCreateState(baseURL)
   const cooldownRemainingMs =
     state.lastFailureTime && state.isOpen
@@ -134,18 +119,18 @@ export const isConnectionError = (error: unknown): boolean => {
   if (error instanceof Error) {
     const msg = error.message.toLowerCase()
     return (
-      msg.includes('connect') ||
-      msg.includes('econnrefused') ||
-      msg.includes('econnreset') ||
-      msg.includes('enotfound') ||
-      msg.includes('etimedout') ||
-      msg.includes('timeout') ||
-      msg.includes('socket') ||
-      msg.includes('network') ||
-      msg.includes('fetch failed') ||
-      msg.includes('unable to connect') ||
-      error.name === 'TypeError' || // fetch failures often throw TypeError
-      error.name === 'AbortError' // request was aborted (often due to timeout)
+      msg.includes('connect')
+      || msg.includes('econnrefused')
+      || msg.includes('econnreset')
+      || msg.includes('enotfound')
+      || msg.includes('etimedout')
+      || msg.includes('timeout')
+      || msg.includes('socket')
+      || msg.includes('network')
+      || msg.includes('fetch failed')
+      || msg.includes('unable to connect')
+      || error.name === 'TypeError' // fetch failures often throw TypeError
+      || error.name === 'AbortError' // request was aborted (often due to timeout)
     )
   }
   return false
