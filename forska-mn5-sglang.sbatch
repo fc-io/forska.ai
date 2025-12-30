@@ -126,13 +126,21 @@ if [[ -f "$SGLANG_MODEL_PATH/config.json" && -f "$SGLANG_MODEL_PATH/modeling_mim
   fi
 fi
 
-# Default tp/dp use the full allocation; override as needed
+# Default tp/dp: For multi-node, prefer TP within node (fast NVLink) and DP across nodes
+# This avoids slow inter-node communication on every transformer layer
 TP_SIZE_SET=0
 DP_SIZE_SET=0
 [[ -n "${TP_SIZE+x}" ]] && TP_SIZE_SET=1
 [[ -n "${DP_SIZE+x}" ]] && DP_SIZE_SET=1
-export TP_SIZE=${TP_SIZE:-$TOTAL_GPUS}
-export DP_SIZE=${DP_SIZE:-1}
+if (( NNODES > 1 )); then
+  # Multi-node: TP per node, DP across nodes
+  export TP_SIZE=${TP_SIZE:-$GPUS_PER_NODE}
+  export DP_SIZE=${DP_SIZE:-$NNODES}
+else
+  # Single node: TP across all GPUs
+  export TP_SIZE=${TP_SIZE:-$TOTAL_GPUS}
+  export DP_SIZE=${DP_SIZE:-1}
+fi
 
 FP8_TP_RECOMMENDED=$(
   SGLANG_MODEL_PATH="$SGLANG_MODEL_PATH" TOTAL_GPUS="$TOTAL_GPUS" python - <<'PY'
