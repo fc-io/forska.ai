@@ -66,6 +66,17 @@ type FailedRequestAggregation = {
   userPrompt: string | null
 }
 
+/**
+ * Check if an error message indicates a connection error.
+ * Connection errors are network-level failures that should not be stored
+ * as they are transient and not actionable for debugging LLM responses.
+ */
+const isConnectionError = (error: string | null): boolean => {
+  if (!error) return false
+  const lowerError = error.toLowerCase()
+  return lowerError.includes('connection error')
+}
+
 type TokenUseTotals = {
   totalPromptTokens: number
   totalCompletionTokens: number
@@ -310,6 +321,8 @@ const buildTokenUseTotals = (
 
   const failedRequestsDetails: FailedRequestDetail[] = Array.from(groupedByRequest.values())
     .filter((request) => {
+      // Exclude connection errors - these are transient network failures
+      if (isConnectionError(request.lastError)) return false
       return request.failedAttempts > 0
     })
     .map((request) => {
