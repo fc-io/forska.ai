@@ -62,7 +62,7 @@ const _app = new Elysia()
   .listen(env.API_SERVER_PORT)
 
 console.log(
-  `🦊 Elysia is running on :${env.API_SERVER_PORT} (nodes=${env.GPU_NNODES}, gpus/node=${env.GPU_GPUS_PER_NODE}, total_gpus=${env.GPU_TOTAL_GPUS}, shape=${env.GPU_SHAPE}, tp=${env.TP_SIZE}, dp=${env.DP_SIZE}, max_running_requests=${env.SGLANG_MAX_RUNNING_REQUESTS})`,
+  `🦊 Elysia is running on :${env.API_SERVER_PORT} (nodes=${env.GPU_NNODES}, gpus/node=${env.GPU_GPUS_PER_NODE}, total_gpus=${env.GPU_TOTAL_GPUS}, shape=${env.GPU_SHAPE}, tp=${env.TP_SIZE}, dp=${env.DP_SIZE}, SGLANG_MAX_RUNNING_REQUESTS=${env.SGLANG_MAX_RUNNING_REQUESTS}, BUN_CONFIG_MAX_HTTP_REQUESTS=${process.env.BUN_CONFIG_MAX_HTTP_REQUESTS})`,
 )
 
 const flushParquetAndExit = (signal: string) => {
