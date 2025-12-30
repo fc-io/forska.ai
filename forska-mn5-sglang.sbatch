@@ -296,6 +296,8 @@ SGLANG_ARGS=(
   --cuda-graph-max-bs "$SGLANG_CUDA_GRAPH_MAX_BS"
   --enable-metrics
   --download-dir /hf
+  --moe-runner-backend triton
+  --attention-backend triton
 )
 
 if [[ -n "${SGLANG_REASONING_PARSER:-}" ]]; then
