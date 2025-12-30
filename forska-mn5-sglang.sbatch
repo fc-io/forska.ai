@@ -3,7 +3,7 @@
 #SBATCH -A ehpc482
 #SBATCH --partition=acc
 #SBATCH --qos=acc_debug
-#SBATCH --nodes=2
+#SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4
 #SBATCH --cpus-per-task=20
 #SBATCH --gres=gpu:4
@@ -13,21 +13,13 @@
 #SBATCH --signal=B:USR1@120
 
 # MareNostrum 5 SGLang inference server for GPT-OSS-120B
-# Hardware: 4x H100 64GB per node, NVLink intra-node, InfiniBand inter-node
 # Default config uses 1 node (4 H100s total) with tp=4
 #
 # Standard (1 node, tp=4):
 #   sbatch --export=ALL forska-mn5-sglang.sbatch
 #
-# Multi-node (2 nodes, 4 H100s each -> 8 GPUs):
-#   Recommended: TP=4 (intra-node), PP=2 (inter-node) for optimized throughput/stability.
-#   sbatch -N 2 --export=ALL forska-mn5-sglang.sbatch
-#
-#   Alternative (extreme throughput): TP=8 (cross-node), PP=1
-#   sbatch -N 2 --export=ALL,TP_SIZE=8,PP_SIZE=1 forska-mn5-sglang.sbatch
-#
-# Note: Ensure you are using a compatible image (e.g., lmsysorg/sglang:v0.5.0rc2-cu126)
-# for best GPT-OSS support on Hopper.
+# Override for multi-node:
+#   sbatch -N 2 --export=ALL,TP_SIZE=8,DP_SIZE=1 forska-mn5-sglang.sbatch
 
 set -euo pipefail
 
@@ -130,27 +122,13 @@ if [[ -f "$SGLANG_MODEL_PATH/config.json" && -f "$SGLANG_MODEL_PATH/modeling_mim
   fi
 fi
 
-# Default tp/pp/dp:
-# Option A (Standard 2-node): TP=4 (intra-node), PP=2 (inter-node), DP=1.
-# This keeps tensor parallelism within the NVLink domain.
+# Default tp/dp use the full allocation; override as needed
 TP_SIZE_SET=0
-PP_SIZE_SET=0
 DP_SIZE_SET=0
 [[ -n "${TP_SIZE+x}" ]] && TP_SIZE_SET=1
-[[ -n "${PP_SIZE+x}" ]] && PP_SIZE_SET=1
 [[ -n "${DP_SIZE+x}" ]] && DP_SIZE_SET=1
-
-if (( NNODES > 1 )); then
-  # Multi-node defaults: TP=GPUS_PER_NODE, PP=NNODES (assuming 1 model spans all nodes)
-  export TP_SIZE=${TP_SIZE:-$GPUS_PER_NODE}
-  export PP_SIZE=${PP_SIZE:-$NNODES}
-  export DP_SIZE=${DP_SIZE:-1}
-else
-  # Single node: TP across all GPUs
-  export TP_SIZE=${TP_SIZE:-$TOTAL_GPUS}
-  export PP_SIZE=${PP_SIZE:-1}
-  export DP_SIZE=${DP_SIZE:-1}
-fi
+export TP_SIZE=${TP_SIZE:-$TOTAL_GPUS}
+export DP_SIZE=${DP_SIZE:-1}
 
 FP8_TP_RECOMMENDED=$(
   SGLANG_MODEL_PATH="$SGLANG_MODEL_PATH" TOTAL_GPUS="$TOTAL_GPUS" python - <<'PY'
@@ -207,35 +185,18 @@ if [[ -n "$FP8_TP_RECOMMENDED" && "$TP_SIZE_SET" -eq 0 && "$FP8_TP_RECOMMENDED" 
   echo "[mn5] adjusted tp/dp for fp8 block size: tp=$TP_SIZE dp=$DP_SIZE"
 fi
 
-# Model-specific settings (tuned for H100 w/ GPT-OSS)
-export SGLANG_MAX_RUNNING_REQUESTS=${SGLANG_MAX_RUNNING_REQUESTS:-1024}
-# Memory fraction 0.85 recommended for H100 to avoid OOM
-export SGLANG_MEM_FRACTION=${SGLANG_MEM_FRACTION:-0.85}
-# Lower chunked prefill to 8192 to avoid prefill OOMs
-export SGLANG_CHUNKED_PREFILL_SIZE=${SGLANG_CHUNKED_PREFILL_SIZE:-8192}
+# Model-specific settings
+export SGLANG_MAX_RUNNING_REQUESTS=${SGLANG_MAX_RUNNING_REQUESTS:-128}
+export SGLANG_MEM_FRACTION=${SGLANG_MEM_FRACTION:-0.75}
+export SGLANG_CHUNKED_PREFILL_SIZE=${SGLANG_CHUNKED_PREFILL_SIZE:-16384}
 export SGLANG_CONTEXT_LENGTH=${SGLANG_CONTEXT_LENGTH:-131072}
 export SGLANG_DTYPE=${SGLANG_DTYPE:-bfloat16}
-export SGLANG_CUDA_GRAPH_MAX_BS=${SGLANG_CUDA_GRAPH_MAX_BS:-32}
 # Reasoning parser for models with thinking/channel tokens (gpt-oss, deepseek-r1, qwen3)
 # This separates reasoning traces into 'reasoning_content' field in the API response
 export SGLANG_REASONING_PARSER=${SGLANG_REASONING_PARSER:-gpt-oss}
-export SGLANG_TOOL_CALL_PARSER=${SGLANG_TOOL_CALL_PARSER:-gpt-oss}
-
-# NCCL / Network Tunables for MareNostrum 5 ACC (ConnectX-7 NDR200)
-# 'ib0' is the standard IPoIB interface on MN5
-export NCCL_DEBUG=${NCCL_DEBUG:-WARN}
-export NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-ib0}
-export NCCL_IB_DISABLE=${NCCL_IB_DISABLE:-0}
-export NCCL_IB_HCA=${NCCL_IB_HCA:-mlx5}
-
-# Network diagnostics
-echo "[mn5] Network Interfaces:"
-ip addr | grep -E '^[0-9]+: ' | awk '{print $2}' | tr -d ':' | xargs echo "  "
-echo "[mn5] InfiniBand Devices:"
-command -v ibv_devinfo >/dev/null && ibv_devinfo -l || echo "  (ibv_devinfo not found)"
 
 echo "[mn5] model=$SGLANG_MODEL (path: $SGLANG_MODEL_PATH)"
-echo "[mn5] nodes=$NNODES gpus/node=$GPUS_PER_NODE total_gpus=$TOTAL_GPUS tp=$TP_SIZE pp=$PP_SIZE dp=$DP_SIZE"
+echo "[mn5] nodes=$NNODES gpus/node=$GPUS_PER_NODE total_gpus=$TOTAL_GPUS tp=$TP_SIZE dp=$DP_SIZE"
 
 # GPU detection
 if command -v nvidia-smi &>/dev/null; then
@@ -274,7 +235,7 @@ wait_for_http() {
 # Set environment for multi-node
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
 
-echo "[mn5] launching SGLang with tp=$TP_SIZE pp=$PP_SIZE dp=$DP_SIZE"
+echo "[mn5] launching SGLang with tp=$TP_SIZE dp=$DP_SIZE"
 
 # Build SGLang command with model-specific settings
 # Note: Some flags like --moe-a2a-backend, --attention-backend, --speculative-*
@@ -285,7 +246,6 @@ SGLANG_ARGS=(
   --host 0.0.0.0
   --port "$SGLANG_PORT"
   --tensor-parallel-size "$TP_SIZE"
-  --pipeline-parallel-size "$PP_SIZE"
   --data-parallel-size "$DP_SIZE"
   --trust-remote-code
   --mem-fraction-static "$SGLANG_MEM_FRACTION"
@@ -293,7 +253,6 @@ SGLANG_ARGS=(
   --chunked-prefill-size "$SGLANG_CHUNKED_PREFILL_SIZE"
   --context-length "$SGLANG_CONTEXT_LENGTH"
   --dtype "$SGLANG_DTYPE"
-  --cuda-graph-max-bs "$SGLANG_CUDA_GRAPH_MAX_BS"
   --enable-metrics
   --download-dir /hf
 )
@@ -302,13 +261,8 @@ if [[ -n "${SGLANG_REASONING_PARSER:-}" ]]; then
   SGLANG_ARGS+=( --reasoning-parser "$SGLANG_REASONING_PARSER" )
 fi
 
-if [[ -n "${SGLANG_TOOL_CALL_PARSER:-}" ]]; then
-  SGLANG_ARGS+=( --tool-call-parser "$SGLANG_TOOL_CALL_PARSER" )
-fi
-
 if (( NNODES > 1 && DP_SIZE > 1 )); then
-  # Disable dp-attention by default as it can cause performance regression due to sync overhead
-  [[ "${SGLANG_ENABLE_DP_ATTENTION:-0}" -eq 1 ]] && SGLANG_ARGS+=( --enable-dp-attention )
+  [[ "${SGLANG_ENABLE_DP_ATTENTION:-1}" -eq 1 ]] && SGLANG_ARGS+=( --enable-dp-attention )
 fi
 
 # Multi-node distributed setup
@@ -336,10 +290,7 @@ CONTAINER_CMD="$SINGULARITY_BIN exec --cleanenv --nv \
   --env HF_HUB_OFFLINE=1 \
   --bind $HF_HOME:/hf:rw \
   --env SGLANG_CACHE_DIR=/sg --bind $SGLANG_CACHE_DIR:/sg:rw \
-  --env NCCL_DEBUG="$NCCL_DEBUG" \
-  --env NCCL_SOCKET_IFNAME="$NCCL_SOCKET_IFNAME" \
-  --env NCCL_IB_DISABLE="$NCCL_IB_DISABLE" \
-  --env NCCL_IB_HCA="$NCCL_IB_HCA" \
+  --env NCCL_DEBUG=${NCCL_DEBUG:-WARN} \
   $SIF_SGLANG \
   python -m sglang.launch_server ${SGLANG_ARGS[*]}"
 
@@ -366,7 +317,7 @@ echo "[mn5] SGLang ready!"
 echo "  Host:     $(hostname)"
 echo "  Endpoint: http://$(hostname):$SGLANG_PORT/v1"
 echo "  Model:    $SGLANG_MODEL"
-echo "  Config:   tp=$TP_SIZE pp=$PP_SIZE dp=$DP_SIZE on $TOTAL_GPUS GPUs ($NNODES nodes)"
+echo "  Config:   tp=$TP_SIZE dp=$DP_SIZE on $TOTAL_GPUS GPUs ($NNODES nodes)"
 echo ""
 echo "SSH tunnel from local machine:"
 echo "  ssh -N -L $SGLANG_PORT:$(hostname):$SGLANG_PORT alog"
