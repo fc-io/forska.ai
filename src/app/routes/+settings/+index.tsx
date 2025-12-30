@@ -2,6 +2,7 @@ import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute} from '@tanstack/solid-router'
 import {createEffect, createSignal, Suspense} from 'solid-js'
 
+import {authClient} from '../../lib/auth-client'
 import {fetchSession} from '../../../services/fetchSession'
 import {updateUserProfile} from '../../../services/usersService'
 
@@ -59,6 +60,68 @@ const Settings = () => {
     setIsSavingProfile(false)
   }
 
+  const [currentPassword, setCurrentPassword] = createSignal('')
+  const [newPassword, setNewPassword] = createSignal('')
+  const [confirmNewPassword, setConfirmNewPassword] = createSignal('')
+  const [isChangingPassword, setIsChangingPassword] = createSignal(false)
+  const [passwordError, setPasswordError] = createSignal('')
+  const [passwordSuccess, setPasswordSuccess] = createSignal('')
+
+  const handleChangePassword = async () => {
+    const current = currentPassword()
+    const newPass = newPassword()
+    const confirmPass = confirmNewPassword()
+
+    if (!current || !newPass || !confirmPass) {
+      setPasswordError('All fields are required.')
+      setPasswordSuccess('')
+      return
+    }
+
+    if (newPass !== confirmPass) {
+      setPasswordError('New passwords do not match.')
+      setPasswordSuccess('')
+      return
+    }
+
+    if (newPass.length < 8) {
+      setPasswordError('Password must be at least 8 characters long.')
+      setPasswordSuccess('')
+      return
+    }
+
+    setIsChangingPassword(true)
+    setPasswordError('')
+    setPasswordSuccess('')
+
+    try {
+      const {error} = await authClient.changePassword({
+        currentPassword: current,
+        newPassword: newPass,
+        revokeOtherSessions: true,
+      })
+
+      if (error) {
+        throw error
+      }
+
+      setPasswordSuccess('Password changed successfully.')
+      setCurrentPassword('')
+      setNewPassword('')
+      setConfirmNewPassword('')
+    } catch (error) {
+      setPasswordError(error instanceof Error ? error.message : 'Failed to change password.')
+    } finally {
+      setIsChangingPassword(false)
+    }
+  }
+
+  const isChangePasswordDisabled = () => {
+    return (
+      isChangingPassword() || !currentPassword() || !newPassword() || !confirmNewPassword()
+    )
+  }
+
   const isSaveDisabled = () => {
     const currentName = sessionQuery.data?.user?.name ?? ''
     return isSavingProfile() || !displayName().trim() || displayName().trim() === currentName
@@ -108,6 +171,62 @@ const Settings = () => {
             >
               {isSavingProfile() ? 'Saving...' : 'Save Changes'}
             </button>
+          </div>
+
+          <div class="bg-white border border-gray-200 rounded-lg shadow-sm p-6">
+            <h2 class="text-xl font-semibold text-gray-900 mb-4">Change Password</h2>
+            <div class="space-y-4">
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">Current Password</label>
+                <input
+                  type="password"
+                  value={currentPassword()}
+                  onInput={(event) => {
+                    return setCurrentPassword(event.currentTarget.value)
+                  }}
+                  class="w-full px-3 py-3 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                />
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">New Password</label>
+                <input
+                  type="password"
+                  value={newPassword()}
+                  onInput={(event) => {
+                    return setNewPassword(event.currentTarget.value)
+                  }}
+                  class="w-full px-3 py-3 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                />
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">Confirm New Password</label>
+                <input
+                  type="password"
+                  value={confirmNewPassword()}
+                  onInput={(event) => {
+                    return setConfirmNewPassword(event.currentTarget.value)
+                  }}
+                  class="w-full px-3 py-3 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                />
+              </div>
+
+              {passwordError() && <p class="mt-2 text-sm text-red-600">{passwordError()}</p>}
+              {passwordSuccess() && !passwordError() && (
+                <p class="mt-2 text-sm text-green-600">{passwordSuccess()}</p>
+              )}
+
+              <div class="pt-2">
+                <button
+                  class="px-4 py-3 bg-blue-600 text-white rounded-md shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed"
+                  disabled={isChangePasswordDisabled()}
+                  onClick={() => {
+                    void handleChangePassword()
+                  }}
+                >
+                  {isChangingPassword() ? 'Changing Password...' : 'Change Password'}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
