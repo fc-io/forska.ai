@@ -3,7 +3,7 @@
 #SBATCH -A ehpc482
 #SBATCH --partition=acc
 #SBATCH --qos=acc_debug
-#SBATCH --nodes=2
+#SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4
 #SBATCH --cpus-per-task=20
 #SBATCH --gres=gpu:4
@@ -198,7 +198,7 @@ if [[ -n "$FP8_TP_RECOMMENDED" && "$TP_SIZE_SET" -eq 0 && "$FP8_TP_RECOMMENDED" 
 fi
 
 # Model-specific settings
-export SGLANG_MAX_RUNNING_REQUESTS=${SGLANG_MAX_RUNNING_REQUESTS:-256}
+export SGLANG_MAX_RUNNING_REQUESTS=${SGLANG_MAX_RUNNING_REQUESTS:-1024}
 export SGLANG_MEM_FRACTION=${SGLANG_MEM_FRACTION:-0.75}
 export SGLANG_CHUNKED_PREFILL_SIZE=${SGLANG_CHUNKED_PREFILL_SIZE:-16384}
 export SGLANG_CONTEXT_LENGTH=${SGLANG_CONTEXT_LENGTH:-131072}
@@ -274,7 +274,8 @@ if [[ -n "${SGLANG_REASONING_PARSER:-}" ]]; then
 fi
 
 if (( NNODES > 1 && DP_SIZE > 1 )); then
-  [[ "${SGLANG_ENABLE_DP_ATTENTION:-1}" -eq 1 ]] && SGLANG_ARGS+=( --enable-dp-attention )
+  # Disable dp-attention by default as it can cause performance regression due to sync overhead
+  [[ "${SGLANG_ENABLE_DP_ATTENTION:-0}" -eq 1 ]] && SGLANG_ARGS+=( --enable-dp-attention )
 fi
 
 # Multi-node distributed setup
