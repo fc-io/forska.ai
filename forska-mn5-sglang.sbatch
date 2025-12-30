@@ -191,7 +191,9 @@ export SGLANG_MEM_FRACTION=${SGLANG_MEM_FRACTION:-0.75}
 export SGLANG_CHUNKED_PREFILL_SIZE=${SGLANG_CHUNKED_PREFILL_SIZE:-16384}
 export SGLANG_CONTEXT_LENGTH=${SGLANG_CONTEXT_LENGTH:-131072}
 export SGLANG_DTYPE=${SGLANG_DTYPE:-bfloat16}
-export SGLANG_REASONING_PARSER=${SGLANG_REASONING_PARSER:-}
+# Reasoning parser for models with thinking/channel tokens (gpt-oss, deepseek-r1, qwen3)
+# This separates reasoning traces into 'reasoning_content' field in the API response
+export SGLANG_REASONING_PARSER=${SGLANG_REASONING_PARSER:-gpt-oss}
 
 echo "[mn5] model=$SGLANG_MODEL (path: $SGLANG_MODEL_PATH)"
 echo "[mn5] nodes=$NNODES gpus/node=$GPUS_PER_NODE total_gpus=$TOTAL_GPUS tp=$TP_SIZE dp=$DP_SIZE"

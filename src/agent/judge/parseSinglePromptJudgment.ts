@@ -3,35 +3,6 @@ import {type as arktype} from 'arktype'
 export type SinglePromptJudgmentResult = {answer: string | string[]; explanation: string; quotes: string[] | null}
 
 /**
- * Extracts the final message from responses that use channel tokens.
- * Some reasoning models (like MiMo) output their response in a format like:
- *   <|channel|>analysis<|message|>...reasoning...<|end|><|start|>assistant<|channel|>final<|message|>{...json...}
- *
- * This function extracts just the content from the "final" channel, which contains
- * the actual JSON answer we need to parse.
- *
- * If no channel tokens are found, returns the original response unchanged.
- */
-export const extractFinalMessage = (response: string): string => {
-  // Pattern to match the final channel content
-  // Matches: <|channel|>final<|message|>...content...
-  // The content goes until the end of the string or until another <|end|> or <|start|> token
-  const finalChannelPattern = /<\|channel\|>final<\|message\|>([\s\S]*?)(?:<\|end\|>|<\|start\|>|$)/
-  const match = response.match(finalChannelPattern)
-
-  if (match && match[1]) {
-    const extracted = match[1].trim()
-    if (extracted) {
-      console.log('[extractFinalMessage] Found channel tokens, extracting final message')
-      return extracted
-    }
-  }
-
-  // No channel tokens found, return original response
-  return response
-}
-
-/**
  * Builds an arktype schema for single-prompt LLM responses.
  * The 'answer' field type is determined by the prompt's type definition.
  * If no type is specified, falls back to 'string | string[]' for flexibility.
@@ -148,11 +119,7 @@ export const tryParseJsonWithSanitization = (response: string): ParseAttemptResu
  * @param promptType - The expected type for the answer (e.g., "'yes' | 'no' | 'unsure'")
  */
 export const parseSinglePromptJudgment = (response: string, promptType: string | null): SinglePromptJudgmentResult => {
-  // First, extract the final message from channel tokens if present
-  // This handles reasoning models that output analysis + final answer
-  const cleanedResponse = extractFinalMessage(response)
-
-  const parseResult = tryParseJsonWithSanitization(cleanedResponse)
+  const parseResult = tryParseJsonWithSanitization(response)
 
   if (!parseResult.success) {
     // Throw original error for retry messaging
