@@ -52,6 +52,7 @@ const envShape = arktype({
   GPU_GPUS_PER_NODE: 'number | string.integer.parse',
   GPU_TOTAL_GPUS: 'number | string.integer.parse',
   TP_SIZE: 'number | string.integer.parse',
+  PP_SIZE: 'number | string.integer.parse',
   DP_SIZE: 'number | string.integer.parse',
   GPU_SHAPE: 'string | null | undefined',
   SGLANG_MAX_RUNNING_REQUESTS: 'number | string.integer.parse',
@@ -108,7 +109,7 @@ const loadEnv = (): typeof envShape.infer => {
     ;(merged as Record<string, string>).RUN_SERVER_FULL_TEST_FETCHING = 'false'
   }
   // Ensure numeric GPU/env defaults exist to satisfy shape; use 0 when not provided
-  const numericKeys = ['GPU_NNODES', 'GPU_GPUS_PER_NODE', 'GPU_TOTAL_GPUS', 'TP_SIZE', 'DP_SIZE']
+  const numericKeys = ['GPU_NNODES', 'GPU_GPUS_PER_NODE', 'GPU_TOTAL_GPUS', 'TP_SIZE', 'PP_SIZE', 'DP_SIZE']
   numericKeys.forEach((k) => {
     if (merged[k] == null || (merged as Record<string, string>)[k] === '') {
       ;(merged as Record<string, string>)[k] = '0'
