@@ -596,15 +596,21 @@ Set up ClickHouse tables and verify ingestion using the real backfilled data.
 
 ## Phase 5: Dual-Write & Validation
 
-A safe transition phase where both paths are active.
+A safe transition phase where both paths are active:
+
+- **PostgreSQL**: keep writing to the **slim** `judgments` table for the detail view (write all columns that still exist).
+- **Parquet/S3 → ClickHouse**: write the **full denormalized** `DenormalizedJudgmentAnalytics` record for analytics.
 
 - [ ] **LLM Worker (Dual Write)**: Modify the worker to:
-  - [ ] Write to **both** PostgreSQL (existing path) AND Parquet/S3 (new path)
-  - [ ] The worker fetches article/project/prompt data and packages it into `DenormalizedJudgmentAnalytics`
+  - [ ] Write to **both** PostgreSQL `judgments` (**slim columns only**) AND Parquet/S3 (full denormalized)
+  - [ ] Keep the PostgreSQL write intentionally narrow: only the columns present in the slim schema (no denormalized/snapshot fields)
+  - [ ] The worker fetches article/project/prompt data and packages it into `DenormalizedJudgmentAnalytics` (for Parquet/ClickHouse)
 - [ ] **Monitoring**: Add metrics/alerts to compare:
   - [ ] Row counts in PostgreSQL `judgments` vs ClickHouse `judgments`
   - [ ] Ingestion latency (time from Parquet write to ClickHouse availability)
 - [ ] **Validation Queries**: Ensure analytics queries return consistent results from both systems
+- [ ] **Detail View Validation**: Confirm the detail view API stays correct using the slim PostgreSQL fields
+- [ ] **Operational Monitoring**: Ensure ClickHouse receives all new judgments continuously (no ingestion gaps)
 
 ## Phase 6: Switch Analytics Queries to ClickHouse
 
@@ -651,12 +657,6 @@ A safe transition phase where both paths are active.
     - [x] `insertArticlesIntoProject.ts` — Auto-links prompts from judgments
     - [x] `storeSinglePromptJudgment.ts` — Checks existing before insert
     - [x] `judgeStoreJudgment.ts` — Checks existing before insert
-
-## Phase 7: Disable PostgreSQL Direct Write for New Judgments
-
-- [ ] **Modify LLM Worker**: Write ONLY to Parquet (stop dual-write to PostgreSQL)
-- [ ] **Update Detail View API**: Confirm it still works with existing PostgreSQL data
-- [ ] **Monitor**: Ensure ClickHouse receives all new judgments
 
 ## Phase 8: Shrink PostgreSQL `judgments` Schema (THE GOAL 🎯)
 
