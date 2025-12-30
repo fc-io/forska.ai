@@ -75,171 +75,183 @@ Additional fields to add to existing schema:
   - local bind host (`127.0.0.1` default)
   - allowed local port range (to avoid collisions with the API server and other tools)
 
-### Template-based sbatch generation (eliminate redundancy)
+### sbatch scripts as source of truth (parseable config)
 
-**Problem**: Currently, the same settings (nodes, GPUs, account, etc.) are defined in both:
-1. Config files (`hpc_*.json`) — the intended source of truth
-2. sbatch scripts (`#SBATCH` directives) — hard-coded duplicates
+**Approach**: Keep sbatch scripts as the canonical source of truth. Make them parseable by llm-runner using a standardized `FORSKA_*` env var defaults block.
 
-This leads to drift, errors, and maintenance overhead.
+**Key insight**: The `: "${VAR:=default}"` bash pattern serves dual purpose:
+1. **Functional**: Sets the variable for use later in the script
+2. **Parseable**: llm-runner can extract config by parsing these lines
 
-**Solution**: llm-runner generates sbatch scripts at runtime from config + templates.
+#### sbatch script structure
 
-#### HPC-specific differences to handle
+```bash
+#!/bin/bash
+#SBATCH -J forska-mn5-sglang
+#SBATCH -A ehpc482
+#SBATCH --partition=acc
+#SBATCH --qos=acc_debug
+#SBATCH --nodes=2
+#SBATCH --gres=gpu:4
+#SBATCH --time=02:00:00
+#SBATCH -o %x-%j.log
+#SBATCH --export=ALL
+#SBATCH --signal=B:USR1@120
 
-| Setting | MN5 | Alvis | DIS |
-|---------|-----|-------|-----|
-| Account directive | `-A ehpc482` | `-A NAISS2025-22-715` | `--account=...` |
-| Partition | `--partition=acc` | `-p alvis` | `-p common` |
-| QOS | `--qos=acc_debug` | *(none)* | `--qos=...` |
-| GPU gres format | `--gres=gpu:4` | `--gpus-per-node=A100fat:3` | `--gres=gpu:2` |
-| Container runtime | `singularity` | `apptainer` | `apptainer` |
-| Script type | SGLang-only | Full stack | Full stack |
-| Extra directives | `--ntasks-per-node`, `--cpus-per-task` | — | `--ntasks-per-node`, `--cpus-per-task` |
+# === FORSKA CONFIG ===
+: "${FORSKA_HPC:=mn5}"
+: "${FORSKA_MODEL:=XiaomiMiMo/MiMo-V2-Flash}"
+: "${FORSKA_PORT:=30000}"
+: "${FORSKA_TP_SIZE:=8}"
+: "${FORSKA_DP_SIZE:=1}"
+: "${FORSKA_MAX_RUNNING:=128}"
+: "${FORSKA_MEM_FRACTION:=0.75}"
+: "${FORSKA_CONTAINER:=singularity}"
+: "${FORSKA_SCRIPT_TYPE:=sglang-only}"
+# === END CONFIG ===
 
-#### Config schema additions
+set -euo pipefail
 
-Add to `hpc_*.json`:
+# Variables are now available for use:
+echo "[forska] Launching SGLang: model=$FORSKA_MODEL tp=$FORSKA_TP_SIZE dp=$FORSKA_DP_SIZE"
 
-```jsonc
-{
-  "slurm": {
-    // Directives that become #SBATCH lines
-    "account": "ehpc482",
-    "partition": "acc",
-    "qos": "acc_debug",               // optional
-    "nodes": 2,
-    "gpusPerNode": 4,
-    "gpuType": null,                  // e.g. "A100fat" for Alvis
-    "time": "02:00:00",
-    "ntasksPerNode": 4,               // optional
-    "cpusPerTask": 20,                // optional
-
-    // Controls which template to use
-    "scriptType": "sglang-only",      // or "full-stack"
-    "containerRuntime": "singularity" // or "apptainer"
-  }
-}
+$FORSKA_CONTAINER exec --nv ... \
+  python -m sglang.launch_server \
+    --model-path "$FORSKA_MODEL" \
+    --port "$FORSKA_PORT" \
+    --tensor-parallel-size "$FORSKA_TP_SIZE" \
+    --data-parallel-size "$FORSKA_DP_SIZE" \
+    --max-running-requests "$FORSKA_MAX_RUNNING" \
+    --mem-fraction-static "$FORSKA_MEM_FRACTION"
 ```
 
-#### Template implementation: Typed template literal functions
+#### Overriding at submit time
 
-**Approach**: Use TypeScript template literal functions with a **resolver layer** that pre-computes all values. Templates receive only simple strings—no conditionals or logic in the template itself.
+Values can be overridden without editing the script:
 
-**Principle**: All HPC-specific logic lives in the resolver; templates are clean string interpolations.
-
-#### Architecture
-
-```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│  HPC Config     │────▶│    Resolver     │────▶│    Template     │
-│  (hpc_*.json)   │     │ (computes vals) │     │ (pure strings)  │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
+```bash
+sbatch --export=ALL,FORSKA_MODEL=Qwen/Qwen3-30B-A3B forska-mn5-sglang.sbatch
 ```
 
-#### Resolver: Pre-compute all template values
+#### Parsing in llm-runner
 
-The resolver transforms raw config into ready-to-use strings:
+**Parse FORSKA config block**:
 
 ```typescript
-interface SbatchTemplateVars {
-  // Header lines (each is a complete #SBATCH line or empty string)
-  jobNameLine: string;        // "#SBATCH -J forska-mn5-sglang"
-  accountLine: string;        // "#SBATCH -A ehpc482"
-  partitionLine: string;      // "#SBATCH --partition=acc" or ""
-  qosLine: string;            // "#SBATCH --qos=acc_debug" or ""
-  nodesLine: string;          // "#SBATCH --nodes=2"
-  gpuLine: string;            // "#SBATCH --gres=gpu:4" or "#SBATCH --gpus-per-node=A100fat:3"
-  timeLine: string;           // "#SBATCH --time=02:00:00"
-  ntasksLine: string;         // "#SBATCH --ntasks-per-node=4" or ""
-  cpusLine: string;           // "#SBATCH --cpus-per-task=20" or ""
-
-  // Runtime values
-  containerRuntime: string;   // "singularity" or "apptainer"
-  stackRoot: string;          // "/gpfs/projects/ehpc482/dev"
-  sglangModel: string;        // "XiaomiMiMo/MiMo-V2-Flash"
-  sglangPort: string;         // "30000"
-  tpSize: string;             // "8"
-  dpSize: string;             // "1"
-  // ... etc
+interface ForskaConfig {
+  hpc: string;
+  model: string;
+  port: number;
+  tpSize: number;
+  dpSize: number;
+  maxRunning: number;
+  memFraction: number;
+  container: 'singularity' | 'apptainer';
+  scriptType: 'sglang-only' | 'full-stack';
 }
 
-const resolveSbatchVars = (hpc: HpcConfig): SbatchTemplateVars => ({
-  jobNameLine: `#SBATCH -J forska-${hpc.name}-sglang`,
-  accountLine: hpc.slurm.accountStyle === 'short'
-    ? `#SBATCH -A ${hpc.slurm.account}`
-    : `#SBATCH --account=${hpc.slurm.account}`,
-  partitionLine: hpc.slurm.partition
-    ? `#SBATCH --partition=${hpc.slurm.partition}`
-    : '',
-  qosLine: hpc.slurm.qos
-    ? `#SBATCH --qos=${hpc.slurm.qos}`
-    : '',
-  nodesLine: `#SBATCH --nodes=${hpc.slurm.nodes}`,
-  gpuLine: hpc.slurm.gpuType
-    ? `#SBATCH --gpus-per-node=${hpc.slurm.gpuType}:${hpc.slurm.gpusPerNode}`
-    : `#SBATCH --gres=gpu:${hpc.slurm.gpusPerNode}`,
-  timeLine: `#SBATCH --time=${hpc.slurm.time}`,
-  ntasksLine: hpc.slurm.ntasksPerNode
-    ? `#SBATCH --ntasks-per-node=${hpc.slurm.ntasksPerNode}`
-    : '',
-  cpusLine: hpc.slurm.cpusPerTask
-    ? `#SBATCH --cpus-per-task=${hpc.slurm.cpusPerTask}`
-    : '',
-  containerRuntime: hpc.slurm.containerRuntime,
-  stackRoot: hpc.connection.storageRoot,
-  // ... etc
+const parseForskaConfig = (script: string): ForskaConfig => {
+  const defaults: Record<string, string> = {};
+
+  // Match: : "${FORSKA_XXX:=value}"
+  const regex = /: "\$\{FORSKA_(\w+):=([^}]+)\}"/g;
+  let match;
+  while ((match = regex.exec(script)) !== null) {
+    defaults[match[1]] = match[2];
+  }
+
+  return {
+    hpc: defaults.HPC ?? 'unknown',
+    model: defaults.MODEL ?? '',
+    port: Number(defaults.PORT) || 30000,
+    tpSize: Number(defaults.TP_SIZE) || 1,
+    dpSize: Number(defaults.DP_SIZE) || 1,
+    maxRunning: Number(defaults.MAX_RUNNING) || 128,
+    memFraction: Number(defaults.MEM_FRACTION) || 0.9,
+    container: (defaults.CONTAINER as 'singularity' | 'apptainer') ?? 'apptainer',
+    scriptType: (defaults.SCRIPT_TYPE as 'sglang-only' | 'full-stack') ?? 'sglang-only',
+  };
+};
+```
+
+**Parse Slurm directives** (for resource allocation info):
+
+```typescript
+interface SlurmConfig {
+  jobName?: string;
+  account?: string;
+  partition?: string;
+  qos?: string;
+  nodes: number;
+  gpusPerNode: number;
+  gpuType?: string;
+  time?: string;
+}
+
+const parseSlurmConfig = (script: string): SlurmConfig => {
+  const get = (pattern: RegExp) => script.match(pattern)?.[1];
+
+  // GPU: "--gres=gpu:4" or "--gpus-per-node=A100fat:3"
+  const gresMatch = script.match(/#SBATCH\s+--gres=gpu:(\d+)/);
+  const gpuPerNodeMatch = script.match(/#SBATCH\s+--gpus-per-node=([^:\s]+):(\d+)/);
+
+  return {
+    jobName: get(/#SBATCH\s+(?:-J|--job-name)[=\s]+(\S+)/),
+    account: get(/#SBATCH\s+(?:-A|--account)[=\s]+(\S+)/),
+    partition: get(/#SBATCH\s+(?:-p|--partition)[=\s]+(\S+)/),
+    qos: get(/#SBATCH\s+--qos[=\s]+(\S+)/),
+    nodes: Number(get(/#SBATCH\s+--nodes[=\s]+(\d+)/)) || 1,
+    gpusPerNode: gresMatch ? Number(gresMatch[1]) :
+                 gpuPerNodeMatch ? Number(gpuPerNodeMatch[2]) : 1,
+    gpuType: gpuPerNodeMatch?.[1],
+    time: get(/#SBATCH\s+--time[=\s]+(\S+)/),
+  };
+};
+```
+
+**Combined parser**:
+
+```typescript
+const parseSbatchScript = (script: string) => ({
+  forska: parseForskaConfig(script),
+  slurm: parseSlurmConfig(script),
 });
 ```
 
-#### Template: Pure string interpolation
+#### HPC-specific differences (handled in each sbatch)
 
-Templates are simple functions that just concatenate pre-computed lines:
+| Setting | MN5 | Alvis | DIS |
+|---------|-----|-------|-----|
+| Account | `-A ehpc482` | `-A NAISS2025-22-715` | `--account=...` |
+| Partition | `acc` | `alvis` | `common` |
+| QOS | `acc_debug` | *(none)* | `ehpc-aif-...` |
+| GPU gres | `--gres=gpu:4` | `--gpus-per-node=A100fat:3` | `--gres=gpu:2` |
+| Container | `singularity` | `apptainer` | `apptainer` |
+| Script type | sglang-only | full-stack | full-stack |
 
-```typescript
-const renderSbatchHeader = (v: SbatchTemplateVars): string => [
-  '#!/bin/bash',
-  v.jobNameLine,
-  v.accountLine,
-  v.partitionLine,
-  v.qosLine,
-  v.nodesLine,
-  v.gpuLine,
-  v.timeLine,
-  v.ntasksLine,
-  v.cpusLine,
-  '#SBATCH -o %x-%j.log',
-  '#SBATCH --export=ALL',
-  '#SBATCH --signal=B:USR1@120',
-].filter(Boolean).join('\n');
-```
+#### Standard FORSKA variables
 
-**Key benefit**: The template function has **zero conditionals**—all logic is in the resolver.
-
-#### Generation flow
-
-1. **On `POST /models/:id/start`**:
-   - Load `HpcConfig` for the requested model
-   - Call `resolveSbatchVars(hpcConfig)` to pre-compute all values
-   - Call template functions (header + body) with resolved values
-   - Validate the rendered script (non-empty required lines, valid time format)
-   - Write to temp file on remote host via SSH
-   - Submit: `ssh <host> "sbatch /path/to/rendered.sbatch"`
-
-2. **Validation** (in resolver, before template):
-   - Required fields present in config
-   - Numeric ranges valid (`nodes >= 1`, `gpusPerNode >= 1`)
-   - Time format valid (`HH:MM:SS`)
-   - Container runtime is `singularity` or `apptainer`
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `FORSKA_HPC` | HPC identifier | `mn5`, `alvis`, `dis` |
+| `FORSKA_MODEL` | HuggingFace model ID | `XiaomiMiMo/MiMo-V2-Flash` |
+| `FORSKA_PORT` | SGLang server port | `30000` |
+| `FORSKA_TP_SIZE` | Tensor parallel size | `8` |
+| `FORSKA_DP_SIZE` | Data parallel size | `1` |
+| `FORSKA_MAX_RUNNING` | Max concurrent requests | `128` |
+| `FORSKA_MEM_FRACTION` | GPU memory fraction | `0.75` |
+| `FORSKA_CONTAINER` | Container runtime | `singularity`, `apptainer` |
+| `FORSKA_SCRIPT_TYPE` | Script type | `sglang-only`, `full-stack` |
 
 #### Benefits
 
-- **Type-safe**: Full TypeScript types from config to template
-- **Testable**: Resolver logic can be unit tested independently
-- **Clean templates**: No conditionals, just interpolation
-- **IDE support**: Autocomplete and refactoring work seamlessly
-- **Single source of truth**: Config drives everything
-- **Auditable**: Can log the resolved vars and rendered script
+- **Single source of truth**: sbatch script is the canonical config
+- **Functional + parseable**: Config vars work as bash AND can be extracted
+- **Overridable**: `--export` allows runtime overrides without editing
+- **Self-documenting**: Anyone reading the script sees the config block
+- **Consistent**: `FORSKA_` prefix makes config vars easy to grep
+- **Testable**: Scripts can be tested directly on the cluster
+- **No generation step**: No templates, no build step, no drift
 
 ## In-memory Domain Model
 
