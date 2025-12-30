@@ -630,10 +630,10 @@ A safe transition phase where both paths are active.
 - [x] **Update `/api/articlesreviewsfilters`**: Query ClickHouse *(2024-12-30)*
   - Enum-based prompts: No database query needed (parsed from type definition)
   - Database-based prompts: Query ClickHouse for distinct answer values
-- [ ] **Update other analytics endpoints using PostgreSQL `judgments` table**:
+- [x] **Update other analytics endpoints using PostgreSQL `judgments` table**:
   - **Analytics (MIGRATE to ClickHouse)**:
-    - [ ] `/api/articlesreviewsboth` — GROUP BY + HAVING for articles with both LLM and human assessments
-    - [ ] `/api/projects/add_articles_by_filter` — Aggregation queries for `llm`, `both`, and `unassessed` list types
+    - [x] `/api/articlesreviewsboth` — GROUP BY + HAVING for articles with both LLM and human assessments *(2024-12-30)*
+    - [x] `/api/projects/add_articles_by_filter` — Aggregation queries for `llm`, `both`, and `unassessed` list types *(2024-12-30)*
   - **Detail View (KEEP in PostgreSQL — per architecture decision)**:
     - [x] `/api/projectsreview` — Single article judgment lookup (O(1) by ID)
   - **Project Management (KEEP — non-analytics, prompt linking logic)**:
@@ -651,7 +651,6 @@ A safe transition phase where both paths are active.
     - [x] `insertArticlesIntoProject.ts` — Auto-links prompts from judgments
     - [x] `storeSinglePromptJudgment.ts` — Checks existing before insert
     - [x] `judgeStoreJudgment.ts` — Checks existing before insert
-- [ ] **Rollback plan**: Keep PostgreSQL query code available (feature flag or environment variable)
 
 ## Phase 7: Disable PostgreSQL Direct Write for New Judgments
 
@@ -663,11 +662,90 @@ A safe transition phase where both paths are active.
 
 **This is the payoff**: Remove denormalized columns from PostgreSQL to reclaim storage.
 
-- [ ] **Create migration**: Drop columns from PostgreSQL `judgments` table
-  - [ ] Remove: `articleTitle`, `articleCreatedAt`, `articleUpdatedAt`
-  - [ ] Remove: `articleCreatedYear`, `articleUpdatedYear`
-  - [ ] Remove: `articleImportRoute`, `articleImportedBy`
-  - [ ] Remove: All `snapshot*` columns (9 columns)
+### Field Usage Analysis (2024-12-30)
+
+Based on code review of all API routes and services, here's the actual usage of each field:
+
+#### ✅ KEEP (Actively Used in PostgreSQL Queries)
+
+| Field | Used In | Notes |
+|-------|---------|-------|
+| `id`, `createdAt`, `updatedAt` | Everywhere | Core identifiers |
+| `deletedAt` | `ProjectExportRoutes.ts` | `isNull(judgments.deletedAt)` filter |
+| `articleId`, `modelId`, `promptId` | All routes | Foreign keys, JOIN conditions |
+| `isAnswered` | `PromptsRoutes.ts` | Invalid judgments validation |
+| `answeredOriginal` | Multiple routes | Answer data for export/validation |
+| `answeredOriginalAsArray` | Multiple routes | Multi-value answers |
+| `explanation` | `ProjectExportRoutes.ts` | CSV export with explanations |
+| `quotes` | `ProjectExportRoutes.ts` | CSV export with quotes |
+
+#### ⚠️ USED BUT MIGRATED TO CLICKHOUSE (Need coordination)
+
+These are currently queried from PostgreSQL but were **already migrated** in Phase 6:
+
+| Field | Used In | Migration Status |
+|-------|---------|------------------|
+| `articleTitle` | `articlesReviewsQueryBuilder.ts` | ⚠️ **Still queried** for search filter |
+| `articleCreatedAt` | `articlesReviewsQueryBuilder.ts` | ⚠️ **Still queried** for date filter |
+| `articleImportRoute` | `articlesReviewsQueryBuilder.ts` | ⚠️ **Still queried** for scope filter |
+
+**⚠️ ACTION REQUIRED**: `articlesReviewsQueryBuilder.ts` is still used for **fallback/human judgments queries**. These fields cannot be removed until human judgment queries are also migrated to ClickHouse or use JOINs with the `articles` table.
+
+#### 🗑️ SAFE TO REMOVE (Only Written, Never Read)
+
+| Field | Why Safe |
+|-------|----------|
+| `reviewId` | Only schema definition, no queries reference it |
+| `answeredTransformed` | Always written as `null`, never read |
+| `articleUpdatedAt` | Only in ClickHouse/Parquet types |
+| `articleCreatedYear` | Only in ClickHouse/Parquet |
+| `articleUpdatedYear` | Only in ClickHouse/Parquet |
+| `articleImportedBy` | Only in ClickHouse/Parquet |
+| `snapshotProjectOwnerId` | Written but never queried |
+| `snapshotProjectUseTitle` | Written but never queried |
+| `snapshotProjectUseAbstract` | Written but never queried |
+| `snapshotProjectUseFulltext` | Written but never queried |
+| `snapshotProjectProvider` | Written but never queried |
+| `snapshotArticleOriginalData` | Written but never queried |
+| `snapshotArticlePdfHash` | Written but never queried |
+
+#### ⚠️ LIMITED USE (Keep for now, review later)
+
+| Field | Used In | Notes |
+|-------|---------|-------|
+| `projectId` | Schema only | Rarely queried, kept for referential integrity |
+| `confidenceOriginal` | Detail view UI | Always stored as `50`, only displayed |
+| `snapshotProjectId` | `projectsRoutesPostArticleReviewDetails.ts` | Cross-project judgment display |
+| `snapshotProjectModelName` | `reviewJudgmentItem.tsx` | UI displays model name for cross-project judgments |
+
+### Migration Plan (Updated)
+
+- [ ] **Phase 8a: Safe removals (13 columns)** — No code changes needed:
+  - [ ] `reviewId`
+  - [ ] `answeredTransformed`
+  - [ ] `articleUpdatedAt`
+  - [ ] `articleCreatedYear`
+  - [ ] `articleUpdatedYear`
+  - [ ] `articleImportedBy`
+  - [ ] `snapshotProjectOwnerId`
+  - [ ] `snapshotProjectUseTitle`
+  - [ ] `snapshotProjectUseAbstract`
+  - [ ] `snapshotProjectUseFulltext`
+  - [ ] `snapshotProjectProvider`
+  - [ ] `snapshotArticleOriginalData`
+  - [ ] `snapshotArticlePdfHash`
+
+- [ ] **Phase 8b: Requires code changes (3 columns)**:
+  - [ ] `articleTitle` — Migrate search filter to ClickHouse or JOIN with `articles`
+  - [ ] `articleCreatedAt` — Migrate date filter to ClickHouse or JOIN with `articles`
+  - [ ] `articleImportRoute` — Migrate scope filter to ClickHouse or JOIN with `article_route_link`
+
+- [ ] **Phase 8c: Consider keeping (4 columns)**:
+  - [ ] `projectId` — Low storage impact, useful for debugging
+  - [ ] `confidenceOriginal` — Displayed in UI (though always `50`)
+  - [ ] `snapshotProjectId` — Used for cross-project display
+  - [ ] `snapshotProjectModelName` — Used for cross-project model name display
+
 - [ ] **Remove unused indexes**: Drop indexes that only served analytics queries
   - [ ] Drop: `judgments_prompt_article_created_idx`
   - [ ] Drop: `judgments_prompt_import_route_idx`
@@ -675,7 +753,10 @@ A safe transition phase where both paths are active.
 - [ ] **Verify detail view**: Confirm GET `/api/judgment/:id` still works
 - [ ] **Verify storage savings**: Check PostgreSQL database size reduction
 
-**Expected savings**: ~8-55 GB for 10M judgments (depending on data).
+**Revised savings estimate**:
+- Phase 8a: ~13 columns × ~400-4000 bytes = **~4-40 GB** for 10M judgments
+- Phase 8b (if completed): Additional ~3 columns = **~1-5 GB**
+- Total: **~5-45 GB** savings
 
 ## Phase 9: Cleanup & Documentation
 
