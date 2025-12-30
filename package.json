@@ -15,7 +15,7 @@
     "lint": "bunx eslint src",
     "lint:fix": "bunx eslint src --fix",
     "dev:app": "bunx --env-file=.env.local --bun vite",
-    "dev:server": "bun --env-file=.env.local run --watch src/server/index.ts",
+    "dev:server": "BUN_CONFIG_MAX_HTTP_REQUESTS=2048 bun --env-file=.env.local run --watch src/server/index.ts",
     "db:gen": "bunx --bun drizzle-kit generate",
     "db:mig": "bunx --bun drizzle-kit migrate",
     "db:push": "bunx --bun drizzle-kit push",
@@ -39,7 +39,7 @@
     "db:r:p": "bun scripts/dbPush.ts --force --no-restore",
     "db:r:pull": "bun scripts/dbRemotePull.ts",
     "db:reset": "bun scripts/dbClear.ts --drop --force",
-    "db:validate-prompts": "bun --env-file=.env.local scripts/dbValidatePromptMigrations.ts",
+
     "validate:dual-write": "bun --env-file=.env.local scripts/validateJudgmentsDualWrite.ts",
     "f:p": "bun scripts/sbatchPut.ts",
     "dis:db:merge-from-remote-dump": "bun scripts/dbMergeRemoteDump.ts",
