@@ -348,7 +348,7 @@ export const queryArticlesReviewsFromClickHouse = async (
       // We'll use LEFT JOIN and add OR condition for temp table match
       // This is handled below in the FROM clause
       // Add condition here for temp table match
-      scopeParts.push(`t.articleId IS NOT NULL`)
+      scopeParts.push(`t.articleId != ''`)
     }
 
     // If no scope parts at all (shouldn't happen due to early return), return empty
@@ -682,7 +682,7 @@ export const countArticlesReviewsFromClickHouse = async (
 
       // If using temp table for curated articles
       if (useCuratedTempTable && tempTableInfo) {
-        scopeParts.push(`t.articleId IS NOT NULL`)
+        scopeParts.push(`t.articleId != ''`)
       }
 
       // Add scope filter to WHERE
