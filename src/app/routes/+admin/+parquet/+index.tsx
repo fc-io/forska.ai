@@ -26,6 +26,8 @@ const AdminParquet = () => {
     return {queryKey: ['session'], queryFn: fetchSession}
   })
 
+  // Removed dual-write status query as it's too slow for UI
+
   const parquetQuery = useQuery(() => {
     return {
       queryKey: ['parquet', 'stats'],
@@ -215,14 +217,37 @@ const AdminParquet = () => {
           <div class="flex justify-between items-center mb-6">
             <h1 class="text-2xl font-bold">Parquet Files</h1>
             <Show when={(stats()?.totalFiles ?? 0) > 0}>
-              <button
-                onClick={() => {
-                  return setDeleteModal({type: 'all'})
-                }}
-                class="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 text-sm"
-              >
-                Delete All
-              </button>
+              <div class="flex gap-2">
+                <button
+                  onClick={() => {
+                    return Promise.all([parquetQuery.refetch()])
+                  }}
+                  class="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 text-sm flex items-center gap-2"
+                >
+                  <svg
+                    class={`h-4 w-4 ${parquetQuery.isFetching ? 'animate-spin' : ''}`}
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                    />
+                  </svg>
+                  Refresh
+                </button>
+                <button
+                  onClick={() => {
+                    return setDeleteModal({type: 'all'})
+                  }}
+                  class="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 text-sm"
+                >
+                  Delete All Files
+                </button>
+              </div>
             </Show>
           </div>
 

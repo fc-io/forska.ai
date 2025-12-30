@@ -24,11 +24,13 @@ const pool = new pg.Pool({connectionString: env.DATABASE_URL, max: 2})
 const db = drizzle(pool, {logger: false})
 
 const getPostgresStats = async (): Promise<{count: number; maxCreatedAt: Date | null}> => {
+  log('Querying PostgreSQL stats...')
   const result = await db.execute<{count: string; max_created_at: Date | null}>(sql`
     SELECT COUNT(*) AS count, MAX(created_at) AS max_created_at
     FROM judgments
     WHERE deleted_at IS NULL
   `)
+  log('PostgreSQL stats received')
   const row = result.rows[0]
   return {
     count: parseInt(row?.count ?? '0', 10),
@@ -37,6 +39,7 @@ const getPostgresStats = async (): Promise<{count: number; maxCreatedAt: Date | 
 }
 
 const getRecentJudgmentIds = async (limit: number): Promise<string[]> => {
+  log(`Fetching ${limit} recent judgment IDs from PostgreSQL...`)
   const result = await db.execute<{id: string}>(sql`
     SELECT id::text AS id
     FROM judgments
@@ -44,6 +47,7 @@ const getRecentJudgmentIds = async (limit: number): Promise<string[]> => {
     ORDER BY created_at DESC
     LIMIT ${limit}
   `)
+  log('Recent IDs received')
   return result.rows
     .map((row) => {
       return row.id
@@ -59,11 +63,13 @@ const getClickhouseStats = async (): Promise<{reachable: boolean; count: number 
     return {reachable: false, count: null, maxCreatedAt: null}
   }
 
+  log('Querying ClickHouse stats...')
   const client = getClickhouseClient()
   const result = await client.query({
-    query: `SELECT count() AS count, max(createdAt) AS maxCreatedAt FROM judgments WHERE deletedAt IS NULL`,
+    query: `SELECT uniqExact(id) AS count, max(createdAt) AS maxCreatedAt FROM judgments WHERE deletedAt IS NULL`,
     format: 'JSONEachRow',
   })
+  log('ClickHouse stats received')
   const [row] = await result.json<{count: number; maxCreatedAt: string | null}>()
   const maxCreatedAt = row?.maxCreatedAt ? new Date(row.maxCreatedAt) : null
   return {reachable: true, count: row?.count ?? 0, maxCreatedAt}
@@ -86,7 +92,7 @@ const getClickhousePresenceCount = async (ids: string[]): Promise<number | null>
 
   const client = getClickhouseClient()
   const result = await client.query({
-    query: `SELECT count() AS count FROM judgments WHERE deletedAt IS NULL AND id IN (${quoted})`,
+    query: `SELECT uniqExact(id) AS count FROM judgments WHERE deletedAt IS NULL AND id IN (${quoted})`,
     format: 'JSONEachRow',
   })
   const [row] = await result.json<{count: number}>()

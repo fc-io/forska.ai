@@ -601,14 +601,14 @@ A safe transition phase where both paths are active:
 - **PostgreSQL**: keep writing to the **slim** `judgments` table for the detail view (write all columns that still exist).
 - **Parquet/S3 → ClickHouse**: write the **full denormalized** `DenormalizedJudgmentAnalytics` record for analytics.
 
-- [ ] **LLM Worker (Dual Write)**: Modify the worker to:
-  - [ ] Write to **both** PostgreSQL `judgments` (**slim columns only**) AND Parquet/S3 (full denormalized)
-  - [ ] Keep the PostgreSQL write intentionally narrow: only the columns present in the slim schema (no denormalized/snapshot fields)
-  - [ ] The worker fetches article/project/prompt data and packages it into `DenormalizedJudgmentAnalytics` (for Parquet/ClickHouse)
-- [ ] **Monitoring**: Add metrics/alerts to compare:
-  - [ ] Row counts in PostgreSQL `judgments` vs ClickHouse `judgments`
-  - [ ] Ingestion latency (time from Parquet write to ClickHouse availability)
-- [ ] **Validation Queries**: Ensure analytics queries return consistent results from both systems
+- [x] **LLM Worker (Dual Write)**: Modify the worker to:
+  - [x] Write to **both** PostgreSQL `judgments` (**slim columns only**) AND Parquet/S3 (full denormalized)
+  - [x] **Immutability Policy**: Judgments are immutable. If a judgment exists, new writes are **skipped**. To re-judge, the existing judgment must be explicitly deleted first.
+- [x] **Monitoring**: Use manual CLI script as Admin UI query is too slow:
+  - [x] Added `bun validate:dual-write` script (`scripts/validateJudgmentsDualWrite.ts`)
+  - [x] Logs row counts in PostgreSQL `judgments` vs ClickHouse `judgments`
+  - [x] Logs ingestion latency (lag)
+- [x] **Validation Queries**: Create `scripts/validateJudgmentsDualWrite.ts` for deep validation
 - [ ] **Detail View Validation**: Confirm the detail view API stays correct using the slim PostgreSQL fields
 - [ ] **Operational Monitoring**: Ensure ClickHouse receives all new judgments continuously (no ingestion gaps)
 

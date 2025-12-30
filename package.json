@@ -40,6 +40,7 @@
     "db:r:pull": "bun scripts/dbRemotePull.ts",
     "db:reset": "bun scripts/dbClear.ts --drop --force",
     "db:validate-prompts": "bun --env-file=.env.local scripts/dbValidatePromptMigrations.ts",
+    "validate:dual-write": "bun --env-file=.env.local scripts/validateJudgmentsDualWrite.ts",
     "f:p": "bun scripts/sbatchPut.ts",
     "dis:db:merge-from-remote-dump": "bun scripts/dbMergeRemoteDump.ts",
     "dis:db:r:p": "SSH_ALIAS=dis STACK_ROOT=/valhalla/projects/ehpc-aif-2025pg01-233/dev bun scripts/dbPush.ts --force --no-restore",

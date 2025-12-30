@@ -109,58 +109,47 @@ export const storeSinglePromptJudgment = async ({
     const existingId = existing[0]?.id ?? null
 
     if (existingId) {
-      await db
-        .update(judgments)
-        .set({
-          projectId,
-          isAnswered: true,
-          answeredOriginal,
-          answeredOriginalAsArray,
-          confidenceOriginal: 50,
-          explanation: answeredExplanation || null,
-          quotes: answeredQuotes || null,
-          snapshotProjectId: snapshotValues.snapshotProjectId,
-          snapshotProjectModelName: snapshotValues.snapshotProjectModelName,
-          updatedAt: new Date(),
-        })
-        .where(eq(judgments.id, existingId))
-    } else {
-      const id = randomUUID()
-      const createdAt = new Date()
-
-      await db.insert(judgments).values({
-        id,
-        createdAt,
-        updatedAt: createdAt,
-        articleId: article.id,
-        modelId,
-        promptId,
-        projectId,
-        isAnswered: true,
-        answeredOriginal,
-        answeredOriginalAsArray,
-        confidenceOriginal: 50,
-        explanation: answeredExplanation || null,
-        quotes: answeredQuotes || null,
-        // Snapshots (kept for cross-project display)
-        snapshotProjectId: snapshotValues.snapshotProjectId,
-        snapshotProjectModelName: snapshotValues.snapshotProjectModelName,
-      })
-
-      const denormalizedRecord = buildDenormalizedJudgmentAnalyticsRecord({
-        id,
-        createdAt,
-        article,
-        promptId,
-        modelId,
-        answeredOriginal,
-        answeredOriginalAsArray,
-        explanation: answeredExplanation || null,
-        quotes: answeredQuotes,
-      })
-
-      await writeJudgmentAnalyticsToParquet(denormalizedRecord)
+      // Immutable judgments: if it already exists, do not update.
+      // To re-judge, the user must delete the existing judgment first.
+      console.error(`${article.id} | Judgment already exists for prompt ${promptId}, skipping.`)
+      return
     }
+
+    const id = randomUUID()
+    const createdAt = new Date()
+
+    await db.insert(judgments).values({
+      id,
+      createdAt,
+      updatedAt: createdAt,
+      articleId: article.id,
+      modelId,
+      promptId,
+      projectId,
+      isAnswered: true,
+      answeredOriginal,
+      answeredOriginalAsArray,
+      confidenceOriginal: 50,
+      explanation: answeredExplanation || null,
+      quotes: answeredQuotes || null,
+      // Snapshots (kept for cross-project display)
+      snapshotProjectId: snapshotValues.snapshotProjectId,
+      snapshotProjectModelName: snapshotValues.snapshotProjectModelName,
+    })
+
+    const denormalizedRecord = buildDenormalizedJudgmentAnalyticsRecord({
+      id,
+      createdAt,
+      article,
+      promptId,
+      modelId,
+      answeredOriginal,
+      answeredOriginalAsArray,
+      explanation: answeredExplanation || null,
+      quotes: answeredQuotes,
+    })
+
+    await writeJudgmentAnalyticsToParquet(denormalizedRecord)
   } catch (error) {
     console.error(
       `${article.id} | Failed to store judgment for prompt ${promptId}`,
