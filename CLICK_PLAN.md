@@ -630,7 +630,27 @@ A safe transition phase where both paths are active.
 - [x] **Update `/api/articlesreviewsfilters`**: Query ClickHouse *(2024-12-30)*
   - Enum-based prompts: No database query needed (parsed from type definition)
   - Database-based prompts: Query ClickHouse for distinct answer values
-- [ ] **Update any other analytics endpoints**: Stats, aggregations, etc.
+- [ ] **Update other analytics endpoints using PostgreSQL `judgments` table**:
+  - **Analytics (MIGRATE to ClickHouse)**:
+    - [ ] `/api/articlesreviewsboth` — GROUP BY + HAVING for articles with both LLM and human assessments
+    - [ ] `/api/projects/add_articles_by_filter` — Aggregation queries for `llm`, `both`, and `unassessed` list types
+  - **Detail View (KEEP in PostgreSQL — per architecture decision)**:
+    - [x] `/api/projectsreview` — Single article judgment lookup (O(1) by ID)
+  - **Project Management (KEEP — non-analytics, prompt linking logic)**:
+    - [x] `/api/projects/:id` — Orphan prompt detection and importable prompt discovery
+  - **Admin Utilities (KEEP — low-volume maintenance operations)**:
+    - [x] `/api/prompts/duplicates` — Counts judgments per prompt
+    - [x] `/api/prompts/orphans` — LEFT JOIN to detect orphan prompts
+    - [x] `/api/prompts/merge` — Write operation (updates promptId)
+    - [x] `/api/prompts/invalid-judgments` — Validates judgment answers
+    - [x] `/api/prompts/delete-invalid-judgments` — Write operation (deletes)
+  - **Background Jobs (KEEP — simple EXISTS checks or write path logic)**:
+    - [x] `fullTextJobs.ts` — Prioritizes articles with judgments (EXISTS)
+    - [x] `judgmentsJobsCronGetPrompts.ts` — Checks existing judgments to avoid re-judging
+  - **Services (KEEP — internal prompt linking and write path)**:
+    - [x] `insertArticlesIntoProject.ts` — Auto-links prompts from judgments
+    - [x] `storeSinglePromptJudgment.ts` — Checks existing before insert
+    - [x] `judgeStoreJudgment.ts` — Checks existing before insert
 - [ ] **Rollback plan**: Keep PostgreSQL query code available (feature flag or environment variable)
 
 ## Phase 7: Disable PostgreSQL Direct Write for New Judgments
