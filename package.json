@@ -26,6 +26,7 @@
     "db:seed-auth": "bun src/seedAuth.ts",
     "db:studio": "bun --env-file=.env.local run drizzle-kit studio",
     "db:backup": "bun scripts/dbBackup.ts",
+    "backup": "bun scripts/fullBackup.ts",
     "db:backup-from-remote": "bun scripts/dbRemoteBackup.ts",
     "db:merge-from-remote-dump": "bun scripts/dbMergeRemoteDump.ts",
     "db:merge-from-remote-dump-safe": "bun scripts/dbMergeRemoteDumpSafe.ts",
