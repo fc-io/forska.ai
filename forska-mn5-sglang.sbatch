@@ -3,7 +3,7 @@
 #SBATCH -A ehpc482
 #SBATCH --partition=acc
 #SBATCH --qos=acc_debug
-#SBATCH --nodes=1
+#SBATCH --nodes=2
 #SBATCH --ntasks-per-node=4
 #SBATCH --cpus-per-task=20
 #SBATCH --gres=gpu:4
@@ -13,13 +13,17 @@
 #SBATCH --signal=B:USR1@120
 
 # MareNostrum 5 SGLang inference server for GPT-OSS-120B
+# Hardware: 4x H100 64GB per node, NVLink intra-node, InfiniBand inter-node
 # Default config uses 1 node (4 H100s total) with tp=4
 #
 # Standard (1 node, tp=4):
 #   sbatch --export=ALL forska-mn5-sglang.sbatch
 #
-# Override for multi-node:
-#   sbatch -N 2 --export=ALL,TP_SIZE=8,DP_SIZE=1 forska-mn5-sglang.sbatch
+# Multi-node (2 nodes, tp=4 per node, dp=2 across nodes):
+#   sbatch -N 2 --export=ALL,TP_SIZE=4,DP_SIZE=2 forska-mn5-sglang.sbatch
+#
+# Note: For multi-node, prefer TP_SIZE=4 (intra-node NVLink) over TP_SIZE=8 (cross-node)
+# to avoid slow inter-node communication on every transformer layer.
 
 set -euo pipefail
 

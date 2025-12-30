@@ -48,6 +48,7 @@
     "dis:oa:p": "SSH_ALIAS=dis STACK_ROOT=/valhalla/projects/ehpc-aif-2025pg01-233/dev SBATCH_FILE=08-openalex-dis-db-rest.sbatch bun scripts/sbatchPut.ts",
     "dis:07:p": "SSH_ALIAS=dis STACK_ROOT=/valhalla/projects/ehpc-aif-2025pg01-233/dev SBATCH_FILE=07-openalex-flatten-works.sbatch bun scripts/sbatchPut.ts",
     "dis:flatten:p": "SSH_ALIAS=dis STACK_ROOT=/valhalla/projects/ehpc-aif-2025pg01-233/dev SBATCH_FILE=flatten-openalex-jsonl.py bun scripts/sbatchPut.ts",
+    "mn5:f:p": "scp forska-mn5-sglang.sbatch tlog:/gpfs/projects/ehpc482/dev/",
     "mn5:transfer": "bun scripts/mn5Transfer.ts",
     "mn5:sbatch:push": "scp forska-mn5-sglang.sbatch tlog:/gpfs/projects/ehpc482/dev/",
     "mn5:submit": "ssh alog 'cd /gpfs/projects/ehpc482/dev && sbatch --export=ALL forska-mn5-sglang.sbatch'",
