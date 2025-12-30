@@ -567,10 +567,6 @@ export const judgments = pgTable(
     confidenceOriginal: integer('confidence_original').default(50),
     explanation: text('explanation'),
     quotes: jsonb('quotes').default([]),
-    // Denormalized article fields (for Parquet/ClickHouse compatibility)
-    articleTitle: text('article_title'),
-    articleCreatedAt: timestamp('article_created_at', {withTimezone: true}),
-    articleImportRoute: text('article_import_route'),
     // Snapshots
     snapshotProjectId: uuid('snapshot_project_id'),
     snapshotProjectModelName: text('snapshot_project_model_name'),
@@ -590,10 +586,7 @@ export const judgments = pgTable(
       index('judgments_project_idx').on(table.projectId),
       // Soft delete queries (for Parquet/ClickHouse compatibility)
       index('judgments_deleted_at_idx').on(table.deletedAt),
-      // Optimized denormalized query pattern: filter by promptId and articleCreatedAt
-      index('judgments_prompt_article_created_idx').on(table.promptId, table.articleCreatedAt),
-      // Optimized import route matching using denormalized articleImportRoute
-      index('judgments_prompt_import_route_idx').on(table.promptId, table.articleImportRoute),
+
     ]
   },
 )

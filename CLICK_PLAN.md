@@ -735,10 +735,10 @@ These are currently queried from PostgreSQL but were **already migrated** in Pha
   - [x] `snapshotArticleOriginalData`
   - [x] `snapshotArticlePdfHash`
 
-- [ ] **Phase 8b: Requires code changes (3 columns)**:
-  - [ ] `articleTitle` — Migrate search filter to ClickHouse or JOIN with `articles`
-  - [ ] `articleCreatedAt` — Migrate date filter to ClickHouse or JOIN with `articles`
-  - [ ] `articleImportRoute` — Migrate scope filter to ClickHouse or JOIN with `article_route_link`
+- [x] **Phase 8b: Requires code changes (3 columns)**:
+  - [x] `articleTitle` — Migrate search filter to ClickHouse or JOIN with `articles`
+  - [x] `articleCreatedAt` — Migrate date filter to ClickHouse or JOIN with `articles`
+  - [x] `articleImportRoute` — Migrate scope filter to ClickHouse or JOIN with `article_route_link`
 
 - [ ] **Phase 8c: Consider keeping (4 columns)**:
   - [ ] `projectId` — Low storage impact, useful for debugging
@@ -746,10 +746,10 @@ These are currently queried from PostgreSQL but were **already migrated** in Pha
   - [ ] `snapshotProjectId` — Used for cross-project display
   - [ ] `snapshotProjectModelName` — Used for cross-project model name display
 
-- [ ] **Remove unused indexes**: Drop indexes that only served analytics queries
-  - [ ] Drop: `judgments_prompt_article_created_idx`
-  - [ ] Drop: `judgments_prompt_import_route_idx`
-- [ ] **Run migration**: Apply schema changes (will be fast since just dropping columns)
+- [x] **Remove unused indexes**: Drop indexes that only served analytics queries
+  - [x] Drop: `judgments_prompt_article_created_idx`
+  - [x] Drop: `judgments_prompt_import_route_idx`
+- [x] **Run migration**: Apply schema changes (will be fast since just dropping columns)
 - [ ] **Verify detail view**: Confirm GET `/api/judgment/:id` still works
 - [ ] **Verify storage savings**: Check PostgreSQL database size reduction
 
