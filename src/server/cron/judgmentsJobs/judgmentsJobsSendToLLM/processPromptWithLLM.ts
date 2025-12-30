@@ -3,6 +3,7 @@ import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import {judgeSinglePrompt} from '../../../../agent/judge.ts'
 import * as schema from '../../../../db/schema.ts'
+import {ConnectionError} from '../connectionHealth.ts'
 import type {PromptToProcess} from './getAndUpdateReadyPrompts.ts'
 
 type PromptDefinition = {
@@ -42,6 +43,28 @@ const markAsJudged = async (
   await db
     .update(schema.judgmentsJobsPrompts)
     .set({status: 'judged', judgedAt: new Date(), updatedAt: new Date()})
+    .where(
+      and(
+        eq(schema.judgmentsJobsPrompts.jobId, jobId),
+        eq(schema.judgmentsJobsPrompts.articleId, articleId),
+        eq(schema.judgmentsJobsPrompts.promptId, promptId),
+      ),
+    )
+}
+
+/**
+ * Reset a prompt back to 'pending' so it can be retried on the next cron cycle.
+ * Used when connection errors occur - the prompt is not permanently failed.
+ */
+const markAsRetry = async (
+  db: PostgresJsDatabase<typeof schema>,
+  jobId: string,
+  articleId: string,
+  promptId: string,
+): Promise<void> => {
+  await db
+    .update(schema.judgmentsJobsPrompts)
+    .set({status: 'pending', updatedAt: new Date()})
     .where(
       and(
         eq(schema.judgmentsJobsPrompts.jobId, jobId),
@@ -96,14 +119,29 @@ export const processPromptWithLLM = async (
 
   try {
     await processSinglePrompt(promptToProcess, article, prompt)
+    // Success - mark as judged
+    await markAsJudged(db, promptToProcess.jobId, promptToProcess.articleId, promptToProcess.promptId)
   } catch (error) {
+    // Check if this is a connection error - if so, don't mark as judged
+    // The prompt will be retried on the next cron cycle when the server is back up
+    if (error instanceof ConnectionError) {
+      console.log('Connection error - marking prompt for retry:', {
+        articleId: promptToProcess.articleId,
+        promptId: promptToProcess.promptId,
+      })
+      await markAsRetry(db, promptToProcess.jobId, promptToProcess.articleId, promptToProcess.promptId)
+      // Re-throw to let the caller know there was a connection issue
+      throw error
+    }
+
+    // For other errors, log and mark as judged to prevent infinite loops
     const errorMessage = error instanceof Error ? error.message : String(error)
     console.error('Failed to process prompt for article:', {
       articleId: promptToProcess.articleId,
       promptId: promptToProcess.promptId,
       error: errorMessage,
     })
+    await markAsJudged(db, promptToProcess.jobId, promptToProcess.articleId, promptToProcess.promptId)
   }
-
-  await markAsJudged(db, promptToProcess.jobId, promptToProcess.articleId, promptToProcess.promptId)
 }
+

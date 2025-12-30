@@ -2,6 +2,12 @@ import OpenAI from 'openai'
 import type {ChatCompletionMessage} from 'openai/resources/chat/completions'
 
 import * as schema from '../db/schema.ts'
+import {
+  ConnectionError,
+  isConnectionError,
+  recordConnectionFailure,
+  recordConnectionSuccess,
+} from '../server/cron/judgmentsJobs/connectionHealth.ts'
 import {judgeGetSinglePrompt} from './judge/judgeGetPrompt.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT} from './judge/judgeSinglePromptSystemPrompt.ts'
 import {judgeStoreTokenUse, type JudgeTokenUsageEntry} from './judge/judgeStoreTokenUse.ts'
@@ -202,6 +208,9 @@ export const judgeSinglePrompt = async ({
       // Store the judgment
       await storeSinglePromptJudgment({article, promptId: prompt.id, modelId, projectId, judgment})
 
+      // Record success with circuit breaker
+      recordConnectionSuccess(baseURL)
+
       tokenUse.push({
         articleId: article.id,
         promptIds,
@@ -224,6 +233,51 @@ export const judgeSinglePrompt = async ({
       break
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+
+      // Check if this is a connection error (server unreachable)
+      // These should not be retried with a modified prompt - they need the server to be back up
+      if (isConnectionError(error)) {
+        recordConnectionFailure(baseURL)
+        abortCount += 1
+        errorCount += 1
+        console.error(`${article.id} | Prompt ${prompt.id} | Aborting: Connection error.`)
+
+        // Store the token use for tracking
+        const duration = performance.now() - startDuration
+        const finishedAt = new Date().toISOString()
+        await judgeStoreTokenUse(
+          [
+            {
+              articleId: article.id,
+              promptIds,
+              modelId,
+              modelName,
+              baseURL,
+              promptTokens: 0,
+              completionTokens: 0,
+              totalTokens: 0,
+              outcome: 'failure',
+              error: 'Connection error',
+              sanitizationAttempted: false,
+              sanitizedError: null,
+              sanitizedResponse: null,
+              lastResponse: null,
+              systemPrompt: SINGLE_PROMPT_SYSTEM_PROMPT,
+              userPrompt,
+            },
+          ],
+          sessionId,
+          {startedAt, finishedAt, duration},
+          judgmentsJobId,
+          {totalRequests: 1},
+        ).catch((err) => {
+          console.error('judgeStoreTokenUse failed; continuing', err instanceof Error ? err.message : err)
+        })
+
+        // Throw ConnectionError to propagate to caller - prompt should NOT be marked as judged
+        throw new ConnectionError(`Failed to connect to inference server: ${errorMessage}`, baseURL)
+      }
+
       // Use actual response if available, otherwise fall back to previous response
       const responseText = currentResponse?.text ?? lastResponse
       const usage = currentResponse?.usage ?? {promptTokens: 0, completionTokens: 0, totalTokens: 0}
