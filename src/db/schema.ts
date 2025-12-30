@@ -869,7 +869,7 @@ export const llmStatus = pgTable(
     engineVersion: text('engine_version'),
     gpuType: text('gpu_type'),
     gpuCount: integer('gpu_count'),
-    pollMs: integer('poll_ms').notNull().default(2000),
+    pollMs: bigint('poll_ms', {mode: 'number'}).notNull().default(2000),
 
     // SGLang-aligned counters
     promptTokensTotal: bigint('prompt_tokens_total', {mode: 'number'}).notNull().default(0),
