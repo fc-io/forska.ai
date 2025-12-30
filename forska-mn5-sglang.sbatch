@@ -3,7 +3,7 @@
 #SBATCH -A ehpc482
 #SBATCH --partition=acc
 #SBATCH --qos=acc_debug
-#SBATCH --nodes=2
+#SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4
 #SBATCH --cpus-per-task=20
 #SBATCH --gres=gpu:4
@@ -12,14 +12,14 @@
 #SBATCH --export=ALL
 #SBATCH --signal=B:USR1@120
 
-# MareNostrum 5 SGLang inference server for MiMo-V2-Flash
-# Default config requires 2 nodes (8 H100s total) with tp=8
+# MareNostrum 5 SGLang inference server for GPT-OSS-120B
+# Default config uses 1 node (4 H100s total) with tp=4
 #
-# Standard (2 nodes, tp=8):
+# Standard (1 node, tp=4):
 #   sbatch --export=ALL forska-mn5-sglang.sbatch
 #
-# Override for smaller models:
-#   sbatch -N 1 --export=ALL,SGLANG_MODEL=Qwen/Qwen3-30B-A3B-Instruct-2507,TP_SIZE=4 forska-mn5-sglang.sbatch
+# Override for multi-node:
+#   sbatch -N 2 --export=ALL,TP_SIZE=8,DP_SIZE=1 forska-mn5-sglang.sbatch
 
 set -euo pipefail
 
@@ -64,8 +64,8 @@ HEAD_IP=$(getent ahostsv4 "$HEAD_NODE" 2>/dev/null | awk '{print $1; exit}')
 [[ -z "$HEAD_IP" ]] && HEAD_IP=$(hostname -I | awk '{print $1}')
 echo "[mn5] HEAD_NODE=$HEAD_NODE HEAD_IP=$HEAD_IP"
 
-# SGLang config - MiMo-V2-Flash recommended settings
-export SGLANG_MODEL=${SGLANG_MODEL:-XiaomiMiMo/MiMo-V2-Flash}
+# SGLang config - default model
+export SGLANG_MODEL=${SGLANG_MODEL:-openai/gpt-oss-120b}
 export SGLANG_PORT=${SGLANG_PORT:-30000}
 
 # Resolve model path: if it looks like a HuggingFace ID (contains /), try to find it in the cache
@@ -122,8 +122,7 @@ if [[ -f "$SGLANG_MODEL_PATH/config.json" && -f "$SGLANG_MODEL_PATH/modeling_mim
   fi
 fi
 
-# MiMo-V2-Flash requires tp=8 (2 nodes x 4 GPUs)
-# For single node, use tp=4
+# Default tp/dp use the full allocation; override as needed
 TP_SIZE_SET=0
 DP_SIZE_SET=0
 [[ -n "${TP_SIZE+x}" ]] && TP_SIZE_SET=1
@@ -186,11 +185,13 @@ if [[ -n "$FP8_TP_RECOMMENDED" && "$TP_SIZE_SET" -eq 0 && "$FP8_TP_RECOMMENDED" 
   echo "[mn5] adjusted tp/dp for fp8 block size: tp=$TP_SIZE dp=$DP_SIZE"
 fi
 
-# MiMo-V2-Flash specific settings from HuggingFace
+# Model-specific settings
 export SGLANG_MAX_RUNNING_REQUESTS=${SGLANG_MAX_RUNNING_REQUESTS:-128}
 export SGLANG_MEM_FRACTION=${SGLANG_MEM_FRACTION:-0.75}
 export SGLANG_CHUNKED_PREFILL_SIZE=${SGLANG_CHUNKED_PREFILL_SIZE:-16384}
 export SGLANG_CONTEXT_LENGTH=${SGLANG_CONTEXT_LENGTH:-131072}
+export SGLANG_DTYPE=${SGLANG_DTYPE:-bfloat16}
+export SGLANG_REASONING_PARSER=${SGLANG_REASONING_PARSER:-}
 
 echo "[mn5] model=$SGLANG_MODEL (path: $SGLANG_MODEL_PATH)"
 echo "[mn5] nodes=$NNODES gpus/node=$GPUS_PER_NODE total_gpus=$TOTAL_GPUS tp=$TP_SIZE dp=$DP_SIZE"
@@ -249,10 +250,14 @@ SGLANG_ARGS=(
   --max-running-requests "$SGLANG_MAX_RUNNING_REQUESTS"
   --chunked-prefill-size "$SGLANG_CHUNKED_PREFILL_SIZE"
   --context-length "$SGLANG_CONTEXT_LENGTH"
+  --dtype "$SGLANG_DTYPE"
   --enable-metrics
   --download-dir /hf
-  --reasoning-parser qwen3
 )
+
+if [[ -n "${SGLANG_REASONING_PARSER:-}" ]]; then
+  SGLANG_ARGS+=( --reasoning-parser "$SGLANG_REASONING_PARSER" )
+fi
 
 if (( NNODES > 1 && DP_SIZE > 1 )); then
   [[ "${SGLANG_ENABLE_DP_ATTENTION:-1}" -eq 1 ]] && SGLANG_ARGS+=( --enable-dp-attention )

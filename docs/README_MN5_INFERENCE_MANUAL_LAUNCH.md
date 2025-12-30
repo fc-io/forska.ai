@@ -40,7 +40,7 @@ ssh glog "cd /gpfs/projects/ehpc482/dev && sbatch --export=ALL forska-mn5-sglang
 
 **What this does:**
 - Submits the job to the ACC queue (`--qos=acc_ehpc`)
-- Requests 2 nodes with 4 GPUs each (8 H100s total for MiMo-V2-Flash)
+- Requests 2 nodes with 4 GPUs each (8 H100s total for GPT-OSS-120B)
 - Job will run for up to 8 hours
 
 **Expected output:**
@@ -102,7 +102,7 @@ RUNNING acc020,acc021
 
 ## Step 4: Wait for SGLang to Be Ready
 
-SGLang needs time to load the model weights. **Large models like MiMo-V2-Flash (313GB) take 15-20 minutes.**
+SGLang needs time to load the model weights. **Large models can take 15-20 minutes.**
 
 ### Option A: Check via API (from ACC login)
 
@@ -120,7 +120,7 @@ NOTREADY
 
 **When ready (you'll see model data):**
 ```json
-{"object":"list","data":[{"id":"XiaomiMiMo/MiMo-V2-Flash",... }]}
+{"object":"list","data":[{"id":"openai/gpt-oss-120b",... }]}
 OK
 ```
 
@@ -195,22 +195,21 @@ curl http://localhost:30000/v1/models | jq .
 curl http://localhost:30000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "XiaomiMiMo/MiMo-V2-Flash",
+    "model": "openai/gpt-oss-120b",
     "messages": [{"role": "user", "content": "What is 2+2?"}],
     "max_tokens": 256
   }' | jq .
 ```
 
-### Chat with thinking mode (MiMo-V2-Flash):
+### Longer response:
 ```bash
 curl http://localhost:30000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "XiaomiMiMo/MiMo-V2-Flash",
+    "model": "openai/gpt-oss-120b",
     "messages": [{"role": "user", "content": "Explain recursion briefly"}],
-    "max_tokens": 4096,
-    "temperature": 0.8,
-    "chat_template_kwargs": {"enable_thinking": true}
+    "max_tokens": 1024,
+    "temperature": 0.7
   }' | jq .
 ```
 
@@ -227,12 +226,12 @@ The server filters jobs to only process projects using the current model. Set th
 **Option A: Add to `.env.local`** (persistent):
 ```bash
 # In your .env.local file
-SGLANG_MODEL=XiaomiMiMo/MiMo-V2-Flash
+SGLANG_MODEL=openai/gpt-oss-120b
 ```
 
 **Option B: Set inline** (temporary):
 ```bash
-SGLANG_MODEL=XiaomiMiMo/MiMo-V2-Flash bun run dev:server
+SGLANG_MODEL=openai/gpt-oss-120b bun run dev:server
 ```
 
 > **Note**: If `SGLANG_MODEL` is not set, the server will **not process any judgment jobs** and will log a warning:
@@ -242,7 +241,7 @@ SGLANG_MODEL=XiaomiMiMo/MiMo-V2-Flash bun run dev:server
 
 ### Verify the model matches
 
-The value of `SGLANG_MODEL` must match what the inference server is using (`--served-model-name`). With the default sbatch configuration, both use `XiaomiMiMo/MiMo-V2-Flash`.
+The value of `SGLANG_MODEL` must match what the inference server is using (`--served-model-name`). With the default sbatch configuration, both use `openai/gpt-oss-120b`.
 
 ---
 

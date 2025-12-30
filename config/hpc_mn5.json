@@ -42,12 +42,12 @@
     "DP_SIZE": 1,
     "GPU_SHAPE": "H100:4",
     "SGLANG_MAX_RUNNING_REQUESTS": 128,
-    "SGLANG_MODEL": "XiaomiMiMo/MiMo-V2-Flash"
+    "SGLANG_MODEL": "openai/gpt-oss-120b"
   },
 
   "sglang": {
-    "model": "XiaomiMiMo/MiMo-V2-Flash",
-    "servedModelName": "XiaomiMiMo/MiMo-V2-Flash",
+    "model": "openai/gpt-oss-120b",
+    "servedModelName": "openai/gpt-oss-120b",
     "port": 30000,
     "tensorParallelSize": 8,
     "dataParallelSize": 1,
@@ -74,7 +74,7 @@
 
   "notes": [
     "MN5 has NO outbound internet access - all models/containers must be pre-transferred",
-    "MiMo-V2-Flash requires 2 nodes (tp=8) for inference",
+    "Large models may require 2 nodes (tp=8) for inference",
     "Large models can take 15-20 minutes to load",
     "SSH tunnel required for local API server to reach SGLang",
     "Using dp=1 (not dp=2): request-level parallelism via max_running_requests=128 is sufficient for batch judging",

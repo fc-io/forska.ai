@@ -7,7 +7,7 @@
 
 Deploy SGLang inference server to MareNostrum 5 at Barcelona Supercomputing Center (BSC). Due to MN5's restriction on outbound network calls, we pre-download models and containers locally, then transfer them via the `tlog` transfer node.
 
-**Current Model**: `XiaomiMiMo/MiMo-V2-Flash` (313GB, requires tp=8 across 2 nodes)
+**Current Model**: `openai/gpt-oss-120b` (large model; multi-node recommended)
 
 ---
 
@@ -45,15 +45,13 @@ bun run mn5:launch
 # List models
 curl http://localhost:30000/v1/models | jq .
 
-# Send a request with thinking mode
+# Send a request
 curl http://localhost:30000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "mimo-v2-flash",
+    "model": "openai/gpt-oss-120b",
     "messages": [{"role": "user", "content": "What is 2+2?"}],
-    "max_tokens": 4096,
-    "temperature": 0.8,
-    "chat_template_kwargs": {"enable_thinking": true}
+    "max_tokens": 256
   }' | jq .
 ```
 
@@ -141,7 +139,7 @@ bun run mn5:transfer -- --skip-container
 | Path | Description | Size |
 |------|-------------|------|
 | `/gpfs/projects/ehpc482/dev/sglang_latest.sif` | Singularity container (amd64) | ~14GB |
-| `/gpfs/projects/ehpc482/dev/hf_cache/models--XiaomiMiMo--MiMo-V2-Flash/` | MiMo-V2-Flash model | ~313GB |
+| `/gpfs/projects/ehpc482/dev/hf_cache/models--openai--gpt-oss-120b/` | GPT-OSS-120B model | large (varies) |
 | `/gpfs/projects/ehpc482/dev/forska-mn5-sglang.sbatch` | Batch job script | ~7KB |
 | `/gpfs/projects/ehpc482/dev/logs/` | Job output logs | varies |
 | `/gpfs/projects/ehpc482/dev/.secrets/hf_token.txt` | HuggingFace token (optional) | <1KB |
@@ -160,20 +158,19 @@ bun run mn5:transfer -- --skip-container
 
 ---
 
-## SGLang Configuration (MiMo-V2-Flash)
+## SGLang Configuration (GPT-OSS-120B)
 
-The sbatch script is configured with MiMo-V2-Flash recommended settings:
+The sbatch script is configured with the GPT-OSS-120B defaults:
 
 | Parameter | Value | Notes |
 |-----------|-------|-------|
-| `--model-path` | `XiaomiMiMo/MiMo-V2-Flash` | From HF cache |
-| `--served-model-name` | `mimo-v2-flash` | API alias |
+| `--model-path` | `openai/gpt-oss-120b` | From HF cache |
+| `--served-model-name` | `openai/gpt-oss-120b` | API name |
 | `--tensor-parallel-size` | 8 | Across 2 nodes |
 | `--context-length` | 131072 | 128K context |
 | `--chunked-prefill-size` | 16384 | Per HF recommendation |
 | `--max-running-requests` | 128 | Concurrency limit |
 | `--mem-fraction-static` | 0.75 | GPU memory allocation |
-| `--reasoning-parser` | `qwen3` | For thinking mode |
 
 ### Multi-Node Distributed Setup
 
@@ -272,4 +269,4 @@ Host alog
 - All models and containers must be pre-downloaded locally and transferred via `tlog`
 - Shared storage at `/gpfs/projects/ehpc482/dev` is accessible from all nodes
 - Each compute node has **4× H100 GPUs** (80GB each)
-- MiMo-V2-Flash requires **2 nodes (tp=8)** for inference
+- Large models may require **2 nodes (tp=8)** for inference

@@ -4,14 +4,14 @@
  */
 
 import {$} from 'bun'
-import {existsSync, mkdirSync, statSync} from 'fs'
+import {existsSync, mkdirSync, statSync, writeFileSync} from 'fs'
 import {basename, join} from 'path'
 
 const MN5_ROOT = '/gpfs/projects/ehpc482/dev'
 const TLOG = 'tlog' // Transfer login (for rsync, any login node)
 const GLOG = 'glog' // General purpose login (has singularity module) - add to ~/.ssh/config
 const MODELS_DIR = './models'
-const DEFAULT_MODEL = 'XiaomiMiMo/MiMo-V2-Flash'
+const DEFAULT_MODEL = 'openai/gpt-oss-120b'
 
 const log = (m: string): void => {
   console.log(`[mn5] ${m}`)
@@ -91,20 +91,113 @@ const main = async () => {
 
   // 5. Transfer and convert container
   if (!skipContainer) {
-    log('Transferring container...')
-    await $`rsync -avzP ${tarball} ${TLOG}:${MN5_ROOT}/`
-    log('Converting to SIF on general login node (this takes a while)...')
-    // Note: Must use glogin (general purpose) - alogin (ACC) doesn't have singularity module
-    // Singularity docker-archive: doesn't support gzipped tar, must decompress first
-    const convertCmd = `
-      cd ${MN5_ROOT} && \\
-      module load singularity/4.1.5 && \\
-      which singularity || which apptainer || (echo "ERROR: Neither singularity nor apptainer found" && exit 1) && \\
-      echo "Building SIF from tar..." && \\
-      singularity build --force sglang_latest.sif docker-archive:sglang_latest.tar && \\
-      rm sglang_latest.tar
-    `
-    await $`ssh ${GLOG} ${convertCmd}`
+    // Check if remote already has the latest tarball by comparing file sizes
+    const localSize = existsSync(tarball) ? statSync(tarball).size : 0
+    const remoteTarPath = `${MN5_ROOT}/sglang_latest.tar`
+
+    let remoteSizeStr = ''
+    try {
+      // Get remote file size (returns empty if file doesn't exist)
+      const result = await $`ssh ${TLOG} stat -c%s ${remoteTarPath} 2>/dev/null || echo "0"`.text()
+      remoteSizeStr = result.trim()
+    } catch {
+      remoteSizeStr = '0'
+    }
+    const remoteSize = parseInt(remoteSizeStr, 10) || 0
+
+    // Skip transfer if sizes match (same file)
+    const sizesMatch = localSize > 0 && localSize === remoteSize
+
+    if (sizesMatch) {
+      log(`Remote already has latest tarball (${(localSize / 1_000_000_000).toFixed(1)}GB) - skipping transfer`)
+    } else {
+      if (remoteSize > 0) {
+        log(
+          `Remote tarball size differs: local=${(localSize / 1_000_000_000).toFixed(2)}GB, remote=${(remoteSize / 1_000_000_000).toFixed(2)}GB`,
+        )
+      }
+      log('Transferring container...')
+      await $`rsync -avzP ${tarball} ${TLOG}:${MN5_ROOT}/`
+    }
+
+    // Convert to SIF using sbatch job (login nodes don't have enough memory for 33GB+ images)
+    log('Submitting sbatch job to convert tar to SIF...')
+    const convertScript = `#!/bin/bash
+#SBATCH --job-name=sglang-sif-build
+#SBATCH --account=ehpc482
+#SBATCH --output=${MN5_ROOT}/logs/sif-build-%j.log
+#SBATCH --error=${MN5_ROOT}/logs/sif-build-%j.log
+#SBATCH --time=00:30:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=20
+#SBATCH --gres=gpu:1
+#SBATCH --partition=acc
+#SBATCH --qos=acc_ehpc
+
+cd ${MN5_ROOT}
+module load singularity/4.1.5
+echo "Building SIF from tar..."
+singularity build --force sglang_latest.sif docker-archive:sglang_latest.tar
+BUILD_EXIT=$?
+if [ $BUILD_EXIT -eq 0 ]; then
+  echo "Build successful, removing tar..."
+  rm sglang_latest.tar
+  echo "Done!"
+else
+  echo "Build failed with exit code $BUILD_EXIT"
+  exit $BUILD_EXIT
+fi
+`
+    // Write script locally and rsync to server
+    const localScriptPath = join(MODELS_DIR, 'sif-build.sbatch')
+    const remoteScriptPath = `${MN5_ROOT}/tmp/sif-build.sbatch`
+    writeFileSync(localScriptPath, convertScript)
+    await $`rsync -avzP ${localScriptPath} ${TLOG}:${remoteScriptPath}`
+
+    const jobOutput = await $`ssh ${GLOG} "cd ${MN5_ROOT} && sbatch ${remoteScriptPath}"`.text()
+    const jobMatch = jobOutput.match(/Submitted batch job (\d+)/)
+    if (!jobMatch) {
+      return fail(`Failed to submit sbatch job: ${jobOutput}`)
+    }
+    const jobId = jobMatch[1]
+    log(`Submitted job ${jobId} - waiting for completion...`)
+
+    // Poll for job completion
+    let completed = false
+    let lastState = ''
+    while (!completed) {
+      await new Promise((r) => {
+        setTimeout(r, 5000)
+      }) // Wait 5 seconds between checks
+      const stateOutput = await $`ssh ${GLOG} "squeue -j ${jobId} -h -o %T 2>/dev/null || echo DONE"`.text()
+      const state = stateOutput.trim()
+
+      if (state !== lastState) {
+        log(`Job ${jobId} state: ${state}`)
+        lastState = state
+      }
+
+      if (state === 'DONE' || state === '' || state === 'COMPLETED') {
+        completed = true
+      } else if (state === 'FAILED' || state === 'CANCELLED' || state === 'TIMEOUT') {
+        const logFile = `${MN5_ROOT}/logs/sif-build-${jobId}.log`
+        log(`Job failed! Check log: ${logFile}`)
+        await $`ssh ${GLOG} "tail -50 ${logFile}"`
+        fail(`SIF build job ${jobId} failed with state: ${state}`)
+      }
+    }
+
+    // Verify the SIF was created
+    const sifExists =
+      (await $`ssh ${TLOG} "test -f ${MN5_ROOT}/sglang_latest.sif && echo yes || echo no"`.text()).trim() === 'yes'
+    if (!sifExists) {
+      const logFile = `${MN5_ROOT}/logs/sif-build-${jobId}.log`
+      log(`SIF file not found after job completion. Check log: ${logFile}`)
+      await $`ssh ${GLOG} "tail -50 ${logFile}"`
+      fail('SIF build may have failed - sglang_latest.sif not found')
+    }
+
+    log('SIF container built successfully!')
   }
 
   log('Done! Next: scp forska-mn5-sglang.sbatch tlog:/gpfs/projects/ehpc482/dev/')

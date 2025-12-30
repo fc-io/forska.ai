@@ -77,7 +77,7 @@ This automated command will:
 1. Deploy the sbatch script to MN5
 2. Submit the job to the queue
 3. Wait for the job to start running
-4. Wait for SGLang to be ready (10-20 min for large models like MiMo-V2-Flash)
+4. Wait for SGLang to be ready (10-20 min for large models)
 5. Automatically establish an SSH tunnel to `localhost:30000`
 
 Once complete, you can immediately start making inference requests!
@@ -99,7 +99,7 @@ This will:
 - Pull the SGLang Docker container (linux/amd64)
 - Transfer both to MN5 via the `tlog` transfer node
 
-> **Note**: This takes ~1 hour depending on your internet connection. The MiMo-V2-Flash model is ~313GB.
+> **Note**: This takes ~1 hour depending on your internet connection.
 
 ### Transfer Options
 
@@ -213,25 +213,22 @@ curl http://localhost:30000/v1/models | jq .
 curl http://localhost:30000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "XiaomiMiMo/MiMo-V2-Flash",
+    "model": "openai/gpt-oss-120b",
     "messages": [{"role": "user", "content": "What is 2+2?"}],
     "max_tokens": 256
   }' | jq .
 ```
 
-### Chat with Thinking Mode (MiMo-V2-Flash)
-
-The MiMo-V2-Flash model supports thinking/reasoning mode:
+### Longer Response
 
 ```bash
 curl http://localhost:30000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "XiaomiMiMo/MiMo-V2-Flash",
+    "model": "openai/gpt-oss-120b",
     "messages": [{"role": "user", "content": "Explain the concept of recursion"}],
-    "max_tokens": 4096,
-    "temperature": 0.8,
-    "chat_template_kwargs": {"enable_thinking": true}
+    "max_tokens": 1024,
+    "temperature": 0.7
   }' | jq .
 ```
 
@@ -241,7 +238,7 @@ curl http://localhost:30000/v1/chat/completions \
 curl http://localhost:30000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "XiaomiMiMo/MiMo-V2-Flash",
+    "model": "openai/gpt-oss-120b",
     "messages": [{"role": "user", "content": "Write a haiku about computing"}],
     "max_tokens": 256,
     "stream": true
@@ -345,7 +342,7 @@ ssh-add ~/.ssh/id_ed25519_bsc
 
 ### Model Not Loading / SGLang Timeout
 
-Large models like MiMo-V2-Flash (313GB) take 15-20 minutes to load. Check the logs:
+Large models can take 15-20 minutes to load. Check the logs:
 
 ```bash
 ssh alog "tail -100 /gpfs/projects/ehpc482/dev/logs/*/sglang.log"
