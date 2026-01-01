@@ -69,17 +69,13 @@ export const judgmentsJobsSendToLLM = async (
     const deficit = Math.max(0, maxNumberOfInflightRequests - promptsInFlight)
     const maxBurst = Math.max(1, Number(env.SGLANG_MAX_RUNNING_REQUESTS || 0))
     const requestsToSend = Math.min(deficit, maxBurst)
-    console.log('requestsToSend', {
-      requestsToSend,
-      maxInflight: maxNumberOfInflightRequests,
-      promptsInFlight,
-      sglangBurst: maxBurst,
-      topology: {
-        totalGpus: env.GPU_TOTAL_GPUS,
-        tp: env.TP_SIZE,
-        pp: env.PP_SIZE,
-      },
-    })
+    // console.log('requestsToSend', {
+    //   requestsToSend,
+    //   maxInflight: maxNumberOfInflightRequests,
+    //   promptsInFlight,
+    //   sglangBurst: maxBurst,
+    //   topology: {totalGpus: env.GPU_TOTAL_GPUS, tp: env.TP_SIZE, pp: env.PP_SIZE},
+    // })
 
     if (requestsToSend > 0 && allJobs.length > 0) {
       const requestsToSendPerJob = Math.max(1, Math.floor(requestsToSend / allJobs.length))

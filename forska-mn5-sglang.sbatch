@@ -211,7 +211,7 @@ if [[ -n "$FP8_TP_RECOMMENDED" && "$FP8_TP_RECOMMENDED" -ne "$TP_SIZE" ]]; then
 fi
 
 # Model-specific settings
-export SGLANG_MAX_RUNNING_REQUESTS=${SGLANG_MAX_RUNNING_REQUESTS:-128}
+export SGLANG_MAX_RUNNING_REQUESTS=${SGLANG_MAX_RUNNING_REQUESTS:-256}
 export SGLANG_MEM_FRACTION=${SGLANG_MEM_FRACTION:-0.75}
 export SGLANG_CHUNKED_PREFILL_SIZE=${SGLANG_CHUNKED_PREFILL_SIZE:-16384}
 export SGLANG_CONTEXT_LENGTH=${SGLANG_CONTEXT_LENGTH:-131072}
@@ -359,6 +359,29 @@ if [[ "${SGLANG_ENABLE_ROUTER}" == "1" ]]; then
   wait_for_http "http://localhost:$SGLANG_PORT/v1/models" 600 "$SGLANG_ROUTER_PID"
 fi
 
+# Build WORKER_URLS for API server metrics collection
+WORKER_URLS_ARRAY=()
+WORKER_URLS_LOCAL_ARRAY=()
+LOCAL_PORT_BASE=$((SGLANG_WORKER_PORT))
+if [[ "${SGLANG_ENABLE_ROUTER:-0}" == "1" ]]; then
+  # Router mode: workers are on SGLANG_WORKER_PORT on each node
+  local_port_idx=0
+  for node_host in "${HOSTS[@]}"; do
+    node_addr=$(resolve_ipv4 "$node_host")
+    WORKER_URLS_ARRAY+=("http://${node_addr}:${SGLANG_WORKER_PORT}")
+    # Each worker gets a unique local port for tunneling
+    local_port=$((LOCAL_PORT_BASE + local_port_idx))
+    WORKER_URLS_LOCAL_ARRAY+=("http://localhost:${local_port}")
+    local_port_idx=$((local_port_idx + 1))
+  done
+else
+  # Single worker mode: worker is on SGLANG_PORT (same as main endpoint)
+  WORKER_URLS_ARRAY+=("http://$(hostname):${SGLANG_PORT}")
+  WORKER_URLS_LOCAL_ARRAY+=("http://localhost:${SGLANG_PORT}")
+fi
+WORKER_URLS_CSV=$(IFS=,; echo "${WORKER_URLS_ARRAY[*]}")
+WORKER_URLS_LOCAL_CSV=$(IFS=,; echo "${WORKER_URLS_LOCAL_ARRAY[*]}")
+
 echo ""
 echo "=============================================="
 echo "[mn5] SGLang ready!"
@@ -368,6 +391,7 @@ echo "  Model:    $SGLANG_MODEL"
 echo "  Config:   ${NNODES} worker(s) × ${GPUS_PER_NODE} GPU(s) (tp=$TP_SIZE dp=$DP_SIZE per worker)"
 if [[ "${SGLANG_ENABLE_ROUTER}" == "1" ]]; then
   echo "  Router:   enabled (policy=$SGLANG_ROUTER_POLICY)"
+  echo "  Workers:  ${WORKER_URLS_ARRAY[*]}"
 else
   echo "  Router:   disabled (workers serve on :$SGLANG_WORKER_PORT)"
 fi
@@ -379,7 +403,7 @@ echo "Test:"
 echo "  curl http://localhost:$SGLANG_PORT/v1/models"
 echo ""
 echo "Example request (with thinking mode):"
-cat << EOF
+cat <<EOF
   curl http://localhost:30000/v1/chat/completions \\
     -H "Content-Type: application/json" \\
     -d '{
@@ -392,6 +416,23 @@ cat << EOF
     }'
 EOF
 echo "=============================================="
+
+# Machine-readable config block for scripts to parse
+echo ""
+echo "[mn5:config:start]"
+echo "SGLANG_HOST=$(hostname)"
+echo "SGLANG_PORT=$SGLANG_PORT"
+echo "SGLANG_WORKER_PORT=$SGLANG_WORKER_PORT"
+echo "SGLANG_MODEL=$SGLANG_MODEL"
+echo "WORKER_URLS=$WORKER_URLS_CSV"
+echo "WORKER_URLS_LOCAL=$WORKER_URLS_LOCAL_CSV"
+echo "NNODES=$NNODES"
+echo "GPUS_PER_NODE=$GPUS_PER_NODE"
+echo "TP_SIZE=$TP_SIZE"
+echo "DP_SIZE=$DP_SIZE"
+echo "SGLANG_ENABLE_ROUTER=${SGLANG_ENABLE_ROUTER:-0}"
+echo "SGLANG_MAX_RUNNING_REQUESTS=$SGLANG_MAX_RUNNING_REQUESTS"
+echo "[mn5:config:end]"
 
 # Keep running
 wait

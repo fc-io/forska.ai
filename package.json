@@ -56,7 +56,8 @@
     "mn5:tunnel": "./scripts/mn5Tunnel.sh",
     "mn5:launch": "bun scripts/mn5Launch.ts",
     "mn5:mount": "mkdir -p ~/mnt/mn5 && sshfs tlog:/gpfs/projects/ehpc482/dev ~/mnt/mn5 -o reconnect,ServerAliveInterval=15,ServerAliveCountMax=3 && echo 'Mounted at ~/mnt/mn5'",
-    "mn5:unmount": "umount ~/mnt/mn5 && echo 'Unmounted'"
+    "mn5:unmount": "umount ~/mnt/mn5 && echo 'Unmounted'",
+    "mn5:dev:server": "bun scripts/mn5DevServer.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^2.0.9",
