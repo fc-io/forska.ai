@@ -18,8 +18,8 @@
 # Standard (1 node, tp=4):
 #   sbatch --export=ALL forska-mn5-sglang.sbatch
 #
-# Multi-node throughput mode (independent worker per node, tp=4 per node, dp=1, router on head):
-#   sbatch -N 2 --export=ALL forska-mn5-sglang.sbatch
+# Override for multi-node:
+#   sbatch -N 2 --export=ALL,TP_SIZE=8,DP_SIZE=1 forska-mn5-sglang.sbatch
 
 set -euo pipefail
 
@@ -64,32 +64,9 @@ HEAD_IP=$(getent ahostsv4 "$HEAD_NODE" 2>/dev/null | awk '{print $1; exit}')
 [[ -z "$HEAD_IP" ]] && HEAD_IP=$(hostname -I | awk '{print $1}')
 echo "[mn5] HEAD_NODE=$HEAD_NODE HEAD_IP=$HEAD_IP"
 
-resolve_ipv4() {
-  local host="$1"
-  local ip=""
-  if command -v getent >/dev/null 2>&1; then
-    ip=$(getent ahostsv4 "$host" 2>/dev/null | awk '{print $1; exit}')
-  fi
-  echo "${ip:-$host}"
-}
-
 # SGLang config - default model
 export SGLANG_MODEL=${SGLANG_MODEL:-openai/gpt-oss-120b}
 export SGLANG_PORT=${SGLANG_PORT:-30000}
-
-# Independent per-node workers (tp spans GPUs on the node; dp=1)
-# If router is enabled, it listens on $SGLANG_PORT and workers listen on $SGLANG_WORKER_PORT on each node.
-if (( NNODES > 1 )); then
-  export SGLANG_ENABLE_ROUTER=${SGLANG_ENABLE_ROUTER:-1}
-else
-  export SGLANG_ENABLE_ROUTER=${SGLANG_ENABLE_ROUTER:-0}
-fi
-export SGLANG_ROUTER_POLICY=${SGLANG_ROUTER_POLICY:-cache_aware}
-if [[ "${SGLANG_ENABLE_ROUTER}" == "1" ]]; then
-  export SGLANG_WORKER_PORT=${SGLANG_WORKER_PORT:-$((SGLANG_PORT + 1))}
-else
-  export SGLANG_WORKER_PORT=${SGLANG_WORKER_PORT:-$SGLANG_PORT}
-fi
 
 # Resolve model path: if it looks like a HuggingFace ID (contains /), try to find it in the cache
 # Otherwise assume it's already a local path
@@ -145,22 +122,16 @@ if [[ -f "$SGLANG_MODEL_PATH/config.json" && -f "$SGLANG_MODEL_PATH/modeling_mim
   fi
 fi
 
-# Default tp/dp use the full GPU allocation on each node (one worker per node)
-export TP_SIZE=${TP_SIZE:-$GPUS_PER_NODE}
+# Default tp/dp use the full allocation; override as needed
+TP_SIZE_SET=4
+DP_SIZE_SET=1
+[[ -n "${TP_SIZE+x}" ]] && TP_SIZE_SET=1
+[[ -n "${DP_SIZE+x}" ]] && DP_SIZE_SET=1
+export TP_SIZE=${TP_SIZE:-$TOTAL_GPUS}
 export DP_SIZE=${DP_SIZE:-1}
 
-GPUS_PER_ENGINE=$((TP_SIZE * DP_SIZE))
-if (( GPUS_PER_ENGINE > GPUS_PER_NODE )); then
-  echo "[mn5] ERROR: TP_SIZE*DP_SIZE (${GPUS_PER_ENGINE}) exceeds GPUs per node (${GPUS_PER_NODE})" >&2
-  echo "       This script runs independent workers per node; set TP_SIZE<=${GPUS_PER_NODE} and DP_SIZE=1." >&2
-  exit 2
-fi
-if (( GPUS_PER_ENGINE < GPUS_PER_NODE )); then
-  echo "[mn5] note: ${GPUS_PER_NODE - GPUS_PER_ENGINE} GPU(s) per node will be unused (tp=$TP_SIZE dp=$DP_SIZE)" >&2
-fi
-
 FP8_TP_RECOMMENDED=$(
-  SGLANG_MODEL_PATH="$SGLANG_MODEL_PATH" TOTAL_GPUS="$GPUS_PER_NODE" python - <<'PY'
+  SGLANG_MODEL_PATH="$SGLANG_MODEL_PATH" TOTAL_GPUS="$TOTAL_GPUS" python - <<'PY'
 import json
 import os
 
@@ -206,8 +177,12 @@ print("")
 PY
 )
 
-if [[ -n "$FP8_TP_RECOMMENDED" && "$FP8_TP_RECOMMENDED" -ne "$TP_SIZE" ]]; then
-  echo "[mn5] note: fp8 block-size suggests tp=$FP8_TP_RECOMMENDED (current tp=$TP_SIZE)" >&2
+if [[ -n "$FP8_TP_RECOMMENDED" && "$TP_SIZE_SET" -eq 0 && "$FP8_TP_RECOMMENDED" -ne "$TP_SIZE" ]]; then
+  export TP_SIZE="$FP8_TP_RECOMMENDED"
+  if [[ "$DP_SIZE_SET" -eq 0 ]]; then
+    export DP_SIZE=$((TOTAL_GPUS / TP_SIZE))
+  fi
+  echo "[mn5] adjusted tp/dp for fp8 block size: tp=$TP_SIZE dp=$DP_SIZE"
 fi
 
 # Model-specific settings
@@ -221,7 +196,7 @@ export SGLANG_DTYPE=${SGLANG_DTYPE:-bfloat16}
 export SGLANG_REASONING_PARSER=${SGLANG_REASONING_PARSER:-gpt-oss}
 
 echo "[mn5] model=$SGLANG_MODEL (path: $SGLANG_MODEL_PATH)"
-echo "[mn5] nodes=$NNODES gpus/node=$GPUS_PER_NODE total_gpus=$TOTAL_GPUS tp/node=$TP_SIZE dp=$DP_SIZE router=$SGLANG_ENABLE_ROUTER"
+echo "[mn5] nodes=$NNODES gpus/node=$GPUS_PER_NODE total_gpus=$TOTAL_GPUS tp=$TP_SIZE dp=$DP_SIZE"
 
 # GPU detection
 if command -v nvidia-smi &>/dev/null; then
@@ -231,7 +206,6 @@ fi
 # Cleanup handler
 graceful_shutdown() {
   echo "[mn5] shutting down..."
-  [[ -n "${SGLANG_ROUTER_PID:-}" ]] && kill -TERM "$SGLANG_ROUTER_PID" 2>/dev/null || true
   [[ -n "${SGLANG_PID:-}" ]] && kill -TERM "$SGLANG_PID" 2>/dev/null || true
   jobs -pr | xargs -r kill -TERM 2>/dev/null || true
   sleep 2
@@ -244,7 +218,7 @@ wait_for_http() {
   local url="$1" timeout="${2:-600}" pid="${3:-}"
   echo "[mn5] waiting for $url (timeout: ${timeout}s, large model load may take 10-20 min)..."
   for ((i=1; i<=timeout/2; i++)); do
-    if curl -sf --connect-timeout 2 --max-time 4 "$url" >/dev/null 2>&1; then
+    if curl -sf "$url" >/dev/null 2>&1; then
       echo "[mn5] $url ready after $((i*2))s"
       return 0
     fi
@@ -270,7 +244,7 @@ SGLANG_ARGS=(
   --model-path "$SGLANG_MODEL_PATH"
   --served-model-name "$SGLANG_MODEL"
   --host 0.0.0.0
-  --port "$SGLANG_WORKER_PORT"
+  --port "$SGLANG_PORT"
   --tensor-parallel-size "$TP_SIZE"
   --data-parallel-size "$DP_SIZE"
   --trust-remote-code
@@ -291,6 +265,20 @@ if (( NNODES > 1 && DP_SIZE > 1 )); then
   [[ "${SGLANG_ENABLE_DP_ATTENTION:-1}" -eq 1 ]] && SGLANG_ARGS+=( --enable-dp-attention )
 fi
 
+# Multi-node distributed setup
+if (( NNODES > 1 )); then
+  # Find master port
+  MASTER_PORT=${MASTER_PORT:-29500}
+
+  echo "[mn5] multi-node distributed mode: $NNODES nodes, master=$HEAD_IP:$MASTER_PORT"
+
+  # Add distributed args (node-rank is set dynamically via SLURM_PROCID in srun)
+  SGLANG_ARGS+=(
+    --nnodes "$NNODES"
+    --dist-init-addr "$HEAD_IP:$MASTER_PORT"
+  )
+fi
+
 # Launch SGLang
 echo "[mn5] SGLang args: ${SGLANG_ARGS[*]}"
 
@@ -307,57 +295,21 @@ CONTAINER_CMD="$SINGULARITY_BIN exec --cleanenv --nv \
   python -m sglang.launch_server ${SGLANG_ARGS[*]}"
 
 if (( NNODES > 1 )); then
-  echo "[mn5] launching one independent worker per node on port $SGLANG_WORKER_PORT (tp=$TP_SIZE dp=$DP_SIZE)"
-  srun --nodes="$NNODES" --ntasks="$NNODES" --ntasks-per-node=1 \
-    --gpus-per-task="$GPUS_PER_NODE" \
-    --export=ALL \
-    --output "$LOG_DIR/sglang-worker-%N.log" \
-    --error "$LOG_DIR/sglang-worker-%N.log" \
-    bash -lc "$CONTAINER_CMD" &
+  # Multi-node: use srun to launch on all nodes with correct node-rank
+  # Using absolute path to singularity binary - no module load needed on worker nodes
+  echo "[mn5] Launching with srun across $NNODES nodes..."
+  srun --nodes=$NNODES --ntasks=$NNODES --ntasks-per-node=1 \
+    bash -c "export NODE_RANK=\$SLURM_PROCID; $CONTAINER_CMD --node-rank \$NODE_RANK" \
+    >"$LOG_DIR/sglang.log" 2>&1 &
   SGLANG_PID=$!
 else
-  echo "[mn5] launching single-node worker on port $SGLANG_WORKER_PORT (tp=$TP_SIZE dp=$DP_SIZE)"
-  bash -lc "$CONTAINER_CMD" >"$LOG_DIR/sglang-worker.log" 2>&1 &
+  # Single node: run directly
+  $CONTAINER_CMD >"$LOG_DIR/sglang.log" 2>&1 &
   SGLANG_PID=$!
 fi
 
-# Wait for head-node worker - large models can take 15-20 minutes to load
-wait_for_http "http://localhost:$SGLANG_WORKER_PORT/v1/models" 2400 "$SGLANG_PID"
-
-if [[ "${SGLANG_ENABLE_ROUTER}" == "1" ]]; then
-  echo "[mn5] starting router on :$SGLANG_PORT (policy=$SGLANG_ROUTER_POLICY)"
-
-  ROUTER_WORKERS=()
-  if [[ -n "${SGLANG_ROUTER_WORKER_URLS:-}" ]]; then
-    read -r -a ROUTER_WORKERS <<<"${SGLANG_ROUTER_WORKER_URLS}"
-  else
-    for node_host in "${HOSTS[@]}"; do
-      node_addr=$(resolve_ipv4 "$node_host")
-      ROUTER_WORKERS+=("http://${node_addr}:${SGLANG_WORKER_PORT}")
-    done
-  fi
-
-  if (( ${#ROUTER_WORKERS[@]} == 0 )); then
-    echo "[mn5] ERROR: router enabled but no worker URLs found" >&2
-    exit 2
-  fi
-
-  echo "[mn5] verifying router -> worker connectivity..."
-  for worker_base_url in "${ROUTER_WORKERS[@]}"; do
-    wait_for_http "${worker_base_url}/v1/models" 2400 "$SGLANG_PID"
-  done
-
-  "$SINGULARITY_BIN" exec --cleanenv "$SIF_SGLANG" \
-    python -m sglang_router.launch_router \
-      --host 0.0.0.0 \
-      --port "$SGLANG_PORT" \
-      --policy "$SGLANG_ROUTER_POLICY" \
-      --worker-urls "${ROUTER_WORKERS[@]}" \
-    >"$LOG_DIR/sglang-router.log" 2>&1 &
-  SGLANG_ROUTER_PID=$!
-
-  wait_for_http "http://localhost:$SGLANG_PORT/v1/models" 600 "$SGLANG_ROUTER_PID"
-fi
+# Wait for server - large models can take 15-20 minutes to load
+wait_for_http "http://localhost:$SGLANG_PORT/v1/models" 2400 "$SGLANG_PID"
 
 echo ""
 echo "=============================================="
@@ -365,12 +317,7 @@ echo "[mn5] SGLang ready!"
 echo "  Host:     $(hostname)"
 echo "  Endpoint: http://$(hostname):$SGLANG_PORT/v1"
 echo "  Model:    $SGLANG_MODEL"
-echo "  Config:   ${NNODES} worker(s) × ${GPUS_PER_NODE} GPU(s) (tp=$TP_SIZE dp=$DP_SIZE per worker)"
-if [[ "${SGLANG_ENABLE_ROUTER}" == "1" ]]; then
-  echo "  Router:   enabled (policy=$SGLANG_ROUTER_POLICY)"
-else
-  echo "  Router:   disabled (workers serve on :$SGLANG_WORKER_PORT)"
-fi
+echo "  Config:   tp=$TP_SIZE dp=$DP_SIZE on $TOTAL_GPUS GPUs ($NNODES nodes)"
 echo ""
 echo "SSH tunnel from local machine:"
 echo "  ssh -N -L $SGLANG_PORT:$(hostname):$SGLANG_PORT alog"
