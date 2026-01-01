@@ -3,7 +3,7 @@
 #SBATCH -A ehpc482
 #SBATCH --partition=acc
 #SBATCH --qos=acc_debug
-#SBATCH --nodes=1
+#SBATCH --nodes=2
 #SBATCH --ntasks-per-node=4
 #SBATCH --cpus-per-task=20
 #SBATCH --gres=gpu:4
