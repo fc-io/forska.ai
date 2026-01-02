@@ -150,16 +150,16 @@ export const judgmentsJobsCronGetPrompts = async (
   console.log('got project and enabled prompt count')
   const [project] = projectResult
 
-  console.log('1')
+  // console.log('1')
   if (!project) {
     return {promptEntries: []}
   }
-  console.log('2')
+  // console.log('2')
   // Skip archived projects
   if (project.archived) {
     return {promptEntries: []}
   }
-  console.log('3')
+  // console.log('3')
   if (!enabledPromptCount[0] || enabledPromptCount[0].count === 0) {
     return {promptEntries: []}
   }

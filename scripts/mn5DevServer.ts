@@ -165,11 +165,41 @@ const killExistingTunnels = async (port: string): Promise<void> => {
   }
 }
 
-// Track all tunnel processes for cleanup
+// Track all tunnel processes for cleanup and monitoring
+interface TunnelInfo {
+  proc: ReturnType<typeof spawn>
+  localPort: string
+  remoteHost: string
+  remotePort: string
+  testEndpoint: boolean
+  stderrBuffer: string[]
+  startTime: Date
+  restartCount: number
+}
+const tunnelInfos: TunnelInfo[] = []
+
+// For backwards compat with cleanup handler
 const tunnelProcesses: ReturnType<typeof spawn>[] = []
 
 /**
- * Start SSH tunnel in background
+ * Interpret SSH exit code to help diagnose issues
+ */
+const interpretExitCode = (code: number): string => {
+  const exitCodes: Record<number, string> = {
+    0: 'Normal exit',
+    1: 'General error (local issue or remote command failed)',
+    2: 'Misuse of shell command',
+    255: 'SSH connection failed (could be network, auth, or remote server issue)',
+    // Signal-based exits (128 + signal number)
+    130: 'Interrupted (Ctrl+C)',
+    137: 'Killed (SIGKILL)',
+    143: 'Terminated (SIGTERM)',
+  }
+  return exitCodes[code] || `Unknown exit code ${code}`
+}
+
+/**
+ * Start SSH tunnel in background with stderr capture for diagnostics
  * Maps localPort on localhost to remotePort on remoteHost via SSH_HOST
  */
 const startTunnel = async (
@@ -177,20 +207,56 @@ const startTunnel = async (
   remoteHost: string,
   remotePort: string,
   testEndpoint = true,
-): Promise<void> => {
-  log(`Starting SSH tunnel: localhost:${localPort} -> ${remoteHost}:${remotePort}`)
+  restartCount = 0,
+): Promise<TunnelInfo> => {
+  log(
+    `Starting SSH tunnel: localhost:${localPort} -> ${remoteHost}:${remotePort}${restartCount > 0 ? ` (restart #${restartCount})` : ''}`,
+  )
 
-  // Start SSH tunnel in background using spawn
+  // Kill any existing process on this port first
+  try {
+    const existing = await $`lsof -i :${localPort} -t 2>/dev/null || true`.text()
+    const pids = existing
+      .trim()
+      .split('\n')
+      .filter((p) => {
+        return p
+      })
+    for (const pid of pids) {
+      try {
+        await $`kill ${pid} 2>/dev/null || true`
+      } catch {
+        /* ignore */
+      }
+    }
+    if (pids.length > 0) await sleep(300)
+  } catch {
+    /* ignore */
+  }
+
+  // Start SSH tunnel in background using spawn with verbose mode for diagnostics
+  // Important: Disable ControlMaster so we can monitor the tunnel process directly
   const proc = spawn(
     [
       'ssh',
+      '-v', // Verbose mode for diagnostics
       '-N',
       '-o',
-      'ServerAliveInterval=30',
+      'ControlMaster=no', // Don't use/create control master - we need to monitor this process
+      '-o',
+      'ControlPath=none', // Ignore any existing control sockets
+      '-o',
+      'ServerAliveInterval=10',
       '-o',
       'ServerAliveCountMax=3',
       '-o',
       'ExitOnForwardFailure=yes',
+      '-o',
+      'TCPKeepAlive=yes',
+      '-o',
+      'ConnectTimeout=10',
+      '-o',
+      'ConnectionAttempts=3',
       '-L',
       `${localPort}:${remoteHost}:${remotePort}`,
       SSH_HOST,
@@ -198,16 +264,114 @@ const startTunnel = async (
     {stdout: 'ignore', stderr: 'pipe'},
   )
 
+  // Track for monitoring and cleanup
+  const info: TunnelInfo = {
+    proc,
+    localPort,
+    remoteHost,
+    remotePort,
+    testEndpoint,
+    stderrBuffer: [],
+    startTime: new Date(),
+    restartCount,
+  }
+  tunnelInfos.push(info)
   tunnelProcesses.push(proc)
 
+  // Capture stderr in background for diagnostics (keep last 20 lines)
+  ;(async () => {
+    try {
+      const reader = proc.stderr.getReader()
+      const decoder = new TextDecoder()
+      while (true) {
+        const {done, value} = await reader.read()
+        if (done) break
+        const text = decoder.decode(value)
+        const lines = text.split('\n').filter((l) => {
+          return l.trim()
+        })
+        info.stderrBuffer.push(...lines)
+        // Keep only last 20 lines
+        if (info.stderrBuffer.length > 20) {
+          info.stderrBuffer.splice(0, info.stderrBuffer.length - 20)
+        }
+      }
+    } catch {
+      /* stream closed */
+    }
+  })()
+
+  // Watch for process exit and log diagnostics
+  proc.exited
+    .then((exitCode) => {
+      const runtime = Math.round((Date.now() - info.startTime.getTime()) / 1000)
+      const interpretation = interpretExitCode(exitCode)
+
+      log(`🔴 Tunnel port ${localPort} exited after ${runtime}s`)
+      log(`   Exit code: ${exitCode} (${interpretation})`)
+
+      // Log last few stderr lines for debugging
+      const relevantStderr = info.stderrBuffer
+        .filter((l) => {
+          return !l.includes('debug1:') || l.includes('disconnect') || l.includes('error') || l.includes('Connection')
+        })
+        .slice(-5)
+      if (relevantStderr.length > 0) {
+        log(`   Last SSH messages:`)
+        for (const line of relevantStderr) {
+          log(`     ${line}`)
+        }
+      }
+
+      // Diagnose likely cause
+      if (exitCode === 255) {
+        if (
+          info.stderrBuffer.some((l) => {
+            return l.includes('Connection refused')
+          })
+        ) {
+          log(`   ⚡ Diagnosis: REMOTE - Login node refused connection (possibly overloaded or restarted)`)
+        } else if (
+          info.stderrBuffer.some((l) => {
+            return l.includes('Connection reset')
+          })
+        ) {
+          log(`   ⚡ Diagnosis: NETWORK - Connection was reset (network interruption)`)
+        } else if (
+          info.stderrBuffer.some((l) => {
+            return l.includes('connect to host') && l.includes('port 22')
+          })
+        ) {
+          log(`   ⚡ Diagnosis: LOCAL - Cannot reach SSH server (network/DNS issue on your machine)`)
+        } else if (
+          info.stderrBuffer.some((l) => {
+            return l.includes('channel') && l.includes('open failed')
+          })
+        ) {
+          log(`   ⚡ Diagnosis: REMOTE - Compute node ${remoteHost} unreachable from login node (job may have ended)`)
+        } else if (
+          info.stderrBuffer.some((l) => {
+            return l.includes('Timeout')
+          })
+        ) {
+          log(`   ⚡ Diagnosis: NETWORK - Connection timed out (network congestion or server busy)`)
+        } else {
+          log(`   ⚡ Diagnosis: UNKNOWN - Check if the SGLang job is still running on MN5`)
+        }
+      } else if (exitCode === 1) {
+        log(`   ⚡ Diagnosis: Likely a local configuration or authentication issue`)
+      }
+    })
+    .catch(() => {})
+
   // Wait a moment and check if tunnel started successfully
-  await sleep(1500)
+  await sleep(2000)
 
   // Test the connection if requested
   if (testEndpoint) {
     try {
       const check =
-        await $`curl -sf --connect-timeout 3 http://localhost:${localPort}/v1/models 2>/dev/null && echo OK || echo FAIL`.text()
+        await $`curl -sf --connect-timeout 5 http://localhost:${localPort}/v1/models 2>/dev/null && echo OK || echo FAIL`.text()
       if (check.includes('OK')) {
         log(`  ✓ Tunnel localhost:${localPort} connected`)
       } else {
@@ -217,6 +381,75 @@ const startTunnel = async (
       log(`  ? Tunnel localhost:${localPort} started`)
     }
   }
+
+  return info
+}
+
+/**
+ * Check if a tunnel is still alive and restart if needed
+ */
+const checkAndRestartTunnel = async (info: TunnelInfo): Promise<void> => {
+  // Check if process is still running
+  const exitCode = info.proc.exitCode
+  if (exitCode !== null) {
+    // Process has exited - diagnostics were already logged by the exited handler
+
+    // Remove old entry
+    const idx = tunnelInfos.indexOf(info)
+    if (idx >= 0) tunnelInfos.splice(idx, 1)
+    const procIdx = tunnelProcesses.indexOf(info.proc)
+    if (procIdx >= 0) tunnelProcesses.splice(procIdx, 1)
+
+    // Exponential backoff for restarts (max 30s)
+    const backoffMs = Math.min(1000 * Math.pow(2, info.restartCount), 30000)
+    if (info.restartCount > 0) {
+      log(`  Waiting ${backoffMs / 1000}s before restart (backoff)...`)
+      await sleep(backoffMs)
+    }
+
+    // Restart tunnel
+    await startTunnel(info.localPort, info.remoteHost, info.remotePort, info.testEndpoint, info.restartCount + 1)
+    return
+  }
+
+  // Also verify the port is actually listening (process might be zombie)
+  try {
+    const listening = await $`lsof -i :${info.localPort} -t 2>/dev/null || true`.text()
+    if (!listening.trim()) {
+      log(`⚠️  Port ${info.localPort} not listening (zombie process?), restarting tunnel...`)
+      try {
+        info.proc.kill()
+      } catch {
+        /* ignore */
+      }
+
+      const idx = tunnelInfos.indexOf(info)
+      if (idx >= 0) tunnelInfos.splice(idx, 1)
+      const procIdx = tunnelProcesses.indexOf(info.proc)
+      if (procIdx >= 0) tunnelProcesses.splice(procIdx, 1)
+
+      await startTunnel(info.localPort, info.remoteHost, info.remotePort, info.testEndpoint, info.restartCount + 1)
+    }
+  } catch {
+    /* ignore check failures */
+  }
+}
+
+/**
+ * Start monitoring tunnels and restart if they die
+ */
+const startTunnelMonitoring = (): void => {
+  const MONITOR_INTERVAL_MS = 10_000 // Check every 10 seconds (more aggressive)
+
+  setInterval(async () => {
+    // Copy array since it may be modified during iteration
+    const currentTunnels = [...tunnelInfos]
+    for (const info of currentTunnels) {
+      await checkAndRestartTunnel(info)
+    }
+  }, MONITOR_INTERVAL_MS)
+
+  log(`Tunnel health monitor started (checking every ${MONITOR_INTERVAL_MS / 1000}s)`)
 }
 
 /**
@@ -270,8 +503,8 @@ const startDevServer = async (config: MN5Config): Promise<void> => {
     BUN_CONFIG_MAX_HTTP_REQUESTS: '2048',
   }
 
-  // Start the dev server (blocking)
-  const proc = spawn(['bun', '--env-file=.env.local', 'run', '--watch', 'src/server/index.ts'], {
+  // Start the server (blocking, no watch mode for stability during long inference runs)
+  const proc = spawn(['bun', '--env-file=.env.local', 'run', 'src/server/index.ts'], {
     cwd: process.cwd(),
     env,
     stdout: 'inherit',
@@ -361,6 +594,9 @@ const main = async () => {
   }
 
   log('All tunnels established')
+
+  // Start monitoring tunnels for health
+  startTunnelMonitoring()
 
   // 5. Start dev server
   await startDevServer(config)
