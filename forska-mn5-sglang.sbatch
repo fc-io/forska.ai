@@ -84,7 +84,7 @@ if (( NNODES > 1 )); then
 else
   export SGLANG_ENABLE_ROUTER=${SGLANG_ENABLE_ROUTER:-0}
 fi
-export SGLANG_ROUTER_POLICY=${SGLANG_ROUTER_POLICY:-cache_aware}
+export SGLANG_ROUTER_POLICY=${SGLANG_ROUTER_POLICY:-power_of_two}
 if [[ "${SGLANG_ENABLE_ROUTER}" == "1" ]]; then
   export SGLANG_WORKER_PORT=${SGLANG_WORKER_PORT:-$((SGLANG_PORT + 1))}
 else
