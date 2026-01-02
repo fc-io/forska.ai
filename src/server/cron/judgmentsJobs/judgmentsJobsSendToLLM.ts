@@ -4,6 +4,7 @@ import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 import * as schema from '../../../db/schema.ts'
 import {env} from '../../utils/env.ts'
 import {rateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
+import {workerLoadBalancer} from '../../utils/workerLoadBalancer.ts'
 import {ConnectionError, isCircuitOpen} from './connectionHealth.ts'
 import {getMaxNumberOfInflightRequests} from './getMaxNumberOfInflightRequests.ts'
 import type {judgmentsJobsGetRunningJobs} from './judgmentsJobsGetRunningJobs.ts'
@@ -19,10 +20,14 @@ const processPrompts = async (
       // Add random jitter (0-1000ms) to desynchronize requests and effectively smooth out
       // the burst load on the SSH tunnel/firewall.
       const jitterMs = Math.floor(Math.random() * 1000)
-      await new Promise((resolve) => {
-        setTimeout(resolve, jitterMs)
-      })
-      return processPromptWithLLM(db, prompt)
+      try {
+        await new Promise((resolve) => {
+          setTimeout(resolve, jitterMs)
+        })
+        return await processPromptWithLLM(db, prompt)
+      } finally {
+        workerLoadBalancer.releaseWorker(prompt.modelBaseUrl)
+      }
     }),
   )
 
@@ -110,6 +115,7 @@ export const judgmentsJobsSendToLLM = async (
             const promptsToSend = prompts.filter((prompt) => {
               if (isCircuitOpen(prompt.modelBaseUrl)) {
                 blockedByCircuitBreaker.push(prompt)
+                workerLoadBalancer.releaseWorker(prompt.modelBaseUrl)
                 return false
               }
               return true

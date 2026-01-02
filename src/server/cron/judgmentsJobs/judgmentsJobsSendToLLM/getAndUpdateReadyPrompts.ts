@@ -2,6 +2,7 @@ import {and, eq, inArray} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../../db/schema.ts'
+import {workerLoadBalancer} from '../../../utils/workerLoadBalancer.ts'
 
 export type PromptToProcess = {
   jobId: string
@@ -65,15 +66,9 @@ const processReadyRows = async (
   })
   const jobConfigMap = new Map(jobConfigPairs)
 
-  // Get worker URLs from env for direct-to-worker mode (bypasses router)
-  const workerUrlsEnv = process.env.WORKER_URLS
-  const workerUrls = workerUrlsEnv ? workerUrlsEnv.split(',').map(u => u.trim()).filter(Boolean) : []
-  const useDirectWorkers = workerUrls.length > 0
-
-  // Random worker selection for load distribution across SSH tunnels
-  const getRandomWorkerUrl = (): string => {
-    return workerUrls[Math.floor(Math.random() * workerUrls.length)]
-  }
+  // Use load balancer to get worker URL
+  // This helps distribute load better than random selection
+  // and keeps track of active connections per worker
 
   const promptsWithProjects = promptsWithJobs
     .map((prompt) => {
@@ -93,9 +88,11 @@ const processReadyRows = async (
       }
 
       // Use random worker URL if direct-to-worker mode enabled, otherwise use DB config
-      const baseUrl = useDirectWorkers
-        ? `${getRandomWorkerUrl()}/v1`
-        : config.modelBaseUrl
+      let baseUrl = config.modelBaseUrl
+      const lbWorker = workerLoadBalancer.getWorkerUrl()
+      if (lbWorker) {
+        baseUrl = `${lbWorker}/v1`
+      }
 
       return {
         ...prompt,
