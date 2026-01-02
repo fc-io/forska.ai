@@ -65,6 +65,16 @@ const processReadyRows = async (
   })
   const jobConfigMap = new Map(jobConfigPairs)
 
+  // Get worker URLs from env for direct-to-worker mode (bypasses router)
+  const workerUrlsEnv = process.env.WORKER_URLS
+  const workerUrls = workerUrlsEnv ? workerUrlsEnv.split(',').map(u => u.trim()).filter(Boolean) : []
+  const useDirectWorkers = workerUrls.length > 0
+
+  // Random worker selection for load distribution across SSH tunnels
+  const getRandomWorkerUrl = (): string => {
+    return workerUrls[Math.floor(Math.random() * workerUrls.length)]
+  }
+
   const promptsWithProjects = promptsWithJobs
     .map((prompt) => {
       const config = jobConfigMap.get(prompt.jobId)
@@ -81,12 +91,18 @@ const processReadyRows = async (
         })
         return null
       }
+
+      // Use random worker URL if direct-to-worker mode enabled, otherwise use DB config
+      const baseUrl = useDirectWorkers
+        ? `${getRandomWorkerUrl()}/v1`
+        : config.modelBaseUrl
+
       return {
         ...prompt,
         projectId: config.projectId,
         modelId: config.modelId,
         modelName: config.modelName,
-        modelBaseUrl: config.modelBaseUrl,
+        modelBaseUrl: baseUrl,
       }
     })
     .filter((prompt): prompt is PromptToProcess => {

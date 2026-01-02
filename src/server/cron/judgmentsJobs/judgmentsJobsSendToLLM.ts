@@ -130,7 +130,7 @@ export const judgmentsJobsSendToLLM = async (
             }
             // Removed redundant "All prompts blocked" log - the above log already covers this
           } else {
-            console.log('No prompts to process – this should not happen, prob bug if it does')
+            // console.log('No prompts to process – this should not happen, prob bug if it does')
           }
         })().catch((error) => {
           const safeError =

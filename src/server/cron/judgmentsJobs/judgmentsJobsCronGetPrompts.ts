@@ -123,7 +123,7 @@ const getPromptsToQueue = async ({
 
   // Use 'pp' alias to refer to project_prompts in the query conditions
   const promptEntries = await query
-  console.log('6')
+  // console.log('6')
   return {promptEntries}
 }
 
@@ -133,7 +133,7 @@ export const judgmentsJobsCronGetPrompts = async (
   numberOfPromptsToGet: number,
 ): Promise<QueuePromptsResult> => {
   const db = getDatabase()
-  console.log('start getting prompts for project', projectId)
+  // console.log('start getting prompts for project', projectId)
   // Run project fetch and enabled prompt count in parallel
   const [projectResult, enabledPromptCount, routeLinksCount] = await Promise.all([
     db.select().from(schema.projects).where(eq(schema.projects.id, projectId)).limit(1),
@@ -147,7 +147,7 @@ export const judgmentsJobsCronGetPrompts = async (
       .where(eq(schema.projectRouteLink.projectId, projectId)),
   ])
 
-  console.log('got project and enabled prompt count')
+  // console.log('got project and enabled prompt count')
   const [project] = projectResult
 
   // console.log('1')
@@ -163,7 +163,7 @@ export const judgmentsJobsCronGetPrompts = async (
   if (!enabledPromptCount[0] || enabledPromptCount[0].count === 0) {
     return {promptEntries: []}
   }
-  console.log('4')
+  // console.log('4')
 
   const hasImportRoutes = routeLinksCount[0] ? routeLinksCount[0].count > 0 : false
 

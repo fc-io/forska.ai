@@ -524,10 +524,10 @@ const startDevServer = async (config: MN5Config): Promise<void> => {
 
   const env = {
     ...process.env,
-    // Override LLM endpoint to use local tunnel
-    VITE_LLM_SERVER_URL: `http://localhost:${config.SGLANG_PORT}/v1`,
-    // Pass worker URLs for metrics collection (using local ports via tunnel)
+    // Worker URLs for LLM requests and metrics (using local ports via tunnel)
     WORKER_URLS: config.WORKER_URLS_LOCAL,
+    // Router mode flag
+    SGLANG_ENABLE_ROUTER: config.SGLANG_ENABLE_ROUTER,
     // Pass GPU/topology info for the admin UI
     GPU_TOTAL_GPUS: String(Number(config.NNODES) * Number(config.GPUS_PER_NODE)),
     GPU_NNODES: config.NNODES,
@@ -617,15 +617,23 @@ const main = async () => {
   // 4. Start tunnels
   log('Setting up SSH tunnels...')
 
-  // Router tunnel (main endpoint)
-  await startTunnel(config.SGLANG_PORT, config.SGLANG_HOST, config.SGLANG_PORT)
+  const routerEnabled = config.SGLANG_ENABLE_ROUTER === '1'
 
-  // Worker tunnels (for metrics collection)
+  if (routerEnabled) {
+    // Router mode: create tunnel to router on SGLANG_PORT
+    await startTunnel(config.SGLANG_PORT, config.SGLANG_HOST, config.SGLANG_PORT)
+  }
+
+  // Worker tunnels (for direct requests when router disabled, or metrics when enabled)
   for (let i = 0; i < remoteWorkers.length; i++) {
     const remote = remoteWorkers[i]
     const localPort = localWorkers[i]
-    if (remote && localPort && localPort !== config.SGLANG_PORT) {
-      await startTunnel(localPort, remote.host, remote.port, false) // Don't test workers
+    if (remote && localPort) {
+      // Skip if this port is same as router port (already tunneled)
+      if (routerEnabled && localPort === config.SGLANG_PORT) continue
+      // Test first worker when router disabled (it's the main endpoint)
+      const testEndpoint = !routerEnabled && i === 0
+      await startTunnel(localPort, remote.host, remote.port, testEndpoint)
     }
   }
 

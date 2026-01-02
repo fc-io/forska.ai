@@ -78,9 +78,10 @@ export SGLANG_MODEL=${SGLANG_MODEL:-openai/gpt-oss-120b}
 export SGLANG_PORT=${SGLANG_PORT:-30000}
 
 # Independent per-node workers (tp spans GPUs on the node; dp=1)
-# If router is enabled, it listens on $SGLANG_PORT and workers listen on $SGLANG_WORKER_PORT on each node.
+# Router disabled by default - direct worker connections avoid SSH bandwidth throttling
+# Set SGLANG_ENABLE_ROUTER=1 to enable router if needed
 if (( NNODES > 1 )); then
-  export SGLANG_ENABLE_ROUTER=${SGLANG_ENABLE_ROUTER:-1}
+  export SGLANG_ENABLE_ROUTER=${SGLANG_ENABLE_ROUTER:-0}
 else
   export SGLANG_ENABLE_ROUTER=${SGLANG_ENABLE_ROUTER:-0}
 fi
@@ -374,8 +375,22 @@ if [[ "${SGLANG_ENABLE_ROUTER:-0}" == "1" ]]; then
     WORKER_URLS_LOCAL_ARRAY+=("http://localhost:${local_port}")
     local_port_idx=$((local_port_idx + 1))
   done
+elif (( NNODES > 1 )); then
+  # Multi-node Direct Worker mode (Router disabled):
+  # All workers are listening on SGLANG_WORKER_PORT (which is same as SGLANG_PORT)
+  local_port_idx=0
+  for node_host in "${HOSTS[@]}"; do
+    node_addr=$(resolve_ipv4 "$node_host")
+    WORKER_URLS_ARRAY+=("http://${node_addr}:${SGLANG_WORKER_PORT}")
+    # Assign unique local ports for tunneling (30001, 30002, etc)
+    # Note: We start at 30001 to avoid conflict with where router WOULD be (30000)
+    # even though router is disabled.
+    local_port=$((30001 + local_port_idx))
+    WORKER_URLS_LOCAL_ARRAY+=("http://localhost:${local_port}")
+    local_port_idx=$((local_port_idx + 1))
+  done
 else
-  # Single worker mode: worker is on SGLANG_PORT (same as main endpoint)
+  # Single worker mode
   WORKER_URLS_ARRAY+=("http://$(hostname):${SGLANG_PORT}")
   WORKER_URLS_LOCAL_ARRAY+=("http://localhost:${SGLANG_PORT}")
 fi

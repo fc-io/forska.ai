@@ -9,8 +9,7 @@ const MN5_ROOT = '/gpfs/projects/ehpc482/dev'
 const TLOG = 'tlog' // Transfer login
 const GLOG = 'glog' // General login (for sbatch)
 const ALOG = 'alog' // ACC login (for tunnel)
-const SGLANG_PORT = 30000
-const SGLANG_WORKER_PORT = 30001 // Workers in multi-node mode
+const SGLANG_PORT = 30000 // Main OpenAI-compatible API port (router or worker)
 const SBATCH_FILE = 'forska-mn5-sglang.sbatch'
 
 const log = (m: string): void => {
@@ -23,11 +22,7 @@ const sleep = (ms: number): Promise<void> => {
   })
 }
 
-type SqueueJob = {
-  jobId: string
-  state: string
-  nodeList: string
-}
+type SqueueJob = {jobId: string; state: string; nodeList: string}
 
 const parseSqueueJobLine = (line: string): SqueueJob | undefined => {
   const [jobId, state, nodeList] = line.split('|').map((part) => {
@@ -49,11 +44,13 @@ const getFirstNodeFromNodeList = async (nodeList: string): Promise<string | unde
 }
 
 const getJobStatus = async (jobId: string): Promise<{state: string; nodeList: string}> => {
-  const result =
-    await $`ssh ${GLOG} "squeue -j ${jobId} -h -o '%T|%.200N' 2>/dev/null || echo 'UNKNOWN|'"`.text()
-  const [state, nodeList] = result.trim().split('|').map((part) => {
-    return part.trim()
-  })
+  const result = await $`ssh ${GLOG} "squeue -j ${jobId} -h -o '%T|%.200N' 2>/dev/null || echo 'UNKNOWN|'"`.text()
+  const [state, nodeList] = result
+    .trim()
+    .split('|')
+    .map((part) => {
+      return part.trim()
+    })
 
   return {state: state || 'UNKNOWN', nodeList: nodeList || ''}
 }
@@ -179,25 +176,16 @@ const main = async () => {
  */
 const waitForSGLangAndPrintConnectionInfo = async (computeNode: string): Promise<void> => {
   // Wait for SGLang to be ready (can take 10-20 min for large models)
-  // In multi-node mode, check worker port (30001) first since router starts after workers
   log('Waiting for SGLang to start (this can take 10-20 minutes for large models)...')
-  let routerReady = false
+  let workerReady = false
   for (let i = 0; i < 240; i++) {
     // Wait up to 40 minutes
-    const checkRouter =
-      await $`ssh ${ALOG} "curl -sf --connect-timeout 2 --max-time 3 http://${computeNode}:${SGLANG_PORT}/v1/models 2>/dev/null && echo OK || echo NOTREADY"`.text()
-    if (checkRouter.includes('OK') && checkRouter.includes('data')) {
-      log('SGLang router is ready!')
-      routerReady = true
-      break
-    }
-
     const checkWorker =
-      await $`ssh ${ALOG} "curl -sf --connect-timeout 2 --max-time 3 http://${computeNode}:${SGLANG_WORKER_PORT}/v1/models 2>/dev/null && echo OK || echo NOTREADY"`.text()
+      await $`ssh ${ALOG} "curl -sf --connect-timeout 2 --max-time 3 http://${computeNode}:${SGLANG_PORT}/v1/models 2>/dev/null && echo OK || echo NOTREADY"`.text()
     if (checkWorker.includes('OK') && checkWorker.includes('data')) {
-      log('SGLang worker is ready! Waiting for router...')
-      await sleep(5000)
-      continue
+      log('SGLang worker is ready!')
+      workerReady = true
+      break
     }
 
     if (i % 30 === 0 && i > 0) {
@@ -206,9 +194,8 @@ const waitForSGLangAndPrintConnectionInfo = async (computeNode: string): Promise
     await sleep(10000)
   }
 
-  log(routerReady ? 'SGLang ready!' : 'Timed out waiting for SGLang readiness (it may still be starting)')
-  log(`SSH tunnel from local machine: ssh -N -L ${SGLANG_PORT}:${computeNode}:${SGLANG_PORT} ${ALOG}`)
-  log(`Test: curl http://localhost:${SGLANG_PORT}/v1/models`)
+  log(workerReady ? 'SGLang ready!' : 'Timed out waiting for SGLang readiness (it may still be starting)')
+  log(`Run: bun mn5:dev:server`)
 }
 
 void main()
