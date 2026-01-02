@@ -62,3 +62,14 @@ accountcheck --all-accounts
 ``` bash
 C3SE_quota
 ```
+
+## check partitions available
+``` bash
+[user@glogin1 ~]$ bsc_queues
+
+>>>>>>>>>>>>>>>>>>> ACCOUNT: ehpc482 <<<<<<<<<<<<<<<<<<<<
+     QUEUE NAME        MAX TIME   MAX PROC   DESCRIPTION
+      acc_debug        02:00:00        640   Debug jobs with limitations in number of jobs running, time and number of nodes used for Accelerated GPU partition of MN5
+       acc_ehpc (D)  3-00:00:00       8000   Standard EuroHPC projects for Accelerated GPU partition of MN5
+acc_interactive        02:00:00         40   Interactive jobs in Accelerated GPU partition of MN5, only login nodes
+```
