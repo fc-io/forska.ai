@@ -211,10 +211,10 @@ if [[ -n "$FP8_TP_RECOMMENDED" && "$FP8_TP_RECOMMENDED" -ne "$TP_SIZE" ]]; then
 fi
 
 # Model-specific settings
-export SGLANG_MAX_RUNNING_REQUESTS=${SGLANG_MAX_RUNNING_REQUESTS:-356}
+export SGLANG_MAX_RUNNING_REQUESTS=${SGLANG_MAX_RUNNING_REQUESTS:-512}
 export SGLANG_MEM_FRACTION=${SGLANG_MEM_FRACTION:-0.80}
-export SGLANG_CHUNKED_PREFILL_SIZE=${SGLANG_CHUNKED_PREFILL_SIZE:-16384}
-export SGLANG_CONTEXT_LENGTH=${SGLANG_CONTEXT_LENGTH:-131072}
+export SGLANG_CHUNKED_PREFILL_SIZE=${SGLANG_CHUNKED_PREFILL_SIZE:-8192}
+export SGLANG_CONTEXT_LENGTH=${SGLANG_CONTEXT_LENGTH:-32768}
 export SGLANG_DTYPE=${SGLANG_DTYPE:-bfloat16}
 # Reasoning parser for models with thinking/channel tokens (gpt-oss, deepseek-r1, qwen3)
 # This separates reasoning traces into 'reasoning_content' field in the API response
