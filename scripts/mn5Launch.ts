@@ -1,6 +1,6 @@
 /**
- * Launch SGLang on MareNostrum 5 and set up SSH tunnel
- * Usage: bun run mn5:launch [--no-tunnel] [--model <id>]
+ * Launch SGLang on MareNostrum 5 and wait for it to be ready
+ * Usage: bun run mn5:launch [--force] [--model <id>]
  */
 
 import {$} from 'bun'
@@ -23,66 +23,107 @@ const sleep = (ms: number): Promise<void> => {
   })
 }
 
+type SqueueJob = {
+  jobId: string
+  state: string
+  nodeList: string
+}
+
+const parseSqueueJobLine = (line: string): SqueueJob | undefined => {
+  const [jobId, state, nodeList] = line.split('|').map((part) => {
+    return part.trim()
+  })
+
+  return jobId && state ? {jobId, state, nodeList: nodeList ?? ''} : undefined
+}
+
+const getFirstNodeFromNodeList = async (nodeList: string): Promise<string | undefined> => {
+  const trimmed = nodeList.trim()
+  if (!trimmed || trimmed === '(null)' || trimmed === 'n/a') return undefined
+
+  if (!trimmed.includes('[')) return trimmed.split(',')[0]
+
+  const expanded = await $`ssh ${GLOG} "scontrol show hostnames '${trimmed}' 2>/dev/null | head -1 || echo ''"`.text()
+  const firstNode = expanded.trim()
+  return firstNode ? firstNode : undefined
+}
+
+const getJobStatus = async (jobId: string): Promise<{state: string; nodeList: string}> => {
+  const result =
+    await $`ssh ${GLOG} "squeue -j ${jobId} -h -o '%T|%.200N' 2>/dev/null || echo 'UNKNOWN|'"`.text()
+  const [state, nodeList] = result.trim().split('|').map((part) => {
+    return part.trim()
+  })
+
+  return {state: state || 'UNKNOWN', nodeList: nodeList || ''}
+}
+
 const main = async () => {
   const args = process.argv.slice(2)
-  let noTunnel = false
   let model: string | undefined
   let force = false
 
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--no-tunnel') noTunnel = true
-    else if (args[i] === '--force') force = true
+    if (args[i] === '--force') force = true
     else if (args[i] === '--model') model = args[++i]
   }
 
   // 1. Check for existing pending/running jobs
   log('Checking for existing jobs...')
-  const existingJobs =
-    await $`ssh ${GLOG} "squeue -u \\$USER -n forska-mn5-sglang -h -o '%i %T %N' 2>/dev/null || echo ''"`.text()
-  const jobLines = existingJobs
+  const existingJobsOutput =
+    await $`ssh ${GLOG} "squeue -u \\$USER -n forska-mn5-sglang -h -o '%i|%T|%.200N' 2>/dev/null || echo ''"`.text()
+  const existingJobs = existingJobsOutput
     .trim()
     .split('\n')
-    .filter((l) => {
-      return l.trim()
+    .map(parseSqueueJobLine)
+    .filter((job): job is SqueueJob => {
+      return Boolean(job)
     })
 
-  if (jobLines.length > 0 && !force) {
-    const [existingJobId, state, node] = jobLines[0].split(/\s+/)
-    if (state === 'RUNNING' && node) {
-      log(`Found running job: ${existingJobId} on ${node}`)
+  const existingRunningJob = existingJobs.find((job) => {
+    return job.state === 'RUNNING'
+  })
+
+  if (existingRunningJob && !force) {
+    const computeNode = await getFirstNodeFromNodeList(existingRunningJob.nodeList)
+    if (computeNode) {
+      log(`Found running job: ${existingRunningJob.jobId} on ${computeNode}`)
       log('Reusing existing job (use --force to submit a new one)')
-
-      // Skip to waiting for SGLang and tunnel setup
-      const computeNode = node.split(',')[0]
-      await waitForSGLangAndTunnel(computeNode, noTunnel)
+      await waitForSGLangAndPrintConnectionInfo(computeNode)
       return
-    } else if (state === 'PENDING') {
-      log(`Found pending job: ${existingJobId}`)
-      log('Waiting for existing job to start (use --force to cancel and submit a new one)')
+    }
+  }
 
-      // Wait for this job to start
-      let computeNode: string | undefined
-      for (let i = 0; i < 720; i++) {
-        const queueInfo =
-          await $`ssh ${GLOG} "squeue -j ${existingJobId} -h -o '%T %N' 2>/dev/null || echo 'UNKNOWN'"`.text()
-        const [st, nd] = queueInfo.trim().split(/\s+/)
-        if (st === 'RUNNING' && nd) {
-          computeNode = nd.split(',')[0]
+  const existingPendingJob = existingJobs.find((job) => {
+    return job.state === 'PENDING'
+  })
+
+  if (existingPendingJob && !force) {
+    log(`Found pending job: ${existingPendingJob.jobId}`)
+    log('Waiting for existing job to start (use --force to submit a new one)')
+
+    let computeNode: string | undefined
+    for (let i = 0; i < 720; i++) {
+      const {state, nodeList} = await getJobStatus(existingPendingJob.jobId)
+
+      if (state === 'RUNNING') {
+        computeNode = await getFirstNodeFromNodeList(nodeList)
+        if (computeNode) {
           log(`Job running on: ${computeNode}`)
           break
-        } else if (st === 'FAILED' || st === 'CANCELLED' || st === 'UNKNOWN' || !st) {
-          log('Existing job ended, will submit a new one')
-          break
         }
-        if (i % 12 === 0) log(`Still pending... (${i * 5}s)`)
-        await sleep(5000)
+      } else if (state === 'FAILED' || state === 'CANCELLED' || state === 'UNKNOWN' || !state) {
+        log('Existing job ended, will submit a new one')
+        break
       }
 
-      if (computeNode) {
-        await waitForSGLangAndTunnel(computeNode, noTunnel)
-        return
-      }
-      // Fall through to submit new job
+      if (i % 12 === 0) log(`Still pending... (${i * 5}s)`)
+      await sleep(5000)
+    }
+
+    if (computeNode) {
+      await waitForSGLangAndPrintConnectionInfo(computeNode)
+      return
     }
   }
 
@@ -107,13 +148,14 @@ const main = async () => {
   let computeNode: string | undefined
   for (let i = 0; i < 720; i++) {
     // Wait up to 60 minutes
-    const queueInfo = await $`ssh ${GLOG} "squeue -j ${jobId} -h -o '%T %N' 2>/dev/null || echo 'UNKNOWN'"`.text()
-    const [state, node] = queueInfo.trim().split(/\s+/)
+    const {state, nodeList} = await getJobStatus(jobId)
 
-    if (state === 'RUNNING' && node) {
-      computeNode = node.split(',')[0] // Take first node if multi-node
-      log(`Job running on: ${computeNode}`)
-      break
+    if (state === 'RUNNING') {
+      computeNode = await getFirstNodeFromNodeList(nodeList)
+      if (computeNode) {
+        log(`Job running on: ${computeNode}`)
+        break
+      }
     } else if (state === 'PENDING') {
       if (i % 12 === 0) log(`Still pending... (${i * 5}s)`)
     } else if (state === 'FAILED' || state === 'CANCELLED' || state === 'UNKNOWN') {
@@ -128,39 +170,34 @@ const main = async () => {
     process.exit(1)
   }
 
-  // 5. Wait for SGLang and set up tunnel
-  await waitForSGLangAndTunnel(computeNode, noTunnel)
+  // 5. Wait for SGLang and print connection info
+  await waitForSGLangAndPrintConnectionInfo(computeNode)
 }
 
 /**
- * Wait for SGLang to be ready and optionally set up SSH tunnel
+ * Wait for SGLang to be ready and print connection info
  */
-const waitForSGLangAndTunnel = async (computeNode: string, noTunnel: boolean): Promise<void> => {
+const waitForSGLangAndPrintConnectionInfo = async (computeNode: string): Promise<void> => {
   // Wait for SGLang to be ready (can take 10-20 min for large models)
   // In multi-node mode, check worker port (30001) first since router starts after workers
   log('Waiting for SGLang to start (this can take 10-20 minutes for large models)...')
+  let routerReady = false
   for (let i = 0; i < 240; i++) {
     // Wait up to 40 minutes
-    try {
-      // Try router port first, then worker port
-      const checkRouter =
-        await $`ssh ${ALOG} "curl -sf http://${computeNode}:${SGLANG_PORT}/v1/models 2>/dev/null && echo OK || echo NOTREADY"`.text()
-      if (checkRouter.includes('OK') && checkRouter.includes('data')) {
-        log('SGLang router is ready!')
-        break
-      }
+    const checkRouter =
+      await $`ssh ${ALOG} "curl -sf --connect-timeout 2 --max-time 3 http://${computeNode}:${SGLANG_PORT}/v1/models 2>/dev/null && echo OK || echo NOTREADY"`.text()
+    if (checkRouter.includes('OK') && checkRouter.includes('data')) {
+      log('SGLang router is ready!')
+      routerReady = true
+      break
+    }
 
-      // Check worker port in case router isn't started yet
-      const checkWorker =
-        await $`ssh ${ALOG} "curl -sf http://${computeNode}:${SGLANG_WORKER_PORT}/v1/models 2>/dev/null && echo OK || echo NOTREADY"`.text()
-      if (checkWorker.includes('OK') && checkWorker.includes('data')) {
-        log('SGLang worker is ready! Waiting for router...')
-        // Give router a moment to start
-        await sleep(5000)
-        continue
-      }
-    } catch {
-      // Ignore errors during startup
+    const checkWorker =
+      await $`ssh ${ALOG} "curl -sf --connect-timeout 2 --max-time 3 http://${computeNode}:${SGLANG_WORKER_PORT}/v1/models 2>/dev/null && echo OK || echo NOTREADY"`.text()
+    if (checkWorker.includes('OK') && checkWorker.includes('data')) {
+      log('SGLang worker is ready! Waiting for router...')
+      await sleep(5000)
+      continue
     }
 
     if (i % 30 === 0 && i > 0) {
@@ -169,19 +206,9 @@ const waitForSGLangAndTunnel = async (computeNode: string, noTunnel: boolean): P
     await sleep(10000)
   }
 
-  // Set up SSH tunnel
-  if (noTunnel) {
-    log('Skipping tunnel (--no-tunnel)')
-    log(`To connect manually: ssh -N -L ${SGLANG_PORT}:${computeNode}:${SGLANG_PORT} ${ALOG}`)
-  } else {
-    log(`Setting up SSH tunnel: localhost:${SGLANG_PORT} -> ${computeNode}:${SGLANG_PORT}`)
-    log('Press Ctrl+C to disconnect')
-    log('')
-    log(`Test with: curl http://localhost:${SGLANG_PORT}/v1/models`)
-
-    // Run SSH tunnel - this will block until Ctrl+C
-    await $`ssh -N -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -L ${SGLANG_PORT}:${computeNode}:${SGLANG_PORT} ${ALOG}`
-  }
+  log(routerReady ? 'SGLang ready!' : 'Timed out waiting for SGLang readiness (it may still be starting)')
+  log(`SSH tunnel from local machine: ssh -N -L ${SGLANG_PORT}:${computeNode}:${SGLANG_PORT} ${ALOG}`)
+  log(`Test: curl http://localhost:${SGLANG_PORT}/v1/models`)
 }
 
 void main()
