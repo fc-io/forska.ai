@@ -344,6 +344,13 @@
       "when": 1767089429386,
       "tag": "0049_confused_thunderbolt",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1767364443573,
+      "tag": "0050_medical_bloodscream",
+      "breakpoints": true
     }
   ]
 }

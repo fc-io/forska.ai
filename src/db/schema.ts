@@ -586,7 +586,6 @@ export const judgments = pgTable(
       index('judgments_project_idx').on(table.projectId),
       // Soft delete queries (for Parquet/ClickHouse compatibility)
       index('judgments_deleted_at_idx').on(table.deletedAt),
-
     ]
   },
 )
@@ -907,6 +906,41 @@ export const llmStatus = pgTable(
       index('llm_status_ts_idx').on(table.ts),
       uniqueIndex('llm_status_engine_instance_ts_idx').on(table.engine, table.instanceId, table.ts),
       index('llm_status_model_ts_idx').on(table.modelName, table.ts),
+    ]
+  },
+)
+
+export const nvidiaSmi = pgTable(
+  'nvidia_smi',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+
+    ts: timestamp('ts', {withTimezone: true}).defaultNow().notNull(),
+
+    hostname: text('hostname').notNull(),
+    gpuIndex: integer('gpu_index').notNull(),
+
+    gpuUuid: text('gpu_uuid'),
+    gpuName: text('gpu_name'),
+
+    temperatureGpu: integer('temperature_gpu'),
+    utilizationGpu: integer('utilization_gpu'),
+    utilizationMemory: integer('utilization_memory'),
+
+    memoryTotalMiB: integer('memory_total_mib'),
+    memoryUsedMiB: integer('memory_used_mib'),
+
+    powerDrawWatts: doublePrecision('power_draw_watts'),
+    powerLimitWatts: doublePrecision('power_limit_watts'),
+
+    fanSpeed: integer('fan_speed'),
+    pstate: text('pstate'),
+  },
+  (table) => {
+    return [
+      index('nvidia_smi_ts_idx').on(table.ts),
+      index('nvidia_smi_hostname_ts_idx').on(table.hostname, table.ts),
+      index('nvidia_smi_gpu_uuid_ts_idx').on(table.gpuUuid, table.ts),
     ]
   },
 )

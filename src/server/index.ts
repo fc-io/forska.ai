@@ -4,6 +4,7 @@ import {Elysia} from 'elysia'
 import {flushDefaultWriterIfPresent} from '../services/parquet/parquetWriter'
 import {fullTextJobsCron} from './cron/fullTextJobs.ts'
 import {judgmentsJobsCron} from './cron/judgmentsJobs.ts'
+import {nvidiaSmiCron} from './cron/nvidiaSmi.ts'
 import {aaModelsRoutes} from './routes/AaModelsRoutes'
 import {articlesRoutes} from './routes/ArticlesRoutes.ts'
 import {authRoutes} from './routes/AuthRoutes.ts'
@@ -15,6 +16,7 @@ import {judgmentsJobsRoutes} from './routes/JudgmentsJobsRoutes.ts'
 import {judgmentsRoutes} from './routes/JudgmentsRoutes.ts'
 import {llmStatusRoutes} from './routes/LlmStatusRoutes.ts'
 import {modelsRoutes} from './routes/ModelsRoutes.ts'
+import {nvidiaSmiRoutes} from './routes/NvidiaSmiRoutes.ts'
 import {parquetRoutes} from './routes/ParquetRoutes'
 import {projectArticlesRoutes} from './routes/ProjectArticlesRoutes.ts'
 import {projectExportRoutes} from './routes/ProjectExportRoutes.ts'
@@ -39,6 +41,7 @@ const _app = new Elysia()
   )
   .use(fullTextJobsCron)
   .use(judgmentsJobsCron)
+  .use(nvidiaSmiCron)
   .use(authRoutes)
   .use(judgmentsJobsRoutes)
   .use(articlesRoutes)
@@ -56,6 +59,7 @@ const _app = new Elysia()
   .use(tokensRoutes)
   .use(usersRoutes)
   .use(llmStatusRoutes)
+  .use(nvidiaSmiRoutes)
   .use(subprojectsRoutes)
   .use(parquetRoutes)
   .use(aaModelsRoutes)
