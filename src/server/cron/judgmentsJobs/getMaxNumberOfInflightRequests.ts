@@ -7,7 +7,6 @@ export const getMaxNumberOfInflightRequests = (): number => {
   const workerCount = getWorkerCount()
 
   const computed = perEngine * workerCount
-  const computedInFlight = inFlightOverride * workerCount
 
-  return inFlightOverride > 0 ? computedInFlight : computed
+  return inFlightOverride > 0 ? inFlightOverride : computed
 }
