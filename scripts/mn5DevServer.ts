@@ -544,7 +544,9 @@ const startDevServer = async (config: MN5Config): Promise<void> => {
     SGLANG_MODEL: config.SGLANG_MODEL,
     BUN_CONFIG_MAX_HTTP_REQUESTS: '2048',
     // For nvidia-smi polling: use the remote worker URLs (actual IPs, not localhost tunnels)
+    // Also pass local URLs for display purposes (mapping remote -> local)
     NVIDIA_SMI_WORKER_URLS: config.WORKER_URLS,
+    NVIDIA_SMI_WORKER_URLS_LOCAL: config.WORKER_URLS_LOCAL,
     NVIDIA_SMI_SSH_JUMP_HOST: SSH_HOST,
   }
 

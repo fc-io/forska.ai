@@ -138,10 +138,14 @@ const getSSHJumpHost = (): string | null => {
   return process.env.NVIDIA_SMI_SSH_JUMP_HOST?.trim() || null
 }
 
-const pollNvidiaSmiForWorker = async (workerUrl: string, ts: Date): Promise<NvidiaSmiSample[]> => {
-  const host = extractHostFromUrl(workerUrl)
+const pollNvidiaSmiForWorker = async (
+  remoteWorkerUrl: string,
+  displayInstanceId: string,
+  ts: Date,
+): Promise<NvidiaSmiSample[]> => {
+  const host = extractHostFromUrl(remoteWorkerUrl)
   if (!host) {
-    console.error(`[nvidia-smi] Could not extract host from URL: ${workerUrl}`)
+    console.error(`[nvidia-smi] Could not extract host from URL: ${remoteWorkerUrl}`)
     return []
   }
 
@@ -180,14 +184,15 @@ const pollNvidiaSmiForWorker = async (workerUrl: string, ts: Date): Promise<Nvid
     ) {
       return []
     }
-    console.error(`[nvidia-smi] poll failed for ${workerUrl}`, {
+    console.error(`[nvidia-smi] poll failed for ${remoteWorkerUrl}`, {
       code: result.code,
       stderr: result.stderr.trim().slice(0, 200),
     })
     return []
   }
 
-  return parseNvidiaSmiCsv(result.stdout, ts, workerUrl)
+  // Use displayInstanceId (local URL) for the instanceId stored in DB
+  return parseNvidiaSmiCsv(result.stdout, ts, displayInstanceId)
 }
 
 // Parse worker URLs from NVIDIA_SMI_WORKER_URLS env (remote IPs, not localhost tunnels)
@@ -204,6 +209,35 @@ const getNvidiaSmiWorkerUrls = (): string[] => {
     })
 }
 
+// Parse local worker URLs for display (matching LLM metrics page)
+const getNvidiaSmiWorkerUrlsLocal = (): string[] => {
+  const raw = process.env.NVIDIA_SMI_WORKER_URLS_LOCAL?.trim() || ''
+  if (!raw) return []
+  return raw
+    .split(',')
+    .map((url) => {
+      return url.trim()
+    })
+    .filter((url) => {
+      return url.length > 0
+    })
+}
+
+// Build mapping from remote worker URL to local worker URL (1:1 positional mapping)
+const buildRemoteToLocalMapping = (): Map<string, string> => {
+  const remoteUrls = getNvidiaSmiWorkerUrls()
+  const localUrls = getNvidiaSmiWorkerUrlsLocal()
+  const mapping = new Map<string, string>()
+
+  for (let i = 0; i < remoteUrls.length; i++) {
+    // Use local URL if available at same position, otherwise fall back to remote
+    const localUrl = localUrls[i] || remoteUrls[i]
+    mapping.set(remoteUrls[i], localUrl)
+  }
+
+  return mapping
+}
+
 const pollNvidiaSmi = async (): Promise<void> => {
   const workerUrls = getNvidiaSmiWorkerUrls()
 
@@ -212,13 +246,17 @@ const pollNvidiaSmi = async (): Promise<void> => {
     return
   }
 
+  // Build mapping for local display URLs
+  const remoteToLocalMapping = buildRemoteToLocalMapping()
+
   const ts = new Date()
   const allSamples: NvidiaSmiSample[] = []
 
   // Poll each worker in parallel
   const results = await Promise.all(
-    workerUrls.map((url) => {
-      return pollNvidiaSmiForWorker(url, ts)
+    workerUrls.map((remoteUrl) => {
+      const displayUrl = remoteToLocalMapping.get(remoteUrl) || remoteUrl
+      return pollNvidiaSmiForWorker(remoteUrl, displayUrl, ts)
     }),
   )
 
