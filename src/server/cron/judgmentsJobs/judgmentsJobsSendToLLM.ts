@@ -67,7 +67,8 @@ export const judgmentsJobsSendToLLM = async (
     const maxNumberOfInflightRequests = getMaxNumberOfInflightRequests()
     const promptsInFlight = await getNumberOfPromptsInFlight(db, serverJobId)
     const deficit = Math.max(0, maxNumberOfInflightRequests - promptsInFlight)
-    const maxBurst = Math.max(1, Number(env.SGLANG_MAX_RUNNING_REQUESTS || 0))
+    const burstOverride = Math.max(0, env.SGLANG_API_MAX_BURST_REQUESTS)
+    const maxBurst = Math.max(1, burstOverride > 0 ? burstOverride : Number(env.SGLANG_MAX_RUNNING_REQUESTS || 0))
     const requestsToSend = Math.min(deficit, maxBurst)
     // console.log('requestsToSend', {
     //   requestsToSend,

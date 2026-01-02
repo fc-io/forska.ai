@@ -1,6 +1,7 @@
 import {env} from '../../utils/env.ts'
 
 export const getMaxNumberOfInflightRequests = (): number => {
+  const inFlightOverride = Math.max(0, env.SGLANG_API_MAX_INFLIGHT_REQUESTS)
   const perEngine = Math.max(1, Number(env.SGLANG_MAX_RUNNING_REQUESTS || 0))
 
   // Prefer explicit worker URLs when router is enabled; otherwise
@@ -15,5 +16,6 @@ export const getMaxNumberOfInflightRequests = (): number => {
   )
   const workerCount = Math.max(1, workerCountFromEnv > 0 ? workerCountFromEnv : estimatedWorkers)
 
-  return perEngine * workerCount
+  const computed = perEngine * workerCount
+  return inFlightOverride > 0 ? inFlightOverride : computed
 }
