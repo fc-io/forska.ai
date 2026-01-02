@@ -22,7 +22,7 @@ export const nvidiaSmiRoutes = new Elysia()
     const data = await db
       .select({
         ts: nvidiaSmi.ts,
-        hostname: nvidiaSmi.hostname,
+        instanceId: nvidiaSmi.instanceId,
         gpuIndex: nvidiaSmi.gpuIndex,
         gpuUuid: nvidiaSmi.gpuUuid,
         gpuName: nvidiaSmi.gpuName,

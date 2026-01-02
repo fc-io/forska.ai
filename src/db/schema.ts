@@ -917,7 +917,7 @@ export const nvidiaSmi = pgTable(
 
     ts: timestamp('ts', {withTimezone: true}).defaultNow().notNull(),
 
-    hostname: text('hostname').notNull(),
+    instanceId: text('instance_id').notNull(),
     gpuIndex: integer('gpu_index').notNull(),
 
     gpuUuid: text('gpu_uuid'),
@@ -939,7 +939,7 @@ export const nvidiaSmi = pgTable(
   (table) => {
     return [
       index('nvidia_smi_ts_idx').on(table.ts),
-      index('nvidia_smi_hostname_ts_idx').on(table.hostname, table.ts),
+      index('nvidia_smi_instance_ts_idx').on(table.instanceId, table.ts),
       index('nvidia_smi_gpu_uuid_ts_idx').on(table.gpuUuid, table.ts),
     ]
   },

@@ -22,7 +22,7 @@ const normalizeTimestamp = (value: unknown): Date | null => {
 
 type NvidiaSmiRow = {
   ts: Date | null
-  hostname: string
+  instanceId: string
   gpuIndex: number
   gpuUuid: string | null
   gpuName: string | null
@@ -44,7 +44,7 @@ const fetchNvidiaSmi = async (): Promise<NvidiaSmiRow[]> => {
   return entries.map((row: Record<string, unknown>) => {
     return {
       ts: normalizeTimestamp(row.ts),
-      hostname: typeof row.hostname === 'string' ? row.hostname : '',
+      instanceId: typeof row.instanceId === 'string' ? row.instanceId : '',
       gpuIndex: typeof row.gpuIndex === 'number' ? row.gpuIndex : 0,
       gpuUuid: (row.gpuUuid as string | null) ?? null,
       gpuName: (row.gpuName as string | null) ?? null,
@@ -161,7 +161,9 @@ const AdminGpu = () => {
                 <thead class="bg-gray-50">
                   <tr>
                     <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Time</th>
-                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Host</th>
+                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Instance
+                    </th>
                     <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">GPU</th>
                     <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
                     <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Temp</th>
@@ -187,7 +189,7 @@ const AdminGpu = () => {
                       return (
                         <tr class="hover:bg-gray-50">
                           <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{formatTs(row.ts)}</td>
-                          <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-600">{row.hostname}</td>
+                          <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-600">{row.instanceId}</td>
                           <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{formatInt(row.gpuIndex)}</td>
                           <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-600">{row.gpuName ?? '—'}</td>
                           <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">

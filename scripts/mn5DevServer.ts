@@ -543,7 +543,9 @@ const startDevServer = async (config: MN5Config): Promise<void> => {
     SGLANG_MAX_RUNNING_REQUESTS: config.SGLANG_MAX_RUNNING_REQUESTS,
     SGLANG_MODEL: config.SGLANG_MODEL,
     BUN_CONFIG_MAX_HTTP_REQUESTS: '2048',
-    NVIDIA_SMI_SSH_HOST: SSH_HOST,
+    // For nvidia-smi polling: use the remote worker URLs (actual IPs, not localhost tunnels)
+    NVIDIA_SMI_WORKER_URLS: config.WORKER_URLS,
+    NVIDIA_SMI_SSH_JUMP_HOST: SSH_HOST,
   }
 
   // Start the server (blocking, no watch mode for stability during long inference runs)

@@ -1,5 +1,4 @@
 import {spawn} from 'node:child_process'
-import os from 'node:os'
 
 import {cron} from '@elysiajs/cron'
 import {Elysia} from 'elysia'
@@ -10,7 +9,7 @@ import {getDatabase} from '../utils/getDatabase.ts'
 
 type NvidiaSmiSample = {
   ts: Date
-  hostname: string
+  instanceId: string
   gpuIndex: number
   gpuUuid: string | null
   gpuName: string | null
@@ -44,7 +43,7 @@ const parseNullableInt = (value: string | undefined): number | null => {
   return parsed === null ? null : Math.trunc(parsed)
 }
 
-const spawnNvidiaSmi = (
+const spawnCommand = (
   command: string,
   args: string[],
 ): Promise<{stdout: string; stderr: string; code: number | null}> => {
@@ -72,7 +71,7 @@ const spawnNvidiaSmi = (
   })
 }
 
-const parseNvidiaSmiCsv = (csv: string, ts: Date, hostname: string): NvidiaSmiSample[] => {
+const parseNvidiaSmiCsv = (csv: string, ts: Date, instanceId: string): NvidiaSmiSample[] => {
   const lines = csv
     .trim()
     .split('\n')
@@ -94,7 +93,7 @@ const parseNvidiaSmiCsv = (csv: string, ts: Date, hostname: string): NvidiaSmiSa
         ? null
         : ({
             ts,
-            hostname,
+            instanceId,
             gpuIndex,
             gpuUuid: normalizeNullable(parts[1]),
             gpuName: normalizeNullable(parts[2]),
@@ -114,51 +113,125 @@ const parseNvidiaSmiCsv = (csv: string, ts: Date, hostname: string): NvidiaSmiSa
     })
 }
 
-const pollNvidiaSmi = async (): Promise<void> => {
-  if (env.GPU_TOTAL_GPUS === 0) return
+const normalizeWorkerUrls = (urls: string[] | null | undefined): string[] => {
+  return Array.from(
+    new Set(
+      (urls ?? [])
+        .map((url) => {
+          return url.trim()
+        })
+        .filter((url) => {
+          return url.length > 0
+        }),
+    ),
+  )
+}
 
-  const args = [
+// Extract host from worker URL (e.g., http://10.2.101.73:30000 -> 10.2.101.73)
+const extractHostFromUrl = (url: string): string | null => {
+  const match = url.match(/https?:\/\/([^:\/]+)/)
+  return match ? match[1] : null
+}
+
+// Get SSH jump host from env (optional, for remote HPC access)
+const getSSHJumpHost = (): string | null => {
+  return process.env.NVIDIA_SMI_SSH_JUMP_HOST?.trim() || null
+}
+
+const pollNvidiaSmiForWorker = async (workerUrl: string, ts: Date): Promise<NvidiaSmiSample[]> => {
+  const host = extractHostFromUrl(workerUrl)
+  if (!host) {
+    console.error(`[nvidia-smi] Could not extract host from URL: ${workerUrl}`)
+    return []
+  }
+
+  const nvidiaSmiArgs = [
     '--query-gpu=index,uuid,name,temperature.gpu,utilization.gpu,utilization.memory,memory.total,memory.used,power.draw,power.limit,fan.speed,pstate',
     '--format=csv,noheader,nounits',
   ]
 
-  let command = 'nvidia-smi'
-  let commandArgs = args
-  const sshHost = process.env.NVIDIA_SMI_SSH_HOST
+  const jumpHost = getSSHJumpHost()
+  let result: {stdout: string; stderr: string; code: number | null}
 
-  if (sshHost) {
-    // Run via SSH
-    command = 'ssh'
-    // SSH command: ssh <host> nvidia-smi <args>
-    commandArgs = [sshHost, 'nvidia-smi', ...args]
+  if (jumpHost) {
+    // Nested SSH: ssh jumpHost "ssh targetHost nvidia-smi ..."
+    const remoteCmd = `ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${host} nvidia-smi ${nvidiaSmiArgs.join(' ')}`
+    result = await spawnCommand('ssh', ['-o', 'ConnectTimeout=10', jumpHost, remoteCmd])
+  } else {
+    // Direct SSH to the worker host
+    result = await spawnCommand('ssh', [
+      '-o',
+      'StrictHostKeyChecking=no',
+      '-o',
+      'ConnectTimeout=10',
+      host,
+      'nvidia-smi',
+      ...nvidiaSmiArgs,
+    ])
   }
 
-  const hostname = String(process.env.HOSTNAME ?? '').trim() || os.hostname()
-  const ts = new Date()
-
-  const result = await spawnNvidiaSmi(command, commandArgs)
   if (result.code !== 0) {
-    // Suppress "executable not found" errors to avoid log spam on non-GPU machines
-    if (result.stderr.includes('Executable not found') || result.stderr.includes('command not found')) {
-      // Log only once per session ideally, but for now just suppress or log debug
-      // console.debug('[nvidia-smi] command not found, skipping poll')
-      return
+    // Suppress common non-error cases
+    if (
+      result.stderr.includes('Executable not found')
+      || result.stderr.includes('command not found')
+      || result.stderr.includes('Connection refused')
+      || result.stderr.includes('Connection timed out')
+    ) {
+      return []
     }
-    console.error('[nvidia-smi] poll failed', {
-      command: `${command} ${commandArgs[0]}...`, // log simplified command
+    console.error(`[nvidia-smi] poll failed for ${workerUrl}`, {
       code: result.code,
-      stderr: result.stderr.trim(),
+      stderr: result.stderr.trim().slice(0, 200),
     })
+    return []
+  }
+
+  return parseNvidiaSmiCsv(result.stdout, ts, workerUrl)
+}
+
+// Parse worker URLs from NVIDIA_SMI_WORKER_URLS env (remote IPs, not localhost tunnels)
+const getNvidiaSmiWorkerUrls = (): string[] => {
+  const raw = process.env.NVIDIA_SMI_WORKER_URLS?.trim() || ''
+  if (!raw) return []
+  return raw
+    .split(',')
+    .map((url) => {
+      return url.trim()
+    })
+    .filter((url) => {
+      return url.length > 0
+    })
+}
+
+const pollNvidiaSmi = async (): Promise<void> => {
+  const workerUrls = getNvidiaSmiWorkerUrls()
+
+  // If no worker URLs configured, skip polling
+  if (workerUrls.length === 0) {
     return
   }
 
-  const samples = parseNvidiaSmiCsv(result.stdout, ts, hostname)
-  if (samples.length === 0) return
+  const ts = new Date()
+  const allSamples: NvidiaSmiSample[] = []
+
+  // Poll each worker in parallel
+  const results = await Promise.all(
+    workerUrls.map((url) => {
+      return pollNvidiaSmiForWorker(url, ts)
+    }),
+  )
+
+  for (const samples of results) {
+    allSamples.push(...samples)
+  }
+
+  if (allSamples.length === 0) return
 
   const db = getDatabase()
   await db
     .insert(schema.nvidiaSmi)
-    .values(samples)
+    .values(allSamples)
     .catch((error) => {
       console.error('[nvidia-smi] db insert failed', error)
     })
