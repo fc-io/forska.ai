@@ -51,7 +51,6 @@
     "mn5:f:p": "scp forska-mn5-sglang.sbatch tlog:/gpfs/projects/ehpc482/dev/",
     "mn5:transfer": "bun scripts/mn5Transfer.ts",
     "mn5:sbatch:push": "scp forska-mn5-sglang.sbatch tlog:/gpfs/projects/ehpc482/dev/",
-    "mn5:submit": "ssh alog 'cd /gpfs/projects/ehpc482/dev && sbatch --export=ALL forska-mn5-sglang.sbatch'",
     "mn5:status": "ssh alog 'squeue -u $USER'",
     "mn5:tunnel": "bun scripts/mn5Tunnel.ts",
     "mn5:smi": "bun scripts/mn5Smi.ts",
