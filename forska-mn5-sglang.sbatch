@@ -214,7 +214,7 @@ fi
 # Model-specific settings
 export SGLANG_MAX_RUNNING_REQUESTS=${SGLANG_MAX_RUNNING_REQUESTS:-512}
 export SGLANG_MEM_FRACTION=${SGLANG_MEM_FRACTION:-0.80}
-export SGLANG_CHUNKED_PREFILL_SIZE=${SGLANG_CHUNKED_PREFILL_SIZE:-8192}
+export SGLANG_CHUNKED_PREFILL_SIZE=${SGLANG_CHUNKED_PREFILL_SIZE:-4096}
 export SGLANG_CONTEXT_LENGTH=${SGLANG_CONTEXT_LENGTH:-32768}
 export SGLANG_DTYPE=${SGLANG_DTYPE:-bfloat16}
 # Reasoning parser for models with thinking/channel tokens (gpt-oss, deepseek-r1, qwen3)
@@ -276,8 +276,8 @@ SGLANG_ARGS=(
   --data-parallel-size "$DP_SIZE"
   --trust-remote-code
   --mem-fraction-static "$SGLANG_MEM_FRACTION"
-  --max-running-requests "${SGLANG_MAX_RUNNING_REQUESTS:-512}"
-  --chunked-prefill-size "${SGLANG_CHUNKED_PREFILL_SIZE:-4096}"
+  --max-running-requests "$SGLANG_MAX_RUNNING_REQUESTS"
+  --chunked-prefill-size "$SGLANG_CHUNKED_PREFILL_SIZE"
   --context-length "$SGLANG_CONTEXT_LENGTH"
   --dtype "$SGLANG_DTYPE"
   --enable-metrics
