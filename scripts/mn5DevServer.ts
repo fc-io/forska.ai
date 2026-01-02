@@ -310,10 +310,35 @@ const startTunnel = async (
       log(`🔴 Tunnel port ${localPort} exited after ${runtime}s`)
       log(`   Exit code: ${exitCode} (${interpretation})`)
 
+      // Parse transfer stats if available
+      const transferLine = info.stderrBuffer.find((l) => {
+        return l.includes('Transferred:')
+      })
+      if (transferLine) {
+        const match = transferLine.match(/sent (\d+), received (\d+).*?(\d+\.?\d*) seconds/)
+        if (match) {
+          const sent = parseInt(match[1]) / 1024 / 1024
+          const received = parseInt(match[2]) / 1024 / 1024
+          const seconds = parseFloat(match[3])
+          const sentRate = sent / seconds
+          const receivedRate = received / seconds
+          log(
+            `   📊 Throughput: sent ${sent.toFixed(1)}MB (${sentRate.toFixed(1)}MB/s), received ${received.toFixed(1)}MB (${receivedRate.toFixed(1)}MB/s)`,
+          )
+          if (receivedRate > 0.5) {
+            log(`   ⚠️  High receive rate detected - possible bandwidth throttling`)
+          }
+        }
+      }
+
       // Log last few stderr lines for debugging
       const relevantStderr = info.stderrBuffer
         .filter((l) => {
-          return !l.includes('debug1:') || l.includes('disconnect') || l.includes('error') || l.includes('Connection')
+          return (
+            (!l.includes('debug1:') || l.includes('disconnect') || l.includes('error') || l.includes('Connection'))
+            && !l.includes('Transferred:')
+            && !l.includes('Bytes per second')
+          )
         })
         .slice(-5)
       if (relevantStderr.length > 0) {
@@ -361,6 +386,9 @@ const startTunnel = async (
       } else if (exitCode === 1) {
         log(`   ⚡ Diagnosis: Likely a local configuration or authentication issue`)
       }
+
+      // Trigger immediate restart (don't wait for monitor interval)
+      void checkAndRestartTunnel(info)
     })
     .catch(() => {})
 
@@ -400,15 +428,23 @@ const checkAndRestartTunnel = async (info: TunnelInfo): Promise<void> => {
     const procIdx = tunnelProcesses.indexOf(info.proc)
     if (procIdx >= 0) tunnelProcesses.splice(procIdx, 1)
 
-    // Exponential backoff for restarts (max 30s)
-    const backoffMs = Math.min(1000 * Math.pow(2, info.restartCount), 30000)
-    if (info.restartCount > 0) {
-      log(`  Waiting ${backoffMs / 1000}s before restart (backoff)...`)
+    // Less aggressive backoff for transient network issues (max 5s)
+    // Only apply backoff if tunnel died very quickly (within 10s of starting)
+    const runtime = Date.now() - info.startTime.getTime()
+    const diedQuickly = runtime < 10_000
+    const backoffMs = diedQuickly ? Math.min(1000 * (info.restartCount + 1), 5000) : 500
+
+    // Reset restart counter if tunnel ran successfully for at least 30s
+    const resetRestartCount = runtime > 30_000
+
+    if (backoffMs > 500) {
+      log(`  Waiting ${backoffMs / 1000}s before restart...`)
       await sleep(backoffMs)
     }
 
     // Restart tunnel
-    await startTunnel(info.localPort, info.remoteHost, info.remotePort, info.testEndpoint, info.restartCount + 1)
+    const newRestartCount = resetRestartCount ? 0 : info.restartCount + 1
+    await startTunnel(info.localPort, info.remoteHost, info.remotePort, info.testEndpoint, newRestartCount)
     return
   }
 
