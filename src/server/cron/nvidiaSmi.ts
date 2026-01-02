@@ -44,9 +44,12 @@ const parseNullableInt = (value: string | undefined): number | null => {
   return parsed === null ? null : Math.trunc(parsed)
 }
 
-const spawnNvidiaSmi = (args: string[]): Promise<{stdout: string; stderr: string; code: number | null}> => {
+const spawnNvidiaSmi = (
+  command: string,
+  args: string[],
+): Promise<{stdout: string; stderr: string; code: number | null}> => {
   return new Promise((resolve) => {
-    const child = spawn('nvidia-smi', args, {stdio: ['ignore', 'pipe', 'pipe']})
+    const child = spawn(command, args, {stdio: ['ignore', 'pipe', 'pipe']})
 
     let stdout = ''
     let stderr = ''
@@ -119,12 +122,33 @@ const pollNvidiaSmi = async (): Promise<void> => {
     '--format=csv,noheader,nounits',
   ]
 
+  let command = 'nvidia-smi'
+  let commandArgs = args
+  const sshHost = process.env.NVIDIA_SMI_SSH_HOST
+
+  if (sshHost) {
+    // Run via SSH
+    command = 'ssh'
+    // SSH command: ssh <host> nvidia-smi <args>
+    commandArgs = [sshHost, 'nvidia-smi', ...args]
+  }
+
   const hostname = String(process.env.HOSTNAME ?? '').trim() || os.hostname()
   const ts = new Date()
 
-  const result = await spawnNvidiaSmi(args)
+  const result = await spawnNvidiaSmi(command, commandArgs)
   if (result.code !== 0) {
-    console.error('[nvidia-smi] poll failed', {code: result.code, stderr: result.stderr.trim()})
+    // Suppress "executable not found" errors to avoid log spam on non-GPU machines
+    if (result.stderr.includes('Executable not found') || result.stderr.includes('command not found')) {
+      // Log only once per session ideally, but for now just suppress or log debug
+      // console.debug('[nvidia-smi] command not found, skipping poll')
+      return
+    }
+    console.error('[nvidia-smi] poll failed', {
+      command: `${command} ${commandArgs[0]}...`, // log simplified command
+      code: result.code,
+      stderr: result.stderr.trim(),
+    })
     return
   }
 

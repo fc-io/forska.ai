@@ -7,6 +7,7 @@ import {rateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {workerLoadBalancer} from '../../utils/workerLoadBalancer.ts'
 import {ConnectionError, isCircuitOpen} from './connectionHealth.ts'
 import {getMaxNumberOfInflightRequests} from './getMaxNumberOfInflightRequests.ts'
+import {getWorkerCount} from './getWorkerCount.ts'
 import type {judgmentsJobsGetRunningJobs} from './judgmentsJobsGetRunningJobs.ts'
 import {getAndUpdateReadyPrompts, type PromptToProcess} from './judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts'
 import {processPromptWithLLM} from './judgmentsJobsSendToLLM/processPromptWithLLM.ts'
@@ -79,8 +80,10 @@ export const judgmentsJobsSendToLLM = async (
     const maxNumberOfInflightRequests = getMaxNumberOfInflightRequests()
     const promptsInFlight = await getNumberOfPromptsInFlight(db, serverJobId)
     const deficit = Math.max(0, maxNumberOfInflightRequests - promptsInFlight)
+    const workerCount = getWorkerCount()
     const burstOverride = Math.max(0, env.SGLANG_API_MAX_BURST_REQUESTS)
-    const maxBurst = Math.max(1, burstOverride > 0 ? burstOverride : Number(env.SGLANG_MAX_RUNNING_REQUESTS || 0))
+    const perWorkerBurst = Math.max(1, burstOverride > 0 ? burstOverride : Number(env.SGLANG_MAX_RUNNING_REQUESTS || 0))
+    const maxBurst = perWorkerBurst * workerCount
     const requestsToSend = Math.min(deficit, maxBurst)
     // console.log('requestsToSend', {
     //   requestsToSend,
