@@ -276,8 +276,8 @@ SGLANG_ARGS=(
   --data-parallel-size "$DP_SIZE"
   --trust-remote-code
   --mem-fraction-static "$SGLANG_MEM_FRACTION"
-  --max-running-requests "$SGLANG_MAX_RUNNING_REQUESTS"
-  --chunked-prefill-size "$SGLANG_CHUNKED_PREFILL_SIZE"
+  --max-running-requests "${SGLANG_MAX_RUNNING_REQUESTS:-512}"
+  --chunked-prefill-size "${SGLANG_CHUNKED_PREFILL_SIZE:-4096}"
   --context-length "$SGLANG_CONTEXT_LENGTH"
   --dtype "$SGLANG_DTYPE"
   --enable-metrics

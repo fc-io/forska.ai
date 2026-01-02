@@ -15,7 +15,13 @@ const processPrompts = async (
   prompts: PromptToProcess[],
 ): Promise<{connectionErrors: number}> => {
   const results = await Promise.allSettled(
-    prompts.map((prompt) => {
+    prompts.map(async (prompt) => {
+      // Add random jitter (0-1000ms) to desynchronize requests and effectively smooth out
+      // the burst load on the SSH tunnel/firewall.
+      const jitterMs = Math.floor(Math.random() * 1000)
+      await new Promise((resolve) => {
+        setTimeout(resolve, jitterMs)
+      })
       return processPromptWithLLM(db, prompt)
     }),
   )

@@ -246,17 +246,23 @@ const startTunnel = async (
       '-o',
       'ControlPath=none', // Ignore any existing control sockets
       '-o',
-      'ServerAliveInterval=10',
+      'ServerAliveInterval=5', // Send keepalive every 5 seconds (more frequent)
       '-o',
-      'ServerAliveCountMax=3',
+      'ServerAliveCountMax=2', // Disconnect after 2 missed keepalives (fail fast to restart)
       '-o',
       'ExitOnForwardFailure=yes',
       '-o',
       'TCPKeepAlive=yes',
       '-o',
-      'ConnectTimeout=10',
+      'IPQoS=throughput', // Optimize for throughput over interactive latency
       '-o',
-      'ConnectionAttempts=3',
+      'ConnectTimeout=15',
+      '-o',
+      'ConnectionAttempts=5',
+      '-o',
+      'Compression=no', // Disable compression for better performance with binary/encrypted data
+      '-o',
+      'Ciphers=aes128-gcm@openssh.com', // Enforce fastest cipher
       '-L',
       `${localPort}:${remoteHost}:${remotePort}`,
       SSH_HOST,
