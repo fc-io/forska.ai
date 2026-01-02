@@ -35,6 +35,10 @@ const needsMorePrompts = (readyCount: number): boolean => {
 
 type PromptQueueEntry = {articleId: string; promptId: string}
 
+// PostgreSQL has a limit of ~65535 parameters per query.
+// With 5 columns per row, we can safely insert up to 10000 rows per batch.
+const BATCH_INSERT_SIZE = 10000
+
 const addPromptsToQueue = async (
   db: PostgresJsDatabase<typeof schema>,
   jobId: string,
@@ -43,17 +47,21 @@ const addPromptsToQueue = async (
 ): Promise<void> => {
   if (promptEntries.length === 0) return
 
-  await db.insert(schema.judgmentsJobsPrompts).values(
-    promptEntries.map((entry) => {
-      return {
-        jobId,
-        articleId: entry.articleId,
-        promptId: entry.promptId,
-        status: 'ready' as const,
-        serverId: serverJobId,
-      }
-    }),
-  )
+  // Chunk the entries to avoid exceeding PostgreSQL's parameter limit
+  for (let i = 0; i < promptEntries.length; i += BATCH_INSERT_SIZE) {
+    const chunk = promptEntries.slice(i, i + BATCH_INSERT_SIZE)
+    await db.insert(schema.judgmentsJobsPrompts).values(
+      chunk.map((entry) => {
+        return {
+          jobId,
+          articleId: entry.articleId,
+          promptId: entry.promptId,
+          status: 'ready' as const,
+          serverId: serverJobId,
+        }
+      }),
+    )
+  }
 }
 
 const fetchPromptsForJob = async (job: Job, numberOfPromptsToGet: number) => {
@@ -76,7 +84,7 @@ export const judgmentsJobsAddToQueue = async (
   serverJobId: string,
 ): Promise<void> => {
   const {SGLANG_MAX_RUNNING_REQUESTS} = env
-  const promptsPerJob = Math.max(1, Number(SGLANG_MAX_RUNNING_REQUESTS || 1) * 20)
+  const promptsPerJob = Math.max(1, Number(SGLANG_MAX_RUNNING_REQUESTS || 1) * 5)
   const runningJobs = await judgmentsJobsGetRunningJobs(db)
 
   await Promise.all(
