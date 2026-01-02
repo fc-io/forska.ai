@@ -3,6 +3,7 @@ import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../db/schema.ts'
 import {env} from '../../utils/env.ts'
+import {rateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {ConnectionError, isCircuitOpen} from './connectionHealth.ts'
 import {getMaxNumberOfInflightRequests} from './getMaxNumberOfInflightRequests.ts'
 import type {judgmentsJobsGetRunningJobs} from './judgmentsJobsGetRunningJobs.ts'
@@ -29,9 +30,9 @@ const processPrompts = async (
   }).length
 
   if (rejected.length > 0) {
-    console.error(
-      'send to LLM: processing errors',
-      JSON.stringify({rejected: rejected.length, connectionErrors, total: results.length}),
+    rateLimitedLogger.error(
+      'llm:processing-errors',
+      `send to LLM: processing errors ${JSON.stringify({rejected: rejected.length, connectionErrors, total: results.length})}`,
     )
   }
 
@@ -99,19 +100,35 @@ export const judgmentsJobsSendToLLM = async (
         void (async () => {
           if (prompts.length > 0) {
             // Filter out prompts for servers with open circuit breakers
+            const blockedByCircuitBreaker: PromptToProcess[] = []
             const promptsToSend = prompts.filter((prompt) => {
               if (isCircuitOpen(prompt.modelBaseUrl)) {
-                console.log(`Circuit breaker open for ${prompt.modelBaseUrl} - skipping prompt ${prompt.promptId}`)
+                blockedByCircuitBreaker.push(prompt)
                 return false
               }
               return true
             })
 
+            if (blockedByCircuitBreaker.length > 0) {
+              // Rate-limited log to avoid spam when circuit breaker is blocking many prompts
+              const uniqueUrls = [
+                ...new Set(
+                  blockedByCircuitBreaker.map((p) => {
+                    return p.modelBaseUrl
+                  }),
+                ),
+              ]
+              const key = `circuit:blocked:${uniqueUrls.join(',')}`
+              rateLimitedLogger.log(
+                key,
+                `Circuit breaker blocked ${blockedByCircuitBreaker.length} prompts for: ${uniqueUrls.join(', ')}`,
+              )
+            }
+
             if (promptsToSend.length > 0) {
               await processPrompts(db, promptsToSend)
-            } else {
-              console.log('All prompts blocked by circuit breaker')
             }
+            // Removed redundant "All prompts blocked" log - the above log already covers this
           } else {
             console.log('No prompts to process – this should not happen, prob bug if it does')
           }

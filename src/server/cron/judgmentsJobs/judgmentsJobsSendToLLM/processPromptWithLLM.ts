@@ -3,6 +3,7 @@ import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import {judgeSinglePrompt} from '../../../../agent/judge.ts'
 import * as schema from '../../../../db/schema.ts'
+import {rateLimitedLogger} from '../../../utils/rateLimitedLogger.ts'
 import {ConnectionError} from '../connectionHealth.ts'
 import type {PromptToProcess} from './getAndUpdateReadyPrompts.ts'
 
@@ -125,10 +126,10 @@ export const processPromptWithLLM = async (
     // Check if this is a connection error - if so, don't mark as judged
     // The prompt will be retried on the next cron cycle when the server is back up
     if (error instanceof ConnectionError) {
-      console.log('Connection error - marking prompt for retry:', {
-        articleId: promptToProcess.articleId,
-        promptId: promptToProcess.promptId,
-      })
+      rateLimitedLogger.log(
+        `prompt:retry:${promptToProcess.modelBaseUrl}`,
+        `Connection error - marking prompts for retry (${promptToProcess.modelBaseUrl})`,
+      )
       await markAsRetry(db, promptToProcess.jobId, promptToProcess.articleId, promptToProcess.promptId)
       // Re-throw to let the caller know there was a connection issue
       throw error
@@ -144,4 +145,3 @@ export const processPromptWithLLM = async (
     await markAsJudged(db, promptToProcess.jobId, promptToProcess.articleId, promptToProcess.promptId)
   }
 }
-

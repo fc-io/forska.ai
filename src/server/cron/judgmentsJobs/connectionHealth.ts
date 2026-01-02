@@ -11,9 +11,14 @@
  * - HALF-OPEN: After cooldown, allow one test request
  */
 
+import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
+
 // Circuit breaker configuration
 const CIRCUIT_BREAKER_THRESHOLD = 5 // Number of consecutive failures to open circuit
 const COOLDOWN_MS = 30_000 // 30 seconds before attempting retry
+
+// Rate-limited logger for circuit breaker events (30s window)
+const circuitLogger = createRateLimitedLogger({windowMs: 30_000})
 
 // State tracking (per baseURL to handle multiple inference servers)
 type CircuitState = {consecutiveFailures: number; lastFailureTime: Date | null; isOpen: boolean}
@@ -49,7 +54,10 @@ export const isCircuitOpen = (baseURL: string): boolean => {
 
   if (cooldownExpired) {
     // Move to half-open state - allow a test request
-    console.log(`Circuit breaker half-open for ${baseURL} - allowing test request after ${COOLDOWN_MS}ms cooldown`)
+    circuitLogger.log(
+      `circuit:half-open:${baseURL}`,
+      `Circuit breaker half-open for ${baseURL} - allowing test request`,
+    )
     // Reset to allow one retry, but keep some failure count
     // so we don't need full threshold again if it fails
     state.consecutiveFailures = CIRCUIT_BREAKER_THRESHOLD - 1
@@ -59,7 +67,11 @@ export const isCircuitOpen = (baseURL: string): boolean => {
 
   if (!state.isOpen) {
     state.isOpen = true
-    console.log(`Circuit breaker OPEN for ${baseURL} - blocking requests for ${COOLDOWN_MS}ms`)
+    // Force log state transitions (important events)
+    circuitLogger.force(
+      `circuit:open:${baseURL}`,
+      `Circuit breaker OPEN for ${baseURL} - blocking requests for ${COOLDOWN_MS}ms`,
+    )
   }
 
   return true
@@ -71,7 +83,9 @@ export const isCircuitOpen = (baseURL: string): boolean => {
 export const recordConnectionSuccess = (baseURL: string): void => {
   const state = getOrCreateState(baseURL)
   if (state.consecutiveFailures > 0 || state.isOpen) {
-    console.log(`Circuit breaker CLOSED for ${baseURL} - connection restored`)
+    // Force log recovery (important event) and reset rate limiter for this URL
+    circuitLogger.force(`circuit:closed:${baseURL}`, `Circuit breaker CLOSED for ${baseURL} - connection restored`)
+    circuitLogger.reset(`circuit:failure:${baseURL}`)
   }
   state.consecutiveFailures = 0
   state.lastFailureTime = null
@@ -86,8 +100,12 @@ export const recordConnectionFailure = (baseURL: string): void => {
   state.consecutiveFailures += 1
   state.lastFailureTime = new Date()
 
-  if (state.consecutiveFailures >= CIRCUIT_BREAKER_THRESHOLD && !state.isOpen) {
-    console.log(`Circuit breaker threshold reached for ${baseURL} (${state.consecutiveFailures} consecutive failures)`)
+  if (state.consecutiveFailures >= CIRCUIT_BREAKER_THRESHOLD) {
+    // Rate-limited: only log once per 30s window, with count of suppressed logs
+    circuitLogger.warn(
+      `circuit:failure:${baseURL}`,
+      `Circuit breaker: ${state.consecutiveFailures} consecutive failures for ${baseURL}`,
+    )
   }
 }
 

@@ -8,6 +8,7 @@ import {
   recordConnectionFailure,
   recordConnectionSuccess,
 } from '../server/cron/judgmentsJobs/connectionHealth.ts'
+import {rateLimitedLogger} from '../server/utils/rateLimitedLogger.ts'
 import {judgeGetSinglePrompt} from './judge/judgeGetPrompt.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT} from './judge/judgeSinglePromptSystemPrompt.ts'
 import {judgeStoreTokenUse, type JudgeTokenUsageEntry} from './judge/judgeStoreTokenUse.ts'
@@ -240,7 +241,10 @@ export const judgeSinglePrompt = async ({
         recordConnectionFailure(baseURL)
         abortCount += 1
         errorCount += 1
-        console.error(`${article.id} | Prompt ${prompt.id} | Aborting: Connection error.`)
+        rateLimitedLogger.error(
+          `judge:connection-error:${baseURL}`,
+          `Connection error for ${baseURL} - aborting prompts`,
+        )
 
         // Store the token use for tracking
         const duration = performance.now() - startDuration
