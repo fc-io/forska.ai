@@ -28,6 +28,7 @@ import { Route as AdminSetup_statsIndexRouteImport } from './routes/+admin/+setu
 import { Route as AdminParquetIndexRouteImport } from './routes/+admin/+parquet/+index'
 import { Route as AdminLlmIndexRouteImport } from './routes/+admin/+llm/+index'
 import { Route as AdminJobsIndexRouteImport } from './routes/+admin/+jobs/+index'
+import { Route as AdminGpuIndexRouteImport } from './routes/+admin/+gpu/+index'
 import { Route as AdminFailed_requestsIndexRouteImport } from './routes/+admin/+failed_requests/+index'
 import { Route as AdminDatasourcesIndexRouteImport } from './routes/+admin/+datasources/+index'
 import { Route as AdminAssessmentsIndexRouteImport } from './routes/+admin/+assessments/+index'
@@ -141,6 +142,11 @@ const AdminJobsIndexRoute = AdminJobsIndexRouteImport.update({
   path: '/admin/jobs/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminGpuIndexRoute = AdminGpuIndexRouteImport.update({
+  id: '/admin/gpu/',
+  path: '/admin/gpu/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AdminFailed_requestsIndexRoute =
   AdminFailed_requestsIndexRouteImport.update({
     id: '/admin/failed_requests/',
@@ -238,6 +244,7 @@ export interface FileRoutesByFullPath {
   '/admin/assessments': typeof AdminAssessmentsIndexRoute
   '/admin/datasources': typeof AdminDatasourcesIndexRoute
   '/admin/failed_requests': typeof AdminFailed_requestsIndexRoute
+  '/admin/gpu': typeof AdminGpuIndexRoute
   '/admin/jobs': typeof AdminJobsIndexRoute
   '/admin/llm': typeof AdminLlmIndexRoute
   '/admin/parquet': typeof AdminParquetIndexRoute
@@ -274,6 +281,7 @@ export interface FileRoutesByTo {
   '/admin/assessments': typeof AdminAssessmentsIndexRoute
   '/admin/datasources': typeof AdminDatasourcesIndexRoute
   '/admin/failed_requests': typeof AdminFailed_requestsIndexRoute
+  '/admin/gpu': typeof AdminGpuIndexRoute
   '/admin/jobs': typeof AdminJobsIndexRoute
   '/admin/llm': typeof AdminLlmIndexRoute
   '/admin/parquet': typeof AdminParquetIndexRoute
@@ -311,6 +319,7 @@ export interface FileRoutesById {
   '/admin/assessments/': typeof AdminAssessmentsIndexRoute
   '/admin/datasources/': typeof AdminDatasourcesIndexRoute
   '/admin/failed_requests/': typeof AdminFailed_requestsIndexRoute
+  '/admin/gpu/': typeof AdminGpuIndexRoute
   '/admin/jobs/': typeof AdminJobsIndexRoute
   '/admin/llm/': typeof AdminLlmIndexRoute
   '/admin/parquet/': typeof AdminParquetIndexRoute
@@ -349,6 +358,7 @@ export interface FileRouteTypes {
     | '/admin/assessments'
     | '/admin/datasources'
     | '/admin/failed_requests'
+    | '/admin/gpu'
     | '/admin/jobs'
     | '/admin/llm'
     | '/admin/parquet'
@@ -385,6 +395,7 @@ export interface FileRouteTypes {
     | '/admin/assessments'
     | '/admin/datasources'
     | '/admin/failed_requests'
+    | '/admin/gpu'
     | '/admin/jobs'
     | '/admin/llm'
     | '/admin/parquet'
@@ -421,6 +432,7 @@ export interface FileRouteTypes {
     | '/admin/assessments/'
     | '/admin/datasources/'
     | '/admin/failed_requests/'
+    | '/admin/gpu/'
     | '/admin/jobs/'
     | '/admin/llm/'
     | '/admin/parquet/'
@@ -458,6 +470,7 @@ export interface RootRouteChildren {
   AdminAssessmentsIndexRoute: typeof AdminAssessmentsIndexRoute
   AdminDatasourcesIndexRoute: typeof AdminDatasourcesIndexRoute
   AdminFailed_requestsIndexRoute: typeof AdminFailed_requestsIndexRoute
+  AdminGpuIndexRoute: typeof AdminGpuIndexRoute
   AdminJobsIndexRoute: typeof AdminJobsIndexRoute
   AdminLlmIndexRoute: typeof AdminLlmIndexRoute
   AdminParquetIndexRoute: typeof AdminParquetIndexRoute
@@ -618,6 +631,13 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof AdminJobsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/gpu/': {
+      id: '/admin/gpu/'
+      path: '/admin/gpu'
+      fullPath: '/admin/gpu'
+      preLoaderRoute: typeof AdminGpuIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/admin/failed_requests/': {
       id: '/admin/failed_requests/'
       path: '/admin/failed_requests'
@@ -738,6 +758,7 @@ const rootRouteChildren: RootRouteChildren = {
   AdminAssessmentsIndexRoute: AdminAssessmentsIndexRoute,
   AdminDatasourcesIndexRoute: AdminDatasourcesIndexRoute,
   AdminFailed_requestsIndexRoute: AdminFailed_requestsIndexRoute,
+  AdminGpuIndexRoute: AdminGpuIndexRoute,
   AdminJobsIndexRoute: AdminJobsIndexRoute,
   AdminLlmIndexRoute: AdminLlmIndexRoute,
   AdminParquetIndexRoute: AdminParquetIndexRoute,
