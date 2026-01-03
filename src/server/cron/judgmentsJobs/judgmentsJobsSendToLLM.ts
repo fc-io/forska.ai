@@ -2,15 +2,44 @@ import {and, count, eq} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../db/schema.ts'
-import {env} from '../../utils/env.ts'
 import {rateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {workerLoadBalancer} from '../../utils/workerLoadBalancer.ts'
 import {ConnectionError, isCircuitOpen} from './connectionHealth.ts'
-import {getMaxNumberOfInflightRequests} from './getMaxNumberOfInflightRequests.ts'
-import {getWorkerCount} from './getWorkerCount.ts'
+import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
 import type {judgmentsJobsGetRunningJobs} from './judgmentsJobsGetRunningJobs.ts'
 import {getAndUpdateReadyPrompts, type PromptToProcess} from './judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts'
 import {processPromptWithLLM} from './judgmentsJobsSendToLLM/processPromptWithLLM.ts'
+
+const shuffle = <T>(items: T[]): T[] => {
+  return items
+    .map((item) => {
+      return {item, sort: Math.random()}
+    })
+    .sort((a, b) => {
+      return a.sort - b.sort
+    })
+    .map((entry) => {
+      return entry.item
+    })
+}
+
+const getRequestsToSendByJob = <T>(jobs: T[], requestsToSend: number): {job: T; limit: number}[] => {
+  const jobCount = jobs.length
+  const hasBudget = jobCount > 0 && requestsToSend > 0
+  const base = hasBudget ? Math.floor(requestsToSend / jobCount) : 0
+  const remainder = hasBudget ? requestsToSend % jobCount : 0
+  const shuffled = hasBudget ? shuffle(jobs) : []
+  const allocations = shuffled
+    .map((job, idx) => {
+      const limit = base + (idx < remainder ? 1 : 0)
+      return {job, limit}
+    })
+    .filter(({limit}) => {
+      return limit > 0
+    })
+
+  return hasBudget ? allocations : []
+}
 
 const processPrompts = async (
   db: PostgresJsDatabase<typeof schema>,
@@ -77,28 +106,24 @@ export const judgmentsJobsSendToLLM = async (
     // Note: Circuit breaker is checked per-prompt below, since prompts have modelBaseUrl
     // and we don't have a global SGLANG_BASE_URL in the env schema
 
-    const maxNumberOfInflightRequests = getMaxNumberOfInflightRequests()
+    const capacity = getJudgmentsCapacity(allJobs.length)
     const promptsInFlight = await getNumberOfPromptsInFlight(db, serverJobId)
-    const deficit = Math.max(0, maxNumberOfInflightRequests - promptsInFlight)
-    const workerCount = getWorkerCount()
-    const burstOverride = Math.max(0, env.SGLANG_API_MAX_BURST_REQUESTS)
-    const perWorkerBurst = Math.max(1, burstOverride > 0 ? burstOverride : Number(env.SGLANG_MAX_RUNNING_REQUESTS || 0))
-    const maxBurst = perWorkerBurst * workerCount
-    const requestsToSend = Math.min(deficit, maxBurst)
+    const deficit = Math.max(0, capacity.maxInflight - promptsInFlight)
+    const requestsToSend = Math.min(deficit, capacity.maxBurst)
     // console.log('requestsToSend', {
     //   requestsToSend,
-    //   maxInflight: maxNumberOfInflightRequests,
+    //   maxInflight: capacity.maxInflight,
     //   promptsInFlight,
-    //   sglangBurst: maxBurst,
+    //   sglangBurst: capacity.maxBurst,
     //   topology: {totalGpus: env.GPU_TOTAL_GPUS, tp: env.TP_SIZE, pp: env.PP_SIZE},
     // })
 
     if (requestsToSend > 0 && allJobs.length > 0) {
-      const requestsToSendPerJob = Math.max(1, Math.floor(requestsToSend / allJobs.length))
+      const requestsToSendByJob = getRequestsToSendByJob(allJobs, requestsToSend)
 
       const promptsToProcess = await Promise.allSettled(
-        allJobs.map((job) => {
-          return getAndUpdateReadyPrompts(db, serverJobId, job.id, requestsToSendPerJob)
+        requestsToSendByJob.map(({job, limit}) => {
+          return getAndUpdateReadyPrompts(db, serverJobId, job.id, limit)
         }),
       ).then((results) => {
         return results

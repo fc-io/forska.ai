@@ -1,3 +1,4 @@
+import {env} from './env.ts'
 
 const activeRequests = new Map<string, number>()
 
@@ -7,14 +8,7 @@ export const workerLoadBalancer = {
    * Increments the active request count for the selected worker.
    */
   getWorkerUrl: (): string | null => {
-    const workerUrlsEnv = process.env.WORKER_URLS
-    if (!workerUrlsEnv) return null
-
-    // Normalize URLs (trim, remove empty)
-    const workerUrls = workerUrlsEnv.split(',').map((u) => {
-      return u.trim()
-    }).filter(Boolean)
-
+    const workerUrls = env.WORKER_URLS
     if (workerUrls.length === 0) return null
 
     // Initialize missing keys

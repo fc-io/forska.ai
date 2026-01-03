@@ -55,9 +55,15 @@ const envShape = arktype({
   PP_SIZE: 'number | string.integer.parse',
   DP_SIZE: 'number | string.integer.parse',
   GPU_SHAPE: 'string | null | undefined',
+  // Per SGLang worker/engine
   SGLANG_MAX_RUNNING_REQUESTS: 'number | string.integer.parse',
+  // Per worker; 0 => use SGLANG_MAX_RUNNING_REQUESTS
   SGLANG_API_MAX_INFLIGHT_REQUESTS: 'number | string.integer.parse',
+  // Per worker; 0 => use SGLANG_MAX_RUNNING_REQUESTS
   SGLANG_API_MAX_BURST_REQUESTS: 'number | string.integer.parse',
+  // Judgments cron policy (not SGLang server config)
+  JUDGMENTS_READY_TARGET_MULTIPLIER: 'number | string.integer.parse',
+  JUDGMENTS_ADD_TO_QUEUE_MAX_BATCH_SIZE: 'number | string.integer.parse',
   SGLANG_MODEL: 'string | null | undefined',
   WORKER_URLS: CsvStringArray,
 })
@@ -132,6 +138,18 @@ const loadEnv = (): typeof envShape.infer => {
     || (merged as Record<string, string>).SGLANG_MAX_RUNNING_REQUESTS === ''
   ) {
     ;(merged as Record<string, string>).SGLANG_MAX_RUNNING_REQUESTS = '0'
+  }
+  if (
+    merged.JUDGMENTS_READY_TARGET_MULTIPLIER == null
+    || (merged as Record<string, string>).JUDGMENTS_READY_TARGET_MULTIPLIER === ''
+  ) {
+    ;(merged as Record<string, string>).JUDGMENTS_READY_TARGET_MULTIPLIER = '10'
+  }
+  if (
+    merged.JUDGMENTS_ADD_TO_QUEUE_MAX_BATCH_SIZE == null
+    || (merged as Record<string, string>).JUDGMENTS_ADD_TO_QUEUE_MAX_BATCH_SIZE === ''
+  ) {
+    ;(merged as Record<string, string>).JUDGMENTS_ADD_TO_QUEUE_MAX_BATCH_SIZE = '10000'
   }
   if (!('WORKER_URLS' in merged)) {
     ;(merged as Record<string, undefined>).WORKER_URLS = undefined

@@ -2,8 +2,7 @@ import {and, count, eq} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../db/schema.ts'
-import {env} from '../../utils/env.ts'
-import {getMaxNumberOfInflightRequests} from './getMaxNumberOfInflightRequests.ts'
+import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
 import {judgmentsJobsCronGetPrompts} from './judgmentsJobsCronGetPrompts.ts'
 import {judgmentsJobsGetRunningJobs} from './judgmentsJobsGetRunningJobs.ts'
 
@@ -29,8 +28,13 @@ const getCountOfReadyPrompts = async (
   return result[0]?.count ?? 0
 }
 
-const needsMorePrompts = (readyCount: number): boolean => {
-  return readyCount < getMaxNumberOfInflightRequests() * 50
+const getPromptsToFetchCount = (
+  readyCount: number,
+  readyTargetPerJob: number,
+  addToQueueMaxBatchSize: number,
+): number => {
+  const deficit = Math.max(0, readyTargetPerJob - readyCount)
+  return Math.min(deficit, addToQueueMaxBatchSize)
 }
 
 type PromptQueueEntry = {articleId: string; promptId: string}
@@ -73,23 +77,30 @@ const getNewPromptsForJob = async (
   db: PostgresJsDatabase<typeof schema>,
   job: Job,
   serverJobId: string,
-  promptsPerJob: number,
+  readyTargetPerJob: number,
+  addToQueueMaxBatchSize: number,
 ) => {
   const countOfReadyPrompts = await getCountOfReadyPrompts(db, serverJobId, job.id)
-  return needsMorePrompts(countOfReadyPrompts) ? fetchPromptsForJob(job, promptsPerJob) : {promptEntries: [], job}
+  const promptsToFetchCount = getPromptsToFetchCount(countOfReadyPrompts, readyTargetPerJob, addToQueueMaxBatchSize)
+  return promptsToFetchCount > 0 ? fetchPromptsForJob(job, promptsToFetchCount) : {promptEntries: [], job}
 }
 
 export const judgmentsJobsAddToQueue = async (
   db: PostgresJsDatabase<typeof schema>,
   serverJobId: string,
 ): Promise<void> => {
-  const {SGLANG_MAX_RUNNING_REQUESTS} = env
-  const promptsPerJob = Math.max(1, Number(SGLANG_MAX_RUNNING_REQUESTS || 1) * 20)
   const runningJobs = await judgmentsJobsGetRunningJobs(db)
+  const capacity = getJudgmentsCapacity(runningJobs.length)
 
   await Promise.all(
     runningJobs.map(async (job) => {
-      const {promptEntries} = await getNewPromptsForJob(db, job, serverJobId, promptsPerJob)
+      const {promptEntries} = await getNewPromptsForJob(
+        db,
+        job,
+        serverJobId,
+        capacity.readyTargetPerJob,
+        capacity.addToQueueMaxBatchSize,
+      )
       await addPromptsToQueue(db, job.id, promptEntries, serverJobId)
     }),
   )
