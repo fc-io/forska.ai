@@ -3,11 +3,107 @@
 .assessment-container {
     line-height: 1.8;
 }
+
+.assessment-container h2,
+.assessment-container h3,
 .assessment-container h4 {
     font-weight: 600;
-    /* margin-top: 1.5rem; */
+    line-height: 1.4;
+    color: rgb(17 24 39);
 }
 
+.assessment-container h2 {
+    font-size: 1.1rem;
+}
+
+.assessment-container h3 {
+    font-size: 1.05rem;
+}
+
+.assessment-container h4 {
+    font-size: 1rem;
+}
+
+.assessment-container h2:not(:first-child),
+.assessment-container h3:not(:first-child),
 .assessment-container h4:not(:first-child) {
     margin-top: 1.5rem;
+}
+
+.assessment-container p:not(:first-child),
+.assessment-container ul:not(:first-child),
+.assessment-container ol:not(:first-child),
+.assessment-container figure:not(:first-child),
+.assessment-container table:not(:first-child),
+.assessment-container blockquote:not(:first-child) {
+    margin-top: 0.75rem;
+}
+
+.assessment-container ul,
+.assessment-container ol {
+    padding-left: 1.25rem;
+    list-style-position: outside;
+}
+
+.assessment-container ul {
+    list-style-type: disc;
+}
+
+.assessment-container ol {
+    list-style-type: decimal;
+}
+
+.assessment-container li:not(:first-child) {
+    margin-top: 0.25rem;
+}
+
+.assessment-container figure {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-right: 0;
+    margin-left: 0;
+}
+
+.assessment-container figure > :only-child {
+    align-self: flex-start;
+}
+
+.assessment-container figcaption,
+.assessment-container caption,
+.assessment-container .caption {
+    font-size: 0.875rem;
+    color: rgb(75 85 99);
+}
+
+.assessment-container table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.assessment-container th,
+.assessment-container td {
+    border: 1px solid rgb(229 231 235);
+    padding: 0.5rem 0.75rem;
+    text-align: left;
+    vertical-align: top;
+}
+
+.assessment-container th {
+    background: rgb(249 250 251);
+}
+
+.assessment-container a {
+    color: rgb(37 99 235);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    overflow-wrap: anywhere;
+}
+
+.assessment-container a:hover {
+    color: rgb(29 78 216);
+}
+
+.assessment-container img {
+    border-radius: 0.375rem;
 }
