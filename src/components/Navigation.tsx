@@ -1,12 +1,29 @@
 import {Menu} from '@ark-ui/solid'
 import {Link} from '@tanstack/solid-router'
-import {Show} from 'solid-js'
+import {Show, createSignal, onCleanup, onMount} from 'solid-js'
 
 import type {User} from '../types/user'
 
 interface NavigationProps {
   user: User | undefined
   onSignOut: () => void
+}
+
+const isEventTargetWithinElement = (target: EventTarget | null, element: HTMLElement | undefined) => {
+  return target instanceof Node && !!element && element.contains(target)
+}
+
+const isEditableTarget = (target: EventTarget | null) => {
+  if (!(target instanceof HTMLElement)) {
+    return false
+  }
+
+  const tagName = target.tagName
+  return tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT' || target.isContentEditable
+}
+
+const isF13KeyDownEvent = (event: KeyboardEvent) => {
+  return event.code === 'F13' || event.key === 'F13'
 }
 
 const getAvatarLabel = (user: User | undefined) => {
@@ -36,8 +53,79 @@ const getAvatarLabel = (user: User | undefined) => {
 }
 
 export const Navigation = (props: NavigationProps) => {
+  const [isAdminMenuOpen, setIsAdminMenuOpen] = createSignal(false)
+  let adminMenuTriggerElement: HTMLDivElement | undefined
+  let adminMenuElement: HTMLDivElement | undefined
+
+  const closeAdminMenu = () => {
+    setIsAdminMenuOpen(false)
+  }
+
+  const openAdminMenu = () => {
+    setIsAdminMenuOpen(true)
+  }
+
+  const toggleAdminMenu = () => {
+    setIsAdminMenuOpen((previous) => {
+      return !previous
+    })
+  }
+
+  const handleAdminMenuTriggerPointerEnter = (event: PointerEvent) => {
+    if (event.pointerType === 'mouse') {
+      openAdminMenu()
+    }
+  }
+
+  const handleAdminMenuTriggerPointerLeave = (event: PointerEvent) => {
+    if (event.pointerType !== 'mouse') {
+      return
+    }
+
+    if (!isEventTargetWithinElement(event.relatedTarget, adminMenuElement)) {
+      closeAdminMenu()
+    }
+  }
+
+  const handleAdminMenuPointerEnter = (event: PointerEvent) => {
+    if (event.pointerType === 'mouse') {
+      openAdminMenu()
+    }
+  }
+
+  const handleAdminMenuPointerLeave = (event: PointerEvent) => {
+    if (event.pointerType !== 'mouse') {
+      return
+    }
+
+    if (!isEventTargetWithinElement(event.relatedTarget, adminMenuTriggerElement)) {
+      closeAdminMenu()
+    }
+  }
+
+  const handleKeyDown = (event: KeyboardEvent) => {
+    if (!isF13KeyDownEvent(event) || isEditableTarget(event.target)) {
+      return
+    }
+
+    if (props.user?.role !== 'admin') {
+      return
+    }
+
+    event.preventDefault()
+    toggleAdminMenu()
+  }
+
+  onMount(() => {
+    window.addEventListener('keydown', handleKeyDown)
+  })
+
+  onCleanup(() => {
+    window.removeEventListener('keydown', handleKeyDown)
+  })
+
   return (
-    <nav class="bg-white shadow-sm border-b border-gray-200">
+    <nav class="relative bg-white shadow-sm border-b border-gray-200">
       <div class="px-4 sm:px-6 lg:px-8">
         <div class="flex justify-between h-16">
           <div class="flex items-center space-x-8">
@@ -56,45 +144,23 @@ export const Navigation = (props: NavigationProps) => {
           </div>
           <div class="flex items-center space-x-4">
             <Show when={props.user?.role === 'admin'}>
-              <Link to="/admin/assessments" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
-                Assessments
-              </Link>
-              <Link to="/admin/datasources" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
-                Data Sources
-              </Link>
-              <Link to="/admin/jobs" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
-                Jobs
-              </Link>
-              <Link to="/admin/articles" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
-                Article Search
-              </Link>
-              <Link to="/admin/pdf-conversions" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
-                PDF Conversions
-              </Link>
-              <Link to="/admin/llm" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
-                LLM Metrics
-              </Link>
-              <Link to="/admin/gpu" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
-                GPU Metrics
-              </Link>
-              <Link to="/admin/setup_stats" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
-                Setup/Stats
-              </Link>
-              <Link to="/admin/users" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
-                Users
-              </Link>
-              <Link to="/admin/prompts/deduplicate" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
-                Prompts
-              </Link>
-              <Link to="/admin/parquet" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
-                Parquet
-              </Link>
-              <Link to="/admin/aa-models" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
-                AI Models
-              </Link>
-              <Link to="/admin/failed_requests" class="text-gray-600 hover:text-blue-600 text-sm font-medium">
-                Failed Requests
-              </Link>
+              <div
+                ref={(element) => {
+                  adminMenuTriggerElement = element
+                }}
+                class={`cursor-pointer select-none rounded-md px-3 py-2 text-sm font-medium text-gray-700 hover:bg-stone-100 hover:text-gray-900 ${
+                  isAdminMenuOpen() ? 'bg-stone-100 text-gray-900' : ''
+                }`}
+                role="button"
+                tabIndex={0}
+                aria-haspopup="true"
+                aria-expanded={isAdminMenuOpen()}
+                onPointerEnter={handleAdminMenuTriggerPointerEnter}
+                onPointerLeave={handleAdminMenuTriggerPointerLeave}
+                onClick={toggleAdminMenu}
+              >
+                Admin Menu
+              </div>
             </Show>
             <Show when={props.user}>
               <Menu.Root positioning={{placement: 'bottom-end'}}>
@@ -130,6 +196,131 @@ export const Navigation = (props: NavigationProps) => {
           </div>
         </div>
       </div>
+      <Show when={props.user?.role === 'admin' && isAdminMenuOpen()}>
+        <div
+          ref={(element) => {
+            adminMenuElement = element
+          }}
+          class="absolute left-0 right-0 top-full z-50 bg-stone-100 shadow-sm"
+          onPointerEnter={handleAdminMenuPointerEnter}
+          onPointerLeave={handleAdminMenuPointerLeave}
+        >
+          <div class="px-4 sm:px-6 lg:px-8 py-6">
+            <div class="flex items-stretch gap-6 min-h-64">
+              <div class="flex items-stretch gap-4">
+                <Link
+                  to="/admin/jobs"
+                  class="flex h-full w-44 sm:w-52 md:w-60 flex-col justify-between rounded-xl border border-stone-200 bg-white/60 px-6 py-6 font-semibold text-gray-900 hover:bg-white"
+                  onClick={closeAdminMenu}
+                >
+                  <div class="text-lg font-semibold">Jobs</div>
+                </Link>
+                <Link
+                  to="/admin/llm"
+                  class="flex h-full w-44 sm:w-52 md:w-60 flex-col justify-between rounded-xl border border-stone-200 bg-white/60 px-6 py-6 font-semibold text-gray-900 hover:bg-white"
+                  onClick={closeAdminMenu}
+                >
+                  <div class="text-lg font-semibold">LLM Metrics</div>
+                </Link>
+              </div>
+              <div class="grid flex-1 grid-cols-1 gap-10 sm:grid-cols-2 lg:grid-cols-3">
+                <div class="flex flex-col gap-4">
+                  <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">Data</div>
+                  <div class="flex flex-col gap-1">
+                    <Link
+                      to="/admin/assessments"
+                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
+                      onClick={closeAdminMenu}
+                    >
+                      Assessments
+                    </Link>
+                    <Link
+                      to="/admin/datasources"
+                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
+                      onClick={closeAdminMenu}
+                    >
+                      Data Sources
+                    </Link>
+                    <Link
+                      to="/admin/articles"
+                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
+                      onClick={closeAdminMenu}
+                    >
+                      Article Search
+                    </Link>
+                    <Link
+                      to="/admin/pdf-conversions"
+                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
+                      onClick={closeAdminMenu}
+                    >
+                      PDF Conversions
+                    </Link>
+                    <Link
+                      to="/admin/parquet"
+                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
+                      onClick={closeAdminMenu}
+                    >
+                      Parquet
+                    </Link>
+                  </div>
+                </div>
+                <div class="flex flex-col gap-4">
+                  <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">System</div>
+                  <div class="flex flex-col gap-1">
+                    <Link
+                      to="/admin/gpu"
+                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
+                      onClick={closeAdminMenu}
+                    >
+                      GPU Metrics
+                    </Link>
+                    <Link
+                      to="/admin/failed_requests"
+                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
+                      onClick={closeAdminMenu}
+                    >
+                      Failed Requests
+                    </Link>
+                    <Link
+                      to="/admin/setup_stats"
+                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
+                      onClick={closeAdminMenu}
+                    >
+                      Setup/Stats
+                    </Link>
+                  </div>
+                </div>
+                <div class="flex flex-col gap-4">
+                  <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">Admin</div>
+                  <div class="flex flex-col gap-1">
+                    <Link
+                      to="/admin/users"
+                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
+                      onClick={closeAdminMenu}
+                    >
+                      Users
+                    </Link>
+                    <Link
+                      to="/admin/prompts/deduplicate"
+                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
+                      onClick={closeAdminMenu}
+                    >
+                      Prompts
+                    </Link>
+                    <Link
+                      to="/admin/aa-models"
+                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
+                      onClick={closeAdminMenu}
+                    >
+                      AI Models
+                    </Link>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </Show>
     </nav>
   )
 }
