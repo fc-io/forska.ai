@@ -1,4 +1,4 @@
-import {count, eq, inArray, isNull, sql} from 'drizzle-orm'
+import {count, eq, inArray, isNotNull, isNull, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {
@@ -53,6 +53,22 @@ export const articlesRoutes = new Elysia()
 
     // Return totals (overall, by route, and without a link)
     return {total: totalRow?.count ?? 0, byImportRoute: linkedCounts, withoutImportRoute}
+  })
+  .get('/api/articles/conversion-stats', async () => {
+    const db = getDatabase()
+
+    const status = sql<string>`COALESCE(${articles.fullTextConversionStatus}, 'not_started')`.as('status')
+    const rows = await db
+      .select({status, count: sql<number>`COUNT(*)::int`.as('count')})
+      .from(articles)
+      .where(isNotNull(articles.fullTextPDF))
+      .groupBy(status)
+
+    const total = rows.reduce((sum, row) => {
+      return sum + (row.count ?? 0)
+    }, 0)
+
+    return {total, byStatus: rows.map((row) => ({status: row.status, count: row.count ?? 0}))}
   })
   .get('/api/articles/latest', async () => {
     const db = getDatabase()

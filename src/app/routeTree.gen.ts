@@ -26,6 +26,7 @@ import { Route as ProjectsArchivedIndexRouteImport } from './routes/+projects/+a
 import { Route as ProjectsIdIndexRouteImport } from './routes/+projects/+$id/+index'
 import { Route as AdminUsersIndexRouteImport } from './routes/+admin/+users/+index'
 import { Route as AdminSetup_statsIndexRouteImport } from './routes/+admin/+setup_stats/+index'
+import { Route as AdminPdfConversionsIndexRouteImport } from './routes/+admin/+pdf-conversions/+index'
 import { Route as AdminParquetIndexRouteImport } from './routes/+admin/+parquet/+index'
 import { Route as AdminLlmIndexRouteImport } from './routes/+admin/+llm/+index'
 import { Route as AdminJobsIndexRouteImport } from './routes/+admin/+jobs/+index'
@@ -134,6 +135,12 @@ const AdminSetup_statsIndexRoute = AdminSetup_statsIndexRouteImport.update({
   path: '/admin/setup_stats/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminPdfConversionsIndexRoute =
+  AdminPdfConversionsIndexRouteImport.update({
+    id: '/admin/pdf-conversions/',
+    path: '/admin/pdf-conversions/',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const AdminParquetIndexRoute = AdminParquetIndexRouteImport.update({
   id: '/admin/parquet/',
   path: '/admin/parquet/',
@@ -261,6 +268,7 @@ export interface FileRoutesByFullPath {
   '/admin/jobs': typeof AdminJobsIndexRoute
   '/admin/llm': typeof AdminLlmIndexRoute
   '/admin/parquet': typeof AdminParquetIndexRoute
+  '/admin/pdf-conversions': typeof AdminPdfConversionsIndexRoute
   '/admin/setup_stats': typeof AdminSetup_statsIndexRoute
   '/admin/users': typeof AdminUsersIndexRoute
   '/projects/$id': typeof ProjectsIdIndexRoute
@@ -300,6 +308,7 @@ export interface FileRoutesByTo {
   '/admin/jobs': typeof AdminJobsIndexRoute
   '/admin/llm': typeof AdminLlmIndexRoute
   '/admin/parquet': typeof AdminParquetIndexRoute
+  '/admin/pdf-conversions': typeof AdminPdfConversionsIndexRoute
   '/admin/setup_stats': typeof AdminSetup_statsIndexRoute
   '/admin/users': typeof AdminUsersIndexRoute
   '/projects/$id': typeof ProjectsIdIndexRoute
@@ -340,6 +349,7 @@ export interface FileRoutesById {
   '/admin/jobs/': typeof AdminJobsIndexRoute
   '/admin/llm/': typeof AdminLlmIndexRoute
   '/admin/parquet/': typeof AdminParquetIndexRoute
+  '/admin/pdf-conversions/': typeof AdminPdfConversionsIndexRoute
   '/admin/setup_stats/': typeof AdminSetup_statsIndexRoute
   '/admin/users/': typeof AdminUsersIndexRoute
   '/projects/$id/': typeof ProjectsIdIndexRoute
@@ -381,6 +391,7 @@ export interface FileRouteTypes {
     | '/admin/jobs'
     | '/admin/llm'
     | '/admin/parquet'
+    | '/admin/pdf-conversions'
     | '/admin/setup_stats'
     | '/admin/users'
     | '/projects/$id'
@@ -420,6 +431,7 @@ export interface FileRouteTypes {
     | '/admin/jobs'
     | '/admin/llm'
     | '/admin/parquet'
+    | '/admin/pdf-conversions'
     | '/admin/setup_stats'
     | '/admin/users'
     | '/projects/$id'
@@ -459,6 +471,7 @@ export interface FileRouteTypes {
     | '/admin/jobs/'
     | '/admin/llm/'
     | '/admin/parquet/'
+    | '/admin/pdf-conversions/'
     | '/admin/setup_stats/'
     | '/admin/users/'
     | '/projects/$id/'
@@ -499,6 +512,7 @@ export interface RootRouteChildren {
   AdminJobsIndexRoute: typeof AdminJobsIndexRoute
   AdminLlmIndexRoute: typeof AdminLlmIndexRoute
   AdminParquetIndexRoute: typeof AdminParquetIndexRoute
+  AdminPdfConversionsIndexRoute: typeof AdminPdfConversionsIndexRoute
   AdminSetup_statsIndexRoute: typeof AdminSetup_statsIndexRoute
   AdminUsersIndexRoute: typeof AdminUsersIndexRoute
   ProjectsIdIndexRoute: typeof ProjectsIdIndexRoute
@@ -641,6 +655,13 @@ declare module '@tanstack/solid-router' {
       path: '/admin/setup_stats'
       fullPath: '/admin/setup_stats'
       preLoaderRoute: typeof AdminSetup_statsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/pdf-conversions/': {
+      id: '/admin/pdf-conversions/'
+      path: '/admin/pdf-conversions'
+      fullPath: '/admin/pdf-conversions'
+      preLoaderRoute: typeof AdminPdfConversionsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/parquet/': {
@@ -803,6 +824,7 @@ const rootRouteChildren: RootRouteChildren = {
   AdminJobsIndexRoute: AdminJobsIndexRoute,
   AdminLlmIndexRoute: AdminLlmIndexRoute,
   AdminParquetIndexRoute: AdminParquetIndexRoute,
+  AdminPdfConversionsIndexRoute: AdminPdfConversionsIndexRoute,
   AdminSetup_statsIndexRoute: AdminSetup_statsIndexRoute,
   AdminUsersIndexRoute: AdminUsersIndexRoute,
   ProjectsIdIndexRoute: ProjectsIdIndexRoute,
