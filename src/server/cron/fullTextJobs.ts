@@ -1,5 +1,5 @@
 import {cron} from '@elysiajs/cron'
-import {eq, isNull, sql} from 'drizzle-orm'
+import {and, between, desc, eq, inArray, isNull, sql} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 import {Elysia} from 'elysia'
 
@@ -11,31 +11,145 @@ import {fullTextArticleFetchFromUnpaywall} from './fullTextJobs/fullTextArticleF
 
 const NEW_ARTICLES_INTERVAL = '0 * * * * *'
 
-const getArticlesWithoutFullText = async (db: PostgresJsDatabase<typeof schema>, numberOfArticlesToFetch: number) => {
-  const articlesWithoutFullText = await db
-    .select({id: schema.articles.id, arxivId: schema.articles.arxivId, originalData: schema.articles.originalData})
-    .from(schema.articles)
-    .where(isNull(schema.articles.fullTextFetchedAt))
-    .orderBy(
-      sql`(
-        EXISTS (
-          ${db
-            .select({one: sql`1`})
-            .from(schema.judgments)
-            .where(eq(schema.judgments.articleId, schema.articles.id))
-            .limit(1)}
-        ) OR EXISTS (
-          ${db
-            .select({one: sql`1`})
-            .from(schema.judgmentsHuman)
-            .where(eq(schema.judgmentsHuman.articleId, schema.articles.id))
-            .limit(1)}
-        )
-      ) DESC, ${schema.articles.createdAt} DESC`,
-    )
-    .limit(numberOfArticlesToFetch)
+type ArticleResult = {id: string; arxivId: string | null; originalData: unknown}
 
-  return articlesWithoutFullText
+/**
+ * Get articles without full text, prioritizing:
+ * 1. Articles from projects with running jobs + useFulltext=true
+ * 2. Articles from projects with running jobs + useFulltext=false
+ * 3. Fallback: any articles by created_at DESC
+ */
+const getArticlesWithoutFullText = async (
+  db: PostgresJsDatabase<typeof schema>,
+  numberOfArticlesToFetch: number,
+): Promise<ArticleResult[]> => {
+  const collectedArticles: ArticleResult[] = []
+  const seenIds = new Set<string>()
+
+  console.time('[fullTextJobs] getArticlesWithoutFullText total')
+
+  // Step 1: Get running jobs with their projects
+  console.time('[fullTextJobs] query running jobs')
+  const runningJobsWithProjects = await db
+    .select({
+      jobId: schema.judgmentsJobs.id,
+      projectId: schema.projects.id,
+      useFulltext: schema.projects.useFulltext,
+      dateFrom: schema.projects.dateFrom,
+      dateTo: schema.projects.dateTo,
+    })
+    .from(schema.judgmentsJobs)
+    .innerJoin(schema.projects, eq(schema.judgmentsJobs.projectId, schema.projects.id))
+    .where(eq(schema.judgmentsJobs.status, 'running'))
+    .orderBy(desc(schema.projects.useFulltext))
+  console.timeEnd('[fullTextJobs] query running jobs')
+
+  console.log(`[fullTextJobs] Found ${runningJobsWithProjects.length} running jobs`)
+
+  // Step 2: For each project, find articles without full text
+  for (const {projectId, useFulltext, dateFrom, dateTo} of runningJobsWithProjects) {
+    if (collectedArticles.length >= numberOfArticlesToFetch) break
+
+    const remaining = numberOfArticlesToFetch - collectedArticles.length
+    console.log(`[fullTextJobs] Project ${projectId} (useFulltext=${useFulltext}), need ${remaining} more`)
+
+    // Build date conditions
+    const dateConditions = []
+    if (dateFrom) {
+      dateConditions.push(sql`${schema.articles.articleCreatedAt} >= ${dateFrom}`)
+    }
+    if (dateTo) {
+      dateConditions.push(sql`${schema.articles.articleCreatedAt} <= ${dateTo}`)
+    }
+
+    // Try importRoute path first
+    console.time(`[fullTextJobs] project ${projectId} importRoute query`)
+    const projectRoutes = await db
+      .select({importRouteId: schema.projectRouteLink.importRouteId})
+      .from(schema.projectRouteLink)
+      .where(eq(schema.projectRouteLink.projectId, projectId))
+    console.timeEnd(`[fullTextJobs] project ${projectId} importRoute query`)
+
+    if (projectRoutes.length > 0) {
+      const routeIds = projectRoutes.map((r) => {
+        return r.importRouteId
+      })
+      console.time(`[fullTextJobs] project ${projectId} articles via importRoute`)
+      const articlesViaRoute = await db
+        .select({id: schema.articles.id, arxivId: schema.articles.arxivId, originalData: schema.articles.originalData})
+        .from(schema.articles)
+        .innerJoin(schema.articleRouteLink, eq(schema.articleRouteLink.articleId, schema.articles.id))
+        .where(
+          and(
+            inArray(schema.articleRouteLink.importRouteId, routeIds),
+            isNull(schema.articles.fullTextFetchedAt),
+            ...dateConditions,
+          ),
+        )
+        .orderBy(desc(schema.articles.articleCreatedAt))
+        .limit(remaining)
+      console.timeEnd(`[fullTextJobs] project ${projectId} articles via importRoute`)
+
+      for (const article of articlesViaRoute) {
+        if (!seenIds.has(article.id)) {
+          seenIds.add(article.id)
+          collectedArticles.push(article)
+        }
+      }
+      continue
+    }
+
+    // Try project_articles path
+    console.time(`[fullTextJobs] project ${projectId} articles via project_articles`)
+    const articlesViaDirect = await db
+      .select({id: schema.articles.id, arxivId: schema.articles.arxivId, originalData: schema.articles.originalData})
+      .from(schema.articles)
+      .innerJoin(schema.projectArticles, eq(schema.projectArticles.articleId, schema.articles.id))
+      .where(
+        and(
+          eq(schema.projectArticles.projectId, projectId),
+          isNull(schema.articles.fullTextFetchedAt),
+          ...dateConditions,
+        ),
+      )
+      .orderBy(desc(schema.articles.articleCreatedAt))
+      .limit(remaining)
+    console.timeEnd(`[fullTextJobs] project ${projectId} articles via project_articles`)
+
+    for (const article of articlesViaDirect) {
+      if (!seenIds.has(article.id)) {
+        seenIds.add(article.id)
+        collectedArticles.push(article)
+      }
+    }
+  }
+
+  // Step 3: Fallback - fill remaining with any articles
+  if (collectedArticles.length < numberOfArticlesToFetch) {
+    const remaining = numberOfArticlesToFetch - collectedArticles.length
+    console.log(`[fullTextJobs] Fallback: fetching ${remaining} more articles`)
+    console.time('[fullTextJobs] fallback query')
+    const fallbackArticles = await db
+      .select({id: schema.articles.id, arxivId: schema.articles.arxivId, originalData: schema.articles.originalData})
+      .from(schema.articles)
+      .where(isNull(schema.articles.fullTextFetchedAt))
+      .orderBy(desc(schema.articles.createdAt))
+      .limit(remaining + seenIds.size) // fetch extra to account for already-seen
+    console.timeEnd('[fullTextJobs] fallback query')
+
+    for (const article of fallbackArticles) {
+      if (collectedArticles.length >= numberOfArticlesToFetch) break
+      if (!seenIds.has(article.id)) {
+        seenIds.add(article.id)
+        collectedArticles.push(article)
+      }
+    }
+  }
+
+  console.timeEnd('[fullTextJobs] getArticlesWithoutFullText total')
+  console.log(`[fullTextJobs] Returning ${collectedArticles.length} articles`)
+
+  return collectedArticles
 }
 
 const getFullTextForArticle = async (
@@ -70,7 +184,7 @@ const storeFullText = async (
 }
 
 const fetchFullTextForArticles = async () => {
-  if (!env.RUN_SERVER_FULL_TEST_FETCHING) return
+  if (!env.RUN_SERVER_FULL_TEXT_FETCHING) return
   const minutesInADay = 24 * 60
   const unpaywallArticlesPerDayLimit = 100_000
   const numberOfArticlesToFetch = Math.floor(unpaywallArticlesPerDayLimit / minutesInADay)

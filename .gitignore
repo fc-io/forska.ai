@@ -7,6 +7,8 @@ models
 pgdata/
 init-db/
 
+assets/article_pdfs/
+
 # Analytics infrastructure data (SeaweedFS, ClickHouse)
 data/
 

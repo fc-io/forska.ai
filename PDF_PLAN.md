@@ -97,12 +97,12 @@ Drizzle: `index(...).on(table.id).where(sql\`full_text_fetched_at IS NULL\`)`
 
 ## Checklist
 
-- [ ] Rewrite `getArticlesWithoutFullText()` with new algorithm
-- [ ] Handle importRoute path (project_route_link → article_route_link)
-- [ ] Handle project_articles path
-- [ ] Apply dateFrom/dateTo filtering
-- [ ] Order projects by useFulltext DESC
-- [ ] Add console.time/timeEnd logs around DB queries
-- [ ] Add fallback for remaining batch capacity
+- [x] Rewrite `getArticlesWithoutFullText()` with new algorithm
+- [x] Handle importRoute path (project_route_link → article_route_link)
+- [x] Handle project_articles path
+- [x] Apply dateFrom/dateTo filtering
+- [x] Order projects by useFulltext DESC
+- [x] Add console.time/timeEnd logs around DB queries
+- [x] Add fallback for remaining batch capacity
 - [ ] Test with EXPLAIN ANALYZE on both paths
 - [ ] Verify cron runs correctly with `RUN_SERVER_FULL_TEXT_FETCHING=true`

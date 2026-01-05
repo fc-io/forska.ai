@@ -42,7 +42,7 @@ const envShape = arktype({
   OPENALEX_MAILTO: 'string',
   VITE_PORT: 'number | string.integer.parse',
   API_SERVER_PORT: 'number | string.integer.parse',
-  RUN_SERVER_FULL_TEST_FETCHING: arktype('"true" | "false" | boolean').pipe((v) => {
+  RUN_SERVER_FULL_TEXT_FETCHING: arktype('"true" | "false" | boolean').pipe((v) => {
     return typeof v === 'string' ? v.toLowerCase() === 'true' : v
   }),
   RUN_SERVER_JUDGING: arktype('"true" | "false" | boolean').pipe((v) => {
@@ -113,8 +113,8 @@ const loadEnv = (): typeof envShape.infer => {
     ;(merged as Record<string, string>).RUN_SERVER_JUDGING = 'true'
   }
   // Default to false when not provided (prevents accidental background fetching)
-  if (merged.RUN_SERVER_FULL_TEST_FETCHING == null || merged.RUN_SERVER_FULL_TEST_FETCHING === '') {
-    ;(merged as Record<string, string>).RUN_SERVER_FULL_TEST_FETCHING = 'false'
+  if (merged.RUN_SERVER_FULL_TEXT_FETCHING == null || merged.RUN_SERVER_FULL_TEXT_FETCHING === '') {
+    ;(merged as Record<string, string>).RUN_SERVER_FULL_TEXT_FETCHING = 'false'
   }
   // Ensure numeric GPU/env defaults exist to satisfy shape; use 0 when not provided
   const numericKeys = [
