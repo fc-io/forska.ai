@@ -47,12 +47,6 @@ const getArticleFulltextSanitizeOptions = (article: ReviewArticleDetailsArticle)
   return {convertNewlines: !isHtml}
 }
 
-const getFulltextContainerClass = (isHtml: boolean) => {
-  return isHtml
-    ? 'mt-3 max-h-96 overflow-y-auto border rounded-lg p-4 bg-gray-50 text-gray-700 text-sm leading-relaxed assessment-container'
-    : 'mt-3 max-h-96 overflow-y-auto border rounded-lg p-4 bg-gray-50 text-gray-700 text-sm leading-relaxed whitespace-pre-wrap assessment-container'
-}
-
 /**
  * Creates highlighted text with clickable highlights that scroll to fulltext.
  * Returns both the JSX element and a function to scroll to first highlight in fulltext.
@@ -131,9 +125,6 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
   let fulltextContainerRef: HTMLDivElement | undefined
   const fulltextForDisplay = () => {
     return getArticleFulltextForDisplay(props.article)
-  }
-  const fulltextIsHtml = () => {
-    return Boolean(toNonEmptyStringOrNull(props.article.fullTextHtml))
   }
   const fulltextSanitizeOptions = () => {
     return getArticleFulltextSanitizeOptions(props.article)
@@ -305,7 +296,7 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
           <Show when={fulltextForDisplay()}>
             {(fulltextValue) => {
               return (
-                <div class="mt-4 border-t pt-4">
+                <div class="mt-4">
                   <button
                     type="button"
                     onClick={() => {
@@ -335,7 +326,7 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
                       ref={(el) => {
                         fulltextContainerRef = el
                       }}
-                      class={getFulltextContainerClass(fulltextIsHtml())}
+                      class="mt-2 text-gray-700 assessment-container leading-relaxed"
                     >
                       {props.judgment ? (
                         getHighlightedFulltext(fulltextValue() ?? '', props.judgment, fulltextSanitizeOptions())
