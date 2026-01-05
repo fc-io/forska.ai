@@ -2,6 +2,69 @@ import path from 'path'
 
 import {env} from './env.ts'
 
+const isRecord = (value: unknown): value is Record<string, unknown> => {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+const toNonEmptyStringOrNull = (value: unknown): string | null => {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? value : null
+}
+
+const markdownKeySet = new Set(['md_content', 'md', 'markdown', 'markdown_content', 'mdcontent', 'markdowncontent'])
+
+const findMarkdownInValue = (value: unknown, depth: number): string | null => {
+  if (depth > 10) return null
+  return Array.isArray(value)
+    ? findMarkdownInArray(value, 0, depth + 1)
+    : isRecord(value)
+      ? findMarkdownInRecord(value, depth + 1)
+      : null
+}
+
+const findMarkdownInArray = (values: unknown[], index: number, depth: number): string | null => {
+  if (index >= values.length) return null
+  const found = findMarkdownInValue(values[index], depth)
+  return found ?? findMarkdownInArray(values, index + 1, depth)
+}
+
+const findMarkdownInRecord = (value: Record<string, unknown>, depth: number): string | null => {
+  const entries = Object.entries(value)
+  const direct = findMarkdownFromCandidateEntries(entries, 0, depth)
+  return direct ?? findMarkdownFromAllEntries(entries, 0, depth)
+}
+
+const findMarkdownFromCandidateEntries = (
+  entries: [string, unknown][],
+  index: number,
+  depth: number,
+): string | null => {
+  if (index >= entries.length) return null
+  const [key, value] = entries[index]
+  const found = markdownKeySet.has(key.toLowerCase())
+    ? (toNonEmptyStringOrNull(value) ?? findMarkdownInValue(value, depth))
+    : null
+  return found ?? findMarkdownFromCandidateEntries(entries, index + 1, depth)
+}
+
+const findMarkdownFromAllEntries = (entries: [string, unknown][], index: number, depth: number): string | null => {
+  if (index >= entries.length) return null
+  const found = findMarkdownInValue(entries[index][1], depth)
+  return found ?? findMarkdownFromAllEntries(entries, index + 1, depth)
+}
+
+const summarizeDoclingResponse = (json: unknown): string => {
+  if (!isRecord(json)) return `type=${typeof json}`
+  const topKeys = Object.keys(json).slice(0, 20).join(',')
+  const documents = Array.isArray(json.documents) ? json.documents : null
+  const doc0 = documents && documents[0] && isRecord(documents[0]) ? (documents[0] as Record<string, unknown>) : null
+  const doc0Keys = doc0 ? Object.keys(doc0).slice(0, 20).join(',') : ''
+  const documentsInfo = documents ? ` documents=${documents.length}` : ''
+  const doc0Info = doc0Keys ? ` doc0Keys=${doc0Keys}` : ''
+  return `topKeys=${topKeys}${documentsInfo}${doc0Info}`
+}
+
 /**
  * Custom error class for PDF conversion failures
  */
@@ -79,11 +142,13 @@ export const convertPdfToText = async (localPath: string, timeoutMs = 60_000): P
       )
     }
 
-    const json = (await res.json()) as {documents?: {md_content?: string}[]}
+    const json = (await res.json()) as unknown
 
-    const mdContent = json.documents?.[0]?.md_content
+    const mdContent = findMarkdownInValue(json, 0)
     if (!mdContent) {
-      throw new ConversionError('Docling returned empty content', undefined, true)
+      const summary = summarizeDoclingResponse(json)
+      console.error(`[convertPdfToText] Docling returned no Markdown content: ${summary}`)
+      throw new ConversionError(`Docling returned no Markdown content (${summary})`, undefined, false)
     }
 
     const duration = Date.now() - startTime
