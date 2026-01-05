@@ -211,22 +211,6 @@ export const Navigation = (props: NavigationProps) => {
         >
           <div class="px-4 sm:px-6 lg:px-8 py-6">
             <div class="flex items-stretch gap-6 min-h-64">
-              <div class="flex items-stretch gap-4">
-                <Link
-                  to="/admin/jobs"
-                  class="flex h-full w-44 sm:w-52 md:w-60 flex-col justify-between rounded-xl border border-stone-200 bg-white/60 px-6 py-6 font-semibold text-gray-900 hover:bg-white"
-                  onClick={closeAdminMenu}
-                >
-                  <div class="text-lg font-semibold">Jobs</div>
-                </Link>
-                <Link
-                  to="/admin/llm"
-                  class="flex h-full w-44 sm:w-52 md:w-60 flex-col justify-between rounded-xl border border-stone-200 bg-white/60 px-6 py-6 font-semibold text-gray-900 hover:bg-white"
-                  onClick={closeAdminMenu}
-                >
-                  <div class="text-lg font-semibold">LLM Metrics</div>
-                </Link>
-              </div>
               <div class="grid flex-1 grid-cols-1 gap-10 sm:grid-cols-2 lg:grid-cols-3">
                 <div class="flex flex-col gap-4">
                   <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">Data</div>
@@ -320,6 +304,22 @@ export const Navigation = (props: NavigationProps) => {
                     </Link>
                   </div>
                 </div>
+              </div>
+              <div class="flex items-stretch gap-4">
+                <Link
+                  to="/admin/jobs"
+                  class="flex h-full w-44 sm:w-52 md:w-60 flex-col justify-between rounded-xl border border-stone-200 bg-white/60 px-6 py-6 font-semibold text-gray-900 hover:bg-white"
+                  onClick={closeAdminMenu}
+                >
+                  <div class="text-lg font-semibold">Jobs</div>
+                </Link>
+                <Link
+                  to="/admin/llm"
+                  class="flex h-full w-44 sm:w-52 md:w-60 flex-col justify-between rounded-xl border border-stone-200 bg-white/60 px-6 py-6 font-semibold text-gray-900 hover:bg-white"
+                  onClick={closeAdminMenu}
+                >
+                  <div class="text-lg font-semibold">LLM Metrics</div>
+                </Link>
               </div>
             </div>
           </div>
