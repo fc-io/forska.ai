@@ -13,45 +13,47 @@ const toNonEmptyStringOrNull = (value: unknown): string | null => {
 }
 
 const markdownKeySet = new Set(['md_content', 'md', 'markdown', 'markdown_content', 'mdcontent', 'markdowncontent'])
+const htmlKeySet = new Set(['html_content', 'html', 'htmlcontent', 'html_text'])
 
-const findMarkdownInValue = (value: unknown, depth: number): string | null => {
+const findContentInValue = (value: unknown, keySet: Set<string>, depth: number): string | null => {
   if (depth > 10) return null
   return Array.isArray(value)
-    ? findMarkdownInArray(value, 0, depth + 1)
+    ? findContentInArray(value, keySet, 0, depth + 1)
     : isRecord(value)
-      ? findMarkdownInRecord(value, depth + 1)
+      ? findContentInRecord(value, keySet, depth + 1)
       : null
 }
 
-const findMarkdownInArray = (values: unknown[], index: number, depth: number): string | null => {
+const findContentInArray = (values: unknown[], keySet: Set<string>, index: number, depth: number): string | null => {
   if (index >= values.length) return null
-  const found = findMarkdownInValue(values[index], depth)
-  return found ?? findMarkdownInArray(values, index + 1, depth)
+  const found = findContentInValue(values[index], keySet, depth)
+  return found ?? findContentInArray(values, keySet, index + 1, depth)
 }
 
-const findMarkdownInRecord = (value: Record<string, unknown>, depth: number): string | null => {
+const findContentInRecord = (value: Record<string, unknown>, keySet: Set<string>, depth: number): string | null => {
   const entries = Object.entries(value)
-  const direct = findMarkdownFromCandidateEntries(entries, 0, depth)
-  return direct ?? findMarkdownFromAllEntries(entries, 0, depth)
+  const direct = findContentFromCandidateEntries(entries, keySet, 0, depth)
+  return direct ?? findContentFromAllEntries(entries, keySet, 0, depth)
 }
 
-const findMarkdownFromCandidateEntries = (
+const findContentFromCandidateEntries = (
   entries: [string, unknown][],
+  keySet: Set<string>,
   index: number,
   depth: number,
 ): string | null => {
   if (index >= entries.length) return null
   const [key, value] = entries[index]
-  const found = markdownKeySet.has(key.toLowerCase())
-    ? (toNonEmptyStringOrNull(value) ?? findMarkdownInValue(value, depth))
+  const found = keySet.has(key.toLowerCase())
+    ? (toNonEmptyStringOrNull(value) ?? findContentInValue(value, keySet, depth))
     : null
-  return found ?? findMarkdownFromCandidateEntries(entries, index + 1, depth)
+  return found ?? findContentFromCandidateEntries(entries, keySet, index + 1, depth)
 }
 
-const findMarkdownFromAllEntries = (entries: [string, unknown][], index: number, depth: number): string | null => {
+const findContentFromAllEntries = (entries: [string, unknown][], keySet: Set<string>, index: number, depth: number): string | null => {
   if (index >= entries.length) return null
-  const found = findMarkdownInValue(entries[index][1], depth)
-  return found ?? findMarkdownFromAllEntries(entries, index + 1, depth)
+  const found = findContentInValue(entries[index][1], keySet, depth)
+  return found ?? findContentFromAllEntries(entries, keySet, index + 1, depth)
 }
 
 const summarizeDoclingResponse = (json: unknown): string => {
@@ -87,7 +89,10 @@ export class ConversionError extends Error {
  * @returns The converted Markdown text
  * @throws ConversionError if conversion fails
  */
-export const convertPdfToText = async (localPath: string, timeoutMs = 60_000): Promise<string> => {
+export const convertPdfToText = async (
+  localPath: string,
+  timeoutMs = 60_000,
+): Promise<{md: string; html: string | null}> => {
   const startTime = Date.now()
 
   // Use absolute path for safety
@@ -116,7 +121,7 @@ export const convertPdfToText = async (localPath: string, timeoutMs = 60_000): P
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
         sources: [{kind: 'file', base64_string: base64, filename: path.basename(absPath)}],
-        options: {to_formats: ['md']},
+        options: {to_formats: ['md', 'html']},
       }),
       signal: controller.signal,
     })
@@ -144,7 +149,9 @@ export const convertPdfToText = async (localPath: string, timeoutMs = 60_000): P
 
     const json = (await res.json()) as unknown
 
-    const mdContent = findMarkdownInValue(json, 0)
+    const mdContent = findContentInValue(json, markdownKeySet, 0)
+    const htmlContent = findContentInValue(json, htmlKeySet, 0)
+
     if (!mdContent) {
       const summary = summarizeDoclingResponse(json)
       console.error(`[convertPdfToText] Docling returned no Markdown content: ${summary}`)
@@ -152,9 +159,11 @@ export const convertPdfToText = async (localPath: string, timeoutMs = 60_000): P
     }
 
     const duration = Date.now() - startTime
-    console.log(`[convertPdfToText] Success: ${absPath} (${duration}ms, ${mdContent.length} chars)`)
+    console.log(
+      `[convertPdfToText] Success: ${absPath} (${duration}ms, ${mdContent.length} chars MD, ${htmlContent?.length ?? 0} chars HTML)`,
+    )
 
-    return mdContent
+    return {md: mdContent, html: htmlContent}
   } catch (error) {
     clearTimeout(timeoutId)
 

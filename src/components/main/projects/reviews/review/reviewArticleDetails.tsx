@@ -22,6 +22,8 @@ type ReviewArticleDetailsProps = {
     fullTextPDF?: string | null
   }
   judgment?: Judgment
+  showTitle?: boolean
+  enableSticky?: boolean
 }
 
 const stickyOffsets = {top: 24, bottom: 24}
@@ -33,10 +35,7 @@ const stickyOffsets = {top: 24, bottom: 24}
 const getHighlightedTextWithScrollHandler = (
   text: string,
   judgment: Judgment,
-  options?: {
-    onHighlightClick?: (quote: string) => void
-    highlightId?: string
-  },
+  options?: {onHighlightClick?: (quote: string) => void; highlightId?: string},
 ) => {
   const sanitizedText = decodeAndSanitize(text)
   const normalizedQuotes = (judgment.quotes || []).map((quote) => {
@@ -105,7 +104,19 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
   let containerRef: HTMLDivElement | undefined
   let fulltextContainerRef: HTMLDivElement | undefined
 
+  // Default props
+  const showTitle = () => {
+    return props.showTitle ?? true
+  }
+  const enableSticky = () => {
+    return props.enableSticky ?? true
+  }
+
   const setStickiness = () => {
+    if (!enableSticky()) {
+      setStickyTop(undefined)
+      return
+    }
     const containerHeight = containerRef?.getBoundingClientRect().height
     if (!containerHeight) {
       setStickyTop(undefined)
@@ -152,21 +163,23 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
   }
 
   onMount(() => {
-    setStickiness()
-    const resizeObserver = new ResizeObserver(() => {
+    if (enableSticky()) {
       setStickiness()
-    })
-    if (containerRef) {
-      resizeObserver.observe(containerRef)
+      const resizeObserver = new ResizeObserver(() => {
+        setStickiness()
+      })
+      if (containerRef) {
+        resizeObserver.observe(containerRef)
+      }
+      const handleResize = () => {
+        setStickiness()
+      }
+      window.addEventListener('resize', handleResize)
+      onCleanup(() => {
+        resizeObserver.disconnect()
+        window.removeEventListener('resize', handleResize)
+      })
     }
-    const handleResize = () => {
-      setStickiness()
-    }
-    window.addEventListener('resize', handleResize)
-    onCleanup(() => {
-      resizeObserver.disconnect()
-      window.removeEventListener('resize', handleResize)
-    })
   })
 
   return (
@@ -175,10 +188,13 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
         containerRef = element
       }}
       class="space-y-4"
-      classList={{'sticky self-start': stickyTop() !== undefined}}
-      style={{top: stickyTop() !== undefined ? `${stickyTop()}px` : undefined}}
+      classList={{'sticky self-start': enableSticky() && stickyTop() !== undefined}}
+      style={{top: enableSticky() && stickyTop() !== undefined ? `${stickyTop()}px` : undefined}}
     >
-      <h1 class="text-2xl font-bold">Article Details</h1>
+      <Show when={showTitle()}>
+        <h1 class="text-2xl font-bold">Article Details</h1>
+      </Show>
+
       <div class="p-6 bg-white rounded-lg shadow">
         <div class="space-y-2">
           {/* Title with clickable highlights */}
@@ -255,7 +271,9 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
             <div class="mt-4 border-t pt-4">
               <button
                 type="button"
-                onClick={() => setIsFulltextExpanded(!isFulltextExpanded())}
+                onClick={() => {
+                  return setIsFulltextExpanded(!isFulltextExpanded())
+                }}
                 class="flex items-center gap-2 font-semibold text-gray-800 hover:text-gray-600 transition-colors"
               >
                 <svg
@@ -280,7 +298,7 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
                   ref={(el) => {
                     fulltextContainerRef = el
                   }}
-                  class="mt-3 max-h-96 overflow-y-auto border rounded-lg p-4 bg-gray-50 text-gray-700 text-sm leading-relaxed"
+                  class="mt-3 max-h-96 overflow-y-auto border rounded-lg p-4 bg-gray-50 text-gray-700 text-sm leading-relaxed whitespace-pre-wrap"
                 >
                   {props.judgment && props.article.fullText ? (
                     getHighlightedFulltext(props.article.fullText, props.judgment)

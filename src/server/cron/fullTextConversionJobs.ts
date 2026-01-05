@@ -33,7 +33,7 @@ const getArticlesNeedingConversion = async (
   // Base conditions: has PDF, no fullText, not failed, not exceeded retry limit
   const baseConditions = [
     isNotNull(schema.articles.fullTextPDF),
-    isNull(schema.articles.fullText),
+    sql`(${schema.articles.fullText} IS NULL OR ${schema.articles.fullTextHtml} IS NULL)`,
     sql`(${schema.articles.fullTextConversionStatus} IS NULL OR ${schema.articles.fullTextConversionStatus} != 'failed')`,
     sql`(${schema.articles.fullTextConversionAttempts} IS NULL OR ${schema.articles.fullTextConversionAttempts} < ${MAX_CONVERSION_ATTEMPTS})`,
   ]
@@ -159,21 +159,20 @@ const convertArticle = async (db: PostgresJsDatabase<typeof schema>, article: Ar
   console.log(`[fullTextConversion] Converting article ${article.id}`)
 
   try {
-    const convertedText = await convertPdfToText(article.fullTextPDF, DOCLING_CONVERSION_TIMEOUT_MS)
+    const {md, html} = await convertPdfToText(article.fullTextPDF, DOCLING_CONVERSION_TIMEOUT_MS)
 
     await db
       .update(schema.articles)
       .set({
-        fullText: convertedText,
+        fullText: md,
+        fullTextHtml: html,
         fullTextConversionStatus: 'success',
-        fullTextCharCount: convertedText.length,
+        fullTextCharCount: md.length,
         fullTextConversionAttempts: (article.fullTextConversionAttempts ?? 0) + 1,
       })
       .where(eq(schema.articles.id, article.id))
 
-    console.log(
-      `[fullTextConversion] Success: article ${article.id} (${Date.now() - startTime}ms, ${convertedText.length} chars)`,
-    )
+    console.log(`[fullTextConversion] Success: article ${article.id} (${Date.now() - startTime}ms, ${md.length} chars)`)
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error)
     const msg = errorMessage.toLowerCase()

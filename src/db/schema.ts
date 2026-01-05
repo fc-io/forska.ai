@@ -68,6 +68,7 @@ export const articles = pgTable(
     url: text('url'),
     fullTextFetchedAt: timestamp('full_text_fetched_at', {withTimezone: true}),
     fullText: text('full_text'),
+    fullTextHtml: text('full_text_html'),
     fullTextSource: text('full_text_source'),
     fullTextOriginalFormat: text('full_text_original_format'),
     fullTextPDF: text('full_text_pdf'),

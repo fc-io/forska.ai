@@ -43,7 +43,7 @@ const AdminArticleDetails = () => {
                   <div class="flex-1 space-y-6">
                     {/* Default view: no selection */}
                     <Show when={articleViewToShow() === undefined}>
-                      <ReviewArticleDetails article={data().article} />
+                      <ReviewArticleDetails article={data().article} showTitle={false} enableSticky={false} />
                     </Show>
 
                     {/* LLM judgment selected */}
@@ -56,7 +56,14 @@ const AdminArticleDetails = () => {
                       }
                     >
                       {(selected) => {
-                        return <ReviewArticleDetails article={data().article} judgment={selected()} />
+                        return (
+                          <ReviewArticleDetails
+                            article={data().article}
+                            judgment={selected()}
+                            showTitle={false}
+                            enableSticky={false}
+                          />
+                        )
                       }}
                     </Show>
                   </div>

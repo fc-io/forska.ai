@@ -7,7 +7,7 @@ Convert article PDFs → Markdown text → include in LLM judgment prompts
 ## Architecture
 
 ```
-PDF fetch (existing) → Docling Serve (Docker) → fullText column → judgeGetSinglePrompt()
+PDF fetch (existing) → Docling Serve (Docker) → fullText, fullTextHtml → judgeGetSinglePrompt()
          ↓                    ↓
    fullTextPDF         http://localhost:5001
 ```
@@ -50,7 +50,7 @@ export class ConversionError extends Error {
   }
 }
 
-export const convertPdfToText = async (localPath: string, timeoutMs: number = 60_000): Promise<string> => {
+export const convertPdfToText = async (localPath: string, timeoutMs: number = 60_000): Promise<{md: string, html: string}> => {
   // Use absolute path for safety
   const absPath = path.resolve(process.cwd(), localPath)
   const pdfBytes = await Bun.file(absPath).arrayBuffer()
@@ -61,7 +61,7 @@ export const convertPdfToText = async (localPath: string, timeoutMs: number = 60
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({
       sources: [{kind: 'base64', data: base64}],
-      options: {to_formats: ['md']}
+      options: {to_formats: ['md', 'html']}
     })
   })
 
@@ -76,8 +76,13 @@ export const convertPdfToText = async (localPath: string, timeoutMs: number = 60
   }
 
   const json = await res.json()
-  return json.documents[0].md_content
+  // docling-serve returns keys for each format, e.g. md_content, html_content (check actual key in response)
+  return {
+    md: json.documents[0].md_content,
+    html: json.documents[0].html_content ?? '' // Fallback if key differs
+  }
 }
+
 ```
 
 ### 3. Prompt Structure
@@ -152,7 +157,7 @@ type EnsureFullTextResult =
   | {text: null; shouldSkip: false}         // Transient failure, should requeue
 
 const ensureFullText = async (db, article, articleId: string): Promise<EnsureFullTextResult> => {
-  // Fast path: already converted
+  // Fast path: already converted (check both MD and HTML if possible, but MD is critical for prompt)
   if (article.fullText) return {text: article.fullText, shouldSkip: false}
   if (!article.fullTextPDF) return {text: null, shouldSkip: true}  // No PDF → permanent skip
 
@@ -182,14 +187,15 @@ const ensureFullText = async (db, article, articleId: string): Promise<EnsureFul
        return {text: null, shouldSkip: true}
     }
 
-    const convertedText = await convertPdfToText(fresh.fullTextPDF)
+    const { md, html } = await convertPdfToText(fresh.fullTextPDF)
     await db.update(articles).set({
-      fullText: convertedText,
+      fullText: md,
+      fullTextHtml: html,
       fullTextConversionStatus: 'success',
-      fullTextCharCount: convertedText.length
+      fullTextCharCount: md.length
     }).where(eq(articles.id, articleId))
 
-    return {text: convertedText, shouldSkip: false}
+    return {text: md, shouldSkip: false}
   } catch (error) {
     // 1. Classify error
     const errorMessage = error instanceof Error ? error.message : String(error)
@@ -257,6 +263,8 @@ if (project.useFulltext) {
   }
 
   article.fullText = result.text
+  // Note: prompts only use markdown, so we don't attach fullTextHtml to the article object here
+  // unless we want it for some other reason.
 }
 ```
 
@@ -314,9 +322,11 @@ const getArticlesNeedingConversion = async (
 
   // Base conditions: has PDF, no fullText, not failed, not exceeded retry limit
   const MAX_CONVERSION_ATTEMPTS = 3
+  // Base conditions: has PDF, AND (fullText missing OR fullTextHtml missing), not failed, not exceeded retry limit
+  const MAX_CONVERSION_ATTEMPTS = 3
   const baseConditions = [
     isNotNull(schema.articles.fullTextPDF),
-    isNull(schema.articles.fullText),
+    sql`(${schema.articles.fullText} IS NULL OR ${schema.articles.fullTextHtml} IS NULL)`,
     sql`(${schema.articles.fullTextConversionStatus} IS NULL OR ${schema.articles.fullTextConversionStatus} != 'failed')`,
     sql`(${schema.articles.fullTextConversionAttempts} IS NULL OR ${schema.articles.fullTextConversionAttempts} < ${MAX_CONVERSION_ATTEMPTS})`,
   ]
@@ -455,19 +465,20 @@ const convertArticle = async (
   console.log(`[fullTextConversion] Converting article ${article.id}`)
 
   try {
-    const convertedText = await convertPdfToText(article.fullTextPDF, DOCLING_CONVERSION_TIMEOUT_MS)
+    const { md, html } = await convertPdfToText(article.fullTextPDF, DOCLING_CONVERSION_TIMEOUT_MS)
 
     await db
       .update(schema.articles)
       .set({
-        fullText: convertedText,
+        fullText: md,
+        fullTextHtml: html,
         fullTextConversionStatus: 'success',
-        fullTextCharCount: convertedText.length,
+        fullTextCharCount: md.length,
         fullTextConversionAttempts: (article.fullTextConversionAttempts ?? 0) + 1,
       })
       .where(eq(schema.articles.id, article.id))
 
-    console.log(`[fullTextConversion] Success: article ${article.id} (${Date.now() - startTime}ms, ${convertedText.length} chars)`)
+    console.log(`[fullTextConversion] Success: article ${article.id} (${Date.now() - startTime}ms, ${md.length} chars)`)
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error)
     const msg = errorMessage.toLowerCase()
@@ -578,6 +589,7 @@ This prevents:
 ### Existing columns (in `articles` table):
 - `fullTextPDF: text` — **local asset path** (e.g., `assets/article_pdfs/10.1234_xxx.pdf`)
 - `fullText: text` — converted Markdown (cached)
+- `fullTextHtml: text` — converted HTML (cached, for UI display)
 - `fullTextFetchedAt: timestamp` — when PDF was fetched
 - `fullTextAssets: jsonb` — (not used for conversion tracking)
 
@@ -597,6 +609,7 @@ export const judgmentsJobsPromptsStatusEnum = pgEnum('judgments_jobs_prompts_sta
 fullTextConversionStatus: text('full_text_conversion_status'),  // 'pending' | 'success' | 'failed'
 fullTextConversionError: text('full_text_conversion_error'),    // error message string if failed
 fullTextConversionAttempts: integer('full_text_conversion_attempts').default(0),
+fullTextHtml: text('full_text_html'),                           // Converted HTML
 fullTextCharCount: integer('full_text_char_count'),             // character count of stored fullText
 ```
 
@@ -743,9 +756,10 @@ article: {
 - [x] Add `fullTextConversionError` column
 - [x] Add `fullTextConversionAttempts` column
 - [x] Add `fullTextCharCount` column
+- [ ] Add `fullTextHtml` column
 - [ ] Add `skipReason` column ('no_fulltext' | 'conversion_failed' | null)
-- [x] Generate migration: `bunx --bun drizzle-kit generate`
-- [x] Run migration: `bun run db:mig`
+- [ ] Generate migration: `bunx --bun drizzle-kit generate`
+- [ ] Run migration: `bun run db:mig`
 
 ### Conversion Function
 - [x] Create `src/server/utils/convertPdfToText.ts`
