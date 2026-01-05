@@ -11,7 +11,7 @@ type ArticleTabsProps = {
 
 export const ArticleTabs = (props: ArticleTabsProps) => {
   const tabClasses = (isActive: boolean) => {
-    const base = 'px-4 py-2 text-sm font-medium border-b-2 transition-colors'
+    const base = 'px-4 py-2 text-sm font-medium border-b-2 transition-colors bg-white'
     if (isActive) {
       return `${base} border-blue-600 text-blue-600`
     }
@@ -19,7 +19,7 @@ export const ArticleTabs = (props: ArticleTabsProps) => {
   }
 
   return (
-    <div class="flex items-center justify-between border-b border-gray-200 bg-white rounded-t-lg">
+    <div class="flex items-center justify-between border-b border-gray-200 rounded-t-lg">
       <div class="flex">
         <Link to={props.basePath} params={props.linkParams} class={tabClasses(props.activeTab === 'summary')}>
           Title & Summary
