@@ -1,6 +1,6 @@
 import {Menu} from '@ark-ui/solid'
 import {Link} from '@tanstack/solid-router'
-import {Show, createSignal, onCleanup, onMount} from 'solid-js'
+import {createSignal, onCleanup, onMount, Show} from 'solid-js'
 
 import type {User} from '../types/user'
 
@@ -148,9 +148,7 @@ export const Navigation = (props: NavigationProps) => {
                 ref={(element) => {
                   adminMenuTriggerElement = element
                 }}
-                class={`cursor-pointer select-none rounded-md px-3 py-2 text-sm font-medium text-gray-700 hover:bg-stone-100 hover:text-gray-900 ${
-                  isAdminMenuOpen() ? 'bg-stone-100 text-gray-900' : ''
-                }`}
+                class="group -mx-2 flex h-full cursor-pointer select-none items-center px-2"
                 role="button"
                 tabIndex={0}
                 aria-haspopup="true"
@@ -159,7 +157,13 @@ export const Navigation = (props: NavigationProps) => {
                 onPointerLeave={handleAdminMenuTriggerPointerLeave}
                 onClick={toggleAdminMenu}
               >
-                Admin Menu
+                <div
+                  class={`rounded-md px-3 py-2 text-sm font-medium text-gray-700 group-hover:bg-stone-100 group-hover:text-gray-900 ${
+                    isAdminMenuOpen() ? 'bg-stone-100 text-gray-900' : ''
+                  }`}
+                >
+                  Admin Menu
+                </div>
               </div>
             </Show>
             <Show when={props.user}>
@@ -201,7 +205,7 @@ export const Navigation = (props: NavigationProps) => {
           ref={(element) => {
             adminMenuElement = element
           }}
-          class="absolute left-0 right-0 top-full z-50 bg-stone-100 shadow-sm"
+          class="absolute left-0 right-0 top-full -mt-px z-50 border-t border-gray-200 bg-stone-100 shadow-sm"
           onPointerEnter={handleAdminMenuPointerEnter}
           onPointerLeave={handleAdminMenuPointerLeave}
         >

@@ -68,7 +68,12 @@ export const articlesRoutes = new Elysia()
       return sum + (row.count ?? 0)
     }, 0)
 
-    return {total, byStatus: rows.map((row) => ({status: row.status, count: row.count ?? 0}))}
+    return {
+      total,
+      byStatus: rows.map((row) => {
+        return {status: row.status, count: row.count ?? 0}
+      }),
+    }
   })
   .get('/api/articles/latest', async () => {
     const db = getDatabase()
