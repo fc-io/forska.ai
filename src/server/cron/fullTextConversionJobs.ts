@@ -204,21 +204,34 @@ const convertArticle = async (db: PostgresJsDatabase<typeof schema>, article: Ar
   }
 }
 
+// Flag to prevent overlapping batch runs
+let isRunning = false
+
 const runConversionBatch = async () => {
   if (!env.RUN_SERVER_FULL_TEXT_CONVERSION_CRON) return
 
-  const db = getDatabase()
-
-  const articles = await getArticlesNeedingConversion(db, BATCH_SIZE)
-
-  if (articles.length === 0) {
-    console.log('[fullTextConversion] No articles to convert')
+  if (isRunning) {
+    console.log('[fullTextConversion] Previous batch still running, skipping')
     return
   }
 
-  // Convert sequentially to avoid overloading Docling
-  for (const article of articles) {
-    await convertArticle(db, article)
+  isRunning = true
+  try {
+    const db = getDatabase()
+
+    const articles = await getArticlesNeedingConversion(db, BATCH_SIZE)
+
+    if (articles.length === 0) {
+      console.log('[fullTextConversion] No articles to convert')
+      return
+    }
+
+    // Convert sequentially to avoid overloading Docling
+    for (const article of articles) {
+      await convertArticle(db, article)
+    }
+  } finally {
+    isRunning = false
   }
 }
 
