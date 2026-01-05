@@ -326,7 +326,7 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
                       ref={(el) => {
                         fulltextContainerRef = el
                       }}
-                      class="mt-2 text-gray-700 assessment-container leading-relaxed"
+                      class="mt-2 border-l border-gray-400 pl-[25px] text-gray-700 assessment-container leading-relaxed"
                     >
                       {props.judgment ? (
                         getHighlightedFulltext(fulltextValue() ?? '', props.judgment, fulltextSanitizeOptions())
