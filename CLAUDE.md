@@ -11,6 +11,7 @@ IMPORTANT: Avoid branching. If something can be done without, please do without.
 IMPORTANT: If there is only one export in a file, then the filename should match the name of the exported function
 IMPORTANT: On the server – prefer Drizzle ORM over executing pure SQL commands
 IMPORTANT: On the client/app – use import {useQuery} from '@tanstack/solid-query' over createQuery
+IMPORTANT: only have secrets and values we need to change from outside the app in the .env files.
 IMPORTANT: Keep filenames camelCase, even for TSX/JSX React components.
 There is an .env.local file in the project; you just can't read it because of security concerns. Always assume the .env files are correct unless the env.ts file throws an error. Use process.env instead of Bun's env functionality to stay compatible with ordinary Node.
 
