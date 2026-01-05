@@ -4,6 +4,8 @@ import {decodeAndSanitize} from '../../../../../app/utils/decodeAndSanitize'
 import {getArticleUrl} from '../../../../../app/utils/getArticleUrl.ts'
 import {reviewArticleDetailsGetHighlightedText} from './reviewArticleDetails/reviewArticleDetailsGetHighlightedText.ts'
 
+type DecodeAndSanitizeOptions = Parameters<typeof decodeAndSanitize>[1]
+
 type Judgment = {
   id: string
   prompt: {originalText: string}
@@ -12,21 +14,44 @@ type Judgment = {
   quotes?: string[]
 }
 
+type ReviewArticleDetailsArticle = {
+  articleTitle: string
+  articleAuthors?: string[] | null
+  articleSummary?: string | null
+  articleId: string
+  fullText?: string | null
+  fullTextHtml?: string | null
+  fullTextPDF?: string | null
+}
+
 type ReviewArticleDetailsProps = {
-  article: {
-    articleTitle: string
-    articleAuthors?: string[] | null
-    articleSummary?: string | null
-    articleId: string
-    fullText?: string | null
-    fullTextPDF?: string | null
-  }
+  article: ReviewArticleDetailsArticle
   judgment?: Judgment
   showTitle?: boolean
   enableSticky?: boolean
 }
 
 const stickyOffsets = {top: 24, bottom: 24}
+
+const toNonEmptyStringOrNull = (value: string | null | undefined): string | null => {
+  const trimmed = value?.trim()
+  return trimmed ? value : null
+}
+
+const getArticleFulltextForDisplay = (article: ReviewArticleDetailsArticle) => {
+  return toNonEmptyStringOrNull(article.fullTextHtml) ?? toNonEmptyStringOrNull(article.fullText)
+}
+
+const getArticleFulltextSanitizeOptions = (article: ReviewArticleDetailsArticle): DecodeAndSanitizeOptions => {
+  const isHtml = Boolean(toNonEmptyStringOrNull(article.fullTextHtml))
+  return {convertNewlines: !isHtml}
+}
+
+const getFulltextContainerClass = (isHtml: boolean) => {
+  return isHtml
+    ? 'mt-3 max-h-96 overflow-y-auto border rounded-lg p-4 bg-gray-50 text-gray-700 text-sm leading-relaxed assessment-container'
+    : 'mt-3 max-h-96 overflow-y-auto border rounded-lg p-4 bg-gray-50 text-gray-700 text-sm leading-relaxed whitespace-pre-wrap assessment-container'
+}
 
 /**
  * Creates highlighted text with clickable highlights that scroll to fulltext.
@@ -36,8 +61,9 @@ const getHighlightedTextWithScrollHandler = (
   text: string,
   judgment: Judgment,
   options?: {onHighlightClick?: (quote: string) => void; highlightId?: string},
+  sanitizeOptions?: DecodeAndSanitizeOptions,
 ) => {
-  const sanitizedText = decodeAndSanitize(text)
+  const sanitizedText = decodeAndSanitize(text, sanitizeOptions)
   const normalizedQuotes = (judgment.quotes || []).map((quote) => {
     return quote.replace(/^\.{3}|\.{3}$/g, '')
   })
@@ -73,8 +99,8 @@ const getHighlightedText = (text: string, judgment: Judgment) => {
 /**
  * Creates highlighted fulltext with data attributes for scroll targeting
  */
-const getHighlightedFulltext = (text: string, judgment: Judgment) => {
-  const sanitizedText = decodeAndSanitize(text)
+const getHighlightedFulltext = (text: string, judgment: Judgment, sanitizeOptions?: DecodeAndSanitizeOptions) => {
+  const sanitizedText = decodeAndSanitize(text, sanitizeOptions)
   const normalizedQuotes = (judgment.quotes || []).map((quote) => {
     return quote.replace(/^\.{3}|\.{3}$/g, '')
   })
@@ -103,6 +129,15 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
   const [isFulltextExpanded, setIsFulltextExpanded] = createSignal(false)
   let containerRef: HTMLDivElement | undefined
   let fulltextContainerRef: HTMLDivElement | undefined
+  const fulltextForDisplay = () => {
+    return getArticleFulltextForDisplay(props.article)
+  }
+  const fulltextIsHtml = () => {
+    return Boolean(toNonEmptyStringOrNull(props.article.fullTextHtml))
+  }
+  const fulltextSanitizeOptions = () => {
+    return getArticleFulltextSanitizeOptions(props.article)
+  }
 
   // Default props
   const showTitle = () => {
@@ -156,7 +191,7 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
     const target = event.target as HTMLElement
     if (target.classList.contains('text-red-500') && target.classList.contains('underline')) {
       // Only scroll if fulltext is available
-      if (props.article.fullText) {
+      if (fulltextForDisplay()) {
         scrollToFirstHighlightInFulltext()
       }
     }
@@ -267,48 +302,52 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
           </Show>
 
           {/* Full Text Section (Collapsible) */}
-          <Show when={props.article.fullText}>
-            <div class="mt-4 border-t pt-4">
-              <button
-                type="button"
-                onClick={() => {
-                  return setIsFulltextExpanded(!isFulltextExpanded())
-                }}
-                class="flex items-center gap-2 font-semibold text-gray-800 hover:text-gray-600 transition-colors"
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke-width="2"
-                  stroke="currentColor"
-                  class="w-4 h-4 transition-transform duration-200"
-                  classList={{'rotate-90': isFulltextExpanded()}}
-                >
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
-                </svg>
-                Full Text
-                <span class="text-sm font-normal text-gray-500">
-                  ({Math.round((props.article.fullText?.length ?? 0) / 1000)}k characters)
-                </span>
-              </button>
+          <Show when={fulltextForDisplay()}>
+            {(fulltextValue) => {
+              return (
+                <div class="mt-4 border-t pt-4">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      return setIsFulltextExpanded(!isFulltextExpanded())
+                    }}
+                    class="flex items-center gap-2 font-semibold text-gray-800 hover:text-gray-600 transition-colors"
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke-width="2"
+                      stroke="currentColor"
+                      class="w-4 h-4 transition-transform duration-200"
+                      classList={{'rotate-90': isFulltextExpanded()}}
+                    >
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+                    </svg>
+                    Full Text
+                    <span class="text-sm font-normal text-gray-500">
+                      ({Math.round((fulltextValue()?.length ?? 0) / 1000)}k characters)
+                    </span>
+                  </button>
 
-              <Show when={isFulltextExpanded()}>
-                <div
-                  ref={(el) => {
-                    fulltextContainerRef = el
-                  }}
-                  class="mt-3 max-h-96 overflow-y-auto border rounded-lg p-4 bg-gray-50 text-gray-700 text-sm leading-relaxed whitespace-pre-wrap"
-                >
-                  {props.judgment && props.article.fullText ? (
-                    getHighlightedFulltext(props.article.fullText, props.judgment)
-                  ) : (
-                    // eslint-disable-next-line solid/no-innerhtml
-                    <span innerHTML={decodeAndSanitize(props.article.fullText ?? '')} />
-                  )}
+                  <Show when={isFulltextExpanded()}>
+                    <div
+                      ref={(el) => {
+                        fulltextContainerRef = el
+                      }}
+                      class={getFulltextContainerClass(fulltextIsHtml())}
+                    >
+                      {props.judgment ? (
+                        getHighlightedFulltext(fulltextValue() ?? '', props.judgment, fulltextSanitizeOptions())
+                      ) : (
+                        // eslint-disable-next-line solid/no-innerhtml
+                        <span innerHTML={decodeAndSanitize(fulltextValue() ?? '', fulltextSanitizeOptions())} />
+                      )}
+                    </div>
+                  </Show>
                 </div>
-              </Show>
-            </div>
+              )
+            }}
           </Show>
         </div>
       </div>
