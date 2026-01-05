@@ -4,20 +4,16 @@ import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 import {Elysia} from 'elysia'
 
 import * as schema from '../../db/schema.ts'
-import {convertPdfToText, ConversionError} from '../utils/convertPdfToText.ts'
+import {ConversionError, convertPdfToText} from '../utils/convertPdfToText.ts'
 import {env} from '../utils/env.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 
 const CONVERSION_INTERVAL = '*/10 * * * * *' // Every 10 seconds
 const DOCLING_CONVERSION_TIMEOUT_MS = 60_000 // 60 seconds - a const, not an env var
 const MAX_CONVERSION_ATTEMPTS = 3
-const BATCH_SIZE = 5 // Convert 5 articles per batch
+const BATCH_SIZE = 1 // Convert 5 articles per batch
 
-type ArticleForConversion = {
-  id: string
-  fullTextPDF: string
-  fullTextConversionAttempts: number | null
-}
+type ArticleForConversion = {id: string; fullTextPDF: string; fullTextConversionAttempts: number | null}
 
 /**
  * Get articles with PDFs that need conversion, prioritizing:
@@ -158,10 +154,7 @@ const getArticlesNeedingConversion = async (
   return collectedArticles
 }
 
-const convertArticle = async (
-  db: PostgresJsDatabase<typeof schema>,
-  article: ArticleForConversion,
-): Promise<void> => {
+const convertArticle = async (db: PostgresJsDatabase<typeof schema>, article: ArticleForConversion): Promise<void> => {
   const startTime = Date.now()
   console.log(`[fullTextConversion] Converting article ${article.id}`)
 
@@ -187,11 +180,11 @@ const convertArticle = async (
 
     // Permanent errors
     const isPerm =
-      (error instanceof ConversionError && error.isPermanent) ||
-      msg.includes('encrypted') ||
-      msg.includes('password') ||
-      msg.includes('invalid pdf') ||
-      msg.includes('file not found')
+      (error instanceof ConversionError && error.isPermanent)
+      || msg.includes('encrypted')
+      || msg.includes('password')
+      || msg.includes('invalid pdf')
+      || msg.includes('file not found')
 
     const attempts = (article.fullTextConversionAttempts ?? 0) + 1
     const finalStatus = isPerm || attempts >= MAX_CONVERSION_ATTEMPTS ? 'failed' : 'pending'
@@ -230,9 +223,5 @@ const runConversionBatch = async () => {
 }
 
 export const fullTextConversionJobsCron = new Elysia().use(
-  cron({
-    name: 'full-text-jobs-convert-pdfs',
-    pattern: CONVERSION_INTERVAL,
-    run: runConversionBatch,
-  }),
+  cron({name: 'full-text-jobs-convert-pdfs', pattern: CONVERSION_INTERVAL, run: runConversionBatch}),
 )
