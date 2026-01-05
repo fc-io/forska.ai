@@ -9,7 +9,7 @@ export class ConversionError extends Error {
   constructor(
     message: string,
     public status?: number,
-    public isPermanent: boolean = false,
+    public isPermanent = false,
   ) {
     super(message)
     this.name = 'ConversionError'
@@ -24,7 +24,7 @@ export class ConversionError extends Error {
  * @returns The converted Markdown text
  * @throws ConversionError if conversion fails
  */
-export const convertPdfToText = async (localPath: string, timeoutMs: number = 60_000): Promise<string> => {
+export const convertPdfToText = async (localPath: string, timeoutMs = 60_000): Promise<string> => {
   const startTime = Date.now()
 
   // Use absolute path for safety
@@ -52,7 +52,7 @@ export const convertPdfToText = async (localPath: string, timeoutMs: number = 60
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
-        sources: [{kind: 'base64', data: base64}],
+        sources: [{kind: 'file', base64_string: base64, filename: path.basename(absPath)}],
         options: {to_formats: ['md']},
       }),
       signal: controller.signal,
@@ -61,9 +61,22 @@ export const convertPdfToText = async (localPath: string, timeoutMs: number = 60
     clearTimeout(timeoutId)
 
     if (!res.ok) {
+      // Try to get error details from response body
+      let errorDetails = ''
+      try {
+        const errorBody = await res.text()
+        errorDetails = errorBody ? ` - ${errorBody.slice(0, 500)}` : ''
+        console.error(`[convertPdfToText] Error response from Docling: ${errorBody}`)
+      } catch {
+        // Ignore if we can't read the body
+      }
       // Permanent errors: client-side issues that won't be fixed by retrying
       const isPermanent = [400, 401, 403, 404, 422].includes(res.status)
-      throw new ConversionError(`Docling conversion failed: ${res.status} ${res.statusText}`, res.status, isPermanent)
+      throw new ConversionError(
+        `Docling conversion failed: ${res.status} ${res.statusText}${errorDetails}`,
+        res.status,
+        isPermanent,
+      )
     }
 
     const json = (await res.json()) as {documents?: {md_content?: string}[]}
@@ -94,11 +107,11 @@ export const convertPdfToText = async (localPath: string, timeoutMs: number = 60
     if (error instanceof Error) {
       const msg = error.message.toLowerCase()
       const isConnectionError =
-        msg.includes('econnrefused') ||
-        msg.includes('etimedout') ||
-        msg.includes('enotfound') ||
-        msg.includes('network') ||
-        msg.includes('socket')
+        msg.includes('econnrefused')
+        || msg.includes('etimedout')
+        || msg.includes('enotfound')
+        || msg.includes('network')
+        || msg.includes('socket')
       throw new ConversionError(`Docling conversion failed: ${error.message}`, undefined, !isConnectionError)
     }
 
