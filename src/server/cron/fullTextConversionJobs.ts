@@ -9,7 +9,7 @@ import {env} from '../utils/env.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 
 const CONVERSION_INTERVAL = '*/10 * * * * *' // Every 10 seconds
-const DOCLING_CONVERSION_TIMEOUT_MS = 60_000 // 60 seconds - a const, not an env var
+const DOCLING_CONVERSION_TIMEOUT_MS = 300_000 // 5 minutes (matching GUNICORN_TIMEOUT)
 const MAX_CONVERSION_ATTEMPTS = 3
 const BATCH_SIZE = 1 // Convert 5 articles per batch
 

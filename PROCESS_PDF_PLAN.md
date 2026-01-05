@@ -760,7 +760,9 @@ article: {
 - [x] Implement `getArticlesNeedingConversion()` with same prioritization as PDF fetching
 - [x] Implement `convertArticle()` with error handling and retry logic
 - [x] Register cron in server startup (similar to `fullTextJobsCron`)
-- [ ] Test with running jobs that have `useFulltext=true`
+- [x] Test with running jobs that have `useFulltext=true`
+- [x] Prevent overlapping cron executions (mutex)
+- [x] Tune Docling timeouts (300s) and add cache volume
 
 ### Integration (after cron job is working)
 - [ ] Create `ensureFullText()` with per-article locking (see Conversion Logic section)
@@ -782,3 +784,4 @@ article: {
 - [ ] Rate limit conversions
 - [ ] GraniteDocling VLM for complex PDFs (--pipeline vlm)
 - [ ] Parallel conversion for batch jobs
+

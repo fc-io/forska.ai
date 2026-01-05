@@ -32,6 +32,7 @@ import { Route as AdminGpuIndexRouteImport } from './routes/+admin/+gpu/+index'
 import { Route as AdminFailed_requestsIndexRouteImport } from './routes/+admin/+failed_requests/+index'
 import { Route as AdminDatasourcesIndexRouteImport } from './routes/+admin/+datasources/+index'
 import { Route as AdminAssessmentsIndexRouteImport } from './routes/+admin/+assessments/+index'
+import { Route as AdminArticlesIndexRouteImport } from './routes/+admin/+articles/+index'
 import { Route as AdminAaModelsIndexRouteImport } from './routes/+admin/+aa-models/+index'
 import { Route as AdminJobsIdUnassessed_articlesRouteImport } from './routes/+admin/+jobs/+$id/+unassessed_articles'
 import { Route as AdminDatasourcesIdEditRouteImport } from './routes/+admin/+datasources/+$id/+edit'
@@ -163,6 +164,11 @@ const AdminAssessmentsIndexRoute = AdminAssessmentsIndexRouteImport.update({
   path: '/admin/assessments/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminArticlesIndexRoute = AdminArticlesIndexRouteImport.update({
+  id: '/admin/articles/',
+  path: '/admin/articles/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AdminAaModelsIndexRoute = AdminAaModelsIndexRouteImport.update({
   id: '/admin/aa-models/',
   path: '/admin/aa-models/',
@@ -241,6 +247,7 @@ export interface FileRoutesByFullPath {
   '/projects/create': typeof ProjectsCreateRoute
   '/projects/create-subproject': typeof ProjectsCreateSubprojectRoute
   '/admin/aa-models': typeof AdminAaModelsIndexRoute
+  '/admin/articles': typeof AdminArticlesIndexRoute
   '/admin/assessments': typeof AdminAssessmentsIndexRoute
   '/admin/datasources': typeof AdminDatasourcesIndexRoute
   '/admin/failed_requests': typeof AdminFailed_requestsIndexRoute
@@ -278,6 +285,7 @@ export interface FileRoutesByTo {
   '/projects/create': typeof ProjectsCreateRoute
   '/projects/create-subproject': typeof ProjectsCreateSubprojectRoute
   '/admin/aa-models': typeof AdminAaModelsIndexRoute
+  '/admin/articles': typeof AdminArticlesIndexRoute
   '/admin/assessments': typeof AdminAssessmentsIndexRoute
   '/admin/datasources': typeof AdminDatasourcesIndexRoute
   '/admin/failed_requests': typeof AdminFailed_requestsIndexRoute
@@ -316,6 +324,7 @@ export interface FileRoutesById {
   '/projects/create': typeof ProjectsCreateRoute
   '/projects/create-subproject': typeof ProjectsCreateSubprojectRoute
   '/admin/aa-models/': typeof AdminAaModelsIndexRoute
+  '/admin/articles/': typeof AdminArticlesIndexRoute
   '/admin/assessments/': typeof AdminAssessmentsIndexRoute
   '/admin/datasources/': typeof AdminDatasourcesIndexRoute
   '/admin/failed_requests/': typeof AdminFailed_requestsIndexRoute
@@ -355,6 +364,7 @@ export interface FileRouteTypes {
     | '/projects/create'
     | '/projects/create-subproject'
     | '/admin/aa-models'
+    | '/admin/articles'
     | '/admin/assessments'
     | '/admin/datasources'
     | '/admin/failed_requests'
@@ -392,6 +402,7 @@ export interface FileRouteTypes {
     | '/projects/create'
     | '/projects/create-subproject'
     | '/admin/aa-models'
+    | '/admin/articles'
     | '/admin/assessments'
     | '/admin/datasources'
     | '/admin/failed_requests'
@@ -429,6 +440,7 @@ export interface FileRouteTypes {
     | '/projects/create'
     | '/projects/create-subproject'
     | '/admin/aa-models/'
+    | '/admin/articles/'
     | '/admin/assessments/'
     | '/admin/datasources/'
     | '/admin/failed_requests/'
@@ -467,6 +479,7 @@ export interface RootRouteChildren {
   ProjectsCreateRoute: typeof ProjectsCreateRoute
   ProjectsCreateSubprojectRoute: typeof ProjectsCreateSubprojectRoute
   AdminAaModelsIndexRoute: typeof AdminAaModelsIndexRoute
+  AdminArticlesIndexRoute: typeof AdminArticlesIndexRoute
   AdminAssessmentsIndexRoute: typeof AdminAssessmentsIndexRoute
   AdminDatasourcesIndexRoute: typeof AdminDatasourcesIndexRoute
   AdminFailed_requestsIndexRoute: typeof AdminFailed_requestsIndexRoute
@@ -659,6 +672,13 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof AdminAssessmentsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/articles/': {
+      id: '/admin/articles/'
+      path: '/admin/articles'
+      fullPath: '/admin/articles'
+      preLoaderRoute: typeof AdminArticlesIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/admin/aa-models/': {
       id: '/admin/aa-models/'
       path: '/admin/aa-models'
@@ -755,6 +775,7 @@ const rootRouteChildren: RootRouteChildren = {
   ProjectsCreateRoute: ProjectsCreateRoute,
   ProjectsCreateSubprojectRoute: ProjectsCreateSubprojectRoute,
   AdminAaModelsIndexRoute: AdminAaModelsIndexRoute,
+  AdminArticlesIndexRoute: AdminArticlesIndexRoute,
   AdminAssessmentsIndexRoute: AdminAssessmentsIndexRoute,
   AdminDatasourcesIndexRoute: AdminDatasourcesIndexRoute,
   AdminFailed_requestsIndexRoute: AdminFailed_requestsIndexRoute,

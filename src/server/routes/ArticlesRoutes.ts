@@ -177,3 +177,42 @@ export const articlesRoutes = new Elysia()
       }),
     },
   )
+  .get(
+    '/api/articles/search',
+    async ({query}) => {
+      const db = getDatabase()
+      const {q} = query
+
+      if (!q || q.trim() === '') {
+        return {data: []}
+      }
+
+      const searchTerm = q.trim()
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(searchTerm)
+
+      const whereClause = isUuid
+        ? sql`${articles.id} = ${searchTerm} OR ${articles.articleId} = ${searchTerm} OR ${articles.articleTitle} ILIKE ${'%' + searchTerm + '%'}`
+        : sql`${articles.articleId} = ${searchTerm} OR ${articles.articleTitle} ILIKE ${'%' + searchTerm + '%'}`
+
+      const searchResults = await db
+        .select()
+        .from(articles)
+        .where(whereClause)
+        .orderBy(sql`
+          CASE
+            WHEN ${isUuid ? sql`${articles.id} = ${searchTerm}` : sql`FALSE`} THEN 0
+            WHEN ${articles.articleId} = ${searchTerm} THEN 1
+            ELSE 2
+          END,
+          ${articles.articleTitle} ASC
+        `)
+        .limit(50)
+
+      return {data: searchResults}
+    },
+    {
+      query: t.Object({
+        q: t.String(),
+      }),
+    },
+  )
