@@ -31,9 +31,6 @@ const AdminArticleDetailsFulltext = () => {
     <div class="min-h-screen bg-gray-50 p-6">
       <div class="max-w-7xl mx-auto space-y-6">
         <div class="flex items-center gap-4 mb-4">
-          <a href="/admin/articles/" class="text-blue-600 hover:underline">
-            ← Back to Search
-          </a>
           <h1 class="text-2xl font-bold">Admin Article View</h1>
         </div>
 
