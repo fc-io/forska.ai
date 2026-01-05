@@ -60,9 +60,13 @@ const AdminArticles = () => {
                     return (
                       <tr class="hover:bg-gray-50">
                         <td class="px-6 py-4">
-                          <div class="text-sm font-medium text-gray-900 line-clamp-2" title={article.articleTitle}>
+                          <a
+                            href={`/admin/articles/${article.id}`}
+                            class="text-sm font-medium text-blue-600 hover:underline line-clamp-2"
+                            title={article.articleTitle}
+                          >
                             {article.articleTitle}
-                          </div>
+                          </a>
                         </td>
                         <td class="px-6 py-4">
                           <div class="text-sm text-gray-500 line-clamp-1" title={article.articleAuthors?.join(', ')}>

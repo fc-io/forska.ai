@@ -21,6 +21,7 @@ import { Route as ProjectsIdExportRouteImport } from './routes/+projects/+$id/+e
 import { Route as ProjectsIdEditRouteImport } from './routes/+projects/+$id/+edit'
 import { Route as AdminPromptsDeduplicateRouteImport } from './routes/+admin/+prompts/+deduplicate'
 import { Route as AdminDatasourcesCreateRouteImport } from './routes/+admin/+datasources/+create'
+import { Route as AdminArticlesIdRouteImport } from './routes/+admin/+articles/+$id'
 import { Route as ProjectsArchivedIndexRouteImport } from './routes/+projects/+archived/+index'
 import { Route as ProjectsIdIndexRouteImport } from './routes/+projects/+$id/+index'
 import { Route as AdminUsersIndexRouteImport } from './routes/+admin/+users/+index'
@@ -106,6 +107,11 @@ const AdminPromptsDeduplicateRoute = AdminPromptsDeduplicateRouteImport.update({
 const AdminDatasourcesCreateRoute = AdminDatasourcesCreateRouteImport.update({
   id: '/admin/datasources/create',
   path: '/admin/datasources/create',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminArticlesIdRoute = AdminArticlesIdRouteImport.update({
+  id: '/admin/articles/$id',
+  path: '/admin/articles/$id',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ProjectsArchivedIndexRoute = ProjectsArchivedIndexRouteImport.update({
@@ -259,6 +265,7 @@ export interface FileRoutesByFullPath {
   '/admin/users': typeof AdminUsersIndexRoute
   '/projects/$id': typeof ProjectsIdIndexRoute
   '/projects/archived': typeof ProjectsArchivedIndexRoute
+  '/admin/articles/$id': typeof AdminArticlesIdRoute
   '/admin/datasources/create': typeof AdminDatasourcesCreateRoute
   '/admin/prompts/deduplicate': typeof AdminPromptsDeduplicateRoute
   '/projects/$id/edit': typeof ProjectsIdEditRoute
@@ -297,6 +304,7 @@ export interface FileRoutesByTo {
   '/admin/users': typeof AdminUsersIndexRoute
   '/projects/$id': typeof ProjectsIdIndexRoute
   '/projects/archived': typeof ProjectsArchivedIndexRoute
+  '/admin/articles/$id': typeof AdminArticlesIdRoute
   '/admin/datasources/create': typeof AdminDatasourcesCreateRoute
   '/admin/prompts/deduplicate': typeof AdminPromptsDeduplicateRoute
   '/projects/$id/edit': typeof ProjectsIdEditRoute
@@ -336,6 +344,7 @@ export interface FileRoutesById {
   '/admin/users/': typeof AdminUsersIndexRoute
   '/projects/$id/': typeof ProjectsIdIndexRoute
   '/projects/archived/': typeof ProjectsArchivedIndexRoute
+  '/admin/articles/$id': typeof AdminArticlesIdRoute
   '/admin/datasources/create': typeof AdminDatasourcesCreateRoute
   '/admin/prompts/deduplicate': typeof AdminPromptsDeduplicateRoute
   '/projects/$id/edit': typeof ProjectsIdEditRoute
@@ -376,6 +385,7 @@ export interface FileRouteTypes {
     | '/admin/users'
     | '/projects/$id'
     | '/projects/archived'
+    | '/admin/articles/$id'
     | '/admin/datasources/create'
     | '/admin/prompts/deduplicate'
     | '/projects/$id/edit'
@@ -414,6 +424,7 @@ export interface FileRouteTypes {
     | '/admin/users'
     | '/projects/$id'
     | '/projects/archived'
+    | '/admin/articles/$id'
     | '/admin/datasources/create'
     | '/admin/prompts/deduplicate'
     | '/projects/$id/edit'
@@ -452,6 +463,7 @@ export interface FileRouteTypes {
     | '/admin/users/'
     | '/projects/$id/'
     | '/projects/archived/'
+    | '/admin/articles/$id'
     | '/admin/datasources/create'
     | '/admin/prompts/deduplicate'
     | '/projects/$id/edit'
@@ -491,6 +503,7 @@ export interface RootRouteChildren {
   AdminUsersIndexRoute: typeof AdminUsersIndexRoute
   ProjectsIdIndexRoute: typeof ProjectsIdIndexRoute
   ProjectsArchivedIndexRoute: typeof ProjectsArchivedIndexRoute
+  AdminArticlesIdRoute: typeof AdminArticlesIdRoute
   AdminDatasourcesCreateRoute: typeof AdminDatasourcesCreateRoute
   AdminPromptsDeduplicateRoute: typeof AdminPromptsDeduplicateRoute
   ProjectsIdEditRoute: typeof ProjectsIdEditRoute
@@ -593,6 +606,13 @@ declare module '@tanstack/solid-router' {
       path: '/admin/datasources/create'
       fullPath: '/admin/datasources/create'
       preLoaderRoute: typeof AdminDatasourcesCreateRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/articles/$id': {
+      id: '/admin/articles/$id'
+      path: '/admin/articles/$id'
+      fullPath: '/admin/articles/$id'
+      preLoaderRoute: typeof AdminArticlesIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/projects/archived/': {
@@ -787,6 +807,7 @@ const rootRouteChildren: RootRouteChildren = {
   AdminUsersIndexRoute: AdminUsersIndexRoute,
   ProjectsIdIndexRoute: ProjectsIdIndexRoute,
   ProjectsArchivedIndexRoute: ProjectsArchivedIndexRoute,
+  AdminArticlesIdRoute: AdminArticlesIdRoute,
   AdminDatasourcesCreateRoute: AdminDatasourcesCreateRoute,
   AdminPromptsDeduplicateRoute: AdminPromptsDeduplicateRoute,
   ProjectsIdEditRoute: ProjectsIdEditRoute,

@@ -1,7 +1,15 @@
 import {count, eq, inArray, isNull, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {articleRouteLink, articles, importRoute as importRouteTable, judgments} from '../../db/schema.ts'
+import {
+  articleRouteLink,
+  articles,
+  importRoute as importRouteTable,
+  judgments,
+  models,
+  projects,
+  prompts,
+} from '../../db/schema.ts'
 import {requireAdminAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
@@ -198,21 +206,72 @@ export const articlesRoutes = new Elysia()
         .select()
         .from(articles)
         .where(whereClause)
-        .orderBy(sql`
+        .orderBy(
+          sql`
           CASE
             WHEN ${isUuid ? sql`${articles.id} = ${searchTerm}` : sql`FALSE`} THEN 0
             WHEN ${articles.articleId} = ${searchTerm} THEN 1
             ELSE 2
           END,
           ${articles.articleTitle} ASC
-        `)
+        `,
+        )
         .limit(50)
 
       return {data: searchResults}
     },
-    {
-      query: t.Object({
-        q: t.String(),
-      }),
+    {query: t.Object({q: t.String()})},
+  )
+  .get(
+    '/api/articles/:id',
+    async ({params}) => {
+      const db = getDatabase()
+      const {id} = params
+
+      // Get the article
+      const [article] = await db.select().from(articles).where(eq(articles.id, id)).limit(1)
+
+      if (!article) {
+        throw new Error('Article not found')
+      }
+
+      // Get all judgments for this article (Cross-Project / Admin View)
+      const allArticleJudgments = await db
+        .select({judgment: judgments, prompt: prompts, modelName: models.modelName})
+        .from(judgments)
+        .innerJoin(prompts, eq(judgments.promptId, prompts.id))
+        .leftJoin(models, eq(judgments.modelId, models.id))
+        .where(eq(judgments.articleId, id))
+
+      const allJudgments = allArticleJudgments.map(({judgment, prompt, modelName}) => {
+        return {...judgment, prompt, modelName}
+      })
+
+      // Resolve project names for snapshotProjectId when present
+      const snapshotProjectIds = Array.from(
+        new Set(
+          allJudgments
+            .map((j) => {
+              return j.snapshotProjectId
+            })
+            .filter((id): id is string => {
+              return Boolean(id)
+            }),
+        ),
+      )
+      const projectNameRows =
+        snapshotProjectIds.length > 0
+          ? await db
+              .select({id: projects.id, name: projects.name})
+              .from(projects)
+              .where(inArray(projects.id, snapshotProjectIds))
+          : []
+      const projectsById = projectNameRows.reduce<Record<string, {name: string}>>((acc, row) => {
+        acc[row.id] = {name: row.name}
+        return acc
+      }, {})
+
+      return {article, allJudgments, projectsById}
     },
+    {params: t.Object({id: t.String()})},
   )
