@@ -9,6 +9,7 @@ import {fetchArticleDetails} from '../../../../services/articlesService'
 const AdminArticleDetails = () => {
   const params = Route.useParams()
   const [articleViewToShow, setArticleViewToShow] = createSignal<string | undefined>(undefined)
+  const [isFulltextExpanded, setIsFulltextExpanded] = createSignal(false)
 
   const articleQuery = useQuery(() => {
     return {
@@ -43,14 +44,20 @@ const AdminArticleDetails = () => {
                   <div class="flex-1 space-y-6">
                     {/* Default view: no selection */}
                     <Show when={articleViewToShow() === undefined}>
-                      <ReviewArticleDetails article={data().article} showTitle={false} enableSticky={false} />
+                      <ReviewArticleDetails
+                        article={data().article}
+                        showTitle={false}
+                        enableSticky={false}
+                        isFulltextExpanded={isFulltextExpanded()}
+                        setIsFulltextExpanded={setIsFulltextExpanded}
+                      />
                     </Show>
 
                     {/* LLM judgment selected */}
                     <Show
                       when={
                         articleViewToShow() !== undefined
-                        && data().allJudgments.find((j: any) => {
+                        && data().allJudgments.find((j) => {
                           return j.id === articleViewToShow()
                         })
                       }
@@ -62,6 +69,8 @@ const AdminArticleDetails = () => {
                             judgment={selected()}
                             showTitle={false}
                             enableSticky={false}
+                            isFulltextExpanded={isFulltextExpanded()}
+                            setIsFulltextExpanded={setIsFulltextExpanded}
                           />
                         )
                       }}

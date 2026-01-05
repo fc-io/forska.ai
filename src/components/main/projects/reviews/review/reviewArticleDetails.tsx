@@ -29,6 +29,8 @@ type ReviewArticleDetailsProps = {
   judgment?: Judgment
   showTitle?: boolean
   enableSticky?: boolean
+  isFulltextExpanded?: boolean
+  setIsFulltextExpanded?: (isFulltextExpanded: boolean) => void
 }
 
 const stickyOffsets = {top: 24, bottom: 24}
@@ -120,7 +122,17 @@ const getHighlightedFulltext = (text: string, judgment: Judgment, sanitizeOption
 
 export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
   const [stickyTop, setStickyTop] = createSignal<number | undefined>(undefined)
-  const [isFulltextExpanded, setIsFulltextExpanded] = createSignal(false)
+  const [localIsFulltextExpanded, setLocalIsFulltextExpanded] = createSignal(false)
+  const isFulltextExpandedControlled = () => {
+    return props.isFulltextExpanded !== undefined && props.setIsFulltextExpanded !== undefined
+  }
+  const isFulltextExpanded = () => {
+    return isFulltextExpandedControlled() ? (props.isFulltextExpanded ?? false) : localIsFulltextExpanded()
+  }
+  const setIsFulltextExpanded = (value: boolean) => {
+    const setControlled = props.setIsFulltextExpanded
+    return isFulltextExpandedControlled() && setControlled ? setControlled(value) : setLocalIsFulltextExpanded(value)
+  }
   let containerRef: HTMLDivElement | undefined
   let fulltextContainerRef: HTMLDivElement | undefined
   const fulltextForDisplay = () => {

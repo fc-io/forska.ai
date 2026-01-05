@@ -14,6 +14,7 @@ export const ReviewDetail = () => {
   const projectId = (params() as {id: string; articleId: string}).id
   const articleId = (params() as {id: string; articleId: string}).articleId
   const [articleViewToShow, setArticleViewToShow] = createSignal<string | undefined>(undefined)
+  const [isFulltextExpanded, setIsFulltextExpanded] = createSignal(false)
 
   const articleQuery = useQuery(() => {
     return {
@@ -53,7 +54,11 @@ export const ReviewDetail = () => {
                   <div class="flex-1 space-y-6">
                     {/* Default view: no selection */}
                     <Show when={articleViewToShow() === undefined}>
-                      <ReviewArticleDetails article={data().article} />
+                      <ReviewArticleDetails
+                        article={data().article}
+                        isFulltextExpanded={isFulltextExpanded()}
+                        setIsFulltextExpanded={setIsFulltextExpanded}
+                      />
                     </Show>
 
                     {/* LLM judgment selected */}
@@ -66,7 +71,14 @@ export const ReviewDetail = () => {
                       }
                     >
                       {(selected) => {
-                        return <ReviewArticleDetails article={data().article} judgment={selected()} />
+                        return (
+                          <ReviewArticleDetails
+                            article={data().article}
+                            judgment={selected()}
+                            isFulltextExpanded={isFulltextExpanded()}
+                            setIsFulltextExpanded={setIsFulltextExpanded}
+                          />
+                        )
                       }}
                     </Show>
 
