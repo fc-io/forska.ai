@@ -107,3 +107,14 @@
 .assessment-container img {
     border-radius: 0.375rem;
 }
+
+pre {
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: auto;
+}
+
+pre code {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
