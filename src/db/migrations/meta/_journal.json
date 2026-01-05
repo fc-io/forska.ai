@@ -365,6 +365,13 @@
       "when": 1767367403326,
       "tag": "0052_nosy_arachne",
       "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1767615003719,
+      "tag": "0053_daily_warhawk",
+      "breakpoints": true
     }
   ]
 }

@@ -48,6 +48,9 @@ const envShape = arktype({
   RUN_SERVER_JUDGING: arktype('"true" | "false" | boolean').pipe((v) => {
     return typeof v === 'string' ? v.toLowerCase() === 'true' : v
   }),
+  RUN_SERVER_FULL_TEXT_CONVERSION_CRON: arktype('"true" | "false" | boolean').pipe((v) => {
+    return typeof v === 'string' ? v.toLowerCase() === 'true' : v
+  }),
   GPU_NNODES: 'number | string.integer.parse',
   GPU_GPUS_PER_NODE: 'number | string.integer.parse',
   GPU_TOTAL_GPUS: 'number | string.integer.parse',
@@ -66,6 +69,7 @@ const envShape = arktype({
   JUDGMENTS_ADD_TO_QUEUE_MAX_BATCH_SIZE: 'number | string.integer.parse',
   SGLANG_MODEL: 'string | null | undefined',
   WORKER_URLS: CsvStringArray,
+  DOCLING_SERVE_URL: 'string | null | undefined',
 })
 
 const readFromFileVar = (key: string): string | undefined => {
@@ -116,6 +120,10 @@ const loadEnv = (): typeof envShape.infer => {
   if (merged.RUN_SERVER_FULL_TEXT_FETCHING == null || merged.RUN_SERVER_FULL_TEXT_FETCHING === '') {
     ;(merged as Record<string, string>).RUN_SERVER_FULL_TEXT_FETCHING = 'false'
   }
+  // Default to false when not provided (prevents accidental background conversion)
+  if (merged.RUN_SERVER_FULL_TEXT_CONVERSION_CRON == null || merged.RUN_SERVER_FULL_TEXT_CONVERSION_CRON === '') {
+    ;(merged as Record<string, string>).RUN_SERVER_FULL_TEXT_CONVERSION_CRON = 'false'
+  }
   // Ensure numeric GPU/env defaults exist to satisfy shape; use 0 when not provided
   const numericKeys = [
     'GPU_NNODES',
@@ -165,6 +173,10 @@ const loadEnv = (): typeof envShape.infer => {
   // Provide a stable default when SGLANG_MODEL is not provided
   if (merged.SGLANG_MODEL == null || String(merged.SGLANG_MODEL).trim() === '') {
     ;(merged as Record<string, string>).SGLANG_MODEL = 'not set'
+  }
+  // Provide a stable default when DOCLING_SERVE_URL is not provided
+  if (merged.DOCLING_SERVE_URL == null || String(merged.DOCLING_SERVE_URL).trim() === '') {
+    ;(merged as Record<string, string>).DOCLING_SERVE_URL = 'http://localhost:5001'
   }
   return envShape.assert(merged)
 }

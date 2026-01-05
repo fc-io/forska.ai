@@ -72,6 +72,11 @@ export const articles = pgTable(
     fullTextOriginalFormat: text('full_text_original_format'),
     fullTextPDF: text('full_text_pdf'),
     fullTextAssets: jsonb('full_text_assets'),
+    // Conversion tracking columns
+    fullTextConversionStatus: text('full_text_conversion_status'), // 'pending' | 'success' | 'failed'
+    fullTextConversionError: text('full_text_conversion_error'),
+    fullTextConversionAttempts: integer('full_text_conversion_attempts').default(0),
+    fullTextCharCount: integer('full_text_char_count'),
     contentHash: text('content_hash'),
     importRoute: text('import_route'),
     originalData: jsonb('original_data'),

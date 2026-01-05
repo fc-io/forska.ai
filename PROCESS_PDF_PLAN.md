@@ -50,7 +50,7 @@ export class ConversionError extends Error {
   }
 }
 
-export const convertPdfToText = async (localPath: string): Promise<string> => {
+export const convertPdfToText = async (localPath: string, timeoutMs: number = 60_000): Promise<string> => {
   // Use absolute path for safety
   const absPath = path.resolve(process.cwd(), localPath)
   const pdfBytes = await Bun.file(absPath).arrayBuffer()
@@ -733,31 +733,33 @@ article: {
 ## Checklist
 
 ### Setup
-- [ ] Add `docling` service to `docker-compose.yml`
-- [ ] Add `DOCLING_SERVE_URL` to env
-- [ ] Add `RUN_SERVER_FULL_TEXT_CONVERSION_CRON` to env and `env.ts`
+- [x] Add `docling` service to `docker-compose.yml`
+- [x] Add `DOCLING_SERVE_URL` to env (default: `http://localhost:5001`)
+- [x] Add `RUN_SERVER_FULL_TEXT_CONVERSION_CRON` to env and `env.ts`
 
 ### DB Schema
 - [ ] Add `'skipped'` to `judgmentsJobsPromptsStatusEnum` (requires migration)
-- [ ] Add `fullTextConversionStatus` column
-- [ ] Add `fullTextConversionError` column
-- [ ] Add `fullTextConversionAttempts` column
-- [ ] Add `fullTextCharCount` column
+- [x] Add `fullTextConversionStatus` column
+- [x] Add `fullTextConversionError` column
+- [x] Add `fullTextConversionAttempts` column
+- [x] Add `fullTextCharCount` column
 - [ ] Add `skipReason` column ('no_fulltext' | 'conversion_failed' | null)
+- [x] Generate migration: `bunx --bun drizzle-kit generate`
+- [x] Run migration: `bun run db:mig`
 
 ### Conversion Function
-- [ ] Create `src/server/utils/convertPdfToText.ts`
-- [ ] `convertPdfToText(localPath: string, timeoutMs?: number): Promise<string>` — reads local file, sends base64 to Docling
-- [ ] Handle errors (timeout, service down, permanent vs transient)
-- [ ] Log timing
-- [ ] Define `DOCLING_CONVERSION_TIMEOUT_MS` as a const (60000ms)
+- [x] Create `src/server/utils/convertPdfToText.ts`
+- [x] `convertPdfToText(localPath: string, timeoutMs?: number): Promise<string>` — reads local file, sends base64 to Docling
+- [x] Handle errors (timeout, service down, permanent vs transient)
+- [x] Log timing
+- [x] Define `DOCLING_CONVERSION_TIMEOUT_MS` as a const (60000ms)
 
-### Full Text Conversion Cron Job (implement first!)
-- [ ] Create `src/server/cron/fullTextConversionJobs.ts`
-- [ ] Add `RUN_SERVER_FULL_TEXT_CONVERSION_CRON` env var to `env.ts` (default: false)
-- [ ] Implement `getArticlesNeedingConversion()` with same prioritization as PDF fetching
-- [ ] Implement `convertArticle()` with error handling and retry logic
-- [ ] Register cron in server startup (similar to `fullTextJobsCron`)
+### Full Text Conversion Cron Job (implement first!) ✅ DONE
+- [x] Create `src/server/cron/fullTextConversionJobs.ts`
+- [x] Add `RUN_SERVER_FULL_TEXT_CONVERSION_CRON` env var to `env.ts` (default: false)
+- [x] Implement `getArticlesNeedingConversion()` with same prioritization as PDF fetching
+- [x] Implement `convertArticle()` with error handling and retry logic
+- [x] Register cron in server startup (similar to `fullTextJobsCron`)
 - [ ] Test with running jobs that have `useFulltext=true`
 
 ### Integration (after cron job is working)

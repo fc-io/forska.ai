@@ -2,6 +2,7 @@ import {cors} from '@elysiajs/cors'
 import {Elysia} from 'elysia'
 
 import {flushDefaultWriterIfPresent} from '../services/parquet/parquetWriter'
+import {fullTextConversionJobsCron} from './cron/fullTextConversionJobs.ts'
 import {fullTextJobsCron} from './cron/fullTextJobs.ts'
 import {judgmentsJobsCron} from './cron/judgmentsJobs.ts'
 import {nvidiaSmiCron} from './cron/nvidiaSmi.ts'
@@ -40,6 +41,7 @@ const _app = new Elysia()
     }),
   )
   .use(fullTextJobsCron)
+  .use(fullTextConversionJobsCron)
   .use(judgmentsJobsCron)
   .use(nvidiaSmiCron)
   .use(authRoutes)

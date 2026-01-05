@@ -135,6 +135,21 @@ services:
     ports:
       - "30000:30000"
 
+  # ============================================================
+  # Docling Serve - PDF to Markdown conversion
+  # Port 5001: REST API for document conversion
+  # ============================================================
+  docling:
+    image: ghcr.io/docling-project/docling-serve
+    ports:
+      - "5001:5001"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:5001/health > /dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
   api-server:
     build:
       context: .
