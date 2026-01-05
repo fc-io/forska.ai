@@ -770,12 +770,12 @@ article: {
 
 ### Frontend
 - [ ] Update Job Status UI to handle `'skipped'` prompts (don't count as pending)
-- [ ] Add `fullText` and `fullTextPDF` to article query
-- [ ] Show fulltext section (collapsible) in `reviewArticleDetails.tsx`
-- [ ] Add PDF download button
-- [ ] Apply quote highlighting to fulltext
-- [ ] Max-height + scroll for long fulltext
-- [ ] Click quote → scroll to location in fulltext
+- [x] Add `fullText` and `fullTextPDF` to article query
+- [x] Show fulltext section (collapsible) in `reviewArticleDetails.tsx`
+- [x] Add PDF download button
+- [x] Apply quote highlighting to fulltext
+- [x] Max-height + scroll for long fulltext
+- [x] Click quote → scroll to location in fulltext
 
 ### Optional/Future
 - [ ] Add health check for Docling service

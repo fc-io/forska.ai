@@ -13,26 +13,85 @@ type Judgment = {
 }
 
 type ReviewArticleDetailsProps = {
-  article: {articleTitle: string; articleAuthors?: string[] | null; articleSummary?: string | null; articleId: string}
+  article: {
+    articleTitle: string
+    articleAuthors?: string[] | null
+    articleSummary?: string | null
+    articleId: string
+    fullText?: string | null
+    fullTextPDF?: string | null
+  }
   judgment?: Judgment
 }
 
 const stickyOffsets = {top: 24, bottom: 24}
 
-const getHighlightedText = (text: string, judgment: Judgment) => {
+/**
+ * Creates highlighted text with clickable highlights that scroll to fulltext.
+ * Returns both the JSX element and a function to scroll to first highlight in fulltext.
+ */
+const getHighlightedTextWithScrollHandler = (
+  text: string,
+  judgment: Judgment,
+  options?: {
+    onHighlightClick?: (quote: string) => void
+    highlightId?: string
+  },
+) => {
   const sanitizedText = decodeAndSanitize(text)
-  const pieces = reviewArticleDetailsGetHighlightedText(
-    sanitizedText,
-    new Array(...(judgment.quotes || [])).map((quote) => {
-      // replace leading ... and trailing ..., should be better stored in the database
-      return quote.replace(/^\.{3}|\.{3}$/g, '')
-    }),
-    {maxDistance: 1, caseInsensitive: true, fuzzyScanLimit: 'auto'},
-  )
+  const normalizedQuotes = (judgment.quotes || []).map((quote) => {
+    return quote.replace(/^\.{3}|\.{3}$/g, '')
+  })
+
+  const pieces = reviewArticleDetailsGetHighlightedText(sanitizedText, normalizedQuotes, {
+    maxDistance: 1,
+    caseInsensitive: true,
+    fuzzyScanLimit: 'auto',
+  })
 
   const html = pieces
-    .map(([text, isHit]) => {
-      return isHit ? `<span class="text-red-500 underline">${text}</span>` : text
+    .map(([pieceText, isHit], index) => {
+      if (isHit) {
+        const dataAttr = options?.highlightId ? `data-highlight-id="${options.highlightId}-${index}"` : ''
+        const clickableClass = options?.onHighlightClick ? 'cursor-pointer hover:bg-red-100' : ''
+        return `<span class="text-red-500 underline ${clickableClass}" ${dataAttr}>${pieceText}</span>`
+      }
+      return pieceText
+    })
+    .join('')
+
+  // eslint-disable-next-line solid/no-innerhtml
+  return <span innerHTML={html} />
+}
+
+/**
+ * Simple highlighted text (backward compatible)
+ */
+const getHighlightedText = (text: string, judgment: Judgment) => {
+  return getHighlightedTextWithScrollHandler(text, judgment)
+}
+
+/**
+ * Creates highlighted fulltext with data attributes for scroll targeting
+ */
+const getHighlightedFulltext = (text: string, judgment: Judgment) => {
+  const sanitizedText = decodeAndSanitize(text)
+  const normalizedQuotes = (judgment.quotes || []).map((quote) => {
+    return quote.replace(/^\.{3}|\.{3}$/g, '')
+  })
+
+  const pieces = reviewArticleDetailsGetHighlightedText(sanitizedText, normalizedQuotes, {
+    maxDistance: 1,
+    caseInsensitive: true,
+    fuzzyScanLimit: 'auto',
+  })
+
+  const html = pieces
+    .map(([pieceText, isHit], index) => {
+      if (isHit) {
+        return `<span class="text-red-500 underline bg-red-50 scroll-mt-4" data-fulltext-highlight="${index}">${pieceText}</span>`
+      }
+      return pieceText
     })
     .join('')
 
@@ -42,7 +101,9 @@ const getHighlightedText = (text: string, judgment: Judgment) => {
 
 export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
   const [stickyTop, setStickyTop] = createSignal<number | undefined>(undefined)
+  const [isFulltextExpanded, setIsFulltextExpanded] = createSignal(false)
   let containerRef: HTMLDivElement | undefined
+  let fulltextContainerRef: HTMLDivElement | undefined
 
   const setStickiness = () => {
     const containerHeight = containerRef?.getBoundingClientRect().height
@@ -55,6 +116,38 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
       setStickyTop(stickyOffsets.top)
     } else {
       setStickyTop(window.innerHeight - containerHeight - stickyOffsets.bottom)
+    }
+  }
+
+  const scrollToFirstHighlightInFulltext = () => {
+    if (!fulltextContainerRef) return
+
+    // First expand the fulltext section if collapsed
+    if (!isFulltextExpanded()) {
+      setIsFulltextExpanded(true)
+      // Wait for DOM update, then scroll
+      requestAnimationFrame(() => {
+        const firstHighlight = fulltextContainerRef?.querySelector('[data-fulltext-highlight="0"]')
+        if (firstHighlight) {
+          firstHighlight.scrollIntoView({behavior: 'smooth', block: 'center'})
+        }
+      })
+    } else {
+      const firstHighlight = fulltextContainerRef?.querySelector('[data-fulltext-highlight="0"]')
+      if (firstHighlight) {
+        firstHighlight.scrollIntoView({behavior: 'smooth', block: 'center'})
+      }
+    }
+  }
+
+  // Handle clicks on highlights in title/summary to scroll to fulltext
+  const handleTitleSummaryClick = (event: MouseEvent) => {
+    const target = event.target as HTMLElement
+    if (target.classList.contains('text-red-500') && target.classList.contains('underline')) {
+      // Only scroll if fulltext is available
+      if (props.article.fullText) {
+        scrollToFirstHighlightInFulltext()
+      }
     }
   }
 
@@ -88,7 +181,8 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
       <h1 class="text-2xl font-bold">Article Details</h1>
       <div class="p-6 bg-white rounded-lg shadow">
         <div class="space-y-2">
-          <p class="text-lg font-semibold">
+          {/* Title with clickable highlights */}
+          <p class="text-lg font-semibold" onClick={handleTitleSummaryClick}>
             {props.judgment ? (
               getHighlightedText(props.article.articleTitle, props.judgment)
             ) : (
@@ -96,6 +190,8 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
               <span innerHTML={decodeAndSanitize(props.article.articleTitle)} />
             )}
           </p>
+
+          {/* Article ID link */}
           <p class="text-gray-600">
             <a
               href={getArticleUrl(props.article.articleId)}
@@ -106,13 +202,44 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
               {props.article.articleId}
             </a>
           </p>
+
+          {/* Authors */}
           <Show when={props.article.articleAuthors}>
             <p class="text-gray-600">Authors: {props.article.articleAuthors?.join(', ')}</p>
           </Show>
+
+          {/* PDF Download Button */}
+          <Show when={props.article.fullTextPDF}>
+            <div class="mt-2">
+              <a
+                href={`/${props.article.fullTextPDF}`}
+                download
+                class="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke-width="1.5"
+                  stroke="currentColor"
+                  class="w-4 h-4"
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"
+                  />
+                </svg>
+                Download PDF
+              </a>
+            </div>
+          </Show>
+
+          {/* Summary with clickable highlights */}
           <Show when={props.article.articleSummary}>
             <div class="mt-4">
               <h3 class="font-semibold mb-2">Summary</h3>
-              <div class="text-gray-700 assessment-container leading-relaxed">
+              <div class="text-gray-700 assessment-container leading-relaxed" onClick={handleTitleSummaryClick}>
                 {props.judgment && props.article.articleSummary ? (
                   getHighlightedText(props.article.articleSummary, props.judgment)
                 ) : (
@@ -120,6 +247,49 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
                   <span innerHTML={decodeAndSanitize(props.article.articleSummary ?? '')} />
                 )}
               </div>
+            </div>
+          </Show>
+
+          {/* Full Text Section (Collapsible) */}
+          <Show when={props.article.fullText}>
+            <div class="mt-4 border-t pt-4">
+              <button
+                type="button"
+                onClick={() => setIsFulltextExpanded(!isFulltextExpanded())}
+                class="flex items-center gap-2 font-semibold text-gray-800 hover:text-gray-600 transition-colors"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke-width="2"
+                  stroke="currentColor"
+                  class="w-4 h-4 transition-transform duration-200"
+                  classList={{'rotate-90': isFulltextExpanded()}}
+                >
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+                </svg>
+                Full Text
+                <span class="text-sm font-normal text-gray-500">
+                  ({Math.round((props.article.fullText?.length ?? 0) / 1000)}k characters)
+                </span>
+              </button>
+
+              <Show when={isFulltextExpanded()}>
+                <div
+                  ref={(el) => {
+                    fulltextContainerRef = el
+                  }}
+                  class="mt-3 max-h-96 overflow-y-auto border rounded-lg p-4 bg-gray-50 text-gray-700 text-sm leading-relaxed"
+                >
+                  {props.judgment && props.article.fullText ? (
+                    getHighlightedFulltext(props.article.fullText, props.judgment)
+                  ) : (
+                    // eslint-disable-next-line solid/no-innerhtml
+                    <span innerHTML={decodeAndSanitize(props.article.fullText ?? '')} />
+                  )}
+                </div>
+              </Show>
             </div>
           </Show>
         </div>
