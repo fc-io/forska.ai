@@ -31,11 +31,15 @@ type ReviewArticleDetailsProps = {
   enableSticky?: boolean
   isFulltextExpanded?: boolean
   setIsFulltextExpanded?: (isFulltextExpanded: boolean) => void
+  /** Controls which content to display: 'all' (default), 'summary' (title/summary only), or 'fulltext' (full text only) */
+  viewMode?: 'all' | 'summary' | 'fulltext'
+  /** Hide the PDF download button (useful when it's displayed elsewhere, e.g., in tabs bar) */
+  hidePdfButton?: boolean
 }
 
 const stickyOffsets = {top: 24, bottom: 24}
 
-const toNonEmptyStringOrNull = (value: string | null | undefined): string | null => {
+const toNonEmptyStringOrNull = (value: string | null | undefined): string | null | undefined => {
   const trimmed = value?.trim()
   return trimmed ? value : null
 }
@@ -149,6 +153,12 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
   const enableSticky = () => {
     return props.enableSticky ?? true
   }
+  const viewMode = () => {
+    return props.viewMode ?? 'all'
+  }
+  const hidePdfButton = () => {
+    return props.hidePdfButton ?? false
+  }
 
   const setStickiness = () => {
     if (!enableSticky()) {
@@ -233,41 +243,45 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
         <h1 class="text-2xl font-bold">Article Details</h1>
       </Show>
 
-      <div class="p-6 bg-white rounded-lg shadow">
+      <div class="p-6 bg-white rounded-lg shadow" classList={{'rounded-t-none': viewMode() !== 'all'}}>
         <div class="space-y-2">
-          {/* Title with clickable highlights */}
-          <p class="text-lg font-semibold" onClick={handleTitleSummaryClick}>
-            {props.judgment ? (
-              getHighlightedText(props.article.articleTitle, props.judgment)
-            ) : (
-              // eslint-disable-next-line solid/no-innerhtml
-              <span innerHTML={decodeAndSanitize(props.article.articleTitle)} />
-            )}
-          </p>
-
-          {/* Article ID link */}
-          <p class="text-gray-600">
-            <a
-              href={getArticleUrl(props.article.articleId)}
-              target="_blank"
-              rel="noopener noreferrer"
-              class="text-blue-600 hover:underline"
-            >
-              {props.article.articleId}
-            </a>
-          </p>
-
-          {/* Authors */}
-          <Show when={props.article.articleAuthors}>
-            <p class="text-gray-600">Authors: {props.article.articleAuthors?.join(', ')}</p>
+          {/* Title with clickable highlights - shown in summary and all modes */}
+          <Show when={viewMode() === 'all' || viewMode() === 'summary'}>
+            <p class="text-lg font-semibold" onClick={handleTitleSummaryClick}>
+              {props.judgment ? (
+                getHighlightedText(props.article.articleTitle, props.judgment)
+              ) : (
+                // eslint-disable-next-line solid/no-innerhtml
+                <span innerHTML={decodeAndSanitize(props.article.articleTitle)} />
+              )}
+            </p>
           </Show>
 
-          {/* PDF Download Button */}
-          <Show when={props.article.fullTextPDF}>
+          {/* Article ID link - shown in summary and all modes */}
+          <Show when={viewMode() === 'all' || viewMode() === 'summary'}>
+            <p class="text-gray-600">
+              <a
+                href={getArticleUrl(props.article.articleId)}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="text-blue-600 hover:underline"
+              >
+                {props.article.articleId}
+              </a>
+            </p>
+
+            {/* Authors */}
+            <Show when={props.article.articleAuthors}>
+              <p class="text-gray-600">Authors: {props.article.articleAuthors?.join(', ')}</p>
+            </Show>
+          </Show>
+
+          {/* PDF Download Button - hidden when using tabs (button is in tab bar) */}
+          <Show when={!hidePdfButton() && props.article.fullTextPDF}>
             <div class="mt-2">
               <a
                 href={`/${props.article.fullTextPDF}`}
-                download
+                download=""
                 class="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
               >
                 <svg
@@ -289,8 +303,8 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
             </div>
           </Show>
 
-          {/* Summary with clickable highlights */}
-          <Show when={props.article.articleSummary}>
+          {/* Summary with clickable highlights - shown in summary and all modes */}
+          <Show when={(viewMode() === 'all' || viewMode() === 'summary') && props.article.articleSummary}>
             <div class="mt-4">
               <h3 class="font-semibold mb-2">Summary</h3>
               <div class="text-gray-700 assessment-container leading-relaxed" onClick={handleTitleSummaryClick}>
@@ -304,41 +318,46 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
             </div>
           </Show>
 
-          {/* Full Text Section (Collapsible) */}
-          <Show when={fulltextForDisplay()}>
+          {/* Full Text Section - Collapsible in 'all' mode, always expanded in 'fulltext' mode */}
+          <Show when={(viewMode() === 'all' || viewMode() === 'fulltext') && fulltextForDisplay()}>
             {(fulltextValue) => {
               return (
                 <div class="mt-4">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      return setIsFulltextExpanded(!isFulltextExpanded())
-                    }}
-                    class="flex items-center gap-2 font-semibold text-gray-800 hover:text-gray-600 transition-colors"
-                  >
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke-width="2"
-                      stroke="currentColor"
-                      class="w-4 h-4 transition-transform duration-200"
-                      classList={{'rotate-90': isFulltextExpanded()}}
+                  {/* Show collapsible header only in 'all' mode */}
+                  <Show when={viewMode() === 'all'}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        return setIsFulltextExpanded(!isFulltextExpanded())
+                      }}
+                      class="flex items-center gap-2 font-semibold text-gray-800 hover:text-gray-600 transition-colors"
                     >
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
-                    </svg>
-                    Full Text
-                    <span class="text-sm font-normal text-gray-500">
-                      ({Math.round((fulltextValue()?.length ?? 0) / 1000)}k characters)
-                    </span>
-                  </button>
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke-width="2"
+                        stroke="currentColor"
+                        class="w-4 h-4 transition-transform duration-200"
+                        classList={{'rotate-90': isFulltextExpanded()}}
+                      >
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+                      </svg>
+                      Full Text
+                      <span class="text-sm font-normal text-gray-500">
+                        ({Math.round((fulltextValue()?.length ?? 0) / 1000)}k characters)
+                      </span>
+                    </button>
+                  </Show>
 
-                  <Show when={isFulltextExpanded()}>
+                  {/* Show fulltext content either when expanded (all mode) or always (fulltext mode) */}
+                  <Show when={viewMode() === 'fulltext' || isFulltextExpanded()}>
                     <div
                       ref={(el) => {
                         fulltextContainerRef = el
                       }}
-                      class="mt-2 border-l border-gray-400 pl-[25px] text-gray-700 assessment-container leading-relaxed"
+                      class="text-gray-700 assessment-container leading-relaxed"
+                      classList={{'mt-2 border-l border-gray-400 pl-[25px]': viewMode() === 'all'}}
                     >
                       {props.judgment ? (
                         getHighlightedFulltext(fulltextValue() ?? '', props.judgment, fulltextSanitizeOptions())

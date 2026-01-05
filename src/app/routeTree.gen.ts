@@ -21,7 +21,6 @@ import { Route as ProjectsIdExportRouteImport } from './routes/+projects/+$id/+e
 import { Route as ProjectsIdEditRouteImport } from './routes/+projects/+$id/+edit'
 import { Route as AdminPromptsDeduplicateRouteImport } from './routes/+admin/+prompts/+deduplicate'
 import { Route as AdminDatasourcesCreateRouteImport } from './routes/+admin/+datasources/+create'
-import { Route as AdminArticlesIdRouteImport } from './routes/+admin/+articles/+$id'
 import { Route as ProjectsArchivedIndexRouteImport } from './routes/+projects/+archived/+index'
 import { Route as ProjectsIdIndexRouteImport } from './routes/+projects/+$id/+index'
 import { Route as AdminUsersIndexRouteImport } from './routes/+admin/+users/+index'
@@ -38,6 +37,7 @@ import { Route as AdminArticlesIndexRouteImport } from './routes/+admin/+article
 import { Route as AdminAaModelsIndexRouteImport } from './routes/+admin/+aa-models/+index'
 import { Route as AdminJobsIdUnassessed_articlesRouteImport } from './routes/+admin/+jobs/+$id/+unassessed_articles'
 import { Route as AdminDatasourcesIdEditRouteImport } from './routes/+admin/+datasources/+$id/+edit'
+import { Route as AdminArticlesIdFulltextRouteImport } from './routes/+admin/+articles/+$id/+fulltext'
 import { Route as ProjectsIdReviewsIndexRouteImport } from './routes/+projects/+$id/+reviews/+index'
 import { Route as ProjectsIdReviewsUnassessedIndexRouteImport } from './routes/+projects/+$id/+reviews-unassessed/+index'
 import { Route as ProjectsIdReviewsLlmIndexRouteImport } from './routes/+projects/+$id/+reviews-llm/+index'
@@ -45,6 +45,8 @@ import { Route as ProjectsIdReviewsHumanIndexRouteImport } from './routes/+proje
 import { Route as ProjectsIdReviewsBothIndexRouteImport } from './routes/+projects/+$id/+reviews-both/+index'
 import { Route as AdminJobsIdIndexRouteImport } from './routes/+admin/+jobs/+$id/+index'
 import { Route as AdminFailed_requestsIdIndexRouteImport } from './routes/+admin/+failed_requests/+$id/+index'
+import { Route as AdminArticlesIdIndexRouteImport } from './routes/+admin/+articles/+$id/+index'
+import { Route as ProjectsIdReviewsLlmArticleIdFulltextRouteImport } from './routes/+projects/+$id/+reviews-llm/+$articleId/+fulltext'
 import { Route as ProjectsIdReviewsArticleIdIndexRouteImport } from './routes/+projects/+$id/+reviews/+$articleId/+index'
 import { Route as ProjectsIdReviewsLlmArticleIdIndexRouteImport } from './routes/+projects/+$id/+reviews-llm/+$articleId/+index'
 
@@ -108,11 +110,6 @@ const AdminPromptsDeduplicateRoute = AdminPromptsDeduplicateRouteImport.update({
 const AdminDatasourcesCreateRoute = AdminDatasourcesCreateRouteImport.update({
   id: '/admin/datasources/create',
   path: '/admin/datasources/create',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AdminArticlesIdRoute = AdminArticlesIdRouteImport.update({
-  id: '/admin/articles/$id',
-  path: '/admin/articles/$id',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ProjectsArchivedIndexRoute = ProjectsArchivedIndexRouteImport.update({
@@ -198,6 +195,11 @@ const AdminDatasourcesIdEditRoute = AdminDatasourcesIdEditRouteImport.update({
   path: '/admin/datasources/$id/edit',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminArticlesIdFulltextRoute = AdminArticlesIdFulltextRouteImport.update({
+  id: '/admin/articles/$id/fulltext',
+  path: '/admin/articles/$id/fulltext',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ProjectsIdReviewsIndexRoute = ProjectsIdReviewsIndexRouteImport.update({
   id: '/projects/$id/reviews/',
   path: '/projects/$id/reviews/',
@@ -238,6 +240,17 @@ const AdminFailed_requestsIdIndexRoute =
     path: '/admin/failed_requests/$id/',
     getParentRoute: () => rootRouteImport,
   } as any)
+const AdminArticlesIdIndexRoute = AdminArticlesIdIndexRouteImport.update({
+  id: '/admin/articles/$id/',
+  path: '/admin/articles/$id/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProjectsIdReviewsLlmArticleIdFulltextRoute =
+  ProjectsIdReviewsLlmArticleIdFulltextRouteImport.update({
+    id: '/projects/$id/reviews-llm/$articleId/fulltext',
+    path: '/projects/$id/reviews-llm/$articleId/fulltext',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ProjectsIdReviewsArticleIdIndexRoute =
   ProjectsIdReviewsArticleIdIndexRouteImport.update({
     id: '/projects/$id/reviews/$articleId/',
@@ -273,12 +286,12 @@ export interface FileRoutesByFullPath {
   '/admin/users': typeof AdminUsersIndexRoute
   '/projects/$id': typeof ProjectsIdIndexRoute
   '/projects/archived': typeof ProjectsArchivedIndexRoute
-  '/admin/articles/$id': typeof AdminArticlesIdRoute
   '/admin/datasources/create': typeof AdminDatasourcesCreateRoute
   '/admin/prompts/deduplicate': typeof AdminPromptsDeduplicateRoute
   '/projects/$id/edit': typeof ProjectsIdEditRoute
   '/projects/$id/export': typeof ProjectsIdExportRoute
   '/projects/$id/humanAssessment': typeof ProjectsIdHumanAssessmentRoute
+  '/admin/articles/$id': typeof AdminArticlesIdIndexRoute
   '/admin/failed_requests/$id': typeof AdminFailed_requestsIdIndexRoute
   '/admin/jobs/$id': typeof AdminJobsIdIndexRoute
   '/projects/$id/reviews-both': typeof ProjectsIdReviewsBothIndexRoute
@@ -286,10 +299,12 @@ export interface FileRoutesByFullPath {
   '/projects/$id/reviews-llm': typeof ProjectsIdReviewsLlmIndexRoute
   '/projects/$id/reviews-unassessed': typeof ProjectsIdReviewsUnassessedIndexRoute
   '/projects/$id/reviews': typeof ProjectsIdReviewsIndexRoute
+  '/admin/articles/$id/fulltext': typeof AdminArticlesIdFulltextRoute
   '/admin/datasources/$id/edit': typeof AdminDatasourcesIdEditRoute
   '/admin/jobs/$id/unassessed_articles': typeof AdminJobsIdUnassessed_articlesRoute
   '/projects/$id/reviews-llm/$articleId': typeof ProjectsIdReviewsLlmArticleIdIndexRoute
   '/projects/$id/reviews/$articleId': typeof ProjectsIdReviewsArticleIdIndexRoute
+  '/projects/$id/reviews-llm/$articleId/fulltext': typeof ProjectsIdReviewsLlmArticleIdFulltextRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -313,12 +328,12 @@ export interface FileRoutesByTo {
   '/admin/users': typeof AdminUsersIndexRoute
   '/projects/$id': typeof ProjectsIdIndexRoute
   '/projects/archived': typeof ProjectsArchivedIndexRoute
-  '/admin/articles/$id': typeof AdminArticlesIdRoute
   '/admin/datasources/create': typeof AdminDatasourcesCreateRoute
   '/admin/prompts/deduplicate': typeof AdminPromptsDeduplicateRoute
   '/projects/$id/edit': typeof ProjectsIdEditRoute
   '/projects/$id/export': typeof ProjectsIdExportRoute
   '/projects/$id/humanAssessment': typeof ProjectsIdHumanAssessmentRoute
+  '/admin/articles/$id': typeof AdminArticlesIdIndexRoute
   '/admin/failed_requests/$id': typeof AdminFailed_requestsIdIndexRoute
   '/admin/jobs/$id': typeof AdminJobsIdIndexRoute
   '/projects/$id/reviews-both': typeof ProjectsIdReviewsBothIndexRoute
@@ -326,10 +341,12 @@ export interface FileRoutesByTo {
   '/projects/$id/reviews-llm': typeof ProjectsIdReviewsLlmIndexRoute
   '/projects/$id/reviews-unassessed': typeof ProjectsIdReviewsUnassessedIndexRoute
   '/projects/$id/reviews': typeof ProjectsIdReviewsIndexRoute
+  '/admin/articles/$id/fulltext': typeof AdminArticlesIdFulltextRoute
   '/admin/datasources/$id/edit': typeof AdminDatasourcesIdEditRoute
   '/admin/jobs/$id/unassessed_articles': typeof AdminJobsIdUnassessed_articlesRoute
   '/projects/$id/reviews-llm/$articleId': typeof ProjectsIdReviewsLlmArticleIdIndexRoute
   '/projects/$id/reviews/$articleId': typeof ProjectsIdReviewsArticleIdIndexRoute
+  '/projects/$id/reviews-llm/$articleId/fulltext': typeof ProjectsIdReviewsLlmArticleIdFulltextRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -354,12 +371,12 @@ export interface FileRoutesById {
   '/admin/users/': typeof AdminUsersIndexRoute
   '/projects/$id/': typeof ProjectsIdIndexRoute
   '/projects/archived/': typeof ProjectsArchivedIndexRoute
-  '/admin/articles/$id': typeof AdminArticlesIdRoute
   '/admin/datasources/create': typeof AdminDatasourcesCreateRoute
   '/admin/prompts/deduplicate': typeof AdminPromptsDeduplicateRoute
   '/projects/$id/edit': typeof ProjectsIdEditRoute
   '/projects/$id/export': typeof ProjectsIdExportRoute
   '/projects/$id/humanAssessment': typeof ProjectsIdHumanAssessmentRoute
+  '/admin/articles/$id/': typeof AdminArticlesIdIndexRoute
   '/admin/failed_requests/$id/': typeof AdminFailed_requestsIdIndexRoute
   '/admin/jobs/$id/': typeof AdminJobsIdIndexRoute
   '/projects/$id/reviews-both/': typeof ProjectsIdReviewsBothIndexRoute
@@ -367,10 +384,12 @@ export interface FileRoutesById {
   '/projects/$id/reviews-llm/': typeof ProjectsIdReviewsLlmIndexRoute
   '/projects/$id/reviews-unassessed/': typeof ProjectsIdReviewsUnassessedIndexRoute
   '/projects/$id/reviews/': typeof ProjectsIdReviewsIndexRoute
+  '/admin/articles/$id/fulltext': typeof AdminArticlesIdFulltextRoute
   '/admin/datasources/$id/edit': typeof AdminDatasourcesIdEditRoute
   '/admin/jobs/$id/unassessed_articles': typeof AdminJobsIdUnassessed_articlesRoute
   '/projects/$id/reviews-llm/$articleId/': typeof ProjectsIdReviewsLlmArticleIdIndexRoute
   '/projects/$id/reviews/$articleId/': typeof ProjectsIdReviewsArticleIdIndexRoute
+  '/projects/$id/reviews-llm/$articleId/fulltext': typeof ProjectsIdReviewsLlmArticleIdFulltextRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -396,12 +415,12 @@ export interface FileRouteTypes {
     | '/admin/users'
     | '/projects/$id'
     | '/projects/archived'
-    | '/admin/articles/$id'
     | '/admin/datasources/create'
     | '/admin/prompts/deduplicate'
     | '/projects/$id/edit'
     | '/projects/$id/export'
     | '/projects/$id/humanAssessment'
+    | '/admin/articles/$id'
     | '/admin/failed_requests/$id'
     | '/admin/jobs/$id'
     | '/projects/$id/reviews-both'
@@ -409,10 +428,12 @@ export interface FileRouteTypes {
     | '/projects/$id/reviews-llm'
     | '/projects/$id/reviews-unassessed'
     | '/projects/$id/reviews'
+    | '/admin/articles/$id/fulltext'
     | '/admin/datasources/$id/edit'
     | '/admin/jobs/$id/unassessed_articles'
     | '/projects/$id/reviews-llm/$articleId'
     | '/projects/$id/reviews/$articleId'
+    | '/projects/$id/reviews-llm/$articleId/fulltext'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -436,12 +457,12 @@ export interface FileRouteTypes {
     | '/admin/users'
     | '/projects/$id'
     | '/projects/archived'
-    | '/admin/articles/$id'
     | '/admin/datasources/create'
     | '/admin/prompts/deduplicate'
     | '/projects/$id/edit'
     | '/projects/$id/export'
     | '/projects/$id/humanAssessment'
+    | '/admin/articles/$id'
     | '/admin/failed_requests/$id'
     | '/admin/jobs/$id'
     | '/projects/$id/reviews-both'
@@ -449,10 +470,12 @@ export interface FileRouteTypes {
     | '/projects/$id/reviews-llm'
     | '/projects/$id/reviews-unassessed'
     | '/projects/$id/reviews'
+    | '/admin/articles/$id/fulltext'
     | '/admin/datasources/$id/edit'
     | '/admin/jobs/$id/unassessed_articles'
     | '/projects/$id/reviews-llm/$articleId'
     | '/projects/$id/reviews/$articleId'
+    | '/projects/$id/reviews-llm/$articleId/fulltext'
   id:
     | '__root__'
     | '/'
@@ -476,12 +499,12 @@ export interface FileRouteTypes {
     | '/admin/users/'
     | '/projects/$id/'
     | '/projects/archived/'
-    | '/admin/articles/$id'
     | '/admin/datasources/create'
     | '/admin/prompts/deduplicate'
     | '/projects/$id/edit'
     | '/projects/$id/export'
     | '/projects/$id/humanAssessment'
+    | '/admin/articles/$id/'
     | '/admin/failed_requests/$id/'
     | '/admin/jobs/$id/'
     | '/projects/$id/reviews-both/'
@@ -489,10 +512,12 @@ export interface FileRouteTypes {
     | '/projects/$id/reviews-llm/'
     | '/projects/$id/reviews-unassessed/'
     | '/projects/$id/reviews/'
+    | '/admin/articles/$id/fulltext'
     | '/admin/datasources/$id/edit'
     | '/admin/jobs/$id/unassessed_articles'
     | '/projects/$id/reviews-llm/$articleId/'
     | '/projects/$id/reviews/$articleId/'
+    | '/projects/$id/reviews-llm/$articleId/fulltext'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -517,12 +542,12 @@ export interface RootRouteChildren {
   AdminUsersIndexRoute: typeof AdminUsersIndexRoute
   ProjectsIdIndexRoute: typeof ProjectsIdIndexRoute
   ProjectsArchivedIndexRoute: typeof ProjectsArchivedIndexRoute
-  AdminArticlesIdRoute: typeof AdminArticlesIdRoute
   AdminDatasourcesCreateRoute: typeof AdminDatasourcesCreateRoute
   AdminPromptsDeduplicateRoute: typeof AdminPromptsDeduplicateRoute
   ProjectsIdEditRoute: typeof ProjectsIdEditRoute
   ProjectsIdExportRoute: typeof ProjectsIdExportRoute
   ProjectsIdHumanAssessmentRoute: typeof ProjectsIdHumanAssessmentRoute
+  AdminArticlesIdIndexRoute: typeof AdminArticlesIdIndexRoute
   AdminFailed_requestsIdIndexRoute: typeof AdminFailed_requestsIdIndexRoute
   AdminJobsIdIndexRoute: typeof AdminJobsIdIndexRoute
   ProjectsIdReviewsBothIndexRoute: typeof ProjectsIdReviewsBothIndexRoute
@@ -530,10 +555,12 @@ export interface RootRouteChildren {
   ProjectsIdReviewsLlmIndexRoute: typeof ProjectsIdReviewsLlmIndexRoute
   ProjectsIdReviewsUnassessedIndexRoute: typeof ProjectsIdReviewsUnassessedIndexRoute
   ProjectsIdReviewsIndexRoute: typeof ProjectsIdReviewsIndexRoute
+  AdminArticlesIdFulltextRoute: typeof AdminArticlesIdFulltextRoute
   AdminDatasourcesIdEditRoute: typeof AdminDatasourcesIdEditRoute
   AdminJobsIdUnassessed_articlesRoute: typeof AdminJobsIdUnassessed_articlesRoute
   ProjectsIdReviewsLlmArticleIdIndexRoute: typeof ProjectsIdReviewsLlmArticleIdIndexRoute
   ProjectsIdReviewsArticleIdIndexRoute: typeof ProjectsIdReviewsArticleIdIndexRoute
+  ProjectsIdReviewsLlmArticleIdFulltextRoute: typeof ProjectsIdReviewsLlmArticleIdFulltextRoute
 }
 
 declare module '@tanstack/solid-router' {
@@ -620,13 +647,6 @@ declare module '@tanstack/solid-router' {
       path: '/admin/datasources/create'
       fullPath: '/admin/datasources/create'
       preLoaderRoute: typeof AdminDatasourcesCreateRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/admin/articles/$id': {
-      id: '/admin/articles/$id'
-      path: '/admin/articles/$id'
-      fullPath: '/admin/articles/$id'
-      preLoaderRoute: typeof AdminArticlesIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/projects/archived/': {
@@ -741,6 +761,13 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof AdminDatasourcesIdEditRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/articles/$id/fulltext': {
+      id: '/admin/articles/$id/fulltext'
+      path: '/admin/articles/$id/fulltext'
+      fullPath: '/admin/articles/$id/fulltext'
+      preLoaderRoute: typeof AdminArticlesIdFulltextRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/projects/$id/reviews/': {
       id: '/projects/$id/reviews/'
       path: '/projects/$id/reviews'
@@ -790,6 +817,20 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof AdminFailed_requestsIdIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/articles/$id/': {
+      id: '/admin/articles/$id/'
+      path: '/admin/articles/$id'
+      fullPath: '/admin/articles/$id'
+      preLoaderRoute: typeof AdminArticlesIdIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/projects/$id/reviews-llm/$articleId/fulltext': {
+      id: '/projects/$id/reviews-llm/$articleId/fulltext'
+      path: '/projects/$id/reviews-llm/$articleId/fulltext'
+      fullPath: '/projects/$id/reviews-llm/$articleId/fulltext'
+      preLoaderRoute: typeof ProjectsIdReviewsLlmArticleIdFulltextRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/projects/$id/reviews/$articleId/': {
       id: '/projects/$id/reviews/$articleId/'
       path: '/projects/$id/reviews/$articleId'
@@ -829,12 +870,12 @@ const rootRouteChildren: RootRouteChildren = {
   AdminUsersIndexRoute: AdminUsersIndexRoute,
   ProjectsIdIndexRoute: ProjectsIdIndexRoute,
   ProjectsArchivedIndexRoute: ProjectsArchivedIndexRoute,
-  AdminArticlesIdRoute: AdminArticlesIdRoute,
   AdminDatasourcesCreateRoute: AdminDatasourcesCreateRoute,
   AdminPromptsDeduplicateRoute: AdminPromptsDeduplicateRoute,
   ProjectsIdEditRoute: ProjectsIdEditRoute,
   ProjectsIdExportRoute: ProjectsIdExportRoute,
   ProjectsIdHumanAssessmentRoute: ProjectsIdHumanAssessmentRoute,
+  AdminArticlesIdIndexRoute: AdminArticlesIdIndexRoute,
   AdminFailed_requestsIdIndexRoute: AdminFailed_requestsIdIndexRoute,
   AdminJobsIdIndexRoute: AdminJobsIdIndexRoute,
   ProjectsIdReviewsBothIndexRoute: ProjectsIdReviewsBothIndexRoute,
@@ -842,11 +883,14 @@ const rootRouteChildren: RootRouteChildren = {
   ProjectsIdReviewsLlmIndexRoute: ProjectsIdReviewsLlmIndexRoute,
   ProjectsIdReviewsUnassessedIndexRoute: ProjectsIdReviewsUnassessedIndexRoute,
   ProjectsIdReviewsIndexRoute: ProjectsIdReviewsIndexRoute,
+  AdminArticlesIdFulltextRoute: AdminArticlesIdFulltextRoute,
   AdminDatasourcesIdEditRoute: AdminDatasourcesIdEditRoute,
   AdminJobsIdUnassessed_articlesRoute: AdminJobsIdUnassessed_articlesRoute,
   ProjectsIdReviewsLlmArticleIdIndexRoute:
     ProjectsIdReviewsLlmArticleIdIndexRoute,
   ProjectsIdReviewsArticleIdIndexRoute: ProjectsIdReviewsArticleIdIndexRoute,
+  ProjectsIdReviewsLlmArticleIdFulltextRoute:
+    ProjectsIdReviewsLlmArticleIdFulltextRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

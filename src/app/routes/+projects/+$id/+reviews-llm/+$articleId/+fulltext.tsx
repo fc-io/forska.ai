@@ -10,12 +10,11 @@ import {ReviewJudgments} from '../../../../../../components/main/projects/review
 import {ReviewStatus} from '../../../../../../components/main/projects/reviews/review/reviewStatus.tsx'
 import {apiClient} from '../../../../../../services/apiClient.ts'
 
-export const ReviewDetail = () => {
+export const ReviewDetailFulltext = () => {
   const params = Route.useParams()
   const projectId = (params() as {id: string; articleId: string}).id
   const articleId = (params() as {id: string; articleId: string}).articleId
   const [articleViewToShow, setArticleViewToShow] = createSignal<string | undefined>(undefined)
-  const [isFulltextExpanded, setIsFulltextExpanded] = createSignal(false)
 
   const articleQuery = useQuery(() => {
     return {
@@ -63,7 +62,7 @@ export const ReviewDetail = () => {
                     <h1 class="text-2xl font-bold">Article Details</h1>
 
                     <ArticleTabs
-                      activeTab="summary"
+                      activeTab="fulltext"
                       hasFullText={hasFullText()}
                       fullTextPDF={data().article.fullTextPDF}
                       basePath={`/projects/${projectId}/reviews-llm/${articleId}`}
@@ -74,9 +73,7 @@ export const ReviewDetail = () => {
                       <ReviewArticleDetails
                         article={data().article}
                         showTitle={false}
-                        isFulltextExpanded={isFulltextExpanded()}
-                        setIsFulltextExpanded={setIsFulltextExpanded}
-                        viewMode="summary"
+                        viewMode="fulltext"
                         hidePdfButton={true}
                       />
                     </Show>
@@ -96,9 +93,7 @@ export const ReviewDetail = () => {
                             article={data().article}
                             judgment={selected()}
                             showTitle={false}
-                            isFulltextExpanded={isFulltextExpanded()}
-                            setIsFulltextExpanded={setIsFulltextExpanded}
-                            viewMode="summary"
+                            viewMode="fulltext"
                             hidePdfButton={true}
                           />
                         )
@@ -132,4 +127,4 @@ export const ReviewDetail = () => {
   )
 }
 
-export const Route = createFileRoute('/projects/$id/reviews-llm/$articleId/')({component: ReviewDetail})
+export const Route = createFileRoute('/projects/$id/reviews-llm/$articleId/fulltext')({component: ReviewDetailFulltext})

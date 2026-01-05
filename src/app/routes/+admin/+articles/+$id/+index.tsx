@@ -2,9 +2,10 @@ import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute} from '@tanstack/solid-router'
 import {createSignal, Show, Suspense} from 'solid-js'
 
-import {ReviewArticleDetails} from '../../../../components/main/projects/reviews/review/reviewArticleDetails'
-import {ReviewAvailableJudgments} from '../../../../components/main/projects/reviews/review/reviewAvailableJudgments'
-import {fetchArticleDetails} from '../../../../services/articlesService'
+import {ArticleTabs} from '../../../../../components/main/articles/articleTabs'
+import {ReviewArticleDetails} from '../../../../../components/main/projects/reviews/review/reviewArticleDetails'
+import {ReviewAvailableJudgments} from '../../../../../components/main/projects/reviews/review/reviewAvailableJudgments'
+import {fetchArticleDetails} from '../../../../../services/articlesService'
 
 const AdminArticleDetails = () => {
   const params = Route.useParams()
@@ -19,6 +20,13 @@ const AdminArticleDetails = () => {
       },
     }
   })
+
+  const hasFullText = () => {
+    const article = articleQuery.data?.article
+    const fullText = article?.fullText?.trim()
+    const fullTextHtml = article?.fullTextHtml?.trim()
+    return Boolean(fullText || fullTextHtml)
+  }
 
   return (
     <div class="min-h-screen bg-gray-50 p-6">
@@ -42,6 +50,13 @@ const AdminArticleDetails = () => {
               return (
                 <div class="flex gap-6">
                   <div class="flex-1 space-y-6">
+                    <ArticleTabs
+                      activeTab="summary"
+                      hasFullText={hasFullText()}
+                      fullTextPDF={data().article.fullTextPDF}
+                      basePath={`/admin/articles/${params().id}`}
+                    />
+
                     {/* Default view: no selection */}
                     <Show when={articleViewToShow() === undefined}>
                       <ReviewArticleDetails
@@ -50,6 +65,8 @@ const AdminArticleDetails = () => {
                         enableSticky={false}
                         isFulltextExpanded={isFulltextExpanded()}
                         setIsFulltextExpanded={setIsFulltextExpanded}
+                        viewMode="summary"
+                        hidePdfButton={true}
                       />
                     </Show>
 
@@ -71,6 +88,8 @@ const AdminArticleDetails = () => {
                             enableSticky={false}
                             isFulltextExpanded={isFulltextExpanded()}
                             setIsFulltextExpanded={setIsFulltextExpanded}
+                            viewMode="summary"
+                            hidePdfButton={true}
                           />
                         )
                       }}
@@ -93,4 +112,4 @@ const AdminArticleDetails = () => {
   )
 }
 
-export const Route = createFileRoute('/admin/articles/$id')({component: AdminArticleDetails})
+export const Route = createFileRoute('/admin/articles/$id/')({component: AdminArticleDetails})
