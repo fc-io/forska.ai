@@ -3,6 +3,7 @@ import {createFileRoute} from '@tanstack/solid-router'
 import {createSignal, Show, Suspense} from 'solid-js'
 
 import {ArticleTabs} from '../../../../../../components/main/articles/articleTabs'
+import {StickyColumn} from '../../../../../../components/main/common/stickyColumn'
 import {ReviewArticleDetails} from '../../../../../../components/main/projects/reviews/review/reviewArticleDetails.tsx'
 import {ReviewAvailableJudgments} from '../../../../../../components/main/projects/reviews/review/reviewAvailableJudgments.tsx'
 import {ReviewHumanAssessments} from '../../../../../../components/main/projects/reviews/review/reviewHumanAssessments.tsx'
@@ -104,7 +105,7 @@ export const ReviewDetailFulltext = () => {
                       <ReviewStatus review={data().review} />
                     </Show>
                   </div>
-                  <div class="w-96">
+                  <StickyColumn class="w-96">
                     <ReviewJudgments
                       judgments={data().judgments}
                       setArticleViewToShow={setArticleViewToShow}
@@ -116,7 +117,7 @@ export const ReviewDetailFulltext = () => {
                       projectsById={data().projectsById}
                       setArticleViewToShow={setArticleViewToShow}
                     />
-                  </div>
+                  </StickyColumn>
                 </div>
               )
             }}
