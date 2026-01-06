@@ -2,10 +2,10 @@ import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute} from '@tanstack/solid-router'
 import {createSignal, Show, Suspense} from 'solid-js'
 
-import {ArticleTabs} from '../../../../../components/main/articles/articleTabs'
-import {ReviewArticleDetails} from '../../../../../components/main/projects/reviews/review/reviewArticleDetails'
-import {ReviewAvailableJudgments} from '../../../../../components/main/projects/reviews/review/reviewAvailableJudgments'
-import {fetchArticleDetails} from '../../../../../services/articlesService'
+import {ArticleTabs} from '../../../../components/main/articles/articleTabs'
+import {ReviewArticleDetails} from '../../../../components/main/projects/reviews/review/reviewArticleDetails'
+import {ReviewAvailableJudgments} from '../../../../components/main/projects/reviews/review/reviewAvailableJudgments'
+import {fetchArticleDetails} from '../../../../services/articlesService'
 
 const AdminArticleDetailsFulltext = () => {
   const params = Route.useParams()
@@ -50,7 +50,7 @@ const AdminArticleDetailsFulltext = () => {
                       activeTab="fulltext"
                       hasFullText={hasFullText()}
                       fullTextPDF={data().article.fullTextPDF}
-                      basePath={`/admin/articles/${params().id}`}
+                      basePath={`/articles/${params().id}`}
                     />
 
                     {/* Default view: no selection */}
@@ -104,4 +104,4 @@ const AdminArticleDetailsFulltext = () => {
   )
 }
 
-export const Route = createFileRoute('/admin/articles/$id/fulltext')({component: AdminArticleDetailsFulltext})
+export const Route = createFileRoute('/articles/$id/fulltext')({component: AdminArticleDetailsFulltext})

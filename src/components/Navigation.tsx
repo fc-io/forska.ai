@@ -136,10 +136,10 @@ export const Navigation = (props: NavigationProps) => {
               Home
             </Link>
             <Link
-              to="/latest-articles"
+              to="/articles"
               class="text-gray-900 hover:text-blue-600 px-3 py-2 text-sm font-medium [&.active]:text-blue-600 [&.active]:font-semibold"
             >
-              Latest Articles
+              Article Search
             </Link>
           </div>
           <div class="flex items-center space-x-4">
@@ -230,11 +230,11 @@ export const Navigation = (props: NavigationProps) => {
                       Data Sources
                     </Link>
                     <Link
-                      to="/admin/articles"
+                      to="/admin/latest-articles"
                       class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
                       onClick={closeAdminMenu}
                     >
-                      Article Search
+                      Latest Articles
                     </Link>
                     <Link
                       to="/admin/pdf-conversions"

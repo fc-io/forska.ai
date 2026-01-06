@@ -3,7 +3,7 @@ import {createFileRoute} from '@tanstack/solid-router'
 import {format} from 'date-fns'
 import {createSignal, For, Show, Suspense} from 'solid-js'
 
-import {fetchArticlesSearch} from '../../../../services/articlesService'
+import {fetchArticlesSearch} from '../../../services/articlesService'
 
 const AdminArticles = () => {
   const [searchTerm, setSearchTerm] = createSignal('')
@@ -61,7 +61,7 @@ const AdminArticles = () => {
                       <tr class="hover:bg-gray-50">
                         <td class="px-6 py-4">
                           <a
-                            href={`/admin/articles/${article.id}`}
+                            href={`/articles/${article.id}`}
                             class="text-sm font-medium text-blue-600 hover:underline line-clamp-2"
                             title={article.articleTitle}
                           >
@@ -117,4 +117,4 @@ const AdminArticles = () => {
   )
 }
 
-export const Route = createFileRoute('/admin/articles/')({component: AdminArticles})
+export const Route = createFileRoute('/articles/')({component: AdminArticles})

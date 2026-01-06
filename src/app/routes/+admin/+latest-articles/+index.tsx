@@ -1,9 +1,9 @@
-import '../../index.css'
+import '../../../index.css'
 
 import {createFileRoute} from '@tanstack/solid-router'
 import {type JSX, Suspense} from 'solid-js'
 
-import {UnassessedArticles} from '../../../components/main/unassessedArticles'
+import {UnassessedArticles} from '../../../../components/main/unassessedArticles'
 
 export const LatestArticlesPage = (): JSX.Element => {
   return (
@@ -19,4 +19,4 @@ export const LatestArticlesPage = (): JSX.Element => {
   )
 }
 
-export const Route = createFileRoute('/latest-articles/')({component: LatestArticlesPage})
+export const Route = createFileRoute('/admin/latest-articles/')({component: LatestArticlesPage})
