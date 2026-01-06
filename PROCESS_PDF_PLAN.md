@@ -756,7 +756,7 @@ article: {
 - [x] Add `fullTextConversionError` column
 - [x] Add `fullTextConversionAttempts` column
 - [x] Add `fullTextCharCount` column
-- [ ] Add `fullTextHtml` column
+- [x] Add `fullTextHtml` column
 - [ ] Add `skipReason` column ('no_fulltext' | 'conversion_failed' | null)
 - [ ] Generate migration: `bunx --bun drizzle-kit generate`
 - [ ] Run migration: `bun run db:mig`
