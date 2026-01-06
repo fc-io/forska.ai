@@ -59,7 +59,7 @@ const AdminArticleDetails = () => {
                       <ReviewArticleDetails
                         article={data().article}
                         showTitle={false}
-                        enableSticky={false}
+                        enableSticky={true}
                         isFulltextExpanded={isFulltextExpanded()}
                         setIsFulltextExpanded={setIsFulltextExpanded}
                         viewMode="summary"
@@ -82,7 +82,7 @@ const AdminArticleDetails = () => {
                             article={data().article}
                             judgment={selected()}
                             showTitle={false}
-                            enableSticky={false}
+                            enableSticky={true}
                             isFulltextExpanded={isFulltextExpanded()}
                             setIsFulltextExpanded={setIsFulltextExpanded}
                             viewMode="summary"

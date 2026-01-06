@@ -58,7 +58,7 @@ const AdminArticleDetailsFulltext = () => {
                       <ReviewArticleDetails
                         article={data().article}
                         showTitle={false}
-                        enableSticky={false}
+                        enableSticky={true}
                         viewMode="fulltext"
                         hidePdfButton={true}
                       />
@@ -79,7 +79,7 @@ const AdminArticleDetailsFulltext = () => {
                             article={data().article}
                             judgment={selected()}
                             showTitle={false}
-                            enableSticky={false}
+                            enableSticky={true}
                             viewMode="fulltext"
                             hidePdfButton={true}
                           />
