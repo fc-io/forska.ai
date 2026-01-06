@@ -148,7 +148,7 @@ export const Navigation = (props: NavigationProps) => {
                 ref={(element) => {
                   adminMenuTriggerElement = element
                 }}
-                class="group -mx-2 flex h-full cursor-pointer select-none items-center px-2"
+                class="group -mx-2 mr-4 flex h-full cursor-pointer select-none items-center px-2"
                 role="button"
                 tabIndex={0}
                 aria-haspopup="true"
