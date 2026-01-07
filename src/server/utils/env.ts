@@ -71,6 +71,8 @@ const envShape = arktype({
   SGLANG_CONTEXT_LENGTH: 'number | string.integer.parse',
   WORKER_URLS: CsvStringArray,
   DOCLING_SERVE_URL: 'string | null | undefined',
+  FULL_TEXT_CONVERSION_BATCH_SIZE: 'number | string.integer.parse | null | undefined',
+  FULL_TEXT_CONVERSION_CONCURRENCY: 'number | string.integer.parse | null | undefined',
 })
 
 const readFromFileVar = (key: string): string | undefined => {
@@ -149,10 +151,7 @@ const loadEnv = (): typeof envShape.infer => {
     ;(merged as Record<string, string>).SGLANG_MAX_RUNNING_REQUESTS = '0'
   }
   // Provide default for SGLANG_CONTEXT_LENGTH when not provided
-  if (
-    merged.SGLANG_CONTEXT_LENGTH == null
-    || (merged as Record<string, string>).SGLANG_CONTEXT_LENGTH === ''
-  ) {
+  if (merged.SGLANG_CONTEXT_LENGTH == null || (merged as Record<string, string>).SGLANG_CONTEXT_LENGTH === '') {
     ;(merged as Record<string, string>).SGLANG_CONTEXT_LENGTH = '0'
   }
   if (
@@ -185,6 +184,15 @@ const loadEnv = (): typeof envShape.infer => {
   // Provide a stable default when DOCLING_SERVE_URL is not provided
   if (merged.DOCLING_SERVE_URL == null || String(merged.DOCLING_SERVE_URL).trim() === '') {
     ;(merged as Record<string, string>).DOCLING_SERVE_URL = 'http://localhost:5001'
+  }
+  if (merged.FULL_TEXT_CONVERSION_BATCH_SIZE == null || String(merged.FULL_TEXT_CONVERSION_BATCH_SIZE).trim() === '') {
+    ;(merged as Record<string, string>).FULL_TEXT_CONVERSION_BATCH_SIZE = '5'
+  }
+  if (
+    merged.FULL_TEXT_CONVERSION_CONCURRENCY == null
+    || String(merged.FULL_TEXT_CONVERSION_CONCURRENCY).trim() === ''
+  ) {
+    ;(merged as Record<string, string>).FULL_TEXT_CONVERSION_CONCURRENCY = '1'
   }
   return envShape.assert(merged)
 }

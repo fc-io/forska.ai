@@ -11,50 +11,6 @@ const fetchConversionStats = async () => {
   return handleApiResponse(response, 'Failed to load conversion stats')
 }
 
-type ConversionStats = Awaited<ReturnType<typeof fetchConversionStats>>
-type ConversionStatusRow = ConversionStats['byStatus'][number]
-
-const getStatusBadgeClass = (status: string) => {
-  switch (status) {
-    case 'success':
-      return 'bg-green-100 text-green-800'
-    case 'failed':
-      return 'bg-red-100 text-red-800'
-    case 'pending':
-      return 'bg-yellow-100 text-yellow-800'
-    case 'not_started':
-      return 'bg-gray-100 text-gray-800'
-    default:
-      return 'bg-gray-100 text-gray-800'
-  }
-}
-
-const formatStatusLabel = (status: string) => {
-  return status
-    .split(/[-_]/)
-    .filter((part) => {
-      return part.length > 0
-    })
-    .map((part) => {
-      return part.charAt(0).toUpperCase() + part.slice(1)
-    })
-    .join(' ')
-}
-
-const getStatusCount = (rows: ConversionStatusRow[] | undefined, status: string) => {
-  return rows?.find((row) => row.status === status)?.count ?? 0
-}
-
-const sortStatusRows = (rows: ConversionStatusRow[]) => {
-  return [...rows].sort((a, b) => {
-    return b.count !== a.count ? b.count - a.count : a.status.localeCompare(b.status)
-  })
-}
-
-const formatCount = (value: number) => {
-  return value.toLocaleString('en-US')
-}
-
 const AdminPdfConversions = () => {
   const sessionQuery = useQuery(() => {
     return {queryKey: ['session'], queryFn: fetchSession}
@@ -71,18 +27,6 @@ const AdminPdfConversions = () => {
 
   const isAdmin = () => {
     return sessionQuery.data?.user?.role === 'admin'
-  }
-
-  const rows = () => {
-    return statsQuery.data?.byStatus ?? []
-  }
-
-  const sortedRows = () => {
-    return sortStatusRows(rows())
-  }
-
-  const total = () => {
-    return statsQuery.data?.total ?? 0
   }
 
   return (
@@ -117,18 +61,18 @@ const AdminPdfConversions = () => {
           }
         >
           <div class="flex justify-between items-center mb-6">
-            <h1 class="text-2xl font-bold">PDF → MD/HTML Conversions</h1>
+            <h1 class="text-2xl font-bold">Failed PDF Conversions</h1>
           </div>
 
           <Show when={statsQuery.isLoading}>
             <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
-              <p class="text-gray-500 text-center">Loading conversion stats...</p>
+              <p class="text-gray-500 text-center">Loading failed conversions...</p>
             </div>
           </Show>
 
           <Show when={statsQuery.isError}>
             <div class="p-4 rounded-md bg-red-50 border border-red-200">
-              <p class="text-red-600">Failed to load conversion stats</p>
+              <p class="text-red-600">Failed to load data</p>
               <button
                 onClick={() => {
                   return void statsQuery.refetch()
@@ -141,65 +85,40 @@ const AdminPdfConversions = () => {
           </Show>
 
           <Show when={!statsQuery.isLoading && !statsQuery.isError}>
-            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-              <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-                <div class="text-sm text-gray-500">Total PDFs</div>
-                <div class="mt-1 text-2xl font-bold text-gray-900">{formatCount(total())}</div>
-              </div>
-              <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-                <div class="text-sm text-gray-500">Success</div>
-                <div class="mt-1 text-2xl font-bold text-green-700">{formatCount(getStatusCount(rows(), 'success'))}</div>
-              </div>
-              <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-                <div class="text-sm text-gray-500">Pending</div>
-                <div class="mt-1 text-2xl font-bold text-yellow-700">
-                  {formatCount(getStatusCount(rows(), 'pending'))}
-                </div>
-              </div>
-              <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-                <div class="text-sm text-gray-500">Failed</div>
-                <div class="mt-1 text-2xl font-bold text-red-700">{formatCount(getStatusCount(rows(), 'failed'))}</div>
-              </div>
-            </div>
-
-            <div class="overflow-x-auto bg-white rounded-lg shadow">
-              <table class="min-w-full divide-y divide-gray-200">
-                <thead class="bg-gray-50">
-                  <tr>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Status
-                    </th>
-                    <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Count
-                    </th>
-                  </tr>
-                </thead>
-                <tbody class="bg-white divide-y divide-gray-200">
-                  <For each={sortedRows()}>
-                    {(row) => {
-                      return (
-                        <tr class="hover:bg-gray-50">
-                          <td class="px-6 py-4">
-                            <span class={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusBadgeClass(row.status)}`}>
-                              {formatStatusLabel(row.status)}
+            <div class="bg-white shadow overflow-hidden sm:rounded-md">
+              <ul class="divide-y divide-gray-200">
+                <For each={statsQuery.data?.lastFailed}>
+                  {(article) => {
+                    return (
+                      <li class="px-4 py-4 sm:px-6">
+                        <div class="flex items-center justify-between">
+                          <div class="truncate text-sm font-medium text-blue-600">
+                            <Link to={`/admin/articles/${article.id}`} class="hover:underline">
+                              {article.title}
+                            </Link>
+                          </div>
+                          <div class="ml-2 flex-shrink-0 flex">
+                            <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">
+                              {article.attempts} attempts
                             </span>
-                          </td>
-                          <td class="px-6 py-4 text-right text-sm text-gray-700 tabular-nums">
-                            {formatCount(row.count)}
-                          </td>
-                        </tr>
-                      )
-                    }}
-                  </For>
-                  <Show when={sortedRows().length === 0}>
-                    <tr>
-                      <td colspan="2" class="px-6 py-8 text-center text-gray-500">
-                        No conversion data found
-                      </td>
-                    </tr>
-                  </Show>
-                </tbody>
-              </table>
+                          </div>
+                        </div>
+                        <div class="mt-2 text-sm text-gray-500">
+                          <p class="truncate font-mono bg-gray-50 p-1 rounded text-xs">
+                            {article.error || 'Unknown error'}
+                          </p>
+                        </div>
+                        <div class="mt-2 text-xs text-gray-400">
+                          Last updated: {new Date(article.updatedAt).toLocaleString()}
+                        </div>
+                      </li>
+                    )
+                  }}
+                </For>
+                <Show when={!statsQuery.data?.lastFailed?.length}>
+                  <li class="px-4 py-8 text-center text-gray-500 text-sm">No failed conversions found.</li>
+                </Show>
+              </ul>
             </div>
           </Show>
         </Show>
@@ -209,4 +128,3 @@ const AdminPdfConversions = () => {
 }
 
 export const Route = createFileRoute('/admin/pdf-conversions/')({component: AdminPdfConversions})
-

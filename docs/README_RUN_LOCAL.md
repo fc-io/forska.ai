@@ -51,3 +51,15 @@ bun run dev:app
 Hit http://localhost:5173 in your browser for the web interface.
 
 If you need the GPU-backed LLM locally, also start the `vllm` service via compose (see below).
+
+## PDF conversion (Docling)
+
+Start Docling (optional):
+
+`docker compose --env-file .env.local up docling`
+
+Enable + tune conversion throughput (in `.env.local`):
+
+`RUN_SERVER_FULL_TEXT_CONVERSION_CRON=true`
+`FULL_TEXT_CONVERSION_BATCH_SIZE=5`
+`FULL_TEXT_CONVERSION_CONCURRENCY=2`

@@ -1,5 +1,5 @@
 import {cron} from '@elysiajs/cron'
-import {and, desc, eq, inArray, isNotNull, isNull, sql} from 'drizzle-orm'
+import {and, desc, eq, inArray, isNotNull, sql} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 import {Elysia} from 'elysia'
 
@@ -11,7 +11,23 @@ import {getDatabase} from '../utils/getDatabase.ts'
 const CONVERSION_INTERVAL = '*/10 * * * * *' // Every 10 seconds
 const DOCLING_CONVERSION_TIMEOUT_MS = 300_000 // 5 minutes (matching GUNICORN_TIMEOUT)
 const MAX_CONVERSION_ATTEMPTS = 3
-const BATCH_SIZE = 1 // Convert 5 articles per batch
+const DEFAULT_BATCH_SIZE = 5
+const DEFAULT_CONCURRENCY = 1
+
+const normalizePositiveInt = (value: number | null | undefined, fallback: number): number => {
+  const raw = value == null ? fallback : value
+  const normalized = Math.trunc(raw)
+  return normalized > 0 ? normalized : fallback
+}
+
+const getConversionBatchSize = (): number => {
+  return normalizePositiveInt(env.FULL_TEXT_CONVERSION_BATCH_SIZE, DEFAULT_BATCH_SIZE)
+}
+
+const getConversionConcurrency = (batchSize: number): number => {
+  const normalized = normalizePositiveInt(env.FULL_TEXT_CONVERSION_CONCURRENCY, DEFAULT_CONCURRENCY)
+  return Math.min(batchSize, normalized)
+}
 
 type ArticleForConversion = {id: string; fullTextPDF: string; fullTextConversionAttempts: number | null}
 
@@ -154,6 +170,39 @@ const getArticlesNeedingConversion = async (
   return collectedArticles
 }
 
+const runConversionWorker = async (
+  db: PostgresJsDatabase<typeof schema>,
+  queue: ArticleForConversion[],
+): Promise<void> => {
+  const article = queue.pop()
+  if (!article) return
+  await convertArticle(db, article)
+  return runConversionWorker(db, queue)
+}
+
+const convertArticles = async (
+  db: PostgresJsDatabase<typeof schema>,
+  articles: ArticleForConversion[],
+  concurrency: number,
+): Promise<void> => {
+  const workerCount = Math.min(concurrency, articles.length)
+  const queue = articles.slice()
+
+  const results = await Promise.allSettled(
+    Array.from({length: workerCount}, () => {
+      return runConversionWorker(db, queue)
+    }),
+  )
+
+  const rejected = results.filter((r) => {
+    return r.status === 'rejected'
+  })
+
+  if (rejected.length > 0) {
+    console.error('[fullTextConversion] Worker failures', {total: results.length, rejected: rejected.length})
+  }
+}
+
 const convertArticle = async (db: PostgresJsDatabase<typeof schema>, article: ArticleForConversion): Promise<void> => {
   const startTime = Date.now()
   console.log(`[fullTextConversion] Converting article ${article.id}`)
@@ -218,17 +267,19 @@ const runConversionBatch = async () => {
   try {
     const db = getDatabase()
 
-    const articles = await getArticlesNeedingConversion(db, BATCH_SIZE)
+    const batchSize = getConversionBatchSize()
+    const concurrency = getConversionConcurrency(batchSize)
+
+    console.log(`[fullTextConversion] Starting batch (size=${batchSize}, concurrency=${concurrency})`)
+
+    const articles = await getArticlesNeedingConversion(db, batchSize)
 
     if (articles.length === 0) {
       console.log('[fullTextConversion] No articles to convert')
       return
     }
 
-    // Convert sequentially to avoid overloading Docling
-    for (const article of articles) {
-      await convertArticle(db, article)
-    }
+    await convertArticles(db, articles, concurrency)
   } finally {
     isRunning = false
   }

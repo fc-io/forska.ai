@@ -1,4 +1,4 @@
-import {count, eq, inArray, isNotNull, isNull, sql} from 'drizzle-orm'
+import {count, desc, eq, inArray, isNotNull, isNull, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {
@@ -57,22 +57,22 @@ export const articlesRoutes = new Elysia()
   .get('/api/articles/conversion-stats', async () => {
     const db = getDatabase()
 
-    const status = sql<string>`COALESCE(${articles.fullTextConversionStatus}, 'not_started')`.as('status')
-    const rows = await db
-      .select({status, count: sql<number>`COUNT(*)::int`.as('count')})
+    const lastFailed = await db
+      .select({
+        id: articles.id,
+        articleId: articles.articleId,
+        title: articles.articleTitle,
+        error: articles.fullTextConversionError,
+        attempts: articles.fullTextConversionAttempts,
+        updatedAt: articles.updatedAt,
+      })
       .from(articles)
-      .where(isNotNull(articles.fullTextPDF))
-      .groupBy(status)
-
-    const total = rows.reduce((sum, row) => {
-      return sum + (row.count ?? 0)
-    }, 0)
+      .where(eq(articles.fullTextConversionStatus, 'failed'))
+      .orderBy(desc(articles.updatedAt))
+      .limit(10)
 
     return {
-      total,
-      byStatus: rows.map((row) => {
-        return {status: row.status, count: row.count ?? 0}
-      }),
+      lastFailed,
     }
   })
   .get('/api/articles/latest', async () => {
