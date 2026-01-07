@@ -50,7 +50,12 @@ const findContentFromCandidateEntries = (
   return found ?? findContentFromCandidateEntries(entries, keySet, index + 1, depth)
 }
 
-const findContentFromAllEntries = (entries: [string, unknown][], keySet: Set<string>, index: number, depth: number): string | null => {
+const findContentFromAllEntries = (
+  entries: [string, unknown][],
+  keySet: Set<string>,
+  index: number,
+  depth: number,
+): string | null => {
   if (index >= entries.length) return null
   const found = findContentInValue(entries[index][1], keySet, depth)
   return found ?? findContentFromAllEntries(entries, keySet, index + 1, depth)
@@ -60,7 +65,7 @@ const summarizeDoclingResponse = (json: unknown): string => {
   if (!isRecord(json)) return `type=${typeof json}`
   const topKeys = Object.keys(json).slice(0, 20).join(',')
   const documents = Array.isArray(json.documents) ? json.documents : null
-  const doc0 = documents && documents[0] && isRecord(documents[0]) ? (documents[0] as Record<string, unknown>) : null
+  const doc0 = documents && documents[0] && isRecord(documents[0]) ? documents[0] : null
   const doc0Keys = doc0 ? Object.keys(doc0).slice(0, 20).join(',') : ''
   const documentsInfo = documents ? ` documents=${documents.length}` : ''
   const doc0Info = doc0Keys ? ` doc0Keys=${doc0Keys}` : ''
@@ -107,6 +112,7 @@ export const convertPdfToText = async (
 
   // Read PDF and convert to base64
   const pdfBytes = await file.arrayBuffer()
+  const fileSizeMB = (pdfBytes.byteLength / (1024 * 1024)).toFixed(2)
   const base64 = Buffer.from(pdfBytes).toString('base64')
 
   // Create AbortController for timeout
@@ -139,9 +145,12 @@ export const convertPdfToText = async (
         // Ignore if we can't read the body
       }
       // Permanent errors: client-side issues that won't be fixed by retrying
-      const isPermanent = [400, 401, 403, 404, 422].includes(res.status)
+      // 504 = Docling timeout, PDF is too complex to convert within the server's configured limit
+      // Also check for "taking too long" message which indicates timeout
+      const isPermanent =
+        [400, 401, 403, 404, 422, 504].includes(res.status) || errorDetails.toLowerCase().includes('taking too long')
       throw new ConversionError(
-        `Docling conversion failed: ${res.status} ${res.statusText}${errorDetails}`,
+        `Docling conversion failed: ${res.status} ${res.statusText}${errorDetails} (file: ${fileSizeMB}MB)`,
         res.status,
         isPermanent,
       )
@@ -154,8 +163,12 @@ export const convertPdfToText = async (
 
     if (!mdContent) {
       const summary = summarizeDoclingResponse(json)
-      console.error(`[convertPdfToText] Docling returned no Markdown content: ${summary}`)
-      throw new ConversionError(`Docling returned no Markdown content (${summary})`, undefined, false)
+      console.error(`[convertPdfToText] Docling returned no Markdown content: ${summary} (file: ${fileSizeMB}MB)`)
+      throw new ConversionError(
+        `Docling returned no Markdown content (${summary}) (file: ${fileSizeMB}MB)`,
+        undefined,
+        false,
+      )
     }
 
     const duration = Date.now() - startTime
@@ -169,7 +182,11 @@ export const convertPdfToText = async (
 
     // Handle abort (timeout)
     if (error instanceof Error && error.name === 'AbortError') {
-      throw new ConversionError(`Docling conversion timed out after ${timeoutMs}ms`, undefined, false)
+      throw new ConversionError(
+        `Docling conversion timed out after ${timeoutMs}ms (file: ${fileSizeMB}MB)`,
+        undefined,
+        false,
+      )
     }
 
     // Re-throw ConversionError as-is
@@ -186,9 +203,13 @@ export const convertPdfToText = async (
         || msg.includes('enotfound')
         || msg.includes('network')
         || msg.includes('socket')
-      throw new ConversionError(`Docling conversion failed: ${error.message}`, undefined, !isConnectionError)
+      throw new ConversionError(
+        `Docling conversion failed: ${error.message} (file: ${fileSizeMB}MB)`,
+        undefined,
+        !isConnectionError,
+      )
     }
 
-    throw new ConversionError(`Docling conversion failed: ${String(error)}`, undefined, false)
+    throw new ConversionError(`Docling conversion failed: ${String(error)} (file: ${fileSizeMB}MB)`, undefined, false)
   }
 }

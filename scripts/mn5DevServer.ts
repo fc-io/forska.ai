@@ -33,6 +33,7 @@ interface MN5Config {
   DP_SIZE: string
   SGLANG_ENABLE_ROUTER: string
   SGLANG_MAX_RUNNING_REQUESTS: string
+  SGLANG_CONTEXT_LENGTH: string
 }
 
 const log = (m: string): void => {
@@ -527,6 +528,7 @@ const startDevServer = async (config: MN5Config): Promise<void> => {
   log(`  WORKER_URLS: ${config.WORKER_URLS_LOCAL}`)
   log(`  SGLANG_MODEL: ${config.SGLANG_MODEL}`)
   log(`  SGLANG_MAX_RUNNING_REQUESTS: ${config.SGLANG_MAX_RUNNING_REQUESTS}`)
+  log(`  SGLANG_CONTEXT_LENGTH: ${config.SGLANG_CONTEXT_LENGTH}`)
 
   const env = {
     ...process.env,
@@ -541,6 +543,7 @@ const startDevServer = async (config: MN5Config): Promise<void> => {
     TP_SIZE: config.TP_SIZE,
     DP_SIZE: config.DP_SIZE,
     SGLANG_MAX_RUNNING_REQUESTS: config.SGLANG_MAX_RUNNING_REQUESTS,
+    SGLANG_CONTEXT_LENGTH: config.SGLANG_CONTEXT_LENGTH,
     SGLANG_MODEL: config.SGLANG_MODEL,
     BUN_CONFIG_MAX_HTTP_REQUESTS: '2048',
     // For nvidia-smi polling: use the remote worker URLs (actual IPs, not localhost tunnels)

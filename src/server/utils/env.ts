@@ -68,6 +68,7 @@ const envShape = arktype({
   JUDGMENTS_READY_TARGET_MULTIPLIER: 'number | string.integer.parse',
   JUDGMENTS_ADD_TO_QUEUE_MAX_BATCH_SIZE: 'number | string.integer.parse',
   SGLANG_MODEL: 'string | null | undefined',
+  SGLANG_CONTEXT_LENGTH: 'number | string.integer.parse',
   WORKER_URLS: CsvStringArray,
   DOCLING_SERVE_URL: 'string | null | undefined',
 })
@@ -146,6 +147,13 @@ const loadEnv = (): typeof envShape.infer => {
     || (merged as Record<string, string>).SGLANG_MAX_RUNNING_REQUESTS === ''
   ) {
     ;(merged as Record<string, string>).SGLANG_MAX_RUNNING_REQUESTS = '0'
+  }
+  // Provide default for SGLANG_CONTEXT_LENGTH when not provided
+  if (
+    merged.SGLANG_CONTEXT_LENGTH == null
+    || (merged as Record<string, string>).SGLANG_CONTEXT_LENGTH === ''
+  ) {
+    ;(merged as Record<string, string>).SGLANG_CONTEXT_LENGTH = '0'
   }
   if (
     merged.JUDGMENTS_READY_TARGET_MULTIPLIER == null
