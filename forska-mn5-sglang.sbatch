@@ -212,10 +212,11 @@ if [[ -n "$FP8_TP_RECOMMENDED" && "$FP8_TP_RECOMMENDED" -ne "$TP_SIZE" ]]; then
 fi
 
 # Model-specific settings
-export SGLANG_MAX_RUNNING_REQUESTS=${SGLANG_MAX_RUNNING_REQUESTS:-1024}
+# Fulltext prompts are much longer (KV cache heavy) → default to lower concurrency + bigger context.
+export SGLANG_MAX_RUNNING_REQUESTS=${SGLANG_MAX_RUNNING_REQUESTS:-256}
 export SGLANG_MEM_FRACTION=${SGLANG_MEM_FRACTION:-0.80}
 export SGLANG_CHUNKED_PREFILL_SIZE=${SGLANG_CHUNKED_PREFILL_SIZE:-4096}
-export SGLANG_CONTEXT_LENGTH=${SGLANG_CONTEXT_LENGTH:-32768}
+export SGLANG_CONTEXT_LENGTH=${SGLANG_CONTEXT_LENGTH:-65536}
 export SGLANG_DTYPE=${SGLANG_DTYPE:-bfloat16}
 # Reasoning parser for models with thinking/channel tokens (gpt-oss, deepseek-r1, qwen3)
 # This separates reasoning traces into 'reasoning_content' field in the API response
@@ -223,6 +224,7 @@ export SGLANG_REASONING_PARSER=${SGLANG_REASONING_PARSER:-gpt-oss}
 
 echo "[mn5] model=$SGLANG_MODEL (path: $SGLANG_MODEL_PATH)"
 echo "[mn5] nodes=$NNODES gpus/node=$GPUS_PER_NODE total_gpus=$TOTAL_GPUS tp/node=$TP_SIZE dp=$DP_SIZE router=$SGLANG_ENABLE_ROUTER"
+echo "[mn5] context=$SGLANG_CONTEXT_LENGTH chunked_prefill=$SGLANG_CHUNKED_PREFILL_SIZE max_running_requests=$SGLANG_MAX_RUNNING_REQUESTS"
 
 # GPU detection
 if command -v nvidia-smi &>/dev/null; then
@@ -447,6 +449,8 @@ echo "TP_SIZE=$TP_SIZE"
 echo "DP_SIZE=$DP_SIZE"
 echo "SGLANG_ENABLE_ROUTER=${SGLANG_ENABLE_ROUTER:-0}"
 echo "SGLANG_MAX_RUNNING_REQUESTS=$SGLANG_MAX_RUNNING_REQUESTS"
+echo "SGLANG_CHUNKED_PREFILL_SIZE=$SGLANG_CHUNKED_PREFILL_SIZE"
+echo "SGLANG_CONTEXT_LENGTH=$SGLANG_CONTEXT_LENGTH"
 echo "[mn5:config:end]"
 
 # Keep running
