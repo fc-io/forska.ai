@@ -1,4 +1,4 @@
-import {and, desc, eq, gte, inArray, lte, or, sql} from 'drizzle-orm'
+import {and, desc, eq, gte, inArray, lte, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {
@@ -47,31 +47,27 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
         .where(eq(projects.id, body.projectId))
         .limit(1)
 
-      // Filter by project's linked import routes via EXISTS against article_route_link joined to project_route_link
-      const hasMatchingImportRoute = sql`EXISTS (
-        SELECT 1 FROM ${articleRouteLink} arl
-        INNER JOIN ${projectRouteLink} prl ON prl."import_route_id" = arl."import_route_id"
-        WHERE arl."article_id" = ${articles.id}
-        AND prl."project_id" = ${body.projectId}::uuid
-      )`
-      const hasProjectArticle = sql`EXISTS (
-        SELECT 1 FROM ${projectArticles} pa
-        WHERE pa."article_id" = ${articles.id}
-        AND pa."project_id" = ${body.projectId}::uuid
-      )`
+      const scopedProjectArticles = db
+        .select({articleId: projectArticles.articleId})
+        .from(projectArticles)
+        .where(eq(projectArticles.projectId, body.projectId))
 
-      // Build scope condition (import route OR explicitly linked to project)
-      // Note: or() can return undefined, so we use hasProjectArticle as explicit fallback
-      const scopeCondition = or(hasMatchingImportRoute, hasProjectArticle) ?? hasProjectArticle
+      const scopedImportRouteArticles = db
+        .select({articleId: articleRouteLink.articleId})
+        .from(projectRouteLink)
+        .innerJoin(articleRouteLink, eq(articleRouteLink.importRouteId, projectRouteLink.importRouteId))
+        .where(eq(projectRouteLink.projectId, body.projectId))
+
+      const scopedArticles = scopedProjectArticles.union(scopedImportRouteArticles).as('scoped_articles')
 
       // Optional UI + project time bounds and search
-      const whereParts: Array<ReturnType<typeof sql>> = [scopeCondition]
+      const whereParts: Array<ReturnType<typeof sql>> = []
       if (projectBounds?.dateFrom) whereParts.push(gte(articles.articleCreatedAt, projectBounds.dateFrom))
       if (projectBounds?.dateTo) whereParts.push(lte(articles.articleCreatedAt, projectBounds.dateTo))
       if (fromDate) whereParts.push(gte(articles.articleCreatedAt, fromDate))
       if (toDate) whereParts.push(lte(articles.articleCreatedAt, toDate))
       if (searchTitle) whereParts.push(sql`${articles.articleTitle} ILIKE ${'%' + searchTitle + '%'}`)
-      const combinedWhereCondition = whereParts.length > 1 ? and(...whereParts) : whereParts[0]
+      const combinedWhereCondition = whereParts.length > 1 ? and(...whereParts) : (whereParts[0] ?? sql`TRUE`)
 
       // Select articles that are NOT fully assessed by LLM for all project prompts
       // Strategy: LEFT JOIN judgments filtered to this project's promptIds (and modelId if set) and HAVING count(distinct prompt_id) < total prompts
@@ -86,27 +82,34 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
 
       const groupedBase = db
         .select({id: articles.id})
-        .from(articles)
+        .from(scopedArticles)
+        .innerJoin(articles, eq(scopedArticles.articleId, articles.id))
         .leftJoin(judgments, judgmentJoinConditions)
         .where(combinedWhereCondition)
         .groupBy(articles.id)
         .having(sql`COUNT(DISTINCT ${judgments.promptId}) < ${promptIds.length}`)
         .as('grouped_unassessed')
 
-      const rows = await db
-        .select({
-          article: articles,
-          totalCount: sql<number>`COUNT(*) OVER()`.as('total_count'),
-        })
+      const [{count: totalCount = 0} = {count: 0}] = await db
+        .select({count: sql<number>`COUNT(*)`.as('count')})
+        .from(groupedBase)
+
+      const pageBase = db
+        .select({id: groupedBase.id})
         .from(groupedBase)
         .innerJoin(articles, eq(groupedBase.id, articles.id))
         .orderBy(desc(articles.articleCreatedAt))
         .limit(limit)
         .offset(offset)
+        .as('page_unassessed')
 
-      const totalCount = rows[0]?.totalCount ?? 0
+      const unassessedArticles = await db
+        .select({article: articles})
+        .from(articles)
+        .innerJoin(pageBase, eq(pageBase.id, articles.id))
+        .orderBy(desc(articles.articleCreatedAt))
 
-      const result = rows.map(({article}) => {
+      const result = unassessedArticles.map(({article}) => {
         return {...article, judgments: []}
       })
 
