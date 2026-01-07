@@ -213,10 +213,13 @@ fi
 
 # Model-specific settings
 # Fulltext prompts are much longer (KV cache heavy) → default to lower concurrency + bigger context.
-export SGLANG_MAX_RUNNING_REQUESTS=${SGLANG_MAX_RUNNING_REQUESTS:-256}
-export SGLANG_MEM_FRACTION=${SGLANG_MEM_FRACTION:-0.80}
-export SGLANG_CHUNKED_PREFILL_SIZE=${SGLANG_CHUNKED_PREFILL_SIZE:-4096}
-export SGLANG_CONTEXT_LENGTH=${SGLANG_CONTEXT_LENGTH:-65536}
+# Max context: 128K (131072) - requires trading throughput for context length
+# Memory fraction: 0.90 - allocate most GPU memory to KV cache
+# Max running requests: 64 - reduced to fit longer context windows in memory
+export SGLANG_MAX_RUNNING_REQUESTS=${SGLANG_MAX_RUNNING_REQUESTS:-64}
+export SGLANG_MEM_FRACTION=${SGLANG_MEM_FRACTION:-0.90}
+export SGLANG_CHUNKED_PREFILL_SIZE=${SGLANG_CHUNKED_PREFILL_SIZE:-8192}
+export SGLANG_CONTEXT_LENGTH=${SGLANG_CONTEXT_LENGTH:-131072}
 export SGLANG_DTYPE=${SGLANG_DTYPE:-bfloat16}
 # Reasoning parser for models with thinking/channel tokens (gpt-oss, deepseek-r1, qwen3)
 # This separates reasoning traces into 'reasoning_content' field in the API response
