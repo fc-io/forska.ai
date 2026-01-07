@@ -149,6 +149,8 @@ services:
       DOCLING_SERVE_ARTIFACTS_PATH: /opt/app-root/src/.cache/docling/models
       # Increase worker timeout for large PDFs (default is 60s)
       GUNICORN_TIMEOUT: "300"
+      # Max time in seconds to wait for sync conversion (default is 120s)
+      DOCLING_SERVE_MAX_SYNC_WAIT: "300"
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:5001/health > /dev/null || exit 1"]
       interval: 30s
