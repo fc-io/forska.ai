@@ -779,13 +779,18 @@ article: {
 - [x] Tune Docling timeouts (300s) and add cache volume
 
 ### Integration (after cron job is working)
-- [ ] Create `ensureFullText()` with per-article locking (see Conversion Logic section)
-- [ ] Modify `processPromptWithLLM.ts`: call `ensureFullText()` when `useFulltext=true`
-- [ ] Skip article if useFulltext && no fullText available → `markAsSkipped()`
-- [ ] Modify `judgeGetPrompt.ts` (`judgeGetSinglePrompt`): append fullText with injection protection
+- [x] Create `ensureFullText()` with per-article locking (see Conversion Logic section)
+- [x] Modify `processPromptWithLLM.ts`: call `ensureFullText()` when `useFulltext=true`
+- [x] Skip article if useFulltext && no fullText available → `markAsSkipped()`
+- [x] Modify `judgeGetPrompt.ts` (`judgeGetSinglePrompt`): append fullText with injection protection
+- [ ] Token budget + truncate fullText in `judgeGetSinglePrompt` (avoid ctx overflow)
+- [ ] Fix fullText injection note: typos + de-dupe (wastes tokens)
+- [ ] `markAsRetry` comment/status mismatch (says pending, sets ready)
+- [ ] `ensureFullText` lock is in-memory only; add cross-process lock if multi-server
 
 ### Frontend
-- [ ] Update Job Status UI to handle `'skipped'` prompts (don't count as pending)
+- [x] Update Job Status UI to handle `'skipped'` prompts (don't count as pending)
+- [ ] Skipped UI text: cover `conversion_failed` too (not only "no fulltext")
 - [x] Add `fullText` and `fullTextPDF` to article query
 - [x] Show fulltext section (collapsible) in `reviewArticleDetails.tsx`
 - [x] Add PDF download button
@@ -798,3 +803,4 @@ article: {
 - [ ] Rate limit conversions
 - [ ] GraniteDocling VLM for complex PDFs (--pipeline vlm)
 - [ ] Parallel conversion for batch jobs
+- [ ] `judgmentsJobsCleanupStale`: don't delete skipped rows (avoid re-queue later)

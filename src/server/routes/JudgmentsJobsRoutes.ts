@@ -379,12 +379,13 @@ export const judgmentsJobsRoutes = new Elysia()
           .orderBy(sql`DATE(created_at AT TIME ZONE 'UTC')`),
       ])
 
-      const stats = {ready: 0, sent: 0, judged: 0}
+      const stats = {ready: 0, sent: 0, judged: 0, skipped: 0}
 
       promptStats.forEach((stat) => {
         if (stat.status === 'ready') stats.ready = stat.count
         if (stat.status === 'sent') stats.sent = stat.count
         if (stat.status === 'judged') stats.judged = stat.count
+        if (stat.status === 'skipped') stats.skipped = stat.count
       })
 
       return {

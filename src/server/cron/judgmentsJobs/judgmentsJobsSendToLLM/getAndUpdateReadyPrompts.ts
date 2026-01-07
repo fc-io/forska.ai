@@ -1,4 +1,4 @@
-import {and, eq, inArray} from 'drizzle-orm'
+import {and, eq, inArray, sql} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../../db/schema.ts'
@@ -13,6 +13,7 @@ export type PromptToProcess = {
   modelId: string
   modelName: string
   modelBaseUrl: string
+  useFulltext: boolean
 }
 
 const processReadyRows = async (
@@ -55,6 +56,7 @@ const processReadyRows = async (
             modelId: schema.projects.modelId,
             modelName: schema.models.modelName,
             modelBaseUrl: schema.models.baseURL,
+            useFulltext: schema.projects.useFulltext,
           })
           .from(schema.judgmentsJobs)
           .leftJoin(schema.projects, eq(schema.projects.id, schema.judgmentsJobs.projectId))
@@ -100,6 +102,7 @@ const processReadyRows = async (
         modelId: config.modelId,
         modelName: config.modelName,
         modelBaseUrl: baseUrl,
+        useFulltext: config.useFulltext ?? false,
       }
     })
     .filter((prompt): prompt is PromptToProcess => {
@@ -115,6 +118,8 @@ export const getAndUpdateReadyPrompts = async (
   jobId: string,
   limit: number,
 ): Promise<PromptToProcess[]> => {
+  // Prioritize articles that already have fullText converted
+  // This avoids on-the-fly conversion when possible
   const readyRows = await db
     .select({
       id: schema.judgmentsJobsPrompts.id,
@@ -123,6 +128,7 @@ export const getAndUpdateReadyPrompts = async (
       jobId: schema.judgmentsJobsPrompts.jobId,
     })
     .from(schema.judgmentsJobsPrompts)
+    .innerJoin(schema.articles, eq(schema.articles.id, schema.judgmentsJobsPrompts.articleId))
     .where(
       and(
         eq(schema.judgmentsJobsPrompts.serverId, serverJobId),
@@ -130,7 +136,11 @@ export const getAndUpdateReadyPrompts = async (
         eq(schema.judgmentsJobsPrompts.status, 'ready'),
       ),
     )
-    .orderBy(schema.judgmentsJobsPrompts.createdAt)
+    // Order by: articles with fullText first (DESC puts non-null first), then by createdAt
+    .orderBy(
+      sql`CASE WHEN ${schema.articles.fullText} IS NOT NULL THEN 0 ELSE 1 END`,
+      schema.judgmentsJobsPrompts.createdAt,
+    )
     .limit(limit)
 
   return readyRows.length === 0 ? [] : processReadyRows(db, serverJobId, readyRows)

@@ -222,7 +222,7 @@ const AdminJudgmentJobDetail = () => {
                   <Show when={data() && 'promptStats' in (data() as any) && (data() as any).promptStats}>
                     <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
                       <h2 class="text-lg font-semibold mb-4">Job Queue</h2>
-                      <div class="grid grid-cols-3 gap-4">
+                      <div class="grid grid-cols-4 gap-4">
                         <div class="bg-gray-50 rounded-lg p-4">
                           <p class="text-sm text-gray-500 mb-1">Ready</p>
                           <p class="text-2xl font-bold text-gray-900">
@@ -243,6 +243,13 @@ const AdminJudgmentJobDetail = () => {
                             {data() && 'promptStats' in (data() as any) ? (data() as any).promptStats?.judged || 0 : 0}
                           </p>
                           <p class="text-xs text-green-600 mt-1">Prompts with judgments completed</p>
+                        </div>
+                        <div class="bg-amber-50 rounded-lg p-4">
+                          <p class="text-sm text-amber-600 mb-1">Skipped</p>
+                          <p class="text-2xl font-bold text-amber-900">
+                            {data() && 'promptStats' in (data() as any) ? (data() as any).promptStats?.skipped || 0 : 0}
+                          </p>
+                          <p class="text-xs text-amber-600 mt-1">No fulltext available</p>
                         </div>
                       </div>
                     </div>

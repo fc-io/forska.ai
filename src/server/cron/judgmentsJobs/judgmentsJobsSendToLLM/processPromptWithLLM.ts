@@ -3,6 +3,7 @@ import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import {judgeSinglePrompt} from '../../../../agent/judge.ts'
 import * as schema from '../../../../db/schema.ts'
+import {ensureFullText} from '../../../utils/ensureFullText.ts'
 import {rateLimitedLogger} from '../../../utils/rateLimitedLogger.ts'
 import {ConnectionError} from '../connectionHealth.ts'
 import type {PromptToProcess} from './getAndUpdateReadyPrompts.ts'
@@ -65,7 +66,30 @@ const markAsRetry = async (
 ): Promise<void> => {
   await db
     .update(schema.judgmentsJobsPrompts)
-    .set({status: 'pending', updatedAt: new Date()})
+    .set({status: 'ready', updatedAt: new Date()})
+    .where(
+      and(
+        eq(schema.judgmentsJobsPrompts.jobId, jobId),
+        eq(schema.judgmentsJobsPrompts.articleId, articleId),
+        eq(schema.judgmentsJobsPrompts.promptId, promptId),
+      ),
+    )
+}
+
+/**
+ * Mark a prompt as skipped when fulltext is required but unavailable.
+ * This is a terminal state - the prompt will not be retried.
+ */
+const markAsSkipped = async (
+  db: PostgresJsDatabase<typeof schema>,
+  jobId: string,
+  articleId: string,
+  promptId: string,
+  skipReason: 'no_fulltext' | 'conversion_failed',
+): Promise<void> => {
+  await db
+    .update(schema.judgmentsJobsPrompts)
+    .set({status: 'skipped', skipReason, updatedAt: new Date()})
     .where(
       and(
         eq(schema.judgmentsJobsPrompts.jobId, jobId),
@@ -88,6 +112,38 @@ export const processPromptWithLLM = async (
   if (!article) {
     console.error('Article not found:', promptToProcess.articleId)
     return
+  }
+
+  // Handle fulltext requirement for projects with useFulltext=true
+  // Create a mutable article object that we can update with fulltext if needed
+  let articleWithFulltext = article
+  if (promptToProcess.useFulltext) {
+    const result = await ensureFullText(db, article, article.id)
+
+    if (!result.text) {
+      if (result.shouldSkip) {
+        // Permanent failure or no PDF → mark as skipped (terminal)
+        console.log(`[fulltext] Skipping article ${article.id}: ${result.reason}`)
+        await markAsSkipped(
+          db,
+          promptToProcess.jobId,
+          promptToProcess.articleId,
+          promptToProcess.promptId,
+          result.reason,
+        )
+        return
+      } else {
+        // Transient failure → requeue for later retry
+        console.log(
+          `[fulltext] Transient failure for article ${article.id}, requeuing prompt ${promptToProcess.promptId}`,
+        )
+        await markAsRetry(db, promptToProcess.jobId, promptToProcess.articleId, promptToProcess.promptId)
+        return
+      }
+    }
+
+    // Update the article object with the fulltext for use in prompt generation
+    articleWithFulltext = {...article, fullText: result.text}
   }
 
   // Get the specific prompt to judge
@@ -119,7 +175,7 @@ export const processPromptWithLLM = async (
   // console.log(`Processing prompt ${promptToProcess.promptId} for article ${promptToProcess.articleId}`)
 
   try {
-    await processSinglePrompt(promptToProcess, article, prompt)
+    await processSinglePrompt(promptToProcess, articleWithFulltext, prompt)
     // Success - mark as judged
     await markAsJudged(db, promptToProcess.jobId, promptToProcess.articleId, promptToProcess.promptId)
   } catch (error) {
