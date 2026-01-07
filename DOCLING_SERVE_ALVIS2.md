@@ -8,6 +8,12 @@ Running Docling Serve locally on Mac (CPU-only) is too slow for PDF → Markdown
 
 Run Docling Serve with GPU/PyTorch on Alvis2, accessible from local machine via SSH tunnel on port 5001 (same as local Docker).
 
+## Assumptions / Pre-reqs
+
+- Local: SSH alias `alvis2` (or change in scripts), `bun`, `curl`, `lsof`
+- Alvis2: `apptainer` available (may require `module load Apptainer`), writable `$STACK_ROOT`, outbound access to `ghcr.io` (or prebuilt SIF), login node can reach compute node hostnames
+- Port: local `5001` must be free (stop local Docling Docker, or use another port + set `DOCLING_SERVE_URL`)
+
 ## Architecture
 
 ```
@@ -48,6 +54,7 @@ echo "[docling] starting on host $(hostname) at $(date)"
 # Paths
 export STACK_ROOT=${STACK_ROOT:-/mimer/NOBACKUP/groups/clin-agent-bench/dev}
 mkdir -p "$STACK_ROOT"/{logs,.cache/docling}
+cd "$STACK_ROOT"
 
 # Container
 SIF_DOCLING="$STACK_ROOT/docling_serve_pytorch.sif"
@@ -78,10 +85,10 @@ trap graceful_shutdown EXIT INT TERM USR1
 echo "[docling] starting Docling Serve on :$DOCLING_PORT"
 
 apptainer exec --cleanenv --nv \
-  --env DOCLING_SERVE_ARTIFACTS_PATH=/opt/docling/models \
+  --env DOCLING_SERVE_ARTIFACTS_PATH=/opt/app-root/src/.cache/docling/models \
   --env GUNICORN_TIMEOUT="300" \
   --env DOCLING_SERVE_MAX_SYNC_WAIT="300" \
-  --bind "$STACK_ROOT/.cache/docling:/opt/docling:rw" \
+  --bind "$STACK_ROOT/.cache/docling:/opt/app-root/src/.cache/docling:rw" \
   "$SIF_DOCLING" \
   python -m docling_serve --host 0.0.0.0 --port "$DOCLING_PORT" \
   >"$LOG_DIR/docling.log" 2>&1 &
@@ -102,7 +109,7 @@ wait_for_http() {
   return 1
 }
 
-wait_for_http "http://localhost:$DOCLING_PORT/health" 300 "$DOCLING_PID"
+wait_for_http "http://localhost:$DOCLING_PORT/health" 300
 
 echo ""
 echo "=============================================="
@@ -259,6 +266,7 @@ Add to `package.json`:
   "scripts": {
     "docling:alvis:launch": "bun scripts/doclingAlvisLaunch.ts",
     "docling:alvis:status": "ssh alvis2 'squeue -u $USER -n forska-docling'",
+    "docling:alvis:cancel": "ssh alvis2 'scancel -u $USER -n forska-docling'",
     "docling:alvis:logs": "ssh alvis2 'tail -f /mimer/NOBACKUP/groups/clin-agent-bench/dev/logs/*/docling.log'"
   }
 }
@@ -283,7 +291,7 @@ cd /mimer/NOBACKUP/groups/clin-agent-bench/dev
 apptainer pull docling_serve_pytorch.sif docker://ghcr.io/docling-project/docling-serve:pytorch
 ```
 
-**Note**: First pull downloads ~5-8GB of model weights. Subsequent runs use cached models from `.cache/docling`.
+**Note**: `apptainer pull` downloads the container image. Model weights are fetched on first conversion and cached under `.cache/docling`.
 
 ## Workflow
 
@@ -310,6 +318,11 @@ bun run docling:alvis:status
 # Launch/reconnect
 bun run docling:alvis:launch
 ```
+
+### Stop / Cleanup
+
+- Stop tunnel: `Ctrl+C` in the `docling:alvis:launch` terminal
+- Cancel job: `bun run docling:alvis:cancel` (or `ssh alvis2 'scancel <jobid>'`)
 
 ### Running with Local Dev Server
 
@@ -354,7 +367,7 @@ Docling downloads ~5GB of models on first run. These are cached in:
 $STACK_ROOT/.cache/docling/
 ```
 
-Bound into the container at `/opt/docling`.
+Bound into the container at `/opt/app-root/src/.cache/docling`.
 
 ## Comparison with Local Docker
 
@@ -372,6 +385,7 @@ Bound into the container at `/opt/docling`.
 - [ ] Create `forska-docling-alvis.sbatch`
 - [ ] Create `scripts/doclingAlvisLaunch.ts`
 - [ ] Add package.json scripts
+- [ ] Add a cancel/cleanup command (`scancel`)
 - [ ] Test SIF build on Alvis2
 - [ ] Test sbatch submission
 - [ ] Verify SSH tunnel works
@@ -383,7 +397,7 @@ Bound into the container at `/opt/docling`.
 - [ ] Verify integration with `fullTextConversionJobs.ts`
 
 ### Documentation
-- [ ] Add to README_RUN_LOCAL.md
+- [ ] Add to `README.md`
 - [ ] Add troubleshooting section
 
 ## Troubleshooting
@@ -399,6 +413,13 @@ ssh alvis2
 cd /mimer/NOBACKUP/groups/clin-agent-bench/dev
 apptainer pull --force docling_serve_pytorch.sif docker://ghcr.io/docling-project/docling-serve:pytorch
 ```
+
+If `apptainer` is missing:
+```bash
+ssh alvis2 'module load Apptainer || true; apptainer --version'
+```
+
+If `ghcr.io` is blocked from Alvis2: build/pull the SIF somewhere with outbound access, then `scp` it into `$STACK_ROOT/`.
 
 ### Job Won't Start
 
@@ -432,7 +453,7 @@ Common issues:
 
 ## Future Improvements
 
-- [ ] Add health check for Docling service in sbatch
+- [ ] Add login-node health check (curl from `alvis2` to the compute node)
 - [ ] Consider `--pipeline vlm` for complex/scanned PDFs (GraniteDocling VLM)
 - [ ] Automatic tunnel restart on disconnect
 - [ ] Combine with main forska-alvis sbatch (single job for all services)
