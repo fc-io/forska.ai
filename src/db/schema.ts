@@ -42,6 +42,12 @@ export const judgmentsJobsPromptsStatusEnum = pgEnum('judgments_jobs_prompts_sta
   'sent',
   'judged',
   'judged_and_ready_to_remove_from_queue',
+  'skipped',
+])
+
+export const judgmentsJobsPromptsSkipReasonEnum = pgEnum('judgments_jobs_prompts_skip_reason_enum', [
+  'no_fulltext',
+  'conversion_failed',
 ])
 
 export const engineEnum = pgEnum('engine_enum', ['sglang', 'vllm'])
@@ -422,6 +428,7 @@ export const judgmentsJobsPrompts = pgTable(
     sentAt: timestamp('sent_at', {withTimezone: true}),
     judgedAt: timestamp('judged_at', {withTimezone: true}),
     status: judgmentsJobsPromptsStatusEnum('status').default('ready').notNull(),
+    skipReason: judgmentsJobsPromptsSkipReasonEnum('skip_reason'),
   },
   (table) => {
     return [

@@ -751,14 +751,14 @@ article: {
 - [x] Add `RUN_SERVER_FULL_TEXT_CONVERSION_CRON` to env and `env.ts`
 
 ### DB Schema
-- [ ] Add `'skipped'` to `judgmentsJobsPromptsStatusEnum` (requires migration)
+- [x] Add `'skipped'` to `judgmentsJobsPromptsStatusEnum` (requires migration)
 - [x] Add `fullTextConversionStatus` column
 - [x] Add `fullTextConversionError` column
 - [x] Add `fullTextConversionAttempts` column
 - [x] Add `fullTextCharCount` column
 - [x] Add `fullTextHtml` column
-- [ ] Add `skipReason` column ('no_fulltext' | 'conversion_failed' | null)
-- [ ] Generate migration: `bunx --bun drizzle-kit generate`
+- [x] Add `skipReason` column ('no_fulltext' | 'conversion_failed' | null)
+- [x] Generate migration: `bunx --bun drizzle-kit generate`
 - [ ] Run migration: `bun run db:mig`
 
 ### Conversion Function
@@ -798,4 +798,3 @@ article: {
 - [ ] Rate limit conversions
 - [ ] GraniteDocling VLM for complex PDFs (--pipeline vlm)
 - [ ] Parallel conversion for batch jobs
-
