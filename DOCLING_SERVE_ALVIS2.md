@@ -382,10 +382,10 @@ Bound into the container at `/opt/app-root/src/.cache/docling`.
 ## Checklist
 
 ### Setup
-- [ ] Create `forska-docling-alvis.sbatch`
-- [ ] Create `scripts/doclingAlvisLaunch.ts`
-- [ ] Add package.json scripts
-- [ ] Add a cancel/cleanup command (`scancel`)
+- [x] Create `forska-docling-alvis.sbatch`
+- [x] Create `scripts/doclingAlvisLaunch.ts`
+- [x] Add package.json scripts
+- [x] Add a cancel/cleanup command (`scancel`)
 - [ ] Test SIF build on Alvis2
 - [ ] Test sbatch submission
 - [ ] Verify SSH tunnel works
