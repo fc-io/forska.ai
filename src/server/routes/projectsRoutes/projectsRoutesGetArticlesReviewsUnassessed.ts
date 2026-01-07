@@ -47,30 +47,13 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
         .where(eq(projects.id, body.projectId))
         .limit(1)
 
-      // Filter by project's linked import routes via EXISTS against article_route_link
-      const projectImportRoutes = await db
-        .select({importRouteId: projectRouteLink.importRouteId})
-        .from(projectRouteLink)
-        .where(eq(projectRouteLink.projectId, body.projectId))
-
-      const routeIdArray =
-        projectImportRoutes.length > 0
-          ? sql.join(
-              projectImportRoutes.map((r) => {
-                return sql`${r.importRouteId}::uuid`
-              }),
-              sql`,`,
-            )
-          : null
-
-      const hasMatchingImportRoute =
-        routeIdArray !== null
-          ? sql`EXISTS (
-              SELECT 1 FROM ${articleRouteLink} arl
-              WHERE arl."article_id" = ${articles.id}
-              AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
-            )`
-          : null
+      // Filter by project's linked import routes via EXISTS against article_route_link joined to project_route_link
+      const hasMatchingImportRoute = sql`EXISTS (
+        SELECT 1 FROM ${articleRouteLink} arl
+        INNER JOIN ${projectRouteLink} prl ON prl."import_route_id" = arl."import_route_id"
+        WHERE arl."article_id" = ${articles.id}
+        AND prl."project_id" = ${body.projectId}::uuid
+      )`
       const hasProjectArticle = sql`EXISTS (
         SELECT 1 FROM ${projectArticles} pa
         WHERE pa."article_id" = ${articles.id}
@@ -79,9 +62,7 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
 
       // Build scope condition (import route OR explicitly linked to project)
       // Note: or() can return undefined, so we use hasProjectArticle as explicit fallback
-      const scopeCondition = hasMatchingImportRoute
-        ? (or(hasMatchingImportRoute, hasProjectArticle) ?? hasProjectArticle)
-        : hasProjectArticle
+      const scopeCondition = or(hasMatchingImportRoute, hasProjectArticle) ?? hasProjectArticle
 
       // Optional UI + project time bounds and search
       const whereParts: Array<ReturnType<typeof sql>> = [scopeCondition]
@@ -112,28 +93,20 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
         .having(sql`COUNT(DISTINCT ${judgments.promptId}) < ${promptIds.length}`)
         .as('grouped_unassessed')
 
-      // Count total
-      const [{count: totalCount = 0} = {count: 0}] = await db
-        .select({count: sql<number>`COUNT(*)`.as('count')})
-        .from(groupedBase)
-
-      // Fetch paginated list
-      const pageBase = db
-        .select({id: groupedBase.id})
+      const rows = await db
+        .select({
+          article: articles,
+          totalCount: sql<number>`COUNT(*) OVER()`.as('total_count'),
+        })
         .from(groupedBase)
         .innerJoin(articles, eq(groupedBase.id, articles.id))
         .orderBy(desc(articles.articleCreatedAt))
         .limit(limit)
         .offset(offset)
-        .as('page_unassessed')
 
-      const unassessedArticles = await db
-        .select({article: articles})
-        .from(articles)
-        .innerJoin(pageBase, eq(pageBase.id, articles.id))
-        .orderBy(desc(articles.articleCreatedAt))
+      const totalCount = rows[0]?.totalCount ?? 0
 
-      const result = unassessedArticles.map(({article}) => {
+      const result = rows.map(({article}) => {
         return {...article, judgments: []}
       })
 
