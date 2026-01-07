@@ -43,6 +43,7 @@ type ProjectSummary = {
   useTitle: boolean
   useAbstract: boolean
   useFulltext: boolean
+  useFulltextNoImages: boolean
 }
 
 type ModelOption = {id: string; name: string; provider: string | null; modelName: string | null}
@@ -89,6 +90,7 @@ const isProjectSummary = (value: unknown): value is ProjectSummary => {
   const useTitle = summary.useTitle
   const useAbstract = summary.useAbstract
   const useFulltext = summary.useFulltext
+  const useFulltextNoImages = summary.useFulltextNoImages
   const hasValidDates = isNullableStringOrDate(dateFrom) && isNullableStringOrDate(dateTo)
   return (
     typeof name === 'string'
@@ -97,6 +99,7 @@ const isProjectSummary = (value: unknown): value is ProjectSummary => {
     && typeof useTitle === 'boolean'
     && typeof useAbstract === 'boolean'
     && typeof useFulltext === 'boolean'
+    && typeof useFulltextNoImages === 'boolean'
   )
 }
 
@@ -291,6 +294,7 @@ const EditProject = (): JSX.Element => {
   const [useTitle, setUseTitle] = createSignal(true)
   const [useAbstract, setUseAbstract] = createSignal(true)
   const [useFulltext, setUseFulltext] = createSignal(false)
+  const [useFulltextNoImages, setUseFulltextNoImages] = createSignal(false)
 
   // Track whether we've loaded initial data to avoid overwriting local changes on refetch
   let initialDataLoaded = false
@@ -395,6 +399,7 @@ const EditProject = (): JSX.Element => {
       setUseTitle(details.project.useTitle)
       setUseAbstract(details.project.useAbstract)
       setUseFulltext(details.project.useFulltext)
+      setUseFulltextNoImages(details.project.useFulltextNoImages)
       if (!selectedModelId() && details.model?.id) {
         setSelectedModelId(details.model.id)
       }
@@ -487,6 +492,7 @@ const EditProject = (): JSX.Element => {
         useTitle: useTitle(),
         useAbstract: useAbstract(),
         useFulltext: useFulltext(),
+        useFulltextNoImages: useFulltextNoImages(),
       })
 
     if (response.error || !response.data?.data) {
@@ -822,13 +828,41 @@ const EditProject = (): JSX.Element => {
                       class="mt-1"
                       checked={useFulltext()}
                       onChange={(event) => {
-                        return setUseFulltext(event.currentTarget.checked)
+                        const checked = event.currentTarget.checked
+                        setUseFulltext(checked)
+                        // Mutual exclusivity: uncheck the other if this is checked
+                        if (checked) setUseFulltextNoImages(false)
                       }}
                       disabled={isLocked()}
                     />
                     <div class="flex-1">
-                      <p class="text-sm font-medium text-gray-900">
-                        Use the full text of the Article (less performant)
+                      <p class="text-sm font-medium text-gray-900">Use Full Text (with images)</p>
+                      <p class="text-xs text-gray-500 mt-0.5">
+                        Include the complete article text including embedded images
+                      </p>
+                    </div>
+                  </label>
+                  <label
+                    class={`flex items-start gap-3 border rounded-md p-3 cursor-pointer ${
+                      isLocked() ? 'opacity-60' : 'border-input'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      class="mt-1"
+                      checked={useFulltextNoImages()}
+                      onChange={(event) => {
+                        const checked = event.currentTarget.checked
+                        setUseFulltextNoImages(checked)
+                        // Mutual exclusivity: uncheck the other if this is checked
+                        if (checked) setUseFulltext(false)
+                      }}
+                      disabled={isLocked()}
+                    />
+                    <div class="flex-1">
+                      <p class="text-sm font-medium text-gray-900">Use Full Text (without images)</p>
+                      <p class="text-xs text-gray-500 mt-0.5">
+                        Include article text but strip embedded base64 images to reduce token usage
                       </p>
                     </div>
                   </label>

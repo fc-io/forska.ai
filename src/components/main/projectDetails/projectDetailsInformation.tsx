@@ -12,6 +12,7 @@ interface ProjectDetailsInformationProject {
   useTitle: boolean
   useAbstract: boolean
   useFulltext: boolean
+  useFulltextNoImages: boolean
 }
 
 type ProjectDetailsInformationProps = {
@@ -59,7 +60,12 @@ export const ProjectDetailsInformation = (props: ProjectDetailsInformationProps)
     return props.model?.name ?? 'Unknown'
   })
   const useFlags = createMemo(() => {
-    return {title: props.project.useTitle, abstract: props.project.useAbstract, fulltext: props.project.useFulltext}
+    return {
+      title: props.project.useTitle,
+      abstract: props.project.useAbstract,
+      fulltext: props.project.useFulltext,
+      fulltextNoImages: props.project.useFulltextNoImages,
+    }
   })
 
   return (
@@ -127,6 +133,13 @@ export const ProjectDetailsInformation = (props: ProjectDetailsInformationProps)
             }`}
           >
             Full text {useFlags().fulltext ? 'on' : 'off'}
+          </span>
+          <span
+            class={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+              useFlags().fulltextNoImages ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-600'
+            }`}
+          >
+            No images {useFlags().fulltextNoImages ? 'on' : 'off'}
           </span>
         </div>
       </div>

@@ -82,6 +82,7 @@ const CreateProject = () => {
   const [useTitle, setUseTitle] = createSignal(true)
   const [useAbstract, setUseAbstract] = createSignal(true)
   const [useFulltext, setUseFulltext] = createSignal(false)
+  const [useFulltextNoImages, setUseFulltextNoImages] = createSignal(false)
   const [isLoading, setIsLoading] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
 
@@ -176,6 +177,7 @@ const CreateProject = () => {
       useTitle: useTitle(),
       useAbstract: useAbstract(),
       useFulltext: useFulltext(),
+      useFulltextNoImages: useFulltextNoImages(),
     })
 
     const result = handleApiResponse(response, 'Failed to create project')
@@ -445,11 +447,32 @@ const CreateProject = () => {
                     class="mt-1"
                     checked={useFulltext()}
                     onChange={(e) => {
-                      return setUseFulltext(e.currentTarget.checked)
+                      const checked = e.currentTarget.checked
+                      setUseFulltext(checked)
+                      // Mutual exclusivity: uncheck the other if this is checked
+                      if (checked) setUseFulltextNoImages(false)
                     }}
                   />
                   <div class="flex-1">
-                    <p class="text-sm font-medium text-gray-900">Use the full text of the Article (less performant)</p>
+                    <p class="text-sm font-medium text-gray-900">Use Full Text (with images)</p>
+                    <p class="text-xs text-gray-500 mt-0.5">Include the complete article text including embedded images</p>
+                  </div>
+                </label>
+                <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    class="mt-1"
+                    checked={useFulltextNoImages()}
+                    onChange={(e) => {
+                      const checked = e.currentTarget.checked
+                      setUseFulltextNoImages(checked)
+                      // Mutual exclusivity: uncheck the other if this is checked
+                      if (checked) setUseFulltext(false)
+                    }}
+                  />
+                  <div class="flex-1">
+                    <p class="text-sm font-medium text-gray-900">Use Full Text (without images)</p>
+                    <p class="text-xs text-gray-500 mt-0.5">Include article text but strip embedded base64 images to reduce token usage</p>
                   </div>
                 </label>
               </div>

@@ -14,6 +14,7 @@ export type PromptToProcess = {
   modelName: string
   modelBaseUrl: string
   useFulltext: boolean
+  useFulltextNoImages: boolean
 }
 
 const processReadyRows = async (
@@ -57,6 +58,7 @@ const processReadyRows = async (
             modelName: schema.models.modelName,
             modelBaseUrl: schema.models.baseURL,
             useFulltext: schema.projects.useFulltext,
+            useFulltextNoImages: schema.projects.useFulltextNoImages,
           })
           .from(schema.judgmentsJobs)
           .leftJoin(schema.projects, eq(schema.projects.id, schema.judgmentsJobs.projectId))
@@ -103,6 +105,7 @@ const processReadyRows = async (
         modelName: config.modelName,
         modelBaseUrl: baseUrl,
         useFulltext: config.useFulltext ?? false,
+        useFulltextNoImages: config.useFulltextNoImages ?? false,
       }
     })
     .filter((prompt): prompt is PromptToProcess => {

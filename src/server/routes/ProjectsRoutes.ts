@@ -235,6 +235,11 @@ export const projectsRoutes = new Elysia()
         throw new Error('Selected model does not exist')
       }
 
+      // Validate mutual exclusivity of useFulltext and useFulltextNoImages
+      if (body.useFulltext && body.useFulltextNoImages) {
+        throw new Error('Cannot enable both "Use Full Text" and "Use Full Text (No Images)" at the same time')
+      }
+
       // Create project
       const [newProject] = await db
         .insert(projects)
@@ -246,6 +251,7 @@ export const projectsRoutes = new Elysia()
           useTitle: body.useTitle ?? true,
           useAbstract: body.useAbstract ?? true,
           useFulltext: body.useFulltext ?? false,
+          useFulltextNoImages: body.useFulltextNoImages ?? false,
           dateFrom,
           dateTo,
         })
@@ -368,6 +374,7 @@ export const projectsRoutes = new Elysia()
         useTitle: t.Optional(t.Boolean()),
         useAbstract: t.Optional(t.Boolean()),
         useFulltext: t.Optional(t.Boolean()),
+        useFulltextNoImages: t.Optional(t.Boolean()),
         importRoutes: t.Optional(t.Array(t.String())),
         prompts: t.Optional(
           t.Union([
@@ -451,6 +458,14 @@ export const projectsRoutes = new Elysia()
         if (body.useTitle !== undefined) updateData.useTitle = body.useTitle
         if (body.useAbstract !== undefined) updateData.useAbstract = body.useAbstract
         if (body.useFulltext !== undefined) updateData.useFulltext = body.useFulltext
+        if (body.useFulltextNoImages !== undefined) updateData.useFulltextNoImages = body.useFulltextNoImages
+
+        // Validate mutual exclusivity (check both incoming values and existing DB values)
+        const finalUseFulltext = body.useFulltext ?? updateData.useFulltext
+        const finalUseFulltextNoImages = body.useFulltextNoImages ?? updateData.useFulltextNoImages
+        if (finalUseFulltext && finalUseFulltextNoImages) {
+          throw new Error('Cannot enable both "Use Full Text" and "Use Full Text (No Images)" at the same time')
+        }
 
         const [updatedProject] = await tx.update(projects).set(updateData).where(eq(projects.id, params.id)).returning()
 
@@ -718,6 +733,7 @@ export const projectsRoutes = new Elysia()
         useTitle: t.Optional(t.Boolean()),
         useAbstract: t.Optional(t.Boolean()),
         useFulltext: t.Optional(t.Boolean()),
+        useFulltextNoImages: t.Optional(t.Boolean()),
         importRoutes: t.Optional(t.Array(t.String())),
         prompts: t.Optional(
           t.Array(

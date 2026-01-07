@@ -4,6 +4,7 @@ import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 import {judgeSinglePrompt} from '../../../../agent/judge.ts'
 import * as schema from '../../../../db/schema.ts'
 import {ensureFullText} from '../../../utils/ensureFullText.ts'
+import {processFulltextForLLM} from '../../../utils/fulltextProcessing.ts'
 import {rateLimitedLogger} from '../../../utils/rateLimitedLogger.ts'
 import {ConnectionError} from '../connectionHealth.ts'
 import type {PromptToProcess} from './getAndUpdateReadyPrompts.ts'
@@ -85,7 +86,7 @@ const markAsSkipped = async (
   jobId: string,
   articleId: string,
   promptId: string,
-  skipReason: 'no_fulltext' | 'conversion_failed',
+  skipReason: 'no_fulltext' | 'conversion_failed' | 'fulltext_too_large',
 ): Promise<void> => {
   await db
     .update(schema.judgmentsJobsPrompts)
@@ -114,10 +115,11 @@ export const processPromptWithLLM = async (
     return
   }
 
-  // Handle fulltext requirement for projects with useFulltext=true
+  // Handle fulltext requirement for projects with useFulltext=true or useFulltextNoImages=true
   // Create a mutable article object that we can update with fulltext if needed
   let articleWithFulltext = article
-  if (promptToProcess.useFulltext) {
+  const needsFulltext = promptToProcess.useFulltext || promptToProcess.useFulltextNoImages
+  if (needsFulltext) {
     const result = await ensureFullText(db, article, article.id)
 
     if (!result.text) {
@@ -142,8 +144,28 @@ export const processPromptWithLLM = async (
       }
     }
 
-    // Update the article object with the fulltext for use in prompt generation
-    articleWithFulltext = {...article, fullText: result.text}
+    // Process fulltext: optionally strip images and check token budget
+    const processResult = processFulltextForLLM(result.text, {
+      stripImages: promptToProcess.useFulltextNoImages,
+    })
+
+    if (!processResult.success) {
+      // Token budget exceeded → mark as skipped
+      console.log(
+        `[fulltext] Skipping article ${article.id}: fulltext too large (${processResult.tokenCount.toLocaleString()} tokens, max: ${processResult.maxTokens.toLocaleString()})`,
+      )
+      await markAsSkipped(
+        db,
+        promptToProcess.jobId,
+        promptToProcess.articleId,
+        promptToProcess.promptId,
+        'fulltext_too_large',
+      )
+      return
+    }
+
+    // Update the article object with the processed fulltext for use in prompt generation
+    articleWithFulltext = {...article, fullText: processResult.processedText}
   }
 
   // Get the specific prompt to judge

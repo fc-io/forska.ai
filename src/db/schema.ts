@@ -48,6 +48,7 @@ export const judgmentsJobsPromptsStatusEnum = pgEnum('judgments_jobs_prompts_sta
 export const judgmentsJobsPromptsSkipReasonEnum = pgEnum('judgments_jobs_prompts_skip_reason_enum', [
   'no_fulltext',
   'conversion_failed',
+  'fulltext_too_large',
 ])
 
 export const engineEnum = pgEnum('engine_enum', ['sglang', 'vllm'])
@@ -363,6 +364,7 @@ export const projects = pgTable('projects', {
   useTitle: boolean('use_title').default(true).notNull(),
   useAbstract: boolean('use_abstract').default(true).notNull(),
   useFulltext: boolean('use_fulltext').default(false).notNull(),
+  useFulltextNoImages: boolean('use_fulltext_no_images').default(false).notNull(),
   dateFrom: timestamp('date_from', {withTimezone: true}),
   dateTo: timestamp('date_to', {withTimezone: true}),
   archived: boolean('archived').default(false).notNull(),
