@@ -57,6 +57,11 @@ export const articlesRoutes = new Elysia()
   .get('/api/articles/conversion-stats', async () => {
     const db = getDatabase()
 
+    const [totalFailedRow] = await db
+      .select({count: count()})
+      .from(articles)
+      .where(eq(articles.fullTextConversionStatus, 'failed'))
+
     const lastFailed = await db
       .select({
         id: articles.id,
@@ -71,9 +76,17 @@ export const articlesRoutes = new Elysia()
       .orderBy(desc(articles.updatedAt))
       .limit(10)
 
-    return {
-      lastFailed,
-    }
+    return {lastFailed, totalFailed: totalFailedRow?.count ?? 0}
+  })
+  .post('/api/articles/conversion-reset', async () => {
+    const db = getDatabase()
+
+    await db
+      .update(articles)
+      .set({fullTextConversionStatus: null, fullTextConversionAttempts: 0, fullTextConversionError: null})
+      .where(eq(articles.fullTextConversionStatus, 'failed'))
+
+    return {success: true}
   })
   .get('/api/articles/latest', async () => {
     const db = getDatabase()

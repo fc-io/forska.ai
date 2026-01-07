@@ -104,6 +104,7 @@ export const articles = pgTable(
       index('articles_import_route_article_created_idx').on(table.importRoute, table.articleCreatedAt),
       index('articles_updated_idx').on(table.updatedAt),
       uniqueIndex('articles_openalex_id_unique').on(table.openalexId),
+      index('articles_full_text_conversion_status_idx').on(table.fullTextConversionStatus),
     ]
   },
 )

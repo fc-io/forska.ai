@@ -1,0 +1,1 @@
+CREATE INDEX "articles_full_text_conversion_status_idx" ON "articles" USING btree ("full_text_conversion_status");
