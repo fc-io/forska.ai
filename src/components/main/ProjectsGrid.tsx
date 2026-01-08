@@ -3,6 +3,7 @@ import {format} from 'date-fns'
 import {createMemo, createSignal, For} from 'solid-js'
 
 import {createJudgmentsJob} from '../../services/judgmentsJobsService'
+import {cloneProject} from '../../services/projectsService'
 import {Button} from '../ui/button'
 
 interface Project {
@@ -35,6 +36,27 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
       console.error('Failed to create judgments job:', error)
     } finally {
       setCreatingJobs((prev) => {
+        const next = new Set(prev)
+        next.delete(projectId)
+        return next
+      })
+    }
+  }
+
+  const [cloningProjects, setCloningProjects] = createSignal<Set<string>>(new Set())
+  const handleCloneProject = async (projectId: string) => {
+    setCloningProjects((prev) => {
+      return new Set([...prev, projectId])
+    })
+    try {
+      const clonedProject = await cloneProject(projectId)
+      console.log('Project cloned:', clonedProject)
+      // Reload the page to show the new project
+      window.location.reload()
+    } catch (error) {
+      console.error('Failed to clone project:', error)
+    } finally {
+      setCloningProjects((prev) => {
         const next = new Set(prev)
         next.delete(projectId)
         return next
@@ -119,8 +141,16 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
                   >
                     Export data
                   </Button>
-                  <Button size="sm" variant="outline" class="px-3 py-1 text-sm">
-                    Clone Project
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    class="px-3 py-1 text-sm"
+                    disabled={cloningProjects().has(project.id)}
+                    onClick={() => {
+                      void handleCloneProject(project.id)
+                    }}
+                  >
+                    {cloningProjects().has(project.id) ? 'Cloning...' : 'Clone Project'}
                   </Button>
                   <Button
                     size="sm"

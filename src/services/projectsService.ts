@@ -101,3 +101,19 @@ export const fetchProjectWithPrompts = async (projectId: string) => {
     throw err
   }
 }
+
+export const cloneProject = async (projectId: string) => {
+  try {
+    const response = await apiClient.api.projects({id: projectId}).clone.post()
+
+    if (response.error || !response.data?.data) {
+      console.error('Error cloning project:', response.error)
+      throw new Error('Failed to clone project')
+    }
+
+    return response.data.data
+  } catch (err) {
+    console.error('Error cloning project:', err)
+    throw err
+  }
+}

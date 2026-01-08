@@ -766,3 +766,83 @@ export const projectsRoutes = new Elysia()
 
     return {success: true}
   })
+  .post('/api/projects/:id/clone', async ({params}) => {
+    const db = getDatabase()
+
+    // Fetch source project
+    const [sourceProject] = await db.select().from(projects).where(eq(projects.id, params.id)).limit(1)
+
+    if (!sourceProject) {
+      throw new Error('Project not found')
+    }
+
+    // Clone within a transaction
+    const result = await db.transaction(async (tx) => {
+      // Create the cloned project with a " - Copy" suffix
+      const [clonedProject] = await tx
+        .insert(projects)
+        .values({
+          name: `${sourceProject.name} - Copy`,
+          description: sourceProject.description,
+          ownerId: sourceProject.ownerId,
+          engine: sourceProject.engine,
+          modelId: sourceProject.modelId,
+          useTitle: sourceProject.useTitle,
+          useAbstract: sourceProject.useAbstract,
+          useFulltext: sourceProject.useFulltext,
+          useFulltextNoImages: sourceProject.useFulltextNoImages,
+          dateFrom: sourceProject.dateFrom,
+          dateTo: sourceProject.dateTo,
+          archived: false,
+        })
+        .returning()
+
+      if (!clonedProject) {
+        throw new Error('Failed to create cloned project')
+      }
+
+      // Clone project prompts associations
+      const sourcePrompts = await tx.select().from(projectPrompts).where(eq(projectPrompts.projectId, params.id))
+
+      if (sourcePrompts.length > 0) {
+        await tx.insert(projectPrompts).values(
+          sourcePrompts.map((p) => {
+            return {
+              projectId: clonedProject.id,
+              promptId: p.promptId,
+              order: p.order,
+              archived: p.archived,
+              enabled: p.enabled,
+              originProjectId: clonedProject.id,
+            }
+          }),
+        )
+      }
+
+      // Clone import route links
+      const sourceRouteLinks = await tx.select().from(projectRouteLink).where(eq(projectRouteLink.projectId, params.id))
+
+      if (sourceRouteLinks.length > 0) {
+        await tx.insert(projectRouteLink).values(
+          sourceRouteLinks.map((link) => {
+            return {projectId: clonedProject.id, importRouteId: link.importRouteId}
+          }),
+        )
+      }
+
+      // Clone project articles (curated articles)
+      const sourceArticles = await tx.select().from(projectArticles).where(eq(projectArticles.projectId, params.id))
+
+      if (sourceArticles.length > 0) {
+        await tx.insert(projectArticles).values(
+          sourceArticles.map((article) => {
+            return {projectId: clonedProject.id, articleId: article.articleId, importedFromProjectId: params.id}
+          }),
+        )
+      }
+
+      return clonedProject
+    })
+
+    return {data: result}
+  })
