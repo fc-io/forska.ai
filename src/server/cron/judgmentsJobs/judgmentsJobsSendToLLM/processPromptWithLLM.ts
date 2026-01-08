@@ -4,6 +4,7 @@ import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 import {judgeSinglePrompt} from '../../../../agent/judge.ts'
 import * as schema from '../../../../db/schema.ts'
 import {ensureFullText} from '../../../utils/ensureFullText.ts'
+import {env} from '../../../utils/env.ts'
 import {processFulltextForLLM} from '../../../utils/fulltextProcessing.ts'
 import {rateLimitedLogger} from '../../../utils/rateLimitedLogger.ts'
 import {ConnectionError} from '../connectionHealth.ts'
@@ -148,10 +149,12 @@ export const processPromptWithLLM = async (
     }
 
     // Process fulltext: optionally strip images and check token budget
+    // Use SGLANG_CONTEXT_LENGTH if available (> 0), otherwise fall back to default
+    const modelContext = env.SGLANG_CONTEXT_LENGTH > 0 ? env.SGLANG_CONTEXT_LENGTH : undefined
     const processResult = processFulltextForLLM(result.text, {
       stripImages: promptToProcess.useFulltextNoImages,
+      modelContext,
     })
-
     if (!processResult.success) {
       // Token budget exceeded → mark as skipped
       console.log(
