@@ -9,9 +9,12 @@
  * Uses PostgreSQL only for project metadata (prompts, routes, curated articles).
  * All judgment data is queried from ClickHouse.
  */
+import {inArray} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
+import {articles} from '../../../db/schema.ts'
 import {queryArticlesReviewsFromClickHouse} from '../../../services/clickhouse/articlesReviewsClickHouse.ts'
+import {getDatabase} from '../../utils/getDatabase.ts'
 
 export const projectsRoutesGetArticlesReviews = new Elysia().post(
   '/api/articlesreviews',
@@ -40,9 +43,45 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
         prompts: body.prompts,
       })
 
+      const db = getDatabase()
+      const articleIds = result.data.map((a) => {
+        return a.id
+      })
+      const fullTextRows =
+        articleIds.length > 0
+          ? await db
+              .select({
+                id: articles.id,
+                articleId: articles.articleId,
+                url: articles.url,
+                fullTextPDF: articles.fullTextPDF,
+                fullTextFetchedAt: articles.fullTextFetchedAt,
+                originalData: articles.originalData,
+              })
+              .from(articles)
+              .where(inArray(articles.id, articleIds))
+          : []
+      const fullTextById = fullTextRows.reduce(
+        (acc, row) => {
+          return {...acc, [row.id]: row}
+        },
+        {} as Record<string, (typeof fullTextRows)[number]>,
+      )
+      const data = result.data.map((article) => {
+        const fullText = fullTextById[article.id]
+        return {
+          ...article,
+          articleId: fullText?.articleId ?? null,
+          url: fullText?.url ?? null,
+          fullTextPDF: fullText?.fullTextPDF ?? null,
+          fullTextFetchedAt: fullText?.fullTextFetchedAt ?? null,
+          originalData: fullText?.originalData ?? null,
+        }
+      })
+
       console.log(`[Articles Reviews API] Returning ${result.data.length} articles`)
 
-      return result
+      return {...result, data}
     } catch (error) {
       console.error('[Articles Reviews API] Error:', error)
       throw new Error(error instanceof Error ? error.message : 'Failed to fetch articles reviews')

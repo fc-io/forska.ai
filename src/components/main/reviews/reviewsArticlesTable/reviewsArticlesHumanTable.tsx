@@ -2,11 +2,12 @@ import {Link} from '@tanstack/solid-router'
 import {type ColumnDef, createSolidTable, flexRender, getCoreRowModel} from '@tanstack/solid-table'
 import {format} from 'date-fns'
 import type {Accessor, Setter} from 'solid-js'
-import {For, Match, Show, Switch} from 'solid-js'
+import {For, Show} from 'solid-js'
 
 import {getArticleUrl} from '../../../../app/utils/getArticleUrl.ts'
 import type {articles, judgmentsHuman} from '../../../../db/schema.ts'
 import {getJournalTitleFromOriginalData} from '../../../../utils/getJournalTitleFromOriginalData.ts'
+import {ReviewsArticlesPdfCell} from './reviewsArticlesPdfCell.tsx'
 
 declare module '@tanstack/solid-table' {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -141,30 +142,15 @@ const columns: ColumnDef<ArticleWithHumanJudgments, unknown>[] = [
   {
     accessorKey: 'fullTextPDF',
     header: 'PDF',
-    size: 40,
-    minSize: 40,
+    size: 140,
+    minSize: 120,
     cell: (info) => {
-      const pdf = (info.getValue() as string | null) || ''
-      const fetched = Boolean((info.row.original as {fullTextFetchedAt?: unknown}).fullTextFetchedAt)
       return (
-        <Switch fallback={<span class="text-gray-400">—</span>}>
-          <Match when={pdf}>
-            <a
-              href={pdf.startsWith('/') ? pdf : `/${pdf}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              class="px-1.5 py-0.5 text-xs rounded bg-green-100 text-green-800"
-              title="Open PDF"
-            >
-              PDF
-            </a>
-          </Match>
-          <Match when={fetched}>
-            <span class="px-1.5 py-0.5 text-xs rounded bg-yellow-100 text-yellow-800" title="Fetched, no PDF available">
-              No PDF
-            </span>
-          </Match>
-        </Switch>
+        <ReviewsArticlesPdfCell
+          fullTextPDF={info.getValue()}
+          fullTextFetchedAt={(info.row.original as {fullTextFetchedAt?: unknown}).fullTextFetchedAt}
+          originalData={(info.row.original as {originalData?: unknown}).originalData}
+        />
       )
     },
   },
