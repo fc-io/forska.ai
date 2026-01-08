@@ -13,6 +13,8 @@ export type PromptToProcess = {
   modelId: string
   modelName: string
   modelBaseUrl: string
+  useTitle: boolean
+  useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
 }
@@ -57,6 +59,8 @@ const processReadyRows = async (
             modelId: schema.projects.modelId,
             modelName: schema.models.modelName,
             modelBaseUrl: schema.models.baseURL,
+            useTitle: schema.projects.useTitle,
+            useAbstract: schema.projects.useAbstract,
             useFulltext: schema.projects.useFulltext,
             useFulltextNoImages: schema.projects.useFulltextNoImages,
           })
@@ -104,6 +108,8 @@ const processReadyRows = async (
         modelId: config.modelId,
         modelName: config.modelName,
         modelBaseUrl: baseUrl,
+        useTitle: config.useTitle ?? true,
+        useAbstract: config.useAbstract ?? true,
         useFulltext: config.useFulltext ?? false,
         useFulltextNoImages: config.useFulltextNoImages ?? false,
       }

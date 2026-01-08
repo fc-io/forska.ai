@@ -166,6 +166,7 @@ export const judgeSinglePrompt = async ({
   judgmentsJobId,
   modelConfig,
   projectId,
+  contentSettings,
 }: {
   article: ArticlesType[number]
   prompt: SinglePromptInput
@@ -173,6 +174,7 @@ export const judgeSinglePrompt = async ({
   judgmentsJobId: string
   modelConfig: ModelConfigInput
   projectId: string
+  contentSettings?: {useTitle: boolean; useAbstract: boolean}
 }): Promise<void> => {
   const {baseURL, modelName, modelId} = modelConfig
   if (!baseURL) {
@@ -184,7 +186,7 @@ export const judgeSinglePrompt = async ({
   const startedAt = new Date().toISOString()
   const startDuration = performance.now()
 
-  const basePrompt = judgeGetSinglePrompt(article, prompt)
+  const basePrompt = judgeGetSinglePrompt(article, prompt, contentSettings)
   const promptIds = [prompt.id]
   let userPrompt = basePrompt
   let attempts = 0

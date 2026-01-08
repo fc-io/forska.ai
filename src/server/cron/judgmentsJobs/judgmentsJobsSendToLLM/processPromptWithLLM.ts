@@ -35,6 +35,10 @@ const processSinglePrompt = async (
       baseURL: promptToProcess.modelBaseUrl,
     },
     projectId: promptToProcess.projectId,
+    contentSettings: {
+      useTitle: promptToProcess.useTitle,
+      useAbstract: promptToProcess.useAbstract,
+    },
   })
 }
 
