@@ -23,10 +23,25 @@ type ProjectDetailsPromptsProps = {
 }
 
 export const ProjectDetailsPrompts = (props: ProjectDetailsPromptsProps) => {
-  const owned = props.prompts.filter((p) => {
+  const shouldShowPrompt = (prompt: Prompt) => {
+    if (!prompt.archived) {
+      return true
+    }
+    if (prompt.enabled) {
+      return true
+    }
+    if (props.projectId && prompt.originProjectId === props.projectId) {
+      return true
+    }
+    return false
+  }
+
+  const visiblePrompts = props.prompts.filter(shouldShowPrompt)
+
+  const owned = visiblePrompts.filter((p) => {
     return props.projectId && p.originProjectId === props.projectId
   })
-  const linked = props.prompts.filter((p) => {
+  const linked = visiblePrompts.filter((p) => {
     return !props.projectId || p.originProjectId !== props.projectId
   })
 
@@ -108,7 +123,7 @@ export const ProjectDetailsPrompts = (props: ProjectDetailsPromptsProps) => {
 
   return (
     <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
-      <Show when={props.prompts.length === 0}>
+      <Show when={visiblePrompts.length === 0}>
         <div class="text-center py-8 text-muted-foreground">
           <p class="text-lg mb-2">No prompts found for this project</p>
           <p class="text-sm">Prompts will appear here once they are created.</p>
