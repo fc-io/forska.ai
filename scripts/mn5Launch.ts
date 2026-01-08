@@ -9,11 +9,14 @@ const MN5_ROOT = '/gpfs/projects/ehpc482/dev'
 const TLOG = 'tlog' // Transfer login
 const GLOG = 'glog' // General login (for sbatch)
 const ALOG = 'alog' // ACC login (for tunnel)
-const SGLANG_PORT = 30000 // Main OpenAI-compatible API port (router or worker)
+const SGLANG_PORT = 30000 // Remote OpenAI-compatible API port (router or worker)
+const DEFAULT_LOCAL_PORT = 30000
 const SBATCH_FILE = 'forska-mn5-sglang.sbatch'
 
 // Track the active job ID for cleanup
 let activeJobId: string | null = null
+let activeTunnelProc: ReturnType<typeof spawn> | null = null
+let isShuttingDown = false
 
 const log = (m: string): void => {
   console.log(`[mn5] ${m}`)
@@ -30,19 +33,29 @@ const cancelJob = async (jobId: string): Promise<void> => {
 }
 
 const setupSignalHandler = (): void => {
-  const cleanup = async () => {
+  const cleanup = async (signal: string) => {
+    if (isShuttingDown) return
+    isShuttingDown = true
     console.log('') // New line after ^C
+    if (activeTunnelProc) {
+      try {
+        activeTunnelProc.kill()
+      } catch {
+        // Ignore
+      }
+    }
     if (activeJobId) {
       await cancelJob(activeJobId)
     }
+    log(`Exiting (${signal})`)
     process.exit(0)
   }
 
   process.on('SIGINT', () => {
-    return void cleanup()
+    return void cleanup('SIGINT')
   })
   process.on('SIGTERM', () => {
-    return void cleanup()
+    return void cleanup('SIGTERM')
   })
 }
 
@@ -85,21 +98,105 @@ const getJobStatus = async (jobId: string): Promise<{state: string; nodeList: st
   return {state: state || 'UNKNOWN', nodeList: nodeList || ''}
 }
 
-const startTunnel = async (computeNode: string, jobId: string): Promise<void> => {
-  // Set active job for signal handler if not already set
-  activeJobId = jobId
-  log(`Starting SSH tunnel: localhost:${SGLANG_PORT} -> ${computeNode}:${SGLANG_PORT} via ${ALOG}`)
+type LocalPortListener = {command: string; pid: number}
 
-  // Kill any existing process on port 30000
-  await $`lsof -i :${SGLANG_PORT} -t 2>/dev/null | xargs kill 2>/dev/null || true`
+const parseLsofListenerLine = (line: string): LocalPortListener | undefined => {
+  const [command, pidRaw] = line
+    .trim()
+    .split(/\s+/)
+    .map((part) => {
+      return part.trim()
+    })
+
+  const pid = Number(pidRaw)
+  return command && Number.isFinite(pid) ? {command, pid} : undefined
+}
+
+const getLocalListenersOnPort = async (port: number): Promise<LocalPortListener[]> => {
+  const raw = await $`lsof -n -P -iTCP:${port} -sTCP:LISTEN 2>/dev/null || true`.text()
+  const lines = raw
+    .trim()
+    .split('\n')
+    .map((line) => {
+      return line.trim()
+    })
+    .filter((line) => {
+      return line.length > 0
+    })
+
+  return lines.length <= 1
+    ? []
+    : lines
+        .slice(1)
+        .map(parseLsofListenerLine)
+        .filter((row): row is LocalPortListener => {
+          return Boolean(row)
+        })
+}
+
+const isLocalSGLangResponding = async (localPort: number): Promise<boolean> => {
+  const result =
+    await $`curl -sf --connect-timeout 2 --max-time 3 http://localhost:${localPort}/v1/models 2>/dev/null || echo ''`.text()
+  const trimmed = result.trim()
+  return trimmed.includes('"data"') || trimmed.includes('"object"') || trimmed.includes('"id"')
+}
+
+const killSshListenersOnPort = async (port: number): Promise<void> => {
+  const listeners = await getLocalListenersOnPort(port)
+  const sshPids = listeners
+    .filter((l) => {
+      return l.command === 'ssh' || l.command === 'autossh'
+    })
+    .map((l) => {
+      return l.pid
+    })
+
+  return sshPids.length === 0 ? undefined : void (await $`kill ${sshPids.join(' ')} 2>/dev/null || true`)
+}
+
+const interpretExitCode = (code: number): string => {
+  const exitCodes: Record<number, string> = {
+    0: 'Normal exit',
+    1: 'General error (local issue or remote command failed)',
+    255: 'SSH connection failed (network/auth/remote issue)',
+    130: 'Interrupted (Ctrl+C)',
+    137: 'Killed (SIGKILL)',
+    143: 'Terminated (SIGTERM)',
+  }
+  return exitCodes[code] || `Unknown exit code ${code}`
+}
+
+const ensureLocalPortReadyForTunnel = async (localPort: number): Promise<'ready' | 'in_use'> => {
+  const alreadyOk = await isLocalSGLangResponding(localPort)
+  if (alreadyOk) return 'ready'
+
+  const listeners = await getLocalListenersOnPort(localPort)
+  if (listeners.length === 0) return 'ready'
+
+  const onlySsh = listeners.every((l) => {
+    return l.command === 'ssh' || l.command === 'autossh'
+  })
+
+  if (!onlySsh) {
+    log(`Local port ${localPort} already in use: ${listeners.map((l) => `${l.command}:${l.pid}`).join(', ')}`)
+    return 'in_use'
+  }
+
+  log(`Killing existing SSH tunnel(s) on port ${localPort}...`)
+  await killSshListenersOnPort(localPort)
   await sleep(500)
+  return 'ready'
+}
 
-  const proc = spawn(
+const spawnTunnelProcess = (computeNode: string, localPort: number) => {
+  return spawn(
     [
       'ssh',
       '-N',
       '-o',
-      'ControlPath=none', // Disable SSH multiplexing to keep tunnel process alive
+      'ControlMaster=no',
+      '-o',
+      'ControlPath=none',
       '-o',
       'ServerAliveInterval=30',
       '-o',
@@ -107,28 +204,88 @@ const startTunnel = async (computeNode: string, jobId: string): Promise<void> =>
       '-o',
       'ExitOnForwardFailure=yes',
       '-L',
-      `${SGLANG_PORT}:${computeNode}:${SGLANG_PORT}`,
+      `${localPort}:${computeNode}:${SGLANG_PORT}`,
       ALOG,
     ],
-    {stdout: 'inherit', stderr: 'inherit'},
+    {stdout: 'inherit', stderr: 'inherit', stdin: 'inherit'},
   )
+}
 
-  // Wait for tunnel to be ready
-  await sleep(2000)
+const waitForExistingTunnel = async (jobId: string, computeNode: string, localPort: number): Promise<void> => {
+  if (isShuttingDown) return
 
-  // Verify connection
-  const check =
-    await $`curl -sf --connect-timeout 5 http://localhost:${SGLANG_PORT}/v1/models 2>/dev/null && echo OK || echo FAIL`.text()
-  if (check.includes('OK')) {
-    log('✓ Tunnel connected and SGLang responding')
-  } else {
-    log('⚠ Tunnel started but SGLang health check failed (may still be starting)')
+  const localOk = await isLocalSGLangResponding(localPort)
+  if (localOk) {
+    await sleep(10_000)
+    return waitForExistingTunnel(jobId, computeNode, localPort)
   }
 
-  log(`SGLang API available at http://localhost:${SGLANG_PORT}/v1`)
+  log(`Local SGLang not responding on :${localPort}, attempting to re-establish tunnel...`)
+  return startTunnelSupervisor(computeNode, jobId, localPort, 0)
+}
+
+const startTunnelSupervisor = async (
+  computeNode: string,
+  jobId: string,
+  localPort: number,
+  restartCount: number,
+): Promise<void> => {
+  if (isShuttingDown) return
+
+  // Set active job for signal handler if not already set
+  activeJobId = jobId
+  const restartSuffix = restartCount > 0 ? ` (restart #${restartCount})` : ''
+  log(`Starting SSH tunnel: localhost:${localPort} -> ${computeNode}:${SGLANG_PORT} via ${ALOG}${restartSuffix}`)
+
+  const portStatus = await ensureLocalPortReadyForTunnel(localPort)
+  if (portStatus === 'in_use') {
+    console.error(`[mn5] Port ${localPort} is in use by a non-SSH process`)
+    console.error(`      Stop that process or use: bun run mn5:launch -- --local-port ${localPort + 1}`)
+    process.exit(1)
+  }
+
+  const localAlreadyOk = await isLocalSGLangResponding(localPort)
+  if (localAlreadyOk) {
+    log(`✓ Reusing existing tunnel on localhost:${localPort}`)
+    log(`SGLang API available at http://localhost:${localPort}/v1`)
+    log(`Press Ctrl+C to disconnect and cancel job ${jobId}`)
+    return waitForExistingTunnel(jobId, computeNode, localPort)
+  }
+
+  const proc = spawnTunnelProcess(computeNode, localPort)
+  activeTunnelProc = proc
+
+  await sleep(2000)
+
+  const ok = await isLocalSGLangResponding(localPort)
+  log(ok ? '✓ Tunnel connected and SGLang responding' : '⚠ Tunnel started but SGLang health check failed (may still be starting)')
+  log(`SGLang API available at http://localhost:${localPort}/v1`)
   log(`Press Ctrl+C to disconnect and cancel job ${jobId}`)
 
-  await proc.exited
+  const exitCode = await proc.exited
+  activeTunnelProc = null
+
+  if (isShuttingDown) return
+
+  const interpretation = interpretExitCode(exitCode)
+  log(`🔴 Tunnel exited (code=${exitCode}): ${interpretation}`)
+
+  await sleep(1500)
+  const replaced = await isLocalSGLangResponding(localPort)
+  if (replaced) {
+    log(`✓ Tunnel on localhost:${localPort} appears to be handled by another process; keeping job watcher alive`)
+    return waitForExistingTunnel(jobId, computeNode, localPort)
+  }
+
+  const {state, nodeList} = await getJobStatus(jobId)
+  if (state !== 'RUNNING') {
+    log(`Job ${jobId} is ${state}; exiting`)
+    process.exit(0)
+  }
+
+  const refreshedNode = await getFirstNodeFromNodeList(nodeList)
+  const nextNode = refreshedNode ?? computeNode
+  return startTunnelSupervisor(nextNode, jobId, localPort, restartCount + 1)
 }
 
 /**
@@ -162,10 +319,12 @@ const main = async () => {
   const args = process.argv.slice(2)
   let model: string | undefined
   let force = false
+  let localPort = DEFAULT_LOCAL_PORT
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--force') force = true
     else if (args[i] === '--model') model = args[++i]
+    else if (args[i] === '--local-port') localPort = Number(args[++i] ?? DEFAULT_LOCAL_PORT)
   }
 
   // 1. Check for existing pending/running jobs
@@ -190,7 +349,7 @@ const main = async () => {
       log(`Found running job: ${existingRunningJob.jobId} on ${computeNode}`)
       log('Reusing existing job (use --force to submit a new one)')
       await waitForSGLangReady(computeNode)
-      await startTunnel(computeNode, existingRunningJob.jobId)
+      await startTunnelSupervisor(computeNode, existingRunningJob.jobId, localPort, 0)
       return
     }
   }
@@ -224,7 +383,7 @@ const main = async () => {
 
     if (computeNode) {
       await waitForSGLangReady(computeNode)
-      await startTunnel(computeNode, existingPendingJob.jobId)
+      await startTunnelSupervisor(computeNode, existingPendingJob.jobId, localPort, 0)
       return
     }
   }
@@ -275,7 +434,7 @@ const main = async () => {
 
   // 5. Wait for SGLang and start tunnel
   await waitForSGLangReady(computeNode)
-  await startTunnel(computeNode, jobId)
+  await startTunnelSupervisor(computeNode, jobId, localPort, 0)
 }
 
 void main()

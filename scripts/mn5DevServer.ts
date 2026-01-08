@@ -1,17 +1,17 @@
 /**
  * MN5 Dev Server Script
  *
- * Connects to a running SGLang job on MareNostrum 5, sets up SSH tunnels,
- * and starts the local dev server with correct WORKER_URLS for metrics.
+ * Connects to a running SGLang job on MareNostrum 5 and starts the local dev server
+ * with correct WORKER_URLS.
+ *
+ * SSH tunnels are handled by `bun run mn5:launch` (this script does not create tunnels).
  *
  * Usage: bun run mn5:dev:server
  *
  * What it does:
  * 1. Finds the latest running sbatch job log on MN5
  * 2. Parses the [mn5:config:start]...[mn5:config:end] block for config
- * 3. Kills any existing SSH tunnels on the SGLANG_PORT
- * 4. Starts SSH tunnels to the compute node(s)
- * 5. Starts the API dev server with WORKER_URLS set for metrics collection
+ * 3. Starts the API dev server with WORKER_URLS from the config
  */
 
 import {$, spawn} from 'bun'
@@ -602,61 +602,10 @@ const main = async () => {
   log(`  Workers (remote): ${config.WORKER_URLS}`)
   log(`  Workers (local):  ${config.WORKER_URLS_LOCAL}`)
 
-  // Install cleanup handlers
-  installTunnelCleanup()
+  log('Using SSH tunnels from `bun run mn5:launch` (this script does not create tunnels)')
+  log(`Expected local endpoints: ${config.WORKER_URLS_LOCAL}`)
 
-  // 3. Kill existing tunnels on router port and worker ports
-  await killExistingTunnels(config.SGLANG_PORT)
-
-  // Parse worker URLs to get host:port pairs
-  const remoteWorkers = config.WORKER_URLS.split(',')
-    .map((url) => {
-      const match = url.match(/http:\/\/([^:]+):(\d+)/)
-      return match ? {host: match[1], port: match[2]} : null
-    })
-    .filter(Boolean) as {host: string; port: string}[]
-
-  const localWorkers = config.WORKER_URLS_LOCAL.split(',')
-    .map((url) => {
-      const match = url.match(/http:\/\/[^:]+:(\d+)/)
-      return match ? match[1] : null
-    })
-    .filter(Boolean) as string[]
-
-  // Kill tunnels on worker ports too
-  for (const localPort of localWorkers) {
-    await killExistingTunnels(localPort)
-  }
-
-  // 4. Start tunnels
-  log('Setting up SSH tunnels...')
-
-  const routerEnabled = config.SGLANG_ENABLE_ROUTER === '1'
-
-  if (routerEnabled) {
-    // Router mode: create tunnel to router on SGLANG_PORT
-    await startTunnel(config.SGLANG_PORT, config.SGLANG_HOST, config.SGLANG_PORT)
-  }
-
-  // Worker tunnels (for direct requests when router disabled, or metrics when enabled)
-  for (let i = 0; i < remoteWorkers.length; i++) {
-    const remote = remoteWorkers[i]
-    const localPort = localWorkers[i]
-    if (remote && localPort) {
-      // Skip if this port is same as router port (already tunneled)
-      if (routerEnabled && localPort === config.SGLANG_PORT) continue
-      // Test first worker when router disabled (it's the main endpoint)
-      const testEndpoint = !routerEnabled && i === 0
-      await startTunnel(localPort, remote.host, remote.port, testEndpoint)
-    }
-  }
-
-  log('All tunnels established')
-
-  // Start monitoring tunnels for health
-  startTunnelMonitoring()
-
-  // 5. Start dev server
+  // 3. Start dev server
   await startDevServer(config)
 }
 
