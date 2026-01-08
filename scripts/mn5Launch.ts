@@ -3,7 +3,7 @@
  * Usage: bun run mn5:launch [--force] [--model <id>]
  */
 
-import {$} from 'bun'
+import {$, spawn} from 'bun'
 
 const MN5_ROOT = '/gpfs/projects/ehpc482/dev'
 const TLOG = 'tlog' // Transfer login
@@ -12,8 +12,38 @@ const ALOG = 'alog' // ACC login (for tunnel)
 const SGLANG_PORT = 30000 // Main OpenAI-compatible API port (router or worker)
 const SBATCH_FILE = 'forska-mn5-sglang.sbatch'
 
+// Track the active job ID for cleanup
+let activeJobId: string | null = null
+
 const log = (m: string): void => {
   console.log(`[mn5] ${m}`)
+}
+
+const cancelJob = async (jobId: string): Promise<void> => {
+  log(`Cancelling job ${jobId}...`)
+  try {
+    await $`ssh ${GLOG} "scancel ${jobId} 2>/dev/null || true"`.quiet()
+    log('Job cancelled')
+  } catch {
+    // Ignore errors - job may already be gone
+  }
+}
+
+const setupSignalHandler = (): void => {
+  const cleanup = async () => {
+    console.log('') // New line after ^C
+    if (activeJobId) {
+      await cancelJob(activeJobId)
+    }
+    process.exit(0)
+  }
+
+  process.on('SIGINT', () => {
+    return void cleanup()
+  })
+  process.on('SIGTERM', () => {
+    return void cleanup()
+  })
 }
 
 const sleep = (ms: number): Promise<void> => {
@@ -55,7 +85,80 @@ const getJobStatus = async (jobId: string): Promise<{state: string; nodeList: st
   return {state: state || 'UNKNOWN', nodeList: nodeList || ''}
 }
 
+const startTunnel = async (computeNode: string, jobId: string): Promise<void> => {
+  // Set active job for signal handler if not already set
+  activeJobId = jobId
+  log(`Starting SSH tunnel: localhost:${SGLANG_PORT} -> ${computeNode}:${SGLANG_PORT} via ${ALOG}`)
+
+  // Kill any existing process on port 30000
+  await $`lsof -i :${SGLANG_PORT} -t 2>/dev/null | xargs kill 2>/dev/null || true`
+  await sleep(500)
+
+  const proc = spawn(
+    [
+      'ssh',
+      '-N',
+      '-o',
+      'ControlPath=none', // Disable SSH multiplexing to keep tunnel process alive
+      '-o',
+      'ServerAliveInterval=30',
+      '-o',
+      'ServerAliveCountMax=3',
+      '-o',
+      'ExitOnForwardFailure=yes',
+      '-L',
+      `${SGLANG_PORT}:${computeNode}:${SGLANG_PORT}`,
+      ALOG,
+    ],
+    {stdout: 'inherit', stderr: 'inherit'},
+  )
+
+  // Wait for tunnel to be ready
+  await sleep(2000)
+
+  // Verify connection
+  const check =
+    await $`curl -sf --connect-timeout 5 http://localhost:${SGLANG_PORT}/v1/models 2>/dev/null && echo OK || echo FAIL`.text()
+  if (check.includes('OK')) {
+    log('✓ Tunnel connected and SGLang responding')
+  } else {
+    log('⚠ Tunnel started but SGLang health check failed (may still be starting)')
+  }
+
+  log(`SGLang API available at http://localhost:${SGLANG_PORT}/v1`)
+  log(`Press Ctrl+C to disconnect and cancel job ${jobId}`)
+
+  await proc.exited
+}
+
+/**
+ * Wait for SGLang to be ready
+ */
+const waitForSGLangReady = async (computeNode: string): Promise<boolean> => {
+  // Wait for SGLang to be ready (can take 10-20 min for large models)
+  log('Waiting for SGLang to start (this can take 10-20 minutes for large models)...')
+  for (let i = 0; i < 240; i++) {
+    // Wait up to 40 minutes
+    const checkWorker =
+      await $`ssh ${ALOG} "curl -sf --connect-timeout 2 --max-time 3 http://${computeNode}:${SGLANG_PORT}/v1/models 2>/dev/null && echo OK || echo NOTREADY"`.text()
+    if (checkWorker.includes('OK') && checkWorker.includes('data')) {
+      log('SGLang worker is ready!')
+      return true
+    }
+
+    if (i % 30 === 0 && i > 0) {
+      log(`Still loading model... (${Math.floor((i * 10) / 60)} min elapsed)`)
+    }
+    await sleep(10000)
+  }
+
+  log('Timed out waiting for SGLang readiness (it may still be starting)')
+  return false
+}
+
 const main = async () => {
+  setupSignalHandler()
+
   const args = process.argv.slice(2)
   let model: string | undefined
   let force = false
@@ -86,7 +189,8 @@ const main = async () => {
     if (computeNode) {
       log(`Found running job: ${existingRunningJob.jobId} on ${computeNode}`)
       log('Reusing existing job (use --force to submit a new one)')
-      await waitForSGLangAndPrintConnectionInfo(computeNode)
+      await waitForSGLangReady(computeNode)
+      await startTunnel(computeNode, existingRunningJob.jobId)
       return
     }
   }
@@ -119,7 +223,8 @@ const main = async () => {
     }
 
     if (computeNode) {
-      await waitForSGLangAndPrintConnectionInfo(computeNode)
+      await waitForSGLangReady(computeNode)
+      await startTunnel(computeNode, existingPendingJob.jobId)
       return
     }
   }
@@ -138,6 +243,7 @@ const main = async () => {
     process.exit(1)
   }
   const jobId = jobIdMatch[1]
+  activeJobId = jobId // Set for cleanup
   log(`Job submitted: ${jobId}`)
 
   // 4. Wait for job to start running (HPC queues can be slow)
@@ -167,35 +273,9 @@ const main = async () => {
     process.exit(1)
   }
 
-  // 5. Wait for SGLang and print connection info
-  await waitForSGLangAndPrintConnectionInfo(computeNode)
-}
-
-/**
- * Wait for SGLang to be ready and print connection info
- */
-const waitForSGLangAndPrintConnectionInfo = async (computeNode: string): Promise<void> => {
-  // Wait for SGLang to be ready (can take 10-20 min for large models)
-  log('Waiting for SGLang to start (this can take 10-20 minutes for large models)...')
-  let workerReady = false
-  for (let i = 0; i < 240; i++) {
-    // Wait up to 40 minutes
-    const checkWorker =
-      await $`ssh ${ALOG} "curl -sf --connect-timeout 2 --max-time 3 http://${computeNode}:${SGLANG_PORT}/v1/models 2>/dev/null && echo OK || echo NOTREADY"`.text()
-    if (checkWorker.includes('OK') && checkWorker.includes('data')) {
-      log('SGLang worker is ready!')
-      workerReady = true
-      break
-    }
-
-    if (i % 30 === 0 && i > 0) {
-      log(`Still loading model... (${Math.floor((i * 10) / 60)} min elapsed)`)
-    }
-    await sleep(10000)
-  }
-
-  log(workerReady ? 'SGLang ready!' : 'Timed out waiting for SGLang readiness (it may still be starting)')
-  log(`Run: bun mn5:dev:server`)
+  // 5. Wait for SGLang and start tunnel
+  await waitForSGLangReady(computeNode)
+  await startTunnel(computeNode, jobId)
 }
 
 void main()
