@@ -8,7 +8,7 @@ import {ConversionError, convertPdfToText} from '../utils/convertPdfToText.ts'
 import {env} from '../utils/env.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 
-const CONVERSION_INTERVAL = '*/10 * * * * *' // Every 10 seconds
+const CONVERSION_INTERVAL = '*/30 * * * * *' // Every 30 seconds
 const DOCLING_CONVERSION_TIMEOUT_MS = 300_000 // 5 minutes (matching GUNICORN_TIMEOUT)
 const MAX_CONVERSION_ATTEMPTS = 3
 const DEFAULT_BATCH_SIZE = 5
@@ -252,36 +252,44 @@ const convertArticle = async (db: PostgresJsDatabase<typeof schema>, article: Ar
   }
 }
 
-// Flag to prevent overlapping batch runs
-let isRunning = false
+// Maximum number of concurrent batch runs allowed
+const MAX_CONCURRENT_BATCHES = 3
+
+// Counter to track how many batches are currently running
+let runningBatches = 0
 
 const runConversionBatch = async () => {
   if (!env.RUN_SERVER_FULL_TEXT_CONVERSION_CRON) return
 
-  if (isRunning) {
-    console.log('[fullTextConversion] Previous batch still running, skipping')
+  if (runningBatches >= MAX_CONCURRENT_BATCHES) {
+    console.log(
+      `[fullTextConversion] Max concurrent batches reached (${runningBatches}/${MAX_CONCURRENT_BATCHES}), skipping`,
+    )
     return
   }
 
-  isRunning = true
+  runningBatches++
+  const batchNumber = runningBatches
   try {
     const db = getDatabase()
 
     const batchSize = getConversionBatchSize()
     const concurrency = getConversionConcurrency(batchSize)
 
-    console.log(`[fullTextConversion] Starting batch (size=${batchSize}, concurrency=${concurrency})`)
+    console.log(
+      `[fullTextConversion] Starting batch #${batchNumber} (size=${batchSize}, concurrency=${concurrency}, running=${runningBatches}/${MAX_CONCURRENT_BATCHES})`,
+    )
 
     const articles = await getArticlesNeedingConversion(db, batchSize)
 
     if (articles.length === 0) {
-      console.log('[fullTextConversion] No articles to convert')
+      console.log(`[fullTextConversion] Batch #${batchNumber}: No articles to convert`)
       return
     }
 
     await convertArticles(db, articles, concurrency)
   } finally {
-    isRunning = false
+    runningBatches--
   }
 }
 
