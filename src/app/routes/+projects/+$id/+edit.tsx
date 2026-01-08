@@ -362,21 +362,9 @@ const EditProject = (): JSX.Element => {
     })
   })
 
-  const visibleOwnedPrompts = createMemo(() => {
-    return sortedOwnedPrompts().filter((prompt) => {
-      return !prompt.archived
-    })
-  })
-
   const sortedImportedPrompts = createMemo(() => {
     return importedPrompts.slice().sort((a, b) => {
       return a.order - b.order
-    })
-  })
-
-  const visibleImportedPrompts = createMemo(() => {
-    return sortedImportedPrompts().filter((prompt) => {
-      return !prompt.archived
     })
   })
 
@@ -896,7 +884,7 @@ const EditProject = (): JSX.Element => {
                   </Button>
                 </div>
                 <div class="space-y-3">
-                  <For each={visibleOwnedPrompts()} fallback={<div>No prompts</div>}>
+                  <For each={sortedOwnedPrompts()} fallback={<div>No prompts</div>}>
                     {(promptItem, index) => {
                       return (
                         <div class="flex gap-2">
@@ -971,13 +959,13 @@ const EditProject = (): JSX.Element => {
                 </div>
               </div>
 
-              <Show when={visibleImportedPrompts().length > 0}>
+              <Show when={sortedImportedPrompts().length > 0}>
                 <div>
                   <div class="flex items-center justify-between mb-2">
                     <label class="block text-sm font-medium">Importable prompts</label>
                   </div>
                   <div class="space-y-3">
-                    <For each={visibleImportedPrompts()}>
+                    <For each={sortedImportedPrompts()}>
                       {(promptItem) => {
                         return (
                           <div

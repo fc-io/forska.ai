@@ -16,7 +16,6 @@ import { Route as SettingsIndexRouteImport } from './routes/+settings/+index'
 import { Route as ProjectsIndexRouteImport } from './routes/+projects/+index'
 import { Route as LoginIndexRouteImport } from './routes/+login/+index'
 import { Route as ArticlesIndexRouteImport } from './routes/+articles/+index'
-import { Route as ProjectsIdPromptsRouteImport } from './routes/+projects/+$id/+prompts'
 import { Route as ProjectsIdHumanAssessmentRouteImport } from './routes/+projects/+$id/+humanAssessment'
 import { Route as ProjectsIdExportRouteImport } from './routes/+projects/+$id/+export'
 import { Route as ProjectsIdEditRouteImport } from './routes/+projects/+$id/+edit'
@@ -85,11 +84,6 @@ const LoginIndexRoute = LoginIndexRouteImport.update({
 const ArticlesIndexRoute = ArticlesIndexRouteImport.update({
   id: '/articles/',
   path: '/articles/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ProjectsIdPromptsRoute = ProjectsIdPromptsRouteImport.update({
-  id: '/projects/$id/prompts',
-  path: '/projects/$id/prompts',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ProjectsIdHumanAssessmentRoute =
@@ -300,7 +294,6 @@ export interface FileRoutesByFullPath {
   '/projects/$id/edit': typeof ProjectsIdEditRoute
   '/projects/$id/export': typeof ProjectsIdExportRoute
   '/projects/$id/humanAssessment': typeof ProjectsIdHumanAssessmentRoute
-  '/projects/$id/prompts': typeof ProjectsIdPromptsRoute
   '/admin/failed_requests/$id': typeof AdminFailed_requestsIdIndexRoute
   '/admin/jobs/$id': typeof AdminJobsIdIndexRoute
   '/projects/$id/reviews-both': typeof ProjectsIdReviewsBothIndexRoute
@@ -343,7 +336,6 @@ export interface FileRoutesByTo {
   '/projects/$id/edit': typeof ProjectsIdEditRoute
   '/projects/$id/export': typeof ProjectsIdExportRoute
   '/projects/$id/humanAssessment': typeof ProjectsIdHumanAssessmentRoute
-  '/projects/$id/prompts': typeof ProjectsIdPromptsRoute
   '/admin/failed_requests/$id': typeof AdminFailed_requestsIdIndexRoute
   '/admin/jobs/$id': typeof AdminJobsIdIndexRoute
   '/projects/$id/reviews-both': typeof ProjectsIdReviewsBothIndexRoute
@@ -387,7 +379,6 @@ export interface FileRoutesById {
   '/projects/$id/edit': typeof ProjectsIdEditRoute
   '/projects/$id/export': typeof ProjectsIdExportRoute
   '/projects/$id/humanAssessment': typeof ProjectsIdHumanAssessmentRoute
-  '/projects/$id/prompts': typeof ProjectsIdPromptsRoute
   '/admin/failed_requests/$id/': typeof AdminFailed_requestsIdIndexRoute
   '/admin/jobs/$id/': typeof AdminJobsIdIndexRoute
   '/projects/$id/reviews-both/': typeof ProjectsIdReviewsBothIndexRoute
@@ -432,7 +423,6 @@ export interface FileRouteTypes {
     | '/projects/$id/edit'
     | '/projects/$id/export'
     | '/projects/$id/humanAssessment'
-    | '/projects/$id/prompts'
     | '/admin/failed_requests/$id'
     | '/admin/jobs/$id'
     | '/projects/$id/reviews-both'
@@ -475,7 +465,6 @@ export interface FileRouteTypes {
     | '/projects/$id/edit'
     | '/projects/$id/export'
     | '/projects/$id/humanAssessment'
-    | '/projects/$id/prompts'
     | '/admin/failed_requests/$id'
     | '/admin/jobs/$id'
     | '/projects/$id/reviews-both'
@@ -518,7 +507,6 @@ export interface FileRouteTypes {
     | '/projects/$id/edit'
     | '/projects/$id/export'
     | '/projects/$id/humanAssessment'
-    | '/projects/$id/prompts'
     | '/admin/failed_requests/$id/'
     | '/admin/jobs/$id/'
     | '/projects/$id/reviews-both/'
@@ -562,7 +550,6 @@ export interface RootRouteChildren {
   ProjectsIdEditRoute: typeof ProjectsIdEditRoute
   ProjectsIdExportRoute: typeof ProjectsIdExportRoute
   ProjectsIdHumanAssessmentRoute: typeof ProjectsIdHumanAssessmentRoute
-  ProjectsIdPromptsRoute: typeof ProjectsIdPromptsRoute
   AdminFailed_requestsIdIndexRoute: typeof AdminFailed_requestsIdIndexRoute
   AdminJobsIdIndexRoute: typeof AdminJobsIdIndexRoute
   ProjectsIdReviewsBothIndexRoute: typeof ProjectsIdReviewsBothIndexRoute
@@ -626,13 +613,6 @@ declare module '@tanstack/solid-router' {
       path: '/articles'
       fullPath: '/articles'
       preLoaderRoute: typeof ArticlesIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/projects/$id/prompts': {
-      id: '/projects/$id/prompts'
-      path: '/projects/$id/prompts'
-      fullPath: '/projects/$id/prompts'
-      preLoaderRoute: typeof ProjectsIdPromptsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/projects/$id/humanAssessment': {
@@ -898,7 +878,6 @@ const rootRouteChildren: RootRouteChildren = {
   ProjectsIdEditRoute: ProjectsIdEditRoute,
   ProjectsIdExportRoute: ProjectsIdExportRoute,
   ProjectsIdHumanAssessmentRoute: ProjectsIdHumanAssessmentRoute,
-  ProjectsIdPromptsRoute: ProjectsIdPromptsRoute,
   AdminFailed_requestsIdIndexRoute: AdminFailed_requestsIdIndexRoute,
   AdminJobsIdIndexRoute: AdminJobsIdIndexRoute,
   ProjectsIdReviewsBothIndexRoute: ProjectsIdReviewsBothIndexRoute,
