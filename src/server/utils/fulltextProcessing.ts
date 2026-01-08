@@ -5,6 +5,8 @@
  * - checkFulltextTokenBudget: Validates fulltext fits within model context window
  */
 
+import {rateLimitedLogger} from './rateLimitedLogger'
+
 /**
  * Regex to match markdown images with base64 data URIs.
  * Matches: ![alt text](data:image/...;base64,...)
@@ -39,7 +41,8 @@ export const stripMarkdownImages = (markdown: string, replacementText = ''): str
 
   if (bytesRemoved > 0) {
     const approxTokensSaved = Math.ceil(bytesRemoved / 4)
-    console.log(
+    rateLimitedLogger.log(
+      'stripMarkdownImages',
       `[stripMarkdownImages] Removed base64 images: ${bytesRemoved.toLocaleString()} chars (~${approxTokensSaved.toLocaleString()} tokens saved)`,
     )
   }
@@ -90,11 +93,7 @@ export const checkFulltextTokenBudget = (
     return {withinBudget: true, tokenCount: estimatedTokens}
   }
 
-  return {
-    withinBudget: false,
-    tokenCount: estimatedTokens,
-    maxTokens: maxFulltextTokens,
-  }
+  return {withinBudget: false, tokenCount: estimatedTokens, maxTokens: maxFulltextTokens}
 }
 
 /**
@@ -106,19 +105,13 @@ export const checkFulltextTokenBudget = (
  * @param options - Processing options
  * @returns Processed result with status
  */
-export type ProcessFulltextOptions = {
-  stripImages: boolean
-  modelContext?: number
-}
+export type ProcessFulltextOptions = {stripImages: boolean; modelContext?: number}
 
 export type ProcessFulltextResult =
   | {success: true; processedText: string; tokenCount: number}
   | {success: false; reason: 'fulltext_too_large'; tokenCount: number; maxTokens: number}
 
-export const processFulltextForLLM = (
-  fullText: string,
-  options: ProcessFulltextOptions,
-): ProcessFulltextResult => {
+export const processFulltextForLLM = (fullText: string, options: ProcessFulltextOptions): ProcessFulltextResult => {
   // Step 1: Optionally strip images
   const processedText = options.stripImages ? stripMarkdownImages(fullText) : fullText
 
@@ -126,11 +119,7 @@ export const processFulltextForLLM = (
   const budgetResult = checkFulltextTokenBudget(processedText, options.modelContext)
 
   if (budgetResult.withinBudget) {
-    return {
-      success: true,
-      processedText,
-      tokenCount: budgetResult.tokenCount,
-    }
+    return {success: true, processedText, tokenCount: budgetResult.tokenCount}
   }
 
   return {

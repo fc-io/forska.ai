@@ -40,7 +40,7 @@ type RateLimitedLogger = {
 }
 
 export const createRateLimitedLogger = (options: RateLimitedLoggerOptions = {}): RateLimitedLogger => {
-  const {windowMs = 30_000, showSuppressedCount = true} = options
+  const {windowMs = 600_000, showSuppressedCount = true} = options
 
   const entries = new Map<string, LogEntry>()
 
@@ -98,6 +98,6 @@ export const createRateLimitedLogger = (options: RateLimitedLoggerOptions = {}):
 
 /**
  * Default shared logger instance for common use cases.
- * 30 second window, shows suppressed counts.
+ * 10 minute window, shows suppressed counts.
  */
 export const rateLimitedLogger = createRateLimitedLogger()
