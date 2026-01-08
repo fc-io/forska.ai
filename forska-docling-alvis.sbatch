@@ -2,7 +2,7 @@
 #SBATCH -J forska-docling
 #SBATCH -A NAISS2025-22-715 -p alvis
 #SBATCH --nodes=1
-#SBATCH --gpus-per-node=A100fat:1    # Only need 1 GPU for Docling
+#SBATCH --gpus-per-node=A100:1    # Only need 1 GPU for Docling
 #SBATCH --time=08:00:00
 #SBATCH -o %x-%j.log
 #SBATCH --export=ALL
@@ -18,7 +18,7 @@ mkdir -p "$STACK_ROOT"/{logs,.cache/docling}
 cd "$STACK_ROOT"
 
 # Container
-SIF_DOCLING="$STACK_ROOT/docling_serve_pytorch.sif"
+SIF_DOCLING="$STACK_ROOT/docling_serve_cu126.sif"
 [[ -f "$SIF_DOCLING" ]] || { echo "[docling] missing: $SIF_DOCLING" >&2; exit 2; }
 
 # Logging
@@ -51,7 +51,7 @@ apptainer exec --cleanenv --nv \
   --env DOCLING_SERVE_MAX_SYNC_WAIT="300" \
   --bind "$STACK_ROOT/.cache/docling:/opt/app-root/src/.cache/docling:rw" \
   "$SIF_DOCLING" \
-  python -m docling_serve --host 0.0.0.0 --port "$DOCLING_PORT" \
+  python -m docling_serve run --host 0.0.0.0 --port "$DOCLING_PORT" \
   >"$LOG_DIR/docling.log" 2>&1 &
 DOCLING_PID=$!
 

@@ -9,11 +9,41 @@ const STACK_ROOT = '/mimer/NOBACKUP/groups/clin-agent-bench/dev'
 const SSH_HOST = 'alvis2' // Login node for sbatch and tunnel
 const DOCLING_PORT = 5001
 const SBATCH_FILE = 'forska-docling-alvis.sbatch'
-const SIF_NAME = 'docling_serve_pytorch.sif'
-const DOCKER_IMAGE = 'ghcr.io/docling-project/docling-serve:pytorch'
+const SIF_NAME = 'docling_serve_cu126.sif'
+const DOCKER_IMAGE = 'ghcr.io/docling-project/docling-serve-cu126:main'
+
+// Track the active job ID for cleanup
+let activeJobId: string | null = null
 
 const log = (m: string): void => {
   console.log(`[docling:alvis] ${m}`)
+}
+
+const cancelJob = async (jobId: string): Promise<void> => {
+  log(`Cancelling job ${jobId}...`)
+  try {
+    await $`ssh ${SSH_HOST} "scancel ${jobId} 2>/dev/null || true"`.quiet()
+    log('Job cancelled')
+  } catch {
+    // Ignore errors - job may already be gone
+  }
+}
+
+const setupSignalHandler = (): void => {
+  const cleanup = async () => {
+    console.log('') // New line after ^C
+    if (activeJobId) {
+      await cancelJob(activeJobId)
+    }
+    process.exit(0)
+  }
+
+  process.on('SIGINT', () => {
+    return void cleanup()
+  })
+  process.on('SIGTERM', () => {
+    return void cleanup()
+  })
 }
 
 const sleep = (ms: number): Promise<void> => {
@@ -45,8 +75,7 @@ const getFirstNodeFromNodeList = async (nodeList: string): Promise<string | unde
 }
 
 const getJobStatus = async (jobId: string): Promise<{state: string; nodeList: string}> => {
-  const result =
-    await $`ssh ${SSH_HOST} "squeue -j ${jobId} -h -o '%T|%.200N' 2>/dev/null || echo 'UNKNOWN|'"`.text()
+  const result = await $`ssh ${SSH_HOST} "squeue -j ${jobId} -h -o '%T|%.200N' 2>/dev/null || echo 'UNKNOWN|'"`.text()
   const [state, nodeList] = result
     .trim()
     .split('|')
@@ -57,7 +86,9 @@ const getJobStatus = async (jobId: string): Promise<{state: string; nodeList: st
   return {state: state || 'UNKNOWN', nodeList: nodeList || ''}
 }
 
-const startTunnel = async (computeNode: string): Promise<void> => {
+const startTunnel = async (computeNode: string, jobId: string): Promise<void> => {
+  // Set active job for signal handler
+  activeJobId = jobId
   log(`Starting SSH tunnel: localhost:${DOCLING_PORT} -> ${computeNode}:${DOCLING_PORT}`)
 
   // Kill any existing process on port 5001
@@ -69,6 +100,8 @@ const startTunnel = async (computeNode: string): Promise<void> => {
       'ssh',
       '-N',
       '-o',
+      'ControlPath=none', // Disable SSH multiplexing to keep tunnel process alive
+      '-o',
       'ServerAliveInterval=30',
       '-o',
       'ServerAliveCountMax=3',
@@ -76,9 +109,9 @@ const startTunnel = async (computeNode: string): Promise<void> => {
       'ExitOnForwardFailure=yes',
       '-L',
       `${DOCLING_PORT}:${computeNode}:${DOCLING_PORT}`,
-      SSH_HOST
+      SSH_HOST,
     ],
-    {stdout: 'inherit', stderr: 'inherit'}
+    {stdout: 'inherit', stderr: 'inherit'},
   )
 
   // Wait for tunnel to be ready
@@ -94,7 +127,7 @@ const startTunnel = async (computeNode: string): Promise<void> => {
   }
 
   log(`Docling Serve available at http://localhost:${DOCLING_PORT}`)
-  log('Press Ctrl+C to disconnect')
+  log(`Press Ctrl+C to disconnect and cancel job ${jobId}`)
 
   await proc.exited
 }
@@ -123,6 +156,8 @@ const waitForDoclingReady = async (computeNode: string): Promise<boolean> => {
 }
 
 const main = async () => {
+  setupSignalHandler()
+
   const args = process.argv.slice(2)
   const force = args.includes('--force')
   const skipBuild = args.includes('--skip-build')
@@ -171,7 +206,7 @@ const main = async () => {
       log(`Found running job: ${existingRunningJob.jobId} on ${computeNode}`)
       log('Reusing existing job (use --force to submit a new one)')
       await waitForDoclingReady(computeNode)
-      await startTunnel(computeNode)
+      await startTunnel(computeNode, existingRunningJob.jobId)
       return
     }
   }
@@ -205,7 +240,7 @@ const main = async () => {
 
     if (computeNode) {
       await waitForDoclingReady(computeNode)
-      await startTunnel(computeNode)
+      await startTunnel(computeNode, existingPendingJob.jobId)
       return
     }
   }
@@ -254,7 +289,7 @@ const main = async () => {
 
   // 6. Wait for Docling to be ready and start tunnel
   await waitForDoclingReady(computeNode)
-  await startTunnel(computeNode)
+  await startTunnel(computeNode, jobId)
 }
 
 void main()
