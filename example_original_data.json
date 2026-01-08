@@ -1,0 +1,129 @@
+{
+  "id": "41369737",
+  "doi": "10.1080/10837450.2025.2602581",
+  "pmid": "41369737",
+  "inPMC": "N",
+  "title": "AI-Guided Real-Time Detection of Flow Irregularities and Bottlenecks in Pharmaceutical Vial Filling Lines Using Vision-Based Models.",
+  "hasPDF": "N",
+  "inEPMC": "N",
+  "source": "MED",
+  "authMan": "N",
+  "hasBook": "N",
+  "hasData": "N",
+  "pubYear": "2025",
+  "hasSuppl": "N",
+  "language": "eng",
+  "pageInfo": "1-21",
+  "pubModel": "Print-Electronic",
+  "authorList": {
+    "author": [
+      {
+        "authorId": {
+          "type": "ORCID",
+          "value": "0009-0000-2200-7121"
+        },
+        "fullName": "Thattukolla SV",
+        "initials": "SV",
+        "lastName": "Thattukolla",
+        "firstName": "Sai Vijay",
+        "authorAffiliationDetailsList": {
+          "authorAffiliation": [
+            {
+              "affiliation": "CSL Behring, Chicago, Illinois."
+            }
+          ]
+        }
+      },
+      {
+        "fullName": "Thattukolla SV",
+        "initials": "SV",
+        "lastName": "Thattukolla",
+        "firstName": "Sai Vinay",
+        "authorAffiliationDetailsList": {
+          "authorAffiliation": [
+            {
+              "affiliation": "Tenneco Inc, Skokie, Illinois."
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "nihAuthMan": "N",
+  "subsetList": {
+    "subset": [
+      {
+        "code": "IM",
+        "name": "Index Medicus"
+      }
+    ]
+  },
+  "affiliation": "CSL Behring, Chicago, Illinois.",
+  "epmcAuthMan": "N",
+  "journalInfo": {
+    "journal": {
+      "essn": "1097-9867",
+      "issn": "1083-7450",
+      "nlmid": "9610932",
+      "title": "Pharmaceutical development and technology",
+      "isoabbreviation": "Pharm Dev Technol",
+      "medlineAbbreviation": "Pharm Dev Technol"
+    },
+    "journalIssueId": 4059220,
+    "dateOfPublication": "2025 Dec",
+    "yearOfPublication": 2025,
+    "monthOfPublication": 12,
+    "printPublicationDate": "2025-12-01"
+  },
+  "keywordList": {
+    "keyword": [
+      "Artificial intelligence",
+      "Computer vision",
+      "Bottleneck Detection",
+      "Vial Flow",
+      "Flow Anomalies",
+      "Pharmaceutical Filling Line",
+      "Yolo"
+    ]
+  },
+  "pubTypeList": {
+    "pubType": [
+      "Journal Article"
+    ]
+  },
+  "abstractText": "<h4>Aim/background</h4>Ensuring smooth and consistent vial flow on pharmaceutical filling line conveyors is essential for maintaining sterility, reducing downtime, and avoiding costly disruptions. However, irregular vial movement such as spacing gaps, clustering, and vial flipping is often seen, leading to filling delays, broken glass, machine stoppages, and extended batch times. Existing systems lack the ability to detect such irregularities in real time and provide actionable alerts.<h4>Materials and methods</h4>A lightweight, AI-guided framework was developed for detecting vial flow irregularities and classifying bottleneck risks using computer vision. A high-speed camera positioned above the conveyor captured video frames processed by YOLOv8 for real-time object detection. OpenCV was used to extract vial positions and calculate flow metrics (average spacing, standard deviation, inter-vial gap thresholds). A rule-based classification system assigned bottleneck risk levels: low, medium, or high. Operational conveyor footage from a pharmaceutical filling line was analyzed; to protect confidentiality, frames were de-identified and re-rendered as schematic visualizations that preserve vial geometry and spacing statistics.<h4>Results</h4>Across 15 operational frames, the classifier achieved accuracy 93.3%, F1-macro 95.21%. On throughput, the end-to-end pipeline processed frames at ∼18 FPS on CPU and ∼25 FPS on Jetson Nano. Detector evaluation yielded mAP@0.5 = 100.00%, mAP@[0.5:0.95] = 70.09%, precision = 98.65%, recall = 100.00%, F1 = 99.32% at confidence 0.50.<h4>Conclusion</h4>This scalable, non-invasive solution can be integrated into existing pharmaceutical lines to improve operational efficiency and product integrity. The rule-based approach offers interpretability, making it suitable for GMP-regulated environments. Across the operational validation set, the risk classifier achieved macro average precision 95.24%, recall 95.83%, and F1 95.21% .",
+  "authorIdList": {
+    "authorId": [
+      {
+        "type": "ORCID",
+        "value": "0009-0000-2200-7121"
+      }
+    ]
+  },
+  "authorString": "Thattukolla SV, Thattukolla SV.",
+  "citedByCount": 0,
+  "hasLabsLinks": "N",
+  "isOpenAccess": "N",
+  "hasReferences": "N",
+  "dateOfCreation": "2025-12-10",
+  "dateOfRevision": "2025-12-10",
+  "firstIndexDate": "2025-12-11",
+  "hasEvaluations": "N",
+  "fullTextUrlList": {
+    "fullTextUrl": [
+      {
+        "url": "https://doi.org/10.1080/10837450.2025.2602581",
+        "site": "DOI",
+        "availability": "Subscription required",
+        "documentStyle": "doi",
+        "availabilityCode": "S"
+      }
+    ]
+  },
+  "hasTextMinedTerms": "Y",
+  "publicationStatus": "aheadofprint",
+  "firstPublicationDate": "2025-12-10",
+  "hasDbCrossReferences": "N",
+  "hasTMAccessionNumbers": "N",
+  "electronicPublicationDate": "2025-12-10"
+}

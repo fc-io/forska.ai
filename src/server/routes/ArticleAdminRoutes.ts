@@ -1,6 +1,9 @@
 import {eq} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
+import {mkdir, writeFile} from 'fs/promises'
+import path from 'path'
 
+import {user} from '../../../auth-schema.ts'
 import {articles} from '../../db/schema.ts'
 import {fullTextArticleFetchFromArxiv} from '../cron/fullTextJobs/fullTextArticleFetchFromArxiv.ts'
 import {fullTextArticleFetchFromUnpaywall} from '../cron/fullTextJobs/fullTextArticleFetchFromUnpaywall.ts'
@@ -8,6 +11,49 @@ import {attemptsToLegacyResult, type PdfFetchAttemptResult} from '../cron/fullTe
 import {requireAdminAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
+
+type OriginalFullTextUrl = {
+  url: string
+  site: string | null
+  availability: string | null
+  documentStyle: string | null
+  availabilityCode: string | null
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> => {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+const getStringField = (value: Record<string, unknown>, key: string) => {
+  const candidate = value[key]
+  return typeof candidate === 'string' ? candidate : null
+}
+
+const getOriginalFullTextUrls = (originalData: unknown): OriginalFullTextUrl[] => {
+  const fullTextUrlList = isRecord(originalData) ? originalData.fullTextUrlList : null
+  const fullTextUrl = isRecord(fullTextUrlList) ? fullTextUrlList.fullTextUrl : null
+  const entries = Array.isArray(fullTextUrl) ? fullTextUrl : fullTextUrl ? [fullTextUrl] : []
+
+  return entries
+    .map((entry): OriginalFullTextUrl | null => {
+      const record = isRecord(entry) ? entry : null
+      const url = record ? getStringField(record, 'url') : null
+
+      return url
+        ? {
+            url,
+            site: record ? getStringField(record, 'site') : null,
+            availability: record ? getStringField(record, 'availability') : null,
+            documentStyle: record ? getStringField(record, 'documentStyle') : null,
+            availabilityCode: record ? getStringField(record, 'availabilityCode') : null,
+          }
+        : null
+    })
+    .filter((v): v is OriginalFullTextUrl => {
+      return v !== null
+    })
+    .slice(0, 25)
+}
 
 /**
  * Fetch PDF for a single article using the same logic as the cron job.
@@ -33,6 +79,27 @@ const fetchPdfForArticle = async (articleData: {arxivId: string | null; original
   return {attempts, ...legacyResult}
 }
 
+/**
+ * Store an uploaded PDF to the user-specific assets folder.
+ * Returns the relative path to the stored file, or null on failure.
+ */
+const storeUploadedPdf = async (userId: string, articleId: string, pdfBuffer: Buffer): Promise<string | null> => {
+  const relDir = `assets/user_uploaded_article_pdfs/${userId}`
+  const fileName = `${articleId}.pdf`
+  const relPath = `${relDir}/${fileName}`
+  const absDir = path.join(process.cwd(), relDir)
+  const absPath = path.join(absDir, fileName)
+
+  try {
+    await mkdir(absDir, {recursive: true})
+    await writeFile(absPath, pdfBuffer)
+    return relPath
+  } catch (error) {
+    console.error('Failed to store uploaded PDF:', error)
+    return null
+  }
+}
+
 export const articleAdminRoutes = new Elysia()
   .use(withErrorHandler())
   .use(requireAdminAuth())
@@ -51,6 +118,7 @@ export const articleAdminRoutes = new Elysia()
           fullTextConversionStatus: articles.fullTextConversionStatus,
           fullTextConversionError: articles.fullTextConversionError,
           fullTextConversionAttempts: articles.fullTextConversionAttempts,
+          fullTextPdfUploadedBy: articles.fullTextPdfUploadedBy,
         })
         .from(articles)
         .where(eq(articles.id, id))
@@ -60,7 +128,18 @@ export const articleAdminRoutes = new Elysia()
         throw new Error('Article not found')
       }
 
-      return {article}
+      // If there's an uploader, fetch their name
+      let uploaderName: string | null = null
+      if (article.fullTextPdfUploadedBy) {
+        const [uploader] = await db
+          .select({name: user.name})
+          .from(user)
+          .where(eq(user.id, article.fullTextPdfUploadedBy))
+          .limit(1)
+        uploaderName = uploader?.name ?? null
+      }
+
+      return {article: {...article, uploaderName}}
     },
     {params: t.Object({id: t.String()})},
   )
@@ -84,6 +163,7 @@ export const articleAdminRoutes = new Elysia()
 
       // Fetch the PDF using the same logic as the cron job
       const result = await fetchPdfForArticle({arxivId: article.arxivId, originalData: article.originalData})
+      const originalFullTextUrls = getOriginalFullTextUrls(article.originalData)
 
       // Update the article with the fetched PDF info
       const updateData: Record<string, unknown> = {fullTextFetchedAt: new Date()}
@@ -99,6 +179,8 @@ export const articleAdminRoutes = new Elysia()
         // Clear existing fullText so conversion will re-run
         updateData.fullText = null
         updateData.fullTextHtml = null
+        // Clear uploaded by since this is an auto-fetched PDF
+        updateData.fullTextPdfUploadedBy = null
       }
 
       await db.update(articles).set(updateData).where(eq(articles.id, id))
@@ -108,7 +190,74 @@ export const articleAdminRoutes = new Elysia()
         fullTextPDF: result.fullTextPDF,
         fullTextSource: result.fullTextSource,
         attempts: result.attempts,
+        originalFullTextUrls,
       }
     },
     {params: t.Object({id: t.String()})},
+  )
+  // Upload a PDF for an article
+  .post(
+    '/api/articles/:id/upload-pdf',
+    async ({params, body, sessionUserId}) => {
+      const db = getDatabase()
+      const {id} = params
+
+      // Get user ID from the auth context (set by requireAdminAuth)
+      if (!sessionUserId) {
+        throw new Error('User ID not found in request context')
+      }
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- Elysia's type inference
+      const userId: string = sessionUserId // Type narrowing: now string, not string | null
+
+      // Check if article exists
+      const [article] = await db.select({id: articles.id}).from(articles).where(eq(articles.id, id)).limit(1)
+
+      if (!article) {
+        throw new Error('Article not found')
+      }
+
+      // Get the PDF file from the request body
+      const pdfFile = body.pdf
+      if (!pdfFile || !(pdfFile instanceof Blob)) {
+        throw new Error('No PDF file provided')
+      }
+
+      // Validate that it's a PDF
+      const fileType = pdfFile.type
+      if (!fileType.includes('pdf')) {
+        throw new Error('File must be a PDF')
+      }
+
+      // Convert to buffer and store
+      const arrayBuffer = await pdfFile.arrayBuffer()
+      const pdfBuffer = Buffer.from(arrayBuffer)
+
+      const fullTextPDF = await storeUploadedPdf(userId, id, pdfBuffer)
+
+      if (!fullTextPDF) {
+        throw new Error('Failed to store PDF file')
+      }
+
+      // Update the article with the uploaded PDF info
+      await db
+        .update(articles)
+        .set({
+          fullTextPDF,
+          fullTextSource: 'user_upload',
+          fullTextOriginalFormat: 'pdf',
+          fullTextFetchedAt: new Date(),
+          fullTextPdfUploadedBy: userId,
+          // Reset conversion status so it can be processed
+          fullTextConversionStatus: null,
+          fullTextConversionAttempts: 0,
+          fullTextConversionError: null,
+          // Clear existing fullText so conversion will re-run
+          fullText: null,
+          fullTextHtml: null,
+        })
+        .where(eq(articles.id, id))
+
+      return {success: true, fullTextPDF, message: 'PDF uploaded successfully'}
+    },
+    {params: t.Object({id: t.String()}), body: t.Object({pdf: t.File({type: 'application/pdf'})})},
   )

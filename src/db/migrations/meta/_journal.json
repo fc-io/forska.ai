@@ -400,6 +400,13 @@
       "when": 1767791200183,
       "tag": "0057_dizzy_morg",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1767861802171,
+      "tag": "0058_kind_penance",
+      "breakpoints": true
     }
   ]
 }

@@ -1,5 +1,5 @@
 import {createMutation, useQuery, useQueryClient} from '@tanstack/solid-query'
-import {For, Show} from 'solid-js'
+import {createSignal, For, Show} from 'solid-js'
 
 import {apiClient} from '../../../services/apiClient.ts'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse.ts'
@@ -17,6 +17,14 @@ interface PdfFetchAttempt {
   details?: string
 }
 
+interface OriginalFullTextUrl {
+  url: string
+  site: string | null
+  availability: string | null
+  documentStyle: string | null
+  availabilityCode: string | null
+}
+
 const fetchArticleAdminInfo = async (articleId: string) => {
   const response = await apiClient.api.articles({id: articleId})['admin-info'].get()
   return handleApiResponse(response, 'Failed to load admin info')
@@ -29,6 +37,7 @@ const fetchArticleAdminInfo = async (articleId: string) => {
  */
 export const ArticleAdminSection = (props: ArticleAdminSectionProps) => {
   const queryClient = useQueryClient()
+  const [selectedFile, setSelectedFile] = createSignal<File | null>(null)
 
   const adminInfoQuery = useQuery(() => {
     return {
@@ -48,13 +57,58 @@ export const ArticleAdminSection = (props: ArticleAdminSectionProps) => {
       },
       onSuccess: () => {
         // Invalidate the admin info query to refresh the data
-        queryClient.invalidateQueries({queryKey: ['article-admin-info', props.articleId]})
+        void queryClient.invalidateQueries({queryKey: ['article-admin-info', props.articleId]})
         // Also invalidate the main article query in case it's being used
-        queryClient.invalidateQueries({queryKey: ['admin-article-details', props.articleId]})
-        queryClient.invalidateQueries({queryKey: ['article-review-details']})
+        void queryClient.invalidateQueries({queryKey: ['admin-article-details', props.articleId]})
+        void queryClient.invalidateQueries({queryKey: ['article-review-details']})
       },
     }
   })
+
+  const uploadPdfMutation = createMutation(() => {
+    return {
+      mutationFn: async (file: File): Promise<{success: boolean; fullTextPDF: string; message: string}> => {
+        const formData = new FormData()
+        formData.append('pdf', file)
+
+        const response = await fetch(`/api/articles/${props.articleId}/upload-pdf`, {
+          method: 'POST',
+          body: formData,
+          credentials: 'include',
+        })
+
+        if (!response.ok) {
+          const errorData = (await response.json().catch(() => {
+            return {}
+          })) as {error?: string}
+          throw new Error(errorData.error ?? 'Failed to upload PDF')
+        }
+
+        return response.json() as Promise<{success: boolean; fullTextPDF: string; message: string}>
+      },
+      onSuccess: () => {
+        setSelectedFile(null)
+        // Invalidate the admin info query to refresh the data
+        void queryClient.invalidateQueries({queryKey: ['article-admin-info', props.articleId]})
+        // Also invalidate the main article query in case it's being used
+        void queryClient.invalidateQueries({queryKey: ['admin-article-details', props.articleId]})
+        void queryClient.invalidateQueries({queryKey: ['article-review-details']})
+      },
+    }
+  })
+
+  const handleFileChange = (event: Event) => {
+    const target = event.target as HTMLInputElement
+    const file = target.files?.[0] ?? null
+    setSelectedFile(file)
+  }
+
+  const handleUpload = () => {
+    const file = selectedFile()
+    if (file) {
+      uploadPdfMutation.mutate(file)
+    }
+  }
 
   const formatDate = (date: string | Date | null | undefined) => {
     if (!date) return 'Never'
@@ -124,6 +178,13 @@ export const ArticleAdminSection = (props: ArticleAdminSectionProps) => {
                 </Show>
               </div>
 
+              <Show when={article().uploaderName}>
+                <div class="text-xs">
+                  <span class="font-medium text-amber-800">Uploaded By:</span>
+                  <span class="ml-2 text-amber-700 bg-purple-100 px-1.5 py-0.5 rounded">{article().uploaderName}</span>
+                </div>
+              </Show>
+
               <Show when={article().fullTextConversionStatus}>
                 <div class="text-xs">
                   <span class="font-medium text-amber-800">Conversion Status:</span>
@@ -148,92 +209,199 @@ export const ArticleAdminSection = (props: ArticleAdminSectionProps) => {
                 </div>
               </Show>
 
-              <div class="pt-2 border-t border-amber-200">
-                <button
-                  onClick={() => {
-                    return fetchPdfMutation.mutate()
-                  }}
-                  disabled={fetchPdfMutation.isPending}
-                  class="w-full px-3 py-1.5 text-xs font-medium text-white bg-amber-600 hover:bg-amber-700 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {fetchPdfMutation.isPending ? (
-                    <span class="flex items-center justify-center gap-2">
-                      <svg class="animate-spin h-3 w-3" viewBox="0 0 24 24">
-                        <circle
-                          class="opacity-25"
-                          cx="12"
-                          cy="12"
-                          r="10"
-                          stroke="currentColor"
-                          stroke-width="4"
-                          fill="none"
-                        />
-                        <path
-                          class="opacity-75"
-                          fill="currentColor"
-                          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                        />
-                      </svg>
-                      Fetching PDF...
-                    </span>
-                  ) : (
-                    'Fetch PDF Now'
-                  )}
-                </button>
+              <div class="pt-2 border-t border-amber-200 space-y-3">
+                {/* Fetch PDF Button */}
+                <div>
+                  <div class="text-xs font-medium text-amber-800 mb-1">Fetch PDF from sources</div>
+                  <button
+                    onClick={() => {
+                      return fetchPdfMutation.mutate()
+                    }}
+                    disabled={fetchPdfMutation.isPending}
+                    class="w-full px-3 py-1.5 text-xs font-medium text-white bg-amber-600 hover:bg-amber-700 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {fetchPdfMutation.isPending ? (
+                      <span class="flex items-center justify-center gap-2">
+                        <svg class="animate-spin h-3 w-3" viewBox="0 0 24 24">
+                          <circle
+                            class="opacity-25"
+                            cx="12"
+                            cy="12"
+                            r="10"
+                            stroke="currentColor"
+                            stroke-width="4"
+                            fill="none"
+                          />
+                          <path
+                            class="opacity-75"
+                            fill="currentColor"
+                            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                          />
+                        </svg>
+                        Fetching PDF...
+                      </span>
+                    ) : (
+                      'Fetch PDF Now'
+                    )}
+                  </button>
 
-                <Show when={fetchPdfMutation.isSuccess}>
-                  <div class="mt-3 space-y-2">
-                    {/* Overall result */}
-                    <div class={`text-xs ${fetchPdfMutation.data?.fullTextPDF ? 'text-green-600' : 'text-amber-700'}`}>
-                      {fetchPdfMutation.data?.fullTextPDF ? (
-                        <>✅ PDF saved to: {fetchPdfMutation.data.fullTextPDF}</>
-                      ) : (
-                        <>⚠️ No PDF found from any source</>
-                      )}
-                    </div>
-
-                    {/* Detailed attempts */}
-                    <Show when={(fetchPdfMutation.data as {attempts?: PdfFetchAttempt[]})?.attempts?.length}>
-                      <div class="bg-white/50 rounded p-2 mt-2">
-                        <div class="text-xs font-medium text-amber-800 mb-1.5">Fetch Attempts:</div>
-                        <div class="space-y-1.5">
-                          <For each={(fetchPdfMutation.data as {attempts: PdfFetchAttempt[]}).attempts}>
-                            {(attempt) => {
-                              return (
-                                <div class={`text-xs p-1.5 rounded ${getAttemptStatusClass(attempt)}`}>
-                                  <div class="flex items-center gap-1.5">
-                                    <span>{getAttemptStatusIcon(attempt)}</span>
-                                    <span class="font-medium">{attempt.source}</span>
-                                    <span class="text-xs opacity-75">
-                                      {!attempt.tried ? '(skipped)' : attempt.success ? '(success)' : '(failed)'}
-                                    </span>
-                                  </div>
-                                  <Show when={attempt.reason}>
-                                    <div class="mt-0.5 pl-5 text-xs opacity-90">{attempt.reason}</div>
-                                  </Show>
-                                  <Show when={attempt.details}>
-                                    <div class="mt-0.5 pl-5 text-xs opacity-75 font-mono break-all">
-                                      {attempt.details}
-                                    </div>
-                                  </Show>
-                                  <Show when={attempt.result?.fullTextPDF}>
-                                    <div class="mt-0.5 pl-5 text-xs font-mono break-all">
-                                      {attempt.result?.fullTextPDF}
-                                    </div>
-                                  </Show>
-                                </div>
-                              )
-                            }}
-                          </For>
-                        </div>
+                  <Show when={fetchPdfMutation.isSuccess}>
+                    <div class="mt-3 space-y-2">
+                      {/* Overall result */}
+                      <div
+                        class={`text-xs ${fetchPdfMutation.data?.fullTextPDF ? 'text-green-600' : 'text-amber-700'}`}
+                      >
+                        {fetchPdfMutation.data?.fullTextPDF ? (
+                          <>✅ PDF saved to: {fetchPdfMutation.data.fullTextPDF}</>
+                        ) : (
+                          <>⚠️ No PDF found from any source</>
+                        )}
                       </div>
-                    </Show>
-                  </div>
-                </Show>
 
-                <Show when={fetchPdfMutation.isError}>
-                  <div class="mt-2 text-xs text-red-600">✗ Failed to fetch PDF</div>
-                </Show>
+                      {/* Detailed attempts */}
+                      <Show when={(fetchPdfMutation.data as {attempts?: PdfFetchAttempt[]})?.attempts?.length}>
+                        <div class="bg-white/50 rounded p-2 mt-2">
+                          <div class="text-xs font-medium text-amber-800 mb-1.5">Fetch Attempts:</div>
+                          <div class="space-y-1.5">
+                            <For each={(fetchPdfMutation.data as {attempts: PdfFetchAttempt[]}).attempts}>
+                              {(attempt) => {
+                                return (
+                                  <div class={`text-xs p-1.5 rounded ${getAttemptStatusClass(attempt)}`}>
+                                    <div class="flex items-center gap-1.5">
+                                      <span>{getAttemptStatusIcon(attempt)}</span>
+                                      <span class="font-medium">{attempt.source}</span>
+                                      <span class="text-xs opacity-75">
+                                        {!attempt.tried ? '(skipped)' : attempt.success ? '(success)' : '(failed)'}
+                                      </span>
+                                    </div>
+                                    <Show when={attempt.reason}>
+                                      <div class="mt-0.5 pl-5 text-xs opacity-90">{attempt.reason}</div>
+                                    </Show>
+                                    <Show when={attempt.details}>
+                                      <div class="mt-0.5 pl-5 text-xs opacity-75 font-mono break-all">
+                                        {attempt.details}
+                                      </div>
+                                    </Show>
+                                    <Show when={attempt.result?.fullTextPDF}>
+                                      <div class="mt-0.5 pl-5 text-xs font-mono break-all">
+                                        {attempt.result?.fullTextPDF}
+                                      </div>
+                                    </Show>
+                                  </div>
+                                )
+                              }}
+                            </For>
+                          </div>
+                        </div>
+                      </Show>
+
+                      {/* Helpful fallback links from original_data */}
+                      <Show
+                        when={
+                          !fetchPdfMutation.data?.fullTextPDF
+                          && (fetchPdfMutation.data as {originalFullTextUrls?: OriginalFullTextUrl[]})?.originalFullTextUrls
+                            ?.length
+                        }
+                      >
+                        <div class="bg-white/50 rounded p-2 mt-2">
+                          <div class="text-xs font-medium text-amber-800 mb-1.5">Original full-text URLs:</div>
+                          <div class="space-y-1.5">
+                            <For
+                              each={
+                                (fetchPdfMutation.data as {originalFullTextUrls: OriginalFullTextUrl[]}).originalFullTextUrls
+                              }
+                            >
+                              {(link) => {
+                                return (
+                                  <div class="text-xs p-1.5 rounded bg-gray-100 text-gray-700">
+                                    <div class="flex items-center gap-2">
+                                      <span class="font-medium">{link.site ?? 'Link'}</span>
+                                      <Show when={link.availability}>
+                                        <span class="text-xs opacity-80">{link.availability}</span>
+                                      </Show>
+                                      <Show when={link.availabilityCode}>
+                                        <span class="text-xs font-mono opacity-70">{link.availabilityCode}</span>
+                                      </Show>
+                                      <Show when={link.documentStyle}>
+                                        <span class="text-xs font-mono opacity-70">{link.documentStyle}</span>
+                                      </Show>
+                                    </div>
+                                    <a
+                                      href={link.url}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      class="mt-0.5 block text-xs font-mono break-all underline opacity-90 hover:opacity-100"
+                                    >
+                                      {link.url}
+                                    </a>
+                                  </div>
+                                )
+                              }}
+                            </For>
+                          </div>
+                        </div>
+                      </Show>
+                    </div>
+                  </Show>
+
+                  <Show when={fetchPdfMutation.isError}>
+                    <div class="mt-2 text-xs text-red-600">✗ Failed to fetch PDF</div>
+                  </Show>
+                </div>
+
+                {/* Upload PDF Section */}
+                <div class="pt-2 border-t border-amber-200">
+                  <div class="text-xs font-medium text-amber-800 mb-1">Upload PDF manually</div>
+                  <div class="flex gap-2">
+                    <input
+                      type="file"
+                      accept=".pdf,application/pdf"
+                      onChange={handleFileChange}
+                      class="flex-1 text-xs file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-xs file:font-medium file:bg-amber-100 file:text-amber-700 hover:file:bg-amber-200 file:cursor-pointer cursor-pointer"
+                    />
+                    <button
+                      onClick={handleUpload}
+                      disabled={!selectedFile() || uploadPdfMutation.isPending}
+                      class="px-3 py-1.5 text-xs font-medium text-white bg-purple-600 hover:bg-purple-700 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {uploadPdfMutation.isPending ? (
+                        <span class="flex items-center gap-1">
+                          <svg class="animate-spin h-3 w-3" viewBox="0 0 24 24">
+                            <circle
+                              class="opacity-25"
+                              cx="12"
+                              cy="12"
+                              r="10"
+                              stroke="currentColor"
+                              stroke-width="4"
+                              fill="none"
+                            />
+                            <path
+                              class="opacity-75"
+                              fill="currentColor"
+                              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                            />
+                          </svg>
+                          Uploading...
+                        </span>
+                      ) : (
+                        'Upload'
+                      )}
+                    </button>
+                  </div>
+
+                  <Show when={uploadPdfMutation.isSuccess}>
+                    <div class="mt-2 text-xs text-green-600">
+                      ✅ PDF uploaded successfully: {uploadPdfMutation.data?.fullTextPDF}
+                    </div>
+                  </Show>
+
+                  <Show when={uploadPdfMutation.isError}>
+                    <div class="mt-2 text-xs text-red-600">
+                      ✗ Failed to upload PDF: {(uploadPdfMutation.error as Error)?.message}
+                    </div>
+                  </Show>
+                </div>
               </div>
             </div>
           )

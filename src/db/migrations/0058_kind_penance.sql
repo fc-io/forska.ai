@@ -1,0 +1,2 @@
+ALTER TABLE "articles" ADD COLUMN "full_text_pdf_uploaded_by" text;--> statement-breakpoint
+ALTER TABLE "articles" ADD CONSTRAINT "articles_full_text_pdf_uploaded_by_user_id_fk" FOREIGN KEY ("full_text_pdf_uploaded_by") REFERENCES "public"."user"("id") ON DELETE set null ON UPDATE no action;

@@ -94,6 +94,13 @@ export const articles = pgTable(
       },
       {onDelete: 'set null'},
     ),
+    // Who uploaded the PDF manually (null if fetched automatically)
+    fullTextPdfUploadedBy: text('full_text_pdf_uploaded_by').references(
+      () => {
+        return user.id
+      },
+      {onDelete: 'set null'},
+    ),
     publicationStatus: publicationStatusEnum('publication_status'),
   },
   (table) => {
