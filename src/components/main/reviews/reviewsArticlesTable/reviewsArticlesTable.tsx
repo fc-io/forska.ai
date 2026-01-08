@@ -133,9 +133,9 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
   {
     id: 'journalTitle',
     header: 'Journal',
-    size: 240,
+    size: 300,
     minSize: 160,
-    maxSize: 360,
+    maxSize: 300,
     cell: (info) => {
       const journalTitle = getJournalTitleForArticle(info.row.original)
       return (
@@ -174,7 +174,7 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
   {
     accessorKey: 'articleId',
     header: 'Article ID',
-    size: 120,
+    size: 180,
     minSize: 120,
     cell: (info) => {
       const articleId = info.getValue() as string
@@ -183,7 +183,8 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
           href={getArticleUrl(articleId)}
           target="_blank"
           rel="noopener noreferrer"
-          class="text-blue-600 hover:underline"
+          class="text-blue-600 hover:underline block truncate"
+          title={articleId}
         >
           {articleId}
         </a>
@@ -211,8 +212,8 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
   {
     accessorKey: 'judgments',
     header: 'Judgments',
-    size: 160,
-    minSize: 140,
+    size: 130,
+    minSize: 100,
     cell: (info) => {
       const judgmentsData = info.getValue() as JudgmentType[]
       const row = info.row.original
@@ -342,7 +343,7 @@ export const ReviewsArticlesTable = (props: ReviewsArticlesTableProps) => {
 
   return (
     <div class="overflow-x-auto bg-white rounded-lg shadow">
-      <table class="min-w-full divide-y divide-gray-200">
+      <table class="min-w-full divide-y divide-gray-200 table-fixed">
         <thead class="bg-gray-50">
           <For each={table.getHeaderGroups()}>
             {(headerGroup) => {
@@ -387,7 +388,7 @@ export const ReviewsArticlesTable = (props: ReviewsArticlesTableProps) => {
                                 ? 'px-6 py-4 text-sm text-gray-900'
                                 : 'px-6 py-4 whitespace-nowrap text-sm text-gray-900'
                           }
-                          style={{width: `${cell.column.getSize()}px`}}
+                          style={{width: `${cell.column.getSize()}px`, 'max-width': `${cell.column.getSize()}px`}}
                         >
                           {flexRender(cell.column.columnDef.cell, cell.getContext())}
                         </td>
