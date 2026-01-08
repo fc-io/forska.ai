@@ -11,8 +11,18 @@
  */
 import {and, eq, inArray, sql} from 'drizzle-orm'
 
-import {importRoute, judgmentsHuman, projectArticles, projectPrompts, projectRouteLink, projects, prompts} from '../../db/schema.ts'
+import {
+  articles,
+  importRoute,
+  judgmentsHuman,
+  projectArticles,
+  projectPrompts,
+  projectRouteLink,
+  projects,
+  prompts,
+} from '../../db/schema.ts'
 import {getDatabase} from '../../server/utils/getDatabase.ts'
+import {getJournalTitleFromOriginalData} from '../../utils/getJournalTitleFromOriginalData.ts'
 import {getClickhouseClient} from './clickhouseClient.ts'
 
 /**
@@ -61,6 +71,7 @@ export interface ArticleReviewsBothResult {
   articleUpdatedAt: Date | null
   judgments: ClickHouseJudgmentRow[]
   humanAnswersByPrompt?: HumanAnswersByPrompt
+  journalTitle: string | null
 }
 
 /**
@@ -428,6 +439,18 @@ export const queryArticlesReviewsBothFromClickHouse = async (
   }
   console.timeEnd('ch:both:human_answers')
 
+  const articleOriginalDataRows = await db
+    .select({id: articles.id, originalData: articles.originalData})
+    .from(articles)
+    .where(inArray(articles.id, articleIds))
+
+  const journalTitlesByArticleId = articleOriginalDataRows.reduce(
+    (acc, row) => {
+      return {...acc, [row.id]: getJournalTitleFromOriginalData(row.originalData)}
+    },
+    {} as Record<string, string | null>,
+  )
+
   // Build final results
   const results: ArticleReviewsBothResult[] = articlesData.map((article) => {
     const judgments = judgmentsByArticle.get(article.articleId) ?? []
@@ -446,6 +469,7 @@ export const queryArticlesReviewsBothFromClickHouse = async (
       articleUpdatedAt: article.updated_ ? new Date(article.updated_) : null,
       judgments: sortedJudgments,
       humanAnswersByPrompt: humanAnswersByArticlePrompt[article.articleId],
+      journalTitle: journalTitlesByArticleId[article.articleId] ?? null,
     }
   })
 

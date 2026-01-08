@@ -31,6 +31,7 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
         articleTitle: article.articleTitle,
         articleCreatedAt: article.articleCreatedAt,
         articleUpdatedAt: article.articleUpdatedAt,
+        journalTitle: article.journalTitle,
         judgments: article.judgments.map((j) => {
           return {
             id: j.id,

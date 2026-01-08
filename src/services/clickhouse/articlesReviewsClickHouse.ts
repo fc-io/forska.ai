@@ -10,10 +10,19 @@
  * - No need for progressive fetch - ClickHouse handles aggregation efficiently
  * - Uses temp tables for large curated article sets (>1000 IDs)
  */
-import {and, eq} from 'drizzle-orm'
+import {and, eq, inArray} from 'drizzle-orm'
 
-import {importRoute, projectArticles, projectPrompts, projectRouteLink, projects, prompts} from '../../db/schema.ts'
+import {
+  articles,
+  importRoute,
+  projectArticles,
+  projectPrompts,
+  projectRouteLink,
+  projects,
+  prompts,
+} from '../../db/schema.ts'
 import {getDatabase} from '../../server/utils/getDatabase.ts'
+import {getJournalTitleFromOriginalData} from '../../utils/getJournalTitleFromOriginalData.ts'
 import {getClickhouseClient} from './clickhouseClient.ts'
 
 /**
@@ -75,6 +84,7 @@ export interface ArticleReviewResult {
   judgments: ClickHouseJudgmentRow[]
   judgedPromptIds: string[]
   isFullyJudged: boolean
+  journalTitle: string | null
 }
 
 /**
@@ -496,6 +506,19 @@ export const queryArticlesReviewsFromClickHouse = async (
     }
 
     // Build final results, preserving the order from articlesData
+    const db = getDatabase()
+    const articleOriginalDataRows = await db
+      .select({id: articles.id, originalData: articles.originalData})
+      .from(articles)
+      .where(inArray(articles.id, articleIds))
+
+    const journalTitlesByArticleId = articleOriginalDataRows.reduce(
+      (acc, row) => {
+        return {...acc, [row.id]: getJournalTitleFromOriginalData(row.originalData)}
+      },
+      {} as Record<string, string | null>,
+    )
+
     const results: ArticleReviewResult[] = articlesData.map((article) => {
       const judgments = judgmentsByArticle.get(article.articleId) ?? []
 
@@ -523,6 +546,7 @@ export const queryArticlesReviewsFromClickHouse = async (
         judgments: sortedJudgments,
         judgedPromptIds,
         isFullyJudged,
+        journalTitle: journalTitlesByArticleId[article.articleId] ?? null,
       }
     })
 

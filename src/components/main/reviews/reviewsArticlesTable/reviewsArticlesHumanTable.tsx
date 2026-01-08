@@ -6,6 +6,7 @@ import {For, Match, Show, Switch} from 'solid-js'
 
 import {getArticleUrl} from '../../../../app/utils/getArticleUrl.ts'
 import type {articles, judgmentsHuman} from '../../../../db/schema.ts'
+import {getJournalTitleFromOriginalData} from '../../../../utils/getJournalTitleFromOriginalData.ts'
 
 declare module '@tanstack/solid-table' {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -52,6 +53,11 @@ const selectionColumn: ColumnDef<ArticleWithHumanJudgments, unknown> = {
   },
 }
 
+const getJournalTitleForArticle = (article: {journalTitle?: unknown; originalData?: unknown}) => {
+  const fromField = typeof article.journalTitle === 'string' ? article.journalTitle.trim() : null
+  return fromField ? fromField : getJournalTitleFromOriginalData(article.originalData)
+}
+
 const columns: ColumnDef<ArticleWithHumanJudgments, unknown>[] = [
   selectionColumn,
   {
@@ -69,6 +75,27 @@ const columns: ColumnDef<ArticleWithHumanJudgments, unknown>[] = [
         >
           {(info.getValue() as string) || 'Untitled'}
         </Link>
+      )
+    },
+  },
+  {
+    id: 'journalTitle',
+    header: 'Journal',
+    size: 240,
+    minSize: 160,
+    maxSize: 360,
+    cell: (info) => {
+      const journalTitle = getJournalTitleForArticle(info.row.original)
+      return (
+        <Show when={journalTitle} fallback={<span class="text-gray-400">—</span>}>
+          {(title) => {
+            return (
+              <span class="block w-full truncate" title={title()}>
+                {title()}
+              </span>
+            )
+          }}
+        </Show>
       )
     },
   },
@@ -181,13 +208,16 @@ export const ReviewsArticlesHumanTable = (props: ReviewsArticlesHumanTableProps)
   const projectId = () => {
     return props.projectId
   }
+  const rowSelection = () => {
+    return props.rowSelection()
+  }
   const table = createSolidTable({
     get data() {
       return props.articles
     },
     columns,
     getCoreRowModel: getCoreRowModel(),
-    meta: {projectId, rowSelection: props.rowSelection},
+    meta: {projectId, rowSelection},
     enableRowSelection: true,
     enableMultiRowSelection: true,
     getRowId: (row) => {
