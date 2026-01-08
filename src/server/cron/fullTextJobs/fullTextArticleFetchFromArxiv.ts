@@ -3,6 +3,9 @@ import path from 'path'
 
 import * as schema from '../../../db/schema.ts'
 import {sleep} from '../../../utils/sleep.ts'
+import type {PdfFetchAttemptResult} from './pdfFetchTypes.ts'
+
+const SOURCE_NAME = 'arXiv'
 
 const cleanArxivId = (arxivId: string) => {
   return arxivId.replace('oai:arXiv.org:', '')
@@ -51,16 +54,72 @@ const arxivRateLimit = (() => {
 
 export const fullTextArticleFetchFromArxiv = async ({
   arxivId,
-}: Pick<typeof schema.articles.$inferSelect, 'arxivId' | 'originalData'>) => {
-  if (arxivId) {
-    console.log('Arxiv:', arxivId)
-    await arxivRateLimit()
-    const fullTextArticle = await fetch(`https://arxiv.org/pdf/${cleanArxivId(arxivId)}.pdf`)
-    const fullTextSource = 'https://arxiv.org/'
-    const fullTextOriginalFormat = 'pdf'
-    const fullTextPDF: string | null = await storePdfToAssets(arxivId, fullTextArticle)
-    console.log('Arxiv done')
-    return fullTextPDF ? {fullTextSource, fullTextOriginalFormat, fullTextPDF} : null
+}: Pick<typeof schema.articles.$inferSelect, 'arxivId' | 'originalData'>): Promise<PdfFetchAttemptResult> => {
+  // Check if arXiv ID is available
+  if (!arxivId) {
+    return {
+      source: SOURCE_NAME,
+      tried: false,
+      success: false,
+      reason: 'No arXiv ID found in article data',
+    }
   }
-  return null
+
+  console.log('Arxiv:', arxivId)
+  const cleanedId = cleanArxivId(arxivId)
+  const pdfUrl = `https://arxiv.org/pdf/${cleanedId}.pdf`
+  const fullTextSource = 'https://arxiv.org/'
+  const fullTextOriginalFormat = 'pdf'
+
+  // Apply rate limiting
+  await arxivRateLimit()
+
+  // Fetch the PDF
+  let pdfResponse: Response
+  try {
+    pdfResponse = await fetch(pdfUrl)
+  } catch (error) {
+    return {
+      source: SOURCE_NAME,
+      tried: true,
+      success: false,
+      reason: 'Failed to fetch PDF from arXiv',
+      details: `URL: ${pdfUrl}, Error: ${error instanceof Error ? error.message : String(error)}`,
+    }
+  }
+
+  if (!pdfResponse.ok) {
+    return {
+      source: SOURCE_NAME,
+      tried: true,
+      success: false,
+      reason: `arXiv returned ${pdfResponse.status}`,
+      details: `URL: ${pdfUrl}, Status: ${pdfResponse.status} ${pdfResponse.statusText}`,
+    }
+  }
+
+  // Store the PDF
+  const fullTextPDF = await storePdfToAssets(arxivId, pdfResponse)
+
+  if (!fullTextPDF) {
+    return {
+      source: SOURCE_NAME,
+      tried: true,
+      success: false,
+      reason: 'Failed to store PDF',
+      details: `URL: ${pdfUrl}, Response status: ${pdfResponse.status}, Content-Type: ${pdfResponse.headers.get('content-type')}`,
+    }
+  }
+
+  console.log('Arxiv done')
+  return {
+    source: SOURCE_NAME,
+    tried: true,
+    success: true,
+    result: {
+      fullTextPDF,
+      fullTextSource,
+      fullTextOriginalFormat,
+    },
+  }
 }

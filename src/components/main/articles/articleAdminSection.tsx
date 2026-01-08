@@ -1,11 +1,20 @@
 import {createMutation, useQuery, useQueryClient} from '@tanstack/solid-query'
-import {Show} from 'solid-js'
+import {For, Show} from 'solid-js'
 
 import {apiClient} from '../../../services/apiClient.ts'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse.ts'
 
 interface ArticleAdminSectionProps {
   articleId: string
+}
+
+interface PdfFetchAttempt {
+  source: string
+  tried: boolean
+  success: boolean
+  result?: {fullTextPDF: string; fullTextSource: string; fullTextOriginalFormat: string}
+  reason?: string
+  details?: string
 }
 
 const fetchArticleAdminInfo = async (articleId: string) => {
@@ -53,6 +62,18 @@ export const ArticleAdminSection = (props: ArticleAdminSectionProps) => {
     return d.toLocaleString()
   }
 
+  const getAttemptStatusIcon = (attempt: PdfFetchAttempt) => {
+    if (!attempt.tried) return '⏭️'
+    if (attempt.success) return '✅'
+    return '❌'
+  }
+
+  const getAttemptStatusClass = (attempt: PdfFetchAttempt) => {
+    if (!attempt.tried) return 'bg-gray-100 text-gray-600'
+    if (attempt.success) return 'bg-green-100 text-green-700'
+    return 'bg-red-100 text-red-700'
+  }
+
   return (
     <div class="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-4">
       <div class="flex items-center gap-2 mb-3">
@@ -93,7 +114,10 @@ export const ArticleAdminSection = (props: ArticleAdminSectionProps) => {
 
               <div class="text-xs">
                 <span class="font-medium text-amber-800">PDF Path:</span>
-                <Show when={article().fullTextPDF} fallback={<span class="ml-2 text-amber-600 italic">Not available</span>}>
+                <Show
+                  when={article().fullTextPDF}
+                  fallback={<span class="ml-2 text-amber-600 italic">Not available</span>}
+                >
                   <span class="ml-2 font-mono text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded text-xs break-all">
                     {article().fullTextPDF}
                   </span>
@@ -158,13 +182,52 @@ export const ArticleAdminSection = (props: ArticleAdminSectionProps) => {
                 </button>
 
                 <Show when={fetchPdfMutation.isSuccess}>
-                  <div class="mt-2 text-xs text-green-600">
-                    ✓ PDF fetch completed
-                    <Show when={fetchPdfMutation.data?.fullTextPDF}>
-                      {' '}
-                      - saved to {fetchPdfMutation.data?.fullTextPDF}
+                  <div class="mt-3 space-y-2">
+                    {/* Overall result */}
+                    <div class={`text-xs ${fetchPdfMutation.data?.fullTextPDF ? 'text-green-600' : 'text-amber-700'}`}>
+                      {fetchPdfMutation.data?.fullTextPDF ? (
+                        <>✅ PDF saved to: {fetchPdfMutation.data.fullTextPDF}</>
+                      ) : (
+                        <>⚠️ No PDF found from any source</>
+                      )}
+                    </div>
+
+                    {/* Detailed attempts */}
+                    <Show when={(fetchPdfMutation.data as {attempts?: PdfFetchAttempt[]})?.attempts?.length}>
+                      <div class="bg-white/50 rounded p-2 mt-2">
+                        <div class="text-xs font-medium text-amber-800 mb-1.5">Fetch Attempts:</div>
+                        <div class="space-y-1.5">
+                          <For each={(fetchPdfMutation.data as {attempts: PdfFetchAttempt[]}).attempts}>
+                            {(attempt) => {
+                              return (
+                                <div class={`text-xs p-1.5 rounded ${getAttemptStatusClass(attempt)}`}>
+                                  <div class="flex items-center gap-1.5">
+                                    <span>{getAttemptStatusIcon(attempt)}</span>
+                                    <span class="font-medium">{attempt.source}</span>
+                                    <span class="text-xs opacity-75">
+                                      {!attempt.tried ? '(skipped)' : attempt.success ? '(success)' : '(failed)'}
+                                    </span>
+                                  </div>
+                                  <Show when={attempt.reason}>
+                                    <div class="mt-0.5 pl-5 text-xs opacity-90">{attempt.reason}</div>
+                                  </Show>
+                                  <Show when={attempt.details}>
+                                    <div class="mt-0.5 pl-5 text-xs opacity-75 font-mono break-all">
+                                      {attempt.details}
+                                    </div>
+                                  </Show>
+                                  <Show when={attempt.result?.fullTextPDF}>
+                                    <div class="mt-0.5 pl-5 text-xs font-mono break-all">
+                                      {attempt.result?.fullTextPDF}
+                                    </div>
+                                  </Show>
+                                </div>
+                              )
+                            }}
+                          </For>
+                        </div>
+                      </div>
                     </Show>
-                    <Show when={!fetchPdfMutation.data?.fullTextPDF}> - no PDF found</Show>
                   </div>
                 </Show>
 

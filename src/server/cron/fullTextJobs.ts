@@ -8,6 +8,7 @@ import {env} from '../utils/env.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {fullTextArticleFetchFromArxiv} from './fullTextJobs/fullTextArticleFetchFromArxiv.ts'
 import {fullTextArticleFetchFromUnpaywall} from './fullTextJobs/fullTextArticleFetchFromUnpaywall.ts'
+import {attemptsToLegacyResult, type PdfFetchAttemptResult} from './fullTextJobs/pdfFetchTypes.ts'
 
 const NEW_ARTICLES_INTERVAL = '0 * * * * *'
 
@@ -152,17 +153,27 @@ const getArticlesWithoutFullText = async (
   return collectedArticles
 }
 
+/**
+ * Fetch PDF for an article, trying all sources and collecting attempt results.
+ * Returns the legacy format for backward compatibility with storeFullText.
+ */
 const getFullTextForArticle = async (
   articleData: Pick<typeof schema.articles.$inferSelect, 'arxivId' | 'originalData'>,
 ) => {
   const fetchSources = [fullTextArticleFetchFromUnpaywall, fullTextArticleFetchFromArxiv]
+  const attempts: PdfFetchAttemptResult[] = []
+
   for (const fetchSource of fetchSources) {
-    const article = await fetchSource(articleData)
-    if (article !== null) {
-      return article
+    const attempt = await fetchSource(articleData)
+    attempts.push(attempt)
+
+    // Short-circuit on first success (same behavior as before)
+    if (attempt.success && attempt.result) {
+      break
     }
   }
-  return {fullText: null, fullTextSource: null, fullTextOriginalFormat: null, fullTextAssets: null, fullTextPDF: null}
+
+  return attemptsToLegacyResult(attempts)
 }
 
 const storeFullText = async (
