@@ -1,6 +1,7 @@
 import {createMutation, useQuery, useQueryClient} from '@tanstack/solid-query'
 import {createSignal, For, Show} from 'solid-js'
 
+import {env} from '../../../app/utils/client-env.ts'
 import {apiClient} from '../../../services/apiClient.ts'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse.ts'
 
@@ -71,7 +72,7 @@ export const ArticleAdminSection = (props: ArticleAdminSectionProps) => {
         const formData = new FormData()
         formData.append('pdf', file)
 
-        const response = await fetch(`/api/articles/${props.articleId}/upload-pdf`, {
+        const response = await fetch(`${env.VITE_SERVER_API}/api/articles/${props.articleId}/upload-pdf`, {
           method: 'POST',
           body: formData,
           credentials: 'include',
@@ -299,8 +300,8 @@ export const ArticleAdminSection = (props: ArticleAdminSectionProps) => {
                       <Show
                         when={
                           !fetchPdfMutation.data?.fullTextPDF
-                          && (fetchPdfMutation.data as {originalFullTextUrls?: OriginalFullTextUrl[]})?.originalFullTextUrls
-                            ?.length
+                          && (fetchPdfMutation.data as {originalFullTextUrls?: OriginalFullTextUrl[]})
+                            ?.originalFullTextUrls?.length
                         }
                       >
                         <div class="bg-white/50 rounded p-2 mt-2">
@@ -308,7 +309,8 @@ export const ArticleAdminSection = (props: ArticleAdminSectionProps) => {
                           <div class="space-y-1.5">
                             <For
                               each={
-                                (fetchPdfMutation.data as {originalFullTextUrls: OriginalFullTextUrl[]}).originalFullTextUrls
+                                (fetchPdfMutation.data as {originalFullTextUrls: OriginalFullTextUrl[]})
+                                  .originalFullTextUrls
                               }
                             >
                               {(link) => {

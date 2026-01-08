@@ -208,6 +208,10 @@ We use "eslint-plugin-prettier" so there is no need to run prettier separately.
 * Try to keep fetch logic local (in the same file) to the tanstack useQuery. Avoid creating services files for the fetch logic.
 * IMPORTANT: Prefer POST with request body over complex nested URL parameters
 
+### Elysia file upload routes
+
+* IMPORTANT: Elysia's `derive` middleware does not propagate context for routes with `t.File()` body schemas. For file upload routes, fetch the session directly from `request.headers` inside the handler instead of relying on `sessionUserId` from auth guard middleware.
+
 ## Database patterns
 
 * IMPORTANT: Always use Drizzle ORM query builder methods instead of raw SQL

@@ -4,6 +4,7 @@ import {mkdir, writeFile} from 'fs/promises'
 import path from 'path'
 
 import {user} from '../../../auth-schema.ts'
+import {auth} from '../../auth.ts'
 import {articles} from '../../db/schema.ts'
 import {fullTextArticleFetchFromArxiv} from '../cron/fullTextJobs/fullTextArticleFetchFromArxiv.ts'
 import {fullTextArticleFetchFromUnpaywall} from '../cron/fullTextJobs/fullTextArticleFetchFromUnpaywall.ts'
@@ -198,16 +199,25 @@ export const articleAdminRoutes = new Elysia()
   // Upload a PDF for an article
   .post(
     '/api/articles/:id/upload-pdf',
-    async ({params, body, sessionUserId}) => {
+    async ({params, body, sessionUserId, request}) => {
       const db = getDatabase()
       const {id} = params
 
-      // Get user ID from the auth context (set by requireAdminAuth)
-      if (!sessionUserId) {
-        throw new Error('User ID not found in request context')
+      // Workaround: For multipart requests, the derive middleware may not propagate sessionUserId
+      // so we fetch the session directly if needed
+      let userId = sessionUserId
+      if (!userId) {
+        const session = await auth.api.getSession({headers: request.headers})
+        userId = session?.user?.id ?? session?.session?.userId ?? null
+        if (!userId) {
+          throw new Error('You must be signed in')
+        }
+        // Also verify admin role
+        const role = session?.user?.role ?? null
+        if (role !== 'admin') {
+          throw new Error('Administrator access required')
+        }
       }
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- Elysia's type inference
-      const userId: string = sessionUserId // Type narrowing: now string, not string | null
 
       // Check if article exists
       const [article] = await db.select({id: articles.id}).from(articles).where(eq(articles.id, id)).limit(1)
