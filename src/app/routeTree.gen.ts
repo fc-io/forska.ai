@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/+index'
 import { Route as ProjectsCreateSubprojectRouteImport } from './routes/+projects/+create-subproject'
 import { Route as ProjectsCreateRouteImport } from './routes/+projects/+create'
 import { Route as SettingsIndexRouteImport } from './routes/+settings/+index'
+import { Route as PromptsIndexRouteImport } from './routes/+prompts/+index'
 import { Route as ProjectsIndexRouteImport } from './routes/+projects/+index'
 import { Route as LoginIndexRouteImport } from './routes/+login/+index'
 import { Route as ArticlesIndexRouteImport } from './routes/+articles/+index'
@@ -22,6 +23,7 @@ import { Route as ProjectsIdEditRouteImport } from './routes/+projects/+$id/+edi
 import { Route as ArticlesIdFulltextRouteImport } from './routes/+articles/+$id/+fulltext'
 import { Route as AdminPromptsDeduplicateRouteImport } from './routes/+admin/+prompts/+deduplicate'
 import { Route as AdminDatasourcesCreateRouteImport } from './routes/+admin/+datasources/+create'
+import { Route as PromptsArchivedIndexRouteImport } from './routes/+prompts/+archived/+index'
 import { Route as ProjectsArchivedIndexRouteImport } from './routes/+projects/+archived/+index'
 import { Route as ProjectsIdIndexRouteImport } from './routes/+projects/+$id/+index'
 import { Route as ArticlesIdIndexRouteImport } from './routes/+articles/+$id/+index'
@@ -71,6 +73,11 @@ const SettingsIndexRoute = SettingsIndexRouteImport.update({
   path: '/settings/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const PromptsIndexRoute = PromptsIndexRouteImport.update({
+  id: '/prompts/',
+  path: '/prompts/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ProjectsIndexRoute = ProjectsIndexRouteImport.update({
   id: '/projects/',
   path: '/projects/',
@@ -115,6 +122,11 @@ const AdminPromptsDeduplicateRoute = AdminPromptsDeduplicateRouteImport.update({
 const AdminDatasourcesCreateRoute = AdminDatasourcesCreateRouteImport.update({
   id: '/admin/datasources/create',
   path: '/admin/datasources/create',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PromptsArchivedIndexRoute = PromptsArchivedIndexRouteImport.update({
+  id: '/prompts/archived/',
+  path: '/prompts/archived/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ProjectsArchivedIndexRoute = ProjectsArchivedIndexRouteImport.update({
@@ -270,6 +282,7 @@ export interface FileRoutesByFullPath {
   '/articles': typeof ArticlesIndexRoute
   '/login': typeof LoginIndexRoute
   '/projects': typeof ProjectsIndexRoute
+  '/prompts': typeof PromptsIndexRoute
   '/settings': typeof SettingsIndexRoute
   '/projects/create': typeof ProjectsCreateRoute
   '/projects/create-subproject': typeof ProjectsCreateSubprojectRoute
@@ -288,6 +301,7 @@ export interface FileRoutesByFullPath {
   '/articles/$id': typeof ArticlesIdIndexRoute
   '/projects/$id': typeof ProjectsIdIndexRoute
   '/projects/archived': typeof ProjectsArchivedIndexRoute
+  '/prompts/archived': typeof PromptsArchivedIndexRoute
   '/admin/datasources/create': typeof AdminDatasourcesCreateRoute
   '/admin/prompts/deduplicate': typeof AdminPromptsDeduplicateRoute
   '/articles/$id/fulltext': typeof ArticlesIdFulltextRoute
@@ -312,6 +326,7 @@ export interface FileRoutesByTo {
   '/articles': typeof ArticlesIndexRoute
   '/login': typeof LoginIndexRoute
   '/projects': typeof ProjectsIndexRoute
+  '/prompts': typeof PromptsIndexRoute
   '/settings': typeof SettingsIndexRoute
   '/projects/create': typeof ProjectsCreateRoute
   '/projects/create-subproject': typeof ProjectsCreateSubprojectRoute
@@ -330,6 +345,7 @@ export interface FileRoutesByTo {
   '/articles/$id': typeof ArticlesIdIndexRoute
   '/projects/$id': typeof ProjectsIdIndexRoute
   '/projects/archived': typeof ProjectsArchivedIndexRoute
+  '/prompts/archived': typeof PromptsArchivedIndexRoute
   '/admin/datasources/create': typeof AdminDatasourcesCreateRoute
   '/admin/prompts/deduplicate': typeof AdminPromptsDeduplicateRoute
   '/articles/$id/fulltext': typeof ArticlesIdFulltextRoute
@@ -355,6 +371,7 @@ export interface FileRoutesById {
   '/articles/': typeof ArticlesIndexRoute
   '/login/': typeof LoginIndexRoute
   '/projects/': typeof ProjectsIndexRoute
+  '/prompts/': typeof PromptsIndexRoute
   '/settings/': typeof SettingsIndexRoute
   '/projects/create': typeof ProjectsCreateRoute
   '/projects/create-subproject': typeof ProjectsCreateSubprojectRoute
@@ -373,6 +390,7 @@ export interface FileRoutesById {
   '/articles/$id/': typeof ArticlesIdIndexRoute
   '/projects/$id/': typeof ProjectsIdIndexRoute
   '/projects/archived/': typeof ProjectsArchivedIndexRoute
+  '/prompts/archived/': typeof PromptsArchivedIndexRoute
   '/admin/datasources/create': typeof AdminDatasourcesCreateRoute
   '/admin/prompts/deduplicate': typeof AdminPromptsDeduplicateRoute
   '/articles/$id/fulltext': typeof ArticlesIdFulltextRoute
@@ -399,6 +417,7 @@ export interface FileRouteTypes {
     | '/articles'
     | '/login'
     | '/projects'
+    | '/prompts'
     | '/settings'
     | '/projects/create'
     | '/projects/create-subproject'
@@ -417,6 +436,7 @@ export interface FileRouteTypes {
     | '/articles/$id'
     | '/projects/$id'
     | '/projects/archived'
+    | '/prompts/archived'
     | '/admin/datasources/create'
     | '/admin/prompts/deduplicate'
     | '/articles/$id/fulltext'
@@ -441,6 +461,7 @@ export interface FileRouteTypes {
     | '/articles'
     | '/login'
     | '/projects'
+    | '/prompts'
     | '/settings'
     | '/projects/create'
     | '/projects/create-subproject'
@@ -459,6 +480,7 @@ export interface FileRouteTypes {
     | '/articles/$id'
     | '/projects/$id'
     | '/projects/archived'
+    | '/prompts/archived'
     | '/admin/datasources/create'
     | '/admin/prompts/deduplicate'
     | '/articles/$id/fulltext'
@@ -483,6 +505,7 @@ export interface FileRouteTypes {
     | '/articles/'
     | '/login/'
     | '/projects/'
+    | '/prompts/'
     | '/settings/'
     | '/projects/create'
     | '/projects/create-subproject'
@@ -501,6 +524,7 @@ export interface FileRouteTypes {
     | '/articles/$id/'
     | '/projects/$id/'
     | '/projects/archived/'
+    | '/prompts/archived/'
     | '/admin/datasources/create'
     | '/admin/prompts/deduplicate'
     | '/articles/$id/fulltext'
@@ -526,6 +550,7 @@ export interface RootRouteChildren {
   ArticlesIndexRoute: typeof ArticlesIndexRoute
   LoginIndexRoute: typeof LoginIndexRoute
   ProjectsIndexRoute: typeof ProjectsIndexRoute
+  PromptsIndexRoute: typeof PromptsIndexRoute
   SettingsIndexRoute: typeof SettingsIndexRoute
   ProjectsCreateRoute: typeof ProjectsCreateRoute
   ProjectsCreateSubprojectRoute: typeof ProjectsCreateSubprojectRoute
@@ -544,6 +569,7 @@ export interface RootRouteChildren {
   ArticlesIdIndexRoute: typeof ArticlesIdIndexRoute
   ProjectsIdIndexRoute: typeof ProjectsIdIndexRoute
   ProjectsArchivedIndexRoute: typeof ProjectsArchivedIndexRoute
+  PromptsArchivedIndexRoute: typeof PromptsArchivedIndexRoute
   AdminDatasourcesCreateRoute: typeof AdminDatasourcesCreateRoute
   AdminPromptsDeduplicateRoute: typeof AdminPromptsDeduplicateRoute
   ArticlesIdFulltextRoute: typeof ArticlesIdFulltextRoute
@@ -592,6 +618,13 @@ declare module '@tanstack/solid-router' {
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof SettingsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/prompts/': {
+      id: '/prompts/'
+      path: '/prompts'
+      fullPath: '/prompts'
+      preLoaderRoute: typeof PromptsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/projects/': {
@@ -655,6 +688,13 @@ declare module '@tanstack/solid-router' {
       path: '/admin/datasources/create'
       fullPath: '/admin/datasources/create'
       preLoaderRoute: typeof AdminDatasourcesCreateRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/prompts/archived/': {
+      id: '/prompts/archived/'
+      path: '/prompts/archived'
+      fullPath: '/prompts/archived'
+      preLoaderRoute: typeof PromptsArchivedIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/projects/archived/': {
@@ -854,6 +894,7 @@ const rootRouteChildren: RootRouteChildren = {
   ArticlesIndexRoute: ArticlesIndexRoute,
   LoginIndexRoute: LoginIndexRoute,
   ProjectsIndexRoute: ProjectsIndexRoute,
+  PromptsIndexRoute: PromptsIndexRoute,
   SettingsIndexRoute: SettingsIndexRoute,
   ProjectsCreateRoute: ProjectsCreateRoute,
   ProjectsCreateSubprojectRoute: ProjectsCreateSubprojectRoute,
@@ -872,6 +913,7 @@ const rootRouteChildren: RootRouteChildren = {
   ArticlesIdIndexRoute: ArticlesIdIndexRoute,
   ProjectsIdIndexRoute: ProjectsIdIndexRoute,
   ProjectsArchivedIndexRoute: ProjectsArchivedIndexRoute,
+  PromptsArchivedIndexRoute: PromptsArchivedIndexRoute,
   AdminDatasourcesCreateRoute: AdminDatasourcesCreateRoute,
   AdminPromptsDeduplicateRoute: AdminPromptsDeduplicateRoute,
   ArticlesIdFulltextRoute: ArticlesIdFulltextRoute,

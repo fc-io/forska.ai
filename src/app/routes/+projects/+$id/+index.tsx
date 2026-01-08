@@ -115,12 +115,20 @@ const ProjectDetail = () => {
               modelName?: string | null
               order: number | null
               archived: boolean
+              promptArchived?: boolean
               type: string | null
               enabled?: boolean
               originProjectId?: string | null
             }
 
-            const prompts = rawPrompts.map((p: RawPrompt) => {
+            const visibleRawPrompts = rawPrompts.filter((p: RawPrompt) => {
+              const isArchived = Boolean(p.promptArchived)
+              const isEnabled = p.enabled !== false
+              const isCreatedForProject = p.originProjectId === project.id
+              return !isArchived || isEnabled || isCreatedForProject
+            })
+
+            const prompts = visibleRawPrompts.map((p: RawPrompt) => {
               return {
                 ...p,
                 order: p.order ?? 0,
@@ -131,7 +139,7 @@ const ProjectDetail = () => {
                 transformed_text: p.transformedText ?? undefined,
                 provider: p.provider ?? null,
                 modelName: p.modelName ?? null,
-                archived: p.archived ?? undefined,
+                archived: p.promptArchived ?? undefined,
                 enabled: p.enabled ?? true,
                 originProjectId: p.originProjectId ?? null,
               }

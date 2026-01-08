@@ -1,10 +1,11 @@
-import {and, eq, sql} from 'drizzle-orm'
+import {and, desc, eq, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {judgments, judgmentsHuman, projectPrompts, prompts} from '../../db/schema'
-import {requireAdminAuth} from '../utils/authGuard.ts'
+import {requireAdminAuth, requireUserAuth} from '../utils/authGuard.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash'
 import {getDatabase} from '../utils/getDatabase'
+import {withErrorHandler} from '../utils/routeErrorHandler'
 
 type PromptRow = Pick<typeof prompts.$inferSelect, 'id' | 'originalText' | 'transformedText' | 'promptHeading' | 'type'>
 
@@ -76,9 +77,75 @@ const applyHashUpdates = async (db: ReturnType<typeof getDatabase>, updates: Pro
   return result.rows.length
 }
 
-export const promptsRoutes = new Elysia({prefix: '/api/prompts'})
+const promptsListSelection = {
+  id: prompts.id,
+  originalText: prompts.originalText,
+  promptHeading: prompts.promptHeading,
+  type: prompts.type,
+  createdAt: prompts.createdAt,
+  updatedAt: prompts.updatedAt,
+  ownerId: prompts.ownerId,
+  archived: prompts.archived,
+}
+
+const promptsUserRoutes = new Elysia()
+  .use(withErrorHandler())
+  .use(requireUserAuth())
+  .get('/api/prompts', async () => {
+    const db = getDatabase()
+    const list = await db
+      .select(promptsListSelection)
+      .from(prompts)
+      .where(eq(prompts.archived, false))
+      .orderBy(desc(prompts.createdAt))
+
+    return {data: list}
+  })
+  .get('/api/prompts/archived', async () => {
+    const db = getDatabase()
+    const list = await db
+      .select(promptsListSelection)
+      .from(prompts)
+      .where(eq(prompts.archived, true))
+      .orderBy(desc(prompts.createdAt))
+
+    return {data: list}
+  })
+  .patch(
+    '/api/prompts/:id',
+    async ({params, body, sessionUserId, role, set}) => {
+      const db = getDatabase()
+      const [existingPrompt] = await db
+        .select({id: prompts.id, ownerId: prompts.ownerId})
+        .from(prompts)
+        .where(eq(prompts.id, params.id))
+        .limit(1)
+
+      if (!existingPrompt) {
+        set.status = 404
+        return {data: null, error: 'Prompt not found'}
+      }
+
+      const isAllowed = role === 'admin' || existingPrompt.ownerId === sessionUserId
+      if (!isAllowed) {
+        set.status = 403
+        return {data: null, error: 'You are not allowed to update this prompt'}
+      }
+
+      const [updatedPrompt] = await db
+        .update(prompts)
+        .set({archived: body.archived})
+        .where(eq(prompts.id, params.id))
+        .returning(promptsListSelection)
+
+      return {data: updatedPrompt ?? null}
+    },
+    {body: t.Object({archived: t.Boolean()})},
+  )
+
+const promptsAdminRoutes = new Elysia()
   .use(requireAdminAuth())
-  .get('/duplicates', async () => {
+  .get('/api/prompts/duplicates', async () => {
     const db = getDatabase()
     const allPrompts = await db.select().from(prompts)
 
@@ -152,7 +219,7 @@ export const promptsRoutes = new Elysia({prefix: '/api/prompts'})
 
     return {success: true, data: result}
   })
-  .post('/regenerate-hashes', async () => {
+  .post('/api/prompts/regenerate-hashes', async () => {
     const db = getDatabase()
     const promptRows = await db
       .select({
@@ -172,7 +239,7 @@ export const promptsRoutes = new Elysia({prefix: '/api/prompts'})
 
     return {success: true, data: {updatedCount, skippedCollisions: collisions}}
   })
-  .delete('/:id', async ({params}) => {
+  .delete('/api/prompts/:id', async ({params}) => {
     const db = getDatabase()
     const {id} = params
 
@@ -200,7 +267,7 @@ export const promptsRoutes = new Elysia({prefix: '/api/prompts'})
 
     return {success: true}
   })
-  .get('/orphans', async () => {
+  .get('/api/prompts/orphans', async () => {
     const db = getDatabase()
 
     const noProjects = await db
@@ -245,7 +312,7 @@ export const promptsRoutes = new Elysia({prefix: '/api/prompts'})
     return {success: true, data: {noProjects, noJudgments, noProjectsAndJudgments}}
   })
   .post(
-    '/merge',
+    '/api/prompts/merge',
     async ({body}) => {
       const {keepPromptId, mergePromptIds} = body
       const db = getDatabase()
@@ -291,7 +358,7 @@ export const promptsRoutes = new Elysia({prefix: '/api/prompts'})
     },
     {body: t.Object({keepPromptId: t.String(), mergePromptIds: t.Array(t.String())})},
   )
-  .get('/invalid-judgments', async () => {
+  .get('/api/prompts/invalid-judgments', async () => {
     const db = getDatabase()
 
     // Get prompts with enum types (containing quotes like 'yes' | 'no' | 'unsure')
@@ -403,7 +470,7 @@ export const promptsRoutes = new Elysia({prefix: '/api/prompts'})
     return {success: true, data: invalidJudgments}
   })
   .post(
-    '/delete-invalid-judgments',
+    '/api/prompts/delete-invalid-judgments',
     async ({body}) => {
       const db = getDatabase()
       const {judgmentIds} = body
@@ -425,3 +492,5 @@ export const promptsRoutes = new Elysia({prefix: '/api/prompts'})
     },
     {body: t.Object({judgmentIds: t.Array(t.String())})},
   )
+
+export const promptsRoutes = new Elysia().use(promptsUserRoutes).use(promptsAdminRoutes)

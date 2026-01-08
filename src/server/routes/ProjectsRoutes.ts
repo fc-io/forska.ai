@@ -137,6 +137,7 @@ export const projectsRoutes = new Elysia()
         promptHeading: prompts.promptHeading,
         order: projectPrompts.order,
         archived: projectPrompts.archived,
+        promptArchived: prompts.archived,
         type: prompts.type,
         enabled: projectPrompts.enabled,
         originProjectId: projectPrompts.originProjectId,
@@ -159,6 +160,7 @@ export const projectsRoutes = new Elysia()
         // No explicit order yet; UI will place these after owned prompts
         order: sql<number>`NULL`,
         archived: sql<boolean>`FALSE`,
+        promptArchived: prompts.archived,
         type: prompts.type,
         enabled: sql<boolean>`FALSE`,
         // null indicates auto-linked from external judgments (no single source project)
@@ -170,7 +172,7 @@ export const projectsRoutes = new Elysia()
       .innerJoin(judgments, eq(judgments.articleId, projectArticles.articleId))
       .innerJoin(prompts, eq(judgments.promptId, prompts.id))
       .leftJoin(projectPrompts, and(eq(projectPrompts.projectId, params.id), eq(projectPrompts.promptId, prompts.id)))
-      .where(and(eq(projectArticles.projectId, params.id), isNull(projectPrompts.id)))
+      .where(and(eq(projectArticles.projectId, params.id), isNull(projectPrompts.id), eq(prompts.archived, false)))
       .groupBy(
         prompts.id,
         prompts.originalText,
@@ -178,6 +180,7 @@ export const projectsRoutes = new Elysia()
         prompts.promptHeading,
         prompts.type,
         prompts.contentHash,
+        prompts.archived,
         prompts.createdAt,
       )
 
@@ -292,6 +295,7 @@ export const projectsRoutes = new Elysia()
                 promptHeading: heading,
                 type: typeVal,
                 contentHash,
+                ownerId: body.ownerId,
               })
               .onConflictDoNothing({target: prompts.contentHash})
               .returning({id: prompts.id})
@@ -422,7 +426,7 @@ export const projectsRoutes = new Elysia()
   )
   .patch(
     '/api/projects/:id/edit',
-    async ({params, body}) => {
+    async ({params, body, sessionUserId}) => {
       const db = getDatabase()
       // Disallow edits when a judgments job exists for this project
       const [job] = await db
@@ -564,6 +568,7 @@ export const projectsRoutes = new Elysia()
                       promptHeading: headingVal,
                       type: typeVal,
                       contentHash: h4b,
+                      ownerId: sessionUserId as string,
                     })
                     .onConflictDoNothing({target: prompts.contentHash})
                     .returning({id: prompts.id})
@@ -626,6 +631,7 @@ export const projectsRoutes = new Elysia()
                     promptHeading: headingVal,
                     type: typeVal,
                     contentHash: h4b,
+                    ownerId: sessionUserId as string,
                   })
                   .onConflictDoNothing({target: prompts.contentHash})
                   .returning({id: prompts.id})
@@ -709,6 +715,7 @@ export const projectsRoutes = new Elysia()
             promptHeading: prompts.promptHeading,
             order: projectPrompts.order,
             archived: projectPrompts.archived,
+            promptArchived: prompts.archived,
             type: prompts.type,
             enabled: projectPrompts.enabled,
             originProjectId: projectPrompts.originProjectId,

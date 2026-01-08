@@ -18,6 +18,7 @@ type PromptItem = {
   originalId?: string
   order: number
   archived: boolean
+  promptArchived?: boolean
   enabled?: boolean
   originProjectId?: string | null
   createdAt?: Date | string | null
@@ -30,6 +31,7 @@ type ProjectPromptResponse = {
   type: string | null
   order: number | null
   archived: boolean
+  promptArchived?: boolean
   enabled?: boolean
   originProjectId?: string | null
   createdAt?: Date | string | null
@@ -114,12 +116,14 @@ const isProjectPromptResponse = (value: unknown): value is ProjectPromptResponse
   const type = prompt.type
   const order = prompt.order
   const archived = (value as any)?.archived
+  const promptArchived = (value as any)?.promptArchived
   const hasRequiredFields = typeof id === 'string' && typeof originalText === 'string'
   const hasOptionalFields =
     (promptHeading === null || typeof promptHeading === 'string')
     && (type === null || typeof type === 'string')
     && (order === null || typeof order === 'number')
     && (typeof archived === 'boolean' || archived === undefined)
+    && (typeof promptArchived === 'boolean' || promptArchived === undefined)
   return hasRequiredFields && hasOptionalFields
 }
 
@@ -155,6 +159,7 @@ const buildExistingPrompt = (prompt: ProjectPromptResponse): PromptItem => {
     originalId: prompt.id,
     order: prompt.order ?? 0,
     archived: Boolean(prompt.archived),
+    promptArchived: typeof prompt.promptArchived === 'boolean' ? prompt.promptArchived : undefined,
     enabled: typeof prompt.enabled === 'boolean' ? prompt.enabled : undefined,
     originProjectId: prompt.originProjectId ?? null,
     createdAt: prompt.createdAt ?? null,
@@ -170,6 +175,7 @@ const buildEmptyPrompt = (order: number): PromptItem => {
     isExisting: false,
     order,
     archived: false,
+    promptArchived: false,
   }
 }
 
@@ -362,9 +368,21 @@ const EditProject = (): JSX.Element => {
     })
   })
 
+  const visibleOwnedPrompts = createMemo(() => {
+    return sortedOwnedPrompts().filter((prompt) => {
+      return !prompt.promptArchived
+    })
+  })
+
   const sortedImportedPrompts = createMemo(() => {
     return importedPrompts.slice().sort((a, b) => {
       return a.order - b.order
+    })
+  })
+
+  const visibleImportedPrompts = createMemo(() => {
+    return sortedImportedPrompts().filter((prompt) => {
+      return !prompt.promptArchived
     })
   })
 
@@ -884,7 +902,7 @@ const EditProject = (): JSX.Element => {
                   </Button>
                 </div>
                 <div class="space-y-3">
-                  <For each={sortedOwnedPrompts()} fallback={<div>No prompts</div>}>
+                  <For each={visibleOwnedPrompts()} fallback={<div>No prompts</div>}>
                     {(promptItem, index) => {
                       return (
                         <div class="flex gap-2">
@@ -959,13 +977,13 @@ const EditProject = (): JSX.Element => {
                 </div>
               </div>
 
-              <Show when={sortedImportedPrompts().length > 0}>
+              <Show when={visibleImportedPrompts().length > 0}>
                 <div>
                   <div class="flex items-center justify-between mb-2">
                     <label class="block text-sm font-medium">Importable prompts</label>
                   </div>
                   <div class="space-y-3">
-                    <For each={sortedImportedPrompts()}>
+                    <For each={visibleImportedPrompts()}>
                       {(promptItem) => {
                         return (
                           <div

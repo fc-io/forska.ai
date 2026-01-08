@@ -458,13 +458,27 @@ export const prompts = pgTable(
     updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
     originalText: text('original_text').notNull(),
     transformedText: text('transformed_text'),
+    ownerId: text('owner_id')
+      .default('uv2Idd2BF6VNSNjwY5IKmIeoYMKq6zXw')
+      .notNull()
+      .references(
+        () => {
+          return user.id
+        },
+        {onDelete: 'cascade'},
+      ),
+    archived: boolean('archived').default(false).notNull(),
     // Global, immutable metadata
     promptHeading: text('prompt_heading'),
     type: text('type'),
     contentHash: text('content_hash'),
   },
   (table) => {
-    return [uniqueIndex('prompts_content_hash_unique').on(table.contentHash)]
+    return [
+      uniqueIndex('prompts_content_hash_unique').on(table.contentHash),
+      index('prompts_owner_idx').on(table.ownerId),
+      index('prompts_archived_idx').on(table.archived),
+    ]
   },
 )
 
