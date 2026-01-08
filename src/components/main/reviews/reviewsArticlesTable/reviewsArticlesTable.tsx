@@ -29,6 +29,7 @@ type ArticleWithJudgments = {
   url?: string | null
   fullTextPDF?: string | null
   fullTextFetchedAt?: Date | null
+  originalData?: unknown
   // Present for "Assessed by Both" view: per-prompt human answers from all qualifying humans
   humanAnswersByPrompt?: Record<string, string[]>
   // Judged status (from new API response)
@@ -67,6 +68,60 @@ const selectionColumn: ColumnDef<ArticleWithJudgments, unknown> = {
       />
     )
   },
+}
+
+type OriginalFullTextUrl = {
+  url: string
+  site: string | null
+  availability: string | null
+  availabilityCode: string | null
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> => {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+const getStringField = (value: Record<string, unknown>, key: string) => {
+  const candidate = value[key]
+  return typeof candidate === 'string' ? candidate : null
+}
+
+const getOriginalFullTextUrls = (originalData: unknown): OriginalFullTextUrl[] => {
+  const fullTextUrlList = isRecord(originalData) ? originalData.fullTextUrlList : null
+  const fullTextUrl = isRecord(fullTextUrlList) ? fullTextUrlList.fullTextUrl : null
+  const entries = Array.isArray(fullTextUrl) ? fullTextUrl : fullTextUrl ? [fullTextUrl] : []
+
+  return entries
+    .map((entry): OriginalFullTextUrl | null => {
+      const record = isRecord(entry) ? entry : null
+      const url = record ? getStringField(record, 'url') : null
+
+      return url
+        ? {
+            url,
+            site: record ? getStringField(record, 'site') : null,
+            availability: record ? getStringField(record, 'availability') : null,
+            availabilityCode: record ? getStringField(record, 'availabilityCode') : null,
+          }
+        : null
+    })
+    .filter((v): v is OriginalFullTextUrl => {
+      return v !== null
+    })
+    .slice(0, 25)
+}
+
+const isSubscriptionRequired = (url: OriginalFullTextUrl) => {
+  const code = url.availabilityCode ?? ''
+  const availability = (url.availability ?? '').toLowerCase()
+  return code === 'S' || availability.includes('subscription')
+}
+
+const toValidDate = (value: unknown): Date | null => {
+  const candidate =
+    value instanceof Date ? value : typeof value === 'string' || typeof value === 'number' ? new Date(value) : null
+  const time = candidate ? candidate.getTime() : NaN
+  return Number.isFinite(time) ? candidate : null
 }
 
 const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
@@ -162,14 +217,28 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
   {
     accessorKey: 'fullTextPDF',
     header: 'PDF',
-    size: 40,
-    minSize: 40,
+    size: 140,
+    minSize: 120,
     cell: (info) => {
-      const pdf = (info.getValue() as string | null) || ''
-      const fetched = Boolean((info.row.original as {fullTextFetchedAt?: unknown}).fullTextFetchedAt)
+      const pdfValue = info.getValue()
+      const pdf = typeof pdfValue === 'string' ? pdfValue : ''
+      const hasPdfField = pdfValue !== undefined
+      const fetchedAt = toValidDate((info.row.original as {fullTextFetchedAt?: unknown}).fullTextFetchedAt)
+      const fetchedAtText = fetchedAt ? format(fetchedAt, 'yyyy-MM-dd HH:mm') : null
+      const subscriptionRequiredFullTextUrls = getOriginalFullTextUrls(
+        (info.row.original as {originalData?: unknown}).originalData,
+      ).filter(isSubscriptionRequired)
+      const subscriptionText = subscriptionRequiredFullTextUrls[0]?.site
+        ? `Requires subscription (${subscriptionRequiredFullTextUrls[0]?.site ?? ''})`
+        : subscriptionRequiredFullTextUrls.length
+          ? 'Requires subscription'
+          : null
+      const hasPdf = Boolean(pdf)
+      const showNoPdf = !hasPdf && (hasPdfField || Boolean(fetchedAtText) || Boolean(subscriptionText))
+
       return (
         <Switch fallback={<span class="text-gray-400">—</span>}>
-          <Match when={pdf}>
+          <Match when={hasPdf}>
             <a
               href={pdf.startsWith('/') ? pdf : `/${pdf}`}
               target="_blank"
@@ -180,10 +249,23 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
               PDF
             </a>
           </Match>
-          <Match when={fetched}>
-            <span class="px-1.5 py-0.5 text-xs rounded bg-yellow-100 text-yellow-800" title="Fetched, no PDF available">
-              No PDF
-            </span>
+          <Match when={showNoPdf}>
+            <div class="flex flex-col gap-1">
+              <span
+                class={`px-1.5 py-0.5 text-xs rounded ${
+                  fetchedAtText ? 'bg-yellow-100 text-yellow-800' : 'bg-gray-100 text-gray-700'
+                }`}
+                title={fetchedAtText ? `Fetched at ${fetchedAtText} (no PDF available)` : 'No PDF available'}
+              >
+                No PDF
+              </span>
+              <Show when={fetchedAtText}>
+                <span class="text-[10px] text-gray-500">Fetched: {fetchedAtText}</span>
+              </Show>
+              <Show when={subscriptionText}>
+                <span class="text-[10px] text-amber-700">{subscriptionText}</span>
+              </Show>
+            </div>
           </Match>
         </Switch>
       )
@@ -296,13 +378,16 @@ export const ReviewsArticlesTable = (props: ReviewsArticlesTableProps) => {
   const projectId = () => {
     return props.projectId
   }
+  const rowSelection = () => {
+    return props.rowSelection()
+  }
   const table = createSolidTable({
     get data() {
       return props.articles
     },
     columns,
     getCoreRowModel: getCoreRowModel(),
-    meta: {projectId, rowSelection: props.rowSelection},
+    meta: {projectId, rowSelection},
     enableRowSelection: true,
     enableMultiRowSelection: true,
     getRowId: (row) => {
