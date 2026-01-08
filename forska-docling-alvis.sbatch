@@ -47,11 +47,11 @@ echo "[docling] starting Docling Serve on :$DOCLING_PORT"
 
 apptainer exec --cleanenv --nv \
   --env DOCLING_SERVE_ARTIFACTS_PATH=/opt/app-root/src/.cache/docling/models \
-  --env GUNICORN_TIMEOUT="300" \
-  --env DOCLING_SERVE_MAX_SYNC_WAIT="300" \
+  --env GUNICORN_TIMEOUT="600" \
+  --env DOCLING_SERVE_MAX_SYNC_WAIT="600" \
   --bind "$STACK_ROOT/.cache/docling:/opt/app-root/src/.cache/docling:rw" \
   "$SIF_DOCLING" \
-  python -m docling_serve run --host 0.0.0.0 --port "$DOCLING_PORT" \
+  python -m docling_serve run --host 0.0.0.0 --port "$DOCLING_PORT" --workers 6 \
   >"$LOG_DIR/docling.log" 2>&1 &
 DOCLING_PID=$!
 

@@ -8,11 +8,13 @@ import {ConversionError, convertPdfToText} from '../utils/convertPdfToText.ts'
 import {env} from '../utils/env.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 
-const CONVERSION_INTERVAL = '*/30 * * * * *' // Every 30 seconds
-const DOCLING_CONVERSION_TIMEOUT_MS = 300_000 // 5 minutes (matching GUNICORN_TIMEOUT)
+const CONVERSION_INTERVAL = '0 */2 * * * *' // Every 2 minutes
+const DOCLING_CONVERSION_TIMEOUT_MS = 600_000 // 10 minutes
 const MAX_CONVERSION_ATTEMPTS = 3
 const DEFAULT_BATCH_SIZE = 5
 const DEFAULT_CONCURRENCY = 1
+// Maximum number of concurrent batch runs allowed
+const MAX_CONCURRENT_BATCHES = 3
 
 const normalizePositiveInt = (value: number | null | undefined, fallback: number): number => {
   const raw = value == null ? fallback : value
@@ -251,9 +253,6 @@ const convertArticle = async (db: PostgresJsDatabase<typeof schema>, article: Ar
     )
   }
 }
-
-// Maximum number of concurrent batch runs allowed
-const MAX_CONCURRENT_BATCHES = 3
 
 // Counter to track how many batches are currently running
 let runningBatches = 0
