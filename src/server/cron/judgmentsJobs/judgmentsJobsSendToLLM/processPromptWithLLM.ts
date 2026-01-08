@@ -125,7 +125,10 @@ export const processPromptWithLLM = async (
     if (!result.text) {
       if (result.shouldSkip) {
         // Permanent failure or no PDF → mark as skipped (terminal)
-        console.log(`[fulltext] Skipping article ${article.id}: ${result.reason}`)
+        rateLimitedLogger.log(
+          `fulltext:skip:${result.reason}`,
+          `[fulltext] Skipping article ${article.id}: ${result.reason}`,
+        )
         await markAsSkipped(
           db,
           promptToProcess.jobId,

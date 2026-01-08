@@ -3,6 +3,7 @@ import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../db/schema.ts'
 import {ConversionError, convertPdfToText} from './convertPdfToText.ts'
+import {rateLimitedLogger} from './rateLimitedLogger.ts'
 
 const DOCLING_CONVERSION_TIMEOUT_MS = 300_000 // 5 minutes - same as cron job
 
@@ -129,7 +130,8 @@ export const ensureFullText = async (
       })
       .where(eq(schema.articles.id, articleId))
 
-    console.log(
+    rateLimitedLogger.log(
+      `fulltext:conversion:${finalStatus}`,
       `[ensureFullText] ${finalStatus === 'failed' ? 'Failed' : 'Retry'}: article ${articleId} - ${errorMessage}`,
     )
 
