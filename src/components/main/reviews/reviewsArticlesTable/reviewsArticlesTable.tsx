@@ -32,6 +32,7 @@ type ArticleWithJudgments = {
   url?: string | null
   fullTextPDF?: string | null
   fullTextFetchedAt?: Date | null
+  fullTextConversionStatus?: string | null
   originalData?: unknown
   // Present for "Assessed by Both" view: per-prompt human answers from all qualifying humans
   humanAnswersByPrompt?: Record<string, string[]>
@@ -199,6 +200,9 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
         <ReviewsArticlesPdfCell
           fullTextPDF={info.getValue()}
           fullTextFetchedAt={(info.row.original as {fullTextFetchedAt?: unknown}).fullTextFetchedAt}
+          fullTextConversionStatus={
+            (info.row.original as {fullTextConversionStatus?: unknown}).fullTextConversionStatus
+          }
           originalData={(info.row.original as {originalData?: unknown}).originalData}
         />
       )

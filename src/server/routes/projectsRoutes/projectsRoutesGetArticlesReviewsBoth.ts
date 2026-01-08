@@ -40,6 +40,7 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
               url: articles.url,
               fullTextPDF: articles.fullTextPDF,
               fullTextFetchedAt: articles.fullTextFetchedAt,
+              fullTextConversionStatus: articles.fullTextConversionStatus,
               originalData: articles.originalData,
             })
             .from(articles)
@@ -65,6 +66,7 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
         url: fullText?.url ?? null,
         fullTextPDF: fullText?.fullTextPDF ?? null,
         fullTextFetchedAt: fullText?.fullTextFetchedAt ?? null,
+        fullTextConversionStatus: fullText?.fullTextConversionStatus ?? null,
         originalData: fullText?.originalData ?? null,
         judgments: article.judgments.map((j) => {
           return {

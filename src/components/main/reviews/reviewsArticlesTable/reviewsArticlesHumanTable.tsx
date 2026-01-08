@@ -149,6 +149,9 @@ const columns: ColumnDef<ArticleWithHumanJudgments, unknown>[] = [
         <ReviewsArticlesPdfCell
           fullTextPDF={info.getValue()}
           fullTextFetchedAt={(info.row.original as {fullTextFetchedAt?: unknown}).fullTextFetchedAt}
+          fullTextConversionStatus={
+            (info.row.original as {fullTextConversionStatus?: unknown}).fullTextConversionStatus
+          }
           originalData={(info.row.original as {originalData?: unknown}).originalData}
         />
       )

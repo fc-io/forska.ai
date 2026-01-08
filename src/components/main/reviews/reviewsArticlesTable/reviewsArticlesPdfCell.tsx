@@ -58,15 +58,19 @@ const toValidDate = (value: unknown): Date | null => {
 export const ReviewsArticlesPdfCell = (props: {
   fullTextPDF: unknown
   fullTextFetchedAt?: unknown
+  fullTextConversionStatus?: unknown
   originalData?: unknown
 }) => {
-  const [local] = splitProps(props, ['fullTextPDF', 'fullTextFetchedAt', 'originalData'])
+  const [local] = splitProps(props, ['fullTextPDF', 'fullTextFetchedAt', 'fullTextConversionStatus', 'originalData'])
   const view = createMemo(() => {
     const pdfValue = local.fullTextPDF
     const pdf = typeof pdfValue === 'string' ? pdfValue : ''
     const hasPdfField = pdfValue !== undefined
     const fetchedAt = toValidDate(local.fullTextFetchedAt)
     const fetchedAtText = fetchedAt ? format(fetchedAt, 'yyyy-MM-dd HH:mm') : null
+    const conversionStatusValue = local.fullTextConversionStatus
+    const conversionStatus = typeof conversionStatusValue === 'string' ? conversionStatusValue.trim() : ''
+    const isConverted = conversionStatus.toLowerCase() === 'success'
     const subscriptionRequiredFullTextUrls = getOriginalFullTextUrls(local.originalData).filter(isSubscriptionRequired)
     const subscriptionText = subscriptionRequiredFullTextUrls[0]?.site
       ? `Requires subscription (${subscriptionRequiredFullTextUrls[0]?.site ?? ''})`
@@ -76,7 +80,7 @@ export const ReviewsArticlesPdfCell = (props: {
     const hasPdf = Boolean(pdf)
     const showNoPdf = !hasPdf && (hasPdfField || Boolean(fetchedAtText) || Boolean(subscriptionText))
 
-    return {hasPdf, pdf, fetchedAtText, subscriptionText, showNoPdf}
+    return {hasPdf, pdf, fetchedAtText, isConverted, subscriptionText, showNoPdf}
   })
 
   return (
@@ -87,9 +91,9 @@ export const ReviewsArticlesPdfCell = (props: {
           target="_blank"
           rel="noopener noreferrer"
           class="px-1.5 py-0.5 text-xs rounded bg-green-100 text-green-800"
-          title="Open PDF"
+          title={view().isConverted ? 'Open converted PDF' : 'Open PDF'}
         >
-          PDF
+          {view().isConverted ? 'PDF Converted' : 'PDF'}
         </a>
       </Match>
       <Match when={view().showNoPdf}>
