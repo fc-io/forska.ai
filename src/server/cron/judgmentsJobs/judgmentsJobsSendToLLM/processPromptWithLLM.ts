@@ -38,6 +38,8 @@ const processSinglePrompt = async (
     contentSettings: {
       useTitle: promptToProcess.useTitle,
       useAbstract: promptToProcess.useAbstract,
+      useFulltext: promptToProcess.useFulltext,
+      useFulltextNoImages: promptToProcess.useFulltextNoImages,
     },
   })
 }
@@ -178,6 +180,8 @@ export const processPromptWithLLM = async (
     articleWithFulltext = {...article, fullText: processResult.processedText}
   }
 
+  const articleForJudging = needsFulltext ? articleWithFulltext : {...article, fullText: null}
+
   // Get the specific prompt to judge
   const [prompt] = await db
     .select({
@@ -207,7 +211,7 @@ export const processPromptWithLLM = async (
   // console.log(`Processing prompt ${promptToProcess.promptId} for article ${promptToProcess.articleId}`)
 
   try {
-    await processSinglePrompt(promptToProcess, articleWithFulltext, prompt)
+    await processSinglePrompt(promptToProcess, articleForJudging, prompt)
     // Success - mark as judged
     await markAsJudged(db, promptToProcess.jobId, promptToProcess.articleId, promptToProcess.promptId)
   } catch (error) {

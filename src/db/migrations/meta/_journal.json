@@ -407,6 +407,13 @@
       "when": 1767861802171,
       "tag": "0058_kind_penance",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1767889705349,
+      "tag": "0059_next_paper_doll",
+      "breakpoints": true
     }
   ]
 }

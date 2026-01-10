@@ -596,6 +596,13 @@ export const judgments = pgTable(
       {onDelete: 'set null'},
     ),
 
+    // Content flags: which article content was used for this judgment.
+    // Legacy/backfilled rows default to title+abstract (useTitle=true, useAbstract=true).
+    useTitle: boolean('use_title').default(true).notNull(),
+    useAbstract: boolean('use_abstract').default(true).notNull(),
+    useFulltext: boolean('use_fulltext').default(false).notNull(),
+    useFulltextNoImages: boolean('use_fulltext_no_images').default(false).notNull(),
+
     // Whether this LLM judgment has been answered (may have null answer fields in some cases)
     isAnswered: boolean('is_answered').default(false),
     answeredOriginal: text('answered_original'),
@@ -623,6 +630,19 @@ export const judgments = pgTable(
       index('judgments_project_idx').on(table.projectId),
       // Soft delete queries (for Parquet/ClickHouse compatibility)
       index('judgments_deleted_at_idx').on(table.deletedAt),
+      // Unique constraint for content-aware judgment deduplication (excludes soft-deleted rows).
+      // This enables rejudge: deleted rows don't block new inserts for the same combo.
+      uniqueIndex('judgments_article_prompt_model_content_unique')
+        .on(
+          table.articleId,
+          table.promptId,
+          table.modelId,
+          table.useTitle,
+          table.useAbstract,
+          table.useFulltext,
+          table.useFulltextNoImages,
+        )
+        .where(sql`${table.deletedAt} IS NULL`),
     ]
   },
 )

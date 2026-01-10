@@ -9,6 +9,7 @@ import {
   recordConnectionSuccess,
 } from '../server/cron/judgmentsJobs/connectionHealth.ts'
 import {rateLimitedLogger} from '../server/utils/rateLimitedLogger.ts'
+import type {ContentSettings} from './judge/judgeGetPrompt.ts'
 import {judgeGetSinglePrompt} from './judge/judgeGetPrompt.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT} from './judge/judgeSinglePromptSystemPrompt.ts'
 import {judgeStoreTokenUse, type JudgeTokenUsageEntry} from './judge/judgeStoreTokenUse.ts'
@@ -174,7 +175,7 @@ export const judgeSinglePrompt = async ({
   judgmentsJobId: string
   modelConfig: ModelConfigInput
   projectId: string
-  contentSettings?: {useTitle: boolean; useAbstract: boolean}
+  contentSettings: ContentSettings
 }): Promise<void> => {
   const {baseURL, modelName, modelId} = modelConfig
   if (!baseURL) {
