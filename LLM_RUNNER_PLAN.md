@@ -523,6 +523,251 @@ This stays within “no persistence” because the source of truth is Slurm.
 - Run `bun run lint`
 - Run `bun test`
 
+---
+
+## JBND v1 — Binary Bundle File Format
+
+A minimal, fast, and future-proof binary "JSON bundle" spec for spool files, designed for:
+
+- **Append-only records**
+- **Zero JSON parsing on the spooling side**
+- **Fast sequential read/write**
+- **Safe partial-write detection**
+- Optional integrity checks
+
+### Endianness
+
+All integers are **little-endian**.
+
+### File Layout
+
+```
+[FileHeader]
+[Record 0]
+[Record 1]
+...
+[Record N-1]
+(optional) [Footer]
+```
+
+---
+
+### 1) FileHeader (fixed 32 bytes)
+
+| Offset | Size | Type  | Name            | Notes                                                            |
+| -----: | ---: | ----- | --------------- | ---------------------------------------------------------------- |
+|      0 |    4 | bytes | magic           | ASCII `"JBND"`                                                   |
+|      4 |    2 | u16   | version         | `1`                                                              |
+|      6 |    2 | u16   | header_len      | bytes of extra header data after this fixed header (usually `0`) |
+|      8 |    4 | u32   | flags           | bitfield (see below)                                             |
+|     12 |    8 | u64   | created_unix_ns | optional, set 0 if unused                                        |
+|     20 |   12 | bytes | reserved        | set to 0                                                         |
+
+**Flags bits:**
+
+- bit 0: `PER_RECORD_CRC32C` (record ends with crc32c)
+- bit 1: `HAS_FOOTER` (file ends with footer)
+- others reserved (0)
+
+If `header_len > 0`, you can add TLVs later without breaking v1 readers (they skip unknown extra bytes).
+
+---
+
+### 2) Record Framing (fast skip + streaming)
+
+Each record is:
+
+```
+u32 record_len
+u8  record_type
+u8  record_flags
+u16 reserved
+u8[16] uuid
+u32 payload_len
+u8[payload_len] payload_json_utf8
+(optional) u32 crc32c
+```
+
+**Field meanings:**
+
+- `record_len`: number of bytes **after** `record_len` up to (and including) optional CRC
+- `record_type`:
+  - `1` = request
+  - `2` = response
+- `record_flags` (for future use; set 0 for now)
+- `uuid`: 16 raw bytes (RFC 4122 canonical order) – i.e. Python `uuid.UUID(...).bytes`
+- `payload_json_utf8`: **raw JSON bytes** exactly as received/produced (no escaping wrapper)
+- optional `crc32c`: CRC32C of the record bytes **excluding** `record_len` and excluding the crc itself (i.e. hash `record_type..payload`)
+
+**Why both `record_len` and `payload_len`?**
+
+- `record_len` lets readers **skip unknown record types** fast and recover from partial tails
+- `payload_len` makes it easy to locate payload without computing offsets
+
+**Truncation rule:** if EOF occurs before a full record is read (based on `record_len`), treat the final record as incomplete and ignore/retry the file.
+
+---
+
+### 3) Optional Footer (24 bytes)
+
+If you want a quick "sealed + verified" marker:
+
+```
+bytes[4]  footer_magic = "JEND"
+u32       record_count
+u64       file_xxh3_64  (or 0 if unused)
+u32       footer_crc32c (of footer fields excluding this crc) (or 0)
+u32       reserved
+```
+
+This lets you distinguish "fully written" from "partially written" even if a writer crash happens after rename (rare, but possible on weird setups).
+
+In practice, many people skip the footer and rely on:
+
+1. Write to `.tmp`
+2. `fsync`
+3. Rename to `.ready`
+4. Only rsync `.ready`
+
+---
+
+### Recommended Operational Pattern
+
+1. Local server writes `bundle_<ts>_<seq>.jbnd.tmp`
+2. Write header, then records
+3. `fsync`, close
+4. Rename to `bundle_... .jbnd` (atomic)
+5. rsync only `*.jbnd`
+6. HPC job processes and writes `result_... .jbnd` back the same way
+
+---
+
+### TypeScript (Bun) — Writer
+
+```ts
+import { openSync, closeSync, writeSync, fsyncSync, renameSync } from "fs";
+
+function u32le(n: number) {
+  const b = Buffer.alloc(4);
+  b.writeUInt32LE(n >>> 0, 0);
+  return b;
+}
+function u16le(n: number) {
+  const b = Buffer.alloc(2);
+  b.writeUInt16LE(n & 0xffff, 0);
+  return b;
+}
+function u64le(nBig: bigint) {
+  const b = Buffer.alloc(8);
+  b.writeBigUInt64LE(nBig, 0);
+  return b;
+}
+
+// Convert UUID string -> 16 bytes canonical
+function uuidToBytes(uuid: string): Buffer {
+  const hex = uuid.replace(/-/g, "");
+  return Buffer.from(hex, "hex");
+}
+
+type Rec = { id: string; payloadJsonUtf8: Uint8Array; type: 1 | 2 };
+
+export function writeJbnd(pathTmp: string, pathFinal: string, recs: Rec[]) {
+  const fd = openSync(pathTmp, "w");
+
+  // Header (32 bytes)
+  const magic = Buffer.from("JBND");
+  const version = u16le(1);
+  const headerLen = u16le(0);
+  const flags = u32le(0); // set bit0 if you add CRC32C, bit1 if footer
+  const createdNs = u64le(BigInt(Date.now()) * 1_000_000n);
+  const reserved = Buffer.alloc(12, 0);
+
+  writeSync(fd, Buffer.concat([magic, version, headerLen, flags, createdNs, reserved]));
+
+  for (const r of recs) {
+    const uuidBytes = uuidToBytes(r.id);
+    if (uuidBytes.length !== 16) throw new Error("bad uuid");
+
+    const payload = Buffer.from(r.payloadJsonUtf8);
+    const payloadLen = payload.length;
+
+    // record body
+    const body = Buffer.concat([
+      Buffer.from([r.type, 0]),    // record_type, record_flags
+      Buffer.alloc(2, 0),          // reserved u16
+      uuidBytes,                   // 16 bytes
+      u32le(payloadLen),
+      payload
+    ]);
+
+    // record_len excludes the u32 record_len field itself
+    writeSync(fd, u32le(body.length));
+    writeSync(fd, body);
+  }
+
+  fsyncSync(fd);
+  closeSync(fd);
+  renameSync(pathTmp, pathFinal);
+}
+```
+
+### TypeScript (Bun) — Reader (streaming)
+
+```ts
+import { openSync, closeSync, readSync } from "fs";
+
+function readExact(fd: number, n: number): Buffer | null {
+  const b = Buffer.alloc(n);
+  const got = readSync(fd, b, 0, n, null);
+  if (got === 0) return null;
+  if (got !== n) throw new Error("truncated");
+  return b;
+}
+
+export function readJbnd(path: string, onRecord: (r: { type: number; idHex: string; payload: Buffer }) => void) {
+  const fd = openSync(path, "r");
+
+  try {
+    const hdr = readExact(fd, 32);
+    if (!hdr) throw new Error("empty");
+    if (hdr.subarray(0, 4).toString("ascii") !== "JBND") throw new Error("bad magic");
+
+    while (true) {
+      const lenBuf = readExact(fd, 4);
+      if (!lenBuf) break; // clean EOF
+      const recordLen = lenBuf.readUInt32LE(0);
+
+      const rec = readExact(fd, recordLen); // throws if truncated tail
+      if (!rec) throw new Error("truncated");
+      const type = rec.readUInt8(0);
+
+      const uuidBytes = rec.subarray(4, 20);
+      const idHex = uuidBytes.toString("hex"); // format as you like
+
+      const payloadLen = rec.readUInt32LE(20);
+      const payload = rec.subarray(24, 24 + payloadLen);
+
+      onRecord({ type, idHex, payload });
+    }
+  } catch (e) {
+    // If you want "ignore truncated last record", catch "truncated" and treat as partial file.
+    throw e;
+  } finally {
+    closeSync(fd);
+  }
+}
+```
+
+---
+
+### Speed Knobs
+
+1. **UUID as 16 bytes** (binary) rather than 36-byte text – free win in size and parse cost.
+
+2. **Compression**: if your bottleneck is network/storage, compress the whole `.jbnd` into `.jbnd.zst` after sealing (fastest operationally). If your bottleneck is CPU and the link is very fast, skip compression.
+
+---
+
 ## Open questions (need answers before coding)
 
 1. Will llm-runner run on the **same host** as the API server (so `127.0.0.1:<port>` is usable)?
