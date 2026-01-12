@@ -1,4 +1,4 @@
-import {and, count, eq} from 'drizzle-orm'
+import {and, count, eq, inArray} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../db/schema.ts'
@@ -163,6 +163,16 @@ export const judgmentsJobsSendToLLM = async (
                 key,
                 `Circuit breaker blocked ${blockedByCircuitBreaker.length} prompts for: ${uniqueUrls.join(', ')}`,
               )
+
+              // Reset blocked prompts back to 'ready' so they can be retried
+              // These were marked as 'sent' in getAndUpdateReadyPrompts but never actually dispatched
+              const blockedIds = blockedByCircuitBreaker.map((p) => {
+                return p.recordId
+              })
+              await db
+                .update(schema.judgmentsJobsPrompts)
+                .set({status: 'ready', updatedAt: new Date()})
+                .where(inArray(schema.judgmentsJobsPrompts.id, blockedIds))
             }
 
             if (promptsToSend.length > 0) {

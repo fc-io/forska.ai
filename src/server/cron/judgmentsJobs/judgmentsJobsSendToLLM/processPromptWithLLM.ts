@@ -119,6 +119,8 @@ export const processPromptWithLLM = async (
 
   if (!article) {
     console.error('Article not found:', promptToProcess.articleId)
+    // Mark as judged to prevent getting stuck in 'sent' status
+    await markAsJudged(db, promptToProcess.jobId, promptToProcess.articleId, promptToProcess.promptId)
     return
   }
 
