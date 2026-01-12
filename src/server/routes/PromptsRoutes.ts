@@ -1,6 +1,7 @@
 import {and, desc, eq, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
+import {auth} from '../../auth.ts'
 import {judgments, judgmentsHuman, projectPrompts, prompts} from '../../db/schema'
 import {requireAdminAuth, requireUserAuth} from '../utils/authGuard.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash'
@@ -113,7 +114,17 @@ const promptsUserRoutes = new Elysia()
   })
   .patch(
     '/api/prompts/:id',
-    async ({params, body, sessionUserId, role, set}) => {
+    async ({params, body, set, request}) => {
+      // Get session directly (consistent with other routes like NvidiaSmiRoutes, ParquetRoutes)
+      const session = await auth.api.getSession({headers: request.headers})
+      const userId = session?.user?.id ?? null
+      const userRole = session?.user?.role ?? null
+
+      if (!userId) {
+        set.status = 401
+        return {data: null, error: 'You must be signed in'}
+      }
+
       const db = getDatabase()
       const [existingPrompt] = await db
         .select({id: prompts.id, ownerId: prompts.ownerId})
@@ -126,7 +137,7 @@ const promptsUserRoutes = new Elysia()
         return {data: null, error: 'Prompt not found'}
       }
 
-      const isAllowed = role === 'admin' || existingPrompt.ownerId === sessionUserId
+      const isAllowed = userRole === 'admin' || existingPrompt.ownerId === userId
       if (!isAllowed) {
         set.status = 403
         return {data: null, error: 'You are not allowed to update this prompt'}
