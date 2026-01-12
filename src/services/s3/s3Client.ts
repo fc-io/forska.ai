@@ -145,17 +145,34 @@ export const uploadToS3 = async (
 
 /**
  * List objects in a bucket with optional prefix.
+ * Handles pagination automatically to retrieve all objects.
  */
 export const listObjects = async (bucket: string, prefix?: string, client?: S3Client): Promise<string[]> => {
   const s3 = client || getS3Client()
-  const result = await s3.send(new ListObjectsV2Command({Bucket: bucket, Prefix: prefix}))
-  return (result.Contents || [])
-    .map((obj) => {
-      return obj.Key
-    })
-    .filter((key): key is string => {
-      return Boolean(key)
-    })
+  const keys: string[] = []
+  let continuationToken: string | undefined
+
+  do {
+    const result = await s3.send(
+      new ListObjectsV2Command({
+        Bucket: bucket,
+        Prefix: prefix,
+        ContinuationToken: continuationToken,
+      }),
+    )
+
+    if (result.Contents) {
+      for (const obj of result.Contents) {
+        if (obj.Key) {
+          keys.push(obj.Key)
+        }
+      }
+    }
+
+    continuationToken = result.NextContinuationToken
+  } while (continuationToken)
+
+  return keys
 }
 
 /**
