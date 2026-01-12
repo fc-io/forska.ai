@@ -461,13 +461,10 @@ export const judgeSinglePrompt = async ({
   const duration = performance.now() - startDuration
   const finishedAt = new Date().toISOString()
 
-  if (
-    (errorCount % 100 === 0 && errorCount > 0)
-    || (abortCount % 100 === 0 && abortCount > 0)
-    || successCount % 100 === 0
-  ) {
-    console.log(`Total: ${errorCount} errorCount,${abortCount} aborts, ${successCount} successes`)
-  }
+  rateLimitedLogger.log(
+    'judge-progress',
+    `Total: ${errorCount} errorCount,${abortCount} aborts, ${successCount} successes`,
+  )
 
   await judgeStoreTokenUse(tokenUse, sessionId, {startedAt, finishedAt, duration}, judgmentsJobId, {
     totalRequests: 1,

@@ -12,6 +12,7 @@
 import {ParquetSchema, ParquetWriter, type WriterOptions} from '@dsnp/parquetjs'
 import {ulid} from 'ulid'
 
+import {rateLimitedLogger} from '../../server/utils/rateLimitedLogger'
 import {ensureBucket, getS3Config, uploadToS3} from '../s3/s3Client'
 import type {DenormalizedJudgmentAnalytics, ParquetWriterConfig} from './types'
 
@@ -184,7 +185,7 @@ export const writeBatch = async (
   // Upload to S3
   await uploadToS3(bucket, key, buffer, 'application/vnd.apache.parquet')
 
-  console.log(`Wrote ${records.length} records to s3://${bucket}/${key}`)
+  rateLimitedLogger.log('parquet-write', `Wrote ${records.length} records to s3://${bucket}/${key}`)
 
   return key
 }
