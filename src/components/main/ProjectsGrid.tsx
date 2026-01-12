@@ -4,17 +4,26 @@ import {createMemo, createSignal, For} from 'solid-js'
 
 import {createJudgmentsJob} from '../../services/judgmentsJobsService'
 import {cloneProject} from '../../services/projectsService'
+import type {fetchProjects} from '../../services/projectsService'
 import {Button} from '../ui/button'
 
-interface Project {
-  id: string
-  name: string
-  description: string | null
-  createdAt: Date
-}
+type Project = Awaited<ReturnType<typeof fetchProjects>>[number]
 
 interface IndexProjectsGridProps {
   projects: Project[]
+}
+
+const getProjectModelLabel = (project: Project) => {
+  return project.modelName || 'Unknown model'
+}
+
+const getProjectContentUsedLabel = (project: Project) => {
+  const fulltextLabel = project.useFulltextNoImages ? 'fulltext (no images)' : project.useFulltext ? 'fulltext' : null
+  const parts = [project.useTitle ? 'title' : null, project.useAbstract ? 'abstract' : null, fulltextLabel].filter(
+    Boolean,
+  ) as string[]
+
+  return parts.length > 0 ? parts.join(', ') : 'none'
 }
 
 export const ProjectsGrid = (props: IndexProjectsGridProps) => {
@@ -73,7 +82,12 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
             <li>
               <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
                 <div class="flex items-start justify-between gap-3 mb-3">
-                  <h2 class="text-xl font-semibold">{project.name}</h2>
+                  <div class="flex flex-col gap-1 min-w-0">
+                    <h2 class="text-xl font-semibold truncate">{project.name}</h2>
+                    <p class="text-sm text-muted-foreground">
+                      Model: {getProjectModelLabel(project)} · Content: {getProjectContentUsedLabel(project)}
+                    </p>
+                  </div>
                   <div class="flex items-center gap-2">
                     <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
                       Active

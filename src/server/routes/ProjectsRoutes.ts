@@ -106,21 +106,33 @@ export const projectsRoutes = new Elysia()
     const db = getDatabase()
     // Filter out archived projects by default
     const projectsList = await db
-      .select()
+      .select({project: projects, modelName: models.modelName})
       .from(projects)
+      .leftJoin(models, eq(projects.modelId, models.id))
       .where(eq(projects.archived, false))
       .orderBy(asc(projects.name))
-    return {data: projectsList}
+
+    const projectsWithModelName = projectsList.map(({project, modelName}) => {
+      return {...project, modelName}
+    })
+
+    return {data: projectsWithModelName}
   })
   .get('/api/projects/archived', async () => {
     const db = getDatabase()
     // Return only archived projects
     const projectsList = await db
-      .select()
+      .select({project: projects, modelName: models.modelName})
       .from(projects)
+      .leftJoin(models, eq(projects.modelId, models.id))
       .where(eq(projects.archived, true))
       .orderBy(desc(projects.createdAt))
-    return {data: projectsList}
+
+    const projectsWithModelName = projectsList.map(({project, modelName}) => {
+      return {...project, modelName}
+    })
+
+    return {data: projectsWithModelName}
   })
   .get('/api/projects/:id', async ({params}) => {
     const db = getDatabase()
