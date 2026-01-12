@@ -33,6 +33,8 @@ interface MN5Config {
   DP_SIZE: string
   SGLANG_ENABLE_ROUTER: string
   SGLANG_MAX_RUNNING_REQUESTS: string
+  SGLANG_API_MAX_INFLIGHT_REQUESTS: string
+  SGLANG_API_MAX_BURST_REQUESTS: string
   SGLANG_CONTEXT_LENGTH: string
 }
 
@@ -128,6 +130,10 @@ const parseConfigFromLog = async (jobId: string): Promise<MN5Config | null> => {
       log('Config block incomplete')
       return null
     }
+
+    // Backwards-compat defaults for newer keys (older logs won't have them)
+    if (!config.SGLANG_API_MAX_INFLIGHT_REQUESTS) config.SGLANG_API_MAX_INFLIGHT_REQUESTS = '0'
+    if (!config.SGLANG_API_MAX_BURST_REQUESTS) config.SGLANG_API_MAX_BURST_REQUESTS = '0'
 
     return config as MN5Config
   } catch (e) {
@@ -528,6 +534,8 @@ const startDevServer = async (config: MN5Config): Promise<void> => {
   log(`  WORKER_URLS: ${config.WORKER_URLS_LOCAL}`)
   log(`  SGLANG_MODEL: ${config.SGLANG_MODEL}`)
   log(`  SGLANG_MAX_RUNNING_REQUESTS: ${config.SGLANG_MAX_RUNNING_REQUESTS}`)
+  log(`  SGLANG_API_MAX_INFLIGHT_REQUESTS: ${config.SGLANG_API_MAX_INFLIGHT_REQUESTS}`)
+  log(`  SGLANG_API_MAX_BURST_REQUESTS: ${config.SGLANG_API_MAX_BURST_REQUESTS}`)
   log(`  SGLANG_CONTEXT_LENGTH: ${config.SGLANG_CONTEXT_LENGTH}`)
 
   const env = {
@@ -545,6 +553,8 @@ const startDevServer = async (config: MN5Config): Promise<void> => {
     TP_SIZE: config.TP_SIZE,
     DP_SIZE: config.DP_SIZE,
     SGLANG_MAX_RUNNING_REQUESTS: config.SGLANG_MAX_RUNNING_REQUESTS,
+    SGLANG_API_MAX_INFLIGHT_REQUESTS: config.SGLANG_API_MAX_INFLIGHT_REQUESTS,
+    SGLANG_API_MAX_BURST_REQUESTS: config.SGLANG_API_MAX_BURST_REQUESTS,
     SGLANG_CONTEXT_LENGTH: config.SGLANG_CONTEXT_LENGTH,
     SGLANG_MODEL: config.SGLANG_MODEL,
     BUN_CONFIG_MAX_HTTP_REQUESTS: '2048',
