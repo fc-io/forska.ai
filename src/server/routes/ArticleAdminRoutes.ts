@@ -199,24 +199,20 @@ export const articleAdminRoutes = new Elysia()
   // Upload a PDF for an article
   .post(
     '/api/articles/:id/upload-pdf',
-    async ({params, body, sessionUserId, request}) => {
+    async ({params, body, request}) => {
       const db = getDatabase()
       const {id} = params
 
-      // Workaround: For multipart requests, the derive middleware may not propagate sessionUserId
-      // so we fetch the session directly if needed
-      let userId = sessionUserId
+      // Get session directly (consistent with other routes)
+      const session = await auth.api.getSession({headers: request.headers})
+      const userId = session?.user?.id ?? null
+      const role = session?.user?.role ?? null
+
       if (!userId) {
-        const session = await auth.api.getSession({headers: request.headers})
-        userId = session?.user?.id ?? session?.session?.userId ?? null
-        if (!userId) {
-          throw new Error('You must be signed in')
-        }
-        // Also verify admin role
-        const role = session?.user?.role ?? null
-        if (role !== 'admin') {
-          throw new Error('Administrator access required')
-        }
+        throw new Error('You must be signed in')
+      }
+      if (role !== 'admin') {
+        throw new Error('Administrator access required')
       }
 
       // Check if article exists

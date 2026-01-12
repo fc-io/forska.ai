@@ -13,6 +13,7 @@ import {
   projects,
   prompts,
 } from '../../db/schema.ts'
+import {auth} from '../../auth.ts'
 import {requireAdminAuth, requireUserAuth} from '../utils/authGuard.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
@@ -426,7 +427,11 @@ export const projectsRoutes = new Elysia()
   )
   .patch(
     '/api/projects/:id/edit',
-    async ({params, body, sessionUserId}) => {
+    async ({params, body, request}) => {
+      // Get session directly (consistent with other routes)
+      const session = await auth.api.getSession({headers: request.headers})
+      const sessionUserId = session?.user?.id ?? null
+
       const db = getDatabase()
       // Disallow edits when a judgments job exists for this project
       const [job] = await db

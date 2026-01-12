@@ -3,6 +3,7 @@ import {eq} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {user} from '../../../auth-schema'
+import {auth} from '../../auth.ts'
 import {requireAdminAuth, requireUserAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
@@ -19,8 +20,12 @@ export const usersRoutes = new Elysia()
   .use(
     new Elysia().use(requireUserAuth()).patch(
       '/api/users/:id',
-      async ({params, body, set, sessionUserId}) => {
-        if (typeof sessionUserId !== 'string') {
+      async ({params, body, set, request}) => {
+        // Get session directly (consistent with other routes)
+        const session = await auth.api.getSession({headers: request.headers})
+        const sessionUserId = session?.user?.id ?? null
+
+        if (!sessionUserId) {
           set.status = 401
           return {data: null, error: 'You must be signed in'}
         }
@@ -46,3 +51,4 @@ export const usersRoutes = new Elysia()
       {body: t.Object({name: t.String()})},
     ),
   )
+
