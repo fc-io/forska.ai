@@ -9,9 +9,12 @@ const MN5_ROOT = '/gpfs/projects/ehpc482/dev'
 const TLOG = 'tlog' // Transfer login
 const GLOG = 'glog' // General login (for sbatch)
 const ALOG = 'alog' // ACC login (for tunnel)
-const SGLANG_PORT = 30000 // Remote OpenAI-compatible API port (router or worker)
-const DEFAULT_LOCAL_PORT = 30000
+// Port scheme: Local Caddy (:30002) -> SSH tunnel (:40002) -> HPC Caddy (:30002) -> SGLang (:30001)
+const CADDY_PORT = 30002 // Remote Caddy H2 port (what we tunnel to)
+const DEFAULT_LOCAL_PORT = 30002 // Local port exposed to app (Caddy listens here)
+const TUNNEL_PORT_BASE = 40002 // Local tunnel endpoint (Caddy proxies to this via H2)
 const SBATCH_FILE = 'forska-mn5-sglang.sbatch'
+const DOCKER_CONTAINER_NAME = 'forska-caddy'
 
 // Track the active job ID for cleanup
 let activeJobId: string | null = null
@@ -37,6 +40,8 @@ const setupSignalHandler = (): void => {
     if (isShuttingDown) return
     isShuttingDown = true
     console.log('') // New line after ^C
+    // Stop Docker Caddy
+    await stopDockerCaddy()
     if (activeTunnelProc) {
       try {
         activeTunnelProc.kill()
@@ -57,6 +62,61 @@ const setupSignalHandler = (): void => {
   process.on('SIGTERM', () => {
     return void cleanup('SIGTERM')
   })
+}
+
+// Docker Caddy management
+const stopDockerCaddy = async (): Promise<void> => {
+  try {
+    await $`docker rm -f ${DOCKER_CONTAINER_NAME} 2>/dev/null || true`.quiet()
+  } catch {
+    // Ignore
+  }
+}
+
+const generateCaddyfile = (localPort: number, tunnelPort: number): string => {
+  return `{
+  auto_https off
+}
+:${localPort} {
+  reverse_proxy host.docker.internal:${tunnelPort} {
+    transport http {
+      versions h2c
+    }
+  }
+}
+`
+}
+
+const startDockerCaddy = async (localPort: number, tunnelPort: number): Promise<void> => {
+  log('Starting local Docker Caddy for H2 multiplexing...')
+
+  // Stop any existing container
+  await stopDockerCaddy()
+
+  // Generate Caddyfile
+  const caddyfile = generateCaddyfile(localPort, tunnelPort)
+  const caddyfilePath = '/tmp/forska-Caddyfile'
+  await Bun.write(caddyfilePath, caddyfile)
+  log(`Generated Caddyfile: localhost:${localPort} -> H2c -> host.docker.internal:${tunnelPort}`)
+
+  // Start Docker container
+  const result = await $`docker run -d --name ${DOCKER_CONTAINER_NAME} \
+    -p ${localPort}:${localPort} \
+    -v ${caddyfilePath}:/etc/caddy/Caddyfile:ro \
+    caddy:2`.text()
+
+  const containerId = result.trim().substring(0, 12)
+  log(`Docker Caddy started (container: ${containerId})`)
+
+  // Give it a moment to start
+  await sleep(1000)
+
+  // Verify it's running
+  const status = await $`docker inspect -f '{{.State.Running}}' ${DOCKER_CONTAINER_NAME}`.text()
+  if (!status.trim().includes('true')) {
+    const logs = await $`docker logs ${DOCKER_CONTAINER_NAME} 2>&1 || true`.text()
+    throw new Error(`Docker Caddy failed to start: ${logs}`)
+  }
 }
 
 const sleep = (ms: number): Promise<void> => {
@@ -178,7 +238,13 @@ const ensureLocalPortReadyForTunnel = async (localPort: number): Promise<'ready'
   })
 
   if (!onlySsh) {
-    log(`Local port ${localPort} already in use: ${listeners.map((l) => `${l.command}:${l.pid}`).join(', ')}`)
+    log(
+      `Local port ${localPort} already in use: ${listeners
+        .map((l) => {
+          return `${l.command}:${l.pid}`
+        })
+        .join(', ')}`,
+    )
     return 'in_use'
   }
 
@@ -188,8 +254,8 @@ const ensureLocalPortReadyForTunnel = async (localPort: number): Promise<'ready'
   return 'ready'
 }
 
-const spawnTunnelProcess = (computeNode: string, localPort: number) => {
-  const logFile = Bun.file('mn5-tunnel.log')
+const spawnTunnelProcess = (computeNode: string, localTunnelPort: number, remoteCaddyPort: number) => {
+  const logFile = Bun.file('mn5-tunnel-debug.txt')
   const proc = spawn(
     [
       'ssh',
@@ -207,13 +273,13 @@ const spawnTunnelProcess = (computeNode: string, localPort: number) => {
       '-o',
       'ExitOnForwardFailure=yes',
       '-L',
-      `${localPort}:${computeNode}:${SGLANG_PORT}`,
+      `${localTunnelPort}:${computeNode}:${remoteCaddyPort}`,
       ALOG,
     ],
     {stdout: 'inherit', stderr: 'pipe', stdin: 'inherit'},
   )
 
-  // Redirect stderr to file for debugging
+  // Stream stderr to file only (verbose logging is too noisy for console)
   Bun.write(logFile, proc.stderr).catch((err) => {
     console.error('Failed to write tunnel logs:', err)
   })
@@ -245,12 +311,12 @@ const startTunnelSupervisor = async (
   // Set active job for signal handler if not already set
   activeJobId = jobId
   const restartSuffix = restartCount > 0 ? ` (restart #${restartCount})` : ''
-  log(`Starting SSH tunnel: localhost:${localPort} -> ${computeNode}:${SGLANG_PORT} via ${ALOG}${restartSuffix}`)
+  log(`Starting SSH tunnel: localhost:${TUNNEL_PORT_BASE} -> ${computeNode}:${CADDY_PORT} via ${ALOG}${restartSuffix}`)
 
-  const portStatus = await ensureLocalPortReadyForTunnel(localPort)
+  const portStatus = await ensureLocalPortReadyForTunnel(TUNNEL_PORT_BASE)
   if (portStatus === 'in_use') {
-    console.error(`[mn5] Port ${localPort} is in use by a non-SSH process`)
-    console.error(`      Stop that process or use: bun run mn5:launch -- --local-port ${localPort + 1}`)
+    console.error(`[mn5] Tunnel port ${TUNNEL_PORT_BASE} is in use by a non-SSH process`)
+    console.error(`      Stop that process first`)
     process.exit(1)
   }
 
@@ -262,13 +328,17 @@ const startTunnelSupervisor = async (
     return waitForExistingTunnel(jobId, computeNode, localPort)
   }
 
-  const proc = spawnTunnelProcess(computeNode, localPort)
+  const proc = spawnTunnelProcess(computeNode, TUNNEL_PORT_BASE, CADDY_PORT)
   activeTunnelProc = proc
 
   await sleep(2000)
 
   const ok = await isLocalSGLangResponding(localPort)
-  log(ok ? '✓ Tunnel connected and SGLang responding' : '⚠ Tunnel started but SGLang health check failed (may still be starting)')
+  log(
+    ok
+      ? '✓ Tunnel connected and SGLang responding'
+      : '⚠ Tunnel started but SGLang health check failed (may still be starting)',
+  )
   log(`SGLang API available at http://localhost:${localPort}/v1`)
   log(`Press Ctrl+C to disconnect and cancel job ${jobId}`)
 
@@ -299,15 +369,16 @@ const startTunnelSupervisor = async (
 }
 
 /**
- * Wait for SGLang to be ready
+ * Wait for SGLang to be ready (via Caddy proxy)
  */
 const waitForSGLangReady = async (computeNode: string): Promise<boolean> => {
   // Wait for SGLang to be ready (can take 10-20 min for large models)
   log('Waiting for SGLang to start (this can take 10-20 minutes for large models)...')
   for (let i = 0; i < 240; i++) {
     // Wait up to 40 minutes
+    // Check via Caddy port (30002) which proxies to SGLang (30001)
     const checkWorker =
-      await $`ssh ${ALOG} "curl -sf --connect-timeout 2 --max-time 3 http://${computeNode}:${SGLANG_PORT}/v1/models 2>/dev/null && echo OK || echo NOTREADY"`.text()
+      await $`ssh ${ALOG} "curl -sf --connect-timeout 2 --max-time 3 http://${computeNode}:${CADDY_PORT}/v1/models 2>/dev/null && echo OK || echo NOTREADY"`.text()
     if (checkWorker.includes('OK') && checkWorker.includes('data')) {
       log('SGLang worker is ready!')
       return true
@@ -359,6 +430,8 @@ const main = async () => {
       log(`Found running job: ${existingRunningJob.jobId} on ${computeNode}`)
       log('Reusing existing job (use --force to submit a new one)')
       await waitForSGLangReady(computeNode)
+      // Start Docker Caddy and tunnel
+      await startDockerCaddy(localPort, TUNNEL_PORT_BASE)
       await startTunnelSupervisor(computeNode, existingRunningJob.jobId, localPort, 0)
       return
     }
@@ -393,6 +466,8 @@ const main = async () => {
 
     if (computeNode) {
       await waitForSGLangReady(computeNode)
+      // Start Docker Caddy and tunnel
+      await startDockerCaddy(localPort, TUNNEL_PORT_BASE)
       await startTunnelSupervisor(computeNode, existingPendingJob.jobId, localPort, 0)
       return
     }
@@ -442,8 +517,9 @@ const main = async () => {
     process.exit(1)
   }
 
-  // 5. Wait for SGLang and start tunnel
+  // 5. Wait for SGLang and start tunnel with H2 proxy
   await waitForSGLangReady(computeNode)
+  await startDockerCaddy(localPort, TUNNEL_PORT_BASE)
   await startTunnelSupervisor(computeNode, jobId, localPort, 0)
 }
 

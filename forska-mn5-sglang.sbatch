@@ -47,6 +47,16 @@ echo "[mn5] using container runtime: $SINGULARITY_BIN"
 SIF_SGLANG="$STACK_ROOT/sglang_latest.sif"
 [[ -f "$SIF_SGLANG" ]] || { echo "[mn5] missing: $SIF_SGLANG" >&2; exit 2; }
 
+# Caddy binary for H2 multiplexing (required for SSH tunnel stability)
+CADDY_BIN="$STACK_ROOT/bin/caddy"
+if [[ ! -x "$CADDY_BIN" ]]; then
+  echo "[mn5] ERROR: Caddy not found at $CADDY_BIN" >&2
+  echo "       Download from https://caddyserver.com/download (linux/amd64)" >&2
+  echo "       Then: scp caddy tlog:$STACK_ROOT/bin/caddy" >&2
+  exit 1
+fi
+echo "[mn5] using caddy: $($CADDY_BIN version 2>/dev/null | head -1)"
+
 # Logging
 LOG_DIR="$STACK_ROOT/logs/${SLURM_JOB_ID:-manual}"
 mkdir -p "$LOG_DIR"
@@ -75,7 +85,10 @@ resolve_ipv4() {
 
 # SGLang config - default model
 export SGLANG_MODEL=${SGLANG_MODEL:-openai/gpt-oss-120b}
-export SGLANG_PORT=${SGLANG_PORT:-30000}
+# Port scheme: Caddy:30002 (H2, external) -> SGLang:30001 (H1, internal)
+export SGLANG_INTERNAL_PORT=${SGLANG_INTERNAL_PORT:-30001}
+export CADDY_PORT=${CADDY_PORT:-30002}
+export SGLANG_PORT=${SGLANG_PORT:-$CADDY_PORT}  # External port = Caddy
 
 # Independent per-node workers (tp spans GPUs on the node; dp=1)
 # Router disabled by default - direct worker connections avoid SSH bandwidth throttling
@@ -87,9 +100,9 @@ else
 fi
 export SGLANG_ROUTER_POLICY=${SGLANG_ROUTER_POLICY:-power_of_two}
 if [[ "${SGLANG_ENABLE_ROUTER}" == "1" ]]; then
-  export SGLANG_WORKER_PORT=${SGLANG_WORKER_PORT:-$((SGLANG_PORT + 1))}
+  export SGLANG_WORKER_PORT=${SGLANG_WORKER_PORT:-$((SGLANG_INTERNAL_PORT + 1))}
 else
-  export SGLANG_WORKER_PORT=${SGLANG_WORKER_PORT:-$SGLANG_PORT}
+  export SGLANG_WORKER_PORT=${SGLANG_WORKER_PORT:-$SGLANG_INTERNAL_PORT}
 fi
 
 # Resolve model path: if it looks like a HuggingFace ID (contains /), try to find it in the cache
@@ -217,8 +230,8 @@ fi
 # Memory fraction: 0.90 - allocate most GPU memory to KV cache
 # Max running requests: 64 - reduced to fit longer context windows in memory
 
-export SGLANG_MAX_RUNNING_REQUESTS=${SGLANG_MAX_RUNNING_REQUESTS:-600}
-export SGLANG_API_MAX_INFLIGHT_REQUESTS=${SGLANG_API_MAX_INFLIGHT_REQUESTS:-1200}
+export SGLANG_MAX_RUNNING_REQUESTS=${SGLANG_MAX_RUNNING_REQUESTS:-500}
+export SGLANG_API_MAX_INFLIGHT_REQUESTS=${SGLANG_API_MAX_INFLIGHT_REQUESTS:-1000}
 export SGLANG_API_MAX_BURST_REQUESTS=${SGLANG_API_MAX_BURST_REQUESTS:-30}
 export SGLANG_MEM_FRACTION=${SGLANG_MEM_FRACTION:-0.90}
 export SGLANG_CHUNKED_PREFILL_SIZE=${SGLANG_CHUNKED_PREFILL_SIZE:-8192}
@@ -230,6 +243,7 @@ export SGLANG_REASONING_PARSER=${SGLANG_REASONING_PARSER:-gpt-oss}
 
 echo "[mn5] model=$SGLANG_MODEL (path: $SGLANG_MODEL_PATH)"
 echo "[mn5] nodes=$NNODES gpus/node=$GPUS_PER_NODE total_gpus=$TOTAL_GPUS tp/node=$TP_SIZE dp=$DP_SIZE router=$SGLANG_ENABLE_ROUTER"
+echo "[mn5] ports: Caddy(H2):$CADDY_PORT -> SGLang(H1):$SGLANG_INTERNAL_PORT"
 echo "[mn5] context=$SGLANG_CONTEXT_LENGTH chunked_prefill=$SGLANG_CHUNKED_PREFILL_SIZE max_running_requests=$SGLANG_MAX_RUNNING_REQUESTS"
 
 # GPU detection
@@ -240,6 +254,7 @@ fi
 # Cleanup handler
 graceful_shutdown() {
   echo "[mn5] shutting down..."
+  [[ -n "${CADDY_PID:-}" ]] && kill -TERM "$CADDY_PID" 2>/dev/null || true
   [[ -n "${SGLANG_ROUTER_PID:-}" ]] && kill -TERM "$SGLANG_ROUTER_PID" 2>/dev/null || true
   [[ -n "${SGLANG_PID:-}" ]] && kill -TERM "$SGLANG_PID" 2>/dev/null || true
   jobs -pr | xargs -r kill -TERM 2>/dev/null || true
@@ -269,6 +284,27 @@ wait_for_http() {
 
 # Set environment for multi-node
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
+
+# Start Caddy H2 proxy (before SGLang)
+echo "[mn5] starting Caddy H2 proxy on :$CADDY_PORT -> localhost:$SGLANG_INTERNAL_PORT"
+CADDY_CONFIG="{
+  auto_https off
+  servers {
+    protocols h2c h1
+  }
+}
+:$CADDY_PORT {
+  reverse_proxy localhost:$SGLANG_INTERNAL_PORT
+}"
+echo "$CADDY_CONFIG" | "$CADDY_BIN" run --config - --adapter caddyfile >"$LOG_DIR/caddy.log" 2>&1 &
+CADDY_PID=$!
+sleep 1
+if ! kill -0 "$CADDY_PID" 2>/dev/null; then
+  echo "[mn5] ERROR: Caddy failed to start. Check $LOG_DIR/caddy.log" >&2
+  cat "$LOG_DIR/caddy.log" >&2
+  exit 1
+fi
+echo "[mn5] Caddy started (PID=$CADDY_PID)"
 
 echo "[mn5] launching SGLang with tp=$TP_SIZE dp=$DP_SIZE"
 
@@ -445,6 +481,8 @@ echo ""
 echo "[mn5:config:start]"
 echo "SGLANG_HOST=$(hostname)"
 echo "SGLANG_PORT=$SGLANG_PORT"
+echo "SGLANG_INTERNAL_PORT=$SGLANG_INTERNAL_PORT"
+echo "CADDY_PORT=$CADDY_PORT"
 echo "SGLANG_WORKER_PORT=$SGLANG_WORKER_PORT"
 echo "SGLANG_MODEL=$SGLANG_MODEL"
 echo "WORKER_URLS=$WORKER_URLS_CSV"
