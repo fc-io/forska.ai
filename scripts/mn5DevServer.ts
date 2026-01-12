@@ -532,6 +532,8 @@ const startDevServer = async (config: MN5Config): Promise<void> => {
 
   const env = {
     ...process.env,
+    // Enable server-side judging when running with MN5
+    RUN_SERVER_JUDGING: 'true',
     // Worker URLs for LLM requests and metrics (using local ports via tunnel)
     WORKER_URLS: config.WORKER_URLS_LOCAL,
     // Router mode flag
