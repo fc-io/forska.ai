@@ -24,6 +24,120 @@ const openAIClients = new Map<string, OpenAI>()
 
 type ModelConfigInput = {modelId: string; modelName: string; baseURL: string}
 
+const loggedFirstJudgeRequestByJobId = new Map<string, true>()
+
+const trimLoggedFirstJudgeRequestByJobId = (): void => {
+  return loggedFirstJudgeRequestByJobId.size <= 200
+    ? undefined
+    : (loggedFirstJudgeRequestByJobId.delete(loggedFirstJudgeRequestByJobId.keys().next().value as string),
+      trimLoggedFirstJudgeRequestByJobId())
+}
+
+const truncateForLog = (text: string, maxChars: number): {text: string; originalLength: number; truncated: boolean} => {
+  const originalLength = text.length
+  const truncated = originalLength > maxChars
+  const truncatedText = truncated ? `${text.slice(0, maxChars)}…` : text
+  return {text: truncatedText, originalLength, truncated}
+}
+
+const getFirstRequestPreviewChars = (): number => {
+  const fromEnv = Number(process.env.JUDGE_FIRST_REQUEST_PREVIEW_CHARS)
+  return Number.isFinite(fromEnv) && fromEnv > 0 ? Math.floor(fromEnv) : 4000
+}
+
+const logFirstJudgeRequest = ({
+  judgmentsJobId,
+  articleId,
+  promptId,
+  baseURL,
+  modelName,
+  systemPrompt,
+  userPrompt,
+  requestConfig,
+}: {
+  judgmentsJobId: string
+  articleId: string
+  promptId: string
+  baseURL: string
+  modelName: string
+  systemPrompt: string
+  userPrompt: string
+  requestConfig: {temperature: number; maxCompletionTokens: number}
+}): void => {
+  loggedFirstJudgeRequestByJobId.set(judgmentsJobId, true)
+  trimLoggedFirstJudgeRequestByJobId()
+
+  const previewChars = getFirstRequestPreviewChars()
+  const userPromptPreview = truncateForLog(userPrompt, previewChars)
+  const systemPromptPreview = truncateForLog(systemPrompt, previewChars)
+  const shouldLogFullPrompt = process.env.JUDGE_FIRST_REQUEST_LOG_FULL === 'true'
+
+  console.log('[judge] first-request', {
+    judgmentsJobId,
+    articleId,
+    promptId,
+    baseURL,
+    modelName,
+    normalizedModelName: normalizeModelName(modelName),
+    request: {
+      temperature: requestConfig.temperature,
+      max_completion_tokens: requestConfig.maxCompletionTokens,
+      messages: [
+        {
+          role: 'system',
+          contentLength: systemPromptPreview.originalLength,
+          contentTruncated: systemPromptPreview.truncated,
+          content: systemPromptPreview.text,
+        },
+        {
+          role: 'user',
+          contentLength: userPromptPreview.originalLength,
+          contentTruncated: userPromptPreview.truncated,
+          content: userPromptPreview.text,
+        },
+      ],
+    },
+  })
+
+  return shouldLogFullPrompt
+    ? console.log('[judge] first-request:full-user-prompt', {judgmentsJobId, userPrompt})
+    : undefined
+}
+
+const logFirstJudgeRequestIfNeeded = ({
+  judgmentsJobId,
+  articleId,
+  promptId,
+  baseURL,
+  modelName,
+  systemPrompt,
+  userPrompt,
+  requestConfig,
+}: {
+  judgmentsJobId: string
+  articleId: string
+  promptId: string
+  baseURL: string
+  modelName: string
+  systemPrompt: string
+  userPrompt: string
+  requestConfig: {temperature: number; maxCompletionTokens: number}
+}): void => {
+  const alreadyLogged = loggedFirstJudgeRequestByJobId.has(judgmentsJobId)
+  return alreadyLogged
+    ? undefined
+    : logFirstJudgeRequest({
+        judgmentsJobId,
+        articleId,
+        promptId,
+        baseURL,
+        modelName,
+        systemPrompt,
+        userPrompt,
+        requestConfig,
+      })
+}
+
 type AssistantMessageShape = {
   role: 'assistant'
   content: string
@@ -188,6 +302,16 @@ export const judgeSinglePrompt = async ({
   const startDuration = performance.now()
 
   const basePrompt = judgeGetSinglePrompt(article, prompt, contentSettings)
+  logFirstJudgeRequestIfNeeded({
+    judgmentsJobId,
+    articleId: article.id,
+    promptId: prompt.id,
+    baseURL,
+    modelName,
+    systemPrompt: SINGLE_PROMPT_SYSTEM_PROMPT,
+    userPrompt: basePrompt,
+    requestConfig: {temperature: 0.1, maxCompletionTokens: 2000},
+  })
   const promptIds = [prompt.id]
   let userPrompt = basePrompt
   let attempts = 0
