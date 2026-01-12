@@ -3,7 +3,7 @@ import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../db/schema.ts'
 import {env} from '../../utils/env.ts'
-import {getMaxNumberOfInflightRequests} from './getMaxNumberOfInflightRequests.ts'
+import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
 import {getSGLangMetrics} from './judgmentsJobsAdjustBatchSize/getSGLangMetrics.ts'
 
 const ema = (prev: number | null | undefined, cur: number, alpha: number): number => {
@@ -172,7 +172,8 @@ export const judgmentsJobsCheckLLMStatus = async (db: PostgresJsDatabase<typeof 
       const tPre = isUnsafe ? targetPrefillFinal * 0.6 : targetPrefillFinal
 
       const inFlight = numQueueReqs + numRunningReqs
-      const maxInFlight = getMaxNumberOfInflightRequests()
+      // Show per-worker limit (not total across all workers) for accurate per-instance display
+      const maxInFlight = getJudgmentsCapacity(1).perWorkerMaxInflightRequests
 
       const llmStatusData = {
         engine,
