@@ -83,6 +83,7 @@ export const projectExportRoutes = new Elysia()
       const projectId = params.id
       const includeExplanation = body.includeExplanation ?? false
       const includeQuotes = body.includeQuotes ?? false
+      const includeSummary = body.includeSummary ?? false
       const includePromptType = body.includePromptType ?? false
       const includePromptContent = body.includePromptContent ?? false
 
@@ -165,6 +166,9 @@ export const projectExportRoutes = new Elysia()
       })
 
       const headers: string[] = ['Title']
+      if (includeSummary) {
+        headers.push('Abstract/Summary')
+      }
       for (const id of orderedPromptIds) {
         const baseHeading = promptHeaderMap.get(id) || id
         const heading = buildPromptHeaderLabel(
@@ -222,6 +226,7 @@ export const projectExportRoutes = new Elysia()
                 .select({
                   articleId: articles.id,
                   articleTitle: articles.articleTitle,
+                  articleSummary: articles.articleSummary,
                   promptId: judgments.promptId,
                   answeredOriginal: judgments.answeredOriginal,
                   answeredOriginalAsArray: judgments.answeredOriginalAsArray,
@@ -251,6 +256,7 @@ export const projectExportRoutes = new Elysia()
                 string,
                 {
                   title: string
+                  summary: string
                   answers: Map<string, string>
                   explanations: Map<string, string>
                   quotes: Map<string, string>
@@ -260,11 +266,12 @@ export const projectExportRoutes = new Elysia()
               for (const row of batchData) {
                 if (!batchArticleMap.has(row.articleId)) {
                   batchArticleMap.set(row.articleId, {
-                    title: row.articleTitle || 'Untitled',
-                    answers: new Map(),
-                    explanations: new Map(),
-                    quotes: new Map(),
-                  })
+                  title: row.articleTitle || 'Untitled',
+                  summary: row.articleSummary || '',
+                  answers: new Map(),
+                  explanations: new Map(),
+                  quotes: new Map(),
+                })
                 }
                 const article = batchArticleMap.get(row.articleId)
                 if (article) {
@@ -294,6 +301,9 @@ export const projectExportRoutes = new Elysia()
               // Stream CSV rows for this batch
               for (const [_, articleData] of batchArticleMap) {
                 const row: string[] = [articleData.title]
+                if (includeSummary) {
+                  row.push(articleData.summary)
+                }
                 for (const promptId of orderedPromptIds) {
                   row.push(articleData.answers.get(promptId) || '')
                   if (includeExplanation) {
@@ -338,6 +348,7 @@ export const projectExportRoutes = new Elysia()
         sourceProjectIds: t.Optional(t.Array(t.String())),
         includeExplanation: t.Optional(t.Boolean()),
         includeQuotes: t.Optional(t.Boolean()),
+        includeSummary: t.Optional(t.Boolean()),
         includePromptType: t.Optional(t.Boolean()),
         includePromptContent: t.Optional(t.Boolean()),
       }),

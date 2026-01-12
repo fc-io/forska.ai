@@ -48,6 +48,7 @@ const ExportData = () => {
   const [selectedPrompts, setSelectedPrompts] = createSignal<Record<string, boolean>>({})
   const [includeExplanation, setIncludeExplanation] = createSignal(false)
   const [includeQuotes, setIncludeQuotes] = createSignal(false)
+  const [includeSummary, setIncludeSummary] = createSignal(false)
   const [includePromptType, setIncludePromptType] = createSignal(false)
   const [includePromptContent, setIncludePromptContent] = createSignal(false)
   const [isExporting, setIsExporting] = createSignal(false)
@@ -118,6 +119,7 @@ const ExportData = () => {
           sourceProjectIds: [projectId],
           includeExplanation: includeExplanation(),
           includeQuotes: includeQuotes(),
+          includeSummary: includeSummary(),
           includePromptType: includePromptType(),
           includePromptContent: includePromptContent(),
         }),
@@ -265,6 +267,27 @@ const ExportData = () => {
                   />
                   <div class="flex-1">
                     <p class="text-sm font-medium text-gray-900">Include Prompt Content in Headers</p>
+                  </div>
+                </label>
+              </div>
+            </div>
+            <div class="mb-6">
+              <p class="block text-sm font-medium mb-2">Abstract/Summary</p>
+              <p class="text-xs text-muted-foreground mb-3">
+                Optionally add abstract/summary as a column next to Title.
+              </p>
+              <div class="space-y-2">
+                <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer hover:bg-muted/50">
+                  <input
+                    type="checkbox"
+                    class="mt-1"
+                    checked={includeSummary()}
+                    onChange={(e) => {
+                      setIncludeSummary(e.currentTarget.checked)
+                    }}
+                  />
+                  <div class="flex-1">
+                    <p class="text-sm font-medium text-gray-900">Include Abstract/Summary</p>
                   </div>
                 </label>
               </div>
