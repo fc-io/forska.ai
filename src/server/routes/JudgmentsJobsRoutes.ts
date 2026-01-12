@@ -153,6 +153,8 @@ const getJobContext = async ({
     status: string
     error: string[] | null
     projectName: string | null
+    useFulltext: boolean
+    useFulltextNoImages: boolean
   }
   projectModelId: string
   projectDateFrom: Date | null
@@ -171,6 +173,8 @@ const getJobContext = async ({
       projectModelId: projects.modelId,
       projectDateFrom: projects.dateFrom,
       projectDateTo: projects.dateTo,
+      projectUseFulltext: projects.useFulltext,
+      projectUseFulltextNoImages: projects.useFulltextNoImages,
     })
     .from(judgmentsJobs)
     .leftJoin(projects, eq(judgmentsJobs.projectId, projects.id))
@@ -181,7 +185,14 @@ const getJobContext = async ({
     throw new Error('Job not found')
   }
 
-  const {projectDateFrom, projectDateTo, projectModelId, ...job} = jobWithProject
+  const {projectDateFrom, projectDateTo, projectModelId, projectUseFulltext, projectUseFulltextNoImages, ...rest} =
+    jobWithProject
+
+  const job = {
+    ...rest,
+    useFulltext: projectUseFulltext ?? false,
+    useFulltextNoImages: projectUseFulltextNoImages ?? false,
+  }
 
   if (!projectModelId) {
     throw new Error('Project model ID not found')
