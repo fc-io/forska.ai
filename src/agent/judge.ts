@@ -72,6 +72,11 @@ const logFirstJudgeRequest = ({
   const systemPromptPreview = truncateForLog(systemPrompt, previewChars)
   const shouldLogFullPrompt = process.env.JUDGE_FIRST_REQUEST_LOG_FULL === 'true'
 
+  const messages = {
+    system: systemPromptPreview.text,
+    user: userPromptPreview.text,
+  }
+
   console.log('[judge] first-request', {
     judgmentsJobId,
     articleId,
@@ -82,20 +87,7 @@ const logFirstJudgeRequest = ({
     request: {
       temperature: requestConfig.temperature,
       max_completion_tokens: requestConfig.maxCompletionTokens,
-      messages: [
-        {
-          role: 'system',
-          contentLength: systemPromptPreview.originalLength,
-          contentTruncated: systemPromptPreview.truncated,
-          content: systemPromptPreview.text,
-        },
-        {
-          role: 'user',
-          contentLength: userPromptPreview.originalLength,
-          contentTruncated: userPromptPreview.truncated,
-          content: userPromptPreview.text,
-        },
-      ],
+      messages,
     },
   })
 
