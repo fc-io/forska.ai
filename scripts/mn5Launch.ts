@@ -189,26 +189,36 @@ const ensureLocalPortReadyForTunnel = async (localPort: number): Promise<'ready'
 }
 
 const spawnTunnelProcess = (computeNode: string, localPort: number) => {
-  return spawn(
+  const logFile = Bun.file('mn5-tunnel.log')
+  const proc = spawn(
     [
       'ssh',
+      '-C', // Compression
+      '-vv', // Verbose logging
       '-N',
       '-o',
       'ControlMaster=no',
       '-o',
       'ControlPath=none',
       '-o',
-      'ServerAliveInterval=30',
+      'ServerAliveInterval=60', // Relaxed keepalive (was 30)
       '-o',
-      'ServerAliveCountMax=3',
+      'ServerAliveCountMax=10', // Relaxed keepalive (was 3)
       '-o',
       'ExitOnForwardFailure=yes',
       '-L',
       `${localPort}:${computeNode}:${SGLANG_PORT}`,
       ALOG,
     ],
-    {stdout: 'inherit', stderr: 'inherit', stdin: 'inherit'},
+    {stdout: 'inherit', stderr: 'pipe', stdin: 'inherit'},
   )
+
+  // Redirect stderr to file for debugging
+  Bun.write(logFile, proc.stderr).catch((err) => {
+    console.error('Failed to write tunnel logs:', err)
+  })
+
+  return proc
 }
 
 const waitForExistingTunnel = async (jobId: string, computeNode: string, localPort: number): Promise<void> => {

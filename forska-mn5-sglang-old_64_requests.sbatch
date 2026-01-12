@@ -216,11 +216,11 @@ fi
 # Max context: 128K (131072) - requires trading throughput for context length
 # Memory fraction: 0.90 - allocate most GPU memory to KV cache
 # Max running requests: 64 - reduced to fit longer context windows in memory
-export SGLANG_MAX_RUNNING_REQUESTS=${SGLANG_MAX_RUNNING_REQUESTS:-256}
+export SGLANG_MAX_RUNNING_REQUESTS=${SGLANG_MAX_RUNNING_REQUESTS:-64}
 export SGLANG_MEM_FRACTION=${SGLANG_MEM_FRACTION:-0.90}
 export SGLANG_CHUNKED_PREFILL_SIZE=${SGLANG_CHUNKED_PREFILL_SIZE:-8192}
-export SGLANG_CONTEXT_LENGTH=${SGLANG_CONTEXT_LENGTH:-32768}
-# export SGLANG_DTYPE=${SGLANG_DTYPE:-bfloat16}
+export SGLANG_CONTEXT_LENGTH=${SGLANG_CONTEXT_LENGTH:-131072}
+export SGLANG_DTYPE=${SGLANG_DTYPE:-bfloat16}
 # Reasoning parser for models with thinking/channel tokens (gpt-oss, deepseek-r1, qwen3)
 # This separates reasoning traces into 'reasoning_content' field in the API response
 export SGLANG_REASONING_PARSER=${SGLANG_REASONING_PARSER:-gpt-oss}
@@ -284,7 +284,7 @@ SGLANG_ARGS=(
   --max-running-requests "$SGLANG_MAX_RUNNING_REQUESTS"
   --chunked-prefill-size "$SGLANG_CHUNKED_PREFILL_SIZE"
   --context-length "$SGLANG_CONTEXT_LENGTH"
-  # --dtype "$SGLANG_DTYPE"
+  --dtype "$SGLANG_DTYPE"
   --enable-metrics
   --download-dir /hf
 )

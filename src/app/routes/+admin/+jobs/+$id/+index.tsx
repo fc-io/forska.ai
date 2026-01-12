@@ -154,7 +154,22 @@ const AdminJudgmentJobDetail = () => {
                     <div class="grid grid-cols-2 gap-4 mt-6">
                       <div>
                         <p class="text-sm text-gray-500">Project</p>
-                        <p class="font-medium">{data()?.projectName || 'Unknown Project'}</p>
+                        <Show
+                          when={data()?.projectId}
+                          fallback={<p class="font-medium">{data()?.projectName || 'Unknown Project'}</p>}
+                        >
+                          {(projectId) => {
+                            return (
+                              <Link
+                                to="/projects/$id"
+                                params={{id: projectId()}}
+                                class="font-medium text-blue-600 hover:text-blue-800 hover:underline"
+                              >
+                                {data()?.projectName || 'Unknown Project'}
+                              </Link>
+                            )
+                          }}
+                        </Show>
                       </div>
                       <div>
                         <p class="text-sm text-gray-500">Project ID</p>
