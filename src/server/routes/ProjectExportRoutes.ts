@@ -16,6 +16,40 @@ const escapeCSV = (value: string): string => {
   return value
 }
 
+type PromptDetails = {
+  id: string
+  promptHeading: string | null
+  originalText: string | null
+  type: string | null
+}
+
+type PromptInfoRow = {title: string; type: string; prompt: string}
+
+const buildPromptInfoRows = (promptIds: string[], promptDetails: PromptDetails[]): PromptInfoRow[] => {
+  const promptDetailsMap = new Map(promptDetails.map((detail) => [detail.id, detail]))
+  return promptIds.flatMap((promptId) => {
+    const detail = promptDetailsMap.get(promptId)
+    return detail
+      ? [
+          {
+            title: detail.promptHeading || 'Untitled Prompt',
+            type: detail.type ?? '',
+            prompt: detail.originalText ?? '',
+          },
+        ]
+      : []
+  })
+}
+
+const buildPromptInfoCsv = (promptIds: string[], promptDetails: PromptDetails[]): string => {
+  const rows = buildPromptInfoRows(promptIds, promptDetails)
+  const headerRow = ['Title', 'Type', 'Prompt'].map(escapeCSV).join(',')
+  const dataRows = rows.map((row) => {
+    return [row.title, row.type, row.prompt].map(escapeCSV).join(',')
+  })
+  return [headerRow, ...dataRows].join('\n') + '\n'
+}
+
 const buildPromptMetadataLines = (
   promptType: string,
   promptContent: string,
@@ -306,6 +340,51 @@ export const projectExportRoutes = new Elysia()
         includeQuotes: t.Optional(t.Boolean()),
         includePromptType: t.Optional(t.Boolean()),
         includePromptContent: t.Optional(t.Boolean()),
+      }),
+    },
+  )
+  .post(
+    '/api/projects/:id/export-prompts',
+    async ({params, body, set}) => {
+      const db = getDatabase()
+      const projectId = params.id
+
+      const [project] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1)
+      if (!project) {
+        throw new Error('Project not found')
+      }
+
+      const promptIds = body.promptIds
+      if (!promptIds || promptIds.length === 0) {
+        throw new Error('No prompts selected for export')
+      }
+
+      const promptDetails = await db
+        .select({
+          id: prompts.id,
+          promptHeading: prompts.promptHeading,
+          originalText: prompts.originalText,
+          type: prompts.type,
+        })
+        .from(prompts)
+        .where(inArray(prompts.id, promptIds))
+
+      const csv = buildPromptInfoCsv(promptIds, promptDetails)
+      const filename = `${project.name.replace(/[^a-zA-Z0-9]/g, '_')}_prompts_${new Date().toISOString().slice(0, 10)}.csv`
+
+      set.headers['Content-Type'] = 'text/csv; charset=utf-8'
+      set.headers['Content-Disposition'] = `attachment; filename="${filename}"`
+
+      return new Response(csv, {
+        headers: {
+          'Content-Type': 'text/csv; charset=utf-8',
+          'Content-Disposition': `attachment; filename="${filename}"`,
+        },
+      })
+    },
+    {
+      body: t.Object({
+        promptIds: t.Array(t.String()),
       }),
     },
   )

@@ -9,6 +9,26 @@ import {env} from '../../../utils/client-env'
 
 type PromptInfo = {id: string; promptHeading: string | null; originalText: string; type: string | null}
 
+const getFilenameFromResponse = (response: Response, fallbackFilename: string): string => {
+  const contentDisposition = response.headers.get('Content-Disposition')
+  const filenameMatch = contentDisposition ? contentDisposition.match(/filename="([^"]+)"/) : null
+  const filenameFromHeader = filenameMatch && filenameMatch[1] ? filenameMatch[1] : null
+  return filenameFromHeader ?? fallbackFilename
+}
+
+const downloadResponseAsCsv = async (response: Response, fallbackFilename: string): Promise<void> => {
+  const filename = getFilenameFromResponse(response, fallbackFilename)
+  const blob = await response.blob()
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
+}
+
 const ExportData = () => {
   const params = Route.useParams()
   const projectId = (params() as {id: string}).id
@@ -31,6 +51,7 @@ const ExportData = () => {
   const [includePromptType, setIncludePromptType] = createSignal(false)
   const [includePromptContent, setIncludePromptContent] = createSignal(false)
   const [isExporting, setIsExporting] = createSignal(false)
+  const [isExportingPrompts, setIsExportingPrompts] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
 
   const togglePromptSelection = (promptId: string) => {
@@ -106,33 +127,48 @@ const ExportData = () => {
         throw new Error('Export failed')
       }
 
-      // Get filename from Content-Disposition header
-      const contentDisposition = response.headers.get('Content-Disposition')
-      let filename = `export-${projectId}.csv`
-      if (contentDisposition) {
-        const filenameMatch = contentDisposition.match(/filename="([^"]+)"/)
-        if (filenameMatch && filenameMatch[1]) {
-          filename = filenameMatch[1]
-        }
-      }
-
-      // Stream the response directly to a blob
-      const blob = await response.blob()
-
-      // Create and download CSV file
-      const url = URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = filename
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      URL.revokeObjectURL(url)
+      const filename = `export-${projectId}.csv`
+      await downloadResponseAsCsv(response, filename)
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'An unexpected error occurred'
       setError(errorMessage)
     } finally {
       setIsExporting(false)
+    }
+  }
+
+  const handleExportPrompts = async () => {
+    setError(null)
+    setIsExportingPrompts(true)
+
+    try {
+      const selectedPromptIds = Object.keys(selectedPrompts())
+      if (selectedPromptIds.length === 0) {
+        setError('Please select at least one prompt to export')
+        setIsExportingPrompts(false)
+        return
+      }
+
+      const response = await fetch(`${env.VITE_SERVER_API}/api/projects/${projectId}/export-prompts`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        credentials: 'include',
+        body: JSON.stringify({
+          promptIds: selectedPromptIds,
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error('Prompt export failed')
+      }
+
+      const filename = `prompts-${projectId}.csv`
+      await downloadResponseAsCsv(response, filename)
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'An unexpected error occurred'
+      setError(errorMessage)
+    } finally {
+      setIsExportingPrompts(false)
     }
   }
 
@@ -306,9 +342,18 @@ const ExportData = () => {
               onClick={() => {
                 return void handleExport()
               }}
-              disabled={!hasAnyPromptSelected() || isExporting()}
+              disabled={!hasAnyPromptSelected() || isExporting() || isExportingPrompts()}
             >
               {isExporting() ? 'Exporting...' : 'Export to CSV'}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => {
+                return void handleExportPrompts()
+              }}
+              disabled={!hasAnyPromptSelected() || isExporting() || isExportingPrompts()}
+            >
+              {isExportingPrompts() ? 'Exporting Prompts...' : 'Export Prompt Info'}
             </Button>
           </div>
         </div>
