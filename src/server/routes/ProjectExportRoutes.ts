@@ -16,6 +16,29 @@ const escapeCSV = (value: string): string => {
   return value
 }
 
+const buildPromptMetadataLines = (
+  promptType: string,
+  promptContent: string,
+  includePromptType: boolean,
+  includePromptContent: boolean,
+): string[] => {
+  const typeLine = includePromptType ? `Type: ${promptType}` : ''
+  const contentLine = includePromptContent ? `Content: ${promptContent}` : ''
+  return [typeLine, contentLine].filter(Boolean)
+}
+
+const buildPromptHeaderLabel = (
+  heading: string,
+  promptType: string,
+  promptContent: string,
+  includePromptType: boolean,
+  includePromptContent: boolean,
+): string => {
+  const metadataLines = buildPromptMetadataLines(promptType, promptContent, includePromptType, includePromptContent)
+  const labelLines = metadataLines.length > 0 ? [heading, ...metadataLines] : [heading]
+  return labelLines.join('\n')
+}
+
 export const projectExportRoutes = new Elysia()
   .use(withErrorHandler())
   .use(requireUserAuth())
@@ -26,6 +49,8 @@ export const projectExportRoutes = new Elysia()
       const projectId = params.id
       const includeExplanation = body.includeExplanation ?? false
       const includeQuotes = body.includeQuotes ?? false
+      const includePromptType = body.includePromptType ?? false
+      const includePromptContent = body.includePromptContent ?? false
 
       // Verify project exists
       const [project] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1)
@@ -40,13 +65,22 @@ export const projectExportRoutes = new Elysia()
 
       // Get prompt details for headers
       const promptDetails = await db
-        .select({id: prompts.id, promptHeading: prompts.promptHeading, originalText: prompts.originalText})
+        .select({
+          id: prompts.id,
+          promptHeading: prompts.promptHeading,
+          originalText: prompts.originalText,
+          type: prompts.type,
+        })
         .from(prompts)
         .where(inArray(prompts.id, promptIds))
 
       const promptHeaderMap = new Map<string, string>()
+      const promptTypeMap = new Map<string, string>()
+      const promptContentMap = new Map<string, string>()
       for (const p of promptDetails) {
         promptHeaderMap.set(p.id, p.promptHeading || p.originalText.substring(0, 50))
+        promptTypeMap.set(p.id, p.type ?? '')
+        promptContentMap.set(p.id, p.originalText ?? '')
       }
 
       // Build scope condition for articles
@@ -98,13 +132,20 @@ export const projectExportRoutes = new Elysia()
 
       const headers: string[] = ['Title']
       for (const id of orderedPromptIds) {
-        const heading = promptHeaderMap.get(id) || id
+        const baseHeading = promptHeaderMap.get(id) || id
+        const heading = buildPromptHeaderLabel(
+          baseHeading,
+          promptTypeMap.get(id) ?? '',
+          promptContentMap.get(id) ?? '',
+          includePromptType,
+          includePromptContent,
+        )
         headers.push(heading)
         if (includeExplanation) {
-          headers.push(`${heading} - Explanation`)
+          headers.push(`${baseHeading} - Explanation`)
         }
         if (includeQuotes) {
-          headers.push(`${heading} - Quotes`)
+          headers.push(`${baseHeading} - Quotes`)
         }
       }
 
@@ -263,6 +304,8 @@ export const projectExportRoutes = new Elysia()
         sourceProjectIds: t.Optional(t.Array(t.String())),
         includeExplanation: t.Optional(t.Boolean()),
         includeQuotes: t.Optional(t.Boolean()),
+        includePromptType: t.Optional(t.Boolean()),
+        includePromptContent: t.Optional(t.Boolean()),
       }),
     },
   )

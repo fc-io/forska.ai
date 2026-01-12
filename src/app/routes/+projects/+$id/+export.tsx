@@ -28,6 +28,8 @@ const ExportData = () => {
   const [selectedPrompts, setSelectedPrompts] = createSignal<Record<string, boolean>>({})
   const [includeExplanation, setIncludeExplanation] = createSignal(false)
   const [includeQuotes, setIncludeQuotes] = createSignal(false)
+  const [includePromptType, setIncludePromptType] = createSignal(false)
+  const [includePromptContent, setIncludePromptContent] = createSignal(false)
   const [isExporting, setIsExporting] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
 
@@ -95,6 +97,8 @@ const ExportData = () => {
           sourceProjectIds: [projectId],
           includeExplanation: includeExplanation(),
           includeQuotes: includeQuotes(),
+          includePromptType: includePromptType(),
+          includePromptContent: includePromptContent(),
         }),
       })
 
@@ -197,6 +201,38 @@ const ExportData = () => {
             <p class="text-sm text-muted-foreground">No prompts available for this project.</p>
           </Show>
           <Show when={!projectData.isLoading && !projectData.isError && availablePrompts().length > 0}>
+            <div class="mb-6">
+              <p class="block text-sm font-medium mb-2">Prompt Header Metadata</p>
+              <p class="text-xs text-muted-foreground mb-3">Optionally add prompt metadata inside the header cells.</p>
+              <div class="space-y-2">
+                <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer hover:bg-muted/50">
+                  <input
+                    type="checkbox"
+                    class="mt-1"
+                    checked={includePromptType()}
+                    onChange={(e) => {
+                      setIncludePromptType(e.currentTarget.checked)
+                    }}
+                  />
+                  <div class="flex-1">
+                    <p class="text-sm font-medium text-gray-900">Include Prompt Type in Headers</p>
+                  </div>
+                </label>
+                <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer hover:bg-muted/50">
+                  <input
+                    type="checkbox"
+                    class="mt-1"
+                    checked={includePromptContent()}
+                    onChange={(e) => {
+                      setIncludePromptContent(e.currentTarget.checked)
+                    }}
+                  />
+                  <div class="flex-1">
+                    <p class="text-sm font-medium text-gray-900">Include Prompt Content in Headers</p>
+                  </div>
+                </label>
+              </div>
+            </div>
             <div class="mb-6">
               <p class="block text-sm font-medium mb-2">Select Prompts to Export</p>
               <p class="text-xs text-muted-foreground mb-3">
