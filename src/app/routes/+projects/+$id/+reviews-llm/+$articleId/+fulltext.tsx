@@ -1,6 +1,6 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute} from '@tanstack/solid-router'
-import {createSignal, Show, Suspense} from 'solid-js'
+import {createEffect, createSignal, Show, Suspense} from 'solid-js'
 
 import {ArticleAdminSection} from '../../../../../../components/main/articles/articleAdminSection'
 import {ArticleTabs} from '../../../../../../components/main/articles/articleTabs'
@@ -12,6 +12,7 @@ import {ReviewJudgments} from '../../../../../../components/main/projects/review
 import {ReviewStatus} from '../../../../../../components/main/projects/reviews/review/reviewStatus.tsx'
 import {apiClient} from '../../../../../../services/apiClient.ts'
 import {fetchSession} from '../../../../../../services/fetchSession'
+import {getArticleDocumentTitle} from '../../../../../utils/getArticleDocumentTitle'
 
 export const ReviewDetailFulltext = () => {
   const params = Route.useParams()
@@ -40,6 +41,10 @@ export const ReviewDetailFulltext = () => {
         return response.data
       },
     }
+  })
+
+  createEffect(() => {
+    document.title = getArticleDocumentTitle(articleQuery.data?.article?.articleTitle)
   })
 
   const hasFullText = () => {
