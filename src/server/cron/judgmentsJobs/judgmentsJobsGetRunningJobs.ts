@@ -50,6 +50,7 @@ export const judgmentsJobsGetRunningJobs = (db: PostgresJsDatabase<typeof schema
     .where(
       and(
         eq(schema.judgmentsJobs.status, 'running'),
+        eq(schema.projects.archived, false),
         or(
           eq(schema.models.modelName, sglangModel), // Exact HuggingFace ID match
           eq(schema.models.modelName, sglangModelLower), // Lowercase variant

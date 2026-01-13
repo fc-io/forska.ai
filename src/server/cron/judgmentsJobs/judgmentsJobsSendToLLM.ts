@@ -23,22 +23,94 @@ const shuffle = <T>(items: T[]): T[] => {
     })
 }
 
-const getRequestsToSendByJob = <T>(jobs: T[], requestsToSend: number): {job: T; limit: number}[] => {
-  const jobCount = jobs.length
-  const hasBudget = jobCount > 0 && requestsToSend > 0
-  const base = hasBudget ? Math.floor(requestsToSend / jobCount) : 0
-  const remainder = hasBudget ? requestsToSend % jobCount : 0
-  const shuffled = hasBudget ? shuffle(jobs) : []
-  const allocations = shuffled
-    .map((job, idx) => {
-      const limit = base + (idx < remainder ? 1 : 0)
-      return {job, limit}
+const getReadyCountsByJob = async (
+  db: PostgresJsDatabase<typeof schema>,
+  serverJobId: string,
+  jobIds: string[],
+): Promise<Map<string, number>> => {
+  const hasJobs = jobIds.length > 0
+  if (!hasJobs) return new Map()
+
+  const readyCounts = await db
+    .select({jobId: schema.judgmentsJobsPrompts.jobId, ready: count()})
+    .from(schema.judgmentsJobsPrompts)
+    .where(
+      and(
+        eq(schema.judgmentsJobsPrompts.status, 'ready'),
+        eq(schema.judgmentsJobsPrompts.serverId, serverJobId),
+        inArray(schema.judgmentsJobsPrompts.jobId, jobIds),
+      ),
+    )
+    .groupBy(schema.judgmentsJobsPrompts.jobId)
+
+  const pairs = readyCounts.map((row) => {
+    return [row.jobId, Number(row.ready)] as const
+  })
+  return new Map(pairs)
+}
+
+const getRequestsToSendByJob = <T extends {id: string}>(
+  jobs: T[],
+  requestsToSend: number,
+  readyCounts: Map<string, number>,
+): {job: T; limit: number}[] => {
+  const shuffled = shuffle(jobs)
+  const withReady = shuffled
+    .map((job) => {
+      const ready = readyCounts.get(job.id) ?? 0
+      return {job, ready}
     })
-    .filter(({limit}) => {
-      return limit > 0
+    .filter(({ready}) => {
+      return ready > 0
     })
 
-  return hasBudget ? allocations : []
+  const hasBudget = withReady.length > 0 && requestsToSend > 0
+  if (!hasBudget) return []
+
+  const base = Math.floor(requestsToSend / withReady.length)
+  const remainder = requestsToSend % withReady.length
+
+  const initialAllocations = withReady.map((entry, idx) => {
+    const desired = base + (idx < remainder ? 1 : 0)
+    const limit = Math.min(entry.ready, desired)
+    const remainingReady = Math.max(0, entry.ready - limit)
+    return {...entry, limit, remainingReady}
+  })
+
+  const used = initialAllocations.reduce((sum, entry) => {
+    return sum + entry.limit
+  }, 0)
+  const leftover = Math.max(0, requestsToSend - used)
+  const hasLeftover = leftover > 0
+  const withRemaining = initialAllocations.filter((entry) => {
+    return entry.remainingReady > 0
+  })
+
+  const redistributed = hasLeftover && withRemaining.length > 0
+    ? getRequestsToSendByJob(
+        withRemaining.map((entry) => {
+          return entry.job
+        }),
+        leftover,
+        new Map(
+          withRemaining.map((entry) => {
+            return [entry.job.id, entry.remainingReady] as const
+          }),
+        ),
+      )
+    : []
+
+  const merged = initialAllocations.map((entry) => {
+    const extra = redistributed.find((r) => {
+      return r.job.id === entry.job.id
+    })
+    const totalLimit = entry.limit + (extra?.limit ?? 0)
+    return {job: entry.job, limit: totalLimit}
+  })
+
+  return merged.filter(({limit}) => {
+    return limit > 0
+  })
 }
 
 const processPrompts = async (
@@ -115,6 +187,10 @@ export const judgmentsJobsSendToLLM = async (
     const promptsInFlight = await getNumberOfPromptsInFlight(db, serverJobId)
     const deficit = Math.max(0, capacity.maxInflight - promptsInFlight)
     const requestsToSend = Math.min(deficit, capacity.maxBurst)
+    const jobIds = allJobs.map((job) => {
+      return job.id
+    })
+    const readyCounts = await getReadyCountsByJob(db, serverJobId, jobIds)
 
     // Debug logging for capacity issues
     if (requestsToSend > 0 || promptsInFlight > capacity.maxInflight * 0.9) {
@@ -129,7 +205,7 @@ export const judgmentsJobsSendToLLM = async (
     }
 
     if (requestsToSend > 0 && allJobs.length > 0) {
-      const requestsToSendByJob = getRequestsToSendByJob(allJobs, requestsToSend)
+      const requestsToSendByJob = getRequestsToSendByJob(allJobs, requestsToSend, readyCounts)
 
       const promptsToProcess = await Promise.allSettled(
         requestsToSendByJob.map(({job, limit}) => {
