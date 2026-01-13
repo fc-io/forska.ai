@@ -2,9 +2,9 @@ import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute} from '@tanstack/solid-router'
 import {createEffect, createSignal, Suspense} from 'solid-js'
 
-import {authClient} from '../../lib/auth-client'
 import {fetchSession} from '../../../services/fetchSession'
 import {updateUserProfile} from '../../../services/usersService'
+import {authClient} from '../../lib/auth-client'
 
 const Settings = () => {
   const [displayName, setDisplayName] = createSignal('')
@@ -117,9 +117,7 @@ const Settings = () => {
   }
 
   const isChangePasswordDisabled = () => {
-    return (
-      isChangingPassword() || !currentPassword() || !newPassword() || !confirmNewPassword()
-    )
+    return isChangingPassword() || !currentPassword() || !newPassword() || !confirmNewPassword()
   }
 
   const isSaveDisabled = () => {
@@ -211,9 +209,7 @@ const Settings = () => {
               </div>
 
               {passwordError() && <p class="mt-2 text-sm text-red-600">{passwordError()}</p>}
-              {passwordSuccess() && !passwordError() && (
-                <p class="mt-2 text-sm text-green-600">{passwordSuccess()}</p>
-              )}
+              {passwordSuccess() && !passwordError() && <p class="mt-2 text-sm text-green-600">{passwordSuccess()}</p>}
 
               <div class="pt-2">
                 <button

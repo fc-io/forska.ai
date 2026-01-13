@@ -21,7 +21,12 @@ type ProjectWithPrompts = {
   id: string
   name: string
   description: string | null
+  modelId: string
   modelName: string | null
+  useTitle: boolean
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
   prompts: Array<{id: string; promptHeading: string | null; originalText: string; type: string | null}>
 }
 
@@ -40,7 +45,17 @@ export const subprojectsRoutes = new Elysia()
 
     // Get all non-archived projects with their model name
     const projectsList = await db
-      .select({id: projects.id, name: projects.name, description: projects.description, modelName: models.name})
+      .select({
+        id: projects.id,
+        name: projects.name,
+        description: projects.description,
+        modelId: projects.modelId,
+        modelName: models.name,
+        useTitle: projects.useTitle,
+        useAbstract: projects.useAbstract,
+        useFulltext: projects.useFulltext,
+        useFulltextNoImages: projects.useFulltextNoImages,
+      })
       .from(projects)
       .innerJoin(models, eq(projects.modelId, models.id))
       .where(eq(projects.archived, false))
@@ -66,7 +81,15 @@ export const subprojectsRoutes = new Elysia()
       // Include all projects that have prompts
       if (projectPromptsList.length > 0) {
         projectsWithPrompts.push({
-          ...project,
+          id: project.id,
+          name: project.name,
+          description: project.description,
+          modelId: project.modelId,
+          modelName: project.modelName,
+          useTitle: project.useTitle,
+          useAbstract: project.useAbstract,
+          useFulltext: project.useFulltext,
+          useFulltextNoImages: project.useFulltextNoImages,
           prompts: projectPromptsList.map((p) => {
             return {id: p.id, promptHeading: p.promptHeading, originalText: p.originalText, type: p.type}
           }),
@@ -192,9 +215,18 @@ export const subprojectsRoutes = new Elysia()
         return r.importRouteId
       })
 
-      // Get project date bounds
+      // Get project date bounds and content/model settings
       const projectBounds = await db
-        .select({id: projects.id, dateFrom: projects.dateFrom, dateTo: projects.dateTo})
+        .select({
+          id: projects.id,
+          dateFrom: projects.dateFrom,
+          dateTo: projects.dateTo,
+          modelId: projects.modelId,
+          useTitle: projects.useTitle,
+          useAbstract: projects.useAbstract,
+          useFulltext: projects.useFulltext,
+          useFulltextNoImages: projects.useFulltextNoImages,
+        })
         .from(projects)
         .where(inArray(projects.id, body.sourceProjectIds))
 
@@ -290,14 +322,33 @@ export const subprojectsRoutes = new Elysia()
 
       const combinedWhereCondition = whereParts.length > 1 ? and(...whereParts) : whereParts[0]
 
+      // Build judgment filter: must match model+content from at least one source project
+      // Each source project has its own model and content settings
+      const judgmentConfigParts = projectBounds.map((proj) => {
+        return and(
+          eq(judgments.modelId, proj.modelId),
+          eq(judgments.useTitle, proj.useTitle),
+          eq(judgments.useAbstract, proj.useAbstract),
+          eq(judgments.useFulltext, proj.useFulltext),
+          eq(judgments.useFulltextNoImages, proj.useFulltextNoImages),
+        )
+      })
+      const judgmentConfigCondition =
+        judgmentConfigParts.length > 1 ? or(...judgmentConfigParts) : judgmentConfigParts[0]
+
       // Single query: find all articles that match ALL prompt/type combinations
       // Join on all selected prompts and use HAVING to ensure ALL conditions are met
+      // Filter judgments by prompt IDs and model+content configuration from source projects
       const groupedQuery = db
         .select({id: articles.id})
         .from(articles)
         .innerJoin(
           judgments,
-          and(eq(judgments.articleId, articles.id), inArray(judgments.promptId, allSelectedPromptIds)),
+          and(
+            eq(judgments.articleId, articles.id),
+            inArray(judgments.promptId, allSelectedPromptIds),
+            judgmentConfigCondition,
+          ),
         )
         .where(combinedWhereCondition)
         .groupBy(articles.id)

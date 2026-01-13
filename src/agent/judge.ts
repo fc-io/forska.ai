@@ -72,10 +72,7 @@ const logFirstJudgeRequest = ({
   const systemPromptPreview = truncateForLog(systemPrompt, previewChars)
   const shouldLogFullPrompt = process.env.JUDGE_FIRST_REQUEST_LOG_FULL === 'true'
 
-  const messages = {
-    system: systemPromptPreview.text,
-    user: userPromptPreview.text,
-  }
+  const messages = {system: systemPromptPreview.text, user: userPromptPreview.text}
 
   console.log('[judge] first-request', {
     judgmentsJobId,

@@ -29,11 +29,16 @@ const getUnassessedCountCacheKey = (
   projectDateFrom: Date | null | undefined,
   projectDateTo: Date | null | undefined,
   importRouteIds: string[],
+  useTitle: boolean,
+  useAbstract: boolean,
+  useFulltext: boolean,
+  useFulltextNoImages: boolean,
 ) => {
   const from = projectDateFrom ? projectDateFrom.toISOString() : ''
   const to = projectDateTo ? projectDateTo.toISOString() : ''
   const routes = importRouteIds.slice().sort().join(',')
-  return `${projectId}|${projectModelId}|${from}|${to}|${routes}`
+  const content = `${useTitle}|${useAbstract}|${useFulltext}|${useFulltextNoImages}`
+  return `${projectId}|${projectModelId}|${from}|${to}|${routes}|${content}`
 }
 
 const buildProjectDateConditions = ({
@@ -63,6 +68,10 @@ const getUnassessedArticlesCount = async ({
   projectDateFrom,
   projectDateTo,
   importRouteIds,
+  useTitle,
+  useAbstract,
+  useFulltext,
+  useFulltextNoImages,
 }: {
   db: Database
   projectId: string
@@ -70,8 +79,22 @@ const getUnassessedArticlesCount = async ({
   projectDateFrom: Date | null | undefined
   projectDateTo: Date | null | undefined
   importRouteIds: string[]
+  useTitle: boolean
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
 }): Promise<number> => {
-  const cacheKey = getUnassessedCountCacheKey(projectId, projectModelId, projectDateFrom, projectDateTo, importRouteIds)
+  const cacheKey = getUnassessedCountCacheKey(
+    projectId,
+    projectModelId,
+    projectDateFrom,
+    projectDateTo,
+    importRouteIds,
+    useTitle,
+    useAbstract,
+    useFulltext,
+    useFulltextNoImages,
+  )
   const cached = unassessedCountCache.get(cacheKey)
   const now = Date.now()
   if (cached && cached.expiresAt > now) {
@@ -102,7 +125,7 @@ const getUnassessedArticlesCount = async ({
     .innerJoin(projectPrompts, eq(projectPrompts.projectId, projectId))
     .leftJoin(
       judgments,
-      sql`${judgments.articleId} = ${articles.id} AND ${judgments.promptId} = ${projectPrompts.promptId} AND ${judgments.modelId} = ${projectModelId}::uuid`,
+      sql`${judgments.articleId} = ${articles.id} AND ${judgments.promptId} = ${projectPrompts.promptId} AND ${judgments.modelId} = ${projectModelId}::uuid AND ${judgments.useTitle} = ${useTitle} AND ${judgments.useAbstract} = ${useAbstract} AND ${judgments.useFulltext} = ${useFulltext} AND ${judgments.useFulltextNoImages} = ${useFulltextNoImages}`,
     )
 
   if (importRouteIds.length > 0) {
@@ -153,6 +176,8 @@ const getJobContext = async ({
     status: string
     error: string[] | null
     projectName: string | null
+    useTitle: boolean
+    useAbstract: boolean
     useFulltext: boolean
     useFulltextNoImages: boolean
   }
@@ -173,6 +198,8 @@ const getJobContext = async ({
       projectModelId: projects.modelId,
       projectDateFrom: projects.dateFrom,
       projectDateTo: projects.dateTo,
+      projectUseTitle: projects.useTitle,
+      projectUseAbstract: projects.useAbstract,
       projectUseFulltext: projects.useFulltext,
       projectUseFulltextNoImages: projects.useFulltextNoImages,
     })
@@ -185,11 +212,21 @@ const getJobContext = async ({
     throw new Error('Job not found')
   }
 
-  const {projectDateFrom, projectDateTo, projectModelId, projectUseFulltext, projectUseFulltextNoImages, ...rest} =
-    jobWithProject
+  const {
+    projectDateFrom,
+    projectDateTo,
+    projectModelId,
+    projectUseTitle,
+    projectUseAbstract,
+    projectUseFulltext,
+    projectUseFulltextNoImages,
+    ...rest
+  } = jobWithProject
 
   const job = {
     ...rest,
+    useTitle: projectUseTitle ?? true,
+    useAbstract: projectUseAbstract ?? true,
     useFulltext: projectUseFulltext ?? false,
     useFulltextNoImages: projectUseFulltextNoImages ?? false,
   }
@@ -221,6 +258,10 @@ const getUnassessedArticles = async ({
   projectDateFrom,
   projectDateTo,
   importRouteIds,
+  useTitle,
+  useAbstract,
+  useFulltext,
+  useFulltextNoImages,
 }: {
   db: Database
   projectId: string
@@ -228,6 +269,10 @@ const getUnassessedArticles = async ({
   projectDateFrom: Date | null | undefined
   projectDateTo: Date | null | undefined
   importRouteIds: string[]
+  useTitle: boolean
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
 }): Promise<
   {
     id: string
@@ -275,7 +320,7 @@ const getUnassessedArticles = async ({
     .innerJoin(projectPrompts, eq(projectPrompts.projectId, projectId))
     .leftJoin(
       judgments,
-      sql`${judgments.articleId} = ${articles.id} AND ${judgments.promptId} = ${projectPrompts.promptId} AND ${judgments.modelId} = ${projectModelId}::uuid`,
+      sql`${judgments.articleId} = ${articles.id} AND ${judgments.promptId} = ${projectPrompts.promptId} AND ${judgments.modelId} = ${projectModelId}::uuid AND ${judgments.useTitle} = ${useTitle} AND ${judgments.useAbstract} = ${useAbstract} AND ${judgments.useFulltext} = ${useFulltext} AND ${judgments.useFulltextNoImages} = ${useFulltextNoImages}`,
     )
     .groupBy(
       articles.id,
@@ -435,6 +480,10 @@ export const judgmentsJobsRoutes = new Elysia()
         projectDateFrom,
         projectDateTo,
         importRouteIds,
+        useTitle: job.useTitle,
+        useAbstract: job.useAbstract,
+        useFulltext: job.useFulltext,
+        useFulltextNoImages: job.useFulltextNoImages,
       })
 
       return {count}
@@ -458,6 +507,10 @@ export const judgmentsJobsRoutes = new Elysia()
         projectDateFrom,
         projectDateTo,
         importRouteIds,
+        useTitle: job.useTitle,
+        useAbstract: job.useAbstract,
+        useFulltext: job.useFulltext,
+        useFulltextNoImages: job.useFulltextNoImages,
       })
 
       return {data: unassessedArticles, error: null}

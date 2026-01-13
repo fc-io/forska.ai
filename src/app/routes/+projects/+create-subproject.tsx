@@ -13,7 +13,12 @@ type ProjectSource = {
   id: string
   name: string
   description: string | null
+  modelId: string
   modelName: string | null
+  useTitle: boolean
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
   prompts: PromptInfo[]
 }
 
@@ -33,6 +38,15 @@ const parseArktypeOptions = (typeStr: string | null): string[] => {
   return matches.map((m) => {
     return m.slice(1, -1) // Remove quotes
   })
+}
+
+const formatContentSettings = (project: ProjectSource): string => {
+  const parts: string[] = []
+  if (project.useTitle) parts.push('title')
+  if (project.useAbstract) parts.push('abstract')
+  if (project.useFulltext) parts.push('fulltext')
+  if (project.useFulltextNoImages) parts.push('fulltext (no images)')
+  return parts.length > 0 ? parts.join(' + ') : 'none'
 }
 
 const CreateSubproject = () => {
@@ -371,6 +385,7 @@ const CreateSubproject = () => {
                             <Show when={project.modelName}>
                               <p class="text-xs text-muted-foreground mt-1">Model: {project.modelName}</p>
                             </Show>
+                            <p class="text-xs text-muted-foreground mt-1">Content: {formatContentSettings(project)}</p>
                             <Show when={project.description}>
                               <p class="text-xs text-muted-foreground mt-1">{project.description}</p>
                             </Show>
@@ -391,7 +406,8 @@ const CreateSubproject = () => {
                 <p class="block text-sm font-medium mb-2">Select Prompts and Answer Types</p>
                 <p class="text-xs text-muted-foreground mb-3">
                   For each prompt, select which answer types to filter by. Articles must match ALL selected prompt/type
-                  combinations to be included.
+                  combinations to be included. Only judgments matching the source project's model and content settings
+                  are considered.
                 </p>
                 <div class="space-y-4">
                   <For each={availablePrompts()}>

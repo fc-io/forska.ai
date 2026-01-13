@@ -6,7 +6,15 @@
  */
 import {and, eq, inArray, sql} from 'drizzle-orm'
 
-import {importRoute, judgmentsHuman, projectArticles, projectPrompts, projectRouteLink, projects, prompts} from '../../db/schema.ts'
+import {
+  importRoute,
+  judgmentsHuman,
+  projectArticles,
+  projectPrompts,
+  projectRouteLink,
+  projects,
+  prompts,
+} from '../../db/schema.ts'
 import {getDatabase} from '../../server/utils/getDatabase.ts'
 import {getClickhouseClient} from './clickhouseClient.ts'
 
@@ -82,11 +90,17 @@ const fetchProjectMetadata = async (projectId: string) => {
   ])
 
   return {
-    promptIds: projectPromptRows.map((p) => p.id),
+    promptIds: projectPromptRows.map((p) => {
+      return p.id
+    }),
     projectBounds: projectBoundsResult[0] ?? null,
     modelId: projectBoundsResult[0]?.modelId ?? null,
-    routeTexts: projectImportRouteTexts.map((r) => r.route),
-    curatedArticleIds: curatedArticleRows.map((r) => r.articleId),
+    routeTexts: projectImportRouteTexts.map((r) => {
+      return r.route
+    }),
+    curatedArticleIds: curatedArticleRows.map((r) => {
+      return r.articleId
+    }),
   }
 }
 
@@ -112,7 +126,11 @@ const selectLlmArticleIds = async (params: SelectArticleIdsParams): Promise<stri
   const whereParts: string[] = []
 
   // Prompt filter
-  const promptIdsQuoted = metadata.promptIds.map((id) => `'${id}'`).join(', ')
+  const promptIdsQuoted = metadata.promptIds
+    .map((id) => {
+      return `'${id}'`
+    })
+    .join(', ')
   whereParts.push(`promptId IN (${promptIdsQuoted})`)
 
   // Model filter
@@ -154,11 +172,19 @@ const selectLlmArticleIds = async (params: SelectArticleIdsParams): Promise<stri
   // Scope filter
   const scopeParts: string[] = []
   if (hasCuratedArticles && metadata.curatedArticleIds.length <= 1000) {
-    const curatedIdsQuoted = metadata.curatedArticleIds.map((id) => `'${id}'`).join(', ')
+    const curatedIdsQuoted = metadata.curatedArticleIds
+      .map((id) => {
+        return `'${id}'`
+      })
+      .join(', ')
     scopeParts.push(`articleId IN (${curatedIdsQuoted})`)
   }
   if (hasImportRoutes) {
-    const routesQuoted = metadata.routeTexts.map((r) => `'${escapeClickHouseString(r)}'`).join(', ')
+    const routesQuoted = metadata.routeTexts
+      .map((r) => {
+        return `'${escapeClickHouseString(r)}'`
+      })
+      .join(', ')
     scopeParts.push(`articleImportRoute IN (${routesQuoted})`)
   }
   if (scopeParts.length > 0) {
@@ -174,7 +200,11 @@ const selectLlmArticleIds = async (params: SelectArticleIdsParams): Promise<stri
     for (const [promptId, answeredValues] of Object.entries(params.promptsFilter)) {
       if (!answeredValues || answeredValues.length === 0) continue
 
-      const valuesQuoted = answeredValues.map((v) => `'${escapeClickHouseString(v)}'`).join(', ')
+      const valuesQuoted = answeredValues
+        .map((v) => {
+          return `'${escapeClickHouseString(v)}'`
+        })
+        .join(', ')
       havingParts.push(
         `sumIf(1, promptId = '${promptId}' AND (
           (length(answeredOriginalAsArray) > 0 AND hasAny(arrayMap(x -> assumeNotNull(x), arrayFilter(x -> x IS NOT NULL, answeredOriginalAsArray)), [${valuesQuoted}]))
@@ -203,7 +233,9 @@ const selectLlmArticleIds = async (params: SelectArticleIdsParams): Promise<stri
   console.timeEnd('ch:select_llm')
   console.log(`[ClickHouse SelectIds LLM] Found ${data.length} articles`)
 
-  return data.map((r) => r.articleId)
+  return data.map((r) => {
+    return r.articleId
+  })
 }
 
 /**
@@ -228,7 +260,11 @@ const selectUnassessedArticleIds = async (params: SelectArticleIdsParams): Promi
   const whereParts: string[] = []
 
   // Prompt filter
-  const promptIdsQuoted = metadata.promptIds.map((id) => `'${id}'`).join(', ')
+  const promptIdsQuoted = metadata.promptIds
+    .map((id) => {
+      return `'${id}'`
+    })
+    .join(', ')
   whereParts.push(`promptId IN (${promptIdsQuoted})`)
 
   // Model filter
@@ -270,11 +306,19 @@ const selectUnassessedArticleIds = async (params: SelectArticleIdsParams): Promi
   // Scope filter
   const scopeParts: string[] = []
   if (hasCuratedArticles && metadata.curatedArticleIds.length <= 1000) {
-    const curatedIdsQuoted = metadata.curatedArticleIds.map((id) => `'${id}'`).join(', ')
+    const curatedIdsQuoted = metadata.curatedArticleIds
+      .map((id) => {
+        return `'${id}'`
+      })
+      .join(', ')
     scopeParts.push(`articleId IN (${curatedIdsQuoted})`)
   }
   if (hasImportRoutes) {
-    const routesQuoted = metadata.routeTexts.map((r) => `'${escapeClickHouseString(r)}'`).join(', ')
+    const routesQuoted = metadata.routeTexts
+      .map((r) => {
+        return `'${escapeClickHouseString(r)}'`
+      })
+      .join(', ')
     scopeParts.push(`articleImportRoute IN (${routesQuoted})`)
   }
   if (scopeParts.length > 0) {
@@ -299,7 +343,11 @@ const selectUnassessedArticleIds = async (params: SelectArticleIdsParams): Promi
   console.time('ch:select_unassessed_fully')
   const fullyAssessedResult = await client.query({query: fullyAssessedQuery, format: 'JSONEachRow'})
   const fullyAssessedData = await fullyAssessedResult.json<{articleId: string}>()
-  const fullyAssessedIds = new Set(fullyAssessedData.map((r) => r.articleId))
+  const fullyAssessedIds = new Set(
+    fullyAssessedData.map((r) => {
+      return r.articleId
+    }),
+  )
   console.timeEnd('ch:select_unassessed_fully')
 
   // Get all articles in scope (with any judgment or none)
@@ -317,7 +365,13 @@ const selectUnassessedArticleIds = async (params: SelectArticleIdsParams): Promi
   console.timeEnd('ch:select_unassessed_partial')
 
   // Get partially assessed articles (have some judgments, but not all)
-  const partiallyAssessedIds = partialData.filter((r) => !fullyAssessedIds.has(r.articleId)).map((r) => r.articleId)
+  const partiallyAssessedIds = partialData
+    .filter((r) => {
+      return !fullyAssessedIds.has(r.articleId)
+    })
+    .map((r) => {
+      return r.articleId
+    })
 
   console.log(`[ClickHouse SelectIds Unassessed] Found ${partiallyAssessedIds.length} partially assessed articles`)
 
@@ -354,7 +408,13 @@ const selectBothArticleIds = async (params: SelectArticleIdsParams): Promise<str
     .groupBy(judgmentsHuman.articleId, judgmentsHuman.user)
     .having(sql`COUNT(DISTINCT ${judgmentsHuman.promptId}) = ${metadata.promptIds.length}`)
 
-  const humanAssessedArticleIds = [...new Set(fullyAssessedByHumanQuery.map((r) => r.articleId))]
+  const humanAssessedArticleIds = [
+    ...new Set(
+      fullyAssessedByHumanQuery.map((r) => {
+        return r.articleId
+      }),
+    ),
+  ]
   console.timeEnd('ch:select_both_human')
 
   if (humanAssessedArticleIds.length === 0) {
@@ -365,7 +425,11 @@ const selectBothArticleIds = async (params: SelectArticleIdsParams): Promise<str
   const whereParts: string[] = []
 
   // Prompt filter
-  const promptIdsQuoted = metadata.promptIds.map((id) => `'${id}'`).join(', ')
+  const promptIdsQuoted = metadata.promptIds
+    .map((id) => {
+      return `'${id}'`
+    })
+    .join(', ')
   whereParts.push(`promptId IN (${promptIdsQuoted})`)
 
   // Model filter
@@ -374,7 +438,11 @@ const selectBothArticleIds = async (params: SelectArticleIdsParams): Promise<str
   }
 
   // Article filter (must be human-assessed)
-  const humanArticleIdsQuoted = humanAssessedArticleIds.map((id) => `'${id}'`).join(', ')
+  const humanArticleIdsQuoted = humanAssessedArticleIds
+    .map((id) => {
+      return `'${id}'`
+    })
+    .join(', ')
   whereParts.push(`articleId IN (${humanArticleIdsQuoted})`)
 
   // Date bounds
@@ -414,11 +482,19 @@ const selectBothArticleIds = async (params: SelectArticleIdsParams): Promise<str
 
   const scopeParts: string[] = []
   if (hasCuratedArticles && metadata.curatedArticleIds.length <= 1000) {
-    const curatedIdsQuoted = metadata.curatedArticleIds.map((id) => `'${id}'`).join(', ')
+    const curatedIdsQuoted = metadata.curatedArticleIds
+      .map((id) => {
+        return `'${id}'`
+      })
+      .join(', ')
     scopeParts.push(`articleId IN (${curatedIdsQuoted})`)
   }
   if (hasImportRoutes) {
-    const routesQuoted = metadata.routeTexts.map((r) => `'${escapeClickHouseString(r)}'`).join(', ')
+    const routesQuoted = metadata.routeTexts
+      .map((r) => {
+        return `'${escapeClickHouseString(r)}'`
+      })
+      .join(', ')
     scopeParts.push(`articleImportRoute IN (${routesQuoted})`)
   }
   if (scopeParts.length > 0) {
@@ -434,7 +510,11 @@ const selectBothArticleIds = async (params: SelectArticleIdsParams): Promise<str
     for (const [promptId, answeredValues] of Object.entries(params.promptsFilter)) {
       if (!answeredValues || answeredValues.length === 0) continue
 
-      const valuesQuoted = answeredValues.map((v) => `'${escapeClickHouseString(v)}'`).join(', ')
+      const valuesQuoted = answeredValues
+        .map((v) => {
+          return `'${escapeClickHouseString(v)}'`
+        })
+        .join(', ')
       havingParts.push(
         `sumIf(1, promptId = '${promptId}' AND (
           (length(answeredOriginalAsArray) > 0 AND hasAny(arrayMap(x -> assumeNotNull(x), arrayFilter(x -> x IS NOT NULL, answeredOriginalAsArray)), [${valuesQuoted}]))
@@ -463,7 +543,9 @@ const selectBothArticleIds = async (params: SelectArticleIdsParams): Promise<str
   console.timeEnd('ch:select_both_llm')
   console.log(`[ClickHouse SelectIds Both] Found ${data.length} articles with both assessments`)
 
-  return data.map((r) => r.articleId)
+  return data.map((r) => {
+    return r.articleId
+  })
 }
 
 /**
@@ -502,12 +584,7 @@ const selectHumanArticleIds = async (params: SelectArticleIdsParams): Promise<st
   if (params.promptsFilter) {
     for (const [promptId, answers] of Object.entries(params.promptsFilter)) {
       if (!answers || answers.length === 0) continue
-      whereParts.push(
-        and(
-          eq(judgmentsHuman.promptId, promptId),
-          inArray(judgmentsHuman.answer, answers),
-        )!,
-      )
+      whereParts.push(and(eq(judgmentsHuman.promptId, promptId), inArray(judgmentsHuman.answer, answers))!)
     }
   }
 
@@ -525,7 +602,13 @@ const selectHumanArticleIds = async (params: SelectArticleIdsParams): Promise<st
     .groupBy(judgmentsHuman.articleId, judgmentsHuman.user)
     .having(sql`COUNT(DISTINCT ${judgmentsHuman.promptId}) = ${metadata.promptIds.length}`)
 
-  const articleIds = [...new Set(result.map((r) => r.articleId))]
+  const articleIds = [
+    ...new Set(
+      result.map((r) => {
+        return r.articleId
+      }),
+    ),
+  ]
   console.log(`[SelectIds Human] Found ${articleIds.length} articles`)
 
   return articleIds
@@ -542,14 +625,7 @@ export const selectArticleIdsByFilterClickHouse = async (
   to?: string,
   search?: string,
 ): Promise<string[]> => {
-  const params: SelectArticleIdsParams = {
-    sourceProjectId,
-    listType,
-    promptsFilter,
-    from,
-    to,
-    search,
-  }
+  const params: SelectArticleIdsParams = {sourceProjectId, listType, promptsFilter, from, to, search}
 
   switch (listType) {
     case 'llm':

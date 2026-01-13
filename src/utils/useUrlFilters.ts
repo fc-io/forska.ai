@@ -107,9 +107,11 @@ export const useUrlFilters = (options: UseUrlFiltersOptions): UseUrlFiltersResul
     // Add prompt filters with pf_ prefix
     for (const [promptId, values] of Object.entries(filters)) {
       if (values && values.length > 0) {
-        params[`pf_${promptId}`] = values.map((v) => {
-          return encodeURIComponent(v)
-        }).join(',')
+        params[`pf_${promptId}`] = values
+          .map((v) => {
+            return encodeURIComponent(v)
+          })
+          .join(',')
       }
     }
 
@@ -118,20 +120,17 @@ export const useUrlFilters = (options: UseUrlFiltersOptions): UseUrlFiltersResul
 
   // Update URL when filters change (after initialization)
   createEffect(
-    on(
-      [fromDate, toDate, currentPage, pageLimit, appliedSearchTitle, promptFilters, initialized],
-      () => {
-        if (!initialized()) return
+    on([fromDate, toDate, currentPage, pageLimit, appliedSearchTitle, promptFilters, initialized], () => {
+      if (!initialized()) return
 
-        const searchParams = buildSearchParams()
-        void navigate({
-          to: options.routePath as '/',
-          params: options.routeParams,
-          search: searchParams,
-          replace: true, // Replace history entry instead of pushing
-        })
-      },
-    ),
+      const searchParams = buildSearchParams()
+      void navigate({
+        to: options.routePath as '/',
+        params: options.routeParams,
+        search: searchParams,
+        replace: true, // Replace history entry instead of pushing
+      })
+    }),
   )
 
   const onSubmitSearch = () => {

@@ -359,9 +359,7 @@ const AdminAaModels = () => {
                 <span>🤖</span>
                 AI Models Directory
               </h1>
-              <p class="text-sm text-gray-500 mt-1">
-                Model data from Artificial Analysis with HuggingFace enrichment
-              </p>
+              <p class="text-sm text-gray-500 mt-1">Model data from Artificial Analysis with HuggingFace enrichment</p>
             </div>
             <button
               onClick={() => {
@@ -372,7 +370,15 @@ const AdminAaModels = () => {
             >
               <Show when={modelsQuery.isFetching}>
                 <svg class="animate-spin h-4 w-4" viewBox="0 0 24 24">
-                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none" />
+                  <circle
+                    class="opacity-25"
+                    cx="12"
+                    cy="12"
+                    r="10"
+                    stroke="currentColor"
+                    stroke-width="4"
+                    fill="none"
+                  />
                   <path
                     class="opacity-75"
                     fill="currentColor"
@@ -477,13 +483,7 @@ const AdminAaModels = () => {
                             filter() === f ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'
                           }`}
                         >
-                          {f === 'required'
-                            ? 'Required'
-                            : f === 'all'
-                              ? 'All'
-                              : f === 'open'
-                                ? 'Open'
-                                : 'Proprietary'}
+                          {f === 'required' ? 'Required' : f === 'all' ? 'All' : f === 'open' ? 'Open' : 'Proprietary'}
                         </button>
                       )
                     }}

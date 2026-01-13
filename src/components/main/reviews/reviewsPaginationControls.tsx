@@ -214,7 +214,10 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
             </button>
 
             <span class="mx-2 text-xs text-gray-700">
-              <Show when={props.totalPages !== null} fallback={<span class="text-gray-400 animate-pulse">Page {props.page} of ...</span>}>
+              <Show
+                when={props.totalPages !== null}
+                fallback={<span class="text-gray-400 animate-pulse">Page {props.page} of ...</span>}
+              >
                 Page {props.page} of {props.totalPages}
               </Show>
             </span>
@@ -258,7 +261,10 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
             <>
               {allAcross ? (
                 <div class="mt-2 text-xs text-gray-700 p-2 bg-white rounded-lg shadow">
-                  <Show when={total !== null} fallback={<span class="text-gray-400 animate-pulse">Counting selected articles...</span>}>
+                  <Show
+                    when={total !== null}
+                    fallback={<span class="text-gray-400 animate-pulse">Counting selected articles...</span>}
+                  >
                     All {total} articles matching filter is selected.
                   </Show>
                 </div>

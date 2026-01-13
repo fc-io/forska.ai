@@ -42,13 +42,17 @@ const getQueryConditions = ({
     conditions.push(lte(schema.articles.articleCreatedAt, project.dateTo))
   }
 
-  // Only get prompts that haven't been judged yet for this article with this model
+  // Only get prompts that haven't been judged yet for this article with this model AND content settings
   conditions.push(
     sql`NOT EXISTS (
       SELECT 1 FROM ${schema.judgments} j
       WHERE j."article_id" = ${schema.articles.id}
       AND j."prompt_id" = ${schema.projectPrompts.promptId}
       AND j."model_id" = ${project.modelId}
+      AND j."use_title" = ${project.useTitle}
+      AND j."use_abstract" = ${project.useAbstract}
+      AND j."use_fulltext" = ${project.useFulltext}
+      AND j."use_fulltext_no_images" = ${project.useFulltextNoImages}
       AND j."is_answered" = true
     )`,
   )

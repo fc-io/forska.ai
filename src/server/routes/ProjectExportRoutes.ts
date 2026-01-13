@@ -163,6 +163,32 @@ export const projectExportRoutes = new Elysia()
       // Build scope condition for articles
       const sourceProjectIds = body.sourceProjectIds || [projectId]
 
+      // Get project model and content settings for filtering judgments
+      const projectSettings = await db
+        .select({
+          id: projects.id,
+          modelId: projects.modelId,
+          useTitle: projects.useTitle,
+          useAbstract: projects.useAbstract,
+          useFulltext: projects.useFulltext,
+          useFulltextNoImages: projects.useFulltextNoImages,
+        })
+        .from(projects)
+        .where(inArray(projects.id, sourceProjectIds))
+
+      // Build judgment filter: must match model+content from at least one source project
+      const judgmentConfigParts = projectSettings.map((proj) => {
+        return and(
+          eq(judgments.modelId, proj.modelId),
+          eq(judgments.useTitle, proj.useTitle),
+          eq(judgments.useAbstract, proj.useAbstract),
+          eq(judgments.useFulltext, proj.useFulltext),
+          eq(judgments.useFulltextNoImages, proj.useFulltextNoImages),
+        )
+      })
+      const judgmentConfigCondition =
+        judgmentConfigParts.length > 1 ? or(...judgmentConfigParts) : judgmentConfigParts[0]
+
       const projectImportRoutes = await db
         .select({projectId: projectRouteLink.projectId, importRouteId: projectRouteLink.importRouteId})
         .from(projectRouteLink)
@@ -270,6 +296,7 @@ export const projectExportRoutes = new Elysia()
                   eq(judgments.articleId, articles.id),
                   inArray(judgments.promptId, promptIds),
                   isNull(judgments.deletedAt),
+                  judgmentConfigCondition,
                 ),
               )
               .where(scopeCondition)
@@ -305,6 +332,7 @@ export const projectExportRoutes = new Elysia()
                     eq(judgments.articleId, articles.id),
                     inArray(judgments.promptId, promptIds),
                     isNull(judgments.deletedAt),
+                    judgmentConfigCondition,
                   ),
                 )
                 .where(scopeCondition)
@@ -338,11 +366,11 @@ export const projectExportRoutes = new Elysia()
                 if (!batchArticleMap.has(row.articleId)) {
                   const articleExternalId = row.articleExternalId ?? ''
                   const articleUrl = includeArticleLink ? getArticleUrl(articleExternalId) : ''
-                  const articleAuthors = includeArticleAuthors ? row.articleAuthors?.join('; ') ?? '' : ''
+                  const articleAuthors = includeArticleAuthors ? (row.articleAuthors?.join('; ') ?? '') : ''
                   const articleCreatedAt = includeArticleCreatedAt ? formatArticleDate(row.articleCreatedAt) : ''
                   const articleUpdatedAt = includeArticleUpdatedAt ? formatArticleDate(row.articleUpdatedAt) : ''
                   const journalTitle = includeJournal
-                    ? getJournalTitleFromOriginalData(row.articleOriginalData) ?? ''
+                    ? (getJournalTitleFromOriginalData(row.articleOriginalData) ?? '')
                     : ''
                   batchArticleMap.set(row.articleId, {
                     title: row.articleTitle || 'Untitled',

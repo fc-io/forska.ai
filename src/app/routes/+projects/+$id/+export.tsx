@@ -167,9 +167,7 @@ const ExportData = () => {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         credentials: 'include',
-        body: JSON.stringify({
-          promptIds: selectedPromptIds,
-        }),
+        body: JSON.stringify({promptIds: selectedPromptIds}),
       })
 
       if (!response.ok) {

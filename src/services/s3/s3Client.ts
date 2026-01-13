@@ -154,11 +154,7 @@ export const listObjects = async (bucket: string, prefix?: string, client?: S3Cl
 
   do {
     const result = await s3.send(
-      new ListObjectsV2Command({
-        Bucket: bucket,
-        Prefix: prefix,
-        ContinuationToken: continuationToken,
-      }),
+      new ListObjectsV2Command({Bucket: bucket, Prefix: prefix, ContinuationToken: continuationToken}),
     )
 
     if (result.Contents) {

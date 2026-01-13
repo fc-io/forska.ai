@@ -154,7 +154,9 @@ export const queryArticlesReviewsBothFromClickHouse = async (
   ])
   console.timeEnd('ch:both:metadata')
 
-  const promptIds = projectPromptRows.map((p) => p.id)
+  const promptIds = projectPromptRows.map((p) => {
+    return p.id
+  })
   const promptOrderMap = projectPromptRows.reduce(
     (acc, p, idx) => {
       const ord = p.order ?? idx
@@ -169,8 +171,12 @@ export const queryArticlesReviewsBothFromClickHouse = async (
 
   const projectBounds = projectBoundsResult[0] ?? null
   const modelId = projectBoundsResult[0]?.modelId ?? null
-  const routeTexts = projectImportRouteTexts.map((r) => r.route)
-  const curatedArticleIds = curatedArticleRows.map((r) => r.articleId)
+  const routeTexts = projectImportRouteTexts.map((r) => {
+    return r.route
+  })
+  const curatedArticleIds = curatedArticleRows.map((r) => {
+    return r.articleId
+  })
 
   // Step 2: Find articles fully assessed by humans (from PostgreSQL)
   // "Fully assessed" = a single user has answered ALL project prompts for that article
@@ -188,7 +194,13 @@ export const queryArticlesReviewsBothFromClickHouse = async (
     .groupBy(judgmentsHuman.articleId, judgmentsHuman.user)
     .having(sql`COUNT(DISTINCT ${judgmentsHuman.promptId}) = ${promptIds.length}`)
 
-  const humanAssessedArticleIds = [...new Set(fullyAssessedByHumanQuery.map((r) => r.articleId))]
+  const humanAssessedArticleIds = [
+    ...new Set(
+      fullyAssessedByHumanQuery.map((r) => {
+        return r.articleId
+      }),
+    ),
+  ]
   console.timeEnd('ch:both:human_articles')
   console.log(`[ClickHouse Both] Found ${humanAssessedArticleIds.length} articles fully assessed by humans`)
 
@@ -201,7 +213,11 @@ export const queryArticlesReviewsBothFromClickHouse = async (
   const whereParts: string[] = []
 
   // Prompt filter
-  const promptIdsQuoted = promptIds.map((id) => `'${id}'`).join(', ')
+  const promptIdsQuoted = promptIds
+    .map((id) => {
+      return `'${id}'`
+    })
+    .join(', ')
   whereParts.push(`promptId IN (${promptIdsQuoted})`)
 
   // Model filter
@@ -210,7 +226,11 @@ export const queryArticlesReviewsBothFromClickHouse = async (
   }
 
   // Article filter (must be human-assessed)
-  const humanArticleIdsQuoted = humanAssessedArticleIds.map((id) => `'${id}'`).join(', ')
+  const humanArticleIdsQuoted = humanAssessedArticleIds
+    .map((id) => {
+      return `'${id}'`
+    })
+    .join(', ')
   whereParts.push(`articleId IN (${humanArticleIdsQuoted})`)
 
   // Date bounds
@@ -244,11 +264,19 @@ export const queryArticlesReviewsBothFromClickHouse = async (
   // Scope filter: curated articles OR import routes
   const scopeParts: string[] = []
   if (curatedArticleIds.length > 0 && curatedArticleIds.length <= 1000) {
-    const curatedIdsQuoted = curatedArticleIds.map((id) => `'${id}'`).join(', ')
+    const curatedIdsQuoted = curatedArticleIds
+      .map((id) => {
+        return `'${id}'`
+      })
+      .join(', ')
     scopeParts.push(`articleId IN (${curatedIdsQuoted})`)
   }
   if (routeTexts.length > 0) {
-    const routesQuoted = routeTexts.map((r) => `'${escapeClickHouseString(r)}'`).join(', ')
+    const routesQuoted = routeTexts
+      .map((r) => {
+        return `'${escapeClickHouseString(r)}'`
+      })
+      .join(', ')
     scopeParts.push(`articleImportRoute IN (${routesQuoted})`)
   }
   if (scopeParts.length > 0) {
@@ -266,7 +294,11 @@ export const queryArticlesReviewsBothFromClickHouse = async (
     for (const [promptId, answeredValues] of Object.entries(params.prompts)) {
       if (!answeredValues || answeredValues.length === 0) continue
 
-      const valuesQuoted = answeredValues.map((v) => `'${escapeClickHouseString(v)}'`).join(', ')
+      const valuesQuoted = answeredValues
+        .map((v) => {
+          return `'${escapeClickHouseString(v)}'`
+        })
+        .join(', ')
       havingParts.push(
         `sumIf(1, promptId = '${promptId}' AND (
           (length(answeredOriginalAsArray) > 0 AND hasAny(arrayMap(x -> assumeNotNull(x), arrayFilter(x -> x IS NOT NULL, answeredOriginalAsArray)), [${valuesQuoted}]))
@@ -328,12 +360,24 @@ export const queryArticlesReviewsBothFromClickHouse = async (
   console.log(`[ClickHouse Both] Found ${articlesData.length} articles with both assessments`)
 
   if (articlesData.length === 0) {
-    return {data: [], totalCount, page: params.page, limit: params.limit, totalPages: Math.ceil(totalCount / params.limit)}
+    return {
+      data: [],
+      totalCount,
+      page: params.page,
+      limit: params.limit,
+      totalPages: Math.ceil(totalCount / params.limit),
+    }
   }
 
   // Fetch full judgment data for paginated articles
-  const articleIds = articlesData.map((a) => a.articleId)
-  const articleIdsQuoted = articleIds.map((id) => `'${id}'`).join(', ')
+  const articleIds = articlesData.map((a) => {
+    return a.articleId
+  })
+  const articleIdsQuoted = articleIds
+    .map((id) => {
+      return `'${id}'`
+    })
+    .join(', ')
 
   console.time('ch:both:judgments')
   const judgmentsQuery = `
@@ -414,7 +458,11 @@ export const queryArticlesReviewsBothFromClickHouse = async (
 
     const qualifyingUsers: string[] = []
     for (const [userId, rows] of byUser.entries()) {
-      const covered = new Set(rows.map((r) => r.promptId))
+      const covered = new Set(
+        rows.map((r) => {
+          return r.promptId
+        }),
+      )
       if (covered.size === promptIds.length) {
         qualifyingUsers.push(userId)
       }

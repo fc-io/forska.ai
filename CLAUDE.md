@@ -225,6 +225,26 @@ We use "eslint-plugin-prettier" so there is no need to run prettier separately.
 * IMPORTANT: When manually adding entries to `_journal.json`, the `when` timestamp MUST be greater than the latest existing migration's timestamp in the database (`SELECT MAX(created_at) FROM drizzle.__drizzle_migrations`). If the timestamp is in the past, Drizzle will silently skip the migration thinking it was already applied.
 * IMPORTANT: Prefer Drizzle-compatible index syntax over raw SQL. Avoid partial indexes (`WHERE` clauses) since Drizzle doesn't support them directly – use regular indexes instead. A regular index on a nullable column like `deleted_at` works fine for filtering `IS NULL`.
 
+### Judgment queries (model + content filtering)
+
+* IMPORTANT: When querying judgments in the context of a project, ALWAYS filter by model AND content settings. Judgments store which content was used (`useTitle`, `useAbstract`, `useFulltext`, `useFulltextNoImages`) and which model made the judgment (`modelId`). If you don't filter by these, you may include judgments from a different model or content configuration.
+* The unique constraint on judgments is: `(articleId, promptId, modelId, useTitle, useAbstract, useFulltext, useFulltextNoImages) WHERE deletedAt IS NULL`
+* Example pattern for filtering by project settings:
+```typescript
+const judgmentConfigCondition = and(
+  eq(judgments.modelId, project.modelId),
+  eq(judgments.useTitle, project.useTitle),
+  eq(judgments.useAbstract, project.useAbstract),
+  eq(judgments.useFulltext, project.useFulltext),
+  eq(judgments.useFulltextNoImages, project.useFulltextNoImages),
+)
+```
+* When querying across multiple source projects, use OR logic for the configurations:
+```typescript
+const judgmentConfigParts = projects.map((proj) => and(...))
+const judgmentConfigCondition = or(...judgmentConfigParts)
+```
+
 ## Data validation
 
 * Use ArkType for runtime type validation at API boundaries when working above the Eden/RPC/Elysia stack

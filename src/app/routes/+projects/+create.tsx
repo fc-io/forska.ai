@@ -455,7 +455,9 @@ const CreateProject = () => {
                   />
                   <div class="flex-1">
                     <p class="text-sm font-medium text-gray-900">Use Full Text (with images)</p>
-                    <p class="text-xs text-gray-500 mt-0.5">Include the complete article text including embedded images</p>
+                    <p class="text-xs text-gray-500 mt-0.5">
+                      Include the complete article text including embedded images
+                    </p>
                   </div>
                 </label>
                 <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer">
@@ -472,7 +474,9 @@ const CreateProject = () => {
                   />
                   <div class="flex-1">
                     <p class="text-sm font-medium text-gray-900">Use Full Text (without images)</p>
-                    <p class="text-xs text-gray-500 mt-0.5">Include article text but strip embedded base64 images to reduce token usage</p>
+                    <p class="text-xs text-gray-500 mt-0.5">
+                      Include article text but strip embedded base64 images to reduce token usage
+                    </p>
                   </div>
                 </label>
               </div>

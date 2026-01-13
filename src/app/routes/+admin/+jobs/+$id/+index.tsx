@@ -5,7 +5,12 @@ import {createSignal, For, Show, Suspense} from 'solid-js'
 
 import {TokenUsageTimeline} from '../../../../../components/TokenUsageTimeline'
 import {apiClient} from '../../../../../services/apiClient.ts'
-import {deleteJudgmentsJob, getJudgmentsJobById, pauseJudgmentsJob, startJudgmentsJob} from '../../../../../services/judgmentsJobsService'
+import {
+  deleteJudgmentsJob,
+  getJudgmentsJobById,
+  pauseJudgmentsJob,
+  startJudgmentsJob,
+} from '../../../../../services/judgmentsJobsService'
 import {handleApiResponse} from '../../../../../services/utils/handleApiResponse'
 
 const getStatusColor = (status: string | null) => {
@@ -349,7 +354,8 @@ const AdminJudgmentJobDetail = () => {
                         onClick={() => {
                           const jobId = data()?.id
                           if (!jobId) return
-                          if (!confirm('Are you sure you want to delete this job? This action cannot be undone.')) return
+                          if (!confirm('Are you sure you want to delete this job? This action cannot be undone.'))
+                            return
                           setIsDeleting(true)
                           deleteJudgmentsJob(jobId)
                             .then(() => {

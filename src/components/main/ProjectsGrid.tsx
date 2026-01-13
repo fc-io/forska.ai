@@ -3,8 +3,8 @@ import {format} from 'date-fns'
 import {createMemo, createSignal, For} from 'solid-js'
 
 import {createJudgmentsJob} from '../../services/judgmentsJobsService'
-import {cloneProject} from '../../services/projectsService'
 import type {fetchProjects} from '../../services/projectsService'
+import {cloneProject} from '../../services/projectsService'
 import {Button} from '../ui/button'
 
 type Project = Awaited<ReturnType<typeof fetchProjects>>[number]
