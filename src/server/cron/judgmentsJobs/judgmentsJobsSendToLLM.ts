@@ -82,12 +82,17 @@ const processPrompts = async (
 
 const getNumberOfPromptsInFlight = async (
   db: PostgresJsDatabase<typeof schema>,
-  serverJobId: string,
+  _serverJobId: string, // Kept for API compat but not used - we count ALL sent prompts
 ): Promise<number> => {
+  // IMPORTANT: Count ALL 'sent' prompts, not just this server's.
+  // This prevents queue overflow when the server restarts:
+  // - Old prompts with old serverJobId are still in DB with status='sent'
+  // - Old prompts are still in SGLang's queue
+  // - If we only counted our own serverJobId, we'd send 2000 more requests
   const result = await db
     .select({count: count()})
     .from(schema.judgmentsJobsPrompts)
-    .where(and(eq(schema.judgmentsJobsPrompts.status, 'sent'), eq(schema.judgmentsJobsPrompts.serverId, serverJobId)))
+    .where(eq(schema.judgmentsJobsPrompts.status, 'sent'))
 
   return result[0]?.count || 0
 }
@@ -110,13 +115,18 @@ export const judgmentsJobsSendToLLM = async (
     const promptsInFlight = await getNumberOfPromptsInFlight(db, serverJobId)
     const deficit = Math.max(0, capacity.maxInflight - promptsInFlight)
     const requestsToSend = Math.min(deficit, capacity.maxBurst)
-    // console.log('requestsToSend', {
-    //   requestsToSend,
-    //   maxInflight: capacity.maxInflight,
-    //   promptsInFlight,
-    //   sglangBurst: capacity.maxBurst,
-    //   topology: {totalGpus: env.GPU_TOTAL_GPUS, tp: env.TP_SIZE, pp: env.PP_SIZE},
-    // })
+
+    // Debug logging for capacity issues
+    if (requestsToSend > 0 || promptsInFlight > capacity.maxInflight * 0.9) {
+      console.log('[capacity]', {
+        requestsToSend,
+        promptsInFlight,
+        maxInflight: capacity.maxInflight,
+        maxBurst: capacity.maxBurst,
+        workerCount: capacity.workerCount,
+        deficit,
+      })
+    }
 
     if (requestsToSend > 0 && allJobs.length > 0) {
       const requestsToSendByJob = getRequestsToSendByJob(allJobs, requestsToSend)
@@ -134,6 +144,14 @@ export const judgmentsJobsSendToLLM = async (
             return result.value
           })
       })
+
+      // Log actual prompts fetched vs requested - detect if more are being sent than allowed
+      const totalPromptsFetched = promptsToProcess.reduce((sum, arr) => {
+        return sum + arr.length
+      }, 0)
+      if (totalPromptsFetched !== requestsToSend) {
+        console.warn('[capacity] MISMATCH: fetched', totalPromptsFetched, 'but requested', requestsToSend)
+      }
 
       promptsToProcess.map((prompts) => {
         void (async () => {

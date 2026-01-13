@@ -175,6 +175,17 @@ export const judgmentsJobsCheckLLMStatus = async (db: PostgresJsDatabase<typeof 
       // Show per-worker limit (not total across all workers) for accurate per-instance display
       const maxInFlight = getJudgmentsCapacity(1).perWorkerMaxInflightRequests
 
+      // Log when SGLang queue is high - helps diagnose capacity overflow
+      if (inFlight > maxInFlight * 0.9) {
+        console.warn('[llm-status] Worker queue high:', {
+          worker: instanceId,
+          sglangQueue: inFlight,
+          perWorkerLimit: maxInFlight,
+          waiting: numQueueReqs,
+          running: numRunningReqs,
+        })
+      }
+
       const llmStatusData = {
         engine,
         instanceId,

@@ -255,17 +255,34 @@ const spawnTunnelProcess = (computeNode: string, localTunnelPort: number, remote
   return proc
 }
 
-const monitorTunnelHealth = async (jobId: string, allNodes: string[], localPort: number): Promise<void> => {
+const monitorTunnelHealth = async (jobId: string, allNodes: string[], localPorts: number[]): Promise<void> => {
   if (isShuttingDown) return
 
-  // Check if the local Caddy endpoint is responding
-  const localOk = await isLocalSGLangResponding(localPort)
-  if (localOk) {
+  // Check if ALL local worker endpoints are responding
+  const portHealthResults = await Promise.all(
+    localPorts.map(async (port) => {
+      const isOk = await isLocalSGLangResponding(port)
+      return {port, isOk}
+    }),
+  )
+
+  const failedPorts = portHealthResults.filter((r) => {
+    return !r.isOk
+  })
+  const allOk = failedPorts.length === 0
+
+  if (allOk) {
     await sleep(10_000)
-    return monitorTunnelHealth(jobId, allNodes, localPort)
+    return monitorTunnelHealth(jobId, allNodes, localPorts)
   }
 
-  log(`Local SGLang not responding on :${localPort}, checking tunnels...`)
+  // Log which specific ports are failing
+  const failedPortList = failedPorts
+    .map((r) => {
+      return r.port
+    })
+    .join(', ')
+  log(`⚠ ${failedPorts.length}/${localPorts.length} worker(s) not responding (ports: ${failedPortList})`)
 
   // Check job is still running
   const {state, nodeList} = await getJobStatus(jobId)
@@ -279,7 +296,7 @@ const monitorTunnelHealth = async (jobId: string, allNodes: string[], localPort:
   const nodesToUse = refreshedNodes.length > 0 ? refreshedNodes : allNodes
 
   // Restart all tunnels with the current node list
-  await startMultiNodeTunnels(nodesToUse, jobId, localPort, 1)
+  await startMultiNodeTunnels(nodesToUse, jobId, localPorts[0], 1)
 }
 
 /**
@@ -348,14 +365,31 @@ const startMultiNodeTunnels = async (
   // Wait for tunnels to establish
   await sleep(2000)
 
-  // Check health on the first local port
-  const firstPort = localPorts[0]
-  const ok = await isLocalSGLangResponding(firstPort)
-  log(
-    ok
-      ? `✓ All ${allNodes.length} tunnel(s) connected and SGLang responding`
-      : '⚠ Tunnels started but SGLang health check failed (may still be starting)',
+  // Check health on ALL local ports (not just the first one)
+  const healthResults = await Promise.all(
+    localPorts.map(async (port) => {
+      const isOk = await isLocalSGLangResponding(port)
+      return {port, isOk}
+    }),
   )
+  const okCount = healthResults.filter((r) => {
+    return r.isOk
+  }).length
+  const failedPorts = healthResults
+    .filter((r) => {
+      return !r.isOk
+    })
+    .map((r) => {
+      return r.port
+    })
+
+  if (okCount === localPorts.length) {
+    log(`✓ All ${allNodes.length} tunnel(s) connected and SGLang responding`)
+  } else if (okCount > 0) {
+    log(`⚠ ${okCount}/${localPorts.length} tunnels responding, failed ports: ${failedPorts.join(', ')}`)
+  } else {
+    log('⚠ Tunnels started but no SGLang health checks passed (may still be starting)')
+  }
 
   // Show all worker URLs
   const workerUrls = localPorts
@@ -366,8 +400,8 @@ const startMultiNodeTunnels = async (
   log(`SGLang workers available at: ${workerUrls}`)
   log(`Press Ctrl+C to disconnect and cancel job ${jobId}`)
 
-  // Monitor tunnel health (use first port for health checks)
-  await monitorTunnelHealth(jobId, allNodes, firstPort)
+  // Monitor tunnel health on ALL ports (not just the first one)
+  await monitorTunnelHealth(jobId, allNodes, localPorts)
 }
 
 /**
