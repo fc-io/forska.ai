@@ -24,3 +24,8 @@ Patch current setup for dev.
 *   **Gateway**: External node acts as proxy.
 *   **Link**: HPC reverse-tunnels **only UI JSON** to Gateway.
 *   **Verdict**: Inevitable for production.
+
+## Considered / Rejected
+- **Single tunnel to router**: rejected; multiplexing all traffic through one SSH stream triggers TCP meltdown under bursty load.
+- **Reverse tunnels from compute → laptop**: usually blocked by MN5 egress rules and would still land on the login node; keep for future if outbound SSH is formally allowed.
+- **Login-node reverse proxy for bulk traffic**: not viable—login QoS/process caps make it a bottleneck similar to the single-tunnel case.
