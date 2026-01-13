@@ -223,7 +223,7 @@ const ensureLocalPortReadyForTunnel = async (localPort: number): Promise<'ready'
 }
 
 const spawnTunnelProcess = (computeNode: string, localTunnelPort: number, remoteCaddyPort: number) => {
-  const logFile = Bun.file('mn5-tunnel-debug.txt')
+  const logFile = Bun.file(`mn5-tunnel-${computeNode}.log`)
   const proc = spawn(
     [
       'ssh',
@@ -248,9 +248,22 @@ const spawnTunnelProcess = (computeNode: string, localTunnelPort: number, remote
   )
 
   // Stream stderr to file only (verbose logging is too noisy for console)
-  Bun.write(logFile, proc.stderr).catch((err) => {
-    console.error('Failed to write tunnel logs:', err)
-  })
+  const pipeLog = async () => {
+    try {
+      const reader = proc.stderr.getReader()
+      const writer = logFile.writer()
+      while (true) {
+        const {done, value} = await reader.read()
+        if (done) break
+        writer.write(value)
+        await writer.flush()
+      }
+      writer.end()
+    } catch (err) {
+      console.error(`Failed to write tunnel logs for ${computeNode}:`, err)
+    }
+  }
+  void pipeLog()
 
   return proc
 }

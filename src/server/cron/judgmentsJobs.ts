@@ -22,29 +22,44 @@ let isAddingToQueue = false
 const runAddToQueue = async (): Promise<void> => {
   if (!env.RUN_SERVER_JUDGING || env.GPU_TOTAL_GPUS === 0 || isAddingToQueue) return
   isAddingToQueue = true
-  const db = getDatabase()
-  await judgmentsJobsAddToQueue(db, serverJobId)
-  isAddingToQueue = false
+  try {
+    const db = getDatabase()
+    await judgmentsJobsAddToQueue(db, serverJobId)
+  } catch (err) {
+    console.error('[cron] runAddToQueue error:', err instanceof Error ? err.message : err)
+  } finally {
+    isAddingToQueue = false
+  }
 }
 
 const sendToLLM = async (): Promise<void> => {
   if (!env.RUN_SERVER_JUDGING || env.GPU_TOTAL_GPUS === 0) return
-
-  const db = getDatabase()
-  const runningJobs = await judgmentsJobsGetRunningJobs(db)
-  await judgmentsJobsSendToLLM(db, runningJobs, serverJobId)
+  try {
+    const db = getDatabase()
+    const runningJobs = await judgmentsJobsGetRunningJobs(db)
+    await judgmentsJobsSendToLLM(db, runningJobs, serverJobId)
+  } catch (err) {
+    console.error('[cron] sendToLLM error:', err instanceof Error ? err.message : err)
+  }
 }
 
 const checkLLMStatusCron = async (): Promise<void> => {
   if (!env.RUN_SERVER_JUDGING || env.GPU_TOTAL_GPUS === 0) return
-  const db = getDatabase()
-  await judgmentsJobsCheckLLMStatus(db)
+  try {
+    const db = getDatabase()
+    await judgmentsJobsCheckLLMStatus(db)
+  } catch (err) {
+    console.error('[cron] checkLLMStatusCron error:', err instanceof Error ? err.message : err)
+  }
 }
 
 const cleanupStaleQueueCron = async (): Promise<void> => {
-  // if (!env.RUN_SERVER_JUDGING) return
-  const db = getDatabase()
-  await judgmentsJobsCleanupStale(db)
+  try {
+    const db = getDatabase()
+    await judgmentsJobsCleanupStale(db)
+  } catch (err) {
+    console.error('[cron] cleanupStaleQueueCron error:', err instanceof Error ? err.message : err)
+  }
 }
 
 export const judgmentsJobsCron = new Elysia()
