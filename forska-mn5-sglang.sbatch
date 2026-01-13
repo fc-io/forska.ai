@@ -3,7 +3,7 @@
 #SBATCH -A ehpc482
 #SBATCH --partition=acc
 #SBATCH --qos=acc_debug
-#SBATCH --nodes=1
+#SBATCH --nodes=2
 #SBATCH --ntasks-per-node=4
 #SBATCH --cpus-per-task=20
 #SBATCH --gres=gpu:4
@@ -285,8 +285,7 @@ wait_for_http() {
 # Set environment for multi-node
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
 
-# Start Caddy H2 proxy (before SGLang)
-echo "[mn5] starting Caddy H2 proxy on :$CADDY_PORT -> localhost:$SGLANG_INTERNAL_PORT"
+# Caddy config for H2 proxy (Caddy:30002 -> SGLang:30001)
 CADDY_CONFIG="{
   auto_https off
   servers {
@@ -296,15 +295,6 @@ CADDY_CONFIG="{
 :$CADDY_PORT {
   reverse_proxy localhost:$SGLANG_INTERNAL_PORT
 }"
-echo "$CADDY_CONFIG" | "$CADDY_BIN" run --config - --adapter caddyfile >"$LOG_DIR/caddy.log" 2>&1 &
-CADDY_PID=$!
-sleep 1
-if ! kill -0 "$CADDY_PID" 2>/dev/null; then
-  echo "[mn5] ERROR: Caddy failed to start. Check $LOG_DIR/caddy.log" >&2
-  cat "$LOG_DIR/caddy.log" >&2
-  exit 1
-fi
-echo "[mn5] Caddy started (PID=$CADDY_PID)"
 
 echo "[mn5] launching SGLang with tp=$TP_SIZE dp=$DP_SIZE"
 
@@ -351,16 +341,86 @@ CONTAINER_CMD="$SINGULARITY_BIN exec --cleanenv --nv \
   $SIF_SGLANG \
   python -m sglang.launch_server ${SGLANG_ARGS[*]}"
 
+# Create a per-node wrapper script that starts Caddy + SGLang together
+# This ensures each node has its own Caddy H2 proxy for SSH tunnel connectivity
+NODE_WRAPPER_SCRIPT="$STACK_ROOT/tmp/node_wrapper_${SLURM_JOB_ID}.sh"
+cat > "$NODE_WRAPPER_SCRIPT" << 'WRAPPER_EOF'
+#!/bin/bash
+set -euo pipefail
+
+# Arguments passed from srun:
+CADDY_BIN="$1"
+CADDY_PORT="$2"
+SGLANG_INTERNAL_PORT="$3"
+LOG_DIR="$4"
+shift 4
+# Rest is the container command
+
+NODE_NAME=$(hostname -s)
+echo "[mn5:$NODE_NAME] starting Caddy H2 proxy on :$CADDY_PORT -> localhost:$SGLANG_INTERNAL_PORT"
+
+# Start Caddy
+CADDY_CONFIG="{
+  auto_https off
+  servers {
+    protocols h2c h1
+  }
+}
+:$CADDY_PORT {
+  reverse_proxy localhost:$SGLANG_INTERNAL_PORT
+}"
+echo "$CADDY_CONFIG" | "$CADDY_BIN" run --config - --adapter caddyfile >"$LOG_DIR/caddy-$NODE_NAME.log" 2>&1 &
+CADDY_PID=$!
+sleep 1
+
+if ! kill -0 "$CADDY_PID" 2>/dev/null; then
+  echo "[mn5:$NODE_NAME] ERROR: Caddy failed to start" >&2
+  cat "$LOG_DIR/caddy-$NODE_NAME.log" >&2
+  exit 1
+fi
+echo "[mn5:$NODE_NAME] Caddy started (PID=$CADDY_PID)"
+
+# Cleanup handler for this node
+cleanup_node() {
+  echo "[mn5:$NODE_NAME] shutting down..."
+  kill -TERM "$CADDY_PID" 2>/dev/null || true
+  kill -TERM "$SGLANG_PID" 2>/dev/null || true
+  wait
+}
+trap cleanup_node EXIT INT TERM
+
+# Launch SGLang (container command is passed as remaining args)
+echo "[mn5:$NODE_NAME] starting SGLang worker..."
+bash -lc "$*" &
+SGLANG_PID=$!
+
+# Wait for SGLang to exit
+wait "$SGLANG_PID"
+WRAPPER_EOF
+chmod +x "$NODE_WRAPPER_SCRIPT"
+
 if (( NNODES > 1 )); then
-  echo "[mn5] launching one independent worker per node on port $SGLANG_WORKER_PORT (tp=$TP_SIZE dp=$DP_SIZE)"
+  echo "[mn5] launching Caddy + SGLang worker on each of $NNODES node(s)"
   srun --nodes="$NNODES" --ntasks="$NNODES" --ntasks-per-node=1 \
     --gpus-per-task="$GPUS_PER_NODE" \
     --export=ALL \
     --output "$LOG_DIR/sglang-worker-%N.log" \
     --error "$LOG_DIR/sglang-worker-%N.log" \
-    bash -lc "$CONTAINER_CMD" &
+    "$NODE_WRAPPER_SCRIPT" "$CADDY_BIN" "$CADDY_PORT" "$SGLANG_INTERNAL_PORT" "$LOG_DIR" "$CONTAINER_CMD" &
   SGLANG_PID=$!
 else
+  # Single-node: start Caddy on head node directly
+  echo "[mn5] starting Caddy H2 proxy on :$CADDY_PORT -> localhost:$SGLANG_INTERNAL_PORT"
+  echo "$CADDY_CONFIG" | "$CADDY_BIN" run --config - --adapter caddyfile >"$LOG_DIR/caddy.log" 2>&1 &
+  CADDY_PID=$!
+  sleep 1
+  if ! kill -0 "$CADDY_PID" 2>/dev/null; then
+    echo "[mn5] ERROR: Caddy failed to start. Check $LOG_DIR/caddy.log" >&2
+    cat "$LOG_DIR/caddy.log" >&2
+    exit 1
+  fi
+  echo "[mn5] Caddy started (PID=$CADDY_PID)"
+
   echo "[mn5] launching single-node worker on port $SGLANG_WORKER_PORT (tp=$TP_SIZE dp=$DP_SIZE)"
   bash -lc "$CONTAINER_CMD" >"$LOG_DIR/sglang-worker.log" 2>&1 &
   SGLANG_PID=$!
