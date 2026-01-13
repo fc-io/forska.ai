@@ -30,9 +30,50 @@ type LlmStatusRow = {
   rps: number | null
   numQueueReqs: number | null
   numRunningReqs: number | null
+  numGrammarQueueReqs: number | null
+  numRunningReqsOfflineBatch: number | null
+  numPrefillPreallocQueueReqs: number | null
+  numPrefillInflightQueueReqs: number | null
+  numDecodePreallocQueueReqs: number | null
+  numDecodeTransferQueueReqs: number | null
+  utilization: number | null
   cacheHitRate: number | null
   inFlight: number | null
   maxInFlight: number | null
+}
+
+const formatPercent = (value: number | null | undefined, fractionDigits = 0) => {
+  const normalized = value === null || value === undefined ? null : value
+  const scaled = normalized === null ? null : normalized > 1 ? normalized : normalized * 100
+  return scaled === null ? '—' : `${scaled.toFixed(fractionDigits)}%`
+}
+
+const formatPresence = (value: number | null | undefined) => {
+  return value === null || value === undefined ? '—' : 'present'
+}
+
+const formatQueueBreakdown = (row: LlmStatusRow) => {
+  const parts: Array<[string, number | null | undefined]> = [
+    ['Grammar', row.numGrammarQueueReqs],
+    ['PrefillPrealloc', row.numPrefillPreallocQueueReqs],
+    ['PrefillInflight', row.numPrefillInflightQueueReqs],
+    ['DecodePrealloc', row.numDecodePreallocQueueReqs],
+    ['DecodeTransfer', row.numDecodeTransferQueueReqs],
+    ['OfflineBatch', row.numRunningReqsOfflineBatch],
+  ]
+  return parts
+    .map(([label, value]) => {
+      const display = value === null || value === undefined ? '—' : `${value}`
+      return `${label}:${display}`
+    })
+    .join(' ')
+}
+
+const getLatestRowsByInstance = (data: LlmStatusRow[]): LlmStatusRow[] => {
+  const map = data.reduce((acc, row) => {
+    return acc.has(row.instanceId) ? acc : acc.set(row.instanceId, row)
+  }, new Map<string, LlmStatusRow>())
+  return [...map.values()]
 }
 
 const fetchLlmStatus = async (): Promise<LlmStatusRow[]> => {
@@ -50,6 +91,13 @@ const fetchLlmStatus = async (): Promise<LlmStatusRow[]> => {
       rps: (row.rps as number | null) ?? null,
       numQueueReqs: (row.numQueueReqs as number | null) ?? null,
       numRunningReqs: (row.numRunningReqs as number | null) ?? null,
+      numGrammarQueueReqs: (row.numGrammarQueueReqs as number | null) ?? null,
+      numRunningReqsOfflineBatch: (row.numRunningReqsOfflineBatch as number | null) ?? null,
+      numPrefillPreallocQueueReqs: (row.numPrefillPreallocQueueReqs as number | null) ?? null,
+      numPrefillInflightQueueReqs: (row.numPrefillInflightQueueReqs as number | null) ?? null,
+      numDecodePreallocQueueReqs: (row.numDecodePreallocQueueReqs as number | null) ?? null,
+      numDecodeTransferQueueReqs: (row.numDecodeTransferQueueReqs as number | null) ?? null,
+      utilization: (row.utilization as number | null) ?? null,
       cacheHitRate: (row.cacheHitRate as number | null) ?? null,
       inFlight: (row.inFlight as number | null) ?? null,
       maxInFlight: (row.maxInFlight as number | null) ?? null,
@@ -78,6 +126,10 @@ const AdminLlm = () => {
 
   const rows = () => {
     return statusQuery.data ?? []
+  }
+
+  const latestRows = () => {
+    return getLatestRowsByInstance(rows())
   }
 
   const formatTs = (value: Date | null | undefined) => {
@@ -144,6 +196,83 @@ const AdminLlm = () => {
           </Show>
 
           <Show when={!statusQuery.isLoading && !statusQuery.isError}>
+            <Show when={latestRows().length > 0}>
+              <div class="bg-white rounded-lg shadow mb-6">
+                <div class="px-4 py-3 border-b border-gray-200">
+                  <h2 class="text-sm font-semibold text-gray-700">SGLang Metrics Presence (latest per instance)</h2>
+                </div>
+                <div class="overflow-x-auto">
+                  <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                      <tr>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Instance
+                        </th>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Util
+                        </th>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Cache Hit
+                        </th>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Grammar
+                        </th>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Prefill Prealloc
+                        </th>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Prefill Inflight
+                        </th>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Decode Prealloc
+                        </th>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Decode Transfer
+                        </th>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Offline Batch
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody class="bg-white divide-y divide-gray-200">
+                      <For each={latestRows()}>
+                        {(row) => {
+                          return (
+                            <tr class="hover:bg-gray-50">
+                              <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-600">{row.instanceId}</td>
+                              <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
+                                {formatPresence(row.utilization ?? undefined)}
+                              </td>
+                              <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
+                                {formatPresence(row.cacheHitRate ?? undefined)}
+                              </td>
+                              <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
+                                {formatPresence(row.numGrammarQueueReqs ?? undefined)}
+                              </td>
+                              <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
+                                {formatPresence(row.numPrefillPreallocQueueReqs ?? undefined)}
+                              </td>
+                              <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
+                                {formatPresence(row.numPrefillInflightQueueReqs ?? undefined)}
+                              </td>
+                              <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
+                                {formatPresence(row.numDecodePreallocQueueReqs ?? undefined)}
+                              </td>
+                              <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
+                                {formatPresence(row.numDecodeTransferQueueReqs ?? undefined)}
+                              </td>
+                              <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
+                                {formatPresence(row.numRunningReqsOfflineBatch ?? undefined)}
+                              </td>
+                            </tr>
+                          )
+                        }}
+                      </For>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </Show>
             <div class="overflow-x-auto bg-white rounded-lg shadow">
               <table class="min-w-full divide-y divide-gray-200">
                 <thead class="bg-gray-50">
@@ -166,6 +295,9 @@ const AdminLlm = () => {
                       Running
                     </th>
                     <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      SGLang Util
+                    </th>
+                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Cache Hit %
                     </th>
                     <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -173,6 +305,9 @@ const AdminLlm = () => {
                     </th>
                     <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Max In-flight
+                    </th>
+                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Queue Breakdown
                     </th>
                   </tr>
                 </thead>
@@ -195,12 +330,16 @@ const AdminLlm = () => {
                           <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{row.numQueueReqs ?? 0}</td>
                           <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{row.numRunningReqs ?? 0}</td>
                           <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
+                            {formatPercent(row.utilization ?? undefined)}
+                          </td>
+                          <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
                             {row.cacheHitRate === null || row.cacheHitRate === undefined
                               ? '—'
                               : `${(row.cacheHitRate * 100).toFixed(0)}%`}
                           </td>
                           <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{row.inFlight ?? 0}</td>
                           <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{row.maxInFlight ?? 0}</td>
+                          <td class="px-4 py-2 text-xs text-gray-600">{formatQueueBreakdown(row)}</td>
                         </tr>
                       )
                     }}

@@ -4,17 +4,22 @@
  */
 
 import {$, spawn} from 'bun'
+import {resolve} from 'path'
 
 const MN5_ROOT = '/gpfs/projects/ehpc482/dev'
 const TLOG = 'tlog' // Transfer login
 const GLOG = 'glog' // General login (for sbatch)
 const ALOG = 'alog' // ACC login (for tunnel)
-// Port scheme: Direct per-node tunnels
-// localhost:30001 -> node1:30002 (Caddy) -> SGLang:30001
-// localhost:30002 -> node2:30002 (Caddy) -> SGLang:30001
-// This matches what sbatch outputs in WORKER_URLS_LOCAL
+// Port scheme: Local Caddy -> SSH tunnel -> remote Caddy -> SGLang
+// localhost:30001 -> local Caddy -> localhost:40001 -> node1:30002 -> SGLang:30001
+// localhost:30002 -> local Caddy -> localhost:40002 -> node2:30002 -> SGLang:30001
+// Local ports match what sbatch outputs in WORKER_URLS_LOCAL
 const REMOTE_CADDY_PORT = 30002 // Remote Caddy H2 port on each HPC node
-const LOCAL_PORT_BASE = 30001 // Local tunnel ports start here (30001, 30002, ...)
+const LOCAL_PORT_BASE = 30001 // Local Caddy ports start here (30001, 30002, ...)
+const LOCAL_TUNNEL_PORT_OFFSET = 10000
+const LOCAL_CADDY_CONTAINER_NAME = 'forska-caddy'
+const LOCAL_CADDY_IMAGE = 'caddy:2.8.4-alpine'
+const LOCAL_CADDYFILE_PATH = 'cache/mn5Local.Caddyfile'
 const SBATCH_FILE = 'forska-mn5-sglang.sbatch'
 
 // Track the active job ID and tunnels for cleanup
@@ -36,6 +41,40 @@ const cancelJob = async (jobId: string): Promise<void> => {
   }
 }
 
+const buildLocalCaddyfile = (localPorts: number[], tunnelPorts: number[]): string => {
+  const siteBlocks = localPorts
+    .map((localPort, index) => {
+      const tunnelPort = tunnelPorts[index]
+      return `:${localPort} {\n  reverse_proxy host.docker.internal:${tunnelPort} {\n    transport http {\n      versions h2c\n    }\n  }\n}`
+    })
+    .join('\n\n')
+
+  return `{\n  auto_https off\n  servers {\n    protocols h1 h2c\n  }\n}\n${siteBlocks}\n`
+}
+
+const writeLocalCaddyfile = async (contents: string): Promise<string> => {
+  await Bun.write(LOCAL_CADDYFILE_PATH, contents)
+  return LOCAL_CADDYFILE_PATH
+}
+
+const stopLocalCaddyContainer = async (): Promise<void> => {
+  await $`docker rm -f ${LOCAL_CADDY_CONTAINER_NAME}`.quiet().nothrow()
+}
+
+const startLocalCaddyContainer = async (localPorts: number[], tunnelPorts: number[]): Promise<void> => {
+  const caddyfilePath = resolve(await writeLocalCaddyfile(buildLocalCaddyfile(localPorts, tunnelPorts)))
+  const portArgs = localPorts.flatMap((port) => {
+    return ['-p', `${port}:${port}`]
+  })
+  await stopLocalCaddyContainer()
+  const result =
+    await $`docker run -d --rm --name ${LOCAL_CADDY_CONTAINER_NAME} ${portArgs} --add-host=host.docker.internal:host-gateway -v ${caddyfilePath}:/etc/caddy/Caddyfile:ro ${LOCAL_CADDY_IMAGE}`.nothrow()
+  if (result.exitCode !== 0) {
+    console.error('[mn5] Failed to start local Caddy container')
+    process.exit(1)
+  }
+}
+
 const setupSignalHandler = (): void => {
   const cleanup = async (signal: string) => {
     if (isShuttingDown) return
@@ -52,6 +91,7 @@ const setupSignalHandler = (): void => {
     if (activeJobId) {
       await cancelJob(activeJobId)
     }
+    await stopLocalCaddyContainer()
     log(`Exiting (${signal})`)
     process.exit(0)
   }
@@ -222,6 +262,10 @@ const ensureLocalPortReadyForTunnel = async (localPort: number): Promise<'ready'
   return 'ready'
 }
 
+const getLocalTunnelPortBase = (localPortBase: number): number => {
+  return localPortBase + LOCAL_TUNNEL_PORT_OFFSET
+}
+
 const spawnTunnelProcess = (computeNode: string, localTunnelPort: number, remoteCaddyPort: number) => {
   const logFile = Bun.file(`mn5-tunnel-${computeNode}.log`)
   const proc = spawn(
@@ -301,6 +345,7 @@ const monitorTunnelHealth = async (jobId: string, allNodes: string[], localPorts
   const {state, nodeList} = await getJobStatus(jobId)
   if (state !== 'RUNNING') {
     log(`Job ${jobId} is ${state}; exiting`)
+    await stopLocalCaddyContainer()
     process.exit(0)
   }
 
@@ -314,14 +359,14 @@ const monitorTunnelHealth = async (jobId: string, allNodes: string[], localPorts
 
 /**
  * Start SSH tunnels to all nodes and monitor them
- * Creates direct per-node tunnels matching WORKER_URLS_LOCAL from sbatch:
- * - localhost:30001 -> node1:30002 (Caddy)
- * - localhost:30002 -> node2:30002 (Caddy)
+ * Local Caddy ports match WORKER_URLS_LOCAL from sbatch:
+ * - localhost:30001 -> local Caddy -> localhost:40001 -> node1:30002
+ * - localhost:30002 -> local Caddy -> localhost:40002 -> node2:30002
  */
 const startMultiNodeTunnels = async (
   allNodes: string[],
   jobId: string,
-  _localPort: number, // Unused - we use LOCAL_PORT_BASE + i for each node
+  localPortBase: number,
   restartCount: number,
 ): Promise<void> => {
   if (isShuttingDown) return
@@ -341,28 +386,33 @@ const startMultiNodeTunnels = async (
   }
   activeTunnelProcs.length = 0 // Clear array
 
-  // Calculate local ports for each node (30001, 30002, etc. to match sbatch WORKER_URLS_LOCAL)
-  const localPorts: number[] = []
+  const localTunnelPortBase = getLocalTunnelPortBase(localPortBase)
+  const localCaddyPorts: number[] = []
+  const localTunnelPorts: number[] = []
   for (let i = 0; i < allNodes.length; i++) {
-    const localPort = LOCAL_PORT_BASE + i
-    localPorts.push(localPort)
+    const localCaddyPort = localPortBase + i
+    const localTunnelPort = localTunnelPortBase + i
+    localCaddyPorts.push(localCaddyPort)
+    localTunnelPorts.push(localTunnelPort)
 
     // Ensure port is ready
-    const portStatus = await ensureLocalPortReadyForTunnel(localPort)
+    const portStatus = await ensureLocalPortReadyForTunnel(localTunnelPort)
     if (portStatus === 'in_use') {
-      console.error(`[mn5] Local port ${localPort} is in use by a non-SSH process`)
+      console.error(`[mn5] Local port ${localTunnelPort} is in use by a non-SSH process`)
       console.error(`      Stop that process first`)
       process.exit(1)
     }
   }
 
-  // Start tunnel to each node: localhost:3000X -> nodeX:30002 (Caddy)
+  await startLocalCaddyContainer(localCaddyPorts, localTunnelPorts)
+  await sleep(1000)
+
   for (let i = 0; i < allNodes.length; i++) {
     const node = allNodes[i]
-    const localPort = localPorts[i]
-    log(`  Tunnel ${i + 1}/${allNodes.length}: localhost:${localPort} -> ${node}:${REMOTE_CADDY_PORT}`)
+    const localTunnelPort = localTunnelPorts[i]
+    log(`  Tunnel ${i + 1}/${allNodes.length}: localhost:${localTunnelPort} -> ${node}:${REMOTE_CADDY_PORT}`)
 
-    const proc = spawnTunnelProcess(node, localPort, REMOTE_CADDY_PORT)
+    const proc = spawnTunnelProcess(node, localTunnelPort, REMOTE_CADDY_PORT)
     activeTunnelProcs.push(proc)
 
     // Set up exit handler for this tunnel
@@ -380,7 +430,7 @@ const startMultiNodeTunnels = async (
 
   // Check health on ALL local ports (not just the first one)
   const healthResults = await Promise.all(
-    localPorts.map(async (port) => {
+    localCaddyPorts.map(async (port) => {
       const isOk = await isLocalSGLangResponding(port)
       return {port, isOk}
     }),
@@ -396,16 +446,16 @@ const startMultiNodeTunnels = async (
       return r.port
     })
 
-  if (okCount === localPorts.length) {
+  if (okCount === localCaddyPorts.length) {
     log(`✓ All ${allNodes.length} tunnel(s) connected and SGLang responding`)
   } else if (okCount > 0) {
-    log(`⚠ ${okCount}/${localPorts.length} tunnels responding, failed ports: ${failedPorts.join(', ')}`)
+    log(`⚠ ${okCount}/${localCaddyPorts.length} tunnels responding, failed ports: ${failedPorts.join(', ')}`)
   } else {
     log('⚠ Tunnels started but no SGLang health checks passed (may still be starting)')
   }
 
   // Show all worker URLs
-  const workerUrls = localPorts
+  const workerUrls = localCaddyPorts
     .map((p) => {
       return `http://localhost:${p}`
     })
@@ -414,7 +464,7 @@ const startMultiNodeTunnels = async (
   log(`Press Ctrl+C to disconnect and cancel job ${jobId}`)
 
   // Monitor tunnel health on ALL ports (not just the first one)
-  await monitorTunnelHealth(jobId, allNodes, localPorts)
+  await monitorTunnelHealth(jobId, allNodes, localCaddyPorts)
 }
 
 /**
@@ -540,7 +590,9 @@ const main = async () => {
 
   // 3. Submit job
   log('Submitting job...')
-  const exportVars = model ? `ALL,SGLANG_MODEL=${model}` : 'ALL'
+  const exportVars = model
+    ? `ALL,SGLANG_MODEL=${model},SGLANG_LOCAL_PORT_BASE=${localPort}`
+    : `ALL,SGLANG_LOCAL_PORT_BASE=${localPort}`
   const result = await $`ssh ${GLOG} "cd ${MN5_ROOT} && sbatch --export=${exportVars} ${SBATCH_FILE}"`.text()
   const jobIdMatch = result.match(/Submitted batch job (\d+)/)
   if (!jobIdMatch) {

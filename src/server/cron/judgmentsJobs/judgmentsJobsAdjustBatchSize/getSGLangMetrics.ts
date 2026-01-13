@@ -68,6 +68,24 @@ const pickOne = (metrics: PromSample[], names: string[], def = 0): number => {
   return def
 }
 
+const pickOptional = (metrics: PromSample[], names: string[]): number | null => {
+  const found = names
+    .map((name) => {
+      return metrics.find((metric) => {
+        return metric.name === name
+      })
+    })
+    .find((metric) => {
+      return metric !== undefined
+    })
+
+  return found ? found.value : null
+}
+
+const floorOptional = (value: number | null): number | null => {
+  return value === null ? null : Math.floor(value)
+}
+
 const stableKey = (labels: Record<string, string>, exclude: string[] = []): string => {
   const ex = new Set(exclude)
   return Object.entries(labels)
@@ -148,16 +166,16 @@ export const getSGLangMetrics = async (
   queueTimeSeconds?: {series: HistogramSeries[]}
   genThroughput?: number
   tokenUsage?: number
-  utilization?: number
-  cacheHitRate?: number
+  utilization?: number | null
+  cacheHitRate?: number | null
   specAcceptRate?: number
   specAcceptLength?: number
-  numGrammarQueueReqs?: number
-  numRunningReqsOfflineBatch?: number
-  numPrefillPreallocQueueReqs?: number
-  numPrefillInflightQueueReqs?: number
-  numDecodePreallocQueueReqs?: number
-  numDecodeTransferQueueReqs?: number
+  numGrammarQueueReqs?: number | null
+  numRunningReqsOfflineBatch?: number | null
+  numPrefillPreallocQueueReqs?: number | null
+  numPrefillInflightQueueReqs?: number | null
+  numDecodePreallocQueueReqs?: number | null
+  numDecodeTransferQueueReqs?: number | null
   kvTransferSpeedGbS?: number
   kvTransferLatencyMs?: number
   kvTransferBootstrapMs?: number
@@ -186,17 +204,17 @@ export const getSGLangMetrics = async (
 
   const numQueueReqs = Math.floor(pickOne(metrics, ['sglang:num_queue_reqs'], 0))
   const numRunningReqs = Math.floor(pickOne(metrics, ['sglang:num_running_reqs'], 0))
-  const numGrammarQueueReqs = Math.floor(pickOne(metrics, ['sglang:num_grammar_queue_reqs'], 0))
-  const numRunningReqsOfflineBatch = Math.floor(pickOne(metrics, ['sglang:num_running_reqs_offline_batch'], 0))
-  const numPrefillPreallocQueueReqs = Math.floor(pickOne(metrics, ['sglang:num_prefill_prealloc_queue_reqs'], 0))
-  const numPrefillInflightQueueReqs = Math.floor(pickOne(metrics, ['sglang:num_prefill_inflight_queue_reqs'], 0))
-  const numDecodePreallocQueueReqs = Math.floor(pickOne(metrics, ['sglang:num_decode_prealloc_queue_reqs'], 0))
-  const numDecodeTransferQueueReqs = Math.floor(pickOne(metrics, ['sglang:num_decode_transfer_queue_reqs'], 0))
+  const numGrammarQueueReqs = floorOptional(pickOptional(metrics, ['sglang:num_grammar_queue_reqs']))
+  const numRunningReqsOfflineBatch = floorOptional(pickOptional(metrics, ['sglang:num_running_reqs_offline_batch']))
+  const numPrefillPreallocQueueReqs = floorOptional(pickOptional(metrics, ['sglang:num_prefill_prealloc_queue_reqs']))
+  const numPrefillInflightQueueReqs = floorOptional(pickOptional(metrics, ['sglang:num_prefill_inflight_queue_reqs']))
+  const numDecodePreallocQueueReqs = floorOptional(pickOptional(metrics, ['sglang:num_decode_prealloc_queue_reqs']))
+  const numDecodeTransferQueueReqs = floorOptional(pickOptional(metrics, ['sglang:num_decode_transfer_queue_reqs']))
 
   const genThroughput = pickOne(metrics, ['sglang:gen_throughput'], 0)
   const tokenUsage = pickOne(metrics, ['sglang:token_usage'], 0)
-  const utilization = pickOne(metrics, ['sglang:utilization'], 0)
-  const cacheHitRate = pickOne(metrics, ['sglang:cache_hit_rate'], 0)
+  const utilization = pickOptional(metrics, ['sglang:utilization'])
+  const cacheHitRate = pickOptional(metrics, ['sglang:cache_hit_rate'])
   const specAcceptRate = pickOne(metrics, ['sglang:spec_accept_rate'], 0)
   const specAcceptLength = pickOne(metrics, ['sglang:spec_accept_length'], 0)
   const pendingPreallocTokenUsage = pickOne(metrics, ['sglang:pending_prealloc_token_usage'], 0)

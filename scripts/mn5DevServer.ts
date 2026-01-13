@@ -36,6 +36,7 @@ interface MN5Config {
   SGLANG_API_MAX_INFLIGHT_REQUESTS: string
   SGLANG_API_MAX_BURST_REQUESTS: string
   SGLANG_CONTEXT_LENGTH: string
+  SGLANG_LOCAL_PORT_BASE: string
 }
 
 const log = (m: string): void => {

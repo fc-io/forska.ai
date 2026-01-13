@@ -1,0 +1,13 @@
+{
+  auto_https off
+  servers {
+    protocols h1 h2c
+  }
+}
+:30001 {
+  reverse_proxy host.docker.internal:40001 {
+    transport http {
+      versions h2c
+    }
+  }
+}

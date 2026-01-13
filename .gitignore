@@ -16,6 +16,7 @@ data/
 out
 dist
 *.tgz
+cache
 
 # code coverage
 coverage

@@ -3,7 +3,7 @@
 #SBATCH -A ehpc482
 #SBATCH --partition=acc
 #SBATCH --qos=acc_debug
-#SBATCH --nodes=2
+#SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4
 #SBATCH --cpus-per-task=20
 #SBATCH --gres=gpu:4
@@ -89,6 +89,7 @@ export SGLANG_MODEL=${SGLANG_MODEL:-openai/gpt-oss-120b}
 export SGLANG_INTERNAL_PORT=${SGLANG_INTERNAL_PORT:-30001}
 export CADDY_PORT=${CADDY_PORT:-30002}
 export SGLANG_PORT=${SGLANG_PORT:-$CADDY_PORT}  # External port = Caddy
+export SGLANG_LOCAL_PORT_BASE=${SGLANG_LOCAL_PORT_BASE:-30001}
 
 # Independent per-node workers (tp spans GPUs on the node; dp=1)
 # Router disabled by default - direct worker connections avoid SSH bandwidth throttling
@@ -467,7 +468,7 @@ fi
 # Build WORKER_URLS for API server metrics collection
 WORKER_URLS_ARRAY=()
 WORKER_URLS_LOCAL_ARRAY=()
-LOCAL_PORT_BASE=$((SGLANG_WORKER_PORT))
+LOCAL_PORT_BASE=$((SGLANG_LOCAL_PORT_BASE))
 if [[ "${SGLANG_ENABLE_ROUTER:-0}" == "1" ]]; then
   # Router mode: workers are on SGLANG_WORKER_PORT on each node
   local_port_idx=0
@@ -486,17 +487,15 @@ elif (( NNODES > 1 )); then
   for node_host in "${HOSTS[@]}"; do
     node_addr=$(resolve_ipv4 "$node_host")
     WORKER_URLS_ARRAY+=("http://${node_addr}:${SGLANG_WORKER_PORT}")
-    # Assign unique local ports for tunneling (30001, 30002, etc)
-    # Note: We start at 30001 to avoid conflict with where router WOULD be (30000)
-    # even though router is disabled.
-    local_port=$((30001 + local_port_idx))
+    # Assign unique local ports for tunneling (base, base+1, etc)
+    local_port=$((LOCAL_PORT_BASE + local_port_idx))
     WORKER_URLS_LOCAL_ARRAY+=("http://localhost:${local_port}")
     local_port_idx=$((local_port_idx + 1))
   done
 else
   # Single worker mode
   WORKER_URLS_ARRAY+=("http://$(hostname):${SGLANG_PORT}")
-  WORKER_URLS_LOCAL_ARRAY+=("http://localhost:${SGLANG_PORT}")
+  WORKER_URLS_LOCAL_ARRAY+=("http://localhost:${SGLANG_LOCAL_PORT_BASE}")
 fi
 WORKER_URLS_CSV=$(IFS=,; echo "${WORKER_URLS_ARRAY[*]}")
 WORKER_URLS_LOCAL_CSV=$(IFS=,; echo "${WORKER_URLS_LOCAL_ARRAY[*]}")
@@ -516,10 +515,10 @@ else
 fi
 echo ""
 echo "SSH tunnel from local machine:"
-echo "  ssh -N -L $SGLANG_PORT:$(hostname):$SGLANG_PORT alog"
+echo "  ssh -N -L $SGLANG_LOCAL_PORT_BASE:$(hostname):$SGLANG_PORT alog"
 echo ""
 echo "Test:"
-echo "  curl http://localhost:$SGLANG_PORT/v1/models"
+echo "  curl http://localhost:$SGLANG_LOCAL_PORT_BASE/v1/models"
 echo ""
 echo "Example request (with thinking mode):"
 cat <<EOF
@@ -557,6 +556,7 @@ echo "SGLANG_API_MAX_INFLIGHT_REQUESTS=$SGLANG_API_MAX_INFLIGHT_REQUESTS"
 echo "SGLANG_API_MAX_BURST_REQUESTS=$SGLANG_API_MAX_BURST_REQUESTS"
 echo "SGLANG_CHUNKED_PREFILL_SIZE=$SGLANG_CHUNKED_PREFILL_SIZE"
 echo "SGLANG_CONTEXT_LENGTH=$SGLANG_CONTEXT_LENGTH"
+echo "SGLANG_LOCAL_PORT_BASE=$SGLANG_LOCAL_PORT_BASE"
 echo "[mn5:config:end]"
 
 # Keep running
