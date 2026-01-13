@@ -209,17 +209,58 @@ const isLocalSGLangResponding = async (localPort: number): Promise<boolean> => {
   return trimmed.includes('"data"') || trimmed.includes('"object"') || trimmed.includes('"id"')
 }
 
-const killSshListenersOnPort = async (port: number): Promise<void> => {
-  const listeners = await getLocalListenersOnPort(port)
-  const sshPids = listeners
-    .filter((l) => {
-      return l.command === 'ssh' || l.command === 'autossh'
-    })
-    .map((l) => {
+/**
+ * Kill all SSH/autossh processes listening on a port with retry and SIGKILL escalation
+ */
+const killSshListenersOnPort = async (port: number, maxRetries = 5): Promise<boolean> => {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    const listeners = await getLocalListenersOnPort(port)
+    const sshPids = listeners
+      .filter((l) => {
+        return l.command === 'ssh' || l.command === 'autossh'
+      })
+      .map((l) => {
+        return l.pid
+      })
+
+    if (sshPids.length === 0) {
+      return true // Port is free
+    }
+
+    // Use SIGKILL after first attempt to force cleanup
+    const signal = attempt > 0 ? '-9' : '-15'
+    await $`kill ${signal} ${sshPids.join(' ')} 2>/dev/null || true`.quiet()
+
+    // Wait progressively longer for process to release port
+    await sleep(300 + attempt * 200)
+  }
+
+  // Final check
+  const finalListeners = await getLocalListenersOnPort(port)
+  const sshRemaining = finalListeners.filter((l) => {
+    return l.command === 'ssh' || l.command === 'autossh'
+  })
+  return sshRemaining.length === 0
+}
+
+/**
+ * Kill ALL processes on a port (not just SSH) - use with caution
+ */
+const killAllListenersOnPort = async (port: number): Promise<boolean> => {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const listeners = await getLocalListenersOnPort(port)
+    if (listeners.length === 0) return true
+
+    const pids = listeners.map((l) => {
       return l.pid
     })
+    const signal = attempt > 0 ? '-9' : '-15'
+    await $`kill ${signal} ${pids.join(' ')} 2>/dev/null || true`.quiet()
+    await sleep(500)
+  }
 
-  return sshPids.length === 0 ? undefined : void (await $`kill ${sshPids.join(' ')} 2>/dev/null || true`)
+  const finalListeners = await getLocalListenersOnPort(port)
+  return finalListeners.length === 0
 }
 
 const interpretExitCode = (code: number): string => {
@@ -257,8 +298,32 @@ const ensureLocalPortReadyForTunnel = async (localPort: number): Promise<'ready'
   }
 
   log(`Killing existing SSH tunnel(s) on port ${localPort}...`)
-  await killSshListenersOnPort(localPort)
-  await sleep(500)
+  const killed = await killSshListenersOnPort(localPort)
+
+  if (!killed) {
+    // SSH cleanup failed, try force-killing all listeners
+    log(`SSH cleanup failed, force-killing all listeners on port ${localPort}...`)
+    const forceKilled = await killAllListenersOnPort(localPort)
+    if (!forceKilled) {
+      log(`ERROR: Could not free port ${localPort}`)
+      return 'in_use'
+    }
+  }
+
+  // Verify port is actually free before returning
+  await sleep(200)
+  const verifyListeners = await getLocalListenersOnPort(localPort)
+  if (verifyListeners.length > 0) {
+    log(
+      `ERROR: Port ${localPort} still in use after cleanup: ${verifyListeners
+        .map((l) => {
+          return `${l.command}:${l.pid}`
+        })
+        .join(', ')}`,
+    )
+    return 'in_use'
+  }
+
   return 'ready'
 }
 
@@ -376,15 +441,22 @@ const startMultiNodeTunnels = async (
   const restartSuffix = restartCount > 0 ? ` (restart #${restartCount})` : ''
   log(`Starting SSH tunnels to ${allNodes.length} node(s)${restartSuffix}`)
 
-  // Kill any existing tunnels
-  for (const proc of activeTunnelProcs) {
-    try {
-      proc.kill()
-    } catch {
-      // Ignore
+  // Kill any managed tunnel processes from previous attempts
+  // This handles tunnels spawned by THIS process; orphaned tunnels from
+  // previous script runs are cleaned up by ensureLocalPortReadyForTunnel
+  if (activeTunnelProcs.length > 0) {
+    log(`Cleaning up ${activeTunnelProcs.length} existing managed tunnel(s)...`)
+    for (const proc of activeTunnelProcs) {
+      try {
+        proc.kill('SIGTERM')
+      } catch {
+        // Ignore - process may already be dead
+      }
     }
+    activeTunnelProcs.length = 0 // Clear array
+    // Wait for processes to fully terminate and release ports
+    await sleep(1000)
   }
-  activeTunnelProcs.length = 0 // Clear array
 
   const localTunnelPortBase = getLocalTunnelPortBase(localPortBase)
   const localCaddyPorts: number[] = []
