@@ -79,7 +79,7 @@ const buildPromptInfoRows = (promptIds: string[], promptDetails: PromptDetails[]
 
 const buildPromptInfoCsv = (promptIds: string[], promptDetails: PromptDetails[]): string => {
   const rows = buildPromptInfoRows(promptIds, promptDetails)
-  const headerRow = ['Title', 'Type', 'Prompt'].map(escapeCSV).join(',')
+  const headerRow = ['Prompt Heading', 'Prompt Answer Options', 'Prompt'].map(escapeCSV).join(',')
   const dataRows = rows.map((row) => {
     return [row.title, row.type, row.prompt].map(escapeCSV).join(',')
   })
@@ -208,9 +208,6 @@ export const projectExportRoutes = new Elysia()
       })
 
       const headers: string[] = ['Title']
-      if (includeSummary) {
-        headers.push('Abstract/Summary')
-      }
       if (includeArticleId) {
         headers.push('Article ID')
       }
@@ -220,14 +217,17 @@ export const projectExportRoutes = new Elysia()
       if (includeArticleAuthors) {
         headers.push('Article Authors')
       }
+      if (includeSummary) {
+        headers.push('Abstract/Summary')
+      }
+      if (includeJournal) {
+        headers.push('Journal')
+      }
       if (includeArticleCreatedAt) {
         headers.push('Article Created At')
       }
       if (includeArticleUpdatedAt) {
         headers.push('Article Updated At')
-      }
-      if (includeJournal) {
-        headers.push('Journal')
       }
       for (const id of orderedPromptIds) {
         const baseHeading = promptHeaderMap.get(id) || id
@@ -386,9 +386,6 @@ export const projectExportRoutes = new Elysia()
               // Stream CSV rows for this batch
               for (const [_, articleData] of batchArticleMap) {
                 const row: string[] = [articleData.title]
-                if (includeSummary) {
-                  row.push(articleData.summary)
-                }
                 if (includeArticleId) {
                   row.push(articleData.articleId)
                 }
@@ -398,14 +395,17 @@ export const projectExportRoutes = new Elysia()
                 if (includeArticleAuthors) {
                   row.push(articleData.authors)
                 }
+                if (includeSummary) {
+                  row.push(articleData.summary)
+                }
+                if (includeJournal) {
+                  row.push(articleData.journalTitle)
+                }
                 if (includeArticleCreatedAt) {
                   row.push(articleData.createdAt)
                 }
                 if (includeArticleUpdatedAt) {
                   row.push(articleData.updatedAt)
-                }
-                if (includeJournal) {
-                  row.push(articleData.journalTitle)
                 }
                 for (const promptId of orderedPromptIds) {
                   row.push(articleData.answers.get(promptId) || '')
