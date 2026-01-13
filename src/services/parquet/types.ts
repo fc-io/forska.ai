@@ -31,6 +31,12 @@ export interface DenormalizedJudgmentAnalytics {
   promptId: string
   modelId: string
 
+  // Content settings used for this judgment
+  useTitle: boolean
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+
   // Answer Data
   answeredOriginal: string | null // For single-value answers
   answeredOriginalAsArray: string[] | null // For multi-value/array answers

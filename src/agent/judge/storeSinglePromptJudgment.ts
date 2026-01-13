@@ -21,6 +21,10 @@ const buildDenormalizedJudgmentAnalyticsRecord = ({
   article,
   promptId,
   modelId,
+  useTitle,
+  useAbstract,
+  useFulltext,
+  useFulltextNoImages,
   answeredOriginal,
   answeredOriginalAsArray,
   explanation,
@@ -31,6 +35,10 @@ const buildDenormalizedJudgmentAnalyticsRecord = ({
   article: typeof articles.$inferSelect
   promptId: string
   modelId: string
+  useTitle: boolean
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
   answeredOriginal: string | null
   answeredOriginalAsArray: string[] | null
   explanation: string | null
@@ -50,6 +58,10 @@ const buildDenormalizedJudgmentAnalyticsRecord = ({
     articleImportedBy: article.importedBy,
     promptId,
     modelId,
+    useTitle,
+    useAbstract,
+    useFulltext,
+    useFulltextNoImages,
     answeredOriginal,
     answeredOriginalAsArray,
     explanation,
@@ -79,13 +91,28 @@ export const storeSinglePromptJudgment = async ({
     const db = getDatabase()
 
     // Prepare snapshot context (best-effort, only fetching fields we still store)
-    const [projectRow] = await db.select({id: projects.id}).from(projects).where(eq(projects.id, projectId)).limit(1)
+    const [projectRow] = await db
+      .select({
+        id: projects.id,
+        useTitle: projects.useTitle,
+        useAbstract: projects.useAbstract,
+        useFulltext: projects.useFulltext,
+        useFulltextNoImages: projects.useFulltextNoImages,
+      })
+      .from(projects)
+      .where(eq(projects.id, projectId))
+      .limit(1)
 
     const [modelRow] = await db
       .select({modelName: models.modelName, provider: models.provider})
       .from(models)
       .where(eq(models.id, modelId))
       .limit(1)
+
+    const useTitle = projectRow?.useTitle ?? true
+    const useAbstract = projectRow?.useAbstract ?? true
+    const useFulltext = projectRow?.useFulltext ?? false
+    const useFulltextNoImages = projectRow?.useFulltextNoImages ?? false
 
     const snapshotValues = {
       snapshotProjectId: projectRow?.id ?? null,
@@ -132,6 +159,10 @@ export const storeSinglePromptJudgment = async ({
       confidenceOriginal: 50,
       explanation: answeredExplanation || null,
       quotes: answeredQuotes || null,
+      useTitle,
+      useAbstract,
+      useFulltext,
+      useFulltextNoImages,
       // Snapshots (kept for cross-project display)
       snapshotProjectId: snapshotValues.snapshotProjectId,
       snapshotProjectModelName: snapshotValues.snapshotProjectModelName,
@@ -143,6 +174,10 @@ export const storeSinglePromptJudgment = async ({
       article,
       promptId,
       modelId,
+      useTitle,
+      useAbstract,
+      useFulltext,
+      useFulltextNoImages,
       answeredOriginal,
       answeredOriginalAsArray,
       explanation: answeredExplanation || null,

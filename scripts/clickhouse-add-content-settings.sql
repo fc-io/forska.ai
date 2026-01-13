@@ -1,43 +1,34 @@
--- ClickHouse DDL for Forska Judgments Analytics
--- Run against forska database
+-- ClickHouse Migration: Add Content Settings Columns
+-- Run this script to add useTitle, useAbstract, useFulltext, useFulltextNoImages columns
+-- to existing ClickHouse tables.
+--
+-- Default values match the legacy behavior where title + abstract was assumed.
+--
+-- Usage:
+--   clickhouse-client --database forska < scripts/clickhouse-add-content-settings.sql
+--
+-- Or in Docker:
+--   docker exec -i clickhouse clickhouse-client --database forska < scripts/clickhouse-add-content-settings.sql
 
 -- ============================================================
--- 1. MAIN ANALYTICS TABLE: ReplacingMergeTree for deduplication
+-- 1. Add columns to main analytics table
 -- ============================================================
--- Note: We use createdAt as the version column since deletedAt can be NULL
--- Tombstones (soft deletes) are handled via WHERE deletedAt IS NULL in queries
-CREATE TABLE IF NOT EXISTS forska.judgments (
-    id String,
-    createdAt DateTime64(6, 'UTC'),
-    deletedAt Nullable(DateTime64(6, 'UTC')),
-    articleId String,
-    articleTitle String,
-    articleCreatedAt Nullable(DateTime64(6, 'UTC')),
-    articleUpdatedAt Nullable(DateTime64(6, 'UTC')),
-    articleCreatedYear Nullable(Int32),
-    articleUpdatedYear Nullable(Int32),
-    articleImportRoute Nullable(String),
-    articleImportedBy Nullable(String),
-    promptId String,
-    modelId String,
-    useTitle Bool DEFAULT true,
-    useAbstract Bool DEFAULT true,
-    useFulltext Bool DEFAULT false,
-    useFulltextNoImages Bool DEFAULT false,
-    answeredOriginal Nullable(String),
-    answeredOriginalAsArray Array(Nullable(String)),
-    explanation Nullable(String),
-    quotes Nullable(String)
-) ENGINE = ReplacingMergeTree(createdAt)
-PARTITION BY toYYYYMM(createdAt)
-ORDER BY (id);
+ALTER TABLE forska.judgments ADD COLUMN IF NOT EXISTS useTitle Bool DEFAULT true;
+ALTER TABLE forska.judgments ADD COLUMN IF NOT EXISTS useAbstract Bool DEFAULT true;
+ALTER TABLE forska.judgments ADD COLUMN IF NOT EXISTS useFulltext Bool DEFAULT false;
+ALTER TABLE forska.judgments ADD COLUMN IF NOT EXISTS useFulltextNoImages Bool DEFAULT false;
 
 -- ============================================================
--- 2. SOURCE TABLE: S3Queue ingests new Parquet files
+-- 2. Recreate S3Queue source table with new columns
 -- ============================================================
--- Uses Nullable types to match Parquet schema exactly
--- Keeper is required for S3Queue (file processing checkpoints)
-CREATE TABLE IF NOT EXISTS forska.judgments_queue (
+-- S3Queue tables don't support ALTER TABLE, so we must drop and recreate
+-- First drop the materialized view that depends on it
+DROP VIEW IF EXISTS forska.judgments_mv;
+
+-- Now drop and recreate the queue table with new columns
+DROP TABLE IF EXISTS forska.judgments_queue;
+
+CREATE TABLE forska.judgments_queue (
     id Nullable(String),
     createdAt Nullable(DateTime64(6, 'UTC')),
     deletedAt Nullable(DateTime64(6, 'UTC')),
@@ -70,10 +61,9 @@ SETTINGS
     s3queue_processing_threads_num = 4;
 
 -- ============================================================
--- 3. MATERIALIZED VIEW: Route from Queue to Main Table
+-- 3. Recreate materialized view with new columns
 -- ============================================================
--- Converts Nullable fields to non-nullable where needed using coalesce
-CREATE MATERIALIZED VIEW IF NOT EXISTS forska.judgments_mv TO forska.judgments AS
+CREATE MATERIALIZED VIEW forska.judgments_mv TO forska.judgments AS
 SELECT
     coalesce(id, '') AS id,
     coalesce(createdAt, now64(6)) AS createdAt,
@@ -97,3 +87,13 @@ SELECT
     explanation,
     quotes
 FROM forska.judgments_queue;
+
+-- ============================================================
+-- 4. Verify columns exist
+-- ============================================================
+SELECT 'Columns added successfully. Verifying schema...' AS status;
+
+SELECT name, type, default_expression
+FROM system.columns
+WHERE table = 'judgments' AND database = 'forska' AND name LIKE 'use%'
+ORDER BY name;

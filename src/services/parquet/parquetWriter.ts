@@ -45,6 +45,12 @@ export const judgmentAnalyticsSchema = new ParquetSchema({
   promptId: {type: 'UTF8'},
   modelId: {type: 'UTF8'},
 
+  // Content settings used for this judgment
+  useTitle: {type: 'BOOLEAN'},
+  useAbstract: {type: 'BOOLEAN'},
+  useFulltext: {type: 'BOOLEAN'},
+  useFulltextNoImages: {type: 'BOOLEAN'},
+
   // Answer data
   answeredOriginal: {type: 'UTF8', optional: true},
   // For array columns, we use a repeated UTF8 field (Parquet LIST)
@@ -76,6 +82,11 @@ const toParquetRow = (record: DenormalizedJudgmentAnalytics): Record<string, unk
 
     promptId: record.promptId,
     modelId: record.modelId,
+
+    useTitle: record.useTitle,
+    useAbstract: record.useAbstract,
+    useFulltext: record.useFulltext,
+    useFulltextNoImages: record.useFulltextNoImages,
 
     answeredOriginal: record.answeredOriginal,
     // Convert null/undefined to empty array for repeated field
