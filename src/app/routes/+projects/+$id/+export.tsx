@@ -50,6 +50,11 @@ const ExportData = () => {
   const [includeQuotes, setIncludeQuotes] = createSignal(false)
   const [includeJournal, setIncludeJournal] = createSignal(false)
   const [includeSummary, setIncludeSummary] = createSignal(false)
+  const [includeArticleId, setIncludeArticleId] = createSignal(false)
+  const [includeArticleLink, setIncludeArticleLink] = createSignal(false)
+  const [includeArticleAuthors, setIncludeArticleAuthors] = createSignal(false)
+  const [includeArticleCreatedAt, setIncludeArticleCreatedAt] = createSignal(false)
+  const [includeArticleUpdatedAt, setIncludeArticleUpdatedAt] = createSignal(false)
   const [includePromptType, setIncludePromptType] = createSignal(false)
   const [includePromptContent, setIncludePromptContent] = createSignal(false)
   const [isExporting, setIsExporting] = createSignal(false)
@@ -122,6 +127,11 @@ const ExportData = () => {
           includeQuotes: includeQuotes(),
           includeJournal: includeJournal(),
           includeSummary: includeSummary(),
+          includeArticleId: includeArticleId(),
+          includeArticleLink: includeArticleLink(),
+          includeArticleAuthors: includeArticleAuthors(),
+          includeArticleCreatedAt: includeArticleCreatedAt(),
+          includeArticleUpdatedAt: includeArticleUpdatedAt(),
           includePromptType: includePromptType(),
           includePromptContent: includePromptContent(),
         }),
@@ -280,6 +290,45 @@ const ExportData = () => {
                   <input
                     type="checkbox"
                     class="mt-1"
+                    checked={includeArticleId()}
+                    onChange={(e) => {
+                      setIncludeArticleId(e.currentTarget.checked)
+                    }}
+                  />
+                  <div class="flex-1">
+                    <p class="text-sm font-medium text-gray-900">Include Article ID</p>
+                  </div>
+                </label>
+                <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer hover:bg-muted/50">
+                  <input
+                    type="checkbox"
+                    class="mt-1"
+                    checked={includeArticleLink()}
+                    onChange={(e) => {
+                      setIncludeArticleLink(e.currentTarget.checked)
+                    }}
+                  />
+                  <div class="flex-1">
+                    <p class="text-sm font-medium text-gray-900">Include Article Link</p>
+                  </div>
+                </label>
+                <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer hover:bg-muted/50">
+                  <input
+                    type="checkbox"
+                    class="mt-1"
+                    checked={includeArticleAuthors()}
+                    onChange={(e) => {
+                      setIncludeArticleAuthors(e.currentTarget.checked)
+                    }}
+                  />
+                  <div class="flex-1">
+                    <p class="text-sm font-medium text-gray-900">Include Article Authors</p>
+                  </div>
+                </label>
+                <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer hover:bg-muted/50">
+                  <input
+                    type="checkbox"
+                    class="mt-1"
                     checked={includeSummary()}
                     onChange={(e) => {
                       setIncludeSummary(e.currentTarget.checked)
@@ -300,6 +349,32 @@ const ExportData = () => {
                   />
                   <div class="flex-1">
                     <p class="text-sm font-medium text-gray-900">Include Journal</p>
+                  </div>
+                </label>
+                <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer hover:bg-muted/50">
+                  <input
+                    type="checkbox"
+                    class="mt-1"
+                    checked={includeArticleCreatedAt()}
+                    onChange={(e) => {
+                      setIncludeArticleCreatedAt(e.currentTarget.checked)
+                    }}
+                  />
+                  <div class="flex-1">
+                    <p class="text-sm font-medium text-gray-900">Include Article Created At</p>
+                  </div>
+                </label>
+                <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer hover:bg-muted/50">
+                  <input
+                    type="checkbox"
+                    class="mt-1"
+                    checked={includeArticleUpdatedAt()}
+                    onChange={(e) => {
+                      setIncludeArticleUpdatedAt(e.currentTarget.checked)
+                    }}
+                  />
+                  <div class="flex-1">
+                    <p class="text-sm font-medium text-gray-900">Include Article Updated At</p>
                   </div>
                 </label>
               </div>

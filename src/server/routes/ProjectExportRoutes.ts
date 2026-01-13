@@ -29,6 +29,40 @@ type PromptDetails = {id: string; promptHeading: string | null; originalText: st
 
 type PromptInfoRow = {title: string; type: string; prompt: string}
 
+type ArticleUrlStrategy = {isMatch: (articleId: string) => boolean; buildUrl: (articleId: string) => string}
+
+const articleUrlStrategies: ArticleUrlStrategy[] = [
+  {
+    isMatch: (articleId) => {
+      return articleId.startsWith('oai:arXiv.org:')
+    },
+    buildUrl: (articleId) => {
+      return `https://www.arxiv.org/abs/${articleId.slice(14)}`
+    },
+  },
+  {
+    isMatch: (articleId) => {
+      return articleId.startsWith('pmid:')
+    },
+    buildUrl: (articleId) => {
+      return `https://pubmed.ncbi.nlm.nih.gov/${articleId.slice(5)}/`
+    },
+  },
+]
+
+const getArticleUrl = (articleId: string | null): string => {
+  const articleIdValue = articleId ?? ''
+  const matchingStrategy = articleUrlStrategies.find((strategy) => {
+    return strategy.isMatch(articleIdValue)
+  })
+  return matchingStrategy ? matchingStrategy.buildUrl(articleIdValue) : ''
+}
+
+const formatArticleDate = (value: Date | string | null | undefined): string => {
+  const dateValue = value ? (typeof value === 'string' ? new Date(value) : value) : null
+  return dateValue ? dateValue.toISOString() : ''
+}
+
 const buildPromptInfoRows = (promptIds: string[], promptDetails: PromptDetails[]): PromptInfoRow[] => {
   const promptDetailsMap = new Map(
     promptDetails.map((detail) => {
@@ -87,6 +121,11 @@ export const projectExportRoutes = new Elysia()
       const includeQuotes = body.includeQuotes ?? false
       const includeJournal = body.includeJournal ?? false
       const includeSummary = body.includeSummary ?? false
+      const includeArticleId = body.includeArticleId ?? false
+      const includeArticleLink = body.includeArticleLink ?? false
+      const includeArticleAuthors = body.includeArticleAuthors ?? false
+      const includeArticleCreatedAt = body.includeArticleCreatedAt ?? false
+      const includeArticleUpdatedAt = body.includeArticleUpdatedAt ?? false
       const includePromptType = body.includePromptType ?? false
       const includePromptContent = body.includePromptContent ?? false
 
@@ -172,6 +211,21 @@ export const projectExportRoutes = new Elysia()
       if (includeSummary) {
         headers.push('Abstract/Summary')
       }
+      if (includeArticleId) {
+        headers.push('Article ID')
+      }
+      if (includeArticleLink) {
+        headers.push('Article Link')
+      }
+      if (includeArticleAuthors) {
+        headers.push('Article Authors')
+      }
+      if (includeArticleCreatedAt) {
+        headers.push('Article Created At')
+      }
+      if (includeArticleUpdatedAt) {
+        headers.push('Article Updated At')
+      }
       if (includeJournal) {
         headers.push('Journal')
       }
@@ -231,8 +285,12 @@ export const projectExportRoutes = new Elysia()
               const batchData = await db
                 .select({
                   articleId: articles.id,
+                  articleExternalId: articles.articleId,
                   articleTitle: articles.articleTitle,
                   articleSummary: articles.articleSummary,
+                  articleAuthors: articles.articleAuthors,
+                  articleCreatedAt: articles.articleCreatedAt,
+                  articleUpdatedAt: articles.articleUpdatedAt,
                   articleOriginalData: includeJournal ? articles.originalData : sql<null>`NULL`,
                   promptId: judgments.promptId,
                   answeredOriginal: judgments.answeredOriginal,
@@ -263,6 +321,11 @@ export const projectExportRoutes = new Elysia()
                 string,
                 {
                   title: string
+                  articleId: string
+                  articleUrl: string
+                  authors: string
+                  createdAt: string
+                  updatedAt: string
                   summary: string
                   journalTitle: string
                   answers: Map<string, string>
@@ -273,11 +336,21 @@ export const projectExportRoutes = new Elysia()
 
               for (const row of batchData) {
                 if (!batchArticleMap.has(row.articleId)) {
+                  const articleExternalId = row.articleExternalId ?? ''
+                  const articleUrl = includeArticleLink ? getArticleUrl(articleExternalId) : ''
+                  const articleAuthors = includeArticleAuthors ? row.articleAuthors?.join('; ') ?? '' : ''
+                  const articleCreatedAt = includeArticleCreatedAt ? formatArticleDate(row.articleCreatedAt) : ''
+                  const articleUpdatedAt = includeArticleUpdatedAt ? formatArticleDate(row.articleUpdatedAt) : ''
                   const journalTitle = includeJournal
                     ? getJournalTitleFromOriginalData(row.articleOriginalData) ?? ''
                     : ''
                   batchArticleMap.set(row.articleId, {
                     title: row.articleTitle || 'Untitled',
+                    articleId: articleExternalId,
+                    articleUrl,
+                    authors: articleAuthors,
+                    createdAt: articleCreatedAt,
+                    updatedAt: articleUpdatedAt,
                     summary: row.articleSummary || '',
                     journalTitle,
                     answers: new Map(),
@@ -315,6 +388,21 @@ export const projectExportRoutes = new Elysia()
                 const row: string[] = [articleData.title]
                 if (includeSummary) {
                   row.push(articleData.summary)
+                }
+                if (includeArticleId) {
+                  row.push(articleData.articleId)
+                }
+                if (includeArticleLink) {
+                  row.push(articleData.articleUrl)
+                }
+                if (includeArticleAuthors) {
+                  row.push(articleData.authors)
+                }
+                if (includeArticleCreatedAt) {
+                  row.push(articleData.createdAt)
+                }
+                if (includeArticleUpdatedAt) {
+                  row.push(articleData.updatedAt)
                 }
                 if (includeJournal) {
                   row.push(articleData.journalTitle)
@@ -365,6 +453,11 @@ export const projectExportRoutes = new Elysia()
         includeQuotes: t.Optional(t.Boolean()),
         includeJournal: t.Optional(t.Boolean()),
         includeSummary: t.Optional(t.Boolean()),
+        includeArticleId: t.Optional(t.Boolean()),
+        includeArticleLink: t.Optional(t.Boolean()),
+        includeArticleAuthors: t.Optional(t.Boolean()),
+        includeArticleCreatedAt: t.Optional(t.Boolean()),
+        includeArticleUpdatedAt: t.Optional(t.Boolean()),
         includePromptType: t.Optional(t.Boolean()),
         includePromptContent: t.Optional(t.Boolean()),
       }),
