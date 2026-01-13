@@ -624,6 +624,16 @@ export const judgments = pgTable(
       index('judgments_prompt_article_idx').on(table.promptId, table.articleId),
       // Cover common NOT EXISTS lookups by (article_id, prompt_id, model_id)
       index('judgments_article_prompt_model_idx').on(table.articleId, table.promptId, table.modelId),
+      // Cover content-aware NOT EXISTS lookups (model + content settings)
+      index('judgments_article_prompt_model_content_idx').on(
+        table.articleId,
+        table.promptId,
+        table.modelId,
+        table.useTitle,
+        table.useAbstract,
+        table.useFulltext,
+        table.useFulltextNoImages,
+      ),
       // Note: judgments_prompt_article_answered_idx is also managed via raw SQL migration
       index('judgments_updated_idx').on(table.updatedAt),
       // Denormalized project lookups (for Parquet/ClickHouse compatibility)

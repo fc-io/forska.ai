@@ -68,9 +68,17 @@ const fetchProjectMetadata = async (projectId: string) => {
       .where(and(eq(projectPrompts.projectId, projectId), eq(projectPrompts.enabled, true)))
       .orderBy(projectPrompts.order),
 
-    // Get project date bounds and modelId
+    // Get project date bounds, modelId, and content settings
     db
-      .select({dateFrom: projects.dateFrom, dateTo: projects.dateTo, modelId: projects.modelId})
+      .select({
+        dateFrom: projects.dateFrom,
+        dateTo: projects.dateTo,
+        modelId: projects.modelId,
+        useTitle: projects.useTitle,
+        useAbstract: projects.useAbstract,
+        useFulltext: projects.useFulltext,
+        useFulltextNoImages: projects.useFulltextNoImages,
+      })
       .from(projects)
       .where(eq(projects.id, projectId))
       .limit(1),
@@ -95,6 +103,10 @@ const fetchProjectMetadata = async (projectId: string) => {
     }),
     projectBounds: projectBoundsResult[0] ?? null,
     modelId: projectBoundsResult[0]?.modelId ?? null,
+    useTitle: projectBoundsResult[0]?.useTitle ?? true,
+    useAbstract: projectBoundsResult[0]?.useAbstract ?? true,
+    useFulltext: projectBoundsResult[0]?.useFulltext ?? false,
+    useFulltextNoImages: projectBoundsResult[0]?.useFulltextNoImages ?? false,
     routeTexts: projectImportRouteTexts.map((r) => {
       return r.route
     }),
@@ -137,6 +149,12 @@ const selectLlmArticleIds = async (params: SelectArticleIdsParams): Promise<stri
   if (metadata.modelId) {
     whereParts.push(`modelId = '${escapeClickHouseString(metadata.modelId)}'`)
   }
+
+  // Content settings filters
+  whereParts.push(`useTitle = ${metadata.useTitle ? 'true' : 'false'}`)
+  whereParts.push(`useAbstract = ${metadata.useAbstract ? 'true' : 'false'}`)
+  whereParts.push(`useFulltext = ${metadata.useFulltext ? 'true' : 'false'}`)
+  whereParts.push(`useFulltextNoImages = ${metadata.useFulltextNoImages ? 'true' : 'false'}`)
 
   // Date bounds
   const fromDate = params.from ? new Date(`${params.from}T00:00:00.000Z`) : null
@@ -271,6 +289,12 @@ const selectUnassessedArticleIds = async (params: SelectArticleIdsParams): Promi
   if (metadata.modelId) {
     whereParts.push(`modelId = '${escapeClickHouseString(metadata.modelId)}'`)
   }
+
+  // Content settings filters
+  whereParts.push(`useTitle = ${metadata.useTitle ? 'true' : 'false'}`)
+  whereParts.push(`useAbstract = ${metadata.useAbstract ? 'true' : 'false'}`)
+  whereParts.push(`useFulltext = ${metadata.useFulltext ? 'true' : 'false'}`)
+  whereParts.push(`useFulltextNoImages = ${metadata.useFulltextNoImages ? 'true' : 'false'}`)
 
   // Date bounds
   const fromDate = params.from ? new Date(`${params.from}T00:00:00.000Z`) : null
@@ -436,6 +460,12 @@ const selectBothArticleIds = async (params: SelectArticleIdsParams): Promise<str
   if (metadata.modelId) {
     whereParts.push(`modelId = '${escapeClickHouseString(metadata.modelId)}'`)
   }
+
+  // Content settings filters
+  whereParts.push(`useTitle = ${metadata.useTitle ? 'true' : 'false'}`)
+  whereParts.push(`useAbstract = ${metadata.useAbstract ? 'true' : 'false'}`)
+  whereParts.push(`useFulltext = ${metadata.useFulltext ? 'true' : 'false'}`)
+  whereParts.push(`useFulltextNoImages = ${metadata.useFulltextNoImages ? 'true' : 'false'}`)
 
   // Article filter (must be human-assessed)
   const humanArticleIdsQuoted = humanAssessedArticleIds

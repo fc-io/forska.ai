@@ -55,9 +55,16 @@ const fetchProjectMetadataForFilters = async (projectId: string) => {
   const db = getDatabase()
 
   const [projectBoundsResult, projectImportRouteTexts, curatedArticleRows, projectModelResult] = await Promise.all([
-    // Get project date bounds
+    // Get project date bounds and content settings
     db
-      .select({dateFrom: projects.dateFrom, dateTo: projects.dateTo})
+      .select({
+        dateFrom: projects.dateFrom,
+        dateTo: projects.dateTo,
+        useTitle: projects.useTitle,
+        useAbstract: projects.useAbstract,
+        useFulltext: projects.useFulltext,
+        useFulltextNoImages: projects.useFulltextNoImages,
+      })
       .from(projects)
       .where(eq(projects.id, projectId))
       .limit(1),
@@ -88,6 +95,10 @@ const fetchProjectMetadataForFilters = async (projectId: string) => {
       return r.articleId
     }),
     modelId: projectModelResult[0]?.modelId ?? null,
+    useTitle: projectBoundsResult[0]?.useTitle ?? true,
+    useAbstract: projectBoundsResult[0]?.useAbstract ?? true,
+    useFulltext: projectBoundsResult[0]?.useFulltext ?? false,
+    useFulltextNoImages: projectBoundsResult[0]?.useFulltextNoImages ?? false,
   }
 }
 
@@ -148,6 +159,12 @@ export const getDatabaseBasedFiltersFromClickHouse = async (
   if (metadata.modelId) {
     whereParts.push(`modelId = '${escapeClickHouseString(metadata.modelId)}'`)
   }
+
+  // Content settings filters
+  whereParts.push(`useTitle = ${metadata.useTitle ? 'true' : 'false'}`)
+  whereParts.push(`useAbstract = ${metadata.useAbstract ? 'true' : 'false'}`)
+  whereParts.push(`useFulltext = ${metadata.useFulltext ? 'true' : 'false'}`)
+  whereParts.push(`useFulltextNoImages = ${metadata.useFulltextNoImages ? 'true' : 'false'}`)
 
   // Date bounds: combine project bounds with request filters
   const effectiveFromDate =

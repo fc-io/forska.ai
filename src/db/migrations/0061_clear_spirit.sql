@@ -1,0 +1,1 @@
+CREATE INDEX "judgments_article_prompt_model_content_idx" ON "judgments" USING btree ("article_id","prompt_id","model_id","use_title","use_abstract","use_fulltext","use_fulltext_no_images");

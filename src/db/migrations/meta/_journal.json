@@ -421,6 +421,13 @@
       "when": 1768072785404,
       "tag": "0060_familiar_mother_askani",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1768317586594,
+      "tag": "0061_clear_spirit",
+      "breakpoints": true
     }
   ]
 }

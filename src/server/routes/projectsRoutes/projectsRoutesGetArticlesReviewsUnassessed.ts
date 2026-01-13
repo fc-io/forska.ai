@@ -40,9 +40,17 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
         return p.id
       })
 
-      // Always enforce the project's date range, modelId, and capture bounds
+      // Always enforce the project's date range, modelId, content settings, and capture bounds
       const [projectBounds] = await db
-        .select({dateFrom: projects.dateFrom, dateTo: projects.dateTo, modelId: projects.modelId})
+        .select({
+          dateFrom: projects.dateFrom,
+          dateTo: projects.dateTo,
+          modelId: projects.modelId,
+          useTitle: projects.useTitle,
+          useAbstract: projects.useAbstract,
+          useFulltext: projects.useFulltext,
+          useFulltextNoImages: projects.useFulltextNoImages,
+        })
         .from(projects)
         .where(eq(projects.id, body.projectId))
         .limit(1)
@@ -70,13 +78,18 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
       const combinedWhereCondition = whereParts.length > 1 ? and(...whereParts) : (whereParts[0] ?? sql`TRUE`)
 
       // Select articles that are NOT fully assessed by LLM for all project prompts
-      // Strategy: LEFT JOIN judgments filtered to this project's promptIds (and modelId if set) and HAVING count(distinct prompt_id) < total prompts
-      // Build judgment join conditions: articleId match, promptId in project prompts, and optionally modelId match
+      // Strategy: LEFT JOIN judgments filtered to this project's promptIds, modelId, and content settings
+      // and HAVING count(distinct prompt_id) < total prompts
+      // Build judgment join conditions: articleId match, promptId in project prompts, modelId, and content settings match
       const judgmentJoinConditions = projectBounds?.modelId
         ? and(
             eq(judgments.articleId, articles.id),
             inArray(judgments.promptId, promptIds),
             eq(judgments.modelId, projectBounds.modelId),
+            eq(judgments.useTitle, projectBounds.useTitle ?? true),
+            eq(judgments.useAbstract, projectBounds.useAbstract ?? true),
+            eq(judgments.useFulltext, projectBounds.useFulltext ?? false),
+            eq(judgments.useFulltextNoImages, projectBounds.useFulltextNoImages ?? false),
           )
         : and(eq(judgments.articleId, articles.id), inArray(judgments.promptId, promptIds))
 

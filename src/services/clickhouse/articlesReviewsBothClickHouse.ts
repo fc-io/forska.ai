@@ -132,9 +132,17 @@ export const queryArticlesReviewsBothFromClickHouse = async (
       .where(and(eq(projectPrompts.projectId, params.projectId), eq(projectPrompts.enabled, true)))
       .orderBy(projectPrompts.order),
 
-    // Get project date bounds and modelId
+    // Get project date bounds, modelId, and content settings
     db
-      .select({dateFrom: projects.dateFrom, dateTo: projects.dateTo, modelId: projects.modelId})
+      .select({
+        dateFrom: projects.dateFrom,
+        dateTo: projects.dateTo,
+        modelId: projects.modelId,
+        useTitle: projects.useTitle,
+        useAbstract: projects.useAbstract,
+        useFulltext: projects.useFulltext,
+        useFulltextNoImages: projects.useFulltextNoImages,
+      })
       .from(projects)
       .where(eq(projects.id, params.projectId))
       .limit(1),
@@ -171,6 +179,10 @@ export const queryArticlesReviewsBothFromClickHouse = async (
 
   const projectBounds = projectBoundsResult[0] ?? null
   const modelId = projectBoundsResult[0]?.modelId ?? null
+  const useTitle = projectBoundsResult[0]?.useTitle ?? true
+  const useAbstract = projectBoundsResult[0]?.useAbstract ?? true
+  const useFulltext = projectBoundsResult[0]?.useFulltext ?? false
+  const useFulltextNoImages = projectBoundsResult[0]?.useFulltextNoImages ?? false
   const routeTexts = projectImportRouteTexts.map((r) => {
     return r.route
   })
@@ -224,6 +236,12 @@ export const queryArticlesReviewsBothFromClickHouse = async (
   if (modelId) {
     whereParts.push(`modelId = '${escapeClickHouseString(modelId)}'`)
   }
+
+  // Content settings filters
+  whereParts.push(`useTitle = ${useTitle ? 'true' : 'false'}`)
+  whereParts.push(`useAbstract = ${useAbstract ? 'true' : 'false'}`)
+  whereParts.push(`useFulltext = ${useFulltext ? 'true' : 'false'}`)
+  whereParts.push(`useFulltextNoImages = ${useFulltextNoImages ? 'true' : 'false'}`)
 
   // Article filter (must be human-assessed)
   const humanArticleIdsQuoted = humanAssessedArticleIds
