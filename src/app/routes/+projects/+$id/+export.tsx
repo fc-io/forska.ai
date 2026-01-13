@@ -48,6 +48,7 @@ const ExportData = () => {
   const [selectedPrompts, setSelectedPrompts] = createSignal<Record<string, boolean>>({})
   const [includeExplanation, setIncludeExplanation] = createSignal(false)
   const [includeQuotes, setIncludeQuotes] = createSignal(false)
+  const [includeJournal, setIncludeJournal] = createSignal(false)
   const [includeSummary, setIncludeSummary] = createSignal(false)
   const [includePromptType, setIncludePromptType] = createSignal(false)
   const [includePromptContent, setIncludePromptContent] = createSignal(false)
@@ -119,6 +120,7 @@ const ExportData = () => {
           sourceProjectIds: [projectId],
           includeExplanation: includeExplanation(),
           includeQuotes: includeQuotes(),
+          includeJournal: includeJournal(),
           includeSummary: includeSummary(),
           includePromptType: includePromptType(),
           includePromptContent: includePromptContent(),
@@ -240,7 +242,7 @@ const ExportData = () => {
           </Show>
           <Show when={!projectData.isLoading && !projectData.isError && availablePrompts().length > 0}>
             <div class="mb-6">
-              <p class="block text-sm font-medium mb-2">Prompt Header Metadata</p>
+              <p class="block text-sm font-medium mb-2">Prompt Header</p>
               <p class="text-xs text-muted-foreground mb-3">Optionally add prompt metadata inside the header cells.</p>
               <div class="space-y-2">
                 <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer hover:bg-muted/50">
@@ -272,10 +274,7 @@ const ExportData = () => {
               </div>
             </div>
             <div class="mb-6">
-              <p class="block text-sm font-medium mb-2">Abstract/Summary</p>
-              <p class="text-xs text-muted-foreground mb-3">
-                Optionally add abstract/summary as a column next to Title.
-              </p>
+              <p class="block text-sm font-medium mb-2">Article</p>
               <div class="space-y-2">
                 <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer hover:bg-muted/50">
                   <input
@@ -288,6 +287,19 @@ const ExportData = () => {
                   />
                   <div class="flex-1">
                     <p class="text-sm font-medium text-gray-900">Include Abstract/Summary</p>
+                  </div>
+                </label>
+                <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer hover:bg-muted/50">
+                  <input
+                    type="checkbox"
+                    class="mt-1"
+                    checked={includeJournal()}
+                    onChange={(e) => {
+                      setIncludeJournal(e.currentTarget.checked)
+                    }}
+                  />
+                  <div class="flex-1">
+                    <p class="text-sm font-medium text-gray-900">Include Journal</p>
                   </div>
                 </label>
               </div>

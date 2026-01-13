@@ -10,6 +10,7 @@ import {
   projects,
   prompts,
 } from '../../db/schema.ts'
+import {getJournalTitleFromOriginalData} from '../../utils/getJournalTitleFromOriginalData.ts'
 import {requireUserAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
@@ -84,6 +85,7 @@ export const projectExportRoutes = new Elysia()
       const projectId = params.id
       const includeExplanation = body.includeExplanation ?? false
       const includeQuotes = body.includeQuotes ?? false
+      const includeJournal = body.includeJournal ?? false
       const includeSummary = body.includeSummary ?? false
       const includePromptType = body.includePromptType ?? false
       const includePromptContent = body.includePromptContent ?? false
@@ -170,6 +172,9 @@ export const projectExportRoutes = new Elysia()
       if (includeSummary) {
         headers.push('Abstract/Summary')
       }
+      if (includeJournal) {
+        headers.push('Journal')
+      }
       for (const id of orderedPromptIds) {
         const baseHeading = promptHeaderMap.get(id) || id
         const heading = buildPromptHeaderLabel(
@@ -228,6 +233,7 @@ export const projectExportRoutes = new Elysia()
                   articleId: articles.id,
                   articleTitle: articles.articleTitle,
                   articleSummary: articles.articleSummary,
+                  articleOriginalData: includeJournal ? articles.originalData : sql<null>`NULL`,
                   promptId: judgments.promptId,
                   answeredOriginal: judgments.answeredOriginal,
                   answeredOriginalAsArray: judgments.answeredOriginalAsArray,
@@ -258,6 +264,7 @@ export const projectExportRoutes = new Elysia()
                 {
                   title: string
                   summary: string
+                  journalTitle: string
                   answers: Map<string, string>
                   explanations: Map<string, string>
                   quotes: Map<string, string>
@@ -266,9 +273,13 @@ export const projectExportRoutes = new Elysia()
 
               for (const row of batchData) {
                 if (!batchArticleMap.has(row.articleId)) {
+                  const journalTitle = includeJournal
+                    ? getJournalTitleFromOriginalData(row.articleOriginalData) ?? ''
+                    : ''
                   batchArticleMap.set(row.articleId, {
                     title: row.articleTitle || 'Untitled',
                     summary: row.articleSummary || '',
+                    journalTitle,
                     answers: new Map(),
                     explanations: new Map(),
                     quotes: new Map(),
@@ -304,6 +315,9 @@ export const projectExportRoutes = new Elysia()
                 const row: string[] = [articleData.title]
                 if (includeSummary) {
                   row.push(articleData.summary)
+                }
+                if (includeJournal) {
+                  row.push(articleData.journalTitle)
                 }
                 for (const promptId of orderedPromptIds) {
                   row.push(articleData.answers.get(promptId) || '')
@@ -349,6 +363,7 @@ export const projectExportRoutes = new Elysia()
         sourceProjectIds: t.Optional(t.Array(t.String())),
         includeExplanation: t.Optional(t.Boolean()),
         includeQuotes: t.Optional(t.Boolean()),
+        includeJournal: t.Optional(t.Boolean()),
         includeSummary: t.Optional(t.Boolean()),
         includePromptType: t.Optional(t.Boolean()),
         includePromptContent: t.Optional(t.Boolean()),
