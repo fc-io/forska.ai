@@ -61,7 +61,9 @@ const findContentFromAllEntries = (
   depth: number,
 ): string | null => {
   if (index >= entries.length) return null
-  const found = findContentInValue(entries[index][1], keySet, depth)
+  const entry = entries[index]
+  if (!entry) return findContentFromAllEntries(entries, keySet, index + 1, depth)
+  const found = findContentInValue(entry[1], keySet, depth)
   return found ?? findContentFromAllEntries(entries, keySet, index + 1, depth)
 }
 

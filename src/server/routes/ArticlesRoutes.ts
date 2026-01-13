@@ -182,15 +182,16 @@ export const articlesRoutes = new Elysia()
           }),
         )
 
-        const links = inserted
-          .map((a) => {
-            const route = articleIdToRoute.get(a.articleId)
-            const importRouteId = route ? routeMap.get(route) : undefined
-            return importRouteId ? {articleId: a.id, importRouteId} : null
-          })
-          .filter((v): v is {articleId: string; importRouteId: string} => {
-            return v !== null
-          })
+        const links: {articleId: string; importRouteId: string}[] = []
+        for (const a of inserted) {
+          if (!a.articleId) continue
+          const route = articleIdToRoute.get(a.articleId)
+          if (typeof route !== 'string') continue
+          const importRouteId = routeMap.get(route)
+          if (importRouteId) {
+            links.push({articleId: a.id, importRouteId})
+          }
+        }
 
         if (links.length > 0) {
           await db.insert(articleRouteLink).values(links).onConflictDoNothing()

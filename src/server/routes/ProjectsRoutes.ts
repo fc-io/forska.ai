@@ -611,14 +611,14 @@ export const projectsRoutes = new Elysia()
                 targetPromptId = p.originalId
               }
 
-              const insertValues: Partial<typeof projectPrompts.$inferInsert> = {
+              const insertValues = {
                 projectId: params.id,
                 promptId: targetPromptId,
                 order: orderVal,
                 originProjectId: params.id,
+                ...(archivedVal !== undefined ? {archived: archivedVal} : {}),
+                ...(enabledVal !== undefined ? {enabled: enabledVal} : {}),
               }
-              if (archivedVal !== undefined) insertValues.archived = archivedVal
-              if (enabledVal !== undefined) insertValues.enabled = enabledVal
 
               const setValues = {
                 order: sql`EXCLUDED."order"`,
@@ -666,14 +666,14 @@ export const projectsRoutes = new Elysia()
                 return fallbackPrompt.id
               })()
 
-              const insertValues: Partial<typeof projectPrompts.$inferInsert> = {
+              const insertValues = {
                 projectId: params.id,
                 promptId: targetPromptId,
                 order: orderVal,
                 originProjectId: params.id,
+                ...(archivedVal !== undefined ? {archived: archivedVal} : {}),
+                ...(enabledVal !== undefined ? {enabled: enabledVal} : {}),
               }
-              if (archivedVal !== undefined) insertValues.archived = archivedVal
-              if (enabledVal !== undefined) insertValues.enabled = enabledVal
 
               const setValues = {
                 order: sql`EXCLUDED."order"`,

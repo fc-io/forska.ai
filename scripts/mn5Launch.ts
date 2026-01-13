@@ -9,13 +9,13 @@ const MN5_ROOT = '/gpfs/projects/ehpc482/dev'
 const TLOG = 'tlog' // Transfer login
 const GLOG = 'glog' // General login (for sbatch)
 const ALOG = 'alog' // ACC login (for tunnel)
-// Port scheme: Local Caddy (:30002) -> SSH tunnel (:40002+) -> HPC Caddy (:30002) -> SGLang (:30001)
-// Multi-node: Each node gets its own tunnel port (40002, 40003, ...)
-const CADDY_PORT = 30002 // Remote Caddy H2 port (what we tunnel to on each node)
-const DEFAULT_LOCAL_PORT = 30002 // Local port exposed to app (Caddy listens here)
-const TUNNEL_PORT_BASE = 40002 // Local tunnel endpoint base (Caddy proxies to these via H2)
+// Port scheme: Direct per-node tunnels
+// localhost:30001 -> node1:30002 (Caddy) -> SGLang:30001
+// localhost:30002 -> node2:30002 (Caddy) -> SGLang:30001
+// This matches what sbatch outputs in WORKER_URLS_LOCAL
+const REMOTE_CADDY_PORT = 30002 // Remote Caddy H2 port on each HPC node
+const LOCAL_PORT_BASE = 30001 // Local tunnel ports start here (30001, 30002, ...)
 const SBATCH_FILE = 'forska-mn5-sglang.sbatch'
-const DOCKER_CONTAINER_NAME = 'forska-caddy'
 
 // Track the active job ID and tunnels for cleanup
 let activeJobId: string | null = null
@@ -41,8 +41,6 @@ const setupSignalHandler = (): void => {
     if (isShuttingDown) return
     isShuttingDown = true
     console.log('') // New line after ^C
-    // Stop Docker Caddy
-    await stopDockerCaddy()
     // Kill all tunnel processes
     for (const proc of activeTunnelProcs) {
       try {
@@ -64,73 +62,6 @@ const setupSignalHandler = (): void => {
   process.on('SIGTERM', () => {
     return void cleanup('SIGTERM')
   })
-}
-
-// Docker Caddy management
-const stopDockerCaddy = async (): Promise<void> => {
-  try {
-    await $`docker rm -f ${DOCKER_CONTAINER_NAME} 2>/dev/null || true`.quiet()
-  } catch {
-    // Ignore
-  }
-}
-
-const generateCaddyfile = (localPort: number, tunnelPorts: number[]): string => {
-  // Build upstream list for round-robin load balancing across all nodes
-  const upstreams = tunnelPorts
-    .map((port) => {
-      return `host.docker.internal:${port}`
-    })
-    .join(' ')
-  return `{
-  auto_https off
-}
-:${localPort} {
-  reverse_proxy ${upstreams} {
-    lb_policy round_robin
-    transport http {
-      versions h2c
-    }
-  }
-}
-`
-}
-
-const startDockerCaddy = async (localPort: number, tunnelPorts: number[]): Promise<void> => {
-  log(`Starting local Docker Caddy for H2 multiplexing (${tunnelPorts.length} backend(s))...`)
-
-  // Stop any existing container
-  await stopDockerCaddy()
-
-  // Generate Caddyfile with all tunnel ports as upstreams
-  const caddyfile = generateCaddyfile(localPort, tunnelPorts)
-  const caddyfilePath = '/tmp/forska-Caddyfile'
-  await Bun.write(caddyfilePath, caddyfile)
-  const upstreamsList = tunnelPorts
-    .map((p) => {
-      return `host.docker.internal:${p}`
-    })
-    .join(', ')
-  log(`Generated Caddyfile: localhost:${localPort} -> H2c round-robin -> [${upstreamsList}]`)
-
-  // Start Docker container
-  const result = await $`docker run -d --name ${DOCKER_CONTAINER_NAME} \
-    -p ${localPort}:${localPort} \
-    -v ${caddyfilePath}:/etc/caddy/Caddyfile:ro \
-    caddy:2`.text()
-
-  const containerId = result.trim().substring(0, 12)
-  log(`Docker Caddy started (container: ${containerId})`)
-
-  // Give it a moment to start
-  await sleep(1000)
-
-  // Verify it's running
-  const status = await $`docker inspect -f '{{.State.Running}}' ${DOCKER_CONTAINER_NAME}`.text()
-  if (!status.trim().includes('true')) {
-    const logs = await $`docker logs ${DOCKER_CONTAINER_NAME} 2>&1 || true`.text()
-    throw new Error(`Docker Caddy failed to start: ${logs}`)
-  }
 }
 
 const sleep = (ms: number): Promise<void> => {
@@ -353,11 +284,14 @@ const monitorTunnelHealth = async (jobId: string, allNodes: string[], localPort:
 
 /**
  * Start SSH tunnels to all nodes and monitor them
+ * Creates direct per-node tunnels matching WORKER_URLS_LOCAL from sbatch:
+ * - localhost:30001 -> node1:30002 (Caddy)
+ * - localhost:30002 -> node2:30002 (Caddy)
  */
 const startMultiNodeTunnels = async (
   allNodes: string[],
   jobId: string,
-  localPort: number,
+  _localPort: number, // Unused - we use LOCAL_PORT_BASE + i for each node
   restartCount: number,
 ): Promise<void> => {
   if (isShuttingDown) return
@@ -377,28 +311,28 @@ const startMultiNodeTunnels = async (
   }
   activeTunnelProcs.length = 0 // Clear array
 
-  // Calculate tunnel ports for each node
-  const tunnelPorts: number[] = []
+  // Calculate local ports for each node (30001, 30002, etc. to match sbatch WORKER_URLS_LOCAL)
+  const localPorts: number[] = []
   for (let i = 0; i < allNodes.length; i++) {
-    const tunnelPort = TUNNEL_PORT_BASE + i
-    tunnelPorts.push(tunnelPort)
+    const localPort = LOCAL_PORT_BASE + i
+    localPorts.push(localPort)
 
     // Ensure port is ready
-    const portStatus = await ensureLocalPortReadyForTunnel(tunnelPort)
+    const portStatus = await ensureLocalPortReadyForTunnel(localPort)
     if (portStatus === 'in_use') {
-      console.error(`[mn5] Tunnel port ${tunnelPort} is in use by a non-SSH process`)
+      console.error(`[mn5] Local port ${localPort} is in use by a non-SSH process`)
       console.error(`      Stop that process first`)
       process.exit(1)
     }
   }
 
-  // Start tunnel to each node
+  // Start tunnel to each node: localhost:3000X -> nodeX:30002 (Caddy)
   for (let i = 0; i < allNodes.length; i++) {
     const node = allNodes[i]
-    const tunnelPort = tunnelPorts[i]
-    log(`  Tunnel ${i + 1}/${allNodes.length}: localhost:${tunnelPort} -> ${node}:${CADDY_PORT}`)
+    const localPort = localPorts[i]
+    log(`  Tunnel ${i + 1}/${allNodes.length}: localhost:${localPort} -> ${node}:${REMOTE_CADDY_PORT}`)
 
-    const proc = spawnTunnelProcess(node, tunnelPort, CADDY_PORT)
+    const proc = spawnTunnelProcess(node, localPort, REMOTE_CADDY_PORT)
     activeTunnelProcs.push(proc)
 
     // Set up exit handler for this tunnel
@@ -414,22 +348,26 @@ const startMultiNodeTunnels = async (
   // Wait for tunnels to establish
   await sleep(2000)
 
-  // Start Docker Caddy with all tunnel ports
-  await startDockerCaddy(localPort, tunnelPorts)
-
-  // Wait a bit more and check health
-  await sleep(1000)
-  const ok = await isLocalSGLangResponding(localPort)
+  // Check health on the first local port
+  const firstPort = localPorts[0]
+  const ok = await isLocalSGLangResponding(firstPort)
   log(
     ok
       ? `✓ All ${allNodes.length} tunnel(s) connected and SGLang responding`
       : '⚠ Tunnels started but SGLang health check failed (may still be starting)',
   )
-  log(`SGLang API available at http://localhost:${localPort}/v1`)
+
+  // Show all worker URLs
+  const workerUrls = localPorts
+    .map((p) => {
+      return `http://localhost:${p}`
+    })
+    .join(', ')
+  log(`SGLang workers available at: ${workerUrls}`)
   log(`Press Ctrl+C to disconnect and cancel job ${jobId}`)
 
-  // Monitor tunnel health
-  await monitorTunnelHealth(jobId, allNodes, localPort)
+  // Monitor tunnel health (use first port for health checks)
+  await monitorTunnelHealth(jobId, allNodes, firstPort)
 }
 
 /**
@@ -447,7 +385,7 @@ const waitForSGLangReady = async (allNodes: string[]): Promise<boolean> => {
     for (const node of allNodes) {
       // Check via Caddy port (30002) which proxies to SGLang (30001)
       const checkWorker =
-        await $`ssh ${ALOG} "curl -sf --connect-timeout 2 --max-time 3 http://${node}:${CADDY_PORT}/v1/models 2>/dev/null && echo OK || echo NOTREADY"`.text()
+        await $`ssh ${ALOG} "curl -sf --connect-timeout 2 --max-time 3 http://${node}:${REMOTE_CADDY_PORT}/v1/models 2>/dev/null && echo OK || echo NOTREADY"`.text()
       if (checkWorker.includes('OK') && checkWorker.includes('data')) {
         readyNodes.push(node)
       } else {
@@ -478,12 +416,12 @@ const main = async () => {
   const args = process.argv.slice(2)
   let model: string | undefined
   let force = false
-  let localPort = DEFAULT_LOCAL_PORT
+  let localPort = LOCAL_PORT_BASE
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--force') force = true
     else if (args[i] === '--model') model = args[++i]
-    else if (args[i] === '--local-port') localPort = Number(args[++i] ?? DEFAULT_LOCAL_PORT)
+    else if (args[i] === '--local-port') localPort = Number(args[++i] ?? LOCAL_PORT_BASE)
   }
 
   // 1. Check for existing pending/running jobs

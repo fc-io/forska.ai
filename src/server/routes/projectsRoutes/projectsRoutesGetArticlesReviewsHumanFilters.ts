@@ -79,12 +79,12 @@ export const projectsRoutesGetArticlesReviewsHumanFilters = new Elysia().get(
         return p.id
       })
 
-      const whereParts: Array<ReturnType<typeof sql>> = [
+      const whereParts = [
         inArray(judgmentsHuman.promptId, promptIds),
         eq(judgmentsHuman.isAnswered, true),
         isNotNull(judgmentsHuman.answer),
         hasMatchingImportRoute ? or(hasMatchingImportRoute, hasProjectArticle) : hasProjectArticle,
-      ]
+      ].filter((part): part is NonNullable<typeof part> => part != null)
       if (projectBounds?.dateFrom) whereParts.push(gte(articles.articleCreatedAt, projectBounds.dateFrom))
       if (projectBounds?.dateTo) whereParts.push(lte(articles.articleCreatedAt, projectBounds.dateTo))
       if (fromDate) whereParts.push(gte(articles.articleCreatedAt, fromDate))

@@ -109,7 +109,8 @@ export const humanAssessmentRoutesPostSubmit = async ({
     const submitted = byId[row.id]
     const value = submitted?.answer
     const typeStr = row.type ?? 'string'
-    const Type = arktype(typeStr)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const Type = arktype(typeStr as any)
 
     const isOptional = (row.type ?? '').toLowerCase().includes('null')
     if (!isOptional) {
@@ -157,9 +158,10 @@ export const humanAssessmentRoutesPostSubmit = async ({
       const raw = payload?.answer
       const value = typeof raw === 'string' ? raw : raw == null ? '' : String(raw)
       const preparedAnswer = value.trim() === '' ? null : value
+      const comment = payload?.comment ?? null
       await tx
         .update(judgmentsHuman)
-        .set({answer: preparedAnswer, isAnswered: true, comment: payload.comment ?? null, updatedAt: new Date()})
+        .set({answer: preparedAnswer, isAnswered: true, comment, updatedAt: new Date()})
         .where(
           and(
             eq(judgmentsHuman.id, id),

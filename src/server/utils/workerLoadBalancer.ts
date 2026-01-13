@@ -20,7 +20,7 @@ export const workerLoadBalancer = {
 
     // Find worker with min count
     let minCount = Infinity
-    let selectedWorker = workerUrls[0]
+    let selectedWorker: string | null = workerUrls[0] ?? null
 
     // Simple robust selection
     for (const url of workerUrls) {
@@ -30,6 +30,8 @@ export const workerLoadBalancer = {
         selectedWorker = url
       }
     }
+
+    if (!selectedWorker) return null
 
     // Increment
     activeRequests.set(selectedWorker, (activeRequests.get(selectedWorker) || 0) + 1)

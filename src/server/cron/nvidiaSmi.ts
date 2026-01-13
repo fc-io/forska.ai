@@ -130,7 +130,7 @@ const _normalizeWorkerUrls = (urls: string[] | null | undefined): string[] => {
 // Extract host from worker URL (e.g., http://10.2.101.73:30000 -> 10.2.101.73)
 const extractHostFromUrl = (url: string): string | null => {
   const match = url.match(/https?:\/\/([^:/]+)/)
-  return match ? match[1] : null
+  return match?.[1] ?? null
 }
 
 // Get SSH jump host from env (optional, for remote HPC access)
@@ -230,9 +230,11 @@ const buildRemoteToLocalMapping = (): Map<string, string> => {
   const mapping = new Map<string, string>()
 
   for (let i = 0; i < remoteUrls.length; i++) {
+    const remoteUrl = remoteUrls[i]
+    if (!remoteUrl) continue
     // Use local URL if available at same position, otherwise fall back to remote
-    const localUrl = localUrls[i] || remoteUrls[i]
-    mapping.set(remoteUrls[i], localUrl)
+    const localUrl = localUrls[i] ?? remoteUrl
+    mapping.set(remoteUrl, localUrl)
   }
 
   return mapping
