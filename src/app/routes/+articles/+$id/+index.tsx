@@ -9,7 +9,7 @@ import {ReviewArticleDetails} from '../../../../components/main/projects/reviews
 import {ReviewAvailableJudgments} from '../../../../components/main/projects/reviews/review/reviewAvailableJudgments'
 import {fetchArticleDetails} from '../../../../services/articlesService'
 import {fetchSession} from '../../../../services/fetchSession'
-import {getArticleDocumentTitle} from '../../../../utils/getArticleDocumentTitle'
+import {getArticleDocumentTitle} from '../../../utils/getArticleDocumentTitle'
 
 const AdminArticleDetails = () => {
   const params = Route.useParams()

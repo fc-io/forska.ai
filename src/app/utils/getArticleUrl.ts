@@ -17,6 +17,22 @@ const articleUrlStrategies: ArticleUrlStrategy[] = [
       return `https://pubmed.ncbi.nlm.nih.gov/${articleId.slice(5)}/`
     },
   },
+  {
+    isMatch: (articleId) => {
+      return articleId.startsWith('medRxiv:')
+    },
+    buildUrl: (articleId) => {
+      return `https://www.medrxiv.org/content/${articleId.slice(8)}`
+    },
+  },
+  {
+    isMatch: (articleId) => {
+      return articleId.startsWith('bioRxiv:')
+    },
+    buildUrl: (articleId) => {
+      return `https://www.biorxiv.org/content/${articleId.slice(8)}`
+    },
+  },
 ]
 
 export const getArticleUrl = (articleId: string | null): string => {
