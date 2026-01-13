@@ -1,7 +1,15 @@
 import {and, eq, inArray, isNull, or, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {articleRouteLink, articles, judgments, projectArticles, projectRouteLink, projects, prompts} from '../../db/schema.ts'
+import {
+  articleRouteLink,
+  articles,
+  judgments,
+  projectArticles,
+  projectRouteLink,
+  projects,
+  prompts,
+} from '../../db/schema.ts'
 import {requireUserAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
@@ -16,27 +24,20 @@ const escapeCSV = (value: string): string => {
   return value
 }
 
-type PromptDetails = {
-  id: string
-  promptHeading: string | null
-  originalText: string | null
-  type: string | null
-}
+type PromptDetails = {id: string; promptHeading: string | null; originalText: string | null; type: string | null}
 
 type PromptInfoRow = {title: string; type: string; prompt: string}
 
 const buildPromptInfoRows = (promptIds: string[], promptDetails: PromptDetails[]): PromptInfoRow[] => {
-  const promptDetailsMap = new Map(promptDetails.map((detail) => [detail.id, detail]))
+  const promptDetailsMap = new Map(
+    promptDetails.map((detail) => {
+      return [detail.id, detail]
+    }),
+  )
   return promptIds.flatMap((promptId) => {
     const detail = promptDetailsMap.get(promptId)
     return detail
-      ? [
-          {
-            title: detail.promptHeading || 'Untitled Prompt',
-            type: detail.type ?? '',
-            prompt: detail.originalText ?? '',
-          },
-        ]
+      ? [{title: detail.promptHeading || 'Untitled Prompt', type: detail.type ?? '', prompt: detail.originalText ?? ''}]
       : []
   })
 }
@@ -266,12 +267,12 @@ export const projectExportRoutes = new Elysia()
               for (const row of batchData) {
                 if (!batchArticleMap.has(row.articleId)) {
                   batchArticleMap.set(row.articleId, {
-                  title: row.articleTitle || 'Untitled',
-                  summary: row.articleSummary || '',
-                  answers: new Map(),
-                  explanations: new Map(),
-                  quotes: new Map(),
-                })
+                    title: row.articleTitle || 'Untitled',
+                    summary: row.articleSummary || '',
+                    answers: new Map(),
+                    explanations: new Map(),
+                    quotes: new Map(),
+                  })
                 }
                 const article = batchArticleMap.get(row.articleId)
                 if (article) {
@@ -393,9 +394,5 @@ export const projectExportRoutes = new Elysia()
         },
       })
     },
-    {
-      body: t.Object({
-        promptIds: t.Array(t.String()),
-      }),
-    },
+    {body: t.Object({promptIds: t.Array(t.String())})},
   )

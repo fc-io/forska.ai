@@ -1,6 +1,7 @@
 import {and, asc, desc, eq, inArray, isNull, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
+import {auth} from '../../auth.ts'
 import {
   importRoute as importRouteTable,
   judgments,
@@ -13,7 +14,6 @@ import {
   projects,
   prompts,
 } from '../../db/schema.ts'
-import {auth} from '../../auth.ts'
 import {requireAdminAuth, requireUserAuth} from '../utils/authGuard.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
 import {getDatabase} from '../utils/getDatabase.ts'

@@ -41,12 +41,7 @@ export const fullTextArticleFetchFromUnpaywall = async ({
     || !('doi' in originalData)
     || typeof originalData.doi !== 'string'
   ) {
-    return {
-      source: SOURCE_NAME,
-      tried: false,
-      success: false,
-      reason: 'No DOI found in article data',
-    }
+    return {source: SOURCE_NAME, tried: false, success: false, reason: 'No DOI found in article data'}
   }
 
   const doi = originalData.doi
@@ -96,12 +91,7 @@ export const fullTextArticleFetchFromUnpaywall = async ({
   })
 
   if (!json) {
-    return {
-      source: SOURCE_NAME,
-      tried: true,
-      success: false,
-      reason: 'Failed to parse API response as JSON',
-    }
+    return {source: SOURCE_NAME, tried: true, success: false, reason: 'Failed to parse API response as JSON'}
   }
 
   // Extract best_oa_location
@@ -168,10 +158,6 @@ export const fullTextArticleFetchFromUnpaywall = async ({
     source: SOURCE_NAME,
     tried: true,
     success: true,
-    result: {
-      fullTextPDF,
-      fullTextSource,
-      fullTextOriginalFormat,
-    },
+    result: {fullTextPDF, fullTextSource, fullTextOriginalFormat},
   }
 }

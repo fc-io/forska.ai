@@ -58,7 +58,7 @@ export const ensureFullText = async (
   }
 
   // Acquire lock and convert
-  let resolve: () => void
+  let resolve: () => void = () => {}
   const lock = new Promise<void>((r) => {
     resolve = r
   })
@@ -142,6 +142,6 @@ export const ensureFullText = async (
     return {text: null, shouldSkip: false, reason: 'transient_failure'}
   } finally {
     conversionLocks.delete(articleId)
-    resolve!()
+    resolve()
   }
 }

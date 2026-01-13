@@ -1,5 +1,5 @@
 import {cron} from '@elysiajs/cron'
-import {and, between, desc, eq, inArray, isNull, sql} from 'drizzle-orm'
+import {and, desc, eq, inArray, isNull, sql} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 import {Elysia} from 'elysia'
 

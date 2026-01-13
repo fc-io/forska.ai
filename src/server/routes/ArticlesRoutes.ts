@@ -1,4 +1,4 @@
-import {count, desc, eq, inArray, isNotNull, isNull, sql} from 'drizzle-orm'
+import {count, desc, eq, inArray, isNull, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {

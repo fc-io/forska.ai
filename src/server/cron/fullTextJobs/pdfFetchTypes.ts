@@ -6,11 +6,7 @@ export type PdfFetchAttemptResult = {
   source: string
   tried: boolean
   success: boolean
-  result?: {
-    fullTextPDF: string
-    fullTextSource: string
-    fullTextOriginalFormat: string
-  }
+  result?: {fullTextPDF: string; fullTextSource: string; fullTextOriginalFormat: string}
   reason?: string // Why it wasn't tried, or why it failed
   details?: string // Additional info (e.g., API response status)
 }
@@ -27,10 +23,7 @@ export type PdfFetchLegacyResult = {
 /**
  * Full result from fetching PDFs, including all attempts.
  */
-export type PdfFetchFullResult = {
-  attempts: PdfFetchAttemptResult[]
-  finalResult: PdfFetchLegacyResult
-}
+export type PdfFetchFullResult = {attempts: PdfFetchAttemptResult[]; finalResult: PdfFetchLegacyResult}
 
 /**
  * Convert a list of attempts to the legacy result format.
@@ -49,9 +42,5 @@ export const attemptsToLegacyResult = (attempts: PdfFetchAttemptResult[]): PdfFe
     }
   }
 
-  return {
-    fullTextPDF: null,
-    fullTextSource: null,
-    fullTextOriginalFormat: null,
-  }
+  return {fullTextPDF: null, fullTextSource: null, fullTextOriginalFormat: null}
 }

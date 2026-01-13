@@ -65,7 +65,7 @@ const createClickhouseClientMock = (options: {totalCount: string}) => {
 const dbMockRef = {current: createDbMock([[], [], [], []])}
 const clickhouseClientMockRef = {current: createClickhouseClientMock({totalCount: '0'}).client}
 
-mock.module('../../utils/getDatabase.ts', () => {
+void mock.module('../../utils/getDatabase.ts', () => {
   return {
     getDatabase: () => {
       return dbMockRef.current
@@ -73,7 +73,7 @@ mock.module('../../utils/getDatabase.ts', () => {
   }
 })
 
-mock.module('../../../services/clickhouse/clickhouseClient.ts', () => {
+void mock.module('../../../services/clickhouse/clickhouseClient.ts', () => {
   return {
     getClickhouseClient: () => {
       return clickhouseClientMockRef.current
@@ -94,7 +94,7 @@ const postCount = async (body: unknown) => {
     }),
   )
 
-  const data = await response.json()
+  const data = (await response.json()) as {totalCount: number; totalPages: number}
 
   return {data, response}
 }
@@ -112,7 +112,9 @@ test('POST /api/articlesreviewscount uses temp table join scope check for large 
   const clickhouse = createClickhouseClientMock({totalCount: '1'})
   clickhouseClientMockRef.current = clickhouse.client
 
-  const {data} = await postCount({limit: '100', projectId: 'project-1', prompts: {}})
+  const {data} = (await postCount({limit: '100', projectId: 'project-1', prompts: {}})) as {
+    data: {totalCount: number; totalPages: number}
+  }
 
   expect(data).toEqual({totalCount: 1, totalPages: 1})
   expect(clickhouse.executedQueries).toHaveLength(1)
@@ -130,7 +132,9 @@ test('POST /api/articlesreviewscount uses IN scope for small curated sets', asyn
   const clickhouse = createClickhouseClientMock({totalCount: '2'})
   clickhouseClientMockRef.current = clickhouse.client
 
-  const {data} = await postCount({limit: '100', projectId: 'project-1', prompts: {}})
+  const {data} = (await postCount({limit: '100', projectId: 'project-1', prompts: {}})) as {
+    data: {totalCount: number; totalPages: number}
+  }
 
   expect(data).toEqual({totalCount: 2, totalPages: 1})
   expect(clickhouse.executedQueries).toHaveLength(1)

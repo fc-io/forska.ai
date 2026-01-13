@@ -57,12 +57,7 @@ export const fullTextArticleFetchFromArxiv = async ({
 }: Pick<typeof schema.articles.$inferSelect, 'arxivId' | 'originalData'>): Promise<PdfFetchAttemptResult> => {
   // Check if arXiv ID is available
   if (!arxivId) {
-    return {
-      source: SOURCE_NAME,
-      tried: false,
-      success: false,
-      reason: 'No arXiv ID found in article data',
-    }
+    return {source: SOURCE_NAME, tried: false, success: false, reason: 'No arXiv ID found in article data'}
   }
 
   console.log('Arxiv:', arxivId)
@@ -116,10 +111,6 @@ export const fullTextArticleFetchFromArxiv = async ({
     source: SOURCE_NAME,
     tried: true,
     success: true,
-    result: {
-      fullTextPDF,
-      fullTextSource,
-      fullTextOriginalFormat,
-    },
+    result: {fullTextPDF, fullTextSource, fullTextOriginalFormat},
   }
 }

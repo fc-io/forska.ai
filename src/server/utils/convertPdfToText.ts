@@ -2,6 +2,9 @@ import path from 'path'
 
 import {env} from './env.ts'
 
+// Bun global type declaration for environments where Bun types aren't available
+declare const Bun: {file: (path: string) => {exists: () => Promise<boolean>; arrayBuffer: () => Promise<ArrayBuffer>}}
+
 const isRecord = (value: unknown): value is Record<string, unknown> => {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -43,7 +46,8 @@ const findContentFromCandidateEntries = (
   depth: number,
 ): string | null => {
   if (index >= entries.length) return null
-  const [key, value] = entries[index]
+  const entry = entries[index] as [string, unknown]
+  const [key, value] = entry
   const found = keySet.has(key.toLowerCase())
     ? (toNonEmptyStringOrNull(value) ?? findContentInValue(value, keySet, depth))
     : null

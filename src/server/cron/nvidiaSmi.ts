@@ -4,7 +4,7 @@ import {cron} from '@elysiajs/cron'
 import {Elysia} from 'elysia'
 
 import * as schema from '../../db/schema.ts'
-import {env} from '../utils/env.ts'
+// Unused import removed: env
 import {getDatabase} from '../utils/getDatabase.ts'
 
 type NvidiaSmiSample = {
@@ -113,7 +113,7 @@ const parseNvidiaSmiCsv = (csv: string, ts: Date, instanceId: string): NvidiaSmi
     })
 }
 
-const normalizeWorkerUrls = (urls: string[] | null | undefined): string[] => {
+const _normalizeWorkerUrls = (urls: string[] | null | undefined): string[] => {
   return Array.from(
     new Set(
       (urls ?? [])
@@ -129,7 +129,7 @@ const normalizeWorkerUrls = (urls: string[] | null | undefined): string[] => {
 
 // Extract host from worker URL (e.g., http://10.2.101.73:30000 -> 10.2.101.73)
 const extractHostFromUrl = (url: string): string | null => {
-  const match = url.match(/https?:\/\/([^:\/]+)/)
+  const match = url.match(/https?:\/\/([^:/]+)/)
   return match ? match[1] : null
 }
 

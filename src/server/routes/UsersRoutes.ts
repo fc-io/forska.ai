@@ -51,4 +51,3 @@ export const usersRoutes = new Elysia()
       {body: t.Object({name: t.String()})},
     ),
   )
-
