@@ -211,19 +211,13 @@ const AdminJobs = () => {
                             </Link>
                           </td>
                           <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                            <Show when={job.projectId} fallback={job.projectName || 'Unknown Project'}>
-                              {(projectId) => {
-                                return (
-                                  <Link
-                                    to="/projects/$id"
-                                    params={{id: projectId()}}
-                                    class="text-blue-600 hover:text-blue-800 hover:underline"
-                                  >
-                                    {job.projectName || 'Unknown Project'}
-                                  </Link>
-                                )
-                              }}
-                            </Show>
+                            <Link
+                              to="/admin/jobs/$id"
+                              params={{id: job.id}}
+                              class="text-blue-600 hover:text-blue-800 hover:underline"
+                            >
+                              {job.projectName || 'Unknown Project'}
+                            </Link>
                           </td>
                           <td class="px-6 py-4 whitespace-nowrap text-sm">
                             <span
