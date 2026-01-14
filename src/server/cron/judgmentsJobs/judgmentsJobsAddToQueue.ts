@@ -8,22 +8,12 @@ import {judgmentsJobsGetRunningJobs} from './judgmentsJobsGetRunningJobs.ts'
 
 type Job = Awaited<ReturnType<typeof judgmentsJobsGetRunningJobs>>[number]
 
-/** Counts the number of prompts in 'ready' status for a given job and server */
-const getCountOfReadyPrompts = async (
-  db: PostgresJsDatabase<typeof schema>,
-  serverJobId: string,
-  jobId: string,
-): Promise<number> => {
+/** Counts the number of prompts in 'ready' status for a given job */
+const getCountOfReadyPrompts = async (db: PostgresJsDatabase<typeof schema>, jobId: string): Promise<number> => {
   const result = await db
     .select({count: count()})
     .from(schema.judgmentsJobsPrompts)
-    .where(
-      and(
-        eq(schema.judgmentsJobsPrompts.status, 'ready'),
-        eq(schema.judgmentsJobsPrompts.serverId, serverJobId),
-        eq(schema.judgmentsJobsPrompts.jobId, jobId),
-      ),
-    )
+    .where(and(eq(schema.judgmentsJobsPrompts.status, 'ready'), eq(schema.judgmentsJobsPrompts.jobId, jobId)))
 
   return result[0]?.count ?? 0
 }
@@ -76,11 +66,10 @@ const fetchPromptsForJob = async (job: Job, numberOfPromptsToGet: number) => {
 const getNewPromptsForJob = async (
   db: PostgresJsDatabase<typeof schema>,
   job: Job,
-  serverJobId: string,
   readyTargetPerJob: number,
   addToQueueMaxBatchSize: number,
 ) => {
-  const countOfReadyPrompts = await getCountOfReadyPrompts(db, serverJobId, job.id)
+  const countOfReadyPrompts = await getCountOfReadyPrompts(db, job.id)
   const promptsToFetchCount = getPromptsToFetchCount(countOfReadyPrompts, readyTargetPerJob, addToQueueMaxBatchSize)
   return promptsToFetchCount > 0 ? fetchPromptsForJob(job, promptsToFetchCount) : {promptEntries: [], job}
 }
@@ -97,7 +86,6 @@ export const judgmentsJobsAddToQueue = async (
       const {promptEntries} = await getNewPromptsForJob(
         db,
         job,
-        serverJobId,
         capacity.readyTargetPerJob,
         capacity.addToQueueMaxBatchSize,
       )

@@ -9,7 +9,17 @@ import {judgmentsJobsCleanupStale} from './judgmentsJobs/judgmentsJobsCleanupSta
 import {judgmentsJobsGetRunningJobs} from './judgmentsJobs/judgmentsJobsGetRunningJobs.ts'
 import {judgmentsJobsSendToLLM} from './judgmentsJobs/judgmentsJobsSendToLLM.ts'
 
-const serverJobId = `server-job-${crypto.randomUUID()}`
+const buildDefaultServerJobId = (): string => {
+  const hostname = String(process.env.HOSTNAME ?? '').trim() || 'unknown-host'
+  const port = String(env.API_SERVER_PORT)
+  return `server-job-${hostname}-${port}`
+}
+
+const serverJobId = String(process.env.SERVER_JOB_ID ?? '').trim() || buildDefaultServerJobId()
+
+const shouldRunJudgingCron = (): boolean => {
+  return env.RUN_SERVER_JUDGING && !!env.SGLANG_MODEL && env.SGLANG_MODEL !== 'not set'
+}
 
 const NEW_ARTICLES_INTERVAL = '*/1 * * * * *'
 const LLM_PROCESSING_INTERVAL = '*/1 * * * * *'
@@ -20,7 +30,7 @@ const START_DELAY_MS = 1000
 let isAddingToQueue = false
 
 const runAddToQueue = async (): Promise<void> => {
-  if (!env.RUN_SERVER_JUDGING || env.GPU_TOTAL_GPUS === 0 || isAddingToQueue) return
+  if (!shouldRunJudgingCron() || isAddingToQueue) return
   isAddingToQueue = true
   try {
     const db = getDatabase()
@@ -33,7 +43,7 @@ const runAddToQueue = async (): Promise<void> => {
 }
 
 const sendToLLM = async (): Promise<void> => {
-  if (!env.RUN_SERVER_JUDGING || env.GPU_TOTAL_GPUS === 0) return
+  if (!shouldRunJudgingCron()) return
   try {
     const db = getDatabase()
     const runningJobs = await judgmentsJobsGetRunningJobs(db)
@@ -44,7 +54,7 @@ const sendToLLM = async (): Promise<void> => {
 }
 
 const checkLLMStatusCron = async (): Promise<void> => {
-  if (!env.RUN_SERVER_JUDGING || env.GPU_TOTAL_GPUS === 0) return
+  if (!shouldRunJudgingCron()) return
   try {
     const db = getDatabase()
     await judgmentsJobsCheckLLMStatus(db)

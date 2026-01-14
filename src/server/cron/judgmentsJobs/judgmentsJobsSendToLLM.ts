@@ -25,7 +25,6 @@ const shuffle = <T>(items: T[]): T[] => {
 
 const getReadyCountsByJob = async (
   db: PostgresJsDatabase<typeof schema>,
-  serverJobId: string,
   jobIds: string[],
 ): Promise<Map<string, number>> => {
   const hasJobs = jobIds.length > 0
@@ -34,13 +33,7 @@ const getReadyCountsByJob = async (
   const readyCounts = await db
     .select({jobId: schema.judgmentsJobsPrompts.jobId, ready: count()})
     .from(schema.judgmentsJobsPrompts)
-    .where(
-      and(
-        eq(schema.judgmentsJobsPrompts.status, 'ready'),
-        eq(schema.judgmentsJobsPrompts.serverId, serverJobId),
-        inArray(schema.judgmentsJobsPrompts.jobId, jobIds),
-      ),
-    )
+    .where(and(eq(schema.judgmentsJobsPrompts.status, 'ready'), inArray(schema.judgmentsJobsPrompts.jobId, jobIds)))
     .groupBy(schema.judgmentsJobsPrompts.jobId)
 
   const pairs = readyCounts.map((row) => {
@@ -191,7 +184,7 @@ export const judgmentsJobsSendToLLM = async (
     const jobIds = allJobs.map((job) => {
       return job.id
     })
-    const readyCounts = await getReadyCountsByJob(db, serverJobId, jobIds)
+    const readyCounts = await getReadyCountsByJob(db, jobIds)
 
     // Debug logging for capacity issues
     if (requestsToSend > 0 || promptsInFlight > capacity.maxInflight * 0.9) {

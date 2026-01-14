@@ -134,6 +134,17 @@ export const getCircuitStatus = (
  * These errors indicate the server is unreachable, not that our request was bad.
  */
 export const isConnectionError = (error: unknown): boolean => {
+  const status = (() => {
+    if (!error || typeof error !== 'object') return null
+    const raw = 'status' in error ? (error as {status?: unknown}).status : null
+    const n = typeof raw === 'number' ? raw : Number(raw)
+    return Number.isFinite(n) ? n : null
+  })()
+
+  if (status !== null) {
+    return status === 408 || status === 429 || status >= 500
+  }
+
   if (error instanceof Error) {
     const msg = error.message.toLowerCase()
     return (
@@ -146,6 +157,9 @@ export const isConnectionError = (error: unknown): boolean => {
       || msg.includes('socket')
       || msg.includes('network')
       || msg.includes('fetch failed')
+      || msg.includes('bad gateway')
+      || msg.includes('service unavailable')
+      || msg.includes('gateway timeout')
       || msg.includes('unable to connect')
       || error.name === 'TypeError' // fetch failures often throw TypeError
       || error.name === 'AbortError' // request was aborted (often due to timeout)

@@ -28,12 +28,11 @@ const processReadyRows = async (
     return r.id
   })
 
+  const now = new Date()
   const promptsWithJobs = await db
     .update(schema.judgmentsJobsPrompts)
-    .set({status: 'sent', sentAt: new Date(), updatedAt: new Date()})
-    .where(
-      and(eq(schema.judgmentsJobsPrompts.serverId, serverJobId), inArray(schema.judgmentsJobsPrompts.id, readyIds)),
-    )
+    .set({status: 'sent', sentAt: now, updatedAt: now, serverId: serverJobId})
+    .where(and(eq(schema.judgmentsJobsPrompts.status, 'ready'), inArray(schema.judgmentsJobsPrompts.id, readyIds)))
     .returning({
       recordId: schema.judgmentsJobsPrompts.id,
       articleId: schema.judgmentsJobsPrompts.articleId,
@@ -138,13 +137,7 @@ export const getAndUpdateReadyPrompts = async (
     })
     .from(schema.judgmentsJobsPrompts)
     .innerJoin(schema.articles, eq(schema.articles.id, schema.judgmentsJobsPrompts.articleId))
-    .where(
-      and(
-        eq(schema.judgmentsJobsPrompts.serverId, serverJobId),
-        eq(schema.judgmentsJobsPrompts.jobId, jobId),
-        eq(schema.judgmentsJobsPrompts.status, 'ready'),
-      ),
-    )
+    .where(and(eq(schema.judgmentsJobsPrompts.jobId, jobId), eq(schema.judgmentsJobsPrompts.status, 'ready')))
     // Order by: articles with fullText first (DESC puts non-null first), then by createdAt
     .orderBy(
       sql`CASE WHEN ${schema.articles.fullText} IS NOT NULL THEN 0 ELSE 1 END`,
