@@ -1,4 +1,4 @@
-import {For, Show} from 'solid-js'
+import {createMemo, For, Show} from 'solid-js'
 
 import {ReviewJudgmentItem} from './reviewJudgmentItem.tsx'
 
@@ -40,14 +40,15 @@ export const ReviewAvailableJudgments = (props: ReviewAvailableJudgmentsProps) =
     return byProject
   }
 
-  const sortedProjectIds = () => {
+  const sortedProjectIds = createMemo(() => {
     const ids = Object.keys(groupedByProject())
     return ids.sort((a, b) => {
       return projectName(a).localeCompare(projectName(b))
     })
-  }
+  })
 
-  const sortJudgments = (list: Judgment[]) => {
+  // Pure utility - sorts array without reactivity concerns
+  const sortJudgments = (list: Judgment[]): Judgment[] => {
     const copy = [...list]
     copy.sort((a, b) => {
       const ah = a.prompt?.promptHeading || a.prompt?.originalText || ''

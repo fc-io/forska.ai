@@ -184,7 +184,17 @@ const readDatePart = (value: unknown): string | number | undefined => {
 }
 
 const parseXml = (input: unknown): unknown => {
-  const xml = typeof input === 'string' ? input : String(input ?? '')
+  let xml: string
+  if (typeof input === 'string') {
+    xml = input
+  } else if (input == null) {
+    xml = ''
+  } else if (typeof input === 'object') {
+    // Use JSON.stringify for objects to avoid [object Object]
+    xml = JSON.stringify(input)
+  } else {
+    xml = String(input)
+  }
   return parser.parse(xml) as unknown
 }
 

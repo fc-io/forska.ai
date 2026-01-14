@@ -58,24 +58,6 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
     }
   })
 
-  const toggleSelectAll = (checked: boolean) => {
-    if (!props.setRowSelection || !props.currentPageRowIds) return
-    props.setRowSelection((prev) => {
-      const next: Record<string, boolean> = {...(prev || {})}
-      if (checked) {
-        for (const id of props.currentPageRowIds || []) {
-          next[id] = true
-        }
-      } else {
-        for (const id of props.currentPageRowIds || []) {
-          if (id in next) delete next[id]
-        }
-        if (props.setSelectAllMatching) props.setSelectAllMatching(false)
-      }
-      return next
-    })
-  }
-
   const selectedCount = createMemo(() => {
     if (!props.currentPageRowIds || !props.rowSelection) return 0
     const sel = props.rowSelection()
@@ -109,7 +91,22 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
                 class="w-[15px] h-[15px]"
                 checked={allSelected()}
                 onChange={(e) => {
-                  toggleSelectAll(Boolean(e.currentTarget.checked))
+                  const checked = Boolean(e.currentTarget.checked)
+                  if (!props.setRowSelection || !props.currentPageRowIds) return
+                  props.setRowSelection((prev) => {
+                    const next: Record<string, boolean> = {...(prev || {})}
+                    if (checked) {
+                      for (const id of props.currentPageRowIds || []) {
+                        next[id] = true
+                      }
+                    } else {
+                      for (const id of props.currentPageRowIds || []) {
+                        if (id in next) delete next[id]
+                      }
+                      if (props.setSelectAllMatching) props.setSelectAllMatching(false)
+                    }
+                    return next
+                  })
                 }}
               />
               <label class="text-xs text-gray-700">Select all rows</label>
@@ -151,36 +148,38 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
                                       <a
                                         href="#"
                                         class="block w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"
-                                        onClick={async (e) => {
+                                        onClick={(e) => {
                                           e.preventDefault()
-                                          const allAcross = props.selectAllMatching && props.selectAllMatching()
-                                          if (allAcross) {
-                                            const filter = props.buildAddAllFilterBody
-                                              ? props.buildAddAllFilterBody()
-                                              : {}
-                                            await apiClient.api.projects['add_articles_by_filter'].post({
-                                              targetProjectId: p.id,
-                                              sourceProjectId: props.sourceProjectId || '',
-                                              listType: (props.listType as ListType) || 'llm',
-                                              ...filter,
-                                            })
-                                          } else {
-                                            const sel = props.rowSelection ? props.rowSelection() : {}
-                                            const ids = Object.entries(sel)
-                                              .filter(([, v]) => {
-                                                return Boolean(v)
-                                              })
-                                              .map(([k]) => {
-                                                return k
-                                              })
-                                            if (ids.length > 0) {
-                                              await apiClient.api.projects['add_artilces_by_ids'].post({
+                                          void (async () => {
+                                            const allAcross = props.selectAllMatching && props.selectAllMatching()
+                                            if (allAcross) {
+                                              const filter = props.buildAddAllFilterBody
+                                                ? props.buildAddAllFilterBody()
+                                                : {}
+                                              await apiClient.api.projects['add_articles_by_filter'].post({
                                                 targetProjectId: p.id,
                                                 sourceProjectId: props.sourceProjectId || '',
-                                                articleIds: ids,
+                                                listType: (props.listType as ListType) || 'llm',
+                                                ...filter,
                                               })
+                                            } else {
+                                              const sel = props.rowSelection ? props.rowSelection() : {}
+                                              const ids = Object.entries(sel)
+                                                .filter(([, v]) => {
+                                                  return Boolean(v)
+                                                })
+                                                .map(([k]) => {
+                                                  return k
+                                                })
+                                              if (ids.length > 0) {
+                                                await apiClient.api.projects['add_artilces_by_ids'].post({
+                                                  targetProjectId: p.id,
+                                                  sourceProjectId: props.sourceProjectId || '',
+                                                  articleIds: ids,
+                                                })
+                                              }
                                             }
-                                          }
+                                          })()
                                         }}
                                       >
                                         {p.name}

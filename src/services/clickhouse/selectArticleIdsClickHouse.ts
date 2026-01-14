@@ -591,8 +591,8 @@ const selectHumanArticleIds = async (params: SelectArticleIdsParams): Promise<st
   // Build SQL conditions
   const whereParts: ReturnType<typeof sql>[] = []
 
-  // Fully assessed by human
-  const fullyAssessedByHumanExists = sql`EXISTS (
+  // _fullyAssessedByHumanExists is kept for documentation but not currently used in query
+  const _fullyAssessedByHumanExists = sql`EXISTS (
     SELECT 1
     FROM ${judgmentsHuman} jh
     WHERE jh."article_id" = ${judgmentsHuman}.article_id
@@ -602,19 +602,23 @@ const selectHumanArticleIds = async (params: SelectArticleIdsParams): Promise<st
     HAVING COUNT(DISTINCT jh."prompt_id") = ${metadata.promptIds.length}
   )`
 
-  whereParts.push(
-    and(
-      eq(judgmentsHuman.projectId, params.sourceProjectId),
-      inArray(judgmentsHuman.promptId, metadata.promptIds),
-      sql`${judgmentsHuman.answer} IS NOT NULL`,
-    )!,
+  const baseCondition = and(
+    eq(judgmentsHuman.projectId, params.sourceProjectId),
+    inArray(judgmentsHuman.promptId, metadata.promptIds),
+    sql`${judgmentsHuman.answer} IS NOT NULL`,
   )
+  if (baseCondition) {
+    whereParts.push(baseCondition)
+  }
 
   // Answer filters (human)
   if (params.promptsFilter) {
     for (const [promptId, answers] of Object.entries(params.promptsFilter)) {
       if (!answers || answers.length === 0) continue
-      whereParts.push(and(eq(judgmentsHuman.promptId, promptId), inArray(judgmentsHuman.answer, answers))!)
+      const condition = and(eq(judgmentsHuman.promptId, promptId), inArray(judgmentsHuman.answer, answers))
+      if (condition) {
+        whereParts.push(condition)
+      }
     }
   }
 
@@ -667,6 +671,6 @@ export const selectArticleIdsByFilterClickHouse = async (
     case 'human':
       return selectHumanArticleIds(params)
     default:
-      throw new Error(`Unknown list type: ${listType}`)
+      throw new Error(`Unknown list type: ${listType as string}`)
   }
 }

@@ -3,7 +3,7 @@ import {type as arktype} from 'arktype'
 import {remapFuzzyKeys} from './fuzzyKeyMatcher.ts'
 import {getBaseHeading, getShortIdForPrompt, type PromptForJudging, type ShortIdMapping} from './judgeGetPrompt.ts'
 
-type JudgmentFlag = 'yes' | 'no' | 'unsure' | 'undecided' | string
+type JudgmentFlag = string
 export type JudgmentResultType = {
   article_judged_as_ai?: JudgmentFlag
   article_judged_as_ai_agent?: JudgmentFlag

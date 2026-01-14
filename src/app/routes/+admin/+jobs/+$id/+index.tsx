@@ -50,6 +50,20 @@ const isRecord = (value: unknown): value is Record<string, unknown> => {
   return Boolean(value && typeof value === 'object')
 }
 
+type JobData = {
+  id?: string
+  status?: string | null
+  projectId?: string
+  projectName?: string
+  createdAt?: string
+  updatedAt?: string
+  useFulltext?: boolean
+  useFulltextNoImages?: boolean
+  totalTokenUsage?: {totalTokens?: number; totalPromptTokens?: number; totalCompletionTokens?: number}
+  promptStats?: {ready?: number; sent?: number; judged?: number; skipped?: number}
+  error?: string[]
+}
+
 const shouldShowFulltextSkippedFromJob = (job: unknown) => {
   return isRecord(job) ? Boolean(job.useFulltext || job.useFulltextNoImages) : false
 }
@@ -124,10 +138,9 @@ const AdminJudgmentJobDetail = () => {
 
           <Show when={job.data}>
             {(jobData) => {
-              const data = jobData
+              const data = jobData as () => JobData | undefined
               const jobDetails = () => {
-                const details = data() as Record<string, unknown> | undefined
-                return details
+                return data()
               }
               const unassessedArticlesCount = () => {
                 return unassessedCountQuery.data ?? 0
@@ -223,69 +236,51 @@ const AdminJudgmentJobDetail = () => {
                           </Show>
                         </Show>
                       </div>
-                      <Show when={data() && 'totalTokenUsage' in (data() as any) && (data() as any).totalTokenUsage}>
+                      <Show when={data()?.totalTokenUsage}>
                         <div class="grid grid-cols-3 gap-4">
                           <div>
                             <p class="text-sm text-gray-500">Total Tokens</p>
-                            <p class="font-medium">
-                              {data() && 'totalTokenUsage' in (data() as any)
-                                ? (data() as any).totalTokenUsage?.totalTokens?.toLocaleString() || '0'
-                                : '0'}
-                            </p>
+                            <p class="font-medium">{data()?.totalTokenUsage?.totalTokens?.toLocaleString() ?? '0'}</p>
                           </div>
                           <div>
                             <p class="text-sm text-gray-500">Prompt Tokens</p>
                             <p class="font-medium">
-                              {data() && 'totalTokenUsage' in (data() as any)
-                                ? (data() as any).totalTokenUsage?.totalPromptTokens?.toLocaleString() || '0'
-                                : '0'}
+                              {data()?.totalTokenUsage?.totalPromptTokens?.toLocaleString() ?? '0'}
                             </p>
                           </div>
                           <div>
                             <p class="text-sm text-gray-500">Completion Tokens</p>
                             <p class="font-medium">
-                              {data() && 'totalTokenUsage' in (data() as any)
-                                ? (data() as any).totalTokenUsage?.totalCompletionTokens?.toLocaleString() || '0'
-                                : '0'}
+                              {data()?.totalTokenUsage?.totalCompletionTokens?.toLocaleString() ?? '0'}
                             </p>
                           </div>
                         </div>
                       </Show>
                     </div>
                   </div>
-                  <Show when={data() && 'promptStats' in (data() as any) && (data() as any).promptStats}>
+                  <Show when={data()?.promptStats}>
                     <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
                       <h2 class="text-lg font-semibold mb-4">Job Queue</h2>
                       <div class={jobQueueGridClass()}>
                         <div class="bg-gray-50 rounded-lg p-4">
                           <p class="text-sm text-gray-500 mb-1">Ready</p>
-                          <p class="text-2xl font-bold text-gray-900">
-                            {data() && 'promptStats' in (data() as any) ? (data() as any).promptStats?.ready || 0 : 0}
-                          </p>
+                          <p class="text-2xl font-bold text-gray-900">{data()?.promptStats?.ready ?? 0}</p>
                           <p class="text-xs text-gray-500 mt-1">Prompts queued for judgment</p>
                         </div>
                         <div class="bg-blue-50 rounded-lg p-4">
                           <p class="text-sm text-blue-600 mb-1">Sent</p>
-                          <p class="text-2xl font-bold text-blue-900">
-                            {data() && 'promptStats' in (data() as any) ? (data() as any).promptStats?.sent || 0 : 0}
-                          </p>
+                          <p class="text-2xl font-bold text-blue-900">{data()?.promptStats?.sent ?? 0}</p>
                           <p class="text-xs text-blue-600 mt-1">Prompts in-flight to LLM</p>
                         </div>
                         <div class="bg-green-50 rounded-lg p-4">
                           <p class="text-sm text-green-600 mb-1">Judged</p>
-                          <p class="text-2xl font-bold text-green-900">
-                            {data() && 'promptStats' in (data() as any) ? (data() as any).promptStats?.judged || 0 : 0}
-                          </p>
+                          <p class="text-2xl font-bold text-green-900">{data()?.promptStats?.judged ?? 0}</p>
                           <p class="text-xs text-green-600 mt-1">Prompts with judgments completed</p>
                         </div>
                         <Show when={shouldShowFulltextSkipped()}>
                           <div class="bg-amber-50 rounded-lg p-4">
                             <p class="text-sm text-amber-600 mb-1">Skipped</p>
-                            <p class="text-2xl font-bold text-amber-900">
-                              {data() && 'promptStats' in (data() as any)
-                                ? (data() as any).promptStats?.skipped || 0
-                                : 0}
-                            </p>
+                            <p class="text-2xl font-bold text-amber-900">{data()?.promptStats?.skipped ?? 0}</p>
                             <p class="text-xs text-amber-600 mt-1">No fulltext available</p>
                           </div>
                         </Show>
@@ -293,11 +288,11 @@ const AdminJudgmentJobDetail = () => {
                     </div>
                   </Show>
 
-                  <Show when={Array.isArray((data() as any)?.error) && (data() as any).error.length > 0}>
+                  <Show when={data()?.error && Array.isArray(data()?.error) && (data()?.error?.length ?? 0) > 0}>
                     <div class="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
                       <h2 class="text-lg font-semibold text-red-900 mb-2">Errors</h2>
                       <ul class="list-disc list-inside space-y-1">
-                        <For each={Array.isArray((data() as any)?.error) ? (data() as any).error : []}>
+                        <For each={data()?.error ?? []}>
                           {(err) => {
                             return <li class="text-red-700">{err}</li>
                           }}
@@ -319,12 +314,12 @@ const AdminJudgmentJobDetail = () => {
                         <button
                           class="px-4 py-2 bg-yellow-600 text-white rounded-md hover:bg-yellow-700"
                           onClick={() => {
-                            const id = data()?.id
-                            return id
-                              ? pauseJudgmentsJob(id).then(() => {
-                                  return job.refetch()
-                                })
-                              : undefined
+                            const jobId = data()?.id
+                            if (jobId) {
+                              void pauseJudgmentsJob(jobId).then(() => {
+                                return job.refetch()
+                              })
+                            }
                           }}
                         >
                           Pause Job
@@ -334,12 +329,12 @@ const AdminJudgmentJobDetail = () => {
                         <button
                           class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
                           onClick={() => {
-                            const id = data()?.id
-                            return id
-                              ? startJudgmentsJob(id).then(() => {
-                                  return job.refetch()
-                                })
-                              : undefined
+                            const jobId = data()?.id
+                            if (jobId) {
+                              void startJudgmentsJob(jobId).then(() => {
+                                return job.refetch()
+                              })
+                            }
                           }}
                         >
                           Start Job

@@ -94,10 +94,10 @@ export const ProjectDetailsCuratedArticles = (props: {projectId: string}) => {
       <h2 class="text-lg font-semibold mb-2">Individually Imported Articles</h2>
       <Show when={query.data && Number(query.data.totalCount ?? 0) > 0}>
         <ImportedArticlesPaginationControls
-          page={query.data!.page}
-          totalPages={query.data!.totalPages}
-          totalCount={query.data!.totalCount}
-          limit={query.data!.limit}
+          page={query.data?.page ?? 1}
+          totalPages={query.data?.totalPages ?? 1}
+          totalCount={query.data?.totalCount ?? 0}
+          limit={query.data?.limit ?? 10}
           onPageChange={(p) => {
             setCurrentPage(p)
           }}
@@ -177,10 +177,10 @@ export const ProjectDetailsCuratedArticles = (props: {projectId: string}) => {
       <Show when={query.data && Number(query.data.totalCount ?? 0) > 0}>
         <div class="mt-3">
           <ImportedArticlesPaginationControls
-            page={query.data!.page}
-            totalPages={query.data!.totalPages}
-            totalCount={query.data!.totalCount}
-            limit={query.data!.limit}
+            page={query.data?.page ?? 1}
+            totalPages={query.data?.totalPages ?? 1}
+            totalCount={query.data?.totalCount ?? 0}
+            limit={query.data?.limit ?? 10}
             onPageChange={(p) => {
               setCurrentPage(p)
             }}

@@ -246,7 +246,7 @@ const AdminJobs = () => {
                                 <button
                                   class="text-sm text-yellow-600 hover:text-yellow-800"
                                   onClick={() => {
-                                    return pauseJudgmentsJob(job.id).then(() => {
+                                    void pauseJudgmentsJob(job.id).then(() => {
                                       return void jobs.refetch()
                                     })
                                   }}
@@ -258,7 +258,7 @@ const AdminJobs = () => {
                                 <button
                                   class="text-sm text-green-600 hover:text-green-800"
                                   onClick={() => {
-                                    return startJudgmentsJob(job.id).then(() => {
+                                    void startJudgmentsJob(job.id).then(() => {
                                       return void jobs.refetch()
                                     })
                                   }}

@@ -220,7 +220,7 @@ const AdminParquet = () => {
               <div class="flex gap-2">
                 <button
                   onClick={() => {
-                    return Promise.all([parquetQuery.refetch()])
+                    void parquetQuery.refetch()
                   }}
                   class="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 text-sm flex items-center gap-2"
                 >

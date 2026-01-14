@@ -1,4 +1,4 @@
-import {For, Show} from 'solid-js'
+import {createMemo, For, Show} from 'solid-js'
 
 type Prompt = {
   id?: string
@@ -23,11 +23,15 @@ type ProjectDetailsPromptsProps = {
 }
 
 export const ProjectDetailsPrompts = (props: ProjectDetailsPromptsProps) => {
-  const owned = props.prompts.filter((p) => {
-    return props.projectId && p.originProjectId === props.projectId
+  const owned = createMemo(() => {
+    return props.prompts.filter((p) => {
+      return props.projectId && p.originProjectId === props.projectId
+    })
   })
-  const linked = props.prompts.filter((p) => {
-    return !props.projectId || p.originProjectId !== props.projectId
+  const linked = createMemo(() => {
+    return props.prompts.filter((p) => {
+      return !props.projectId || p.originProjectId !== props.projectId
+    })
   })
 
   const PromptCard = (prompt: Prompt) => {
@@ -115,10 +119,10 @@ export const ProjectDetailsPrompts = (props: ProjectDetailsPromptsProps) => {
         </div>
       </Show>
 
-      <Show when={owned.length > 0}>
+      <Show when={owned().length > 0}>
         <div class="space-y-4">
-          <h3 class="text-lg font-semibold">Project Prompts ({owned.length})</h3>
-          <For each={owned}>
+          <h3 class="text-lg font-semibold">Project Prompts ({owned().length})</h3>
+          <For each={owned()}>
             {(p) => {
               return PromptCard(p)
             }}
@@ -126,10 +130,10 @@ export const ProjectDetailsPrompts = (props: ProjectDetailsPromptsProps) => {
         </div>
       </Show>
 
-      <Show when={linked.length > 0}>
+      <Show when={linked().length > 0}>
         <div class="space-y-4 mt-6">
-          <h3 class="text-lg font-semibold">Imported prompts on articles from other projects ({linked.length})</h3>
-          <For each={linked}>
+          <h3 class="text-lg font-semibold">Imported prompts on articles from other projects ({linked().length})</h3>
+          <For each={linked()}>
             {(p) => {
               return PromptCard(p)
             }}

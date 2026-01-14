@@ -25,7 +25,7 @@ const AdminPdfConversions = () => {
         return handleApiResponse(response, 'Failed to reset conversions')
       },
       onSuccess: () => {
-        queryClient.invalidateQueries({queryKey: ['articles', 'conversion-stats']})
+        void queryClient.invalidateQueries({queryKey: ['articles', 'conversion-stats']})
       },
     }
   })

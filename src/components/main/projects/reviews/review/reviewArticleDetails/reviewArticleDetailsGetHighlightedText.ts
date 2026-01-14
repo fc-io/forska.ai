@@ -52,20 +52,22 @@ export const reviewArticleDetailsGetHighlightedText = (
     if (m === 0) return Math.min(n, limit + 1)
 
     const dp: number[][] = Array.from({length: n + 1}, () => {
-      return new Array(m + 1).fill(0)
+      return new Array<number>(m + 1).fill(0)
     })
-    for (let i = 0; i <= n; i++) dp[i]![0] = i
-    for (let j = 0; j <= m; j++) dp[0]![j] = j
+    for (let i = 0; i <= n; i++) (dp[i] as number[])[0] = i
+    for (let j = 0; j <= m; j++) (dp[0] as number[])[j] = j
 
     for (let i = 1; i <= n; i++) {
       let rowMin = Infinity
       const ai = a.charCodeAt(i - 1)
+      const dpPrev = dp[i - 1] as number[]
+      const dpCur = dp[i] as number[]
       for (let j = 1; j <= m; j++) {
         const cost = ai === b.charCodeAt(j - 1) ? 0 : 1
         let v = Math.min(
-          dp[i - 1]![j]! + 1, // deletion
-          dp[i]![j - 1]! + 1, // insertion
-          dp[i - 1]![j - 1]! + cost, // substitution
+          (dpPrev[j] ?? 0) + 1, // deletion
+          (dpCur[j - 1] ?? 0) + 1, // insertion
+          (dpPrev[j - 1] ?? 0) + cost, // substitution
         )
         if (
           i > 1
@@ -73,14 +75,15 @@ export const reviewArticleDetailsGetHighlightedText = (
           && a.charCodeAt(i - 1) === b.charCodeAt(j - 2)
           && a.charCodeAt(i - 2) === b.charCodeAt(j - 1)
         ) {
-          v = Math.min(v, dp[i - 2]![j - 2]! + 1) // transposition
+          const dpPrev2 = dp[i - 2] as number[]
+          v = Math.min(v, (dpPrev2[j - 2] ?? 0) + 1) // transposition
         }
-        dp[i]![j] = v
+        dpCur[j] = v
         if (v < rowMin) rowMin = v
       }
       if (rowMin > limit) return limit + 1
     }
-    return dp[n]![m]!
+    return (dp[n] as number[])[m] ?? 0
   }
 
   // Process the string globally
@@ -93,8 +96,8 @@ export const reviewArticleDetailsGetHighlightedText = (
     for (let k = 0; k < keys.length; k++) {
       if (used[k]) continue
 
-      const keyN = keysN[k]!
-      const keyRaw = keys[k]!
+      const keyN = keysN[k] ?? ''
+      const keyRaw = keys[k] ?? ''
 
       // Try exact match first
       const sN = norm(s)
@@ -106,7 +109,7 @@ export const reviewArticleDetailsGetHighlightedText = (
         if (
           !bestMatch
           || candidate.start < bestMatch.start
-          || (candidate.start === bestMatch.start && keyRaw.length > keys[bestMatch.keyIdx]!.length)
+          || (candidate.start === bestMatch.start && keyRaw.length > (keys[bestMatch.keyIdx] ?? '').length)
         ) {
           bestMatch = candidate
         }
@@ -208,7 +211,7 @@ const buildTagAgnosticRegex = (key: string, caseInsensitive: boolean): RegExp | 
   if (tokens.length === 1) {
     // Single token adds no benefit over exact search
     try {
-      return new RegExp(tokens[0]!, caseInsensitive ? 'i' : '')
+      return new RegExp(tokens[0] ?? '', caseInsensitive ? 'i' : '')
     } catch {
       return null
     }

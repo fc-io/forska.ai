@@ -86,19 +86,20 @@ const getRequestsToSendByJob = <T extends {id: string}>(
     return entry.remainingReady > 0
   })
 
-  const redistributed = hasLeftover && withRemaining.length > 0
-    ? getRequestsToSendByJob(
-        withRemaining.map((entry) => {
-          return entry.job
-        }),
-        leftover,
-        new Map(
+  const redistributed =
+    hasLeftover && withRemaining.length > 0
+      ? getRequestsToSendByJob(
           withRemaining.map((entry) => {
-            return [entry.job.id, entry.remainingReady] as const
+            return entry.job
           }),
-        ),
-      )
-    : []
+          leftover,
+          new Map(
+            withRemaining.map((entry) => {
+              return [entry.job.id, entry.remainingReady] as const
+            }),
+          ),
+        )
+      : []
 
   const merged = initialAllocations.map((entry) => {
     const extra = redistributed.find((r) => {

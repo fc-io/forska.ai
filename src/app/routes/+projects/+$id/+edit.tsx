@@ -115,8 +115,8 @@ const isProjectPromptResponse = (value: unknown): value is ProjectPromptResponse
   const promptHeading = prompt.promptHeading
   const type = prompt.type
   const order = prompt.order
-  const archived = (value as any)?.archived
-  const promptArchived = (value as any)?.promptArchived
+  const archived = typeof prompt.archived === 'boolean' ? prompt.archived : undefined
+  const promptArchived = typeof prompt.promptArchived === 'boolean' ? prompt.promptArchived : undefined
   const hasRequiredFields = typeof id === 'string' && typeof originalText === 'string'
   const hasOptionalFields =
     (promptHeading === null || typeof promptHeading === 'string')
@@ -478,8 +478,8 @@ const EditProject = (): JSX.Element => {
       (prompt) => {
         return prompt.id === promptId
       },
-      field as any,
-      value as any,
+      field as keyof PromptItem,
+      value as PromptItem[keyof PromptItem],
     )
   }
 
@@ -488,9 +488,9 @@ const EditProject = (): JSX.Element => {
       (p) => {
         return p.id === promptId
       },
-      'enabled' as any,
-      (prev) => {
-        return !prev as any
+      'enabled' as keyof PromptItem,
+      (prev: boolean | undefined) => {
+        return !prev
       },
     )
   }
@@ -539,8 +539,10 @@ const EditProject = (): JSX.Element => {
         ...previous,
         project: result.project,
         prompts: result.prompts,
-        hasJudgedArticles: previous.hasOwnProperty('hasJudgedArticles') ? previous.hasJudgedArticles : false,
-        model: previous.hasOwnProperty('model') ? previous.model : null,
+        hasJudgedArticles: Object.prototype.hasOwnProperty.call(previous, 'hasJudgedArticles')
+          ? previous.hasJudgedArticles
+          : false,
+        model: Object.prototype.hasOwnProperty.call(previous, 'model') ? previous.model : null,
         importRoutes: Array.isArray(previous.importRoutes) ? previous.importRoutes : [],
       }
     })

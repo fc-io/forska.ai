@@ -218,7 +218,7 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
       </Show>
       <Show when={props.judgment.assessments && props.judgment.assessments.length > 0}>
         <div class="mt-2 text-xs">
-          <ReviewJudgmentAssessments assessments={props.judgment.assessments!} />
+          <ReviewJudgmentAssessments assessments={props.judgment.assessments ?? []} />
         </div>
       </Show>
     </div>

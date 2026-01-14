@@ -98,7 +98,10 @@ const AdminGpu = () => {
       if (!timeMap.has(timeKey)) {
         timeMap.set(timeKey, [])
       }
-      timeMap.get(timeKey)!.push(row)
+      const arr = timeMap.get(timeKey)
+      if (arr) {
+        arr.push(row)
+      }
     }
 
     // For each time group, group by instance
@@ -109,7 +112,10 @@ const AdminGpu = () => {
         if (!instanceMap.has(row.instanceId)) {
           instanceMap.set(row.instanceId, [])
         }
-        instanceMap.get(row.instanceId)!.push(row)
+        const arr = instanceMap.get(row.instanceId)
+        if (arr) {
+          arr.push(row)
+        }
       }
 
       // Sort instances and rows within each instance

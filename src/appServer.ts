@@ -44,10 +44,11 @@ const app = new Elysia()
 
 const listener = app.listen(port)
 
-if (listener instanceof Error) {
-  console.error('🦊 App static server failed to start', listener.message)
+if (listener.server && typeof listener.server === 'object') {
+  const {hostname, port: serverPort} = listener.server as {hostname?: string; port?: number}
+  console.log(`🦊 App static server running at ${String(hostname ?? 'unknown')}:${String(serverPort ?? 'unknown')}`)
 } else {
-  console.log(`🦊 App static server running at ${listener.server?.hostname}:${listener.server?.port}`)
+  console.log(`🦊 App static server started on port ${port}`)
 }
 
 export type App = typeof app
