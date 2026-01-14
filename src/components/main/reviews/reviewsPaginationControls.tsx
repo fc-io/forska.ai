@@ -92,18 +92,21 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
                 checked={allSelected()}
                 onChange={(e) => {
                   const checked = Boolean(e.currentTarget.checked)
-                  if (!props.setRowSelection || !props.currentPageRowIds) return
-                  props.setRowSelection((prev) => {
+                  const setRowSelection = props.setRowSelection
+                  const currentPageRowIds = props.currentPageRowIds
+                  const setSelectAllMatching = props.setSelectAllMatching
+                  if (!setRowSelection || !currentPageRowIds) return
+                  setRowSelection((prev) => {
                     const next: Record<string, boolean> = {...(prev || {})}
                     if (checked) {
-                      for (const id of props.currentPageRowIds || []) {
+                      for (const id of currentPageRowIds) {
                         next[id] = true
                       }
                     } else {
-                      for (const id of props.currentPageRowIds || []) {
+                      for (const id of currentPageRowIds) {
                         if (id in next) delete next[id]
                       }
-                      if (props.setSelectAllMatching) props.setSelectAllMatching(false)
+                      if (setSelectAllMatching) setSelectAllMatching(false)
                     }
                     return next
                   })

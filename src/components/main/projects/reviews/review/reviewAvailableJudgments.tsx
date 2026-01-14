@@ -29,7 +29,7 @@ export const ReviewAvailableJudgments = (props: ReviewAvailableJudgmentsProps) =
     return props.projectsById?.[projectId]?.name || projectId
   }
 
-  const groupedByProject = () => {
+  const groupedByProject = createMemo(() => {
     const list = props.judgments || []
     const byProject: Record<string, Judgment[]> = {}
     for (const j of list) {
@@ -38,12 +38,17 @@ export const ReviewAvailableJudgments = (props: ReviewAvailableJudgmentsProps) =
       byProject[key] = [...arr, j]
     }
     return byProject
-  }
+  })
 
   const sortedProjectIds = createMemo(() => {
+    const projectsById = props.projectsById
+    const getName = (projectId: string) => {
+      if (!projectId) return 'Other/Unknown'
+      return projectsById?.[projectId]?.name || projectId
+    }
     const ids = Object.keys(groupedByProject())
     return ids.sort((a, b) => {
-      return projectName(a).localeCompare(projectName(b))
+      return getName(a).localeCompare(getName(b))
     })
   })
 

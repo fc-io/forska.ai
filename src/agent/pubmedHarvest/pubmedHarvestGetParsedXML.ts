@@ -192,8 +192,13 @@ const parseXml = (input: unknown): unknown => {
   } else if (typeof input === 'object') {
     // Use JSON.stringify for objects to avoid [object Object]
     xml = JSON.stringify(input)
-  } else {
+  } else if (typeof input === 'number' || typeof input === 'boolean' || typeof input === 'bigint') {
     xml = String(input)
+  } else if (typeof input === 'symbol') {
+    xml = input.toString()
+  } else {
+    // function or other - use empty
+    xml = ''
   }
   return parser.parse(xml) as unknown
 }
