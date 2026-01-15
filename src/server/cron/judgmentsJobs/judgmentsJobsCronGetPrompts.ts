@@ -74,6 +74,7 @@ const getQueryConditions = ({jobId, project}: {jobId: string; project: typeof sc
       AND j."use_fulltext" = ${project.useFulltext}
       AND j."use_fulltext_no_images" = ${project.useFulltextNoImages}
       AND j."is_answered" = true
+      AND j."deleted_at" IS NULL
     )`,
   )
 
@@ -100,7 +101,11 @@ const getPromptsToQueue = async ({
     .innerJoin(schema.articles, eq(scopedArticles.articleId, schema.articles.id))
     .innerJoin(
       schema.projectPrompts,
-      and(eq(schema.projectPrompts.projectId, project.id), eq(schema.projectPrompts.enabled, true)),
+      and(
+        eq(schema.projectPrompts.projectId, project.id),
+        eq(schema.projectPrompts.enabled, true),
+        eq(schema.projectPrompts.archived, false),
+      ),
     )
     .where(queryConditions.length > 0 ? sql`${sql.join(queryConditions, sql` AND `)}` : undefined)
     .orderBy(
@@ -125,7 +130,13 @@ export const judgmentsJobsCronGetPrompts = async (
     db
       .select({count: sql<number>`count(*)`})
       .from(schema.projectPrompts)
-      .where(and(eq(schema.projectPrompts.projectId, projectId), eq(schema.projectPrompts.enabled, true))),
+      .where(
+        and(
+          eq(schema.projectPrompts.projectId, projectId),
+          eq(schema.projectPrompts.enabled, true),
+          eq(schema.projectPrompts.archived, false),
+        ),
+      ),
   ])
 
   // console.log('got project and enabled prompt count')

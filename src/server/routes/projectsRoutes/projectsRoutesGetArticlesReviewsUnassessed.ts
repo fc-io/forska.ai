@@ -1,4 +1,4 @@
-import {and, desc, eq, gte, inArray, lte, sql} from 'drizzle-orm'
+import {and, desc, eq, gte, inArray, isNull, lte, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {
@@ -30,7 +30,13 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
         .select({id: prompts.id})
         .from(projectPrompts)
         .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
-        .where(and(eq(projectPrompts.projectId, body.projectId), eq(projectPrompts.enabled, true)))
+        .where(
+          and(
+            eq(projectPrompts.projectId, body.projectId),
+            eq(projectPrompts.enabled, true),
+            eq(projectPrompts.archived, false),
+          ),
+        )
 
       if (projectPromptRows.length === 0) {
         return {data: [], totalCount: 0, page, limit, totalPages: 0}
@@ -90,8 +96,15 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
             eq(judgments.useAbstract, projectBounds.useAbstract ?? true),
             eq(judgments.useFulltext, projectBounds.useFulltext ?? false),
             eq(judgments.useFulltextNoImages, projectBounds.useFulltextNoImages ?? false),
+            isNull(judgments.deletedAt),
+            eq(judgments.isAnswered, true),
           )
-        : and(eq(judgments.articleId, articles.id), inArray(judgments.promptId, promptIds))
+        : and(
+            eq(judgments.articleId, articles.id),
+            inArray(judgments.promptId, promptIds),
+            isNull(judgments.deletedAt),
+            eq(judgments.isAnswered, true),
+          )
 
       const groupedBase = db
         .select({id: articles.id})

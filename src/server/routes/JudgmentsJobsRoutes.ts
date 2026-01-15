@@ -122,10 +122,17 @@ const getUnassessedArticlesCount = async ({
   }
 
   countQuery = countQuery
-    .innerJoin(projectPrompts, eq(projectPrompts.projectId, projectId))
+    .innerJoin(
+      projectPrompts,
+      and(
+        eq(projectPrompts.projectId, projectId),
+        eq(projectPrompts.enabled, true),
+        eq(projectPrompts.archived, false),
+      ),
+    )
     .leftJoin(
       judgments,
-      sql`${judgments.articleId} = ${articles.id} AND ${judgments.promptId} = ${projectPrompts.promptId} AND ${judgments.modelId} = ${projectModelId}::uuid AND ${judgments.useTitle} = ${useTitle} AND ${judgments.useAbstract} = ${useAbstract} AND ${judgments.useFulltext} = ${useFulltext} AND ${judgments.useFulltextNoImages} = ${useFulltextNoImages}`,
+      sql`${judgments.articleId} = ${articles.id} AND ${judgments.promptId} = ${projectPrompts.promptId} AND ${judgments.modelId} = ${projectModelId}::uuid AND ${judgments.useTitle} = ${useTitle} AND ${judgments.useAbstract} = ${useAbstract} AND ${judgments.useFulltext} = ${useFulltext} AND ${judgments.useFulltextNoImages} = ${useFulltextNoImages} AND ${judgments.deletedAt} IS NULL AND ${judgments.isAnswered} = true`,
     )
 
   if (importRouteIds.length > 0) {
@@ -317,10 +324,17 @@ const getUnassessedArticles = async ({
   }
 
   query = query
-    .innerJoin(projectPrompts, eq(projectPrompts.projectId, projectId))
+    .innerJoin(
+      projectPrompts,
+      and(
+        eq(projectPrompts.projectId, projectId),
+        eq(projectPrompts.enabled, true),
+        eq(projectPrompts.archived, false),
+      ),
+    )
     .leftJoin(
       judgments,
-      sql`${judgments.articleId} = ${articles.id} AND ${judgments.promptId} = ${projectPrompts.promptId} AND ${judgments.modelId} = ${projectModelId}::uuid AND ${judgments.useTitle} = ${useTitle} AND ${judgments.useAbstract} = ${useAbstract} AND ${judgments.useFulltext} = ${useFulltext} AND ${judgments.useFulltextNoImages} = ${useFulltextNoImages}`,
+      sql`${judgments.articleId} = ${articles.id} AND ${judgments.promptId} = ${projectPrompts.promptId} AND ${judgments.modelId} = ${projectModelId}::uuid AND ${judgments.useTitle} = ${useTitle} AND ${judgments.useAbstract} = ${useAbstract} AND ${judgments.useFulltext} = ${useFulltext} AND ${judgments.useFulltextNoImages} = ${useFulltextNoImages} AND ${judgments.deletedAt} IS NULL AND ${judgments.isAnswered} = true`,
     )
     .groupBy(
       articles.id,

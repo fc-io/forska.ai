@@ -181,7 +181,7 @@ export const projectExportRoutes = new Elysia()
       const sourceProjectIds = body.sourceProjectIds || [projectId]
 
       // Get project model and content settings for filtering judgments (only needed if prompts selected)
-      let judgmentConfigCondition: ReturnType<typeof and> | ReturnType<typeof or> | undefined
+      let judgmentConfigCondition: ReturnType<typeof and> | undefined
       if (hasPrompts) {
         const projectSettings = await db
           .select({
@@ -205,8 +205,7 @@ export const projectExportRoutes = new Elysia()
             eq(judgments.useFulltextNoImages, proj.useFulltextNoImages),
           )
         })
-        judgmentConfigCondition =
-          judgmentConfigParts.length > 1 ? or(...judgmentConfigParts) : judgmentConfigParts[0]
+        judgmentConfigCondition = judgmentConfigParts.length > 1 ? or(...judgmentConfigParts) : judgmentConfigParts[0]
       }
 
       const projectImportRoutes = await db

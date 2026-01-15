@@ -526,7 +526,7 @@ WHERE slot_type = 'logical';
 
 ## Pre-flight checklist (before implementing CH)
 
-- [ ] **Unify PG "assessed" semantics**: Update `JudgmentsJobsRoutes.ts` and `projectsRoutesGetArticlesReviewsUnassessed.ts` to filter `is_answered = true`, `deleted_at IS NULL`, and `project_prompts.enabled = true`
+- [x] **Unify PG "assessed" semantics**: Update `JudgmentsJobsRoutes.ts` and `projectsRoutesGetArticlesReviewsUnassessed.ts` to filter `is_answered = true`, `deleted_at IS NULL`, and `project_prompts.enabled = true`
 - [ ] **Backfill `article_route_link` if needed**: Required if you want to deprecate Path 3 string-matching or if many articles lack FK entries. Skip if Path 3 performance is acceptable:
   ```sql
   INSERT INTO article_route_link (article_id, import_route_id)
@@ -544,7 +544,7 @@ WHERE slot_type = 'logical';
 ## Rollout plan
 
 ### Phase 1: PG cleanup
-- [ ] Unify assessed semantics in all PG queries (add `is_answered`, `deleted_at`, `enabled`, `archived` filters)
+- [x] Unify assessed semantics in all PG queries (add `is_answered`, `deleted_at`, `enabled`, `archived` filters)
 - [ ] Backfill `article_route_link` if needed (see pre-flight checklist for SQL; only needed if deprecating Path 3 or articles missing FK entries)
 
 ### Phase 2: Infrastructure
