@@ -151,59 +151,63 @@ export const projectExportRoutes = new Elysia()
         throw new Error('Project not found')
       }
 
-      const promptIds = body.promptIds
-      if (!promptIds || promptIds.length === 0) {
-        throw new Error('No prompts selected for export')
-      }
+      const promptIds = body.promptIds ?? []
+      const hasPrompts = promptIds.length > 0
 
-      // Get prompt details for headers
-      const promptDetails = await db
-        .select({
-          id: prompts.id,
-          promptHeading: prompts.promptHeading,
-          originalText: prompts.originalText,
-          type: prompts.type,
-        })
-        .from(prompts)
-        .where(inArray(prompts.id, promptIds))
-
+      // Get prompt details for headers (only if prompts selected)
       const promptHeaderMap = new Map<string, string>()
       const promptTypeMap = new Map<string, string>()
       const promptContentMap = new Map<string, string>()
-      for (const p of promptDetails) {
-        promptHeaderMap.set(p.id, p.promptHeading || p.originalText.substring(0, 50))
-        promptTypeMap.set(p.id, p.type ?? '')
-        promptContentMap.set(p.id, p.originalText ?? '')
+
+      if (hasPrompts) {
+        const promptDetails = await db
+          .select({
+            id: prompts.id,
+            promptHeading: prompts.promptHeading,
+            originalText: prompts.originalText,
+            type: prompts.type,
+          })
+          .from(prompts)
+          .where(inArray(prompts.id, promptIds))
+
+        for (const p of promptDetails) {
+          promptHeaderMap.set(p.id, p.promptHeading || p.originalText.substring(0, 50))
+          promptTypeMap.set(p.id, p.type ?? '')
+          promptContentMap.set(p.id, p.originalText ?? '')
+        }
       }
 
       // Build scope condition for articles
       const sourceProjectIds = body.sourceProjectIds || [projectId]
 
-      // Get project model and content settings for filtering judgments
-      const projectSettings = await db
-        .select({
-          id: projects.id,
-          modelId: projects.modelId,
-          useTitle: projects.useTitle,
-          useAbstract: projects.useAbstract,
-          useFulltext: projects.useFulltext,
-          useFulltextNoImages: projects.useFulltextNoImages,
-        })
-        .from(projects)
-        .where(inArray(projects.id, sourceProjectIds))
+      // Get project model and content settings for filtering judgments (only needed if prompts selected)
+      let judgmentConfigCondition: ReturnType<typeof and> | ReturnType<typeof or> | undefined
+      if (hasPrompts) {
+        const projectSettings = await db
+          .select({
+            id: projects.id,
+            modelId: projects.modelId,
+            useTitle: projects.useTitle,
+            useAbstract: projects.useAbstract,
+            useFulltext: projects.useFulltext,
+            useFulltextNoImages: projects.useFulltextNoImages,
+          })
+          .from(projects)
+          .where(inArray(projects.id, sourceProjectIds))
 
-      // Build judgment filter: must match model+content from at least one source project
-      const judgmentConfigParts = projectSettings.map((proj) => {
-        return and(
-          eq(judgments.modelId, proj.modelId),
-          eq(judgments.useTitle, proj.useTitle),
-          eq(judgments.useAbstract, proj.useAbstract),
-          eq(judgments.useFulltext, proj.useFulltext),
-          eq(judgments.useFulltextNoImages, proj.useFulltextNoImages),
-        )
-      })
-      const judgmentConfigCondition =
-        judgmentConfigParts.length > 1 ? or(...judgmentConfigParts) : judgmentConfigParts[0]
+        // Build judgment filter: must match model+content from at least one source project
+        const judgmentConfigParts = projectSettings.map((proj) => {
+          return and(
+            eq(judgments.modelId, proj.modelId),
+            eq(judgments.useTitle, proj.useTitle),
+            eq(judgments.useAbstract, proj.useAbstract),
+            eq(judgments.useFulltext, proj.useFulltext),
+            eq(judgments.useFulltextNoImages, proj.useFulltextNoImages),
+          )
+        })
+        judgmentConfigCondition =
+          judgmentConfigParts.length > 1 ? or(...judgmentConfigParts) : judgmentConfigParts[0]
+      }
 
       const projectImportRoutes = await db
         .select({projectId: projectRouteLink.projectId, importRouteId: projectRouteLink.importRouteId})
@@ -302,45 +306,13 @@ export const projectExportRoutes = new Elysia()
             // Send header row
             controller.enqueue(headers.map(escapeCSV).join(',') + '\n')
 
-            // Get article count first with a lightweight query
-            const countResult = await db
-              .select({count: sql<number>`count(DISTINCT ${articles.id})`})
-              .from(articles)
-              .innerJoin(
-                judgments,
-                and(
-                  eq(judgments.articleId, articles.id),
-                  inArray(judgments.promptId, promptIds),
-                  isNull(judgments.deletedAt),
-                  judgmentConfigCondition,
-                ),
-              )
-              .where(scopeCondition)
-
-            const totalCount = Number(countResult[0]?.count ?? 0)
-            console.log(`[export] Starting export of ~${totalCount} articles`)
-
             let offset = 0
             let processedCount = 0
 
-            while (true) {
-              // Fetch batch of articles with their judgments using OFFSET/LIMIT
-              const batchData = await db
-                .select({
-                  articleId: articles.id,
-                  articleExternalId: articles.articleId,
-                  articleTitle: articles.articleTitle,
-                  articleSummary: articles.articleSummary,
-                  articleAuthors: articles.articleAuthors,
-                  articleCreatedAt: articles.articleCreatedAt,
-                  articleUpdatedAt: articles.articleUpdatedAt,
-                  articleOriginalData: includeJournal ? articles.originalData : sql<null>`NULL`,
-                  promptId: judgments.promptId,
-                  answeredOriginal: judgments.answeredOriginal,
-                  answeredOriginalAsArray: judgments.answeredOriginalAsArray,
-                  explanation: judgments.explanation,
-                  quotes: judgments.quotes,
-                })
+            if (hasPrompts) {
+              // Export with prompts - join with judgments
+              const countResult = await db
+                .select({count: sql<number>`count(DISTINCT ${articles.id})`})
                 .from(articles)
                 .innerJoin(
                   judgments,
@@ -352,124 +324,225 @@ export const projectExportRoutes = new Elysia()
                   ),
                 )
                 .where(scopeCondition)
-                .orderBy(articles.id)
-                .limit(BATCH_SIZE * promptIds.length) // Account for multiple rows per article
-                .offset(offset)
 
-              if (batchData.length === 0) {
-                break
-              }
+              const totalCount = Number(countResult[0]?.count ?? 0)
+              console.log(`[export] Starting export of ~${totalCount} articles with prompts`)
 
-              // Group batch data by article
-              const batchArticleMap = new Map<
-                string,
-                {
-                  title: string
-                  articleId: string
-                  articleUrl: string
-                  authors: string
-                  createdAt: string
-                  updatedAt: string
-                  summary: string
-                  journalTitle: string
-                  answers: Map<string, string>
-                  explanations: Map<string, string>
-                  quotes: Map<string, string>
-                }
-              >()
-
-              for (const row of batchData) {
-                if (!batchArticleMap.has(row.articleId)) {
-                  const articleExternalId = row.articleExternalId ?? ''
-                  const articleUrl = includeArticleLink ? getArticleUrl(articleExternalId) : ''
-                  const articleAuthors = includeArticleAuthors ? (row.articleAuthors?.join('; ') ?? '') : ''
-                  const articleCreatedAt = includeArticleCreatedAt ? formatArticleDate(row.articleCreatedAt) : ''
-                  const articleUpdatedAt = includeArticleUpdatedAt ? formatArticleDate(row.articleUpdatedAt) : ''
-                  const journalTitle = includeJournal
-                    ? (getJournalTitleFromOriginalData(row.articleOriginalData) ?? '')
-                    : ''
-                  batchArticleMap.set(row.articleId, {
-                    title: row.articleTitle || 'Untitled',
-                    articleId: articleExternalId,
-                    articleUrl,
-                    authors: articleAuthors,
-                    createdAt: articleCreatedAt,
-                    updatedAt: articleUpdatedAt,
-                    summary: row.articleSummary || '',
-                    journalTitle,
-                    answers: new Map(),
-                    explanations: new Map(),
-                    quotes: new Map(),
+              while (true) {
+                // Fetch batch of articles with their judgments using OFFSET/LIMIT
+                const batchData = await db
+                  .select({
+                    articleId: articles.id,
+                    articleExternalId: articles.articleId,
+                    articleTitle: articles.articleTitle,
+                    articleSummary: articles.articleSummary,
+                    articleAuthors: articles.articleAuthors,
+                    articleCreatedAt: articles.articleCreatedAt,
+                    articleUpdatedAt: articles.articleUpdatedAt,
+                    articleOriginalData: includeJournal ? articles.originalData : sql<null>`NULL`,
+                    promptId: judgments.promptId,
+                    answeredOriginal: judgments.answeredOriginal,
+                    answeredOriginalAsArray: judgments.answeredOriginalAsArray,
+                    explanation: judgments.explanation,
+                    quotes: judgments.quotes,
                   })
+                  .from(articles)
+                  .innerJoin(
+                    judgments,
+                    and(
+                      eq(judgments.articleId, articles.id),
+                      inArray(judgments.promptId, promptIds),
+                      isNull(judgments.deletedAt),
+                      judgmentConfigCondition,
+                    ),
+                  )
+                  .where(scopeCondition)
+                  .orderBy(articles.id)
+                  .limit(BATCH_SIZE * promptIds.length) // Account for multiple rows per article
+                  .offset(offset)
+
+                if (batchData.length === 0) {
+                  break
                 }
-                const article = batchArticleMap.get(row.articleId)
-                if (article) {
-                  let answer = row.answeredOriginal || ''
-                  if (row.answeredOriginalAsArray && row.answeredOriginalAsArray.length > 0) {
-                    answer = row.answeredOriginalAsArray.join('; ')
-                  }
-                  article.answers.set(row.promptId, answer)
 
-                  if (includeExplanation && row.explanation) {
-                    article.explanations.set(row.promptId, row.explanation)
+                // Group batch data by article
+                const batchArticleMap = new Map<
+                  string,
+                  {
+                    title: string
+                    articleId: string
+                    articleUrl: string
+                    authors: string
+                    createdAt: string
+                    updatedAt: string
+                    summary: string
+                    journalTitle: string
+                    answers: Map<string, string>
+                    explanations: Map<string, string>
+                    quotes: Map<string, string>
                   }
+                >()
 
-                  if (includeQuotes && row.quotes) {
-                    const quotesValue = row.quotes
-                    if (Array.isArray(quotesValue)) {
-                      article.quotes.set(row.promptId, quotesValue.join('; '))
-                    } else if (typeof quotesValue === 'string') {
-                      article.quotes.set(row.promptId, quotesValue)
-                    } else {
-                      article.quotes.set(row.promptId, JSON.stringify(quotesValue))
+                for (const row of batchData) {
+                  if (!batchArticleMap.has(row.articleId)) {
+                    const articleExternalId = row.articleExternalId ?? ''
+                    const articleUrl = includeArticleLink ? getArticleUrl(articleExternalId) : ''
+                    const articleAuthors = includeArticleAuthors ? (row.articleAuthors?.join('; ') ?? '') : ''
+                    const articleCreatedAt = includeArticleCreatedAt ? formatArticleDate(row.articleCreatedAt) : ''
+                    const articleUpdatedAt = includeArticleUpdatedAt ? formatArticleDate(row.articleUpdatedAt) : ''
+                    const journalTitle = includeJournal
+                      ? (getJournalTitleFromOriginalData(row.articleOriginalData) ?? '')
+                      : ''
+                    batchArticleMap.set(row.articleId, {
+                      title: row.articleTitle || 'Untitled',
+                      articleId: articleExternalId,
+                      articleUrl,
+                      authors: articleAuthors,
+                      createdAt: articleCreatedAt,
+                      updatedAt: articleUpdatedAt,
+                      summary: row.articleSummary || '',
+                      journalTitle,
+                      answers: new Map(),
+                      explanations: new Map(),
+                      quotes: new Map(),
+                    })
+                  }
+                  const article = batchArticleMap.get(row.articleId)
+                  if (article) {
+                    let answer = row.answeredOriginal || ''
+                    if (row.answeredOriginalAsArray && row.answeredOriginalAsArray.length > 0) {
+                      answer = row.answeredOriginalAsArray.join('; ')
+                    }
+                    article.answers.set(row.promptId, answer)
+
+                    if (includeExplanation && row.explanation) {
+                      article.explanations.set(row.promptId, row.explanation)
+                    }
+
+                    if (includeQuotes && row.quotes) {
+                      const quotesValue = row.quotes
+                      if (Array.isArray(quotesValue)) {
+                        article.quotes.set(row.promptId, quotesValue.join('; '))
+                      } else if (typeof quotesValue === 'string') {
+                        article.quotes.set(row.promptId, quotesValue)
+                      } else {
+                        article.quotes.set(row.promptId, JSON.stringify(quotesValue))
+                      }
                     }
                   }
                 }
-              }
 
-              // Stream CSV rows for this batch
-              for (const [_, articleData] of batchArticleMap) {
-                const row: string[] = [articleData.title]
-                if (includeArticleId) {
-                  row.push(articleData.articleId)
-                }
-                if (includeArticleLink) {
-                  row.push(articleData.articleUrl)
-                }
-                if (includeArticleAuthors) {
-                  row.push(articleData.authors)
-                }
-                if (includeSummary) {
-                  row.push(articleData.summary)
-                }
-                if (includeJournal) {
-                  row.push(articleData.journalTitle)
-                }
-                if (includeArticleCreatedAt) {
-                  row.push(articleData.createdAt)
-                }
-                if (includeArticleUpdatedAt) {
-                  row.push(articleData.updatedAt)
-                }
-                for (const promptId of orderedPromptIds) {
-                  row.push(articleData.answers.get(promptId) || '')
-                  if (includeExplanation) {
-                    row.push(articleData.explanations.get(promptId) || '')
+                // Stream CSV rows for this batch
+                for (const [_, articleData] of batchArticleMap) {
+                  const row: string[] = [articleData.title]
+                  if (includeArticleId) {
+                    row.push(articleData.articleId)
                   }
-                  if (includeQuotes) {
-                    row.push(articleData.quotes.get(promptId) || '')
+                  if (includeArticleLink) {
+                    row.push(articleData.articleUrl)
                   }
+                  if (includeArticleAuthors) {
+                    row.push(articleData.authors)
+                  }
+                  if (includeSummary) {
+                    row.push(articleData.summary)
+                  }
+                  if (includeJournal) {
+                    row.push(articleData.journalTitle)
+                  }
+                  if (includeArticleCreatedAt) {
+                    row.push(articleData.createdAt)
+                  }
+                  if (includeArticleUpdatedAt) {
+                    row.push(articleData.updatedAt)
+                  }
+                  for (const promptId of orderedPromptIds) {
+                    row.push(articleData.answers.get(promptId) || '')
+                    if (includeExplanation) {
+                      row.push(articleData.explanations.get(promptId) || '')
+                    }
+                    if (includeQuotes) {
+                      row.push(articleData.quotes.get(promptId) || '')
+                    }
+                  }
+                  controller.enqueue(row.map(escapeCSV).join(',') + '\n')
+                  processedCount++
                 }
-                controller.enqueue(row.map(escapeCSV).join(',') + '\n')
-                processedCount++
+
+                offset += batchData.length
+                console.log(`[export] Streamed ${processedCount} articles`)
+
+                // Check if we got fewer rows than expected (end of data)
+                if (batchData.length < BATCH_SIZE * promptIds.length) {
+                  break
+                }
               }
+            } else {
+              // Export without prompts - just article metadata
+              const countResult = await db
+                .select({count: sql<number>`count(${articles.id})`})
+                .from(articles)
+                .where(scopeCondition)
 
-              offset += batchData.length
-              console.log(`[export] Streamed ${processedCount} articles`)
+              const totalCount = Number(countResult[0]?.count ?? 0)
+              console.log(`[export] Starting export of ~${totalCount} articles (metadata only)`)
 
-              // Check if we got fewer rows than expected (end of data)
-              if (batchData.length < BATCH_SIZE * promptIds.length) {
-                break
+              while (true) {
+                const batchData = await db
+                  .select({
+                    articleId: articles.id,
+                    articleExternalId: articles.articleId,
+                    articleTitle: articles.articleTitle,
+                    articleSummary: articles.articleSummary,
+                    articleAuthors: articles.articleAuthors,
+                    articleCreatedAt: articles.articleCreatedAt,
+                    articleUpdatedAt: articles.articleUpdatedAt,
+                    articleOriginalData: includeJournal ? articles.originalData : sql<null>`NULL`,
+                  })
+                  .from(articles)
+                  .where(scopeCondition)
+                  .orderBy(articles.id)
+                  .limit(BATCH_SIZE)
+                  .offset(offset)
+
+                if (batchData.length === 0) {
+                  break
+                }
+
+                for (const row of batchData) {
+                  const articleExternalId = row.articleExternalId ?? ''
+                  const csvRow: string[] = [row.articleTitle || 'Untitled']
+                  if (includeArticleId) {
+                    csvRow.push(articleExternalId)
+                  }
+                  if (includeArticleLink) {
+                    csvRow.push(getArticleUrl(articleExternalId))
+                  }
+                  if (includeArticleAuthors) {
+                    csvRow.push(row.articleAuthors?.join('; ') ?? '')
+                  }
+                  if (includeSummary) {
+                    csvRow.push(row.articleSummary || '')
+                  }
+                  if (includeJournal) {
+                    csvRow.push(getJournalTitleFromOriginalData(row.articleOriginalData) ?? '')
+                  }
+                  if (includeArticleCreatedAt) {
+                    csvRow.push(formatArticleDate(row.articleCreatedAt))
+                  }
+                  if (includeArticleUpdatedAt) {
+                    csvRow.push(formatArticleDate(row.articleUpdatedAt))
+                  }
+                  controller.enqueue(csvRow.map(escapeCSV).join(',') + '\n')
+                  processedCount++
+                }
+
+                offset += batchData.length
+                console.log(`[export] Streamed ${processedCount} articles`)
+
+                if (batchData.length < BATCH_SIZE) {
+                  break
+                }
               }
             }
 
@@ -520,7 +593,8 @@ export const projectExportRoutes = new Elysia()
 
       const promptIds = body.promptIds
       if (!promptIds || promptIds.length === 0) {
-        throw new Error('No prompts selected for export')
+        set.status = 400
+        return {data: null, error: 'No prompts selected for export'}
       }
 
       const promptDetails = await db
