@@ -160,8 +160,7 @@ Create these as reusable CTEs or views in `pg.*`:
 
 ## Feature implementations
 
-> 🏳️ All features gated behind `USE_CLICKHOUSE_MATERIALIZED_PG` flag.
-> On CH error/unavailable → fall back to current Postgres queries.
+> On CH error/unavailable → fall back to Postgres queries (circuit breaker).
 
 ### 1) Jobs page: unassessed count
 **Current**: Heavy Postgres query with cross join + NOT EXISTS.
