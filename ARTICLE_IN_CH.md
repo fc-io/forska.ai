@@ -46,7 +46,7 @@ JOIN articles a ON a.import_route = ir.route
 WHERE prl.project_id = ?
 ```
 
-> 📌 **Legacy path status**: Path 3 is kept for backward compatibility. CH will replicate `import_route` table to support this. Backfilling `article_route_link` is optional to reduce reliance on string-matching.
+> 📌 **Legacy path status**: Path 3 matches current cron behavior. CH replicates `import_route` table to support this. Future work: harmonize to FK-only approach (Paths 1+2) once all articles have `article_route_link` entries.
 
 ### "Assessed" judgment
 
@@ -156,7 +156,7 @@ The idiomatic ClickHouse approach — just replicate everything:
 | **Initial sync time** | Large articles table × full rows = longer first sync | One-time cost; run during low-traffic window |
 | **WAL bandwidth** | Full row sent on every UPDATE | Acceptable if article updates are infrequent |
 | **Disk usage** | ~10-500 KB/article before compression | Compression helps; monitor and scale storage |
-| **Replication lag** | CH lags PG by 1-5s | Same for all options; use circuit breaker for critical paths |
+| **Replication lag** | CH lags PG by 1-5s | Accept as-is; 1-5s lag expected for MaterializedPostgreSQL |
 
 Fallback: If storage becomes a concern, switch to C.2 (metadata-only) or B (skinny + PG hydration).
 
@@ -210,9 +210,13 @@ SELECT
 FROM pg_default_acl
 WHERE 'ch_replicator' = ANY(aclexplode(defaclacl)).grantee::text;
 -- Should show entries for both current role and forska_admin
+
+-- Check for other roles that might create tables:
+SELECT DISTINCT tableowner FROM pg_tables WHERE schemaname = 'public';
+-- If other roles exist, run: ALTER DEFAULT PRIVILEGES FOR ROLE <other_role> IN SCHEMA public GRANT SELECT ON TABLES TO ch_replicator;
 ```
 
-> ⚠️ **`ALTER DEFAULT PRIVILEGES` ownership caveat**: This only applies to tables created by the *current role* (or the role specified via `FOR ROLE`). If database migrations run as a different user (e.g., `forska_admin`), new tables they create will NOT inherit grants to `ch_replicator`. The commands above handle both cases, and the verification queries confirm correct setup.
+> ⚠️ **`ALTER DEFAULT PRIVILEGES` ownership caveat**: This only applies to tables created by the *current role* (or the role specified via `FOR ROLE`). If database migrations run as a different user (e.g., `forska_admin`), new tables they create will NOT inherit grants to `ch_replicator`. The commands above handle both the current role and `forska_admin`. If you discover other roles creating tables (via the `tableowner` query above), add `ALTER DEFAULT PRIVILEGES FOR ROLE` for those roles too.
 > **Publication/Replication Slot**: MaterializedPostgreSQL creates its own publication and replication slot automatically. However, some setups may require explicit creation:
 > ```sql
 > -- If CH requires explicit publication (check CH version docs):
@@ -349,8 +353,6 @@ JOIN pg.article_route_link arl ON arl.import_route_id = prl.import_route_id;
 
 ## Feature implementations
 
-> On CH error/unavailable → fall back to Postgres queries (circuit breaker).
-
 ### 1) Jobs page: unassessed count
 **Current**: Heavy Postgres query with cross join + NOT EXISTS.
 
@@ -366,6 +368,8 @@ JOIN pg.article_route_link arl ON arl.import_route_id = prl.import_route_id;
 2. Order by `article_updated_at DESC` (canonical sort column)
 3. Use keyset cursor: `WHERE (article_updated_at, article_id) < (?, ?) ORDER BY article_updated_at DESC, article_id DESC LIMIT 100`
 4. Return IDs from CH, hydrate from Postgres via `WHERE id IN (...)` (limit 100)
+
+> ⚠️ **Index for pagination**: Ensure CH has an index on `(article_updated_at, article_id)` for efficient keyset pagination. MaterializedPostgreSQL may auto-create indexes based on PG indexes. Verify with `SHOW CREATE TABLE pg.articles;` and create manually if needed.
 
 ### 3) Project Reviews Unassessed page
 **Endpoint**: `/api/articlesreviewsunassessed`
@@ -385,8 +389,13 @@ JOIN pg.article_route_link arl ON arl.import_route_id = prl.import_route_id;
 
 **CH strategy**:
 
-> ⚠️ **0 enabled prompts guard**: Check prompt count before running query. If 0 prompts, return early with empty result `{promptEntries: []}` to avoid unnecessary CROSS JOIN.
+> ⚠️ **0 enabled prompts guard**: Add app-level check BEFORE running CH query. If 0 prompts, return early `{promptEntries: []}` to avoid unnecessary CROSS JOIN:
+> ```ts
+> const enabledPromptsCount = await getEnabledPromptsCount(projectId)
+> if (enabledPromptsCount === 0) return { promptEntries: [] }
+> ```
 
+**CH query** (run only if prompts exist):
 ```sql
 WITH
   scoped AS (
@@ -449,13 +458,27 @@ FROM system.postgres_replication_slots
 WHERE database = 'pg';
 ```
 
-**Option B (check MaterializedPostgreSQL status)**:
+**Option B (check MaterializedPostgreSQL database status)**:
 ```sql
-SELECT name, value FROM system.settings WHERE name LIKE 'materialized_postgresql%';
--- Or check database replication status via system tables
+-- Check if MaterializedPostgreSQL engine is running
+SELECT
+  name,
+  engine,
+  data_path,
+  metadata_path
+FROM system.databases
+WHERE name = 'pg' AND engine LIKE '%MaterializedPostgreSQL%';
+
+-- Check table sync status (row counts as proxy)
+SELECT
+  database,
+  table,
+  total_rows
+FROM system.tables
+WHERE database = 'pg';
 ```
 
-**Option C (compare row counts)**:
+**Option C (compare row counts for lag detection)**:
 ```sql
 -- Compare PG vs CH counts as proxy for lag
 -- Run periodically and alert if delta persists > 60s
@@ -471,7 +494,7 @@ if (lag) logger.info({ chReplicationLagSec: lag }, 'CH replication status');
 
 **Alert thresholds**:
 - ⚠️ Warning: lag > 10s
-- 🚨 Critical: lag > 60s → consider fallback to Postgres
+- 🚨 Critical: lag > 60s → investigate CH health
 
 ### WAL slot size (Postgres side)
 ```sql
@@ -497,14 +520,23 @@ WHERE slot_type = 'logical';
 | **Monitoring query** | `system.postgres_replication_slots` may not exist | Test in target CH version; fallback to row count comparison |
 | **Replication lag** | Stale counts, missed articles | Accept 1-5s lag expected for MaterializedPostgreSQL |
 | **WAL growth** | Disk full on Postgres | Monitor slot size; alert on > 1GB; emergency slot drop procedure |
-| **Type mapping** | UUID/timestamp mismatches | Explicit casts in CH queries; verify with test data |
+| **Type mapping** | UUID/timestamp params from app | MaterializedPostgreSQL auto-converts PG types; if manual casts needed: `toUUID('...')`, `toDateTime('...')` |
 
 ---
 
 ## Pre-flight checklist (before implementing CH)
 
 - [ ] **Unify PG "assessed" semantics**: Update `JudgmentsJobsRoutes.ts` and `projectsRoutesGetArticlesReviewsUnassessed.ts` to filter `is_answered = true`, `deleted_at IS NULL`, and `project_prompts.enabled = true`
-- [ ] **Backfill `article_route_link` (optional)**: Populate for legacy `articles.import_route` values to reduce reliance on Path 3 string-match
+- [ ] **Backfill `article_route_link` if needed**: Required if you want to deprecate Path 3 string-matching or if many articles lack FK entries. Skip if Path 3 performance is acceptable:
+  ```sql
+  INSERT INTO article_route_link (article_id, import_route_id)
+  SELECT a.id, ir.id
+  FROM articles a
+  JOIN import_route ir ON ir.route = a.import_route
+  WHERE a.import_route IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM article_route_link arl WHERE arl.article_id = a.id)
+  ON CONFLICT DO NOTHING;
+  ```
 - [ ] **Verify CH version**: Check if `system.postgres_replication_slots` exists with expected columns
 
 ---
@@ -513,13 +545,13 @@ WHERE slot_type = 'logical';
 
 ### Phase 1: PG cleanup
 - [ ] Unify assessed semantics in all PG queries (add `is_answered`, `deleted_at`, `enabled`, `archived` filters)
-- [ ] Backfill `article_route_link` for legacy articles (optional: reduces reliance on Path 3 string-match)
+- [ ] Backfill `article_route_link` if needed (see pre-flight checklist for SQL; only needed if deprecating Path 3 or articles missing FK entries)
 
 ### Phase 2: Infrastructure
 - [ ] Enable logical replication in Postgres (`wal_level = logical`)
 - [ ] Create CH replication user with appropriate grants (including `FOR ROLE` if migrations run as different user)
 - [ ] Verify CH version supports MaterializedPostgreSQL with expected features
-- [ ] **Schedule initial sync during low-traffic window** (full `articles` replication may take time)
+- [ ] **Initial sync**: Estimate ~1-10 min per million articles (full_text + network dependent); 10M articles ≈ 2-6 hours. Run `CREATE DATABASE` command now (dev system, no scheduling needed)
 - [ ] Create `pg` database in ClickHouse with full `articles` table (C.1 approach):
   ```sql
   CREATE DATABASE pg ENGINE = MaterializedPostgreSQL(...)
@@ -527,6 +559,7 @@ WHERE slot_type = 'logical';
   ```
 - [ ] Create `forska_helpers` database for views/CTEs
 - [ ] Verify row counts match between PG and CH (especially `articles`)
+- [ ] Verify index on `pg.articles (article_updated_at, article_id)` exists (for keyset pagination)
 - [ ] Confirm monitoring query works in CH version
 - [ ] **Monitor CH disk usage** after initial sync; scale storage if needed
 
@@ -536,7 +569,6 @@ WHERE slot_type = 'logical';
   - [ ] Reviews/unassessed page: paginated list (now uses CH `ORDER BY article_updated_at`)
   - [ ] Cron queue fill: (article, prompt) pairs
 - [ ] Add 0-prompt guard to all queries
-- [ ] Add circuit breaker: fallback to PG if CH unavailable
 - [ ] Deploy to staging; verify counts match PG
 - [ ] Deploy to production
 - [ ] Observe query latency + CH disk usage
