@@ -36,7 +36,7 @@ JOIN article_route_link arl ON arl.import_route_id = prl.import_route_id
 WHERE prl.project_id = ?
 ```
 
-**Legacy path (cron only, deprecated)**:
+**Legacy path (kept for compatibility)**:
 ```sql
 -- Path 3: Legacy string-match on articles.import_route → import_route.route
 SELECT a.id AS article_id
@@ -46,7 +46,7 @@ JOIN articles a ON a.import_route = ir.route
 WHERE prl.project_id = ?
 ```
 
-> 🔧 **TODO**: Backfill `article_route_link` for legacy articles, then remove Path 3 from cron. CH should NOT replicate legacy path — use canonical 2-way union only.
+> 📌 **Legacy path status**: Path 3 is kept for backward compatibility. CH will replicate `import_route` table to support this. Backfilling `article_route_link` is optional to reduce reliance on string-matching.
 
 ### "Assessed" judgment
 
@@ -171,7 +171,7 @@ Fallback: If storage becomes a concern, switch to C.2 (metadata-only) or B (skin
 | `project_articles`     | `project_id`, `article_id`                                          | Direct scope link              |
 | `project_route_link`   | `project_id`, `import_route_id`                                     | Note: FK is `import_route_id`  |
 | `article_route_link`   | `article_id`, `import_route_id`                                     | Note: FK is `import_route_id`  |
-| `import_route`         | `id`, `route`                                                       | Only if keeping legacy path    |
+| `import_route`         | `id`, `route`                                                       | Replicate (legacy path kept)   |
 
 ---
 
@@ -194,19 +194,29 @@ GRANT USAGE ON SCHEMA public TO ch_replicator;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO ch_replicator;
 
 -- Grant on future tables (critical: prevents breaks when new tables are created)
+-- Run both commands: one for current role, one for migration role
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO ch_replicator;
+ALTER DEFAULT PRIVILEGES FOR ROLE forska_admin IN SCHEMA public GRANT SELECT ON TABLES TO ch_replicator;
+
+-- Verify grants were applied:
+SELECT * FROM information_schema.role_table_grants WHERE grantee = 'ch_replicator';
+-- Should show SELECT grants on all existing tables
+
+-- Verify default privileges are set:
+SELECT
+  defaclrole::regrole AS grantor,
+  defaclobjtype AS object_type,
+  defaclacl AS privileges
+FROM pg_default_acl
+WHERE 'ch_replicator' = ANY(aclexplode(defaclacl)).grantee::text;
+-- Should show entries for both current role and forska_admin
 ```
 
-> ⚠️ **`ALTER DEFAULT PRIVILEGES` ownership caveat**: This only applies to tables created by the *current role* (or the role specified via `FOR ROLE`). If database migrations run as a different user (e.g., `forska_admin`), new tables they create will NOT inherit grants to `ch_replicator`. To handle this:
-> ```sql
-> -- Run as superuser/owner of migration role:
-> ALTER DEFAULT PRIVILEGES FOR ROLE forska_admin IN SCHEMA public GRANT SELECT ON TABLES TO ch_replicator;
-> ```
->
+> ⚠️ **`ALTER DEFAULT PRIVILEGES` ownership caveat**: This only applies to tables created by the *current role* (or the role specified via `FOR ROLE`). If database migrations run as a different user (e.g., `forska_admin`), new tables they create will NOT inherit grants to `ch_replicator`. The commands above handle both cases, and the verification queries confirm correct setup.
 > **Publication/Replication Slot**: MaterializedPostgreSQL creates its own publication and replication slot automatically. However, some setups may require explicit creation:
 > ```sql
 > -- If CH requires explicit publication (check CH version docs):
-> CREATE PUBLICATION forska_ch_pub FOR TABLE projects, project_prompts, judgments, project_articles, project_route_link, article_route_link;
+> CREATE PUBLICATION forska_ch_pub FOR TABLE projects, project_prompts, judgments, project_articles, project_route_link, article_route_link, import_route;
 >
 > -- Replication slot is typically created by CH, but verify slot exists:
 > SELECT * FROM pg_replication_slots WHERE slot_name LIKE '%ch%';
@@ -225,7 +235,7 @@ CREATE DATABASE pg ENGINE = MaterializedPostgreSQL(
   'forska_db',
   'ch_replicator',
   'xxx'
-) SETTINGS materialized_postgresql_tables_list = 'articles,projects,project_prompts,judgments,project_articles,project_route_link,article_route_link';
+) SETTINGS materialized_postgresql_tables_list = 'articles,projects,project_prompts,judgments,project_articles,project_route_link,article_route_link,import_route';
 ```
 
 > 📌 Use a separate DB name (`pg`) to avoid collision with existing `forska.judgments` (Parquet-based).
@@ -263,6 +273,9 @@ UNION ALL SELECT 'project_articles', COUNT(*) FROM pg.project_articles;
 ```
 
 **Per-project spot check (compare unassessed counts):**
+
+> ⚠️ **Query pattern note**: Prefer `NOT EXISTS` over `NOT IN` to avoid NULL semantics issues. `NOT IN (subquery)` returns unknown/false if subquery contains NULL, which can silently drop results. `NOT EXISTS` is NULL-safe.
+
 ```sql
 -- ClickHouse: unassessed count for project X
 WITH
@@ -281,7 +294,8 @@ WITH
     SELECT j.article_id
     FROM pg.judgments j
     JOIN pg.projects p ON p.id = 'X'
-    WHERE j.deleted_at IS NULL
+    WHERE j.article_id IN (SELECT article_id FROM scoped)  -- Critical: only scan scoped articles
+      AND j.deleted_at IS NULL
       AND j.is_answered = true
       AND j.model_id = p.model_id
       AND j.use_title = p.use_title
@@ -300,11 +314,7 @@ SELECT
            SELECT 1 FROM assessed a WHERE a.article_id = s.article_id
          )
        )
-  END AS unassessed_count;
-
--- NOTE: Prefer NOT EXISTS over NOT IN to avoid NULL semantics issues.
--- NOT IN (subquery) returns unknown/false if subquery contains NULL,
--- which can silently drop results. NOT EXISTS is NULL-safe."
+  END AS unassessed_count;"
 ```
 
 ---
@@ -352,27 +362,31 @@ JOIN pg.article_route_link arl ON arl.import_route_id = prl.import_route_id;
 
 ### 2) Jobs page: unassessed articles list
 **CH strategy**:
-1. Query `unassessed_article_ids(projectId)` with pagination
+1. Query `unassessed_article_ids(projectId)` with keyset pagination
 2. Order by `article_updated_at DESC` (canonical sort column)
-3. Return IDs from CH, hydrate from Postgres via `WHERE id IN (...)` (limit 100)
+3. Use keyset cursor: `WHERE (article_updated_at, article_id) < (?, ?) ORDER BY article_updated_at DESC, article_id DESC LIMIT 100`
+4. Return IDs from CH, hydrate from Postgres via `WHERE id IN (...)` (limit 100)
 
 ### 3) Project Reviews Unassessed page
 **Endpoint**: `/api/articlesreviewsunassessed`
 
 **CH strategy**:
 1. CH query for count + paginated article IDs
-2. Prefer keyset pagination for large scopes:
+2. **Use keyset pagination** (prevents duplicates/skips during concurrent updates):
    ```sql
    WHERE (article_updated_at, article_id) < (?, ?)
    ORDER BY article_updated_at DESC, article_id DESC
    LIMIT 100
    ```
-3. Offset pagination acceptable if scope < 100k articles
+   > ⚠️ **Why keyset over offset**: If articles update between page requests, offset pagination can skip/duplicate rows. Keyset pagination uses cursor position (last seen timestamp + id) to maintain consistency.
 
 ### 4) Cron: `judgmentsJobsCronGetPrompts`
 **Goal**: Avoid Postgres cross join + NOT EXISTS scans.
 
 **CH strategy**:
+
+> ⚠️ **0 enabled prompts guard**: Check prompt count before running query. If 0 prompts, return early with empty result `{promptEntries: []}` to avoid unnecessary CROSS JOIN.
+
 ```sql
 WITH
   scoped AS (
@@ -391,7 +405,8 @@ WITH
     SELECT j.article_id, j.prompt_id
     FROM pg.judgments j
     JOIN pg.projects p ON p.id = ?
-    WHERE j.deleted_at IS NULL
+    WHERE j.article_id IN (SELECT article_id FROM scoped)  -- Critical: only scan scoped articles
+      AND j.deleted_at IS NULL
       AND j.is_answered = true
       AND j.model_id = p.model_id
       AND j.use_title = p.use_title
@@ -474,13 +489,13 @@ WHERE slot_type = 'logical';
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
-| **Scope mismatch** | CH uses 2-way union; PG cron uses 3-way | Backfill `article_route_link`, then deprecate legacy path |
 | **Assessed semantics drift** | CH/PG counts differ | Unify PG queries first (`is_answered`, `deleted_at`, `enabled`) |
-| **0 enabled prompts** | CH returns all articles as unassessed | Add guard clause in queries |
-| **Full articles replication** | Storage/WAL bloat | Hydrate from PG (do not replicate articles) |
+| **Assessed CTE performance** | Scanning all judgments instead of scoped only | Add `j.article_id IN (SELECT article_id FROM scoped)` filter |
+| **0 enabled prompts** | CH returns all articles as unassessed | Add guard clause in queries (return 0 or early exit) |
+| **Full articles replication** | Storage/WAL bloat | Monitor disk usage; articles replicated in controlled manner |
 | **Views in MaterializedPG DB** | May fail or behave unexpectedly | Use separate `forska_helpers` DB |
 | **Monitoring query** | `system.postgres_replication_slots` may not exist | Test in target CH version; fallback to row count comparison |
-| **Replication lag** | Stale counts, missed articles | Accept 1-5s lag; fallback to Postgres for user-facing actions |
+| **Replication lag** | Stale counts, missed articles | Accept 1-5s lag expected for MaterializedPostgreSQL |
 | **WAL growth** | Disk full on Postgres | Monitor slot size; alert on > 1GB; emergency slot drop procedure |
 | **Type mapping** | UUID/timestamp mismatches | Explicit casts in CH queries; verify with test data |
 
@@ -489,8 +504,7 @@ WHERE slot_type = 'logical';
 ## Pre-flight checklist (before implementing CH)
 
 - [ ] **Unify PG "assessed" semantics**: Update `JudgmentsJobsRoutes.ts` and `projectsRoutesGetArticlesReviewsUnassessed.ts` to filter `is_answered = true`, `deleted_at IS NULL`, and `project_prompts.enabled = true`
-- [ ] **Backfill `article_route_link`**: Populate for legacy `articles.import_route` values
-- [ ] **Deprecate legacy scope path**: Remove 3rd path from cron after backfill complete
+- [ ] **Backfill `article_route_link` (optional)**: Populate for legacy `articles.import_route` values to reduce reliance on Path 3 string-match
 - [ ] **Verify CH version**: Check if `system.postgres_replication_slots` exists with expected columns
 
 ---
@@ -499,8 +513,7 @@ WHERE slot_type = 'logical';
 
 ### Phase 1: PG cleanup
 - [ ] Unify assessed semantics in all PG queries (add `is_answered`, `deleted_at`, `enabled`, `archived` filters)
-- [ ] Backfill `article_route_link` for legacy articles
-- [ ] Deprecate legacy scope path (Path 3) from cron after backfill
+- [ ] Backfill `article_route_link` for legacy articles (optional: reduces reliance on Path 3 string-match)
 
 ### Phase 2: Infrastructure
 - [ ] Enable logical replication in Postgres (`wal_level = logical`)
@@ -510,7 +523,7 @@ WHERE slot_type = 'logical';
 - [ ] Create `pg` database in ClickHouse with full `articles` table (C.1 approach):
   ```sql
   CREATE DATABASE pg ENGINE = MaterializedPostgreSQL(...)
-  SETTINGS materialized_postgresql_tables_list = 'articles,projects,project_prompts,judgments,project_articles,project_route_link,article_route_link';
+  SETTINGS materialized_postgresql_tables_list = 'articles,projects,project_prompts,judgments,project_articles,project_route_link,article_route_link,import_route';
   ```
 - [ ] Create `forska_helpers` database for views/CTEs
 - [ ] Verify row counts match between PG and CH (especially `articles`)
