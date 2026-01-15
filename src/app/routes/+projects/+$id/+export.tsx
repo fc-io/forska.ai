@@ -172,11 +172,6 @@ const ExportData = () => {
 
     try {
       const selectedPromptIds = Object.keys(selectedPrompts())
-      if (selectedPromptIds.length === 0) {
-        setError('Please select at least one prompt to export')
-        setIsExporting(false)
-        return
-      }
 
       // Use native fetch for streaming response
       const response = await fetch(`${env.VITE_SERVER_API}/api/projects/${projectId}/export`, {
@@ -220,11 +215,6 @@ const ExportData = () => {
 
     try {
       const selectedPromptIds = Object.keys(selectedPrompts())
-      if (selectedPromptIds.length === 0) {
-        setError('Please select at least one prompt to export')
-        setIsExportingPrompts(false)
-        return
-      }
 
       const response = await fetch(`${env.VITE_SERVER_API}/api/projects/${projectId}/export-prompts`, {
         method: 'POST',
