@@ -67,6 +67,9 @@ services:
       - pgdata:/var/lib/postgresql/data
       # Seed database on first init; files run in alphanumeric order
       - ./init-db:/docker-entrypoint-initdb.d:ro
+      # Custom PostgreSQL config for logical replication (ClickHouse MaterializedPostgreSQL)
+      - ./config/postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+    command: postgres -c config_file=/etc/postgresql/postgresql.conf
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-postgres} -h 127.0.0.1 -p 5432"]
       interval: 10s
@@ -214,6 +217,9 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./init-db:/docker-entrypoint-initdb.d:ro
+      # Custom PostgreSQL config for logical replication (ClickHouse MaterializedPostgreSQL)
+      - ./config/postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+    command: postgres -c config_file=/etc/postgresql/postgresql.conf
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-postgres} -h 127.0.0.1 -p 5432"]
       interval: 10s

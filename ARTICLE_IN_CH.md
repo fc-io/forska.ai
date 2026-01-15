@@ -548,9 +548,9 @@ WHERE slot_type = 'logical';
 - [ ] Backfill `article_route_link` if needed (see pre-flight checklist for SQL; only needed if deprecating Path 3 or articles missing FK entries)
 
 ### Phase 2: Infrastructure
-- [ ] Enable logical replication in Postgres (`wal_level = logical`)
-- [ ] Create CH replication user with appropriate grants (including `FOR ROLE` if migrations run as different user)
-- [ ] Verify CH version supports MaterializedPostgreSQL with expected features
+- [x] Enable logical replication in Postgres (`wal_level = logical`)
+- [x] Create CH replication user with appropriate grants (including `FOR ROLE` if migrations run as different user)
+- [x] Verify CH version supports MaterializedPostgreSQL with expected features
 - [ ] **Initial sync**: Estimate ~1-10 min per million articles (full_text + network dependent); 10M articles ≈ 2-6 hours. Run `CREATE DATABASE` command now (dev system, no scheduling needed)
 - [ ] Create `pg` database in ClickHouse with full `articles` table (C.1 approach):
   ```sql
