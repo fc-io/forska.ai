@@ -60,6 +60,7 @@ const ExportData = () => {
   const [isExporting, setIsExporting] = createSignal(false)
   const [isExportingPrompts, setIsExportingPrompts] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
+  const [hasInitializedPrompts, setHasInitializedPrompts] = createSignal(false)
 
   const togglePromptSelection = (promptId: string) => {
     setSelectedPrompts((current) => {
@@ -91,15 +92,77 @@ const ExportData = () => {
     return Object.keys(selectedPrompts()).length > 0
   }
 
-  // Auto-select all prompts on load
+  // Prompt Header section helpers
+  const isAllPromptHeaderSelected = () => {
+    return includePromptType() && includePromptContent()
+  }
+  const toggleAllPromptHeader = (select: boolean) => {
+    setIncludePromptType(select)
+    setIncludePromptContent(select)
+  }
+
+  // Article section helpers
+  const isAllArticleSelected = () => {
+    return (
+      includeArticleId()
+      && includeArticleLink()
+      && includeArticleAuthors()
+      && includeSummary()
+      && includeJournal()
+      && includeArticleCreatedAt()
+      && includeArticleUpdatedAt()
+    )
+  }
+  const toggleAllArticle = (select: boolean) => {
+    setIncludeArticleId(select)
+    setIncludeArticleLink(select)
+    setIncludeArticleAuthors(select)
+    setIncludeSummary(select)
+    setIncludeJournal(select)
+    setIncludeArticleCreatedAt(select)
+    setIncludeArticleUpdatedAt(select)
+  }
+
+  // Prompts section helpers
+  const isAllPromptsSelected = () => {
+    const prompts = availablePrompts()
+    if (prompts.length === 0) return false
+    const selected = selectedPrompts()
+    return prompts.every((p) => {
+      return selected[p.id] === true
+    })
+  }
+  const toggleAllPrompts = (select: boolean) => {
+    if (select) {
+      const newSelected: Record<string, boolean> = {}
+      for (const prompt of availablePrompts()) {
+        newSelected[prompt.id] = true
+      }
+      setSelectedPrompts(newSelected)
+    } else {
+      setSelectedPrompts({})
+    }
+  }
+
+  // Additional Columns section helpers
+  const isAllAdditionalColumnsSelected = () => {
+    return includeExplanation() && includeQuotes()
+  }
+  const toggleAllAdditionalColumns = (select: boolean) => {
+    setIncludeExplanation(select)
+    setIncludeQuotes(select)
+  }
+
+  // Auto-select all prompts on load (only once)
   createEffect(() => {
     const prompts = availablePrompts()
-    if (prompts.length > 0 && Object.keys(selectedPrompts()).length === 0) {
+    if (prompts.length > 0 && !hasInitializedPrompts()) {
       const newSelectedPrompts: Record<string, boolean> = {}
       for (const prompt of prompts) {
         newSelectedPrompts[prompt.id] = true
       }
       setSelectedPrompts(newSelectedPrompts)
+      setHasInitializedPrompts(true)
     }
   })
 
@@ -250,7 +313,18 @@ const ExportData = () => {
           </Show>
           <Show when={!projectData.isLoading && !projectData.isError && availablePrompts().length > 0}>
             <div class="mb-6">
-              <p class="block text-sm font-medium mb-2">Prompt Header</p>
+              <div class="flex items-center justify-between mb-2">
+                <p class="block text-sm font-medium">Prompt Header</p>
+                <button
+                  type="button"
+                  class="text-xs text-blue-600 hover:text-blue-800 hover:underline"
+                  onClick={() => {
+                    return toggleAllPromptHeader(!isAllPromptHeaderSelected())
+                  }}
+                >
+                  {isAllPromptHeaderSelected() ? 'Deselect All' : 'Select All'}
+                </button>
+              </div>
               <p class="text-xs text-muted-foreground mb-3">Optionally add prompt metadata inside the header cells.</p>
               <div class="space-y-2">
                 <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer hover:bg-muted/50">
@@ -282,7 +356,18 @@ const ExportData = () => {
               </div>
             </div>
             <div class="mb-6">
-              <p class="block text-sm font-medium mb-2">Article</p>
+              <div class="flex items-center justify-between mb-2">
+                <p class="block text-sm font-medium">Article</p>
+                <button
+                  type="button"
+                  class="text-xs text-blue-600 hover:text-blue-800 hover:underline"
+                  onClick={() => {
+                    return toggleAllArticle(!isAllArticleSelected())
+                  }}
+                >
+                  {isAllArticleSelected() ? 'Deselect All' : 'Select All'}
+                </button>
+              </div>
               <div class="space-y-2">
                 <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer hover:bg-muted/50">
                   <input
@@ -378,7 +463,18 @@ const ExportData = () => {
               </div>
             </div>
             <div class="mb-6">
-              <p class="block text-sm font-medium mb-2">Select Prompts to Export</p>
+              <div class="flex items-center justify-between mb-2">
+                <p class="block text-sm font-medium">Select Prompts to Export</p>
+                <button
+                  type="button"
+                  class="text-xs text-blue-600 hover:text-blue-800 hover:underline"
+                  onClick={() => {
+                    return toggleAllPrompts(!isAllPromptsSelected())
+                  }}
+                >
+                  {isAllPromptsSelected() ? 'Deselect All' : 'Select All'}
+                </button>
+              </div>
               <p class="text-xs text-muted-foreground mb-3">
                 Select which prompts to include in the export. Each selected prompt will be a column in the CSV.
               </p>
@@ -407,7 +503,18 @@ const ExportData = () => {
 
             {/* Additional Export Options */}
             <div class="mb-6">
-              <p class="block text-sm font-medium mb-2">Additional Columns</p>
+              <div class="flex items-center justify-between mb-2">
+                <p class="block text-sm font-medium">Additional Columns</p>
+                <button
+                  type="button"
+                  class="text-xs text-blue-600 hover:text-blue-800 hover:underline"
+                  onClick={() => {
+                    return toggleAllAdditionalColumns(!isAllAdditionalColumnsSelected())
+                  }}
+                >
+                  {isAllAdditionalColumnsSelected() ? 'Deselect All' : 'Select All'}
+                </button>
+              </div>
               <p class="text-xs text-muted-foreground mb-3">
                 Optionally include explanation and quotes for each prompt answer.
               </p>
@@ -450,7 +557,7 @@ const ExportData = () => {
               onClick={() => {
                 return void handleExport()
               }}
-              disabled={!hasAnyPromptSelected() || isExporting() || isExportingPrompts()}
+              disabled={isExporting() || isExportingPrompts()}
             >
               {isExporting() ? 'Exporting...' : 'Export to CSV'}
             </Button>
@@ -459,7 +566,7 @@ const ExportData = () => {
               onClick={() => {
                 return void handleExportPrompts()
               }}
-              disabled={!hasAnyPromptSelected() || isExporting() || isExportingPrompts()}
+              disabled={isExporting() || isExportingPrompts()}
             >
               {isExportingPrompts() ? 'Exporting Prompts...' : 'Export Prompt Info'}
             </Button>
