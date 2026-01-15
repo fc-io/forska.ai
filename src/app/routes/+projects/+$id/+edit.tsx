@@ -369,9 +369,9 @@ const EditProject = (): JSX.Element => {
   })
 
   const visibleOwnedPrompts = createMemo(() => {
-    return sortedOwnedPrompts().filter((prompt) => {
-      return !prompt.promptArchived
-    })
+    // Show all owned prompts (already linked to project) regardless of promptArchived
+    // They're already part of the project, so user should be able to see and manage them
+    return sortedOwnedPrompts()
   })
 
   const sortedImportedPrompts = createMemo(() => {
@@ -381,8 +381,10 @@ const EditProject = (): JSX.Element => {
   })
 
   const visibleImportedPrompts = createMemo(() => {
+    // Show imported prompts if they're enabled OR if the underlying prompt is not archived
+    // This ensures enabled prompts remain visible even after the base prompt is archived
     return sortedImportedPrompts().filter((prompt) => {
-      return !prompt.promptArchived
+      return prompt.enabled || !prompt.promptArchived
     })
   })
 
@@ -909,10 +911,17 @@ const EditProject = (): JSX.Element => {
                       return (
                         <div class="flex gap-2">
                           <div class="flex-1 space-y-2">
-                            <div class="text-[11px] text-gray-500">
-                              {promptItem.originalId
-                                ? `Prompt ID: ${String(promptItem.originalId).slice(0, 8)}`
-                                : 'New prompt'}
+                            <div class="flex items-center gap-2 text-[11px] text-gray-500">
+                              <span>
+                                {promptItem.originalId
+                                  ? `Prompt ID: ${String(promptItem.originalId).slice(0, 8)}`
+                                  : 'New prompt'}
+                              </span>
+                              <Show when={promptItem.promptArchived}>
+                                <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-200 text-gray-600">
+                                  Archived
+                                </span>
+                              </Show>
                             </div>
                             <input
                               type="text"
@@ -1008,6 +1017,11 @@ const EditProject = (): JSX.Element => {
                                 <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800">
                                   Imported
                                 </span>
+                                <Show when={promptItem.promptArchived}>
+                                  <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-200 text-gray-600">
+                                    Archived
+                                  </span>
+                                </Show>
                                 <Show when={promptItem.originalId}>
                                   <span class="inline-flex items-center px-2 py-1 rounded-full text-[11px] font-medium bg-gray-50 text-gray-600 font-mono">
                                     {promptItem.originalId}
