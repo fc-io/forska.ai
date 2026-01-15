@@ -8,19 +8,39 @@ export type PromptQueueEntry = {articleId: string; promptId: string}
 
 export type QueuePromptsResult = {promptEntries: PromptQueueEntry[]}
 
+const getScopedArticles = (db: PostgresJsDatabase<typeof schema>, projectId: string) => {
+  const scopedProjectArticles = db
+    .select({articleId: schema.projectArticles.articleId})
+    .from(schema.projectArticles)
+    .where(eq(schema.projectArticles.projectId, projectId))
+
+  const scopedImportRouteArticles = db
+    .select({articleId: schema.articleRouteLink.articleId})
+    .from(schema.projectRouteLink)
+    .innerJoin(
+      schema.articleRouteLink,
+      eq(schema.articleRouteLink.importRouteId, schema.projectRouteLink.importRouteId),
+    )
+    .where(eq(schema.projectRouteLink.projectId, projectId))
+
+  const scopedLegacyImportRouteArticles = db
+    .select({articleId: schema.articles.id})
+    .from(schema.projectRouteLink)
+    .innerJoin(schema.importRoute, eq(schema.projectRouteLink.importRouteId, schema.importRoute.id))
+    .innerJoin(schema.articles, eq(schema.articles.importRoute, schema.importRoute.route))
+    .where(eq(schema.projectRouteLink.projectId, projectId))
+
+  return scopedProjectArticles
+    .union(scopedImportRouteArticles)
+    .union(scopedLegacyImportRouteArticles)
+    .as('scoped_articles')
+}
+
 /**
  * Gets prompts (article × prompt pairs) that need to be judged for a project.
  * Each entry represents a single prompt that needs to be processed for a specific article.
  */
-const getQueryConditions = ({
-  jobId,
-  project,
-  hasImportRoutes,
-}: {
-  jobId: string
-  project: typeof schema.projects.$inferSelect
-  hasImportRoutes: boolean
-}) => {
+const getQueryConditions = ({jobId, project}: {jobId: string; project: typeof schema.projects.$inferSelect}) => {
   const conditions = []
 
   // Exclude article+prompt pairs already claimed/processed by this job
@@ -57,29 +77,6 @@ const getQueryConditions = ({
     )`,
   )
 
-  // Restrict to articles that belong to any of the project's import routes (via project_route_link)
-  // OR articles that are directly linked to the project via project_articles
-  // Optimization: If hasImportRoutes is false, we use an innerJoin in the main query instead, so we skip this condition.
-  if (hasImportRoutes) {
-    conditions.push(
-      sql`(
-        EXISTS (
-          SELECT 1
-          FROM ${schema.articleRouteLink} arl
-          JOIN ${schema.projectRouteLink} prl ON prl."import_route_id" = arl."import_route_id"
-          WHERE arl."article_id" = ${schema.articles.id}
-          AND prl."project_id" = ${project.id}
-        )
-        OR EXISTS (
-          SELECT 1
-          FROM ${schema.projectArticles} pa
-          WHERE pa."article_id" = ${schema.articles.id}
-          AND pa."project_id" = ${project.id}
-        )
-      )`,
-    )
-  }
-
   return conditions
 }
 
@@ -88,33 +85,19 @@ const getPromptsToQueue = async ({
   jobId,
   project,
   numberOfPromptsToGet,
-  hasImportRoutes,
 }: {
   db: PostgresJsDatabase<typeof schema>
   jobId: string
   project: typeof schema.projects.$inferSelect
   numberOfPromptsToGet: number
-  hasImportRoutes: boolean
 }): Promise<QueuePromptsResult> => {
-  const queryConditions = getQueryConditions({jobId, project, hasImportRoutes})
+  const scopedArticles = getScopedArticles(db, project.id)
+  const queryConditions = getQueryConditions({jobId, project})
 
-  // Cross join articles with project prompts to get all article×prompt pairs that need judging
-  // We use detailed query construction to safely cast types when optimizing with conditional joins
-  let initialQuery = db
+  const query = db
     .select({articleId: schema.articles.id, promptId: schema.projectPrompts.promptId})
-    .from(schema.articles)
-    .$dynamic()
-
-  // Optimization: If the project has NO import routes, we can strictly restrict to project_articles
-  // using an INNER JOIN. This is much faster than the OR EXISTS check for large article sets.
-  if (!hasImportRoutes) {
-    initialQuery = initialQuery.innerJoin(
-      schema.projectArticles,
-      and(eq(schema.projectArticles.articleId, schema.articles.id), eq(schema.projectArticles.projectId, project.id)),
-    )
-  }
-
-  const query = initialQuery
+    .from(scopedArticles)
+    .innerJoin(schema.articles, eq(scopedArticles.articleId, schema.articles.id))
     .innerJoin(
       schema.projectPrompts,
       and(eq(schema.projectPrompts.projectId, project.id), eq(schema.projectPrompts.enabled, true)),
@@ -125,9 +108,7 @@ const getPromptsToQueue = async ({
     )
     .limit(numberOfPromptsToGet)
 
-  // Use 'pp' alias to refer to project_prompts in the query conditions
   const promptEntries = await query
-  // console.log('6')
   return {promptEntries}
 }
 
@@ -139,16 +120,12 @@ export const judgmentsJobsCronGetPrompts = async (
   const db = getDatabase()
   // console.log('start getting prompts for project', projectId)
   // Run project fetch and enabled prompt count in parallel
-  const [projectResult, enabledPromptCount, routeLinksCount] = await Promise.all([
+  const [projectResult, enabledPromptCount] = await Promise.all([
     db.select().from(schema.projects).where(eq(schema.projects.id, projectId)).limit(1),
     db
       .select({count: sql<number>`count(*)`})
       .from(schema.projectPrompts)
       .where(and(eq(schema.projectPrompts.projectId, projectId), eq(schema.projectPrompts.enabled, true))),
-    db
-      .select({count: sql<number>`count(*)`})
-      .from(schema.projectRouteLink)
-      .where(eq(schema.projectRouteLink.projectId, projectId)),
   ])
 
   // console.log('got project and enabled prompt count')
@@ -169,7 +146,5 @@ export const judgmentsJobsCronGetPrompts = async (
   }
   // console.log('4')
 
-  const hasImportRoutes = routeLinksCount[0] ? routeLinksCount[0].count > 0 : false
-
-  return await getPromptsToQueue({db, jobId, project, numberOfPromptsToGet, hasImportRoutes})
+  return await getPromptsToQueue({db, jobId, project, numberOfPromptsToGet})
 }
