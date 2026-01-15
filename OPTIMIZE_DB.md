@@ -82,11 +82,14 @@ Each check: run `EXPLAIN (ANALYZE, BUFFERS)` real params; fill `query plan:` (in
   - query plan (reset update): estimate; top=ModifyTable; index=articles_full_text_conversion_status_idx
 
 ### ProjectArticlesRoutes (`src/server/routes/ProjectArticlesRoutes.ts`)
-- [ ] GET `/api/projects/:id/articles`
+- [x] GET `/api/projects/:id/articles`
   - impact: High (core project UI list)
   - index: `project_articles_unique` | `project_articles_project_idx`
-  - result: unique hot; pkey 0
-  - query plan:
+  - result: unique hot (10M scans); project_idx used for count
+  - query plan (count): analyze; top=Finalize Aggregate; index=project_articles_project_idx (Index Only Scan); ms=99; buf=4317/1; parallel workers=2
+  - query plan (list): analyze; top=Nested Loop Left Join; index=articles_created_idx (wrong order!)+project_articles_unique; ms=14234.9; buf=2889399/858673; loops=883988 on unique idx
+  - improvement impact: High (14.2s for paginated list; blocks project UI)
+  - potential improvement: rewrite query to start from project_articles (filter first) then join articles; add composite index (project_id, article_id) with articles.created_at via subquery; consider keyset pagination
 - [ ] DELETE `/api/projects/:id/articles/:articleId`
   - impact: Low (point delete)
   - index: `project_articles_unique`
