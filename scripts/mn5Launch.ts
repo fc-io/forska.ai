@@ -215,13 +215,18 @@ const isLocalSGLangResponding = async (localPort: number): Promise<boolean> => {
 const killSshListenersOnPort = async (port: number, maxRetries = 5): Promise<boolean> => {
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     const listeners = await getLocalListenersOnPort(port)
-    const sshPids = listeners
-      .filter((l) => {
-        return l.command === 'ssh' || l.command === 'autossh'
-      })
-      .map((l) => {
-        return l.pid
-      })
+    // Deduplicate PIDs (lsof shows same PID twice for IPv4/IPv6)
+    const sshPids = [
+      ...new Set(
+        listeners
+          .filter((l) => {
+            return l.command === 'ssh' || l.command === 'autossh'
+          })
+          .map((l) => {
+            return String(l.pid)
+          }),
+      ),
+    ]
 
     if (sshPids.length === 0) {
       return true // Port is free
@@ -229,7 +234,8 @@ const killSshListenersOnPort = async (port: number, maxRetries = 5): Promise<boo
 
     // Use SIGKILL after first attempt to force cleanup
     const signal = attempt > 0 ? '-9' : '-15'
-    await $`kill ${signal} ${sshPids.join(' ')} 2>/dev/null || true`.quiet()
+    // Use array spread to pass PIDs as separate arguments
+    await $`kill ${signal} ${sshPids}`.nothrow().quiet()
 
     // Wait progressively longer for process to release port
     await sleep(300 + attempt * 200)
@@ -251,11 +257,17 @@ const killAllListenersOnPort = async (port: number): Promise<boolean> => {
     const listeners = await getLocalListenersOnPort(port)
     if (listeners.length === 0) return true
 
-    const pids = listeners.map((l) => {
-      return l.pid
-    })
+    // Deduplicate PIDs (lsof shows same PID twice for IPv4/IPv6)
+    const pids = [
+      ...new Set(
+        listeners.map((l) => {
+          return String(l.pid)
+        }),
+      ),
+    ]
     const signal = attempt > 0 ? '-9' : '-15'
-    await $`kill ${signal} ${pids.join(' ')} 2>/dev/null || true`.quiet()
+    // Use array spread to pass PIDs as separate arguments
+    await $`kill ${signal} ${pids}`.nothrow().quiet()
     await sleep(500)
   }
 
@@ -287,13 +299,24 @@ const ensureLocalPortReadyForTunnel = async (localPort: number): Promise<'ready'
   })
 
   if (!onlySsh) {
-    log(
-      `Local port ${localPort} already in use: ${listeners
-        .map((l) => {
-          return `${l.command}:${l.pid}`
-        })
-        .join(', ')}`,
-    )
+    const processInfo = listeners
+      .map((l) => {
+        return `${l.command} (PID ${l.pid})`
+      })
+      .join(', ')
+    log(`Local port ${localPort} already in use by: ${processInfo}`)
+    log('')
+    log('To inspect the process(es):')
+    log(`  lsof -n -P -iTCP:${localPort} -sTCP:LISTEN`)
+    log('')
+    log('To kill if safe:')
+    const pids = listeners
+      .map((l) => {
+        return l.pid
+      })
+      .join(' ')
+    log(`  kill ${pids}`)
+    log('')
     return 'in_use'
   }
 
