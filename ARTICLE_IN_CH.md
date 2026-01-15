@@ -54,7 +54,9 @@ A judgment qualifies as "assessed" if **all** are true:
 1. `deleted_at IS NULL`
 2. `is_answered = true`
 3. Content settings match project: `(model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)` = project values
-4. `prompt_id` ∈ enabled prompts (from `project_prompts WHERE enabled = true`)
+4. `prompt_id` ∈ enabled prompts (from `project_prompts WHERE enabled = true AND archived = false`)
+
+> ⚠️ **`project_prompts` semantics**: Both `enabled` and `archived` columns exist. A prompt is considered "active" only when `enabled = true AND archived = false`. Ensure CH and PG queries agree on this to prevent drift.
 
 > ⚠️ **Current PG inconsistencies**:
 > - `JudgmentsJobsRoutes.ts` (line ~124): Jobs count join does NOT filter `is_answered`, `deleted_at`, or `project_prompts.enabled`
@@ -84,13 +86,85 @@ Article is "unassessed" if missing ≥1 assessed judgment for any enabled prompt
 
 ## Tables to replicate in ClickHouse
 
-> ⚠️ **Storage concern**: `articles` table has heavy columns (`full_text`, `full_text_html`, `full_text_pdf`, `full_text_assets`). MaterializedPostgreSQL replicates ALL columns → high storage/WAL/ingest cost that may dwarf query wins.
+### Articles replication options
 
-**Approach: Hydrate from PG**
-Do NOT replicate articles at all. Query CH for article IDs only, then hydrate metadata from Postgres via `WHERE id IN (...)`. Avoids trigger overhead + extra table.
+The `articles` table has heavy columns (`full_text`, `full_text_html`, `full_text_pdf`, `full_text_assets`) that impact storage and WAL bandwidth (the volume of data streamed over PostgreSQL's logical replication — larger rows = more network/disk I/O per change). Choose one of three approaches:
+
+| Option | What's replicated | CH Storage | WAL Bandwidth | Sort in CH? | Hydrate from PG? |
+|--------|-------------------|------------|---------------|-------------|------------------|
+| **(A) No replication** | Nothing | None | None | ❌ No | ✅ Full (IDs + all metadata) |
+| **(B) Skinny replica** | `id`, timestamps only | ~50-100 bytes/row | Low | ✅ Yes | ✅ Title/abstract/etc. |
+| **(C.2) Metadata replica** | All except `full_text_*` | ~1-5 KB/row | Medium | ✅ Yes | ❌ Not needed |
+| **(C.1) Full replica** | All columns | ~10-500 KB/row | High | ✅ Yes | ❌ Not needed |
+
+**Option A: No replication (hydrate from PG)**
+- Query CH for article IDs only, then hydrate from Postgres via `WHERE id IN (...)`
+- ⚠️ CH cannot sort by `article_updated_at` — each hydrated batch from PG is sorted independently
+- Works well for **count-only endpoints**; causes page-boundary inconsistencies for **paginated lists**
+
+**Option B: Skinny replica (recommended for list/pagination)**
+- Replicate only `articles.id`, `article_created_at`, `article_updated_at`
+- Enables correct `ORDER BY article_updated_at DESC` pagination in CH
+- Still hydrate title, abstract, etc. from PG after getting sorted IDs
+- Requires a **PostgreSQL view or separate table** since MaterializedPostgreSQL replicates all columns by default:
+  ```sql
+  -- Option B.1: Create a view (CH may not support replicating views — check version)
+  CREATE VIEW articles_skinny AS SELECT id, article_created_at, article_updated_at FROM articles;
+
+  -- Option B.2: Trigger-maintained shadow table (more complex but guaranteed to work)
+  CREATE TABLE articles_ch_sync (id UUID PRIMARY KEY, article_created_at TIMESTAMPTZ, article_updated_at TIMESTAMPTZ);
+  -- + INSERT/UPDATE/DELETE triggers on articles
+  ```
+
+**Option C: Full replication**
+- Replicate the `articles` table to avoid any PG hydration round-trips
+- Maximum query flexibility in CH (search, sort, filter all in one place)
+- Two sub-approaches:
+  ```sql
+  -- Option C.1: True full replication (includes full_text columns)
+  -- Just add 'articles' to materialized_postgresql_tables_list
+  -- ⚠️ High storage: 10-500 KB/row × millions of articles
+  -- ⚠️ High WAL bandwidth: full payload on every INSERT/UPDATE
+  -- Use when: you want full-text search in CH, or have few articles
+
+  -- Option C.2: Metadata-only replication (excludes heavy columns)
+  -- Replicate everything EXCEPT full_text, full_text_html, full_text_pdf, full_text_assets
+  -- Requires view or shadow table (like Option B) since MaterializedPostgreSQL can't exclude columns:
+  CREATE VIEW articles_metadata AS
+  SELECT id, article_created_at, article_updated_at, title, abstract, doi,
+         openalex_id, import_route, source_url, source_name /* etc - all except full_text_* */
+  FROM articles;
+  -- OR trigger-maintained shadow table
+
+  -- Use when: you want title/abstract in CH for filtering, but not full-text storage cost
+  ```
+
+**Recommendation: C.1 (full replication)**
+
+The idiomatic ClickHouse approach — just replicate everything:
+- ✅ **Simplest setup**: Just add `articles` to the table list, no views/triggers needed
+- ✅ CH can sort, filter, and display article lists without PG round-trips
+- ✅ Columnar storage: unused columns (full_text) don't hurt query performance
+- ✅ Compression shrinks text 5-10×, so storage cost is manageable
+- ⚠️ Higher WAL bandwidth during initial sync and on article updates
+- ⚠️ Monitor disk usage; scale CH storage if needed
+
+**Potential downsides of C.1:**
+
+| Downside | Impact | Mitigation |
+|----------|--------|------------|
+| **Initial sync time** | Large articles table × full rows = longer first sync | One-time cost; run during low-traffic window |
+| **WAL bandwidth** | Full row sent on every UPDATE | Acceptable if article updates are infrequent |
+| **Disk usage** | ~10-500 KB/article before compression | Compression helps; monitor and scale storage |
+| **Replication lag** | CH lags PG by 1-5s | Same for all options; use circuit breaker for critical paths |
+
+Fallback: If storage becomes a concern, switch to C.2 (metadata-only) or B (skinny + PG hydration).
+
+### Tables to replicate
 
 | Postgres Table         | Key Columns                                                         | Notes                          |
 |------------------------|---------------------------------------------------------------------|--------------------------------|
+| `articles`             | `id`, `article_created_at`, `article_updated_at`, `title`, `abstract`, ... | **Full replication (C.1)** |
 | `projects`             | `id`, `model_id`, `date_from`, `date_to`, `use_*`, `archived` | Small, replicate fully |
 | `project_prompts`      | `project_id`, `prompt_id`, `enabled`                                | Small, replicate fully |
 | `judgments`            | `article_id`, `prompt_id`, `model_id`, `is_answered`, `deleted_at`, `use_*` | Main assessment table |
@@ -123,6 +197,21 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO ch_replicator;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO ch_replicator;
 ```
 
+> ⚠️ **`ALTER DEFAULT PRIVILEGES` ownership caveat**: This only applies to tables created by the *current role* (or the role specified via `FOR ROLE`). If database migrations run as a different user (e.g., `forska_admin`), new tables they create will NOT inherit grants to `ch_replicator`. To handle this:
+> ```sql
+> -- Run as superuser/owner of migration role:
+> ALTER DEFAULT PRIVILEGES FOR ROLE forska_admin IN SCHEMA public GRANT SELECT ON TABLES TO ch_replicator;
+> ```
+>
+> **Publication/Replication Slot**: MaterializedPostgreSQL creates its own publication and replication slot automatically. However, some setups may require explicit creation:
+> ```sql
+> -- If CH requires explicit publication (check CH version docs):
+> CREATE PUBLICATION forska_ch_pub FOR TABLE projects, project_prompts, judgments, project_articles, project_route_link, article_route_link;
+>
+> -- Replication slot is typically created by CH, but verify slot exists:
+> SELECT * FROM pg_replication_slots WHERE slot_name LIKE '%ch%';
+> ```
+
 > ⚠️ **WAL growth**: If CH consumer lags or goes offline, the replication slot holds WAL.
 > Monitor with: `SELECT slot_name, pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)) FROM pg_replication_slots;`
 
@@ -136,7 +225,7 @@ CREATE DATABASE pg ENGINE = MaterializedPostgreSQL(
   'forska_db',
   'ch_replicator',
   'xxx'
-) SETTINGS materialized_postgresql_tables_list = 'projects,project_prompts,judgments,project_articles,project_route_link,article_route_link';
+) SETTINGS materialized_postgresql_tables_list = 'articles,projects,project_prompts,judgments,project_articles,project_route_link,article_route_link';
 ```
 
 > 📌 Use a separate DB name (`pg`) to avoid collision with existing `forska.judgments` (Parquet-based).
@@ -186,7 +275,7 @@ WITH
     WHERE prl.project_id = 'X'
   ),
   enabled_prompts AS (
-    SELECT prompt_id FROM pg.project_prompts WHERE project_id = 'X' AND enabled = true
+    SELECT prompt_id FROM pg.project_prompts WHERE project_id = 'X' AND enabled = true AND archived = false
   ),
   assessed AS (
     SELECT j.article_id
@@ -205,22 +294,46 @@ WITH
   )
 SELECT
   CASE WHEN (SELECT COUNT(*) FROM enabled_prompts) = 0 THEN 0
-       ELSE (SELECT COUNT(*) FROM scoped s WHERE s.article_id NOT IN (SELECT article_id FROM assessed))
+       ELSE (
+         SELECT COUNT(*) FROM scoped s
+         WHERE NOT EXISTS (
+           SELECT 1 FROM assessed a WHERE a.article_id = s.article_id
+         )
+       )
   END AS unassessed_count;
+
+-- NOTE: Prefer NOT EXISTS over NOT IN to avoid NULL semantics issues.
+-- NOT IN (subquery) returns unknown/false if subquery contains NULL,
+-- which can silently drop results. NOT EXISTS is NULL-safe."
 ```
 
 ---
 
 ## ClickHouse query building blocks
 
+> ⚠️ **Not SQL functions**: ClickHouse doesn't support parameterized SQL functions like `scoped_article_ids(projectId)`. These are **query templates** or **CTEs** that must be inlined with `WHERE project_id = ?`. They can also be implemented as views over all `(project_id, article_id)` pairs, filtered at query time.
+
 Create in `forska_helpers` DB (not `pg.*`):
 
-| Function | Returns | Notes |
-|----------|---------|-------|
-| `scoped_article_ids(projectId)` | `DISTINCT article_id` | 2-way union (direct + route-based) |
-| `enabled_prompt_ids(projectId)` | `Array(UUID)` or subquery | From `project_prompts WHERE enabled = true` |
-| `assessed_article_ids(projectId)` | `DISTINCT article_id` | Articles with ALL enabled prompts judged |
-| `unassessed_article_ids(projectId)` | `DISTINCT article_id` | `scoped - assessed` (guard for 0 prompts) |
+| Query Template | Returns | Notes |
+|----------------|---------|-------|
+| `scoped_article_ids` CTE | `DISTINCT article_id` | 2-way union (direct + route-based), filter by `project_id = ?` |
+| `enabled_prompt_ids` CTE | `DISTINCT prompt_id` | From `project_prompts WHERE project_id = ? AND enabled = true AND archived = false` |
+| `assessed_article_ids` CTE | `DISTINCT article_id` | Articles with ALL enabled prompts judged |
+| `unassessed_article_ids` CTE | `DISTINCT article_id` | `scoped - assessed` (guard for 0 prompts) |
+
+Alternatively, create parameterizable **views** over all projects:
+```sql
+-- View: all scoped (project_id, article_id) pairs
+CREATE VIEW forska_helpers.scoped_articles AS
+SELECT project_id, article_id FROM pg.project_articles
+UNION DISTINCT
+SELECT prl.project_id, arl.article_id
+FROM pg.project_route_link prl
+JOIN pg.article_route_link arl ON arl.import_route_id = prl.import_route_id;
+
+-- Usage: SELECT article_id FROM forska_helpers.scoped_articles WHERE project_id = ?
+```
 
 ---
 
@@ -271,7 +384,7 @@ WITH
     WHERE prl.project_id = ?
   ),
   enabled_prompts AS (
-    SELECT prompt_id FROM pg.project_prompts WHERE project_id = ? AND enabled = true
+    SELECT prompt_id FROM pg.project_prompts WHERE project_id = ? AND enabled = true AND archived = false
   ),
   -- assessed returns (article_id, prompt_id) pairs, not just article_id
   assessed_pairs AS (
@@ -385,24 +498,40 @@ WHERE slot_type = 'logical';
 ## Rollout plan
 
 ### Phase 1: PG cleanup
-- [ ] Unify assessed semantics in all PG queries (add `is_answered`, `deleted_at`, `enabled` filters)
+- [ ] Unify assessed semantics in all PG queries (add `is_answered`, `deleted_at`, `enabled`, `archived` filters)
 - [ ] Backfill `article_route_link` for legacy articles
+- [ ] Deprecate legacy scope path (Path 3) from cron after backfill
 
 ### Phase 2: Infrastructure
-- [ ] Enable logical replication in Postgres
-- [ ] Create CH replication user with appropriate grants
-- [ ] Create `pg` database in ClickHouse (excluding full `articles`)
-- [ ] Create `forska_helpers` database for views
-- [ ] Verify row counts match between PG and CH
+- [ ] Enable logical replication in Postgres (`wal_level = logical`)
+- [ ] Create CH replication user with appropriate grants (including `FOR ROLE` if migrations run as different user)
+- [ ] Verify CH version supports MaterializedPostgreSQL with expected features
+- [ ] **Schedule initial sync during low-traffic window** (full `articles` replication may take time)
+- [ ] Create `pg` database in ClickHouse with full `articles` table (C.1 approach):
+  ```sql
+  CREATE DATABASE pg ENGINE = MaterializedPostgreSQL(...)
+  SETTINGS materialized_postgresql_tables_list = 'articles,projects,project_prompts,judgments,project_articles,project_route_link,article_route_link';
+  ```
+- [ ] Create `forska_helpers` database for views/CTEs
+- [ ] Verify row counts match between PG and CH (especially `articles`)
 - [ ] Confirm monitoring query works in CH version
+- [ ] **Monitor CH disk usage** after initial sync; scale storage if needed
 
 ### Phase 3: Deploy
-- [ ] Implement CH queries (replaces Postgres queries directly)
+- [ ] Implement CH queries for:
+  - [ ] Jobs page: unassessed count
+  - [ ] Reviews/unassessed page: paginated list (now uses CH `ORDER BY article_updated_at`)
+  - [ ] Cron queue fill: (article, prompt) pairs
 - [ ] Add 0-prompt guard to all queries
+- [ ] Add circuit breaker: fallback to PG if CH unavailable
+- [ ] Deploy to staging; verify counts match PG
 - [ ] Deploy to production
-- [ ] Observe query latency
+- [ ] Observe query latency + CH disk usage
 
 ### Phase 4: Evaluate
 - [ ] Compare CH vs PG counts for sample projects
+- [ ] Verify pagination consistency (no page-boundary issues)
+- [ ] Monitor WAL slot size on PG side
 - [ ] If noticeable improvement → done
-- [ ] If no improvement or issues → revert commit, reassess approach
+- [ ] If storage becomes a concern → consider switching to C.2 (metadata-only)
+- [ ] If other issues → revert commit, reassess approach
