@@ -227,8 +227,7 @@ export const getUnassessedCountFromClickHouse = async (params: UnassessedCountPa
     SELECT COUNT(*) as unassessed_count
     FROM scoped s
     INNER JOIN forska.articles a ON s.article_id = a.id
-    LEFT JOIN assessed ass ON s.article_id = ass.article_id
-    WHERE ass.article_id IS NULL${dateConditionsStr}
+    WHERE s.article_id NOT IN (SELECT article_id FROM assessed)${dateConditionsStr}
   `
 
   console.log('[CH] Unassessed count query:', query.substring(0, 300) + '...')
@@ -271,8 +270,20 @@ export const getUnassessedArticlesFromClickHouse = async (
   } = params
 
   console.time('ch:unassessed_articles')
+  console.log('[CH] Params:', {
+    projectId,
+    projectModelId,
+    dateFrom: projectDateFrom?.toISOString(),
+    dateTo: projectDateTo?.toISOString(),
+    importRouteIds: importRouteIds.length,
+    useTitle,
+    useAbstract,
+    useFulltext,
+    useFulltextNoImages,
+  })
 
   const promptIds = await fetchEnabledPromptIds(projectId)
+  console.log(`[CH] Enabled prompts: ${promptIds.length}`, promptIds)
 
   if (promptIds.length === 0) {
     console.timeEnd('ch:unassessed_articles')
@@ -315,8 +326,7 @@ export const getUnassessedArticlesFromClickHouse = async (
         SELECT s.article_id AS article_id
         FROM scoped s
         INNER JOIN forska.articles a ON s.article_id = a.id
-        LEFT JOIN assessed ass ON s.article_id = ass.article_id
-        WHERE ass.article_id IS NULL${dateConditionsStr}${searchCondition}
+        WHERE s.article_id NOT IN (SELECT article_id FROM assessed)${dateConditionsStr}${searchCondition}
       )`
 
   const countQuery = `
@@ -341,10 +351,192 @@ export const getUnassessedArticlesFromClickHouse = async (
 
   console.log('[CH] Unassessed articles query:', articlesQuery.substring(0, 300) + '...')
 
-  const [countResult, articlesResult] = await Promise.all([
+  const diagnosticQuery = `
+    WITH
+      ${buildScopedArticlesCTE(projectId, importRouteIds)},
+      enabled_prompts AS (
+        SELECT prompt_id FROM pg.project_prompts
+        WHERE project_id = '${escapeClickHouseString(projectId)}'
+          AND enabled = true
+          AND archived = false
+      ),
+      assessed AS (
+        SELECT j.article_id
+        FROM pg.judgments j
+        WHERE j.article_id IN (SELECT article_id FROM scoped)
+          AND j.deleted_at IS NULL
+          AND j.is_answered = true
+          AND j.model_id = '${modelIdEscaped}'
+          AND j.use_title = ${useTitle}
+          AND j.use_abstract = ${useAbstract}
+          AND j.use_fulltext = ${useFulltext}
+          AND j.use_fulltext_no_images = ${useFulltextNoImages}
+          AND j.prompt_id IN (SELECT prompt_id FROM enabled_prompts)
+        GROUP BY j.article_id
+        HAVING countDistinct(j.prompt_id) >= (SELECT COUNT(*) FROM enabled_prompts)
+      ),
+      unassessed_no_date AS (
+        SELECT s.article_id
+        FROM scoped s
+        INNER JOIN forska.articles a ON s.article_id = a.id
+        WHERE s.article_id NOT IN (SELECT article_id FROM assessed)
+      ),
+      unassessed_with_date AS (
+        SELECT s.article_id
+        FROM scoped s
+        INNER JOIN forska.articles a ON s.article_id = a.id
+        WHERE s.article_id NOT IN (SELECT article_id FROM assessed)${dateConditionsStr}
+      )
+    SELECT
+      (SELECT COUNT(*) FROM scoped) as scoped_count,
+      (SELECT COUNT(*) FROM enabled_prompts) as enabled_prompts_count,
+      (SELECT COUNT(*) FROM assessed) as assessed_count,
+      (SELECT COUNT(*) FROM unassessed_no_date) as unassessed_no_date_count,
+      (SELECT COUNT(*) FROM unassessed_with_date) as unassessed_with_date_count
+  `
+
+  const scopedSampleQuery = `
+    WITH ${buildScopedArticlesCTE(projectId, importRouteIds)}
+    SELECT
+      article_id,
+      toTypeName(article_id) as article_id_type
+    FROM scoped
+    LIMIT 3
+  `
+
+  const articlesSampleQuery = `
+    SELECT
+      id,
+      toTypeName(id) as id_type
+    FROM forska.articles
+    LIMIT 3
+  `
+
+  const joinTestQuery = `
+    WITH ${buildScopedArticlesCTE(projectId, importRouteIds)}
+    SELECT COUNT(*) as joined_count
+    FROM scoped s
+    INNER JOIN forska.articles a ON toString(s.article_id) = toString(a.id)
+  `
+
+  const dateFilterTestQuery = `
+    WITH ${buildScopedArticlesCTE(projectId, importRouteIds)}
+    SELECT
+      COUNT(*) as total_scoped,
+      countIf(a.article_created_at IS NULL) as null_dates,
+      countIf(a.article_created_at IS NOT NULL) as has_dates,
+      countIf(a.article_created_at >= toDateTime64('${projectDateFrom ? formatDateForClickHouse(projectDateFrom) : '1970-01-01 00:00:00.000'}', 3)
+        AND a.article_created_at <= toDateTime64('${projectDateTo ? formatDateForClickHouse(projectDateTo) : '2099-12-31 23:59:59.999'}', 3)) as matches_date_filter,
+      min(a.article_created_at) as min_date,
+      max(a.article_created_at) as max_date
+    FROM scoped s
+    INNER JOIN forska.articles a ON s.article_id = a.id
+  `
+
+  const [
+    countResult,
+    articlesResult,
+    diagnosticResult,
+    scopedSampleResult,
+    articlesSampleResult,
+    joinTestResult,
+    dateFilterTestResult,
+  ] = await Promise.all([
     client.query({query: countQuery, format: 'JSONEachRow'}),
     client.query({query: articlesQuery, format: 'JSONEachRow'}),
+    client.query({query: diagnosticQuery, format: 'JSONEachRow'}),
+    client.query({query: scopedSampleQuery, format: 'JSONEachRow'}).catch((e) => {
+      console.log('[CH] Scoped sample query failed:', e.message)
+      return null
+    }),
+    client.query({query: articlesSampleQuery, format: 'JSONEachRow'}).catch((e) => {
+      console.log('[CH] Articles sample query failed:', e.message)
+      return null
+    }),
+    client.query({query: joinTestQuery, format: 'JSONEachRow'}).catch((e) => {
+      console.log('[CH] Join test query failed:', e.message)
+      return null
+    }),
+    client.query({query: dateFilterTestQuery, format: 'JSONEachRow'}).catch((e) => {
+      console.log('[CH] Date filter test query failed:', e.message)
+      return null
+    }),
   ])
+
+  const diagnosticData = await diagnosticResult.json<{
+    scoped_count: string
+    enabled_prompts_count: string
+    assessed_count: string
+    unassessed_no_date_count: string
+    unassessed_with_date_count: string
+  }>()
+  console.log('[CH] Diagnostic counts:', diagnosticData[0])
+
+  if (scopedSampleResult) {
+    const scopedSample = await scopedSampleResult.json()
+    console.log('[CH] Scoped sample (type check):', scopedSample)
+  }
+
+  if (articlesSampleResult) {
+    const articlesSample = await articlesSampleResult.json()
+    console.log('[CH] Articles sample (type check):', articlesSample)
+  }
+
+  if (joinTestResult) {
+    const joinTest = await joinTestResult.json<{joined_count: string}>()
+    console.log('[CH] Join test with toString():', joinTest[0])
+  }
+
+  if (dateFilterTestResult) {
+    const dateFilterTest = await dateFilterTestResult.json()
+    console.log('[CH] Date filter test:', dateFilterTest[0])
+  }
+
+  const assessedOverlapQuery = `
+    WITH
+      ${buildScopedArticlesCTE(projectId, importRouteIds)},
+      enabled_prompts AS (
+        SELECT prompt_id FROM pg.project_prompts
+        WHERE project_id = '${escapeClickHouseString(projectId)}'
+          AND enabled = true AND archived = false
+      ),
+      assessed AS (
+        SELECT j.article_id
+        FROM pg.judgments j
+        WHERE j.article_id IN (SELECT article_id FROM scoped)
+          AND j.deleted_at IS NULL AND j.is_answered = true
+          AND j.model_id = '${modelIdEscaped}'
+          AND j.use_title = ${useTitle} AND j.use_abstract = ${useAbstract}
+          AND j.use_fulltext = ${useFulltext} AND j.use_fulltext_no_images = ${useFulltextNoImages}
+          AND j.prompt_id IN (SELECT prompt_id FROM enabled_prompts)
+        GROUP BY j.article_id
+        HAVING countDistinct(j.prompt_id) >= (SELECT COUNT(*) FROM enabled_prompts)
+      ),
+      joined_test AS (
+        SELECT s.article_id as scoped_id, a.id as forska_id
+        FROM scoped s
+        INNER JOIN forska.articles a ON s.article_id = a.id
+        LIMIT 5
+      ),
+      assessed_in_forska AS (
+        SELECT COUNT(*) as cnt
+        FROM assessed ass
+        INNER JOIN forska.articles a ON ass.article_id = a.id
+      )
+    SELECT
+      (SELECT COUNT(*) FROM joined_test) as join_sample_count,
+      (SELECT cnt FROM assessed_in_forska) as assessed_in_forska_count,
+      (SELECT any(scoped_id) FROM joined_test) as sample_scoped_id,
+      (SELECT any(forska_id) FROM joined_test) as sample_forska_id
+  `
+
+  try {
+    const assessedOverlapResult = await client.query({query: assessedOverlapQuery, format: 'JSONEachRow'})
+    const assessedOverlap = await assessedOverlapResult.json()
+    console.log('[CH] Assessed overlap test:', assessedOverlap[0])
+  } catch (e: unknown) {
+    console.log('[CH] Assessed overlap query failed:', (e as Error).message?.substring(0, 200))
+  }
 
   const countData = await countResult.json<{total_count: string}>()
   const articlesData = await articlesResult.json<{

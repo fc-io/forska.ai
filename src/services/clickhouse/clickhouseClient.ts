@@ -48,12 +48,12 @@ export const getClickhouseClient = (): ClickHouseClient => {
         output_format_json_quote_64bit_integers: 0,
         output_format_json_quote_denormals: 1,
         // Memory management: prevent OOM on large aggregations
-        // When GROUP BY needs more than 4GB, spill to disk
-        max_bytes_before_external_group_by: '4294967296', // 4 GB
-        // Max memory per query: 8GB (allows headroom before external GROUP BY kicks in)
-        max_memory_usage: '8589934592', // 8 GB
+        // When GROUP BY needs more than 8GB, spill to disk
+        max_bytes_before_external_group_by: '8589934592', // 8 GB
+        // Max memory per query: 16GB (allows headroom before external GROUP BY kicks in)
+        max_memory_usage: '17179869184', // 16 GB
         // Use external sorting when ORDER BY exceeds memory
-        max_bytes_before_external_sort: '4294967296', // 4 GB
+        max_bytes_before_external_sort: '8589934592', // 8 GB
       },
     })
   }
