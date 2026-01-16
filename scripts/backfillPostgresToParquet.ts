@@ -82,6 +82,10 @@ const fetchBatch = async (offset: number, limit: number): Promise<DenormalizedJu
     article_imported_by: string | null
     prompt_id: string
     model_id: string
+    use_title: boolean
+    use_abstract: boolean
+    use_fulltext: boolean
+    use_fulltext_no_images: boolean
     answered_original: string | null
     answered_original_as_array: string[] | null
     explanation: string | null
@@ -101,6 +105,10 @@ const fetchBatch = async (offset: number, limit: number): Promise<DenormalizedJu
       COALESCE(j.article_imported_by, a.imported_by) as article_imported_by,
       j.prompt_id::text,
       j.model_id::text,
+      j.use_title,
+      j.use_abstract,
+      j.use_fulltext,
+      j.use_fulltext_no_images,
       j.answered_original,
       j.answered_original_as_array,
       j.explanation,
@@ -128,6 +136,10 @@ const fetchBatch = async (offset: number, limit: number): Promise<DenormalizedJu
       articleImportedBy: row.article_imported_by,
       promptId: row.prompt_id,
       modelId: row.model_id,
+      useTitle: row.use_title ?? true,
+      useAbstract: row.use_abstract ?? true,
+      useFulltext: row.use_fulltext ?? false,
+      useFulltextNoImages: row.use_fulltext_no_images ?? false,
       answeredOriginal: row.answered_original,
       answeredOriginalAsArray: row.answered_original_as_array,
       explanation: row.explanation,

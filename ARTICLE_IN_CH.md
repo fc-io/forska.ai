@@ -606,16 +606,24 @@ WHERE slot_type = 'logical';
 - `config/clickhouse/INVESTIGATE_ARTICLE_MISMATCH.md` - Investigation and resolution details
 
 ### Phase 3: Deploy
-**Status**: ✅ READY TO PROCEED
+**Status**: 🚧 IN PROGRESS
 
-- [ ] Implement CH queries for:
-  - [ ] Jobs page: unassessed count
-  - [ ] Reviews/unassessed page: paginated list (now uses CH `ORDER BY article_updated_at`)
-  - [ ] Cron queue fill: (article, prompt) pairs
-- [ ] Add 0-prompt guard to all queries
+- [x] Implement CH queries for:
+  - [x] Jobs page: unassessed count (`getUnassessedCountFromClickHouse`)
+  - [x] Reviews/unassessed page: paginated list (`getUnassessedArticlesFromClickHouse`)
+  - [x] Cron queue fill: (article, prompt) pairs (`getUnassessedPairsFromClickHouse`)
+- [x] Add 0-prompt guard to all queries (returns 0/empty if no enabled prompts)
 - [ ] Deploy to staging; verify counts match PG
 - [ ] Deploy to production
 - [ ] Observe query latency + CH disk usage
+
+**Implementation Notes**:
+- Created `src/services/clickhouse/unassessedArticlesClickHouse.ts` with 3 CH query functions
+- Updated `JudgmentsJobsRoutes.ts` to use CH for `/api/judgmentsjobs-unassessed-count`
+- Updated `projectsRoutesGetArticlesReviewsUnassessed.ts` to use CH for `/api/articlesreviewsunassessed`
+- Updated `judgmentsJobsCronGetPrompts.ts` to use CH for cron queue fill
+- Added `onConflictDoNothing` to queue insert (CH can't check `judgments_jobs_prompts` table)
+- CH queries use `pg.*` tables (MaterializedPostgreSQL) + `forska.articles` (MergeTree workaround)
 
 ### Phase 4: Evaluate
 - [ ] Compare CH vs PG counts for sample projects

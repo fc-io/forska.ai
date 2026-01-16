@@ -14,6 +14,7 @@ import {
   projects,
   tokenUse,
 } from '../../db/schema'
+import {getUnassessedCountFromClickHouse} from '../../services/clickhouse/unassessedArticlesClickHouse.ts'
 import {requireAdminAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase'
 import {withErrorHandler} from '../utils/routeErrorHandler'
@@ -39,133 +40,6 @@ const getUnassessedCountCacheKey = (
   const routes = importRouteIds.slice().sort().join(',')
   const content = `${useTitle}|${useAbstract}|${useFulltext}|${useFulltextNoImages}`
   return `${projectId}|${projectModelId}|${from}|${to}|${routes}|${content}`
-}
-
-const buildProjectDateConditions = ({
-  projectDateFrom,
-  projectDateTo,
-}: {
-  projectDateFrom: Date | null | undefined
-  projectDateTo: Date | null | undefined
-}): SQL[] => {
-  const conditions: SQL[] = []
-
-  if (projectDateFrom) {
-    conditions.push(gte(articles.articleCreatedAt, projectDateFrom))
-  }
-
-  if (projectDateTo) {
-    conditions.push(lte(articles.articleCreatedAt, projectDateTo))
-  }
-
-  return conditions
-}
-
-const getUnassessedArticlesCount = async ({
-  db,
-  projectId,
-  projectModelId,
-  projectDateFrom,
-  projectDateTo,
-  importRouteIds,
-  useTitle,
-  useAbstract,
-  useFulltext,
-  useFulltextNoImages,
-}: {
-  db: Database
-  projectId: string
-  projectModelId: string
-  projectDateFrom: Date | null | undefined
-  projectDateTo: Date | null | undefined
-  importRouteIds: string[]
-  useTitle: boolean
-  useAbstract: boolean
-  useFulltext: boolean
-  useFulltextNoImages: boolean
-}): Promise<number> => {
-  const cacheKey = getUnassessedCountCacheKey(
-    projectId,
-    projectModelId,
-    projectDateFrom,
-    projectDateTo,
-    importRouteIds,
-    useTitle,
-    useAbstract,
-    useFulltext,
-    useFulltextNoImages,
-  )
-  const cached = unassessedCountCache.get(cacheKey)
-  const now = Date.now()
-  if (cached && cached.expiresAt > now) {
-    return cached.value
-  }
-
-  const dateConditions = buildProjectDateConditions({projectDateFrom, projectDateTo})
-
-  // Join-based rewrite: project prompts + left join judgments; count DISTINCT articles missing a judgment
-  const allConditions: SQL[] = [sql`${judgments.id} IS NULL`, ...dateConditions]
-
-  console.time('getUnassessedArticlesCount')
-
-  let countQuery = db
-    .select({count: sql<number>`COUNT(DISTINCT ${articles.id})`})
-    .from(articles)
-    .$dynamic()
-
-  // Optimization: If no import routes, strictly limit to project_articles via INNER JOIN
-  if (importRouteIds.length === 0) {
-    countQuery = countQuery.innerJoin(
-      projectArticles,
-      and(eq(projectArticles.articleId, articles.id), eq(projectArticles.projectId, projectId)),
-    )
-  }
-
-  countQuery = countQuery
-    .innerJoin(
-      projectPrompts,
-      and(
-        eq(projectPrompts.projectId, projectId),
-        eq(projectPrompts.enabled, true),
-        eq(projectPrompts.archived, false),
-      ),
-    )
-    .leftJoin(
-      judgments,
-      sql`${judgments.articleId} = ${articles.id} AND ${judgments.promptId} = ${projectPrompts.promptId} AND ${judgments.modelId} = ${projectModelId}::uuid AND ${judgments.useTitle} = ${useTitle} AND ${judgments.useAbstract} = ${useAbstract} AND ${judgments.useFulltext} = ${useFulltext} AND ${judgments.useFulltextNoImages} = ${useFulltextNoImages} AND ${judgments.deletedAt} IS NULL AND ${judgments.isAnswered} = true`,
-    )
-
-  if (importRouteIds.length > 0) {
-    const routeCondition = sql`EXISTS (
-      SELECT 1 FROM ${articleRouteLink} arl
-      WHERE arl."article_id" = ${articles.id}
-      AND arl."import_route_id" = ANY(ARRAY[${sql.join(
-        importRouteIds.map((id) => {
-          return sql`${id}::uuid`
-        }),
-        sql`,`,
-      )}])
-    )`
-
-    const projectArticleCondition = sql`EXISTS (
-      SELECT 1 FROM ${projectArticles} pa
-      WHERE pa."article_id" = ${articles.id}
-      AND pa."project_id" = ${projectId}
-    )`
-
-    countQuery = countQuery.where(
-      sql`${sql.join(allConditions, sql` AND `)} AND (${routeCondition} OR ${projectArticleCondition})`,
-    )
-  } else {
-    // If we optimized with INNER JOIN, we just need the base conditions
-    countQuery = countQuery.where(sql`${sql.join(allConditions, sql` AND `)}`)
-  }
-
-  const [{count: unassessedCount = 0} = {count: 0}] = await countQuery
-  console.timeEnd('getUnassessedArticlesCount')
-  const value = Number(unassessedCount)
-  unassessedCountCache.set(cacheKey, {value, expiresAt: now + unassessedCountTTLms})
-  return value
 }
 
 const getJobContext = async ({
@@ -487,8 +361,24 @@ export const judgmentsJobsRoutes = new Elysia()
         jobId: query.jobId,
       })
 
-      const count = await getUnassessedArticlesCount({
-        db,
+      const cacheKey = getUnassessedCountCacheKey(
+        job.projectId,
+        projectModelId,
+        projectDateFrom,
+        projectDateTo,
+        importRouteIds,
+        job.useTitle,
+        job.useAbstract,
+        job.useFulltext,
+        job.useFulltextNoImages,
+      )
+      const cached = unassessedCountCache.get(cacheKey)
+      const now = Date.now()
+      if (cached && cached.expiresAt > now) {
+        return {count: cached.value}
+      }
+
+      const count = await getUnassessedCountFromClickHouse({
         projectId: job.projectId,
         projectModelId,
         projectDateFrom,
@@ -499,6 +389,8 @@ export const judgmentsJobsRoutes = new Elysia()
         useFulltext: job.useFulltext,
         useFulltextNoImages: job.useFulltextNoImages,
       })
+
+      unassessedCountCache.set(cacheKey, {value: count, expiresAt: now + unassessedCountTTLms})
 
       return {count}
     },

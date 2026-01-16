@@ -21,7 +21,7 @@ services:
       - "8333:8333"   # S3 API
       - "9333:9333"   # Master UI (optional, for debugging)
     volumes:
-      - ./data/seaweedfs:/data
+      - /Users/fredrc/Dropbox/_projects/phd/dev/forska.ai/data/seaweedfs:/data
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:9333/cluster/status >/dev/null"]
       interval: 10s

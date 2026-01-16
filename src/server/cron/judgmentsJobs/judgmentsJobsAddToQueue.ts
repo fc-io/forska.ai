@@ -42,19 +42,24 @@ const addPromptsToQueue = async (
   if (promptEntries.length === 0) return
 
   // Chunk the entries to avoid exceeding PostgreSQL's parameter limit
+  // Use onConflictDoNothing because ClickHouse query cannot check queue table
+  // (judgments_jobs_prompts is not replicated to CH)
   for (let i = 0; i < promptEntries.length; i += BATCH_INSERT_SIZE) {
     const chunk = promptEntries.slice(i, i + BATCH_INSERT_SIZE)
-    await db.insert(schema.judgmentsJobsPrompts).values(
-      chunk.map((entry) => {
-        return {
-          jobId,
-          articleId: entry.articleId,
-          promptId: entry.promptId,
-          status: 'ready' as const,
-          serverId: serverJobId,
-        }
-      }),
-    )
+    await db
+      .insert(schema.judgmentsJobsPrompts)
+      .values(
+        chunk.map((entry) => {
+          return {
+            jobId,
+            articleId: entry.articleId,
+            promptId: entry.promptId,
+            status: 'ready' as const,
+            serverId: serverJobId,
+          }
+        }),
+      )
+      .onConflictDoNothing()
   }
 }
 
