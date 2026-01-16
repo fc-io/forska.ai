@@ -312,7 +312,7 @@ export const getUnassessedArticlesFromClickHouse = async (
         HAVING countDistinct(j.prompt_id) >= (SELECT COUNT(*) FROM enabled_prompts)
       ),
       unassessed AS (
-        SELECT s.article_id
+        SELECT s.article_id AS article_id
         FROM scoped s
         INNER JOIN forska.articles a ON s.article_id = a.id
         LEFT JOIN assessed ass ON s.article_id = ass.article_id
