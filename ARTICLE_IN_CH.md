@@ -178,18 +178,27 @@ Fallback: If storage becomes a concern, switch to C.2 (metadata-only) or B (skin
 ## Infrastructure setup
 
 ### 1) PostgreSQL: enable logical replication
+
+> ⚠️ **CRITICAL**: Two key configuration changes required for Docker environments:
+> 1. `listen_addresses = '*'` in postgresql.conf (default 'localhost' blocks container-to-container connections)
+> 2. `SUPERUSER` privilege for ch_replicator (MaterializedPostgreSQL requires it for publication management)
 ```ini
 # postgresql.conf
+# Enable logical replication for MaterializedPostgreSQL
 wal_level = logical
 max_wal_senders = 10
 max_replication_slots = 10
+
+# CRITICAL for Docker: Allow connections from other containers
+listen_addresses = '*'
 ```
 
 Create replication user with default privileges (so new tables don't break replication):
 ```sql
-CREATE USER ch_replicator WITH REPLICATION PASSWORD 'xxx';
+-- SUPERUSER required for MaterializedPostgreSQL to manage publications and replication slots
+CREATE USER ch_replicator WITH REPLICATION SUPERUSER PASSWORD 'xxx';
 
--- Grant on existing tables
+-- Grant on existing tables (technically redundant with SUPERUSER, but explicit is better)
 GRANT USAGE ON SCHEMA public TO ch_replicator;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO ch_replicator;
 
@@ -549,21 +558,46 @@ WHERE slot_type = 'logical';
 
 ### Phase 2: Infrastructure
 - [x] Enable logical replication in Postgres (`wal_level = logical`)
+- [x] Fix PostgreSQL network config: Added `listen_addresses = '*'` to `config/postgres/postgresql.conf` (required for Docker container-to-container communication)
 - [x] Create CH replication user with appropriate grants (including `FOR ROLE` if migrations run as different user)
+  - **Note**: Granted SUPERUSER to `ch_replicator` (required by MaterializedPostgreSQL engine for publication management)
 - [x] Verify CH version supports MaterializedPostgreSQL with expected features
-- [ ] **Initial sync**: Estimate ~1-10 min per million articles (full_text + network dependent); 10M articles ≈ 2-6 hours. Run `CREATE DATABASE` command now (dev system, no scheduling needed)
-- [ ] Create `pg` database in ClickHouse with full `articles` table (C.1 approach):
+- [x] Create `pg` database in ClickHouse with full `articles` table (C.1 approach):
   ```sql
-  CREATE DATABASE pg ENGINE = MaterializedPostgreSQL(...)
-  SETTINGS materialized_postgresql_tables_list = 'articles,projects,project_prompts,judgments,project_articles,project_route_link,article_route_link,import_route';
+  CREATE DATABASE pg ENGINE = MaterializedPostgreSQL(
+    'db:5432', 'postgres', 'ch_replicator', '<password>'
+  ) SETTINGS materialized_postgresql_tables_list =
+    'articles,projects,project_prompts,judgments,project_articles,project_route_link,article_route_link,import_route';
   ```
-- [ ] Create `forska_helpers` database for views/CTEs
-- [ ] Verify row counts match between PG and CH (especially `articles`)
-- [ ] Verify index on `pg.articles (article_updated_at, article_id)` exists (for keyset pagination)
-- [ ] Confirm monitoring query works in CH version
-- [ ] **Monitor CH disk usage** after initial sync; scale storage if needed
+  **Note**: Uses Docker service name `db:5432` for container-to-container communication
+- [x] Create `forska_helpers` database for views/CTEs
+- [x] Enable experimental MaterializedPostgreSQL engine via `config/clickhouse/experimental-users.xml`
+- [x] **Wait for initial sync to complete** - All 8 tables synced (~35M rows, 237 GiB total, completed 2026-01-16)
+- [x] Create helper view `forska_helpers.scoped_articles`
+- [x] Confirm monitoring query works in CH version (adapted for ClickHouse SQL syntax - see `config/clickhouse/CLICKHOUSE_QUERY_SYNTAX.md`)
+- [ ] **⚠️ BLOCKER: Investigate and fix articles table mismatch**
+  - **Issue**: ClickHouse has 10,341,151 articles vs PostgreSQL 10,526,004 (184,853 missing = 1.8%)
+  - **Status**: Investigation plan created at `config/clickhouse/INVESTIGATE_ARTICLE_MISMATCH.md`
+  - **Required**: Must achieve 100% row count match before production use
+- [x] ~~Verify index on `pg.articles (article_updated_at, article_id)` exists~~ (N/A - MaterializedPostgreSQL does not replicate indexes; uses `ORDER BY tuple(id)` instead)
+- [x] **Monitor CH disk usage** after initial sync: 237 GiB (compressed columnar format)
+
+**Phase 2 Status**: ⚠️ MOSTLY COMPLETE - Blocked on articles mismatch investigation/fix
+
+**Critical Fixes Applied**:
+1. PostgreSQL `listen_addresses = '*'` (was `localhost`, blocked CH connections)
+2. Granted SUPERUSER to ch_replicator (MaterializedPostgreSQL requirement)
+
+**Documentation Created**:
+- `config/clickhouse/STATUS.md` - Current status and quick reference
+- `config/clickhouse/SETUP_PROGRESS.md` - Step-by-step setup log
+- `config/clickhouse/TROUBLESHOOTING.md` - Common issues and solutions
+- `config/clickhouse/CLICKHOUSE_QUERY_SYNTAX.md` - SQL syntax differences (NOT EXISTS → LEFT JOIN, JOIN ON constant → CROSS JOIN)
+- `config/clickhouse/INVESTIGATE_ARTICLE_MISMATCH.md` - Investigation plan for row count discrepancy
 
 ### Phase 3: Deploy
+**Status**: 🚧 BLOCKED - Cannot proceed until articles mismatch is resolved (Phase 2)
+
 - [ ] Implement CH queries for:
   - [ ] Jobs page: unassessed count
   - [ ] Reviews/unassessed page: paginated list (now uses CH `ORDER BY article_updated_at`)
