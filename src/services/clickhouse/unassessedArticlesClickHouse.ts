@@ -138,7 +138,7 @@ const buildScopedArticlesCTE = (projectId: string, importRouteIds: string[]): st
   const projectArticlesPart = `
     SELECT article_id FROM pg.project_articles WHERE project_id = '${projectIdEscaped}'`
 
-  const importRoutesPart =
+  const importRoutesViaLinkTablePart =
     importRouteIds.length > 0
       ? `
     UNION DISTINCT
@@ -148,7 +148,18 @@ const buildScopedArticlesCTE = (projectId: string, importRouteIds: string[]): st
     WHERE prl.project_id = '${projectIdEscaped}'`
       : ''
 
-  return `scoped AS (${projectArticlesPart}${importRoutesPart})`
+  const importRoutesViaStringMatchPart =
+    importRouteIds.length > 0
+      ? `
+    UNION DISTINCT
+    SELECT a.id AS article_id
+    FROM pg.project_route_link prl
+    INNER JOIN pg.import_route ir ON prl.import_route_id = ir.id
+    INNER JOIN forska.articles a ON a.import_route = ir.route
+    WHERE prl.project_id = '${projectIdEscaped}'`
+      : ''
+
+  return `scoped AS (${projectArticlesPart}${importRoutesViaLinkTablePart}${importRoutesViaStringMatchPart})`
 }
 
 const buildDateConditions = (dateFrom: Date | null | undefined, dateTo: Date | null | undefined): string[] => {
@@ -411,6 +422,95 @@ export const getUnassessedPairsFromClickHouse = async (
   const dateConditions = buildDateConditions(project.dateFrom, project.dateTo)
   const dateConditionsStr = dateConditions.length > 0 ? ` AND ${dateConditions.join(' AND ')}` : ''
 
+  const diagnosticQuery = `
+    WITH
+      ${buildScopedArticlesCTE(projectId, importRouteIds)},
+      enabled_prompts AS (
+        SELECT prompt_id FROM pg.project_prompts
+        WHERE project_id = '${escapeClickHouseString(projectId)}'
+          AND enabled = true
+          AND archived = false
+      ),
+      scoped_with_dates AS (
+        SELECT s.article_id
+        FROM scoped s
+        INNER JOIN forska.articles a ON s.article_id = a.id
+        WHERE 1=1${dateConditionsStr}
+      ),
+      assessed_pairs AS (
+        SELECT j.article_id, j.prompt_id
+        FROM pg.judgments j
+        WHERE j.article_id IN (SELECT article_id FROM scoped)
+          AND j.deleted_at IS NULL
+          AND j.is_answered = true
+          AND j.model_id = '${modelIdEscaped}'
+          AND j.use_title = ${project.useTitle}
+          AND j.use_abstract = ${project.useAbstract}
+          AND j.use_fulltext = ${project.useFulltext}
+          AND j.use_fulltext_no_images = ${project.useFulltextNoImages}
+          AND j.prompt_id IN (SELECT prompt_id FROM enabled_prompts)
+      )
+    SELECT
+      (SELECT COUNT(*) FROM scoped) as scoped_total,
+      (SELECT COUNT(*) FROM scoped_with_dates) as scoped_after_date_filter,
+      (SELECT COUNT(*) FROM enabled_prompts) as enabled_prompts,
+      (SELECT COUNT(DISTINCT article_id) FROM assessed_pairs) as assessed_articles,
+      (SELECT COUNT(*) FROM assessed_pairs) as assessed_pairs
+  `
+  const diagResult = await client.query({query: diagnosticQuery, format: 'JSONEachRow'})
+  const diagData = await diagResult.json<Record<string, string>>()
+  console.log('[CH] Diagnostic counts:', diagData[0])
+  console.log('[CH] Date conditions:', dateConditionsStr || '(none)')
+
+  const stepByStepQuery = `
+    WITH
+      ${buildScopedArticlesCTE(projectId, importRouteIds)},
+      enabled_prompts AS (
+        SELECT prompt_id FROM pg.project_prompts
+        WHERE project_id = '${escapeClickHouseString(projectId)}'
+          AND enabled = true
+          AND archived = false
+      ),
+      assessed_pairs AS (
+        SELECT j.article_id, j.prompt_id
+        FROM pg.judgments j
+        WHERE j.article_id IN (SELECT article_id FROM scoped)
+          AND j.deleted_at IS NULL
+          AND j.is_answered = true
+          AND j.model_id = '${modelIdEscaped}'
+          AND j.use_title = ${project.useTitle}
+          AND j.use_abstract = ${project.useAbstract}
+          AND j.use_fulltext = ${project.useFulltext}
+          AND j.use_fulltext_no_images = ${project.useFulltextNoImages}
+          AND j.prompt_id IN (SELECT prompt_id FROM enabled_prompts)
+      ),
+      scoped_with_dates AS (
+        SELECT s.article_id, a.article_updated_at, a.article_created_at, a.created_at
+        FROM scoped s
+        INNER JOIN forska.articles a ON s.article_id = a.id
+        WHERE 1=1${dateConditionsStr}
+      ),
+      cross_joined AS (
+        SELECT s.article_id, ep.prompt_id
+        FROM scoped_with_dates s
+        CROSS JOIN enabled_prompts ep
+      ),
+      unassessed AS (
+        SELECT cj.article_id, cj.prompt_id
+        FROM cross_joined cj
+        WHERE (cj.article_id, cj.prompt_id) NOT IN (SELECT article_id, prompt_id FROM assessed_pairs)
+      )
+    SELECT
+      (SELECT COUNT(*) FROM scoped_with_dates) as step1_scoped_with_dates,
+      (SELECT COUNT(*) FROM enabled_prompts) as step2_enabled_prompts,
+      (SELECT COUNT(*) FROM cross_joined) as step3_cross_joined,
+      (SELECT COUNT(*) FROM assessed_pairs) as step4_assessed_pairs,
+      (SELECT COUNT(*) FROM unassessed) as step5_unassessed
+  `
+  const stepResult = await client.query({query: stepByStepQuery, format: 'JSONEachRow'})
+  const stepData = await stepResult.json<Record<string, string>>()
+  console.log('[CH] Step-by-step counts:', stepData[0])
+
   const query = `
     WITH
       ${buildScopedArticlesCTE(projectId, importRouteIds)},
@@ -442,8 +542,7 @@ export const getUnassessedPairsFromClickHouse = async (
     SELECT s.article_id, ep.prompt_id
     FROM scoped_with_dates s
     CROSS JOIN enabled_prompts ep
-    LEFT JOIN assessed_pairs ap ON ap.article_id = s.article_id AND ap.prompt_id = ep.prompt_id
-    WHERE ap.article_id IS NULL
+    WHERE (s.article_id, ep.prompt_id) NOT IN (SELECT article_id, prompt_id FROM assessed_pairs)
     ORDER BY COALESCE(s.article_updated_at, s.article_created_at, s.created_at) DESC, s.article_id DESC
     LIMIT ${numberOfPromptsToGet}
   `
