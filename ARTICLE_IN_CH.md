@@ -575,28 +575,38 @@ WHERE slot_type = 'logical';
 - [x] **Wait for initial sync to complete** - All 8 tables synced (~35M rows, 237 GiB total, completed 2026-01-16)
 - [x] Create helper view `forska_helpers.scoped_articles`
 - [x] Confirm monitoring query works in CH version (adapted for ClickHouse SQL syntax - see `config/clickhouse/CLICKHOUSE_QUERY_SYNTAX.md`)
-- [ ] **⚠️ BLOCKER: Investigate and fix articles table mismatch**
-  - **Issue**: ClickHouse has 10,341,151 articles vs PostgreSQL 10,526,004 (184,853 missing = 1.8%)
-  - **Status**: Investigation plan created at `config/clickhouse/INVESTIGATE_ARTICLE_MISMATCH.md`
-  - **Required**: Must achieve 100% row count match before production use
+- [x] **✅ RESOLVED: Articles table mismatch fixed (2026-01-16)**
+  - **Root cause**: MaterializedPostgreSQL bug with large table initial snapshots (incomplete syncs)
+  - **Solution**: Created `forska.articles` MergeTree table, synced via `postgresql()` function
+  - **Result**: 100% row count match (10,526,004 rows)
+  - **Details**: See `config/clickhouse/INVESTIGATE_ARTICLE_MISMATCH.md`
 - [x] ~~Verify index on `pg.articles (article_updated_at, article_id)` exists~~ (N/A - MaterializedPostgreSQL does not replicate indexes; uses `ORDER BY tuple(id)` instead)
 - [x] **Monitor CH disk usage** after initial sync: 237 GiB (compressed columnar format)
+- [x] Create incremental sync script: `scripts/syncArticlesToClickHouse.ts`
+- [x] Update `forska_helpers.scoped_articles` view to use `forska.articles`
 
-**Phase 2 Status**: ⚠️ MOSTLY COMPLETE - Blocked on articles mismatch investigation/fix
+**Phase 2 Status**: ✅ COMPLETE
 
 **Critical Fixes Applied**:
 1. PostgreSQL `listen_addresses = '*'` (was `localhost`, blocked CH connections)
 2. Granted SUPERUSER to ch_replicator (MaterializedPostgreSQL requirement)
+3. **Articles replication workaround**: MaterializedPostgreSQL has a bug with large tables. Created `forska.articles` (MergeTree) synced via batch INSERT from `postgresql()` function instead of relying on `pg.articles`.
+
+**Articles Table Architecture**:
+- `pg.articles` - MaterializedPostgreSQL replica (incomplete, ~64% of rows, DO NOT USE)
+- `forska.articles` - MergeTree table with ReplacingMergeTree(updated_at), 100% synced
+- Excluded columns: `article_authors`, `original_data`, `full_text_assets` (null byte issues)
+- Incremental sync: `bun scripts/syncArticlesToClickHouse.ts`
 
 **Documentation Created**:
 - `config/clickhouse/STATUS.md` - Current status and quick reference
 - `config/clickhouse/SETUP_PROGRESS.md` - Step-by-step setup log
 - `config/clickhouse/TROUBLESHOOTING.md` - Common issues and solutions
 - `config/clickhouse/CLICKHOUSE_QUERY_SYNTAX.md` - SQL syntax differences (NOT EXISTS → LEFT JOIN, JOIN ON constant → CROSS JOIN)
-- `config/clickhouse/INVESTIGATE_ARTICLE_MISMATCH.md` - Investigation plan for row count discrepancy
+- `config/clickhouse/INVESTIGATE_ARTICLE_MISMATCH.md` - Investigation and resolution details
 
 ### Phase 3: Deploy
-**Status**: 🚧 BLOCKED - Cannot proceed until articles mismatch is resolved (Phase 2)
+**Status**: ✅ READY TO PROCEED
 
 - [ ] Implement CH queries for:
   - [ ] Jobs page: unassessed count
@@ -614,3 +624,32 @@ WHERE slot_type = 'logical';
 - [ ] If noticeable improvement → done
 - [ ] If storage becomes a concern → consider switching to C.2 (metadata-only)
 - [ ] If other issues → revert commit, reassess approach
+
+---
+
+## Remaining Tasks (Post-Resolution)
+
+### High Priority
+- [ ] **Set up cron job for periodic articles sync** (e.g., every 5 minutes)
+  ```bash
+  # Add to system cron or Elysia cron
+  bun scripts/syncArticlesToClickHouse.ts
+  ```
+- [ ] **Clean up incomplete `pg` database** (optional - uses 237 GiB disk)
+  ```sql
+  -- In ClickHouse (requires max_table_size_to_drop=0)
+  SET max_table_size_to_drop = 0;
+  DROP DATABASE pg;
+  -- Then recreate without articles table if needed for other tables
+  ```
+
+### Medium Priority
+- [ ] **Monitor memory usage on `scoped_articles` view** - Currently hits memory limit on large queries
+- [ ] **Add missing columns to `forska.articles`** if needed:
+  - `article_authors` (Array - excluded due to null byte issues)
+  - `original_data` (JSON)
+  - `full_text_assets` (JSON)
+
+### Low Priority
+- [ ] Consider upgrading ClickHouse to fix MaterializedPostgreSQL bug
+- [ ] Evaluate if `pg.articles` can be dropped entirely (other tables in `pg.*` still useful)

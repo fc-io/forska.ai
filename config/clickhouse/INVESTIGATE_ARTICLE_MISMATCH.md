@@ -1,8 +1,40 @@
 # Articles Table Mismatch Investigation Plan
 
-## Problem Statement
+## ✅ RESOLVED (2026-01-16)
 
-**Current Status:**
+**Final Status:**
+- PostgreSQL: 10,526,004 articles
+- ClickHouse: 10,526,004 articles (forska.articles)
+- **100% match achieved**
+
+### Root Cause
+MaterializedPostgreSQL engine has a bug with large table initial snapshots. Multiple attempts produced incomplete syncs:
+- 1st attempt: 10,341,151 rows (98.2%)
+- 2nd attempt: 6,737,127 rows (64%)
+
+### Solution
+Created a standard MergeTree table (`forska.articles`) and synced via batch INSERT from `postgresql()` function:
+1. Created `forska.articles` with ReplacingMergeTree(updated_at)
+2. Full sync via: `INSERT INTO forska.articles SELECT ... FROM postgresql('db:5432', ...)`
+3. Sync completed in ~3 minutes
+4. Incremental sync script: `scripts/syncArticlesToClickHouse.ts`
+
+### Changes Made
+- Created `forska.articles` MergeTree table (replacing unreliable `pg.articles`)
+- Updated `forska_helpers.scoped_articles` view to use `forska.articles`
+- Added `scripts/syncArticlesToClickHouse.ts` for incremental sync
+- Note: Excluded `article_authors`, `original_data`, `full_text_assets` columns (array/JSON with potential null bytes)
+
+### Next Steps
+- [ ] Set up cron job for periodic incremental sync (e.g., every 5 minutes)
+- [ ] Consider cleaning up incomplete `pg` database
+- [ ] Monitor memory usage on `scoped_articles` view queries
+
+---
+
+## Original Problem Statement
+
+**Original Status:**
 - PostgreSQL: 10,526,004 articles
 - ClickHouse: 10,341,151 articles
 - **Missing: 184,853 articles (1.8%)**
