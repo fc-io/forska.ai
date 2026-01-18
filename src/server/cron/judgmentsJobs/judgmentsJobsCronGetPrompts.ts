@@ -3,6 +3,7 @@ import {and, eq, sql} from 'drizzle-orm'
 import * as schema from '../../../db/schema.ts'
 import {getUnassessedPairsFromClickHouse} from '../../../services/clickhouse/unassessedArticlesClickHouse.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
+import {clearJobCursor, getJobCursor, setJobCursor} from './jobCursorStore.ts'
 
 export type PromptQueueEntry = {articleId: string; promptId: string}
 
@@ -12,11 +13,11 @@ export type QueuePromptsResult = {promptEntries: PromptQueueEntry[]}
  * Gets prompts (article × prompt pairs) that need to be judged for a project.
  *
  * Uses ClickHouse to find unassessed pairs (articles without judgments for all prompts).
- * Note: Does NOT check judgments_jobs_prompts queue - caller must use onConflictDoNothing.
+ * Uses cursor-based pagination to avoid re-fetching already-queued pairs.
  */
 export const judgmentsJobsCronGetPrompts = async (
   projectId: string,
-  _jobId: string,
+  jobId: string,
   numberOfPromptsToGet: number,
 ): Promise<QueuePromptsResult> => {
   const db = getDatabase()
@@ -49,5 +50,14 @@ export const judgmentsJobsCronGetPrompts = async (
     return {promptEntries: []}
   }
 
-  return await getUnassessedPairsFromClickHouse({projectId, jobId: _jobId, numberOfPromptsToGet})
+  const cursor = getJobCursor(jobId)
+  const result = await getUnassessedPairsFromClickHouse({projectId, jobId, numberOfPromptsToGet, cursor})
+
+  if (result.nextCursor) {
+    setJobCursor(jobId, result.nextCursor)
+  } else if (cursor) {
+    clearJobCursor(jobId)
+  }
+
+  return {promptEntries: result.promptEntries}
 }

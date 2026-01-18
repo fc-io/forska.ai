@@ -126,11 +126,21 @@ export const storeSinglePromptJudgment = async ({
     const answeredExplanation = judgment.explanation
     const answeredQuotes = judgment.quotes
 
-    // Check if judgment already exists
+    // Check if judgment already exists (must match full unique constraint including content config)
     const existing = await db
       .select({id: judgments.id})
       .from(judgments)
-      .where(and(eq(judgments.articleId, article.id), eq(judgments.modelId, modelId), eq(judgments.promptId, promptId)))
+      .where(
+        and(
+          eq(judgments.articleId, article.id),
+          eq(judgments.modelId, modelId),
+          eq(judgments.promptId, promptId),
+          eq(judgments.useTitle, useTitle),
+          eq(judgments.useAbstract, useAbstract),
+          eq(judgments.useFulltext, useFulltext),
+          eq(judgments.useFulltextNoImages, useFulltextNoImages),
+        ),
+      )
       .limit(1)
 
     const existingId = existing[0]?.id ?? null

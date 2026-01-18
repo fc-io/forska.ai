@@ -444,8 +444,7 @@ export const judgmentsJobsPrompts = pgTable(
     return [
       index('judgments_jobs_prompts_job_idx').on(table.jobId),
       index('judgments_jobs_prompts_job_status_idx').on(table.jobId, table.status),
-      // Speed up NOT EXISTS lookups for article×prompt pairs already claimed by a job
-      index('judgments_jobs_prompts_article_prompt_job_idx').on(table.articleId, table.promptId, table.jobId),
+      uniqueIndex('judgments_jobs_prompts_article_prompt_job_unique').on(table.articleId, table.promptId, table.jobId),
     ]
   },
 )

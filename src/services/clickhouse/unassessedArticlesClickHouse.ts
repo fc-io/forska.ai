@@ -1,19 +1,8 @@
 /**
  * ClickHouse-based unassessed articles queries.
  *
- * Replaces PostgreSQL queries for:
- * - Jobs page: unassessed count
- * - Reviews/unassessed page: paginated list
- * - Cron queue fill: (article, prompt) pairs
- *
- * Uses:
- * - `pg.*` tables for MaterializedPostgreSQL replicas (judgments, project_*, etc.)
- * - `forska.articles` MergeTree table (100% synced, workaround for MaterializedPG bug)
- *
- * Key differences from PostgreSQL:
- * - No NOT EXISTS - use LEFT JOIN + IS NULL
- * - No JOIN ON constant - use CTE + CROSS JOIN
- * - 0-prompt guard: return early if no enabled prompts
+ * Uses `pg.*` (MaterializedPostgreSQL replicas) + `forska.articles` (MergeTree workaround).
+ * ClickHouse quirk: LEFT JOIN fills unmatched with defaults not NULL, so use NOT IN pattern.
  */
 import {and, eq} from 'drizzle-orm'
 
@@ -46,7 +35,16 @@ type UnassessedCountParams = {
 
 type UnassessedArticlesParams = UnassessedCountParams & {limit: number; offset: number; search?: string}
 
-type UnassessedPairsParams = {projectId: string; jobId: string; numberOfPromptsToGet: number}
+type PaginationCursor = {lastDate: Date; lastArticleId: string}
+
+type UnassessedPairsParams = {
+  projectId: string
+  jobId: string
+  numberOfPromptsToGet: number
+  cursor: PaginationCursor | null
+}
+
+type UnassessedPairsResult = {promptEntries: PromptQueueEntry[]; nextCursor: PaginationCursor | null}
 
 type UnassessedArticleRow = {
   id: string
@@ -173,16 +171,6 @@ const buildDateConditions = (dateFrom: Date | null | undefined, dateTo: Date | n
   return conditions
 }
 
-/**
- * Count unassessed articles for a project using ClickHouse.
- *
- * Strategy:
- * 1. Build scoped articles (project_articles UNION article_route_link)
- * 2. Build assessed articles (fully judged for all enabled prompts)
- * 3. Return: scoped - assessed (using LEFT JOIN + IS NULL)
- *
- * 0-prompt guard: Returns 0 if no enabled prompts
- */
 export const getUnassessedCountFromClickHouse = async (params: UnassessedCountParams): Promise<number> => {
   const client = getClickhouseClient()
   const {
@@ -241,8 +229,6 @@ export const getUnassessedCountFromClickHouse = async (params: UnassessedCountPa
     WHERE s.article_id NOT IN (SELECT article_id FROM assessed)${dateConditionsStr}
   `
 
-  console.log('[CH] Unassessed count query:', query.substring(0, 300) + '...')
-
   const result = await client.query({query, format: 'JSONEachRow'})
   const data = await result.json<{unassessed_count: string}>()
 
@@ -253,14 +239,6 @@ export const getUnassessedCountFromClickHouse = async (params: UnassessedCountPa
   return count
 }
 
-/**
- * Get paginated unassessed articles list using ClickHouse.
- *
- * Returns article IDs + metadata sorted by article_updated_at DESC.
- * Uses keyset pagination is recommended for production but this uses OFFSET for compatibility.
- *
- * 0-prompt guard: Returns empty array if no enabled prompts
- */
 export const getUnassessedArticlesFromClickHouse = async (
   params: UnassessedArticlesParams,
 ): Promise<{articles: UnassessedArticleRow[]; totalCount: number}> => {
@@ -379,23 +357,24 @@ export const getUnassessedArticlesFromClickHouse = async (
   return {articles, totalCount}
 }
 
-/**
- * Get (article, prompt) pairs that need to be judged for cron queue fill.
- *
- * Returns pairs where:
- * - Article is in project scope
- * - Article+prompt pair not already in judgments_jobs_prompts for this job
- * - Article+prompt pair not already judged with matching model/content settings
- *
- * 0-prompt guard: Returns empty array if no enabled prompts
- *
- * Note: Does NOT check judgments_jobs_prompts (PostgreSQL table) - that must be done
- * separately in application code with onConflictDoNothing.
- */
+const buildCursorCondition = (cursor: PaginationCursor | null): string => {
+  if (!cursor) return ''
+  const cursorDateStr = formatDateForClickHouse(cursor.lastDate)
+  const cursorArticleId = escapeClickHouseString(cursor.lastArticleId)
+  return `
+      AND (COALESCE(s.article_updated_at, s.article_created_at, s.created_at), s.article_id)
+          < (toDateTime64('${cursorDateStr}', 3), '${cursorArticleId}')`
+}
+
+const extractNextCursor = (data: Array<{article_id: string; sort_date: string}>): PaginationCursor | null => {
+  const lastRow = data[data.length - 1]
+  return lastRow ? {lastDate: new Date(lastRow.sort_date), lastArticleId: lastRow.article_id} : null
+}
+
 export const getUnassessedPairsFromClickHouse = async (
   params: UnassessedPairsParams,
-): Promise<{promptEntries: PromptQueueEntry[]}> => {
-  const {projectId, numberOfPromptsToGet} = params
+): Promise<UnassessedPairsResult> => {
+  const {projectId, numberOfPromptsToGet, cursor} = params
   const client = getClickhouseClient()
 
   console.time('ch:unassessed_pairs')
@@ -409,107 +388,19 @@ export const getUnassessedPairsFromClickHouse = async (
   if (!project) {
     console.timeEnd('ch:unassessed_pairs')
     console.log('[CH] Project not found - returning empty')
-    return {promptEntries: []}
+    return {promptEntries: [], nextCursor: null}
   }
 
   if (promptIds.length === 0) {
     console.timeEnd('ch:unassessed_pairs')
     console.log('[CH] 0 enabled prompts - returning empty')
-    return {promptEntries: []}
+    return {promptEntries: [], nextCursor: null}
   }
 
   const modelIdEscaped = escapeClickHouseString(project.modelId)
   const dateConditions = buildDateConditions(project.dateFrom, project.dateTo)
   const dateConditionsStr = dateConditions.length > 0 ? ` AND ${dateConditions.join(' AND ')}` : ''
-
-  const diagnosticQuery = `
-    WITH
-      ${buildScopedArticlesCTE(projectId, importRouteIds)},
-      enabled_prompts AS (
-        SELECT prompt_id FROM pg.project_prompts
-        WHERE project_id = '${escapeClickHouseString(projectId)}'
-          AND enabled = true
-          AND archived = false
-      ),
-      scoped_with_dates AS (
-        SELECT s.article_id
-        FROM scoped s
-        INNER JOIN forska.articles a ON s.article_id = a.id
-        WHERE 1=1${dateConditionsStr}
-      ),
-      assessed_pairs AS (
-        SELECT j.article_id, j.prompt_id
-        FROM pg.judgments j
-        WHERE j.article_id IN (SELECT article_id FROM scoped)
-          AND j.deleted_at IS NULL
-          AND j.is_answered = true
-          AND j.model_id = '${modelIdEscaped}'
-          AND j.use_title = ${project.useTitle}
-          AND j.use_abstract = ${project.useAbstract}
-          AND j.use_fulltext = ${project.useFulltext}
-          AND j.use_fulltext_no_images = ${project.useFulltextNoImages}
-          AND j.prompt_id IN (SELECT prompt_id FROM enabled_prompts)
-      )
-    SELECT
-      (SELECT COUNT(*) FROM scoped) as scoped_total,
-      (SELECT COUNT(*) FROM scoped_with_dates) as scoped_after_date_filter,
-      (SELECT COUNT(*) FROM enabled_prompts) as enabled_prompts,
-      (SELECT COUNT(DISTINCT article_id) FROM assessed_pairs) as assessed_articles,
-      (SELECT COUNT(*) FROM assessed_pairs) as assessed_pairs
-  `
-  const diagResult = await client.query({query: diagnosticQuery, format: 'JSONEachRow'})
-  const diagData = await diagResult.json<Record<string, string>>()
-  console.log('[CH] Diagnostic counts:', diagData[0])
-  console.log('[CH] Date conditions:', dateConditionsStr || '(none)')
-
-  const stepByStepQuery = `
-    WITH
-      ${buildScopedArticlesCTE(projectId, importRouteIds)},
-      enabled_prompts AS (
-        SELECT prompt_id FROM pg.project_prompts
-        WHERE project_id = '${escapeClickHouseString(projectId)}'
-          AND enabled = true
-          AND archived = false
-      ),
-      assessed_pairs AS (
-        SELECT j.article_id, j.prompt_id
-        FROM pg.judgments j
-        WHERE j.article_id IN (SELECT article_id FROM scoped)
-          AND j.deleted_at IS NULL
-          AND j.is_answered = true
-          AND j.model_id = '${modelIdEscaped}'
-          AND j.use_title = ${project.useTitle}
-          AND j.use_abstract = ${project.useAbstract}
-          AND j.use_fulltext = ${project.useFulltext}
-          AND j.use_fulltext_no_images = ${project.useFulltextNoImages}
-          AND j.prompt_id IN (SELECT prompt_id FROM enabled_prompts)
-      ),
-      scoped_with_dates AS (
-        SELECT s.article_id, a.article_updated_at, a.article_created_at, a.created_at
-        FROM scoped s
-        INNER JOIN forska.articles a ON s.article_id = a.id
-        WHERE 1=1${dateConditionsStr}
-      ),
-      cross_joined AS (
-        SELECT s.article_id, ep.prompt_id
-        FROM scoped_with_dates s
-        CROSS JOIN enabled_prompts ep
-      ),
-      unassessed AS (
-        SELECT cj.article_id, cj.prompt_id
-        FROM cross_joined cj
-        WHERE (cj.article_id, cj.prompt_id) NOT IN (SELECT article_id, prompt_id FROM assessed_pairs)
-      )
-    SELECT
-      (SELECT COUNT(*) FROM scoped_with_dates) as step1_scoped_with_dates,
-      (SELECT COUNT(*) FROM enabled_prompts) as step2_enabled_prompts,
-      (SELECT COUNT(*) FROM cross_joined) as step3_cross_joined,
-      (SELECT COUNT(*) FROM assessed_pairs) as step4_assessed_pairs,
-      (SELECT COUNT(*) FROM unassessed) as step5_unassessed
-  `
-  const stepResult = await client.query({query: stepByStepQuery, format: 'JSONEachRow'})
-  const stepData = await stepResult.json<Record<string, string>>()
-  console.log('[CH] Step-by-step counts:', stepData[0])
+  const cursorCondition = buildCursorCondition(cursor)
 
   const query = `
     WITH
@@ -539,25 +430,26 @@ export const getUnassessedPairsFromClickHouse = async (
         INNER JOIN forska.articles a ON s.article_id = a.id
         WHERE 1=1${dateConditionsStr}
       )
-    SELECT s.article_id, ep.prompt_id
+    SELECT
+      s.article_id,
+      ep.prompt_id,
+      COALESCE(s.article_updated_at, s.article_created_at, s.created_at) AS sort_date
     FROM scoped_with_dates s
     CROSS JOIN enabled_prompts ep
-    WHERE (s.article_id, ep.prompt_id) NOT IN (SELECT article_id, prompt_id FROM assessed_pairs)
-    ORDER BY COALESCE(s.article_updated_at, s.article_created_at, s.created_at) DESC, s.article_id DESC
+    WHERE (s.article_id, ep.prompt_id) NOT IN (SELECT article_id, prompt_id FROM assessed_pairs)${cursorCondition}
+    ORDER BY sort_date DESC, s.article_id DESC
     LIMIT ${numberOfPromptsToGet}
   `
 
-  console.log('[CH] Unassessed pairs query:', query.substring(0, 300) + '...')
-
   const result = await client.query({query, format: 'JSONEachRow'})
-  const data = await result.json<{article_id: string; prompt_id: string}>()
-
+  const data = await result.json<{article_id: string; prompt_id: string; sort_date: string}>()
   console.timeEnd('ch:unassessed_pairs')
 
   const promptEntries: PromptQueueEntry[] = data.map((row) => {
     return {articleId: row.article_id, promptId: row.prompt_id}
   })
+  const nextCursor = extractNextCursor(data)
 
   console.log(`[CH] Found ${promptEntries.length} unassessed pairs`)
-  return {promptEntries}
+  return {promptEntries, nextCursor}
 }

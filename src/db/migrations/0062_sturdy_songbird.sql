@@ -1,0 +1,2 @@
+DROP INDEX "judgments_jobs_prompts_article_prompt_job_idx";--> statement-breakpoint
+CREATE UNIQUE INDEX "judgments_jobs_prompts_article_prompt_job_unique" ON "judgments_jobs_prompts" USING btree ("article_id","prompt_id","job_id");

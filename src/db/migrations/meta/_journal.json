@@ -428,6 +428,13 @@
       "when": 1768317586594,
       "tag": "0061_clear_spirit",
       "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1768769178072,
+      "tag": "0062_sturdy_songbird",
+      "breakpoints": true
     }
   ]
 }
