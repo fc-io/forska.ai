@@ -88,10 +88,6 @@ const ExportData = () => {
       })
   }
 
-  const hasAnyPromptSelected = () => {
-    return Object.keys(selectedPrompts()).length > 0
-  }
-
   // Prompt Header section helpers
   const isAllPromptHeaderSelected = () => {
     return includePromptType() && includePromptContent()
