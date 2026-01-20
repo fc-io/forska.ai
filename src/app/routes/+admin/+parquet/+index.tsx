@@ -33,7 +33,10 @@ const AdminParquet = () => {
       queryKey: ['parquet', 'stats'],
       queryFn: async () => {
         const response = await apiClient.api.parquet.stats.get()
-        const result = handleApiResponse<ParquetStatsResponse>(response, 'Failed to load parquet stats')
+        const result = handleApiResponse<ParquetStatsResponse>(
+          response as {data?: ParquetStatsResponse; error?: unknown},
+          'Failed to load parquet stats',
+        )
         return result.data
       },
       staleTime: 1000 * 30,
@@ -52,7 +55,10 @@ const AdminParquet = () => {
     return {
       mutationFn: async (key: string) => {
         const response = await apiClient.api.parquet.file.delete({key})
-        return handleApiResponse<DeleteResponse>(response, 'Failed to delete file')
+        return handleApiResponse<DeleteResponse>(
+          response as {data?: DeleteResponse; error?: unknown},
+          'Failed to delete file',
+        )
       },
       onSuccess: () => {
         setDeleteModal({type: null})
@@ -66,7 +72,10 @@ const AdminParquet = () => {
     return {
       mutationFn: async ({year, month}: {year: string; month: string}) => {
         const response = await apiClient.api.parquet.partition.delete({year, month})
-        return handleApiResponse<DeleteResponse>(response, 'Failed to delete partition')
+        return handleApiResponse<DeleteResponse>(
+          response as {data?: DeleteResponse; error?: unknown},
+          'Failed to delete partition',
+        )
       },
       onSuccess: () => {
         setDeleteModal({type: null})
@@ -80,7 +89,10 @@ const AdminParquet = () => {
     return {
       mutationFn: async () => {
         const response = await apiClient.api.parquet.all.delete()
-        return handleApiResponse<DeleteResponse>(response, 'Failed to delete all files')
+        return handleApiResponse<DeleteResponse>(
+          response as {data?: DeleteResponse; error?: unknown},
+          'Failed to delete all files',
+        )
       },
       onSuccess: () => {
         setDeleteModal({type: null})

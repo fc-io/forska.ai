@@ -1,7 +1,6 @@
 import js from '@eslint/js'
 import * as typescriptPlugin from '@typescript-eslint/eslint-plugin'
 import typescriptParser from '@typescript-eslint/parser'
-// @ts-expect-error - Package has no type definitions
 import prettierConfig from 'eslint-config-prettier'
 import * as importPlugin from 'eslint-plugin-import'
 import * as prettierPlugin from 'eslint-plugin-prettier'

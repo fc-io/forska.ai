@@ -55,9 +55,12 @@ const sleep = (ms: number): Promise<void> => {
 type SqueueJob = {jobId: string; state: string; nodeList: string}
 
 const parseSqueueJobLine = (line: string): SqueueJob | undefined => {
-  const [jobId, state, nodeList] = line.split('|').map((part) => {
+  const parts = line.split('|').map((part) => {
     return part.trim()
   })
+  const jobId = parts[0]
+  const state = parts[1]
+  const nodeList = parts[2]
 
   return jobId && state ? {jobId, state, nodeList: nodeList ?? ''} : undefined
 }
@@ -76,12 +79,14 @@ const getFirstNodeFromNodeList = async (nodeList: string): Promise<string | unde
 
 const getJobStatus = async (jobId: string): Promise<{state: string; nodeList: string}> => {
   const result = await $`ssh ${SSH_HOST} "squeue -j ${jobId} -h -o '%T|%.200N' 2>/dev/null || echo 'UNKNOWN|'"`.text()
-  const [state, nodeList] = result
+  const parts = result
     .trim()
     .split('|')
     .map((part) => {
       return part.trim()
     })
+  const state = parts[0]
+  const nodeList = parts[1]
 
   return {state: state || 'UNKNOWN', nodeList: nodeList || ''}
 }
@@ -253,11 +258,11 @@ const main = async () => {
   log('Submitting job...')
   const result = await $`ssh ${SSH_HOST} "cd ${STACK_ROOT} && sbatch ${SBATCH_FILE}"`.text()
   const jobIdMatch = result.match(/Submitted batch job (\d+)/)
-  if (!jobIdMatch) {
+  const jobId = jobIdMatch?.[1]
+  if (!jobId) {
     console.error('Failed to submit job:', result)
     process.exit(1)
   }
-  const jobId = jobIdMatch[1]
   log(`Job submitted: ${jobId}`)
 
   // 5. Wait for job to start running

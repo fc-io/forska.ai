@@ -26,7 +26,8 @@ const parse = (): Opts => {
   const args = process.argv.slice(2)
   const get = (k: string, d: string): string => {
     const i = args.findIndex((a) => a === k)
-    return i !== -1 && args[i + 1] ? args[i + 1] : d
+    const nextArg = args[i + 1]
+    return i !== -1 && nextArg ? nextArg : d
   }
   const has = (k: string): boolean => args.includes(k)
   const scopeArg = get('--scope', 'schema') as Scope

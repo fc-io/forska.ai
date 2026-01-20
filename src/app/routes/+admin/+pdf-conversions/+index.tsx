@@ -123,7 +123,7 @@ const AdminPdfConversions = () => {
                       <li class="px-4 py-4 sm:px-6">
                         <div class="flex items-center justify-between">
                           <div class="truncate text-sm font-medium text-blue-600">
-                            <Link to={`/admin/articles/${article.id}`} class="hover:underline">
+                            <Link to="/articles/$id" params={{id: article.id}} class="hover:underline">
                               {article.title}
                             </Link>
                           </div>

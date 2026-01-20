@@ -149,7 +149,8 @@ const AdminFailedRequests = () => {
                         <tr class="hover:bg-gray-50">
                           <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-500 font-mono text-xs">
                             <Link
-                              to={`/admin/failed_requests/${row.id}`}
+                              to="/admin/failed_requests/$id"
+                              params={{id: row.id}}
                               class="text-blue-600 hover:text-blue-900 underline"
                             >
                               {row.id}

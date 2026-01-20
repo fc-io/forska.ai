@@ -82,7 +82,7 @@ const findLatestJob = async (): Promise<{jobId: string; computeNode: string} | n
       const expanded = await sshCommand(GLOG, `scontrol show hostnames '${nodeList}' | head -1`)
       computeNode = expanded.trim()
     } else {
-      computeNode = nodeList.split(',')[0]
+      computeNode = nodeList.split(',')[0] ?? ''
     }
 
     if (jobId && computeNode) {
@@ -123,7 +123,9 @@ const parseConfigFromLog = async (jobId: string): Promise<MN5Config | null> => {
       const trimmed = line.trim()
       if (!trimmed || !trimmed.includes('=')) continue
       const [key, ...valueParts] = trimmed.split('=')
-      config[key.trim() as keyof MN5Config] = valueParts.join('=').trim()
+      if (key) {
+        config[key.trim() as keyof MN5Config] = valueParts.join('=').trim()
+      }
     }
 
     // Validate required fields
@@ -330,10 +332,13 @@ const startTunnel = async (
       })
       if (transferLine) {
         const match = transferLine.match(/sent (\d+), received (\d+).*?(\d+\.?\d*) seconds/)
-        if (match) {
-          const sent = parseInt(match[1]) / 1024 / 1024
-          const received = parseInt(match[2]) / 1024 / 1024
-          const seconds = parseFloat(match[3])
+        const sentStr = match?.[1]
+        const receivedStr = match?.[2]
+        const secondsStr = match?.[3]
+        if (sentStr && receivedStr && secondsStr) {
+          const sent = parseInt(sentStr) / 1024 / 1024
+          const received = parseInt(receivedStr) / 1024 / 1024
+          const seconds = parseFloat(secondsStr)
           const sentRate = sent / seconds
           const receivedRate = received / seconds
           log(

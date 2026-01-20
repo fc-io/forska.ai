@@ -92,6 +92,7 @@ const getForeignKeyEdges = async (db: string): Promise<Array<{table: string; ref
     .split('\n')
     .filter(Boolean)
     .map((l) => l.split('|'))
+    .filter((parts): parts is [string, string] => parts.length >= 2 && parts[0] !== undefined && parts[1] !== undefined)
     .map(([table, referencedTable]) => ({table, referencedTable}))
 }
 
@@ -238,17 +239,16 @@ const adjustSequences = async (db: string, tables: string[]): Promise<void> => {
   const rows = out ? out.split('\n').map((l) => l.split('|')) : []
   const entries = rows
     .map((r) => ({table: r[0], col: r[1], seq: r[2]}))
-    .filter((e) => e.table && e.col && e.seq)
+    .filter((e): e is {table: string; col: string; seq: string} => Boolean(e.table) && Boolean(e.col) && Boolean(e.seq))
     .filter((e) => tables.includes(e.table))
-  const step = async (i: number): Promise<void> =>
-    i >= entries.length
-      ? undefined
-      : (await (async (): Promise<void> => {
-          const e = entries[i]
-          log(`Adjust sequence for ${e.table}.${e.col}`)
-          const set = `SELECT setval('${e.seq}', COALESCE((SELECT MAX("${e.col}") FROM public."${e.table}"), 0), true);`
-          await runPsql(db, set)
-        })()) ?? (await step(i + 1))
+  const step = async (i: number): Promise<void> => {
+    const e = entries[i]
+    if (!e) return
+    log(`Adjust sequence for ${e.table}.${e.col}`)
+    const set = `SELECT setval('${e.seq}', COALESCE((SELECT MAX("${e.col}") FROM public."${e.table}"), 0), true);`
+    await runPsql(db, set)
+    return step(i + 1)
+  }
   await step(0)
 }
 
@@ -285,30 +285,28 @@ const main = async (): Promise<void> => {
   log(`Tables to sync (${mergeTables.length}): ${mergeTables.join(', ')}`)
 
   const processTable = async (idx: number): Promise<void> => {
-    return idx >= mergeTables.length
-      ? undefined
-      : (await (async (): Promise<void> => {
-          const table = mergeTables[idx]
-          const meta = await getTableMeta(env.DB_NAME, table)
-          if (meta.pkeys.length === 0) {
-            log(`Skip ${table}: no primary key`)
-            return
-          }
-          const hasUpdatedAt = meta.cols.includes('updated_at')
-          const last = fullSync || !hasUpdatedAt ? undefined : await getLastSyncedAt(env.DB_NAME, remoteId, table)
-          const where = fullSync || !hasUpdatedAt ? undefined : `t."updated_at" > '${escapeSql(last as string)}'::timestamptz`
-          log(`Sync ${table} ${where ? `(delta since ${last})` : '(full upsert)'}`)
-          await runPsql(env.DB_NAME, 'BEGIN;')
-          await runPsql(env.DB_NAME, buildUpsertSql(meta, where))
-          await runPsql(env.DB_NAME, 'COMMIT;')
-          if (hasUpdatedAt && !fullSync) {
-            const max = await runPsql(
-              env.DB_NAME,
-              `SELECT COALESCE(MAX(updated_at), '${escapeSql(last as string)}'::timestamptz) FROM import_remote."${table}";`,
-            )
-            await updateSyncState(env.DB_NAME, remoteId, table, (max || last || '1970-01-01T00:00:00Z') as string)
-          }
-        })()) ?? (await processTable(idx + 1))
+    const table = mergeTables[idx]
+    if (!table) return
+    const meta = await getTableMeta(env.DB_NAME, table)
+    if (meta.pkeys.length === 0) {
+      log(`Skip ${table}: no primary key`)
+      return processTable(idx + 1)
+    }
+    const hasUpdatedAt = meta.cols.includes('updated_at')
+    const last = fullSync || !hasUpdatedAt ? undefined : await getLastSyncedAt(env.DB_NAME, remoteId, table)
+    const where = fullSync || !hasUpdatedAt || !last ? undefined : `t."updated_at" > '${escapeSql(last)}'::timestamptz`
+    log(`Sync ${table} ${where ? `(delta since ${last})` : '(full upsert)'}`)
+    await runPsql(env.DB_NAME, 'BEGIN;')
+    await runPsql(env.DB_NAME, buildUpsertSql(meta, where))
+    await runPsql(env.DB_NAME, 'COMMIT;')
+    if (hasUpdatedAt && !fullSync && last) {
+      const max = await runPsql(
+        env.DB_NAME,
+        `SELECT COALESCE(MAX(updated_at), '${escapeSql(last)}'::timestamptz) FROM import_remote."${table}";`,
+      )
+      await updateSyncState(env.DB_NAME, remoteId, table, max || last || '1970-01-01T00:00:00Z')
+    }
+    return processTable(idx + 1)
   }
 
   await processTable(0)

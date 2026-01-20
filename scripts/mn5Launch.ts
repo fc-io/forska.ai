@@ -113,9 +113,12 @@ const sleep = (ms: number): Promise<void> => {
 type SqueueJob = {jobId: string; state: string; nodeList: string}
 
 const parseSqueueJobLine = (line: string): SqueueJob | undefined => {
-  const [jobId, state, nodeList] = line.split('|').map((part) => {
+  const parts = line.split('|').map((part) => {
     return part.trim()
   })
+  const jobId = parts[0]
+  const state = parts[1]
+  const nodeList = parts[2]
 
   return jobId && state ? {jobId, state, nodeList: nodeList ?? ''} : undefined
 }
@@ -156,12 +159,14 @@ const getAllNodesFromNodeList = async (nodeList: string): Promise<string[]> => {
 
 const getJobStatus = async (jobId: string): Promise<{state: string; nodeList: string}> => {
   const result = await $`ssh ${GLOG} "squeue -j ${jobId} -h -o '%T|%.200N' 2>/dev/null || echo 'UNKNOWN|'"`.text()
-  const [state, nodeList] = result
+  const parts = result
     .trim()
     .split('|')
     .map((part) => {
       return part.trim()
     })
+  const state = parts[0]
+  const nodeList = parts[1]
 
   return {state: state || 'UNKNOWN', nodeList: nodeList || ''}
 }
@@ -354,7 +359,7 @@ const getLocalTunnelPortBase = (localPortBase: number): number => {
   return localPortBase + LOCAL_TUNNEL_PORT_OFFSET
 }
 
-const spawnTunnelProcess = (computeNode: string, localTunnelPort: number, remoteCaddyPort: number) => {
+const spawnTunnelProcess = (computeNode: string, localTunnelPort: number, remoteCaddyPort: number): ReturnType<typeof spawn> => {
   const logFile = Bun.file(`mn5-tunnel-${computeNode}.log`)
   const proc = spawn(
     [
@@ -440,9 +445,10 @@ const monitorTunnelHealth = async (jobId: string, allNodes: string[], localPorts
   // Get updated node list
   const refreshedNodes = await getAllNodesFromNodeList(nodeList)
   const nodesToUse = refreshedNodes.length > 0 ? refreshedNodes : allNodes
+  const firstPort = localPorts[0] ?? LOCAL_PORT_BASE
 
   // Restart all tunnels with the current node list
-  await startMultiNodeTunnels(nodesToUse, jobId, localPorts[0], 1)
+  await startMultiNodeTunnels(nodesToUse, jobId, firstPort, 1)
 }
 
 /**
@@ -505,6 +511,7 @@ const startMultiNodeTunnels = async (
   for (let i = 0; i < allNodes.length; i++) {
     const node = allNodes[i]
     const localTunnelPort = localTunnelPorts[i]
+    if (!node || localTunnelPort === undefined) continue
     log(`  Tunnel ${i + 1}/${allNodes.length}: localhost:${localTunnelPort} -> ${node}:${REMOTE_CADDY_PORT}`)
 
     const proc = spawnTunnelProcess(node, localTunnelPort, REMOTE_CADDY_PORT)
@@ -611,9 +618,10 @@ const main = async () => {
   let localPort = LOCAL_PORT_BASE
 
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--force') force = true
-    else if (args[i] === '--model') model = args[++i]
-    else if (args[i] === '--local-port') localPort = Number(args[++i] ?? LOCAL_PORT_BASE)
+    const arg = args[i]
+    if (arg === '--force') force = true
+    else if (arg === '--model') model = args[++i]
+    else if (arg === '--local-port') localPort = Number(args[++i] ?? LOCAL_PORT_BASE)
   }
 
   // 1. Check for existing pending/running jobs
@@ -690,11 +698,11 @@ const main = async () => {
     : `ALL,SGLANG_LOCAL_PORT_BASE=${localPort}`
   const result = await $`ssh ${GLOG} "cd ${MN5_ROOT} && sbatch --export=${exportVars} ${SBATCH_FILE}"`.text()
   const jobIdMatch = result.match(/Submitted batch job (\d+)/)
-  if (!jobIdMatch) {
+  const jobId = jobIdMatch?.[1]
+  if (!jobId) {
     console.error('Failed to submit job:', result)
     process.exit(1)
   }
-  const jobId = jobIdMatch[1]
   activeJobId = jobId // Set for cleanup
   log(`Job submitted: ${jobId}`)
 

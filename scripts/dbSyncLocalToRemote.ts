@@ -341,10 +341,10 @@ const adjustRemoteSequences = async (db: string, tables: string[]): Promise<void
     : []
   const entries = rows
     .map((r) => {
-      return {table: r[0], col: r[1], seq: r[2]}
+      return {table: r[0] ?? '', col: r[1] ?? '', seq: r[2] ?? ''}
     })
     .filter((e) => {
-      return e.table && e.col && e.seq
+      return Boolean(e.table) && Boolean(e.col) && Boolean(e.seq)
     })
     .filter((e) => {
       return tables.includes(e.table)
@@ -387,7 +387,10 @@ const main = async (): Promise<void> => {
   await assertLocalDbRunning()
 
   const remoteUrl = env.REMOTE_DATABASE_URL
-  if (!remoteUrl) fail('REMOTE_DATABASE_URL is not set')
+  if (!remoteUrl) {
+    fail('REMOTE_DATABASE_URL is not set')
+    return
+  }
 
   const remote = parseDbUrl(remoteUrl)
   const remoteId = process.env.REMOTE_ID || `${remote.host}:${remote.port}/${remote.db}`

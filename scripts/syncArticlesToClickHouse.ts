@@ -31,8 +31,9 @@ const getLastSyncedUpdatedAt = async (): Promise<string | null> => {
     query: 'SELECT max(updated_at) as max_updated_at FROM forska.articles',
     format: 'JSONEachRow',
   })
-  const rows = await result.json<{max_updated_at: string | null}[]>()
-  return rows[0]?.max_updated_at ?? null
+  const rows = await result.json<{max_updated_at: string | null}>()
+  const firstRow = Array.isArray(rows) ? rows[0] : rows
+  return firstRow?.max_updated_at ?? null
 }
 
 const syncArticlesBatch = async (
@@ -67,8 +68,9 @@ const syncArticlesBatch = async (
     query: `SELECT count() as cnt FROM postgresql(${pgConnStr}) ${whereClause}`,
     format: 'JSONEachRow',
   })
-  const countRows = await countResult.json<{cnt: string}[]>()
-  return parseInt(countRows[0]?.cnt ?? '0', 10)
+  const countRows = await countResult.json<{cnt: string}>()
+  const firstRow = Array.isArray(countRows) ? countRows[0] : countRows
+  return parseInt(firstRow?.cnt ?? '0', 10)
 }
 
 export const syncArticlesToClickHouse = async (): Promise<SyncResult> => {

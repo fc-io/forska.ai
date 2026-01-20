@@ -172,7 +172,8 @@ const storeTokenUseViaAPI = async (
     successfulRequests: totalTokenUse.successfulRequests,
     failedRequests: totalTokenUse.failedRequests,
     hasFailedRequests: totalTokenUse.hasFailedRequests,
-    failedRequestsDetails: totalTokenUse.failedRequestsDetails,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    failedRequestsDetails: totalTokenUse.failedRequestsDetails as any,
     totalSuccessPromptTokens: totalTokenUse.totalSuccessPromptTokens,
     totalSuccessCompletionTokens: totalTokenUse.totalSuccessCompletionTokens,
     totalSuccessTokens: totalTokenUse.totalSuccessTokens,

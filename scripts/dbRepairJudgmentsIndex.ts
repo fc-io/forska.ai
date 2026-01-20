@@ -26,7 +26,7 @@ const parseArgs = (): Opts => {
   }
   const args = process.argv.slice(2)
   const next = (i: number): string => {
-    return args[i + 1]
+    return args[i + 1] ?? ''
   }
   const updated = args.reduce((acc, cur, i) => {
     if (cur === '-h' || cur === '--host') return {...acc, host: next(i)}

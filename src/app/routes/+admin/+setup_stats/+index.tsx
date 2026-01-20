@@ -58,7 +58,10 @@ const AdminConfiguration = () => {
       queryKey: ['models', 'admin-list'],
       queryFn: async () => {
         const response = await apiClient.api.models.get()
-        const result = handleApiResponse<ModelsResponse>(response, 'Failed to load models')
+        const result = handleApiResponse<ModelsResponse>(
+          response as {data?: ModelsResponse; error?: unknown},
+          'Failed to load models',
+        )
         return result.data ?? []
       },
       staleTime: 1000 * 60 * 5,
@@ -71,7 +74,10 @@ const AdminConfiguration = () => {
       queryKey: ['models', 'gpu-info'],
       queryFn: async () => {
         const response = await apiClient.api.models['gpu-info'].get()
-        const result = handleApiResponse<GpuInfoResponse>(response, 'Failed to load GPU info')
+        const result = handleApiResponse<GpuInfoResponse>(
+          response as {data?: GpuInfoResponse; error?: unknown},
+          'Failed to load GPU info',
+        )
         return result.data
       },
       staleTime: 1000 * 30,
@@ -85,7 +91,7 @@ const AdminConfiguration = () => {
       queryFn: async () => {
         const response = await apiClient.api.tokens['largest-per-request'].get()
         const result = handleApiResponse<LargestPerRequestResponse>(
-          response,
+          response as {data?: LargestPerRequestResponse; error?: unknown},
           'Failed to load largest token per request',
         )
         return result.data ?? []
@@ -101,7 +107,7 @@ const AdminConfiguration = () => {
       queryFn: async () => {
         const response = await apiClient.api.tokens['largest-completion-per-request'].get()
         const result = handleApiResponse<LargestCompletionPerRequestResponse>(
-          response,
+          response as {data?: LargestCompletionPerRequestResponse; error?: unknown},
           'Failed to load largest completion tokens per request',
         )
         return result.data ?? []

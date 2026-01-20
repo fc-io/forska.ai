@@ -138,7 +138,7 @@ const AdminJudgmentJobDetail = () => {
 
           <Show when={job.data}>
             {(jobData) => {
-              const data = jobData as () => JobData | undefined
+              const data = jobData as unknown as () => JobData | undefined
               const jobDetails = () => {
                 return data()
               }
@@ -210,13 +210,13 @@ const AdminJudgmentJobDetail = () => {
                       <div>
                         <p class="text-sm text-gray-500">Created</p>
                         <p class="font-medium">
-                          {data()?.createdAt ? formatDate(new Date(data().createdAt), 'yyyy-MM-dd HH:mm:ss') : 'N/A'}
+                          {data()?.createdAt ? formatDate(new Date(data()?.createdAt ?? ''), 'yyyy-MM-dd HH:mm:ss') : 'N/A'}
                         </p>
                       </div>
                       <div>
                         <p class="text-sm text-gray-500">Last Updated</p>
                         <p class="font-medium">
-                          {data()?.updatedAt ? formatDate(new Date(data().updatedAt), 'yyyy-MM-dd HH:mm:ss') : 'N/A'}
+                          {data()?.updatedAt ? formatDate(new Date(data()?.updatedAt ?? ''), 'yyyy-MM-dd HH:mm:ss') : 'N/A'}
                         </p>
                       </div>
                     </div>
@@ -302,9 +302,13 @@ const AdminJudgmentJobDetail = () => {
                   </Show>
 
                   <Show when={data()?.projectId}>
-                    <div class="mb-6">
-                      <TokenUsageTimeline projectId={data().projectId} />
-                    </div>
+                    {(projectId) => {
+                      return (
+                        <div class="mb-6">
+                          <TokenUsageTimeline projectId={projectId()} />
+                        </div>
+                      )
+                    }}
                   </Show>
 
                   <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">

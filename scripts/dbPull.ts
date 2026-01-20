@@ -34,7 +34,8 @@ const volumeExists = async (name: string): Promise<boolean> => {
 }
 
 const pickVolume = async (names: string[]): Promise<string | undefined> => {
-  return names.length === 0 ? undefined : (await volumeExists(names[0])) ? names[0] : await pickVolume(names.slice(1))
+  const first = names[0]
+  return names.length === 0 || !first ? undefined : (await volumeExists(first)) ? first : await pickVolume(names.slice(1))
 }
 
 const getPgVolume = async (): Promise<string> => {

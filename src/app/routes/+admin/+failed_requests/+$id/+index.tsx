@@ -135,7 +135,9 @@ const FailedRequestDetail = () => {
           }
         >
           {(request) => {
-            const failureDetails = Array.isArray(request().failedRequestsDetails) ? request().failedRequestsDetails : []
+            const failureDetails = Array.isArray(request().failedRequestsDetails)
+              ? (request().failedRequestsDetails as unknown[])
+              : []
             const hasFailureDetails = failureDetails.length > 0
             return (
               <div class="space-y-6">
@@ -199,8 +201,8 @@ const FailedRequestDetail = () => {
                   fallback={<p class="text-gray-500">No detailed failure information available.</p>}
                 >
                   <div class="space-y-4">
-                    <For each={failureDetails}>
-                      {(detail: FailedRequestDetailItem, index) => {
+                    <For each={failureDetails as FailedRequestDetailItem[]}>
+                      {(detail, index) => {
                         return (
                           <div class="bg-white shadow overflow-hidden sm:rounded-lg border border-gray-200">
                             <div class="px-4 py-4 sm:px-6 bg-red-50 border-b border-red-100 flex justify-between items-center">

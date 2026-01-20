@@ -5,8 +5,8 @@ const SSH_HOST = 'alog'
 const GLOG = 'glog'
 const MN5_ROOT = '/gpfs/projects/ehpc482/dev'
 
-const log = (m: string) => {
-  return <string>console.log(`[mn5:smi] ${m}`)
+const log = (m: string): void => {
+  console.log(`[mn5:smi] ${m}`)
 }
 
 // Helper to run SSH command
@@ -51,7 +51,9 @@ const parseConfigFromLog = async (jobId: string): Promise<Record<string, string>
       const trimmed = line.trim()
       if (!trimmed || !trimmed.includes('=')) continue
       const [key, ...valueParts] = trimmed.split('=')
-      config[key.trim()] = valueParts.join('=').trim()
+      if (key) {
+        config[key.trim()] = valueParts.join('=').trim()
+      }
     }
     return config
   } catch (e) {
@@ -81,7 +83,8 @@ const main = async () => {
 
   for (const url of workerUrls) {
     const match = url.match(/http:\/\/([^:]+):/)
-    if (match) hosts.add(match[1])
+    const host = match?.[1]
+    if (host) hosts.add(host)
   }
 
   if (hosts.size === 0) {
@@ -108,4 +111,4 @@ const main = async () => {
   }
 }
 
-main()
+void main()

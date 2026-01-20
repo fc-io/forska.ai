@@ -29,10 +29,10 @@ const main = async () => {
     console.log(`Total time: ${elapsed.toFixed(0)}ms`)
     console.log(`Articles returned: ${result.data.length}`)
 
-    if (result.data.length > 0) {
+    const first = result.data[0]
+    if (first) {
       console.log('')
       console.log('First article:')
-      const first = result.data[0]
       console.log(`  ID: ${first.id}`)
       console.log(`  Title: ${first.articleTitle?.substring(0, 60)}...`)
       console.log(`  Created: ${first.articleCreatedAt}`)

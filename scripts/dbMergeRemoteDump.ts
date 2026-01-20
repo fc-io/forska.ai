@@ -186,6 +186,9 @@ const getForeignKeyEdges = async (db: string): Promise<Array<{table: string; ref
     .map((l) => {
       return l.split('|')
     })
+    .filter((parts): parts is [string, string] => {
+      return parts.length >= 2 && parts[0] !== undefined && parts[1] !== undefined
+    })
     .map(([table, referencedTable]) => {
       return {table, referencedTable}
     })
@@ -352,15 +355,15 @@ const adjustSequences = async (db: string, tables: string[]): Promise<void> => {
     .map((r) => {
       return {table: r[0], col: r[1], seq: r[2]}
     })
-    .filter((e) => {
-      return e.table && e.col && e.seq
+    .filter((e): e is {table: string; col: string; seq: string} => {
+      return Boolean(e.table) && Boolean(e.col) && Boolean(e.seq)
     })
     .filter((e) => {
       return tables.includes(e.table)
     })
   const apply = async (i: number): Promise<void> => {
-    if (i >= entries.length) return
     const e = entries[i]
+    if (!e) return
     log(`Adjust sequence for ${e.table}.${e.col}`)
     const set = `SELECT setval('${e.seq}', COALESCE((SELECT MAX("${e.col}") FROM public."${e.table}"), 0), true);`
     await runPsql(db, set)
@@ -420,8 +423,8 @@ const main = async (): Promise<void> => {
   log(`Tables to merge (${mergeTables.length}): ${mergeTables.join(', ')}`)
 
   const processTable = async (idx: number): Promise<void> => {
-    if (idx >= mergeTables.length) return
     const table = mergeTables[idx]
+    if (!table) return
     const meta = await getTableMeta(localDb, table)
     if (meta.pkeys.length === 0) {
       log(`Skip ${table}: no primary key`)

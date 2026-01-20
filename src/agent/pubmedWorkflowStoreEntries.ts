@@ -124,21 +124,24 @@ const storeBatch = async (batch: DatabaseEntry[]): Promise<void> => {
   )
 
   // Resolve DB article ids for linking
-  const dbArticles = await db
-    .select({id: articles.id, articleId: articles.articleId})
-    .from(articles)
-    .where(
-      inArray(
-        articles.articleId,
-        upserted.map((r) => {
-          return r.articleId
-        }),
-      ),
-    )
+  const articleIds = upserted
+    .map((r) => {
+      return r.articleId
+    })
+    .filter((id): id is string => {
+      return id !== null
+    })
+  const dbArticles = articleIds.length === 0
+    ? []
+    : await db
+        .select({id: articles.id, articleId: articles.articleId})
+        .from(articles)
+        .where(inArray(articles.articleId, articleIds))
 
   const links = dbArticles
     .map((a) => {
-      const route = articleIdToRoute.get(a.articleId)
+      const articleIdValue = a.articleId
+      const route = articleIdValue ? articleIdToRoute.get(articleIdValue) : undefined
       const routeId = route ? routeMap.get(route) : undefined
       return routeId ? {articleId: a.id, importRouteId: routeId} : null
     })
