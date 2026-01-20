@@ -378,7 +378,7 @@ const ExportData = () => {
                     }}
                   />
                   <div class="flex-1">
-                    <p class="text-sm font-medium text-gray-900">Include Article Link</p>
+                    <p class="text-sm font-medium text-gray-900">Include Article Link (external)</p>
                   </div>
                 </label>
                 <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer hover:bg-muted/50">
