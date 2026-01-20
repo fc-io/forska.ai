@@ -210,13 +210,17 @@ const AdminJudgmentJobDetail = () => {
                       <div>
                         <p class="text-sm text-gray-500">Created</p>
                         <p class="font-medium">
-                          {data()?.createdAt ? formatDate(new Date(data()?.createdAt ?? ''), 'yyyy-MM-dd HH:mm:ss') : 'N/A'}
+                          {data()?.createdAt
+                            ? formatDate(new Date(data()?.createdAt ?? ''), 'yyyy-MM-dd HH:mm:ss')
+                            : 'N/A'}
                         </p>
                       </div>
                       <div>
                         <p class="text-sm text-gray-500">Last Updated</p>
                         <p class="font-medium">
-                          {data()?.updatedAt ? formatDate(new Date(data()?.updatedAt ?? ''), 'yyyy-MM-dd HH:mm:ss') : 'N/A'}
+                          {data()?.updatedAt
+                            ? formatDate(new Date(data()?.updatedAt ?? ''), 'yyyy-MM-dd HH:mm:ss')
+                            : 'N/A'}
                         </p>
                       </div>
                     </div>

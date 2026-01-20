@@ -180,8 +180,8 @@ const CreateSubproject = () => {
     return types.includes(answerType)
   }
 
-  const hasAnySelections = () => {
-    return Object.keys(promptAnswerTypes()).length > 0
+  const hasSelectedProjects = () => {
+    return selectedProjects().length > 0
   }
 
   const handleSubmit = async (e: Event) => {
@@ -198,8 +198,8 @@ const CreateSubproject = () => {
       return
     }
 
-    if (!hasAnySelections()) {
-      setError('Please select at least one answer type for a prompt')
+    if (!hasSelectedProjects()) {
+      setError('Please select at least one source project')
       return
     }
 
@@ -457,7 +457,7 @@ const CreateSubproject = () => {
             </Show>
 
             <div class="flex gap-3 pt-4">
-              <Button type="submit" disabled={!projectName().trim() || !hasAnySelections() || isLoading()}>
+              <Button type="submit" disabled={!projectName().trim() || !hasSelectedProjects() || isLoading()}>
                 {isLoading() ? 'Creating...' : 'Create Project'}
               </Button>
               <Button as={Link} to="/projects" variant="outline">

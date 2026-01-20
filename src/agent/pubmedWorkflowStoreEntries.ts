@@ -131,12 +131,13 @@ const storeBatch = async (batch: DatabaseEntry[]): Promise<void> => {
     .filter((id): id is string => {
       return id !== null
     })
-  const dbArticles = articleIds.length === 0
-    ? []
-    : await db
-        .select({id: articles.id, articleId: articles.articleId})
-        .from(articles)
-        .where(inArray(articles.articleId, articleIds))
+  const dbArticles =
+    articleIds.length === 0
+      ? []
+      : await db
+          .select({id: articles.id, articleId: articles.articleId})
+          .from(articles)
+          .where(inArray(articles.articleId, articleIds))
 
   const links = dbArticles
     .map((a) => {

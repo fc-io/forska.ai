@@ -36,6 +36,73 @@ const chunk = <T>(arr: T[], size: number): T[][] => {
   return out
 }
 
+type ProjectBound = {
+  id: string
+  modelId: string
+  useTitle: boolean
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+}
+
+type PromptFilter = {promptId: string; types: string[]}
+
+const queryArticlesWithPromptFilters = async (
+  db: ReturnType<typeof getDatabase>,
+  promptFilters: PromptFilter[],
+  allSelectedPromptIds: string[],
+  projectBounds: ProjectBound[],
+  combinedWhereCondition: ReturnType<typeof and> | ReturnType<typeof sql> | undefined,
+) => {
+  const normalized = sql`COALESCE(${judgments.answeredOriginalAsArray}, CASE WHEN ${judgments.answeredOriginal} IS NOT NULL THEN ARRAY[${judgments.answeredOriginal}] ELSE ARRAY[]::text[] END)`
+
+  const havingParts: Array<ReturnType<typeof sql>> = []
+  for (const filter of promptFilters) {
+    const answeredValsArray = sql.join(
+      filter.types.map((v) => {
+        return sql`${v}`
+      }),
+      sql`,`,
+    )
+    havingParts.push(
+      sql`SUM(CASE WHEN ${judgments.promptId} = ${filter.promptId}::uuid AND (${normalized}) && ARRAY[${answeredValsArray}]::text[] THEN 1 ELSE 0 END) > 0`,
+    )
+  }
+
+  const judgmentConfigParts = projectBounds.map((proj) => {
+    return and(
+      eq(judgments.modelId, proj.modelId),
+      eq(judgments.useTitle, proj.useTitle),
+      eq(judgments.useAbstract, proj.useAbstract),
+      eq(judgments.useFulltext, proj.useFulltext),
+      eq(judgments.useFulltextNoImages, proj.useFulltextNoImages),
+    )
+  })
+  const judgmentConfigCondition = judgmentConfigParts.length > 1 ? or(...judgmentConfigParts) : judgmentConfigParts[0]
+
+  return db
+    .select({id: articles.id})
+    .from(articles)
+    .innerJoin(
+      judgments,
+      and(
+        eq(judgments.articleId, articles.id),
+        inArray(judgments.promptId, allSelectedPromptIds),
+        judgmentConfigCondition,
+      ),
+    )
+    .where(combinedWhereCondition)
+    .groupBy(articles.id)
+    .having(and(...havingParts))
+}
+
+const queryAllArticlesInScope = async (
+  db: ReturnType<typeof getDatabase>,
+  combinedWhereCondition: ReturnType<typeof and> | ReturnType<typeof sql> | undefined,
+) => {
+  return db.select({id: articles.id}).from(articles).where(combinedWhereCondition)
+}
+
 export const subprojectsRoutes = new Elysia()
   .use(withErrorHandler())
   .use(requireUserAuth())
@@ -194,12 +261,7 @@ export const subprojectsRoutes = new Elysia()
         return s.types.length > 0
       })
 
-      if (promptFilters.length === 0) {
-        console.log(`[subprojects] No valid prompt selections, no articles added`)
-        return {data: {project: newProject, articleCount: 0}}
-      }
-
-      // Get all prompt IDs that we're filtering on
+      // Get all prompt IDs that we're filtering on (may be empty)
       const allSelectedPromptIds = promptFilters.map((f) => {
         return f.promptId
       })
@@ -240,25 +302,6 @@ export const subprojectsRoutes = new Elysia()
         if (row.dateTo && (!effectiveDateTo || row.dateTo < effectiveDateTo)) {
           effectiveDateTo = row.dateTo
         }
-      }
-
-      // Use HAVING-based filtering: articles must match ALL prompt/type filters
-      const normalized = sql`COALESCE(${judgments.answeredOriginalAsArray}, CASE WHEN ${judgments.answeredOriginal} IS NOT NULL THEN ARRAY[${judgments.answeredOriginal}] ELSE ARRAY[]::text[] END)`
-
-      // Build HAVING conditions for ALL selected prompt/type filters
-      // Each condition requires that the article has at least one judgment for that prompt
-      // with an answer matching one of the selected types
-      const havingParts: Array<ReturnType<typeof sql>> = []
-      for (const filter of promptFilters) {
-        const answeredValsArray = sql.join(
-          filter.types.map((v) => {
-            return sql`${v}`
-          }),
-          sql`,`,
-        )
-        havingParts.push(
-          sql`SUM(CASE WHEN ${judgments.promptId} = ${filter.promptId}::uuid AND (${normalized}) && ARRAY[${answeredValsArray}]::text[] THEN 1 ELSE 0 END) > 0`,
-        )
       }
 
       // Build scope condition: articles accessible via ANY source project's import routes or project_articles
@@ -322,39 +365,17 @@ export const subprojectsRoutes = new Elysia()
 
       const combinedWhereCondition = whereParts.length > 1 ? and(...whereParts) : whereParts[0]
 
-      // Build judgment filter: must match model+content from at least one source project
-      // Each source project has its own model and content settings
-      const judgmentConfigParts = projectBounds.map((proj) => {
-        return and(
-          eq(judgments.modelId, proj.modelId),
-          eq(judgments.useTitle, proj.useTitle),
-          eq(judgments.useAbstract, proj.useAbstract),
-          eq(judgments.useFulltext, proj.useFulltext),
-          eq(judgments.useFulltextNoImages, proj.useFulltextNoImages),
-        )
-      })
-      const judgmentConfigCondition =
-        judgmentConfigParts.length > 1 ? or(...judgmentConfigParts) : judgmentConfigParts[0]
-
-      // Single query: find all articles that match ALL prompt/type combinations
-      // Join on all selected prompts and use HAVING to ensure ALL conditions are met
-      // Filter judgments by prompt IDs and model+content configuration from source projects
-      const groupedQuery = db
-        .select({id: articles.id})
-        .from(articles)
-        .innerJoin(
-          judgments,
-          and(
-            eq(judgments.articleId, articles.id),
-            inArray(judgments.promptId, allSelectedPromptIds),
-            judgmentConfigCondition,
-          ),
-        )
-        .where(combinedWhereCondition)
-        .groupBy(articles.id)
-        .having(and(...havingParts))
-
-      const matchingArticles = await groupedQuery
+      // Query articles - with or without prompt filtering
+      const matchingArticles =
+        promptFilters.length > 0
+          ? await queryArticlesWithPromptFilters(
+              db,
+              promptFilters,
+              allSelectedPromptIds,
+              projectBounds,
+              combinedWhereCondition,
+            )
+          : await queryAllArticlesInScope(db, combinedWhereCondition)
       const articleIds = matchingArticles.map((row) => {
         return row.id
       })
