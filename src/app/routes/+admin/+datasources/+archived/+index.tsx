@@ -197,9 +197,7 @@ const ArchivedDataSources = () => {
                               </div>
                               <div class="text-sm text-gray-500">
                                 <span class="font-medium text-gray-700">Date To:</span>{' '}
-                                {entry.dateTo
-                                  ? formatDate(new Date(entry.dateTo), 'yyyy-MM-dd HH:mm xxx')
-                                  : 'Not set'}
+                                {entry.dateTo ? formatDate(new Date(entry.dateTo), 'yyyy-MM-dd HH:mm xxx') : 'Not set'}
                               </div>
                               <div class="text-sm text-gray-500">
                                 <span class="font-medium text-gray-700">Items After Import:</span>{' '}
