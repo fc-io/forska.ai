@@ -167,6 +167,7 @@ export const dataSource = pgTable(
         },
         {onDelete: 'cascade'},
       ),
+    archived: boolean('archived').default(false).notNull(),
   },
   (table) => {
     return [index('datasource_owner_idx').on(table.ownerId)]

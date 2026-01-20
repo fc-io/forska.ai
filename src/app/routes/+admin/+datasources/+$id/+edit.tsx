@@ -82,12 +82,12 @@ const updateDataSource = async (
   }
 }
 
-const deleteDataSource = async (id: string): Promise<void> => {
+const archiveDataSource = async (id: string): Promise<void> => {
   const response = await apiClient.api.datasources({id}).delete()
 
   if (response.error) {
-    console.error('Error deleting data source:', response.error)
-    throw new Error('Failed to delete data source')
+    console.error('Error archiving data source:', response.error)
+    throw new Error('Failed to archive data source')
   }
 }
 
@@ -116,8 +116,8 @@ const AdminEditDataSource = () => {
   const [dateFrom, setDateFrom] = createSignal('')
   const [dateTo, setDateTo] = createSignal('')
   const [isSaving, setIsSaving] = createSignal(false)
-  const [isDeleting, setIsDeleting] = createSignal(false)
-  const [showDeleteConfirm, setShowDeleteConfirm] = createSignal(false)
+  const [isArchiving, setIsArchiving] = createSignal(false)
+  const [showArchiveConfirm, setShowArchiveConfirm] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
   const [successMessage, setSuccessMessage] = createSignal<string | null>(null)
 
@@ -204,20 +204,20 @@ const AdminEditDataSource = () => {
       })
   }
 
-  const handleDelete = () => {
+  const handleArchive = () => {
     setError(null)
     setSuccessMessage(null)
-    setIsDeleting(true)
+    setIsArchiving(true)
 
-    void deleteDataSource(dataSourceId())
+    void archiveDataSource(dataSourceId())
       .then(() => {
         void navigate({to: '/admin/datasources'})
       })
-      .catch((deleteError) => {
-        const message = deleteError instanceof Error ? deleteError.message : 'Failed to delete data source'
+      .catch((archiveError) => {
+        const message = archiveError instanceof Error ? archiveError.message : 'Failed to archive data source'
         setError(message)
-        setIsDeleting(false)
-        setShowDeleteConfirm(false)
+        setIsArchiving(false)
+        setShowArchiveConfirm(false)
       })
   }
 
@@ -335,44 +335,40 @@ const AdminEditDataSource = () => {
                 <button
                   type="button"
                   onClick={() => {
-                    setShowDeleteConfirm(true)
+                    setShowArchiveConfirm(true)
                   }}
-                  class="ml-auto px-4 py-2 rounded-md bg-red-600 text-white text-sm font-medium hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500"
+                  class="ml-auto px-4 py-2 rounded-md border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500"
                 >
-                  Delete Data Source
+                  Archive Data Source
                 </button>
               </div>
 
-              {/* Delete Confirmation Dialog */}
-              <Show when={showDeleteConfirm()}>
+              <Show when={showArchiveConfirm()}>
                 <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
                   <div class="bg-white rounded-lg shadow-xl p-6 max-w-md mx-4">
-                    <h2 class="text-lg font-semibold text-gray-900 mb-2">Delete Data Source</h2>
+                    <h2 class="text-lg font-semibold text-gray-900 mb-2">Archive Data Source</h2>
                     <p class="text-gray-600 mb-4">
-                      Are you sure you want to delete this data source? This action cannot be undone.
-                    </p>
-                    <p class="text-sm text-gray-500 mb-6">
-                      Note: This will only delete the data source record. Articles imported through this data source
-                      will not be affected.
+                      Are you sure you want to archive this data source? You can restore it later from the archived data
+                      sources page.
                     </p>
                     <div class="flex justify-end gap-3">
                       <button
                         type="button"
                         onClick={() => {
-                          setShowDeleteConfirm(false)
+                          setShowArchiveConfirm(false)
                         }}
                         class="px-4 py-2 rounded-md border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50"
-                        disabled={isDeleting()}
+                        disabled={isArchiving()}
                       >
                         Cancel
                       </button>
                       <button
                         type="button"
-                        onClick={handleDelete}
-                        class="px-4 py-2 rounded-md bg-red-600 text-white text-sm font-medium hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500"
-                        disabled={isDeleting()}
+                        onClick={handleArchive}
+                        class="px-4 py-2 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        disabled={isArchiving()}
                       >
-                        {isDeleting() ? 'Deleting...' : 'Delete'}
+                        {isArchiving() ? 'Archiving...' : 'Archive'}
                       </button>
                     </div>
                   </div>

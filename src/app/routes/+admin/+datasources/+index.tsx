@@ -1,8 +1,9 @@
-import {useQuery} from '@tanstack/solid-query'
+import {useQuery, useQueryClient} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
 import {formatDate} from 'date-fns'
 import {createSignal, For, Show, Suspense} from 'solid-js'
 
+import {Button} from '../../../../components/ui/button'
 import {apiClient} from '../../../../services/apiClient.ts'
 import {fetchSession} from '../../../../services/fetchSession.ts'
 
@@ -40,7 +41,16 @@ const formatImportTimestamp = (value: string | null) => {
   return value ? formatDate(new Date(value), 'yyyy-MM-dd HH:mm') : 'Never imported'
 }
 
+const archiveDataSource = async (id: string) => {
+  const response = await apiClient.api.datasources({id}).delete()
+  if (response.error) {
+    throw new Error('Failed to archive data source')
+  }
+  return response.data
+}
+
 const AdminDataSources = () => {
+  const queryClient = useQueryClient()
   const sessionQuery = useQuery(() => {
     return {queryKey: ['session'], queryFn: fetchSession}
   })
@@ -57,6 +67,7 @@ const AdminDataSources = () => {
 
   const [searchTerm, setSearchTerm] = createSignal('')
   const [selectedFilter, setSelectedFilter] = createSignal<'all' | 'owned' | 'shared'>('all')
+  const [pendingArchiveId, setPendingArchiveId] = createSignal<string | null>(null)
 
   const currentUserId = () => {
     return sessionQuery.data?.user?.id ?? ''
@@ -150,12 +161,17 @@ const AdminDataSources = () => {
         >
           <div class="flex justify-between items-center mb-6">
             <h1 class="text-2xl font-bold">Data Sources</h1>
-            <Link
-              to="/admin/datasources/create"
-              class="px-4 py-2 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              Add Data Source
-            </Link>
+            <div class="flex gap-2">
+              <Button as={Link} to="/admin/datasources/archived" variant="outline" size="sm">
+                Archived
+              </Button>
+              <Link
+                to="/admin/datasources/create"
+                class="px-4 py-2 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                Add Data Source
+              </Link>
+            </div>
           </div>
 
           <div class="space-y-4">
@@ -397,6 +413,30 @@ const AdminDataSources = () => {
                                     New Import
                                   </button>
                                 </Show>
+                                <button
+                                  type="button"
+                                  disabled={pendingArchiveId() === entry.id}
+                                  onClick={() => {
+                                    if (!confirm('Archive this data source?')) {
+                                      return
+                                    }
+                                    setPendingArchiveId(entry.id)
+                                    void archiveDataSource(entry.id).then(
+                                      () => {
+                                        setPendingArchiveId(null)
+                                        void queryClient.invalidateQueries({queryKey: ['datasources']})
+                                      },
+                                      (error) => {
+                                        console.error('Failed to archive data source', error)
+                                        setPendingArchiveId(null)
+                                        alert('Failed to archive data source')
+                                      },
+                                    )
+                                  }}
+                                  class="px-3 py-1.5 rounded-md border border-gray-200 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 disabled:opacity-50"
+                                >
+                                  {pendingArchiveId() === entry.id ? 'Archiving...' : 'Archive'}
+                                </button>
                               </div>
                             </td>
                           </tr>
