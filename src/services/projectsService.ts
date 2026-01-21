@@ -36,6 +36,15 @@ export const archiveProject = async (projectId: string): Promise<void> => {
   }
 }
 
+export const unarchiveProject = async (projectId: string): Promise<void> => {
+  const response = await apiClient.api.projects({id: projectId}).unarchive.post()
+
+  if (response.error || !response.data?.success) {
+    console.error('Error unarchiving project:', response.error)
+    throw new Error('Failed to unarchive project')
+  }
+}
+
 export const createProject = async (
   name: string,
   description: string | null,

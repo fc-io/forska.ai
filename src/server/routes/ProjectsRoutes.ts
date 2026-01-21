@@ -790,6 +790,20 @@ export const projectsRoutes = new Elysia()
 
     return {success: true}
   })
+  .post('/api/projects/:id/unarchive', async ({params}) => {
+    const db = getDatabase()
+    const [unarchivedProject] = await db
+      .update(projects)
+      .set({archived: false, updatedAt: new Date()})
+      .where(eq(projects.id, params.id))
+      .returning()
+
+    if (!unarchivedProject) {
+      throw new Error('Project not found')
+    }
+
+    return {success: true}
+  })
   .post('/api/projects/:id/clone', async ({params}) => {
     const db = getDatabase()
 

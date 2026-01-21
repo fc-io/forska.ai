@@ -43,7 +43,13 @@ export const ArchivedProjectsPage = () => {
         </Show>
 
         <Show when={projects.data && Array.isArray(projects.data) && (projects.data?.length ?? 0) > 0}>
-          <ProjectsGrid projects={projects.data || []} />
+          <ProjectsGrid
+            projects={projects.data || []}
+            isArchived
+            onUnarchive={() => {
+              void projects.refetch()
+            }}
+          />
         </Show>
       </Suspense>
     </div>

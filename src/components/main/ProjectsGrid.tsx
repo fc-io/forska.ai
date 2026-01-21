@@ -1,16 +1,18 @@
 import {Link} from '@tanstack/solid-router'
 import {format} from 'date-fns'
-import {createMemo, createSignal, For} from 'solid-js'
+import {createMemo, createSignal, For, Show} from 'solid-js'
 
 import {createJudgmentsJob} from '../../services/judgmentsJobsService'
 import type {fetchProjects} from '../../services/projectsService'
-import {cloneProject} from '../../services/projectsService'
+import {cloneProject, unarchiveProject} from '../../services/projectsService'
 import {Button} from '../ui/button'
 
 type Project = Awaited<ReturnType<typeof fetchProjects>>[number]
 
 interface IndexProjectsGridProps {
   projects: Project[]
+  isArchived?: boolean
+  onUnarchive?: () => void
 }
 
 const getProjectModelLabel = (project: Project) => {
@@ -73,6 +75,26 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
     }
   }
 
+  const [unarchivingProjects, setUnarchivingProjects] = createSignal<Set<string>>(new Set())
+  const handleUnarchiveProject = async (projectId: string) => {
+    setUnarchivingProjects((prev) => {
+      return new Set([...prev, projectId])
+    })
+    try {
+      await unarchiveProject(projectId)
+      console.log('Project unarchived:', projectId)
+      props.onUnarchive?.()
+    } catch (error) {
+      console.error('Failed to unarchive project:', error)
+    } finally {
+      setUnarchivingProjects((prev) => {
+        const next = new Set(prev)
+        next.delete(projectId)
+        return next
+      })
+    }
+  }
+
   return (
     <ul class="flex flex-col gap-6 mb-8 list-none p-0">
       {}
@@ -89,9 +111,18 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
                     </p>
                   </div>
                   <div class="flex items-center gap-2">
-                    <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                      Active
-                    </span>
+                    <Show
+                      when={props.isArchived}
+                      fallback={
+                        <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                          Active
+                        </span>
+                      }
+                    >
+                      <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                        Archived
+                      </span>
+                    </Show>
                     <span class="text-sm text-muted-foreground">
                       Created: {format(project.createdAt, 'yyyy-MM-dd HH:mm')}
                     </span>
@@ -105,6 +136,18 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
                   </p>
                 )}
                 <div class="flex gap-2">
+                  <Show when={props.isArchived}>
+                    <Button
+                      size="sm"
+                      class="px-3 py-1 text-sm"
+                      disabled={unarchivingProjects().has(project.id)}
+                      onClick={() => {
+                        void handleUnarchiveProject(project.id)
+                      }}
+                    >
+                      {unarchivingProjects().has(project.id) ? 'Unarchiving...' : 'Unarchive'}
+                    </Button>
+                  </Show>
                   <Button
                     as={Link}
                     to="/projects/$id"
@@ -166,16 +209,18 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
                   >
                     {cloningProjects().has(project.id) ? 'Cloning...' : 'Clone Project'}
                   </Button>
-                  <Button
-                    size="sm"
-                    class="px-3 py-1 text-sm"
-                    disabled={creatingJobs().has(project.id)}
-                    onClick={() => {
-                      void handleCreateJudgmentsJob(project.id)
-                    }}
-                  >
-                    {creatingJobs().has(project.id) ? 'Creating...' : 'Start Judgments Job'}
-                  </Button>
+                  <Show when={!props.isArchived}>
+                    <Button
+                      size="sm"
+                      class="px-3 py-1 text-sm"
+                      disabled={creatingJobs().has(project.id)}
+                      onClick={() => {
+                        void handleCreateJudgmentsJob(project.id)
+                      }}
+                    >
+                      {creatingJobs().has(project.id) ? 'Creating...' : 'Start Judgments Job'}
+                    </Button>
+                  </Show>
                 </div>
               </div>
             </li>
