@@ -21,6 +21,7 @@ import {
   projects,
   prompts,
 } from '../../db/schema.ts'
+import {isNumericType} from '../../server/routes/projectsRoutes/articlesReviewsFiltersUtils.ts'
 import {getDatabase} from '../../server/utils/getDatabase.ts'
 import {getJournalTitleFromOriginalData} from '../../utils/getJournalTitleFromOriginalData.ts'
 import {getClickhouseClient} from './clickhouseClient.ts'
@@ -106,9 +107,9 @@ const fetchProjectMetadataForClickHouse = async (projectId: string) => {
   const db = getDatabase()
 
   const [projectPromptRows, projectBoundsResult, projectImportRouteTexts, curatedArticleRows] = await Promise.all([
-    // Get enabled prompts for project
+    // Get enabled prompts for project with type info
     db
-      .select({id: prompts.id, order: projectPrompts.order})
+      .select({id: prompts.id, order: projectPrompts.order, type: prompts.type})
       .from(projectPrompts)
       .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
       .where(and(eq(projectPrompts.projectId, projectId), eq(projectPrompts.enabled, true)))
@@ -153,6 +154,12 @@ const fetchProjectMetadataForClickHouse = async (projectId: string) => {
         return {...acc, [p.id]: ord}
       },
       {} as Record<string, number>,
+    ),
+    promptTypes: projectPromptRows.reduce(
+      (acc, p) => {
+        return {...acc, [p.id]: p.type}
+      },
+      {} as Record<string, string | null>,
     ),
     projectBounds: projectBoundsResult[0] ?? null,
     modelId: projectBoundsResult[0]?.modelId ?? null,
@@ -401,22 +408,73 @@ export const queryArticlesReviewsFromClickHouse = async (
       for (const [promptId, answeredValues] of Object.entries(params.prompts)) {
         if (!answeredValues || answeredValues.length === 0) continue
 
-        const valuesQuoted = answeredValues
-          .map((v) => {
-            return `'${escapeClickHouseString(v)}'`
-          })
-          .join(', ')
-        // Check if any judgment for this prompt has any of the required answers
-        // IMPORTANT: answeredOriginalAsArray is empty for most rows (~98%), so we need to:
-        // 1. Check answeredOriginalAsArray if it's not empty (using hasAny)
-        // 2. OR check answeredOriginal directly (the single-value fallback)
-        // This mirrors the PostgreSQL COALESCE logic in articlesReviewsQueryBuilder.ts
-        havingParts.push(
-          `sumIf(1, promptId = '${promptId}' AND (
-            (length(answeredOriginalAsArray) > 0 AND hasAny(arrayMap(x -> assumeNotNull(x), arrayFilter(x -> x IS NOT NULL, answeredOriginalAsArray)), [${valuesQuoted}]))
-            OR (length(answeredOriginalAsArray) = 0 AND answeredOriginal IN (${valuesQuoted}))
-          )) > 0`,
-        )
+        const promptType = metadata.promptTypes[promptId]
+        const isNumeric = promptType && isNumericType(promptType)
+
+        if (isNumeric) {
+          // For numeric prompts, values can be:
+          // - Bin ranges: "bin:min:max" (e.g., "bin:0:12")
+          // - Special values: strings like "not applicable", "unsure"
+          const binRanges: Array<{min: number; max: number}> = []
+          const specialValues: string[] = []
+
+          for (const v of answeredValues) {
+            if (v.startsWith('bin:')) {
+              const parts = v.split(':')
+              const minStr = parts[1] ?? ''
+              const maxStr = parts[2] ?? ''
+              const min = parseInt(minStr, 10)
+              const max = parseInt(maxStr, 10)
+              if (!isNaN(min) && !isNaN(max)) {
+                binRanges.push({min, max})
+              }
+            } else {
+              specialValues.push(v)
+            }
+          }
+
+          const conditions: string[] = []
+
+          // Build range conditions for numeric bins
+          if (binRanges.length > 0) {
+            const rangeConditions = binRanges.map((range) => {
+              return `(toInt64OrNull(answeredOriginal) >= ${range.min} AND toInt64OrNull(answeredOriginal) <= ${range.max})`
+            })
+            conditions.push(`(${rangeConditions.join(' OR ')})`)
+          }
+
+          // Build IN condition for special values
+          if (specialValues.length > 0) {
+            const specialQuoted = specialValues
+              .map((v) => {
+                return `'${escapeClickHouseString(v)}'`
+              })
+              .join(', ')
+            conditions.push(`answeredOriginal IN (${specialQuoted})`)
+          }
+
+          if (conditions.length > 0) {
+            havingParts.push(`sumIf(1, promptId = '${promptId}' AND (${conditions.join(' OR ')})) > 0`)
+          }
+        } else {
+          // For non-numeric prompts, use the existing exact match logic
+          const valuesQuoted = answeredValues
+            .map((v) => {
+              return `'${escapeClickHouseString(v)}'`
+            })
+            .join(', ')
+          // Check if any judgment for this prompt has any of the required answers
+          // IMPORTANT: answeredOriginalAsArray is empty for most rows (~98%), so we need to:
+          // 1. Check answeredOriginalAsArray if it's not empty (using hasAny)
+          // 2. OR check answeredOriginal directly (the single-value fallback)
+          // This mirrors the PostgreSQL COALESCE logic in articlesReviewsQueryBuilder.ts
+          havingParts.push(
+            `sumIf(1, promptId = '${promptId}' AND (
+              (length(answeredOriginalAsArray) > 0 AND hasAny(arrayMap(x -> assumeNotNull(x), arrayFilter(x -> x IS NOT NULL, answeredOriginalAsArray)), [${valuesQuoted}]))
+              OR (length(answeredOriginalAsArray) = 0 AND answeredOriginal IN (${valuesQuoted}))
+            )) > 0`,
+          )
+        }
       }
     }
 
@@ -750,22 +808,73 @@ export const countArticlesReviewsFromClickHouse = async (
         for (const [promptId, answeredValues] of Object.entries(params.prompts)) {
           if (!answeredValues || answeredValues.length === 0) continue
 
-          const valuesQuoted = answeredValues
-            .map((v) => {
-              return `'${escapeClickHouseString(v)}'`
-            })
-            .join(', ')
-          // Check if any judgment for this prompt has any of the required answers
-          // IMPORTANT: answeredOriginalAsArray is empty for most rows (~98%), so we need to:
-          // 1. Check answeredOriginalAsArray if it's not empty (using hasAny)
-          // 2. OR check answeredOriginal directly (the single-value fallback)
-          // This mirrors the PostgreSQL COALESCE logic in articlesReviewsQueryBuilder.ts
-          havingParts.push(
-            `sumIf(1, promptId = '${promptId}' AND (
-              (length(answeredOriginalAsArray) > 0 AND hasAny(arrayMap(x -> assumeNotNull(x), arrayFilter(x -> x IS NOT NULL, answeredOriginalAsArray)), [${valuesQuoted}]))
-              OR (length(answeredOriginalAsArray) = 0 AND answeredOriginal IN (${valuesQuoted}))
-            )) > 0`,
-          )
+          const promptType = metadata.promptTypes[promptId]
+          const isNumeric = promptType && isNumericType(promptType)
+
+          if (isNumeric) {
+            // For numeric prompts, values can be:
+            // - Bin ranges: "bin:min:max" (e.g., "bin:0:12")
+            // - Special values: strings like "not applicable", "unsure"
+            const binRanges: Array<{min: number; max: number}> = []
+            const specialValues: string[] = []
+
+            for (const v of answeredValues) {
+              if (v.startsWith('bin:')) {
+                const parts = v.split(':')
+                const minStr = parts[1] ?? ''
+                const maxStr = parts[2] ?? ''
+                const min = parseInt(minStr, 10)
+                const max = parseInt(maxStr, 10)
+                if (!isNaN(min) && !isNaN(max)) {
+                  binRanges.push({min, max})
+                }
+              } else {
+                specialValues.push(v)
+              }
+            }
+
+            const conditions: string[] = []
+
+            // Build range conditions for numeric bins
+            if (binRanges.length > 0) {
+              const rangeConditions = binRanges.map((range) => {
+                return `(toInt64OrNull(answeredOriginal) >= ${range.min} AND toInt64OrNull(answeredOriginal) <= ${range.max})`
+              })
+              conditions.push(`(${rangeConditions.join(' OR ')})`)
+            }
+
+            // Build IN condition for special values
+            if (specialValues.length > 0) {
+              const specialQuoted = specialValues
+                .map((v) => {
+                  return `'${escapeClickHouseString(v)}'`
+                })
+                .join(', ')
+              conditions.push(`answeredOriginal IN (${specialQuoted})`)
+            }
+
+            if (conditions.length > 0) {
+              havingParts.push(`sumIf(1, promptId = '${promptId}' AND (${conditions.join(' OR ')})) > 0`)
+            }
+          } else {
+            // For non-numeric prompts, use the existing exact match logic
+            const valuesQuoted = answeredValues
+              .map((v) => {
+                return `'${escapeClickHouseString(v)}'`
+              })
+              .join(', ')
+            // Check if any judgment for this prompt has any of the required answers
+            // IMPORTANT: answeredOriginalAsArray is empty for most rows (~98%), so we need to:
+            // 1. Check answeredOriginalAsArray if it's not empty (using hasAny)
+            // 2. OR check answeredOriginal directly (the single-value fallback)
+            // This mirrors the PostgreSQL COALESCE logic in articlesReviewsQueryBuilder.ts
+            havingParts.push(
+              `sumIf(1, promptId = '${promptId}' AND (
+                (length(answeredOriginalAsArray) > 0 AND hasAny(arrayMap(x -> assumeNotNull(x), arrayFilter(x -> x IS NOT NULL, answeredOriginalAsArray)), [${valuesQuoted}]))
+                OR (length(answeredOriginalAsArray) = 0 AND answeredOriginal IN (${valuesQuoted}))
+              )) > 0`,
+            )
+          }
         }
       }
 

@@ -5,6 +5,20 @@ import {createEffect, createMemo, For, Show, Suspense} from 'solid-js'
 
 import {apiClient} from '../../../services/apiClient.ts'
 
+type NumericBin = {label: string; min: number; max: number}
+
+type EnumFilter = {promptId: string; promptName: string; filterType: 'enum'; answeredOriginalValues: string[]}
+
+type NumericFilter = {
+  promptId: string
+  promptName: string
+  filterType: 'numeric'
+  bins: NumericBin[]
+  specialValues: string[]
+}
+
+type PromptFilter = EnumFilter | NumericFilter
+
 interface ReviewsFilterControlsProps {
   projectId: string
   promptFilters: () => Record<string, string[] | null>
@@ -63,7 +77,7 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
           throw new Error('Failed to fetch filters')
         }
 
-        return response.data as Array<{promptId: string; promptName: string; answeredOriginalValues: string[]}>
+        return response.data as PromptFilter[]
       },
       enabled: !props.hidePromptSelectors,
     }
@@ -76,21 +90,29 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
     props.setCurrentPage(1)
   }
 
+  const getAllowedValues = (filter: PromptFilter): Set<string> => {
+    if (filter.filterType === 'numeric') {
+      const binValues = filter.bins.map((bin) => {
+        return `bin:${bin.min}:${bin.max}`
+      })
+      return new Set([...binValues, ...filter.specialValues])
+    }
+    return new Set(filter.answeredOriginalValues)
+  }
+
   createEffect(() => {
     if (props.hidePromptSelectors) {
       return
     }
     const maybe = (filtersQuery as unknown as {data?: unknown}).data
     const filters =
-      typeof maybe === 'function'
-        ? (maybe as () => Array<{promptId: string; answeredOriginalValues: string[]}>)()
-        : (maybe as Array<{promptId: string; answeredOriginalValues: string[]}> | undefined)
+      typeof maybe === 'function' ? (maybe as () => PromptFilter[])() : (maybe as PromptFilter[] | undefined)
     if (!filters) {
       return
     }
     const allowedByPrompt: Record<string, Set<string>> = filters.reduce(
       (acc, f) => {
-        return {...acc, [f.promptId]: new Set(f.answeredOriginalValues)}
+        return {...acc, [f.promptId]: getAllowedValues(f)}
       },
       {} as Record<string, Set<string>>,
     )
@@ -191,6 +213,34 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
         <Show when={!props.hidePromptSelectors && filtersQuery.data}>
           {(data) => {
             const filters = data()
+
+            const getOptionsForFilter = (filter: PromptFilter): Array<{value: string; label: string}> => {
+              if (filter.filterType === 'numeric') {
+                const binOptions = filter.bins.map((bin) => {
+                  return {value: `bin:${bin.min}:${bin.max}`, label: bin.label}
+                })
+                const specialOptions = filter.specialValues.map((sv) => {
+                  return {value: sv, label: sv}
+                })
+                return [...binOptions, ...specialOptions]
+              }
+              return filter.answeredOriginalValues.map((v) => {
+                return {value: v, label: v}
+              })
+            }
+
+            const getDisplayLabel = (filter: PromptFilter, value: string): string => {
+              if (filter.filterType === 'numeric' && value.startsWith('bin:')) {
+                const parts = value.split(':')
+                const minStr = parts[1] ?? ''
+                const maxStr = parts[2] ?? ''
+                const min = parseInt(minStr, 10)
+                const max = parseInt(maxStr, 10)
+                return min === max ? String(min) : `${min}-${max}`
+              }
+              return value
+            }
+
             return (
               <div class="space-y-4">
                 <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -200,7 +250,7 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
                         return props.promptFilters()[promptFilter.promptId] ?? []
                       })
                       const options = createMemo(() => {
-                        return promptFilter.answeredOriginalValues
+                        return getOptionsForFilter(promptFilter)
                       })
                       return (
                         <div class="flex flex-col gap-2">
@@ -210,28 +260,29 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
                           >
                             {promptFilter.promptName || `Prompt ${promptFilter.promptId}`}:
                           </label>
-                          <Select.Root
+                          <Select.Root<{value: string; label: string}>
                             multiple
-                            value={current()}
+                            value={options().filter((opt) => {
+                              return current().includes(opt.value)
+                            })}
                             onChange={(vals) => {
-                              return setPromptMulti(promptFilter.promptId, vals.length ? vals : null)
+                              const values = vals.map((v) => {
+                                return v.value
+                              })
+                              return setPromptMulti(promptFilter.promptId, values.length ? values : null)
                             }}
                             options={options()}
-                            optionValue={(v) => {
-                              return v
-                            }}
-                            optionTextValue={(v) => {
-                              return v
-                            }}
+                            optionValue="value"
+                            optionTextValue="label"
                             placeholder="All"
                             name={promptFilter.promptId}
-                            itemComponent={(props) => {
+                            itemComponent={(itemProps) => {
                               return (
                                 <Select.Item
-                                  item={props.item}
+                                  item={itemProps.item}
                                   class="relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-2 pr-8 text-sm outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-muted data-[disabled]:opacity-50"
                                 >
-                                  <Select.ItemLabel class="truncate">{props.item.rawValue as string}</Select.ItemLabel>
+                                  <Select.ItemLabel class="truncate">{itemProps.item.rawValue.label}</Select.ItemLabel>
                                   <Select.ItemIndicator class="absolute right-2 flex h-3.5 w-3.5 items-center justify-center">
                                     <svg
                                       xmlns="http://www.w3.org/2000/svg"
@@ -261,15 +312,16 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
                                 >
                                   <For each={current()}>
                                     {(val) => {
+                                      const displayLabel = getDisplayLabel(promptFilter, val)
                                       return (
                                         <span class="inline-flex items-center gap-1 rounded-md border border-input bg-muted/70 px-2 py-1 text-sm text-foreground">
-                                          <span class="truncate max-w-[10rem]" title={val}>
-                                            {val}
+                                          <span class="truncate max-w-[10rem]" title={displayLabel}>
+                                            {displayLabel}
                                           </span>
                                           <button
                                             type="button"
                                             class="inline-flex size-4 items-center justify-center rounded hover:bg-muted-foreground/10"
-                                            aria-label={`Remove ${val}`}
+                                            aria-label={`Remove ${displayLabel}`}
                                             onClick={() => {
                                               const next = current().filter((v) => {
                                                 return v !== val

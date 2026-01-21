@@ -5,11 +5,19 @@
  * Used for prompts with open-ended types (string, string[], etc.) where
  * we need to query distinct answer values from the judgments table.
  *
+ * Also handles numeric prompts (string.integer) by querying min/max values
+ * and generating bins.
+ *
  * Performance: Expected ~1-2 seconds for ~25M rows (vs potentially slower in PostgreSQL)
  */
 import {eq} from 'drizzle-orm'
 
 import {importRoute, projectArticles, projectRouteLink, projects} from '../../db/schema.ts'
+import {
+  buildNumericFilterResult,
+  buildNumericFilterResultFromValues,
+  type NumericFilterResult,
+} from '../../server/routes/projectsRoutes/articlesReviewsFiltersNumeric.ts'
 import type {PromptFilterInfo} from '../../server/routes/projectsRoutes/articlesReviewsFiltersUtils.ts'
 import {getDatabase} from '../../server/utils/getDatabase.ts'
 import {getClickhouseClient} from './clickhouseClient.ts'
@@ -286,6 +294,176 @@ export const getDatabaseBasedFiltersFromClickHouse = async (
     // Return empty arrays on error to allow the request to complete
     return databasePrompts.map((p) => {
       return {promptId: p.promptId, promptName: p.promptName, answeredOriginalValues: []}
+    })
+  }
+}
+
+/**
+ * Get min/max values for numeric prompts from ClickHouse.
+ * Used to generate bins for filtering by numeric ranges.
+ *
+ * Filters out special values (like 'not applicable', 'unsure') and only
+ * considers values that can be parsed as integers.
+ */
+export const getNumericFiltersFromClickHouse = async (
+  params: ClickHouseFilterParams,
+): Promise<NumericFilterResult[]> => {
+  const startTime = performance.now()
+  const client = getClickhouseClient()
+
+  const numericPrompts = params.prompts.filter((p) => {
+    return p.strategy === 'numeric'
+  })
+
+  if (numericPrompts.length === 0) {
+    return []
+  }
+
+  console.time('ch:numeric_filters:metadata')
+  const metadata = await fetchProjectMetadataForFilters(params.projectId)
+  console.timeEnd('ch:numeric_filters:metadata')
+
+  const promptIds = numericPrompts.map((p) => {
+    return p.promptId
+  })
+
+  const hasImportRoutes = metadata.routeTexts.length > 0
+  const hasCuratedArticles = metadata.curatedArticleIds.length > 0
+
+  if (!hasImportRoutes && !hasCuratedArticles) {
+    console.log('[ClickHouse Numeric Filters] No scope defined, returning empty')
+    return numericPrompts.map((p) => {
+      return buildNumericFilterResult(p.promptId, p.promptName, null, null, p.specialValues || [])
+    })
+  }
+
+  const whereParts: string[] = []
+
+  const promptIdsQuoted = promptIds
+    .map((id) => {
+      return `'${id}'`
+    })
+    .join(', ')
+  whereParts.push(`promptId IN (${promptIdsQuoted})`)
+
+  if (metadata.modelId) {
+    whereParts.push(`modelId = '${escapeClickHouseString(metadata.modelId)}'`)
+  }
+
+  whereParts.push(`useTitle = ${metadata.useTitle ? 'true' : 'false'}`)
+  whereParts.push(`useAbstract = ${metadata.useAbstract ? 'true' : 'false'}`)
+  whereParts.push(`useFulltext = ${metadata.useFulltext ? 'true' : 'false'}`)
+  whereParts.push(`useFulltextNoImages = ${metadata.useFulltextNoImages ? 'true' : 'false'}`)
+
+  const effectiveFromDate =
+    metadata.projectBounds?.dateFrom && params.fromDate
+      ? metadata.projectBounds.dateFrom > params.fromDate
+        ? metadata.projectBounds.dateFrom
+        : params.fromDate
+      : (metadata.projectBounds?.dateFrom ?? params.fromDate)
+
+  const effectiveToDate =
+    metadata.projectBounds?.dateTo && params.toDate
+      ? metadata.projectBounds.dateTo < params.toDate
+        ? metadata.projectBounds.dateTo
+        : params.toDate
+      : (metadata.projectBounds?.dateTo ?? params.toDate)
+
+  if (effectiveFromDate) {
+    whereParts.push(`articleCreatedAt >= toDateTime64('${formatDateForClickHouse(effectiveFromDate)}', 3)`)
+  }
+  if (effectiveToDate) {
+    whereParts.push(`articleCreatedAt <= toDateTime64('${formatDateForClickHouse(effectiveToDate)}', 3)`)
+  }
+
+  if (params.searchTitle && params.searchTitle.trim()) {
+    const searchEscaped = escapeClickHouseString(params.searchTitle.trim())
+    whereParts.push(`articleTitle ILIKE '%${searchEscaped}%'`)
+  }
+
+  const scopeParts: string[] = []
+
+  if (hasCuratedArticles && metadata.curatedArticleIds.length <= 1000) {
+    const curatedIdsQuoted = metadata.curatedArticleIds
+      .map((id) => {
+        return `'${id}'`
+      })
+      .join(', ')
+    scopeParts.push(`articleId IN (${curatedIdsQuoted})`)
+  }
+
+  if (hasImportRoutes) {
+    const routesQuoted = metadata.routeTexts
+      .map((r) => {
+        return `'${escapeClickHouseString(r)}'`
+      })
+      .join(', ')
+    scopeParts.push(`articleImportRoute IN (${routesQuoted})`)
+  }
+
+  if (scopeParts.length > 0) {
+    whereParts.push(`(${scopeParts.join(' OR ')})`)
+  }
+
+  const whereClause = whereParts.join(' AND ')
+
+  // Query distinct numeric values to understand the actual distribution
+  // This handles cases where outliers might skew min/max
+  const query = `
+    SELECT
+      promptId,
+      groupArray(DISTINCT numVal) AS distinctValues
+    FROM (
+      SELECT
+        promptId,
+        toInt64OrNull(answeredOriginal) AS numVal
+      FROM judgments
+      WHERE ${whereClause}
+        AND answeredOriginal IS NOT NULL
+        AND answeredOriginal != ''
+        AND toInt64OrNull(answeredOriginal) IS NOT NULL
+    )
+    WHERE numVal IS NOT NULL
+    GROUP BY promptId
+  `
+
+  console.log('[ClickHouse Numeric Filters] Query:', query.substring(0, 500) + '...')
+  console.time('ch:numeric_filters:query')
+
+  try {
+    const result = await client.query({query, format: 'JSONEachRow'})
+    const data = await result.json<{promptId: string; distinctValues: number[]}>()
+    console.timeEnd('ch:numeric_filters:query')
+
+    const byPrompt = new Map<string, number[]>()
+    for (const row of data) {
+      // Sort values and store
+      const sortedValues = (row.distinctValues || []).sort((a, b) => {
+        return a - b
+      })
+      byPrompt.set(row.promptId, sortedValues)
+      // Log the distinct values for debugging
+      console.log(
+        `[ClickHouse Numeric Filters] Prompt ${row.promptId}: ${sortedValues.length} distinct values, range: ${sortedValues[0]} - ${sortedValues[sortedValues.length - 1]}`,
+      )
+      if (sortedValues.length <= 20) {
+        console.log(`[ClickHouse Numeric Filters] Values: ${sortedValues.join(', ')}`)
+      }
+    }
+
+    const elapsed = performance.now() - startTime
+    console.log(
+      `[ClickHouse Numeric Filters] Found distinct values for ${byPrompt.size} prompts in ${elapsed.toFixed(0)}ms`,
+    )
+
+    return numericPrompts.map((p) => {
+      const values = byPrompt.get(p.promptId) || []
+      return buildNumericFilterResultFromValues(p.promptId, p.promptName, values, p.specialValues || [])
+    })
+  } catch (error) {
+    console.error('[ClickHouse Numeric Filters] Error:', error)
+    return numericPrompts.map((p) => {
+      return buildNumericFilterResult(p.promptId, p.promptName, null, null, p.specialValues || [])
     })
   }
 }
