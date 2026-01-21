@@ -107,7 +107,6 @@ const ProjectDetail = () => {
               id: string
               createdAt?: Date
               updatedAt?: Date
-              projectId: string
               originalText: string
               transformedText: string | null
               promptHeading: string | null

@@ -99,8 +99,9 @@ const CreateProject = () => {
 
   createEffect(() => {
     const models = availableModels()
-    if (models.length > 0 && !selectedModelId()) {
-      setSelectedModelId(models[0].id)
+    const firstModel = models[0]
+    if (firstModel && !selectedModelId()) {
+      setSelectedModelId(firstModel.id)
     }
   })
 

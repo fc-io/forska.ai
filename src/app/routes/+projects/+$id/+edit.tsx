@@ -486,15 +486,13 @@ const EditProject = (): JSX.Element => {
   }
 
   const toggleImportedPromptEnabled = (promptId: string) => {
-    setImportedPrompts(
-      (p) => {
-        return p.id === promptId
-      },
-      'enabled' as keyof PromptItem,
-      (prev: boolean | undefined) => {
-        return !prev
-      },
-    )
+    const idx = importedPrompts.findIndex((p) => {
+      return p.id === promptId
+    })
+    const item = importedPrompts[idx]
+    if (idx >= 0 && item) {
+      setImportedPrompts(idx, 'enabled', !item.enabled)
+    }
   }
 
   const sendUpdateRequest = async (startDate: string | null, endDate: string | null): Promise<void> => {

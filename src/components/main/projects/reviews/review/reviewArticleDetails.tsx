@@ -11,14 +11,14 @@ type Judgment = {
   prompt: {originalText: string}
   answeredOriginal?: string | null
   confidenceOriginal?: number | null
-  quotes?: string[]
+  quotes?: unknown
 }
 
 type ReviewArticleDetailsArticle = {
   articleTitle: string
   articleAuthors?: string[] | null
   articleSummary?: string | null
-  articleId: string
+  articleId: string | null
   fullText?: string | null
   fullTextHtml?: string | null
   fullTextPDF?: string | null
@@ -64,7 +64,8 @@ const getHighlightedTextWithScrollHandler = (
   sanitizeOptions?: DecodeAndSanitizeOptions,
 ) => {
   const sanitizedText = decodeAndSanitize(text, sanitizeOptions)
-  const normalizedQuotes = (judgment.quotes || []).map((quote) => {
+  const quotes = Array.isArray(judgment.quotes) ? judgment.quotes : []
+  const normalizedQuotes = (quotes as string[]).map((quote) => {
     return quote.replace(/^\.{3}|\.{3}$/g, '')
   })
 
@@ -101,7 +102,8 @@ const getHighlightedText = (text: string, judgment: Judgment) => {
  */
 const getHighlightedFulltext = (text: string, judgment: Judgment, sanitizeOptions?: DecodeAndSanitizeOptions) => {
   const sanitizedText = decodeAndSanitize(text, sanitizeOptions)
-  const normalizedQuotes = (judgment.quotes || []).map((quote) => {
+  const quotes = Array.isArray(judgment.quotes) ? judgment.quotes : []
+  const normalizedQuotes = (quotes as string[]).map((quote) => {
     return quote.replace(/^\.{3}|\.{3}$/g, '')
   })
 

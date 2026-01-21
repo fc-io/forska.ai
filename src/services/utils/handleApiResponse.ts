@@ -1,7 +1,7 @@
 // TODO:  handleApiResponse is an not needed abstraction that should be removed,
 // every service or api call should handle there own errors etc.
 export const handleApiResponse = <T>(
-  response: {data?: T; error?: unknown; status?: number},
+  response: {data?: T | null; error?: unknown; status?: number},
   errorMessage = 'An error occurred',
 ): NonNullable<T> => {
   // Check for Eden/Treaty level errors (network, parsing, etc.)

@@ -381,11 +381,11 @@ const DeduplicatePrompts = () => {
                     <div class="mb-4">
                       <h3 class="text-lg font-semibold text-gray-900">Duplicate Group #{index() + 1}</h3>
                       <div class="text-sm text-gray-500 mt-1">
-                        <span class="font-medium">Heading:</span> {group[0].promptHeading || 'N/A'} |{' '}
-                        <span class="font-medium">Type:</span> {group[0].type || 'N/A'}
+                        <span class="font-medium">Heading:</span> {group[0]?.promptHeading || 'N/A'} |{' '}
+                        <span class="font-medium">Type:</span> {group[0]?.type || 'N/A'}
                       </div>
                       <div class="mt-2 p-3 bg-gray-50 rounded text-sm font-mono whitespace-pre-wrap max-h-32 overflow-y-auto border border-gray-200">
-                        {group[0].originalText}
+                        {group[0]?.originalText}
                       </div>
                     </div>
 
@@ -675,7 +675,7 @@ const DeduplicatePrompts = () => {
                       </thead>
                       <tbody class="bg-white divide-y divide-gray-200">
                         <Show
-                          when={orphansQuery.data?.noProjects?.length > 0}
+                          when={(orphansQuery.data?.noProjects?.length ?? 0) > 0}
                           fallback={
                             <tr>
                               <td colspan="6" class="px-6 py-4 text-center text-sm text-gray-500">
@@ -700,7 +700,7 @@ const DeduplicatePrompts = () => {
                                     {formatDate(new Date(prompt.createdAt), 'yyyy-MM-dd HH:mm')}
                                   </td>
                                   <td class="px-6 py-4 text-sm text-gray-500 max-w-xs break-words">
-                                    <div class="max-h-[100px] overflow-y-auto" title={prompt.originalText}>
+                                    <div class="max-h-[100px] overflow-y-auto" title={prompt.originalText ?? undefined}>
                                       {prompt.originalText}
                                     </div>
                                   </td>
@@ -783,7 +783,7 @@ const DeduplicatePrompts = () => {
                       </thead>
                       <tbody class="bg-white divide-y divide-gray-200">
                         <Show
-                          when={orphansQuery.data?.noJudgments?.length > 0}
+                          when={(orphansQuery.data?.noJudgments?.length ?? 0) > 0}
                           fallback={
                             <tr>
                               <td colspan="6" class="px-6 py-4 text-center text-sm text-gray-500">
@@ -808,7 +808,7 @@ const DeduplicatePrompts = () => {
                                     {formatDate(new Date(prompt.createdAt), 'yyyy-MM-dd HH:mm')}
                                   </td>
                                   <td class="px-6 py-4 text-sm text-gray-500 max-w-xs break-words">
-                                    <div class="max-h-[100px] overflow-y-auto" title={prompt.originalText}>
+                                    <div class="max-h-[100px] overflow-y-auto" title={prompt.originalText ?? undefined}>
                                       {prompt.originalText}
                                     </div>
                                   </td>
@@ -893,7 +893,7 @@ const DeduplicatePrompts = () => {
                       </thead>
                       <tbody class="bg-white divide-y divide-gray-200">
                         <Show
-                          when={orphansQuery.data?.noProjectsAndJudgments?.length > 0}
+                          when={(orphansQuery.data?.noProjectsAndJudgments?.length ?? 0) > 0}
                           fallback={
                             <tr>
                               <td colspan="6" class="px-6 py-4 text-center text-sm text-gray-500">
@@ -917,7 +917,7 @@ const DeduplicatePrompts = () => {
                                     {formatDate(new Date(prompt.createdAt), 'yyyy-MM-dd HH:mm')}
                                   </td>
                                   <td class="px-6 py-4 text-sm text-gray-500 max-w-xs break-words">
-                                    <div class="max-h-[100px] overflow-y-auto" title={prompt.originalText}>
+                                    <div class="max-h-[100px] overflow-y-auto" title={prompt.originalText ?? undefined}>
                                       {prompt.originalText}
                                     </div>
                                   </td>
