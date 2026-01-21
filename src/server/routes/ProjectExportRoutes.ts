@@ -153,6 +153,8 @@ export const projectExportRoutes = new Elysia()
 
       const promptIds = body.promptIds ?? []
       const hasPrompts = promptIds.length > 0
+      const promptSelections = body.promptSelections ?? []
+      const hasPromptFilters = promptSelections.length > 0
 
       // Get prompt details for headers (only if prompts selected)
       const promptHeaderMap = new Map<string, string>()
@@ -247,6 +249,56 @@ export const projectExportRoutes = new Elysia()
 
       const scopeCondition = scopeParts.length > 1 ? or(...scopeParts) : scopeParts[0]
 
+      // If prompt filters are provided, query article IDs that match all filters
+      let filteredArticleIds: string[] | null = null
+      if (hasPromptFilters && hasPrompts && judgmentConfigCondition) {
+        const normalized = sql`COALESCE(${judgments.answeredOriginalAsArray}, CASE WHEN ${judgments.answeredOriginal} IS NOT NULL THEN ARRAY[${judgments.answeredOriginal}] ELSE ARRAY[]::text[] END)`
+
+        const havingParts: Array<ReturnType<typeof sql>> = []
+        const allFilterPromptIds: string[] = []
+        for (const filter of promptSelections) {
+          allFilterPromptIds.push(filter.promptId)
+          const answeredValsArray = sql.join(
+            filter.types.map((v) => {
+              return sql`${v}`
+            }),
+            sql`,`,
+          )
+          havingParts.push(
+            sql`SUM(CASE WHEN ${judgments.promptId} = ${filter.promptId}::uuid AND (${normalized}) && ARRAY[${answeredValsArray}]::text[] THEN 1 ELSE 0 END) > 0`,
+          )
+        }
+
+        const filteredQuery = await db
+          .select({id: articles.id})
+          .from(articles)
+          .innerJoin(
+            judgments,
+            and(
+              eq(judgments.articleId, articles.id),
+              inArray(judgments.promptId, allFilterPromptIds),
+              isNull(judgments.deletedAt),
+              judgmentConfigCondition,
+            ),
+          )
+          .where(scopeCondition)
+          .groupBy(articles.id)
+          .having(and(...havingParts))
+
+        filteredArticleIds = filteredQuery.map((r) => {
+          return r.id
+        })
+        console.log(`[export] Filtered to ${filteredArticleIds.length} articles based on prompt answer filters`)
+      }
+
+      // Build final scope condition with article filter if applicable
+      const finalScopeCondition =
+        filteredArticleIds !== null
+          ? filteredArticleIds.length > 0
+            ? and(scopeCondition, inArray(articles.id, filteredArticleIds))
+            : sql`FALSE`
+          : scopeCondition
+
       // Build CSV header
       const orderedPromptIds = promptIds.filter((id) => {
         return promptHeaderMap.has(id)
@@ -322,7 +374,7 @@ export const projectExportRoutes = new Elysia()
                     judgmentConfigCondition,
                   ),
                 )
-                .where(scopeCondition)
+                .where(finalScopeCondition)
 
               const totalCount = Number(countResult[0]?.count ?? 0)
               console.log(`[export] Starting export of ~${totalCount} articles with prompts`)
@@ -355,7 +407,7 @@ export const projectExportRoutes = new Elysia()
                       judgmentConfigCondition,
                     ),
                   )
-                  .where(scopeCondition)
+                  .where(finalScopeCondition)
                   .orderBy(articles.id)
                   .limit(BATCH_SIZE * promptIds.length) // Account for multiple rows per article
                   .offset(offset)
@@ -481,7 +533,7 @@ export const projectExportRoutes = new Elysia()
               const countResult = await db
                 .select({count: sql<number>`count(${articles.id})`})
                 .from(articles)
-                .where(scopeCondition)
+                .where(finalScopeCondition)
 
               const totalCount = Number(countResult[0]?.count ?? 0)
               console.log(`[export] Starting export of ~${totalCount} articles (metadata only)`)
@@ -499,7 +551,7 @@ export const projectExportRoutes = new Elysia()
                     articleOriginalData: includeJournal ? articles.originalData : sql<null>`NULL`,
                   })
                   .from(articles)
-                  .where(scopeCondition)
+                  .where(finalScopeCondition)
                   .orderBy(articles.id)
                   .limit(BATCH_SIZE)
                   .offset(offset)
@@ -564,6 +616,7 @@ export const projectExportRoutes = new Elysia()
     {
       body: t.Object({
         promptIds: t.Array(t.String()),
+        promptSelections: t.Optional(t.Array(t.Object({promptId: t.String(), types: t.Array(t.String())}))),
         sourceProjectIds: t.Optional(t.Array(t.String())),
         includeExplanation: t.Optional(t.Boolean()),
         includeQuotes: t.Optional(t.Boolean()),

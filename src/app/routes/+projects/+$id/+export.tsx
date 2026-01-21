@@ -9,6 +9,16 @@ import {env} from '../../../utils/client-env'
 
 type PromptInfo = {id: string; promptHeading: string | null; originalText: string; type: string | null}
 
+const parseArktypeOptions = (typeStr: string | null): string[] => {
+  if (!typeStr) return []
+  const matches = typeStr.match(/['"]([^'"]+)['"]/g)
+  return (
+    matches?.map((m) => {
+      return m.slice(1, -1)
+    }) ?? []
+  )
+}
+
 const getFilenameFromResponse = (response: Response, fallbackFilename: string): string => {
   const contentDisposition = response.headers.get('Content-Disposition')
   const filenameMatch = contentDisposition ? contentDisposition.match(/filename="([^"]+)"/) : null
@@ -61,6 +71,9 @@ const ExportData = () => {
   const [isExportingPrompts, setIsExportingPrompts] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
   const [hasInitializedPrompts, setHasInitializedPrompts] = createSignal(false)
+  const [promptAnswerFilters, setPromptAnswerFilters] = createSignal<Record<string, string[]>>({})
+  const [hasInitializedFilters, setHasInitializedFilters] = createSignal(false)
+  const [isFilterExpanded, setIsFilterExpanded] = createSignal(false)
 
   const togglePromptSelection = (promptId: string) => {
     setSelectedPrompts((current) => {
@@ -86,6 +99,64 @@ const ExportData = () => {
       .map((p: {id: string; promptHeading?: string | null; originalText: string; type?: string | null}) => {
         return {id: p.id, promptHeading: p.promptHeading ?? null, originalText: p.originalText, type: p.type ?? null}
       })
+  }
+
+  const promptsWithOptions = () => {
+    return availablePrompts().map((p) => {
+      return {...p, options: parseArktypeOptions(p.type)}
+    })
+  }
+
+  const toggleAnswerFilter = (promptId: string, answerType: string) => {
+    setPromptAnswerFilters((current) => {
+      const currentTypes = current[promptId] ?? []
+      const has = currentTypes.includes(answerType)
+      if (has) {
+        const newTypes = currentTypes.filter((t) => {
+          return t !== answerType
+        })
+        if (newTypes.length === 0) {
+          const {[promptId]: _, ...rest} = current
+          return rest
+        }
+        return {...current, [promptId]: newTypes}
+      }
+      return {...current, [promptId]: [...currentTypes, answerType]}
+    })
+  }
+
+  const isAnswerFilterSelected = (promptId: string, answerType: string) => {
+    const types = promptAnswerFilters()[promptId] ?? []
+    return types.includes(answerType)
+  }
+
+  const isAllFiltersSelected = () => {
+    const prompts = promptsWithOptions().filter((p) => {
+      return p.options.length > 0
+    })
+    if (prompts.length === 0) return false
+    const filters = promptAnswerFilters()
+    return prompts.every((p) => {
+      const selected = filters[p.id] ?? []
+      return p.options.every((opt) => {
+        return selected.includes(opt)
+      })
+    })
+  }
+
+  const toggleAllFilters = (select: boolean) => {
+    const prompts = promptsWithOptions().filter((p) => {
+      return p.options.length > 0
+    })
+    if (select) {
+      const newFilters: Record<string, string[]> = {}
+      for (const prompt of prompts) {
+        newFilters[prompt.id] = [...prompt.options]
+      }
+      setPromptAnswerFilters(newFilters)
+    } else {
+      setPromptAnswerFilters({})
+    }
   }
 
   // Prompt Header section helpers
@@ -162,12 +233,34 @@ const ExportData = () => {
     }
   })
 
+  // Auto-select all answer types for all prompts on load (only once)
+  createEffect(() => {
+    const prompts = promptsWithOptions()
+    if (prompts.length > 0 && !hasInitializedFilters()) {
+      const newFilters: Record<string, string[]> = {}
+      for (const prompt of prompts) {
+        if (prompt.options.length > 0) {
+          newFilters[prompt.id] = [...prompt.options]
+        }
+      }
+      setPromptAnswerFilters(newFilters)
+      setHasInitializedFilters(true)
+    }
+  })
+
   const handleExport = async () => {
     setError(null)
     setIsExporting(true)
 
     try {
       const selectedPromptIds = Object.keys(selectedPrompts())
+      const promptSelections = Object.entries(promptAnswerFilters())
+        .filter(([_, types]) => {
+          return types.length > 0
+        })
+        .map(([promptId, types]) => {
+          return {promptId, types}
+        })
 
       // Use native fetch for streaming response
       const response = await fetch(`${env.VITE_SERVER_API}/api/projects/${projectId}/export`, {
@@ -176,6 +269,7 @@ const ExportData = () => {
         credentials: 'include',
         body: JSON.stringify({
           promptIds: selectedPromptIds,
+          promptSelections,
           sourceProjectIds: [projectId],
           includeExplanation: includeExplanation(),
           includeQuotes: includeQuotes(),
@@ -534,6 +628,80 @@ const ExportData = () => {
                   </div>
                 </label>
               </div>
+            </div>
+          </Show>
+
+          {/* Filter on Prompt Answers */}
+          <Show
+            when={promptsWithOptions().some((p) => {
+              return p.options.length > 0
+            })}
+          >
+            <div class="mb-6 border border-input rounded-lg">
+              <div class="flex items-center justify-between p-4">
+                <button
+                  type="button"
+                  class="flex items-center gap-2 text-left hover:text-muted-foreground"
+                  onClick={() => {
+                    setIsFilterExpanded(!isFilterExpanded())
+                  }}
+                >
+                  <span class="text-muted-foreground">{isFilterExpanded() ? '▼' : '▶'}</span>
+                  <span class="text-sm font-medium">Filter on Prompt Answers</span>
+                </button>
+                <button
+                  type="button"
+                  class="text-xs text-blue-600 hover:text-blue-800 hover:underline"
+                  onClick={() => {
+                    toggleAllFilters(!isAllFiltersSelected())
+                  }}
+                >
+                  {isAllFiltersSelected() ? 'Deselect All' : 'Select All'}
+                </button>
+              </div>
+              <Show when={isFilterExpanded()}>
+                <div class="px-4 pb-4">
+                  <p class="text-xs text-muted-foreground mb-3">
+                    Filter which articles to include based on their prompt answers. Articles must match ALL selected
+                    prompt/answer combinations. Deselect answer types to exclude articles with those answers.
+                  </p>
+                  <div class="space-y-4">
+                    <For
+                      each={promptsWithOptions().filter((p) => {
+                        return p.options.length > 0
+                      })}
+                    >
+                      {(prompt) => {
+                        return (
+                          <div class="border border-input rounded-md p-4">
+                            <p class="text-sm font-medium text-gray-900 mb-3">
+                              {prompt.promptHeading || 'Untitled Prompt'}
+                            </p>
+                            <div class="flex flex-wrap gap-3">
+                              <For each={prompt.options}>
+                                {(answerType) => {
+                                  return (
+                                    <label class="flex items-center gap-2 cursor-pointer">
+                                      <input
+                                        type="checkbox"
+                                        checked={isAnswerFilterSelected(prompt.id, answerType)}
+                                        onChange={() => {
+                                          toggleAnswerFilter(prompt.id, answerType)
+                                        }}
+                                      />
+                                      <span class="text-sm">{answerType}</span>
+                                    </label>
+                                  )
+                                }}
+                              </For>
+                            </div>
+                          </div>
+                        )
+                      }}
+                    </For>
+                  </div>
+                </div>
+              </Show>
             </div>
           </Show>
 
