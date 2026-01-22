@@ -128,7 +128,7 @@ export const storeSinglePromptJudgment = async ({
 
     // Check if judgment already exists (must match full unique constraint including content config)
     const existing = await db
-      .select({id: judgments.id})
+      .select({id: judgments.id, createdAt: judgments.createdAt})
       .from(judgments)
       .where(
         and(
@@ -144,11 +144,16 @@ export const storeSinglePromptJudgment = async ({
       .limit(1)
 
     const existingId = existing[0]?.id ?? null
+    const existingCreatedAt = existing[0]?.createdAt ?? null
 
     if (existingId) {
       // Immutable judgments: if it already exists, do not update.
       // To re-judge, the user must delete the existing judgment first.
-      console.error(`${article.id} | Judgment already exists for prompt ${promptId}, skipping.`)
+      console.error(
+        `${article.id} | Judgment already exists: promptId=${promptId}, modelId=${modelId}, ` +
+          `content=[T:${useTitle},A:${useAbstract},F:${useFulltext},FNI:${useFulltextNoImages}], ` +
+          `projectId=${projectId}, existingId=${existingId}, createdAt=${existingCreatedAt?.toISOString()}`,
+      )
       return
     }
 
