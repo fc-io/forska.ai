@@ -21,21 +21,21 @@ import type {DenormalizedJudgmentAnalytics, ParquetWriterConfig} from './types'
  *
  * Maps TypeScript types to Parquet logical types:
  * - string -> UTF8
- * - Date -> TIMESTAMP_MILLIS
+ * - Date -> TIMESTAMP_MICROS (microseconds for ClickHouse DateTime64(6) compatibility)
  * - number -> INT32
  * - string[] -> LIST of UTF8
  * - nullable fields use optional: true
  */
 export const judgmentAnalyticsSchema = new ParquetSchema({
   id: {type: 'UTF8'},
-  createdAt: {type: 'TIMESTAMP_MILLIS'},
-  deletedAt: {type: 'TIMESTAMP_MILLIS', optional: true},
+  createdAt: {type: 'TIMESTAMP_MICROS'},
+  deletedAt: {type: 'TIMESTAMP_MICROS', optional: true},
 
   // Article dimensions
   articleId: {type: 'UTF8'},
   articleTitle: {type: 'UTF8', optional: true},
-  articleCreatedAt: {type: 'TIMESTAMP_MILLIS', optional: true},
-  articleUpdatedAt: {type: 'TIMESTAMP_MILLIS', optional: true},
+  articleCreatedAt: {type: 'TIMESTAMP_MICROS', optional: true},
+  articleUpdatedAt: {type: 'TIMESTAMP_MICROS', optional: true},
   articleCreatedYear: {type: 'INT32', optional: true},
   articleUpdatedYear: {type: 'INT32', optional: true},
   articleImportRoute: {type: 'UTF8', optional: true},
@@ -62,19 +62,24 @@ export const judgmentAnalyticsSchema = new ParquetSchema({
 })
 
 /**
+ * Convert milliseconds to microseconds for TIMESTAMP_MICROS.
+ */
+const msToMicros = (ms: number): bigint => BigInt(ms) * 1000n
+
+/**
  * Convert a DenormalizedJudgmentAnalytics record to Parquet row format.
- * Handles Date -> timestamp conversion and null handling.
+ * Handles Date -> timestamp conversion (microseconds) and null handling.
  */
 const toParquetRow = (record: DenormalizedJudgmentAnalytics): Record<string, unknown> => {
   return {
     id: record.id,
-    createdAt: record.createdAt.getTime(),
-    deletedAt: record.deletedAt?.getTime() ?? null,
+    createdAt: msToMicros(record.createdAt.getTime()),
+    deletedAt: record.deletedAt ? msToMicros(record.deletedAt.getTime()) : null,
 
     articleId: record.articleId,
     articleTitle: record.articleTitle,
-    articleCreatedAt: record.articleCreatedAt?.getTime() ?? null,
-    articleUpdatedAt: record.articleUpdatedAt?.getTime() ?? null,
+    articleCreatedAt: record.articleCreatedAt ? msToMicros(record.articleCreatedAt.getTime()) : null,
+    articleUpdatedAt: record.articleUpdatedAt ? msToMicros(record.articleUpdatedAt.getTime()) : null,
     articleCreatedYear: record.articleCreatedYear,
     articleUpdatedYear: record.articleUpdatedYear,
     articleImportRoute: record.articleImportRoute,
