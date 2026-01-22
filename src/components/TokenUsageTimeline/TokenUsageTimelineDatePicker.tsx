@@ -29,10 +29,7 @@ import {getTokenUsageTimelineDateRange, type TokenUsageTimelineDateRange} from '
 type TokenUsageTimelineDatePickerApi = {
   clearValue: () => void
   setOpen: (open: boolean) => void
-  getOffset: (params: {months: number}) => {
-    weeks: DateValue[][]
-    visibleRange: {start: DateValue; end: DateValue}
-  }
+  getOffset: (params: {months: number}) => {weeks: DateValue[][]; visibleRange: {start: DateValue; end: DateValue}}
   weekDays: Array<{short: string}>
   weeks: DateValue[][]
   getMonthsGrid: (params: {columns: number; format: 'short'}) => Array<Array<{label: string; value: number}>>

@@ -73,7 +73,12 @@ const ReviewsHuman = () => {
               <Button as={Link} to="/projects/$id" params={{id: params().id} as never} variant="outline">
                 Project Details
               </Button>
-              <Button as={Link} to="/projects/$id/humanAssessment" params={{id: params().id} as never} variant="outline">
+              <Button
+                as={Link}
+                to="/projects/$id/humanAssessment"
+                params={{id: params().id} as never}
+                variant="outline"
+              >
                 Human Assessment
               </Button>
               <Button as={Link} to="/projects/$id/edit" params={{id: params().id} as never}>
