@@ -162,40 +162,25 @@ export const projectsRoutes = new Elysia()
       .where(eq(projectPrompts.projectId, params.id))
       .orderBy(projectPrompts.order)
 
-    // Importable prompts inferred from judgments on this project's articles
-    // that are not yet linked via project_prompts for this project
+    // All non-archived prompts not already linked to this project
     const importablePrompts = await db
       .select({
         id: prompts.id,
         originalText: prompts.originalText,
         transformedText: prompts.transformedText,
         promptHeading: prompts.promptHeading,
-        // No explicit order yet; UI will place these after owned prompts
         order: sql<number>`NULL`,
         archived: sql<boolean>`FALSE`,
         promptArchived: prompts.archived,
         type: prompts.type,
         enabled: sql<boolean>`FALSE`,
-        // null indicates auto-linked from external judgments (no single source project)
         originProjectId: sql<string>`NULL`,
         contentHash: prompts.contentHash,
         createdAt: prompts.createdAt,
       })
-      .from(projectArticles)
-      .innerJoin(judgments, eq(judgments.articleId, projectArticles.articleId))
-      .innerJoin(prompts, eq(judgments.promptId, prompts.id))
+      .from(prompts)
       .leftJoin(projectPrompts, and(eq(projectPrompts.projectId, params.id), eq(projectPrompts.promptId, prompts.id)))
-      .where(and(eq(projectArticles.projectId, params.id), isNull(projectPrompts.id), eq(prompts.archived, false)))
-      .groupBy(
-        prompts.id,
-        prompts.originalText,
-        prompts.transformedText,
-        prompts.promptHeading,
-        prompts.type,
-        prompts.contentHash,
-        prompts.archived,
-        prompts.createdAt,
-      )
+      .where(and(isNull(projectPrompts.id), eq(prompts.archived, false)))
 
     const promptsCombined = [...projectPromptsList, ...importablePrompts]
 
