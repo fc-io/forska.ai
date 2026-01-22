@@ -27,13 +27,7 @@ export const judgmentsJobsCronGetPrompts = async (
     db
       .select({count: sql<number>`count(*)`})
       .from(schema.projectPrompts)
-      .where(
-        and(
-          eq(schema.projectPrompts.projectId, projectId),
-          eq(schema.projectPrompts.enabled, true),
-          eq(schema.projectPrompts.archived, false),
-        ),
-      ),
+      .where(and(eq(schema.projectPrompts.projectId, projectId), eq(schema.projectPrompts.enabled, true))),
   ])
 
   const [project] = projectResult

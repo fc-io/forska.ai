@@ -3,12 +3,16 @@
  *
  * Uses `forska.judgments` (S3Queue/Parquet) for consistency with articlesReviewsClickHouse.ts.
  * Scope is determined via PostgreSQL metadata (project_articles, import routes).
+ * Uses temp tables for large curated article sets to avoid query size limits.
  */
 import {and, eq} from 'drizzle-orm'
 
 import {importRoute, projectArticles, projectPrompts, projectRouteLink, projects} from '../../db/schema.ts'
 import {getDatabase} from '../../server/utils/getDatabase.ts'
 import {getClickhouseClient} from './clickhouseClient.ts'
+
+const CURATED_ARTICLES_TEMP_TABLE_THRESHOLD = 1000
+const TEMP_TABLE_INSERT_BATCH_SIZE = 10000
 
 type UnassessedCountParams = {
   projectId: string
@@ -58,6 +62,8 @@ type ProjectMetadata = {
   curatedArticleIds: string[]
 }
 
+type TempTableInfo = {tableName: string; cleanup: () => Promise<void>}
+
 const escapeClickHouseString = (value: string): string => {
   return value.replace(/'/g, "''").replace(/\\/g, '\\\\')
 }
@@ -73,10 +79,32 @@ const formatDateForClickHouse = (date: Date): string => {
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}.${millis}`
 }
 
-/**
- * Fetches project metadata from PostgreSQL for ClickHouse queries.
- * This mirrors the approach in articlesReviewsClickHouse.ts for consistency.
- */
+const createTempTable = async (curatedArticleIds: string[]): Promise<TempTableInfo> => {
+  const client = getClickhouseClient()
+  const tableName = `temp_unassessed_${Date.now()}_${Math.random().toString(36).substring(7)}`
+
+  await client.command({query: `CREATE TABLE ${tableName} (articleId String) ENGINE = Memory`})
+
+  for (let i = 0; i < curatedArticleIds.length; i += TEMP_TABLE_INSERT_BATCH_SIZE) {
+    const batch = curatedArticleIds.slice(i, i + TEMP_TABLE_INSERT_BATCH_SIZE).map((id) => {
+      return {articleId: id}
+    })
+    await client.insert({table: tableName, values: batch, format: 'JSONEachRow'})
+  }
+
+  console.log(`[CH] Created temp table ${tableName} with ${curatedArticleIds.length} IDs`)
+
+  const cleanup = async () => {
+    try {
+      await client.command({query: `DROP TABLE IF EXISTS ${tableName}`})
+    } catch (error) {
+      console.error(`[CH] Failed to drop temp table ${tableName}:`, error)
+    }
+  }
+
+  return {tableName, cleanup}
+}
+
 const fetchProjectMetadataForUnassessed = async (projectId: string): Promise<ProjectMetadata | null> => {
   const db = getDatabase()
 
@@ -135,10 +163,6 @@ const fetchProjectMetadataForUnassessed = async (projectId: string): Promise<Pro
   }
 }
 
-/**
- * Builds WHERE conditions for filtering judgments.
- * Matches the approach in articlesReviewsClickHouse.ts.
- */
 const buildJudgmentFilters = (
   promptIds: string[],
   modelId: string,
@@ -168,37 +192,6 @@ const buildJudgmentFilters = (
   return filters
 }
 
-/**
- * Builds scope filter for articles in project.
- * Uses same approach as articlesReviewsClickHouse.ts: curatedArticleIds OR import routes.
- */
-const buildScopeFilter = (curatedArticleIds: string[], routeTexts: string[]): string | null => {
-  const scopeParts: string[] = []
-
-  if (curatedArticleIds.length > 0) {
-    const curatedIdsQuoted = curatedArticleIds
-      .map((id) => {
-        return `'${escapeClickHouseString(id)}'`
-      })
-      .join(', ')
-    scopeParts.push(`articleId IN (${curatedIdsQuoted})`)
-  }
-
-  if (routeTexts.length > 0) {
-    const routesQuoted = routeTexts
-      .map((r) => {
-        return `'${escapeClickHouseString(r)}'`
-      })
-      .join(', ')
-    scopeParts.push(`articleImportRoute IN (${routesQuoted})`)
-  }
-
-  return scopeParts.length > 0 ? `(${scopeParts.join(' OR ')})` : null
-}
-
-/**
- * Builds date filter conditions.
- */
 const buildDateFilters = (
   projectDateFrom: Date | null | undefined,
   projectDateTo: Date | null | undefined,
@@ -236,78 +229,125 @@ export const getUnassessedCountFromClickHouse = async (params: UnassessedCountPa
     return 0
   }
 
-  const hasScope = metadata.curatedArticleIds.length > 0 || metadata.routeTexts.length > 0
-  if (!hasScope) {
+  const hasRoutes = metadata.routeTexts.length > 0
+  const hasCurated = metadata.curatedArticleIds.length > 0
+  if (!hasRoutes && !hasCurated) {
     console.timeEnd('ch:unassessed_count')
     console.log('[CH] No scope defined - returning 0')
     return 0
   }
 
-  const judgmentFilters = buildJudgmentFilters(
-    metadata.promptIds,
-    projectModelId,
-    useTitle,
-    useAbstract,
-    useFulltext,
-    useFulltextNoImages,
-  )
-  const scopeFilter = buildScopeFilter(metadata.curatedArticleIds, metadata.routeTexts)
-  const dateFilters = buildDateFilters(projectDateFrom, projectDateTo)
+  const useTempTable = hasCurated && metadata.curatedArticleIds.length > CURATED_ARTICLES_TEMP_TABLE_THRESHOLD
+  let tempTableInfo: TempTableInfo | null = null
 
-  const allFilters = [...judgmentFilters, scopeFilter, ...dateFilters].filter(Boolean)
-  const whereClause = allFilters.join(' AND ')
+  try {
+    if (useTempTable) {
+      tempTableInfo = await createTempTable(metadata.curatedArticleIds)
+    }
 
-  // Query: Find articles that are in scope but NOT fully assessed
-  // Step 1: Get all articles in scope (from judgments table - articles that have at least one judgment)
-  // Step 2: Get assessed articles (those with ALL prompts answered)
-  // Step 3: Count scope articles minus assessed articles
+    const judgmentFilters = buildJudgmentFilters(
+      metadata.promptIds,
+      projectModelId,
+      useTitle,
+      useAbstract,
+      useFulltext,
+      useFulltextNoImages,
+    )
+    const dateFilters = buildDateFilters(projectDateFrom, projectDateTo)
 
-  // But we also need articles with NO judgments at all - those won't appear in the judgments table.
-  // So we need to count scoped articles from forska.articles and subtract assessed count.
+    // Build scope filter for judgments table (camelCase)
+    const judgmentScopeParts: string[] = []
+    if (hasCurated) {
+      if (useTempTable && tempTableInfo) {
+        judgmentScopeParts.push(`articleId IN (SELECT articleId FROM ${tempTableInfo.tableName})`)
+      } else {
+        const curatedIdsQuoted = metadata.curatedArticleIds
+          .map((id) => {
+            return `'${escapeClickHouseString(id)}'`
+          })
+          .join(', ')
+        judgmentScopeParts.push(`articleId IN (${curatedIdsQuoted})`)
+      }
+    }
+    if (hasRoutes) {
+      const routesQuoted = metadata.routeTexts
+        .map((r) => {
+          return `'${escapeClickHouseString(r)}'`
+        })
+        .join(', ')
+      judgmentScopeParts.push(`articleImportRoute IN (${routesQuoted})`)
+    }
+    const judgmentScopeFilter = `(${judgmentScopeParts.join(' OR ')})`
 
-  // First, count total scoped articles (forska.articles uses snake_case columns)
-  const scopedArticlesFilter = buildScopeFilter(metadata.curatedArticleIds, metadata.routeTexts)
-    ?.replace(/articleId/g, 'id')
-    .replace(/articleImportRoute/g, 'import_route')
-  const scopedDateFilters = dateFilters.map((f) => {
-    return f.replace('articleCreatedAt', 'article_created_at')
-  })
+    const allJudgmentFilters = [...judgmentFilters, judgmentScopeFilter, ...dateFilters]
+    const judgmentWhereClause = allJudgmentFilters.join(' AND ')
 
-  const scopedWhereClause = [scopedArticlesFilter, ...scopedDateFilters].filter(Boolean).join(' AND ')
+    // Build scope filter for forska.articles (snake_case)
+    const articleScopeParts: string[] = []
+    if (hasCurated) {
+      if (useTempTable && tempTableInfo) {
+        articleScopeParts.push(`id IN (SELECT articleId FROM ${tempTableInfo.tableName})`)
+      } else {
+        const curatedIdsQuoted = metadata.curatedArticleIds
+          .map((id) => {
+            return `'${escapeClickHouseString(id)}'`
+          })
+          .join(', ')
+        articleScopeParts.push(`id IN (${curatedIdsQuoted})`)
+      }
+    }
+    if (hasRoutes) {
+      const routesQuoted = metadata.routeTexts
+        .map((r) => {
+          return `'${escapeClickHouseString(r)}'`
+        })
+        .join(', ')
+      articleScopeParts.push(`import_route IN (${routesQuoted})`)
+    }
+    const articleScopeFilter = `(${articleScopeParts.join(' OR ')})`
 
-  const totalScopedQuery = `
-    SELECT COUNT(DISTINCT id) as total
-    FROM forska.articles
-    WHERE ${scopedWhereClause}
-  `
+    const articleDateFilters = dateFilters.map((f) => {
+      return f.replace('articleCreatedAt', 'article_created_at')
+    })
+    const articleWhereClause = [articleScopeFilter, ...articleDateFilters].join(' AND ')
 
-  // Count assessed articles (those with ALL prompts)
-  const assessedQuery = `
-    SELECT COUNT(*) as assessed
-    FROM (
-      SELECT articleId
-      FROM judgments
-      WHERE ${whereClause}
-      GROUP BY articleId
-      HAVING COUNT(DISTINCT promptId) = ${metadata.promptIds.length}
-    ) subquery
-  `
+    const totalScopedQuery = `
+      SELECT COUNT(DISTINCT id) as total
+      FROM forska.articles
+      WHERE ${articleWhereClause}
+    `
 
-  const [totalResult, assessedResult] = await Promise.all([
-    client.query({query: totalScopedQuery, format: 'JSONEachRow'}),
-    client.query({query: assessedQuery, format: 'JSONEachRow'}),
-  ])
+    const assessedQuery = `
+      SELECT COUNT(*) as assessed
+      FROM (
+        SELECT articleId
+        FROM judgments
+        WHERE ${judgmentWhereClause}
+        GROUP BY articleId
+        HAVING COUNT(DISTINCT promptId) = ${metadata.promptIds.length}
+      ) subquery
+    `
 
-  const totalData = await totalResult.json<{total: string}>()
-  const assessedData = await assessedResult.json<{assessed: string}>()
+    const [totalResult, assessedResult] = await Promise.all([
+      client.query({query: totalScopedQuery, format: 'JSONEachRow'}),
+      client.query({query: assessedQuery, format: 'JSONEachRow'}),
+    ])
 
-  const total = parseInt(totalData[0]?.total ?? '0', 10)
-  const assessed = parseInt(assessedData[0]?.assessed ?? '0', 10)
-  const unassessed = Math.max(0, total - assessed)
+    const totalData = await totalResult.json<{total: string}>()
+    const assessedData = await assessedResult.json<{assessed: string}>()
 
-  console.timeEnd('ch:unassessed_count')
-  console.log(`[CH] Unassessed count: ${unassessed} (total: ${total}, assessed: ${assessed})`)
-  return unassessed
+    const total = parseInt(totalData[0]?.total ?? '0', 10)
+    const assessed = parseInt(assessedData[0]?.assessed ?? '0', 10)
+    const unassessed = Math.max(0, total - assessed)
+
+    console.timeEnd('ch:unassessed_count')
+    console.log(`[CH] Unassessed count: ${unassessed} (total: ${total}, assessed: ${assessed})`)
+    return unassessed
+  } finally {
+    if (tempTableInfo) {
+      await tempTableInfo.cleanup()
+    }
+  }
 }
 
 export const getUnassessedArticlesFromClickHouse = async (
@@ -338,100 +378,153 @@ export const getUnassessedArticlesFromClickHouse = async (
     return {articles: [], totalCount: 0}
   }
 
-  const hasScope = metadata.curatedArticleIds.length > 0 || metadata.routeTexts.length > 0
-  if (!hasScope) {
+  const hasRoutes = metadata.routeTexts.length > 0
+  const hasCurated = metadata.curatedArticleIds.length > 0
+  if (!hasRoutes && !hasCurated) {
     console.timeEnd('ch:unassessed_articles')
     console.log('[CH] No scope defined - returning empty')
     return {articles: [], totalCount: 0}
   }
 
-  const judgmentFilters = buildJudgmentFilters(
-    metadata.promptIds,
-    projectModelId,
-    useTitle,
-    useAbstract,
-    useFulltext,
-    useFulltextNoImages,
-  )
-  const scopeFilter = buildScopeFilter(metadata.curatedArticleIds, metadata.routeTexts)
-  const dateFilters = buildDateFilters(projectDateFrom, projectDateTo)
+  const useTempTable = hasCurated && metadata.curatedArticleIds.length > CURATED_ARTICLES_TEMP_TABLE_THRESHOLD
+  let tempTableInfo: TempTableInfo | null = null
 
-  const allFilters = [...judgmentFilters, scopeFilter, ...dateFilters].filter(Boolean)
-  const whereClause = allFilters.join(' AND ')
-
-  // Build scope filters for forska.articles (uses snake_case)
-  const scopedArticlesFilter = buildScopeFilter(metadata.curatedArticleIds, metadata.routeTexts)
-    ?.replace(/articleId/g, 'id')
-    .replace(/articleImportRoute/g, 'import_route')
-  const scopedDateFilters = dateFilters.map((f) => {
-    return f.replace('articleCreatedAt', 'article_created_at')
-  })
-  const searchFilter = search?.trim() ? `article_title ILIKE '%${escapeClickHouseString(search.trim())}%'` : null
-
-  const scopedWhereClause = [scopedArticlesFilter, ...scopedDateFilters, searchFilter].filter(Boolean).join(' AND ')
-
-  // Get assessed article IDs
-  const assessedSubquery = `
-    SELECT articleId
-    FROM judgments
-    WHERE ${whereClause}
-    GROUP BY articleId
-    HAVING COUNT(DISTINCT promptId) = ${metadata.promptIds.length}
-  `
-
-  // Count unassessed
-  const countQuery = `
-    SELECT COUNT(*) as total_count
-    FROM forska.articles a
-    WHERE ${scopedWhereClause}
-      AND a.id NOT IN (${assessedSubquery})
-  `
-
-  // Get unassessed articles
-  const articlesQuery = `
-    SELECT
-      a.id,
-      a.article_id,
-      a.article_title,
-      a.article_created_at,
-      a.article_updated_at
-    FROM forska.articles a
-    WHERE ${scopedWhereClause}
-      AND a.id NOT IN (${assessedSubquery})
-    ORDER BY COALESCE(a.article_updated_at, a.article_created_at, a.created_at) DESC, a.id DESC
-    LIMIT ${limit}
-    OFFSET ${offset}
-  `
-
-  const [countResult, articlesResult] = await Promise.all([
-    client.query({query: countQuery, format: 'JSONEachRow'}),
-    client.query({query: articlesQuery, format: 'JSONEachRow'}),
-  ])
-
-  const countData = await countResult.json<{total_count: string}>()
-  const articlesData = await articlesResult.json<{
-    id: string
-    article_id: string | null
-    article_title: string
-    article_created_at: string | null
-    article_updated_at: string | null
-  }>()
-
-  console.timeEnd('ch:unassessed_articles')
-
-  const totalCount = parseInt(countData[0]?.total_count ?? '0', 10)
-  const articles: UnassessedArticleRow[] = articlesData.map((row) => {
-    return {
-      id: row.id,
-      articleId: row.article_id,
-      articleTitle: row.article_title,
-      articleCreatedAt: row.article_created_at ? new Date(row.article_created_at) : null,
-      articleUpdatedAt: row.article_updated_at ? new Date(row.article_updated_at) : null,
+  try {
+    if (useTempTable) {
+      tempTableInfo = await createTempTable(metadata.curatedArticleIds)
     }
-  })
 
-  console.log(`[CH] Found ${articles.length} unassessed articles (total: ${totalCount})`)
-  return {articles, totalCount}
+    const judgmentFilters = buildJudgmentFilters(
+      metadata.promptIds,
+      projectModelId,
+      useTitle,
+      useAbstract,
+      useFulltext,
+      useFulltextNoImages,
+    )
+    const dateFilters = buildDateFilters(projectDateFrom, projectDateTo)
+
+    // Build scope filter for judgments table (camelCase)
+    const judgmentScopeParts: string[] = []
+    if (hasCurated) {
+      if (useTempTable && tempTableInfo) {
+        judgmentScopeParts.push(`articleId IN (SELECT articleId FROM ${tempTableInfo.tableName})`)
+      } else {
+        const curatedIdsQuoted = metadata.curatedArticleIds
+          .map((id) => {
+            return `'${escapeClickHouseString(id)}'`
+          })
+          .join(', ')
+        judgmentScopeParts.push(`articleId IN (${curatedIdsQuoted})`)
+      }
+    }
+    if (hasRoutes) {
+      const routesQuoted = metadata.routeTexts
+        .map((r) => {
+          return `'${escapeClickHouseString(r)}'`
+        })
+        .join(', ')
+      judgmentScopeParts.push(`articleImportRoute IN (${routesQuoted})`)
+    }
+    const judgmentScopeFilter = `(${judgmentScopeParts.join(' OR ')})`
+
+    const allJudgmentFilters = [...judgmentFilters, judgmentScopeFilter, ...dateFilters]
+    const judgmentWhereClause = allJudgmentFilters.join(' AND ')
+
+    // Build scope filter for forska.articles (snake_case)
+    const articleScopeParts: string[] = []
+    if (hasCurated) {
+      if (useTempTable && tempTableInfo) {
+        articleScopeParts.push(`id IN (SELECT articleId FROM ${tempTableInfo.tableName})`)
+      } else {
+        const curatedIdsQuoted = metadata.curatedArticleIds
+          .map((id) => {
+            return `'${escapeClickHouseString(id)}'`
+          })
+          .join(', ')
+        articleScopeParts.push(`id IN (${curatedIdsQuoted})`)
+      }
+    }
+    if (hasRoutes) {
+      const routesQuoted = metadata.routeTexts
+        .map((r) => {
+          return `'${escapeClickHouseString(r)}'`
+        })
+        .join(', ')
+      articleScopeParts.push(`import_route IN (${routesQuoted})`)
+    }
+    const articleScopeFilter = `(${articleScopeParts.join(' OR ')})`
+
+    const articleDateFilters = dateFilters.map((f) => {
+      return f.replace('articleCreatedAt', 'article_created_at')
+    })
+    const searchFilter = search?.trim() ? `article_title ILIKE '%${escapeClickHouseString(search.trim())}%'` : null
+    const articleWhereClause = [articleScopeFilter, ...articleDateFilters, searchFilter].filter(Boolean).join(' AND ')
+
+    const assessedSubquery = `
+      SELECT articleId
+      FROM judgments
+      WHERE ${judgmentWhereClause}
+      GROUP BY articleId
+      HAVING COUNT(DISTINCT promptId) = ${metadata.promptIds.length}
+    `
+
+    const countQuery = `
+      SELECT COUNT(*) as total_count
+      FROM forska.articles a
+      WHERE ${articleWhereClause}
+        AND a.id NOT IN (${assessedSubquery})
+    `
+
+    const articlesQuery = `
+      SELECT
+        a.id,
+        a.article_id,
+        a.article_title,
+        a.article_created_at,
+        a.article_updated_at
+      FROM forska.articles a
+      WHERE ${articleWhereClause}
+        AND a.id NOT IN (${assessedSubquery})
+      ORDER BY COALESCE(a.article_updated_at, a.article_created_at, a.created_at) DESC, a.id DESC
+      LIMIT ${limit}
+      OFFSET ${offset}
+    `
+
+    const [countResult, articlesResult] = await Promise.all([
+      client.query({query: countQuery, format: 'JSONEachRow'}),
+      client.query({query: articlesQuery, format: 'JSONEachRow'}),
+    ])
+
+    const countData = await countResult.json<{total_count: string}>()
+    const articlesData = await articlesResult.json<{
+      id: string
+      article_id: string | null
+      article_title: string
+      article_created_at: string | null
+      article_updated_at: string | null
+    }>()
+
+    console.timeEnd('ch:unassessed_articles')
+
+    const totalCount = parseInt(countData[0]?.total_count ?? '0', 10)
+    const articles: UnassessedArticleRow[] = articlesData.map((row) => {
+      return {
+        id: row.id,
+        articleId: row.article_id,
+        articleTitle: row.article_title,
+        articleCreatedAt: row.article_created_at ? new Date(row.article_created_at) : null,
+        articleUpdatedAt: row.article_updated_at ? new Date(row.article_updated_at) : null,
+      }
+    })
+
+    console.log(`[CH] Found ${articles.length} unassessed articles (total: ${totalCount})`)
+    return {articles, totalCount}
+  } finally {
+    if (tempTableInfo) {
+      await tempTableInfo.cleanup()
+    }
+  }
 }
 
 const buildCursorCondition = (cursor: PaginationCursor | null): string => {
@@ -476,76 +569,131 @@ export const getUnassessedPairsFromClickHouse = async (
     return {promptEntries: [], nextCursor: null}
   }
 
-  const hasScope = metadata.curatedArticleIds.length > 0 || metadata.routeTexts.length > 0
-  if (!hasScope) {
+  const hasRoutes = metadata.routeTexts.length > 0
+  const hasCurated = metadata.curatedArticleIds.length > 0
+  if (!hasRoutes && !hasCurated) {
     console.timeEnd('ch:unassessed_pairs')
     console.log('[CH] No scope defined - returning empty')
     return {promptEntries: [], nextCursor: null}
   }
 
-  const judgmentFilters = buildJudgmentFilters(
-    metadata.promptIds,
-    metadata.modelId,
-    metadata.useTitle,
-    metadata.useAbstract,
-    metadata.useFulltext,
-    metadata.useFulltextNoImages,
-  )
-  const scopeFilter = buildScopeFilter(metadata.curatedArticleIds, metadata.routeTexts)
-  const dateFilters = buildDateFilters(metadata.dateFrom, metadata.dateTo)
+  const useTempTable = hasCurated && metadata.curatedArticleIds.length > CURATED_ARTICLES_TEMP_TABLE_THRESHOLD
+  let tempTableInfo: TempTableInfo | null = null
 
-  const judgmentWhereClause = [...judgmentFilters, scopeFilter].filter(Boolean).join(' AND ')
+  try {
+    if (useTempTable) {
+      tempTableInfo = await createTempTable(metadata.curatedArticleIds)
+    }
 
-  // Build scope filters for forska.articles
-  const scopedArticlesFilter = buildScopeFilter(metadata.curatedArticleIds, metadata.routeTexts)
-    ?.replace(/articleId/g, 'id')
-    .replace(/articleImportRoute/g, 'import_route')
-  const scopedDateFilters = dateFilters.map((f) => {
-    return f.replace('articleCreatedAt', 'article_created_at')
-  })
-  const scopedWhereClause = [scopedArticlesFilter, ...scopedDateFilters].filter(Boolean).join(' AND ')
+    const judgmentFilters = buildJudgmentFilters(
+      metadata.promptIds,
+      metadata.modelId,
+      metadata.useTitle,
+      metadata.useAbstract,
+      metadata.useFulltext,
+      metadata.useFulltextNoImages,
+    )
+    const dateFilters = buildDateFilters(metadata.dateFrom, metadata.dateTo)
 
-  const cursorCondition = buildCursorCondition(cursor)
+    // Build scope filter for judgments table (camelCase)
+    const judgmentScopeParts: string[] = []
+    if (hasCurated) {
+      if (useTempTable && tempTableInfo) {
+        judgmentScopeParts.push(`articleId IN (SELECT articleId FROM ${tempTableInfo.tableName})`)
+      } else {
+        const curatedIdsQuoted = metadata.curatedArticleIds
+          .map((id) => {
+            return `'${escapeClickHouseString(id)}'`
+          })
+          .join(', ')
+        judgmentScopeParts.push(`articleId IN (${curatedIdsQuoted})`)
+      }
+    }
+    if (hasRoutes) {
+      const routesQuoted = metadata.routeTexts
+        .map((r) => {
+          return `'${escapeClickHouseString(r)}'`
+        })
+        .join(', ')
+      judgmentScopeParts.push(`articleImportRoute IN (${routesQuoted})`)
+    }
+    const judgmentScopeFilter = `(${judgmentScopeParts.join(' OR ')})`
 
-  const promptIdsQuoted = metadata.promptIds
-    .map((id) => {
-      return `'${escapeClickHouseString(id)}'`
+    const judgmentWhereClause = [...judgmentFilters, judgmentScopeFilter].join(' AND ')
+
+    // Build scope filter for forska.articles (snake_case)
+    const articleScopeParts: string[] = []
+    if (hasCurated) {
+      if (useTempTable && tempTableInfo) {
+        articleScopeParts.push(`id IN (SELECT articleId FROM ${tempTableInfo.tableName})`)
+      } else {
+        const curatedIdsQuoted = metadata.curatedArticleIds
+          .map((id) => {
+            return `'${escapeClickHouseString(id)}'`
+          })
+          .join(', ')
+        articleScopeParts.push(`id IN (${curatedIdsQuoted})`)
+      }
+    }
+    if (hasRoutes) {
+      const routesQuoted = metadata.routeTexts
+        .map((r) => {
+          return `'${escapeClickHouseString(r)}'`
+        })
+        .join(', ')
+      articleScopeParts.push(`import_route IN (${routesQuoted})`)
+    }
+    const articleScopeFilter = `(${articleScopeParts.join(' OR ')})`
+
+    const articleDateFilters = dateFilters.map((f) => {
+      return f.replace('articleCreatedAt', 'article_created_at')
     })
-    .join(', ')
+    const articleWhereClause = [articleScopeFilter, ...articleDateFilters].join(' AND ')
 
-  // Get assessed article-prompt pairs
-  const assessedPairsSubquery = `
-    SELECT articleId, promptId
-    FROM judgments
-    WHERE ${judgmentWhereClause}
-  `
+    const cursorCondition = buildCursorCondition(cursor)
 
-  // Get unassessed pairs: all (article, prompt) combinations minus assessed pairs
-  const query = `
-    SELECT
-      a.id AS article_id,
-      p.promptId AS prompt_id,
-      COALESCE(a.article_updated_at, a.article_created_at, a.created_at) AS sort_date
-    FROM forska.articles a
-    CROSS JOIN (
-      SELECT arrayJoin([${promptIdsQuoted}]) AS promptId
-    ) p
-    WHERE ${scopedWhereClause}
-      AND (a.id, p.promptId) NOT IN (${assessedPairsSubquery})
-      ${cursorCondition}
-    ORDER BY sort_date DESC, a.id DESC
-    LIMIT ${numberOfPromptsToGet}
-  `
+    const promptIdsQuoted = metadata.promptIds
+      .map((id) => {
+        return `'${escapeClickHouseString(id)}'`
+      })
+      .join(', ')
 
-  const result = await client.query({query, format: 'JSONEachRow'})
-  const data = await result.json<{article_id: string; prompt_id: string; sort_date: string}>()
-  console.timeEnd('ch:unassessed_pairs')
+    const assessedPairsSubquery = `
+      SELECT articleId, promptId
+      FROM judgments
+      WHERE ${judgmentWhereClause}
+    `
 
-  const promptEntries: PromptQueueEntry[] = data.map((row) => {
-    return {articleId: row.article_id, promptId: row.prompt_id}
-  })
-  const nextCursor = extractNextCursor(data)
+    const query = `
+      SELECT
+        a.id AS article_id,
+        p.promptId AS prompt_id,
+        COALESCE(a.article_updated_at, a.article_created_at, a.created_at) AS sort_date
+      FROM forska.articles a
+      CROSS JOIN (
+        SELECT arrayJoin([${promptIdsQuoted}]) AS promptId
+      ) p
+      WHERE ${articleWhereClause}
+        AND (a.id, p.promptId) NOT IN (${assessedPairsSubquery})
+        ${cursorCondition}
+      ORDER BY sort_date DESC, a.id DESC
+      LIMIT ${numberOfPromptsToGet}
+    `
 
-  console.log(`[CH] Found ${promptEntries.length} unassessed pairs`)
-  return {promptEntries, nextCursor}
+    const result = await client.query({query, format: 'JSONEachRow'})
+    const data = await result.json<{article_id: string; prompt_id: string; sort_date: string}>()
+    console.timeEnd('ch:unassessed_pairs')
+
+    const promptEntries: PromptQueueEntry[] = data.map((row) => {
+      return {articleId: row.article_id, promptId: row.prompt_id}
+    })
+    const nextCursor = extractNextCursor(data)
+
+    console.log(`[CH] Found ${promptEntries.length} unassessed pairs`)
+    return {promptEntries, nextCursor}
+  } finally {
+    if (tempTableInfo) {
+      await tempTableInfo.cleanup()
+    }
+  }
 }
