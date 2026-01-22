@@ -1,0 +1,52 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bun run lint:*)",
+      "Bash(bun run lint:fix)",
+      "Bash(bunx tsc:*)",
+      "Bash(bunx eslint:*)",
+      "Read(//Users/fredrc/Library/Application Support/com.mitchellh.ghostty/**)",
+      "Bash(bun run:*)",
+      "Bash(bun add:*)",
+      "Bash(curl:*)",
+      "Bash(bun:*)",
+      "mcp__ide__getDiagnostics",
+      "WebFetch(domain:clickhouse.com)",
+      "WebFetch(domain:api.github.com)",
+      "Bash(CH_REPLICATOR_PASSWORD='ch_replicator_dev_pass' bun run:*)",
+      "Bash(docker-compose restart:*)",
+      "Bash(docker logs:*)",
+      "Bash(docker exec:*)",
+      "Bash(docker-compose stop:*)",
+      "Bash(docker-compose up:*)",
+      "Bash(docker-compose rm:*)",
+      "Bash(docker ps:*)",
+      "Bash(chmod:*)",
+      "Bash(scripts/monitorSyncProgress.sh:*)",
+      "Bash(docker network inspect:*)",
+      "Bash(for i in {1..120})",
+      "Bash(done)",
+      "Bash(docker port:*)",
+      "Bash(docker stop:*)",
+      "Bash(docker rm:*)",
+      "Bash(docker compose:*)",
+      "Bash(S3_ENDPOINT=http://localhost:8333 S3_ACCESS_KEY=admin S3_SECRET_KEY=admin S3_BUCKET=forska-judgments bun:*)",
+      "Bash(S3_ENDPOINT=http://localhost:8333 S3_ACCESS_KEY=admin S3_SECRET_KEY=admin S3_BUCKET=forska-judgments LIMIT=10000 bun:*)",
+      "Bash(psql:*)"
+    ],
+    "deny": [],
+    "ask": [],
+    "defaultMode": "acceptEdits"
+  },
+  "sandbox": {
+    "enabled": true,
+    "excludedCommands": [
+      "docker"
+    ],
+    "networkAccess": [
+      "localhost",
+      "127.0.0.1"
+    ],
+    "autoAllowBashIfSandboxed": true
+  }
+}
