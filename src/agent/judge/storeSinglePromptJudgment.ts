@@ -150,9 +150,9 @@ export const storeSinglePromptJudgment = async ({
       // Immutable judgments: if it already exists, do not update.
       // To re-judge, the user must delete the existing judgment first.
       console.error(
-        `${article.id} | Judgment already exists: promptId=${promptId}, modelId=${modelId}, ` +
-          `content=[T:${useTitle},A:${useAbstract},F:${useFulltext},FNI:${useFulltextNoImages}], ` +
-          `projectId=${projectId}, existingId=${existingId}, createdAt=${existingCreatedAt?.toISOString()}`,
+        `${article.id} | Judgment already exists: promptId=${promptId}, modelId=${modelId}, `
+          + `content=[T:${useTitle},A:${useAbstract},F:${useFulltext},FNI:${useFulltextNoImages}], `
+          + `projectId=${projectId}, existingId=${existingId}, createdAt=${existingCreatedAt?.toISOString()}`,
       )
       return
     }

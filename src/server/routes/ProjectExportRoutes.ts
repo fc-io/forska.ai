@@ -17,6 +17,17 @@ import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 
 const BATCH_SIZE = 500
 
+// Parse arktype options from a type string like "'option1' | 'option2' | 'option3'"
+const parseArktypeOptions = (typeStr: string | null): string[] => {
+  if (!typeStr) return []
+  const matches = typeStr.match(/['"]([^'"]+)['"]/g)
+  return (
+    matches?.map((m) => {
+      return m.slice(1, -1)
+    }) ?? []
+  )
+}
+
 // Escape CSV field
 const escapeCSV = (value: string): string => {
   if (value.includes(',') || value.includes('"') || value.includes('\n') || value.includes('\r')) {
@@ -254,41 +265,62 @@ export const projectExportRoutes = new Elysia()
       if (hasPromptFilters && hasPrompts && judgmentConfigCondition) {
         const normalized = sql`COALESCE(${judgments.answeredOriginalAsArray}, CASE WHEN ${judgments.answeredOriginal} IS NOT NULL THEN ARRAY[${judgments.answeredOriginal}] ELSE ARRAY[]::text[] END)`
 
-        const havingParts: Array<ReturnType<typeof sql>> = []
-        const allFilterPromptIds: string[] = []
-        for (const filter of promptSelections) {
-          allFilterPromptIds.push(filter.promptId)
-          const answeredValsArray = sql.join(
-            filter.types.map((v) => {
-              return sql`${v}`
-            }),
-            sql`,`,
-          )
-          havingParts.push(
-            sql`SUM(CASE WHEN ${judgments.promptId} = ${filter.promptId}::uuid AND (${normalized}) && ARRAY[${answeredValsArray}]::text[] THEN 1 ELSE 0 END) > 0`,
-          )
-        }
-
-        const filteredQuery = await db
-          .select({id: articles.id})
-          .from(articles)
-          .innerJoin(
-            judgments,
-            and(
-              eq(judgments.articleId, articles.id),
-              inArray(judgments.promptId, allFilterPromptIds),
-              isNull(judgments.deletedAt),
-              judgmentConfigCondition,
-            ),
-          )
-          .where(scopeCondition)
-          .groupBy(articles.id)
-          .having(and(...havingParts))
-
-        filteredArticleIds = filteredQuery.map((r) => {
-          return r.id
+        // Filter out prompts where ALL options are selected (treat as no filter)
+        const effectivePromptSelections = promptSelections.filter((filter) => {
+          const promptType = promptTypeMap.get(filter.promptId)
+          const allOptions = parseArktypeOptions(promptType ?? null)
+          if (allOptions.length === 0) return true // No defined options, keep the filter
+          const selectedSet = new Set(filter.types)
+          const allOptionsSelected = allOptions.every((opt) => {
+            return selectedSet.has(opt)
+          })
+          return !allOptionsSelected // Only keep filters where not all options are selected
         })
-        console.log(`[export] Filtered to ${filteredArticleIds.length} articles based on prompt answer filters`)
+
+        console.log(
+          `[export] Prompt filters: ${promptSelections.length} provided, ${effectivePromptSelections.length} effective (after removing "all selected")`,
+        )
+
+        // Only apply filtering if there are effective prompt selections
+        if (effectivePromptSelections.length > 0) {
+          const havingParts: Array<ReturnType<typeof sql>> = []
+          const allFilterPromptIds: string[] = []
+          for (const filter of effectivePromptSelections) {
+            allFilterPromptIds.push(filter.promptId)
+            const answeredValsArray = sql.join(
+              filter.types.map((v) => {
+                return sql`${v}`
+              }),
+              sql`,`,
+            )
+            havingParts.push(
+              sql`SUM(CASE WHEN ${judgments.promptId} = ${filter.promptId}::uuid AND (${normalized}) && ARRAY[${answeredValsArray}]::text[] THEN 1 ELSE 0 END) > 0`,
+            )
+          }
+
+          const filteredQuery = await db
+            .select({id: articles.id})
+            .from(articles)
+            .innerJoin(
+              judgments,
+              and(
+                eq(judgments.articleId, articles.id),
+                inArray(judgments.promptId, allFilterPromptIds),
+                isNull(judgments.deletedAt),
+                judgmentConfigCondition,
+              ),
+            )
+            .where(scopeCondition)
+            .groupBy(articles.id)
+            .having(and(...havingParts))
+
+          filteredArticleIds = filteredQuery.map((r) => {
+            return r.id
+          })
+          console.log(`[export] Filtered to ${filteredArticleIds.length} articles based on prompt answer filters`)
+        } else {
+          console.log(`[export] All prompt filters had all options selected - treating as no filter`)
+        }
       }
 
       // Build final scope condition with article filter if applicable

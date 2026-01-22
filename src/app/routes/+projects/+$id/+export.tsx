@@ -233,17 +233,12 @@ const ExportData = () => {
     }
   })
 
-  // Auto-select all answer types for all prompts on load (only once)
+  // Mark filters as initialized when prompts are loaded
+  // NOTE: We intentionally do NOT auto-select answer filters to match the behavior
+  // of the reviews page, which shows all articles regardless of answer values
   createEffect(() => {
     const prompts = promptsWithOptions()
     if (prompts.length > 0 && !hasInitializedFilters()) {
-      const newFilters: Record<string, string[]> = {}
-      for (const prompt of prompts) {
-        if (prompt.options.length > 0) {
-          newFilters[prompt.id] = [...prompt.options]
-        }
-      }
-      setPromptAnswerFilters(newFilters)
       setHasInitializedFilters(true)
     }
   })
@@ -663,7 +658,8 @@ const ExportData = () => {
                 <div class="px-4 pb-4">
                   <p class="text-xs text-muted-foreground mb-3">
                     Filter which articles to include based on their prompt answers. Articles must match ALL selected
-                    prompt/answer combinations. Deselect answer types to exclude articles with those answers.
+                    prompt/answer combinations. By default, no filtering is applied (all articles are included).
+                    Selecting all options for a prompt is equivalent to not filtering on that prompt.
                   </p>
                   <div class="space-y-4">
                     <For

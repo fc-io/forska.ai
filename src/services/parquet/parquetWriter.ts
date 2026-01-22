@@ -64,7 +64,9 @@ export const judgmentAnalyticsSchema = new ParquetSchema({
 /**
  * Convert milliseconds to microseconds for TIMESTAMP_MICROS.
  */
-const msToMicros = (ms: number): bigint => BigInt(ms) * 1000n
+const msToMicros = (ms: number): bigint => {
+  return BigInt(ms) * 1000n
+}
 
 /**
  * Convert a DenormalizedJudgmentAnalytics record to Parquet row format.
