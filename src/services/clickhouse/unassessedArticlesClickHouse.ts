@@ -265,8 +265,10 @@ export const getUnassessedCountFromClickHouse = async (params: UnassessedCountPa
   // But we also need articles with NO judgments at all - those won't appear in the judgments table.
   // So we need to count scoped articles from forska.articles and subtract assessed count.
 
-  // First, count total scoped articles
+  // First, count total scoped articles (forska.articles uses snake_case columns)
   const scopedArticlesFilter = buildScopeFilter(metadata.curatedArticleIds, metadata.routeTexts)
+    ?.replace(/articleId/g, 'id')
+    .replace(/articleImportRoute/g, 'import_route')
   const scopedDateFilters = dateFilters.map((f) => {
     return f.replace('articleCreatedAt', 'article_created_at')
   })

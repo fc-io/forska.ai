@@ -1,20 +1,11 @@
-import type {SQL} from 'drizzle-orm'
-import {and, eq, gte, lte, sql, sum} from 'drizzle-orm'
+import {eq, sql, sum} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
+import {judgmentsJobs, judgmentsJobsPrompts, projectRouteLink, projects, tokenUse} from '../../db/schema'
 import {
-  articleRouteLink,
-  articles,
-  judgments,
-  judgmentsJobs,
-  judgmentsJobsPrompts,
-  projectArticles,
-  projectPrompts,
-  projectRouteLink,
-  projects,
-  tokenUse,
-} from '../../db/schema'
-import {getUnassessedCountFromClickHouse} from '../../services/clickhouse/unassessedArticlesClickHouse.ts'
+  getUnassessedArticlesFromClickHouse,
+  getUnassessedCountFromClickHouse,
+} from '../../services/clickhouse/unassessedArticlesClickHouse.ts'
 import {requireAdminAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase'
 import {withErrorHandler} from '../utils/routeErrorHandler'
@@ -130,128 +121,6 @@ const getJobContext = async ({
       return r.importRouteId
     }),
   }
-}
-
-const getUnassessedArticles = async ({
-  db,
-  projectId,
-  projectModelId,
-  projectDateFrom,
-  projectDateTo,
-  importRouteIds,
-  useTitle,
-  useAbstract,
-  useFulltext,
-  useFulltextNoImages,
-}: {
-  db: Database
-  projectId: string
-  projectModelId: string
-  projectDateFrom: Date | null | undefined
-  projectDateTo: Date | null | undefined
-  importRouteIds: string[]
-  useTitle: boolean
-  useAbstract: boolean
-  useFulltext: boolean
-  useFulltextNoImages: boolean
-}): Promise<
-  {
-    id: string
-    articleId: string | null
-    articleTitle: string
-    articleAuthors: string[] | null
-    articleCreatedAt: Date | null
-    articleUpdatedAt: Date | null
-  }[]
-> => {
-  const dateConditions: SQL[] = []
-  if (projectDateFrom) {
-    dateConditions.push(gte(articles.articleCreatedAt, projectDateFrom))
-  }
-  if (projectDateTo) {
-    dateConditions.push(lte(articles.articleCreatedAt, projectDateTo))
-  }
-
-  const allConditions: SQL[] = [sql`${judgments.id} IS NULL`]
-  if (dateConditions.length > 0) {
-    allConditions.push(...dateConditions)
-  }
-
-  let query = db
-    .select({
-      id: articles.id,
-      articleId: articles.articleId,
-      articleTitle: articles.articleTitle,
-      articleAuthors: articles.articleAuthors,
-      articleCreatedAt: articles.articleCreatedAt,
-      articleUpdatedAt: articles.articleUpdatedAt,
-    })
-    .from(articles)
-    .$dynamic()
-
-  // Optimization: If no import routes, strictly limit to project_articles via INNER JOIN
-  if (importRouteIds.length === 0) {
-    query = query.innerJoin(
-      projectArticles,
-      and(eq(projectArticles.articleId, articles.id), eq(projectArticles.projectId, projectId)),
-    )
-  }
-
-  query = query
-    .innerJoin(
-      projectPrompts,
-      and(
-        eq(projectPrompts.projectId, projectId),
-        eq(projectPrompts.enabled, true),
-        eq(projectPrompts.archived, false),
-      ),
-    )
-    .leftJoin(
-      judgments,
-      sql`${judgments.articleId} = ${articles.id} AND ${judgments.promptId} = ${projectPrompts.promptId} AND ${judgments.modelId} = ${projectModelId}::uuid AND ${judgments.useTitle} = ${useTitle} AND ${judgments.useAbstract} = ${useAbstract} AND ${judgments.useFulltext} = ${useFulltext} AND ${judgments.useFulltextNoImages} = ${useFulltextNoImages} AND ${judgments.deletedAt} IS NULL AND ${judgments.isAnswered} = true`,
-    )
-    .groupBy(
-      articles.id,
-      articles.articleId,
-      articles.articleTitle,
-      articles.articleAuthors,
-      articles.articleCreatedAt,
-      articles.articleUpdatedAt,
-    )
-
-  if (importRouteIds.length > 0) {
-    const routeCondition = sql`EXISTS (
-      SELECT 1 FROM ${articleRouteLink} arl
-      WHERE arl."article_id" = ${articles.id}
-      AND arl."import_route_id" = ANY(ARRAY[${sql.join(
-        importRouteIds.map((id) => {
-          return sql`${id}::uuid`
-        }),
-        sql`,`,
-      )}])
-    )`
-
-    const projectArticleCondition = sql`EXISTS (
-      SELECT 1 FROM ${projectArticles} pa
-      WHERE pa."article_id" = ${articles.id}
-      AND pa."project_id" = ${projectId}
-    )`
-
-    query = query.where(
-      sql`${sql.join(allConditions, sql` AND `)} AND (${routeCondition} OR ${projectArticleCondition})`,
-    )
-  } else {
-    // If we optimized with INNER JOIN, we just need the base conditions
-    query = query.where(sql`${sql.join(allConditions, sql` AND `)}`)
-  }
-
-  const articlesToAssess = await query
-    .orderBy(
-      sql`COALESCE(${articles.articleUpdatedAt}, ${articles.articleCreatedAt}, ${articles.createdAt}) DESC, ${articles.id} DESC`,
-    )
-    .limit(100)
-
-  return articlesToAssess
 }
 
 export const judgmentsJobsRoutes = new Elysia()
@@ -406,8 +275,7 @@ export const judgmentsJobsRoutes = new Elysia()
         jobId: query.jobId,
       })
 
-      const unassessedArticles = await getUnassessedArticles({
-        db,
+      const {articles} = await getUnassessedArticlesFromClickHouse({
         projectId: job.projectId,
         projectModelId,
         projectDateFrom,
@@ -417,6 +285,19 @@ export const judgmentsJobsRoutes = new Elysia()
         useAbstract: job.useAbstract,
         useFulltext: job.useFulltext,
         useFulltextNoImages: job.useFulltextNoImages,
+        limit: 100,
+        offset: 0,
+      })
+
+      const unassessedArticles = articles.map((a) => {
+        return {
+          id: a.id,
+          articleId: a.articleId,
+          articleTitle: a.articleTitle,
+          articleAuthors: null,
+          articleCreatedAt: a.articleCreatedAt,
+          articleUpdatedAt: a.articleUpdatedAt,
+        }
       })
 
       return {data: unassessedArticles, error: null}
