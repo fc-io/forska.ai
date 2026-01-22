@@ -157,7 +157,8 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
           {promptId() ? <div>Prompt ID: {String(promptId()).slice(0, 8)}</div> : null}
           {modelName() ? <div>Model: {modelName()}</div> : null}
           <Show when={hasContentFlags()}>
-            <div class="flex flex-wrap gap-1 mt-0.5">
+            <div class="flex flex-wrap items-center gap-1 mt-0.5">
+              <span class="mr-0.5">Content:</span>
               <span
                 class={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${
                   props.judgment.useTitle ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-500'
