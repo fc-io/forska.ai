@@ -338,7 +338,7 @@ const ExportData = () => {
   return (
     <div class="p-6 max-w-4xl mx-auto">
       <div class="flex items-center gap-4 mb-6">
-        <Button as={Link} to="/projects/$id" params={{id: projectId}} variant="outline" size="sm">
+        <Button as={Link} to="/projects/$id" params={{id: projectId} as never} variant="outline" size="sm">
           ← Back to Project
         </Button>
         <h1 class="text-3xl font-bold">Export data</h1>

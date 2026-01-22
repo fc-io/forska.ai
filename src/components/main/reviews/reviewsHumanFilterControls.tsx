@@ -48,15 +48,18 @@ export const ReviewsHumanFilterControls = (props: ReviewsHumanFilterControlsProp
         (props.appliedSearchTitle || '').trim() || null,
       ],
       queryFn: async () => {
-        const query: Record<string, string> = {projectId: props.projectId}
         const from = validFrom()
         const to = validTo()
-        if (from) query.from = from
-        if (to) query.to = to
         const search = (props.appliedSearchTitle || '').trim()
-        if (search) query.search = search
 
-        const response = await apiClient.api.articlesreviewshumanfilters.get({query})
+        const response = await apiClient.api.articlesreviewshumanfilters.get({
+          query: {
+            projectId: props.projectId,
+            from: from ?? undefined,
+            to: to ?? undefined,
+            search: search || undefined,
+          },
+        })
 
         if (!response.data) {
           throw new Error('Failed to fetch filters')
@@ -209,27 +212,27 @@ export const ReviewsHumanFilterControls = (props: ReviewsHumanFilterControlsProp
                           >
                             {promptFilter.promptName || `Prompt ${promptFilter.promptId}`}:
                           </label>
-                          <Select.Root
+                          <Select.Root<string>
                             multiple
                             value={current()}
-                            onChange={(vals) => {
+                            onChange={(vals: string[]) => {
                               return setPromptMulti(promptFilter.promptId, vals.length ? vals : null)
                             }}
                             options={options()}
-                            optionValue={(v) => {
+                            optionValue={(v: string) => {
                               return v
                             }}
-                            optionTextValue={(v) => {
+                            optionTextValue={(v: string) => {
                               return v
                             }}
                             placeholder="All"
-                            itemComponent={(props) => {
+                            itemComponent={(itemProps) => {
                               return (
                                 <Select.Item
-                                  item={props.item}
+                                  item={itemProps.item}
                                   class="relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-2 pr-8 text-sm outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-muted data-[disabled]:opacity-50"
                                 >
-                                  <Select.ItemLabel class="truncate">{props.item.rawValue as string}</Select.ItemLabel>
+                                  <Select.ItemLabel class="truncate">{itemProps.item.rawValue}</Select.ItemLabel>
                                   <Select.ItemIndicator class="absolute right-2 flex h-3.5 w-3.5 items-center justify-center">
                                     <svg
                                       xmlns="http://www.w3.org/2000/svg"

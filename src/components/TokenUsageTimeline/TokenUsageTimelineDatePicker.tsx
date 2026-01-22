@@ -30,13 +30,13 @@ type TokenUsageTimelineDatePickerApi = {
   clearValue: () => void
   setOpen: (open: boolean) => void
   getOffset: (params: {months: number}) => {
-    weeks: Array<Array<{day: string; value: DateValue}>>
+    weeks: DateValue[][]
     visibleRange: {start: DateValue; end: DateValue}
   }
   weekDays: Array<{short: string}>
-  weeks: Array<Array<{day: string; value: DateValue}>>
-  getMonthsGrid: (params: {columns: number; format: 'short'}) => Array<Array<{label: string; value: DateValue}>>
-  getYearsGrid: (params: {columns: number}) => Array<Array<{label: string; value: DateValue}>>
+  weeks: DateValue[][]
+  getMonthsGrid: (params: {columns: number; format: 'short'}) => Array<Array<{label: string; value: number}>>
+  getYearsGrid: (params: {columns: number}) => Array<Array<{label: string; value: number}>>
 }
 
 type TokenUsageTimelineDatePickerProps = {

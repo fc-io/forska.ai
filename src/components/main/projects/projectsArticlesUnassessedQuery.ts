@@ -38,15 +38,18 @@ export const createArticlesUnassessedQueryOptions = (
       (searchTitleApplied() || '').trim() || null,
     ],
     queryFn: async () => {
-      const body: Record<string, unknown> = {page: String(currentPage()), limit: String(pageLimit()), projectId}
       const from = validFrom()
       const to = validTo()
-      if (from) body.from = from
-      if (to) body.to = to
       const search = (searchTitleApplied() || '').trim()
-      if (search) body.search = search
 
-      const response = await apiClient.api.articlesreviewsunassessed.post(body)
+      const response = await apiClient.api.articlesreviewsunassessed.post({
+        page: String(currentPage()),
+        limit: String(pageLimit()),
+        projectId,
+        from: from ?? undefined,
+        to: to ?? undefined,
+        search: search || undefined,
+      })
 
       if (!response.data) {
         throw new Error('Failed to fetch unassessed articles')

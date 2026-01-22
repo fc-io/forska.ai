@@ -63,15 +63,18 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
         (props.appliedSearchTitle || '').trim() || null,
       ],
       queryFn: async () => {
-        const query: Record<string, string> = {projectId: props.projectId}
         const from = validFrom()
         const to = validTo()
-        if (from) query.from = from
-        if (to) query.to = to
         const search = (props.appliedSearchTitle || '').trim()
-        if (search) query.search = search
 
-        const response = await apiClient.api.articlesreviewsfilters.get({query})
+        const response = await apiClient.api.articlesreviewsfilters.get({
+          query: {
+            projectId: props.projectId,
+            from: from ?? undefined,
+            to: to ?? undefined,
+            search: search || undefined,
+          },
+        })
 
         if (!response.data) {
           throw new Error('Failed to fetch filters')

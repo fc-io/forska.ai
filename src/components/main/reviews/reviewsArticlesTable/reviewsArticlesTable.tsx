@@ -5,7 +5,6 @@ import type {Accessor, Setter} from 'solid-js'
 import {For, Show} from 'solid-js'
 
 import {getArticleUrl} from '../../../../app/utils/getArticleUrl.ts'
-import type {judgments} from '../../../../db/schema.ts'
 import {getJournalTitleFromOriginalData} from '../../../../utils/getJournalTitleFromOriginalData.ts'
 import {ReviewsArticlesPdfCell} from './reviewsArticlesPdfCell.tsx'
 
@@ -17,7 +16,13 @@ declare module '@tanstack/solid-table' {
   }
 }
 
-type JudgmentType = typeof judgments.$inferSelect
+// Minimal judgment fields used by this component
+type JudgmentData = {
+  id: string
+  promptId: string
+  answeredOriginal: string | null
+  answeredOriginalAsArray?: string[] | null
+}
 
 // Minimal article data required for the reviews table
 // This supports both the full article schema and the denormalized API response
@@ -26,7 +31,7 @@ type ArticleWithJudgments = {
   articleTitle: string | null
   articleCreatedAt: Date | null
   articleUpdatedAt: Date | null
-  judgments: Array<JudgmentType>
+  judgments: Array<JudgmentData>
   journalTitle?: string | null
   // Optional fields from full article schema
   url?: string | null
@@ -215,7 +220,7 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
     size: 130,
     minSize: 100,
     cell: (info) => {
-      const judgmentsData = info.getValue() as JudgmentType[]
+      const judgmentsData = info.getValue() as JudgmentData[]
       const row = info.row.original
 
       const norm = (s?: string | null) => {

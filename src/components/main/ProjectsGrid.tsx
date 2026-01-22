@@ -151,7 +151,7 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
                   <Button
                     as={Link}
                     to="/projects/$id"
-                    params={{id: project.id}}
+                    params={{id: project.id} as never}
                     variant="outline"
                     size="sm"
                     class="px-3 py-1 text-sm"
@@ -161,7 +161,7 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
                   <Button
                     as={Link}
                     to="/projects/$id/reviews"
-                    params={{id: project.id}}
+                    params={{id: project.id} as never}
                     variant="outline"
                     size="sm"
                     class="px-3 py-1 text-sm"
@@ -171,7 +171,7 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
                   <Button
                     as={Link}
                     to="/projects/$id/humanAssessment"
-                    params={{id: project.id}}
+                    params={{id: project.id} as never}
                     variant="outline"
                     size="sm"
                     class="px-3 py-1 text-sm"
@@ -181,7 +181,7 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
                   <Button
                     as={Link}
                     to="/projects/$id/edit"
-                    params={{id: project.id}}
+                    params={{id: project.id} as never}
                     size="sm"
                     variant="outline"
                     class="px-3 py-1 text-sm"
@@ -191,7 +191,7 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
                   <Button
                     as={Link}
                     to="/projects/$id/export"
-                    params={{id: project.id}}
+                    params={{id: project.id} as never}
                     size="sm"
                     variant="outline"
                     class="px-3 py-1 text-sm"

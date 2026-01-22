@@ -64,13 +64,13 @@ const ProjectDetail = () => {
 
         {/* Navigation Buttons */}
         <div class="flex gap-2">
-          <Button as={Link} to="/projects/$id/reviews-llm" params={{id: projectId}} variant="outline">
+          <Button as={Link} to="/projects/$id/reviews-llm" params={{id: projectId} as never} variant="outline">
             Project Reviews
           </Button>
-          <Button as={Link} to="/projects/$id/humanAssessment" params={{id: projectId}} variant="outline">
+          <Button as={Link} to="/projects/$id/humanAssessment" params={{id: projectId} as never} variant="outline">
             Human Assessment
           </Button>
-          <Button as={Link} to="/projects/$id/edit" params={{id: projectId}}>
+          <Button as={Link} to="/projects/$id/edit" params={{id: projectId} as never}>
             Edit Project
           </Button>
           <Button

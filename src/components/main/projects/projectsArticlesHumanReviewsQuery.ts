@@ -39,28 +39,28 @@ export const createArticlesHumanReviewsQueryOptions = (
       (searchTitleApplied() || '').trim() || null,
     ],
     queryFn: async () => {
-      const body: Record<string, unknown> = {
+      const prompts = Object.entries(promptFilters()).reduce(
+        (acc, [promptId, value]) => {
+          if (Array.isArray(value) && value.length > 0) {
+            acc[promptId] = value
+          }
+          return acc
+        },
+        {} as Record<string, string[]>,
+      )
+      const from = validFrom()
+      const to = validTo()
+      const search = (searchTitleApplied() || '').trim()
+
+      const response = await apiClient.api.articlesreviewshuman.post({
         page: String(currentPage()),
         limit: String(pageLimit()),
         projectId,
-        prompts: Object.entries(promptFilters()).reduce(
-          (acc, [promptId, value]) => {
-            if (Array.isArray(value) && value.length > 0) {
-              acc[promptId] = value
-            }
-            return acc
-          },
-          {} as Record<string, string[]>,
-        ),
-      }
-      const from = validFrom()
-      const to = validTo()
-      if (from) body.from = from
-      if (to) body.to = to
-      const search = (searchTitleApplied() || '').trim()
-      if (search) body.search = search
-
-      const response = await apiClient.api.articlesreviewshuman.post(body)
+        prompts,
+        from: from ?? undefined,
+        to: to ?? undefined,
+        search: search || undefined,
+      })
 
       if (!response.data) {
         throw new Error('Failed to fetch human-assessed articles')

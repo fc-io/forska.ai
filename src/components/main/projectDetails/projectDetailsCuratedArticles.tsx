@@ -69,9 +69,11 @@ export const ProjectDetailsCuratedArticles = (props: {projectId: string}) => {
         const name = info.row.original.importedFromProjectName
         return (
           <Show when={id} fallback={<span class="text-gray-500">—</span>}>
-            <Link to="/projects/$id" params={{id}} class="text-blue-600 hover:underline">
-              {name || id}
-            </Link>
+            {(nonNullId) => (
+              <Link to="/projects/$id" params={{id: nonNullId()} as never} class="text-blue-600 hover:underline">
+                {name || nonNullId()}
+              </Link>
+            )}
           </Show>
         )
       },

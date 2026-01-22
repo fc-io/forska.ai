@@ -21,13 +21,17 @@ export const ArticleTabs = (props: ArticleTabsProps) => {
   return (
     <div class="flex items-center justify-between border-b border-gray-200 rounded-t-lg">
       <div class="flex">
-        <Link to={props.basePath} params={props.linkParams} class={tabClasses(props.activeTab === 'summary')}>
+        <Link
+          to={props.basePath as '/articles/$id'}
+          params={(props.linkParams ?? {}) as never}
+          class={tabClasses(props.activeTab === 'summary')}
+        >
           Title & Summary
         </Link>
         <Show when={props.hasFullText}>
           <Link
-            to={`${props.basePath}/fulltext`}
-            params={props.linkParams}
+            to={`${props.basePath}/fulltext` as '/articles/$id/fulltext'}
+            params={(props.linkParams ?? {}) as never}
             class={tabClasses(props.activeTab === 'fulltext')}
           >
             Full Text

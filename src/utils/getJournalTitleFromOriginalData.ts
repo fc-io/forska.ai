@@ -8,7 +8,8 @@ const asNonEmptyString = (value: unknown) => {
 }
 
 const getValueAtPath = (value: unknown, path: string[]): unknown => {
-  return path.length === 0 ? value : getValueAtPath(isRecord(value) ? value[path[0]] : null, path.slice(1))
+  const [first, ...rest] = path
+  return first === undefined ? value : getValueAtPath(isRecord(value) ? value[first] : null, rest)
 }
 
 const getStringAtPath = (value: unknown, path: string[]) => {

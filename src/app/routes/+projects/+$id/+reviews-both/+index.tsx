@@ -70,13 +70,13 @@ const ReviewsBoth = () => {
           </div>
           <Show when={isAdmin()}>
             <div class="flex gap-2">
-              <Button as={Link} to="/projects/$id" params={{id: params().id}} variant="outline">
+              <Button as={Link} to="/projects/$id" params={{id: params().id} as never} variant="outline">
                 Project Details
               </Button>
-              <Button as={Link} to="/projects/$id/humanAssessment" params={{id: params().id}} variant="outline">
+              <Button as={Link} to="/projects/$id/humanAssessment" params={{id: params().id} as never} variant="outline">
                 Human Assessment
               </Button>
-              <Button as={Link} to="/projects/$id/edit" params={{id: params().id}}>
+              <Button as={Link} to="/projects/$id/edit" params={{id: params().id} as never}>
                 Edit Project
               </Button>
               <Button

@@ -26,10 +26,10 @@ export const getTokenUsageTimelinePickerValues = (params: {range: TokenUsageTime
 }
 
 export const getTokenUsageTimelineDateRange = (params: {values: DateValue[]; timeZone: string}) => {
-  if (params.values.length !== 2) {
+  const [startValue, endValue] = params.values
+  if (!startValue || !endValue) {
     return null
   }
-  const [startValue, endValue] = params.values
   const startDate = startValue.toDate(params.timeZone)
   const endDate = endValue.toDate(params.timeZone)
   return {start: getTokenUsageTimelineStartOfDay(startDate), end: getTokenUsageTimelineEndOfDay(endDate)}
