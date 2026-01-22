@@ -19,6 +19,10 @@ type ReviewJudgmentItemProps = {
     assessments?: Array<{assessmentIsCorrect?: boolean | null; assessmentComment?: string | null}>
     modelName?: string | null
     snapshotProjectModelName?: string | null
+    useTitle?: boolean
+    useAbstract?: boolean
+    useFulltext?: boolean
+    useFulltextNoImages?: boolean
   }
   setArticleViewToShow: SetArticleViewToShow
   humanAnswers?: HumanAnswer[]
@@ -38,6 +42,16 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
   const modelName = () => {
     // Use modelName (from joined models table) or fall back to snapshotProjectModelName
     return props.judgment.modelName || props.judgment.snapshotProjectModelName || undefined
+  }
+
+  const hasContentFlags = () => {
+    const j = props.judgment
+    return (
+      j.useTitle !== undefined
+      || j.useAbstract !== undefined
+      || j.useFulltext !== undefined
+      || j.useFulltextNoImages !== undefined
+    )
   }
 
   // Get the LLM answer as a normalized string for comparison
@@ -142,6 +156,38 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
         <div class="mt-1 text-[11px] text-gray-500 space-y-0.5">
           {promptId() ? <div>Prompt ID: {String(promptId()).slice(0, 8)}</div> : null}
           {modelName() ? <div>Model: {modelName()}</div> : null}
+          <Show when={hasContentFlags()}>
+            <div class="flex flex-wrap gap-1 mt-0.5">
+              <span
+                class={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                  props.judgment.useTitle ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-500'
+                }`}
+              >
+                Title
+              </span>
+              <span
+                class={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                  props.judgment.useAbstract ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-500'
+                }`}
+              >
+                Abstract
+              </span>
+              <span
+                class={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                  props.judgment.useFulltext ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-500'
+                }`}
+              >
+                Full text
+              </span>
+              <span
+                class={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                  props.judgment.useFulltextNoImages ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-500'
+                }`}
+              >
+                No images
+              </span>
+            </div>
+          </Show>
         </div>
       </div>
 

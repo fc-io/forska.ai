@@ -13,6 +13,10 @@ type Judgment = {
   snapshotProjectModelName?: string | null
   modelName?: string | null
   prompt?: {id?: string; originalText: string; promptHeading?: string | null; contentHash?: string | null}
+  useTitle?: boolean
+  useAbstract?: boolean
+  useFulltext?: boolean
+  useFulltextNoImages?: boolean
 }
 
 type SetArticleViewToShow = (articleViewToShow: string | undefined) => void
@@ -100,6 +104,10 @@ export const ReviewAvailableJudgments = (props: ReviewAvailableJudgmentsProps) =
                               quotes: j.quotes,
                               modelName: j.modelName,
                               snapshotProjectModelName: j.snapshotProjectModelName,
+                              useTitle: j.useTitle,
+                              useAbstract: j.useAbstract,
+                              useFulltext: j.useFulltext,
+                              useFulltextNoImages: j.useFulltextNoImages,
                             }}
                             setArticleViewToShow={props.setArticleViewToShow}
                           />

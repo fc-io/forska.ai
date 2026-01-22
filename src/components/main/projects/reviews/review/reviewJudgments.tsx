@@ -17,6 +17,10 @@ type Judgment = {
   assessments?: Array<{assessmentIsCorrect?: boolean | null; assessmentComment?: string | null}>
   modelName?: string | null
   snapshotProjectModelName?: string | null
+  useTitle?: boolean
+  useAbstract?: boolean
+  useFulltext?: boolean
+  useFulltextNoImages?: boolean
 }
 
 type ReviewJudgmentsProps = {
