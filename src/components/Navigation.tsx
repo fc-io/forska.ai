@@ -256,6 +256,13 @@ export const Navigation = (props: NavigationProps) => {
                     >
                       Parquet
                     </Link>
+                    <Link
+                      to="/admin/unexpected-answers"
+                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
+                      onClick={closeAdminMenu}
+                    >
+                      Unexpected Answers
+                    </Link>
                   </div>
                 </div>
                 <div class="flex flex-col gap-4">
