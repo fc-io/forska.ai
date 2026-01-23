@@ -1,10 +1,10 @@
 /**
  * Admin routes for investigating unexpected answer values
  */
-import {and, eq, isNotNull, sql} from 'drizzle-orm'
+import {and, eq, inArray, isNotNull, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {judgments, projectPrompts, projects, prompts} from '../../db/schema.ts'
+import {articles, judgments, projectPrompts, projects, prompts} from '../../db/schema.ts'
 import {requireUserAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
@@ -30,9 +30,360 @@ const isOpenEndedType = (typeStr: string | null): boolean => {
   return !hasQuotedLiterals
 }
 
+const deleteUnexpectedJudgments = async (promptId: string, unexpectedValue: string | null) => {
+  const db = getDatabase()
+
+  const [prompt] = await db
+    .select({id: prompts.id, type: prompts.type})
+    .from(prompts)
+    .where(eq(prompts.id, promptId))
+    .limit(1)
+
+  if (!prompt || isOpenEndedType(prompt.type)) {
+    return {deleted: 0}
+  }
+
+  const expectedOptions = parseArktypeOptions(prompt.type)
+  if (expectedOptions.length === 0) {
+    return {deleted: 0}
+  }
+
+  const isArray = isArrayType(prompt.type)
+  const now = new Date()
+
+  if (isArray) {
+    const arrayAnswersQuery = await db
+      .select({
+        id: judgments.id,
+        answeredOriginalAsArray: judgments.answeredOriginalAsArray,
+        articleId: judgments.articleId,
+        modelId: judgments.modelId,
+        createdAt: judgments.createdAt,
+        useTitle: judgments.useTitle,
+        useAbstract: judgments.useAbstract,
+        useFulltext: judgments.useFulltext,
+        useFulltextNoImages: judgments.useFulltextNoImages,
+      })
+      .from(judgments)
+      .where(sql`${judgments.promptId} = ${promptId}::uuid AND ${judgments.deletedAt} IS NULL`)
+
+    const toDelete = arrayAnswersQuery.filter((j) => {
+      const arrayAnswer = j.answeredOriginalAsArray
+      const currentValue = arrayAnswer === null ? null : JSON.stringify(arrayAnswer)
+      return currentValue === unexpectedValue
+    })
+
+    if (toDelete.length === 0) {
+      return {deleted: 0}
+    }
+
+    const idsToDelete = toDelete.map((j) => {
+      return j.id
+    })
+    await db.update(judgments).set({deletedAt: now, updatedAt: now}).where(inArray(judgments.id, idsToDelete))
+
+    const articles_map = new Map<string, typeof articles.$inferSelect>()
+    const articleIds = [
+      ...new Set(
+        toDelete.map((j) => {
+          return j.articleId
+        }),
+      ),
+    ]
+    const articleRows = await db.select().from(articles).where(inArray(articles.id, articleIds))
+    for (const article of articleRows) {
+      articles_map.set(article.id, article)
+    }
+
+    const {writeJudgmentAnalyticsToParquet, getJudgmentsParquetDualWriteConfig} = await import(
+      '../../services/parquet/judgmentsParquetDualWrite.ts'
+    )
+    const parquetConfig = getJudgmentsParquetDualWriteConfig()
+
+    for (const judgment of toDelete) {
+      const article = articles_map.get(judgment.articleId)
+      if (!article) continue
+
+      const denormalizedRecord = {
+        id: judgment.id,
+        createdAt: judgment.createdAt,
+        deletedAt: now,
+        articleId: article.id,
+        articleTitle: article.articleTitle,
+        articleCreatedAt: article.articleCreatedAt,
+        articleUpdatedAt: article.articleUpdatedAt,
+        articleCreatedYear: article.articleCreatedAt ? article.articleCreatedAt.getUTCFullYear() : null,
+        articleUpdatedYear: article.articleUpdatedAt ? article.articleUpdatedAt.getUTCFullYear() : null,
+        articleImportRoute: article.importRoute,
+        articleImportedBy: article.importedBy,
+        promptId,
+        modelId: judgment.modelId,
+        useTitle: judgment.useTitle,
+        useAbstract: judgment.useAbstract,
+        useFulltext: judgment.useFulltext,
+        useFulltextNoImages: judgment.useFulltextNoImages,
+        answeredOriginal: null,
+        answeredOriginalAsArray: judgment.answeredOriginalAsArray,
+        explanation: null,
+        quotes: null,
+      }
+
+      await writeJudgmentAnalyticsToParquet(denormalizedRecord)
+    }
+
+    if (!parquetConfig.enabled) {
+      const {getClickhouseClient} = await import('../../services/clickhouse/clickhouseClient.ts')
+      const chClient = getClickhouseClient()
+      const clickhouseRecords = toDelete.map((judgment) => {
+        const article = articles_map.get(judgment.articleId)
+        return {
+          id: judgment.id,
+          createdAt: formatDateForClickHouse(judgment.createdAt),
+          deletedAt: formatDateForClickHouse(now),
+          articleId: judgment.articleId,
+          articleTitle: article?.articleTitle ?? null,
+          articleCreatedAt: formatDateForClickHouse(article?.articleCreatedAt ?? null),
+          articleUpdatedAt: formatDateForClickHouse(article?.articleUpdatedAt ?? null),
+          articleCreatedYear: article?.articleCreatedAt ? article.articleCreatedAt.getUTCFullYear() : null,
+          articleUpdatedYear: article?.articleUpdatedAt ? article.articleUpdatedAt.getUTCFullYear() : null,
+          articleImportRoute: article?.importRoute ?? null,
+          articleImportedBy: article?.importedBy ?? null,
+          promptId,
+          modelId: judgment.modelId,
+          useTitle: judgment.useTitle,
+          useAbstract: judgment.useAbstract,
+          useFulltext: judgment.useFulltext,
+          useFulltextNoImages: judgment.useFulltextNoImages,
+          answeredOriginal: null,
+          answeredOriginalAsArray: judgment.answeredOriginalAsArray ?? [],
+          explanation: null,
+          quotes: null,
+        }
+      })
+
+      await chClient.insert({table: 'forska.judgments', values: clickhouseRecords, format: 'JSONEachRow'})
+      console.log(`[Admin] Inserted ${clickhouseRecords.length} tombstone records to ClickHouse`)
+    }
+
+    return {deleted: toDelete.length}
+  }
+
+  const stringAnswersQuery = await db
+    .select({
+      id: judgments.id,
+      answeredOriginal: judgments.answeredOriginal,
+      articleId: judgments.articleId,
+      modelId: judgments.modelId,
+      createdAt: judgments.createdAt,
+      useTitle: judgments.useTitle,
+      useAbstract: judgments.useAbstract,
+      useFulltext: judgments.useFulltext,
+      useFulltextNoImages: judgments.useFulltextNoImages,
+    })
+    .from(judgments)
+    .where(sql`${judgments.promptId} = ${promptId}::uuid AND ${judgments.deletedAt} IS NULL`)
+
+  const toDelete = stringAnswersQuery.filter((j) => {
+    return j.answeredOriginal === unexpectedValue
+  })
+
+  if (toDelete.length === 0) {
+    return {deleted: 0}
+  }
+
+  const idsToDelete = toDelete.map((j) => {
+    return j.id
+  })
+  await db.update(judgments).set({deletedAt: now, updatedAt: now}).where(inArray(judgments.id, idsToDelete))
+
+  const articles_map = new Map<string, typeof articles.$inferSelect>()
+  const articleIds = [
+    ...new Set(
+      toDelete.map((j) => {
+        return j.articleId
+      }),
+    ),
+  ]
+  const articleRows = await db.select().from(articles).where(inArray(articles.id, articleIds))
+  for (const article of articleRows) {
+    articles_map.set(article.id, article)
+  }
+
+  const {writeJudgmentAnalyticsToParquet, getJudgmentsParquetDualWriteConfig} = await import(
+    '../../services/parquet/judgmentsParquetDualWrite.ts'
+  )
+  const parquetConfig = getJudgmentsParquetDualWriteConfig()
+
+  for (const judgment of toDelete) {
+    const article = articles_map.get(judgment.articleId)
+    if (!article) continue
+
+    const denormalizedRecord = {
+      id: judgment.id,
+      createdAt: judgment.createdAt,
+      deletedAt: now,
+      articleId: article.id,
+      articleTitle: article.articleTitle,
+      articleCreatedAt: article.articleCreatedAt,
+      articleUpdatedAt: article.articleUpdatedAt,
+      articleCreatedYear: article.articleCreatedAt ? article.articleCreatedAt.getUTCFullYear() : null,
+      articleUpdatedYear: article.articleUpdatedAt ? article.articleUpdatedAt.getUTCFullYear() : null,
+      articleImportRoute: article.importRoute,
+      articleImportedBy: article.importedBy,
+      promptId,
+      modelId: judgment.modelId,
+      useTitle: judgment.useTitle,
+      useAbstract: judgment.useAbstract,
+      useFulltext: judgment.useFulltext,
+      useFulltextNoImages: judgment.useFulltextNoImages,
+      answeredOriginal: judgment.answeredOriginal,
+      answeredOriginalAsArray: null,
+      explanation: null,
+      quotes: null,
+    }
+
+    await writeJudgmentAnalyticsToParquet(denormalizedRecord)
+  }
+
+  if (!parquetConfig.enabled) {
+    const {getClickhouseClient} = await import('../../services/clickhouse/clickhouseClient.ts')
+    const chClient = getClickhouseClient()
+    const clickhouseRecords = toDelete.map((judgment) => {
+      const article = articles_map.get(judgment.articleId)
+      return {
+        id: judgment.id,
+        createdAt: formatDateForClickHouse(judgment.createdAt),
+        deletedAt: formatDateForClickHouse(now),
+        articleId: judgment.articleId,
+        articleTitle: article?.articleTitle ?? null,
+        articleCreatedAt: formatDateForClickHouse(article?.articleCreatedAt ?? null),
+        articleUpdatedAt: formatDateForClickHouse(article?.articleUpdatedAt ?? null),
+        articleCreatedYear: article?.articleCreatedAt ? article.articleCreatedAt.getUTCFullYear() : null,
+        articleUpdatedYear: article?.articleUpdatedAt ? article.articleUpdatedAt.getUTCFullYear() : null,
+        articleImportRoute: article?.importRoute ?? null,
+        articleImportedBy: article?.importedBy ?? null,
+        promptId,
+        modelId: judgment.modelId,
+        useTitle: judgment.useTitle,
+        useAbstract: judgment.useAbstract,
+        useFulltext: judgment.useFulltext,
+        useFulltextNoImages: judgment.useFulltextNoImages,
+        answeredOriginal: judgment.answeredOriginal,
+        answeredOriginalAsArray: [],
+        explanation: null,
+        quotes: null,
+      }
+    })
+
+    await chClient.insert({table: 'forska.judgments', values: clickhouseRecords, format: 'JSONEachRow'})
+    console.log(`[Admin] Inserted ${clickhouseRecords.length} tombstone records to ClickHouse`)
+  }
+
+  return {deleted: toDelete.length}
+}
+
+const formatDateForClickHouse = (date: Date | null): string | null => {
+  if (!date) return null
+  const year = date.getUTCFullYear()
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0')
+  const day = String(date.getUTCDate()).padStart(2, '0')
+  const hours = String(date.getUTCHours()).padStart(2, '0')
+  const minutes = String(date.getUTCMinutes()).padStart(2, '0')
+  const seconds = String(date.getUTCSeconds()).padStart(2, '0')
+  const millis = String(date.getUTCMilliseconds()).padStart(3, '0')
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}.${millis}`
+}
+
+const syncDeletedJudgmentsToClickhouse = async () => {
+  const db = getDatabase()
+  const {getClickhouseClient} = await import('../../services/clickhouse/clickhouseClient.ts')
+  const chClient = getClickhouseClient()
+
+  const deletedJudgments = await db
+    .select({
+      id: judgments.id,
+      createdAt: judgments.createdAt,
+      deletedAt: judgments.deletedAt,
+      articleId: judgments.articleId,
+      promptId: judgments.promptId,
+      modelId: judgments.modelId,
+      useTitle: judgments.useTitle,
+      useAbstract: judgments.useAbstract,
+      useFulltext: judgments.useFulltext,
+      useFulltextNoImages: judgments.useFulltextNoImages,
+      answeredOriginal: judgments.answeredOriginal,
+      answeredOriginalAsArray: judgments.answeredOriginalAsArray,
+    })
+    .from(judgments)
+    .where(isNotNull(judgments.deletedAt))
+
+  if (deletedJudgments.length === 0) {
+    return {synced: 0, message: 'No deleted judgments to sync'}
+  }
+
+  const articleIds = [
+    ...new Set(
+      deletedJudgments.map((j) => {
+        return j.articleId
+      }),
+    ),
+  ]
+  const articleRows = await db.select().from(articles).where(inArray(articles.id, articleIds))
+  const articlesMap = new Map(
+    articleRows.map((a) => {
+      return [a.id, a]
+    }),
+  )
+
+  const clickhouseRecords = deletedJudgments.map((judgment) => {
+    const article = articlesMap.get(judgment.articleId)
+    return {
+      id: judgment.id,
+      createdAt: formatDateForClickHouse(judgment.createdAt),
+      deletedAt: formatDateForClickHouse(judgment.deletedAt),
+      articleId: judgment.articleId,
+      articleTitle: article?.articleTitle ?? null,
+      articleCreatedAt: formatDateForClickHouse(article?.articleCreatedAt ?? null),
+      articleUpdatedAt: formatDateForClickHouse(article?.articleUpdatedAt ?? null),
+      articleCreatedYear: article?.articleCreatedAt ? article.articleCreatedAt.getUTCFullYear() : null,
+      articleUpdatedYear: article?.articleUpdatedAt ? article.articleUpdatedAt.getUTCFullYear() : null,
+      articleImportRoute: article?.importRoute ?? null,
+      articleImportedBy: article?.importedBy ?? null,
+      promptId: judgment.promptId,
+      modelId: judgment.modelId,
+      useTitle: judgment.useTitle,
+      useAbstract: judgment.useAbstract,
+      useFulltext: judgment.useFulltext,
+      useFulltextNoImages: judgment.useFulltextNoImages,
+      answeredOriginal: judgment.answeredOriginal,
+      answeredOriginalAsArray: judgment.answeredOriginalAsArray ?? [],
+      explanation: null,
+      quotes: null,
+    }
+  })
+
+  await chClient.insert({table: 'forska.judgments', values: clickhouseRecords, format: 'JSONEachRow'})
+
+  return {
+    synced: clickhouseRecords.length,
+    message: `Synced ${clickhouseRecords.length} deleted judgments to ClickHouse`,
+  }
+}
+
 export const adminInvestigateRoutes = new Elysia()
   .use(withErrorHandler())
   .use(requireUserAuth())
+  .post('/api/admin/sync-deleted-judgments-to-clickhouse', async () => {
+    return syncDeletedJudgmentsToClickhouse()
+  })
+  .post(
+    '/api/admin/delete-unexpected-answers',
+    async ({body}) => {
+      const {promptId, unexpectedValue} = body
+      return deleteUnexpectedJudgments(promptId, unexpectedValue)
+    },
+    {body: t.Object({promptId: t.String(), unexpectedValue: t.Union([t.String(), t.Null()])})},
+  )
   .get(
     '/api/admin/investigate-unexpected-answers',
     async ({query}) => {

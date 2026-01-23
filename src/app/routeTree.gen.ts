@@ -38,6 +38,7 @@ import { Route as AdminJobsIndexRouteImport } from './routes/+admin/+jobs/+index
 import { Route as AdminGpuIndexRouteImport } from './routes/+admin/+gpu/+index'
 import { Route as AdminFailed_requestsIndexRouteImport } from './routes/+admin/+failed_requests/+index'
 import { Route as AdminDatasourcesIndexRouteImport } from './routes/+admin/+datasources/+index'
+import { Route as AdminClickhouseSyncIndexRouteImport } from './routes/+admin/+clickhouse-sync/+index'
 import { Route as AdminAssessmentsIndexRouteImport } from './routes/+admin/+assessments/+index'
 import { Route as AdminAaModelsIndexRouteImport } from './routes/+admin/+aa-models/+index'
 import { Route as AdminJobsIdUnassessed_articlesRouteImport } from './routes/+admin/+jobs/+$id/+unassessed_articles'
@@ -207,6 +208,12 @@ const AdminDatasourcesIndexRoute = AdminDatasourcesIndexRouteImport.update({
   path: '/admin/datasources/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminClickhouseSyncIndexRoute =
+  AdminClickhouseSyncIndexRouteImport.update({
+    id: '/admin/clickhouse-sync/',
+    path: '/admin/clickhouse-sync/',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const AdminAssessmentsIndexRoute = AdminAssessmentsIndexRouteImport.update({
   id: '/admin/assessments/',
   path: '/admin/assessments/',
@@ -316,6 +323,7 @@ export interface FileRoutesByFullPath {
   '/projects/create-subproject': typeof ProjectsCreateSubprojectRoute
   '/admin/aa-models': typeof AdminAaModelsIndexRoute
   '/admin/assessments': typeof AdminAssessmentsIndexRoute
+  '/admin/clickhouse-sync': typeof AdminClickhouseSyncIndexRoute
   '/admin/datasources': typeof AdminDatasourcesIndexRoute
   '/admin/failed_requests': typeof AdminFailed_requestsIndexRoute
   '/admin/gpu': typeof AdminGpuIndexRoute
@@ -364,6 +372,7 @@ export interface FileRoutesByTo {
   '/projects/create-subproject': typeof ProjectsCreateSubprojectRoute
   '/admin/aa-models': typeof AdminAaModelsIndexRoute
   '/admin/assessments': typeof AdminAssessmentsIndexRoute
+  '/admin/clickhouse-sync': typeof AdminClickhouseSyncIndexRoute
   '/admin/datasources': typeof AdminDatasourcesIndexRoute
   '/admin/failed_requests': typeof AdminFailed_requestsIndexRoute
   '/admin/gpu': typeof AdminGpuIndexRoute
@@ -413,6 +422,7 @@ export interface FileRoutesById {
   '/projects/create-subproject': typeof ProjectsCreateSubprojectRoute
   '/admin/aa-models/': typeof AdminAaModelsIndexRoute
   '/admin/assessments/': typeof AdminAssessmentsIndexRoute
+  '/admin/clickhouse-sync/': typeof AdminClickhouseSyncIndexRoute
   '/admin/datasources/': typeof AdminDatasourcesIndexRoute
   '/admin/failed_requests/': typeof AdminFailed_requestsIndexRoute
   '/admin/gpu/': typeof AdminGpuIndexRoute
@@ -463,6 +473,7 @@ export interface FileRouteTypes {
     | '/projects/create-subproject'
     | '/admin/aa-models'
     | '/admin/assessments'
+    | '/admin/clickhouse-sync'
     | '/admin/datasources'
     | '/admin/failed_requests'
     | '/admin/gpu'
@@ -511,6 +522,7 @@ export interface FileRouteTypes {
     | '/projects/create-subproject'
     | '/admin/aa-models'
     | '/admin/assessments'
+    | '/admin/clickhouse-sync'
     | '/admin/datasources'
     | '/admin/failed_requests'
     | '/admin/gpu'
@@ -559,6 +571,7 @@ export interface FileRouteTypes {
     | '/projects/create-subproject'
     | '/admin/aa-models/'
     | '/admin/assessments/'
+    | '/admin/clickhouse-sync/'
     | '/admin/datasources/'
     | '/admin/failed_requests/'
     | '/admin/gpu/'
@@ -608,6 +621,7 @@ export interface RootRouteChildren {
   ProjectsCreateSubprojectRoute: typeof ProjectsCreateSubprojectRoute
   AdminAaModelsIndexRoute: typeof AdminAaModelsIndexRoute
   AdminAssessmentsIndexRoute: typeof AdminAssessmentsIndexRoute
+  AdminClickhouseSyncIndexRoute: typeof AdminClickhouseSyncIndexRoute
   AdminDatasourcesIndexRoute: typeof AdminDatasourcesIndexRoute
   AdminFailed_requestsIndexRoute: typeof AdminFailed_requestsIndexRoute
   AdminGpuIndexRoute: typeof AdminGpuIndexRoute
@@ -851,6 +865,13 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof AdminDatasourcesIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/clickhouse-sync/': {
+      id: '/admin/clickhouse-sync/'
+      path: '/admin/clickhouse-sync'
+      fullPath: '/admin/clickhouse-sync'
+      preLoaderRoute: typeof AdminClickhouseSyncIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/admin/assessments/': {
       id: '/admin/assessments/'
       path: '/admin/assessments'
@@ -984,6 +1005,7 @@ const rootRouteChildren: RootRouteChildren = {
   ProjectsCreateSubprojectRoute: ProjectsCreateSubprojectRoute,
   AdminAaModelsIndexRoute: AdminAaModelsIndexRoute,
   AdminAssessmentsIndexRoute: AdminAssessmentsIndexRoute,
+  AdminClickhouseSyncIndexRoute: AdminClickhouseSyncIndexRoute,
   AdminDatasourcesIndexRoute: AdminDatasourcesIndexRoute,
   AdminFailed_requestsIndexRoute: AdminFailed_requestsIndexRoute,
   AdminGpuIndexRoute: AdminGpuIndexRoute,

@@ -283,6 +283,13 @@ export const Navigation = (props: NavigationProps) => {
                       Failed Requests
                     </Link>
                     <Link
+                      to="/admin/clickhouse-sync"
+                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
+                      onClick={closeAdminMenu}
+                    >
+                      ClickHouse Sync
+                    </Link>
+                    <Link
                       to="/admin/setup_stats"
                       class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
                       onClick={closeAdminMenu}
