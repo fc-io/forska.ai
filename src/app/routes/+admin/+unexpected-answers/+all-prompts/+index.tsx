@@ -14,9 +14,7 @@ type Prompt = {
   archived: boolean
 }
 
-type PromptsListResponse = {
-  prompts: Prompt[]
-}
+type PromptsListResponse = {prompts: Prompt[]}
 
 const formatPromptTimestamp = (value: string | Date): string => {
   const date = value instanceof Date ? value : new Date(value)
@@ -29,9 +27,7 @@ const getPromptPreview = (text: string, maxLength = 240): string => {
 }
 
 const fetchAllPromptsWithTypes = async (): Promise<PromptsListResponse> => {
-  const response = await fetch(`${env.VITE_SERVER_API}/api/admin/list-prompts-with-types`, {
-    credentials: 'include',
-  })
+  const response = await fetch(`${env.VITE_SERVER_API}/api/admin/list-prompts-with-types`, {credentials: 'include'})
   if (!response.ok) {
     throw new Error('Failed to fetch prompts list')
   }
@@ -40,11 +36,7 @@ const fetchAllPromptsWithTypes = async (): Promise<PromptsListResponse> => {
 
 const AdminUnexpectedAnswersAllPrompts = () => {
   const promptsList = useQuery(() => {
-    return {
-      queryKey: ['admin-prompts-list'],
-      queryFn: fetchAllPromptsWithTypes,
-      refetchOnWindowFocus: false,
-    }
+    return {queryKey: ['admin-prompts-list'], queryFn: fetchAllPromptsWithTypes, refetchOnWindowFocus: false}
   })
 
   const [searchTerm, setSearchTerm] = createSignal('')
@@ -165,7 +157,8 @@ const AdminUnexpectedAnswersAllPrompts = () => {
                                     </Show>
                                   </div>
                                   <div class="mt-1 text-xs text-gray-500">
-                                    Created {formatPromptTimestamp(prompt.createdAt)} • Owner {prompt.ownerId.slice(0, 8)}
+                                    Created {formatPromptTimestamp(prompt.createdAt)} • Owner{' '}
+                                    {prompt.ownerId.slice(0, 8)}
                                   </div>
                                 </div>
                                 <div class="text-sm text-blue-600 font-medium whitespace-nowrap">Investigate →</div>

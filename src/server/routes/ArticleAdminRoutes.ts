@@ -10,6 +10,7 @@ import {fullTextArticleFetchFromArxiv} from '../cron/fullTextJobs/fullTextArticl
 import {fullTextArticleFetchFromUnpaywall} from '../cron/fullTextJobs/fullTextArticleFetchFromUnpaywall.ts'
 import {attemptsToLegacyResult, type PdfFetchAttemptResult} from '../cron/fullTextJobs/pdfFetchTypes.ts'
 import {requireAdminAuth} from '../utils/authGuard.ts'
+import {ConversionError, convertPdfToText} from '../utils/convertPdfToText.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
@@ -266,4 +267,91 @@ export const articleAdminRoutes = new Elysia()
       return {success: true, fullTextPDF, message: 'PDF uploaded successfully'}
     },
     {params: t.Object({id: t.String()}), body: t.Object({pdf: t.File({type: 'application/pdf'})})},
+  )
+  // Convert PDF to text for an article (async - returns immediately)
+  .post(
+    '/api/articles/:id/convert-pdf',
+    async ({params}) => {
+      const db = getDatabase()
+      const {id} = params
+      const DOCLING_CONVERSION_TIMEOUT_MS = 600_000
+      const MAX_CONVERSION_ATTEMPTS = 3
+
+      const [article] = await db
+        .select({
+          id: articles.id,
+          fullTextPDF: articles.fullTextPDF,
+          fullTextConversionAttempts: articles.fullTextConversionAttempts,
+        })
+        .from(articles)
+        .where(eq(articles.id, id))
+        .limit(1)
+
+      if (!article) {
+        throw new Error('Article not found')
+      }
+
+      if (!article.fullTextPDF) {
+        throw new Error('No PDF available for this article')
+      }
+
+      await db
+        .update(articles)
+        .set({fullTextConversionStatus: 'pending', fullTextConversionError: null})
+        .where(eq(articles.id, article.id))
+
+      const runConversion = async () => {
+        const startTime = Date.now()
+        console.log(`[convertPdf] Converting article ${article.id}`)
+
+        try {
+          const {md, html} = await convertPdfToText(article.fullTextPDF, DOCLING_CONVERSION_TIMEOUT_MS)
+
+          await db
+            .update(articles)
+            .set({
+              fullText: md,
+              fullTextHtml: html,
+              fullTextConversionStatus: 'success',
+              fullTextCharCount: md.length,
+              fullTextConversionAttempts: (article.fullTextConversionAttempts ?? 0) + 1,
+            })
+            .where(eq(articles.id, article.id))
+
+          const duration = Date.now() - startTime
+          console.log(`[convertPdf] Success: article ${article.id} (${duration}ms, ${md.length} chars)`)
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error)
+          const msg = errorMessage.toLowerCase()
+
+          const isPerm =
+            (error instanceof ConversionError && error.isPermanent)
+            || msg.includes('encrypted')
+            || msg.includes('password')
+            || msg.includes('invalid pdf')
+            || msg.includes('file not found')
+
+          const attempts = (article.fullTextConversionAttempts ?? 0) + 1
+          const finalStatus = isPerm || attempts >= MAX_CONVERSION_ATTEMPTS ? 'failed' : 'pending'
+
+          await db
+            .update(articles)
+            .set({
+              fullTextConversionStatus: finalStatus,
+              fullTextConversionError: errorMessage,
+              fullTextConversionAttempts: attempts,
+            })
+            .where(eq(articles.id, article.id))
+
+          console.log(
+            `[convertPdf] ${finalStatus === 'failed' ? 'Failed' : 'Retry'}: article ${article.id} - ${errorMessage}`,
+          )
+        }
+      }
+
+      void runConversion()
+
+      return {success: true, message: 'Conversion started', status: 'pending'}
+    },
+    {params: t.Object({id: t.String()})},
   )

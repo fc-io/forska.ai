@@ -1,5 +1,5 @@
 import {createMutation, useQuery, useQueryClient} from '@tanstack/solid-query'
-import {createSignal, For, Show} from 'solid-js'
+import {createEffect, createSignal, For, onCleanup, Show} from 'solid-js'
 
 import {env} from '../../../app/utils/client-env.ts'
 import {apiClient} from '../../../services/apiClient.ts'
@@ -50,6 +50,18 @@ export const ArticleAdminSection = (props: ArticleAdminSectionProps) => {
     }
   })
 
+  createEffect(() => {
+    const conversionStatus = adminInfoQuery.data?.article?.fullTextConversionStatus
+    if (conversionStatus === 'pending') {
+      const interval = setInterval(() => {
+        void queryClient.invalidateQueries({queryKey: ['article-admin-info', props.articleId]})
+      }, 3000)
+      onCleanup(() => {
+        return clearInterval(interval)
+      })
+    }
+  })
+
   const fetchPdfMutation = createMutation(() => {
     return {
       mutationFn: async () => {
@@ -92,6 +104,20 @@ export const ArticleAdminSection = (props: ArticleAdminSectionProps) => {
         // Invalidate the admin info query to refresh the data
         void queryClient.invalidateQueries({queryKey: ['article-admin-info', props.articleId]})
         // Also invalidate the main article query in case it's being used
+        void queryClient.invalidateQueries({queryKey: ['admin-article-details', props.articleId]})
+        void queryClient.invalidateQueries({queryKey: ['article-review-details']})
+      },
+    }
+  })
+
+  const convertPdfMutation = createMutation(() => {
+    return {
+      mutationFn: async () => {
+        const response = await apiClient.api.articles({id: props.articleId})['convert-pdf'].post()
+        return handleApiResponse(response, 'Failed to convert PDF')
+      },
+      onSuccess: () => {
+        void queryClient.invalidateQueries({queryKey: ['article-admin-info', props.articleId]})
         void queryClient.invalidateQueries({queryKey: ['admin-article-details', props.articleId]})
         void queryClient.invalidateQueries({queryKey: ['article-review-details']})
       },
@@ -401,6 +427,86 @@ export const ArticleAdminSection = (props: ArticleAdminSectionProps) => {
                   <Show when={uploadPdfMutation.isError}>
                     <div class="mt-2 text-xs text-red-600">
                       ✗ Failed to upload PDF: {(uploadPdfMutation.error as Error)?.message}
+                    </div>
+                  </Show>
+                </div>
+
+                {/* Convert PDF Section */}
+                <div class="pt-2 border-t border-amber-200">
+                  <div class="text-xs font-medium text-amber-800 mb-1">Convert PDF to text</div>
+                  <button
+                    onClick={() => {
+                      return convertPdfMutation.mutate()
+                    }}
+                    disabled={
+                      convertPdfMutation.isPending
+                      || !article().fullTextPDF
+                      || article().fullTextConversionStatus === 'pending'
+                    }
+                    class="w-full px-3 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {convertPdfMutation.isPending ? (
+                      <span class="flex items-center justify-center gap-2">
+                        <svg class="animate-spin h-3 w-3" viewBox="0 0 24 24">
+                          <circle
+                            class="opacity-25"
+                            cx="12"
+                            cy="12"
+                            r="10"
+                            stroke="currentColor"
+                            stroke-width="4"
+                            fill="none"
+                          />
+                          <path
+                            class="opacity-75"
+                            fill="currentColor"
+                            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                          />
+                        </svg>
+                        Starting conversion...
+                      </span>
+                    ) : (
+                      'Convert PDF Now'
+                    )}
+                  </button>
+
+                  <Show when={convertPdfMutation.isSuccess}>
+                    <div class="mt-2 p-2 text-xs bg-blue-100 text-blue-700 rounded">
+                      <div class="font-medium">🚀 Conversion started</div>
+                      <div class="mt-1 opacity-90">
+                        This may take several minutes. Status will update automatically.
+                      </div>
+                    </div>
+                  </Show>
+
+                  <Show when={convertPdfMutation.isError}>
+                    <div class="mt-2 text-xs text-red-600">
+                      ✗ Failed to start conversion: {(convertPdfMutation.error as Error)?.message}
+                    </div>
+                  </Show>
+
+                  <Show when={article().fullTextConversionStatus === 'pending'}>
+                    <div class="mt-2 p-2 text-xs bg-blue-100 text-blue-700 rounded">
+                      <div class="flex items-center gap-2">
+                        <svg class="animate-spin h-3 w-3" viewBox="0 0 24 24">
+                          <circle
+                            class="opacity-25"
+                            cx="12"
+                            cy="12"
+                            r="10"
+                            stroke="currentColor"
+                            stroke-width="4"
+                            fill="none"
+                          />
+                          <path
+                            class="opacity-75"
+                            fill="currentColor"
+                            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                          />
+                        </svg>
+                        <span class="font-medium">Conversion in progress...</span>
+                      </div>
+                      <div class="mt-1 opacity-90">Checking status every 3 seconds</div>
                     </div>
                   </Show>
                 </div>
