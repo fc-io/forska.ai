@@ -138,7 +138,7 @@ export const processPromptWithLLM = async (
   const judgmentExists = await checkJudgmentExistsInPostgres(db, promptToProcess)
   if (judgmentExists) {
     await markAsJudged(db, promptToProcess.jobId, promptToProcess.articleId, promptToProcess.promptId)
-    rateLimitedLogger.log('llm:skip:exists', `[llm] Skipped - judgment already exists`)
+    console.log('[llm] Skipped - judgment already exists for:', promptToProcess.articleId.slice(0, 8))
     return
   }
 
@@ -244,11 +244,12 @@ export const processPromptWithLLM = async (
   // console.log(`Processing prompt ${promptToProcess.promptId} for article ${promptToProcess.articleId}`)
 
   try {
+    console.log('[llm] Calling LLM for article:', promptToProcess.articleId.slice(0, 8))
     await processSinglePrompt(promptToProcess, articleForJudging, prompt)
     // Success - mark as judged
     await markAsJudged(db, promptToProcess.jobId, promptToProcess.articleId, promptToProcess.promptId)
     const duration = Date.now() - startTime
-    rateLimitedLogger.log('llm:success', `[llm] Success - processed in ${duration}ms`)
+    console.log(`[llm] Success - processed in ${duration}ms`)
   } catch (error) {
     // Check if this is a connection error - if so, don't mark as judged
     // The prompt will be retried on the next cron cycle when the server is back up
