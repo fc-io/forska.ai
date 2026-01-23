@@ -10,7 +10,7 @@ The Parquet dual-write has reliability issues:
 
 ## Solution
 
-Remove the Parquet dual-write entirely. PostgreSQL is the source of truth; ClickHouse is synced via existing manual backfill routes when needed.
+Remove Parquet entirely. PostgreSQL is the source of truth; ClickHouse is synced via existing manual backfill routes when needed.
 
 ---
 
@@ -46,10 +46,13 @@ Remove the Parquet dual-write entirely. PostgreSQL is the source of truth; Click
     - `types.ts`
     - `index.ts`
 
+- [ ] `src/services/duckdb/duckdbQuery.ts`
+  - Remove or update Parquet path reference (line 81)
+
 ### Client Code
 
-- [ ] `src/app/routes/+admin/+parquet/+index.tsx`
-  - Delete entire file
+- [ ] `src/app/routes/+admin/+parquet/`
+  - Delete entire directory (including `+index.tsx`)
 
 - [ ] `src/app/routes/+admin/+clickhouse-sync/+index.tsx`
   - Remove fetch to `/api/admin/parquet-dual-write-status` (line 42)
@@ -58,29 +61,43 @@ Remove the Parquet dual-write entirely. PostgreSQL is the source of truth; Click
 - [ ] `src/components/Navigation.tsx`
   - Remove link to `/admin/parquet` (line 345)
 
-- [ ] Run `bun run dev:app` to regenerate `src/app/routeTree.gen.ts`
+- [ ] Regenerate route tree:
+  - Run `bun run build` (or `bun run dev:app` and wait for regeneration)
+  - Verify `src/app/routeTree.gen.ts` no longer references parquet routes
+  - Commit the updated `routeTree.gen.ts`
 
 ### Scripts
 
-- [ ] `scripts/backfillPostgresToParquet.ts`
-  - Delete entire file
+- [ ] `scripts/backfillPostgresToParquet.ts` - Delete
+- [ ] `scripts/backfillPostgresToParquetFast.ts` - Delete
+- [ ] `scripts/backfillPostgresToParquetDuckDB.ts` - Delete
+- [ ] `scripts/backfillFailedS3QueueFiles.ts` - Delete
 
-- [ ] `scripts/backfillPostgresToParquetFast.ts`
-  - Delete entire file
+### Dependencies
 
-- [ ] `scripts/backfillPostgresToParquetDuckDB.ts`
-  - Keep (uses DuckDB directly, doesn't import parquet module)
+- [ ] `package.json`
+  - Remove `@dsnp/parquetjs` dependency (line 71)
+  - Run `bun install` to update lockfile
 
-- [ ] `scripts/backfillFailedS3QueueFiles.ts`
-  - Keep (operates on existing S3 files, doesn't import parquet module)
+### ClickHouse Cleanup
 
-### Optional Cleanup (can defer)
+- [ ] Drop S3Queue pipeline (run in ClickHouse):
+  ```sql
+  DROP VIEW IF EXISTS forska.judgments_mv;
+  DROP TABLE IF EXISTS forska.judgments_queue;
+  ```
 
-- [ ] `src/services/duckdb/duckdbQuery.ts` (line 81)
-  - References parquet path pattern; may want to update or remove DuckDB queries
+### S3/SeaweedFS Cleanup
 
-- [ ] ClickHouse S3Queue pipeline (`forska.judgments_queue`, `forska.judgments_mv`)
-  - No longer receives new data; can drop these objects or leave inactive
+- [ ] Delete existing Parquet files from S3 bucket:
+
+  ```bash
+  # List files first
+  aws --endpoint-url <SEAWEEDFS_URL> s3 ls s3://forska-judgments/judgments/ --recursive
+
+  # Delete all parquet files
+  aws --endpoint-url <SEAWEEDFS_URL> s3 rm s3://forska-judgments/judgments/ --recursive
+  ```
 
 ---
 
@@ -103,10 +120,12 @@ ClickHouse data is synced manually via existing backfill routes:
 - **Updates not synced:** `judgeStoreJudgment.ts` can update existing judgments; these updates won't be reflected unless you do a full resync (truncate + backfill)
 - **Tombstone bug remains:** Soft deletes use same `createdAt`, causing version ties in ReplacingMergeTree. Analytics may show deleted rows until `OPTIMIZE TABLE forska.judgments FINAL` or full resync
 - **Dedup is eventual:** ReplacingMergeTree deduplicates during background merges, not immediately
-- **S3Queue pipeline orphaned:** `forska.judgments_queue` and `forska.judgments_mv` will no longer receive data but remain in ClickHouse; can be dropped manually if desired
 
 ---
 
 ## Rollback
 
-`git revert <commit>` to restore all Parquet code and call sites.
+`git revert <commit>` to restore all Parquet code. Manual steps to restore:
+
+- Reinstall `@dsnp/parquetjs`: `bun add @dsnp/parquetjs`
+- Recreate ClickHouse S3Queue objects (from `scripts/clickhouse-setup.sql`)
