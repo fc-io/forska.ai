@@ -1456,6 +1456,11 @@ export const adminInvestigateRoutes = new Elysia()
     },
     {query: t.Object({projectId: t.String()})},
   )
+  .post('/api/admin/sync-articles-to-clickhouse', async () => {
+    const {syncArticlesToClickHouse} = await import('../../../scripts/syncArticlesToClickHouse.ts')
+    const result = await syncArticlesToClickHouse()
+    return result
+  })
   .get('/api/admin/parquet-dual-write-status', async () => {
     const {getJudgmentsParquetDualWriteConfig} = await import('../../services/parquet/judgmentsParquetDualWrite.ts')
     const {getDefaultWriterPendingCount} = await import('../../services/parquet/parquetWriter.ts')
