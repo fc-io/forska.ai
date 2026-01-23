@@ -69,6 +69,17 @@ const msToMicros = (ms: number): bigint => {
 }
 
 /**
+ * Ensure all elements in an array are strings.
+ * Converts non-string values to strings to prevent Parquet encoding errors.
+ */
+const ensureStringArray = (arr: unknown[] | null | undefined): string[] => {
+  if (!arr || !Array.isArray(arr)) return []
+  return arr.map((item) => {
+    return typeof item === 'string' ? item : String(item)
+  })
+}
+
+/**
  * Convert a DenormalizedJudgmentAnalytics record to Parquet row format.
  * Handles Date -> timestamp conversion (microseconds) and null handling.
  */
@@ -96,8 +107,9 @@ const toParquetRow = (record: DenormalizedJudgmentAnalytics): Record<string, unk
     useFulltextNoImages: record.useFulltextNoImages,
 
     answeredOriginal: record.answeredOriginal,
-    // Convert null/undefined to empty array for repeated field
-    answeredOriginalAsArray: record.answeredOriginalAsArray ?? [],
+    // Convert null/undefined to empty array and ensure all elements are strings
+    // to prevent Parquet encoding errors (UTF8 fields require string values)
+    answeredOriginalAsArray: ensureStringArray(record.answeredOriginalAsArray),
 
     explanation: record.explanation,
     quotes: record.quotes,
