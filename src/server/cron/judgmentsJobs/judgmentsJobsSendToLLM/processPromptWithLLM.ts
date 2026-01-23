@@ -1,4 +1,4 @@
-import {and, eq} from 'drizzle-orm'
+import {and, eq, isNull} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import {judgeSinglePrompt} from '../../../../agent/judge.ts'
@@ -9,6 +9,29 @@ import {processFulltextForLLM} from '../../../utils/fulltextProcessing.ts'
 import {rateLimitedLogger} from '../../../utils/rateLimitedLogger.ts'
 import {ConnectionError} from '../connectionHealth.ts'
 import type {PromptToProcess} from './getAndUpdateReadyPrompts.ts'
+
+const checkJudgmentExistsInPostgres = async (
+  db: PostgresJsDatabase<typeof schema>,
+  promptToProcess: PromptToProcess,
+): Promise<boolean> => {
+  const [existing] = await db
+    .select({id: schema.judgments.id})
+    .from(schema.judgments)
+    .where(
+      and(
+        eq(schema.judgments.articleId, promptToProcess.articleId),
+        eq(schema.judgments.promptId, promptToProcess.promptId),
+        eq(schema.judgments.modelId, promptToProcess.modelId),
+        eq(schema.judgments.useTitle, promptToProcess.useTitle),
+        eq(schema.judgments.useAbstract, promptToProcess.useAbstract),
+        eq(schema.judgments.useFulltext, promptToProcess.useFulltext),
+        eq(schema.judgments.useFulltextNoImages, promptToProcess.useFulltextNoImages),
+        isNull(schema.judgments.deletedAt),
+      ),
+    )
+    .limit(1)
+  return Boolean(existing)
+}
 
 type PromptDefinition = {
   id: string
@@ -111,6 +134,12 @@ export const processPromptWithLLM = async (
   db: PostgresJsDatabase<typeof schema>,
   promptToProcess: PromptToProcess,
 ): Promise<void> => {
+  const judgmentExists = await checkJudgmentExistsInPostgres(db, promptToProcess)
+  if (judgmentExists) {
+    await markAsJudged(db, promptToProcess.jobId, promptToProcess.articleId, promptToProcess.promptId)
+    return
+  }
+
   const [article] = await db
     .select()
     .from(schema.articles)
