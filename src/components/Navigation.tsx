@@ -1,7 +1,9 @@
 import {Menu} from '@ark-ui/solid'
+import {useQuery} from '@tanstack/solid-query'
 import {Link} from '@tanstack/solid-router'
 import {createSignal, onCleanup, onMount, Show} from 'solid-js'
 
+import {apiClient} from '../services/apiClient'
 import type {User} from '../types/user'
 
 interface NavigationProps {
@@ -52,10 +54,85 @@ const getAvatarLabel = (user: User | undefined) => {
   return defaultLabel
 }
 
+type LlmMetricsSummary = {waiting: number; running: number; lastUpdate: Date | null}
+
+const fetchLlmMetricsSummary = async (): Promise<LlmMetricsSummary | null> => {
+  const response = await apiClient.api.llmstatus.get()
+  if (response.error) {
+    return null
+  }
+  const entries = response.data?.data ?? []
+  const latestByInstance = new Map<string, {waiting: number; running: number; ts: Date | null}>()
+  for (const row of entries) {
+    const instanceId = typeof row.instanceId === 'string' ? row.instanceId : ''
+    if (!latestByInstance.has(instanceId)) {
+      const ts = row.ts ? new Date(row.ts as string | number | Date) : null
+      latestByInstance.set(instanceId, {
+        waiting: (row.numQueueReqs as number | null) ?? 0,
+        running: (row.numRunningReqs as number | null) ?? 0,
+        ts: ts && !isNaN(ts.getTime()) ? ts : null,
+      })
+    }
+  }
+  const values = [...latestByInstance.values()]
+  const totalWaiting = values.reduce((sum, v) => {
+    return sum + v.waiting
+  }, 0)
+  const totalRunning = values.reduce((sum, v) => {
+    return sum + v.running
+  }, 0)
+  const timestamps = values
+    .map((v) => {
+      return v.ts
+    })
+    .filter((t): t is Date => {
+      return t !== null
+    })
+  const lastUpdate =
+    timestamps.length > 0
+      ? new Date(
+          Math.max(
+            ...timestamps.map((t) => {
+              return t.getTime()
+            }),
+          ),
+        )
+      : null
+  return {waiting: totalWaiting, running: totalRunning, lastUpdate}
+}
+
+const formatLastUpdate = (date: Date | null): string => {
+  if (!date) {
+    return ''
+  }
+  const now = new Date()
+  const isToday =
+    date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate()
+  const time = date.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'})
+  if (isToday) {
+    return time
+  }
+  const dateStr = date.toLocaleDateString([], {month: 'short', day: 'numeric'})
+  return `${dateStr} ${time}`
+}
+
 export const Navigation = (props: NavigationProps) => {
   const [isAdminMenuOpen, setIsAdminMenuOpen] = createSignal(false)
   let adminMenuTriggerElement: HTMLDivElement | undefined
   let adminMenuElement: HTMLDivElement | undefined
+
+  const llmMetricsQuery = useQuery(() => {
+    return {
+      queryKey: ['llm-metrics-summary'],
+      queryFn: fetchLlmMetricsSummary,
+      refetchInterval: 2000,
+      enabled: props.user?.role === 'admin',
+    }
+  })
+
+  const llmMetrics = () => {
+    return llmMetricsQuery.data ?? null
+  }
 
   const closeAdminMenu = () => {
     setIsAdminMenuOpen(false)
@@ -150,6 +227,14 @@ export const Navigation = (props: NavigationProps) => {
           </div>
           <div class="flex items-center space-x-4">
             <Show when={props.user?.role === 'admin'}>
+              <Show when={llmMetrics()}>
+                <div class="flex flex-col items-end px-2 py-1" title="Waiting / Running requests across all workers">
+                  <div class={`text-sm font-medium ${llmMetrics()?.waiting === 0 ? 'text-red-600' : 'text-gray-700'}`}>
+                    {llmMetrics()?.waiting}/{llmMetrics()?.running}
+                  </div>
+                  <div class="text-xs text-gray-400">{formatLastUpdate(llmMetrics()?.lastUpdate ?? null)}</div>
+                </div>
+              </Show>
               <div
                 ref={(element) => {
                   adminMenuTriggerElement = element
