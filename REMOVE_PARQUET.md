@@ -31,20 +31,18 @@ This inserts directly into the main `forska.judgments` table, **bypassing** the 
 
 - ReplacingMergeTree deduplicates by `id` during background merges, keeping the row with the highest `createdAt`
 - Retries of the **same record** (identical `id` + `createdAt`) are safe: results in one row after merge
-- For immediate dedup in queries, can use `FINAL` keyword: `SELECT ... FROM judgments FINAL WHERE deletedAt IS NULL`
 
 ### Tombstones (Soft Deletes)
 
 **Current behavior has a bug:** Tombstones reuse the original `createdAt`, so ReplacingMergeTree may keep either row (version tie). This means `WHERE deletedAt IS NULL` is unreliable after merges.
 
-**Current queries do NOT use FINAL** - they accept this limitation and may show stale/deleted data until manual resync or `OPTIMIZE TABLE ... FINAL`. (No automated periodic resync job exists.)
+**Impact:** Analytics queries may show deleted/stale rows until manual intervention (`OPTIMIZE TABLE forska.judgments FINAL` or full resync from PostgreSQL). No automated job exists to fix this.
 
 **Options to fix (out of scope for this change):**
 
 1. Use `updatedAt` as the version column instead of `createdAt` (requires DDL change)
 2. Set tombstone `createdAt` to `now()` so it always wins (but breaks time-series semantics)
-3. Add `FINAL` to all queries (performance cost)
-4. Accept eventual consistency and manually resync from PostgreSQL when needed
+3. Accept eventual consistency and manually resync from PostgreSQL when needed
 
 ### Field Conversions Required
 
@@ -101,10 +99,10 @@ const formatDateForClickHouse = (date: Date | null): string | null => {
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}.${millis}`
 }
 
-export const writeJudgmentToClickHouse = async (record: DenormalizedJudgmentAnalytics): Promise<void> => {
-  try {
-    const chClient = getClickhouseClient()
-    await chClient.insert({
+export const writeJudgmentToClickHouse = (record: DenormalizedJudgmentAnalytics): Promise<void> => {
+  const chClient = getClickhouseClient()
+  return chClient
+    .insert({
       table: 'forska.judgments',
       values: [
         {
@@ -119,13 +117,14 @@ export const writeJudgmentToClickHouse = async (record: DenormalizedJudgmentAnal
       ],
       format: 'JSONEachRow',
     })
-  } catch (error) {
-    // Best-effort: log and continue, don't throw
-    console.error('[ClickHouse Sync] Failed to write judgment', {
-      id: record.id,
-      error: error instanceof Error ? error.message : String(error),
+    .then(() => {})
+    .catch((error: unknown) => {
+      const safeError =
+        error instanceof Error
+          ? {name: error.name, message: error.message, stack: error.stack}
+          : {message: String(error)}
+      console.error('[ClickHouse Sync] Failed to write judgment', {id: record.id, error: safeError})
     })
-  }
 }
 ```
 
@@ -144,9 +143,9 @@ export const writeJudgmentToClickHouse = async (record: DenormalizedJudgmentAnal
 **Why not true fire-and-forget (no await)?**
 
 - Unawaited promises with the 120s default timeout could pile up if ClickHouse is slow
-- Backpressure is implicit: if ClickHouse is slow, judgment processing slows (acceptable for this use case)
+- Backpressure is implicit: if ClickHouse is slow, judgment processing slows
 
-**If 120s stall is unacceptable:** Create a separate ClickHouse client instance with a shorter `request_timeout` (~5s) for sync writes. This would require a new function in `clickhouseClient.ts` since timeout is set at client creation, not per-call.
+**120s stall is accepted** for this change. If it becomes problematic, can add a separate ClickHouse client with shorter timeout later.
 
 ---
 
