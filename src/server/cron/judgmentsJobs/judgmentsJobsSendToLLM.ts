@@ -127,6 +127,9 @@ const processPrompts = async (
     }),
   )
 
+  const fulfilled = results.filter((r) => {
+    return r.status === 'fulfilled'
+  })
   const rejected = results.filter((r) => {
     return r.status === 'rejected'
   })
@@ -135,6 +138,14 @@ const processPrompts = async (
   const connectionErrors = rejected.filter((r) => {
     return r.reason instanceof ConnectionError
   }).length
+
+  // Always log batch completion stats
+  console.log('[llm] Batch complete:', {
+    sent: prompts.length,
+    fulfilled: fulfilled.length,
+    rejected: rejected.length,
+    connectionErrors,
+  })
 
   if (rejected.length > 0) {
     rateLimitedLogger.error(

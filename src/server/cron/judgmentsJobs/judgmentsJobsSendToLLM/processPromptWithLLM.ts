@@ -264,7 +264,7 @@ export const processPromptWithLLM = async (
 
     // For other errors, log and mark as judged to prevent infinite loops
     const errorMessage = error instanceof Error ? error.message : String(error)
-    console.error('Failed to process prompt for article:', {
+    console.error('[llm] ERROR - Failed to process prompt:', {
       articleId: promptToProcess.articleId,
       promptId: promptToProcess.promptId,
       error: errorMessage,
