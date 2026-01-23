@@ -50,8 +50,21 @@ export const ArticleAdminSection = (props: ArticleAdminSectionProps) => {
     }
   })
 
+  const [prevConversionStatus, setPrevConversionStatus] = createSignal<string | null | undefined>(undefined)
+  const [conversionJustCompleted, setConversionJustCompleted] = createSignal(false)
+
   createEffect(() => {
     const conversionStatus = adminInfoQuery.data?.article?.fullTextConversionStatus
+    const prev = prevConversionStatus()
+
+    if (prev === 'pending' && conversionStatus === 'success') {
+      setConversionJustCompleted(true)
+      void queryClient.invalidateQueries({queryKey: ['admin-article-details', props.articleId]})
+      void queryClient.invalidateQueries({queryKey: ['article-review-details']})
+    }
+
+    setPrevConversionStatus(conversionStatus)
+
     if (conversionStatus === 'pending') {
       const interval = setInterval(() => {
         void queryClient.invalidateQueries({queryKey: ['article-admin-info', props.articleId]})
@@ -419,8 +432,8 @@ export const ArticleAdminSection = (props: ArticleAdminSectionProps) => {
                   </div>
 
                   <Show when={uploadPdfMutation.isSuccess}>
-                    <div class="mt-2 text-xs text-green-600">
-                      ✅ PDF uploaded successfully: {uploadPdfMutation.data?.fullTextPDF}
+                    <div class="mt-2 text-xs text-green-600 break-all">
+                      PDF uploaded successfully: {uploadPdfMutation.data?.fullTextPDF}
                     </div>
                   </Show>
 
@@ -470,9 +483,25 @@ export const ArticleAdminSection = (props: ArticleAdminSectionProps) => {
                     )}
                   </button>
 
-                  <Show when={convertPdfMutation.isSuccess}>
+                  <Show when={conversionJustCompleted() && article().fullTextConversionStatus === 'success'}>
+                    <div class="mt-2 p-2 text-xs bg-green-100 text-green-700 rounded">
+                      <div class="font-medium">Conversion completed successfully</div>
+                      <div class="mt-1 opacity-90">
+                        Full text is now available ({article().fullTextCharCount?.toLocaleString() ?? 'N/A'}{' '}
+                        characters).
+                      </div>
+                    </div>
+                  </Show>
+
+                  <Show
+                    when={
+                      convertPdfMutation.isSuccess
+                      && !conversionJustCompleted()
+                      && article().fullTextConversionStatus === 'pending'
+                    }
+                  >
                     <div class="mt-2 p-2 text-xs bg-blue-100 text-blue-700 rounded">
-                      <div class="font-medium">🚀 Conversion started</div>
+                      <div class="font-medium">Conversion started</div>
                       <div class="mt-1 opacity-90">
                         This may take several minutes. Status will update automatically.
                       </div>

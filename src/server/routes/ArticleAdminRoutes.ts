@@ -121,6 +121,7 @@ export const articleAdminRoutes = new Elysia()
           fullTextConversionError: articles.fullTextConversionError,
           fullTextConversionAttempts: articles.fullTextConversionAttempts,
           fullTextPdfUploadedBy: articles.fullTextPdfUploadedBy,
+          fullTextCharCount: articles.fullTextCharCount,
         })
         .from(articles)
         .where(eq(articles.id, id))
