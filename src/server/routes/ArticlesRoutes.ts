@@ -88,6 +88,33 @@ export const articlesRoutes = new Elysia()
 
     return {success: true}
   })
+  .get('/api/articles/pdf-fetch-stats', async () => {
+    const db = getDatabase()
+
+    const [totalRow] = await db
+      .select({count: count()})
+      .from(articles)
+      .where(sql`${articles.fullTextPDF} LIKE 'assets/article_pdfs/%' AND ${articles.fullTextPdfUploadedBy} IS NULL`)
+
+    return {totalAutoFetched: totalRow?.count ?? 0}
+  })
+  .post('/api/articles/pdf-fetch-reset', () => {
+    const db = getDatabase()
+
+    db.update(articles)
+      .set({
+        fullTextFetchedAt: null,
+        fullTextPDF: null,
+        fullTextSource: null,
+        fullTextOriginalFormat: null,
+      })
+      .where(sql`${articles.fullTextPDF} LIKE 'assets/article_pdfs/%' AND ${articles.fullTextPdfUploadedBy} IS NULL`)
+      .then((result) => {
+        console.log(`[pdf-fetch-reset] Reset ${result.rowCount ?? 0} articles`)
+      })
+
+    return {success: true, message: 'Reset started in background'}
+  })
   .get('/api/articles/latest', async () => {
     const db = getDatabase()
 

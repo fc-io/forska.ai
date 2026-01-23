@@ -250,6 +250,13 @@ export const Navigation = (props: NavigationProps) => {
                       PDF Conversions
                     </Link>
                     <Link
+                      to="/admin/pdf-reset"
+                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
+                      onClick={closeAdminMenu}
+                    >
+                      PDF Fetch Reset
+                    </Link>
+                    <Link
                       to="/admin/parquet"
                       class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
                       onClick={closeAdminMenu}
