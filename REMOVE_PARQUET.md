@@ -29,20 +29,20 @@ This approach trades **write amplification** (per-row insert) for **simplicity**
 
 - ReplacingMergeTree deduplicates by `id` during background merges, keeping the row with the highest `createdAt`
 - Retries are safe: inserting the same judgment twice results in one row after merge
-- For immediate dedup in queries, use `FINAL` keyword: `SELECT ... FROM judgments FINAL WHERE deletedAt IS NULL`
+- For immediate dedup in queries, can use `FINAL` keyword: `SELECT ... FROM judgments FINAL WHERE deletedAt IS NULL`
 
 ### Tombstones (Soft Deletes)
 
 **Current behavior has a bug:** Tombstones reuse the original `createdAt`, so ReplacingMergeTree may keep either row (version tie). This means `WHERE deletedAt IS NULL` is unreliable after merges.
 
+**Current queries do NOT use FINAL** - they accept this limitation and may show stale/deleted data until periodic resync or manual `OPTIMIZE TABLE ... FINAL`.
+
 **Options to fix (out of scope for this change):**
 
 1. Use `updatedAt` as the version column instead of `createdAt` (requires DDL change)
 2. Set tombstone `createdAt` to `now()` so it always wins (but breaks time-series semantics)
-3. Use `FINAL` in all queries (performance cost)
+3. Add `FINAL` to all queries (performance cost)
 4. Accept eventual consistency and periodically re-sync from PostgreSQL
-
-For now, existing behavior is preserved. Queries already use `FINAL` or accept this limitation.
 
 ### Field Conversions Required
 
@@ -134,8 +134,9 @@ export const writeJudgmentToClickHouse = async (record: DenormalizedJudgmentAnal
 **Awaited, not fire-and-forget.** The caller awaits `writeJudgmentToClickHouse()`, but errors are caught and logged (not thrown). This means:
 
 - The PostgreSQL insert completes before ClickHouse write starts
-- ClickHouse write adds latency to the request path (~10ms typical, up to 120s timeout)
-- If ClickHouse is slow/down, requests complete but ClickHouse data is lost (logged)
+- ClickHouse write adds latency to the request path (~10ms typical)
+- **If ClickHouse hangs, requests stall up to 120s** (the singleton client's `request_timeout`)
+- After timeout, the error is caught/logged and the request completes (ClickHouse data lost)
 - No background queue means no risk of unbounded memory growth from pending writes
 
 **Why not true fire-and-forget (no await)?**
@@ -143,7 +144,7 @@ export const writeJudgmentToClickHouse = async (record: DenormalizedJudgmentAnal
 - Unawaited promises with the 120s default timeout could pile up if ClickHouse is slow
 - Backpressure is implicit: if ClickHouse is slow, judgment processing slows (acceptable for this use case)
 
-**Future optimization if needed:** Reduce `request_timeout` for this call to ~5s, or use a bounded async queue.
+**Future optimization if needed:** Create a separate ClickHouse client with a shorter `request_timeout` (~5s) for sync writes, or use a bounded async queue.
 
 ---
 
@@ -174,8 +175,10 @@ The existing `/api/admin/backfill-judgments-to-clickhouse` starts from `max(crea
 
 ## Rollback
 
-If issues arise:
+Since this change **replaces** the call site (not a runtime switch), rollback requires a code revert:
 
-1. Set `PARQUET_JUDGMENTS_DUAL_WRITE=true` to re-enable Parquet path
-2. The ClickHouse sync call will still run but can be removed in a follow-up
-3. For full resync: truncate ClickHouse table, then run backfill from PostgreSQL
+1. `git revert <commit>` to restore Parquet call in `storeSinglePromptJudgment.ts`
+2. Set `PARQUET_JUDGMENTS_DUAL_WRITE=true` if it was previously disabled
+3. For full resync after issues: truncate ClickHouse table, then run backfill from PostgreSQL
+
+**Alternative (not implemented):** Could add a runtime env var switch between Parquet and ClickHouse sync, but adds complexity for a one-way migration.
