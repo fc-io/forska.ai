@@ -486,15 +486,24 @@ export const projectsRoutes = new Elysia()
           const submitted = body.prompts.filter((p) => {
             return (p.originalText ?? '').trim() !== ''
           })
-          // Existing associations
+          // Existing associations (include originProjectId to preserve it for imported prompts)
           const existing = await tx
-            .select({id: projectPrompts.id, promptId: projectPrompts.promptId})
+            .select({
+              id: projectPrompts.id,
+              promptId: projectPrompts.promptId,
+              originProjectId: projectPrompts.originProjectId,
+            })
             .from(projectPrompts)
             .where(eq(projectPrompts.projectId, params.id))
 
           const existingPromptIds = new Set(
             existing.map((p) => {
               return p.promptId
+            }),
+          )
+          const existingOriginMap = new Map(
+            existing.map((p) => {
+              return [p.promptId, p.originProjectId]
             }),
           )
           const receivedOriginalIds = new Set(
@@ -596,11 +605,30 @@ export const projectsRoutes = new Elysia()
                 targetPromptId = p.originalId
               }
 
+              // Preserve originProjectId for imported prompts
+              // First check if this project already has an association (use its originProjectId)
+              // If not, look up the original origin from any other project that has this prompt
+              // Only use current project ID for brand new prompts with no prior associations anywhere
+              const promptId = p.originalId
+              const existingOrigin = existingOriginMap.get(promptId)
+              const resolvedOriginProjectId = await (async () => {
+                if (existingOrigin !== undefined) {
+                  return existingOrigin
+                }
+                // Look up the original originProjectId from any existing association
+                const [anyExisting] = await tx
+                  .select({originProjectId: projectPrompts.originProjectId})
+                  .from(projectPrompts)
+                  .where(eq(projectPrompts.promptId, promptId))
+                  .limit(1)
+                return anyExisting?.originProjectId ?? params.id
+              })()
+
               const insertValues = {
                 projectId: params.id,
                 promptId: targetPromptId,
                 order: orderVal,
-                originProjectId: params.id,
+                originProjectId: resolvedOriginProjectId,
                 ...(archivedVal !== undefined ? {archived: archivedVal} : {}),
                 ...(enabledVal !== undefined ? {enabled: enabledVal} : {}),
               }
