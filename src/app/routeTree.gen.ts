@@ -30,6 +30,7 @@ import { Route as ArticlesIdIndexRouteImport } from './routes/+articles/+$id/+in
 import { Route as AdminUsersIndexRouteImport } from './routes/+admin/+users/+index'
 import { Route as AdminUnexpectedAnswersIndexRouteImport } from './routes/+admin/+unexpected-answers/+index'
 import { Route as AdminSetup_statsIndexRouteImport } from './routes/+admin/+setup_stats/+index'
+import { Route as AdminPdfResetIndexRouteImport } from './routes/+admin/+pdf-reset/+index'
 import { Route as AdminPdfConversionsIndexRouteImport } from './routes/+admin/+pdf-conversions/+index'
 import { Route as AdminParquetIndexRouteImport } from './routes/+admin/+parquet/+index'
 import { Route as AdminLlmIndexRouteImport } from './routes/+admin/+llm/+index'
@@ -165,6 +166,11 @@ const AdminUnexpectedAnswersIndexRoute =
 const AdminSetup_statsIndexRoute = AdminSetup_statsIndexRouteImport.update({
   id: '/admin/setup_stats/',
   path: '/admin/setup_stats/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminPdfResetIndexRoute = AdminPdfResetIndexRouteImport.update({
+  id: '/admin/pdf-reset/',
+  path: '/admin/pdf-reset/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminPdfConversionsIndexRoute =
@@ -346,6 +352,7 @@ export interface FileRoutesByFullPath {
   '/admin/llm': typeof AdminLlmIndexRoute
   '/admin/parquet': typeof AdminParquetIndexRoute
   '/admin/pdf-conversions': typeof AdminPdfConversionsIndexRoute
+  '/admin/pdf-reset': typeof AdminPdfResetIndexRoute
   '/admin/setup_stats': typeof AdminSetup_statsIndexRoute
   '/admin/unexpected-answers': typeof AdminUnexpectedAnswersIndexRoute
   '/admin/users': typeof AdminUsersIndexRoute
@@ -397,6 +404,7 @@ export interface FileRoutesByTo {
   '/admin/llm': typeof AdminLlmIndexRoute
   '/admin/parquet': typeof AdminParquetIndexRoute
   '/admin/pdf-conversions': typeof AdminPdfConversionsIndexRoute
+  '/admin/pdf-reset': typeof AdminPdfResetIndexRoute
   '/admin/setup_stats': typeof AdminSetup_statsIndexRoute
   '/admin/unexpected-answers': typeof AdminUnexpectedAnswersIndexRoute
   '/admin/users': typeof AdminUsersIndexRoute
@@ -449,6 +457,7 @@ export interface FileRoutesById {
   '/admin/llm/': typeof AdminLlmIndexRoute
   '/admin/parquet/': typeof AdminParquetIndexRoute
   '/admin/pdf-conversions/': typeof AdminPdfConversionsIndexRoute
+  '/admin/pdf-reset/': typeof AdminPdfResetIndexRoute
   '/admin/setup_stats/': typeof AdminSetup_statsIndexRoute
   '/admin/unexpected-answers/': typeof AdminUnexpectedAnswersIndexRoute
   '/admin/users/': typeof AdminUsersIndexRoute
@@ -502,6 +511,7 @@ export interface FileRouteTypes {
     | '/admin/llm'
     | '/admin/parquet'
     | '/admin/pdf-conversions'
+    | '/admin/pdf-reset'
     | '/admin/setup_stats'
     | '/admin/unexpected-answers'
     | '/admin/users'
@@ -553,6 +563,7 @@ export interface FileRouteTypes {
     | '/admin/llm'
     | '/admin/parquet'
     | '/admin/pdf-conversions'
+    | '/admin/pdf-reset'
     | '/admin/setup_stats'
     | '/admin/unexpected-answers'
     | '/admin/users'
@@ -604,6 +615,7 @@ export interface FileRouteTypes {
     | '/admin/llm/'
     | '/admin/parquet/'
     | '/admin/pdf-conversions/'
+    | '/admin/pdf-reset/'
     | '/admin/setup_stats/'
     | '/admin/unexpected-answers/'
     | '/admin/users/'
@@ -656,6 +668,7 @@ export interface RootRouteChildren {
   AdminLlmIndexRoute: typeof AdminLlmIndexRoute
   AdminParquetIndexRoute: typeof AdminParquetIndexRoute
   AdminPdfConversionsIndexRoute: typeof AdminPdfConversionsIndexRoute
+  AdminPdfResetIndexRoute: typeof AdminPdfResetIndexRoute
   AdminSetup_statsIndexRoute: typeof AdminSetup_statsIndexRoute
   AdminUnexpectedAnswersIndexRoute: typeof AdminUnexpectedAnswersIndexRoute
   AdminUsersIndexRoute: typeof AdminUsersIndexRoute
@@ -835,6 +848,13 @@ declare module '@tanstack/solid-router' {
       path: '/admin/setup_stats'
       fullPath: '/admin/setup_stats'
       preLoaderRoute: typeof AdminSetup_statsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/pdf-reset/': {
+      id: '/admin/pdf-reset/'
+      path: '/admin/pdf-reset'
+      fullPath: '/admin/pdf-reset'
+      preLoaderRoute: typeof AdminPdfResetIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/pdf-conversions/': {
@@ -1056,6 +1076,7 @@ const rootRouteChildren: RootRouteChildren = {
   AdminLlmIndexRoute: AdminLlmIndexRoute,
   AdminParquetIndexRoute: AdminParquetIndexRoute,
   AdminPdfConversionsIndexRoute: AdminPdfConversionsIndexRoute,
+  AdminPdfResetIndexRoute: AdminPdfResetIndexRoute,
   AdminSetup_statsIndexRoute: AdminSetup_statsIndexRoute,
   AdminUnexpectedAnswersIndexRoute: AdminUnexpectedAnswersIndexRoute,
   AdminUsersIndexRoute: AdminUsersIndexRoute,
