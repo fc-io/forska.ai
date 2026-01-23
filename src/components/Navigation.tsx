@@ -108,7 +108,7 @@ const formatLastUpdate = (date: Date | null): string => {
   const now = new Date()
   const isToday =
     date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate()
-  const time = date.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'})
+  const time = date.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false})
   if (isToday) {
     return time
   }
