@@ -1447,10 +1447,10 @@ export const adminInvestigateRoutes = new Elysia()
         clickhouse: {articlesInScope: chArticleCount, judgmentsInScope: chJudgmentCount},
         analysis: {
           expectedJudgments,
-          missingInPostgres,
+          remainingToRun: missingInPostgres,
           missingInClickhouse: pgScopedJudgmentCount - chJudgmentCount,
           articlesFullyCovered: Math.floor(pgScopedJudgmentCount / enabledPromptIds.length),
-          articlesPartialOrNone: pgArticleCount - Math.floor(pgScopedJudgmentCount / enabledPromptIds.length),
+          articlesRemaining: pgArticleCount - Math.floor(pgScopedJudgmentCount / enabledPromptIds.length),
         },
       }
     },

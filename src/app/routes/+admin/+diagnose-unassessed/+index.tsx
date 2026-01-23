@@ -1,5 +1,6 @@
+import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute} from '@tanstack/solid-router'
-import {createEffect, createMemo, createSignal, For, Show} from 'solid-js'
+import {createMemo, createSignal, For, Show} from 'solid-js'
 
 import {env} from '../../../utils/client-env.ts'
 
@@ -20,10 +21,10 @@ type DiagnoseResult = {
   clickhouse: {articlesInScope: number; judgmentsInScope: number}
   analysis: {
     expectedJudgments: number
-    missingInPostgres: number
+    remainingToRun: number
     missingInClickhouse: number
     articlesFullyCovered: number
-    articlesPartialOrNone: number
+    articlesRemaining: number
   }
   error?: string
 }
@@ -88,8 +89,6 @@ const backfillProjectJudgments = async (projectId: string): Promise<BackfillResu
 const AdminDiagnoseUnassessed = () => {
   const [selectedProjectId, setSelectedProjectId] = createSignal<string | null>(null)
   const [includeArchived, setIncludeArchived] = createSignal(false)
-  const [projects, setProjects] = createSignal<Project[]>([])
-  const [projectsLoading, setProjectsLoading] = createSignal(true)
   const [loading, setLoading] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
   const [result, setResult] = createSignal<DiagnoseResult | null>(null)
@@ -98,23 +97,18 @@ const AdminDiagnoseUnassessed = () => {
   const [syncingArticles, setSyncingArticles] = createSignal(false)
   const [articleSyncResult, setArticleSyncResult] = createSignal<ArticleSyncResult | null>(null)
 
-  createEffect(() => {
-    const withArchived = includeArchived()
-    setProjectsLoading(true)
-    fetchProjects(withArchived)
-      .then((data) => {
-        setProjects(data)
-      })
-      .catch((err) => {
-        setError(err instanceof Error ? err.message : 'Failed to load projects')
-      })
-      .finally(() => {
-        setProjectsLoading(false)
-      })
+  const projectsQuery = useQuery(() => {
+    return {
+      queryKey: ['projects', {includeArchived: includeArchived()}],
+      queryFn: () => {
+        return fetchProjects(includeArchived())
+      },
+    }
   })
 
   const sortedProjects = createMemo(() => {
-    return [...projects()].sort((a, b) => {
+    const list = projectsQuery.data ?? []
+    return [...list].sort((a, b) => {
       return a.name.localeCompare(b.name)
     })
   })
@@ -168,46 +162,41 @@ const AdminDiagnoseUnassessed = () => {
           </label>
         </div>
 
-        <Show when={projectsLoading()}>
-          <p class="text-sm text-gray-500">Loading projects...</p>
-        </Show>
-
-        <Show when={!projectsLoading()}>
-          <div class="flex gap-4 items-end">
-            <div class="flex-1">
-              <label class="block text-sm font-medium text-gray-700 mb-1">Select Project</label>
-              <select
-                value={selectedProjectId() ?? ''}
-                onChange={(e) => {
-                  setSelectedProjectId(e.currentTarget.value || null)
-                }}
-                class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-blue-500 focus:border-blue-500"
-              >
-                <option value="">-- Select a project --</option>
-                <For each={sortedProjects()}>
-                  {(project) => {
-                    return (
-                      <option value={project.id}>
-                        {project.name}
-                        {project.archived ? ' (archived)' : ''}
-                        {project.modelName ? ` — ${project.modelName}` : ''}
-                      </option>
-                    )
-                  }}
-                </For>
-              </select>
-            </div>
-            <button
-              onClick={() => {
-                void handleDiagnose()
+        <div class="flex gap-4 items-end">
+          <div class="flex-1">
+            <label class="block text-sm font-medium text-gray-700 mb-1">Select Project</label>
+            <select
+              value={selectedProjectId() ?? ''}
+              onChange={(e) => {
+                setSelectedProjectId(e.currentTarget.value || null)
               }}
-              disabled={loading() || !selectedProjectId()}
-              class="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 font-medium"
+              disabled={projectsQuery.isLoading}
+              class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-blue-500 focus:border-blue-500 disabled:opacity-50"
             >
-              {loading() ? 'Diagnosing...' : 'Diagnose'}
-            </button>
+              <option value="">{projectsQuery.isLoading ? 'Loading projects...' : '-- Select a project --'}</option>
+              <For each={sortedProjects()}>
+                {(project) => {
+                  return (
+                    <option value={project.id}>
+                      {project.name}
+                      {project.archived ? ' (archived)' : ''}
+                      {project.modelName ? ` — ${project.modelName}` : ''}
+                    </option>
+                  )
+                }}
+              </For>
+            </select>
           </div>
-        </Show>
+          <button
+            onClick={() => {
+              void handleDiagnose()
+            }}
+            disabled={loading() || !selectedProjectId()}
+            class="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 font-medium"
+          >
+            {loading() ? 'Diagnosing...' : 'Diagnose'}
+          </button>
+        </div>
       </div>
 
       <Show when={error()}>
@@ -317,14 +306,14 @@ const AdminDiagnoseUnassessed = () => {
 
                 {/* Problem Summary */}
                 <div class="space-y-3">
-                  <Show when={r().analysis.missingInPostgres > 0}>
-                    <div class="p-4 bg-orange-50 border border-orange-200 rounded-lg">
-                      <p class="text-orange-700 font-medium">
-                        Missing {r().analysis.missingInPostgres.toLocaleString()} judgments in PostgreSQL
+                  <Show when={r().analysis.remainingToRun > 0}>
+                    <div class="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                      <p class="text-blue-700 font-medium">
+                        {r().analysis.remainingToRun.toLocaleString()} judgments remaining to run
                       </p>
-                      <p class="text-sm text-orange-600 mt-1">
-                        These need to be created by running a judgment job. Approximately{' '}
-                        {r().analysis.articlesPartialOrNone.toLocaleString()} articles have incomplete or no judgments.
+                      <p class="text-sm text-blue-600 mt-1">
+                        {r().analysis.articlesRemaining.toLocaleString()} articles still need judgments. The judgment
+                        job will create these.
                       </p>
                     </div>
                   </Show>
@@ -425,7 +414,7 @@ const AdminDiagnoseUnassessed = () => {
 
                   <Show
                     when={
-                      r().analysis.missingInPostgres === 0
+                      r().analysis.remainingToRun === 0
                       && r().analysis.missingInClickhouse === 0
                       && r().clickhouse.articlesInScope >= r().postgres.articlesInScope
                     }
