@@ -188,6 +188,7 @@ export const judgmentsJobsSendToLLM = async (
 
     // Debug logging for capacity issues
     if (requestsToSend > 0 || promptsInFlight > capacity.maxInflight * 0.9) {
+      const readyCountsObj = Object.fromEntries(readyCounts)
       console.log('[capacity]', {
         requestsToSend,
         promptsInFlight,
@@ -195,11 +196,17 @@ export const judgmentsJobsSendToLLM = async (
         maxBurst: capacity.maxBurst,
         workerCount: capacity.workerCount,
         deficit,
+        jobCount: allJobs.length,
+        readyCounts: readyCountsObj,
       })
     }
 
     if (requestsToSend > 0 && allJobs.length > 0) {
       const requestsToSendByJob = getRequestsToSendByJob(allJobs, requestsToSend, readyCounts)
+      console.log(
+        '[capacity] requestsToSendByJob:',
+        requestsToSendByJob.map(({job, limit}) => ({jobId: job.id.slice(0, 8), limit})),
+      )
 
       const promptsToProcess = await Promise.allSettled(
         requestsToSendByJob.map(({job, limit}) => {
