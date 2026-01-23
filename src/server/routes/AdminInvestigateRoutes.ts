@@ -1,10 +1,19 @@
 /**
  * Admin routes for investigating unexpected answer values
  */
-import {and, eq, inArray, isNotNull, sql} from 'drizzle-orm'
+import {and, eq, inArray, isNotNull, or, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {articles, judgments, projectPrompts, projects, prompts} from '../../db/schema.ts'
+import {
+  articles,
+  importRoute,
+  judgments,
+  projectArticles,
+  projectPrompts,
+  projectRouteLink,
+  projects,
+  prompts,
+} from '../../db/schema.ts'
 import {requireUserAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
@@ -30,7 +39,7 @@ const isOpenEndedType = (typeStr: string | null): boolean => {
   return !hasQuotedLiterals
 }
 
-const deleteUnexpectedJudgments = async (promptId: string, unexpectedValue: string | null) => {
+const deleteUnexpectedJudgments = async (projectId: string, promptId: string, unexpectedValue: string | null) => {
   const db = getDatabase()
 
   const [prompt] = await db
@@ -48,8 +57,62 @@ const deleteUnexpectedJudgments = async (promptId: string, unexpectedValue: stri
     return {deleted: 0}
   }
 
+  const projectScope = await fetchProjectScope(projectId)
+  if (!projectScope) {
+    return {deleted: 0}
+  }
+
   const isArray = isArrayType(prompt.type)
   const now = new Date()
+
+  // Build WHERE conditions based on project scope
+  const baseConditions = [eq(judgments.promptId, promptId), sql`${judgments.deletedAt} IS NULL`]
+  baseConditions.push(eq(judgments.modelId, projectScope.modelId))
+  baseConditions.push(eq(judgments.useTitle, projectScope.useTitle))
+  baseConditions.push(eq(judgments.useAbstract, projectScope.useAbstract))
+  baseConditions.push(eq(judgments.useFulltext, projectScope.useFulltext))
+  baseConditions.push(eq(judgments.useFulltextNoImages, projectScope.useFulltextNoImages))
+
+  const articleScopeConditions = []
+  if (projectScope.importRoutes.length > 0) {
+    articleScopeConditions.push(
+      sql`EXISTS (
+        SELECT 1 FROM ${articles}
+        WHERE ${articles.id} = ${judgments.articleId}
+        AND ${articles.importRoute} IN (${sql.join(
+          projectScope.importRoutes.map((r) => {
+            return sql`${r}`
+          }),
+          sql`, `,
+        )})
+      )`,
+    )
+  }
+  if (projectScope.curatedArticleIds.length > 0) {
+    articleScopeConditions.push(inArray(judgments.articleId, projectScope.curatedArticleIds))
+  }
+  if (articleScopeConditions.length > 0) {
+    baseConditions.push(or(...articleScopeConditions))
+  }
+
+  if (projectScope.dateFrom) {
+    baseConditions.push(
+      sql`EXISTS (
+        SELECT 1 FROM ${articles}
+        WHERE ${articles.id} = ${judgments.articleId}
+        AND ${articles.articleCreatedAt} >= ${projectScope.dateFrom}
+      )`,
+    )
+  }
+  if (projectScope.dateTo) {
+    baseConditions.push(
+      sql`EXISTS (
+        SELECT 1 FROM ${articles}
+        WHERE ${articles.id} = ${judgments.articleId}
+        AND ${articles.articleCreatedAt} <= ${projectScope.dateTo}
+      )`,
+    )
+  }
 
   if (isArray) {
     const arrayAnswersQuery = await db
@@ -65,7 +128,7 @@ const deleteUnexpectedJudgments = async (promptId: string, unexpectedValue: stri
         useFulltextNoImages: judgments.useFulltextNoImages,
       })
       .from(judgments)
-      .where(sql`${judgments.promptId} = ${promptId}::uuid AND ${judgments.deletedAt} IS NULL`)
+      .where(and(...baseConditions))
 
     const toDelete = arrayAnswersQuery.filter((j) => {
       const arrayAnswer = j.answeredOriginalAsArray
@@ -181,7 +244,7 @@ const deleteUnexpectedJudgments = async (promptId: string, unexpectedValue: stri
       useFulltextNoImages: judgments.useFulltextNoImages,
     })
     .from(judgments)
-    .where(sql`${judgments.promptId} = ${promptId}::uuid AND ${judgments.deletedAt} IS NULL`)
+    .where(and(...baseConditions))
 
   const toDelete = stringAnswersQuery.filter((j) => {
     return j.answeredOriginal === unexpectedValue
@@ -294,6 +357,65 @@ const formatDateForClickHouse = (date: Date | null): string | null => {
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}.${millis}`
 }
 
+type ProjectScope = {
+  modelId: string
+  useTitle: boolean
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  dateFrom: Date | null
+  dateTo: Date | null
+  importRoutes: string[]
+  curatedArticleIds: string[]
+}
+
+const fetchProjectScope = async (projectId: string): Promise<ProjectScope | null> => {
+  const db = getDatabase()
+
+  const [project] = await db
+    .select({
+      modelId: projects.modelId,
+      useTitle: projects.useTitle,
+      useAbstract: projects.useAbstract,
+      useFulltext: projects.useFulltext,
+      useFulltextNoImages: projects.useFulltextNoImages,
+      dateFrom: projects.dateFrom,
+      dateTo: projects.dateTo,
+    })
+    .from(projects)
+    .where(eq(projects.id, projectId))
+    .limit(1)
+
+  if (!project) return null
+
+  const projectImportRoutes = await db
+    .select({route: importRoute.route})
+    .from(projectRouteLink)
+    .innerJoin(importRoute, eq(importRoute.id, projectRouteLink.importRouteId))
+    .where(eq(projectRouteLink.projectId, projectId))
+
+  const curatedArticles = await db
+    .select({articleId: projectArticles.articleId})
+    .from(projectArticles)
+    .where(eq(projectArticles.projectId, projectId))
+
+  return {
+    modelId: project.modelId,
+    useTitle: project.useTitle,
+    useAbstract: project.useAbstract,
+    useFulltext: project.useFulltext,
+    useFulltextNoImages: project.useFulltextNoImages,
+    dateFrom: project.dateFrom,
+    dateTo: project.dateTo,
+    importRoutes: projectImportRoutes.map((r) => {
+      return r.route
+    }),
+    curatedArticleIds: curatedArticles.map((a) => {
+      return a.articleId
+    }),
+  }
+}
+
 const syncDeletedJudgmentsToClickhouse = async () => {
   const db = getDatabase()
   const {getClickhouseClient} = await import('../../services/clickhouse/clickhouseClient.ts')
@@ -379,10 +501,10 @@ export const adminInvestigateRoutes = new Elysia()
   .post(
     '/api/admin/delete-unexpected-answers',
     async ({body}) => {
-      const {promptId, unexpectedValue} = body
-      return deleteUnexpectedJudgments(promptId, unexpectedValue)
+      const {projectId, promptId, unexpectedValue} = body
+      return deleteUnexpectedJudgments(projectId, promptId, unexpectedValue)
     },
-    {body: t.Object({promptId: t.String(), unexpectedValue: t.Union([t.String(), t.Null()])})},
+    {body: t.Object({projectId: t.String(), promptId: t.String(), unexpectedValue: t.Union([t.String(), t.Null()])})},
   )
   .get(
     '/api/admin/investigate-unexpected-answers',
@@ -447,6 +569,15 @@ export const adminInvestigateRoutes = new Elysia()
         percentUnexpected: number
       }> = []
 
+      // Fetch project scope if projectId is provided
+      let projectScope: ProjectScope | null = null
+      if (projectId) {
+        projectScope = await fetchProjectScope(projectId)
+        if (!projectScope) {
+          throw new Error('Project not found or has no configuration')
+        }
+      }
+
       for (const prompt of allPrompts) {
         if (isOpenEndedType(prompt.type)) continue
         const expectedOptions = parseArktypeOptions(prompt.type)
@@ -455,6 +586,58 @@ export const adminInvestigateRoutes = new Elysia()
         // Get all distinct answers for this prompt
         const isArray = isArrayType(prompt.type)
 
+        // Build WHERE conditions based on project scope
+        const baseConditions = [eq(judgments.promptId, prompt.id), sql`${judgments.deletedAt} IS NULL`]
+
+        if (projectScope) {
+          baseConditions.push(eq(judgments.modelId, projectScope.modelId))
+          baseConditions.push(eq(judgments.useTitle, projectScope.useTitle))
+          baseConditions.push(eq(judgments.useAbstract, projectScope.useAbstract))
+          baseConditions.push(eq(judgments.useFulltext, projectScope.useFulltext))
+          baseConditions.push(eq(judgments.useFulltextNoImages, projectScope.useFulltextNoImages))
+
+          const articleScopeConditions = []
+          if (projectScope.importRoutes.length > 0) {
+            articleScopeConditions.push(
+              sql`EXISTS (
+                SELECT 1 FROM ${articles}
+                WHERE ${articles.id} = ${judgments.articleId}
+                AND ${articles.importRoute} IN (${sql.join(
+                  projectScope.importRoutes.map((r) => {
+                    return sql`${r}`
+                  }),
+                  sql`, `,
+                )})
+              )`,
+            )
+          }
+          if (projectScope.curatedArticleIds.length > 0) {
+            articleScopeConditions.push(inArray(judgments.articleId, projectScope.curatedArticleIds))
+          }
+          if (articleScopeConditions.length > 0) {
+            baseConditions.push(or(...articleScopeConditions))
+          }
+
+          if (projectScope.dateFrom) {
+            baseConditions.push(
+              sql`EXISTS (
+                SELECT 1 FROM ${articles}
+                WHERE ${articles.id} = ${judgments.articleId}
+                AND ${articles.articleCreatedAt} >= ${projectScope.dateFrom}
+              )`,
+            )
+          }
+          if (projectScope.dateTo) {
+            baseConditions.push(
+              sql`EXISTS (
+                SELECT 1 FROM ${articles}
+                WHERE ${articles.id} = ${judgments.articleId}
+                AND ${articles.articleCreatedAt} <= ${projectScope.dateTo}
+              )`,
+            )
+          }
+        }
+
         let totalJudgments: number
         let unexpectedAnswers: Array<{value: string | null; count: number}>
 
@@ -462,7 +645,7 @@ export const adminInvestigateRoutes = new Elysia()
           const arrayAnswersQuery = await db
             .select({answeredOriginalAsArray: judgments.answeredOriginalAsArray, count: sql<number>`COUNT(*)::int`})
             .from(judgments)
-            .where(sql`${judgments.promptId} = ${prompt.id}::uuid AND ${judgments.deletedAt} IS NULL`)
+            .where(and(...baseConditions))
             .groupBy(judgments.answeredOriginalAsArray)
 
           totalJudgments = arrayAnswersQuery.reduce((sum, a) => {
@@ -490,7 +673,7 @@ export const adminInvestigateRoutes = new Elysia()
           const stringAnswersQuery = await db
             .select({answeredOriginal: judgments.answeredOriginal, count: sql<number>`COUNT(*)::int`})
             .from(judgments)
-            .where(sql`${judgments.promptId} = ${prompt.id}::uuid AND ${judgments.deletedAt} IS NULL`)
+            .where(and(...baseConditions))
             .groupBy(judgments.answeredOriginal)
 
           totalJudgments = stringAnswersQuery.reduce((sum, a) => {

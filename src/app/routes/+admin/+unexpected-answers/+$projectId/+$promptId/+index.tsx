@@ -28,12 +28,16 @@ const fetchUnexpectedAnswersForPrompt = async (projectId: string, promptId: stri
   return response.json() as Promise<InvestigationResponse>
 }
 
-const deleteUnexpectedValue = async (promptId: string, unexpectedValue: string | null): Promise<{deleted: number}> => {
+const deleteUnexpectedValue = async (
+  projectId: string,
+  promptId: string,
+  unexpectedValue: string | null,
+): Promise<{deleted: number}> => {
   const response = await fetch(`${env.VITE_SERVER_API}/api/admin/delete-unexpected-answers`, {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     credentials: 'include',
-    body: JSON.stringify({promptId, unexpectedValue}),
+    body: JSON.stringify({projectId, promptId, unexpectedValue}),
   })
   if (!response.ok) {
     throw new Error('Failed to delete unexpected judgments')
@@ -66,14 +70,14 @@ const AdminUnexpectedAnswersPromptDetail = () => {
           investigation.data?.result?.unexpectedAnswers.find((ua) => {
             return ua.value === unexpectedValue
           })?.count || 0
-        } judgments with this value?`,
+        } judgments with this value (scoped to this project)?`,
       )
     ) {
       return
     }
 
     setDeletingValue(unexpectedValue)
-    const result = await deleteUnexpectedValue(promptId, unexpectedValue)
+    const result = await deleteUnexpectedValue(projectId, promptId, unexpectedValue)
     setDeletingValue(null)
 
     if (result.deleted > 0) {
