@@ -69,6 +69,16 @@ const msToMicros = (ms: number): bigint => {
 }
 
 /**
+ * Ensure a value is a string or null.
+ * Converts non-string values (like numbers from integer-type prompts) to strings
+ * to prevent Parquet encoding errors on UTF8 fields.
+ */
+const ensureStringOrNull = (value: string | number | null | undefined): string | null => {
+  if (value === null || value === undefined) return null
+  return typeof value === 'string' ? value : String(value)
+}
+
+/**
  * Ensure all elements in an array are strings.
  * Converts non-string values to strings to prevent Parquet encoding errors.
  */
@@ -106,13 +116,11 @@ const toParquetRow = (record: DenormalizedJudgmentAnalytics): Record<string, unk
     useFulltext: record.useFulltext,
     useFulltextNoImages: record.useFulltextNoImages,
 
-    answeredOriginal: record.answeredOriginal,
-    // Convert null/undefined to empty array and ensure all elements are strings
-    // to prevent Parquet encoding errors (UTF8 fields require string values)
+    // Ensure string fields are actually strings (LLM may return numbers for integer-type prompts)
+    answeredOriginal: ensureStringOrNull(record.answeredOriginal),
     answeredOriginalAsArray: ensureStringArray(record.answeredOriginalAsArray),
-
-    explanation: record.explanation,
-    quotes: record.quotes,
+    explanation: ensureStringOrNull(record.explanation),
+    quotes: ensureStringOrNull(record.quotes),
   }
 }
 
