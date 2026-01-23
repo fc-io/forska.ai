@@ -7,6 +7,7 @@ import * as schema from '../../db/schema.ts'
 import {env} from '../utils/env.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {fullTextArticleFetchFromArxiv} from './fullTextJobs/fullTextArticleFetchFromArxiv.ts'
+import {fullTextArticleFetchFromOriginalUrls} from './fullTextJobs/fullTextArticleFetchFromOriginalUrls.ts'
 import {fullTextArticleFetchFromUnpaywall} from './fullTextJobs/fullTextArticleFetchFromUnpaywall.ts'
 import {attemptsToLegacyResult, type PdfFetchAttemptResult} from './fullTextJobs/pdfFetchTypes.ts'
 
@@ -160,7 +161,11 @@ const getArticlesWithoutFullText = async (
 const getFullTextForArticle = async (
   articleData: Pick<typeof schema.articles.$inferSelect, 'arxivId' | 'originalData'>,
 ) => {
-  const fetchSources = [fullTextArticleFetchFromUnpaywall, fullTextArticleFetchFromArxiv]
+  const fetchSources = [
+    fullTextArticleFetchFromOriginalUrls,
+    fullTextArticleFetchFromUnpaywall,
+    fullTextArticleFetchFromArxiv,
+  ]
   const attempts: PdfFetchAttemptResult[] = []
 
   for (const fetchSource of fetchSources) {

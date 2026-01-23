@@ -7,6 +7,7 @@ import {user} from '../../../auth-schema.ts'
 import {auth} from '../../auth.ts'
 import {articles} from '../../db/schema.ts'
 import {fullTextArticleFetchFromArxiv} from '../cron/fullTextJobs/fullTextArticleFetchFromArxiv.ts'
+import {fullTextArticleFetchFromOriginalUrls} from '../cron/fullTextJobs/fullTextArticleFetchFromOriginalUrls.ts'
 import {fullTextArticleFetchFromUnpaywall} from '../cron/fullTextJobs/fullTextArticleFetchFromUnpaywall.ts'
 import {attemptsToLegacyResult, type PdfFetchAttemptResult} from '../cron/fullTextJobs/pdfFetchTypes.ts'
 import {requireAdminAuth} from '../utils/authGuard.ts'
@@ -63,7 +64,11 @@ const getOriginalFullTextUrls = (originalData: unknown): OriginalFullTextUrl[] =
  * Returns both the final result and detailed attempt information for each source.
  */
 const fetchPdfForArticle = async (articleData: {arxivId: string | null; originalData: unknown}) => {
-  const fetchSources = [fullTextArticleFetchFromUnpaywall, fullTextArticleFetchFromArxiv]
+  const fetchSources = [
+    fullTextArticleFetchFromOriginalUrls,
+    fullTextArticleFetchFromUnpaywall,
+    fullTextArticleFetchFromArxiv,
+  ]
   const attempts: PdfFetchAttemptResult[] = []
 
   for (const fetchSource of fetchSources) {
