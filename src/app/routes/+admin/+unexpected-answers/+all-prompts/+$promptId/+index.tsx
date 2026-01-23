@@ -1,6 +1,6 @@
-import {useQuery} from '@tanstack/solid-query'
+import {useQuery, useQueryClient} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
-import {For, Show, Suspense} from 'solid-js'
+import {createSignal, For, Show, Suspense} from 'solid-js'
 
 import {env} from '../../../../../utils/client-env.ts'
 
@@ -28,9 +28,25 @@ const fetchUnexpectedAnswersForPrompt = async (promptId: string): Promise<Invest
   return response.json() as Promise<InvestigationResponse>
 }
 
+const deleteUnexpectedValue = async (promptId: string, unexpectedValue: string | null): Promise<{deleted: number}> => {
+  const response = await fetch(`${env.VITE_SERVER_API}/api/admin/delete-unexpected-answers`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    credentials: 'include',
+    body: JSON.stringify({projectId: null, promptId, unexpectedValue}),
+  })
+  if (!response.ok) {
+    throw new Error('Failed to delete unexpected judgments')
+  }
+  return response.json() as Promise<{deleted: number}>
+}
+
 const AdminUnexpectedAnswersAllPromptsDetail = () => {
   const params = Route.useParams()
   const promptId = params().promptId
+  const queryClient = useQueryClient()
+
+  const [deletingValue, setDeletingValue] = createSignal<string | null | undefined>(undefined)
 
   const investigation = useQuery(() => {
     return {
@@ -41,6 +57,28 @@ const AdminUnexpectedAnswersAllPromptsDetail = () => {
       refetchOnWindowFocus: false,
     }
   })
+
+  const handleDelete = async (unexpectedValue: string | null) => {
+    if (
+      !confirm(
+        `Delete all ${
+          investigation.data?.result?.unexpectedAnswers.find((ua) => {
+            return ua.value === unexpectedValue
+          })?.count || 0
+        } judgments with this value (GLOBALLY across all projects)?`,
+      )
+    ) {
+      return
+    }
+
+    setDeletingValue(unexpectedValue)
+    const result = await deleteUnexpectedValue(promptId, unexpectedValue)
+    setDeletingValue(undefined)
+
+    if (result.deleted > 0) {
+      await queryClient.invalidateQueries({queryKey: ['admin-unexpected-answers-all', promptId]})
+    }
+  }
 
   const getPercentColor = (percent: number) => {
     if (percent >= 20) return 'text-red-600 font-semibold'
@@ -86,7 +124,7 @@ const AdminUnexpectedAnswersAllPromptsDetail = () => {
           <div class="bg-purple-50 rounded-lg shadow-sm border border-purple-200 p-4">
             <p class="text-sm text-purple-800">
               <strong>Global View:</strong> This shows unexpected answers across all projects, models, and
-              configurations. To delete specific judgments, navigate to a project-specific view.
+              configurations. Deleting here will remove ALL judgments with that value globally.
             </p>
           </div>
 
@@ -186,8 +224,11 @@ const AdminUnexpectedAnswersAllPromptsDetail = () => {
                                 <div class="space-y-2">
                                   <For each={promptResult.unexpectedAnswers}>
                                     {(unexpected) => {
+                                      const isDeleting = () => {
+                                        return deletingValue() === unexpected.value
+                                      }
                                       return (
-                                        <div class="flex justify-between items-center py-2 px-3 bg-red-50 rounded">
+                                        <div class="flex justify-between items-center py-2 px-3 bg-red-50 rounded gap-3">
                                           <div class="flex-1">
                                             <div class="text-sm font-mono text-red-600">
                                               "{formatValue(unexpected.value)}"
@@ -196,6 +237,15 @@ const AdminUnexpectedAnswersAllPromptsDetail = () => {
                                               {unexpected.count.toLocaleString()} judgments
                                             </div>
                                           </div>
+                                          <button
+                                            onClick={() => {
+                                              return void handleDelete(unexpected.value)
+                                            }}
+                                            disabled={isDeleting()}
+                                            class="px-3 py-1 text-xs font-medium rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                                          >
+                                            {isDeleting() ? 'Deleting...' : 'Delete'}
+                                          </button>
                                         </div>
                                       )
                                     }}
@@ -209,7 +259,8 @@ const AdminUnexpectedAnswersAllPromptsDetail = () => {
                           <div class="bg-blue-50 rounded-lg shadow-sm border border-blue-200 p-6">
                             <h3 class="text-sm font-semibold text-blue-900 mb-3">What To Do</h3>
                             <ul class="text-sm text-blue-800 space-y-2">
-                              <li>• Navigate to a specific project to delete unexpected judgments</li>
+                              <li>• Delete button removes ALL judgments with that value across all projects</li>
+                              <li>• For project-specific deletions, navigate to a specific project view</li>
                               <li>• Review if these values are valid but missing from type definition</li>
                               <li>• Check if judgments are from an old schema version</li>
                               <li>• Update type definition if new valid options identified</li>

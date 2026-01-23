@@ -39,7 +39,11 @@ const isOpenEndedType = (typeStr: string | null): boolean => {
   return !hasQuotedLiterals
 }
 
-const deleteUnexpectedJudgments = async (projectId: string, promptId: string, unexpectedValue: string | null) => {
+const deleteUnexpectedJudgments = async (
+  projectId: string | null,
+  promptId: string,
+  unexpectedValue: string | null,
+) => {
   const db = getDatabase()
 
   const [prompt] = await db
@@ -57,61 +61,67 @@ const deleteUnexpectedJudgments = async (projectId: string, promptId: string, un
     return {deleted: 0}
   }
 
-  const projectScope = await fetchProjectScope(projectId)
-  if (!projectScope) {
-    return {deleted: 0}
+  let projectScope: ProjectScope | null = null
+  if (projectId) {
+    projectScope = await fetchProjectScope(projectId)
+    if (!projectScope) {
+      return {deleted: 0}
+    }
   }
 
   const isArray = isArrayType(prompt.type)
   const now = new Date()
 
-  // Build WHERE conditions based on project scope
+  // Build WHERE conditions - with or without project scope
   const baseConditions = [eq(judgments.promptId, promptId), sql`${judgments.deletedAt} IS NULL`]
-  baseConditions.push(eq(judgments.modelId, projectScope.modelId))
-  baseConditions.push(eq(judgments.useTitle, projectScope.useTitle))
-  baseConditions.push(eq(judgments.useAbstract, projectScope.useAbstract))
-  baseConditions.push(eq(judgments.useFulltext, projectScope.useFulltext))
-  baseConditions.push(eq(judgments.useFulltextNoImages, projectScope.useFulltextNoImages))
 
-  const articleScopeConditions = []
-  if (projectScope.importRoutes.length > 0) {
-    articleScopeConditions.push(
-      sql`EXISTS (
-        SELECT 1 FROM ${articles}
-        WHERE ${articles.id} = ${judgments.articleId}
-        AND ${articles.importRoute} IN (${sql.join(
-          projectScope.importRoutes.map((r) => {
-            return sql`${r}`
-          }),
-          sql`, `,
-        )})
-      )`,
-    )
-  }
-  if (projectScope.curatedArticleIds.length > 0) {
-    articleScopeConditions.push(inArray(judgments.articleId, projectScope.curatedArticleIds))
-  }
-  if (articleScopeConditions.length > 0) {
-    baseConditions.push(or(...articleScopeConditions))
-  }
+  if (projectScope) {
+    baseConditions.push(eq(judgments.modelId, projectScope.modelId))
+    baseConditions.push(eq(judgments.useTitle, projectScope.useTitle))
+    baseConditions.push(eq(judgments.useAbstract, projectScope.useAbstract))
+    baseConditions.push(eq(judgments.useFulltext, projectScope.useFulltext))
+    baseConditions.push(eq(judgments.useFulltextNoImages, projectScope.useFulltextNoImages))
 
-  if (projectScope.dateFrom) {
-    baseConditions.push(
-      sql`EXISTS (
-        SELECT 1 FROM ${articles}
-        WHERE ${articles.id} = ${judgments.articleId}
-        AND ${articles.articleCreatedAt} >= ${projectScope.dateFrom}
-      )`,
-    )
-  }
-  if (projectScope.dateTo) {
-    baseConditions.push(
-      sql`EXISTS (
-        SELECT 1 FROM ${articles}
-        WHERE ${articles.id} = ${judgments.articleId}
-        AND ${articles.articleCreatedAt} <= ${projectScope.dateTo}
-      )`,
-    )
+    const articleScopeConditions = []
+    if (projectScope.importRoutes.length > 0) {
+      articleScopeConditions.push(
+        sql`EXISTS (
+          SELECT 1 FROM ${articles}
+          WHERE ${articles.id} = ${judgments.articleId}
+          AND ${articles.importRoute} IN (${sql.join(
+            projectScope.importRoutes.map((r) => {
+              return sql`${r}`
+            }),
+            sql`, `,
+          )})
+        )`,
+      )
+    }
+    if (projectScope.curatedArticleIds.length > 0) {
+      articleScopeConditions.push(inArray(judgments.articleId, projectScope.curatedArticleIds))
+    }
+    if (articleScopeConditions.length > 0) {
+      baseConditions.push(or(...articleScopeConditions))
+    }
+
+    if (projectScope.dateFrom) {
+      baseConditions.push(
+        sql`EXISTS (
+          SELECT 1 FROM ${articles}
+          WHERE ${articles.id} = ${judgments.articleId}
+          AND ${articles.articleCreatedAt} >= ${projectScope.dateFrom}
+        )`,
+      )
+    }
+    if (projectScope.dateTo) {
+      baseConditions.push(
+        sql`EXISTS (
+          SELECT 1 FROM ${articles}
+          WHERE ${articles.id} = ${judgments.articleId}
+          AND ${articles.articleCreatedAt} <= ${projectScope.dateTo}
+        )`,
+      )
+    }
   }
 
   if (isArray) {
@@ -538,7 +548,13 @@ export const adminInvestigateRoutes = new Elysia()
       const {projectId, promptId, unexpectedValue} = body
       return deleteUnexpectedJudgments(projectId, promptId, unexpectedValue)
     },
-    {body: t.Object({projectId: t.String(), promptId: t.String(), unexpectedValue: t.Union([t.String(), t.Null()])})},
+    {
+      body: t.Object({
+        projectId: t.Union([t.String(), t.Null()]),
+        promptId: t.String(),
+        unexpectedValue: t.Union([t.String(), t.Null()]),
+      }),
+    },
   )
   .get(
     '/api/admin/investigate-unexpected-answers',

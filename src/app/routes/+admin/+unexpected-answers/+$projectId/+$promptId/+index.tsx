@@ -51,7 +51,7 @@ const AdminUnexpectedAnswersPromptDetail = () => {
   const promptId = params().promptId
   const queryClient = useQueryClient()
 
-  const [deletingValue, setDeletingValue] = createSignal<string | null>(null)
+  const [deletingValue, setDeletingValue] = createSignal<string | null | undefined>(undefined)
 
   const investigation = useQuery(() => {
     return {
@@ -78,7 +78,7 @@ const AdminUnexpectedAnswersPromptDetail = () => {
 
     setDeletingValue(unexpectedValue)
     const result = await deleteUnexpectedValue(projectId, promptId, unexpectedValue)
-    setDeletingValue(null)
+    setDeletingValue(undefined)
 
     if (result.deleted > 0) {
       await queryClient.invalidateQueries({queryKey: ['admin-unexpected-answers', projectId, promptId]})
