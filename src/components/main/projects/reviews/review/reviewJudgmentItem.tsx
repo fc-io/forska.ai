@@ -10,7 +10,7 @@ type ReviewJudgmentItemProps = {
   judgment: {
     id: string
     promptId?: string
-    prompt: {originalText: string; id?: string; contentHash?: string | null}
+    prompt: {originalText: string; id?: string; contentHash?: string | null; promptHeading?: string | null}
     answeredOriginal?: string | null
     answeredOriginalAsArray?: string[] | null
     confidenceOriginal?: number | null
@@ -150,6 +150,13 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
       }}
     >
       <div class="mb-2">
+        <Show when={props.judgment.prompt.promptHeading}>
+          <div class="-ml-5 mb-4">
+            <span class="inline-block px-2 py-0.5 text-[10px] font-semibold text-white bg-blue-900 rounded-r">
+              {props.judgment.prompt.promptHeading}
+            </span>
+          </div>
+        </Show>
         <p class="text-sm font-medium text-gray-900 line-clamp-2" title={props.judgment.prompt.originalText}>
           {props.judgment.prompt.originalText}
         </p>

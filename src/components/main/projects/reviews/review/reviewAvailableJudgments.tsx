@@ -97,6 +97,7 @@ export const ReviewAvailableJudgments = (props: ReviewAvailableJudgmentsProps) =
                                 id: j.prompt?.id || j.promptId,
                                 originalText: j.prompt?.originalText || '',
                                 contentHash: j.prompt?.contentHash,
+                                promptHeading: j.prompt?.promptHeading,
                               },
                               answeredOriginal: j.answeredOriginal,
                               confidenceOriginal: j.confidenceOriginal ?? undefined,

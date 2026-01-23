@@ -9,7 +9,7 @@ type HumanAnswer = {userName: string; answer: string}
 type Judgment = {
   id: string
   promptId?: string
-  prompt: {originalText: string; id?: string}
+  prompt: {originalText: string; id?: string; promptHeading?: string | null}
   answeredOriginal?: string | null
   confidenceOriginal?: number | null
   explanation?: string | null
