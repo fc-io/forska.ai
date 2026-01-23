@@ -333,6 +333,41 @@ export const projectsRoutes = new Elysia()
         }
       }
 
+      // Link existing prompts to the project (by prompt ID)
+      if (newProject && body.existingPromptIds && body.existingPromptIds.length > 0) {
+        for (const existing of body.existingPromptIds) {
+          const [existingPrompt] = await db
+            .select({id: prompts.id})
+            .from(prompts)
+            .where(eq(prompts.id, existing.originalId))
+            .limit(1)
+
+          if (!existingPrompt) {
+            throw new Error(`Existing prompt not found: ${existing.originalId}`)
+          }
+
+          await db
+            .insert(projectPrompts)
+            .values({
+              projectId: newProject.id,
+              promptId: existing.originalId,
+              order: existing.order,
+              archived: false,
+              enabled: true,
+              originProjectId: null,
+            })
+            .onConflictDoUpdate({
+              target: [projectPrompts.projectId, projectPrompts.promptId],
+              set: {
+                order: sql`EXCLUDED."order"`,
+                archived: sql`EXCLUDED.archived`,
+                enabled: sql`EXCLUDED.enabled`,
+                updatedAt: sql`CURRENT_TIMESTAMP`,
+              },
+            })
+        }
+      }
+
       // Link selected import routes to the project
       if (newProject && body.importRoutes && body.importRoutes.length > 0) {
         const selectedRoutes = Array.from(
@@ -391,6 +426,7 @@ export const projectsRoutes = new Elysia()
             ),
           ]),
         ),
+        existingPromptIds: t.Optional(t.Array(t.Object({originalId: t.String(), order: t.Number()}))),
       }),
     },
   )

@@ -1,6 +1,6 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
-import {createEffect, createSignal, For, Show, Suspense} from 'solid-js'
+import {createEffect, createMemo, createSignal, For, Show, Suspense} from 'solid-js'
 import {createStore} from 'solid-js/store'
 
 import {Button} from '../../../components/ui/button'
@@ -9,6 +9,25 @@ import {fetchSession} from '../../../services/fetchSession'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse'
 
 type PromptItem = {id: string; content: string; promptHeading: string; type: string}
+
+type ExistingPrompt = {
+  id: string
+  originalText: string
+  promptHeading: string | null
+  type: string | null
+  createdAt: string | null
+  enabled: boolean
+}
+
+type ExistingPromptsResponse = {
+  data: Array<{
+    id: string
+    originalText: string
+    promptHeading: string | null
+    type: string | null
+    createdAt: Date | string | null
+  }>
+}
 
 type ParsedDateResult = {date: Date | null; normalized: string | null; error: string | null}
 
@@ -65,6 +84,17 @@ const CreateProject = () => {
       staleTime: 1000 * 60 * 5,
     }
   })
+  const existingPromptsQuery = useQuery(() => {
+    return {
+      queryKey: ['prompts'],
+      queryFn: async () => {
+        const response = await apiClient.api.prompts.get()
+        const result = handleApiResponse<ExistingPromptsResponse>(response, 'Failed to load existing prompts')
+        return result.data ?? []
+      },
+      staleTime: 1000 * 60 * 5,
+    }
+  })
   const createDefaultModel = async () => {
     await apiClient.api.judgments.model.get()
     await modelsQuery.refetch()
@@ -78,6 +108,7 @@ const CreateProject = () => {
   const [prompts, setPrompts] = createStore<PromptItem[]>([
     {id: crypto.randomUUID(), content: '', promptHeading: '', type: ''},
   ])
+  const [existingPrompts, setExistingPrompts] = createStore<ExistingPrompt[]>([])
   const [selectedImportRoutes, setSelectedImportRoutes] = createSignal<string[]>([])
   const [useTitle, setUseTitle] = createSignal(true)
   const [useAbstract, setUseAbstract] = createSignal(true)
@@ -104,6 +135,42 @@ const CreateProject = () => {
       setSelectedModelId(firstModel.id)
     }
   })
+
+  createEffect(() => {
+    const data = existingPromptsQuery.data
+    if (data && existingPrompts.length === 0) {
+      setExistingPrompts(
+        data.map((p) => {
+          return {
+            id: p.id,
+            originalText: p.originalText,
+            promptHeading: p.promptHeading,
+            type: p.type,
+            createdAt: p.createdAt ? String(p.createdAt) : null,
+            enabled: false,
+          }
+        }),
+      )
+    }
+  })
+
+  const sortedExistingPrompts = createMemo(() => {
+    return existingPrompts.slice().sort((a, b) => {
+      const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0
+      const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0
+      return dateB - dateA
+    })
+  })
+
+  const toggleExistingPromptEnabled = (promptId: string) => {
+    const idx = existingPrompts.findIndex((p) => {
+      return p.id === promptId
+    })
+    const item = existingPrompts[idx]
+    if (idx >= 0 && item) {
+      setExistingPrompts(idx, 'enabled', !item.enabled)
+    }
+  }
 
   const addPromptInput = () => {
     setPrompts([...prompts, {id: crypto.randomUUID(), content: '', promptHeading: '', type: ''}])
@@ -144,11 +211,12 @@ const CreateProject = () => {
     description: string,
     modelId: string,
     promptItems: PromptItem[],
+    selectedExistingPrompts: ExistingPrompt[],
     importRoutes: string[],
     startDate?: string,
     endDate?: string,
   ) => {
-    // Filter valid prompts
+    // Filter valid new prompts
     const validPrompts = promptItems
       .filter((prompt) => {
         return prompt.content.trim()
@@ -162,6 +230,15 @@ const CreateProject = () => {
         }
       })
 
+    // Filter enabled existing prompts
+    const enabledExistingPrompts = selectedExistingPrompts
+      .filter((p) => {
+        return p.enabled
+      })
+      .map((p, index) => {
+        return {originalId: p.id, order: validPrompts.length + index}
+      })
+
     if (!sessionQuery.data?.user.id) {
       throw new Error('User must be authenticated to create a project')
     }
@@ -172,6 +249,7 @@ const CreateProject = () => {
       ownerId: sessionQuery.data.user.id,
       modelId,
       prompts: validPrompts,
+      existingPromptIds: enabledExistingPrompts,
       dateFrom: startDate,
       dateTo: endDate,
       importRoutes: importRoutes.length > 0 ? Array.from(new Set(importRoutes)) : undefined,
@@ -224,6 +302,7 @@ const CreateProject = () => {
         description(),
         selectedModelId(),
         prompts,
+        existingPrompts,
         selectedImportRoutes(),
         startDateResult.normalized ?? undefined,
         endDateResult.normalized ?? undefined,
@@ -543,6 +622,95 @@ const CreateProject = () => {
                 </For>
               </div>
             </div>
+
+            <Show when={sortedExistingPrompts().length > 0}>
+              <div>
+                <div class="flex items-center justify-between mb-2">
+                  <label class="block text-sm font-medium">Existing Prompts</label>
+                  <span class="text-xs text-muted-foreground">
+                    {
+                      sortedExistingPrompts().filter((p) => {
+                        return p.enabled
+                      }).length
+                    }{' '}
+                    of {sortedExistingPrompts().length} selected
+                  </span>
+                </div>
+                <div class="space-y-3">
+                  <For each={sortedExistingPrompts()}>
+                    {(promptItem) => {
+                      return (
+                        <div
+                          class="border rounded-lg p-4 bg-background"
+                          classList={{'opacity-40': !promptItem.enabled}}
+                        >
+                          <div class="flex justify-between items-start mb-3">
+                            <div class="flex items-center gap-2 flex-wrap">
+                              <Show when={promptItem.promptHeading}>
+                                <span class="font-medium">{promptItem.promptHeading}</span>
+                              </Show>
+                              <Show when={promptItem.type}>
+                                <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                                  {promptItem.type}
+                                </span>
+                              </Show>
+                              <Show when={promptItem.createdAt}>
+                                <span class="inline-flex items-center px-2 py-1 rounded-full text-[11px] font-medium bg-gray-50 text-gray-600">
+                                  Created: {new Date(promptItem.createdAt as string).toLocaleDateString()}
+                                </span>
+                              </Show>
+                              <Show when={promptItem.enabled}>
+                                <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                  Selected
+                                </span>
+                              </Show>
+                            </div>
+                            <label class="flex items-center gap-2">
+                              <input
+                                type="checkbox"
+                                class="mt-0.5"
+                                checked={promptItem.enabled}
+                                onChange={() => {
+                                  return toggleExistingPromptEnabled(promptItem.id)
+                                }}
+                              />
+                              <span class="text-sm">Include</span>
+                            </label>
+                          </div>
+
+                          <div class="space-y-3">
+                            <Show when={promptItem.promptHeading}>
+                              <div>
+                                <label class="text-sm font-medium text-muted-foreground block mb-1">Heading</label>
+                                <div class="bg-gray-50 rounded p-3 text-sm whitespace-pre-wrap">
+                                  {promptItem.promptHeading}
+                                </div>
+                              </div>
+                            </Show>
+                            <Show when={promptItem.type}>
+                              <div>
+                                <label class="text-sm font-medium text-muted-foreground block mb-1">Type</label>
+                                <div class="bg-gray-50 rounded p-3 text-sm whitespace-pre-wrap">{promptItem.type}</div>
+                              </div>
+                            </Show>
+                            <div>
+                              <label class="text-sm font-medium text-muted-foreground block mb-1">Prompt Text</label>
+                              <div class="bg-gray-50 rounded p-3 text-sm font-mono whitespace-pre-wrap">
+                                {promptItem.originalText}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    }}
+                  </For>
+                </div>
+              </div>
+            </Show>
+
+            <Show when={existingPromptsQuery.isLoading}>
+              <div class="text-sm text-muted-foreground">Loading existing prompts...</div>
+            </Show>
 
             <div class="flex gap-3 pt-4">
               <Button type="submit" disabled={!projectName().trim() || isLoading()}>
