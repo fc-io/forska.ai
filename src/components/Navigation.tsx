@@ -110,10 +110,10 @@ const formatLastUpdate = (date: Date | null): string => {
     date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate()
   const time = date.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false})
   if (isToday) {
-    return time
+    return `Updated ${time}`
   }
   const dateStr = date.toLocaleDateString([], {month: 'short', day: 'numeric'})
-  return `${dateStr} ${time}`
+  return `Updated ${dateStr} ${time}`
 }
 
 export const Navigation = (props: NavigationProps) => {
