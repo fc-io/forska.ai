@@ -1,4 +1,4 @@
-import {and, eq, inArray, sql} from 'drizzle-orm'
+import {and, eq, inArray, isNull, sql} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../../db/schema.ts'
@@ -126,8 +126,27 @@ export const getAndUpdateReadyPrompts = async (
   jobId: string,
   limit: number,
 ): Promise<PromptToProcess[]> => {
-  // Prioritize articles that already have fullText converted
-  // This avoids on-the-fly conversion when possible
+  // Get job config to know content settings for judgment matching
+  const [jobConfig] = await db
+    .select({
+      modelId: schema.projects.modelId,
+      useTitle: schema.projects.useTitle,
+      useAbstract: schema.projects.useAbstract,
+      useFulltext: schema.projects.useFulltext,
+      useFulltextNoImages: schema.projects.useFulltextNoImages,
+    })
+    .from(schema.judgmentsJobs)
+    .innerJoin(schema.projects, eq(schema.projects.id, schema.judgmentsJobs.projectId))
+    .where(eq(schema.judgmentsJobs.id, jobId))
+    .limit(1)
+
+  if (!jobConfig?.modelId) {
+    console.error('[getAndUpdateReadyPrompts] Job config not found for jobId:', jobId)
+    return []
+  }
+
+  // Fetch ready prompts, excluding those that already have judgments
+  // This prevents wasting capacity on stale queue entries from ClickHouse replication lag
   const readyRows = await db
     .select({
       id: schema.judgmentsJobsPrompts.id,
@@ -137,7 +156,26 @@ export const getAndUpdateReadyPrompts = async (
     })
     .from(schema.judgmentsJobsPrompts)
     .innerJoin(schema.articles, eq(schema.articles.id, schema.judgmentsJobsPrompts.articleId))
-    .where(and(eq(schema.judgmentsJobsPrompts.jobId, jobId), eq(schema.judgmentsJobsPrompts.status, 'ready')))
+    .leftJoin(
+      schema.judgments,
+      and(
+        eq(schema.judgments.articleId, schema.judgmentsJobsPrompts.articleId),
+        eq(schema.judgments.promptId, schema.judgmentsJobsPrompts.promptId),
+        eq(schema.judgments.modelId, jobConfig.modelId),
+        eq(schema.judgments.useTitle, jobConfig.useTitle),
+        eq(schema.judgments.useAbstract, jobConfig.useAbstract),
+        eq(schema.judgments.useFulltext, jobConfig.useFulltext),
+        eq(schema.judgments.useFulltextNoImages, jobConfig.useFulltextNoImages),
+        isNull(schema.judgments.deletedAt),
+      ),
+    )
+    .where(
+      and(
+        eq(schema.judgmentsJobsPrompts.jobId, jobId),
+        eq(schema.judgmentsJobsPrompts.status, 'ready'),
+        isNull(schema.judgments.id), // No existing judgment
+      ),
+    )
     // Order by: articles with fullText first (DESC puts non-null first), then by createdAt
     .orderBy(
       sql`CASE WHEN ${schema.articles.fullText} IS NOT NULL THEN 0 ELSE 1 END`,
