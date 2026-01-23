@@ -183,5 +183,38 @@ export const getAndUpdateReadyPrompts = async (
     )
     .limit(limit)
 
+  // If we found fewer than requested, clean up stale entries that already have judgments
+  // This happens due to ClickHouse replication lag - prompts get queued but are already judged
+  if (readyRows.length < limit) {
+    const staleCleanupLimit = Math.min(500, limit * 2) // Clean up more aggressively
+    const staleRows = await db
+      .select({id: schema.judgmentsJobsPrompts.id})
+      .from(schema.judgmentsJobsPrompts)
+      .innerJoin(
+        schema.judgments,
+        and(
+          eq(schema.judgments.articleId, schema.judgmentsJobsPrompts.articleId),
+          eq(schema.judgments.promptId, schema.judgmentsJobsPrompts.promptId),
+          eq(schema.judgments.modelId, jobConfig.modelId),
+          eq(schema.judgments.useTitle, jobConfig.useTitle),
+          eq(schema.judgments.useAbstract, jobConfig.useAbstract),
+          eq(schema.judgments.useFulltext, jobConfig.useFulltext),
+          eq(schema.judgments.useFulltextNoImages, jobConfig.useFulltextNoImages),
+          isNull(schema.judgments.deletedAt),
+        ),
+      )
+      .where(and(eq(schema.judgmentsJobsPrompts.jobId, jobId), eq(schema.judgmentsJobsPrompts.status, 'ready')))
+      .limit(staleCleanupLimit)
+
+    if (staleRows.length > 0) {
+      const staleIds = staleRows.map((r) => r.id)
+      await db
+        .update(schema.judgmentsJobsPrompts)
+        .set({status: 'judged', judgedAt: new Date(), updatedAt: new Date()})
+        .where(inArray(schema.judgmentsJobsPrompts.id, staleIds))
+      console.log(`[cleanup] Marked ${staleRows.length} stale queue entries as judged`)
+    }
+  }
+
   return readyRows.length === 0 ? [] : processReadyRows(db, serverJobId, readyRows)
 }
