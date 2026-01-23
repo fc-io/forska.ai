@@ -25,24 +25,26 @@ This approach trades **write amplification** (per-row insert) for **simplicity**
 **Table:** `forska.judgments`  
 **Engine:** `ReplacingMergeTree(createdAt)` with `ORDER BY (id)`
 
+This inserts directly into the main `forska.judgments` table, **bypassing** the S3Queue (`judgments_queue`) and materialized view (`judgments_mv`) pipeline that was used for Parquet ingestion.
+
 ### Deduplication & Idempotency
 
 - ReplacingMergeTree deduplicates by `id` during background merges, keeping the row with the highest `createdAt`
-- Retries are safe: inserting the same judgment twice results in one row after merge
+- Retries of the **same record** (identical `id` + `createdAt`) are safe: results in one row after merge
 - For immediate dedup in queries, can use `FINAL` keyword: `SELECT ... FROM judgments FINAL WHERE deletedAt IS NULL`
 
 ### Tombstones (Soft Deletes)
 
 **Current behavior has a bug:** Tombstones reuse the original `createdAt`, so ReplacingMergeTree may keep either row (version tie). This means `WHERE deletedAt IS NULL` is unreliable after merges.
 
-**Current queries do NOT use FINAL** - they accept this limitation and may show stale/deleted data until periodic resync or manual `OPTIMIZE TABLE ... FINAL`.
+**Current queries do NOT use FINAL** - they accept this limitation and may show stale/deleted data until manual resync or `OPTIMIZE TABLE ... FINAL`. (No automated periodic resync job exists.)
 
 **Options to fix (out of scope for this change):**
 
 1. Use `updatedAt` as the version column instead of `createdAt` (requires DDL change)
 2. Set tombstone `createdAt` to `now()` so it always wins (but breaks time-series semantics)
 3. Add `FINAL` to all queries (performance cost)
-4. Accept eventual consistency and periodically re-sync from PostgreSQL
+4. Accept eventual consistency and manually resync from PostgreSQL when needed
 
 ### Field Conversions Required
 
@@ -84,8 +86,8 @@ This approach trades **write amplification** (per-row insert) for **simplicity**
 ```ts
 // src/services/clickhouse/judgmentsClickHouseSync.ts
 
-import {getClickhouseClient} from './clickhouseClient'
-import type {DenormalizedJudgmentAnalytics} from '../parquet/types'
+import {getClickhouseClient} from './clickhouseClient.ts'
+import type {DenormalizedJudgmentAnalytics} from '../parquet/types.ts'
 
 const formatDateForClickHouse = (date: Date | null): string | null => {
   if (!date) return null
@@ -135,8 +137,8 @@ export const writeJudgmentToClickHouse = async (record: DenormalizedJudgmentAnal
 
 - The PostgreSQL insert completes before ClickHouse write starts
 - ClickHouse write adds latency to the request path (~10ms typical)
-- **If ClickHouse hangs, requests stall up to 120s** (the singleton client's `request_timeout`)
-- After timeout, the error is caught/logged and the request completes (ClickHouse data lost)
+- **If ClickHouse hangs, judgment processing stalls up to 120s** (the singleton client's `request_timeout`)
+- After timeout, the error is caught/logged and processing continues (ClickHouse data lost)
 - No background queue means no risk of unbounded memory growth from pending writes
 
 **Why not true fire-and-forget (no await)?**
@@ -144,7 +146,7 @@ export const writeJudgmentToClickHouse = async (record: DenormalizedJudgmentAnal
 - Unawaited promises with the 120s default timeout could pile up if ClickHouse is slow
 - Backpressure is implicit: if ClickHouse is slow, judgment processing slows (acceptable for this use case)
 
-**Future optimization if needed:** Create a separate ClickHouse client with a shorter `request_timeout` (~5s) for sync writes, or use a bounded async queue.
+**If 120s stall is unacceptable:** Create a separate ClickHouse client instance with a shorter `request_timeout` (~5s) for sync writes. This would require a new function in `clickhouseClient.ts` since timeout is set at client creation, not per-call.
 
 ---
 
