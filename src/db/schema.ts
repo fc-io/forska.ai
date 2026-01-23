@@ -636,6 +636,8 @@ export const judgments = pgTable(
       ),
       // Note: judgments_prompt_article_answered_idx is also managed via raw SQL migration
       index('judgments_updated_idx').on(table.updatedAt),
+      // For sync status checks (ORDER BY created_at DESC LIMIT 1)
+      index('judgments_created_idx').on(table.createdAt),
       // Denormalized project lookups (for Parquet/ClickHouse compatibility)
       index('judgments_project_idx').on(table.projectId),
       // Soft delete queries (for Parquet/ClickHouse compatibility)
