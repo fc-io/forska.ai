@@ -74,6 +74,21 @@ const AdminUnexpectedAnswersProjectList = () => {
                     </div>
                   </div>
 
+                  {/* All Prompts Option */}
+                  <div class="bg-gradient-to-br from-purple-50 to-blue-50 rounded-lg shadow-sm border-2 border-purple-200 p-6 mb-4">
+                    <h3 class="text-lg font-semibold text-gray-900 mb-2">All Prompts (Global View)</h3>
+                    <p class="text-sm text-gray-600 mb-4">
+                      View unexpected answers across all projects, models, and configurations. Not filtered by project
+                      scope.
+                    </p>
+                    <Link
+                      to="/admin/unexpected-answers/all-prompts"
+                      class="inline-flex items-center px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 font-medium text-sm"
+                    >
+                      View All Prompts →
+                    </Link>
+                  </div>
+
                   {/* Projects List */}
                   <Show
                     when={filteredProjects().length > 0}

@@ -48,6 +48,7 @@ import { Route as ProjectsIdReviewsUnassessedIndexRouteImport } from './routes/+
 import { Route as ProjectsIdReviewsLlmIndexRouteImport } from './routes/+projects/+$id/+reviews-llm/+index'
 import { Route as ProjectsIdReviewsHumanIndexRouteImport } from './routes/+projects/+$id/+reviews-human/+index'
 import { Route as ProjectsIdReviewsBothIndexRouteImport } from './routes/+projects/+$id/+reviews-both/+index'
+import { Route as AdminUnexpectedAnswersAllPromptsIndexRouteImport } from './routes/+admin/+unexpected-answers/+all-prompts/+index'
 import { Route as AdminUnexpectedAnswersProjectIdIndexRouteImport } from './routes/+admin/+unexpected-answers/+$projectId/+index'
 import { Route as AdminJobsIdIndexRouteImport } from './routes/+admin/+jobs/+$id/+index'
 import { Route as AdminFailed_requestsIdIndexRouteImport } from './routes/+admin/+failed_requests/+$id/+index'
@@ -55,6 +56,7 @@ import { Route as AdminDatasourcesArchivedIndexRouteImport } from './routes/+adm
 import { Route as ProjectsIdReviewsLlmArticleIdFulltextRouteImport } from './routes/+projects/+$id/+reviews-llm/+$articleId/+fulltext'
 import { Route as ProjectsIdReviewsArticleIdIndexRouteImport } from './routes/+projects/+$id/+reviews/+$articleId/+index'
 import { Route as ProjectsIdReviewsLlmArticleIdIndexRouteImport } from './routes/+projects/+$id/+reviews-llm/+$articleId/+index'
+import { Route as AdminUnexpectedAnswersAllPromptsPromptIdIndexRouteImport } from './routes/+admin/+unexpected-answers/+all-prompts/+$promptId/+index'
 import { Route as AdminUnexpectedAnswersProjectIdPromptIdIndexRouteImport } from './routes/+admin/+unexpected-answers/+$projectId/+$promptId/+index'
 
 const IndexRoute = IndexRouteImport.update({
@@ -264,6 +266,12 @@ const ProjectsIdReviewsBothIndexRoute =
     path: '/projects/$id/reviews-both/',
     getParentRoute: () => rootRouteImport,
   } as any)
+const AdminUnexpectedAnswersAllPromptsIndexRoute =
+  AdminUnexpectedAnswersAllPromptsIndexRouteImport.update({
+    id: '/admin/unexpected-answers/all-prompts/',
+    path: '/admin/unexpected-answers/all-prompts/',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const AdminUnexpectedAnswersProjectIdIndexRoute =
   AdminUnexpectedAnswersProjectIdIndexRouteImport.update({
     id: '/admin/unexpected-answers/$projectId/',
@@ -303,6 +311,12 @@ const ProjectsIdReviewsLlmArticleIdIndexRoute =
   ProjectsIdReviewsLlmArticleIdIndexRouteImport.update({
     id: '/projects/$id/reviews-llm/$articleId/',
     path: '/projects/$id/reviews-llm/$articleId/',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const AdminUnexpectedAnswersAllPromptsPromptIdIndexRoute =
+  AdminUnexpectedAnswersAllPromptsPromptIdIndexRouteImport.update({
+    id: '/admin/unexpected-answers/all-prompts/$promptId/',
+    path: '/admin/unexpected-answers/all-prompts/$promptId/',
     getParentRoute: () => rootRouteImport,
   } as any)
 const AdminUnexpectedAnswersProjectIdPromptIdIndexRoute =
@@ -349,6 +363,7 @@ export interface FileRoutesByFullPath {
   '/admin/failed_requests/$id': typeof AdminFailed_requestsIdIndexRoute
   '/admin/jobs/$id': typeof AdminJobsIdIndexRoute
   '/admin/unexpected-answers/$projectId': typeof AdminUnexpectedAnswersProjectIdIndexRoute
+  '/admin/unexpected-answers/all-prompts': typeof AdminUnexpectedAnswersAllPromptsIndexRoute
   '/projects/$id/reviews-both': typeof ProjectsIdReviewsBothIndexRoute
   '/projects/$id/reviews-human': typeof ProjectsIdReviewsHumanIndexRoute
   '/projects/$id/reviews-llm': typeof ProjectsIdReviewsLlmIndexRoute
@@ -357,6 +372,7 @@ export interface FileRoutesByFullPath {
   '/admin/datasources/$id/edit': typeof AdminDatasourcesIdEditRoute
   '/admin/jobs/$id/unassessed_articles': typeof AdminJobsIdUnassessed_articlesRoute
   '/admin/unexpected-answers/$projectId/$promptId': typeof AdminUnexpectedAnswersProjectIdPromptIdIndexRoute
+  '/admin/unexpected-answers/all-prompts/$promptId': typeof AdminUnexpectedAnswersAllPromptsPromptIdIndexRoute
   '/projects/$id/reviews-llm/$articleId': typeof ProjectsIdReviewsLlmArticleIdIndexRoute
   '/projects/$id/reviews/$articleId': typeof ProjectsIdReviewsArticleIdIndexRoute
   '/projects/$id/reviews-llm/$articleId/fulltext': typeof ProjectsIdReviewsLlmArticleIdFulltextRoute
@@ -398,6 +414,7 @@ export interface FileRoutesByTo {
   '/admin/failed_requests/$id': typeof AdminFailed_requestsIdIndexRoute
   '/admin/jobs/$id': typeof AdminJobsIdIndexRoute
   '/admin/unexpected-answers/$projectId': typeof AdminUnexpectedAnswersProjectIdIndexRoute
+  '/admin/unexpected-answers/all-prompts': typeof AdminUnexpectedAnswersAllPromptsIndexRoute
   '/projects/$id/reviews-both': typeof ProjectsIdReviewsBothIndexRoute
   '/projects/$id/reviews-human': typeof ProjectsIdReviewsHumanIndexRoute
   '/projects/$id/reviews-llm': typeof ProjectsIdReviewsLlmIndexRoute
@@ -406,6 +423,7 @@ export interface FileRoutesByTo {
   '/admin/datasources/$id/edit': typeof AdminDatasourcesIdEditRoute
   '/admin/jobs/$id/unassessed_articles': typeof AdminJobsIdUnassessed_articlesRoute
   '/admin/unexpected-answers/$projectId/$promptId': typeof AdminUnexpectedAnswersProjectIdPromptIdIndexRoute
+  '/admin/unexpected-answers/all-prompts/$promptId': typeof AdminUnexpectedAnswersAllPromptsPromptIdIndexRoute
   '/projects/$id/reviews-llm/$articleId': typeof ProjectsIdReviewsLlmArticleIdIndexRoute
   '/projects/$id/reviews/$articleId': typeof ProjectsIdReviewsArticleIdIndexRoute
   '/projects/$id/reviews-llm/$articleId/fulltext': typeof ProjectsIdReviewsLlmArticleIdFulltextRoute
@@ -448,6 +466,7 @@ export interface FileRoutesById {
   '/admin/failed_requests/$id/': typeof AdminFailed_requestsIdIndexRoute
   '/admin/jobs/$id/': typeof AdminJobsIdIndexRoute
   '/admin/unexpected-answers/$projectId/': typeof AdminUnexpectedAnswersProjectIdIndexRoute
+  '/admin/unexpected-answers/all-prompts/': typeof AdminUnexpectedAnswersAllPromptsIndexRoute
   '/projects/$id/reviews-both/': typeof ProjectsIdReviewsBothIndexRoute
   '/projects/$id/reviews-human/': typeof ProjectsIdReviewsHumanIndexRoute
   '/projects/$id/reviews-llm/': typeof ProjectsIdReviewsLlmIndexRoute
@@ -456,6 +475,7 @@ export interface FileRoutesById {
   '/admin/datasources/$id/edit': typeof AdminDatasourcesIdEditRoute
   '/admin/jobs/$id/unassessed_articles': typeof AdminJobsIdUnassessed_articlesRoute
   '/admin/unexpected-answers/$projectId/$promptId/': typeof AdminUnexpectedAnswersProjectIdPromptIdIndexRoute
+  '/admin/unexpected-answers/all-prompts/$promptId/': typeof AdminUnexpectedAnswersAllPromptsPromptIdIndexRoute
   '/projects/$id/reviews-llm/$articleId/': typeof ProjectsIdReviewsLlmArticleIdIndexRoute
   '/projects/$id/reviews/$articleId/': typeof ProjectsIdReviewsArticleIdIndexRoute
   '/projects/$id/reviews-llm/$articleId/fulltext': typeof ProjectsIdReviewsLlmArticleIdFulltextRoute
@@ -499,6 +519,7 @@ export interface FileRouteTypes {
     | '/admin/failed_requests/$id'
     | '/admin/jobs/$id'
     | '/admin/unexpected-answers/$projectId'
+    | '/admin/unexpected-answers/all-prompts'
     | '/projects/$id/reviews-both'
     | '/projects/$id/reviews-human'
     | '/projects/$id/reviews-llm'
@@ -507,6 +528,7 @@ export interface FileRouteTypes {
     | '/admin/datasources/$id/edit'
     | '/admin/jobs/$id/unassessed_articles'
     | '/admin/unexpected-answers/$projectId/$promptId'
+    | '/admin/unexpected-answers/all-prompts/$promptId'
     | '/projects/$id/reviews-llm/$articleId'
     | '/projects/$id/reviews/$articleId'
     | '/projects/$id/reviews-llm/$articleId/fulltext'
@@ -548,6 +570,7 @@ export interface FileRouteTypes {
     | '/admin/failed_requests/$id'
     | '/admin/jobs/$id'
     | '/admin/unexpected-answers/$projectId'
+    | '/admin/unexpected-answers/all-prompts'
     | '/projects/$id/reviews-both'
     | '/projects/$id/reviews-human'
     | '/projects/$id/reviews-llm'
@@ -556,6 +579,7 @@ export interface FileRouteTypes {
     | '/admin/datasources/$id/edit'
     | '/admin/jobs/$id/unassessed_articles'
     | '/admin/unexpected-answers/$projectId/$promptId'
+    | '/admin/unexpected-answers/all-prompts/$promptId'
     | '/projects/$id/reviews-llm/$articleId'
     | '/projects/$id/reviews/$articleId'
     | '/projects/$id/reviews-llm/$articleId/fulltext'
@@ -597,6 +621,7 @@ export interface FileRouteTypes {
     | '/admin/failed_requests/$id/'
     | '/admin/jobs/$id/'
     | '/admin/unexpected-answers/$projectId/'
+    | '/admin/unexpected-answers/all-prompts/'
     | '/projects/$id/reviews-both/'
     | '/projects/$id/reviews-human/'
     | '/projects/$id/reviews-llm/'
@@ -605,6 +630,7 @@ export interface FileRouteTypes {
     | '/admin/datasources/$id/edit'
     | '/admin/jobs/$id/unassessed_articles'
     | '/admin/unexpected-answers/$projectId/$promptId/'
+    | '/admin/unexpected-answers/all-prompts/$promptId/'
     | '/projects/$id/reviews-llm/$articleId/'
     | '/projects/$id/reviews/$articleId/'
     | '/projects/$id/reviews-llm/$articleId/fulltext'
@@ -647,6 +673,7 @@ export interface RootRouteChildren {
   AdminFailed_requestsIdIndexRoute: typeof AdminFailed_requestsIdIndexRoute
   AdminJobsIdIndexRoute: typeof AdminJobsIdIndexRoute
   AdminUnexpectedAnswersProjectIdIndexRoute: typeof AdminUnexpectedAnswersProjectIdIndexRoute
+  AdminUnexpectedAnswersAllPromptsIndexRoute: typeof AdminUnexpectedAnswersAllPromptsIndexRoute
   ProjectsIdReviewsBothIndexRoute: typeof ProjectsIdReviewsBothIndexRoute
   ProjectsIdReviewsHumanIndexRoute: typeof ProjectsIdReviewsHumanIndexRoute
   ProjectsIdReviewsLlmIndexRoute: typeof ProjectsIdReviewsLlmIndexRoute
@@ -655,6 +682,7 @@ export interface RootRouteChildren {
   AdminDatasourcesIdEditRoute: typeof AdminDatasourcesIdEditRoute
   AdminJobsIdUnassessed_articlesRoute: typeof AdminJobsIdUnassessed_articlesRoute
   AdminUnexpectedAnswersProjectIdPromptIdIndexRoute: typeof AdminUnexpectedAnswersProjectIdPromptIdIndexRoute
+  AdminUnexpectedAnswersAllPromptsPromptIdIndexRoute: typeof AdminUnexpectedAnswersAllPromptsPromptIdIndexRoute
   ProjectsIdReviewsLlmArticleIdIndexRoute: typeof ProjectsIdReviewsLlmArticleIdIndexRoute
   ProjectsIdReviewsArticleIdIndexRoute: typeof ProjectsIdReviewsArticleIdIndexRoute
   ProjectsIdReviewsLlmArticleIdFulltextRoute: typeof ProjectsIdReviewsLlmArticleIdFulltextRoute
@@ -935,6 +963,13 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof ProjectsIdReviewsBothIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/unexpected-answers/all-prompts/': {
+      id: '/admin/unexpected-answers/all-prompts/'
+      path: '/admin/unexpected-answers/all-prompts'
+      fullPath: '/admin/unexpected-answers/all-prompts'
+      preLoaderRoute: typeof AdminUnexpectedAnswersAllPromptsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/admin/unexpected-answers/$projectId/': {
       id: '/admin/unexpected-answers/$projectId/'
       path: '/admin/unexpected-answers/$projectId'
@@ -982,6 +1017,13 @@ declare module '@tanstack/solid-router' {
       path: '/projects/$id/reviews-llm/$articleId'
       fullPath: '/projects/$id/reviews-llm/$articleId'
       preLoaderRoute: typeof ProjectsIdReviewsLlmArticleIdIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/unexpected-answers/all-prompts/$promptId/': {
+      id: '/admin/unexpected-answers/all-prompts/$promptId/'
+      path: '/admin/unexpected-answers/all-prompts/$promptId'
+      fullPath: '/admin/unexpected-answers/all-prompts/$promptId'
+      preLoaderRoute: typeof AdminUnexpectedAnswersAllPromptsPromptIdIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/unexpected-answers/$projectId/$promptId/': {
@@ -1032,6 +1074,8 @@ const rootRouteChildren: RootRouteChildren = {
   AdminJobsIdIndexRoute: AdminJobsIdIndexRoute,
   AdminUnexpectedAnswersProjectIdIndexRoute:
     AdminUnexpectedAnswersProjectIdIndexRoute,
+  AdminUnexpectedAnswersAllPromptsIndexRoute:
+    AdminUnexpectedAnswersAllPromptsIndexRoute,
   ProjectsIdReviewsBothIndexRoute: ProjectsIdReviewsBothIndexRoute,
   ProjectsIdReviewsHumanIndexRoute: ProjectsIdReviewsHumanIndexRoute,
   ProjectsIdReviewsLlmIndexRoute: ProjectsIdReviewsLlmIndexRoute,
@@ -1041,6 +1085,8 @@ const rootRouteChildren: RootRouteChildren = {
   AdminJobsIdUnassessed_articlesRoute: AdminJobsIdUnassessed_articlesRoute,
   AdminUnexpectedAnswersProjectIdPromptIdIndexRoute:
     AdminUnexpectedAnswersProjectIdPromptIdIndexRoute,
+  AdminUnexpectedAnswersAllPromptsPromptIdIndexRoute:
+    AdminUnexpectedAnswersAllPromptsPromptIdIndexRoute,
   ProjectsIdReviewsLlmArticleIdIndexRoute:
     ProjectsIdReviewsLlmArticleIdIndexRoute,
   ProjectsIdReviewsArticleIdIndexRoute: ProjectsIdReviewsArticleIdIndexRoute,

@@ -495,6 +495,40 @@ const syncDeletedJudgmentsToClickhouse = async () => {
 export const adminInvestigateRoutes = new Elysia()
   .use(withErrorHandler())
   .use(requireUserAuth())
+  .get('/api/admin/list-prompts-with-types', async () => {
+    const db = getDatabase()
+    const promptsList = await db
+      .select({
+        id: prompts.id,
+        promptHeading: prompts.promptHeading,
+        type: prompts.type,
+        originalText: prompts.originalText,
+        createdAt: prompts.createdAt,
+        ownerId: prompts.ownerId,
+        archived: prompts.archived,
+      })
+      .from(prompts)
+      .where(isNotNull(prompts.type))
+      .orderBy(prompts.promptHeading)
+
+    const filtered = promptsList.filter((p) => {
+      return !isOpenEndedType(p.type)
+    })
+
+    return {
+      prompts: filtered.map((p) => {
+        return {
+          id: p.id,
+          promptHeading: p.promptHeading || 'Untitled',
+          type: p.type,
+          originalText: p.originalText,
+          createdAt: p.createdAt,
+          ownerId: p.ownerId,
+          archived: p.archived,
+        }
+      }),
+    }
+  })
   .post('/api/admin/sync-deleted-judgments-to-clickhouse', async () => {
     return syncDeletedJudgmentsToClickhouse()
   })
