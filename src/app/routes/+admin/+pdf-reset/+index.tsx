@@ -1,4 +1,4 @@
-import {createMutation, useQuery, useQueryClient} from '@tanstack/solid-query'
+import {createMutation, useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
 import {Show, Suspense} from 'solid-js'
 
@@ -6,17 +6,10 @@ import {apiClient} from '../../../../services/apiClient.ts'
 import {fetchSession} from '../../../../services/fetchSession.ts'
 import {handleApiResponse} from '../../../../services/utils/handleApiResponse.ts'
 
-const fetchPdfFetchStats = async () => {
-  const response = await apiClient.api.articles['pdf-fetch-stats'].get()
-  return handleApiResponse(response, 'Failed to load PDF fetch stats')
-}
-
 const AdminPdfReset = () => {
   const sessionQuery = useQuery(() => {
     return {queryKey: ['session'], queryFn: fetchSession}
   })
-
-  const queryClient = useQueryClient()
 
   const resetMutation = createMutation(() => {
     return {
@@ -24,18 +17,6 @@ const AdminPdfReset = () => {
         const response = await apiClient.api.articles['pdf-fetch-reset'].post()
         return handleApiResponse(response, 'Failed to reset PDF fetches')
       },
-      onSuccess: () => {
-        void queryClient.invalidateQueries({queryKey: ['articles', 'pdf-fetch-stats']})
-      },
-    }
-  })
-
-  const statsQuery = useQuery(() => {
-    return {
-      queryKey: ['articles', 'pdf-fetch-stats'],
-      queryFn: fetchPdfFetchStats,
-      staleTime: 1000 * 30,
-      refetchOnWindowFocus: true,
     }
   })
 
@@ -77,19 +58,10 @@ const AdminPdfReset = () => {
           <h1 class="text-2xl font-bold mb-6">Reset PDF Fetches</h1>
 
           <div class="bg-white shadow rounded-lg p-6 mb-6">
-            <p class="text-gray-700 mb-4">
+            <p class="text-gray-700 mb-6">
               This will reset all auto-fetched PDFs so they can be re-downloaded from arxiv/unpaywall. User-uploaded PDFs
               will not be affected.
             </p>
-
-            <div class="bg-gray-50 rounded-md p-4 mb-6">
-              <div class="text-sm text-gray-600">Auto-fetched PDFs that will be reset:</div>
-              <div class="text-2xl font-bold text-gray-900">
-                <Show when={!statsQuery.isLoading} fallback="...">
-                  {statsQuery.data?.totalAutoFetched ?? 0}
-                </Show>
-              </div>
-            </div>
 
             <Show when={resetMutation.isSuccess}>
               <div class="mb-4 p-3 bg-green-50 border border-green-200 rounded-md text-green-800 text-sm">
@@ -107,7 +79,7 @@ const AdminPdfReset = () => {
               onClick={() => {
                 return resetMutation.mutate()
               }}
-              disabled={resetMutation.isPending || statsQuery.data?.totalAutoFetched === 0}
+              disabled={resetMutation.isPending}
               class="w-full px-4 py-3 bg-red-600 text-white text-sm font-medium rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {resetMutation.isPending ? 'Resetting...' : 'Reset All Auto-Fetched PDFs'}

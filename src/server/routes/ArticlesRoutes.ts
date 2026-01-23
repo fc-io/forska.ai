@@ -88,16 +88,6 @@ export const articlesRoutes = new Elysia()
 
     return {success: true}
   })
-  .get('/api/articles/pdf-fetch-stats', async () => {
-    const db = getDatabase()
-
-    const [totalRow] = await db
-      .select({count: count()})
-      .from(articles)
-      .where(sql`${articles.fullTextPDF} LIKE 'assets/article_pdfs/%' AND ${articles.fullTextPdfUploadedBy} IS NULL`)
-
-    return {totalAutoFetched: totalRow?.count ?? 0}
-  })
   .post('/api/articles/pdf-fetch-reset', () => {
     const db = getDatabase()
 
