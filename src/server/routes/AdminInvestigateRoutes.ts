@@ -1267,3 +1267,385 @@ export const adminInvestigateRoutes = new Elysia()
     },
     {query: t.Object({projectId: t.Optional(t.String()), promptId: t.Optional(t.String())})},
   )
+  .get(
+    '/api/admin/diagnose-unassessed',
+    async ({query}) => {
+      const projectId = query.projectId
+      const db = getDatabase()
+      const {getClickhouseClient} = await import('../../services/clickhouse/clickhouseClient.ts')
+      const chClient = getClickhouseClient()
+
+      const [project] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1)
+
+      if (!project) {
+        return {error: 'Project not found'}
+      }
+
+      const enabledPromptRows = await db
+        .select({promptId: projectPrompts.promptId})
+        .from(projectPrompts)
+        .where(and(eq(projectPrompts.projectId, projectId), eq(projectPrompts.enabled, true)))
+
+      const enabledPromptIds = enabledPromptRows.map((r) => r.promptId)
+
+      const projectImportRoutes = await db
+        .select({route: importRoute.route})
+        .from(projectRouteLink)
+        .innerJoin(importRoute, eq(importRoute.id, projectRouteLink.importRouteId))
+        .where(eq(projectRouteLink.projectId, projectId))
+
+      const curatedArticleRows = await db
+        .select({articleId: projectArticles.articleId})
+        .from(projectArticles)
+        .where(eq(projectArticles.projectId, projectId))
+
+      const routes = projectImportRoutes.map((r) => r.route)
+      const curatedIds = curatedArticleRows.map((r) => r.articleId)
+
+      // Count articles in scope from PostgreSQL
+      let pgArticleCount = 0
+      if (curatedIds.length > 0) {
+        const result = await db
+          .select({count: sql<number>`COUNT(DISTINCT ${articles.id})::int`})
+          .from(articles)
+          .where(inArray(articles.id, curatedIds))
+        pgArticleCount = result[0]?.count ?? 0
+      } else if (routes.length > 0) {
+        const result = await db
+          .select({count: sql<number>`COUNT(*)::int`})
+          .from(articles)
+          .where(inArray(articles.importRoute, routes))
+        pgArticleCount = result[0]?.count ?? 0
+      }
+
+      // Build article scope condition for PostgreSQL
+      const articleIds = curatedIds.length > 0 ? curatedIds : []
+      const hasArticleScope = articleIds.length > 0 || routes.length > 0
+
+      // Count judgments in PostgreSQL matching project settings AND scoped to project articles
+      let pgJudgmentCount = 0
+      let pgScopedJudgmentCount = 0
+
+      if (hasArticleScope) {
+        // Scoped count (only articles in this project)
+        const scopeConditions = []
+        if (articleIds.length > 0) {
+          scopeConditions.push(inArray(judgments.articleId, articleIds))
+        }
+        if (routes.length > 0) {
+          scopeConditions.push(
+            sql`${judgments.articleId} IN (SELECT id FROM articles WHERE import_route IN (${sql.join(
+              routes.map((r) => sql`${r}`),
+              sql`, `,
+            )}))`,
+          )
+        }
+
+        const pgScopedResult = await db
+          .select({count: sql<number>`COUNT(*)::int`})
+          .from(judgments)
+          .where(
+            and(
+              or(...scopeConditions),
+              inArray(judgments.promptId, enabledPromptIds),
+              eq(judgments.modelId, project.modelId),
+              eq(judgments.useTitle, project.useTitle),
+              eq(judgments.useAbstract, project.useAbstract),
+              eq(judgments.useFulltext, project.useFulltext),
+              eq(judgments.useFulltextNoImages, project.useFulltextNoImages),
+              sql`${judgments.deletedAt} IS NULL`,
+            ),
+          )
+        pgScopedJudgmentCount = pgScopedResult[0]?.count ?? 0
+      }
+
+      // Total count (all judgments matching settings, for comparison)
+      const pgTotalResult = await db
+        .select({count: sql<number>`COUNT(*)::int`})
+        .from(judgments)
+        .where(
+          and(
+            inArray(judgments.promptId, enabledPromptIds),
+            eq(judgments.modelId, project.modelId),
+            eq(judgments.useTitle, project.useTitle),
+            eq(judgments.useAbstract, project.useAbstract),
+            eq(judgments.useFulltext, project.useFulltext),
+            eq(judgments.useFulltextNoImages, project.useFulltextNoImages),
+            sql`${judgments.deletedAt} IS NULL`,
+          ),
+        )
+      pgJudgmentCount = pgTotalResult[0]?.count ?? 0
+
+      // Count judgments in ClickHouse matching project settings AND scoped
+      const promptIdsQuoted = enabledPromptIds.map((id) => `'${id}'`).join(', ')
+
+      let chScopeFilter = ''
+      if (articleIds.length > 0) {
+        const idsQuoted = articleIds.map((id) => `'${id}'`).join(', ')
+        chScopeFilter = `AND articleId IN (${idsQuoted})`
+      } else if (routes.length > 0) {
+        const routesQuoted = routes.map((r) => `'${r}'`).join(', ')
+        chScopeFilter = `AND articleImportRoute IN (${routesQuoted})`
+      }
+
+      const chQuery = `
+        SELECT count() AS count
+        FROM judgments
+        WHERE promptId IN (${promptIdsQuoted})
+          AND modelId = '${project.modelId}'
+          AND useTitle = ${project.useTitle}
+          AND useAbstract = ${project.useAbstract}
+          AND useFulltext = ${project.useFulltext}
+          AND useFulltextNoImages = ${project.useFulltextNoImages}
+          AND deletedAt IS NULL
+          ${chScopeFilter}
+      `
+      const chResult = await chClient.query({query: chQuery, format: 'JSONEachRow'})
+      const [chRow] = await chResult.json<{count: number}>()
+      const chJudgmentCount = chRow?.count ?? 0
+
+      // Count articles in ClickHouse (full count, not limited)
+      let chArticleCount = 0
+      if (articleIds.length > 0) {
+        const idsQuoted = articleIds.map((id) => `'${id}'`).join(', ')
+        const chArticleQuery = `SELECT count() AS count FROM forska.articles WHERE id IN (${idsQuoted})`
+        const result = await chClient.query({query: chArticleQuery, format: 'JSONEachRow'})
+        const [row] = await result.json<{count: number}>()
+        chArticleCount = row?.count ?? 0
+      } else if (routes.length > 0) {
+        const routesQuoted = routes.map((r) => `'${r}'`).join(', ')
+        const chArticleQuery = `SELECT count() AS count FROM forska.articles WHERE import_route IN (${routesQuoted})`
+        const result = await chClient.query({query: chArticleQuery, format: 'JSONEachRow'})
+        const [row] = await result.json<{count: number}>()
+        chArticleCount = row?.count ?? 0
+      }
+
+      const expectedJudgments = pgArticleCount * enabledPromptIds.length
+      const missingInPostgres = expectedJudgments - pgScopedJudgmentCount
+
+      return {
+        project: {
+          id: project.id,
+          name: project.name,
+          modelId: project.modelId,
+          useTitle: project.useTitle,
+          useAbstract: project.useAbstract,
+          useFulltext: project.useFulltext,
+          useFulltextNoImages: project.useFulltextNoImages,
+        },
+        scope: {
+          enabledPromptCount: enabledPromptIds.length,
+          enabledPromptIds,
+          importRoutes: routes,
+          curatedArticleCount: curatedIds.length,
+        },
+        postgres: {
+          articlesInScope: pgArticleCount,
+          judgmentsInScope: pgScopedJudgmentCount,
+          judgmentsTotalMatchingSettings: pgJudgmentCount,
+        },
+        clickhouse: {articlesInScope: chArticleCount, judgmentsInScope: chJudgmentCount},
+        analysis: {
+          expectedJudgments,
+          missingInPostgres,
+          missingInClickhouse: pgScopedJudgmentCount - chJudgmentCount,
+          articlesFullyCovered: Math.floor(pgScopedJudgmentCount / enabledPromptIds.length),
+          articlesPartialOrNone: pgArticleCount - Math.floor(pgScopedJudgmentCount / enabledPromptIds.length),
+        },
+      }
+    },
+    {query: t.Object({projectId: t.String()})},
+  )
+  .get('/api/admin/parquet-dual-write-status', async () => {
+    const {getJudgmentsParquetDualWriteConfig} = await import('../../services/parquet/judgmentsParquetDualWrite.ts')
+    const {getDefaultWriterPendingCount} = await import('../../services/parquet/parquetWriter.ts')
+
+    const config = getJudgmentsParquetDualWriteConfig()
+    const pendingCount = getDefaultWriterPendingCount()
+
+    return {
+      enabled: config.enabled,
+      s3Configured: config.s3Configured,
+      batchSize: config.batchSize,
+      flushIntervalMs: config.flushIntervalMs,
+      pendingRecords: pendingCount,
+      envVars: {
+        S3_ENDPOINT: process.env.S3_ENDPOINT ? 'set' : 'not set',
+        S3_ACCESS_KEY: process.env.S3_ACCESS_KEY ? 'set' : 'not set',
+        S3_SECRET_KEY: process.env.S3_SECRET_KEY ? 'set' : 'not set',
+        S3_BUCKET: process.env.S3_BUCKET ? 'set' : 'not set',
+        PARQUET_JUDGMENTS_DUAL_WRITE:
+          process.env.PARQUET_JUDGMENTS_DUAL_WRITE ?? 'not set (defaults to true if S3 configured)',
+      },
+    }
+  })
+  .post(
+    '/api/admin/backfill-project-judgments',
+    async ({body}) => {
+      const {projectId} = body
+      const db = getDatabase()
+      const {getClickhouseClient} = await import('../../services/clickhouse/clickhouseClient.ts')
+      const chClient = getClickhouseClient()
+
+      const [project] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1)
+      if (!project) {
+        return {error: 'Project not found', synced: 0}
+      }
+
+      const enabledPromptRows = await db
+        .select({promptId: projectPrompts.promptId})
+        .from(projectPrompts)
+        .where(and(eq(projectPrompts.projectId, projectId), eq(projectPrompts.enabled, true)))
+      const enabledPromptIds = enabledPromptRows.map((r) => r.promptId)
+
+      const curatedArticleRows = await db
+        .select({articleId: projectArticles.articleId})
+        .from(projectArticles)
+        .where(eq(projectArticles.projectId, projectId))
+      const curatedIds = curatedArticleRows.map((r) => r.articleId)
+
+      const projectImportRoutes = await db
+        .select({route: importRoute.route})
+        .from(projectRouteLink)
+        .innerJoin(importRoute, eq(importRoute.id, projectRouteLink.importRouteId))
+        .where(eq(projectRouteLink.projectId, projectId))
+      const routes = projectImportRoutes.map((r) => r.route)
+
+      // Build scope conditions
+      const scopeConditions = []
+      if (curatedIds.length > 0) {
+        scopeConditions.push(inArray(judgments.articleId, curatedIds))
+      }
+      if (routes.length > 0) {
+        scopeConditions.push(
+          sql`${judgments.articleId} IN (SELECT id FROM articles WHERE import_route IN (${sql.join(
+            routes.map((r) => sql`${r}`),
+            sql`, `,
+          )}))`,
+        )
+      }
+
+      if (scopeConditions.length === 0) {
+        return {error: 'No scope defined for project', synced: 0}
+      }
+
+      // Get all judgment IDs from PostgreSQL for this project
+      const pgJudgmentIds = await db
+        .select({id: judgments.id})
+        .from(judgments)
+        .where(
+          and(
+            or(...scopeConditions),
+            inArray(judgments.promptId, enabledPromptIds),
+            eq(judgments.modelId, project.modelId),
+            eq(judgments.useTitle, project.useTitle),
+            eq(judgments.useAbstract, project.useAbstract),
+            eq(judgments.useFulltext, project.useFulltext),
+            eq(judgments.useFulltextNoImages, project.useFulltextNoImages),
+          ),
+        )
+
+      const pgIds = new Set(pgJudgmentIds.map((r) => r.id))
+      console.log(`[ProjectBackfill] Found ${pgIds.size} judgments in PostgreSQL for project ${projectId}`)
+
+      // Get judgment IDs from ClickHouse for this project
+      const promptIdsQuoted = enabledPromptIds.map((id) => `'${id}'`).join(', ')
+      let chScopeFilter = ''
+      if (curatedIds.length > 0) {
+        const idsQuoted = curatedIds.map((id) => `'${id}'`).join(', ')
+        chScopeFilter = `AND articleId IN (${idsQuoted})`
+      } else if (routes.length > 0) {
+        const routesQuoted = routes.map((r) => `'${r}'`).join(', ')
+        chScopeFilter = `AND articleImportRoute IN (${routesQuoted})`
+      }
+
+      const chIdsResult = await chClient.query({
+        query: `
+          SELECT id FROM judgments
+          WHERE promptId IN (${promptIdsQuoted})
+            AND modelId = '${project.modelId}'
+            AND useTitle = ${project.useTitle}
+            AND useAbstract = ${project.useAbstract}
+            AND useFulltext = ${project.useFulltext}
+            AND useFulltextNoImages = ${project.useFulltextNoImages}
+            ${chScopeFilter}
+        `,
+        format: 'JSONEachRow',
+      })
+      const chIdsRows = await chIdsResult.json<{id: string}>()
+      const chIds = new Set(chIdsRows.map((r) => r.id))
+      console.log(`[ProjectBackfill] Found ${chIds.size} judgments in ClickHouse for project ${projectId}`)
+
+      // Find missing IDs
+      const missingIds = [...pgIds].filter((id) => !chIds.has(id))
+      console.log(`[ProjectBackfill] Missing ${missingIds.length} judgments in ClickHouse`)
+
+      if (missingIds.length === 0) {
+        return {synced: 0, message: 'ClickHouse is already in sync with PostgreSQL for this project'}
+      }
+
+      // Fetch and sync missing judgments in batches
+      const batchSize = 1000
+      let totalSynced = 0
+
+      for (let i = 0; i < missingIds.length; i += batchSize) {
+        const batchIds = missingIds.slice(i, i + batchSize)
+
+        const pgJudgments = await db
+          .select({
+            id: judgments.id,
+            createdAt: judgments.createdAt,
+            deletedAt: judgments.deletedAt,
+            articleId: judgments.articleId,
+            promptId: judgments.promptId,
+            modelId: judgments.modelId,
+            useTitle: judgments.useTitle,
+            useAbstract: judgments.useAbstract,
+            useFulltext: judgments.useFulltext,
+            useFulltextNoImages: judgments.useFulltextNoImages,
+            answeredOriginal: judgments.answeredOriginal,
+            answeredOriginalAsArray: judgments.answeredOriginalAsArray,
+          })
+          .from(judgments)
+          .where(inArray(judgments.id, batchIds))
+
+        const articleIds = [...new Set(pgJudgments.map((j) => j.articleId))]
+        const articleRows = await db.select().from(articles).where(inArray(articles.id, articleIds))
+        const articlesMap = new Map(articleRows.map((a) => [a.id, a]))
+
+        const clickhouseRecords = pgJudgments.map((judgment) => {
+          const article = articlesMap.get(judgment.articleId)
+          return {
+            id: judgment.id,
+            createdAt: formatDateForClickHouse(judgment.createdAt),
+            deletedAt: formatDateForClickHouse(judgment.deletedAt),
+            articleId: judgment.articleId,
+            articleTitle: article?.articleTitle ?? null,
+            articleCreatedAt: formatDateForClickHouse(article?.articleCreatedAt ?? null),
+            articleUpdatedAt: formatDateForClickHouse(article?.articleUpdatedAt ?? null),
+            articleCreatedYear: article?.articleCreatedAt ? article.articleCreatedAt.getUTCFullYear() : null,
+            articleUpdatedYear: article?.articleUpdatedAt ? article.articleUpdatedAt.getUTCFullYear() : null,
+            articleImportRoute: article?.importRoute ?? null,
+            articleImportedBy: article?.importedBy ?? null,
+            promptId: judgment.promptId,
+            modelId: judgment.modelId,
+            useTitle: judgment.useTitle,
+            useAbstract: judgment.useAbstract,
+            useFulltext: judgment.useFulltext,
+            useFulltextNoImages: judgment.useFulltextNoImages,
+            answeredOriginal: judgment.answeredOriginal,
+            answeredOriginalAsArray: judgment.answeredOriginalAsArray ?? [],
+            explanation: null,
+            quotes: null,
+          }
+        })
+
+        await chClient.insert({table: 'forska.judgments', values: clickhouseRecords, format: 'JSONEachRow'})
+        totalSynced += clickhouseRecords.length
+        console.log(`[ProjectBackfill] Synced batch ${Math.floor(i / batchSize) + 1}, total: ${totalSynced}`)
+      }
+
+      return {synced: totalSynced, message: `Synced ${totalSynced} missing judgments for project`}
+    },
+    {body: t.Object({projectId: t.String()})},
+  )

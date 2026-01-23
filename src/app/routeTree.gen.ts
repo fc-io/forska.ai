@@ -38,6 +38,7 @@ import { Route as AdminLatestArticlesIndexRouteImport } from './routes/+admin/+l
 import { Route as AdminJobsIndexRouteImport } from './routes/+admin/+jobs/+index'
 import { Route as AdminGpuIndexRouteImport } from './routes/+admin/+gpu/+index'
 import { Route as AdminFailed_requestsIndexRouteImport } from './routes/+admin/+failed_requests/+index'
+import { Route as AdminDiagnoseUnassessedIndexRouteImport } from './routes/+admin/+diagnose-unassessed/+index'
 import { Route as AdminDatasourcesIndexRouteImport } from './routes/+admin/+datasources/+index'
 import { Route as AdminClickhouseSyncIndexRouteImport } from './routes/+admin/+clickhouse-sync/+index'
 import { Route as AdminAssessmentsIndexRouteImport } from './routes/+admin/+assessments/+index'
@@ -211,6 +212,12 @@ const AdminFailed_requestsIndexRoute =
     path: '/admin/failed_requests/',
     getParentRoute: () => rootRouteImport,
   } as any)
+const AdminDiagnoseUnassessedIndexRoute =
+  AdminDiagnoseUnassessedIndexRouteImport.update({
+    id: '/admin/diagnose-unassessed/',
+    path: '/admin/diagnose-unassessed/',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const AdminDatasourcesIndexRoute = AdminDatasourcesIndexRouteImport.update({
   id: '/admin/datasources/',
   path: '/admin/datasources/',
@@ -345,6 +352,7 @@ export interface FileRoutesByFullPath {
   '/admin/assessments': typeof AdminAssessmentsIndexRoute
   '/admin/clickhouse-sync': typeof AdminClickhouseSyncIndexRoute
   '/admin/datasources': typeof AdminDatasourcesIndexRoute
+  '/admin/diagnose-unassessed': typeof AdminDiagnoseUnassessedIndexRoute
   '/admin/failed_requests': typeof AdminFailed_requestsIndexRoute
   '/admin/gpu': typeof AdminGpuIndexRoute
   '/admin/jobs': typeof AdminJobsIndexRoute
@@ -397,6 +405,7 @@ export interface FileRoutesByTo {
   '/admin/assessments': typeof AdminAssessmentsIndexRoute
   '/admin/clickhouse-sync': typeof AdminClickhouseSyncIndexRoute
   '/admin/datasources': typeof AdminDatasourcesIndexRoute
+  '/admin/diagnose-unassessed': typeof AdminDiagnoseUnassessedIndexRoute
   '/admin/failed_requests': typeof AdminFailed_requestsIndexRoute
   '/admin/gpu': typeof AdminGpuIndexRoute
   '/admin/jobs': typeof AdminJobsIndexRoute
@@ -450,6 +459,7 @@ export interface FileRoutesById {
   '/admin/assessments/': typeof AdminAssessmentsIndexRoute
   '/admin/clickhouse-sync/': typeof AdminClickhouseSyncIndexRoute
   '/admin/datasources/': typeof AdminDatasourcesIndexRoute
+  '/admin/diagnose-unassessed/': typeof AdminDiagnoseUnassessedIndexRoute
   '/admin/failed_requests/': typeof AdminFailed_requestsIndexRoute
   '/admin/gpu/': typeof AdminGpuIndexRoute
   '/admin/jobs/': typeof AdminJobsIndexRoute
@@ -504,6 +514,7 @@ export interface FileRouteTypes {
     | '/admin/assessments'
     | '/admin/clickhouse-sync'
     | '/admin/datasources'
+    | '/admin/diagnose-unassessed'
     | '/admin/failed_requests'
     | '/admin/gpu'
     | '/admin/jobs'
@@ -556,6 +567,7 @@ export interface FileRouteTypes {
     | '/admin/assessments'
     | '/admin/clickhouse-sync'
     | '/admin/datasources'
+    | '/admin/diagnose-unassessed'
     | '/admin/failed_requests'
     | '/admin/gpu'
     | '/admin/jobs'
@@ -608,6 +620,7 @@ export interface FileRouteTypes {
     | '/admin/assessments/'
     | '/admin/clickhouse-sync/'
     | '/admin/datasources/'
+    | '/admin/diagnose-unassessed/'
     | '/admin/failed_requests/'
     | '/admin/gpu/'
     | '/admin/jobs/'
@@ -661,6 +674,7 @@ export interface RootRouteChildren {
   AdminAssessmentsIndexRoute: typeof AdminAssessmentsIndexRoute
   AdminClickhouseSyncIndexRoute: typeof AdminClickhouseSyncIndexRoute
   AdminDatasourcesIndexRoute: typeof AdminDatasourcesIndexRoute
+  AdminDiagnoseUnassessedIndexRoute: typeof AdminDiagnoseUnassessedIndexRoute
   AdminFailed_requestsIndexRoute: typeof AdminFailed_requestsIndexRoute
   AdminGpuIndexRoute: typeof AdminGpuIndexRoute
   AdminJobsIndexRoute: typeof AdminJobsIndexRoute
@@ -906,6 +920,13 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof AdminFailed_requestsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/diagnose-unassessed/': {
+      id: '/admin/diagnose-unassessed/'
+      path: '/admin/diagnose-unassessed'
+      fullPath: '/admin/diagnose-unassessed'
+      preLoaderRoute: typeof AdminDiagnoseUnassessedIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/admin/datasources/': {
       id: '/admin/datasources/'
       path: '/admin/datasources'
@@ -1069,6 +1090,7 @@ const rootRouteChildren: RootRouteChildren = {
   AdminAssessmentsIndexRoute: AdminAssessmentsIndexRoute,
   AdminClickhouseSyncIndexRoute: AdminClickhouseSyncIndexRoute,
   AdminDatasourcesIndexRoute: AdminDatasourcesIndexRoute,
+  AdminDiagnoseUnassessedIndexRoute: AdminDiagnoseUnassessedIndexRoute,
   AdminFailed_requestsIndexRoute: AdminFailed_requestsIndexRoute,
   AdminGpuIndexRoute: AdminGpuIndexRoute,
   AdminJobsIndexRoute: AdminJobsIndexRoute,

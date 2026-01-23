@@ -29,6 +29,23 @@ type BackfillProgress = {
   estimatedSecondsRemaining: number | null
 }
 
+type DualWriteStatus = {
+  enabled: boolean
+  s3Configured: boolean
+  batchSize: number
+  flushIntervalMs: number
+  pendingRecords: number
+  envVars: Record<string, string>
+}
+
+const fetchDualWriteStatus = async (): Promise<DualWriteStatus> => {
+  const response = await fetch(`${env.VITE_SERVER_API}/api/admin/parquet-dual-write-status`, {credentials: 'include'})
+  if (!response.ok) {
+    throw new Error('Failed to fetch dual-write status')
+  }
+  return response.json() as Promise<DualWriteStatus>
+}
+
 const fetchSyncStatus = async (): Promise<SyncStatus> => {
   const response = await fetch(`${env.VITE_SERVER_API}/api/admin/clickhouse-sync-status`, {credentials: 'include'})
   if (!response.ok) {
@@ -92,6 +109,7 @@ const AdminClickhouseSync = () => {
 
   const [backfillProgress, setBackfillProgress] = createSignal<BackfillProgress | null>(null)
   const [backfillPolling, setBackfillPolling] = createSignal(false)
+  const [dualWriteStatus, setDualWriteStatus] = createSignal<DualWriteStatus | null>(null)
 
   const loadStatus = async () => {
     setLoading(true)
@@ -114,6 +132,9 @@ const AdminClickhouseSync = () => {
         void pollBackfillProgress()
       }
     })
+    void fetchDualWriteStatus()
+      .then(setDualWriteStatus)
+      .catch(() => {})
   })
 
   const handleSyncDeleted = async () => {
@@ -301,6 +322,57 @@ const AdminClickhouseSync = () => {
             }}
           </Show>
         </div>
+
+        {/* Dual Write Status Card */}
+        <Show when={dualWriteStatus()}>
+          {(dw) => (
+            <div
+              class={`rounded-lg shadow-sm border p-6 ${dw().enabled ? 'bg-white border-gray-200' : 'bg-red-50 border-red-200'}`}
+            >
+              <h2 class="text-lg font-semibold mb-3">Parquet Dual-Write Status</h2>
+              <div class="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <span class="text-gray-500">Status:</span>
+                  <span class={`ml-2 font-semibold ${dw().enabled ? 'text-green-600' : 'text-red-600'}`}>
+                    {dw().enabled ? 'Enabled' : 'Disabled'}
+                  </span>
+                </div>
+                <div>
+                  <span class="text-gray-500">S3 Configured:</span>
+                  <span class={`ml-2 font-semibold ${dw().s3Configured ? 'text-green-600' : 'text-red-600'}`}>
+                    {dw().s3Configured ? 'Yes' : 'No'}
+                  </span>
+                </div>
+                <div>
+                  <span class="text-gray-500">Batch Size:</span>
+                  <span class="ml-2">{dw().batchSize.toLocaleString()}</span>
+                </div>
+                <div>
+                  <span class="text-gray-500">Flush Interval:</span>
+                  <span class="ml-2">{(dw().flushIntervalMs / 1000).toFixed(0)}s</span>
+                </div>
+                <div>
+                  <span class="text-gray-500">Pending Records:</span>
+                  <span class="ml-2 font-semibold">{dw().pendingRecords.toLocaleString()}</span>
+                </div>
+              </div>
+              <Show when={!dw().enabled}>
+                <div class="mt-4 p-3 bg-red-100 rounded-lg">
+                  <p class="text-red-700 font-medium text-sm">
+                    Dual-write is disabled! New judgments will NOT be synced to ClickHouse automatically.
+                  </p>
+                  <p class="text-red-600 text-xs mt-1">
+                    Missing env vars:{' '}
+                    {Object.entries(dw().envVars)
+                      .filter(([_, v]) => v === 'not set')
+                      .map(([k]) => k)
+                      .join(', ') || 'None'}
+                  </p>
+                </div>
+              </Show>
+            </div>
+          )}
+        </Show>
 
         {/* Sync Deleted Card */}
         <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
