@@ -10,10 +10,10 @@ The Parquet dual-write has reliability issues:
 
 ## Solution
 
-Write directly to ClickHouse after each PostgreSQL insert. This is **best-effort** (fire-and-forget) - not transactional with PostgreSQL. Data can still be lost if ClickHouse is unreachable, but this is acceptable because:
+Write directly to ClickHouse after each PostgreSQL insert. This is **best-effort** - not transactional with PostgreSQL. Data can still be lost if ClickHouse is unreachable, but this is acceptable because:
 
 1. PostgreSQL remains the source of truth
-2. Existing backfill route (`/api/admin/backfill-judgments-to-clickhouse`) can resync any missing data
+2. A full-sync backfill can be run to resync (see "Known Limitations" below)
 3. The current Parquet approach has the same reliability model (buffered writes can be lost)
 
 This approach trades **write amplification** (per-row insert) for **simplicity** and **lower latency to visibility** in ClickHouse.
@@ -29,18 +29,33 @@ This approach trades **write amplification** (per-row insert) for **simplicity**
 
 - ReplacingMergeTree deduplicates by `id` during background merges, keeping the row with the highest `createdAt`
 - Retries are safe: inserting the same judgment twice results in one row after merge
-- Soft deletes (tombstones): insert a record with the same `id` but `deletedAt` set; queries filter via `WHERE deletedAt IS NULL`
 - For immediate dedup in queries, use `FINAL` keyword: `SELECT ... FROM judgments FINAL WHERE deletedAt IS NULL`
+
+### Tombstones (Soft Deletes)
+
+**Current behavior has a bug:** Tombstones reuse the original `createdAt`, so ReplacingMergeTree may keep either row (version tie). This means `WHERE deletedAt IS NULL` is unreliable after merges.
+
+**Options to fix (out of scope for this change):**
+
+1. Use `updatedAt` as the version column instead of `createdAt` (requires DDL change)
+2. Set tombstone `createdAt` to `now()` so it always wins (but breaks time-series semantics)
+3. Use `FINAL` in all queries (performance cost)
+4. Accept eventual consistency and periodically re-sync from PostgreSQL
+
+For now, existing behavior is preserved. Queries already use `FINAL` or accept this limitation.
 
 ### Field Conversions Required
 
-| Field                     | TypeScript         | ClickHouse                       | Conversion                          |
-| ------------------------- | ------------------ | -------------------------------- | ----------------------------------- |
-| `createdAt`               | `Date`             | `DateTime64(6, 'UTC')`           | Format as `YYYY-MM-DD HH:mm:ss.SSS` |
-| `deletedAt`               | `Date \| null`     | `Nullable(DateTime64(6, 'UTC'))` | Format or `null`                    |
-| `articleCreatedAt`        | `Date \| null`     | `Nullable(DateTime64(6, 'UTC'))` | Format or `null`                    |
-| `articleUpdatedAt`        | `Date \| null`     | `Nullable(DateTime64(6, 'UTC'))` | Format or `null`                    |
-| `answeredOriginalAsArray` | `string[] \| null` | `Array(Nullable(String))`        | `null` → `[]`                       |
+| Field                     | TypeScript         | ClickHouse                       | Conversion                                                          |
+| ------------------------- | ------------------ | -------------------------------- | ------------------------------------------------------------------- |
+| `createdAt`               | `Date`             | `DateTime64(6, 'UTC')`           | Format as `YYYY-MM-DD HH:mm:ss.SSS` (ClickHouse pads to 6 decimals) |
+| `deletedAt`               | `Date \| null`     | `Nullable(DateTime64(6, 'UTC'))` | Format or `null`                                                    |
+| `articleCreatedAt`        | `Date \| null`     | `Nullable(DateTime64(6, 'UTC'))` | Format or `null`                                                    |
+| `articleUpdatedAt`        | `Date \| null`     | `Nullable(DateTime64(6, 'UTC'))` | Format or `null`                                                    |
+| `articleTitle`            | `string \| null`   | `String` (non-nullable)          | `null` → `''` (coalesce)                                            |
+| `answeredOriginalAsArray` | `string[] \| null` | `Array(Nullable(String))`        | `null` → `[]`                                                       |
+
+**Note:** DateTime64(6) expects microseconds but we format with milliseconds (.SSS). ClickHouse accepts this and zero-pads the remaining digits.
 
 ---
 
@@ -72,10 +87,16 @@ This approach trades **write amplification** (per-row insert) for **simplicity**
 import {getClickhouseClient} from './clickhouseClient'
 import type {DenormalizedJudgmentAnalytics} from '../parquet/types'
 
-// Format: YYYY-MM-DD HH:mm:ss.SSS (ClickHouse DateTime64(6) expects this)
 const formatDateForClickHouse = (date: Date | null): string | null => {
   if (!date) return null
-  // ... UTC formatting logic (same as adminInvestigateRoutes.ts:358-368)
+  const year = date.getUTCFullYear()
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0')
+  const day = String(date.getUTCDate()).padStart(2, '0')
+  const hours = String(date.getUTCHours()).padStart(2, '0')
+  const minutes = String(date.getUTCMinutes()).padStart(2, '0')
+  const seconds = String(date.getUTCSeconds()).padStart(2, '0')
+  const millis = String(date.getUTCMilliseconds()).padStart(3, '0')
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}.${millis}`
 }
 
 export const writeJudgmentToClickHouse = async (record: DenormalizedJudgmentAnalytics): Promise<void> => {
@@ -90,6 +111,7 @@ export const writeJudgmentToClickHouse = async (record: DenormalizedJudgmentAnal
           deletedAt: formatDateForClickHouse(record.deletedAt),
           articleCreatedAt: formatDateForClickHouse(record.articleCreatedAt),
           articleUpdatedAt: formatDateForClickHouse(record.articleUpdatedAt),
+          articleTitle: record.articleTitle ?? '', // Non-nullable in CH
           answeredOriginalAsArray: record.answeredOriginalAsArray ?? [],
         },
       ],
@@ -107,20 +129,33 @@ export const writeJudgmentToClickHouse = async (record: DenormalizedJudgmentAnal
 
 ---
 
-## Performance Considerations
+## Execution Model
 
-**Tradeoff:** Per-row `chClient.insert()` adds latency to the judgment write path.
+**Awaited, not fire-and-forget.** The caller awaits `writeJudgmentToClickHouse()`, but errors are caught and logged (not thrown). This means:
 
-**Acceptable because:**
+- The PostgreSQL insert completes before ClickHouse write starts
+- ClickHouse write adds latency to the request path (~10ms typical, up to 120s timeout)
+- If ClickHouse is slow/down, requests complete but ClickHouse data is lost (logged)
+- No background queue means no risk of unbounded memory growth from pending writes
 
-- Judgment writes are already I/O-bound (PostgreSQL insert + LLM response handling)
-- ClickHouse HTTP insert for a single row is typically <10ms
-- Fire-and-forget (async in request handler) means it doesn't block response
-- If latency becomes an issue, can batch writes using a small in-memory buffer with immediate flush (vs current 10s/1000-record buffer)
+**Why not true fire-and-forget (no await)?**
 
-**Alternative considered but deferred:**
+- Unawaited promises with the 120s default timeout could pile up if ClickHouse is slow
+- Backpressure is implicit: if ClickHouse is slow, judgment processing slows (acceptable for this use case)
 
-- Outbox pattern (write to PG outbox table, background worker syncs to ClickHouse) - more complex, not needed given backfill exists
+**Future optimization if needed:** Reduce `request_timeout` for this call to ~5s, or use a bounded async queue.
+
+---
+
+## Known Limitations
+
+### Backfill Route Doesn't Fill Gaps
+
+The existing `/api/admin/backfill-judgments-to-clickhouse` starts from `max(createdAt)` in ClickHouse. If some writes fail but later ones succeed, older gaps won't be filled.
+
+**Workaround:** For a full resync, truncate the ClickHouse table first, or add a new backfill mode that syncs all records regardless of existing data.
+
+**Not addressed in this change** - the current Parquet approach has the same limitation.
 
 ---
 
@@ -143,4 +178,4 @@ If issues arise:
 
 1. Set `PARQUET_JUDGMENTS_DUAL_WRITE=true` to re-enable Parquet path
 2. The ClickHouse sync call will still run but can be removed in a follow-up
-3. Run backfill to sync any missing records: `POST /api/admin/backfill-judgments-to-clickhouse`
+3. For full resync: truncate ClickHouse table, then run backfill from PostgreSQL
