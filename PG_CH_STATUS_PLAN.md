@@ -466,8 +466,8 @@ Triggers incremental count update. Returns immediately, runs async.
 // Request body (optional)
 {
   tables?: ('pg_articles' | 'ch_articles' | 'pg_judgments' | 'ch_judgments')[],
-  fullRecount?: boolean,       // Reset watermark, recount from scratch
-  includeUniqueCount?: boolean, // Run expensive uniqExact for accurate count
+  fullRecount?: boolean,        // Reset counts+watermark+maxCursorAt; recount baseline
+  includeUniqueCount?: boolean, // CH: run uniqExact (partition-scoped if possible)
 }
 
 // Response
@@ -815,54 +815,55 @@ Dedup drift: 150 rows — merge pending (count(*) - uniqCombined)
 1. [ ] **BLOCKING:** Complete PG_CH_HEALTH.md Phase-1 (add `updatedAt` to CH judgments)
    - Until complete: judgments update-lag unavailable; only insert-lag via `createdAt`
    - After migration: runtime detect column; force full recount/baseline when cursor col changes
+2. [ ] **HIGH:** Fix `scripts/syncArticlesToClickHouse.ts` to keyset `(updated_at, id)` (no OFFSET)
 
 ### Phase 1: Database & API
 
-2. [ ] Add `pgChSyncStats` table to Drizzle schema (with job\* columns + heartbeat)
-3. [ ] Generate and run migration
-4. [ ] Add composite covering indexes:
+3. [ ] Add `pgChSyncStats` table to Drizzle schema (with job\* columns + heartbeat)
+4. [ ] Generate and run migration
+5. [ ] Add composite covering indexes:
    - `judgments (updated_at, id) INCLUDE (deleted_at)`
    - `articles (updated_at, id)`
-5. [ ] Create `GET /api/admin/sync-stats` endpoint
-6. [ ] Create `POST /api/admin/refresh-sync-stats` with DB-persisted job state
-7. [ ] Create `GET /api/admin/refresh-sync-stats-progress` (reads from DB)
-8. [ ] Implement batched counting with:
+6. [ ] Create `GET /api/admin/sync-stats` endpoint
+7. [ ] Create `POST /api/admin/refresh-sync-stats` with DB-persisted job state
+8. [ ] Create `GET /api/admin/refresh-sync-stats-progress` (reads from DB)
+9. [ ] Implement batched counting with:
    - CTE-based counting (no row transfers)
    - Table-specific logic (`TABLE_CONFIG`)
    - Heartbeat updates each batch
    - `AT TIME ZONE 'UTC'` for timestamp formatting
    - `COALESCE` for nullable `maxCursorAt`
-9. [ ] Seed/upsert 4 `pgChSyncStats` rows (else locks no-op)
-10. [ ] Implement lag tracking (only when cursorCol matches)
-11. [ ] Handle CH articles snake_case vs judgments camelCase
-12. [ ] Use `uniqCombined()` for default unique counts, `uniqExact()` on-demand
+10. [ ] Seed/upsert 4 `pgChSyncStats` rows (else locks no-op)
+11. [ ] Implement lag tracking (only when cursorCol matches)
+12. [ ] Handle CH articles snake_case vs judgments camelCase
+13. [ ] Use `uniqCombined()` for default unique counts, `uniqExact()` on-demand
 
 ### Phase 2: Admin UI
 
-13. [ ] Create `/admin/sync-stats` page
-14. [ ] Add cards showing total/unique/deleted breakdown
-15. [ ] Show both absolute diff AND percentage **using uniqueCount**
-16. [ ] Show "CH ahead" vs "CH behind" direction
-17. [ ] Show lag time and dedup drift
-18. [ ] Add job status indicators with batch progress + heartbeat age
-19. [ ] Add refresh button (disabled if job running)
-20. [ ] Add "Full Recount" option
-21. [ ] Show "approximate" labels on all counts
+14. [ ] Create `/admin/sync-stats` page
+15. [ ] Add cards showing total/unique/deleted breakdown
+16. [ ] Show both absolute diff AND percentage **using uniqueCount**
+17. [ ] Show "CH ahead" vs "CH behind" direction
+18. [ ] Show lag time and dedup drift
+19. [ ] Add job status indicators with batch progress + heartbeat age
+20. [ ] Add refresh button (disabled if job running)
+21. [ ] Add "Full Recount" option
+22. [ ] Show "approximate" labels on all counts
 
 ### Phase 3: Verification & Integrity Checks
 
-22. [ ] Implement `POST /api/admin/sample-verify` endpoint with `FINAL`/`argMax`
-23. [ ] Implement `POST /api/admin/partition-coverage-check` endpoint
-24. [ ] Add sample verify UI with results display
-25. [ ] Add partition coverage UI showing per-month counts
-26. [ ] Add stale job detection (>30min since last heartbeat = crashed)
-27. [ ] Add logging for debugging
+23. [ ] Implement `POST /api/admin/sample-verify` endpoint with `FINAL`/`argMax`
+24. [ ] Implement `POST /api/admin/partition-coverage-check` endpoint
+25. [ ] Add sample verify UI with results display
+26. [ ] Add partition coverage UI showing per-month counts
+27. [ ] Add stale job detection (>30min since last heartbeat = crashed)
+28. [ ] Add logging for debugging
 
 ### Phase 4: Polish & Hardening
 
-28. [ ] Add backfill detection (rows with old `updatedAt` trigger warning)
-29. [ ] Consider scheduled refresh (cron) if needed
-30. [ ] Document when to run full recount vs incremental
+29. [ ] Add backfill detection (rows with old `updatedAt` trigger warning)
+30. [ ] Consider scheduled refresh (cron) if needed
+31. [ ] Document when to run full recount vs incremental
 
 ---
 
