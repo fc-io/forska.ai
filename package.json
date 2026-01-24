@@ -39,8 +39,6 @@
     "db:r:p": "bun scripts/dbPush.ts --force --no-restore",
     "db:r:pull": "bun scripts/dbRemotePull.ts",
     "db:reset": "bun scripts/dbClear.ts --drop --force",
-
-    "validate:dual-write": "bun --env-file=.env.local scripts/validateJudgmentsDualWrite.ts",
     "f:p": "bun scripts/sbatchPut.ts",
     "dis:db:merge-from-remote-dump": "bun scripts/dbMergeRemoteDump.ts",
     "dis:db:r:p": "SSH_ALIAS=dis STACK_ROOT=/valhalla/projects/ehpc-aif-2025pg01-233/dev bun scripts/dbPush.ts --force --no-restore",
@@ -66,9 +64,7 @@
   "dependencies": {
     "@ai-sdk/openai": "^2.0.9",
     "@ark-ui/solid": "^5.18.3",
-    "@aws-sdk/client-s3": "^3.956.0",
     "@clickhouse/client": "^1.15.0",
-    "@dsnp/parquetjs": "^1.8.7",
     "@elysiajs/cors": "^1.4.1",
     "@elysiajs/cron": "^1.4.1",
     "@elysiajs/eden": "^1.4.6",

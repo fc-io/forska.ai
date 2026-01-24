@@ -168,27 +168,22 @@ const deleteUnexpectedJudgments = async (
       articles_map.set(article.id, article)
     }
 
-    const {writeJudgmentAnalyticsToParquet, getJudgmentsParquetDualWriteConfig} = await import(
-      '../../services/parquet/judgmentsParquetDualWrite.ts'
-    )
-    const parquetConfig = getJudgmentsParquetDualWriteConfig()
-
-    for (const judgment of toDelete) {
+    const {getClickhouseClient} = await import('../../services/clickhouse/clickhouseClient.ts')
+    const chClient = getClickhouseClient()
+    const clickhouseRecords = toDelete.map((judgment) => {
       const article = articles_map.get(judgment.articleId)
-      if (!article) continue
-
-      const denormalizedRecord = {
+      return {
         id: judgment.id,
-        createdAt: judgment.createdAt,
-        deletedAt: now,
-        articleId: article.id,
-        articleTitle: article.articleTitle,
-        articleCreatedAt: article.articleCreatedAt,
-        articleUpdatedAt: article.articleUpdatedAt,
-        articleCreatedYear: article.articleCreatedAt ? article.articleCreatedAt.getUTCFullYear() : null,
-        articleUpdatedYear: article.articleUpdatedAt ? article.articleUpdatedAt.getUTCFullYear() : null,
-        articleImportRoute: article.importRoute,
-        articleImportedBy: article.importedBy,
+        createdAt: formatDateForClickHouse(judgment.createdAt),
+        deletedAt: formatDateForClickHouse(now),
+        articleId: judgment.articleId,
+        articleTitle: article?.articleTitle ?? '',
+        articleCreatedAt: formatDateForClickHouse(article?.articleCreatedAt ?? null),
+        articleUpdatedAt: formatDateForClickHouse(article?.articleUpdatedAt ?? null),
+        articleCreatedYear: article?.articleCreatedAt ? article.articleCreatedAt.getUTCFullYear() : null,
+        articleUpdatedYear: article?.articleUpdatedAt ? article.articleUpdatedAt.getUTCFullYear() : null,
+        articleImportRoute: article?.importRoute ?? null,
+        articleImportedBy: article?.importedBy ?? null,
         promptId,
         modelId: judgment.modelId,
         useTitle: judgment.useTitle,
@@ -196,47 +191,14 @@ const deleteUnexpectedJudgments = async (
         useFulltext: judgment.useFulltext,
         useFulltextNoImages: judgment.useFulltextNoImages,
         answeredOriginal: null,
-        answeredOriginalAsArray: judgment.answeredOriginalAsArray,
+        answeredOriginalAsArray: judgment.answeredOriginalAsArray ?? [],
         explanation: null,
         quotes: null,
       }
+    })
 
-      await writeJudgmentAnalyticsToParquet(denormalizedRecord)
-    }
-
-    if (!parquetConfig.enabled) {
-      const {getClickhouseClient} = await import('../../services/clickhouse/clickhouseClient.ts')
-      const chClient = getClickhouseClient()
-      const clickhouseRecords = toDelete.map((judgment) => {
-        const article = articles_map.get(judgment.articleId)
-        return {
-          id: judgment.id,
-          createdAt: formatDateForClickHouse(judgment.createdAt),
-          deletedAt: formatDateForClickHouse(now),
-          articleId: judgment.articleId,
-          articleTitle: article?.articleTitle ?? null,
-          articleCreatedAt: formatDateForClickHouse(article?.articleCreatedAt ?? null),
-          articleUpdatedAt: formatDateForClickHouse(article?.articleUpdatedAt ?? null),
-          articleCreatedYear: article?.articleCreatedAt ? article.articleCreatedAt.getUTCFullYear() : null,
-          articleUpdatedYear: article?.articleUpdatedAt ? article.articleUpdatedAt.getUTCFullYear() : null,
-          articleImportRoute: article?.importRoute ?? null,
-          articleImportedBy: article?.importedBy ?? null,
-          promptId,
-          modelId: judgment.modelId,
-          useTitle: judgment.useTitle,
-          useAbstract: judgment.useAbstract,
-          useFulltext: judgment.useFulltext,
-          useFulltextNoImages: judgment.useFulltextNoImages,
-          answeredOriginal: null,
-          answeredOriginalAsArray: judgment.answeredOriginalAsArray ?? [],
-          explanation: null,
-          quotes: null,
-        }
-      })
-
-      await chClient.insert({table: 'forska.judgments', values: clickhouseRecords, format: 'JSONEachRow'})
-      console.log(`[Admin] Inserted ${clickhouseRecords.length} tombstone records to ClickHouse`)
-    }
+    await chClient.insert({table: 'forska.judgments', values: clickhouseRecords, format: 'JSONEachRow'})
+    console.log(`[Admin] Inserted ${clickhouseRecords.length} tombstone records to ClickHouse`)
 
     return {deleted: toDelete.length}
   }
@@ -282,27 +244,22 @@ const deleteUnexpectedJudgments = async (
     articles_map.set(article.id, article)
   }
 
-  const {writeJudgmentAnalyticsToParquet, getJudgmentsParquetDualWriteConfig} = await import(
-    '../../services/parquet/judgmentsParquetDualWrite.ts'
-  )
-  const parquetConfig = getJudgmentsParquetDualWriteConfig()
-
-  for (const judgment of toDelete) {
+  const {getClickhouseClient} = await import('../../services/clickhouse/clickhouseClient.ts')
+  const chClient = getClickhouseClient()
+  const clickhouseRecords = toDelete.map((judgment) => {
     const article = articles_map.get(judgment.articleId)
-    if (!article) continue
-
-    const denormalizedRecord = {
+    return {
       id: judgment.id,
-      createdAt: judgment.createdAt,
-      deletedAt: now,
-      articleId: article.id,
-      articleTitle: article.articleTitle,
-      articleCreatedAt: article.articleCreatedAt,
-      articleUpdatedAt: article.articleUpdatedAt,
-      articleCreatedYear: article.articleCreatedAt ? article.articleCreatedAt.getUTCFullYear() : null,
-      articleUpdatedYear: article.articleUpdatedAt ? article.articleUpdatedAt.getUTCFullYear() : null,
-      articleImportRoute: article.importRoute,
-      articleImportedBy: article.importedBy,
+      createdAt: formatDateForClickHouse(judgment.createdAt),
+      deletedAt: formatDateForClickHouse(now),
+      articleId: judgment.articleId,
+      articleTitle: article?.articleTitle ?? '',
+      articleCreatedAt: formatDateForClickHouse(article?.articleCreatedAt ?? null),
+      articleUpdatedAt: formatDateForClickHouse(article?.articleUpdatedAt ?? null),
+      articleCreatedYear: article?.articleCreatedAt ? article.articleCreatedAt.getUTCFullYear() : null,
+      articleUpdatedYear: article?.articleUpdatedAt ? article.articleUpdatedAt.getUTCFullYear() : null,
+      articleImportRoute: article?.importRoute ?? null,
+      articleImportedBy: article?.importedBy ?? null,
       promptId,
       modelId: judgment.modelId,
       useTitle: judgment.useTitle,
@@ -310,47 +267,14 @@ const deleteUnexpectedJudgments = async (
       useFulltext: judgment.useFulltext,
       useFulltextNoImages: judgment.useFulltextNoImages,
       answeredOriginal: judgment.answeredOriginal,
-      answeredOriginalAsArray: null,
+      answeredOriginalAsArray: [],
       explanation: null,
       quotes: null,
     }
+  })
 
-    await writeJudgmentAnalyticsToParquet(denormalizedRecord)
-  }
-
-  if (!parquetConfig.enabled) {
-    const {getClickhouseClient} = await import('../../services/clickhouse/clickhouseClient.ts')
-    const chClient = getClickhouseClient()
-    const clickhouseRecords = toDelete.map((judgment) => {
-      const article = articles_map.get(judgment.articleId)
-      return {
-        id: judgment.id,
-        createdAt: formatDateForClickHouse(judgment.createdAt),
-        deletedAt: formatDateForClickHouse(now),
-        articleId: judgment.articleId,
-        articleTitle: article?.articleTitle ?? null,
-        articleCreatedAt: formatDateForClickHouse(article?.articleCreatedAt ?? null),
-        articleUpdatedAt: formatDateForClickHouse(article?.articleUpdatedAt ?? null),
-        articleCreatedYear: article?.articleCreatedAt ? article.articleCreatedAt.getUTCFullYear() : null,
-        articleUpdatedYear: article?.articleUpdatedAt ? article.articleUpdatedAt.getUTCFullYear() : null,
-        articleImportRoute: article?.importRoute ?? null,
-        articleImportedBy: article?.importedBy ?? null,
-        promptId,
-        modelId: judgment.modelId,
-        useTitle: judgment.useTitle,
-        useAbstract: judgment.useAbstract,
-        useFulltext: judgment.useFulltext,
-        useFulltextNoImages: judgment.useFulltextNoImages,
-        answeredOriginal: judgment.answeredOriginal,
-        answeredOriginalAsArray: [],
-        explanation: null,
-        quotes: null,
-      }
-    })
-
-    await chClient.insert({table: 'forska.judgments', values: clickhouseRecords, format: 'JSONEachRow'})
-    console.log(`[Admin] Inserted ${clickhouseRecords.length} tombstone records to ClickHouse`)
-  }
+  await chClient.insert({table: 'forska.judgments', values: clickhouseRecords, format: 'JSONEachRow'})
+  console.log(`[Admin] Inserted ${clickhouseRecords.length} tombstone records to ClickHouse`)
 
   return {deleted: toDelete.length}
 }
@@ -1460,29 +1384,6 @@ export const adminInvestigateRoutes = new Elysia()
     const {syncArticlesToClickHouse} = await import('../../../scripts/syncArticlesToClickHouse.ts')
     const result = await syncArticlesToClickHouse()
     return result
-  })
-  .get('/api/admin/parquet-dual-write-status', async () => {
-    const {getJudgmentsParquetDualWriteConfig} = await import('../../services/parquet/judgmentsParquetDualWrite.ts')
-    const {getDefaultWriterPendingCount} = await import('../../services/parquet/parquetWriter.ts')
-
-    const config = getJudgmentsParquetDualWriteConfig()
-    const pendingCount = getDefaultWriterPendingCount()
-
-    return {
-      enabled: config.enabled,
-      s3Configured: config.s3Configured,
-      batchSize: config.batchSize,
-      flushIntervalMs: config.flushIntervalMs,
-      pendingRecords: pendingCount,
-      envVars: {
-        S3_ENDPOINT: process.env.S3_ENDPOINT ? 'set' : 'not set',
-        S3_ACCESS_KEY: process.env.S3_ACCESS_KEY ? 'set' : 'not set',
-        S3_SECRET_KEY: process.env.S3_SECRET_KEY ? 'set' : 'not set',
-        S3_BUCKET: process.env.S3_BUCKET ? 'set' : 'not set',
-        PARQUET_JUDGMENTS_DUAL_WRITE:
-          process.env.PARQUET_JUDGMENTS_DUAL_WRITE ?? 'not set (defaults to true if S3 configured)',
-      },
-    }
   })
   .post(
     '/api/admin/backfill-project-judgments',

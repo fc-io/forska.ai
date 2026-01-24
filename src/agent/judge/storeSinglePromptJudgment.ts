@@ -2,72 +2,8 @@ import {randomUUID} from 'crypto'
 import {and, eq} from 'drizzle-orm'
 
 import {articles, judgments, models, projects} from '../../db/schema.ts'
-import type {DenormalizedJudgmentAnalytics} from '../../services/parquet'
-import {writeJudgmentAnalyticsToParquet} from '../../services/parquet/judgmentsParquetDualWrite.ts'
 import {judgeStoreJudgmentGetStringAsArrayOfStrings} from './judgeStoreJudgment/judgeStoreJudgmentGetStringAsArrayOfStrings.ts'
 import type {SinglePromptJudgmentResult} from './parseSinglePromptJudgment.ts'
-
-const getYearFromDate = (date: Date | null): number | null => {
-  return date ? date.getUTCFullYear() : null
-}
-
-const getQuotesAsJsonString = (quotes: string[] | null): string | null => {
-  return quotes ? JSON.stringify(quotes) : null
-}
-
-const buildDenormalizedJudgmentAnalyticsRecord = ({
-  id,
-  createdAt,
-  article,
-  promptId,
-  modelId,
-  useTitle,
-  useAbstract,
-  useFulltext,
-  useFulltextNoImages,
-  answeredOriginal,
-  answeredOriginalAsArray,
-  explanation,
-  quotes,
-}: {
-  id: string
-  createdAt: Date
-  article: typeof articles.$inferSelect
-  promptId: string
-  modelId: string
-  useTitle: boolean
-  useAbstract: boolean
-  useFulltext: boolean
-  useFulltextNoImages: boolean
-  answeredOriginal: string | null
-  answeredOriginalAsArray: string[] | null
-  explanation: string | null
-  quotes: string[] | null
-}): DenormalizedJudgmentAnalytics => {
-  return {
-    id,
-    createdAt,
-    deletedAt: null,
-    articleId: article.id,
-    articleTitle: article.articleTitle,
-    articleCreatedAt: article.articleCreatedAt,
-    articleUpdatedAt: article.articleUpdatedAt,
-    articleCreatedYear: getYearFromDate(article.articleCreatedAt),
-    articleUpdatedYear: getYearFromDate(article.articleUpdatedAt),
-    articleImportRoute: article.importRoute,
-    articleImportedBy: article.importedBy,
-    promptId,
-    modelId,
-    useTitle,
-    useAbstract,
-    useFulltext,
-    useFulltextNoImages,
-    answeredOriginal,
-    answeredOriginalAsArray,
-    explanation,
-    quotes: getQuotesAsJsonString(quotes),
-  }
-}
 
 /**
  * Stores a judgment for a single prompt.
@@ -182,24 +118,6 @@ export const storeSinglePromptJudgment = async ({
       snapshotProjectId: snapshotValues.snapshotProjectId,
       snapshotProjectModelName: snapshotValues.snapshotProjectModelName,
     })
-
-    const denormalizedRecord = buildDenormalizedJudgmentAnalyticsRecord({
-      id,
-      createdAt,
-      article,
-      promptId,
-      modelId,
-      useTitle,
-      useAbstract,
-      useFulltext,
-      useFulltextNoImages,
-      answeredOriginal,
-      answeredOriginalAsArray,
-      explanation: answeredExplanation || null,
-      quotes: answeredQuotes,
-    })
-
-    await writeJudgmentAnalyticsToParquet(denormalizedRecord)
   } catch (error) {
     console.error(
       `${article.id} | Failed to store judgment for prompt ${promptId}`,

@@ -1,7 +1,6 @@
 import {cors} from '@elysiajs/cors'
 import {Elysia} from 'elysia'
 
-import {flushDefaultWriterIfPresent} from '../services/parquet/parquetWriter'
 import {fullTextConversionJobsCron} from './cron/fullTextConversionJobs.ts'
 import {fullTextJobsCron} from './cron/fullTextJobs.ts'
 import {judgmentsJobsCron} from './cron/judgmentsJobs.ts'
@@ -20,7 +19,6 @@ import {judgmentsRoutes} from './routes/JudgmentsRoutes.ts'
 import {llmStatusRoutes} from './routes/LlmStatusRoutes.ts'
 import {modelsRoutes} from './routes/ModelsRoutes.ts'
 import {nvidiaSmiRoutes} from './routes/NvidiaSmiRoutes.ts'
-import {parquetRoutes} from './routes/ParquetRoutes'
 import {projectArticlesRoutes} from './routes/ProjectArticlesRoutes.ts'
 import {projectExportRoutes} from './routes/ProjectExportRoutes.ts'
 import {projectsAddArticlesRoutes} from './routes/ProjectsAddArticlesRoutes.ts'
@@ -67,31 +65,11 @@ const _app = new Elysia()
   .use(llmStatusRoutes)
   .use(nvidiaSmiRoutes)
   .use(subprojectsRoutes)
-  .use(parquetRoutes)
   .use(aaModelsRoutes)
   .listen(env.API_SERVER_PORT)
 
 console.log(
   `🦊 Elysia is running on :${env.API_SERVER_PORT} (nodes=${env.GPU_NNODES}, gpus/node=${env.GPU_GPUS_PER_NODE}, total_gpus=${env.GPU_TOTAL_GPUS}, shape=${env.GPU_SHAPE}, tp=${env.TP_SIZE}, pp=${env.PP_SIZE}, dp=${env.DP_SIZE}, SGLANG_MAX_RUNNING_REQUESTS=${env.SGLANG_MAX_RUNNING_REQUESTS}, SGLANG_API_MAX_INFLIGHT_REQUESTS=${env.SGLANG_API_MAX_INFLIGHT_REQUESTS}, SGLANG_CONTEXT_LENGTH=${env.SGLANG_CONTEXT_LENGTH}, BUN_CONFIG_MAX_HTTP_REQUESTS=${process.env.BUN_CONFIG_MAX_HTTP_REQUESTS})`,
 )
-
-const flushParquetAndExit = (signal: string) => {
-  console.log(`[Shutdown] ${signal} received; flushing pending Parquet writes...`)
-  return flushDefaultWriterIfPresent()
-    .catch((error) => {
-      console.error('[Shutdown] Failed to flush Parquet writer', error)
-    })
-    .finally(() => {
-      process.exit(0)
-    })
-}
-
-process.on('SIGINT', () => {
-  void flushParquetAndExit('SIGINT')
-})
-
-process.on('SIGTERM', () => {
-  void flushParquetAndExit('SIGTERM')
-})
 
 export type App = typeof _app
