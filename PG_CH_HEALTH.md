@@ -3,22 +3,29 @@
 ## Recent Fixes (Done)
 
 - [x] Fix CH DateTime parsing (UTC; no `new Date(str)` / `+ 'Z'`)
-- [x] Filter `deletedAt IS NULL` in CH query layer
+- [x] Temp: filter `deletedAt IS NULL` in CH query layer (until delete-only table)
 - [x] Normalize CH `quotes` to `string[]` (JSON string/array)
 - [x] Fix CH inserts sending `null` to non-null cols (`articleTitle`)
 - [x] Doc: CH delete syntax/params (no `?`; use `query_params`)
 
 ## Target Architecture
 
-PostgreSQL is source of truth. Target: CH holds only live rows via **MergeTree + deletes**.
+PostgreSQL is source of truth. Target: CH holds only live rows (no tombstones) via **MergeTree + deletes**.
 
 | Operation | CH Action |
 |-----------|-----------|
 | PG insert | INSERT into CH |
 | PG update | DELETE + INSERT in CH |
-| PG soft-delete | DELETE FROM CH |
+| PG judgment soft-delete (`deletedAt`) | DELETE FROM CH |
+| PG article hard-delete | DELETE FROM CH |
 
 Requires CH delete support + monotonic watermark not derived from table (deletes can drop `max(updatedAt)`). Deletes async → temp dupes/count mismatch.
+
+Delete propagation (both paths):
+- Write-path (API): when deleting in PG → issue CH delete by id (best-effort; retryable)
+- Backfill: also apply deletes missed by write-path
+  - Judgments: read `deletedAt` since watermark → CH delete
+  - Articles: hard-deletes need a PG delete log (or periodic id diff) → CH delete
 
 ---
 
@@ -29,11 +36,11 @@ Manual backfill routes:
 | Route | Purpose |
 |-------|---------|
 | `POST /api/admin/backfill-judgments-to-clickhouse` | Sync new rows from `max(createdAt)` forward |
-| `POST /api/admin/sync-deleted-judgments-to-clickhouse` | Sync soft-deleted rows (tombstones) |
+| `POST /api/admin/sync-deleted-judgments-to-clickhouse` | Sync deleted judgments (delete in CH) |
 | `POST /api/admin/sync-articles-to-clickhouse` | Sync articles by `updated_at` |
 | `GET /api/admin/clickhouse-sync-status` | Health check comparing max createdAt |
 
-Current CH impl uses tombstones (`deletedAt`) + ReplacingMergeTree-ish semantics.
+Current CH impl uses tombstones (`deletedAt`) + ReplacingMergeTree-ish semantics. Target removes tombstones (physical deletes).
 
 ---
 
@@ -76,7 +83,6 @@ CREATE TABLE forska.judgments_new (
     id String,
     createdAt DateTime64(6, 'UTC'),
     updatedAt DateTime64(6, 'UTC'),
-    deletedAt Nullable(DateTime64(6, 'UTC')),
     articleId String,
     articleTitle String,
     articleCreatedAt Nullable(DateTime64(6, 'UTC')),
@@ -101,7 +107,7 @@ ORDER BY (id);
 ```
 
 - [ ] Update `scripts/clickhouse-setup.sql`
-- [ ] Update CH query code (many queries read/filter `deletedAt`)
+- [ ] Remove CH `deletedAt` filters (live-only table)
 - [ ] Revisit ORDER BY for query patterns (most filters: `modelId/promptId/articleId`, not `id`)
 - [ ] Drop old table, rename new table
 - [ ] Full resync from PG
@@ -145,6 +151,9 @@ ORDER BY (id);
 
 - [ ] Refactor `scripts/syncArticlesToClickHouse.ts` to use keyset pagination `(updated_at, id)`
 - [ ] Remove `LIMIT/OFFSET`
+- [ ] Handle article deletes:
+  - Write-path (API): on PG delete → CH delete by id
+  - Backfill: consume delete log (or periodic id diff) → CH delete
 
 ### Phase 5: Address Denorm Drift
 
@@ -165,6 +174,7 @@ ORDER BY (id);
 - [ ] New judgments sync correctly
 - [ ] Updated judgments sync correctly (old row deleted, new inserted)
 - [ ] Soft-deleted judgments removed from CH
+- [ ] Deleted articles removed from CH
 - [ ] Health check shows matching counts
 - [ ] Keyset pagination handles cursor ties correctly
 - [ ] Load test: sync 100k judgments
@@ -173,7 +183,7 @@ ORDER BY (id);
 
 ## Scale Notes (Millions+ Rows)
 
-- Row-level deletes are expensive; prefer insert-only (ReplacingMergeTree + tombstones) if update volume high
+- Row-level deletes are expensive; keep deletes batched + monitor `system.mutations`
 - Avoid full-table `COUNT(*)` in health checks (use time window / sampling / slower cron)
 - Keep CH `articles` slim (don’t sync `full_text`/PDF blobs unless needed)
 - Keep PG reads lean during sync (avoid `SELECT *` from `articles`)
