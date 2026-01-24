@@ -43,6 +43,21 @@ When a judgment is soft-deleted, `deletedAt` is set but `createdAt` remains unch
 
 ReplacingMergeTree deduplicates during background merges, not on insert. Queries may return duplicates until merge completes. Use `FINAL` modifier for guaranteed dedup (slower).
 
+**Why this happens:** ClickHouse optimizes for write speed. When you insert a row with an existing `id`, both rows coexist in separate "parts" (immutable data chunks). Background merge processes eventually combine parts and keep only the row with the highest version (`updatedAt`). Until merge runs, `SELECT` without `FINAL` returns both rows.
+
+**Impact:**
+
+- Counts can be inflated (`COUNT(*)` counts duplicates)
+- Aggregations may double-count affected rows
+- `GROUP BY id` returns multiple rows per id
+
+**Mitigations:**
+
+1. Use `SELECT ... FINAL` for accuracy (forces dedup at query time, slower)
+2. Use `OPTIMIZE TABLE forska.judgments FINAL` to force immediate merge (blocking, expensive)
+3. Accept eventual consistency for dashboards; use `FINAL` only for exports/reports
+4. Monitor dedup drift: `SELECT count() - uniqExact(id) FROM forska.judgments` should trend to 0
+
 ### 7. Health Check Can False-Alert
 
 If PG max row is deleted (or CH filter differs), `max(createdAt)` comparison reports lag even when non-deleted data is in sync. **Fix:** compare consistent predicates (+ add `updatedAt`).
@@ -130,7 +145,25 @@ Judgments store `articleTitle/*` snapshots. Later article updates in PG won’t 
   - Fetch from PG and insert to CH
   - Handles both missing rows and stale rows
 
-### Phase 5: Automated Sync (Optional)
+### Phase 5: Fix Articles Sync OFFSET
+
+- [ ] Refactor `scripts/syncArticlesToClickHouse.ts` to use keyset pagination on `(updated_at, id)`
+- [ ] Remove `LIMIT/OFFSET` pattern which degrades at scale and risks skip/dup on concurrent writes
+
+### Phase 6: Address Denorm Drift
+
+- [ ] Decide on strategy for article field drift in judgments:
+  - **Option A:** Accept drift (simplest, current behavior)
+  - **Option B:** Remove denormalized fields from CH judgments, join to `forska.articles` at query time
+  - **Option C:** Re-sync affected judgments when article is updated (complex, high write amplification)
+- [ ] Document chosen approach and update queries if needed
+
+### Phase 7: Ensure FINAL Usage for Accurate Queries
+
+- [ ] Audit all CH queries in codebase — add `FINAL` where accuracy matters (counts, exports, reports)
+- [ ] For dashboards where eventual consistency is acceptable, document that counts may briefly inflate after sync
+
+### Phase 8: Automated Sync (Optional)
 
 - [ ] Cron job or scheduled task to run sync periodically
 - [ ] Alert/notification when lag exceeds threshold
