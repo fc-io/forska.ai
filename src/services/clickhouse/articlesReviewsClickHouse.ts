@@ -25,6 +25,7 @@ import {isNumericType} from '../../server/routes/projectsRoutes/articlesReviewsF
 import {getDatabase} from '../../server/utils/getDatabase.ts'
 import {getJournalTitleFromOriginalData} from '../../utils/getJournalTitleFromOriginalData.ts'
 import {getClickhouseClient} from './clickhouseClient.ts'
+import {parseClickhouseDateTimeUtc} from './parseClickhouseDateTimeUtc.ts'
 
 /**
  * Threshold for using temp tables instead of IN clause.
@@ -71,7 +72,7 @@ export interface ClickHouseJudgmentRow {
   answeredOriginal: string | null
   answeredOriginalAsArray: string[]
   explanation: string | null
-  quotes: string | null
+  quotes: unknown
 }
 
 /**
@@ -182,6 +183,30 @@ const fetchProjectMetadataForClickHouse = async (projectId: string) => {
  */
 const escapeClickHouseString = (value: string): string => {
   return value.replace(/'/g, "''")
+}
+
+const parseQuotesFromClickhouse = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return value.filter((q): q is string => {
+      return typeof q === 'string'
+    })
+  }
+
+  const raw = typeof value === 'string' ? value.trim() : ''
+  const json = raw.startsWith('[') ? raw : ''
+
+  if (!json) return []
+
+  try {
+    const parsed = JSON.parse(json) as unknown
+    return Array.isArray(parsed)
+      ? parsed.filter((q): q is string => {
+          return typeof q === 'string'
+        })
+      : []
+  } catch {
+    return []
+  }
 }
 
 /**
@@ -318,6 +343,7 @@ export const queryArticlesReviewsFromClickHouse = async (
     whereParts.push(`useAbstract = ${metadata.useAbstract ? 'true' : 'false'}`)
     whereParts.push(`useFulltext = ${metadata.useFulltext ? 'true' : 'false'}`)
     whereParts.push(`useFulltextNoImages = ${metadata.useFulltextNoImages ? 'true' : 'false'}`)
+    whereParts.push(`deletedAt IS NULL`)
 
     // Date bounds
     const effectiveFromDate =
@@ -563,13 +589,23 @@ export const queryArticlesReviewsFromClickHouse = async (
       FROM judgments
       WHERE articleId IN (${articleIdsQuoted})
         AND promptId IN (${promptIdsQuoted})
+        AND deletedAt IS NULL
       ORDER BY articleId, createdAt DESC
     `
 
     console.time('ch:judgments_query')
     const judgmentsResult = await client.query({query: judgmentsQuery, format: 'JSONEachRow'})
 
-    const judgmentsData = await judgmentsResult.json<ClickHouseJudgmentRow>()
+    const judgmentsDataRaw = await judgmentsResult.json<ClickHouseJudgmentRow>()
+    const judgmentsData = judgmentsDataRaw.map((j) => {
+      return {
+        ...j,
+        answeredOriginalAsArray: (j.answeredOriginalAsArray ?? []).filter((v): v is string => {
+          return typeof v === 'string'
+        }),
+        quotes: parseQuotesFromClickhouse(j.quotes),
+      }
+    })
     console.timeEnd('ch:judgments_query')
     console.log(`[ClickHouse] Fetched ${judgmentsData.length} judgments`)
 
@@ -617,8 +653,8 @@ export const queryArticlesReviewsFromClickHouse = async (
       return {
         id: article.articleId,
         articleTitle: article.title_,
-        articleCreatedAt: article.created_ ? new Date(article.created_) : null,
-        articleUpdatedAt: article.updated_ ? new Date(article.updated_) : null,
+        articleCreatedAt: parseClickhouseDateTimeUtc(article.created_),
+        articleUpdatedAt: parseClickhouseDateTimeUtc(article.updated_),
         judgments: sortedJudgments,
         judgedPromptIds,
         isFullyJudged,
@@ -732,6 +768,7 @@ export const countArticlesReviewsFromClickHouse = async (
       whereParts.push(`useAbstract = ${metadata.useAbstract ? 'true' : 'false'}`)
       whereParts.push(`useFulltext = ${metadata.useFulltext ? 'true' : 'false'}`)
       whereParts.push(`useFulltextNoImages = ${metadata.useFulltextNoImages ? 'true' : 'false'}`)
+      whereParts.push(`deletedAt IS NULL`)
 
       // Date bounds
       const effectiveFromDate =

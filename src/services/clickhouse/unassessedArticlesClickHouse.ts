@@ -10,6 +10,7 @@ import {and, eq} from 'drizzle-orm'
 import {importRoute, projectArticles, projectPrompts, projectRouteLink, projects} from '../../db/schema.ts'
 import {getDatabase} from '../../server/utils/getDatabase.ts'
 import {getClickhouseClient} from './clickhouseClient.ts'
+import {parseClickhouseDateTimeUtc} from './parseClickhouseDateTimeUtc.ts'
 
 const CURATED_ARTICLES_TEMP_TABLE_THRESHOLD = 1000
 const TEMP_TABLE_INSERT_BATCH_SIZE = 10000
@@ -513,8 +514,8 @@ export const getUnassessedArticlesFromClickHouse = async (
         id: row.id,
         articleId: row.article_id,
         articleTitle: row.article_title,
-        articleCreatedAt: row.article_created_at ? new Date(row.article_created_at) : null,
-        articleUpdatedAt: row.article_updated_at ? new Date(row.article_updated_at) : null,
+        articleCreatedAt: parseClickhouseDateTimeUtc(row.article_created_at),
+        articleUpdatedAt: parseClickhouseDateTimeUtc(row.article_updated_at),
       }
     })
 
@@ -538,7 +539,8 @@ const buildCursorCondition = (cursor: PaginationCursor | null): string => {
 
 const extractNextCursor = (data: Array<{article_id: string; sort_date: string}>): PaginationCursor | null => {
   const lastRow = data[data.length - 1]
-  return lastRow ? {lastDate: new Date(lastRow.sort_date), lastArticleId: lastRow.article_id} : null
+  const lastDate = lastRow ? parseClickhouseDateTimeUtc(lastRow.sort_date) : null
+  return lastRow && lastDate ? {lastDate, lastArticleId: lastRow.article_id} : null
 }
 
 export const getUnassessedPairsFromClickHouse = async (

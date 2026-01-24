@@ -14,6 +14,7 @@ import {
   projects,
   prompts,
 } from '../../db/schema.ts'
+import {parseClickhouseDateTimeUtc} from '../../services/clickhouse/parseClickhouseDateTimeUtc.ts'
 import {requireUserAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
@@ -398,7 +399,7 @@ const syncDeletedJudgmentsToClickhouse = async () => {
       createdAt: formatDateForClickHouse(judgment.createdAt),
       deletedAt: formatDateForClickHouse(judgment.deletedAt),
       articleId: judgment.articleId,
-      articleTitle: article?.articleTitle ?? null,
+      articleTitle: article?.articleTitle ?? '',
       articleCreatedAt: formatDateForClickHouse(article?.articleCreatedAt ?? null),
       articleUpdatedAt: formatDateForClickHouse(article?.articleUpdatedAt ?? null),
       articleCreatedYear: article?.articleCreatedAt ? article.articleCreatedAt.getUTCFullYear() : null,
@@ -472,8 +473,7 @@ const getClickhouseSyncStatus = async () => {
     })
 
     const [chRow] = chResult
-    // ClickHouse returns timestamps without timezone - treat as UTC
-    const chMaxCreatedAt = chRow?.maxCreatedAt ? new Date(chRow.maxCreatedAt + 'Z') : null
+    const chMaxCreatedAt = parseClickhouseDateTimeUtc(chRow?.maxCreatedAt)
 
     const lagMs = pgMaxCreatedAt && chMaxCreatedAt ? pgMaxCreatedAt.getTime() - chMaxCreatedAt.getTime() : null
     const lagSeconds = lagMs !== null ? Math.round(lagMs / 1000) : null
@@ -787,8 +787,7 @@ const runBackfillAsync = async (batchSize: number = 1000) => {
         format: 'JSONEachRow',
       })
       const [chMaxRow] = await chMaxResult.json<{maxCreatedAt: string | null}>()
-      // ClickHouse returns timestamps without timezone - treat as UTC
-      const chMaxCreatedAt = chMaxRow?.maxCreatedAt ? new Date(chMaxRow.maxCreatedAt + 'Z') : new Date(0)
+      const chMaxCreatedAt = parseClickhouseDateTimeUtc(chMaxRow?.maxCreatedAt) ?? new Date(0)
 
       console.log(`[Backfill] ClickHouse max createdAt: ${chMaxCreatedAt.toISOString()}`)
 
@@ -829,7 +828,7 @@ const runBackfillAsync = async (batchSize: number = 1000) => {
             createdAt: formatDateForClickHouse(judgment.createdAt),
             deletedAt: formatDateForClickHouse(judgment.deletedAt),
             articleId: judgment.articleId,
-            articleTitle: article?.articleTitle ?? null,
+            articleTitle: article?.articleTitle ?? '',
             articleCreatedAt: formatDateForClickHouse(article?.articleCreatedAt ?? null),
             articleUpdatedAt: formatDateForClickHouse(article?.articleUpdatedAt ?? null),
             articleCreatedYear: article?.articleCreatedAt ? article.articleCreatedAt.getUTCFullYear() : null,
@@ -1526,7 +1525,7 @@ export const adminInvestigateRoutes = new Elysia()
             createdAt: formatDateForClickHouse(judgment.createdAt),
             deletedAt: formatDateForClickHouse(judgment.deletedAt),
             articleId: judgment.articleId,
-            articleTitle: article?.articleTitle ?? null,
+            articleTitle: article?.articleTitle ?? '',
             articleCreatedAt: formatDateForClickHouse(article?.articleCreatedAt ?? null),
             articleUpdatedAt: formatDateForClickHouse(article?.articleUpdatedAt ?? null),
             articleCreatedYear: article?.articleCreatedAt ? article.articleCreatedAt.getUTCFullYear() : null,

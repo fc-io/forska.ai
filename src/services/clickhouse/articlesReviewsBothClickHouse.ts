@@ -24,6 +24,7 @@ import {
 import {getDatabase} from '../../server/utils/getDatabase.ts'
 import {getJournalTitleFromOriginalData} from '../../utils/getJournalTitleFromOriginalData.ts'
 import {getClickhouseClient} from './clickhouseClient.ts'
+import {parseClickhouseDateTimeUtc} from './parseClickhouseDateTimeUtc.ts'
 
 /**
  * Input parameters for articles reviews both query
@@ -58,7 +59,7 @@ interface ClickHouseJudgmentRow {
   answeredOriginal: string | null
   answeredOriginalAsArray: string[]
   explanation: string | null
-  quotes: string | null
+  quotes: unknown
 }
 
 /**
@@ -90,6 +91,30 @@ export interface ArticlesReviewsBothResponse {
  */
 const escapeClickHouseString = (value: string): string => {
   return value.replace(/'/g, "''")
+}
+
+const parseQuotesFromClickhouse = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return value.filter((q): q is string => {
+      return typeof q === 'string'
+    })
+  }
+
+  const raw = typeof value === 'string' ? value.trim() : ''
+  const json = raw.startsWith('[') ? raw : ''
+
+  if (!json) return []
+
+  try {
+    const parsed = JSON.parse(json) as unknown
+    return Array.isArray(parsed)
+      ? parsed.filter((q): q is string => {
+          return typeof q === 'string'
+        })
+      : []
+  } catch {
+    return []
+  }
 }
 
 /**
@@ -242,6 +267,7 @@ export const queryArticlesReviewsBothFromClickHouse = async (
   whereParts.push(`useAbstract = ${useAbstract ? 'true' : 'false'}`)
   whereParts.push(`useFulltext = ${useFulltext ? 'true' : 'false'}`)
   whereParts.push(`useFulltextNoImages = ${useFulltextNoImages ? 'true' : 'false'}`)
+  whereParts.push(`deletedAt IS NULL`)
 
   // Article filter (must be human-assessed)
   const humanArticleIdsQuoted = humanAssessedArticleIds
@@ -412,10 +438,20 @@ export const queryArticlesReviewsBothFromClickHouse = async (
     FROM judgments
     WHERE articleId IN (${articleIdsQuoted})
       AND promptId IN (${promptIdsQuoted})
+      AND deletedAt IS NULL
     ORDER BY articleId, createdAt DESC
   `
   const judgmentsResult = await client.query({query: judgmentsQuery, format: 'JSONEachRow'})
-  const judgmentsData = await judgmentsResult.json<ClickHouseJudgmentRow>()
+  const judgmentsDataRaw = await judgmentsResult.json<ClickHouseJudgmentRow>()
+  const judgmentsData = judgmentsDataRaw.map((j) => {
+    return {
+      ...j,
+      answeredOriginalAsArray: (j.answeredOriginalAsArray ?? []).filter((v): v is string => {
+        return typeof v === 'string'
+      }),
+      quotes: parseQuotesFromClickhouse(j.quotes),
+    }
+  })
   console.timeEnd('ch:both:judgments')
 
   // Group judgments by articleId
@@ -531,8 +567,8 @@ export const queryArticlesReviewsBothFromClickHouse = async (
     return {
       id: article.articleId,
       articleTitle: article.title_,
-      articleCreatedAt: article.created_ ? new Date(article.created_) : null,
-      articleUpdatedAt: article.updated_ ? new Date(article.updated_) : null,
+      articleCreatedAt: parseClickhouseDateTimeUtc(article.created_),
+      articleUpdatedAt: parseClickhouseDateTimeUtc(article.updated_),
       judgments: sortedJudgments,
       humanAnswersByPrompt: humanAnswersByArticlePrompt[article.articleId],
       journalTitle: journalTitlesByArticleId[article.articleId] ?? null,

@@ -59,7 +59,7 @@ DELETEs can lag; old+new rows can coexist until mutation done. Health checks mus
 
 ## Implementation Checklist
 
-### Phase 1: Migrate to MergeTree + Lightweight Deletes
+### Phase 1: Migrate to MergeTree + Deletes
 
 - [ ] Create new table with MergeTree engine:
 
@@ -68,6 +68,7 @@ CREATE TABLE forska.judgments_new (
     id String,
     createdAt DateTime64(6, 'UTC'),
     updatedAt DateTime64(6, 'UTC'),
+    deletedAt Nullable(DateTime64(6, 'UTC')),
     articleId String,
     articleTitle String,
     articleCreatedAt Nullable(DateTime64(6, 'UTC')),
@@ -85,7 +86,7 @@ CREATE TABLE forska.judgments_new (
     answeredOriginal Nullable(String),
     answeredOriginalAsArray Array(Nullable(String)),
     explanation Nullable(String),
-    quotes Nullable(String)
+    quotes Array(String)
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMM(createdAt)
 ORDER BY (id);
@@ -103,12 +104,13 @@ ORDER BY (id);
   1. Get watermark from durable state (table/kv), not `max(updatedAt)` on `forska.judgments`
   2. Fetch PG rows where `(updatedAt, id) > watermark`
   3. For each row:
-     - If `deletedAt IS NOT NULL`: `DELETE FROM forska.judgments WHERE id = ?`
-     - Else: `DELETE FROM ... WHERE id = ?` then `INSERT`
+     - If `deletedAt IS NOT NULL`: `ALTER TABLE forska.judgments DELETE WHERE id = {id:String}`
+     - Else: `ALTER TABLE ... DELETE WHERE id = {id:String}` then `INSERT`
 - [ ] Use keyset pagination `(updatedAt, id)` — no OFFSET
 - [ ] Tie-breaker ordering must match PG+CH (UUID vs String): use `id::text` in PG (or CH `UUID`)
 - [ ] Batch deletes/inserts (avoid per-row mutations); monitor `system.mutations` backlog
 - [ ] CH insert schema strict: never send `null` to non-null cols (e.g. `articleTitle String`)
+- [ ] ClickHouse has no `?` placeholders; use `{id:String}` + `query_params` (or batched `IN (...)`)
 - [ ] Deprecate old endpoints: `backfill-judgments`, `sync-deleted-judgments`
 
 ### Phase 3: Improve Health Check
@@ -119,6 +121,8 @@ ORDER BY (id);
   - Should match
 - [ ] Compare `max(updatedAt)` with same predicate (PG `deletedAt IS NULL`, CH is live-only)
 - [ ] If `system.mutations` has pending deletes, report `status=mutating` (avoid false alerts)
+- [ ] Avoid parsing CH datetime strings in JS; prefer epoch:
+  - CH: `toUnixTimestamp64Milli(max(updatedAt)) AS maxUpdatedAtMs`
 - [ ] Return structured status:
 
 ```typescript
