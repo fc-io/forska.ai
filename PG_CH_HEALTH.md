@@ -1,5 +1,13 @@
 # Plan: PostgreSQL ↔ ClickHouse Sync Health
 
+## Recent Fixes (Done)
+
+- [x] Fix CH DateTime parsing (UTC; no `new Date(str)` / `+ 'Z'`)
+- [x] Filter `deletedAt IS NULL` in CH query layer
+- [x] Normalize CH `quotes` to `string[]` (JSON string/array)
+- [x] Fix CH inserts sending `null` to non-null cols (`articleTitle`)
+- [x] Doc: CH delete syntax/params (no `?`; use `query_params`)
+
 ## Target Architecture
 
 PostgreSQL is source of truth. Target: CH holds only live rows via **MergeTree + deletes**.
