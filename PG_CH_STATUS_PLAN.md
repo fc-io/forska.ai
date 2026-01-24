@@ -34,6 +34,13 @@ This plan addresses several subtle correctness and performance issues:
 
 - **PG_CH_HEALTH.md Phase-1:** CH judgments `updatedAt` needed for update-lag + `argMax` correctness. Until then, show insert-lag only (`createdAt`).
 - **PG_CH_HEALTH.md Phase-5:** `scripts/syncArticlesToClickHouse.ts` should be keyset `(updated_at, id)` (no OFFSET) for correctness/perf at 10M+ rows.
+- **Invariant:** PG `updated_at` must bump on UPDATE + soft delete; else watermark+lag lies.
+
+## Pre-flight Checks
+
+- Seed 4 `pgChSyncStats` rows (locks no-op if missing)
+- CH counts from client are often strings; keep as string/BigInt (avoid `Number()` at 10M+)
+- Ensure CH DDL supports intended checks (ORDER BY / PARTITION); avoid keyset WHERE if not aligned
 
 ## Architecture
 
@@ -82,7 +89,7 @@ Incremental counting **cannot stay perfectly accurate** when rows are updated or
 1. **Approximate counts** — fast, incremental, **inflate on updates** (use for progress indication only)
 2. **Periodic full recount** — expensive but accurate, resets drift
 3. **`uniqueCount`** — accurate unique count (from full recount or `uniqExact`), **use this for alerts/diffs**
-4. **max(updatedAt) lag** — detects sync delay independent of count accuracy
+4. **maxCursorAt lag** — detects sync delay independent of count accuracy (only when cursorCol matches)
 
 **Status thresholds and diff alerts MUST use `uniqueCount`, not `totalCount`.** The approximate `totalCount` is only useful for showing "rows processed" during a job.
 
