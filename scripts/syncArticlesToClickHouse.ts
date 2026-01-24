@@ -13,6 +13,11 @@
 import {getClickhouseClient} from '../src/services/clickhouse/clickhouseClient.ts'
 
 const BATCH_SIZE = 5000
+const MIN_WATERMARK = {
+  updatedAt: '1970-01-01 00:00:00.000000',
+  id: '00000000-0000-0000-0000-000000000000',
+} as const
+
 const PG_CONN = {
   host: process.env['CLICKHOUSE_PG_HOST'] ?? 'db',
   port: process.env['CLICKHOUSE_PG_PORT'] ?? '5432',
@@ -23,42 +28,88 @@ const PG_CONN = {
 
 type SyncResult = {syncedRows: number; lastUpdatedAt: string | null; durationMs: number}
 
-const getLastSyncedUpdatedAt = async (): Promise<string | null> => {
+const parseClickhouseCount = (value: unknown): bigint => {
+  return typeof value === 'string'
+    ? BigInt(value || '0')
+    : typeof value === 'number'
+      ? BigInt(Math.trunc(value))
+      : BigInt(String(value ?? '0') || '0')
+}
+
+const getClickhouseArticlesRowCount = async (): Promise<bigint> => {
+  const client = getClickhouseClient()
+  const result = await client.query({query: 'SELECT count() as cnt FROM forska.articles', format: 'JSONEachRow'})
+  const rows = await result.json<{cnt: string | number}>()
+  const firstRow = Array.isArray(rows) ? rows[0] : rows
+  return parseClickhouseCount(firstRow?.cnt ?? '0')
+}
+
+const getLastSyncedWatermark = async (): Promise<{updatedAt: string; id: string}> => {
   const client = getClickhouseClient()
   const result = await client.query({
-    query: 'SELECT max(updated_at) as max_updated_at FROM forska.articles',
+    query: `
+      SELECT
+        toString(tupleElement(maxOrNull(tuple(updated_at, toString(id))), 1)) as updatedAt,
+        tupleElement(maxOrNull(tuple(updated_at, toString(id))), 2) as id
+      FROM forska.articles
+    `,
     format: 'JSONEachRow',
   })
-  const rows = await result.json<{max_updated_at: string | null}>()
+  const rows = await result.json<{updatedAt: string | null; id: string | null}>()
   const firstRow = Array.isArray(rows) ? rows[0] : rows
-  return firstRow?.max_updated_at ?? null
+  const updatedAt = firstRow?.updatedAt ?? null
+  const id = firstRow?.id ?? null
+  return updatedAt && id ? {updatedAt, id} : {...MIN_WATERMARK}
 }
 
-const countPendingArticles = async (sinceUpdatedAt: string | null): Promise<number> => {
+const getBatchBoundaries = async (watermark: {updatedAt: string; id: string}): Promise<{
+  batchCount: number
+  lastUpdatedAt: string | null
+  lastId: string | null
+}> => {
   const client = getClickhouseClient()
   const pgConnStr = `'${PG_CONN.host}:${PG_CONN.port}', '${PG_CONN.database}', 'articles', '${PG_CONN.user}', '${PG_CONN.password}'`
 
-  const whereClause = sinceUpdatedAt ? `WHERE updated_at > '${sinceUpdatedAt}'` : ''
+  const query = `
+    WITH batch AS (
+      SELECT
+        updated_at,
+        toString(id) as id
+      FROM postgresql(${pgConnStr})
+      WHERE (updated_at, toString(id)) > ({watermarkUpdatedAt:DateTime64(6, 'UTC')}, {watermarkId:String})
+      ORDER BY updated_at ASC, id ASC
+      LIMIT {batchSize:UInt32}
+    )
+    SELECT
+      count() as batchCount,
+      toString(tupleElement(maxOrNull(tuple(updated_at, id)), 1)) as lastUpdatedAt,
+      tupleElement(maxOrNull(tuple(updated_at, id)), 2) as lastId
+    FROM batch
+  `
 
-  const countResult = await client.query({
-    query: `SELECT count() as cnt FROM postgresql(${pgConnStr}) ${whereClause}`,
+  const result = await client.query({
+    query,
     format: 'JSONEachRow',
+    query_params: {watermarkUpdatedAt: watermark.updatedAt, watermarkId: watermark.id, batchSize: BATCH_SIZE},
   })
-  const countRows = await countResult.json<{cnt: string}>()
-  const firstRow = Array.isArray(countRows) ? countRows[0] : countRows
-  return parseInt(firstRow?.cnt ?? '0', 10)
+
+  const rows = await result.json<{batchCount: string | number; lastUpdatedAt: string | null; lastId: string | null}>()
+  const firstRow = Array.isArray(rows) ? rows[0] : rows
+  const batchCount = parseInt(String(firstRow?.batchCount ?? '0'), 10)
+  return {batchCount, lastUpdatedAt: firstRow?.lastUpdatedAt ?? null, lastId: firstRow?.lastId ?? null}
 }
 
-const syncArticlesBatch = async (sinceUpdatedAt: string | null, offset: number): Promise<number> => {
+const syncArticlesBatch = async (
+  watermark: {updatedAt: string; id: string},
+  last: {updatedAt: string; id: string},
+): Promise<void> => {
   const client = getClickhouseClient()
   const pgConnStr = `'${PG_CONN.host}:${PG_CONN.port}', '${PG_CONN.database}', 'articles', '${PG_CONN.user}', '${PG_CONN.password}'`
-
-  const whereClause = sinceUpdatedAt ? `WHERE updated_at > '${sinceUpdatedAt}'` : ''
 
   const query = `
     INSERT INTO forska.articles
     SELECT
-      id, created_at, updated_at, article_title,
+      toString(id) as id, created_at, updated_at, article_title,
       article_created_at, article_updated_at, article_id, article_summary,
       article_version, arxiv_id, doi, pubmed_id, url, content_hash,
       import_route, imported_by, publication_status, full_text,
@@ -68,15 +119,20 @@ const syncArticlesBatch = async (sinceUpdatedAt: string | null, offset: number):
       full_text_conversion_attempts, full_text_char_count,
       full_text_html, full_text_pdf_uploaded_by
     FROM postgresql(${pgConnStr})
-    ${whereClause}
-    ORDER BY updated_at
-    LIMIT ${BATCH_SIZE}
-    OFFSET ${offset}
+    WHERE (updated_at, toString(id)) > ({watermarkUpdatedAt:DateTime64(6, 'UTC')}, {watermarkId:String})
+      AND (updated_at, toString(id)) <= ({lastUpdatedAt:DateTime64(6, 'UTC')}, {lastId:String})
+    ORDER BY updated_at ASC, id ASC
   `
 
-  await client.command({query})
-
-  return BATCH_SIZE
+  await client.command({
+    query,
+    query_params: {
+      watermarkUpdatedAt: watermark.updatedAt,
+      watermarkId: watermark.id,
+      lastUpdatedAt: last.updatedAt,
+      lastId: last.id,
+    },
+  })
 }
 
 export const syncArticlesToClickHouse = async (): Promise<SyncResult> => {
@@ -84,34 +140,36 @@ export const syncArticlesToClickHouse = async (): Promise<SyncResult> => {
 
   console.log('[ArticleSync] Starting incremental sync...')
 
-  const lastUpdatedAt = await getLastSyncedUpdatedAt()
-  console.log(`[ArticleSync] Last synced updated_at: ${lastUpdatedAt ?? 'none (full sync)'}`)
+  const startRowCount = await getClickhouseArticlesRowCount()
+  const startWatermark = await getLastSyncedWatermark()
+  console.log(`[ArticleSync] Starting watermark: ${startWatermark.updatedAt}, ${startWatermark.id}`)
 
-  const totalPending = await countPendingArticles(lastUpdatedAt)
-  console.log(`[ArticleSync] Found ${totalPending} articles to sync`)
+  const syncRecursive = async (watermark: {updatedAt: string; id: string}, batchNumber: number): Promise<void> => {
+    const batch = await getBatchBoundaries(watermark)
 
-  if (totalPending === 0) {
-    return {syncedRows: 0, lastUpdatedAt, durationMs: performance.now() - startTime}
+    if (batch.batchCount === 0 || !batch.lastUpdatedAt || !batch.lastId) {
+      return
+    }
+
+    await syncArticlesBatch(watermark, {updatedAt: batch.lastUpdatedAt, id: batch.lastId})
+    console.log(
+      `[ArticleSync] Batch ${batchNumber}: inserted ~${batch.batchCount.toLocaleString()} (up to ${batch.lastUpdatedAt}, ${batch.lastId})`,
+    )
+
+    return syncRecursive({updatedAt: batch.lastUpdatedAt, id: batch.lastId}, batchNumber + 1)
   }
 
-  let totalSynced = 0
-  let offset = 0
-
-  while (offset < totalPending) {
-    await syncArticlesBatch(lastUpdatedAt, offset)
-    const batchSynced = Math.min(BATCH_SIZE, totalPending - offset)
-    totalSynced += batchSynced
-    offset += BATCH_SIZE
-    console.log(`[ArticleSync] Synced ${totalSynced.toLocaleString()} / ${totalPending.toLocaleString()}`)
-  }
+  await syncRecursive(startWatermark, 1)
 
   const durationMs = performance.now() - startTime
-  const newLastUpdatedAt = await getLastSyncedUpdatedAt()
+  const endRowCount = await getClickhouseArticlesRowCount()
+  const endWatermark = await getLastSyncedWatermark()
+  const inserted = endRowCount > startRowCount ? endRowCount - startRowCount : 0n
 
-  console.log(`[ArticleSync] Completed! Synced ${totalSynced} rows in ${(durationMs / 1000).toFixed(1)}s`)
-  console.log(`[ArticleSync] New max updated_at: ${newLastUpdatedAt}`)
+  console.log(`[ArticleSync] Completed! Inserted ${inserted.toString()} rows in ${(durationMs / 1000).toFixed(1)}s`)
+  console.log(`[ArticleSync] New watermark: ${endWatermark.updatedAt}, ${endWatermark.id}`)
 
-  return {syncedRows: totalSynced, lastUpdatedAt: newLastUpdatedAt, durationMs}
+  return {syncedRows: Number(inserted), lastUpdatedAt: endWatermark.updatedAt, durationMs}
 }
 
 const main = async () => {
