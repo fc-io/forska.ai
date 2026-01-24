@@ -18,62 +18,62 @@ Remove Parquet entirely. PostgreSQL is the source of truth; ClickHouse is synced
 
 ### Server Code
 
-- [ ] `src/agent/judge/storeSinglePromptJudgment.ts`
+- [x] `src/agent/judge/storeSinglePromptJudgment.ts`
   - Remove import of `DenormalizedJudgmentAnalytics`
   - Remove import of `writeJudgmentAnalyticsToParquet`
   - Remove `buildDenormalizedJudgmentAnalyticsRecord` function
   - Remove call to `writeJudgmentAnalyticsToParquet`
   - Remove `getYearFromDate` and `getQuotesAsJsonString` helpers
 
-- [ ] `src/server/index.ts`
+- [x] `src/server/index.ts`
   - Remove import of `flushDefaultWriterIfPresent`
   - Remove import of `parquetRoutes`
   - Remove `.use(parquetRoutes)`
   - Remove `flushParquetAndExit` function and SIGINT/SIGTERM handlers
 
-- [ ] `src/server/routes/ParquetRoutes.ts` - Delete entire file
+- [x] `src/server/routes/ParquetRoutes.ts` - Delete entire file
 
-- [ ] `src/server/routes/AdminInvestigateRoutes.ts`
+- [x] `src/server/routes/AdminInvestigateRoutes.ts`
   - Remove dynamic imports of parquet modules
   - Remove `parquetConfig` checks and Parquet write calls
   - Remove `/api/admin/parquet-dual-write-status` endpoint
 
-- [ ] `src/services/parquet/` - Delete entire directory
+- [x] `src/services/parquet/` - Delete entire directory
 
-- [ ] `src/services/duckdb/` - Delete entire directory (only used for Parquet queries)
+- [x] `src/services/duckdb/` - Delete entire directory (only used for Parquet queries)
 
-- [ ] `src/services/s3/` - Delete entire directory (only used by Parquet)
+- [x] `src/services/s3/` - Delete entire directory (only used by Parquet)
 
 ### Client Code
 
-- [ ] `src/app/routes/+admin/+parquet/` - Delete entire directory
+- [x] `src/app/routes/+admin/+parquet/` - Delete entire directory
 
-- [ ] `src/app/routes/+admin/+clickhouse-sync/+index.tsx`
+- [x] `src/app/routes/+admin/+clickhouse-sync/+index.tsx`
   - Remove `DualWriteStatus` type
   - Remove `fetchDualWriteStatus` function
   - Remove `dualWriteStatus` signal and its usage
   - Remove entire "Parquet Dual-Write Status" card section
   - Update "How Sync Works" info card - remove Parquet/S3Queue references, update to explain manual backfill
 
-- [ ] `src/components/Navigation.tsx`
+- [x] `src/components/Navigation.tsx`
   - Remove link to `/admin/parquet`
 
-- [ ] Regenerate route tree:
+- [x] Regenerate route tree:
   - Run `bun run build`
   - Verify `src/app/routeTree.gen.ts` no longer references parquet routes
   - Commit the updated `routeTree.gen.ts`
 
 ### Scripts
 
-- [ ] `scripts/backfillPostgresToParquet.ts` - Delete
-- [ ] `scripts/backfillPostgresToParquetFast.ts` - Delete
-- [ ] `scripts/backfillPostgresToParquetDuckDB.ts` - Delete
-- [ ] `scripts/backfillFailedS3QueueFiles.ts` - Delete
-- [ ] `scripts/validateJudgmentsDualWrite.ts` - Delete
+- [x] `scripts/backfillPostgresToParquet.ts` - Delete
+- [x] `scripts/backfillPostgresToParquetFast.ts` - Delete
+- [x] `scripts/backfillPostgresToParquetDuckDB.ts` - Delete
+- [x] `scripts/backfillFailedS3QueueFiles.ts` - Delete
+- [x] `scripts/validateJudgmentsDualWrite.ts` - Delete
 
 ### Dependencies
 
-- [ ] `package.json`
+- [x] `package.json`
   - Remove `@dsnp/parquetjs` dependency
   - Remove `@aws-sdk/client-s3` dependency
   - Remove `"validate:dual-write"` script
@@ -81,7 +81,7 @@ Remove Parquet entirely. PostgreSQL is the source of truth; ClickHouse is synced
 
 ### ClickHouse Cleanup
 
-- [ ] Drop S3Queue pipeline (run in ClickHouse):
+- [x] Drop S3Queue pipeline (run in ClickHouse):
   ```sql
   DROP VIEW IF EXISTS forska.judgments_mv;
   DROP TABLE IF EXISTS forska.judgments_queue;
@@ -89,7 +89,7 @@ Remove Parquet entirely. PostgreSQL is the source of truth; ClickHouse is synced
 
 ### S3/SeaweedFS Cleanup
 
-- [ ] Delete existing Parquet files from S3 bucket:
+- [x] Delete existing Parquet files from S3 bucket:
   ```bash
   aws --endpoint-url <SEAWEEDFS_URL> s3 rm s3://forska-judgments/judgments/ --recursive
   ```
