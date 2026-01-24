@@ -16,18 +16,24 @@ This plan addresses several subtle correctness and performance issues:
 | `to_char(..., 'Z')` emits local time                             | Use `AT TIME ZONE 'UTC'`                             | [Batched Counting](#solution-batched-incremental-counting-with-locking) |
 | `GREATEST` on nullable text stays NULL                           | Use `COALESCE` with conditional                      | [Batched Counting](#solution-batched-incremental-counting-with-locking) |
 | Stale job detection using start time misclassifies long recounts | Heartbeat-based detection via `lastUpdatedAt`        | [Stale Job Detection](#stale-job-detection-heartbeat-based)             |
+| Missing `pgChSyncStats` seed rows makes locks no-op              | Seed/upsert 4 rows before refresh                    | [Batched Counting](#solution-batched-incremental-counting-with-locking) |
 | Articles table has no `deleted_at` column                        | Table-specific config (`TABLE_CONFIG`)               | [Batched Counting](#solution-batched-incremental-counting-with-locking) |
 | CH judgments lacks `updatedAt` column                            | Feature flag + fallback to `createdAt`               | [ClickHouse Judgments](#clickhouse-judgments-camelcase-columns)         |
+| Cursor col switch (`createdAt`→`updatedAt`) breaks watermarks    | Persist cursor col + force full recount on change    | [ClickHouse Judgments](#clickhouse-judgments-camelcase-columns)         |
 | `uniqExact()` expensive on large tables                          | Default to `uniqCombined()`, exact on-demand         | [ClickHouse Judgments](#clickhouse-judgments-camelcase-columns)         |
+| `uniqCombined()` error conflicts with tight thresholds           | Widen thresholds unless exact counts                 | [Status Thresholds](#status-thresholds)                                 |
 | Fetching 50k rows per batch wastes bandwidth                     | CTE computes counts in-database                      | [Batched Counting](#solution-batched-incremental-counting-with-locking) |
+| CH keyset WHERE can full-scan (ORDER BY/partition mismatch)      | Default to full `count()`; keyset only if aligned    | [Counting Logic](#counting-logic)                                       |
 | Single-column index causes heap fetches                          | Composite covering index with `INCLUDE`              | [Required Indexes](#required-indexes-for-performance)                   |
-| `maxUpdatedAt` lag misses old partition gaps                     | Partition coverage check endpoint                    | [Partition Coverage Check](#post-apiadminpartition-coverage-check)      |
+| Lag alone misses old partition gaps                              | Partition coverage check endpoint                    | [Partition Coverage Check](#post-apiadminpartition-coverage-check)      |
+| PG month query risk (string INTERVAL, TZ drift)                  | `make_interval` + `AT TIME ZONE 'UTC'`               | [Partition Coverage Check](#post-apiadminpartition-coverage-check)      |
 | Sample-verify gets false mismatches during merge                 | Use `FINAL` or `argMax` for CH queries               | [Sample Verify](#post-apiadminsample-verify)                            |
 | `OPTIMIZE TABLE FINAL` blocks production                         | Partition-scoped or avoid entirely                   | [ClickHouse Judgments](#clickhouse-judgments-camelcase-columns)         |
 
 ## Dependencies
 
-- **PG_CH_HEALTH.md Phase-1:** Must be completed before CH judgments can use `updatedAt` for keyset pagination. Until then, fall back to `createdAt` (which misses updates).
+- **PG_CH_HEALTH.md Phase-1:** CH judgments `updatedAt` needed for update-lag + `argMax` correctness. Until then, show insert-lag only (`createdAt`).
+- **PG_CH_HEALTH.md Phase-5:** `scripts/syncArticlesToClickHouse.ts` should be keyset `(updated_at, id)` (no OFFSET) for correctness/perf at 10M+ rows.
 
 ## Architecture
 
@@ -36,8 +42,8 @@ This plan addresses several subtle correctness and performance issues:
 Instead of running expensive `COUNT(*)` queries on every page load, we:
 
 1. **Store cached counts** in a PostgreSQL table (`pgChSyncStats`)
-2. **Track keyset watermarks** using `(updatedAt, id)` tuple to avoid cursor-tie and out-of-order insert issues
-3. **Increment counts** by only counting rows newer than the watermark
+2. **PG:** keyset watermark + batched scans (cheap incremental)
+3. **CH:** `count()` + `max()` on refresh (cheap); `uniqCombined/uniqExact` on-demand
 4. **Refresh on-demand** via admin UI button with progress tracking
 
 ### Why Keyset Watermarks?
@@ -101,13 +107,13 @@ export const pgChSyncStats = pgTable('pg_ch_sync_stats', {
   uniqueCount: bigint('unique_count', {mode: 'number'}),
   uniqueCountAt: timestamp('unique_count_at', {withTimezone: true, mode: 'date'}),
 
-  // Keyset watermark (stored as TEXT to preserve full µs precision)
-  // CRITICAL: JS Date loses microseconds; store as ISO string or µs epoch
-  watermarkTs: text('watermark_ts'), // ISO8601 with microseconds: '2026-01-24T09:00:00.123456Z'
-  watermarkId: text('watermark_id'), // UUID of last row counted
+  // Keyset watermark (µs-safe; avoid JS Date)
+  watermarkCursorCol: text('watermark_cursor_col'), // e.g. 'updated_at' | 'updatedAt' | 'createdAt'
+  watermarkTs: text('watermark_ts'), // ISO8601 µs UTC: '2026-01-24T09:00:00.123456Z'
+  watermarkId: text('watermark_id'), // UUID text; invariant: watermarkTs+watermarkId both NULL or both set
 
-  // Lag tracking (for detecting sync delay)
-  maxUpdatedAt: text('max_updated_at'), // latest updatedAt seen (µs precision)
+  // Lag tracking (compare like-for-like cursor col)
+  maxCursorAt: text('max_cursor_at'), // ISO8601 µs UTC; matches watermarkCursorCol
 
   // Job state (for distributed/crash-safe progress)
   jobStatus: text('job_status').default('idle'), // 'idle' | 'running' | 'completed' | 'error'
@@ -141,6 +147,8 @@ CREATE INDEX idx_judgments_deleted_updated ON judgments (deleted_at, updated_at)
   WHERE deleted_at IS NOT NULL;
 ```
 
+**Prod note:** use `CREATE INDEX CONCURRENTLY` (can't run inside a transaction).
+
 **Why covering indexes?**
 
 The batch query selects `(id, updated_at, deleted_at)`. Without `INCLUDE (deleted_at)`:
@@ -154,6 +162,8 @@ With `INCLUDE (deleted_at)`:
 - All needed columns are in the index
 - Pure index-only scan, no heap access
 - ~10x faster for large batches
+
+**PG note:** index-only scan needs VACUUM/visibility map; otherwise heap fetches still happen.
 
 **Note:** ClickHouse queries on `updated_at` will scan active partitions unless that column is in ORDER BY. Keep expensive checks (FINAL, uniqExact) scoped to recent partitions or on-demand only.
 
@@ -176,7 +186,7 @@ Never count more than `BATCH_SIZE` (e.g., 50,000) rows in a single query. Use da
 **Key fixes in this implementation:**
 
 1. **Timezone-safe timestamps:** Use `AT TIME ZONE 'UTC'` to ensure consistent UTC output (not `to_char(..., 'Z')` which can emit local time with literal 'Z')
-2. **COALESCE for nullable text:** `maxUpdatedAt` is nullable; use `COALESCE` to handle initial NULL state
+2. **COALESCE for nullable text:** `maxCursorAt` is nullable; use `COALESCE` to handle initial NULL state
 3. **Table-specific logic:** Articles have no `deleted_at`; only judgments track active/deleted counts
 4. **CTE for performance:** Use SQL CTE to compute counts + watermark in-database (don't fetch 50k rows to app)
 5. **Heartbeat for stale detection:** Update `lastUpdatedAt` each batch so stale job detection works for long recounts
@@ -199,6 +209,7 @@ const countInBatches = async (tableName: 'articles' | 'judgments', db: DrizzleCl
   const statsId = `pg_${tableName}`
   const config = TABLE_CONFIG[tableName]
 
+  // PRE-REQ: seed/upsert pgChSyncStats rows for all statsId values; missing row makes FOR UPDATE + UPDATE a no-op
   // Acquire lock and set job status atomically
   // This prevents concurrent refreshes from double-counting
   const lockAcquired = await db.transaction(async (tx) => {
@@ -262,19 +273,13 @@ const countInBatches = async (tableName: 'articles' | 'judgments', db: DrizzleCl
         WITH batch AS (
           SELECT
             id,
-            -- CRITICAL: Use AT TIME ZONE 'UTC' to ensure proper UTC output
-            -- to_char(..., 'Z') emits local time with literal 'Z' suffix!
-            to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"+00"') AS updated_at_str
+            updated_at
             ${config.hasDeletedAt ? sql`, deleted_at` : sql``}
           FROM ${sql.identifier(tableName)}
-          WHERE ${
-            currentWatermark.ts
-              ? sql`
-              (updated_at > ${currentWatermark.ts}::timestamptz)
-              OR (updated_at = ${currentWatermark.ts}::timestamptz AND id > ${currentWatermark.id})
-            `
-              : sql`TRUE`
-          }
+          WHERE (updated_at, id) > (
+            COALESCE(${currentWatermark.ts}::timestamptz, '-infinity'::timestamptz),
+            COALESCE(${currentWatermark.id}::uuid, '00000000-0000-0000-0000-000000000000'::uuid)
+          )
           ORDER BY updated_at ASC, id ASC
           LIMIT ${BATCH_SIZE}
         )
@@ -287,8 +292,8 @@ const countInBatches = async (tableName: 'articles' | 'judgments', db: DrizzleCl
               : sql`COUNT(*)::int AS active_count,
                  0 AS deleted_count,`
           }
-          (SELECT updated_at_str FROM batch ORDER BY updated_at_str DESC, id DESC LIMIT 1) AS last_updated_at,
-          (SELECT id FROM batch ORDER BY updated_at_str DESC, id DESC LIMIT 1) AS last_id
+          (SELECT to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') FROM batch ORDER BY updated_at DESC, id DESC LIMIT 1) AS last_updated_at,
+          (SELECT id::text FROM batch ORDER BY updated_at DESC, id DESC LIMIT 1) AS last_id
         FROM batch
       `)
 
@@ -307,10 +312,10 @@ const countInBatches = async (tableName: 'articles' | 'judgments', db: DrizzleCl
             deletedCount: sql`${pgChSyncStats.deletedCount} + ${row.deleted_count}`,
             watermarkTs: newWatermark.ts,
             watermarkId: newWatermark.id,
-            // COALESCE handles initial NULL state; use text comparison (ISO format sorts correctly)
-            maxUpdatedAt: sql`COALESCE(
-              CASE WHEN ${pgChSyncStats.maxUpdatedAt} > ${newWatermark.ts} 
-                   THEN ${pgChSyncStats.maxUpdatedAt} 
+            watermarkCursorCol: 'updated_at',
+            maxCursorAt: sql`COALESCE(
+              CASE WHEN ${pgChSyncStats.maxCursorAt} > ${newWatermark.ts}
+                   THEN ${pgChSyncStats.maxCursorAt}
                    ELSE ${newWatermark.ts} END,
               ${newWatermark.ts}
             )`,
@@ -336,10 +341,10 @@ const countInBatches = async (tableName: 'articles' | 'judgments', db: DrizzleCl
     // Mark job failed
     await db
       .update(pgChSyncStats)
-      .set({jobStatus: 'error', jobError: String(error), jobCompletedAt: new Date()})
+      .set({jobStatus: 'error', jobError: String(error), jobCompletedAt: new Date(), lastUpdatedAt: new Date()})
       .where(eq(pgChSyncStats.id, statsId))
 
-    throw error
+    return {success: false, error: String(error)}
   }
 }
 ```
@@ -410,14 +415,16 @@ Returns current cached counts and health metrics from `pgChSyncStats` table.
         deleted: 0,            // approximate
         uniqueCount: 1234567,  // accurate (from last full recount)
         uniqueCountAge: '2d',  // how old is uniqueCount
-        maxUpdatedAt: '2026-01-24T10:00:00.123456Z',
+        cursorCol: 'updated_at',
+        maxCursorAt: '2026-01-24T10:00:00.123456Z',
       },
       ch: {
         total: 1234650,        // may be > PG due to unmerged duplicates
         active: 1234500,
         deleted: 150,
         uniqueCount: 1234500,  // from uniqExact (on-demand)
-        maxUpdatedAt: '2026-01-24T09:30:00.456789Z',
+        cursorCol: 'updated_at',
+        maxCursorAt: '2026-01-24T09:30:00.456789Z',
         dedupDrift: 150,       // total - uniqueCount
       },
       // Comparison
@@ -427,7 +434,7 @@ Returns current cached counts and health metrics from `pgChSyncStats` table.
         direction: 'ch_ahead', // 'pg_ahead' | 'ch_ahead' | 'synced'
       },
       lag: {
-        seconds: 1800,         // CH maxUpdatedAt is 30min behind PG
+        seconds: 1800,         // only when both sides use same cursorCol; else null + warning
         formatted: '30 min',
       },
       status: 'merge_pending', // see Status Thresholds
@@ -511,6 +518,9 @@ Spot-check N random rows for data integrity.
 **Implementation notes:**
 
 ```ts
+// Don't do ORDER BY random() on PG/CH at 10M+ rows.
+// Pick ids via recent window or TABLESAMPLE/hashed sampling, then WHERE id IN (...)
+
 // Option 1: Use FINAL modifier (simpler, may be slower for full table)
 const chRows = await clickhouseClient.query({
   query: `SELECT id, articleTitle, ... FROM forska.judgments FINAL WHERE id IN ({ids:Array(String)})`,
@@ -536,7 +546,7 @@ const chRows = await clickhouseClient.query({
 
 ### `POST /api/admin/partition-coverage-check`
 
-Detect missing older partitions that wouldn't be caught by `maxUpdatedAt` lag alone. A synced `maxUpdatedAt` doesn't guarantee older data exists.
+Detect missing older partitions not caught by lag alone. A synced `maxCursorAt` doesn't guarantee older data exists.
 
 ```ts
 // Request body
@@ -567,18 +577,18 @@ Detect missing older partitions that wouldn't be caught by `maxUpdatedAt` lag al
 ```ts
 // PostgreSQL: Count per month
 const pgCounts = await db.execute(sql`
-  SELECT to_char(created_at, 'YYYY-MM') as month, COUNT(*)::int as count
+  SELECT to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM') as month, COUNT(*)::int as count
   FROM judgments
-  WHERE created_at >= NOW() - INTERVAL '${months} months'
+  WHERE created_at >= NOW() - make_interval(months => ${months})
   GROUP BY 1 ORDER BY 1 DESC
 `)
 
 // ClickHouse: Count per month (uses partition column efficiently)
 const chCounts = await clickhouseClient.query({
   query: `
-    SELECT formatDateTime(createdAt, '%Y-%m') as month, count() as count
+    SELECT formatDateTime(toTimeZone(createdAt, 'UTC'), '%Y-%m') as month, count() as count
     FROM forska.judgments
-    WHERE createdAt >= now() - INTERVAL {months:Int32} MONTH
+    WHERE createdAt >= now64(6, 'UTC') - INTERVAL {months:Int32} MONTH
     GROUP BY month ORDER BY month DESC
   `,
   query_params: {months},
@@ -594,17 +604,15 @@ const chCounts = await clickhouseClient.query({
 **IMPORTANT:** The `forska.articles` table uses snake_case column names (`updated_at`, `created_at`, `import_route`), not camelCase.
 
 ```ts
-// Basic incremental count for CH articles
+// Default CH counts: cheap `count()`, avoid `uniqExact()` unless on-demand
 const result = await clickhouseClient.query({
   query: `
     SELECT
       count(*) as totalCount,
-      uniqExact(id) as uniqueCount,
-      max(updated_at) as maxUpdatedAt
+      uniqCombined(id) as uniqueCountApprox,
+      max(updated_at) as maxCursorAt
     FROM forska.articles
-    WHERE (updated_at, id) > ({watermarkTs:DateTime64(6, 'UTC')}, {watermarkId:String})
   `,
-  query_params: {watermarkTs: currentWatermarkTs, watermarkId: currentWatermarkId},
 })
 ```
 
@@ -613,8 +621,8 @@ const result = await clickhouseClient.query({
 **CRITICAL DEPENDENCY:** The queries below using `updatedAt` require PG_CH_HEALTH.md Phase-1 to be completed first. The current CH schema (`clickhouse-setup.sql`) does NOT have an `updatedAt` column — it only has `createdAt`.
 
 ```ts
-// Feature flag: check if updatedAt column exists in CH
-const CH_HAS_UPDATED_AT = false // Set to true after PG_CH_HEALTH.md Phase-1 migration
+// Runtime feature flag: does CH have updatedAt?
+const CH_HAS_UPDATED_AT = await hasClickhouseColumn('forska', 'judgments', 'updatedAt')
 
 // Pre-Phase-1: Use createdAt (limited - misses updates)
 // Post-Phase-1: Use updatedAt (correct - captures updates)
@@ -629,9 +637,7 @@ const result = await clickhouseClient.query({
       countIf(deletedAt IS NOT NULL) as deletedCount,
       max(${cursorCol}) as maxCursorAt
     FROM forska.judgments
-    WHERE (${cursorCol}, id) > ({watermarkTs:DateTime64(6, 'UTC')}, {watermarkId:String})
   `,
-  query_params: {watermarkTs: currentWatermarkTs, watermarkId: currentWatermarkId},
 })
 
 // Approximate unique count (fast, default) - use uniq() or uniqCombined()
@@ -656,12 +662,30 @@ const exactUniqueResult = await clickhouseClient.query({
 })
 ```
 
+**Column existence helper:**
+
+```ts
+const hasClickhouseColumn = async (db: string, table: string, col: string) => {
+  const result = await clickhouseClient.query({
+    query: `
+      SELECT count() AS cnt
+      FROM system.columns
+      WHERE database = {db:String} AND table = {table:String} AND name = {col:String}
+    `,
+    query_params: {db, table, col},
+    format: 'JSONEachRow',
+  })
+  const row = await result.json<{cnt: string}>()
+  return Number(Array.isArray(row) ? row[0]?.cnt : row?.cnt) > 0
+}
+```
+
 **Unique count strategy:**
 
 | Context                | Function         | Error | Use When                               |
 | ---------------------- | ---------------- | ----- | -------------------------------------- |
 | Dashboard display      | `uniqCombined()` | ~1%   | Always (fast, good enough)             |
-| Drift alerts           | `uniqCombined()` | ~1%   | Threshold > 1% so error doesn't matter |
+| Drift alerts           | `uniqCombined()` | ~1%   | Threshold >= 2% so error doesn't matter |
 | Export/audit           | `uniqExact()`    | 0%    | On-demand button, warn about latency   |
 | Partition-scoped check | `uniqExact()`    | 0%    | Scope to recent 90 days for speed      |
 
@@ -695,19 +719,20 @@ ClickHouse's ReplacingMergeTree is **eventually consistent** — tombstones may 
 - Always show `dedupDrift` = `count(*) - uniqExact(id)` when available
 - Use `FINAL` modifier sparingly (expensive) for accurate counts
 - Show "approximate" label on all counts
-- Track `maxUpdatedAt` lag as primary health indicator (more reliable than count diff)
+- Track lag from `maxCursorAt` only when both sides use same cursorCol (else "lag unavailable")
 
 ---
 
 ## Status Thresholds
 
 **CRITICAL:** Use `uniqueCount` (not `totalCount`) for diff calculations and threshold alerts. `totalCount` inflates on updates and is unsuitable for accurate comparisons.
+If CH `uniqueCount` comes from `uniqCombined()`, don't use sub-1% thresholds (est error ~1%).
 
 | Condition                                                 | Status        | Badge Color | Meaning               |
 | --------------------------------------------------------- | ------------- | ----------- | --------------------- |
-| lag < 1h AND \|uniqueDiff\| < 0.1% AND dedupDrift < 100   | Synced        | Green       | Healthy               |
-| lag 1-6h OR \|uniqueDiff\| 0.1-1%                         | Behind        | Yellow      | Minor lag             |
-| lag > 6h OR \|uniqueDiff\| > 1%                           | Critical      | Red         | Needs attention       |
+| lag < 1h AND \|uniqueDiff\| < 2% AND dedupDrift < 100     | Synced        | Green       | Healthy (approx)      |
+| lag 1-6h OR \|uniqueDiff\| 2-5%                           | Behind        | Yellow      | Minor lag             |
+| lag > 6h OR \|uniqueDiff\| > 5%                           | Critical      | Red         | Needs attention       |
 | CH uniqueCount > PG uniqueCount + 1000 (shouldn't happen) | Data Error    | Red         | Investigate           |
 | dedupDrift > 1000                                         | Merge Pending | Orange      | Background merge slow |
 | CH unreachable                                            | Unreachable   | Gray        | Connection error      |
@@ -781,8 +806,8 @@ Dedup drift: 150 rows — merge pending (count(*) - uniqCombined)
 ### Phase 0: Prerequisites
 
 1. [ ] **BLOCKING:** Complete PG_CH_HEALTH.md Phase-1 (add `updatedAt` to CH judgments)
-   - Until complete, CH judgments counting falls back to `createdAt` (misses updates)
-   - Set `CH_HAS_UPDATED_AT = true` after migration
+   - Until complete: judgments update-lag unavailable; only insert-lag via `createdAt`
+   - After migration: runtime detect column; force full recount/baseline when cursor col changes
 
 ### Phase 1: Database & API
 
@@ -799,37 +824,38 @@ Dedup drift: 150 rows — merge pending (count(*) - uniqCombined)
    - Table-specific logic (`TABLE_CONFIG`)
    - Heartbeat updates each batch
    - `AT TIME ZONE 'UTC'` for timestamp formatting
-   - `COALESCE` for nullable `maxUpdatedAt`
-9. [ ] Implement lag tracking (max updatedAt comparison)
-10. [ ] Handle CH articles snake_case vs judgments camelCase
-11. [ ] Use `uniqCombined()` for default unique counts, `uniqExact()` on-demand
+   - `COALESCE` for nullable `maxCursorAt`
+9. [ ] Seed/upsert 4 `pgChSyncStats` rows (else locks no-op)
+10. [ ] Implement lag tracking (only when cursorCol matches)
+11. [ ] Handle CH articles snake_case vs judgments camelCase
+12. [ ] Use `uniqCombined()` for default unique counts, `uniqExact()` on-demand
 
 ### Phase 2: Admin UI
 
-12. [ ] Create `/admin/sync-stats` page
-13. [ ] Add cards showing total/unique/deleted breakdown
-14. [ ] Show both absolute diff AND percentage **using uniqueCount**
-15. [ ] Show "CH ahead" vs "CH behind" direction
-16. [ ] Show lag time and dedup drift
-17. [ ] Add job status indicators with batch progress + heartbeat age
-18. [ ] Add refresh button (disabled if job running)
-19. [ ] Add "Full Recount" option
-20. [ ] Show "approximate" labels on all counts
+13. [ ] Create `/admin/sync-stats` page
+14. [ ] Add cards showing total/unique/deleted breakdown
+15. [ ] Show both absolute diff AND percentage **using uniqueCount**
+16. [ ] Show "CH ahead" vs "CH behind" direction
+17. [ ] Show lag time and dedup drift
+18. [ ] Add job status indicators with batch progress + heartbeat age
+19. [ ] Add refresh button (disabled if job running)
+20. [ ] Add "Full Recount" option
+21. [ ] Show "approximate" labels on all counts
 
 ### Phase 3: Verification & Integrity Checks
 
-21. [ ] Implement `POST /api/admin/sample-verify` endpoint with `FINAL`/`argMax`
-22. [ ] Implement `POST /api/admin/partition-coverage-check` endpoint
-23. [ ] Add sample verify UI with results display
-24. [ ] Add partition coverage UI showing per-month counts
-25. [ ] Add stale job detection (>30min since last heartbeat = crashed)
-26. [ ] Add logging for debugging
+22. [ ] Implement `POST /api/admin/sample-verify` endpoint with `FINAL`/`argMax`
+23. [ ] Implement `POST /api/admin/partition-coverage-check` endpoint
+24. [ ] Add sample verify UI with results display
+25. [ ] Add partition coverage UI showing per-month counts
+26. [ ] Add stale job detection (>30min since last heartbeat = crashed)
+27. [ ] Add logging for debugging
 
 ### Phase 4: Polish & Hardening
 
-27. [ ] Add backfill detection (rows with old `updatedAt` trigger warning)
-28. [ ] Consider scheduled refresh (cron) if needed
-29. [ ] Document when to run full recount vs incremental
+28. [ ] Add backfill detection (rows with old `updatedAt` trigger warning)
+29. [ ] Consider scheduled refresh (cron) if needed
+30. [ ] Document when to run full recount vs incremental
 
 ---
 
