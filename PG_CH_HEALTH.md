@@ -74,9 +74,9 @@ DELETEs can lag; old+new rows can coexist until mutation done. Health checks mus
 
 ## Implementation Checklist
 
-### Phase 1: Live-Only Table (No Tombstones)
+### Phase 1: ClickHouse Live-Only Table (No Tombstones)
 
-- [ ] Decide table layout (tradeoffs):
+- [ ] Decide CH table layout (`forska.judgments`) (tradeoffs):
   - Query perf: cluster by `articleId`/`promptId`/`modelId`
   - Delete perf: `DELETE WHERE id=...` needs `id` in `ORDER BY` prefix OR skip index on `id`
   - Types: prefer `UUID` cols + `LowCardinality(String)` dims (requires code/query casts)
