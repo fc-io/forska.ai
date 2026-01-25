@@ -82,7 +82,7 @@ DELETEs can lag; old+new rows can coexist until mutation done. Health checks mus
   - Types: prefer `UUID` cols + `LowCardinality(String)` dims (requires code/query casts)
   - Millions+ rows: avoid per-row mutations; batch; watch `system.mutations`
 
-- [ ] Create new table (example; tune `ORDER BY`):
+- [x] Create new table (example; tune `ORDER BY`):
 
 ```sql
 CREATE TABLE forska.judgments_new (
@@ -116,8 +116,8 @@ ORDER BY (articleId, promptId, modelId, id);
 - [x] Remove S3Queue/MV (or make it write new schema; no `deletedAt`)
 - [x] Remove `deletedAt` column usage in code (filters + selects + types + writers)
 - [ ] Add skip indexes/projection if needed (`id` deletes; `promptId/modelId` filters; `articleImportRoute` scoping)
-- [ ] Drop old table, rename new table
-- [ ] Full resync from PG (prefer CH-side `INSERT SELECT` or server batch insert; avoid 1-row inserts)
+- [x] Drop old table, rename new table
+- [ ] Full resync from PG (UI backfill works if table empty)
 - [ ] Post-migration checks:
   - `count()` vs PG live count
   - `count() - uniqExact(id)` ≈ 0 (or accept while mutating)
