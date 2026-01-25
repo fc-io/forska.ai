@@ -162,16 +162,13 @@ ORDER BY (articleId, promptId, modelId, id);
 
 - [x] Refactor `scripts/syncArticlesToClickHouse.ts` to use keyset pagination `(updated_at, id)`
 - [x] Remove `LIMIT/OFFSET`
-- [ ] Handle article deletes:
-  - Write-path (API): on PG delete → CH delete by id
-  - Backfill: consume delete log (or periodic id diff) → CH delete
+- [x] Handle article deletes:
+  - Write-path (API): `DELETE /api/articles/:id` → CH delete by id (best-effort)
+  - Backfill (manual UI trigger): `POST /api/admin/sync-deleted-articles-to-clickhouse` (also `bun scripts/syncDeletedArticlesToClickHouse.ts`)
 
 ### Phase 5: Address Denorm Drift
 
-- [ ] Decide strategy:
-  - **Option A:** Accept drift (current, simplest)
-  - **Option B:** Join to `forska.articles` at query time
-  - **Option C:** Re-sync affected judgments when article updated
+- [x] Decision: **Option A** — accept drift (no implementation needed)
 
 ### Phase 6: Automated Sync (Optional)
 

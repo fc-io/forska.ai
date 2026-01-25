@@ -73,6 +73,15 @@ type PartitionCoverageResult = {
   summary: {totalPg: number; totalCh: number; missingMonths: string[]; status: 'partition_gap' | 'synced' | 'diff'}
 }
 
+type SyncDeletedArticlesResult = {
+  scannedIds: number
+  scannedBatches: number
+  orphanIdsFound: number
+  deleteCommandsIssued: number
+  durationMs: number
+  lastScannedId: string | null
+}
+
 const fetchSyncStats = async (): Promise<SyncStatsResponse> => {
   const response = await fetch(`${env.VITE_SERVER_API}/api/admin/sync-stats`, {credentials: 'include'})
   if (!response.ok) {
@@ -140,6 +149,23 @@ const partitionCoverageCheck = async (input: {
   return json.data
 }
 
+const syncDeletedArticlesToClickHouse = async (input: {
+  batchSize: number
+  maxBatches: number
+}): Promise<SyncDeletedArticlesResult> => {
+  const response = await fetch(`${env.VITE_SERVER_API}/api/admin/sync-deleted-articles-to-clickhouse`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({batchSize: input.batchSize, maxBatches: input.maxBatches}),
+  })
+  if (!response.ok) {
+    throw new Error('Failed to sync deleted articles')
+  }
+  const json = (await response.json()) as {data: SyncDeletedArticlesResult}
+  return json.data
+}
+
 const formatCount = (value: number | null | undefined): string => {
   return value === null || value === undefined ? 'N/A' : value.toLocaleString()
 }
@@ -196,6 +222,11 @@ const AdminSyncStats = () => {
   const [refreshing, setRefreshing] = createSignal(false)
   const [fullRecount, setFullRecount] = createSignal(false)
   const [includeUniqueCount, setIncludeUniqueCount] = createSignal(false)
+
+  const [orphanBatchSize, setOrphanBatchSize] = createSignal(10_000)
+  const [orphanMaxBatches, setOrphanMaxBatches] = createSignal(25)
+  const [orphanCleaning, setOrphanCleaning] = createSignal(false)
+  const [orphanCleanupResult, setOrphanCleanupResult] = createSignal<SyncDeletedArticlesResult | null>(null)
 
   const [sampleSize, setSampleSize] = createSignal(100)
   const [sampleType, setSampleType] = createSignal<'recent' | 'random' | 'deleted'>('recent')
@@ -257,6 +288,28 @@ const AdminSyncStats = () => {
       (err) => {
         setError(err instanceof Error ? err.message : 'Failed to refresh')
         setRefreshing(false)
+      },
+    )
+  }
+
+  const handleOrphanCleanup = async () => {
+    const confirmed = window.confirm(
+      `Delete orphan articles from ClickHouse?\n\nThis scans ClickHouse IDs in batches and deletes any IDs missing in PostgreSQL.\n\nClickHouse deletes are async (mutations).`,
+    )
+    if (!confirmed) return
+
+    setOrphanCleaning(true)
+    setError(null)
+    setOrphanCleanupResult(null)
+
+    return syncDeletedArticlesToClickHouse({batchSize: orphanBatchSize(), maxBatches: orphanMaxBatches()}).then(
+      (result) => {
+        setOrphanCleanupResult(result)
+        setOrphanCleaning(false)
+      },
+      (err) => {
+        setError(err instanceof Error ? err.message : 'Failed to sync deleted articles')
+        setOrphanCleaning(false)
       },
     )
   }
@@ -422,6 +475,56 @@ const AdminSyncStats = () => {
               />
               `uniqExact` (slow)
             </label>
+          </div>
+          <div class="flex flex-col items-end gap-2">
+            <div class="flex items-center gap-2 text-sm">
+              <label class="flex items-center gap-2">
+                <span class="text-gray-600">Batch</span>
+                <input
+                  type="number"
+                  value={orphanBatchSize()}
+                  min={1000}
+                  max={50000}
+                  onInput={(e) => {
+                    setOrphanBatchSize(Math.max(1000, Math.min(50000, Number(e.currentTarget.value) || 10_000)))
+                  }}
+                  class="w-24 px-2 py-1 border border-gray-300 rounded-md text-sm"
+                />
+              </label>
+              <label class="flex items-center gap-2">
+                <span class="text-gray-600">Batches</span>
+                <input
+                  type="number"
+                  value={orphanMaxBatches()}
+                  min={1}
+                  max={100000}
+                  onInput={(e) => {
+                    setOrphanMaxBatches(Math.max(1, Math.min(100000, Number(e.currentTarget.value) || 25)))
+                  }}
+                  class="w-24 px-2 py-1 border border-gray-300 rounded-md text-sm"
+                />
+              </label>
+              <button
+                onClick={() => {
+                  void handleOrphanCleanup()
+                }}
+                disabled={orphanCleaning()}
+                class="px-3 py-2 text-sm bg-red-600 text-white hover:bg-red-700 rounded-md disabled:opacity-50"
+              >
+                {orphanCleaning() ? 'Cleaning...' : 'Delete Orphans (Articles)'}
+              </button>
+            </div>
+            <Show when={orphanCleanupResult()}>
+              {(r) => {
+                return (
+                  <div class="text-xs text-gray-600">
+                    Scanned {r().scannedIds.toLocaleString()} ids ({r().scannedBatches} batches). Found{' '}
+                    {r().orphanIdsFound.toLocaleString()} orphans. Issued {r().deleteCommandsIssued.toLocaleString()}{' '}
+                    deletes in {(r().durationMs / 1000).toFixed(1)}s.
+                  </div>
+                )
+              }}
+            </Show>
           </div>
         </div>
       </div>

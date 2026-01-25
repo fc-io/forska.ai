@@ -1077,3 +1077,12 @@ export const adminSyncStatsRoutes = new Elysia()
     },
     {body: t.Object({table: t.Union([t.Literal('articles'), t.Literal('judgments')]), months: t.Optional(t.Number())})},
   )
+  .post(
+    '/api/admin/sync-deleted-articles-to-clickhouse',
+    async ({body}) => {
+      const {syncDeletedArticlesToClickHouse} = await import('../../../scripts/syncDeletedArticlesToClickHouse.ts')
+      const result = await syncDeletedArticlesToClickHouse(body ?? undefined)
+      return {data: result}
+    },
+    {body: t.Optional(t.Object({batchSize: t.Optional(t.Number()), maxBatches: t.Optional(t.Number())}))},
+  )

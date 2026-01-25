@@ -10,9 +10,23 @@ import {
   projects,
   prompts,
 } from '../../db/schema.ts'
+import {getClickhouseClient} from '../../services/clickhouse/clickhouseClient.ts'
 import {requireAdminAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
+
+const deleteArticleFromClickhouseBestEffort = async (id: string): Promise<boolean> => {
+  const client = getClickhouseClient()
+  return client
+    .command({query: 'ALTER TABLE forska.articles DELETE WHERE id = {id:String}', query_params: {id}})
+    .then(() => {
+      return true
+    })
+    .catch((error) => {
+      console.error('[ClickHouse] Failed to delete article:', error)
+      return false
+    })
+}
 
 export const articlesRoutes = new Elysia()
   .use(withErrorHandler())
@@ -324,6 +338,33 @@ export const articlesRoutes = new Elysia()
       }, {})
 
       return {article, allJudgments, projectsById}
+    },
+    {params: t.Object({id: t.String()})},
+  )
+  .delete(
+    '/api/articles/:id',
+    async ({params}) => {
+      const db = getDatabase()
+      const {id} = params
+
+      const [article] = await db.select({id: articles.id}).from(articles).where(eq(articles.id, id)).limit(1)
+
+      if (!article) {
+        throw new Error('Article not found')
+      }
+
+      const [judgmentRow] = await db.select({count: count()}).from(judgments).where(eq(judgments.articleId, id))
+
+      const judgmentCount = judgmentRow?.count ?? 0
+      if (judgmentCount > 0) {
+        throw new Error(`Cannot delete article with ${judgmentCount} judgments`)
+      }
+
+      await db.delete(articles).where(eq(articles.id, id))
+
+      const clickhouseDeleteIssued = await deleteArticleFromClickhouseBestEffort(id)
+
+      return {success: true, id, clickhouseDeleteIssued}
     },
     {params: t.Object({id: t.String()})},
   )
