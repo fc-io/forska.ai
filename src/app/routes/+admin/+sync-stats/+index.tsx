@@ -1,6 +1,8 @@
+import {useMutation, useQuery, useQueryClient} from '@tanstack/solid-query'
 import {createFileRoute} from '@tanstack/solid-router'
-import {createMemo, createSignal, For, Match, onMount, Show, Switch} from 'solid-js'
+import {createMemo, createSignal, For, Match, Show, Switch} from 'solid-js'
 
+import {apiClient} from '../../../../services/apiClient.ts'
 import {env} from '../../../utils/client-env.ts'
 
 type SyncDirection = 'pg_ahead' | 'ch_ahead' | 'synced'
@@ -83,35 +85,30 @@ type SyncDeletedArticlesResult = {
 }
 
 const fetchSyncStats = async (): Promise<SyncStatsResponse> => {
-  const response = await fetch(`${env.VITE_SERVER_API}/api/admin/sync-stats`, {credentials: 'include'})
-  if (!response.ok) {
-    throw new Error('Failed to fetch sync stats')
-  }
-  return response.json() as Promise<SyncStatsResponse>
+  const response = await apiClient.api.admin['sync-stats'].get()
+  if (response.error) throw new Error('Failed to fetch sync stats')
+  if (!response.data) throw new Error('Failed to fetch sync stats')
+  return response.data
 }
 
 const refreshSyncStats = async (input: {
   fullRecount: boolean
   includeUniqueCount: boolean
 }): Promise<RefreshResponse> => {
-  const response = await fetch(`${env.VITE_SERVER_API}/api/admin/refresh-sync-stats`, {
-    method: 'POST',
-    credentials: 'include',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({fullRecount: input.fullRecount, includeUniqueCount: input.includeUniqueCount}),
+  const response = await apiClient.api.admin['refresh-sync-stats'].post({
+    fullRecount: input.fullRecount,
+    includeUniqueCount: input.includeUniqueCount,
   })
-  if (!response.ok) {
-    throw new Error('Failed to refresh sync stats')
-  }
-  return response.json() as Promise<RefreshResponse>
+  if (response.error) throw new Error('Failed to refresh sync stats')
+  if (!response.data) throw new Error('Failed to refresh sync stats')
+  return response.data
 }
 
 const fetchProgress = async (): Promise<{jobs: SyncStatsResponse['jobs']}> => {
-  const response = await fetch(`${env.VITE_SERVER_API}/api/admin/refresh-sync-stats-progress`, {credentials: 'include'})
-  if (!response.ok) {
-    throw new Error('Failed to fetch progress')
-  }
-  return response.json() as Promise<{jobs: SyncStatsResponse['jobs']}>
+  const response = await apiClient.api.admin['refresh-sync-stats-progress'].get()
+  if (response.error) throw new Error('Failed to fetch progress')
+  if (!response.data) throw new Error('Failed to fetch progress')
+  return response.data
 }
 
 const sampleVerify = async (input: {
@@ -119,34 +116,20 @@ const sampleVerify = async (input: {
   sampleSize: number
   sampleType: 'recent' | 'random' | 'deleted'
 }): Promise<SampleVerifyResult> => {
-  const response = await fetch(`${env.VITE_SERVER_API}/api/admin/sample-verify`, {
-    method: 'POST',
-    credentials: 'include',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(input),
-  })
-  if (!response.ok) {
-    throw new Error('Failed to sample verify')
-  }
-  const json = (await response.json()) as {data: SampleVerifyResult}
-  return json.data
+  const response = await apiClient.api.admin['sample-verify'].post(input)
+  if (response.error) throw new Error('Failed to sample verify')
+  if (!response.data) throw new Error('Failed to sample verify')
+  return response.data.data
 }
 
 const partitionCoverageCheck = async (input: {
   table: 'articles' | 'judgments'
   months: number
 }): Promise<PartitionCoverageResult> => {
-  const response = await fetch(`${env.VITE_SERVER_API}/api/admin/partition-coverage-check`, {
-    method: 'POST',
-    credentials: 'include',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(input),
-  })
-  if (!response.ok) {
-    throw new Error('Failed to run partition coverage check')
-  }
-  const json = (await response.json()) as {data: PartitionCoverageResult}
-  return json.data
+  const response = await apiClient.api.admin['partition-coverage-check'].post(input)
+  if (response.error) throw new Error('Failed to run partition coverage check')
+  if (!response.data) throw new Error('Failed to run partition coverage check')
+  return response.data.data
 }
 
 const syncDeletedArticlesToClickHouse = async (input: {
@@ -215,152 +198,108 @@ const isAnyJobRunning = (jobs: SyncStatsResponse['jobs'] | null): boolean => {
   })
 }
 
+const syncStatsQueryKey = ['admin', 'sync-stats'] as const
+const syncStatsProgressQueryKey = ['admin', 'sync-stats-progress'] as const
+
+const getErrorMessage = (error: unknown): string | null => {
+  return error instanceof Error ? error.message : error ? 'Unknown error' : null
+}
+
 const AdminSyncStats = () => {
-  const [stats, setStats] = createSignal<SyncStatsResponse | null>(null)
-  const [loading, setLoading] = createSignal(true)
-  const [error, setError] = createSignal<string | null>(null)
-  const [refreshing, setRefreshing] = createSignal(false)
+  const queryClient = useQueryClient()
+
   const [fullRecount, setFullRecount] = createSignal(false)
   const [includeUniqueCount, setIncludeUniqueCount] = createSignal(false)
 
   const [orphanBatchSize, setOrphanBatchSize] = createSignal(10_000)
   const [orphanMaxBatches, setOrphanMaxBatches] = createSignal(25)
-  const [orphanCleaning, setOrphanCleaning] = createSignal(false)
-  const [orphanCleanupResult, setOrphanCleanupResult] = createSignal<SyncDeletedArticlesResult | null>(null)
 
   const [sampleSize, setSampleSize] = createSignal(100)
   const [sampleType, setSampleType] = createSignal<'recent' | 'random' | 'deleted'>('recent')
-  const [sampleResult, setSampleResult] = createSignal<SampleVerifyResult | null>(null)
-  const [sampleLoading, setSampleLoading] = createSignal(false)
 
   const [partitionMonths, setPartitionMonths] = createSignal(12)
-  const [partitionResult, setPartitionResult] = createSignal<PartitionCoverageResult | null>(null)
-  const [partitionLoading, setPartitionLoading] = createSignal(false)
+  const syncStatsQuery = useQuery(() => {
+    return {queryKey: syncStatsQueryKey, queryFn: fetchSyncStats, refetchOnWindowFocus: false}
+  })
 
-  const load = async (): Promise<SyncStatsResponse | null> => {
-    setLoading(true)
-    setError(null)
-    return fetchSyncStats().then(
-      (data) => {
-        setStats(data)
-        setLoading(false)
-        return data
+  const progressQuery = useQuery(() => {
+    return {
+      queryKey: syncStatsProgressQueryKey,
+      queryFn: fetchProgress,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      refetchIntervalInBackground: true,
+      refetchInterval: (query) => {
+        const currentJobs = query.state.data?.jobs ?? null
+        return isAnyJobRunning(currentJobs) ? 1000 : false
       },
-      (err) => {
-        setError(err instanceof Error ? err.message : 'Unknown error')
-        setLoading(false)
-        return null
+    }
+  })
+
+  const refreshMutation = useMutation(() => {
+    return {
+      mutationFn: refreshSyncStats,
+      onSuccess: () => {
+        void queryClient.invalidateQueries({queryKey: syncStatsQueryKey})
+        void queryClient.invalidateQueries({queryKey: syncStatsProgressQueryKey})
       },
+    }
+  })
+
+  const sampleVerifyMutation = useMutation(() => {
+    return {
+      mutationFn: (table: 'articles' | 'judgments') => {
+        return sampleVerify({table, sampleSize: sampleSize(), sampleType: sampleType()})
+      },
+    }
+  })
+
+  const partitionCheckMutation = useMutation(() => {
+    return {
+      mutationFn: (table: 'articles' | 'judgments') => {
+        return partitionCoverageCheck({table, months: partitionMonths()})
+      },
+    }
+  })
+
+  const orphanCleanupMutation = useMutation(() => {
+    return {
+      mutationFn: syncDeletedArticlesToClickHouse,
+      onSuccess: () => {
+        void queryClient.invalidateQueries({queryKey: syncStatsQueryKey})
+      },
+    }
+  })
+
+  const syncStatsData = createMemo(() => {
+    return syncStatsQuery.isSuccess ? syncStatsQuery.data : null
+  })
+
+  const jobsData = createMemo(() => {
+    const progressJobs = progressQuery.isSuccess ? progressQuery.data.jobs : null
+    const snapshotJobs = syncStatsData()?.jobs ?? null
+    return progressJobs ?? snapshotJobs
+  })
+
+  const errorMessage = createMemo(() => {
+    return (
+      getErrorMessage(syncStatsQuery.error)
+      ?? getErrorMessage(progressQuery.error)
+      ?? getErrorMessage(refreshMutation.error)
+      ?? getErrorMessage(sampleVerifyMutation.error)
+      ?? getErrorMessage(partitionCheckMutation.error)
+      ?? getErrorMessage(orphanCleanupMutation.error)
+      ?? null
     )
-  }
-
-  const pollProgress = async (jobs: SyncStatsResponse['jobs']): Promise<void> => {
-    if (!isAnyJobRunning(jobs)) return
-
-    return fetchProgress().then(
-      (data) => {
-        setStats((prev) => {
-          return prev ? {...prev, jobs: data.jobs} : prev
-        })
-        setTimeout(() => {
-          void pollProgress(data.jobs)
-        }, 1000)
-      },
-      () => {
-        setTimeout(() => {
-          void pollProgress(jobs)
-        }, 3000)
-      },
-    )
-  }
-
-  const handleRefresh = async () => {
-    setRefreshing(true)
-    setError(null)
-
-    return refreshSyncStats({fullRecount: fullRecount(), includeUniqueCount: includeUniqueCount()}).then(
-      () => {
-        setRefreshing(false)
-        return load().then((data) => {
-          return data ? pollProgress(data.jobs) : Promise.resolve()
-        })
-      },
-      (err) => {
-        setError(err instanceof Error ? err.message : 'Failed to refresh')
-        setRefreshing(false)
-      },
-    )
-  }
-
-  const handleOrphanCleanup = async () => {
-    const confirmed = window.confirm(
-      `Delete orphan articles from ClickHouse?\n\nThis scans ClickHouse IDs in batches and deletes any IDs missing in PostgreSQL.\n\nClickHouse deletes are async (mutations).`,
-    )
-    if (!confirmed) return
-
-    setOrphanCleaning(true)
-    setError(null)
-    setOrphanCleanupResult(null)
-
-    return syncDeletedArticlesToClickHouse({batchSize: orphanBatchSize(), maxBatches: orphanMaxBatches()}).then(
-      (result) => {
-        setOrphanCleanupResult(result)
-        setOrphanCleaning(false)
-      },
-      (err) => {
-        setError(err instanceof Error ? err.message : 'Failed to sync deleted articles')
-        setOrphanCleaning(false)
-      },
-    )
-  }
-
-  const runSampleVerify = async (table: 'articles' | 'judgments') => {
-    setSampleLoading(true)
-    setError(null)
-    setSampleResult(null)
-
-    return sampleVerify({table, sampleSize: sampleSize(), sampleType: sampleType()}).then(
-      (result) => {
-        setSampleResult(result)
-        setSampleLoading(false)
-      },
-      (err) => {
-        setError(err instanceof Error ? err.message : 'Failed sample verify')
-        setSampleLoading(false)
-      },
-    )
-  }
-
-  const runPartitionCheck = async (table: 'articles' | 'judgments') => {
-    setPartitionLoading(true)
-    setError(null)
-    setPartitionResult(null)
-
-    return partitionCoverageCheck({table, months: partitionMonths()}).then(
-      (result) => {
-        setPartitionResult(result)
-        setPartitionLoading(false)
-      },
-      (err) => {
-        setError(err instanceof Error ? err.message : 'Failed partition coverage check')
-        setPartitionLoading(false)
-      },
-    )
-  }
-
-  onMount(() => {
-    void load().then((data) => {
-      return data ? pollProgress(data.jobs) : Promise.resolve()
-    })
   })
 
   const clickhouseReachable = createMemo(() => {
-    return stats()?.clickhouse.reachable ?? false
+    return syncStatsData()?.clickhouse.reachable ?? false
   })
 
-  const jobsList = createMemo(() => {
-    const jobs = stats()?.jobs ?? {}
-    return Object.entries(jobs).sort(([a], [b]) => {
+  const jobIds = createMemo(() => {
+    const currentJobs = jobsData() ?? {}
+    return Object.keys(currentJobs).sort((a, b) => {
       return a.localeCompare(b)
     })
   })
@@ -435,21 +374,22 @@ const AdminSyncStats = () => {
           <div class="flex items-center gap-2">
             <button
               onClick={() => {
-                void load()
+                void syncStatsQuery.refetch()
               }}
-              disabled={loading()}
+              disabled={syncStatsQuery.isFetching}
               class="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 rounded-md disabled:opacity-50"
             >
-              {loading() ? 'Loading...' : 'Refresh View'}
+              {syncStatsQuery.isFetching ? 'Loading...' : 'Refresh View'}
             </button>
             <button
               onClick={() => {
-                void handleRefresh()
+                refreshMutation.reset()
+                void refreshMutation.mutateAsync({fullRecount: fullRecount(), includeUniqueCount: includeUniqueCount()})
               }}
-              disabled={refreshing()}
+              disabled={refreshMutation.isPending}
               class="px-3 py-2 text-sm bg-blue-600 text-white hover:bg-blue-700 rounded-md disabled:opacity-50"
             >
-              {refreshing() ? 'Starting...' : 'Refresh Stats'}
+              {refreshMutation.isPending ? 'Starting...' : 'Refresh Stats'}
             </button>
           </div>
           <div class="flex items-center gap-4 text-sm">
@@ -506,15 +446,20 @@ const AdminSyncStats = () => {
               </label>
               <button
                 onClick={() => {
-                  void handleOrphanCleanup()
+                  const confirmed = window.confirm(
+                    `Delete orphan articles from ClickHouse?\n\nThis scans ClickHouse IDs in batches and deletes any IDs missing in PostgreSQL.\n\nClickHouse deletes are async (mutations).`,
+                  )
+                  if (!confirmed) return
+                  orphanCleanupMutation.reset()
+                  void orphanCleanupMutation.mutateAsync({batchSize: orphanBatchSize(), maxBatches: orphanMaxBatches()})
                 }}
-                disabled={orphanCleaning()}
+                disabled={orphanCleanupMutation.isPending}
                 class="px-3 py-2 text-sm bg-red-600 text-white hover:bg-red-700 rounded-md disabled:opacity-50"
               >
-                {orphanCleaning() ? 'Cleaning...' : 'Delete Orphans (Articles)'}
+                {orphanCleanupMutation.isPending ? 'Cleaning...' : 'Delete Orphans (Articles)'}
               </button>
             </div>
-            <Show when={orphanCleanupResult()}>
+            <Show when={orphanCleanupMutation.data}>
               {(r) => {
                 return (
                   <div class="text-xs text-gray-600">
@@ -529,13 +474,13 @@ const AdminSyncStats = () => {
         </div>
       </div>
 
-      <Show when={error()}>
+      <Show when={errorMessage()}>
         <div class="p-4 rounded-md bg-red-50 border border-red-200 mb-6">
-          <p class="text-red-600">{error()}</p>
+          <p class="text-red-600">{errorMessage()}</p>
         </div>
       </Show>
 
-      <Show when={stats()}>
+      <Show when={syncStatsData()}>
         {(s) => {
           return (
             <div class="space-y-6">
@@ -547,10 +492,10 @@ const AdminSyncStats = () => {
               <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
                 <div class="flex items-center justify-between mb-4">
                   <h2 class="text-lg font-semibold">Jobs</h2>
-                  <Show when={isAnyJobRunning(s().jobs)}>
+                  <Show when={isAnyJobRunning(jobsData())}>
                     <button
                       onClick={() => {
-                        void pollProgress(s().jobs)
+                        void progressQuery.refetch()
                       }}
                       class="px-3 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded-md"
                     >
@@ -560,29 +505,38 @@ const AdminSyncStats = () => {
                 </div>
 
                 <div class="space-y-2 text-sm">
-                  <For each={jobsList()}>
-                    {([id, job]) => {
+                  <For each={jobIds()}>
+                    {(id) => {
+                      const job = createMemo(() => {
+                        return jobsData()?.[id] ?? null
+                      })
                       const heartbeatAge = createMemo(() => {
-                        const iso = job.lastHeartbeatAt
+                        const iso = job()?.lastHeartbeatAt ?? null
                         return iso ? formatAge(iso) : 'N/A'
                       })
 
                       return (
-                        <div class="flex items-center justify-between rounded-md bg-gray-50 px-4 py-3">
-                          <div class="font-mono text-xs">{id}</div>
-                          <div class="flex items-center gap-3">
-                            <div class="text-gray-700">{job.status.toUpperCase()}</div>
-                            <Show when={job.status === 'running'}>
-                              <div class="text-gray-600">
-                                Batch {job.currentBatch ?? 0} — {formatCount(job.rowsCounted)}
+                        <Show when={job()}>
+                          {(j) => {
+                            return (
+                              <div class="flex items-center justify-between rounded-md bg-gray-50 px-4 py-3">
+                                <div class="font-mono text-xs">{id}</div>
+                                <div class="flex items-center gap-3">
+                                  <div class="text-gray-700">{j().status.toUpperCase()}</div>
+                                  <Show when={j().status === 'running'}>
+                                    <div class="text-gray-600">
+                                      Batch {j().currentBatch ?? 0} — {formatCount(j().rowsCounted)}
+                                    </div>
+                                  </Show>
+                                  <div class="text-gray-500">Heartbeat: {heartbeatAge()}</div>
+                                  <Show when={j().error}>
+                                    <div class="text-red-600">{j().error}</div>
+                                  </Show>
+                                </div>
                               </div>
-                            </Show>
-                            <div class="text-gray-500">Heartbeat: {heartbeatAge()}</div>
-                            <Show when={job.error}>
-                              <div class="text-red-600">{job.error}</div>
-                            </Show>
-                          </div>
-                        </div>
+                            )
+                          }}
+                        </Show>
                       )
                     }}
                   </For>
@@ -624,18 +578,20 @@ const AdminSyncStats = () => {
                     <div class="flex items-center gap-2">
                       <button
                         onClick={() => {
-                          void runSampleVerify('articles')
+                          sampleVerifyMutation.reset()
+                          void sampleVerifyMutation.mutateAsync('articles')
                         }}
-                        disabled={sampleLoading()}
+                        disabled={sampleVerifyMutation.isPending}
                         class="px-3 py-2 text-sm bg-gray-900 text-white rounded-md disabled:opacity-50"
                       >
                         Articles
                       </button>
                       <button
                         onClick={() => {
-                          void runSampleVerify('judgments')
+                          sampleVerifyMutation.reset()
+                          void sampleVerifyMutation.mutateAsync('judgments')
                         }}
-                        disabled={sampleLoading()}
+                        disabled={sampleVerifyMutation.isPending}
                         class="px-3 py-2 text-sm bg-gray-900 text-white rounded-md disabled:opacity-50"
                       >
                         Judgments
@@ -643,7 +599,7 @@ const AdminSyncStats = () => {
                     </div>
                   </div>
 
-                  <Show when={sampleResult()}>
+                  <Show when={sampleVerifyMutation.data}>
                     {(r) => {
                       return (
                         <div class="space-y-2 text-sm">
@@ -705,18 +661,20 @@ const AdminSyncStats = () => {
                     <div class="flex items-center gap-2">
                       <button
                         onClick={() => {
-                          void runPartitionCheck('articles')
+                          partitionCheckMutation.reset()
+                          void partitionCheckMutation.mutateAsync('articles')
                         }}
-                        disabled={partitionLoading()}
+                        disabled={partitionCheckMutation.isPending}
                         class="px-3 py-2 text-sm bg-gray-900 text-white rounded-md disabled:opacity-50"
                       >
                         Articles
                       </button>
                       <button
                         onClick={() => {
-                          void runPartitionCheck('judgments')
+                          partitionCheckMutation.reset()
+                          void partitionCheckMutation.mutateAsync('judgments')
                         }}
-                        disabled={partitionLoading()}
+                        disabled={partitionCheckMutation.isPending}
                         class="px-3 py-2 text-sm bg-gray-900 text-white rounded-md disabled:opacity-50"
                       >
                         Judgments
@@ -724,7 +682,7 @@ const AdminSyncStats = () => {
                     </div>
                   </div>
 
-                  <Show when={partitionResult()}>
+                  <Show when={partitionCheckMutation.data}>
                     {(r) => {
                       return (
                         <div class="space-y-2 text-sm">
