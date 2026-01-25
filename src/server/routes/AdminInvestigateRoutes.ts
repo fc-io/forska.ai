@@ -539,24 +539,6 @@ const fetchProjectScope = async (projectId: string): Promise<ProjectScope | null
   }
 }
 
-const syncDeletedJudgmentsToClickhouse = async () => {
-  const db = getDatabase()
-
-  const deletedJudgments = await db.select({id: judgments.id}).from(judgments).where(isNotNull(judgments.deletedAt))
-
-  if (deletedJudgments.length === 0) {
-    return {synced: 0, message: 'No deleted judgments to sync'}
-  }
-
-  const idsToDelete = deletedJudgments.map((j) => {
-    return j.id
-  })
-
-  await deleteJudgmentsFromClickhouse(idsToDelete)
-
-  return {synced: idsToDelete.length, message: `Enqueued ${idsToDelete.length} deletes in ClickHouse`}
-}
-
 const getClickhouseSyncStatus = async () => {
   const db = getDatabase()
   const {getClickhouseClient, pingClickhouse} = await import('../../services/clickhouse/clickhouseClient.ts')
@@ -671,34 +653,6 @@ const getClickhouseSyncStatus = async () => {
     status,
     message,
   }
-}
-
-type BackfillProgress = {
-  status: 'idle' | 'running' | 'completed' | 'error'
-  totalToSync: number
-  synced: number
-  currentBatch: number
-  totalBatches: number
-  startedAt: Date | null
-  completedAt: Date | null
-  error: string | null
-  estimatedSecondsRemaining: number | null
-}
-
-const backfillProgress: BackfillProgress = {
-  status: 'idle',
-  totalToSync: 0,
-  synced: 0,
-  currentBatch: 0,
-  totalBatches: 0,
-  startedAt: null,
-  completedAt: null,
-  error: null,
-  estimatedSecondsRemaining: null,
-}
-
-const getBackfillProgress = () => {
-  return {...backfillProgress}
 }
 
 type AutoSyncAllProgress = {
@@ -918,133 +872,6 @@ const runAutoSyncAllAsync = async (projectId: string | null) => {
   return {started: true, message: 'Auto-sync all started'}
 }
 
-const runBackfillAsync = async (batchSize: number = 1000) => {
-  if (backfillProgress.status === 'running') {
-    return {started: false, message: 'Backfill already in progress'}
-  }
-
-  backfillProgress.status = 'running'
-  backfillProgress.synced = 0
-  backfillProgress.currentBatch = 0
-  backfillProgress.totalBatches = 0
-  backfillProgress.startedAt = new Date()
-  backfillProgress.completedAt = null
-  backfillProgress.error = null
-  backfillProgress.estimatedSecondsRemaining = null
-
-  const runBackfill = async () => {
-    const db = getDatabase()
-    const {getClickhouseClient} = await import('../../services/clickhouse/clickhouseClient.ts')
-    const chClient = getClickhouseClient()
-
-    try {
-      console.log('[Backfill] Starting backfill from ClickHouse max timestamp...')
-
-      const chMaxResult = await chClient.query({
-        query: `SELECT max(createdAt) AS maxCreatedAt FROM judgments`,
-        format: 'JSONEachRow',
-      })
-      const [chMaxRow] = await chMaxResult.json<{maxCreatedAt: string | null}>()
-      const chMaxCreatedAt = parseClickhouseDateTimeUtc(chMaxRow?.maxCreatedAt) ?? new Date(0)
-
-      console.log(`[Backfill] ClickHouse max createdAt: ${chMaxCreatedAt.toISOString()}`)
-
-      let lastCreatedAt = chMaxCreatedAt
-      let totalSynced = 0
-
-      while (true) {
-        const pgJudgments = await db
-          .select({
-            id: judgments.id,
-            createdAt: judgments.createdAt,
-            updatedAt: judgments.updatedAt,
-            articleId: judgments.articleId,
-            promptId: judgments.promptId,
-            modelId: judgments.modelId,
-            useTitle: judgments.useTitle,
-            useAbstract: judgments.useAbstract,
-            useFulltext: judgments.useFulltext,
-            useFulltextNoImages: judgments.useFulltextNoImages,
-            answeredOriginal: judgments.answeredOriginal,
-            answeredOriginalAsArray: judgments.answeredOriginalAsArray,
-            explanation: judgments.explanation,
-            quotes: judgments.quotes,
-          })
-          .from(judgments)
-          .where(sql`${judgments.createdAt} > ${lastCreatedAt} AND ${judgments.deletedAt} IS NULL`)
-          .orderBy(judgments.createdAt)
-          .limit(batchSize)
-
-        if (pgJudgments.length === 0) break
-
-        const articleIds = [...new Set(pgJudgments.map((j) => j.articleId))]
-        const articleRows = await db.select().from(articles).where(inArray(articles.id, articleIds))
-        const articlesMap = new Map(articleRows.map((a) => [a.id, a]))
-
-        const clickhouseRecords = pgJudgments.map((judgment) => {
-          const article = articlesMap.get(judgment.articleId)
-          return {
-            id: judgment.id,
-            createdAt: formatDateForClickHouse(judgment.createdAt),
-            updatedAt: formatDateForClickHouse(judgment.updatedAt),
-            articleId: judgment.articleId,
-            articleTitle: article?.articleTitle ?? '',
-            articleCreatedAt: formatDateForClickHouse(article?.articleCreatedAt ?? null),
-            articleUpdatedAt: formatDateForClickHouse(article?.articleUpdatedAt ?? null),
-            articleCreatedYear: article?.articleCreatedAt ? article.articleCreatedAt.getUTCFullYear() : null,
-            articleUpdatedYear: article?.articleUpdatedAt ? article.articleUpdatedAt.getUTCFullYear() : null,
-            articleImportRoute: article?.importRoute ?? null,
-            articleImportedBy: article?.importedBy ?? null,
-            promptId: judgment.promptId,
-            modelId: judgment.modelId,
-            useTitle: judgment.useTitle,
-            useAbstract: judgment.useAbstract,
-            useFulltext: judgment.useFulltext,
-            useFulltextNoImages: judgment.useFulltextNoImages,
-            answeredOriginal: judgment.answeredOriginal,
-            answeredOriginalAsArray: judgment.answeredOriginalAsArray ?? [],
-            explanation: judgment.explanation,
-            quotes: getQuotesForClickhouse(judgment.quotes),
-          }
-        })
-
-        await chClient.insert({table: 'forska.judgments', values: clickhouseRecords, format: 'JSONEachRow'})
-
-        totalSynced += pgJudgments.length
-        backfillProgress.synced = totalSynced
-        backfillProgress.currentBatch += 1
-
-        lastCreatedAt = pgJudgments[pgJudgments.length - 1]!.createdAt
-
-        const elapsedMs = Date.now() - (backfillProgress.startedAt?.getTime() ?? Date.now())
-        const rate = totalSynced / (elapsedMs / 1000)
-        const remaining = backfillProgress.totalToSync - totalSynced
-        backfillProgress.estimatedSecondsRemaining = rate > 0 ? Math.round(remaining / rate) : null
-
-        console.log(
-          `[Backfill] Synced ${totalSynced.toLocaleString()} / ${backfillProgress.totalToSync.toLocaleString()} (${backfillProgress.estimatedSecondsRemaining}s remaining)`,
-        )
-
-        if (pgJudgments.length < batchSize) break
-      }
-
-      backfillProgress.status = 'completed'
-      backfillProgress.completedAt = new Date()
-      backfillProgress.totalToSync = totalSynced
-      console.log(`[Backfill] Completed! Synced ${totalSynced.toLocaleString()} judgments`)
-    } catch (error) {
-      backfillProgress.status = 'error'
-      backfillProgress.error = error instanceof Error ? error.message : 'Unknown error'
-      backfillProgress.completedAt = new Date()
-      console.error('[Backfill] Error:', error)
-    }
-  }
-
-  void runBackfill()
-
-  return {started: true, message: 'Backfill started'}
-}
-
 export const adminInvestigateRoutes = new Elysia()
   .use(withErrorHandler())
   .use(requireUserAuth())
@@ -1058,17 +885,6 @@ export const adminInvestigateRoutes = new Elysia()
     },
     {body: t.Optional(t.Object({batchSize: t.Optional(t.Number()), maxBatches: t.Optional(t.Number())}))},
   )
-  .post(
-    '/api/admin/backfill-judgments-to-clickhouse',
-    async ({body}) => {
-      const batchSize = body?.batchSize ?? 1000
-      return runBackfillAsync(batchSize)
-    },
-    {body: t.Optional(t.Object({batchSize: t.Optional(t.Number())}))},
-  )
-  .get('/api/admin/backfill-progress', async () => {
-    return getBackfillProgress()
-  })
   .get('/api/admin/list-prompts-with-types', async () => {
     const db = getDatabase()
     const promptsList = await db
@@ -1102,9 +918,6 @@ export const adminInvestigateRoutes = new Elysia()
         }
       }),
     }
-  })
-  .post('/api/admin/sync-deleted-judgments-to-clickhouse', async () => {
-    return syncDeletedJudgmentsToClickhouse()
   })
   .post(
     '/api/admin/delete-unexpected-answers',

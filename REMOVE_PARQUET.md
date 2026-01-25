@@ -98,20 +98,15 @@ Remove Parquet entirely. PostgreSQL is the source of truth; ClickHouse is synced
 
 ## ClickHouse Sync (Post-Removal)
 
-ClickHouse data is synced manually via existing backfill routes:
+ClickHouse data is synced manually via unified sync route:
 
-| Route                                                  | Purpose                                     |
-| ------------------------------------------------------ | ------------------------------------------- |
-| `POST /api/admin/backfill-judgments-to-clickhouse`     | Sync new rows from `max(createdAt)` forward |
-| `POST /api/admin/sync-deleted-judgments-to-clickhouse` | Sync soft-deleted rows (tombstones)         |
+| Route                                         | Purpose                                                    |
+| --------------------------------------------- | ---------------------------------------------------------- |
+| `POST /api/admin/sync-judgments-to-clickhouse` | Unified sync (keyset pagination; handles upserts+deletes) |
 
-**For a full resync:** Truncate the ClickHouse table, then run backfill.
+**For a full resync:** Truncate the ClickHouse table, then run sync.
 
 ### Known Limitations
 
-- **No real-time sync:** ClickHouse data lags behind PostgreSQL until backfill is run
-- **Gaps not auto-filled:** Backfill starts from `max(createdAt)`, so gaps require truncate + full resync
-- **Deletes require separate sync:** Run `sync-deleted-judgments-to-clickhouse` to propagate deletes
-- **Updates not synced:** `judgeStoreJudgment.ts` can update existing judgments; requires full resync
-- **Tombstone bug remains:** Soft deletes use same `createdAt`, causing version ties in ReplacingMergeTree
-- **Dedup is eventual:** ReplacingMergeTree deduplicates during background merges, not immediately
+- **No real-time sync:** ClickHouse data lags behind PostgreSQL until sync is run
+- **Deletes are async:** CH deletes via mutations; may have brief count mismatches

@@ -8,6 +8,20 @@
 - [x] Fix CH inserts sending `null` to non-null cols (`articleTitle`)
 - [x] Doc: CH delete syntax/params (no `?`; use `query_params`)
 
+## Removed Legacy Code
+
+Removed in favor of unified `sync-judgments-to-clickhouse` endpoint:
+
+| Removed | Description |
+|---------|-------------|
+| `POST /api/admin/backfill-judgments-to-clickhouse` | Old endpoint; synced from `max(createdAt)` forward |
+| `POST /api/admin/sync-deleted-judgments-to-clickhouse` | Old endpoint; synced soft-deletes separately |
+| `GET /api/admin/backfill-progress` | Progress tracking for old backfill |
+| `scripts/syncDeletedJudgmentsToClickhouse.ts` | CLI script for deleted judgments sync |
+| `runBackfillAsync()` | Function for old backfill logic |
+| `syncDeletedJudgmentsToClickhouse()` | Function for old delete sync |
+| `BackfillProgress` type + state | Progress tracking state |
+
 ## Target Architecture
 
 PostgreSQL is source of truth. Target: CH holds only live rows (no tombstones) via **MergeTree + deletes**.
@@ -31,16 +45,15 @@ Delete propagation (both paths):
 
 ## Current State
 
-Manual backfill routes:
+Sync routes:
 
 | Route | Purpose |
 |-------|---------|
-| `POST /api/admin/backfill-judgments-to-clickhouse` | Sync new rows from `max(createdAt)` forward |
-| `POST /api/admin/sync-deleted-judgments-to-clickhouse` | Sync soft-deletes (insert tombstones) |
+| `POST /api/admin/sync-judgments-to-clickhouse` | Unified sync (keyset pagination on `updatedAt,id`; handles upserts+deletes) |
 | `POST /api/admin/sync-articles-to-clickhouse` | Sync articles by `updated_at` |
-| `GET /api/admin/clickhouse-sync-status` | Health check comparing max createdAt |
+| `GET /api/admin/clickhouse-sync-status` | Health check comparing counts/timestamps |
 
-Current CH impl uses tombstones (`deletedAt`) + ReplacingMergeTree-ish semantics. Target removes tombstones (physical deletes).
+CH uses MergeTree + physical deletes (no tombstones).
 
 ---
 
@@ -136,7 +149,7 @@ ORDER BY (articleId, promptId, modelId, id);
 - [x] Batch deletes/inserts (avoid per-row mutations); monitor `system.mutations` backlog
 - [x] CH insert schema strict: never send `null` to non-null cols (e.g. `articleTitle String`)
 - [x] ClickHouse has no `?` placeholders; use `{id:String}` + `query_params` (or batched `IN (...)`)
-- [x] Deprecate old endpoints: `backfill-judgments`, `sync-deleted-judgments`
+- [x] Removed old endpoints: `backfill-judgments`, `sync-deleted-judgments`
 
 ### Phase 3: Improve Health Check
 
