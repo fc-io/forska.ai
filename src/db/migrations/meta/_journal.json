@@ -449,6 +449,13 @@
       "when": 1769188540491,
       "tag": "0064_perpetual_guardian",
       "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "7",
+      "when": 1769357500662,
+      "tag": "0065_romantic_next_avengers",
+      "breakpoints": true
     }
   ]
 }

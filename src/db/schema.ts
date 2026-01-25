@@ -110,6 +110,7 @@ export const articles = pgTable(
       index('articles_article_updated_idx').on(table.articleUpdatedAt),
       index('articles_import_route_article_created_idx').on(table.importRoute, table.articleCreatedAt),
       index('articles_updated_idx').on(table.updatedAt),
+      index('articles_updated_id_idx').on(table.updatedAt, table.id),
       uniqueIndex('articles_openalex_id_unique').on(table.openalexId),
       index('articles_full_text_conversion_status_idx').on(table.fullTextConversionStatus),
     ]
@@ -636,12 +637,16 @@ export const judgments = pgTable(
       ),
       // Note: judgments_prompt_article_answered_idx is also managed via raw SQL migration
       index('judgments_updated_idx').on(table.updatedAt),
+      index('judgments_updated_id_deleted_idx').on(table.updatedAt, table.id, table.deletedAt),
       // For sync status checks (ORDER BY created_at DESC LIMIT 1)
       index('judgments_created_idx').on(table.createdAt),
       // Denormalized project lookups (for Parquet/ClickHouse compatibility)
       index('judgments_project_idx').on(table.projectId),
       // Soft delete queries (for Parquet/ClickHouse compatibility)
       index('judgments_deleted_at_idx').on(table.deletedAt),
+      index('judgments_deleted_updated_idx')
+        .on(table.deletedAt, table.updatedAt)
+        .where(sql`${table.deletedAt} IS NOT NULL`),
       // Unique constraint for content-aware judgment deduplication (excludes soft-deleted rows).
       // This enables rejudge: deleted rows don't block new inserts for the same combo.
       uniqueIndex('judgments_article_prompt_model_content_unique')
@@ -1025,5 +1030,41 @@ export const syncState = pgTable(
   },
   (table) => {
     return {pk: primaryKey({columns: [table.remoteId, table.tableName]})}
+  },
+)
+
+export const pgChSyncStats = pgTable(
+  'pg_ch_sync_stats',
+  {
+    id: text('id').primaryKey(),
+
+    totalCount: bigint('total_count', {mode: 'number'}).notNull().default(0),
+    activeCount: bigint('active_count', {mode: 'number'}).notNull().default(0),
+    deletedCount: bigint('deleted_count', {mode: 'number'}).notNull().default(0),
+
+    uniqueCount: bigint('unique_count', {mode: 'number'}),
+    uniqueCountAt: timestamp('unique_count_at', {withTimezone: true}),
+
+    watermarkCursorCol: text('watermark_cursor_col'),
+    watermarkTs: text('watermark_ts'),
+    watermarkId: text('watermark_id'),
+
+    maxCursorAt: text('max_cursor_at'),
+
+    jobStatus: text('job_status').notNull().default('idle'),
+    jobStartedAt: timestamp('job_started_at', {withTimezone: true}),
+    jobCompletedAt: timestamp('job_completed_at', {withTimezone: true}),
+    jobError: text('job_error'),
+    jobCurrentBatch: integer('job_current_batch'),
+    jobRowsCounted: bigint('job_rows_counted', {mode: 'number'}).notNull().default(0),
+
+    lastUpdatedAt: timestamp('last_updated_at', {withTimezone: true}).defaultNow().notNull(),
+    lastFullCountAt: timestamp('last_full_count_at', {withTimezone: true}),
+  },
+  (table) => {
+    return [
+      index('pg_ch_sync_stats_job_status_idx').on(table.jobStatus),
+      index('pg_ch_sync_stats_last_updated_at_idx').on(table.lastUpdatedAt),
+    ]
   },
 )
