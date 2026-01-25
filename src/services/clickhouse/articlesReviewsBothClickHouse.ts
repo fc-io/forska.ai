@@ -267,7 +267,6 @@ export const queryArticlesReviewsBothFromClickHouse = async (
   whereParts.push(`useAbstract = ${useAbstract ? 'true' : 'false'}`)
   whereParts.push(`useFulltext = ${useFulltext ? 'true' : 'false'}`)
   whereParts.push(`useFulltextNoImages = ${useFulltextNoImages ? 'true' : 'false'}`)
-  whereParts.push(`deletedAt IS NULL`)
 
   // Article filter (must be human-assessed)
   const humanArticleIdsQuoted = humanAssessedArticleIds
@@ -438,7 +437,6 @@ export const queryArticlesReviewsBothFromClickHouse = async (
     FROM judgments
     WHERE articleId IN (${articleIdsQuoted})
       AND promptId IN (${promptIdsQuoted})
-      AND deletedAt IS NULL
     ORDER BY articleId, createdAt DESC
   `
   const judgmentsResult = await client.query({query: judgmentsQuery, format: 'JSONEachRow'})

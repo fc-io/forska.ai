@@ -173,7 +173,6 @@ export const getDatabaseBasedFiltersFromClickHouse = async (
   whereParts.push(`useAbstract = ${metadata.useAbstract ? 'true' : 'false'}`)
   whereParts.push(`useFulltext = ${metadata.useFulltext ? 'true' : 'false'}`)
   whereParts.push(`useFulltextNoImages = ${metadata.useFulltextNoImages ? 'true' : 'false'}`)
-  whereParts.push(`deletedAt IS NULL`)
 
   // Date bounds: combine project bounds with request filters
   const effectiveFromDate =
@@ -355,7 +354,6 @@ export const getNumericFiltersFromClickHouse = async (
   whereParts.push(`useAbstract = ${metadata.useAbstract ? 'true' : 'false'}`)
   whereParts.push(`useFulltext = ${metadata.useFulltext ? 'true' : 'false'}`)
   whereParts.push(`useFulltextNoImages = ${metadata.useFulltextNoImages ? 'true' : 'false'}`)
-  whereParts.push(`deletedAt IS NULL`)
 
   const effectiveFromDate =
     metadata.projectBounds?.dateFrom && params.fromDate

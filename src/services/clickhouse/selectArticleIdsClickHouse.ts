@@ -155,7 +155,6 @@ const selectLlmArticleIds = async (params: SelectArticleIdsParams): Promise<stri
   whereParts.push(`useAbstract = ${metadata.useAbstract ? 'true' : 'false'}`)
   whereParts.push(`useFulltext = ${metadata.useFulltext ? 'true' : 'false'}`)
   whereParts.push(`useFulltextNoImages = ${metadata.useFulltextNoImages ? 'true' : 'false'}`)
-  whereParts.push(`deletedAt IS NULL`)
 
   // Date bounds
   const fromDate = params.from ? new Date(`${params.from}T00:00:00.000Z`) : null
@@ -296,7 +295,6 @@ const selectUnassessedArticleIds = async (params: SelectArticleIdsParams): Promi
   whereParts.push(`useAbstract = ${metadata.useAbstract ? 'true' : 'false'}`)
   whereParts.push(`useFulltext = ${metadata.useFulltext ? 'true' : 'false'}`)
   whereParts.push(`useFulltextNoImages = ${metadata.useFulltextNoImages ? 'true' : 'false'}`)
-  whereParts.push(`deletedAt IS NULL`)
 
   // Date bounds
   const fromDate = params.from ? new Date(`${params.from}T00:00:00.000Z`) : null
@@ -468,7 +466,6 @@ const selectBothArticleIds = async (params: SelectArticleIdsParams): Promise<str
   whereParts.push(`useAbstract = ${metadata.useAbstract ? 'true' : 'false'}`)
   whereParts.push(`useFulltext = ${metadata.useFulltext ? 'true' : 'false'}`)
   whereParts.push(`useFulltextNoImages = ${metadata.useFulltextNoImages ? 'true' : 'false'}`)
-  whereParts.push(`deletedAt IS NULL`)
 
   // Article filter (must be human-assessed)
   const humanArticleIdsQuoted = humanAssessedArticleIds

@@ -2,7 +2,7 @@
  * ClickHouse-based articles reviews query service.
  *
  * This is the ClickHouse equivalent of the PostgreSQL articlesReviewsQueryBuilder.ts
- * Queries the `judgments` table in ClickHouse which was populated via S3Queue from Parquet files.
+ * Queries the `judgments` table in ClickHouse which is populated via sync from PostgreSQL.
  *
  * Key differences from PostgreSQL:
  * - Uses ClickHouse SQL dialect (hasAny for array intersections, etc.)
@@ -58,7 +58,6 @@ export interface ArticlesReviewsParams {
 export interface ClickHouseJudgmentRow {
   id: string
   createdAt: string
-  deletedAt: string | null
   articleId: string
   articleTitle: string
   articleCreatedAt: string | null
@@ -343,7 +342,6 @@ export const queryArticlesReviewsFromClickHouse = async (
     whereParts.push(`useAbstract = ${metadata.useAbstract ? 'true' : 'false'}`)
     whereParts.push(`useFulltext = ${metadata.useFulltext ? 'true' : 'false'}`)
     whereParts.push(`useFulltextNoImages = ${metadata.useFulltextNoImages ? 'true' : 'false'}`)
-    whereParts.push(`deletedAt IS NULL`)
 
     // Date bounds
     const effectiveFromDate =
@@ -571,7 +569,6 @@ export const queryArticlesReviewsFromClickHouse = async (
       SELECT
         id,
         createdAt,
-        deletedAt,
         articleId,
         articleTitle,
         articleCreatedAt,
@@ -589,7 +586,6 @@ export const queryArticlesReviewsFromClickHouse = async (
       FROM judgments
       WHERE articleId IN (${articleIdsQuoted})
         AND promptId IN (${promptIdsQuoted})
-        AND deletedAt IS NULL
       ORDER BY articleId, createdAt DESC
     `
 
@@ -768,7 +764,6 @@ export const countArticlesReviewsFromClickHouse = async (
       whereParts.push(`useAbstract = ${metadata.useAbstract ? 'true' : 'false'}`)
       whereParts.push(`useFulltext = ${metadata.useFulltext ? 'true' : 'false'}`)
       whereParts.push(`useFulltextNoImages = ${metadata.useFulltextNoImages ? 'true' : 'false'}`)
-      whereParts.push(`deletedAt IS NULL`)
 
       // Date bounds
       const effectiveFromDate =

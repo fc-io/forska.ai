@@ -40,6 +40,62 @@ const isOpenEndedType = (typeStr: string | null): boolean => {
   return !hasQuotedLiterals
 }
 
+const CLICKHOUSE_DELETE_BATCH_SIZE = 1000
+
+const getQuotesForClickhouse = (value: unknown): string[] => {
+  if (!value) return []
+
+  if (Array.isArray(value)) {
+    return value.filter((q): q is string => {
+      return typeof q === 'string'
+    })
+  }
+
+  const raw = typeof value === 'string' ? value.trim() : ''
+  const json = raw.startsWith('[') ? raw : ''
+
+  if (!json) return []
+
+  try {
+    const parsed = JSON.parse(json) as unknown
+    return Array.isArray(parsed)
+      ? parsed.filter((q): q is string => {
+          return typeof q === 'string'
+        })
+      : []
+  } catch {
+    return []
+  }
+}
+
+const deleteJudgmentsFromClickhouse = async (ids: string[]): Promise<void> => {
+  const uniqueIds = [...new Set(ids)].filter((id) => {
+    return typeof id === 'string' && id.length > 0
+  })
+
+  if (uniqueIds.length === 0) return
+
+  const {getClickhouseClient} = await import('../../services/clickhouse/clickhouseClient.ts')
+  const chClient = getClickhouseClient()
+
+  const deleteRecursive = async (offset: number): Promise<void> => {
+    const batch = uniqueIds.slice(offset, offset + CLICKHOUSE_DELETE_BATCH_SIZE)
+
+    if (batch.length === 0) {
+      return
+    }
+
+    await chClient.command({
+      query: 'ALTER TABLE forska.judgments DELETE WHERE id IN ({ids:Array(String)})',
+      query_params: {ids: batch},
+    })
+
+    return deleteRecursive(offset + CLICKHOUSE_DELETE_BATCH_SIZE)
+  }
+
+  return deleteRecursive(0)
+}
+
 const deleteUnexpectedJudgments = async (
   projectId: string | null,
   promptId: string,
@@ -156,50 +212,8 @@ const deleteUnexpectedJudgments = async (
     })
     await db.update(judgments).set({deletedAt: now, updatedAt: now}).where(inArray(judgments.id, idsToDelete))
 
-    const articles_map = new Map<string, typeof articles.$inferSelect>()
-    const articleIds = [
-      ...new Set(
-        toDelete.map((j) => {
-          return j.articleId
-        }),
-      ),
-    ]
-    const articleRows = await db.select().from(articles).where(inArray(articles.id, articleIds))
-    for (const article of articleRows) {
-      articles_map.set(article.id, article)
-    }
-
-    const {getClickhouseClient} = await import('../../services/clickhouse/clickhouseClient.ts')
-    const chClient = getClickhouseClient()
-    const clickhouseRecords = toDelete.map((judgment) => {
-      const article = articles_map.get(judgment.articleId)
-      return {
-        id: judgment.id,
-        createdAt: formatDateForClickHouse(judgment.createdAt),
-        deletedAt: formatDateForClickHouse(now),
-        articleId: judgment.articleId,
-        articleTitle: article?.articleTitle ?? '',
-        articleCreatedAt: formatDateForClickHouse(article?.articleCreatedAt ?? null),
-        articleUpdatedAt: formatDateForClickHouse(article?.articleUpdatedAt ?? null),
-        articleCreatedYear: article?.articleCreatedAt ? article.articleCreatedAt.getUTCFullYear() : null,
-        articleUpdatedYear: article?.articleUpdatedAt ? article.articleUpdatedAt.getUTCFullYear() : null,
-        articleImportRoute: article?.importRoute ?? null,
-        articleImportedBy: article?.importedBy ?? null,
-        promptId,
-        modelId: judgment.modelId,
-        useTitle: judgment.useTitle,
-        useAbstract: judgment.useAbstract,
-        useFulltext: judgment.useFulltext,
-        useFulltextNoImages: judgment.useFulltextNoImages,
-        answeredOriginal: null,
-        answeredOriginalAsArray: judgment.answeredOriginalAsArray ?? [],
-        explanation: null,
-        quotes: null,
-      }
-    })
-
-    await chClient.insert({table: 'forska.judgments', values: clickhouseRecords, format: 'JSONEachRow'})
-    console.log(`[Admin] Inserted ${clickhouseRecords.length} tombstone records to ClickHouse`)
+    await deleteJudgmentsFromClickhouse(idsToDelete)
+    console.log(`[Admin] Enqueued ${idsToDelete.length} ClickHouse deletes`)
 
     return {deleted: toDelete.length}
   }
@@ -232,50 +246,8 @@ const deleteUnexpectedJudgments = async (
   })
   await db.update(judgments).set({deletedAt: now, updatedAt: now}).where(inArray(judgments.id, idsToDelete))
 
-  const articles_map = new Map<string, typeof articles.$inferSelect>()
-  const articleIds = [
-    ...new Set(
-      toDelete.map((j) => {
-        return j.articleId
-      }),
-    ),
-  ]
-  const articleRows = await db.select().from(articles).where(inArray(articles.id, articleIds))
-  for (const article of articleRows) {
-    articles_map.set(article.id, article)
-  }
-
-  const {getClickhouseClient} = await import('../../services/clickhouse/clickhouseClient.ts')
-  const chClient = getClickhouseClient()
-  const clickhouseRecords = toDelete.map((judgment) => {
-    const article = articles_map.get(judgment.articleId)
-    return {
-      id: judgment.id,
-      createdAt: formatDateForClickHouse(judgment.createdAt),
-      deletedAt: formatDateForClickHouse(now),
-      articleId: judgment.articleId,
-      articleTitle: article?.articleTitle ?? '',
-      articleCreatedAt: formatDateForClickHouse(article?.articleCreatedAt ?? null),
-      articleUpdatedAt: formatDateForClickHouse(article?.articleUpdatedAt ?? null),
-      articleCreatedYear: article?.articleCreatedAt ? article.articleCreatedAt.getUTCFullYear() : null,
-      articleUpdatedYear: article?.articleUpdatedAt ? article.articleUpdatedAt.getUTCFullYear() : null,
-      articleImportRoute: article?.importRoute ?? null,
-      articleImportedBy: article?.importedBy ?? null,
-      promptId,
-      modelId: judgment.modelId,
-      useTitle: judgment.useTitle,
-      useAbstract: judgment.useAbstract,
-      useFulltext: judgment.useFulltext,
-      useFulltextNoImages: judgment.useFulltextNoImages,
-      answeredOriginal: judgment.answeredOriginal,
-      answeredOriginalAsArray: [],
-      explanation: null,
-      quotes: null,
-    }
-  })
-
-  await chClient.insert({table: 'forska.judgments', values: clickhouseRecords, format: 'JSONEachRow'})
-  console.log(`[Admin] Inserted ${clickhouseRecords.length} tombstone records to ClickHouse`)
+  await deleteJudgmentsFromClickhouse(idsToDelete)
+  console.log(`[Admin] Enqueued ${idsToDelete.length} ClickHouse deletes`)
 
   return {deleted: toDelete.length}
 }
@@ -353,78 +325,20 @@ const fetchProjectScope = async (projectId: string): Promise<ProjectScope | null
 
 const syncDeletedJudgmentsToClickhouse = async () => {
   const db = getDatabase()
-  const {getClickhouseClient} = await import('../../services/clickhouse/clickhouseClient.ts')
-  const chClient = getClickhouseClient()
 
-  const deletedJudgments = await db
-    .select({
-      id: judgments.id,
-      createdAt: judgments.createdAt,
-      deletedAt: judgments.deletedAt,
-      articleId: judgments.articleId,
-      promptId: judgments.promptId,
-      modelId: judgments.modelId,
-      useTitle: judgments.useTitle,
-      useAbstract: judgments.useAbstract,
-      useFulltext: judgments.useFulltext,
-      useFulltextNoImages: judgments.useFulltextNoImages,
-      answeredOriginal: judgments.answeredOriginal,
-      answeredOriginalAsArray: judgments.answeredOriginalAsArray,
-    })
-    .from(judgments)
-    .where(isNotNull(judgments.deletedAt))
+  const deletedJudgments = await db.select({id: judgments.id}).from(judgments).where(isNotNull(judgments.deletedAt))
 
   if (deletedJudgments.length === 0) {
     return {synced: 0, message: 'No deleted judgments to sync'}
   }
 
-  const articleIds = [
-    ...new Set(
-      deletedJudgments.map((j) => {
-        return j.articleId
-      }),
-    ),
-  ]
-  const articleRows = await db.select().from(articles).where(inArray(articles.id, articleIds))
-  const articlesMap = new Map(
-    articleRows.map((a) => {
-      return [a.id, a]
-    }),
-  )
-
-  const clickhouseRecords = deletedJudgments.map((judgment) => {
-    const article = articlesMap.get(judgment.articleId)
-    return {
-      id: judgment.id,
-      createdAt: formatDateForClickHouse(judgment.createdAt),
-      deletedAt: formatDateForClickHouse(judgment.deletedAt),
-      articleId: judgment.articleId,
-      articleTitle: article?.articleTitle ?? '',
-      articleCreatedAt: formatDateForClickHouse(article?.articleCreatedAt ?? null),
-      articleUpdatedAt: formatDateForClickHouse(article?.articleUpdatedAt ?? null),
-      articleCreatedYear: article?.articleCreatedAt ? article.articleCreatedAt.getUTCFullYear() : null,
-      articleUpdatedYear: article?.articleUpdatedAt ? article.articleUpdatedAt.getUTCFullYear() : null,
-      articleImportRoute: article?.importRoute ?? null,
-      articleImportedBy: article?.importedBy ?? null,
-      promptId: judgment.promptId,
-      modelId: judgment.modelId,
-      useTitle: judgment.useTitle,
-      useAbstract: judgment.useAbstract,
-      useFulltext: judgment.useFulltext,
-      useFulltextNoImages: judgment.useFulltextNoImages,
-      answeredOriginal: judgment.answeredOriginal,
-      answeredOriginalAsArray: judgment.answeredOriginalAsArray ?? [],
-      explanation: null,
-      quotes: null,
-    }
+  const idsToDelete = deletedJudgments.map((j) => {
+    return j.id
   })
 
-  await chClient.insert({table: 'forska.judgments', values: clickhouseRecords, format: 'JSONEachRow'})
+  await deleteJudgmentsFromClickhouse(idsToDelete)
 
-  return {
-    synced: clickhouseRecords.length,
-    message: `Synced ${clickhouseRecords.length} deleted judgments to ClickHouse`,
-  }
+  return {synced: idsToDelete.length, message: `Enqueued ${idsToDelete.length} deletes in ClickHouse`}
 }
 
 const getClickhouseSyncStatus = async () => {
@@ -436,6 +350,7 @@ const getClickhouseSyncStatus = async () => {
     db
       .select({createdAt: judgments.createdAt})
       .from(judgments)
+      .where(sql`${judgments.deletedAt} IS NULL`)
       .orderBy(sql`${judgments.createdAt} DESC`)
       .limit(1),
   ])
@@ -466,7 +381,7 @@ const getClickhouseSyncStatus = async () => {
   try {
     const chResult = await queryWithTimeout(async () => {
       const result = await chClient.query({
-        query: `SELECT max(createdAt) AS maxCreatedAt FROM judgments WHERE deletedAt IS NULL`,
+        query: `SELECT max(createdAt) AS maxCreatedAt FROM judgments`,
         format: 'JSONEachRow',
       })
       return result.json<{maxCreatedAt: string | null}>()
@@ -799,7 +714,7 @@ const runBackfillAsync = async (batchSize: number = 1000) => {
           .select({
             id: judgments.id,
             createdAt: judgments.createdAt,
-            deletedAt: judgments.deletedAt,
+            updatedAt: judgments.updatedAt,
             articleId: judgments.articleId,
             promptId: judgments.promptId,
             modelId: judgments.modelId,
@@ -809,9 +724,11 @@ const runBackfillAsync = async (batchSize: number = 1000) => {
             useFulltextNoImages: judgments.useFulltextNoImages,
             answeredOriginal: judgments.answeredOriginal,
             answeredOriginalAsArray: judgments.answeredOriginalAsArray,
+            explanation: judgments.explanation,
+            quotes: judgments.quotes,
           })
           .from(judgments)
-          .where(sql`${judgments.createdAt} > ${lastCreatedAt}`)
+          .where(sql`${judgments.createdAt} > ${lastCreatedAt} AND ${judgments.deletedAt} IS NULL`)
           .orderBy(judgments.createdAt)
           .limit(batchSize)
 
@@ -826,7 +743,7 @@ const runBackfillAsync = async (batchSize: number = 1000) => {
           return {
             id: judgment.id,
             createdAt: formatDateForClickHouse(judgment.createdAt),
-            deletedAt: formatDateForClickHouse(judgment.deletedAt),
+            updatedAt: formatDateForClickHouse(judgment.updatedAt),
             articleId: judgment.articleId,
             articleTitle: article?.articleTitle ?? '',
             articleCreatedAt: formatDateForClickHouse(article?.articleCreatedAt ?? null),
@@ -843,8 +760,8 @@ const runBackfillAsync = async (batchSize: number = 1000) => {
             useFulltextNoImages: judgment.useFulltextNoImages,
             answeredOriginal: judgment.answeredOriginal,
             answeredOriginalAsArray: judgment.answeredOriginalAsArray ?? [],
-            explanation: null,
-            quotes: null,
+            explanation: judgment.explanation,
+            quotes: getQuotesForClickhouse(judgment.quotes),
           }
         })
 
@@ -1320,7 +1237,6 @@ export const adminInvestigateRoutes = new Elysia()
           AND useAbstract = ${project.useAbstract}
           AND useFulltext = ${project.useFulltext}
           AND useFulltextNoImages = ${project.useFulltextNoImages}
-          AND deletedAt IS NULL
           ${chScopeFilter}
       `
       const chResult = await chClient.query({query: chQuery, format: 'JSONEachRow'})
@@ -1447,6 +1363,7 @@ export const adminInvestigateRoutes = new Elysia()
             eq(judgments.useAbstract, project.useAbstract),
             eq(judgments.useFulltext, project.useFulltext),
             eq(judgments.useFulltextNoImages, project.useFulltextNoImages),
+            sql`${judgments.deletedAt} IS NULL`,
           ),
         )
 
@@ -1500,7 +1417,7 @@ export const adminInvestigateRoutes = new Elysia()
           .select({
             id: judgments.id,
             createdAt: judgments.createdAt,
-            deletedAt: judgments.deletedAt,
+            updatedAt: judgments.updatedAt,
             articleId: judgments.articleId,
             promptId: judgments.promptId,
             modelId: judgments.modelId,
@@ -1510,6 +1427,8 @@ export const adminInvestigateRoutes = new Elysia()
             useFulltextNoImages: judgments.useFulltextNoImages,
             answeredOriginal: judgments.answeredOriginal,
             answeredOriginalAsArray: judgments.answeredOriginalAsArray,
+            explanation: judgments.explanation,
+            quotes: judgments.quotes,
           })
           .from(judgments)
           .where(inArray(judgments.id, batchIds))
@@ -1523,7 +1442,7 @@ export const adminInvestigateRoutes = new Elysia()
           return {
             id: judgment.id,
             createdAt: formatDateForClickHouse(judgment.createdAt),
-            deletedAt: formatDateForClickHouse(judgment.deletedAt),
+            updatedAt: formatDateForClickHouse(judgment.updatedAt),
             articleId: judgment.articleId,
             articleTitle: article?.articleTitle ?? '',
             articleCreatedAt: formatDateForClickHouse(article?.articleCreatedAt ?? null),
@@ -1540,8 +1459,8 @@ export const adminInvestigateRoutes = new Elysia()
             useFulltextNoImages: judgment.useFulltextNoImages,
             answeredOriginal: judgment.answeredOriginal,
             answeredOriginalAsArray: judgment.answeredOriginalAsArray ?? [],
-            explanation: null,
-            quotes: null,
+            explanation: judgment.explanation,
+            quotes: getQuotesForClickhouse(judgment.quotes),
           }
         })
 

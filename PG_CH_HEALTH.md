@@ -76,7 +76,7 @@ DELETEs can lag; old+new rows can coexist until mutation done. Health checks mus
 
 ### Phase 1: ClickHouse Live-Only Table (No Tombstones)
 
-- [ ] Decide CH table layout (`forska.judgments`) (tradeoffs):
+- [x] Decide CH table layout (`forska.judgments`) (tradeoffs):
   - Query perf: cluster by `articleId`/`promptId`/`modelId`
   - Delete perf: `DELETE WHERE id=...` needs `id` in `ORDER BY` prefix OR skip index on `id`
   - Types: prefer `UUID` cols + `LowCardinality(String)` dims (requires code/query casts)
@@ -112,9 +112,9 @@ PARTITION BY toYYYYMM(createdAt)
 ORDER BY (articleId, promptId, modelId, id);
 ```
 
-- [ ] Update `scripts/clickhouse-setup.sql`
-- [ ] Remove S3Queue/MV (or make it write new schema; no `deletedAt`)
-- [ ] Remove `deletedAt` column usage in code (filters + selects + types + writers)
+- [x] Update `scripts/clickhouse-setup.sql`
+- [x] Remove S3Queue/MV (or make it write new schema; no `deletedAt`)
+- [x] Remove `deletedAt` column usage in code (filters + selects + types + writers)
 - [ ] Add skip indexes/projection if needed (`id` deletes; `promptId/modelId` filters; `articleImportRoute` scoping)
 - [ ] Drop old table, rename new table
 - [ ] Full resync from PG (prefer CH-side `INSERT SELECT` or server batch insert; avoid 1-row inserts)

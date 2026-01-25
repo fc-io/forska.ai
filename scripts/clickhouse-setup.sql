@@ -2,18 +2,16 @@
 -- Run against forska database
 
 -- ============================================================
--- 1. MAIN ANALYTICS TABLE: ReplacingMergeTree for deduplication
+-- 1. MAIN ANALYTICS TABLE: live-only (no tombstones)
 -- ============================================================
--- Note: We use createdAt as the version column since deletedAt can be NULL
--- Tombstones (soft deletes) are handled via WHERE deletedAt IS NULL in queries
 CREATE TABLE IF NOT EXISTS forska.judgments (
     id String,
-    createdAt DateTime64(6, 'UTC'),
-    deletedAt Nullable(DateTime64(6, 'UTC')),
+    createdAt DateTime64(3, 'UTC'),
+    updatedAt DateTime64(3, 'UTC'),
     articleId String,
     articleTitle String,
-    articleCreatedAt Nullable(DateTime64(6, 'UTC')),
-    articleUpdatedAt Nullable(DateTime64(6, 'UTC')),
+    articleCreatedAt Nullable(DateTime64(3, 'UTC')),
+    articleUpdatedAt Nullable(DateTime64(3, 'UTC')),
     articleCreatedYear Nullable(Int32),
     articleUpdatedYear Nullable(Int32),
     articleImportRoute Nullable(String),
@@ -25,75 +23,9 @@ CREATE TABLE IF NOT EXISTS forska.judgments (
     useFulltext Bool DEFAULT false,
     useFulltextNoImages Bool DEFAULT false,
     answeredOriginal Nullable(String),
-    answeredOriginalAsArray Array(Nullable(String)),
+    answeredOriginalAsArray Array(Nullable(String)) DEFAULT [],
     explanation Nullable(String),
-    quotes Nullable(String)
-) ENGINE = ReplacingMergeTree(createdAt)
+    quotes Array(String) DEFAULT []
+) ENGINE = MergeTree()
 PARTITION BY toYYYYMM(createdAt)
-ORDER BY (id);
-
--- ============================================================
--- 2. SOURCE TABLE: S3Queue ingests new Parquet files
--- ============================================================
--- Uses Nullable types to match Parquet schema exactly
--- Keeper is required for S3Queue (file processing checkpoints)
-CREATE TABLE IF NOT EXISTS forska.judgments_queue (
-    id Nullable(String),
-    createdAt Nullable(DateTime64(6, 'UTC')),
-    deletedAt Nullable(DateTime64(6, 'UTC')),
-    articleId Nullable(String),
-    articleTitle Nullable(String),
-    articleCreatedAt Nullable(DateTime64(6, 'UTC')),
-    articleUpdatedAt Nullable(DateTime64(6, 'UTC')),
-    articleCreatedYear Nullable(Int32),
-    articleUpdatedYear Nullable(Int32),
-    articleImportRoute Nullable(String),
-    articleImportedBy Nullable(String),
-    promptId Nullable(String),
-    modelId Nullable(String),
-    useTitle Nullable(Bool),
-    useAbstract Nullable(Bool),
-    useFulltext Nullable(Bool),
-    useFulltextNoImages Nullable(Bool),
-    answeredOriginal Nullable(String),
-    answeredOriginalAsArray Array(Nullable(String)),
-    explanation Nullable(String),
-    quotes Nullable(String)
-) ENGINE = S3Queue(
-    'http://seaweedfs:8333/forska-judgments/judgments/**/*.parquet',
-    'admin',
-    'admin',
-    'Parquet'
-)
-SETTINGS
-    mode = 'ordered',
-    s3queue_processing_threads_num = 4;
-
--- ============================================================
--- 3. MATERIALIZED VIEW: Route from Queue to Main Table
--- ============================================================
--- Converts Nullable fields to non-nullable where needed using coalesce
-CREATE MATERIALIZED VIEW IF NOT EXISTS forska.judgments_mv TO forska.judgments AS
-SELECT
-    coalesce(id, '') AS id,
-    coalesce(createdAt, now64(6)) AS createdAt,
-    deletedAt,
-    coalesce(articleId, '') AS articleId,
-    coalesce(articleTitle, '') AS articleTitle,
-    articleCreatedAt,
-    articleUpdatedAt,
-    articleCreatedYear,
-    articleUpdatedYear,
-    articleImportRoute,
-    articleImportedBy,
-    coalesce(promptId, '') AS promptId,
-    coalesce(modelId, '') AS modelId,
-    coalesce(useTitle, true) AS useTitle,
-    coalesce(useAbstract, true) AS useAbstract,
-    coalesce(useFulltext, false) AS useFulltext,
-    coalesce(useFulltextNoImages, false) AS useFulltextNoImages,
-    answeredOriginal,
-    answeredOriginalAsArray,
-    explanation,
-    quotes
-FROM forska.judgments_queue;
+ORDER BY (articleId, promptId, modelId, id);

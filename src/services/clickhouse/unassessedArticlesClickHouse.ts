@@ -1,7 +1,7 @@
 /**
  * ClickHouse-based unassessed articles queries.
  *
- * Uses `forska.judgments` (S3Queue/Parquet) for consistency with articlesReviewsClickHouse.ts.
+ * Uses `forska.judgments` for consistency with articlesReviewsClickHouse.ts.
  * Scope is determined via PostgreSQL metadata (project_articles, import routes).
  * Uses temp tables for large curated article sets to avoid query size limits.
  */
@@ -187,8 +187,6 @@ const buildJudgmentFilters = (
   filters.push(`useAbstract = ${useAbstract}`)
   filters.push(`useFulltext = ${useFulltext}`)
   filters.push(`useFulltextNoImages = ${useFulltextNoImages}`)
-
-  filters.push(`deletedAt IS NULL`)
 
   return filters
 }
