@@ -8,6 +8,7 @@ import {
   articles,
   importRoute,
   judgments,
+  pgChSyncStats,
   projectArticles,
   projectPrompts,
   projectRouteLink,
@@ -41,6 +42,8 @@ const isOpenEndedType = (typeStr: string | null): boolean => {
 }
 
 const CLICKHOUSE_DELETE_BATCH_SIZE = 1000
+const JUDGMENTS_SYNC_STATS_ID = 'ch_judgments_sync' as const
+const MIN_WATERMARK = {updatedAt: '1970-01-01T00:00:00.000Z', id: '00000000-0000-0000-0000-000000000000'} as const
 
 const getQuotesForClickhouse = (value: unknown): string[] => {
   if (!value) return []
@@ -94,6 +97,219 @@ const deleteJudgmentsFromClickhouse = async (ids: string[]): Promise<void> => {
   }
 
   return deleteRecursive(0)
+}
+
+const ensureJudgmentsSyncStateSeeded = async (): Promise<void> => {
+  const db = getDatabase()
+  await db.insert(pgChSyncStats).values({id: JUDGMENTS_SYNC_STATS_ID}).onConflictDoNothing()
+}
+
+const getJudgmentsSyncWatermark = async (): Promise<{updatedAt: string; id: string}> => {
+  const db = getDatabase()
+  await ensureJudgmentsSyncStateSeeded()
+
+  const [row] = await db
+    .select({watermarkTs: pgChSyncStats.watermarkTs, watermarkId: pgChSyncStats.watermarkId})
+    .from(pgChSyncStats)
+    .where(eq(pgChSyncStats.id, JUDGMENTS_SYNC_STATS_ID))
+    .limit(1)
+
+  return {updatedAt: row?.watermarkTs ?? MIN_WATERMARK.updatedAt, id: row?.watermarkId ?? MIN_WATERMARK.id}
+}
+
+const setJudgmentsSyncWatermark = async (watermark: {updatedAt: string; id: string}): Promise<void> => {
+  const db = getDatabase()
+  const now = new Date()
+  await db
+    .update(pgChSyncStats)
+    .set({
+      watermarkCursorCol: 'updatedAt',
+      watermarkTs: watermark.updatedAt,
+      watermarkId: watermark.id,
+      lastUpdatedAt: now,
+    })
+    .where(eq(pgChSyncStats.id, JUDGMENTS_SYNC_STATS_ID))
+}
+
+const fetchPgJudgmentsForSync = async (
+  watermark: {updatedAt: string; id: string},
+  batchSize: number,
+): Promise<
+  Array<{
+    id: string
+    createdAt: Date
+    updatedAt: Date
+    deletedAt: Date | null
+    articleId: string
+    promptId: string
+    modelId: string
+    useTitle: boolean
+    useAbstract: boolean
+    useFulltext: boolean
+    useFulltextNoImages: boolean
+    answeredOriginal: string | null
+    answeredOriginalAsArray: string[] | null
+    explanation: string | null
+    quotes: unknown
+  }>
+> => {
+  const db = getDatabase()
+
+  return db
+    .select({
+      id: sql<string>`${judgments.id}::text`,
+      createdAt: judgments.createdAt,
+      updatedAt: judgments.updatedAt,
+      deletedAt: judgments.deletedAt,
+      articleId: sql<string>`${judgments.articleId}::text`,
+      promptId: sql<string>`${judgments.promptId}::text`,
+      modelId: sql<string>`${judgments.modelId}::text`,
+      useTitle: judgments.useTitle,
+      useAbstract: judgments.useAbstract,
+      useFulltext: judgments.useFulltext,
+      useFulltextNoImages: judgments.useFulltextNoImages,
+      answeredOriginal: judgments.answeredOriginal,
+      answeredOriginalAsArray: judgments.answeredOriginalAsArray,
+      explanation: judgments.explanation,
+      quotes: judgments.quotes,
+    })
+    .from(judgments)
+    .where(
+      sql`(${judgments.updatedAt}, ${judgments.id}::text) > (${watermark.updatedAt}::timestamptz, ${watermark.id})`,
+    )
+    .orderBy(sql`${judgments.updatedAt} ASC`, sql`${judgments.id}::text ASC`)
+    .limit(batchSize)
+}
+
+type JudgmentsSyncResult = {
+  startedAt: string
+  completedAt: string
+  batches: number
+  rowsRead: number
+  rowsInserted: number
+  idsDeleted: number
+  hasMore: boolean
+  watermark: {updatedAt: string; id: string}
+}
+
+const syncJudgmentsToClickhouse = async (input?: {
+  batchSize?: number
+  maxBatches?: number
+}): Promise<JudgmentsSyncResult> => {
+  const startedAt = new Date()
+  const batchSize = Math.max(1, Math.min(input?.batchSize ?? 1000, 10_000))
+  const maxBatches = Math.max(1, Math.min(input?.maxBatches ?? 10, 10_000))
+  const {getClickhouseClient} = await import('../../services/clickhouse/clickhouseClient.ts')
+  const chClient = getClickhouseClient()
+
+  const startWatermark = await getJudgmentsSyncWatermark()
+
+  const syncRecursive = async (
+    watermark: {updatedAt: string; id: string},
+    batchNumber: number,
+    acc: {batches: number; rowsRead: number; rowsInserted: number; idsDeleted: number},
+  ): Promise<{hasMore: boolean; watermark: {updatedAt: string; id: string}} & typeof acc> => {
+    const pgRows = await fetchPgJudgmentsForSync(watermark, batchSize)
+
+    if (pgRows.length === 0) {
+      return {hasMore: false, watermark, ...acc}
+    }
+
+    const idsToDelete = pgRows.map((r) => {
+      return r.id
+    })
+
+    const liveRows = pgRows.filter((r) => {
+      return r.deletedAt === null
+    })
+
+    const articleIds = [
+      ...new Set(
+        liveRows.map((r) => {
+          return r.articleId
+        }),
+      ),
+    ]
+    const articlesRows =
+      articleIds.length > 0
+        ? await getDatabase()
+            .select()
+            .from(articles)
+            .where(inArray(sql`${articles.id}::text`, articleIds))
+        : []
+    const articlesMap = new Map(
+      articlesRows.map((a) => {
+        return [a.id, a]
+      }),
+    )
+
+    const clickhouseRecords = liveRows.map((judgment) => {
+      const article = articlesMap.get(judgment.articleId)
+      return {
+        id: judgment.id,
+        createdAt: formatDateForClickHouse(judgment.createdAt),
+        updatedAt: formatDateForClickHouse(judgment.updatedAt),
+        articleId: judgment.articleId,
+        articleTitle: article?.articleTitle ?? '',
+        articleCreatedAt: formatDateForClickHouse(article?.articleCreatedAt ?? null),
+        articleUpdatedAt: formatDateForClickHouse(article?.articleUpdatedAt ?? null),
+        articleCreatedYear: article?.articleCreatedAt ? article.articleCreatedAt.getUTCFullYear() : null,
+        articleUpdatedYear: article?.articleUpdatedAt ? article.articleUpdatedAt.getUTCFullYear() : null,
+        articleImportRoute: article?.importRoute ?? null,
+        articleImportedBy: article?.importedBy ?? null,
+        promptId: judgment.promptId,
+        modelId: judgment.modelId,
+        useTitle: judgment.useTitle,
+        useAbstract: judgment.useAbstract,
+        useFulltext: judgment.useFulltext,
+        useFulltextNoImages: judgment.useFulltextNoImages,
+        answeredOriginal: judgment.answeredOriginal,
+        answeredOriginalAsArray: judgment.answeredOriginalAsArray ?? [],
+        explanation: judgment.explanation,
+        quotes: getQuotesForClickhouse(judgment.quotes),
+      }
+    })
+
+    await deleteJudgmentsFromClickhouse(idsToDelete)
+
+    if (clickhouseRecords.length > 0) {
+      await chClient.insert({table: 'forska.judgments', values: clickhouseRecords, format: 'JSONEachRow'})
+    }
+
+    const last = pgRows[pgRows.length - 1]
+    const nextWatermark = last ? {updatedAt: new Date(last.updatedAt).toISOString(), id: last.id} : watermark
+
+    await setJudgmentsSyncWatermark(nextWatermark)
+
+    const nextAcc = {
+      batches: acc.batches + 1,
+      rowsRead: acc.rowsRead + pgRows.length,
+      rowsInserted: acc.rowsInserted + clickhouseRecords.length,
+      idsDeleted: acc.idsDeleted + [...new Set(idsToDelete)].length,
+    }
+
+    const hasMore = pgRows.length === batchSize && batchNumber >= maxBatches
+
+    return pgRows.length < batchSize
+      ? {hasMore: false, watermark: nextWatermark, ...nextAcc}
+      : batchNumber >= maxBatches
+        ? {hasMore, watermark: nextWatermark, ...nextAcc}
+        : syncRecursive(nextWatermark, batchNumber + 1, nextAcc)
+  }
+
+  const result = await syncRecursive(startWatermark, 1, {batches: 0, rowsRead: 0, rowsInserted: 0, idsDeleted: 0})
+  const completedAt = new Date()
+
+  return {
+    startedAt: startedAt.toISOString(),
+    completedAt: completedAt.toISOString(),
+    batches: result.batches,
+    rowsRead: result.rowsRead,
+    rowsInserted: result.rowsInserted,
+    idsDeleted: result.idsDeleted,
+    hasMore: result.hasMore,
+    watermark: result.watermark,
+  }
 }
 
 const deleteUnexpectedJudgments = async (
@@ -345,25 +561,33 @@ const getClickhouseSyncStatus = async () => {
   const db = getDatabase()
   const {getClickhouseClient, pingClickhouse} = await import('../../services/clickhouse/clickhouseClient.ts')
 
-  const [reachable, pgLatestResult] = await Promise.all([
+  const [reachable, pgCountResult, pgLatestResult] = await Promise.all([
     pingClickhouse(),
     db
-      .select({createdAt: judgments.createdAt})
+      .select({count: sql<number>`COUNT(*)::int`})
+      .from(judgments)
+      .where(sql`${judgments.deletedAt} IS NULL`),
+    db
+      .select({updatedAt: judgments.updatedAt})
       .from(judgments)
       .where(sql`${judgments.deletedAt} IS NULL`)
-      .orderBy(sql`${judgments.createdAt} DESC`)
+      .orderBy(sql`${judgments.updatedAt} DESC`, sql`${judgments.id} DESC`)
       .limit(1),
   ])
 
-  const pgMaxCreatedAt = pgLatestResult[0]?.createdAt ? new Date(pgLatestResult[0].createdAt) : null
+  const pgCount = pgCountResult[0]?.count ?? 0
+  const pgMaxUpdatedAt = pgLatestResult[0]?.updatedAt ? new Date(pgLatestResult[0].updatedAt).toISOString() : null
+  const pgMaxUpdatedAtMs = pgMaxUpdatedAt ? new Date(pgMaxUpdatedAt).getTime() : null
 
   if (!reachable) {
     return {
       reachable: false,
-      postgres: {maxCreatedAt: pgMaxCreatedAt?.toISOString() ?? null},
-      clickhouse: {maxCreatedAt: null},
+      postgres: {count: pgCount, maxUpdatedAt: pgMaxUpdatedAt},
+      clickhouse: {count: null, maxUpdatedAt: null},
+      mutations: {pending: null},
       lagMs: null,
       lagSeconds: null,
+      inSync: false,
       status: 'unreachable' as const,
       message: 'ClickHouse is not reachable',
     }
@@ -371,62 +595,81 @@ const getClickhouseSyncStatus = async () => {
 
   const chClient = getClickhouseClient()
 
-  const queryWithTimeout = async <T>(queryFn: () => Promise<T>, timeoutMs: number = 10000): Promise<T> => {
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error('ClickHouse query timeout')), timeoutMs)
-    })
-    return Promise.race([queryFn(), timeoutPromise])
+  const toNumber = (value: unknown): number => {
+    if (typeof value === 'number') return value
+    if (typeof value === 'string') return parseInt(value, 10) || 0
+    return typeof value === 'bigint' ? Number(value) : parseInt(String(value ?? '0'), 10) || 0
   }
 
-  try {
-    const chResult = await queryWithTimeout(async () => {
-      const result = await chClient.query({
-        query: `SELECT max(createdAt) AS maxCreatedAt FROM judgments`,
-        format: 'JSONEachRow',
-      })
-      return result.json<{maxCreatedAt: string | null}>()
-    })
+  const [chCountsResult, chMutationsResult] = await Promise.all([
+    chClient.query({
+      query: `
+        SELECT
+          count() as count,
+          toUnixTimestamp64Milli(ifNull(maxOrNull(updatedAt), toDateTime64(0, 3, 'UTC'))) as maxUpdatedAtMs
+        FROM forska.judgments
+      `,
+      format: 'JSONEachRow',
+    }),
+    chClient.query({
+      query: `
+        SELECT countIf(is_done = 0) as pending
+        FROM system.mutations
+        WHERE database = 'forska' AND table = 'judgments'
+      `,
+      format: 'JSONEachRow',
+    }),
+  ])
 
-    const [chRow] = chResult
-    const chMaxCreatedAt = parseClickhouseDateTimeUtc(chRow?.maxCreatedAt)
+  const [chCountsRow] = await chCountsResult.json<{count: string | number; maxUpdatedAtMs: string | number}>()
+  const [chMutationsRow] = await chMutationsResult.json<{pending: string | number}>()
 
-    const lagMs = pgMaxCreatedAt && chMaxCreatedAt ? pgMaxCreatedAt.getTime() - chMaxCreatedAt.getTime() : null
-    const lagSeconds = lagMs !== null ? Math.round(lagMs / 1000) : null
+  const chCount = toNumber(chCountsRow?.count)
+  const chMaxUpdatedAtMsRaw = toNumber(chCountsRow?.maxUpdatedAtMs)
+  const chMaxUpdatedAtMs = chMaxUpdatedAtMsRaw > 0 ? chMaxUpdatedAtMsRaw : null
+  const chMaxUpdatedAt = chMaxUpdatedAtMs ? new Date(chMaxUpdatedAtMs).toISOString() : null
 
-    let status: 'synced' | 'behind' | 'critical'
-    let message: string
+  const pendingMutations = toNumber(chMutationsRow?.pending)
 
-    if (lagSeconds === null || lagSeconds <= 60) {
-      status = 'synced'
-      message = 'ClickHouse is in sync with PostgreSQL'
-    } else if (lagSeconds < 3600) {
-      status = 'behind'
-      message = `ClickHouse is behind by ${Math.round(lagSeconds / 60)} minutes`
-    } else {
-      status = 'critical'
-      message = `ClickHouse is behind by ${Math.round(lagSeconds / 3600)} hours`
-    }
+  const lagMs =
+    pgMaxUpdatedAtMs !== null && chMaxUpdatedAtMs !== null ? pgMaxUpdatedAtMs - chMaxUpdatedAtMs : null
+  const lagSeconds = lagMs !== null ? Math.round(lagMs / 1000) : null
 
-    return {
-      reachable: true,
-      postgres: {maxCreatedAt: pgMaxCreatedAt?.toISOString() ?? null},
-      clickhouse: {maxCreatedAt: chMaxCreatedAt?.toISOString() ?? null},
-      lagMs,
-      lagSeconds,
-      status,
-      message,
-    }
-  } catch (error) {
-    console.error('[ClickHouse] Query failed:', error)
-    return {
-      reachable: false,
-      postgres: {maxCreatedAt: pgMaxCreatedAt?.toISOString() ?? null},
-      clickhouse: {maxCreatedAt: null},
-      lagMs: null,
-      lagSeconds: null,
-      status: 'unreachable' as const,
-      message: error instanceof Error ? `ClickHouse error: ${error.message}` : 'ClickHouse query failed',
-    }
+  const countsMatch = pgCount === chCount
+  const mutating = pendingMutations > 0
+  const inSync = !mutating && countsMatch && (lagSeconds === null || lagSeconds <= 60)
+
+  const status = mutating
+    ? 'mutating'
+    : !countsMatch
+      ? 'diff'
+      : inSync
+        ? 'synced'
+        : lagSeconds !== null && lagSeconds > 3600
+          ? 'critical'
+          : 'behind'
+
+  const message =
+    status === 'synced'
+      ? 'ClickHouse matches PostgreSQL'
+      : status === 'mutating'
+        ? 'ClickHouse is applying delete mutations'
+        : status === 'diff'
+          ? 'Row counts differ between PostgreSQL and ClickHouse'
+          : status === 'critical'
+            ? 'ClickHouse is far behind PostgreSQL'
+            : 'ClickHouse is behind PostgreSQL'
+
+  return {
+    reachable: true,
+    postgres: {count: pgCount, maxUpdatedAt: pgMaxUpdatedAt},
+    clickhouse: {count: chCount, maxUpdatedAt: chMaxUpdatedAt},
+    mutations: {pending: pendingMutations},
+    lagMs,
+    lagSeconds,
+    inSync,
+    status,
+    message,
   }
 }
 
@@ -808,6 +1051,13 @@ export const adminInvestigateRoutes = new Elysia()
   .get('/api/admin/clickhouse-sync-status', async () => {
     return getClickhouseSyncStatus()
   })
+  .post(
+    '/api/admin/sync-judgments-to-clickhouse',
+    async ({body}) => {
+      return syncJudgmentsToClickhouse(body ?? undefined)
+    },
+    {body: t.Optional(t.Object({batchSize: t.Optional(t.Number()), maxBatches: t.Optional(t.Number())}))},
+  )
   .post(
     '/api/admin/backfill-judgments-to-clickhouse',
     async ({body}) => {

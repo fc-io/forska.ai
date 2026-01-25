@@ -125,30 +125,30 @@ ORDER BY (articleId, promptId, modelId, id);
 
 ### Phase 2: Unified Sync Endpoint
 
-- [ ] Create `POST /api/admin/sync-judgments-to-clickhouse`:
+- [x] Create `POST /api/admin/sync-judgments-to-clickhouse`:
   1. Get watermark from durable state (table/kv), not `max(updatedAt)` on `forska.judgments`
   2. Fetch PG rows where `(updatedAt, id) > watermark`
   3. For each row:
      - If `deletedAt IS NOT NULL`: `ALTER TABLE forska.judgments DELETE WHERE id = {id:String}`
      - Else: `ALTER TABLE ... DELETE WHERE id = {id:String}` then `INSERT`
-- [ ] Use keyset pagination `(updatedAt, id)` — no OFFSET
-- [ ] Tie-breaker ordering must match PG+CH (UUID vs String): use `id::text` in PG (or CH `UUID`)
-- [ ] Batch deletes/inserts (avoid per-row mutations); monitor `system.mutations` backlog
-- [ ] CH insert schema strict: never send `null` to non-null cols (e.g. `articleTitle String`)
-- [ ] ClickHouse has no `?` placeholders; use `{id:String}` + `query_params` (or batched `IN (...)`)
-- [ ] Deprecate old endpoints: `backfill-judgments`, `sync-deleted-judgments`
+- [x] Use keyset pagination `(updatedAt, id)` — no OFFSET
+- [x] Tie-breaker ordering must match PG+CH (UUID vs String): use `id::text` in PG (or CH `UUID`)
+- [x] Batch deletes/inserts (avoid per-row mutations); monitor `system.mutations` backlog
+- [x] CH insert schema strict: never send `null` to non-null cols (e.g. `articleTitle String`)
+- [x] ClickHouse has no `?` placeholders; use `{id:String}` + `query_params` (or batched `IN (...)`)
+- [x] Deprecate old endpoints: `backfill-judgments`, `sync-deleted-judgments`
 
 ### Phase 3: Improve Health Check
 
-- [ ] Compare counts:
+- [x] Compare counts:
   - PG: `COUNT(*) WHERE deletedAt IS NULL`
   - CH: `COUNT(*)`
   - Should match
-- [ ] Compare `max(updatedAt)` with same predicate (PG `deletedAt IS NULL`, CH is live-only)
-- [ ] If `system.mutations` has pending deletes, report `status=mutating` (avoid false alerts)
-- [ ] Avoid parsing CH datetime strings in JS; prefer epoch:
+- [x] Compare `max(updatedAt)` with same predicate (PG `deletedAt IS NULL`, CH is live-only)
+- [x] If `system.mutations` has pending deletes, report `status=mutating` (avoid false alerts)
+- [x] Avoid parsing CH datetime strings in JS; prefer epoch:
   - CH: `toUnixTimestamp64Milli(max(updatedAt)) AS maxUpdatedAtMs`
-- [ ] Return structured status:
+- [x] Return structured status:
 
 ```typescript
 {
@@ -160,8 +160,8 @@ ORDER BY (articleId, promptId, modelId, id);
 
 ### Phase 4: Fix Articles Sync
 
-- [ ] Refactor `scripts/syncArticlesToClickHouse.ts` to use keyset pagination `(updated_at, id)`
-- [ ] Remove `LIMIT/OFFSET`
+- [x] Refactor `scripts/syncArticlesToClickHouse.ts` to use keyset pagination `(updated_at, id)`
+- [x] Remove `LIMIT/OFFSET`
 - [ ] Handle article deletes:
   - Write-path (API): on PG delete → CH delete by id
   - Backfill: consume delete log (or periodic id diff) → CH delete
