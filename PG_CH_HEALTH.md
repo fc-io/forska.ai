@@ -115,7 +115,7 @@ ORDER BY (articleId, promptId, modelId, id);
 - [x] Update `scripts/clickhouse-setup.sql`
 - [x] Remove S3Queue/MV (or make it write new schema; no `deletedAt`)
 - [x] Remove `deletedAt` column usage in code (filters + selects + types + writers)
-- [ ] Add skip indexes/projection if needed (`id` deletes; `promptId/modelId` filters; `articleImportRoute` scoping)
+- [x] Add skip index on `id` (bloom) for deletes/verify
 - [x] Drop old table, rename new table
 - [ ] Full resync from PG (UI backfill works if table empty)
 - [ ] Post-migration checks:

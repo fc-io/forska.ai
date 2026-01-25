@@ -3,6 +3,7 @@ import {Elysia, t} from 'elysia'
 
 import {articles, judgments, pgChSyncStats} from '../../db/schema.ts'
 import {getClickhouseClient, pingClickhouse} from '../../services/clickhouse/clickhouseClient.ts'
+import {ensureClickhouseArticlesTable} from '../../services/clickhouse/ensureClickhouseArticlesTable.ts'
 import {parseClickhouseDateTimeUtc} from '../../services/clickhouse/parseClickhouseDateTimeUtc.ts'
 import {requireAdminAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
@@ -353,6 +354,10 @@ const fetchClickhouseTableStats = async (input: {
   cursorCol: 'updated_at' | 'createdAt' | 'updatedAt'
   maxCursorAt: string | null
 }> => {
+  if (input.table === 'articles') {
+    await ensureClickhouseArticlesTable()
+  }
+
   const client = getClickhouseClient()
 
   const hasJudgmentsUpdatedAt =
@@ -571,6 +576,9 @@ const getSampleVerifyResult = async (input: {
   sampleSize: number
 }) => {
   const db = getDatabase()
+  if (input.table === 'articles') {
+    await ensureClickhouseArticlesTable()
+  }
   const idsResult = await db.execute<{id: string}>(getSampleIdsQuery(input))
   const sampleIds = idsResult.rows.map((r) => {
     return r.id
@@ -640,6 +648,12 @@ const getSampleVerifyResult = async (input: {
   )
 
   const client = getClickhouseClient()
+  const judgmentsCursorCol =
+    input.table === 'judgments'
+      ? (await hasClickhouseColumn('forska', 'judgments', 'updatedAt'))
+        ? 'updatedAt'
+        : 'createdAt'
+      : null
 
   const chQuery =
     input.table === 'articles'
@@ -654,15 +668,15 @@ const getSampleVerifyResult = async (input: {
       : `
           SELECT
             id,
-            argMax(articleId, updatedAt) as articleId,
-            argMax(promptId, updatedAt) as promptId,
-            argMax(modelId, updatedAt) as modelId,
-            argMax(useTitle, updatedAt) as useTitle,
-            argMax(useAbstract, updatedAt) as useAbstract,
-            argMax(useFulltext, updatedAt) as useFulltext,
-            argMax(useFulltextNoImages, updatedAt) as useFulltextNoImages,
-            argMax(answeredOriginal, updatedAt) as answeredOriginal,
-            argMax(explanation, updatedAt) as explanation
+            argMax(articleId, ${judgmentsCursorCol}) as articleId,
+            argMax(promptId, ${judgmentsCursorCol}) as promptId,
+            argMax(modelId, ${judgmentsCursorCol}) as modelId,
+            argMax(useTitle, ${judgmentsCursorCol}) as useTitle,
+            argMax(useAbstract, ${judgmentsCursorCol}) as useAbstract,
+            argMax(useFulltext, ${judgmentsCursorCol}) as useFulltext,
+            argMax(useFulltextNoImages, ${judgmentsCursorCol}) as useFulltextNoImages,
+            argMax(answeredOriginal, ${judgmentsCursorCol}) as answeredOriginal,
+            argMax(explanation, ${judgmentsCursorCol}) as explanation
           FROM forska.judgments
           WHERE id IN ({ids:Array(String)})
           GROUP BY id
@@ -770,6 +784,9 @@ const getFieldMismatches = (
 
 const getPartitionCoverage = async (input: {table: 'articles' | 'judgments'; months: number}) => {
   const db = getDatabase()
+  if (input.table === 'articles') {
+    await ensureClickhouseArticlesTable()
+  }
   const pgTable = input.table === 'articles' ? sql.identifier('articles') : sql.identifier('judgments')
   const pgFilter = input.table === 'judgments' ? sql`AND deleted_at IS NULL` : sql``
 

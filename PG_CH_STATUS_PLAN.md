@@ -32,12 +32,13 @@ This plan addresses several subtle correctness and performance issues:
 
 ## Dependencies
 
-- **PG_CH_HEALTH.md Phase-1:** CH judgments `updatedAt` needed for update-lag + `argMax` correctness. Until then, show insert-lag only (`createdAt`).
-- **PG_CH_HEALTH.md Phase-5:** `scripts/syncArticlesToClickHouse.ts` should be keyset `(updated_at, id)` (no OFFSET) for correctness/perf at 10M+ rows.
+- **PG_CH_HEALTH.md Phase-1 (done):** CH judgments has `updatedAt` (fallback to `createdAt` if old schema)
+- **PG_CH_HEALTH.md Phase-5 (done):** `scripts/syncArticlesToClickHouse.ts` keyset `(updated_at, id)` (no OFFSET)
 - **Invariant:** PG `updated_at` must bump on UPDATE + soft delete; else watermark+lag lies.
 
 ## Pre-flight Checks
 
+- Run `scripts/clickhouse-setup.sql` (creates `forska` + `forska.judgments` + `forska.articles`)
 - Seed 4 `pgChSyncStats` rows (locks no-op if missing)
 - CH counts from client are often strings; keep as string/BigInt (avoid `Number()` at 10M+)
 - Ensure CH DDL supports intended checks (ORDER BY / PARTITION); avoid keyset WHERE if not aligned
@@ -625,7 +626,7 @@ const result = await clickhouseClient.query({
 
 ### ClickHouse Judgments (camelCase columns)
 
-**CRITICAL DEPENDENCY:** The queries below using `updatedAt` require PG_CH_HEALTH.md Phase-1 to be completed first. The current CH schema (`clickhouse-setup.sql`) does NOT have an `updatedAt` column — it only has `createdAt`.
+**NOTE:** Runtime detect `updatedAt`; fallback to `createdAt` if old schema.
 
 ```ts
 // Runtime feature flag: does CH have updatedAt?
@@ -812,51 +813,51 @@ Dedup drift: 150 rows — merge pending (count(*) - uniqCombined)
 
 ### Phase 0: Prerequisites
 
-1. [ ] **BLOCKING:** Complete PG_CH_HEALTH.md Phase-1 (add `updatedAt` to CH judgments)
+1. [x] **BLOCKING:** Complete PG_CH_HEALTH.md Phase-1 (add `updatedAt` to CH judgments)
    - Until complete: judgments update-lag unavailable; only insert-lag via `createdAt`
    - After migration: runtime detect column; force full recount/baseline when cursor col changes
-2. [ ] **HIGH:** Fix `scripts/syncArticlesToClickHouse.ts` to keyset `(updated_at, id)` (no OFFSET)
+2. [x] **HIGH:** Fix `scripts/syncArticlesToClickHouse.ts` to keyset `(updated_at, id)` (no OFFSET)
 
 ### Phase 1: Database & API
 
-3. [ ] Add `pgChSyncStats` table to Drizzle schema (with job\* columns + heartbeat)
+3. [x] Add `pgChSyncStats` table to Drizzle schema (with job\* columns + heartbeat)
 4. [ ] Generate and run migration
-5. [ ] Add composite covering indexes:
+5. [x] Add composite covering indexes:
    - `judgments (updated_at, id) INCLUDE (deleted_at)`
    - `articles (updated_at, id)`
-6. [ ] Create `GET /api/admin/sync-stats` endpoint
-7. [ ] Create `POST /api/admin/refresh-sync-stats` with DB-persisted job state
-8. [ ] Create `GET /api/admin/refresh-sync-stats-progress` (reads from DB)
-9. [ ] Implement batched counting with:
+6. [x] Create `GET /api/admin/sync-stats` endpoint
+7. [x] Create `POST /api/admin/refresh-sync-stats` with DB-persisted job state
+8. [x] Create `GET /api/admin/refresh-sync-stats-progress` (reads from DB)
+9. [x] Implement batched counting with:
    - CTE-based counting (no row transfers)
    - Table-specific logic (`TABLE_CONFIG`)
    - Heartbeat updates each batch
    - `AT TIME ZONE 'UTC'` for timestamp formatting
    - `COALESCE` for nullable `maxCursorAt`
-10. [ ] Seed/upsert 4 `pgChSyncStats` rows (else locks no-op)
-11. [ ] Implement lag tracking (only when cursorCol matches)
-12. [ ] Handle CH articles snake_case vs judgments camelCase
-13. [ ] Use `uniqCombined()` for default unique counts, `uniqExact()` on-demand
+10. [x] Seed/upsert 4 `pgChSyncStats` rows (else locks no-op)
+11. [x] Implement lag tracking (only when cursorCol matches)
+12. [x] Handle CH articles snake_case vs judgments camelCase
+13. [x] Use `uniqCombined()` for default unique counts, `uniqExact()` on-demand
 
 ### Phase 2: Admin UI
 
-14. [ ] Create `/admin/sync-stats` page
-15. [ ] Add cards showing total/unique/deleted breakdown
-16. [ ] Show both absolute diff AND percentage **using uniqueCount**
-17. [ ] Show "CH ahead" vs "CH behind" direction
-18. [ ] Show lag time and dedup drift
-19. [ ] Add job status indicators with batch progress + heartbeat age
-20. [ ] Add refresh button (disabled if job running)
-21. [ ] Add "Full Recount" option
-22. [ ] Show "approximate" labels on all counts
+14. [x] Create `/admin/sync-stats` page
+15. [x] Add cards showing total/unique/deleted breakdown
+16. [x] Show both absolute diff AND percentage **using uniqueCount**
+17. [x] Show "CH ahead" vs "CH behind" direction
+18. [x] Show lag time and dedup drift
+19. [x] Add job status indicators with batch progress + heartbeat age
+20. [x] Add refresh button (disabled if job running)
+21. [x] Add "Full Recount" option
+22. [x] Show "approximate" labels on all counts
 
 ### Phase 3: Verification & Integrity Checks
 
-23. [ ] Implement `POST /api/admin/sample-verify` endpoint with `FINAL`/`argMax`
-24. [ ] Implement `POST /api/admin/partition-coverage-check` endpoint
-25. [ ] Add sample verify UI with results display
-26. [ ] Add partition coverage UI showing per-month counts
-27. [ ] Add stale job detection (>30min since last heartbeat = crashed)
+23. [x] Implement `POST /api/admin/sample-verify` endpoint with `FINAL`/`argMax`
+24. [x] Implement `POST /api/admin/partition-coverage-check` endpoint
+25. [x] Add sample verify UI with results display
+26. [x] Add partition coverage UI showing per-month counts
+27. [x] Add stale job detection (>30min since last heartbeat = crashed)
 28. [ ] Add logging for debugging
 
 ### Phase 4: Polish & Hardening
@@ -875,7 +876,10 @@ src/
 │   └── schema.ts                    # Add pgChSyncStats table
 ├── server/
 │   └── routes/
-│       └── adminSyncStatsRoutes.ts  # New route file
+│       └── AdminSyncStatsRoutes.ts  # New route file
+├── services/
+│   └── clickhouse/
+│       └── ensureClickhouseArticlesTable.ts
 ├── app/
 │   └── routes/
 │       └── +admin/

@@ -11,12 +11,10 @@
  * Or via cron: Add to Elysia cron for scheduled execution
  */
 import {getClickhouseClient} from '../src/services/clickhouse/clickhouseClient.ts'
+import {ensureClickhouseArticlesTable} from '../src/services/clickhouse/ensureClickhouseArticlesTable.ts'
 
 const BATCH_SIZE = 5000
-const MIN_WATERMARK = {
-  updatedAt: '1970-01-01 00:00:00.000000',
-  id: '00000000-0000-0000-0000-000000000000',
-} as const
+const MIN_WATERMARK = {updatedAt: '1970-01-01 00:00:00.000000', id: '00000000-0000-0000-0000-000000000000'} as const
 
 const PG_CONN = {
   host: process.env['CLICKHOUSE_PG_HOST'] ?? 'db',
@@ -29,11 +27,9 @@ const PG_CONN = {
 type SyncResult = {syncedRows: number; lastUpdatedAt: string | null; durationMs: number}
 
 const parseClickhouseCount = (value: unknown): bigint => {
-  return typeof value === 'string'
-    ? BigInt(value || '0')
-    : typeof value === 'number'
-      ? BigInt(Math.trunc(value))
-      : BigInt(String(value ?? '0') || '0')
+  if (typeof value === 'string') return BigInt(value || '0')
+  if (typeof value === 'number') return BigInt(Math.trunc(value))
+  return typeof value === 'bigint' ? value : 0n
 }
 
 const getClickhouseArticlesRowCount = async (): Promise<bigint> => {
@@ -62,11 +58,10 @@ const getLastSyncedWatermark = async (): Promise<{updatedAt: string; id: string}
   return updatedAt && id ? {updatedAt, id} : {...MIN_WATERMARK}
 }
 
-const getBatchBoundaries = async (watermark: {updatedAt: string; id: string}): Promise<{
-  batchCount: number
-  lastUpdatedAt: string | null
-  lastId: string | null
-}> => {
+const getBatchBoundaries = async (watermark: {
+  updatedAt: string
+  id: string
+}): Promise<{batchCount: number; lastUpdatedAt: string | null; lastId: string | null}> => {
   const client = getClickhouseClient()
   const pgConnStr = `'${PG_CONN.host}:${PG_CONN.port}', '${PG_CONN.database}', 'articles', '${PG_CONN.user}', '${PG_CONN.password}'`
 
@@ -139,6 +134,8 @@ export const syncArticlesToClickHouse = async (): Promise<SyncResult> => {
   const startTime = performance.now()
 
   console.log('[ArticleSync] Starting incremental sync...')
+
+  await ensureClickhouseArticlesTable()
 
   const startRowCount = await getClickhouseArticlesRowCount()
   const startWatermark = await getLastSyncedWatermark()
