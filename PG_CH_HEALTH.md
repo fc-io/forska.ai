@@ -36,7 +36,7 @@ Manual backfill routes:
 | Route | Purpose |
 |-------|---------|
 | `POST /api/admin/backfill-judgments-to-clickhouse` | Sync new rows from `max(createdAt)` forward |
-| `POST /api/admin/sync-deleted-judgments-to-clickhouse` | Sync deleted judgments (delete in CH) |
+| `POST /api/admin/sync-deleted-judgments-to-clickhouse` | Sync soft-deletes (insert tombstones) |
 | `POST /api/admin/sync-articles-to-clickhouse` | Sync articles by `updated_at` |
 | `GET /api/admin/clickhouse-sync-status` | Health check comparing max createdAt |
 
@@ -74,9 +74,15 @@ DELETEs can lag; old+new rows can coexist until mutation done. Health checks mus
 
 ## Implementation Checklist
 
-### Phase 1: Migrate to MergeTree + Deletes
+### Phase 1: Live-Only Table (No Tombstones)
 
-- [ ] Create new table with MergeTree engine:
+- [ ] Decide table layout (tradeoffs):
+  - Query perf: cluster by `articleId`/`promptId`/`modelId`
+  - Delete perf: `DELETE WHERE id=...` needs `id` in `ORDER BY` prefix OR skip index on `id`
+  - Types: prefer `UUID` cols + `LowCardinality(String)` dims (requires code/query casts)
+  - Millions+ rows: avoid per-row mutations; batch; watch `system.mutations`
+
+- [ ] Create new table (example; tune `ORDER BY`):
 
 ```sql
 CREATE TABLE forska.judgments_new (
@@ -98,19 +104,24 @@ CREATE TABLE forska.judgments_new (
     useFulltext Bool DEFAULT false,
     useFulltextNoImages Bool DEFAULT false,
     answeredOriginal Nullable(String),
-    answeredOriginalAsArray Array(Nullable(String)),
+    answeredOriginalAsArray Array(Nullable(String)) DEFAULT [],
     explanation Nullable(String),
-    quotes Array(String)
+    quotes Array(String) DEFAULT []
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMM(createdAt)
-ORDER BY (id);
+ORDER BY (articleId, promptId, modelId, id);
 ```
 
 - [ ] Update `scripts/clickhouse-setup.sql`
-- [ ] Remove CH `deletedAt` filters (live-only table)
-- [ ] Revisit ORDER BY for query patterns (most filters: `modelId/promptId/articleId`, not `id`)
+- [ ] Remove S3Queue/MV (or make it write new schema; no `deletedAt`)
+- [ ] Remove `deletedAt` column usage in code (filters + selects + types + writers)
+- [ ] Add skip indexes/projection if needed (`id` deletes; `promptId/modelId` filters; `articleImportRoute` scoping)
 - [ ] Drop old table, rename new table
-- [ ] Full resync from PG
+- [ ] Full resync from PG (prefer CH-side `INSERT SELECT` or server batch insert; avoid 1-row inserts)
+- [ ] Post-migration checks:
+  - `count()` vs PG live count
+  - `count() - uniqExact(id)` ≈ 0 (or accept while mutating)
+  - `system.mutations` backlog near 0
 
 ### Phase 2: Unified Sync Endpoint
 
