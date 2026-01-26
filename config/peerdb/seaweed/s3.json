@@ -1,0 +1,14 @@
+{
+  "identities": [
+    {
+      "name": "peerdb",
+      "credentials": [
+        {
+          "accessKey": "_peerdb_seaweed",
+          "secretKey": "_peerdb_seaweed"
+        }
+      ],
+      "actions": ["Admin", "Read", "List", "Tagging", "Write"]
+    }
+  ]
+}

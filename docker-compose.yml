@@ -9,6 +9,30 @@ x-caches: &caches
   TORCHINDUCTOR_CACHE_DIR: /cache/vllm/torchinductor
   TRITON_CACHE_DIR: /cache/vllm/triton
 
+x-peerdb-s3-config: &peerdb-s3-config
+  PEERDB_CLICKHOUSE_AWS_CREDENTIALS_AWS_ACCESS_KEY_ID: ${PEERDB_CLICKHOUSE_AWS_CREDENTIALS_AWS_ACCESS_KEY_ID:-_peerdb_seaweed}
+  PEERDB_CLICKHOUSE_AWS_CREDENTIALS_AWS_SECRET_ACCESS_KEY: ${PEERDB_CLICKHOUSE_AWS_CREDENTIALS_AWS_SECRET_ACCESS_KEY:-_peerdb_seaweed}
+  PEERDB_CLICKHOUSE_AWS_CREDENTIALS_AWS_REGION: ${PEERDB_CLICKHOUSE_AWS_CREDENTIALS_AWS_REGION:-us-east-1}
+  PEERDB_CLICKHOUSE_AWS_CREDENTIALS_AWS_ENDPOINT_URL_S3: ${PEERDB_CLICKHOUSE_AWS_CREDENTIALS_AWS_ENDPOINT_URL_S3:-http://peerdb-seaweed-s3:8333}
+  PEERDB_CLICKHOUSE_AWS_S3_BUCKET_NAME: ${PEERDB_CLICKHOUSE_AWS_S3_BUCKET_NAME:-peerdbbucket}
+
+x-peerdb-catalog-config: &peerdb-catalog-config
+  PEERDB_CATALOG_HOST: peerdb-catalog
+  PEERDB_CATALOG_PORT: 5432
+  PEERDB_CATALOG_USER: postgres
+  PEERDB_CATALOG_PASSWORD: postgres
+  PEERDB_CATALOG_DATABASE: postgres
+
+x-peerdb-flow-worker-env: &peerdb-flow-worker-env
+  TEMPORAL_HOST_PORT: peerdb-temporal:7233
+  TEMPORAL_CLIENT_CERT:
+  TEMPORAL_CLIENT_KEY:
+  PEERDB_TEMPORAL_NAMESPACE: default
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+  AWS_REGION: ${AWS_REGION:-}
+  AWS_ENDPOINT: ${AWS_ENDPOINT:-}
+
 services:
   # ============================================================
   # ClickHouse - Analytics engine for judgments queries
@@ -58,6 +82,217 @@ services:
       retries: 6
     ports:
       - "${POSTGRES_PORT:-5432}:5432"   # optional for local psql access
+
+  peerdb-catalog:
+    profiles: ["peerdb"]
+    image: postgres:18-alpine
+    command: -c config_file=/etc/postgresql.conf
+    restart: unless-stopped
+    ports:
+      - "9901:5432"
+    environment:
+      PGUSER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+      POSTGRES_INITDB_ARGS: --locale=C.UTF-8
+    volumes:
+      - peerdb-catalog-data:/var/lib/postgresql/data
+      - ./config/peerdb/postgresql.conf:/etc/postgresql.conf:ro
+      - ./config/peerdb/docker-entrypoint-initdb.d:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-d", "postgres", "-U", "postgres"]
+      interval: 10s
+      timeout: 30s
+      retries: 5
+      start_period: 60s
+
+  peerdb-temporal:
+    profiles: ["peerdb"]
+    restart: unless-stopped
+    depends_on:
+      peerdb-catalog:
+        condition: service_healthy
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=postgres
+      - POSTGRES_PWD=postgres
+      - POSTGRES_SEEDS=peerdb-catalog
+      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/development-sql.yaml
+    image: temporalio/auto-setup:1.29
+    ports:
+      - "7233:7233"
+    volumes:
+      - ./config/peerdb/temporal-dynamicconfig:/etc/temporal/config/dynamicconfig:ro
+
+  peerdb-temporal-admin-tools:
+    profiles: ["peerdb"]
+    restart: unless-stopped
+    depends_on:
+      - peerdb-temporal
+    environment:
+      - TEMPORAL_ADDRESS=peerdb-temporal:7233
+      - TEMPORAL_CLI_ADDRESS=peerdb-temporal:7233
+      - TEMPORAL_CLI_SHOW_STACKS=1
+    image: temporalio/admin-tools:1.25.2-tctl-1.18.1-cli-1.1.1
+    stdin_open: true
+    tty: true
+    entrypoint: /etc/temporal/entrypoint.sh
+    healthcheck:
+      test: ["CMD", "tctl", "workflow", "list"]
+      interval: 1s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - ./config/peerdb/mirror-name-search.sh:/etc/temporal/entrypoint.sh:ro
+
+  peerdb-temporal-ui:
+    profiles: ["peerdb"]
+    restart: unless-stopped
+    depends_on:
+      - peerdb-temporal
+    environment:
+      - TEMPORAL_ADDRESS=peerdb-temporal:7233
+      - TEMPORAL_CORS_ORIGINS=http://localhost:3001
+      - TEMPORAL_CSRF_COOKIE_INSECURE=true
+    image: temporalio/ui:2.44.1
+    ports:
+      - "8085:8080"
+
+  peerdb-flow-api:
+    profiles: ["peerdb"]
+    image: ghcr.io/peerdb-io/flow-api:stable-v0.36.3
+    restart: unless-stopped
+    ports:
+      - "8112:8112"
+      - "8113:8113"
+    environment:
+      <<: [*peerdb-catalog-config, *peerdb-flow-worker-env, *peerdb-s3-config]
+      PEERDB_ALLOWED_TARGETS:
+    depends_on:
+      peerdb-temporal-admin-tools:
+        condition: service_healthy
+
+  peerdb-flow-snapshot-worker:
+    profiles: ["peerdb"]
+    image: ghcr.io/peerdb-io/flow-snapshot-worker:stable-v0.36.3
+    restart: unless-stopped
+    environment:
+      <<: [*peerdb-catalog-config, *peerdb-flow-worker-env, *peerdb-s3-config]
+    depends_on:
+      peerdb-temporal-admin-tools:
+        condition: service_healthy
+
+  peerdb-flow-worker:
+    profiles: ["peerdb"]
+    image: ghcr.io/peerdb-io/flow-worker:stable-v0.36.3
+    restart: unless-stopped
+    environment:
+      <<: [*peerdb-catalog-config, *peerdb-flow-worker-env, *peerdb-s3-config]
+    depends_on:
+      peerdb-temporal-admin-tools:
+        condition: service_healthy
+
+  peerdb-server:
+    profiles: ["peerdb"]
+    stop_signal: SIGINT
+    image: ghcr.io/peerdb-io/peerdb-server:stable-v0.36.3
+    restart: unless-stopped
+    environment:
+      <<: *peerdb-catalog-config
+      PEERDB_PASSWORD: ${PEERDB_PASSWORD:-peerdb}
+      PEERDB_FLOW_SERVER_ADDRESS: grpc://peerdb-flow-api:8112
+      RUST_LOG: info
+      RUST_BACKTRACE: 1
+    ports:
+      - "9900:9900"
+    depends_on:
+      peerdb-catalog:
+        condition: service_healthy
+
+  peerdb-ui:
+    profiles: ["peerdb"]
+    image: ghcr.io/peerdb-io/peerdb-ui:stable-v0.36.3
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      <<: *peerdb-catalog-config
+      PEERDB_FLOW_SERVER_HTTP: http://peerdb-flow-api:8113
+      NEXTAUTH_SECRET: ${PEERDB_UI_NEXTAUTH_SECRET:-__changeme__}
+      NEXTAUTH_URL: http://localhost:3001
+      PEERDB_ALLOWED_TARGETS:
+      PEERDB_CLICKHOUSE_ALLOWED_DOMAINS:
+      PEERDB_EXPERIMENTAL_ENABLE_SCRIPTING: true
+    depends_on:
+      - peerdb-flow-api
+
+  peerdb-seaweed-master:
+    profiles: ["peerdb"]
+    image: chrislusf/seaweedfs:latest
+    restart: unless-stopped
+    command: 'master -ip=peerdb-seaweed-master -ip.bind=0.0.0.0'
+
+  peerdb-seaweed-volume:
+    profiles: ["peerdb"]
+    image: chrislusf/seaweedfs:latest
+    restart: unless-stopped
+    command: 'volume -ip=peerdb-seaweed-volume -master="peerdb-seaweed-master:9333" -ip.bind=0.0.0.0 -port=8080 -dir=/data'
+    volumes:
+      - peerdb-seaweed-volume-data:/data
+    depends_on:
+      - peerdb-seaweed-master
+
+  peerdb-seaweed-s3:
+    profiles: ["peerdb"]
+    image: chrislusf/seaweedfs:latest
+    restart: unless-stopped
+    command: 'filer -ip=peerdb-seaweed-s3 -master="peerdb-seaweed-master:9333" -s3 -s3.port=8333 -s3.config=/etc/seaweedfs/s3.json -ip.bind=0.0.0.0'
+    volumes:
+      - ./config/peerdb/seaweed/s3.json:/etc/seaweedfs/s3.json:ro
+    depends_on:
+      - peerdb-seaweed-master
+      - peerdb-seaweed-volume
+
+  peerdb-s3-bucket-init:
+    profiles: ["peerdb"]
+    image: amazon/aws-cli:latest
+    restart: "no"
+    environment:
+      AWS_ACCESS_KEY_ID: ${PEERDB_CLICKHOUSE_AWS_CREDENTIALS_AWS_ACCESS_KEY_ID:-_peerdb_seaweed}
+      AWS_SECRET_ACCESS_KEY: ${PEERDB_CLICKHOUSE_AWS_CREDENTIALS_AWS_SECRET_ACCESS_KEY:-_peerdb_seaweed}
+      AWS_DEFAULT_REGION: ${PEERDB_CLICKHOUSE_AWS_CREDENTIALS_AWS_REGION:-us-east-1}
+      S3_ENDPOINT_URL: ${PEERDB_CLICKHOUSE_AWS_CREDENTIALS_AWS_ENDPOINT_URL_S3:-http://peerdb-seaweed-s3:8333}
+      S3_BUCKET_NAME: ${PEERDB_CLICKHOUSE_AWS_S3_BUCKET_NAME:-peerdbbucket}
+    command: >
+      /bin/sh -c "
+      aws configure set default.s3.addressing_style path >/dev/null 2>&1 || true;
+      aws --endpoint-url $$S3_ENDPOINT_URL s3 mb s3://$$S3_BUCKET_NAME || true
+      "
+    depends_on:
+      - peerdb-seaweed-s3
+
+  peerdb-minio:
+    profiles: ["peerdb-minio"]
+    image: minio/minio:latest
+    restart: unless-stopped
+    volumes:
+      - peerdb-minio-data:/data
+    ports:
+      - "9001:9000"
+      - "9002:36987"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-_peerdb_minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-_peerdb_minioadmin}
+      PEERDB_CLICKHOUSE_AWS_S3_BUCKET_NAME: ${PEERDB_CLICKHOUSE_AWS_S3_BUCKET_NAME:-peerdbbucket}
+    entrypoint: >
+      /bin/sh -c "
+      minio server /data --console-address=:36987 &
+      sleep 2;
+      mc alias set myminiopeerdb http://peerdb-minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD;
+      mc mb --ignore-existing myminiopeerdb/$$PEERDB_CLICKHOUSE_AWS_S3_BUCKET_NAME;
+      wait
+      "
 
   vllm:
     image: vllm/vllm-openai:latest
@@ -287,6 +522,9 @@ services:
 
 volumes:
   pgdata:
+  peerdb-catalog-data:
+  peerdb-seaweed-volume-data:
+  peerdb-minio-data:
 secrets:
   db_password:
     file: ${STACK_ROOT:-.}/.secrets/db_password.txt

@@ -234,11 +234,15 @@ Self-hosted PeerDB for real-time PG→CH replication. Uses **ReplacingMergeTree 
 
 #### 6.2 PeerDB Infrastructure
 
-- [ ] Deploy PeerDB stack (Docker Compose or k8s)
-- [ ] S3-compatible storage for staging (bulk load pattern: PG → S3 → CH); try SeaweedFS (`weed s3`) first, fall back to MinIO
-- [ ] Ensure CH can reach S3 endpoint (network config)
-- [ ] Configure PeerDB mirror: PG → CH (`forska.judgments`, `forska.articles`)
-- [ ] Tune: batch size, parallelism, initial snapshot strategy
+- [x] Deploy PeerDB stack (Docker Compose profile: `peerdb`) — see `docker-compose.yml`
+- [x] S3-compatible storage for staging: SeaweedFS (`peerdb-seaweed-*`), S3 endpoint `http://peerdb-seaweed-s3:8333` (+ `peerdb-s3-bucket-init`)
+- [x] Fallback (if needed): MinIO (`docker compose --profile peerdb-minio ...`) + set endpoint `http://peerdb-minio:9000`
+- [x] Configure mirror (PG→CH): `bun --env-file=.env.local scripts/setupPeerdbPgToClickhouse.ts`
+- [x] Tune (env):
+  - `PEERDB_MIRROR_MAX_BATCH_SIZE`
+  - `PEERDB_MIRROR_SNAPSHOT_NUM_ROWS_PER_PARTITION`
+  - `PEERDB_MIRROR_SNAPSHOT_MAX_PARALLEL_WORKERS`
+  - `PEERDB_MIRROR_SNAPSHOT_NUM_TABLES_IN_PARALLEL`
 
 #### 6.3 CH Schema Changes
 
