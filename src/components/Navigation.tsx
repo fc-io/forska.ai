@@ -1,6 +1,6 @@
 import {Menu} from '@ark-ui/solid'
 import {useQuery} from '@tanstack/solid-query'
-import {Link} from '@tanstack/solid-router'
+import {Link, useLocation} from '@tanstack/solid-router'
 import {createSignal, onCleanup, onMount, Show} from 'solid-js'
 
 import {apiClient} from '../services/apiClient'
@@ -55,6 +55,21 @@ const getAvatarLabel = (user: User | undefined) => {
 }
 
 type LlmMetricsSummary = {waiting: number; running: number; lastUpdate: Date | null}
+
+const clickhouseSyncPaths = new Set([
+  '/admin/clickhouse-sync',
+  '/admin/clickhouse-sync/',
+  '/admin/clickhouse-sync/articles',
+  '/admin/clickhouse-sync/articles/',
+])
+
+const isClickhouseSyncPath = (pathname: string) => {
+  return clickhouseSyncPaths.has(pathname)
+}
+
+const getLlmMetricsRefetchInterval = (pathname: string) => {
+  return isClickhouseSyncPath(pathname) ? 1000 * 30 : 2000
+}
 
 const fetchLlmMetricsSummary = async (): Promise<LlmMetricsSummary | null> => {
   const response = await apiClient.api.llmstatus.get()
@@ -120,12 +135,13 @@ export const Navigation = (props: NavigationProps) => {
   const [isAdminMenuOpen, setIsAdminMenuOpen] = createSignal(false)
   let adminMenuTriggerElement: HTMLDivElement | undefined
   let adminMenuElement: HTMLDivElement | undefined
+  const location = useLocation()
 
   const llmMetricsQuery = useQuery(() => {
     return {
       queryKey: ['llm-metrics-summary'],
       queryFn: fetchLlmMetricsSummary,
-      refetchInterval: 2000,
+      refetchInterval: getLlmMetricsRefetchInterval(location().pathname),
       enabled: props.user?.role === 'admin',
     }
   })
