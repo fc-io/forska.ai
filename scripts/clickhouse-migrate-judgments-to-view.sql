@@ -34,8 +34,11 @@ CREATE TABLE IF NOT EXISTS forska.judgments_raw (
     snapshot_project_id Nullable(String),
     snapshot_project_model_name Nullable(String),
 
+    _peerdb_version Int64,
+    _peerdb_is_deleted Int8 DEFAULT 0,
+
     INDEX idx_judgments_raw_id id TYPE bloom_filter(0.01) GRANULARITY 1
-) ENGINE = MergeTree()
+) ENGINE = ReplacingMergeTree(_peerdb_version)
 PARTITION BY toYYYYMM(created_at)
 ORDER BY (article_id, prompt_id, model_id, id);
 
@@ -66,4 +69,3 @@ SELECT
 FROM forska.judgments_raw j
 LEFT JOIN forska.articles a ON j.article_id = a.id
 WHERE j.deleted_at IS NULL;
-

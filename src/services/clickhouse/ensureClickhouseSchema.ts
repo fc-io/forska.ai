@@ -70,8 +70,10 @@ export const ensureClickhouseSchema = async (): Promise<void> => {
         full_text_char_count Nullable(Int32),
         full_text_html Nullable(String),
         full_text_pdf_uploaded_by Nullable(String),
-        original_data Nullable(String)
-      ) ENGINE = ReplacingMergeTree(updated_at)
+        original_data Nullable(String),
+        _peerdb_version Int64,
+        _peerdb_is_deleted Int8 DEFAULT 0
+      ) ENGINE = ReplacingMergeTree(_peerdb_version)
       PARTITION BY toYYYYMM(created_at)
       ORDER BY (id)
     `,
@@ -100,12 +102,21 @@ export const ensureClickhouseSchema = async (): Promise<void> => {
         quotes Nullable(String),
         snapshot_project_id Nullable(String),
         snapshot_project_model_name Nullable(String),
+        _peerdb_version Int64,
+        _peerdb_is_deleted Int8 DEFAULT 0,
         INDEX idx_judgments_raw_id id TYPE bloom_filter(0.01) GRANULARITY 1
-      ) ENGINE = MergeTree()
+      ) ENGINE = ReplacingMergeTree(_peerdb_version)
       PARTITION BY toYYYYMM(created_at)
       ORDER BY (article_id, prompt_id, model_id, id)
     `,
   })
+
+  await runClickhouseCommands([
+    'ALTER TABLE forska.articles ADD COLUMN IF NOT EXISTS _peerdb_version Int64',
+    'ALTER TABLE forska.articles ADD COLUMN IF NOT EXISTS _peerdb_is_deleted Int8 DEFAULT 0',
+    'ALTER TABLE forska.judgments_raw ADD COLUMN IF NOT EXISTS _peerdb_version Int64',
+    'ALTER TABLE forska.judgments_raw ADD COLUMN IF NOT EXISTS _peerdb_is_deleted Int8 DEFAULT 0',
+  ])
 
   const judgmentsEngine = await getClickhouseTableEngine('forska', 'judgments')
   const hasJudgmentsNameConflict = judgmentsEngine !== null && judgmentsEngine !== 'View'

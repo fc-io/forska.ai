@@ -255,26 +255,26 @@ Self-hosted PeerDB for real-time PG→CH replication. Uses **ReplacingMergeTree 
 Current MergeTree → **ReplacingMergeTree** with PeerDB cols:
 
 ```sql
-CREATE TABLE forska.judgments (
+CREATE TABLE forska.judgments_raw (
     -- existing cols...
     id String,
-    createdAt DateTime64(6, 'UTC'),
-    updatedAt DateTime64(6, 'UTC'),
+    created_at DateTime64(3, 'UTC'),
+    updated_at DateTime64(3, 'UTC'),
     -- ... other cols ...
 
     -- PeerDB cols (required)
     _peerdb_version Int64,
     _peerdb_is_deleted Int8 DEFAULT 0
 ) ENGINE = ReplacingMergeTree(_peerdb_version)
-PARTITION BY toYYYYMM(createdAt)
-ORDER BY (articleId, promptId, modelId, id);
+PARTITION BY toYYYYMM(created_at)
+ORDER BY (article_id, prompt_id, model_id, id);
 ```
 
-- [ ] Add `_peerdb_version Int64` col
-- [ ] Add `_peerdb_is_deleted Int8 DEFAULT 0` col
-- [ ] Change ENGINE: MergeTree → ReplacingMergeTree(`_peerdb_version`)
-- [ ] Handle `quotes` array: PeerDB may need transform (PG `text[]` → CH `Array(String)`)
-- [ ] Decide denormalized cols (`articleTitle`, etc.): replicate raw from PG or keep denorm logic
+- [x] Add `_peerdb_version Int64` col
+- [x] Add `_peerdb_is_deleted Int8 DEFAULT 0` col
+- [x] Use ReplacingMergeTree(`_peerdb_version`) (PeerDB pattern)
+- [x] Keep `quotes` as JSON `Nullable(String)` + parse in query layer
+- [x] Keep `articleTitle/*` in `forska.judgments` view (join `articles`)
 
 #### 6.4 Query Layer Changes
 
