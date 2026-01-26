@@ -181,7 +181,7 @@ const AdminClickhouseArticlesSync = () => {
                         <div class="p-4 bg-gray-50 rounded-lg">
                           <h3 class="text-sm font-medium text-gray-500 mb-2">ClickHouse</h3>
                           <p class="text-lg font-semibold text-gray-900">
-                            {(s().clickhouse.count ?? 0).toLocaleString()} unique ids
+                            {(s().clickhouse.count ?? 0).toLocaleString()} unique ids (approx)
                           </p>
                           <p class="text-sm text-gray-700 mt-1">
                             {(s().clickhouse.physicalCount ?? 0).toLocaleString()} physical rows

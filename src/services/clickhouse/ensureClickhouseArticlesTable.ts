@@ -44,4 +44,31 @@ export const ensureClickhouseArticlesTable = async (): Promise<void> => {
       ORDER BY (id)
     `,
   })
+
+  await client.command({
+    query: `
+      CREATE TABLE IF NOT EXISTS forska.articles_stats (
+        month UInt32,
+        uniqueCount AggregateFunction(uniqCombined64, UInt64),
+        maxUpdatedAt AggregateFunction(max, DateTime64(6, 'UTC'))
+      ) ENGINE = AggregatingMergeTree()
+      PARTITION BY month
+      ORDER BY month
+    `,
+  })
+
+  await client.command({
+    query: `
+      CREATE MATERIALIZED VIEW IF NOT EXISTS forska.articles_stats_mv
+      TO forska.articles_stats
+      POPULATE
+      AS
+      SELECT
+        toYYYYMM(created_at) as month,
+        uniqCombined64State(cityHash64(id)) as uniqueCount,
+        maxState(updated_at) as maxUpdatedAt
+      FROM forska.articles
+      GROUP BY month
+    `,
+  })
 }

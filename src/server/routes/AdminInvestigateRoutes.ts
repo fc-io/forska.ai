@@ -43,6 +43,12 @@ const isOpenEndedType = (typeStr: string | null): boolean => {
 const CLICKHOUSE_DELETE_BATCH_SIZE = 1000
 const JUDGMENTS_SYNC_STATS_ID = 'ch_judgments_sync' as const
 const MIN_WATERMARK = {updatedAt: '1970-01-01T00:00:00.000Z', id: '00000000-0000-0000-0000-000000000000'} as const
+const getApproxCountsMatch = (left: number, right: number): boolean => {
+  const diff = Math.abs(left - right)
+  const maxValue = Math.max(left, right, 1)
+  const tolerance = Math.max(100, Math.round(maxValue * 0.005))
+  return diff <= tolerance
+}
 
 const getQuotesForClickhouse = (value: unknown): string[] => {
   if (!value) return []
@@ -579,7 +585,7 @@ const getClickhouseSyncStatus = async () => {
   const toNumber = (value: unknown): number => {
     if (typeof value === 'number') return value
     if (typeof value === 'string') return parseInt(value, 10) || 0
-    return typeof value === 'bigint' ? Number(value) : parseInt(String(value ?? '0'), 10) || 0
+    return typeof value === 'bigint' ? Number(value) : 0
   }
 
   const [chCountsResult, chMutationsResult] = await Promise.all([
@@ -612,8 +618,7 @@ const getClickhouseSyncStatus = async () => {
 
   const pendingMutations = toNumber(chMutationsRow?.pending)
 
-  const lagMs =
-    pgMaxUpdatedAtMs !== null && chMaxUpdatedAtMs !== null ? pgMaxUpdatedAtMs - chMaxUpdatedAtMs : null
+  const lagMs = pgMaxUpdatedAtMs !== null && chMaxUpdatedAtMs !== null ? pgMaxUpdatedAtMs - chMaxUpdatedAtMs : null
   const lagSeconds = lagMs !== null ? Math.round(lagMs / 1000) : null
 
   const countsMatch = pgCount === chCount
@@ -657,6 +662,7 @@ const getClickhouseSyncStatus = async () => {
 const getClickhouseArticlesSyncStatus = async () => {
   const db = getDatabase()
   const {getClickhouseClient, pingClickhouse} = await import('../../services/clickhouse/clickhouseClient.ts')
+  const {ensureClickhouseArticlesTable} = await import('../../services/clickhouse/ensureClickhouseArticlesTable.ts')
 
   const [reachable, pgCountResult, pgLatestResult] = await Promise.all([
     pingClickhouse(),
@@ -686,22 +692,31 @@ const getClickhouseArticlesSyncStatus = async () => {
     }
   }
 
+  await ensureClickhouseArticlesTable()
+
   const chClient = getClickhouseClient()
 
   const toNumber = (value: unknown): number => {
     if (typeof value === 'number') return value
     if (typeof value === 'string') return parseInt(value, 10) || 0
-    return typeof value === 'bigint' ? Number(value) : parseInt(String(value ?? '0'), 10) || 0
+    return typeof value === 'bigint' ? Number(value) : 0
   }
 
-  const [chCountsResult, chMutationsResult] = await Promise.all([
+  const [chStatsResult, chPhysicalCountResult, chMutationsResult] = await Promise.all([
     chClient.query({
       query: `
         SELECT
-          count() as physicalCount,
-          uniqExact(id) as count,
-          toUnixTimestamp64Milli(ifNull(maxOrNull(updated_at), toDateTime64(0, 6, 'UTC'))) as maxUpdatedAtMs
-        FROM forska.articles
+          uniqCombined64Merge(uniqueCount) as count,
+          toUnixTimestamp64Milli(maxMerge(maxUpdatedAt)) as maxUpdatedAtMs
+        FROM forska.articles_stats
+      `,
+      format: 'JSONEachRow',
+    }),
+    chClient.query({
+      query: `
+        SELECT sum(rows) as physicalCount
+        FROM system.parts
+        WHERE database = 'forska' AND table = 'articles' AND active
       `,
       format: 'JSONEachRow',
     }),
@@ -715,26 +730,21 @@ const getClickhouseArticlesSyncStatus = async () => {
     }),
   ])
 
-  const [chCountsRow] = await chCountsResult.json<{
-    count: string | number
-    physicalCount: string | number
-    maxUpdatedAtMs: string | number
-  }>()
+  const [chStatsRow] = await chStatsResult.json<{count: string | number; maxUpdatedAtMs: string | number}>()
+  const [chPhysicalCountRow] = await chPhysicalCountResult.json<{physicalCount: string | number}>()
   const [chMutationsRow] = await chMutationsResult.json<{pending: string | number}>()
 
-  const chCount = toNumber(chCountsRow?.count)
-  const chPhysicalCount = toNumber(chCountsRow?.physicalCount)
-  const chMaxUpdatedAtMsRaw = toNumber(chCountsRow?.maxUpdatedAtMs)
+  const chCount = toNumber(chStatsRow?.count)
+  const chPhysicalCount = toNumber(chPhysicalCountRow?.physicalCount)
+  const chMaxUpdatedAtMsRaw = toNumber(chStatsRow?.maxUpdatedAtMs)
   const chMaxUpdatedAtMs = chMaxUpdatedAtMsRaw > 0 ? chMaxUpdatedAtMsRaw : null
   const chMaxUpdatedAt = chMaxUpdatedAtMs ? new Date(chMaxUpdatedAtMs).toISOString() : null
 
   const pendingMutations = toNumber(chMutationsRow?.pending)
-
-  const lagMs =
-    pgMaxUpdatedAtMs !== null && chMaxUpdatedAtMs !== null ? pgMaxUpdatedAtMs - chMaxUpdatedAtMs : null
+  const lagMs = pgMaxUpdatedAtMs !== null && chMaxUpdatedAtMs !== null ? pgMaxUpdatedAtMs - chMaxUpdatedAtMs : null
   const lagSeconds = lagMs !== null ? Math.round(lagMs / 1000) : null
 
-  const countsMatch = pgCount === chCount
+  const countsMatch = getApproxCountsMatch(pgCount, chCount)
   const mutating = pendingMutations > 0
   const inSync = !mutating && countsMatch && (lagSeconds === null || lagSeconds <= 60)
 
