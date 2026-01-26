@@ -2,13 +2,14 @@
 
 ## Overview
 
-Admin page to monitor data consistency between PostgreSQL (source of truth) and ClickHouse (analytics replica). Shows row counts for articles and judgments in both databases, with discrepancy detection.
+Admin page to monitor PG (source) ↔ CH (replica) consistency + PeerDB CDC health. Shows counts, cursor lag, PeerDB lag/slot health, CH mutation backlog.
 
 ## Policy (Hard Deletes)
 
 - PG `articles` + `judgments`: hard delete (no `deleted_at`)
 - Sync status/counting: no `deleted_at IS NULL` filters
-- Delete correctness: (1) write-path CH delete, (2) PG delete log + replay, (3) periodic reconcile/diff
+- Replication: PeerDB CDC (snapshot + logical repl) is primary
+- Deletes: CDC events → CH mutations; expect temporary mismatch while `system.mutations` pending
 
 ## Key Design Decisions
 
@@ -23,7 +24,7 @@ This plan addresses several subtle correctness and performance issues:
 | `GREATEST` on nullable text stays NULL                           | Use `COALESCE` with conditional                      | [Batched Counting](#solution-batched-incremental-counting-with-locking) |
 | Stale job detection using start time misclassifies long recounts | Heartbeat-based detection via `lastUpdatedAt`        | [Stale Job Detection](#stale-job-detection-heartbeat-based)             |
 | Missing `pgChSyncStats` seed rows makes locks no-op              | Seed/upsert 4 rows before refresh                    | [Batched Counting](#solution-batched-incremental-counting-with-locking) |
-| Hard deletes invisible to keyset scans                           | Write-path delete + delete log + periodic reconcile  | [Policy](#policy-hard-deletes)                                          |
+| Hard deletes invisible to keyset scans                           | Accept drift; periodic full recount; alert on `uniqueCount` only        | [Why Counts Are Approximate](#why-counts-are-approximate)               |
 | CH judgments lacks `updatedAt` column                            | Feature flag + fallback to `createdAt`               | [ClickHouse Judgments](#clickhouse-judgments-camelcase-columns)         |
 | Cursor col switch (`createdAt`→`updatedAt`) breaks watermarks    | Persist cursor col + force full recount on change    | [ClickHouse Judgments](#clickhouse-judgments-camelcase-columns)         |
 | `uniqExact()` expensive on large tables                          | Default to `uniqCombined()`, exact on-demand         | [ClickHouse Judgments](#clickhouse-judgments-camelcase-columns)         |
@@ -33,14 +34,18 @@ This plan addresses several subtle correctness and performance issues:
 | Single-column index causes heap fetches                          | Composite covering index with `INCLUDE`              | [Required Indexes](#required-indexes-for-performance)                   |
 | Lag alone misses old partition gaps                              | Partition coverage check endpoint                    | [Partition Coverage Check](#post-apiadminpartition-coverage-check)      |
 | PG month query risk (string INTERVAL, TZ drift)                  | `make_interval` + `AT TIME ZONE 'UTC'`               | [Partition Coverage Check](#post-apiadminpartition-coverage-check)      |
-| Sample-verify gets false mismatches during merge                 | Use `FINAL` or `argMax` for CH queries               | [Sample Verify](#post-apiadminsample-verify)                            |
+| Sample-verify gets false mismatches during merge/mutation lag    | Use `FINAL` or `argMax` for CH queries               | [Sample Verify](#post-apiadminsample-verify)                            |
 | `OPTIMIZE TABLE FINAL` blocks production                         | Partition-scoped or avoid entirely                   | [ClickHouse Judgments](#clickhouse-judgments-camelcase-columns)         |
+| PeerDB mirror down/degraded                                      | Surface mirror status + lag; override to Critical    | [Status Thresholds](#status-thresholds)                                 |
+| PG replication slot inactive / WAL bloat                         | Surface slot active + retained WAL signals           | [Status Thresholds](#status-thresholds)                                 |
+| CH mutations stuck/backlogged                                    | Surface `system.mutations` backlog/age               | [Status Thresholds](#status-thresholds)                                 |
 
 ## Dependencies
 
+- **PG_CH_HEALTH.md Phase-6 (current):** PeerDB CDC for PG→CH (mirror health + lag)
 - **PG_CH_HEALTH.md Phase-1 (done):** CH judgments has `updatedAt` (fallback to `createdAt` if old schema)
 - **PG_CH_HEALTH.md Phase-5 (done):** `scripts/syncArticlesToClickHouse.ts` keyset `(updated_at, id)` (no OFFSET)
-- **Invariant:** PG `updated_at` must bump on UPDATE. Deletes need separate delete log if you want delete lag.
+- **Invariant:** PG `updated_at` must bump on UPDATE; stable PKs required for CDC
 
 ## Pre-flight Checks
 
@@ -49,6 +54,7 @@ This plan addresses several subtle correctness and performance issues:
 - Seed 4 `pgChSyncStats` rows (locks no-op if missing)
 - CH counts from client are often strings; keep as string/BigInt (avoid `Number()` at 10M+)
 - Ensure CH DDL supports intended checks (ORDER BY / PARTITION); avoid keyset WHERE if not aligned
+- PeerDB status/metrics reachable from server (or proxied)
 
 ## Architecture
 
@@ -388,6 +394,11 @@ Returns current cached counts and health metrics from `pgChSyncStats` table.
 ```ts
 // Response
 {
+  replication: {
+    peerdb: { status: 'running', lagSeconds: 12 },
+    postgres: { slotActive: true },
+    clickhouse: { pendingMutations: 3 },
+  },
   stats: {
     articles: {
       pg: {
@@ -411,7 +422,7 @@ Returns current cached counts and health metrics from `pgChSyncStats` table.
         direction: 'ch_ahead', // 'pg_ahead' | 'ch_ahead' | 'synced'
       },
       lag: {
-        seconds: 1800,         // only when both sides use same cursorCol; else null + warning
+        seconds: 1800,         // cursor lag from maxCursorAt (fallback when PeerDB lag unavailable)
         formatted: '30 min',
       },
       status: 'merge_pending', // see Status Thresholds
@@ -472,7 +483,7 @@ Poll for progress during refresh. **Progress is read from DB**, so it survives r
 
 Spot-check N random rows for data integrity.
 
-**CRITICAL:** When comparing CH data to PG, use `FINAL` or `argMax` to get the latest version of each row. Without this, you'll get false mismatches during ReplacingMergeTree merge lag (unmerged old versions will compare against PG's current version).
+**CRITICAL:** When comparing CH data to PG, use `FINAL` or `argMax` to get the latest version of each row. Without this, you'll get false mismatches during merge/mutation lag (old versions still present in CH).
 
 ```ts
 // Request body
@@ -673,12 +684,12 @@ await clickhouseClient.command({query: `OPTIMIZE TABLE forska.judgments PARTITIO
 // Or let background merges happen naturally (usually sufficient)
 ```
 
-### Handling Deletions & ReplacingMergeTree
+### Handling Deletes & Mutations (CH)
 
-ClickHouse's ReplacingMergeTree is **eventually consistent** — tombstones may not be merged immediately. This causes:
+CH deletes (and delete+insert updates) apply via mutations (async). Even with PeerDB CDC, CH can temporarily contain both old+new versions until mutation completes. This can show:
 
 1. **CH count > PG count**: unmerged duplicates inflate `count(*)`
-2. **CH count < PG count**: sync lag (rows not yet synced)
+2. **CH count < PG count**: replication lag (CDC and/or mutation backlog)
 
 **Display logic:**
 
@@ -693,7 +704,7 @@ ClickHouse's ReplacingMergeTree is **eventually consistent** — tombstones may 
 - Always show `dedupDrift` = `count(*) - uniqExact(id)` when available
 - Use `FINAL` modifier sparingly (expensive) for accurate counts
 - Show "approximate" label on all counts
-- Track lag from `maxCursorAt` only when both sides use same cursorCol (else "lag unavailable")
+- Prefer PeerDB lag for replication; use `maxCursorAt` lag as fallback only when both sides use same cursorCol
 
 ---
 
@@ -702,8 +713,11 @@ ClickHouse's ReplacingMergeTree is **eventually consistent** — tombstones may 
 **CRITICAL:** Use `uniqueCount` (not `totalCount`) for diff calculations and threshold alerts. `totalCount` inflates on updates and is unsuitable for accurate comparisons.
 If CH `uniqueCount` comes from `uniqCombined()`, don't use sub-1% thresholds (est error ~1%).
 
+`effectiveLag` = `replication.peerdb.lagSeconds ?? stats[table].lag.seconds` (cursor lag = `maxCursorAt` diff).
+
 | Condition                                                 | Status        | Badge Color | Meaning               |
 | --------------------------------------------------------- | ------------- | ----------- | --------------------- |
+| PeerDB down/degraded OR PG slot inactive                  | CDC Down      | Red         | Replication unhealthy |
 | lag < 1h AND \|uniqueDiff\| < 2% AND dedupDrift < 100     | Synced        | Green       | Healthy (approx)      |
 | lag 1-6h OR \|uniqueDiff\| 2-5%                           | Behind        | Yellow      | Minor lag             |
 | lag > 6h OR \|uniqueDiff\| > 5%                           | Critical      | Red         | Needs attention       |
@@ -735,7 +749,7 @@ Dedup drift: 150 rows — merge pending (count(*) - uniqCombined)
 
 ```
 +------------------------------------------------------------------+
-|  Database Sync Status                            [Refresh] [Full] |
+|  Database Sync Status   PeerDB: [OK] 12s lag      [Refresh] [Full] |
 +------------------------------------------------------------------+
 |                                                                  |
 |  +-----------------------------+  +-----------------------------+ |
@@ -743,17 +757,17 @@ Dedup drift: 150 rows — merge pending (count(*) - uniqCombined)
 |  |                             |  |                             | |
 |  | PostgreSQL (approx)         |  | PostgreSQL (approx)         | |
 |  |   Total:  1,234,567         |  |   Total:  5,678,901         | |
-|  |   Unique: 1,234,567 (2d ago)|  |   Active: 5,600,000         | |
-|  |   Max updated: 10:00:00     |  |   Deleted: 78,901           | |
-|  |                             |  |   Max updated: 10:00:00     | |
+|  |   Unique: 1,234,567 (2d ago)|  |   Unique: 5,678,901 (2d ago)| |
+|  |   Max updated: 10:00:00     |  |   Max updated: 10:00:00     | |
+|  |                             |  |                             | |
 |  | ClickHouse (approx)         |  |                             | |
 |  |   Total:  1,234,650         |  | ClickHouse (approx)         | |
 |  |   Unique: 1,234,500         |  |   Total:  5,670,150         | |
-|  |   Dedup drift: 150          |  |   Active: 5,592,000         | |
-|  |   Max updated: 09:30:00     |  |   Deleted: 78,000           | |
-|  |                             |  |   Unique: 5,670,000         | |
-|  | Diff: -83 (-0.01%) CH ahead |  |   Dedup drift: 150          | |
-|  | Lag: 30 min                 |  |   Max updated: 09:00:00     | |
+|  |   Dedup drift: 150          |  |   Unique: 5,670,000         | |
+|  |   Max updated: 09:30:00     |  |   Dedup drift: 150          | |
+|  |                             |  |   Max updated: 09:00:00     | |
+|  | Diff: -83 (-0.01%) CH ahead |  |                             | |
+|  | Lag: 30 min                 |  |                             | |
 |  | Status: [MERGE PENDING]     |  |                             | |
 |  +-----------------------------+  | Diff: 8,901 (0.16%) behind  | |
 |                                   | Lag: 1 hour                 | |
@@ -808,7 +822,7 @@ Dedup drift: 150 rows — merge pending (count(*) - uniqCombined)
 ### Phase 2: Admin UI
 
 14. [x] Create `/admin/sync-stats` page
-15. [x] Add cards showing total/unique/deleted breakdown
+15. [x] Add cards showing total/unique/dedup drift + maxCursorAt
 16. [x] Show both absolute diff AND percentage **using uniqueCount**
 17. [x] Show "CH ahead" vs "CH behind" direction
 18. [x] Show lag time and dedup drift
@@ -831,6 +845,13 @@ Dedup drift: 150 rows — merge pending (count(*) - uniqCombined)
 29. [ ] Add backfill detection (rows with old `updatedAt` trigger warning)
 30. [ ] Consider scheduled refresh (cron) if needed
 31. [ ] Document when to run full recount vs incremental
+
+### Phase 5: PeerDB CDC Monitoring
+
+32. [ ] Add PeerDB mirror status + lag to `GET /api/admin/sync-stats`
+33. [ ] Add PG slot health (active + retained WAL signal) to sync-stats
+34. [ ] Add CH mutation summary (`system.mutations`) to sync-stats
+35. [ ] UI: top banner + status override rules (CDC down, slot inactive, stuck mutations)
 
 ---
 
@@ -869,6 +890,7 @@ src/
 10. **Articles vs judgments schema**: CH snake_case vs camelCase; use `TABLE_CONFIG` for cursor col names
 11. **CH judgments pre-Phase-1**: No `updatedAt` column; fall back to `createdAt` (misses updates)
 12. **Long-running recount**: Heartbeat keeps job alive; don't misclassify as crashed based on start time alone
+13. **PeerDB down / slot inactive**: show "CDC Down"; ignore cursor lag until recovered
 
 ---
 
@@ -878,5 +900,6 @@ src/
 - Historical tracking (count over time chart)
 - Per-project breakdown
 - Alert notifications when diff exceeds threshold
+- Alert notifications when PeerDB lag/slot unhealthy
 - Automatic OPTIMIZE TABLE trigger when dedup drift exceeds threshold
 - Job queue (pg-boss) for more robust background processing

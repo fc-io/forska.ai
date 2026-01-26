@@ -1,19 +1,13 @@
 # Plan: PostgreSQL ↔ ClickHouse Sync Health
 
-## Policy (Hard Deletes)
+Decision: PeerDB CDC for PG→CH. Phases 1–5 below = legacy manual sync (reference/rollback only).
 
-- PG `articles` + `judgments`: hard delete rows (no soft delete / no `deleted_at`)
-- CH: live-only replica; deletes require write-path CH delete + delete log + periodic id diff/reconcile
+## Policy
 
-## Checklist (Hard Delete + CH Delete)
+- PG `articles` + `judgments`: hard delete (no `deleted_at`)
+- CH: live-only replica (no tombstones). Deletes = async mutations.
 
-- [ ] PG: remove `judgments.deleted_at` (schema + `bun run db:gen` + `bun run db:mig`)
-- [ ] Write-path: on PG delete (articles/judgments) also best-effort CH delete by id
-- [ ] PG delete log table: `entity` + `entityId` + `deletedAt` + `issuedAt` + `attempts` + `lastError`
-- [ ] Write-path: insert delete-log row in same PG tx as delete
-- [ ] Replay job: batch unissued delete-log rows → issue CH deletes → mark issued (retryable)
-- [ ] Periodic reconcile: bucketed diff (count/hash) → id diff only on mismatch → targeted repair
-- [ ] Health: surface delete-log backlog + oldest pending + CH `system.mutations` pending
+## Cutover Checklist (PeerDB)
 
 ## Recent Fixes (Done)
 
@@ -72,19 +66,21 @@ Delete propagation (current approach):
 
 ---
 
-## Current State
+## Phase 6: PeerDB CDC (Current)
 
-Sync routes:
+### 6.1 Setup
 
-| Route | Purpose |
-|-------|---------|
-| `POST /api/admin/sync-judgments-to-clickhouse` | Unified upsert sync (keyset pagination on `updatedAt,id`; deletes handled via delete log/diff) |
-| `POST /api/admin/sync-articles-to-clickhouse` | Sync articles by `updated_at` |
-| `GET /api/admin/clickhouse-sync-status` | Health check comparing counts/timestamps |
+- [ ] Add PeerDB to infra (`docker-compose.yml`/k8s)
+- [ ] PG config for logical repl (wal_level=logical, slots, WAL retention)
+- [ ] Create replication user + publication for `articles`,`judgments`
 
 CH currently uses MergeTree + physical deletes. Target: ReplacingMergeTree + soft deletes (Phase 6).
 
----
+- [ ] Create mirrors PG→CH: `forska.articles`, `forska.judgments`
+- [ ] Decide snapshot mode + batch/parallelism
+- [ ] Type mapping: `text[]` → `Array(String)` (`quotes`, `answeredOriginalAsArray`)
+- [ ] Enforce non-null CH `String` cols (no `null` writes)
+- [ ] Denorm cols in judgments: keep as-is for now (Phase 5)
 
 ## Known Limitations (Current Manual Sync)
 
@@ -223,14 +219,7 @@ Self-hosted PeerDB for real-time PG→CH replication. Uses **ReplacingMergeTree 
 - DELETE → new row with `_peerdb_is_deleted=1`
 - ReplacingMergeTree dedupes by version on merge; use `FINAL` or `argMax` for exact reads
 
-<<<<<<< HEAD
 #### 6.1 Postgres Setup
-=======
-- [ ] Deploy PeerDB (use our Docker Compose); requires PG logical replication enabled
-- [ ] Configure PG publication for `articles` + `judgments` tables
-- [ ] Create PeerDB mirror: PG → CH (`forska.judgments`, `forska.articles`)
-- [ ] Tune PeerDB settings: batch size, parallelism, initial snapshot strategy
->>>>>>> 0f87473 (update plan)
 
 - [ ] Enable logical replication: `wal_level=logical`
 - [ ] Create replication slot + publication for `articles` + `judgments`
@@ -316,7 +305,6 @@ GROUP BY id;
 
 #### 6.7 Rollback Plan
 
-<<<<<<< HEAD
 If PeerDB fails:
 1. Stop PeerDB mirror
 2. Re-enable manual sync endpoints (revert code)
@@ -334,13 +322,6 @@ If PeerDB fails:
 | Handles replays cleanly (idempotent) | REPLICA IDENTITY setup for non-PK ORDER BY |
 | Production-ready monitoring | Schema changes to existing CH tables |
 | No custom sync code to maintain | Learning curve |
-=======
-no rollback plan needed
-
-#### 6.7 Other replication opportunities
-
-- [ ] Search for any other replication logic and replace with PeerDB
->>>>>>> 0f87473 (update plan)
 
 ### Phase 7: Automated Alerts (Optional)
 
@@ -350,7 +331,7 @@ no rollback plan needed
 
 ---
 
-## Testing Checklist
+## Legacy Manual Sync (Reference)
 
 - [ ] New judgments appear in CH (check `_peerdb_is_deleted=0`)
 - [ ] Updated judgments: new version row exists, `FINAL` returns latest
@@ -363,15 +344,23 @@ no rollback plan needed
 
 ---
 
-## Scale Notes (Millions+ Rows)
+## Testing Checklist (PeerDB)
 
-- Row-level deletes are expensive; keep deletes batched + monitor `system.mutations`
-- Avoid full-table `COUNT(*)` in health checks (use time window / sampling / slower cron)
-- Prefer `articles_stats` agg; rebuild partitions after deletes
-- Keep CH `articles` slim (don’t sync `full_text`/PDF blobs unless needed)
-- Keep PG reads lean during sync (avoid `SELECT *` from `articles`)
-- Prefer compact CH types: `UUID`, `LowCardinality(String)` for dims
-- `ILIKE '%...%'` on `articleTitle` is scan-heavy; consider skip index (`tokenbf_v1`/`ngrambf_v1`) or limit search
+- [ ] Insert/update/delete judgment propagates to CH
+- [ ] Insert/update/delete article propagates to CH
+- [ ] Mirror restart resumes; lag recovers
+- [ ] Health endpoint reports lag/slot/mutations without false alarms
+
+## Notes (Keep)
+
+- CH DateTime parsing: UTC; avoid `new Date(str)` and string hacks
+- CH delete params: `{id:String}` + `query_params` (no `?`)
+- CH deletes are mutations; health checks must tolerate lag
+
+## Scale Notes
+
+- Deletes expensive; batch; monitor `system.mutations`
+- Avoid frequent full `COUNT(*)` on big tables; windowed/sampled checks
 
 ## Key Files
 
