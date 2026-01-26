@@ -226,11 +226,9 @@ Self-hosted PeerDB for real-time PG→CH replication. Uses **ReplacingMergeTree 
 
 #### 6.1 Postgres Setup
 
-- [ ] Enable logical replication: `wal_level=logical`
-- [ ] Create replication slot + publication for `articles` + `judgments`
-- [ ] Create replication user with appropriate permissions
-- [ ] Configure `pg_hba.conf` for replication connections
-- [ ] **REPLICA IDENTITY**: Our CH ORDER BY is `(articleId, promptId, modelId, id)` — need unique index on these cols + `ALTER TABLE ... REPLICA IDENTITY USING INDEX ...` so deletes emit all key cols
+- [x] Enable logical replication: `wal_level=logical` (`config/postgres/postgresql.conf`)
+- [x] Configure `pg_hba.conf` for replication connections (`config/postgres/pg_hba.conf`)
+- [ ] Run: `bun run scripts/setupPeerdbPostgres.ts` (role+publication+REPLICA IDENTITY; `PEERDB_CREATE_SLOT=1` to also create slot)
 
 #### 6.2 PeerDB Infrastructure
 
