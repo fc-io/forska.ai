@@ -223,7 +223,14 @@ Self-hosted PeerDB for real-time PG→CH replication. Uses **ReplacingMergeTree 
 - DELETE → new row with `_peerdb_is_deleted=1`
 - ReplacingMergeTree dedupes by version on merge; use `FINAL` or `argMax` for exact reads
 
+<<<<<<< HEAD
 #### 6.1 Postgres Setup
+=======
+- [ ] Deploy PeerDB (use our Docker Compose); requires PG logical replication enabled
+- [ ] Configure PG publication for `articles` + `judgments` tables
+- [ ] Create PeerDB mirror: PG → CH (`forska.judgments`, `forska.articles`)
+- [ ] Tune PeerDB settings: batch size, parallelism, initial snapshot strategy
+>>>>>>> 0f87473 (update plan)
 
 - [ ] Enable logical replication: `wal_level=logical`
 - [ ] Create replication slot + publication for `articles` + `judgments`
@@ -309,6 +316,7 @@ GROUP BY id;
 
 #### 6.7 Rollback Plan
 
+<<<<<<< HEAD
 If PeerDB fails:
 1. Stop PeerDB mirror
 2. Re-enable manual sync endpoints (revert code)
@@ -326,6 +334,13 @@ If PeerDB fails:
 | Handles replays cleanly (idempotent) | REPLICA IDENTITY setup for non-PK ORDER BY |
 | Production-ready monitoring | Schema changes to existing CH tables |
 | No custom sync code to maintain | Learning curve |
+=======
+no rollback plan needed
+
+#### 6.7 Other replication opportunities
+
+- [ ] Search for any other replication logic and replace with PeerDB
+>>>>>>> 0f87473 (update plan)
 
 ### Phase 7: Automated Alerts (Optional)
 
@@ -367,12 +382,3 @@ If PeerDB fails:
 | `src/services/clickhouse/ensureClickhouseArticlesTable.ts` | CH DDL incl. `articles_stats` |
 | `scripts/clickhouse-setup.sql` | DDL for judgments + articles + stats |
 | `scripts/syncArticlesToClickHouse.ts` | Articles sync |
-
----
-
-## Rollback Plan
-
-1. Revert code changes
-2. Truncate CH judgments table
-3. Run full backfill from PG
-4. Verify counts match
