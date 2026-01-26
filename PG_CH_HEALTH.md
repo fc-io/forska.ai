@@ -5,6 +5,16 @@
 - PG `articles` + `judgments`: hard delete rows (no soft delete / no `deleted_at`)
 - CH: live-only replica; deletes require write-path CH delete + delete log + periodic id diff/reconcile
 
+## Checklist (Hard Delete + CH Delete)
+
+- [ ] PG: remove `judgments.deleted_at` (schema + `bun run db:gen` + `bun run db:mig`)
+- [ ] Write-path: on PG delete (articles/judgments) also best-effort CH delete by id
+- [ ] PG delete log table: `entity` + `entityId` + `deletedAt` + `issuedAt` + `attempts` + `lastError`
+- [ ] Write-path: insert delete-log row in same PG tx as delete
+- [ ] Replay job: batch unissued delete-log rows → issue CH deletes → mark issued (retryable)
+- [ ] Periodic reconcile: bucketed diff (count/hash) → id diff only on mismatch → targeted repair
+- [ ] Health: surface delete-log backlog + oldest pending + CH `system.mutations` pending
+
 ## Recent Fixes (Done)
 
 - [x] Fix CH DateTime parsing (UTC; no `new Date(str)` / `+ 'Z'`)
