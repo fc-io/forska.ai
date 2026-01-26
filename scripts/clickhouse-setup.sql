@@ -76,3 +76,24 @@ CREATE TABLE IF NOT EXISTS forska.articles (
 ) ENGINE = ReplacingMergeTree(updated_at)
 PARTITION BY toYYYYMM(created_at)
 ORDER BY (id);
+
+-- ============================================================
+-- 3. ARTICLES STATS: Aggregated counts for health checks
+-- ============================================================
+CREATE TABLE IF NOT EXISTS forska.articles_stats (
+    month UInt32,
+    uniqueCount AggregateFunction(uniqCombined64, UInt64),
+    maxUpdatedAt AggregateFunction(max, DateTime64(6, 'UTC'))
+) ENGINE = AggregatingMergeTree()
+PARTITION BY month
+ORDER BY month;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS forska.articles_stats_mv
+TO forska.articles_stats
+AS
+SELECT
+    toYYYYMM(created_at) as month,
+    uniqCombined64State(cityHash64(id)) as uniqueCount,
+    maxState(updated_at) as maxUpdatedAt
+FROM forska.articles
+GROUP BY month;

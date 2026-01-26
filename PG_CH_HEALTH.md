@@ -219,6 +219,7 @@ ORDER BY (articleId, promptId, modelId, id);
 
 - Row-level deletes are expensive; keep deletes batched + monitor `system.mutations`
 - Avoid full-table `COUNT(*)` in health checks (use time window / sampling / slower cron)
+- Prefer `articles_stats` agg; rebuild partitions after deletes
 - Keep CH `articles` slim (don’t sync `full_text`/PDF blobs unless needed)
 - Keep PG reads lean during sync (avoid `SELECT *` from `articles`)
 - Prefer compact CH types: `UUID`, `LowCardinality(String)` for dims
@@ -230,7 +231,8 @@ ORDER BY (articleId, promptId, modelId, id);
 |------|---------|
 | `src/server/routes/AdminInvestigateRoutes.ts` | Sync endpoints, backfill logic |
 | `src/services/clickhouse/clickhouseClient.ts` | CH client singleton |
-| `scripts/clickhouse-setup.sql` | DDL for judgments table |
+| `src/services/clickhouse/ensureClickhouseArticlesTable.ts` | CH DDL incl. `articles_stats` |
+| `scripts/clickhouse-setup.sql` | DDL for judgments + articles + stats |
 | `scripts/syncArticlesToClickHouse.ts` | Articles sync |
 
 ---

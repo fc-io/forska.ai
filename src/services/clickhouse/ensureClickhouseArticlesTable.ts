@@ -61,7 +61,6 @@ export const ensureClickhouseArticlesTable = async (): Promise<void> => {
     query: `
       CREATE MATERIALIZED VIEW IF NOT EXISTS forska.articles_stats_mv
       TO forska.articles_stats
-      POPULATE
       AS
       SELECT
         toYYYYMM(created_at) as month,

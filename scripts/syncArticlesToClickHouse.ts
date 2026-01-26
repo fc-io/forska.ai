@@ -25,6 +25,9 @@ const PG_CONN = {
 }
 
 type SyncResult = {syncedRows: number; lastUpdatedAt: string | null; durationMs: number}
+type MonthKey = {year: number; month: number}
+type StatsBackfillInput = {months: MonthKey[]; rebuild: boolean}
+type StatsBackfillResult = {months: number; durationMs: number}
 
 const parseClickhouseCount = (value: unknown): bigint => {
   if (typeof value === 'string') return BigInt(value || '0')
@@ -169,19 +172,192 @@ export const syncArticlesToClickHouse = async (): Promise<SyncResult> => {
   return {syncedRows: Number(inserted), lastUpdatedAt: endWatermark.updatedAt, durationMs}
 }
 
-const main = async () => {
+const getArgValue = (args: string[], prefix: string): string | null => {
+  const match = args.find((arg) => {
+    return arg.startsWith(prefix)
+  })
+  return match ? match.slice(prefix.length) : null
+}
+
+const parseMonthKey = (value: string | null): MonthKey | null => {
+  const match = value ? value.match(/^(\d{4})-(\d{2})$/) : null
+  const year = match ? Number(match[1]) : NaN
+  const month = match ? Number(match[2]) : NaN
+  const isValid = Number.isInteger(year) && Number.isInteger(month) && month >= 1 && month <= 12
+  return isValid ? {year, month} : null
+}
+
+const formatMonthKey = (month: MonthKey): string => {
+  const monthLabel = String(month.month).padStart(2, '0')
+  return `${month.year}-${monthLabel}`
+}
+
+const monthKeyToPartition = (month: MonthKey): number => {
+  return month.year * 100 + month.month
+}
+
+const addMonth = (month: MonthKey): MonthKey => {
+  const base = new Date(Date.UTC(month.year, month.month - 1, 1))
+  const next = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth() + 1, 1))
+  return {year: next.getUTCFullYear(), month: next.getUTCMonth() + 1}
+}
+
+const isAfterMonth = (left: MonthKey, right: MonthKey): boolean => {
+  return left.year > right.year || (left.year === right.year && left.month > right.month)
+}
+
+const buildMonthRange = (start: MonthKey, end: MonthKey): MonthKey[] => {
+  const done = isAfterMonth(start, end)
+  const next = addMonth(start)
+  const rest = done ? [] : buildMonthRange(next, end)
+  return done ? [] : [start, ...rest]
+}
+
+const parseMonthList = (value: string | null): MonthKey[] | null => {
+  const raw = value ? value.split(',') : []
+  const trimmed = raw
+    .map((entry) => {
+      return entry.trim()
+    })
+    .filter((entry) => {
+      return entry.length > 0
+    })
+  const parsed = trimmed.map((entry) => {
+    return parseMonthKey(entry)
+  })
+  const valid = parsed.filter((entry): entry is MonthKey => {
+    return Boolean(entry)
+  })
+  const isValid = trimmed.length > 0 && valid.length === trimmed.length
+  return isValid ? valid : null
+}
+
+const parseStatsBackfillInput = (args: string[]): StatsBackfillInput | null => {
+  const monthsArg = getArgValue(args, '--months=')
+  const fromArg = getArgValue(args, '--from=')
+  const toArg = getArgValue(args, '--to=')
+  const rebuild = args.includes('--rebuild')
+  const monthsFromList = monthsArg ? parseMonthList(monthsArg) : null
+  const fromMonth = monthsArg ? null : parseMonthKey(fromArg)
+  const toMonth = monthsArg ? null : parseMonthKey(toArg)
+  const range = fromMonth && toMonth && !isAfterMonth(fromMonth, toMonth) ? buildMonthRange(fromMonth, toMonth) : null
+  const months = monthsFromList ?? range
+  const monthList = months ?? []
+  const isValid = monthList.length > 0
+  return isValid ? {months: monthList, rebuild} : null
+}
+
+const formatMonthStart = (month: MonthKey): string => {
+  return `${formatMonthKey(month)}-01 00:00:00.000000`
+}
+
+const dropArticlesStatsPartition = async (month: MonthKey): Promise<void> => {
+  const client = getClickhouseClient()
+  await client.command({
+    query: 'ALTER TABLE forska.articles_stats DROP PARTITION IF EXISTS {month:UInt32}',
+    query_params: {month: monthKeyToPartition(month)},
+  })
+}
+
+const insertArticlesStatsForMonth = async (month: MonthKey): Promise<void> => {
+  const client = getClickhouseClient()
+  const start = formatMonthStart(month)
+  const next = formatMonthStart(addMonth(month))
+  await client.command({
+    query: `
+      INSERT INTO forska.articles_stats
+      SELECT
+        {month:UInt32} as month,
+        uniqCombined64State(cityHash64(id)) as uniqueCount,
+        maxState(updated_at) as maxUpdatedAt
+      FROM forska.articles
+      WHERE created_at >= {start:DateTime64(6, 'UTC')}
+        AND created_at < {end:DateTime64(6, 'UTC')}
+    `,
+    query_params: {month: monthKeyToPartition(month), start, end: next},
+  })
+}
+
+const backfillArticlesStatsMonth = async (month: MonthKey, rebuild: boolean): Promise<void> => {
+  const drop = rebuild ? dropArticlesStatsPartition(month) : Promise.resolve()
+  await drop
+  await insertArticlesStatsForMonth(month)
+  console.log(`[ArticleStats] Backfilled ${formatMonthKey(month)}${rebuild ? ' (rebuild)' : ''}`)
+}
+
+const backfillArticlesStatsRecursive = async (input: {
+  months: MonthKey[]
+  index: number
+  rebuild: boolean
+}): Promise<void> => {
+  const current = input.months[input.index]
+  const hasCurrent = Boolean(current)
+  if (current) {
+    await backfillArticlesStatsMonth(current, input.rebuild)
+  }
+  const nextInput = {months: input.months, index: input.index + 1, rebuild: input.rebuild}
+  const nextResult = hasCurrent ? await backfillArticlesStatsRecursive(nextInput) : undefined
+  return nextResult
+}
+
+const backfillArticlesStats = async (input: StatsBackfillInput): Promise<StatsBackfillResult> => {
+  const startTime = performance.now()
+  await ensureClickhouseArticlesTable()
+  await backfillArticlesStatsRecursive({months: input.months, index: 0, rebuild: input.rebuild})
+  const durationMs = performance.now() - startTime
+  return {months: input.months.length, durationMs}
+}
+
+const logBackfillUsage = (): void => {
+  console.log('Usage: bun scripts/syncArticlesToClickHouse.ts --backfill-stats --from=YYYY-MM --to=YYYY-MM [--rebuild]')
+  console.log('   or: bun scripts/syncArticlesToClickHouse.ts --backfill-stats --months=YYYY-MM,YYYY-MM [--rebuild]')
+}
+
+const logBackfillStart = (input: StatsBackfillInput): void => {
+  console.log('=== ClickHouse Articles Stats Backfill ===')
+  console.log(`Months: ${input.months.map(formatMonthKey).join(', ')}`)
+  console.log(`Rebuild: ${input.rebuild ? 'yes' : 'no'}`)
+}
+
+const logBackfillSummary = (result: StatsBackfillResult): void => {
+  console.log('')
+  console.log('=== Summary ===')
+  console.log(`Months processed: ${result.months}`)
+  console.log(`Duration: ${result.durationMs.toFixed(0)}ms`)
+}
+
+const runSync = async (): Promise<boolean> => {
   console.log('=== ClickHouse Articles Sync ===')
   console.log('')
-
   const result = await syncArticlesToClickHouse()
-
   console.log('')
   console.log('=== Summary ===')
   console.log(`Rows synced: ${result.syncedRows}`)
   console.log(`Duration: ${result.durationMs.toFixed(0)}ms`)
   console.log(`Last updated_at: ${result.lastUpdatedAt}`)
+  return true
+}
 
-  process.exit(0)
+const runStatsBackfill = async (args: string[]): Promise<boolean> => {
+  const input = parseStatsBackfillInput(args)
+  if (input) {
+    logBackfillStart(input)
+  }
+  const result = input ? await backfillArticlesStats(input) : null
+  if (result) {
+    logBackfillSummary(result)
+  }
+  if (!input) {
+    logBackfillUsage()
+  }
+  return Boolean(result)
+}
+
+const main = async () => {
+  const args = process.argv.slice(2)
+  const isBackfill = args.includes('--backfill-stats')
+  const success = isBackfill ? await runStatsBackfill(args) : await runSync()
+  process.exit(success ? 0 : 1)
 }
 
 if (import.meta.main) {

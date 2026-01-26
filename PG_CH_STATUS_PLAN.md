@@ -45,6 +45,7 @@ This plan addresses several subtle correctness and performance issues:
 ## Pre-flight Checks
 
 - Run `scripts/clickhouse-setup.sql` (creates `forska` + `forska.judgments` + `forska.articles`)
+- Backfill `articles_stats`: `bun scripts/syncArticlesToClickHouse.ts --backfill-stats --from=YYYY-MM --to=YYYY-MM` (use `--rebuild` after deletes)
 - Seed 4 `pgChSyncStats` rows (locks no-op if missing)
 - CH counts from client are often strings; keep as string/BigInt (avoid `Number()` at 10M+)
 - Ensure CH DDL supports intended checks (ORDER BY / PARTITION); avoid keyset WHERE if not aligned
@@ -57,7 +58,7 @@ Instead of running expensive `COUNT(*)` queries on every page load, we:
 
 1. **Store cached counts** in a PostgreSQL table (`pgChSyncStats`)
 2. **PG:** keyset watermark + batched scans (cheap incremental)
-3. **CH:** `count()` + `max()` on refresh (cheap); `uniqCombined/uniqExact` on-demand
+3. **CH:** articles via `articles_stats` (agg MV; rebuild for deletes). judgments use `count()`/`max()`; `uniqCombined/uniqExact` on-demand
 4. **Refresh on-demand** via admin UI button with progress tracking
 
 ### Why Keyset Watermarks?
