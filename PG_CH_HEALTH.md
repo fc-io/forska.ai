@@ -39,18 +39,33 @@ Removed in favor of unified `sync-judgments-to-clickhouse` endpoint:
 
 ## Target Architecture
 
-PostgreSQL is source of truth. Target: CH holds only live rows (no tombstones) via **MergeTree + deletes**.
+PostgreSQL is source of truth.
+
+### Future Target: PeerDB + ReplacingMergeTree (Phase 6)
+
+Real-time CDC via PeerDB. Uses **ReplacingMergeTree + soft deletes** pattern:
+
+| Operation | CH Action |
+|-----------|-----------|
+| PG insert | INSERT row |
+| PG update | INSERT row with higher `_peerdb_version` |
+| PG delete | INSERT row with `_peerdb_is_deleted=1` |
+
+Queries use `FINAL` or `argMax` for dedup + filter `_peerdb_is_deleted=0`.
+
+### Current: Manual Sync + MergeTree (Phases 1-5)
+
+Manual sync endpoints + MergeTree with physical deletes:
 
 | Operation | CH Action |
 |-----------|-----------|
 | PG insert | INSERT into CH |
 | PG update | DELETE + INSERT in CH |
-| PG judgment delete | DELETE FROM CH |
-| PG article hard-delete | DELETE FROM CH |
+| PG delete | DELETE FROM CH |
 
 Requires CH delete support + monotonic watermark not derived from table (deletes can drop `max(updatedAt)`). Deletes async → temp dupes/count mismatch.
 
-Delete propagation (both paths):
+Delete propagation (current approach):
 - Write-path (API): on PG delete → issue CH delete by id (best-effort) + append to PG delete log (same transaction)
 - Backfill: replay delete log (retry until issued; track mutation backlog)
 - Reconcile: periodic PG↔CH id/hash diff by time buckets; if mismatch → targeted resync + replay deletes
@@ -67,35 +82,37 @@ Sync routes:
 | `POST /api/admin/sync-articles-to-clickhouse` | Sync articles by `updated_at` |
 | `GET /api/admin/clickhouse-sync-status` | Health check comparing counts/timestamps |
 
-CH uses MergeTree + physical deletes (no tombstones).
+CH currently uses MergeTree + physical deletes. Target: ReplacingMergeTree + soft deletes (Phase 6).
 
 ---
 
-## Known Limitations
+## Known Limitations (Current Manual Sync)
 
-### 1. No Real-Time Sync
+*Most resolved by Phase 6 (PeerDB)*
 
-CH lags PG until backfill run manually. No CDC.
+### 1. No Real-Time Sync ✅ *Fixed by Phase 6*
 
-### 2. Cursor Uses createdAt Only
+CH lags PG until backfill run manually. No CDC. → PeerDB provides real-time CDC.
 
-Backfill uses `WHERE createdAt > max(createdAt)`. Updates/deletes missed. Cursor ties can skip rows.
+### 2. Cursor Uses createdAt Only ✅ *Fixed by Phase 6*
 
-### 3. Articles Sync Uses OFFSET
+Backfill uses `WHERE createdAt > max(createdAt)`. Updates/deletes missed. Cursor ties can skip rows. → PeerDB uses WAL position, not table cursors.
 
-`syncArticlesToClickHouse` uses `LIMIT/OFFSET`. Slow at scale, skip/dup on concurrent writes.
+### 3. Articles Sync Uses OFFSET ✅ *Fixed by Phase 6*
 
-### 4. Denorm Drift
+`syncArticlesToClickHouse` uses `LIMIT/OFFSET`. Slow at scale, skip/dup on concurrent writes. → PeerDB doesn't use OFFSET.
 
-Judgments store `articleTitle/*` snapshots. Article updates in PG won't update existing CH judgment rows.
+### 4. Denorm Drift ⚠️ *Remains*
 
-### 5. Watermark Can Regress (If Using Deletes)
+Judgments store `articleTitle/*` snapshots. Article updates in PG won't update existing CH judgment rows. → Still applies with PeerDB (denorm is app-level).
 
-If CH physically deletes latest-updated row, `max(updatedAt)` in CH can go backwards → resync loops / duplicate work.
+### 5. Watermark Can Regress (If Using Deletes) ✅ *Fixed by Phase 6*
 
-### 6. Deletes Are Async (Mutations)
+If CH physically deletes latest-updated row, `max(updatedAt)` in CH can go backwards → resync loops / duplicate work. → PeerDB uses WAL position (not table watermark) + soft deletes (no physical DELETE).
 
-DELETEs can lag; old+new rows can coexist until mutation done. Health checks must tolerate or check `system.mutations`.
+### 6. Deletes Are Async (Mutations) ✅ *Fixed by Phase 6*
+
+DELETEs can lag; old+new rows can coexist until mutation done. Health checks must tolerate or check `system.mutations`. → PeerDB uses soft deletes; ReplacingMergeTree dedupes on merge but `FINAL` gives correct reads immediately.
 
 ---
 
@@ -198,29 +215,79 @@ ORDER BY (articleId, promptId, modelId, id);
 
 ### Phase 6: PeerDB CDC (Replaces Manual Sync)
 
-Self-hosted PeerDB for real-time PG→CH replication. Removes need for manual sync endpoints + cron.
+Self-hosted PeerDB for real-time PG→CH replication. Uses **ReplacingMergeTree + soft deletes** pattern (not physical DELETEs).
 
-#### 6.1 Setup
+**How PeerDB works:**
+- INSERT → new row in CH
+- UPDATE → new row with higher `_peerdb_version`
+- DELETE → new row with `_peerdb_is_deleted=1`
+- ReplacingMergeTree dedupes by version on merge; use `FINAL` or `argMax` for exact reads
 
-- [ ] Deploy PeerDB (Docker Compose or k8s); requires PG logical replication enabled
-- [ ] Configure PG publication for `articles` + `judgments` tables
-- [ ] Create PeerDB mirror: PG → CH (`forska.judgments`, `forska.articles`)
-- [ ] Tune PeerDB settings: batch size, parallelism, initial snapshot strategy
+#### 6.1 Postgres Setup
 
-#### 6.2 Schema Alignment
+- [ ] Enable logical replication: `wal_level=logical`
+- [ ] Create replication slot + publication for `articles` + `judgments`
+- [ ] Create replication user with appropriate permissions
+- [ ] Configure `pg_hba.conf` for replication connections
+- [ ] **REPLICA IDENTITY**: Our CH ORDER BY is `(articleId, promptId, modelId, id)` — need unique index on these cols + `ALTER TABLE ... REPLICA IDENTITY USING INDEX ...` so deletes emit all key cols
 
-- [ ] Ensure CH schema matches PeerDB expectations (column types, nullability)
-- [ ] Handle `quotes` array: PeerDB may need custom transform (PG `text[]` → CH `Array(String)`)
-- [ ] Handle denormalized cols (`articleTitle`, etc.): decide if PeerDB replicates raw or if we keep denorm logic
+#### 6.2 PeerDB Infrastructure
 
-#### 6.3 Delete Handling
+- [ ] Deploy PeerDB stack (Docker Compose or k8s)
+- [ ] Stack includes MinIO for staging (bulk load pattern: PG → MinIO → CH)
+- [ ] Ensure CH can reach MinIO endpoint (network config)
+- [ ] Configure PeerDB mirror: PG → CH (`forska.judgments`, `forska.articles`)
+- [ ] Tune: batch size, parallelism, initial snapshot strategy
 
-- [ ] PeerDB supports hard deletes via logical replication (DELETE events → CH DELETE)
-- [ ] Remove PG delete log table (no longer needed)
-- [ ] Remove delete replay job
-- [ ] Remove periodic id-diff reconcile (PeerDB handles consistency)
+#### 6.3 CH Schema Changes
 
-#### 6.4 Remove Manual Sync Code
+Current MergeTree → **ReplacingMergeTree** with PeerDB cols:
+
+```sql
+CREATE TABLE forska.judgments (
+    -- existing cols...
+    id String,
+    createdAt DateTime64(6, 'UTC'),
+    updatedAt DateTime64(6, 'UTC'),
+    -- ... other cols ...
+
+    -- PeerDB cols (required)
+    _peerdb_version Int64,
+    _peerdb_is_deleted Int8 DEFAULT 0
+) ENGINE = ReplacingMergeTree(_peerdb_version)
+PARTITION BY toYYYYMM(createdAt)
+ORDER BY (articleId, promptId, modelId, id);
+```
+
+- [ ] Add `_peerdb_version Int64` col
+- [ ] Add `_peerdb_is_deleted Int8 DEFAULT 0` col
+- [ ] Change ENGINE: MergeTree → ReplacingMergeTree(`_peerdb_version`)
+- [ ] Handle `quotes` array: PeerDB may need transform (PG `text[]` → CH `Array(String)`)
+- [ ] Decide denormalized cols (`articleTitle`, etc.): replicate raw from PG or keep denorm logic
+
+#### 6.4 Query Layer Changes
+
+All CH queries must handle dedup + filter deleted:
+
+```sql
+-- Option A: FINAL (simple, slower)
+SELECT * FROM forska.judgments FINAL
+WHERE _peerdb_is_deleted = 0;
+
+-- Option B: argMax (faster, more complex)
+SELECT argMax(col1, _peerdb_version) AS col1, ...
+FROM forska.judgments
+WHERE _peerdb_is_deleted = 0
+GROUP BY id;
+```
+
+- [ ] Audit all CH queries in codebase
+- [ ] Add `WHERE _peerdb_is_deleted = 0` filter to all queries
+- [ ] Add `FINAL` or implement `argMax` pattern for dedup
+- [ ] Consider materialized view for "current state" if FINAL too slow
+- [ ] Update health check queries
+
+#### 6.5 Remove Manual Sync Code
 
 | To Remove | File |
 |-----------|------|
@@ -229,47 +296,55 @@ Self-hosted PeerDB for real-time PG→CH replication. Removes need for manual sy
 | `scripts/syncArticlesToClickHouse.ts` | scripts |
 | Keyset pagination helpers | shared utils |
 | Watermark state management | if stored externally |
+| PG delete log table | schema (if implemented) |
+| Delete replay job | (if implemented) |
 
-#### 6.5 Health Check Updates
+#### 6.6 Health Check Updates
 
-- [ ] Monitor PeerDB lag (`peerdb.lag_seconds` or similar metric)
-- [ ] Monitor PeerDB slot replication lag in PG (`pg_replication_slots`)
-- [ ] Keep count comparison (PG vs CH) as sanity check
+- [ ] Monitor PeerDB lag (replication delay)
+- [ ] Monitor PG replication slot lag (`pg_replication_slots.pg_wal_lsn_diff`)
+- [ ] Count comparison: PG `COUNT(*)` vs CH `COUNT(*) ... FINAL WHERE _peerdb_is_deleted=0`
 - [ ] Alert on PeerDB mirror failure or slot inactive
+- [ ] Alert on slot lag > threshold (WAL accumulating)
 
-#### 6.6 Rollback Plan
+#### 6.7 Rollback Plan
 
 If PeerDB fails:
-1. Re-enable manual sync endpoints
-2. Truncate CH tables
-3. Full resync via old backfill
-4. Drop PeerDB publication + slot
+1. Stop PeerDB mirror
+2. Re-enable manual sync endpoints (revert code)
+3. Recreate CH tables with MergeTree (drop ReplacingMergeTree + PeerDB cols)
+4. Full resync via old backfill
+5. Drop PG publication + replication slot
 
-#### 6.7 Tradeoffs
+#### 6.8 Tradeoffs
 
 | Pro | Con |
 |-----|-----|
-| Real-time sync (no lag) | Extra infra (PeerDB service) |
-| Automatic delete propagation | Logical replication slot consumes WAL |
-| Less custom code | Schema changes need coordination |
-| Built-in monitoring | Learning curve |
+| Real-time sync (sub-second lag) | Extra infra (PeerDB + MinIO) |
+| Correctness guarantees (snapshot + CDC handoff) | Query complexity (`FINAL` or `argMax` everywhere) |
+| Bulk loading (staging → fast inserts) | Soft deletes (rows exist until merge) |
+| Handles replays cleanly (idempotent) | REPLICA IDENTITY setup for non-PK ORDER BY |
+| Production-ready monitoring | Schema changes to existing CH tables |
+| No custom sync code to maintain | Learning curve |
 
 ### Phase 7: Automated Alerts (Optional)
 
 - [ ] Alert when PeerDB lag > threshold
-- [ ] Alert when count mismatch detected (fallback sanity check)
+- [ ] Alert when PG slot lag > threshold (WAL growth)
+- [ ] Alert when count mismatch detected (sanity check)
 
 ---
 
 ## Testing Checklist
 
-- [ ] New judgments sync correctly
-- [ ] Updated judgments sync correctly (old row deleted, new inserted)
-- [ ] Deleted judgments removed from CH
-- [ ] Deleted articles removed from CH
-- [ ] Health check shows matching counts
-- [ ] Keyset pagination handles cursor ties correctly
-- [ ] Load test: sync 100k judgments
+- [ ] New judgments appear in CH (check `_peerdb_is_deleted=0`)
+- [ ] Updated judgments: new version row exists, `FINAL` returns latest
+- [ ] Deleted judgments: `_peerdb_is_deleted=1` row exists, filtered out in queries
+- [ ] Same for articles
+- [ ] Health check counts match (PG vs CH with FINAL + filter)
+- [ ] REPLICA IDENTITY works: delete by non-PK cols propagates correctly
+- [ ] Load test: sync 100k+ rows, verify no missing/duplicate after snapshot+CDC handoff
+- [ ] Query perf acceptable with FINAL (or argMax pattern works)
 
 ---
 
