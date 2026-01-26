@@ -4,6 +4,12 @@
 
 Admin page to monitor data consistency between PostgreSQL (source of truth) and ClickHouse (analytics replica). Shows row counts for articles and judgments in both databases, with discrepancy detection.
 
+## Policy (Hard Deletes)
+
+- PG `articles` + `judgments`: hard delete (no `deleted_at`)
+- Sync status/counting: no `deleted_at IS NULL` filters
+- Delete correctness: (1) write-path CH delete, (2) PG delete log + replay, (3) periodic reconcile/diff
+
 ## Key Design Decisions
 
 This plan addresses several subtle correctness and performance issues:
@@ -17,7 +23,7 @@ This plan addresses several subtle correctness and performance issues:
 | `GREATEST` on nullable text stays NULL                           | Use `COALESCE` with conditional                      | [Batched Counting](#solution-batched-incremental-counting-with-locking) |
 | Stale job detection using start time misclassifies long recounts | Heartbeat-based detection via `lastUpdatedAt`        | [Stale Job Detection](#stale-job-detection-heartbeat-based)             |
 | Missing `pgChSyncStats` seed rows makes locks no-op              | Seed/upsert 4 rows before refresh                    | [Batched Counting](#solution-batched-incremental-counting-with-locking) |
-| Articles table has no `deleted_at` column                        | Table-specific config (`TABLE_CONFIG`)               | [Batched Counting](#solution-batched-incremental-counting-with-locking) |
+| Hard deletes invisible to keyset scans                           | Write-path delete + delete log + periodic reconcile  | [Policy](#policy-hard-deletes)                                          |
 | CH judgments lacks `updatedAt` column                            | Feature flag + fallback to `createdAt`               | [ClickHouse Judgments](#clickhouse-judgments-camelcase-columns)         |
 | Cursor col switch (`createdAt`→`updatedAt`) breaks watermarks    | Persist cursor col + force full recount on change    | [ClickHouse Judgments](#clickhouse-judgments-camelcase-columns)         |
 | `uniqExact()` expensive on large tables                          | Default to `uniqCombined()`, exact on-demand         | [ClickHouse Judgments](#clickhouse-judgments-camelcase-columns)         |
@@ -34,7 +40,7 @@ This plan addresses several subtle correctness and performance issues:
 
 - **PG_CH_HEALTH.md Phase-1 (done):** CH judgments has `updatedAt` (fallback to `createdAt` if old schema)
 - **PG_CH_HEALTH.md Phase-5 (done):** `scripts/syncArticlesToClickHouse.ts` keyset `(updated_at, id)` (no OFFSET)
-- **Invariant:** PG `updated_at` must bump on UPDATE + soft delete; else watermark+lag lies.
+- **Invariant:** PG `updated_at` must bump on UPDATE. Deletes need separate delete log if you want delete lag.
 
 ## Pre-flight Checks
 
@@ -79,7 +85,7 @@ Keyset pagination assumes `updatedAt` increases monotonically. Rows with **retro
 
 Incremental counting **cannot stay perfectly accurate** when rows are updated or deleted:
 
-- A row counted as "active" may later be soft-deleted → `activeCount` is now too high
+- A row counted may later be deleted → cached counts drift
 - A row's `updatedAt` changes → it gets **re-counted** (inflating `totalCount`)
 - Deletes are not subtracted — we only add, never subtract
 
@@ -106,10 +112,8 @@ Incremental counting **cannot stay perfectly accurate** when rows are updated or
 export const pgChSyncStats = pgTable('pg_ch_sync_stats', {
   id: text('id').primaryKey(), // e.g., 'pg_articles', 'ch_articles', 'pg_judgments', 'ch_judgments'
 
-  // Counts (approximate — can drift due to updates/deletes)
+  // Counts (approximate — inflate on updates; drift on deletes)
   totalCount: bigint('total_count', {mode: 'number'}).notNull().default(0),
-  activeCount: bigint('active_count', {mode: 'number'}).notNull().default(0),
-  deletedCount: bigint('deleted_count', {mode: 'number'}).notNull().default(0),
 
   // Accurate unique count (from periodic full recount or uniqExact)
   uniqueCount: bigint('unique_count', {mode: 'number'}),
@@ -143,33 +147,17 @@ export const pgChSyncStats = pgTable('pg_ch_sync_stats', {
 
 ```sql
 -- PostgreSQL: Composite covering index for judgments keyset pagination
--- INCLUDE (deleted_at) allows counting active/deleted without heap access
-CREATE INDEX idx_judgments_updated_id ON judgments (updated_at, id) INCLUDE (deleted_at);
+CREATE INDEX idx_judgments_updated_id ON judgments (updated_at, id);
 
 -- PostgreSQL: Composite covering index for articles keyset pagination
--- Articles have no deleted_at, so just (updated_at, id) is sufficient
 CREATE INDEX idx_articles_updated_id ON articles (updated_at, id);
-
--- PostgreSQL: Optional index for tombstone-specific queries
-CREATE INDEX idx_judgments_deleted_updated ON judgments (deleted_at, updated_at)
-  WHERE deleted_at IS NOT NULL;
 ```
 
 **Prod note:** use `CREATE INDEX CONCURRENTLY` (can't run inside a transaction).
 
 **Why covering indexes?**
 
-The batch query selects `(id, updated_at, deleted_at)`. Without `INCLUDE (deleted_at)`:
-
-- Index scan finds rows matching keyset condition
-- For each row, PostgreSQL must fetch from heap to read `deleted_at`
-- With 50k rows per batch, this adds 50k random heap reads
-
-With `INCLUDE (deleted_at)`:
-
-- All needed columns are in the index
-- Pure index-only scan, no heap access
-- ~10x faster for large batches
+The batch query selects `(id, updated_at)` with `ORDER BY updated_at, id`. A composite `(updated_at, id)` index supports index-only scans (visibility-map dependent).
 
 **PG note:** index-only scan needs VACUUM/visibility map; otherwise heap fetches still happen.
 
@@ -195,7 +183,7 @@ Never count more than `BATCH_SIZE` (e.g., 50,000) rows in a single query. Use da
 
 1. **Timezone-safe timestamps:** Use `AT TIME ZONE 'UTC'` to ensure consistent UTC output (not `to_char(..., 'Z')` which can emit local time with literal 'Z')
 2. **COALESCE for nullable text:** `maxCursorAt` is nullable; use `COALESCE` to handle initial NULL state
-3. **Table-specific logic:** Articles have no `deleted_at`; only judgments track active/deleted counts
+3. **Hard deletes:** no deleted-row logic in counters
 4. **CTE for performance:** Use SQL CTE to compute counts + watermark in-database (don't fetch 50k rows to app)
 5. **Heartbeat for stale detection:** Update `lastUpdatedAt` each batch so stale job detection works for long recounts
 
@@ -205,12 +193,8 @@ const STALE_JOB_MINUTES = 30
 
 // Table-specific configuration
 const TABLE_CONFIG = {
-  articles: {
-    table: articles,
-    hasDeletedAt: false, // articles table has no deleted_at column
-    updatedAtCol: 'updated_at',
-  },
-  judgments: {table: judgments, hasDeletedAt: true, updatedAtCol: 'updated_at'},
+  articles: {table: articles, updatedAtCol: 'updated_at'},
+  judgments: {table: judgments, updatedAtCol: 'updated_at'},
 } as const
 
 const countInBatches = async (tableName: 'articles' | 'judgments', db: DrizzleClient) => {
@@ -273,8 +257,6 @@ const countInBatches = async (tableName: 'articles' | 'judgments', db: DrizzleCl
       // This avoids transferring 50k rows per batch to the application
       const batchResult = await db.execute<{
         total_count: number
-        active_count: number
-        deleted_count: number
         last_updated_at: string | null
         last_id: string | null
       }>(sql`
@@ -282,7 +264,6 @@ const countInBatches = async (tableName: 'articles' | 'judgments', db: DrizzleCl
           SELECT
             id,
             updated_at
-            ${config.hasDeletedAt ? sql`, deleted_at` : sql``}
           FROM ${sql.identifier(tableName)}
           WHERE (updated_at, id) > (
             COALESCE(${currentWatermark.ts}::timestamptz, '-infinity'::timestamptz),
@@ -293,13 +274,6 @@ const countInBatches = async (tableName: 'articles' | 'judgments', db: DrizzleCl
         )
         SELECT
           COUNT(*)::int AS total_count,
-          ${
-            config.hasDeletedAt
-              ? sql`COUNT(*) FILTER (WHERE deleted_at IS NULL)::int AS active_count,
-                 COUNT(*) FILTER (WHERE deleted_at IS NOT NULL)::int AS deleted_count,`
-              : sql`COUNT(*)::int AS active_count,
-                 0 AS deleted_count,`
-          }
           (SELECT to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') FROM batch ORDER BY updated_at DESC, id DESC LIMIT 1) AS last_updated_at,
           (SELECT id::text FROM batch ORDER BY updated_at DESC, id DESC LIMIT 1) AS last_id
         FROM batch
@@ -316,8 +290,6 @@ const countInBatches = async (tableName: 'articles' | 'judgments', db: DrizzleCl
           .update(pgChSyncStats)
           .set({
             totalCount: sql`${pgChSyncStats.totalCount} + ${row.total_count}`,
-            activeCount: sql`${pgChSyncStats.activeCount} + ${row.active_count}`,
-            deletedCount: sql`${pgChSyncStats.deletedCount} + ${row.deleted_count}`,
             watermarkTs: newWatermark.ts,
             watermarkId: newWatermark.id,
             watermarkCursorCol: 'updated_at',
@@ -367,7 +339,7 @@ const countInBatches = async (tableName: 'articles' | 'judgments', db: DrizzleCl
 | **µs precision**               | Timestamps stored as ISO strings via `AT TIME ZONE 'UTC'` + `to_char`  |
 | **Progress visibility**        | `jobCurrentBatch` and `jobRowsCounted` updated after each batch        |
 | **Heartbeat**                  | `lastUpdatedAt` updated each batch; stale = no heartbeat for 30 min    |
-| **Table-specific logic**       | `TABLE_CONFIG` defines which tables have `deleted_at`; articles don't  |
+| **Table-specific logic**       | None for deletes (hard deletes; no `deleted_at`)                       |
 | **Performance**                | CTE computes counts in-database; no 50k row transfers to app           |
 
 ### Stale Job Detection (Heartbeat-Based)
@@ -419,8 +391,6 @@ Returns current cached counts and health metrics from `pgChSyncStats` table.
     articles: {
       pg: {
         total: 1234567,        // approximate
-        active: 1234567,       // approximate
-        deleted: 0,            // approximate
         uniqueCount: 1234567,  // accurate (from last full recount)
         uniqueCountAge: '2d',  // how old is uniqueCount
         cursorCol: 'updated_at',
@@ -428,8 +398,6 @@ Returns current cached counts and health metrics from `pgChSyncStats` table.
       },
       ch: {
         total: 1234650,        // may be > PG due to unmerged duplicates
-        active: 1234500,
-        deleted: 150,
         uniqueCount: 1234500,  // from uniqExact (on-demand)
         cursorCol: 'updated_at',
         maxCursorAt: '2026-01-24T09:30:00.456789Z',
@@ -540,8 +508,7 @@ const chRows = await clickhouseClient.query({
   query: `
     SELECT
       id,
-      argMax(articleTitle, updatedAt) as articleTitle,
-      argMax(deletedAt, updatedAt) as deletedAt
+      argMax(articleTitle, updatedAt) as articleTitle
     FROM forska.judgments
     WHERE id IN ({ids:Array(String)})
     GROUP BY id
@@ -641,8 +608,6 @@ const result = await clickhouseClient.query({
   query: `
     SELECT
       count(*) as totalCount,
-      countIf(deletedAt IS NULL) as activeCount,
-      countIf(deletedAt IS NOT NULL) as deletedCount,
       max(${cursorCol}) as maxCursorAt
     FROM forska.judgments
   `,
@@ -823,7 +788,7 @@ Dedup drift: 150 rows — merge pending (count(*) - uniqCombined)
 3. [x] Add `pgChSyncStats` table to Drizzle schema (with job\* columns + heartbeat)
 4. [ ] Generate and run migration
 5. [x] Add composite covering indexes:
-   - `judgments (updated_at, id) INCLUDE (deleted_at)`
+   - `judgments (updated_at, id)`
    - `articles (updated_at, id)`
 6. [x] Create `GET /api/admin/sync-stats` endpoint
 7. [x] Create `POST /api/admin/refresh-sync-stats` with DB-persisted job state
@@ -900,7 +865,7 @@ src/
 7. **µs precision**: Store as ISO string with `AT TIME ZONE 'UTC'` + `to_char(..., 'US')`, never JS Date
 8. **Multi-instance deployment**: Job state in DB, not memory; all instances see same progress
 9. **Retroactive backfills**: Rows with old `updatedAt` skip watermark; schedule full recount after backfills
-10. **Articles vs judgments schema**: Articles have no `deleted_at`; use `TABLE_CONFIG` for table-specific logic
+10. **Articles vs judgments schema**: CH snake_case vs camelCase; use `TABLE_CONFIG` for cursor col names
 11. **CH judgments pre-Phase-1**: No `updatedAt` column; fall back to `createdAt` (misses updates)
 12. **Long-running recount**: Heartbeat keeps job alive; don't misclassify as crashed based on start time alone
 

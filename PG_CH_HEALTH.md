@@ -1,9 +1,14 @@
 # Plan: PostgreSQL ↔ ClickHouse Sync Health
 
+## Policy (Hard Deletes)
+
+- PG `articles` + `judgments`: hard delete rows (no soft delete / no `deleted_at`)
+- CH: live-only replica; deletes require write-path CH delete + delete log + periodic id diff/reconcile
+
 ## Recent Fixes (Done)
 
 - [x] Fix CH DateTime parsing (UTC; no `new Date(str)` / `+ 'Z'`)
-- [x] Temp: filter `deletedAt IS NULL` in CH query layer (until delete-only table)
+- [x] Temp: filter live-only rows in CH query layer
 - [x] Normalize CH `quotes` to `string[]` (JSON string/array)
 - [x] Fix CH inserts sending `null` to non-null cols (`articleTitle`)
 - [x] Doc: CH delete syntax/params (no `?`; use `query_params`)
@@ -30,16 +35,15 @@ PostgreSQL is source of truth. Target: CH holds only live rows (no tombstones) v
 |-----------|-----------|
 | PG insert | INSERT into CH |
 | PG update | DELETE + INSERT in CH |
-| PG judgment soft-delete (`deletedAt`) | DELETE FROM CH |
+| PG judgment delete | DELETE FROM CH |
 | PG article hard-delete | DELETE FROM CH |
 
 Requires CH delete support + monotonic watermark not derived from table (deletes can drop `max(updatedAt)`). Deletes async → temp dupes/count mismatch.
 
 Delete propagation (both paths):
-- Write-path (API): when deleting in PG → issue CH delete by id (best-effort; retryable)
-- Backfill: also apply deletes missed by write-path
-  - Judgments: read `deletedAt` since watermark → CH delete
-  - Articles: hard-deletes need a PG delete log (or periodic id diff) → CH delete
+- Write-path (API): on PG delete → issue CH delete by id (best-effort) + append to PG delete log (same transaction)
+- Backfill: replay delete log (retry until issued; track mutation backlog)
+- Reconcile: periodic PG↔CH id/hash diff by time buckets; if mismatch → targeted resync + replay deletes
 
 ---
 
@@ -49,7 +53,7 @@ Sync routes:
 
 | Route | Purpose |
 |-------|---------|
-| `POST /api/admin/sync-judgments-to-clickhouse` | Unified sync (keyset pagination on `updatedAt,id`; handles upserts+deletes) |
+| `POST /api/admin/sync-judgments-to-clickhouse` | Unified upsert sync (keyset pagination on `updatedAt,id`; deletes handled via delete log/diff) |
 | `POST /api/admin/sync-articles-to-clickhouse` | Sync articles by `updated_at` |
 | `GET /api/admin/clickhouse-sync-status` | Health check comparing counts/timestamps |
 
@@ -126,8 +130,8 @@ ORDER BY (articleId, promptId, modelId, id);
 ```
 
 - [x] Update `scripts/clickhouse-setup.sql`
-- [x] Remove S3Queue/MV (or make it write new schema; no `deletedAt`)
-- [x] Remove `deletedAt` column usage in code (filters + selects + types + writers)
+- [x] Remove S3Queue/MV (or make it write new schema)
+- [ ] Drop PG `judgments.deleted_at` + remove soft-delete usage (switch to hard deletes)
 - [x] Add skip index on `id` (bloom) for deletes/verify
 - [x] Drop old table, rename new table
 - [ ] Full resync from PG (UI backfill works if table empty)
@@ -141,9 +145,8 @@ ORDER BY (articleId, promptId, modelId, id);
 - [x] Create `POST /api/admin/sync-judgments-to-clickhouse`:
   1. Get watermark from durable state (table/kv), not `max(updatedAt)` on `forska.judgments`
   2. Fetch PG rows where `(updatedAt, id) > watermark`
-  3. For each row:
-     - If `deletedAt IS NOT NULL`: `ALTER TABLE forska.judgments DELETE WHERE id = {id:String}`
-     - Else: `ALTER TABLE ... DELETE WHERE id = {id:String}` then `INSERT`
+  3. For each row: `ALTER TABLE ... DELETE WHERE id = {id:String}` then `INSERT`
+  4. Deletes: not derivable from PG table scan after hard delete → use delete log (or periodic id diff)
 - [x] Use keyset pagination `(updatedAt, id)` — no OFFSET
 - [x] Tie-breaker ordering must match PG+CH (UUID vs String): use `id::text` in PG (or CH `UUID`)
 - [x] Batch deletes/inserts (avoid per-row mutations); monitor `system.mutations` backlog
@@ -154,10 +157,10 @@ ORDER BY (articleId, promptId, modelId, id);
 ### Phase 3: Improve Health Check
 
 - [x] Compare counts:
-  - PG: `COUNT(*) WHERE deletedAt IS NULL`
+  - PG: `COUNT(*)`
   - CH: `COUNT(*)`
   - Should match
-- [x] Compare `max(updatedAt)` with same predicate (PG `deletedAt IS NULL`, CH is live-only)
+- [x] Compare `max(updatedAt)`
 - [x] If `system.mutations` has pending deletes, report `status=mutating` (avoid false alerts)
 - [x] Avoid parsing CH datetime strings in JS; prefer epoch:
   - CH: `toUnixTimestamp64Milli(max(updatedAt)) AS maxUpdatedAtMs`
@@ -194,7 +197,7 @@ ORDER BY (articleId, promptId, modelId, id);
 
 - [ ] New judgments sync correctly
 - [ ] Updated judgments sync correctly (old row deleted, new inserted)
-- [ ] Soft-deleted judgments removed from CH
+- [ ] Deleted judgments removed from CH
 - [ ] Deleted articles removed from CH
 - [ ] Health check shows matching counts
 - [ ] Keyset pagination handles cursor ties correctly
