@@ -12,6 +12,10 @@ const quoteIdentifier = (identifier: string): string => {
   return `"${identifier.replaceAll('"', '""')}"`
 }
 
+const quoteLiteral = (value: string): string => {
+  return `'${value.replaceAll("'", "''")}'`
+}
+
 const isSafePgIdentifier = (value: string): boolean => {
   return /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(value)
 }
@@ -60,11 +64,12 @@ const ensurePeerdbRole = async (client: Client, roleName: string, password: stri
 
   const roleIdent = quoteIdentifier(roleName)
   const dbIdent = quoteIdentifier(dbName)
+  const passwordLiteral = quoteLiteral(password)
 
   if (existing.rowCount) {
-    await client.query(`ALTER ROLE ${roleIdent} WITH LOGIN REPLICATION PASSWORD $1`, [password])
+    await client.query(`ALTER ROLE ${roleIdent} WITH LOGIN REPLICATION PASSWORD ${passwordLiteral}`)
   } else {
-    await client.query(`CREATE ROLE ${roleIdent} WITH LOGIN REPLICATION PASSWORD $1`, [password])
+    await client.query(`CREATE ROLE ${roleIdent} WITH LOGIN REPLICATION PASSWORD ${passwordLiteral}`)
   }
 
   await client.query(`GRANT CONNECT ON DATABASE ${dbIdent} TO ${roleIdent}`)
