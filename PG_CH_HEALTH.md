@@ -235,8 +235,8 @@ Self-hosted PeerDB for real-time PG→CH replication. Uses **ReplacingMergeTree 
 #### 6.2 PeerDB Infrastructure
 
 - [ ] Deploy PeerDB stack (Docker Compose or k8s)
-- [ ] Stack includes MinIO for staging (bulk load pattern: PG → MinIO → CH)
-- [ ] Ensure CH can reach MinIO endpoint (network config)
+- [ ] S3-compatible storage for staging (bulk load pattern: PG → S3 → CH); try SeaweedFS (`weed s3`) first, fall back to MinIO
+- [ ] Ensure CH can reach S3 endpoint (network config)
 - [ ] Configure PeerDB mirror: PG → CH (`forska.judgments`, `forska.articles`)
 - [ ] Tune: batch size, parallelism, initial snapshot strategy
 
