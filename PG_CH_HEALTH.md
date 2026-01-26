@@ -196,10 +196,68 @@ ORDER BY (articleId, promptId, modelId, id);
 
 - [x] Decision: **Option A** — accept drift (no implementation needed)
 
-### Phase 6: Automated Sync (Optional)
+### Phase 6: PeerDB CDC (Replaces Manual Sync)
 
-- [ ] Cron job to run sync periodically
-- [ ] Alert when count mismatch detected
+Self-hosted PeerDB for real-time PG→CH replication. Removes need for manual sync endpoints + cron.
+
+#### 6.1 Setup
+
+- [ ] Deploy PeerDB (Docker Compose or k8s); requires PG logical replication enabled
+- [ ] Configure PG publication for `articles` + `judgments` tables
+- [ ] Create PeerDB mirror: PG → CH (`forska.judgments`, `forska.articles`)
+- [ ] Tune PeerDB settings: batch size, parallelism, initial snapshot strategy
+
+#### 6.2 Schema Alignment
+
+- [ ] Ensure CH schema matches PeerDB expectations (column types, nullability)
+- [ ] Handle `quotes` array: PeerDB may need custom transform (PG `text[]` → CH `Array(String)`)
+- [ ] Handle denormalized cols (`articleTitle`, etc.): decide if PeerDB replicates raw or if we keep denorm logic
+
+#### 6.3 Delete Handling
+
+- [ ] PeerDB supports hard deletes via logical replication (DELETE events → CH DELETE)
+- [ ] Remove PG delete log table (no longer needed)
+- [ ] Remove delete replay job
+- [ ] Remove periodic id-diff reconcile (PeerDB handles consistency)
+
+#### 6.4 Remove Manual Sync Code
+
+| To Remove | File |
+|-----------|------|
+| `POST /api/admin/sync-judgments-to-clickhouse` | `AdminInvestigateRoutes.ts` |
+| `POST /api/admin/sync-articles-to-clickhouse` | `AdminInvestigateRoutes.ts` |
+| `scripts/syncArticlesToClickHouse.ts` | scripts |
+| Keyset pagination helpers | shared utils |
+| Watermark state management | if stored externally |
+
+#### 6.5 Health Check Updates
+
+- [ ] Monitor PeerDB lag (`peerdb.lag_seconds` or similar metric)
+- [ ] Monitor PeerDB slot replication lag in PG (`pg_replication_slots`)
+- [ ] Keep count comparison (PG vs CH) as sanity check
+- [ ] Alert on PeerDB mirror failure or slot inactive
+
+#### 6.6 Rollback Plan
+
+If PeerDB fails:
+1. Re-enable manual sync endpoints
+2. Truncate CH tables
+3. Full resync via old backfill
+4. Drop PeerDB publication + slot
+
+#### 6.7 Tradeoffs
+
+| Pro | Con |
+|-----|-----|
+| Real-time sync (no lag) | Extra infra (PeerDB service) |
+| Automatic delete propagation | Logical replication slot consumes WAL |
+| Less custom code | Schema changes need coordination |
+| Built-in monitoring | Learning curve |
+
+### Phase 7: Automated Alerts (Optional)
+
+- [ ] Alert when PeerDB lag > threshold
+- [ ] Alert when count mismatch detected (fallback sanity check)
 
 ---
 
