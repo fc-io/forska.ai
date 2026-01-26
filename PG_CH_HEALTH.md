@@ -308,16 +308,7 @@ GROUP BY id;
 - [ ] Alert on PeerDB mirror failure or slot inactive
 - [ ] Alert on slot lag > threshold (WAL accumulating)
 
-#### 6.7 Rollback Plan
-
-If PeerDB fails:
-1. Stop PeerDB mirror
-2. Re-enable manual sync endpoints (revert code)
-3. Recreate CH tables with MergeTree (drop ReplacingMergeTree + PeerDB cols)
-4. Full resync via old backfill
-5. Drop PG publication + replication slot
-
-#### 6.8 Tradeoffs
+#### 6.7 Tradeoffs
 
 | Pro | Con |
 |-----|-----|
