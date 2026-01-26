@@ -39,21 +39,6 @@ const fetchDiagnosis = async (projectId: string): Promise<DiagnoseResult> => {
   return response.json() as Promise<DiagnoseResult>
 }
 
-type BackfillResult = {synced: number; message?: string; error?: string}
-
-type ArticleSyncResult = {syncedRows: number; lastUpdatedAt: string | null; durationMs: number}
-
-const syncArticlesToClickHouse = async (): Promise<ArticleSyncResult> => {
-  const response = await fetch(`${env.VITE_SERVER_API}/api/admin/sync-articles-to-clickhouse`, {
-    method: 'POST',
-    credentials: 'include',
-  })
-  if (!response.ok) {
-    throw new Error('Failed to sync articles')
-  }
-  return response.json() as Promise<ArticleSyncResult>
-}
-
 const fetchProjects = async (includeArchived: boolean): Promise<Project[]> => {
   const [activeRes, archivedRes] = await Promise.all([
     fetch(`${env.VITE_SERVER_API}/api/projects`, {credentials: 'include'}),
@@ -73,29 +58,12 @@ const fetchProjects = async (includeArchived: boolean): Promise<Project[]> => {
   ]
 }
 
-const backfillProjectJudgments = async (projectId: string): Promise<BackfillResult> => {
-  const response = await fetch(`${env.VITE_SERVER_API}/api/admin/backfill-project-judgments`, {
-    method: 'POST',
-    credentials: 'include',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({projectId}),
-  })
-  if (!response.ok) {
-    throw new Error('Failed to backfill')
-  }
-  return response.json() as Promise<BackfillResult>
-}
-
 const AdminDiagnoseUnassessed = () => {
   const [selectedProjectId, setSelectedProjectId] = createSignal<string | null>(null)
   const [includeArchived, setIncludeArchived] = createSignal(false)
   const [loading, setLoading] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
   const [result, setResult] = createSignal<DiagnoseResult | null>(null)
-  const [backfilling, setBackfilling] = createSignal(false)
-  const [backfillResult, setBackfillResult] = createSignal<BackfillResult | null>(null)
-  const [syncingArticles, setSyncingArticles] = createSignal(false)
-  const [articleSyncResult, setArticleSyncResult] = createSignal<ArticleSyncResult | null>(null)
 
   const projectsQuery = useQuery(() => {
     return {
@@ -323,46 +291,10 @@ const AdminDiagnoseUnassessed = () => {
                       <p class="text-yellow-700 font-medium">
                         Missing {r().analysis.missingInClickhouse.toLocaleString()} judgments in ClickHouse
                       </p>
-                      <p class="text-sm text-yellow-600 mt-1 mb-3">
-                        These judgments exist in PostgreSQL but not in ClickHouse. Click below to sync them.
+                      <p class="text-sm text-yellow-600 mt-1">
+                        These judgments exist in PostgreSQL but not in ClickHouse. PeerDB is responsible for syncing;
+                        check `/admin/sync-stats` for lag and health.
                       </p>
-                      <button
-                        onClick={() => {
-                          void (async () => {
-                            setBackfilling(true)
-                            setBackfillResult(null)
-                            try {
-                              const res = await backfillProjectJudgments(r().project.id)
-                              setBackfillResult(res)
-                              if (res.synced > 0) {
-                                void handleDiagnose()
-                              }
-                            } catch (err) {
-                              setBackfillResult({
-                                synced: 0,
-                                error: err instanceof Error ? err.message : 'Unknown error',
-                              })
-                            } finally {
-                              setBackfilling(false)
-                            }
-                          })()
-                        }}
-                        disabled={backfilling()}
-                        class="px-4 py-2 bg-yellow-600 text-white rounded-md hover:bg-yellow-700 disabled:opacity-50 text-sm font-medium"
-                      >
-                        {backfilling() ? 'Syncing...' : 'Sync Missing Judgments to ClickHouse'}
-                      </button>
-                      <Show when={backfillResult()}>
-                        {(res) => {
-                          return (
-                            <div
-                              class={`mt-3 p-2 rounded text-sm ${res().error ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}
-                            >
-                              {res().error ?? res().message ?? `Synced ${res().synced} judgments`}
-                            </div>
-                          )
-                        }}
-                      </Show>
                     </div>
                   </Show>
 
@@ -374,41 +306,9 @@ const AdminDiagnoseUnassessed = () => {
                       </p>
                       <p class="text-sm text-red-600 mt-1 mb-3">
                         Articles exist in PostgreSQL but not in ClickHouse. The job uses ClickHouse to find unassessed
-                        articles, so these won't be picked up! Click below to sync articles.
+                        articles, so these won't be picked up. PeerDB is responsible for syncing; check
+                        `/admin/sync-stats`.
                       </p>
-                      <button
-                        onClick={() => {
-                          void (async () => {
-                            setSyncingArticles(true)
-                            setArticleSyncResult(null)
-                            try {
-                              const res = await syncArticlesToClickHouse()
-                              setArticleSyncResult(res)
-                              if (res.syncedRows > 0) {
-                                void handleDiagnose()
-                              }
-                            } catch (err) {
-                              setError(err instanceof Error ? err.message : 'Failed to sync articles')
-                            } finally {
-                              setSyncingArticles(false)
-                            }
-                          })()
-                        }}
-                        disabled={syncingArticles()}
-                        class="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 disabled:opacity-50 text-sm font-medium"
-                      >
-                        {syncingArticles() ? 'Syncing Articles...' : 'Sync Articles to ClickHouse'}
-                      </button>
-                      <Show when={articleSyncResult()}>
-                        {(res) => {
-                          return (
-                            <div class="mt-3 p-2 rounded text-sm bg-green-100 text-green-700">
-                              Synced {res().syncedRows.toLocaleString()} articles in{' '}
-                              {(res().durationMs / 1000).toFixed(1)}s
-                            </div>
-                          )
-                        }}
-                      </Show>
                     </div>
                   </Show>
 

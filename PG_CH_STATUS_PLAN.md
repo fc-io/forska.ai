@@ -4,10 +4,12 @@
 
 Admin page to monitor PG (source) ↔ CH (replica) consistency + PeerDB CDC health. Shows counts, cursor lag, PeerDB lag/slot health, CH mutation backlog.
 
-## Policy (Hard Deletes)
+## Policy (Deletes)
 
-- PG `articles` + `judgments`: hard delete (no `deleted_at`)
-- Sync status/counting: no `deleted_at IS NULL` filters
+- PG `articles`: hard delete
+- PG `judgments`: soft delete via `deleted_at`
+- CH `judgments`: view filters `deletedAt IS NULL` (live-only)
+- Sync status/diffs: compare live rows (PG active vs CH view)
 - Replication: PeerDB CDC (snapshot + logical repl) is primary
 - Deletes: CDC events → CH mutations; expect temporary mismatch while `system.mutations` pending
 
@@ -43,14 +45,12 @@ This plan addresses several subtle correctness and performance issues:
 ## Dependencies
 
 - **PG_CH_HEALTH.md Phase-6 (current):** PeerDB CDC for PG→CH (mirror health + lag)
-- **PG_CH_HEALTH.md Phase-1 (done):** CH judgments has `updatedAt` (fallback to `createdAt` if old schema)
-- **PG_CH_HEALTH.md Phase-5 (done):** `scripts/syncArticlesToClickHouse.ts` keyset `(updated_at, id)` (no OFFSET)
+- **CH schema:** `forska.judgments_raw` (sink) + `forska.judgments` (view with `updatedAt`)
 - **Invariant:** PG `updated_at` must bump on UPDATE; stable PKs required for CDC
 
 ## Pre-flight Checks
 
-- Run `scripts/clickhouse-setup.sql` (creates `forska` + `forska.judgments` + `forska.articles`)
-- Backfill `articles_stats`: `bun scripts/syncArticlesToClickHouse.ts --backfill-stats --from=YYYY-MM --to=YYYY-MM` (use `--rebuild` after deletes)
+- Run `scripts/clickhouse-setup.sql` (creates `forska` + `forska.articles` + `forska.judgments_raw` + `forska.judgments` view)
 - Seed 4 `pgChSyncStats` rows (locks no-op if missing)
 - CH counts from client are often strings; keep as string/BigInt (avoid `Number()` at 10M+)
 - Ensure CH DDL supports intended checks (ORDER BY / PARTITION); avoid keyset WHERE if not aligned
@@ -793,10 +793,7 @@ Dedup drift: 150 rows — merge pending (count(*) - uniqCombined)
 
 ### Phase 0: Prerequisites
 
-1. [x] **BLOCKING:** Complete PG_CH_HEALTH.md Phase-1 (add `updatedAt` to CH judgments)
-   - Until complete: judgments update-lag unavailable; only insert-lag via `createdAt`
-   - After migration: runtime detect column; force full recount/baseline when cursor col changes
-2. [x] **HIGH:** Fix `scripts/syncArticlesToClickHouse.ts` to keyset `(updated_at, id)` (no OFFSET)
+1. [x] **BLOCKING:** CH schema compatible with PeerDB sinks (`scripts/clickhouse-setup.sql`)
 
 ### Phase 1: Database & API
 
@@ -866,7 +863,7 @@ src/
 │       └── AdminSyncStatsRoutes.ts  # New route file
 ├── services/
 │   └── clickhouse/
-│       └── ensureClickhouseArticlesTable.ts
+│       └── ensureClickhouseSchema.ts
 ├── app/
 │   └── routes/
 │       └── +admin/

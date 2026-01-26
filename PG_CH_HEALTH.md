@@ -1,13 +1,15 @@
-# Plan: PostgreSQL ↔ ClickHouse Sync Health
-
-Decision: PeerDB CDC for PG→CH. Phases 1–5 below = legacy manual sync (reference/rollback only).
+# Plan: PG → CH (PeerDB) Health
 
 ## Policy
 
-- PG `articles` + `judgments`: hard delete (no `deleted_at`)
-- CH: live-only replica (no tombstones). Deletes = async mutations.
+- PeerDB is sole writer to CH (no manual sync routes/scripts, no app-side CH deletes)
+- PG keeps `judgments.deleted_at` for now; drop later after stable PeerDB
+- CH schema:
+  - `forska.articles` = PeerDB sink (PG `articles`)
+  - `forska.judgments_raw` = PeerDB sink (PG `judgments`)
+  - `forska.judgments` = live-only view (filters `deleted_at`, joins `articles`)
 
-## Cutover Checklist (PeerDB)
+## Setup
 
 ## Recent Fixes (Done)
 
@@ -64,9 +66,12 @@ Delete propagation (current approach):
 - Backfill: replay delete log (retry until issued; track mutation backlog)
 - Reconcile: periodic PG↔CH id/hash diff by time buckets; if mismatch → targeted resync + replay deletes
 
----
+## Health Signals
 
-## Phase 6: PeerDB CDC (Current)
+- PeerDB mirror status + lag
+- PG slot active + WAL retention (`pg_replication_slots`)
+- CH mutation backlog/stuck (if PeerDB uses UPDATE/DELETE → `system.mutations`)
+- Slow sanity (on-demand): PG vs CH counts + sample verify
 
 ### 6.1 Setup
 

@@ -1,5 +1,7 @@
 # ARTICLE_IN_CH — MaterializedPostgreSQL plan
 
+LEGACY. Current PG→CH sync uses PeerDB; manual scripts/routes removed. See `PG_CH_HEALTH.md`.
+
 Goal: CH has *exact* project-scope articles + judgments state, continuously from Postgres, to power:
 - Jobs page: Unassessed Articles count (`/api/judgmentsjobs-unassessed-count`)
 - Project Reviews Unassessed page: list+count (`/api/articlesreviewsunassessed`)
@@ -582,7 +584,7 @@ WHERE slot_type = 'logical';
   - **Details**: See `config/clickhouse/INVESTIGATE_ARTICLE_MISMATCH.md`
 - [x] ~~Verify index on `pg.articles (article_updated_at, article_id)` exists~~ (N/A - MaterializedPostgreSQL does not replicate indexes; uses `ORDER BY tuple(id)` instead)
 - [x] **Monitor CH disk usage** after initial sync: 237 GiB (compressed columnar format)
-- [x] Create incremental sync script: `scripts/syncArticlesToClickHouse.ts`
+- [x] Use PeerDB CDC for ongoing PG→CH sync
 - [x] Update `forska_helpers.scoped_articles` view to use `forska.articles`
 
 **Phase 2 Status**: ✅ COMPLETE
@@ -596,7 +598,7 @@ WHERE slot_type = 'logical';
 - `pg.articles` - MaterializedPostgreSQL replica (incomplete, ~64% of rows, DO NOT USE)
 - `forska.articles` - MergeTree table with ReplacingMergeTree(updated_at), 100% synced
 - Excluded columns: `article_authors`, `original_data`, `full_text_assets` (null byte issues)
-- Incremental sync: `bun scripts/syncArticlesToClickHouse.ts`
+- Sync: PeerDB CDC (no scripts)
 
 **Documentation Created**:
 - `config/clickhouse/STATUS.md` - Current status and quick reference
@@ -638,11 +640,7 @@ WHERE slot_type = 'logical';
 ## Remaining Tasks (Post-Resolution)
 
 ### High Priority
-- [ ] **Set up cron job for periodic articles sync** (e.g., every 5 minutes)
-  ```bash
-  # Add to system cron or Elysia cron
-  bun scripts/syncArticlesToClickHouse.ts
-  ```
+- [ ] Ensure PeerDB mirror health + lag alerts
 - [ ] **Clean up incomplete `pg` database** (optional - uses 237 GiB disk)
   ```sql
   -- In ClickHouse (requires max_table_size_to_drop=0)

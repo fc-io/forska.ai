@@ -3,7 +3,7 @@ import {Elysia, t} from 'elysia'
 
 import {articles, judgments, pgChSyncStats} from '../../db/schema.ts'
 import {getClickhouseClient, pingClickhouse} from '../../services/clickhouse/clickhouseClient.ts'
-import {ensureClickhouseArticlesTable} from '../../services/clickhouse/ensureClickhouseArticlesTable.ts'
+import {ensureClickhouseSchema} from '../../services/clickhouse/ensureClickhouseSchema.ts'
 import {parseClickhouseDateTimeUtc} from '../../services/clickhouse/parseClickhouseDateTimeUtc.ts'
 import {requireAdminAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
@@ -354,9 +354,7 @@ const fetchClickhouseTableStats = async (input: {
   cursorCol: 'updated_at' | 'createdAt' | 'updatedAt'
   maxCursorAt: string | null
 }> => {
-  if (input.table === 'articles') {
-    await ensureClickhouseArticlesTable()
-  }
+  await ensureClickhouseSchema()
 
   const client = getClickhouseClient()
 
@@ -576,9 +574,7 @@ const getSampleVerifyResult = async (input: {
   sampleSize: number
 }) => {
   const db = getDatabase()
-  if (input.table === 'articles') {
-    await ensureClickhouseArticlesTable()
-  }
+  await ensureClickhouseSchema()
   const idsResult = await db.execute<{id: string}>(getSampleIdsQuery(input))
   const sampleIds = idsResult.rows.map((r) => {
     return r.id
@@ -784,9 +780,7 @@ const getFieldMismatches = (
 
 const getPartitionCoverage = async (input: {table: 'articles' | 'judgments'; months: number}) => {
   const db = getDatabase()
-  if (input.table === 'articles') {
-    await ensureClickhouseArticlesTable()
-  }
+  await ensureClickhouseSchema()
   const pgTable = input.table === 'articles' ? sql.identifier('articles') : sql.identifier('judgments')
   const pgFilter = input.table === 'judgments' ? sql`AND deleted_at IS NULL` : sql``
 
@@ -1076,13 +1070,4 @@ export const adminSyncStatsRoutes = new Elysia()
       return {data: result}
     },
     {body: t.Object({table: t.Union([t.Literal('articles'), t.Literal('judgments')]), months: t.Optional(t.Number())})},
-  )
-  .post(
-    '/api/admin/sync-deleted-articles-to-clickhouse',
-    async ({body}) => {
-      const {syncDeletedArticlesToClickHouse} = await import('../../../scripts/syncDeletedArticlesToClickHouse.ts')
-      const result = await syncDeletedArticlesToClickHouse(body ?? undefined)
-      return {data: result}
-    },
-    {body: t.Optional(t.Object({batchSize: t.Optional(t.Number()), maxBatches: t.Optional(t.Number())}))},
   )

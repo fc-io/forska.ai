@@ -10,23 +10,9 @@ import {
   projects,
   prompts,
 } from '../../db/schema.ts'
-import {getClickhouseClient} from '../../services/clickhouse/clickhouseClient.ts'
 import {requireAdminAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
-
-const deleteArticleFromClickhouseBestEffort = async (id: string): Promise<boolean> => {
-  const client = getClickhouseClient()
-  return client
-    .command({query: 'ALTER TABLE forska.articles DELETE WHERE id = {id:String}', query_params: {id}})
-    .then(() => {
-      return true
-    })
-    .catch((error) => {
-      console.error('[ClickHouse] Failed to delete article:', error)
-      return false
-    })
-}
 
 export const articlesRoutes = new Elysia()
   .use(withErrorHandler())
@@ -105,13 +91,9 @@ export const articlesRoutes = new Elysia()
   .post('/api/articles/pdf-fetch-reset', () => {
     const db = getDatabase()
 
-    db.update(articles)
-      .set({
-        fullTextFetchedAt: null,
-        fullTextPDF: null,
-        fullTextSource: null,
-        fullTextOriginalFormat: null,
-      })
+    void db
+      .update(articles)
+      .set({fullTextFetchedAt: null, fullTextPDF: null, fullTextSource: null, fullTextOriginalFormat: null})
       .where(sql`${articles.fullTextPDF} LIKE 'assets/article_pdfs/%' AND ${articles.fullTextPdfUploadedBy} IS NULL`)
       .then((result) => {
         console.log(`[pdf-fetch-reset] Reset ${result.rowCount ?? 0} articles`)
@@ -361,10 +343,7 @@ export const articlesRoutes = new Elysia()
       }
 
       await db.delete(articles).where(eq(articles.id, id))
-
-      const clickhouseDeleteIssued = await deleteArticleFromClickhouseBestEffort(id)
-
-      return {success: true, id, clickhouseDeleteIssued}
+      return {success: true, id}
     },
     {params: t.Object({id: t.String()})},
   )

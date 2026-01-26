@@ -98,15 +98,8 @@ Remove Parquet entirely. PostgreSQL is the source of truth; ClickHouse is synced
 
 ## ClickHouse Sync (Post-Removal)
 
-ClickHouse data is synced manually via unified sync route:
-
-| Route                                         | Purpose                                                    |
-| --------------------------------------------- | ---------------------------------------------------------- |
-| `POST /api/admin/sync-judgments-to-clickhouse` | Unified sync (keyset pagination; handles upserts+deletes) |
-
-**For a full resync:** Truncate the ClickHouse table, then run sync.
+ClickHouse data is synced via PeerDB CDC (snapshot + logical repl). No manual sync endpoints.
 
 ### Known Limitations
 
-- **No real-time sync:** ClickHouse data lags behind PostgreSQL until sync is run
-- **Deletes are async:** CH deletes via mutations; may have brief count mismatches
+- **Deletes may be async:** if PeerDB uses CH UPDATE/DELETE mutations, expect brief mismatches while `system.mutations` pending

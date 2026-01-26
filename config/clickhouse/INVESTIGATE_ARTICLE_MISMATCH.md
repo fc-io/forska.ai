@@ -13,20 +13,19 @@ MaterializedPostgreSQL engine has a bug with large table initial snapshots. Mult
 - 2nd attempt: 6,737,127 rows (64%)
 
 ### Solution
-Created a standard MergeTree table (`forska.articles`) and synced via batch INSERT from `postgresql()` function:
+Created a standard MergeTree table (`forska.articles`) and synced via batch INSERT from `postgresql()` function (legacy):
 1. Created `forska.articles` with ReplacingMergeTree(updated_at)
 2. Full sync via: `INSERT INTO forska.articles SELECT ... FROM postgresql('db:5432', ...)`
 3. Sync completed in ~3 minutes
-4. Incremental sync script: `scripts/syncArticlesToClickHouse.ts`
+4. PeerDB CDC now handles ongoing PG→CH sync (no scripts)
 
 ### Changes Made
 - Created `forska.articles` MergeTree table (replacing unreliable `pg.articles`)
 - Updated `forska_helpers.scoped_articles` view to use `forska.articles`
-- Added `scripts/syncArticlesToClickHouse.ts` for incremental sync
-- Note: Excluded `article_authors`, `original_data`, `full_text_assets` columns (array/JSON with potential null bytes)
+- PeerDB CDC is now the sync mechanism
 
 ### Next Steps
-- [ ] Set up cron job for periodic incremental sync (e.g., every 5 minutes)
+- [ ] Ensure PeerDB mirror health + lag alerts
 - [ ] Consider cleaning up incomplete `pg` database
 - [ ] Monitor memory usage on `scoped_articles` view queries
 

@@ -1,6 +1,7 @@
 import {getClickhouseClient} from './clickhouseClient.ts'
 
 const HEALTH_TABLES = ['articles', 'judgments'] as const
+const HEALTH_TABLE_MAP = {articles: 'articles', judgments: 'judgments_raw'} as const
 
 type HealthTable = (typeof HEALTH_TABLES)[number]
 
@@ -20,10 +21,7 @@ type PartsTopPartitionRow = {
   bytesOnDisk: string | number
 }
 
-type MergesSummaryRow = {
-  table: string
-  merges: string | number
-}
+type MergesSummaryRow = {table: string; merges: string | number}
 
 export type ClickhouseTableHealth = {
   table: HealthTable
@@ -35,35 +33,31 @@ export type ClickhouseTableHealth = {
   topPartitions: Array<{partition: string; parts: string; rows: string; bytesOnDisk: string}>
 }
 
-export type ClickhouseHealth = {
-  queriedAt: string
-  tables: Record<HealthTable, ClickhouseTableHealth>
+export type ClickhouseHealth = {queriedAt: string; tables: Record<HealthTable, ClickhouseTableHealth>}
+
+const toHealthTable = (table: string): HealthTable | null => {
+  if (table === HEALTH_TABLE_MAP.articles) return 'articles'
+  return table === HEALTH_TABLE_MAP.judgments ? 'judgments' : null
 }
 
 const toIntString = (value: unknown): string => {
-  return typeof value === 'string'
-    ? value
-    : typeof value === 'number'
-      ? String(Math.trunc(value))
-      : typeof value === 'bigint'
-        ? value.toString()
-        : String(value ?? '0')
+  if (typeof value === 'string') return value
+  if (typeof value === 'number') return String(Math.trunc(value))
+  if (typeof value === 'bigint') return value.toString()
+  return '0'
 }
 
 const emptyHealthForTable = (table: HealthTable): ClickhouseTableHealth => {
-  return {
-    table,
-    parts: '0',
-    rows: '0',
-    bytesOnDisk: '0',
-    bytesUncompressed: '0',
-    merges: '0',
-    topPartitions: [],
-  }
+  return {table, parts: '0', rows: '0', bytesOnDisk: '0', bytesUncompressed: '0', merges: '0', topPartitions: []}
 }
 
 export const getClickhouseHealth = async (): Promise<ClickhouseHealth> => {
   const client = getClickhouseClient()
+  const tableList = Object.values(HEALTH_TABLE_MAP)
+    .map((t) => {
+      return `'${t}'`
+    })
+    .join(', ')
 
   const partsSummaryQuery = `
     SELECT
@@ -73,7 +67,7 @@ export const getClickhouseHealth = async (): Promise<ClickhouseHealth> => {
       sum(bytes_on_disk) as bytesOnDisk,
       sum(data_uncompressed_bytes) as bytesUncompressed
     FROM system.parts
-    WHERE active AND database = 'forska' AND table IN ('articles', 'judgments')
+    WHERE active AND database = 'forska' AND table IN (${tableList})
     GROUP BY table
   `
 
@@ -85,7 +79,7 @@ export const getClickhouseHealth = async (): Promise<ClickhouseHealth> => {
       sum(rows) as rows,
       sum(bytes_on_disk) as bytesOnDisk
     FROM system.parts
-    WHERE active AND database = 'forska' AND table IN ('articles', 'judgments')
+    WHERE active AND database = 'forska' AND table IN (${tableList})
     GROUP BY table, partition
     ORDER BY table ASC, parts DESC
     LIMIT 5 BY table
@@ -96,7 +90,7 @@ export const getClickhouseHealth = async (): Promise<ClickhouseHealth> => {
       table,
       count() as merges
     FROM system.merges
-    WHERE database = 'forska' AND table IN ('articles', 'judgments')
+    WHERE database = 'forska' AND table IN (${tableList})
     GROUP BY table
   `
 
@@ -112,15 +106,18 @@ export const getClickhouseHealth = async (): Promise<ClickhouseHealth> => {
 
   const mergesByTable = mergesSummaryRows.reduce(
     (acc, row) => {
-      return {...acc, [row.table]: toIntString(row.merges)}
+      const table = toHealthTable(row.table)
+      return table ? {...acc, [table]: toIntString(row.merges)} : acc
     },
-    {} as Record<string, string>,
+    {} as Partial<Record<HealthTable, string>>,
   )
 
   const topPartitionsByTable = topPartitionsRows.reduce(
     (acc, row) => {
+      const table = toHealthTable(row.table)
+      if (!table) return acc
       const next = [
-        ...(acc[row.table] ?? []),
+        ...(acc[table] ?? []),
         {
           partition: row.partition,
           parts: toIntString(row.parts),
@@ -128,26 +125,28 @@ export const getClickhouseHealth = async (): Promise<ClickhouseHealth> => {
           bytesOnDisk: toIntString(row.bytesOnDisk),
         },
       ]
-      return {...acc, [row.table]: next}
+      return {...acc, [table]: next}
     },
-    {} as Record<string, Array<{partition: string; parts: string; rows: string; bytesOnDisk: string}>>,
+    {} as Partial<Record<HealthTable, Array<{partition: string; parts: string; rows: string; bytesOnDisk: string}>>>,
   )
 
   const healthByTable = partsSummaryRows.reduce(
     (acc, row) => {
-      const table = row.table as HealthTable
-      return {
-        ...acc,
-        [table]: {
-          table,
-          parts: toIntString(row.parts),
-          rows: toIntString(row.rows),
-          bytesOnDisk: toIntString(row.bytesOnDisk),
-          bytesUncompressed: toIntString(row.bytesUncompressed),
-          merges: mergesByTable[row.table] ?? '0',
-          topPartitions: topPartitionsByTable[row.table] ?? [],
-        },
-      }
+      const table = toHealthTable(row.table)
+      return table
+        ? {
+            ...acc,
+            [table]: {
+              table,
+              parts: toIntString(row.parts),
+              rows: toIntString(row.rows),
+              bytesOnDisk: toIntString(row.bytesOnDisk),
+              bytesUncompressed: toIntString(row.bytesUncompressed),
+              merges: mergesByTable[table] ?? '0',
+              topPartitions: topPartitionsByTable[table] ?? [],
+            },
+          }
+        : acc
     },
     {} as Partial<Record<HealthTable, ClickhouseTableHealth>>,
   )
@@ -162,4 +161,3 @@ export const getClickhouseHealth = async (): Promise<ClickhouseHealth> => {
     ),
   }
 }
-

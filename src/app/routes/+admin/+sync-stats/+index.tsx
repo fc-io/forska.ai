@@ -3,7 +3,6 @@ import {createFileRoute} from '@tanstack/solid-router'
 import {createMemo, createSignal, For, Match, Show, Switch} from 'solid-js'
 
 import {apiClient} from '../../../../services/apiClient.ts'
-import {env} from '../../../utils/client-env.ts'
 
 type SyncDirection = 'pg_ahead' | 'ch_ahead' | 'synced'
 
@@ -75,15 +74,6 @@ type PartitionCoverageResult = {
   summary: {totalPg: number; totalCh: number; missingMonths: string[]; status: 'partition_gap' | 'synced' | 'diff'}
 }
 
-type SyncDeletedArticlesResult = {
-  scannedIds: number
-  scannedBatches: number
-  orphanIdsFound: number
-  deleteCommandsIssued: number
-  durationMs: number
-  lastScannedId: string | null
-}
-
 const fetchSyncStats = async (): Promise<SyncStatsResponse> => {
   const response = await apiClient.api.admin['sync-stats'].get()
   if (response.error) throw new Error('Failed to fetch sync stats')
@@ -130,23 +120,6 @@ const partitionCoverageCheck = async (input: {
   if (response.error) throw new Error('Failed to run partition coverage check')
   if (!response.data) throw new Error('Failed to run partition coverage check')
   return response.data.data
-}
-
-const syncDeletedArticlesToClickHouse = async (input: {
-  batchSize: number
-  maxBatches: number
-}): Promise<SyncDeletedArticlesResult> => {
-  const response = await fetch(`${env.VITE_SERVER_API}/api/admin/sync-deleted-articles-to-clickhouse`, {
-    method: 'POST',
-    credentials: 'include',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({batchSize: input.batchSize, maxBatches: input.maxBatches}),
-  })
-  if (!response.ok) {
-    throw new Error('Failed to sync deleted articles')
-  }
-  const json = (await response.json()) as {data: SyncDeletedArticlesResult}
-  return json.data
 }
 
 const formatCount = (value: number | null | undefined): string => {
@@ -211,9 +184,6 @@ const AdminSyncStats = () => {
   const [fullRecount, setFullRecount] = createSignal(false)
   const [includeUniqueCount, setIncludeUniqueCount] = createSignal(false)
 
-  const [orphanBatchSize, setOrphanBatchSize] = createSignal(10_000)
-  const [orphanMaxBatches, setOrphanMaxBatches] = createSignal(25)
-
   const [sampleSize, setSampleSize] = createSignal(100)
   const [sampleType, setSampleType] = createSignal<'recent' | 'random' | 'deleted'>('recent')
 
@@ -262,15 +232,6 @@ const AdminSyncStats = () => {
     }
   })
 
-  const orphanCleanupMutation = useMutation(() => {
-    return {
-      mutationFn: syncDeletedArticlesToClickHouse,
-      onSuccess: () => {
-        void queryClient.invalidateQueries({queryKey: syncStatsQueryKey})
-      },
-    }
-  })
-
   const syncStatsData = createMemo(() => {
     return syncStatsQuery.isSuccess ? syncStatsQuery.data : null
   })
@@ -288,7 +249,6 @@ const AdminSyncStats = () => {
       ?? getErrorMessage(refreshMutation.error)
       ?? getErrorMessage(sampleVerifyMutation.error)
       ?? getErrorMessage(partitionCheckMutation.error)
-      ?? getErrorMessage(orphanCleanupMutation.error)
       ?? null
     )
   })
@@ -415,61 +375,6 @@ const AdminSyncStats = () => {
               />
               `uniqExact` (slow)
             </label>
-          </div>
-          <div class="flex flex-col items-end gap-2">
-            <div class="flex items-center gap-2 text-sm">
-              <label class="flex items-center gap-2">
-                <span class="text-gray-600">Batch</span>
-                <input
-                  type="number"
-                  value={orphanBatchSize()}
-                  min={1000}
-                  max={50000}
-                  onInput={(e) => {
-                    setOrphanBatchSize(Math.max(1000, Math.min(50000, Number(e.currentTarget.value) || 10_000)))
-                  }}
-                  class="w-24 px-2 py-1 border border-gray-300 rounded-md text-sm"
-                />
-              </label>
-              <label class="flex items-center gap-2">
-                <span class="text-gray-600">Batches</span>
-                <input
-                  type="number"
-                  value={orphanMaxBatches()}
-                  min={1}
-                  max={100000}
-                  onInput={(e) => {
-                    setOrphanMaxBatches(Math.max(1, Math.min(100000, Number(e.currentTarget.value) || 25)))
-                  }}
-                  class="w-24 px-2 py-1 border border-gray-300 rounded-md text-sm"
-                />
-              </label>
-              <button
-                onClick={() => {
-                  const confirmed = window.confirm(
-                    `Delete orphan articles from ClickHouse?\n\nThis scans ClickHouse IDs in batches and deletes any IDs missing in PostgreSQL.\n\nClickHouse deletes are async (mutations).`,
-                  )
-                  if (!confirmed) return
-                  orphanCleanupMutation.reset()
-                  void orphanCleanupMutation.mutateAsync({batchSize: orphanBatchSize(), maxBatches: orphanMaxBatches()})
-                }}
-                disabled={orphanCleanupMutation.isPending}
-                class="px-3 py-2 text-sm bg-red-600 text-white hover:bg-red-700 rounded-md disabled:opacity-50"
-              >
-                {orphanCleanupMutation.isPending ? 'Cleaning...' : 'Delete Orphans (Articles)'}
-              </button>
-            </div>
-            <Show when={orphanCleanupMutation.data}>
-              {(r) => {
-                return (
-                  <div class="text-xs text-gray-600">
-                    Scanned {r().scannedIds.toLocaleString()} ids ({r().scannedBatches} batches). Found{' '}
-                    {r().orphanIdsFound.toLocaleString()} orphans. Issued {r().deleteCommandsIssued.toLocaleString()}{' '}
-                    deletes in {(r().durationMs / 1000).toFixed(1)}s.
-                  </div>
-                )
-              }}
-            </Show>
           </div>
         </div>
       </div>
