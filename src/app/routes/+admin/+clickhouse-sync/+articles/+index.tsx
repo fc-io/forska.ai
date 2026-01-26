@@ -2,13 +2,13 @@ import {createMutation, useQuery, useQueryClient} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
 import {Match, Show, Suspense, Switch} from 'solid-js'
 
-import {apiClient} from '../../../../services/apiClient.ts'
-import {fetchSession} from '../../../../services/fetchSession.ts'
-import {handleApiResponse} from '../../../../services/utils/handleApiResponse.ts'
+import {apiClient} from '../../../../../services/apiClient.ts'
+import {fetchSession} from '../../../../../services/fetchSession.ts'
+import {handleApiResponse} from '../../../../../services/utils/handleApiResponse.ts'
 
-const fetchJudgmentsSyncStatus = async () => {
-  const response = await apiClient.api.admin['clickhouse-sync-status'].get()
-  return handleApiResponse(response, 'Failed to fetch judgments sync status')
+const fetchArticlesSyncStatus = async () => {
+  const response = await apiClient.api.admin['clickhouse-articles-sync-status'].get()
+  return handleApiResponse(response, 'Failed to fetch articles sync status')
 }
 
 const formatDate = (dateStr: string | null): string => {
@@ -28,7 +28,7 @@ const formatLag = (lagSeconds: number | null): string => {
           : `${Math.round(lagSeconds / 86400)}d`
 }
 
-const AdminClickhouseSync = () => {
+const AdminClickhouseArticlesSync = () => {
   const sessionQuery = useQuery(() => {
     return {queryKey: ['session'], queryFn: fetchSession}
   })
@@ -41,8 +41,8 @@ const AdminClickhouseSync = () => {
 
   const statusQuery = useQuery(() => {
     return {
-      queryKey: ['clickhouse-sync', 'judgments', 'status'],
-      queryFn: fetchJudgmentsSyncStatus,
+      queryKey: ['clickhouse-sync', 'articles', 'status'],
+      queryFn: fetchArticlesSyncStatus,
       staleTime: 1000 * 10,
       refetchOnWindowFocus: true,
     }
@@ -51,14 +51,11 @@ const AdminClickhouseSync = () => {
   const syncMutation = createMutation(() => {
     return {
       mutationFn: async () => {
-        const response = await apiClient.api.admin['sync-judgments-to-clickhouse'].post({
-          batchSize: 1000,
-          maxBatches: 10,
-        })
-        return handleApiResponse(response, 'Failed to sync judgments')
+        const response = await apiClient.api.admin['sync-articles-to-clickhouse'].post()
+        return handleApiResponse(response, 'Failed to sync articles')
       },
       onSuccess: () => {
-        void queryClient.invalidateQueries({queryKey: ['clickhouse-sync', 'judgments', 'status']})
+        void queryClient.invalidateQueries({queryKey: ['clickhouse-sync', 'articles', 'status']})
       },
     }
   })
@@ -97,19 +94,17 @@ const AdminClickhouseSync = () => {
           <div class="mb-8">
             <div class="flex items-center justify-between gap-4 flex-wrap">
               <div>
-                <h1 class="text-2xl font-bold">ClickHouse Sync — Judgments</h1>
-                <p class="text-sm text-gray-600 mt-1">
-                  Syncs PostgreSQL `judgments` into ClickHouse `forska.judgments`.
-                </p>
+                <h1 class="text-2xl font-bold">ClickHouse Sync — Articles</h1>
+                <p class="text-sm text-gray-600 mt-1">Syncs PostgreSQL `articles` into ClickHouse `forska.articles`.</p>
               </div>
               <div class="flex gap-2">
-                <span class="px-3 py-1 text-sm rounded-md bg-blue-600 text-white font-medium">Judgments</span>
                 <Link
-                  to="/admin/clickhouse-sync/articles"
+                  to="/admin/clickhouse-sync"
                   class="px-3 py-1 text-sm rounded-md bg-white border border-gray-200 text-gray-800 hover:bg-gray-50 font-medium"
                 >
-                  Articles
+                  Judgments
                 </Link>
+                <span class="px-3 py-1 text-sm rounded-md bg-blue-600 text-white font-medium">Articles</span>
               </div>
             </div>
           </div>
@@ -186,10 +181,13 @@ const AdminClickhouseSync = () => {
                         <div class="p-4 bg-gray-50 rounded-lg">
                           <h3 class="text-sm font-medium text-gray-500 mb-2">ClickHouse</h3>
                           <p class="text-lg font-semibold text-gray-900">
-                            {(s().clickhouse.count ?? 0).toLocaleString()} rows
+                            {(s().clickhouse.count ?? 0).toLocaleString()} unique ids
+                          </p>
+                          <p class="text-sm text-gray-700 mt-1">
+                            {(s().clickhouse.physicalCount ?? 0).toLocaleString()} physical rows
                           </p>
                           <p class="text-xs text-gray-600 mt-1">
-                            max(updatedAt): {formatDate(s().clickhouse.maxUpdatedAt)}
+                            max(updated_at): {formatDate(s().clickhouse.maxUpdatedAt)}
                           </p>
                         </div>
                       </div>
@@ -213,7 +211,7 @@ const AdminClickhouseSync = () => {
             <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
               <h2 class="text-lg font-semibold mb-3">Run Sync</h2>
               <p class="text-sm text-gray-600 mb-4">
-                Runs incremental PG → ClickHouse sync using (updatedAt, id) keyset.
+                Pulls new/updated PG rows into ClickHouse. Updated rows create new versions until ClickHouse merges.
               </p>
 
               <button
@@ -232,13 +230,10 @@ const AdminClickhouseSync = () => {
                     <div class="mt-4 p-4 rounded-md bg-green-50 border border-green-200">
                       <p class="text-green-700 font-medium">Sync completed</p>
                       <p class="text-sm text-green-600 mt-1">
-                        Read {result().rowsRead.toLocaleString()} / inserted {result().rowsInserted.toLocaleString()} /
-                        deleted {result().idsDeleted.toLocaleString()} (batches: {result().batches.toLocaleString()})
+                        Inserted ~{result().syncedRows.toLocaleString()} rows in{' '}
+                        {(result().durationMs / 1000).toFixed(1)}s
                       </p>
-                      <p class="text-xs text-green-700 mt-1">
-                        Watermark: {formatDate(result().watermark.updatedAt)} ({result().watermark.id})
-                        {result().hasMore ? ' — more remaining' : ''}
-                      </p>
+                      <p class="text-xs text-green-700 mt-1">Last updated_at: {result().lastUpdatedAt ?? 'N/A'}</p>
                     </div>
                   )
                 }}
@@ -256,20 +251,20 @@ const AdminClickhouseSync = () => {
             <h3 class="text-sm font-semibold text-blue-900 mb-3">What This Sync Does</h3>
             <ul class="text-sm text-blue-800 space-y-2">
               <li>
-                <strong>Source of truth:</strong> PostgreSQL. ClickHouse holds live rows for analytics.
+                <strong>Source of truth:</strong> PostgreSQL. ClickHouse holds rows for fast project scoping/filtering.
               </li>
               <li>
-                <strong>Incremental:</strong> Reads PG rows where (updatedAt, id) &gt; watermark and applies
-                DELETE+INSERT in ClickHouse.
+                <strong>ReplacingMergeTree:</strong> updates insert new versions; the table may temporarily have more
+                physical rows than unique ids.
               </li>
               <li>
-                <strong>Deletes:</strong> Soft-deleted PG judgments are physically deleted from ClickHouse (async
-                mutations).
+                <strong>Does not handle deletes:</strong> if an article is removed in PostgreSQL, it may remain in
+                ClickHouse until explicitly deleted.
               </li>
               <li>
-                <strong>Articles sync:</strong> separate page at{' '}
-                <Link to="/admin/clickhouse-sync/articles" class="underline">
-                  /admin/clickhouse-sync/articles
+                <strong>Judgments sync:</strong> back at{' '}
+                <Link to="/admin/clickhouse-sync" class="underline">
+                  /admin/clickhouse-sync
                 </Link>
                 .
               </li>
@@ -281,4 +276,4 @@ const AdminClickhouseSync = () => {
   )
 }
 
-export const Route = createFileRoute('/admin/clickhouse-sync/')({component: AdminClickhouseSync})
+export const Route = createFileRoute('/admin/clickhouse-sync/articles/')({component: AdminClickhouseArticlesSync})

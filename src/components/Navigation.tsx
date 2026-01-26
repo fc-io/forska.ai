@@ -372,7 +372,14 @@ export const Navigation = (props: NavigationProps) => {
                       class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
                       onClick={closeAdminMenu}
                     >
-                      ClickHouse Sync
+                      ClickHouse Sync (Judgments)
+                    </Link>
+                    <Link
+                      to="/admin/clickhouse-sync/articles"
+                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
+                      onClick={closeAdminMenu}
+                    >
+                      ClickHouse Sync (Articles)
                     </Link>
                     <Link
                       to="/admin/sync-stats"

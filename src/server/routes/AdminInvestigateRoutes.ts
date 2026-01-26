@@ -15,7 +15,6 @@ import {
   projects,
   prompts,
 } from '../../db/schema.ts'
-import {parseClickhouseDateTimeUtc} from '../../services/clickhouse/parseClickhouseDateTimeUtc.ts'
 import {requireUserAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
@@ -655,6 +654,124 @@ const getClickhouseSyncStatus = async () => {
   }
 }
 
+const getClickhouseArticlesSyncStatus = async () => {
+  const db = getDatabase()
+  const {getClickhouseClient, pingClickhouse} = await import('../../services/clickhouse/clickhouseClient.ts')
+
+  const [reachable, pgCountResult, pgLatestResult] = await Promise.all([
+    pingClickhouse(),
+    db.select({count: sql<number>`COUNT(*)::int`}).from(articles),
+    db
+      .select({updatedAt: articles.updatedAt})
+      .from(articles)
+      .orderBy(sql`${articles.updatedAt} DESC`, sql`${articles.id} DESC`)
+      .limit(1),
+  ])
+
+  const pgCount = pgCountResult[0]?.count ?? 0
+  const pgMaxUpdatedAt = pgLatestResult[0]?.updatedAt ? new Date(pgLatestResult[0].updatedAt).toISOString() : null
+  const pgMaxUpdatedAtMs = pgMaxUpdatedAt ? new Date(pgMaxUpdatedAt).getTime() : null
+
+  if (!reachable) {
+    return {
+      reachable: false,
+      postgres: {count: pgCount, maxUpdatedAt: pgMaxUpdatedAt},
+      clickhouse: {count: null, physicalCount: null, maxUpdatedAt: null},
+      mutations: {pending: null},
+      lagMs: null,
+      lagSeconds: null,
+      inSync: false,
+      status: 'unreachable' as const,
+      message: 'ClickHouse is not reachable',
+    }
+  }
+
+  const chClient = getClickhouseClient()
+
+  const toNumber = (value: unknown): number => {
+    if (typeof value === 'number') return value
+    if (typeof value === 'string') return parseInt(value, 10) || 0
+    return typeof value === 'bigint' ? Number(value) : parseInt(String(value ?? '0'), 10) || 0
+  }
+
+  const [chCountsResult, chMutationsResult] = await Promise.all([
+    chClient.query({
+      query: `
+        SELECT
+          count() as physicalCount,
+          uniqExact(id) as count,
+          toUnixTimestamp64Milli(ifNull(maxOrNull(updated_at), toDateTime64(0, 6, 'UTC'))) as maxUpdatedAtMs
+        FROM forska.articles
+      `,
+      format: 'JSONEachRow',
+    }),
+    chClient.query({
+      query: `
+        SELECT countIf(is_done = 0) as pending
+        FROM system.mutations
+        WHERE database = 'forska' AND table = 'articles'
+      `,
+      format: 'JSONEachRow',
+    }),
+  ])
+
+  const [chCountsRow] = await chCountsResult.json<{
+    count: string | number
+    physicalCount: string | number
+    maxUpdatedAtMs: string | number
+  }>()
+  const [chMutationsRow] = await chMutationsResult.json<{pending: string | number}>()
+
+  const chCount = toNumber(chCountsRow?.count)
+  const chPhysicalCount = toNumber(chCountsRow?.physicalCount)
+  const chMaxUpdatedAtMsRaw = toNumber(chCountsRow?.maxUpdatedAtMs)
+  const chMaxUpdatedAtMs = chMaxUpdatedAtMsRaw > 0 ? chMaxUpdatedAtMsRaw : null
+  const chMaxUpdatedAt = chMaxUpdatedAtMs ? new Date(chMaxUpdatedAtMs).toISOString() : null
+
+  const pendingMutations = toNumber(chMutationsRow?.pending)
+
+  const lagMs =
+    pgMaxUpdatedAtMs !== null && chMaxUpdatedAtMs !== null ? pgMaxUpdatedAtMs - chMaxUpdatedAtMs : null
+  const lagSeconds = lagMs !== null ? Math.round(lagMs / 1000) : null
+
+  const countsMatch = pgCount === chCount
+  const mutating = pendingMutations > 0
+  const inSync = !mutating && countsMatch && (lagSeconds === null || lagSeconds <= 60)
+
+  const status = mutating
+    ? 'mutating'
+    : !countsMatch
+      ? 'diff'
+      : inSync
+        ? 'synced'
+        : lagSeconds !== null && lagSeconds > 3600
+          ? 'critical'
+          : 'behind'
+
+  const message =
+    status === 'synced'
+      ? 'ClickHouse matches PostgreSQL'
+      : status === 'mutating'
+        ? 'ClickHouse is applying delete mutations'
+        : status === 'diff'
+          ? 'Row counts differ between PostgreSQL and ClickHouse'
+          : status === 'critical'
+            ? 'ClickHouse is far behind PostgreSQL'
+            : 'ClickHouse is behind PostgreSQL'
+
+  return {
+    reachable: true,
+    postgres: {count: pgCount, maxUpdatedAt: pgMaxUpdatedAt},
+    clickhouse: {count: chCount, physicalCount: chPhysicalCount, maxUpdatedAt: chMaxUpdatedAt},
+    mutations: {pending: pendingMutations},
+    lagMs,
+    lagSeconds,
+    inSync,
+    status,
+    message,
+  }
+}
+
 type AutoSyncAllProgress = {
   status: 'idle' | 'running' | 'completed' | 'error'
   totalPrompts: number
@@ -877,6 +994,9 @@ export const adminInvestigateRoutes = new Elysia()
   .use(requireUserAuth())
   .get('/api/admin/clickhouse-sync-status', async () => {
     return getClickhouseSyncStatus()
+  })
+  .get('/api/admin/clickhouse-articles-sync-status', async () => {
+    return getClickhouseArticlesSyncStatus()
   })
   .post(
     '/api/admin/sync-judgments-to-clickhouse',

@@ -55,6 +55,7 @@ import { Route as AdminUnexpectedAnswersProjectIdIndexRouteImport } from './rout
 import { Route as AdminJobsIdIndexRouteImport } from './routes/+admin/+jobs/+$id/+index'
 import { Route as AdminFailed_requestsIdIndexRouteImport } from './routes/+admin/+failed_requests/+$id/+index'
 import { Route as AdminDatasourcesArchivedIndexRouteImport } from './routes/+admin/+datasources/+archived/+index'
+import { Route as AdminClickhouseSyncArticlesIndexRouteImport } from './routes/+admin/+clickhouse-sync/+articles/+index'
 import { Route as ProjectsIdReviewsLlmArticleIdFulltextRouteImport } from './routes/+projects/+$id/+reviews-llm/+$articleId/+fulltext'
 import { Route as ProjectsIdReviewsArticleIdIndexRouteImport } from './routes/+projects/+$id/+reviews/+$articleId/+index'
 import { Route as ProjectsIdReviewsLlmArticleIdIndexRouteImport } from './routes/+projects/+$id/+reviews-llm/+$articleId/+index'
@@ -308,6 +309,12 @@ const AdminDatasourcesArchivedIndexRoute =
     path: '/admin/datasources/archived/',
     getParentRoute: () => rootRouteImport,
   } as any)
+const AdminClickhouseSyncArticlesIndexRoute =
+  AdminClickhouseSyncArticlesIndexRouteImport.update({
+    id: '/admin/clickhouse-sync/articles/',
+    path: '/admin/clickhouse-sync/articles/',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ProjectsIdReviewsLlmArticleIdFulltextRoute =
   ProjectsIdReviewsLlmArticleIdFulltextRouteImport.update({
     id: '/projects/$id/reviews-llm/$articleId/fulltext',
@@ -374,6 +381,7 @@ export interface FileRoutesByFullPath {
   '/projects/$id/edit': typeof ProjectsIdEditRoute
   '/projects/$id/export': typeof ProjectsIdExportRoute
   '/projects/$id/humanAssessment': typeof ProjectsIdHumanAssessmentRoute
+  '/admin/clickhouse-sync/articles': typeof AdminClickhouseSyncArticlesIndexRoute
   '/admin/datasources/archived': typeof AdminDatasourcesArchivedIndexRoute
   '/admin/failed_requests/$id': typeof AdminFailed_requestsIdIndexRoute
   '/admin/jobs/$id': typeof AdminJobsIdIndexRoute
@@ -427,6 +435,7 @@ export interface FileRoutesByTo {
   '/projects/$id/edit': typeof ProjectsIdEditRoute
   '/projects/$id/export': typeof ProjectsIdExportRoute
   '/projects/$id/humanAssessment': typeof ProjectsIdHumanAssessmentRoute
+  '/admin/clickhouse-sync/articles': typeof AdminClickhouseSyncArticlesIndexRoute
   '/admin/datasources/archived': typeof AdminDatasourcesArchivedIndexRoute
   '/admin/failed_requests/$id': typeof AdminFailed_requestsIdIndexRoute
   '/admin/jobs/$id': typeof AdminJobsIdIndexRoute
@@ -481,6 +490,7 @@ export interface FileRoutesById {
   '/projects/$id/edit': typeof ProjectsIdEditRoute
   '/projects/$id/export': typeof ProjectsIdExportRoute
   '/projects/$id/humanAssessment': typeof ProjectsIdHumanAssessmentRoute
+  '/admin/clickhouse-sync/articles/': typeof AdminClickhouseSyncArticlesIndexRoute
   '/admin/datasources/archived/': typeof AdminDatasourcesArchivedIndexRoute
   '/admin/failed_requests/$id/': typeof AdminFailed_requestsIdIndexRoute
   '/admin/jobs/$id/': typeof AdminJobsIdIndexRoute
@@ -536,6 +546,7 @@ export interface FileRouteTypes {
     | '/projects/$id/edit'
     | '/projects/$id/export'
     | '/projects/$id/humanAssessment'
+    | '/admin/clickhouse-sync/articles'
     | '/admin/datasources/archived'
     | '/admin/failed_requests/$id'
     | '/admin/jobs/$id'
@@ -589,6 +600,7 @@ export interface FileRouteTypes {
     | '/projects/$id/edit'
     | '/projects/$id/export'
     | '/projects/$id/humanAssessment'
+    | '/admin/clickhouse-sync/articles'
     | '/admin/datasources/archived'
     | '/admin/failed_requests/$id'
     | '/admin/jobs/$id'
@@ -642,6 +654,7 @@ export interface FileRouteTypes {
     | '/projects/$id/edit'
     | '/projects/$id/export'
     | '/projects/$id/humanAssessment'
+    | '/admin/clickhouse-sync/articles/'
     | '/admin/datasources/archived/'
     | '/admin/failed_requests/$id/'
     | '/admin/jobs/$id/'
@@ -696,6 +709,7 @@ export interface RootRouteChildren {
   ProjectsIdEditRoute: typeof ProjectsIdEditRoute
   ProjectsIdExportRoute: typeof ProjectsIdExportRoute
   ProjectsIdHumanAssessmentRoute: typeof ProjectsIdHumanAssessmentRoute
+  AdminClickhouseSyncArticlesIndexRoute: typeof AdminClickhouseSyncArticlesIndexRoute
   AdminDatasourcesArchivedIndexRoute: typeof AdminDatasourcesArchivedIndexRoute
   AdminFailed_requestsIdIndexRoute: typeof AdminFailed_requestsIdIndexRoute
   AdminJobsIdIndexRoute: typeof AdminJobsIdIndexRoute
@@ -1039,6 +1053,13 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof AdminDatasourcesArchivedIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/clickhouse-sync/articles/': {
+      id: '/admin/clickhouse-sync/articles/'
+      path: '/admin/clickhouse-sync/articles'
+      fullPath: '/admin/clickhouse-sync/articles'
+      preLoaderRoute: typeof AdminClickhouseSyncArticlesIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/projects/$id/reviews-llm/$articleId/fulltext': {
       id: '/projects/$id/reviews-llm/$articleId/fulltext'
       path: '/projects/$id/reviews-llm/$articleId/fulltext'
@@ -1112,6 +1133,7 @@ const rootRouteChildren: RootRouteChildren = {
   ProjectsIdEditRoute: ProjectsIdEditRoute,
   ProjectsIdExportRoute: ProjectsIdExportRoute,
   ProjectsIdHumanAssessmentRoute: ProjectsIdHumanAssessmentRoute,
+  AdminClickhouseSyncArticlesIndexRoute: AdminClickhouseSyncArticlesIndexRoute,
   AdminDatasourcesArchivedIndexRoute: AdminDatasourcesArchivedIndexRoute,
   AdminFailed_requestsIdIndexRoute: AdminFailed_requestsIdIndexRoute,
   AdminJobsIdIndexRoute: AdminJobsIdIndexRoute,
