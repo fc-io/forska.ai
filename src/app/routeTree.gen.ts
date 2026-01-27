@@ -35,8 +35,8 @@ import { Route as AdminPdfResetIndexRouteImport } from './routes/+admin/+pdf-res
 import { Route as AdminPdfConversionsIndexRouteImport } from './routes/+admin/+pdf-conversions/+index'
 import { Route as AdminLlmIndexRouteImport } from './routes/+admin/+llm/+index'
 import { Route as AdminLatestArticlesIndexRouteImport } from './routes/+admin/+latest-articles/+index'
-import { Route as AdminImportRouteStatsIndexRouteImport } from './routes/+admin/+import-route-stats/+index'
 import { Route as AdminJobsIndexRouteImport } from './routes/+admin/+jobs/+index'
+import { Route as AdminImportRouteStatsIndexRouteImport } from './routes/+admin/+import-route-stats/+index'
 import { Route as AdminGpuIndexRouteImport } from './routes/+admin/+gpu/+index'
 import { Route as AdminFailed_requestsIndexRouteImport } from './routes/+admin/+failed_requests/+index'
 import { Route as AdminDiagnoseUnassessedIndexRouteImport } from './routes/+admin/+diagnose-unassessed/+index'
@@ -198,17 +198,17 @@ const AdminLatestArticlesIndexRoute =
     path: '/admin/latest-articles/',
     getParentRoute: () => rootRouteImport,
   } as any)
+const AdminJobsIndexRoute = AdminJobsIndexRouteImport.update({
+  id: '/admin/jobs/',
+  path: '/admin/jobs/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AdminImportRouteStatsIndexRoute =
   AdminImportRouteStatsIndexRouteImport.update({
     id: '/admin/import-route-stats/',
     path: '/admin/import-route-stats/',
     getParentRoute: () => rootRouteImport,
   } as any)
-const AdminJobsIndexRoute = AdminJobsIndexRouteImport.update({
-  id: '/admin/jobs/',
-  path: '/admin/jobs/',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const AdminGpuIndexRoute = AdminGpuIndexRouteImport.update({
   id: '/admin/gpu/',
   path: '/admin/gpu/',
@@ -369,9 +369,9 @@ export interface FileRoutesByFullPath {
   '/admin/diagnose-unassessed': typeof AdminDiagnoseUnassessedIndexRoute
   '/admin/failed_requests': typeof AdminFailed_requestsIndexRoute
   '/admin/gpu': typeof AdminGpuIndexRoute
+  '/admin/import-route-stats': typeof AdminImportRouteStatsIndexRoute
   '/admin/jobs': typeof AdminJobsIndexRoute
   '/admin/latest-articles': typeof AdminLatestArticlesIndexRoute
-  '/admin/import-route-stats': typeof AdminImportRouteStatsIndexRoute
   '/admin/llm': typeof AdminLlmIndexRoute
   '/admin/pdf-conversions': typeof AdminPdfConversionsIndexRoute
   '/admin/pdf-reset': typeof AdminPdfResetIndexRoute
@@ -424,9 +424,9 @@ export interface FileRoutesByTo {
   '/admin/diagnose-unassessed': typeof AdminDiagnoseUnassessedIndexRoute
   '/admin/failed_requests': typeof AdminFailed_requestsIndexRoute
   '/admin/gpu': typeof AdminGpuIndexRoute
+  '/admin/import-route-stats': typeof AdminImportRouteStatsIndexRoute
   '/admin/jobs': typeof AdminJobsIndexRoute
   '/admin/latest-articles': typeof AdminLatestArticlesIndexRoute
-  '/admin/import-route-stats': typeof AdminImportRouteStatsIndexRoute
   '/admin/llm': typeof AdminLlmIndexRoute
   '/admin/pdf-conversions': typeof AdminPdfConversionsIndexRoute
   '/admin/pdf-reset': typeof AdminPdfResetIndexRoute
@@ -480,9 +480,9 @@ export interface FileRoutesById {
   '/admin/diagnose-unassessed/': typeof AdminDiagnoseUnassessedIndexRoute
   '/admin/failed_requests/': typeof AdminFailed_requestsIndexRoute
   '/admin/gpu/': typeof AdminGpuIndexRoute
+  '/admin/import-route-stats/': typeof AdminImportRouteStatsIndexRoute
   '/admin/jobs/': typeof AdminJobsIndexRoute
   '/admin/latest-articles/': typeof AdminLatestArticlesIndexRoute
-  '/admin/import-route-stats/': typeof AdminImportRouteStatsIndexRoute
   '/admin/llm/': typeof AdminLlmIndexRoute
   '/admin/pdf-conversions/': typeof AdminPdfConversionsIndexRoute
   '/admin/pdf-reset/': typeof AdminPdfResetIndexRoute
@@ -537,9 +537,9 @@ export interface FileRouteTypes {
     | '/admin/diagnose-unassessed'
     | '/admin/failed_requests'
     | '/admin/gpu'
+    | '/admin/import-route-stats'
     | '/admin/jobs'
     | '/admin/latest-articles'
-    | '/admin/import-route-stats'
     | '/admin/llm'
     | '/admin/pdf-conversions'
     | '/admin/pdf-reset'
@@ -592,9 +592,9 @@ export interface FileRouteTypes {
     | '/admin/diagnose-unassessed'
     | '/admin/failed_requests'
     | '/admin/gpu'
+    | '/admin/import-route-stats'
     | '/admin/jobs'
     | '/admin/latest-articles'
-    | '/admin/import-route-stats'
     | '/admin/llm'
     | '/admin/pdf-conversions'
     | '/admin/pdf-reset'
@@ -647,9 +647,9 @@ export interface FileRouteTypes {
     | '/admin/diagnose-unassessed/'
     | '/admin/failed_requests/'
     | '/admin/gpu/'
+    | '/admin/import-route-stats/'
     | '/admin/jobs/'
     | '/admin/latest-articles/'
-    | '/admin/import-route-stats/'
     | '/admin/llm/'
     | '/admin/pdf-conversions/'
     | '/admin/pdf-reset/'
@@ -703,9 +703,9 @@ export interface RootRouteChildren {
   AdminDiagnoseUnassessedIndexRoute: typeof AdminDiagnoseUnassessedIndexRoute
   AdminFailed_requestsIndexRoute: typeof AdminFailed_requestsIndexRoute
   AdminGpuIndexRoute: typeof AdminGpuIndexRoute
+  AdminImportRouteStatsIndexRoute: typeof AdminImportRouteStatsIndexRoute
   AdminJobsIndexRoute: typeof AdminJobsIndexRoute
   AdminLatestArticlesIndexRoute: typeof AdminLatestArticlesIndexRoute
-  AdminImportRouteStatsIndexRoute: typeof AdminImportRouteStatsIndexRoute
   AdminLlmIndexRoute: typeof AdminLlmIndexRoute
   AdminPdfConversionsIndexRoute: typeof AdminPdfConversionsIndexRoute
   AdminPdfResetIndexRoute: typeof AdminPdfResetIndexRoute
@@ -927,18 +927,18 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof AdminLatestArticlesIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/admin/import-route-stats/': {
-      id: '/admin/import-route-stats/'
-      path: '/admin/import-route-stats'
-      fullPath: '/admin/import-route-stats'
-      preLoaderRoute: typeof AdminImportRouteStatsIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/admin/jobs/': {
       id: '/admin/jobs/'
       path: '/admin/jobs'
       fullPath: '/admin/jobs'
       preLoaderRoute: typeof AdminJobsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/import-route-stats/': {
+      id: '/admin/import-route-stats/'
+      path: '/admin/import-route-stats'
+      fullPath: '/admin/import-route-stats'
+      preLoaderRoute: typeof AdminImportRouteStatsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/gpu/': {
@@ -1135,9 +1135,9 @@ const rootRouteChildren: RootRouteChildren = {
   AdminDiagnoseUnassessedIndexRoute: AdminDiagnoseUnassessedIndexRoute,
   AdminFailed_requestsIndexRoute: AdminFailed_requestsIndexRoute,
   AdminGpuIndexRoute: AdminGpuIndexRoute,
+  AdminImportRouteStatsIndexRoute: AdminImportRouteStatsIndexRoute,
   AdminJobsIndexRoute: AdminJobsIndexRoute,
   AdminLatestArticlesIndexRoute: AdminLatestArticlesIndexRoute,
-  AdminImportRouteStatsIndexRoute: AdminImportRouteStatsIndexRoute,
   AdminLlmIndexRoute: AdminLlmIndexRoute,
   AdminPdfConversionsIndexRoute: AdminPdfConversionsIndexRoute,
   AdminPdfResetIndexRoute: AdminPdfResetIndexRoute,
