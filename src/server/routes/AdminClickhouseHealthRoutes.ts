@@ -11,4 +11,3 @@ export const adminClickhouseHealthRoutes = new Elysia()
     const data = await getClickhouseHealth()
     return {data}
   })
-

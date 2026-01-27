@@ -75,11 +75,13 @@ export const closeClickhouseClient = async (): Promise<void> => {
 /**
  * Health check - pings the ClickHouse server with a short timeout
  */
-export const pingClickhouse = async (timeoutMs: number = 5000): Promise<boolean> => {
+export const pingClickhouse = async (timeoutMs = 5000): Promise<boolean> => {
   try {
     const client = getClickhouseClient()
     const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error('Ping timeout')), timeoutMs)
+      setTimeout(() => {
+        return reject(new Error('Ping timeout'))
+      }, timeoutMs)
     })
     await Promise.race([client.ping(), timeoutPromise])
     return true

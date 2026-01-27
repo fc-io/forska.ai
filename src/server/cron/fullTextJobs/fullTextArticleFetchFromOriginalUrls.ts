@@ -123,7 +123,7 @@ export const fullTextArticleFetchFromOriginalUrls = async ({
   const errors: string[] = []
 
   for (const entry of pdfUrls) {
-    const {url, site, availability} = entry
+    const {url, site} = entry
 
     // Skip subscription-required URLs if we have OA options
     const hasOAOption = pdfUrls.some(isOpenAccess)

@@ -216,7 +216,9 @@ export const judgmentsJobsSendToLLM = async (
       const requestsToSendByJob = getRequestsToSendByJob(allJobs, requestsToSend, readyCounts)
       console.log(
         '[capacity] requestsToSendByJob:',
-        requestsToSendByJob.map(({job, limit}) => ({jobId: job.id.slice(0, 8), limit})),
+        requestsToSendByJob.map(({job, limit}) => {
+          return {jobId: job.id.slice(0, 8), limit}
+        }),
       )
 
       const promptsToProcess = await Promise.allSettled(

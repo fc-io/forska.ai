@@ -207,7 +207,9 @@ export const getAndUpdateReadyPrompts = async (
       .limit(staleCleanupLimit)
 
     if (staleRows.length > 0) {
-      const staleIds = staleRows.map((r) => r.id)
+      const staleIds = staleRows.map((r) => {
+        return r.id
+      })
       await db
         .update(schema.judgmentsJobsPrompts)
         .set({status: 'judged', judgedAt: new Date(), updatedAt: new Date()})

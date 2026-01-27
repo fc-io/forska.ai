@@ -1,4 +1,4 @@
-import {and, count, eq, inArray, isNull, or} from 'drizzle-orm'
+import {and, count, eq, isNull, or} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../db/schema.ts'
@@ -57,9 +57,9 @@ const filterAlreadyJudged = async (
     const batch = promptEntries.slice(i, i + BATCH_SIZE)
 
     // Build conditions for each article/prompt pair
-    const pairConditions = batch.map((entry) =>
-      and(eq(schema.judgments.articleId, entry.articleId), eq(schema.judgments.promptId, entry.promptId)),
-    )
+    const pairConditions = batch.map((entry) => {
+      return and(eq(schema.judgments.articleId, entry.articleId), eq(schema.judgments.promptId, entry.promptId))
+    })
 
     // Find which pairs already have judgments
     const existingJudgments = await db
@@ -77,9 +77,15 @@ const filterAlreadyJudged = async (
         ),
       )
 
-    const existingSet = new Set(existingJudgments.map((j) => `${j.articleId}:${j.promptId}`))
+    const existingSet = new Set(
+      existingJudgments.map((j) => {
+        return `${j.articleId}:${j.promptId}`
+      }),
+    )
 
-    const notJudged = batch.filter((entry) => !existingSet.has(`${entry.articleId}:${entry.promptId}`))
+    const notJudged = batch.filter((entry) => {
+      return !existingSet.has(`${entry.articleId}:${entry.promptId}`)
+    })
     filtered.push(...notJudged)
   }
 

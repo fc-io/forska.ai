@@ -319,7 +319,9 @@ const runAutoSyncAllAsync = async (projectId: string | null) => {
           .where(isNotNull(prompts.type))
       }
 
-      const filteredPrompts = promptsToProcess.filter((p) => !isOpenEndedType(p.type))
+      const filteredPrompts = promptsToProcess.filter((p) => {
+        return !isOpenEndedType(p.type)
+      })
 
       autoSyncAllProgress.totalPrompts = filteredPrompts.length
       console.log(`[AutoSyncAll] Found ${filteredPrompts.length} prompts with defined types to process`)
@@ -355,7 +357,9 @@ const runAutoSyncAllAsync = async (projectId: string | null) => {
                   SELECT 1 FROM ${articles}
                   WHERE ${articles.id} = ${judgments.articleId}
                   AND ${articles.importRoute} IN (${sql.join(
-                    projectScope.importRoutes.map((r) => sql`${r}`),
+                    projectScope.importRoutes.map((r) => {
+                      return sql`${r}`
+                    }),
                     sql`, `,
                   )})
                 )`,
@@ -364,8 +368,9 @@ const runAutoSyncAllAsync = async (projectId: string | null) => {
             if (projectScope.curatedArticleIds.length > 0) {
               articleScopeConditions.push(inArray(judgments.articleId, projectScope.curatedArticleIds))
             }
-            if (articleScopeConditions.length > 0) {
-              baseConditions.push(or(...articleScopeConditions)!)
+            const articleScopeCondition = or(...articleScopeConditions)
+            if (articleScopeCondition) {
+              baseConditions.push(articleScopeCondition)
             }
 
             if (projectScope.dateFrom) {
@@ -404,9 +409,13 @@ const runAutoSyncAllAsync = async (projectId: string | null) => {
               if (arrayAnswer === null) return true
               if (!Array.isArray(arrayAnswer)) return true
               if (arrayAnswer.length === 0) return true
-              return arrayAnswer.some((elem) => !expectedOptions.includes(elem))
+              return arrayAnswer.some((elem) => {
+                return !expectedOptions.includes(elem)
+              })
             })
-            .map((a) => (a.answeredOriginalAsArray === null ? null : JSON.stringify(a.answeredOriginalAsArray)))
+            .map((a) => {
+              return a.answeredOriginalAsArray === null ? null : JSON.stringify(a.answeredOriginalAsArray)
+            })
         } else {
           const stringAnswersQuery = await db
             .select({answeredOriginal: judgments.answeredOriginal})
@@ -421,7 +430,9 @@ const runAutoSyncAllAsync = async (projectId: string | null) => {
               if (answer === '') return true
               return !expectedOptions.includes(answer)
             })
-            .map((a) => a.answeredOriginal)
+            .map((a) => {
+              return a.answeredOriginal
+            })
         }
 
         let promptDeleted = 0
@@ -772,7 +783,9 @@ export const adminInvestigateRoutes = new Elysia()
         .from(projectPrompts)
         .where(and(eq(projectPrompts.projectId, projectId), eq(projectPrompts.enabled, true)))
 
-      const enabledPromptIds = enabledPromptRows.map((r) => r.promptId)
+      const enabledPromptIds = enabledPromptRows.map((r) => {
+        return r.promptId
+      })
 
       const projectImportRoutes = await db
         .select({route: importRoute.route})
@@ -785,8 +798,12 @@ export const adminInvestigateRoutes = new Elysia()
         .from(projectArticles)
         .where(eq(projectArticles.projectId, projectId))
 
-      const routes = projectImportRoutes.map((r) => r.route)
-      const curatedIds = curatedArticleRows.map((r) => r.articleId)
+      const routes = projectImportRoutes.map((r) => {
+        return r.route
+      })
+      const curatedIds = curatedArticleRows.map((r) => {
+        return r.articleId
+      })
 
       // Count articles in scope from PostgreSQL
       let pgArticleCount = 0
@@ -821,7 +838,9 @@ export const adminInvestigateRoutes = new Elysia()
         if (routes.length > 0) {
           scopeConditions.push(
             sql`${judgments.articleId} IN (SELECT id FROM articles WHERE import_route IN (${sql.join(
-              routes.map((r) => sql`${r}`),
+              routes.map((r) => {
+                return sql`${r}`
+              }),
               sql`, `,
             )}))`,
           )
@@ -863,14 +882,26 @@ export const adminInvestigateRoutes = new Elysia()
       pgJudgmentCount = pgTotalResult[0]?.count ?? 0
 
       // Count judgments in ClickHouse matching project settings AND scoped
-      const promptIdsQuoted = enabledPromptIds.map((id) => `'${id}'`).join(', ')
+      const promptIdsQuoted = enabledPromptIds
+        .map((id) => {
+          return `'${id}'`
+        })
+        .join(', ')
 
       let chScopeFilter = ''
       if (articleIds.length > 0) {
-        const idsQuoted = articleIds.map((id) => `'${id}'`).join(', ')
+        const idsQuoted = articleIds
+          .map((id) => {
+            return `'${id}'`
+          })
+          .join(', ')
         chScopeFilter = `AND articleId IN (${idsQuoted})`
       } else if (routes.length > 0) {
-        const routesQuoted = routes.map((r) => `'${r}'`).join(', ')
+        const routesQuoted = routes
+          .map((r) => {
+            return `'${r}'`
+          })
+          .join(', ')
         chScopeFilter = `AND articleImportRoute IN (${routesQuoted})`
       }
 
@@ -893,14 +924,32 @@ export const adminInvestigateRoutes = new Elysia()
       // Count articles in ClickHouse (full count, not limited)
       let chArticleCount = 0
       if (articleIds.length > 0) {
-        const idsQuoted = articleIds.map((id) => `'${id}'`).join(', ')
-        const chArticleQuery = `SELECT count() AS count FROM forska.articles FINAL WHERE _peerdb_is_deleted = 0 AND id IN (${idsQuoted})`
+        const idsQuoted = articleIds
+          .map((id) => {
+            return `'${id}'`
+          })
+          .join(', ')
+
+        const chArticleQuery = `
+          SELECT count() AS count
+          FROM forska.articles FINAL
+          WHERE _peerdb_is_deleted = 0 AND id IN (${idsQuoted})
+        `
         const result = await chClient.query({query: chArticleQuery, format: 'JSONEachRow'})
         const [row] = await result.json<{count: number}>()
         chArticleCount = row?.count ?? 0
       } else if (routes.length > 0) {
-        const routesQuoted = routes.map((r) => `'${r}'`).join(', ')
-        const chArticleQuery = `SELECT count() AS count FROM forska.articles FINAL WHERE _peerdb_is_deleted = 0 AND import_route IN (${routesQuoted})`
+        const routesQuoted = routes
+          .map((r) => {
+            return `'${r}'`
+          })
+          .join(', ')
+
+        const chArticleQuery = `
+          SELECT count() AS count
+          FROM forska.articles FINAL
+          WHERE _peerdb_is_deleted = 0 AND import_route IN (${routesQuoted})
+        `
         const result = await chClient.query({query: chArticleQuery, format: 'JSONEachRow'})
         const [row] = await result.json<{count: number}>()
         chArticleCount = row?.count ?? 0

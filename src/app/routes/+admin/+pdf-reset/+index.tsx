@@ -59,8 +59,8 @@ const AdminPdfReset = () => {
 
           <div class="bg-white shadow rounded-lg p-6 mb-6">
             <p class="text-gray-700 mb-6">
-              This will reset all auto-fetched PDFs so they can be re-downloaded from arxiv/unpaywall. User-uploaded PDFs
-              will not be affected.
+              This will reset all auto-fetched PDFs so they can be re-downloaded from arxiv/unpaywall. User-uploaded
+              PDFs will not be affected.
             </p>
 
             <Show when={resetMutation.isSuccess}>
