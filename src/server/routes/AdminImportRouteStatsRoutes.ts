@@ -1,7 +1,8 @@
-import {asc, desc, eq, sql} from 'drizzle-orm'
 import {Elysia} from 'elysia'
 
-import {articles, importRoute as importRouteTable} from '../../db/schema.ts'
+import {importRoute as importRouteTable} from '../../db/schema.ts'
+import {getClickhouseClient} from '../../services/clickhouse/clickhouseClient.ts'
+import {ensureClickhouseSchema} from '../../services/clickhouse/ensureClickhouseSchema.ts'
 import {requireAdminAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
@@ -15,6 +16,20 @@ type ImportRouteStats = {
   years: ImportRouteYearCount[]
 }
 
+type ClickhouseImportRouteTotalRow = {importRoute: string | null; total: string | number}
+
+type ClickhouseImportRouteYearRow = {importRoute: string | null; year: string | number; count: string | number}
+
+const toNumber = (value: unknown): number => {
+  if (typeof value === 'number') return value
+  if (typeof value === 'string') return parseInt(value, 10) || 0
+  return typeof value === 'bigint' ? Number(value) : 0
+}
+
+const toRows = <T>(value: T | T[]): T[] => {
+  return Array.isArray(value) ? value : [value]
+}
+
 const importRouteKey = (route: string | null): string => {
   return route ?? '__null__'
 }
@@ -25,45 +40,71 @@ const compareImportRoutes = (a: string | null, b: string | null): number => {
   return rankA !== rankB ? rankA - rankB : String(a ?? '').localeCompare(String(b ?? ''))
 }
 
-const buildImportRouteStats = async (): Promise<ImportRouteStats[]> => {
+const fetchImportRouteNameMap = async (): Promise<Map<string, string | null>> => {
   const db = getDatabase()
-  const yearExpr = sql<number>`EXTRACT(YEAR FROM COALESCE(${articles.articleCreatedAt}, ${articles.createdAt}))::int`
+  const rows = await db.select({route: importRouteTable.route, name: importRouteTable.name}).from(importRouteTable)
 
-  const totals = await db
-    .select({
-      importRoute: articles.importRoute,
-      importRouteName: importRouteTable.name,
-      total: sql<number>`COUNT(*)::int`.as('total'),
-    })
-    .from(articles)
-    .leftJoin(importRouteTable, eq(importRouteTable.route, articles.importRoute))
-    .groupBy(articles.importRoute, importRouteTable.name)
-    .orderBy(asc(articles.importRoute))
+  return rows.reduce((map, row) => {
+    map.set(row.route, row.name)
+    return map
+  }, new Map<string, string | null>())
+}
 
-  const yearlyCounts = await db
-    .select({
-      importRoute: articles.importRoute,
-      importRouteName: importRouteTable.name,
-      year: yearExpr.as('year'),
-      count: sql<number>`COUNT(*)::int`.as('count'),
-    })
-    .from(articles)
-    .leftJoin(importRouteTable, eq(importRouteTable.route, articles.importRoute))
-    .groupBy(articles.importRoute, importRouteTable.name, yearExpr)
-    .orderBy(asc(articles.importRoute), desc(yearExpr))
+const getImportRouteName = (nameMap: Map<string, string | null>, importRoute: string | null): string | null => {
+  return importRoute ? (nameMap.get(importRoute) ?? null) : null
+}
 
-  const byRoute = totals.reduce((map, row) => {
-    map.set(importRouteKey(row.importRoute), {...row, years: []})
+const buildImportRouteStatsFromClickhouse = async (): Promise<ImportRouteStats[]> => {
+  await ensureClickhouseSchema()
+  const client = getClickhouseClient()
+
+  const [nameMap, totalsResult, yearlyResult] = await Promise.all([
+    fetchImportRouteNameMap(),
+    client.query({
+      query: `
+        SELECT
+          import_route AS importRoute,
+          count() AS total
+        FROM forska.articles FINAL
+        WHERE _peerdb_is_deleted = 0
+        GROUP BY import_route
+        ORDER BY import_route
+      `,
+      format: 'JSONEachRow',
+    }),
+    client.query({
+      query: `
+        SELECT
+          import_route AS importRoute,
+          toInt32(toYear(coalesce(article_created_at, created_at))) AS year,
+          count() AS count
+        FROM forska.articles FINAL
+        WHERE _peerdb_is_deleted = 0
+        GROUP BY import_route, year
+        ORDER BY import_route, year DESC
+      `,
+      format: 'JSONEachRow',
+    }),
+  ])
+
+  const totalsRows = toRows(await totalsResult.json<ClickhouseImportRouteTotalRow>())
+  const yearRows = toRows(await yearlyResult.json<ClickhouseImportRouteYearRow>())
+
+  const byRoute = totalsRows.reduce((map, row) => {
+    const importRoute = row.importRoute ?? null
+    const importRouteName = getImportRouteName(nameMap, importRoute)
+    map.set(importRouteKey(importRoute), {importRoute, importRouteName, total: toNumber(row.total), years: []})
     return map
   }, new Map<string, ImportRouteStats>())
 
-  const withYears = yearlyCounts.reduce((map, row) => {
-    const key = importRouteKey(row.importRoute)
+  const withYears = yearRows.reduce((map, row) => {
+    const importRoute = row.importRoute ?? null
+    const key = importRouteKey(importRoute)
     const existing = map.get(key)
     const updated = existing
       ? existing
-      : {importRoute: row.importRoute, importRouteName: row.importRouteName, total: 0, years: []}
-    const years = [...updated.years, {year: row.year, count: row.count}]
+      : {importRoute, importRouteName: getImportRouteName(nameMap, importRoute), total: 0, years: []}
+    const years = [...updated.years, {year: toNumber(row.year), count: toNumber(row.count)}]
     map.set(key, {...updated, years})
     return map
   }, byRoute)
@@ -84,6 +125,6 @@ export const adminImportRouteStatsRoutes = new Elysia()
   .use(withErrorHandler())
   .use(requireAdminAuth())
   .get('/api/admin/import-route-stats', async () => {
-    const data = await buildImportRouteStats()
+    const data = await buildImportRouteStatsFromClickhouse()
     return {data}
   })
