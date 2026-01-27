@@ -954,7 +954,7 @@ export const countArticlesReviewsFromClickHouse = async (
       const tempTableName = tempTableInfo?.tableName ?? ''
       const useTempTableJoin = useCuratedTempTable && tempTableInfo !== null
       const fromClause = useTempTableJoin
-        ? `judgments FINAL j LEFT JOIN ${tempTableName} t ON j.articleId = t.articleId`
+        ? `judgments j FINAL LEFT JOIN ${tempTableName} t ON j.articleId = t.articleId`
         : 'judgments FINAL'
 
       const columnPrefix = useTempTableJoin ? 'j.' : ''

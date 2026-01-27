@@ -471,7 +471,7 @@ export const getUnassessedArticlesFromClickHouse = async (
 
     const countQuery = `
       SELECT COUNT(*) as total_count
-      FROM forska.articles FINAL a
+      FROM forska.articles a FINAL
       WHERE a._peerdb_is_deleted = 0 AND ${articleWhereClause}
         AND a.id NOT IN (${assessedSubquery})
     `
@@ -480,14 +480,14 @@ export const getUnassessedArticlesFromClickHouse = async (
       SELECT
         a.id,
         a.article_id,
-        a.article_title,
-        a.article_created_at,
-        a.article_updated_at
-      FROM forska.articles FINAL a
-      WHERE a._peerdb_is_deleted = 0 AND ${articleWhereClause}
-        AND a.id NOT IN (${assessedSubquery})
-      ORDER BY COALESCE(a.article_updated_at, a.article_created_at, a.created_at) DESC, a.id DESC
-      LIMIT ${limit}
+	        a.article_title,
+	        a.article_created_at,
+	        a.article_updated_at
+	      FROM forska.articles a FINAL
+	      WHERE a._peerdb_is_deleted = 0 AND ${articleWhereClause}
+	        AND a.id NOT IN (${assessedSubquery})
+	      ORDER BY COALESCE(a.article_updated_at, a.article_created_at, a.created_at) DESC, a.id DESC
+	      LIMIT ${limit}
       OFFSET ${offset}
     `
 
@@ -667,14 +667,14 @@ export const getUnassessedPairsFromClickHouse = async (
 
     const query = `
       SELECT
-        a.id AS article_id,
-        p.promptId AS prompt_id,
-        COALESCE(a.article_updated_at, a.article_created_at, a.created_at) AS sort_date
-      FROM forska.articles FINAL a
-      CROSS JOIN (
-        SELECT arrayJoin([${promptIdsQuoted}]) AS promptId
-      ) p
-      WHERE a._peerdb_is_deleted = 0 AND ${articleWhereClause}
+	        a.id AS article_id,
+	        p.promptId AS prompt_id,
+	        COALESCE(a.article_updated_at, a.article_created_at, a.created_at) AS sort_date
+	      FROM forska.articles a FINAL
+	      CROSS JOIN (
+	        SELECT arrayJoin([${promptIdsQuoted}]) AS promptId
+	      ) p
+	      WHERE a._peerdb_is_deleted = 0 AND ${articleWhereClause}
         AND (a.id, p.promptId) NOT IN (${assessedPairsSubquery})
         ${cursorCondition}
       ORDER BY sort_date DESC, a.id DESC
