@@ -273,6 +273,7 @@ ORDER BY (article_id, prompt_id, model_id, id);
 - [x] Add `_peerdb_version Int64` col
 - [x] Add `_peerdb_is_deleted Int8 DEFAULT 0` col
 - [x] Use ReplacingMergeTree(`_peerdb_version`) (PeerDB pattern)
+- [x] Enforce/migrate engine in setup: if existing `MergeTree` → rename to `*_legacy_<ts>`, recreate as ReplacingMergeTree, backfill with `_peerdb_version = toUnixTimestamp64Milli(updated_at)` (also for `forska.articles`) (`src/services/clickhouse/ensureClickhouseSchema.ts`)
 - [x] Keep `quotes` as JSON `Nullable(String)` + parse in query layer
 - [x] Keep `articleTitle/*` in `forska.judgments` view (join `articles`)
 
