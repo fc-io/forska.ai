@@ -60,7 +60,7 @@ services:
     environment:
       POSTGRES_DB: ${DB_NAME:-postgres}
       POSTGRES_USER: ${DB_USER:-postgres}
-      POSTGRES_PASSWORD: ${DB_PASS:?set DB_PASS in .env.local}
+      POSTGRES_PASSWORD: ${DB_PASS:-postgres}
     volumes:
       - pgdata:/var/lib/postgresql/data
       # Seed database on first init; files run in alphanumeric order
@@ -289,6 +289,7 @@ services:
       "
 
   sglang:
+    profiles: ["gpu"]
     image: lmsysorg/sglang:latest
     entrypoint: ["python", "-m", "sglang.launch_server"]
     environment:
@@ -349,7 +350,7 @@ services:
     env_file:
       - .env.local
     environment:
-      DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASS:?set DB_PASS in .env.local}@db:5432/${DB_NAME:-postgres}
+      DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASS:-postgres}@db:5432/${DB_NAME:-postgres}
       VITE_LLM_SERVER_URL: http://sglang:30000/v1
       API_SERVER_PORT: 3000
       VITE_PORT: 8080
@@ -364,13 +365,13 @@ services:
       context: .
       dockerfile: Dockerfile.app
       args:
-        DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASS:?set DB_PASS in .env.local}@db:5432/${DB_NAME:-postgres}
-        BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET required in .env.local}
-        BETTER_AUTH_URL: ${BETTER_AUTH_URL:?BETTER_AUTH_URL required in .env.local}
+        DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASS:-postgres}@db:5432/${DB_NAME:-postgres}
+        BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-unused-better-auth-secret}
+        BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:3006}
         VITE_PORT: "8080"
         API_SERVER_PORT: "3000"
         VITE_LLM_SERVER_URL: http://sglang:30000/v1
-        VITE_SERVER_API: ${VITE_SERVER_API:?VITE_SERVER_API required in .env.local}
+        VITE_SERVER_API: ${VITE_SERVER_API:-http://localhost:3006}
     env_file:
       - .env.local
     environment:
@@ -441,8 +442,8 @@ services:
       dockerfile: Dockerfile.app
       args:
         DATABASE_URL: postgresql://${DB_USER:-postgres}:***@localhost:${POSTGRES_PORT:-5432}/${DB_NAME:-postgres}
-        BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET required in .env}
-        BETTER_AUTH_URL: ${BETTER_AUTH_URL:?BETTER_AUTH_URL required in .env}
+        BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-unused-better-auth-secret}
+        BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:3006}
         VITE_PORT: "8080"
         API_SERVER_PORT: "3000"
         VITE_LLM_SERVER_URL: http://localhost:30000/v1
