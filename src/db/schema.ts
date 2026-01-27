@@ -1032,39 +1032,3 @@ export const syncState = pgTable(
     return {pk: primaryKey({columns: [table.remoteId, table.tableName]})}
   },
 )
-
-export const pgChSyncStats = pgTable(
-  'pg_ch_sync_stats',
-  {
-    id: text('id').primaryKey(),
-
-    totalCount: bigint('total_count', {mode: 'number'}).notNull().default(0),
-    activeCount: bigint('active_count', {mode: 'number'}).notNull().default(0),
-    deletedCount: bigint('deleted_count', {mode: 'number'}).notNull().default(0),
-
-    uniqueCount: bigint('unique_count', {mode: 'number'}),
-    uniqueCountAt: timestamp('unique_count_at', {withTimezone: true}),
-
-    watermarkCursorCol: text('watermark_cursor_col'),
-    watermarkTs: text('watermark_ts'),
-    watermarkId: text('watermark_id'),
-
-    maxCursorAt: text('max_cursor_at'),
-
-    jobStatus: text('job_status').notNull().default('idle'),
-    jobStartedAt: timestamp('job_started_at', {withTimezone: true}),
-    jobCompletedAt: timestamp('job_completed_at', {withTimezone: true}),
-    jobError: text('job_error'),
-    jobCurrentBatch: integer('job_current_batch'),
-    jobRowsCounted: bigint('job_rows_counted', {mode: 'number'}).notNull().default(0),
-
-    lastUpdatedAt: timestamp('last_updated_at', {withTimezone: true}).defaultNow().notNull(),
-    lastFullCountAt: timestamp('last_full_count_at', {withTimezone: true}),
-  },
-  (table) => {
-    return [
-      index('pg_ch_sync_stats_job_status_idx').on(table.jobStatus),
-      index('pg_ch_sync_stats_last_updated_at_idx').on(table.lastUpdatedAt),
-    ]
-  },
-)

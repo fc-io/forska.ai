@@ -56,19 +56,8 @@ const getAvatarLabel = (user: User | undefined) => {
 
 type LlmMetricsSummary = {waiting: number; running: number; lastUpdate: Date | null}
 
-const clickhouseSyncPaths = new Set([
-  '/admin/clickhouse-sync',
-  '/admin/clickhouse-sync/',
-  '/admin/clickhouse-sync/articles',
-  '/admin/clickhouse-sync/articles/',
-])
-
-const isClickhouseSyncPath = (pathname: string) => {
-  return clickhouseSyncPaths.has(pathname)
-}
-
 const getLlmMetricsRefetchInterval = (pathname: string) => {
-  return isClickhouseSyncPath(pathname) ? 1000 * 30 : 2000
+  return pathname ? 2000 : 2000
 }
 
 const fetchLlmMetricsSummary = async (): Promise<LlmMetricsSummary | null> => {
@@ -384,25 +373,11 @@ export const Navigation = (props: NavigationProps) => {
                       Failed Requests
                     </Link>
                     <Link
-                      to="/admin/clickhouse-sync"
-                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
-                      onClick={closeAdminMenu}
-                    >
-                      ClickHouse Sync (Judgments)
-                    </Link>
-                    <Link
-                      to="/admin/clickhouse-sync/articles"
-                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
-                      onClick={closeAdminMenu}
-                    >
-                      ClickHouse Sync (Articles)
-                    </Link>
-                    <Link
                       to="/admin/sync-stats"
                       class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
                       onClick={closeAdminMenu}
                     >
-                      Sync Stats
+                      Sync Stats (Legacy)
                     </Link>
                     <Link
                       to="/admin/diagnose-unassessed"

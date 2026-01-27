@@ -1,51 +1,10 @@
-import {useMutation, useQuery, useQueryClient} from '@tanstack/solid-query'
+import {useMutation, useQuery} from '@tanstack/solid-query'
 import {createFileRoute} from '@tanstack/solid-router'
 import {createMemo, createSignal, For, Match, Show, Switch} from 'solid-js'
 
 import {apiClient} from '../../../../services/apiClient.ts'
 
-type SyncDirection = 'pg_ahead' | 'ch_ahead' | 'synced'
-
-type SyncDiff = {absolute: number; percentage: number; direction: SyncDirection}
-
-type SyncSideStats = {
-  total: number
-  active: number
-  deleted: number
-  uniqueCount: number | null
-  uniqueCountAt: string | null
-  cursorCol: string | null
-  maxCursorAt: string | null
-  dedupDrift?: number
-}
-
-type SyncTableStats = {
-  pg: SyncSideStats
-  ch: SyncSideStats
-  diff: SyncDiff
-  lag: {seconds: number | null}
-  status: 'synced' | 'behind' | 'critical' | 'merge_pending' | 'unreachable'
-}
-
-type SyncStatsResponse = {
-  stats: {articles: SyncTableStats; judgments: SyncTableStats}
-  jobs: Record<
-    string,
-    {
-      status: 'idle' | 'running' | 'completed' | 'error'
-      currentBatch: number | null
-      rowsCounted: number | null
-      startedAt: string | null
-      completedAt: string | null
-      error: string | null
-      lastHeartbeatAt: string | null
-    }
-  >
-  clickhouse: {reachable: boolean}
-}
-
-type RefreshResult = {id: string; started: boolean; reason?: string}
-type RefreshResponse = {started: boolean; results: RefreshResult[]}
+type LegacySyncStatsResponse = {legacy: true; message: string; clickhouse: {reachable: boolean}}
 
 type SampleVerifyMismatch = {id: string; field: string; pg: unknown; ch: unknown}
 
@@ -74,30 +33,10 @@ type PartitionCoverageResult = {
   summary: {totalPg: number; totalCh: number; missingMonths: string[]; status: 'partition_gap' | 'synced' | 'diff'}
 }
 
-const fetchSyncStats = async (): Promise<SyncStatsResponse> => {
+const fetchSyncStats = async (): Promise<LegacySyncStatsResponse> => {
   const response = await apiClient.api.admin['sync-stats'].get()
   if (response.error) throw new Error('Failed to fetch sync stats')
   if (!response.data) throw new Error('Failed to fetch sync stats')
-  return response.data
-}
-
-const refreshSyncStats = async (input: {
-  fullRecount: boolean
-  includeUniqueCount: boolean
-}): Promise<RefreshResponse> => {
-  const response = await apiClient.api.admin['refresh-sync-stats'].post({
-    fullRecount: input.fullRecount,
-    includeUniqueCount: input.includeUniqueCount,
-  })
-  if (response.error) throw new Error('Failed to refresh sync stats')
-  if (!response.data) throw new Error('Failed to refresh sync stats')
-  return response.data
-}
-
-const fetchProgress = async (): Promise<{jobs: SyncStatsResponse['jobs']}> => {
-  const response = await apiClient.api.admin['refresh-sync-stats-progress'].get()
-  if (response.error) throw new Error('Failed to fetch progress')
-  if (!response.data) throw new Error('Failed to fetch progress')
   return response.data
 }
 
@@ -126,94 +65,19 @@ const formatCount = (value: number | null | undefined): string => {
   return value === null || value === undefined ? 'N/A' : value.toLocaleString()
 }
 
-const formatPercent = (value: number): string => {
-  return `${value.toFixed(2)}%`
-}
-
-const formatLag = (lagSeconds: number | null): string => {
-  if (lagSeconds === null) return 'N/A'
-  const abs = Math.abs(lagSeconds)
-  if (abs < 60) return `${lagSeconds}s`
-  if (abs < 3600) return `${Math.round(lagSeconds / 60)}m`
-  if (abs < 86400) return `${Math.round(lagSeconds / 3600)}h`
-  return `${Math.round(lagSeconds / 86400)}d`
-}
-
-const formatAge = (iso: string | null): string => {
-  if (!iso) return 'N/A'
-  const ts = Date.parse(iso)
-  if (Number.isNaN(ts)) return 'N/A'
-  const diffSeconds = Math.max(0, Math.floor((Date.now() - ts) / 1000))
-  if (diffSeconds < 60) return `${diffSeconds}s`
-  if (diffSeconds < 3600) return `${Math.floor(diffSeconds / 60)}m`
-  if (diffSeconds < 86400) return `${Math.floor(diffSeconds / 3600)}h`
-  return `${Math.floor(diffSeconds / 86400)}d`
-}
-
-const getStatusBadge = (status: SyncTableStats['status']) => {
-  if (status === 'synced') return {label: 'Synced', class: 'bg-green-100 text-green-800'}
-  if (status === 'behind') return {label: 'Behind', class: 'bg-yellow-100 text-yellow-800'}
-  if (status === 'merge_pending') return {label: 'Merge Pending', class: 'bg-orange-100 text-orange-800'}
-  if (status === 'critical') return {label: 'Critical', class: 'bg-red-100 text-red-800'}
-  return {label: 'Unreachable', class: 'bg-gray-100 text-gray-800'}
-}
-
-const getDiffLabel = (diff: SyncDiff): string => {
-  if (diff.direction === 'synced') return `0 (${formatPercent(0)}) — Synced`
-  const absLabel = `${diff.absolute.toLocaleString()} (${formatPercent(diff.percentage)})`
-  return diff.direction === 'pg_ahead' ? `${absLabel} — CH behind` : `${absLabel} — CH ahead`
-}
-
-const isAnyJobRunning = (jobs: SyncStatsResponse['jobs'] | null): boolean => {
-  const entries = jobs ? Object.values(jobs) : []
-  return entries.some((j) => {
-    return j.status === 'running'
-  })
-}
-
 const syncStatsQueryKey = ['admin', 'sync-stats'] as const
-const syncStatsProgressQueryKey = ['admin', 'sync-stats-progress'] as const
 
 const getErrorMessage = (error: unknown): string | null => {
   return error instanceof Error ? error.message : error ? 'Unknown error' : null
 }
 
 const AdminSyncStats = () => {
-  const queryClient = useQueryClient()
-
-  const [fullRecount, setFullRecount] = createSignal(false)
-  const [includeUniqueCount, setIncludeUniqueCount] = createSignal(false)
-
   const [sampleSize, setSampleSize] = createSignal(100)
   const [sampleType, setSampleType] = createSignal<'recent' | 'random' | 'deleted'>('recent')
-
   const [partitionMonths, setPartitionMonths] = createSignal(12)
+
   const syncStatsQuery = useQuery(() => {
     return {queryKey: syncStatsQueryKey, queryFn: fetchSyncStats, refetchOnWindowFocus: false}
-  })
-
-  const progressQuery = useQuery(() => {
-    return {
-      queryKey: syncStatsProgressQueryKey,
-      queryFn: fetchProgress,
-      refetchOnWindowFocus: false,
-      refetchOnReconnect: false,
-      refetchIntervalInBackground: true,
-      refetchInterval: (query) => {
-        const currentJobs = query.state.data?.jobs ?? null
-        return isAnyJobRunning(currentJobs) ? 1000 : false
-      },
-    }
-  })
-
-  const refreshMutation = useMutation(() => {
-    return {
-      mutationFn: refreshSyncStats,
-      onSuccess: () => {
-        void queryClient.invalidateQueries({queryKey: syncStatsQueryKey})
-        void queryClient.invalidateQueries({queryKey: syncStatsProgressQueryKey})
-      },
-    }
   })
 
   const sampleVerifyMutation = useMutation(() => {
@@ -236,20 +100,11 @@ const AdminSyncStats = () => {
     return syncStatsQuery.isSuccess ? syncStatsQuery.data : null
   })
 
-  const jobsData = createMemo(() => {
-    const progressJobs = progressQuery.isSuccess ? progressQuery.data.jobs : null
-    const snapshotJobs = syncStatsData()?.jobs ?? null
-    return progressJobs ?? snapshotJobs
-  })
-
   const errorMessage = createMemo(() => {
     return (
       getErrorMessage(syncStatsQuery.error)
-      ?? getErrorMessage(progressQuery.error)
-      ?? getErrorMessage(refreshMutation.error)
       ?? getErrorMessage(sampleVerifyMutation.error)
       ?? getErrorMessage(partitionCheckMutation.error)
-      ?? null
     )
   })
 
@@ -257,407 +112,239 @@ const AdminSyncStats = () => {
     return syncStatsData()?.clickhouse.reachable ?? false
   })
 
-  const jobIds = createMemo(() => {
-    const currentJobs = jobsData() ?? {}
-    return Object.keys(currentJobs).sort((a, b) => {
-      return a.localeCompare(b)
-    })
-  })
-
-  const tableCard = (input: {title: string; data: SyncTableStats}) => {
-    const badge = () => {
-      return getStatusBadge(input.data.status)
-    }
-    return (
-      <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-        <div class="flex items-center justify-between mb-4">
-          <h2 class="text-lg font-semibold">{input.title}</h2>
-          <span class={`px-3 py-1 rounded-full text-sm font-medium ${badge().class}`}>{badge().label}</span>
-        </div>
-
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-          <div class="p-4 bg-gray-50 rounded-lg">
-            <div class="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">PostgreSQL (cached)</div>
-            <div class="space-y-1">
-              <div>Total: {formatCount(input.data.pg.total)}</div>
-              <div>Active: {formatCount(input.data.pg.active)}</div>
-              <div>Deleted: {formatCount(input.data.pg.deleted)}</div>
-              <div>
-                Unique: {formatCount(input.data.pg.uniqueCount)}{' '}
-                <span class="text-gray-500">({formatAge(input.data.pg.uniqueCountAt)})</span>
-              </div>
-              <div class="text-gray-600 break-all">Max cursor: {input.data.pg.maxCursorAt ?? 'N/A'}</div>
-              <div class="text-gray-600">Cursor col: {input.data.pg.cursorCol ?? 'N/A'}</div>
-            </div>
-          </div>
-
-          <div class="p-4 bg-gray-50 rounded-lg">
-            <div class="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">ClickHouse (cached)</div>
-            <div class="space-y-1">
-              <div>Total: {formatCount(input.data.ch.total)}</div>
-              <div>Active: {formatCount(input.data.ch.active)}</div>
-              <div>Deleted: {formatCount(input.data.ch.deleted)}</div>
-              <div>
-                Unique: {formatCount(input.data.ch.uniqueCount)}{' '}
-                <span class="text-gray-500">({formatAge(input.data.ch.uniqueCountAt)})</span>
-              </div>
-              <Show when={input.data.ch.dedupDrift !== undefined}>
-                <div>Dedup drift: {formatCount(input.data.ch.dedupDrift)}</div>
-              </Show>
-              <div class="text-gray-600 break-all">Max cursor: {input.data.ch.maxCursorAt ?? 'N/A'}</div>
-              <div class="text-gray-600">Cursor col: {input.data.ch.cursorCol ?? 'N/A'}</div>
-            </div>
-          </div>
-        </div>
-
-        <div class="mt-4 space-y-1 text-sm">
-          <div class="font-medium">Diff (unique): {getDiffLabel(input.data.diff)}</div>
-          <div>Lag: {formatLag(input.data.lag.seconds)}</div>
-        </div>
-      </div>
-    )
-  }
-
   return (
-    <div class="min-h-screen bg-gray-50 p-6 mx-auto max-w-6xl">
-      <div class="mb-6 flex items-start justify-between gap-4">
-        <div>
-          <h1 class="text-2xl font-bold">Database Sync Status</h1>
-          <div class="text-sm text-gray-600 mt-1">
-            ClickHouse reachable:{' '}
-            <span class={clickhouseReachable() ? 'text-green-700 font-medium' : 'text-red-700 font-medium'}>
-              {clickhouseReachable() ? 'Yes' : 'No'}
-            </span>
-          </div>
+    <div class="min-h-screen bg-gray-50 py-6">
+      <div class="max-w-6xl mx-auto px-6">
+        <div class="mb-6 flex flex-col gap-2">
+          <h1 class="text-2xl font-bold text-gray-900">Sync Stats (Legacy)</h1>
+          <p class="text-sm text-gray-600">
+            Manual sync stats were removed. PeerDB now handles PG → ClickHouse replication.
+          </p>
         </div>
-        <div class="flex flex-col items-end gap-2">
-          <div class="flex items-center gap-2">
-            <button
-              onClick={() => {
-                void syncStatsQuery.refetch()
-              }}
-              disabled={syncStatsQuery.isFetching}
-              class="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 rounded-md disabled:opacity-50"
-            >
-              {syncStatsQuery.isFetching ? 'Loading...' : 'Refresh View'}
-            </button>
-            <button
-              onClick={() => {
-                refreshMutation.reset()
-                void refreshMutation.mutateAsync({fullRecount: fullRecount(), includeUniqueCount: includeUniqueCount()})
-              }}
-              disabled={refreshMutation.isPending}
-              class="px-3 py-2 text-sm bg-blue-600 text-white hover:bg-blue-700 rounded-md disabled:opacity-50"
-            >
-              {refreshMutation.isPending ? 'Starting...' : 'Refresh Stats'}
-            </button>
+
+        <Show when={syncStatsData()}>
+          {(s) => {
+            return (
+              <div class="mb-6 rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
+                <div class="font-medium">{s().message}</div>
+                <div class="mt-1">
+                  ClickHouse reachable:{' '}
+                  <span class={clickhouseReachable() ? 'font-semibold text-green-700' : 'font-semibold text-red-700'}>
+                    {clickhouseReachable() ? 'Yes' : 'No'}
+                  </span>
+                </div>
+              </div>
+            )
+          }}
+        </Show>
+
+        <Show when={errorMessage()}>
+          <div class="mb-6 rounded-md border border-red-200 bg-red-50 p-4">
+            <p class="text-red-600">{errorMessage()}</p>
           </div>
-          <div class="flex items-center gap-4 text-sm">
-            <label class="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={fullRecount()}
-                onChange={(e) => {
-                  setFullRecount(e.currentTarget.checked)
-                }}
-                class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-              />
-              Full recount (reset)
-            </label>
-            <label class="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={includeUniqueCount()}
-                onChange={(e) => {
-                  setIncludeUniqueCount(e.currentTarget.checked)
-                }}
-                class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-              />
-              `uniqExact` (slow)
-            </label>
+        </Show>
+
+        <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+          <div class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+            <h2 class="mb-4 text-lg font-semibold">Sample Verify</h2>
+
+            <div class="mb-4 flex flex-col items-start gap-3 sm:flex-row sm:items-end">
+              <div class="flex flex-col gap-1">
+                <label class="text-sm text-gray-700">Sample size</label>
+                <input
+                  type="number"
+                  value={sampleSize()}
+                  min={1}
+                  max={500}
+                  onInput={(e) => {
+                    setSampleSize(Math.max(1, Math.min(500, Number(e.currentTarget.value) || 100)))
+                  }}
+                  class="w-32 rounded-md border border-gray-300 px-3 py-2 text-sm"
+                />
+              </div>
+              <div class="flex flex-col gap-1">
+                <label class="text-sm text-gray-700">Sample type</label>
+                <select
+                  value={sampleType()}
+                  onChange={(e) => {
+                    setSampleType(e.currentTarget.value as 'recent' | 'random' | 'deleted')
+                  }}
+                  class="w-40 rounded-md border border-gray-300 px-3 py-2 text-sm"
+                >
+                  <option value="recent">Recent</option>
+                  <option value="random">Random</option>
+                  <option value="deleted">Deleted</option>
+                </select>
+              </div>
+              <div class="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    sampleVerifyMutation.reset()
+                    void sampleVerifyMutation.mutateAsync('articles')
+                  }}
+                  disabled={sampleVerifyMutation.isPending}
+                  class="rounded-md bg-gray-900 px-3 py-2 text-sm text-white disabled:opacity-50"
+                >
+                  Articles
+                </button>
+                <button
+                  onClick={() => {
+                    sampleVerifyMutation.reset()
+                    void sampleVerifyMutation.mutateAsync('judgments')
+                  }}
+                  disabled={sampleVerifyMutation.isPending}
+                  class="rounded-md bg-gray-900 px-3 py-2 text-sm text-white disabled:opacity-50"
+                >
+                  Judgments
+                </button>
+              </div>
+            </div>
+
+            <Show when={sampleVerifyMutation.data}>
+              {(r) => {
+                return (
+                  <div class="space-y-2 text-sm">
+                    <div>
+                      Sampled: <span class="font-semibold">{r().sampled}</span> — Matched:{' '}
+                      <span class="font-semibold">{r().matched}</span>
+                    </div>
+                    <Show when={r().missingInCh.length > 0}>
+                      <div class="text-red-700">Missing in ClickHouse: {r().missingInCh.slice(0, 10).join(', ')}</div>
+                    </Show>
+                    <Show when={r().missingInPg.length > 0}>
+                      <div class="text-red-700">Missing in PostgreSQL: {r().missingInPg.slice(0, 10).join(', ')}</div>
+                    </Show>
+                    <Show when={r().fieldMismatches.length > 0}>
+                      <div class="mt-3">
+                        <div class="mb-2 font-semibold">
+                          Mismatches (first {Math.min(r().fieldMismatches.length, 50)})
+                        </div>
+                        <div class="max-h-64 space-y-1 overflow-auto rounded-md border border-gray-200 bg-gray-50 p-3 font-mono text-xs">
+                          <For each={r().fieldMismatches}>
+                            {(m) => {
+                              return (
+                                <div>
+                                  {m.id} — {m.field} — pg={String(m.pg)} ch={String(m.ch)}
+                                </div>
+                              )
+                            }}
+                          </For>
+                        </div>
+                      </div>
+                    </Show>
+                  </div>
+                )
+              }}
+            </Show>
+          </div>
+
+          <div class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+            <h2 class="mb-4 text-lg font-semibold">Partition Coverage</h2>
+
+            <div class="mb-4 flex flex-col items-start gap-3 sm:flex-row sm:items-end">
+              <div class="flex flex-col gap-1">
+                <label class="text-sm text-gray-700">Months</label>
+                <input
+                  type="number"
+                  value={partitionMonths()}
+                  min={1}
+                  max={60}
+                  onInput={(e) => {
+                    setPartitionMonths(Math.max(1, Math.min(60, Number(e.currentTarget.value) || 12)))
+                  }}
+                  class="w-32 rounded-md border border-gray-300 px-3 py-2 text-sm"
+                />
+              </div>
+              <div class="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    partitionCheckMutation.reset()
+                    void partitionCheckMutation.mutateAsync('articles')
+                  }}
+                  disabled={partitionCheckMutation.isPending}
+                  class="rounded-md bg-gray-900 px-3 py-2 text-sm text-white disabled:opacity-50"
+                >
+                  Articles
+                </button>
+                <button
+                  onClick={() => {
+                    partitionCheckMutation.reset()
+                    void partitionCheckMutation.mutateAsync('judgments')
+                  }}
+                  disabled={partitionCheckMutation.isPending}
+                  class="rounded-md bg-gray-900 px-3 py-2 text-sm text-white disabled:opacity-50"
+                >
+                  Judgments
+                </button>
+              </div>
+            </div>
+
+            <Show when={partitionCheckMutation.data}>
+              {(r) => {
+                return (
+                  <div class="space-y-2 text-sm">
+                    <div class="flex items-center justify-between">
+                      <div>
+                        Status:{' '}
+                        <span
+                          class={
+                            r().summary.status === 'partition_gap' ? 'font-semibold text-orange-700' : 'font-semibold'
+                          }
+                        >
+                          {r().summary.status}
+                        </span>
+                      </div>
+                      <div class="text-gray-600">
+                        Total: PG {formatCount(r().summary.totalPg)} / CH {formatCount(r().summary.totalCh)}
+                      </div>
+                    </div>
+                    <div class="max-h-72 overflow-auto rounded-md border border-gray-200">
+                      <table class="min-w-full text-xs">
+                        <thead class="sticky top-0 bg-gray-50">
+                          <tr>
+                            <th class="px-3 py-2 text-left font-semibold text-gray-600">Month</th>
+                            <th class="px-3 py-2 text-right font-semibold text-gray-600">PG</th>
+                            <th class="px-3 py-2 text-right font-semibold text-gray-600">CH</th>
+                            <th class="px-3 py-2 text-right font-semibold text-gray-600">Diff</th>
+                            <th class="px-3 py-2 text-left font-semibold text-gray-600">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <For each={r().months}>
+                            {(m) => {
+                              return (
+                                <tr class="border-t border-gray-100">
+                                  <td class="font-mono px-3 py-2">{m.month}</td>
+                                  <td class="px-3 py-2 text-right">{formatCount(m.pg)}</td>
+                                  <td class="px-3 py-2 text-right">{formatCount(m.ch)}</td>
+                                  <td class="px-3 py-2 text-right">{formatCount(m.diff)}</td>
+                                  <td class="px-3 py-2">
+                                    <Switch>
+                                      <Match when={m.status === 'synced'}>
+                                        <span class="font-medium text-green-700">synced</span>
+                                      </Match>
+                                      <Match when={m.status === 'missing'}>
+                                        <span class="font-semibold text-orange-700">missing</span>
+                                      </Match>
+                                      <Match when={m.status === 'diff'}>
+                                        <span class="font-medium text-yellow-700">diff</span>
+                                      </Match>
+                                    </Switch>
+                                  </td>
+                                </tr>
+                              )
+                            }}
+                          </For>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )
+              }}
+            </Show>
           </div>
         </div>
       </div>
-
-      <Show when={errorMessage()}>
-        <div class="p-4 rounded-md bg-red-50 border border-red-200 mb-6">
-          <p class="text-red-600">{errorMessage()}</p>
-        </div>
-      </Show>
-
-      <Show when={syncStatsData()}>
-        {(s) => {
-          return (
-            <div class="space-y-6">
-              <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {tableCard({title: 'Articles', data: s().stats.articles})}
-                {tableCard({title: 'Judgments', data: s().stats.judgments})}
-              </div>
-
-              <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-                <div class="flex items-center justify-between mb-4">
-                  <h2 class="text-lg font-semibold">Jobs</h2>
-                  <Show when={isAnyJobRunning(jobsData())}>
-                    <button
-                      onClick={() => {
-                        void progressQuery.refetch()
-                      }}
-                      class="px-3 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded-md"
-                    >
-                      Poll
-                    </button>
-                  </Show>
-                </div>
-
-                <div class="space-y-2 text-sm">
-                  <For each={jobIds()}>
-                    {(id) => {
-                      const job = createMemo(() => {
-                        return jobsData()?.[id] ?? null
-                      })
-                      const heartbeatAge = createMemo(() => {
-                        const iso = job()?.lastHeartbeatAt ?? null
-                        return iso ? formatAge(iso) : 'N/A'
-                      })
-
-                      return (
-                        <Show when={job()}>
-                          {(j) => {
-                            return (
-                              <div class="flex items-center justify-between rounded-md bg-gray-50 px-4 py-3">
-                                <div class="font-mono text-xs">{id}</div>
-                                <div class="flex items-center gap-3">
-                                  <div class="text-gray-700">{j().status.toUpperCase()}</div>
-                                  <Show when={j().status === 'running'}>
-                                    <div class="text-gray-600">
-                                      Batch {j().currentBatch ?? 0} — {formatCount(j().rowsCounted)}
-                                    </div>
-                                  </Show>
-                                  <div class="text-gray-500">Heartbeat: {heartbeatAge()}</div>
-                                  <Show when={j().error}>
-                                    <div class="text-red-600">{j().error}</div>
-                                  </Show>
-                                </div>
-                              </div>
-                            )
-                          }}
-                        </Show>
-                      )
-                    }}
-                  </For>
-                </div>
-              </div>
-
-              <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-                  <h2 class="text-lg font-semibold mb-4">Sample Verify</h2>
-
-                  <div class="flex flex-col sm:flex-row gap-3 items-start sm:items-end mb-4">
-                    <div class="flex flex-col gap-1">
-                      <label class="text-sm text-gray-700">Sample size</label>
-                      <input
-                        type="number"
-                        value={sampleSize()}
-                        min={1}
-                        max={500}
-                        onInput={(e) => {
-                          setSampleSize(Math.max(1, Math.min(500, Number(e.currentTarget.value) || 100)))
-                        }}
-                        class="w-32 px-3 py-2 border border-gray-300 rounded-md text-sm"
-                      />
-                    </div>
-                    <div class="flex flex-col gap-1">
-                      <label class="text-sm text-gray-700">Sample type</label>
-                      <select
-                        value={sampleType()}
-                        onChange={(e) => {
-                          setSampleType(e.currentTarget.value as 'recent' | 'random' | 'deleted')
-                        }}
-                        class="w-40 px-3 py-2 border border-gray-300 rounded-md text-sm"
-                      >
-                        <option value="recent">Recent</option>
-                        <option value="random">Random</option>
-                        <option value="deleted">Deleted</option>
-                      </select>
-                    </div>
-                    <div class="flex items-center gap-2">
-                      <button
-                        onClick={() => {
-                          sampleVerifyMutation.reset()
-                          void sampleVerifyMutation.mutateAsync('articles')
-                        }}
-                        disabled={sampleVerifyMutation.isPending}
-                        class="px-3 py-2 text-sm bg-gray-900 text-white rounded-md disabled:opacity-50"
-                      >
-                        Articles
-                      </button>
-                      <button
-                        onClick={() => {
-                          sampleVerifyMutation.reset()
-                          void sampleVerifyMutation.mutateAsync('judgments')
-                        }}
-                        disabled={sampleVerifyMutation.isPending}
-                        class="px-3 py-2 text-sm bg-gray-900 text-white rounded-md disabled:opacity-50"
-                      >
-                        Judgments
-                      </button>
-                    </div>
-                  </div>
-
-                  <Show when={sampleVerifyMutation.data}>
-                    {(r) => {
-                      return (
-                        <div class="space-y-2 text-sm">
-                          <div>
-                            Sampled: <span class="font-semibold">{r().sampled}</span> — Matched:{' '}
-                            <span class="font-semibold">{r().matched}</span>
-                          </div>
-                          <Show when={r().missingInCh.length > 0}>
-                            <div class="text-red-700">
-                              Missing in ClickHouse: {r().missingInCh.slice(0, 10).join(', ')}
-                            </div>
-                          </Show>
-                          <Show when={r().missingInPg.length > 0}>
-                            <div class="text-red-700">
-                              Missing in PostgreSQL: {r().missingInPg.slice(0, 10).join(', ')}
-                            </div>
-                          </Show>
-                          <Show when={r().fieldMismatches.length > 0}>
-                            <div class="mt-3">
-                              <div class="font-semibold mb-2">
-                                Mismatches (first {Math.min(r().fieldMismatches.length, 50)})
-                              </div>
-                              <div class="space-y-1 max-h-64 overflow-auto rounded-md border border-gray-200 bg-gray-50 p-3 font-mono text-xs">
-                                <For each={r().fieldMismatches}>
-                                  {(m) => {
-                                    return (
-                                      <div>
-                                        {m.id} — {m.field} — pg={String(m.pg)} ch={String(m.ch)}
-                                      </div>
-                                    )
-                                  }}
-                                </For>
-                              </div>
-                            </div>
-                          </Show>
-                        </div>
-                      )
-                    }}
-                  </Show>
-                </div>
-
-                <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-                  <h2 class="text-lg font-semibold mb-4">Partition Coverage</h2>
-
-                  <div class="flex flex-col sm:flex-row gap-3 items-start sm:items-end mb-4">
-                    <div class="flex flex-col gap-1">
-                      <label class="text-sm text-gray-700">Months</label>
-                      <input
-                        type="number"
-                        value={partitionMonths()}
-                        min={1}
-                        max={60}
-                        onInput={(e) => {
-                          setPartitionMonths(Math.max(1, Math.min(60, Number(e.currentTarget.value) || 12)))
-                        }}
-                        class="w-32 px-3 py-2 border border-gray-300 rounded-md text-sm"
-                      />
-                    </div>
-                    <div class="flex items-center gap-2">
-                      <button
-                        onClick={() => {
-                          partitionCheckMutation.reset()
-                          void partitionCheckMutation.mutateAsync('articles')
-                        }}
-                        disabled={partitionCheckMutation.isPending}
-                        class="px-3 py-2 text-sm bg-gray-900 text-white rounded-md disabled:opacity-50"
-                      >
-                        Articles
-                      </button>
-                      <button
-                        onClick={() => {
-                          partitionCheckMutation.reset()
-                          void partitionCheckMutation.mutateAsync('judgments')
-                        }}
-                        disabled={partitionCheckMutation.isPending}
-                        class="px-3 py-2 text-sm bg-gray-900 text-white rounded-md disabled:opacity-50"
-                      >
-                        Judgments
-                      </button>
-                    </div>
-                  </div>
-
-                  <Show when={partitionCheckMutation.data}>
-                    {(r) => {
-                      return (
-                        <div class="space-y-2 text-sm">
-                          <div class="flex items-center justify-between">
-                            <div>
-                              Status:{' '}
-                              <span
-                                class={
-                                  r().summary.status === 'partition_gap'
-                                    ? 'text-orange-700 font-semibold'
-                                    : 'font-semibold'
-                                }
-                              >
-                                {r().summary.status}
-                              </span>
-                            </div>
-                            <div class="text-gray-600">
-                              Total: PG {formatCount(r().summary.totalPg)} / CH {formatCount(r().summary.totalCh)}
-                            </div>
-                          </div>
-                          <div class="max-h-72 overflow-auto rounded-md border border-gray-200">
-                            <table class="min-w-full text-xs">
-                              <thead class="bg-gray-50 sticky top-0">
-                                <tr>
-                                  <th class="text-left px-3 py-2 font-semibold text-gray-600">Month</th>
-                                  <th class="text-right px-3 py-2 font-semibold text-gray-600">PG</th>
-                                  <th class="text-right px-3 py-2 font-semibold text-gray-600">CH</th>
-                                  <th class="text-right px-3 py-2 font-semibold text-gray-600">Diff</th>
-                                  <th class="text-left px-3 py-2 font-semibold text-gray-600">Status</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                <For each={r().months}>
-                                  {(m) => {
-                                    return (
-                                      <tr class="border-t border-gray-100">
-                                        <td class="px-3 py-2 font-mono">{m.month}</td>
-                                        <td class="px-3 py-2 text-right">{formatCount(m.pg)}</td>
-                                        <td class="px-3 py-2 text-right">{formatCount(m.ch)}</td>
-                                        <td class="px-3 py-2 text-right">{formatCount(m.diff)}</td>
-                                        <td class="px-3 py-2">
-                                          <Switch>
-                                            <Match when={m.status === 'synced'}>
-                                              <span class="text-green-700 font-medium">synced</span>
-                                            </Match>
-                                            <Match when={m.status === 'missing'}>
-                                              <span class="text-orange-700 font-semibold">missing</span>
-                                            </Match>
-                                            <Match when={m.status === 'diff'}>
-                                              <span class="text-yellow-700 font-medium">diff</span>
-                                            </Match>
-                                          </Switch>
-                                        </td>
-                                      </tr>
-                                    )
-                                  }}
-                                </For>
-                              </tbody>
-                            </table>
-                          </div>
-                        </div>
-                      )
-                    }}
-                  </Show>
-                </div>
-              </div>
-            </div>
-          )
-        }}
-      </Show>
     </div>
   )
 }

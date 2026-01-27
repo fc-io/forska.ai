@@ -456,6 +456,13 @@
       "when": 1769357500662,
       "tag": "0065_romantic_next_avengers",
       "breakpoints": true
+    },
+    {
+      "idx": 66,
+      "version": "7",
+      "when": 1769502734149,
+      "tag": "0066_useful_the_hand",
+      "breakpoints": true
     }
   ]
 }

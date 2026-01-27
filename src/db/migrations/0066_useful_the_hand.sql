@@ -1,0 +1,1 @@
+DROP TABLE "pg_ch_sync_stats" CASCADE;
