@@ -4,7 +4,7 @@ import {createMemo, createSignal, For, Match, Show, Suspense, Switch} from 'soli
 
 import {apiClient} from '../../../../services/apiClient.ts'
 
-type TableStats = {count: number; maxUpdatedAtMs: number | null}
+type TableStats = {count: number; countType: 'exact' | 'estimated'; maxUpdatedAtMs: number | null}
 
 type SampleVerifyMismatch = {id: string; field: string; pg: unknown; ch: unknown}
 
@@ -125,7 +125,7 @@ const StatsCard = (props: StatsCardProps) => {
       <Show when={!errorMessage()}>
         <div class="space-y-2 text-sm">
           <div class="flex items-center gap-2">
-            <div class="text-gray-600">Count</div>
+            <div class="text-gray-600">{query.data?.countType === 'estimated' ? 'Count (estimated)' : 'Count'}</div>
             <div class="font-semibold text-gray-900">{formatCount(query.data?.count)}</div>
           </div>
           <div class="flex items-center gap-2">

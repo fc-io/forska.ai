@@ -27,6 +27,18 @@ const toMsOrNull = (value: unknown): number | null => {
 }
 
 const STATS_STATEMENT_TIMEOUT_MS = 10 * 60 * 1000
+const MAX_REASONABLE_FUTURE_MS = 1000 * 60 * 60 * 24 * 365 * 20
+
+const normalizeEpochMsWithin = (value: number, maxReasonableMs: number): number => {
+  return value > maxReasonableMs ? normalizeEpochMsWithin(Math.trunc(value / 1000), maxReasonableMs) : value
+}
+
+const normalizeEpochMs = (value: number | null): number | null => {
+  const maxReasonableMs = Date.now() + MAX_REASONABLE_FUTURE_MS
+  return value === null ? null : normalizeEpochMsWithin(value, maxReasonableMs)
+}
+
+type CountType = 'exact' | 'estimated'
 
 const getPeerdbMirrorName = (): string => {
   const raw = String(process.env['PEERDB_MIRROR_NAME'] ?? '').trim()
@@ -152,18 +164,51 @@ const getPgTableStats = async (
   const where = table === 'judgments' ? sql`WHERE deleted_at IS NULL` : sql``
   const result = await db.transaction(async (tx) => {
     await tx.execute(sql.raw(`SET LOCAL statement_timeout = ${STATS_STATEMENT_TIMEOUT_MS}`))
-    return tx.execute<{count: string | number; max_updated_at: Date | null}>(sql`
+    return tx.execute<{count: string | number; max_updated_at_ms: string | number | null}>(sql`
       SELECT
         COUNT(*)::text AS count,
-        MAX(updated_at) AS max_updated_at
+        (EXTRACT(EPOCH FROM MAX(updated_at)) * 1000)::bigint::text AS max_updated_at_ms
       FROM ${sql.identifier(table)} ${where}
     `)
   })
 
   const row = result.rows[0]
   return row
-    ? {count: toNumber(row.count), maxUpdatedAtMs: toMsOrNull(row.max_updated_at)}
+    ? {count: toNumber(row.count), maxUpdatedAtMs: toMsOrNull(row.max_updated_at_ms)}
     : {count: 0, maxUpdatedAtMs: null}
+}
+
+const getPgArticlesFastStats = async (): Promise<{
+  count: number
+  countType: CountType
+  maxUpdatedAtMs: number | null
+}> => {
+  const db = getDatabase()
+
+  const {countRow, maxRow} = await db.transaction(async (tx) => {
+    await tx.execute(sql.raw(`SET LOCAL statement_timeout = ${STATS_STATEMENT_TIMEOUT_MS}`))
+
+    const [countResult, maxResult] = await Promise.all([
+      tx.execute<{count: string | number}>(sql`
+        SELECT reltuples::bigint::text AS count
+        FROM pg_class
+        WHERE oid = 'public.articles'::regclass
+      `),
+      tx.execute<{max_updated_at_ms: string | number | null}>(sql`
+        SELECT (EXTRACT(EPOCH FROM updated_at) * 1000)::bigint::text AS max_updated_at_ms
+        FROM articles
+        ORDER BY updated_at DESC
+        LIMIT 1
+      `),
+    ])
+
+    return {countRow: countResult.rows[0], maxRow: maxResult.rows[0]}
+  })
+
+  const count = toNumber(countRow?.count)
+  const maxUpdatedAtMs = toMsOrNull(maxRow?.max_updated_at_ms ?? null)
+
+  return {count, countType: 'estimated', maxUpdatedAtMs}
 }
 
 type ClickhouseTableStats = {
@@ -206,9 +251,11 @@ const getClickhouseTableStats = async (table: 'articles' | 'judgments'): Promise
   const liveRow = await liveResult.json<{liveCount: string | number; liveMaxUpdatedAtMs: string | number | null}>()
 
   const totalCount = toNumber((Array.isArray(rawRow) ? rawRow[0] : rawRow)?.totalCount)
-  const maxUpdatedAtMs = toMsOrNull((Array.isArray(rawRow) ? rawRow[0] : rawRow)?.maxUpdatedAtMs)
+  const maxUpdatedAtMs = normalizeEpochMs(toMsOrNull((Array.isArray(rawRow) ? rawRow[0] : rawRow)?.maxUpdatedAtMs))
   const liveCount = toNumber((Array.isArray(liveRow) ? liveRow[0] : liveRow)?.liveCount)
-  const liveMaxUpdatedAtMs = toMsOrNull((Array.isArray(liveRow) ? liveRow[0] : liveRow)?.liveMaxUpdatedAtMs)
+  const liveMaxUpdatedAtMs = normalizeEpochMs(
+    toMsOrNull((Array.isArray(liveRow) ? liveRow[0] : liveRow)?.liveMaxUpdatedAtMs),
+  )
   const dedupDrift = Math.max(0, totalCount - liveCount)
 
   return {totalCount, maxUpdatedAtMs, liveCount, liveMaxUpdatedAtMs, dedupDrift}
@@ -650,23 +697,24 @@ export const adminSyncStatsRoutes = new Elysia()
     return {data}
   })
   .get('/api/admin/sync-stats/pg-articles', async () => {
-    const data = await getPgTableStats('articles')
+    const data = await getPgArticlesFastStats()
     return {data}
   })
   .get('/api/admin/sync-stats/pg-judgments', async () => {
-    const data = await getPgTableStats('judgments')
+    const stats = await getPgTableStats('judgments')
+    const data = {...stats, countType: 'exact' as const}
     return {data}
   })
   .get('/api/admin/sync-stats/ch-articles', async () => {
     await ensureClickhouseSchema()
     const stats = await getClickhouseTableStats('articles')
-    const data = {count: stats.liveCount, maxUpdatedAtMs: stats.liveMaxUpdatedAtMs}
+    const data = {count: stats.liveCount, countType: 'exact' as const, maxUpdatedAtMs: stats.liveMaxUpdatedAtMs}
     return {data}
   })
   .get('/api/admin/sync-stats/ch-judgments', async () => {
     await ensureClickhouseSchema()
     const stats = await getClickhouseTableStats('judgments')
-    const data = {count: stats.liveCount, maxUpdatedAtMs: stats.liveMaxUpdatedAtMs}
+    const data = {count: stats.liveCount, countType: 'exact' as const, maxUpdatedAtMs: stats.liveMaxUpdatedAtMs}
     return {data}
   })
   .post(
