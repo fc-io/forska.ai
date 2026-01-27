@@ -2,16 +2,16 @@
 
 ## Overview
 
-Admin page to monitor PG (source) ↔ CH (replica) consistency + PeerDB CDC health. Shows counts, cursor lag, PeerDB lag/slot health, CH mutation backlog.
+Admin page to monitor PG (source) ↔ CH (replica) consistency + PeerDB CDC health. Shows counts, cursor lag, PeerDB lag/slot health, CH merge/dedup backlog.
 
 ## Policy (Deletes)
 
 - PG `articles`: hard delete
-- PG `judgments`: soft delete via `deleted_at`
-- CH `judgments`: view filters `deletedAt IS NULL` (live-only)
+- PG `judgments`: soft delete via `deleted_at` (for now)
+- CH `judgments`: view filters `deleted_at IS NULL` (live-only)
 - Sync status/diffs: compare live rows (PG active vs CH view)
-- Replication: PeerDB CDC (snapshot + logical repl) is primary
-- Deletes: CDC events → CH mutations; expect temporary mismatch while `system.mutations` pending
+- Replication: PeerDB CDC (snapshot + logical repl) is primary + sole CH writer
+- Updates/deletes: new versions + tombstones (`_peerdb_is_deleted=1`); dedup via merges (no `system.mutations`)
 
 ## Key Design Decisions
 
@@ -27,8 +27,8 @@ This plan addresses several subtle correctness and performance issues:
 | Stale job detection using start time misclassifies long recounts | Heartbeat-based detection via `lastUpdatedAt`        | [Stale Job Detection](#stale-job-detection-heartbeat-based)             |
 | Missing `pgChSyncStats` seed rows makes locks no-op              | Seed/upsert 4 rows before refresh                    | [Batched Counting](#solution-batched-incremental-counting-with-locking) |
 | Hard deletes invisible to keyset scans                           | Accept drift; periodic full recount; alert on `uniqueCount` only        | [Why Counts Are Approximate](#why-counts-are-approximate)               |
-| CH judgments lacks `updatedAt` column                            | Feature flag + fallback to `createdAt`               | [ClickHouse Judgments](#clickhouse-judgments-camelcase-columns)         |
-| Cursor col switch (`createdAt`→`updatedAt`) breaks watermarks    | Persist cursor col + force full recount on change    | [ClickHouse Judgments](#clickhouse-judgments-camelcase-columns)         |
+| `forska.judgments` is a VIEW (no `FINAL`)                       | Use `judgments_raw` for `FINAL`/`argMax`             | [ClickHouse Judgments](#clickhouse-judgments-camelcase-columns)         |
+| PeerDB ordering isn't `updatedAt`                               | Use `_peerdb_version` for `argMax` (sink tables)     | [Sample Verify](#post-apiadminsample-verify)                            |
 | `uniqExact()` expensive on large tables                          | Default to `uniqCombined()`, exact on-demand         | [ClickHouse Judgments](#clickhouse-judgments-camelcase-columns)         |
 | `uniqCombined()` error conflicts with tight thresholds           | Widen thresholds unless exact counts                 | [Status Thresholds](#status-thresholds)                                 |
 | Fetching 50k rows per batch wastes bandwidth                     | CTE computes counts in-database                      | [Batched Counting](#solution-batched-incremental-counting-with-locking) |
@@ -36,16 +36,16 @@ This plan addresses several subtle correctness and performance issues:
 | Single-column index causes heap fetches                          | Composite covering index with `INCLUDE`              | [Required Indexes](#required-indexes-for-performance)                   |
 | Lag alone misses old partition gaps                              | Partition coverage check endpoint                    | [Partition Coverage Check](#post-apiadminpartition-coverage-check)      |
 | PG month query risk (string INTERVAL, TZ drift)                  | `make_interval` + `AT TIME ZONE 'UTC'`               | [Partition Coverage Check](#post-apiadminpartition-coverage-check)      |
-| Sample-verify gets false mismatches during merge/mutation lag    | Use `FINAL` or `argMax` for CH queries               | [Sample Verify](#post-apiadminsample-verify)                            |
+| Sample-verify gets false mismatches during merge lag             | Use `FINAL` or `argMax` for CH queries               | [Sample Verify](#post-apiadminsample-verify)                            |
 | `OPTIMIZE TABLE FINAL` blocks production                         | Partition-scoped or avoid entirely                   | [ClickHouse Judgments](#clickhouse-judgments-camelcase-columns)         |
 | PeerDB mirror down/degraded                                      | Surface mirror status + lag; override to Critical    | [Status Thresholds](#status-thresholds)                                 |
 | PG replication slot inactive / WAL bloat                         | Surface slot active + retained WAL signals           | [Status Thresholds](#status-thresholds)                                 |
-| CH mutations stuck/backlogged                                    | Surface `system.mutations` backlog/age               | [Status Thresholds](#status-thresholds)                                 |
+| CH merges stuck/backlogged                                       | Surface `system.merges` + part counts                | [Status Thresholds](#status-thresholds)                                 |
 
 ## Dependencies
 
 - **PG_CH_HEALTH.md Phase-6 (current):** PeerDB CDC for PG→CH (mirror health + lag)
-- **CH schema:** `forska.judgments_raw` (sink) + `forska.judgments` (view with `updatedAt`)
+- **CH schema:** `forska.articles` + `forska.judgments_raw` sinks (`_peerdb_*`) + `forska.judgments` view (camelCase; filters `deleted_at`)
 - **Invariant:** PG `updated_at` must bump on UPDATE; stable PKs required for CDC
 
 ## Pre-flight Checks
@@ -64,7 +64,7 @@ Instead of running expensive `COUNT(*)` queries on every page load, we:
 
 1. **Store cached counts** in a PostgreSQL table (`pgChSyncStats`)
 2. **PG:** keyset watermark + batched scans (cheap incremental)
-3. **CH:** articles via `articles_stats` (agg MV; rebuild for deletes). judgments use `count()`/`max()`; `uniqCombined/uniqExact` on-demand
+3. **CH:** sinks are ReplacingMergeTree; cheap `count()/uniqCombined()` for UI, exact checks use `FINAL`/`argMax(..., _peerdb_version)` + tombstone filters
 4. **Refresh on-demand** via admin UI button with progress tracking
 
 ### Why Keyset Watermarks?
@@ -397,7 +397,7 @@ Returns current cached counts and health metrics from `pgChSyncStats` table.
   replication: {
     peerdb: { status: 'running', lagSeconds: 12 },
     postgres: { slotActive: true },
-    clickhouse: { pendingMutations: 3 },
+    clickhouse: { mergesInProgress: 2, partsActive: 120 },
   },
   stats: {
     articles: {
@@ -483,7 +483,7 @@ Poll for progress during refresh. **Progress is read from DB**, so it survives r
 
 Spot-check N random rows for data integrity.
 
-**CRITICAL:** When comparing CH data to PG, use `FINAL` or `argMax` to get the latest version of each row. Without this, you'll get false mismatches during merge/mutation lag (old versions still present in CH).
+**CRITICAL:** For PeerDB sinks (ReplacingMergeTree), use `FINAL` (or `argMax(..., _peerdb_version)`) to read latest row per `id`. Without this, you can read old versions/tombstones.
 
 ```ts
 // Request body
@@ -509,26 +509,39 @@ Spot-check N random rows for data integrity.
 // Don't do ORDER BY random() on PG/CH at 10M+ rows.
 // Pick ids via recent window or TABLESAMPLE/hashed sampling, then WHERE id IN (...)
 
-// Option 1: Use FINAL modifier (simpler, may be slower for full table)
-const chRows = await clickhouseClient.query({
-  query: `SELECT id, articleTitle, ... FROM forska.judgments FINAL WHERE id IN ({ids:Array(String)})`,
-  query_params: {ids: sampleIds},
-})
-
-// Option 2: Use argMax for specific columns (more control, works per-column)
+// NOTE: `forska.judgments` is a VIEW; use `judgments_raw` (sink) for `FINAL`/`argMax`.
+// Option 1: Use FINAL on sink table (simpler, ok for small samples)
 const chRows = await clickhouseClient.query({
   query: `
     SELECT
-      id,
-      argMax(articleTitle, updatedAt) as articleTitle
-    FROM forska.judgments
-    WHERE id IN ({ids:Array(String)})
-    GROUP BY id
+      j.id,
+      COALESCE(a.article_title, '') AS articleTitle,
+      j.article_id,
+      j.answered_original,
+      j.quotes
+    FROM forska.judgments_raw FINAL AS j
+    LEFT JOIN forska.articles FINAL AS a ON j.article_id = a.id
+    WHERE j.id IN ({ids:Array(UUID)}) AND j.deleted_at IS NULL AND j._peerdb_is_deleted = 0
   `,
   query_params: {ids: sampleIds},
 })
 
-// NOTE: argMax requires updatedAt column - gate behind PG_CH_HEALTH.md Phase-1 completion
+// Option 2: Use argMax by `_peerdb_version` (faster, more complex)
+const chRows = await clickhouseClient.query({
+  query: `
+    SELECT
+      id,
+      argMax(answered_original, _peerdb_version) as answered_original,
+      argMax(quotes, _peerdb_version) as quotes,
+      argMax(deleted_at, _peerdb_version) as deleted_at,
+      argMax(_peerdb_is_deleted, _peerdb_version) as _peerdb_is_deleted
+    FROM forska.judgments_raw
+    WHERE id IN ({ids:Array(UUID)})
+    GROUP BY id
+    HAVING _peerdb_is_deleted = 0 AND isNull(deleted_at)
+  `,
+  query_params: {ids: sampleIds},
+})
 ```
 
 ### `POST /api/admin/partition-coverage-check`
@@ -573,9 +586,11 @@ const pgCounts = await db.execute(sql`
 // ClickHouse: Count per month (uses partition column efficiently)
 const chCounts = await clickhouseClient.query({
   query: `
-    SELECT formatDateTime(toTimeZone(createdAt, 'UTC'), '%Y-%m') as month, count() as count
-    FROM forska.judgments
-    WHERE createdAt >= now64(6, 'UTC') - INTERVAL {months:Int32} MONTH
+    SELECT formatDateTime(toTimeZone(created_at, 'UTC'), '%Y-%m') as month, count() as count
+    FROM forska.judgments_raw FINAL
+    WHERE created_at >= now64(3, 'UTC') - INTERVAL {months:Int32} MONTH
+      AND deleted_at IS NULL
+      AND _peerdb_is_deleted = 0
     GROUP BY month ORDER BY month DESC
   `,
   query_params: {months},
@@ -591,36 +606,31 @@ const chCounts = await clickhouseClient.query({
 **IMPORTANT:** The `forska.articles` table uses snake_case column names (`updated_at`, `created_at`, `import_route`), not camelCase.
 
 ```ts
-// Default CH counts: cheap `count()`, avoid `uniqExact()` unless on-demand
+// Live-only counts need tombstone filter; exact needs FINAL (ReplacingMergeTree)
 const result = await clickhouseClient.query({
   query: `
     SELECT
       count(*) as totalCount,
       uniqCombined(id) as uniqueCountApprox,
       max(updated_at) as maxCursorAt
-    FROM forska.articles
+    FROM forska.articles FINAL
+    WHERE _peerdb_is_deleted = 0
   `,
 })
 ```
 
 ### ClickHouse Judgments (camelCase columns)
 
-**NOTE:** Runtime detect `updatedAt`; fallback to `createdAt` if old schema.
+**NOTE:** `forska.judgments` is a VIEW (camelCase) over `judgments_raw` + `articles` and filters `deleted_at IS NULL`.
+Exact/dedup checks must use `judgments_raw` (`FINAL` or `argMax(..., _peerdb_version)`) — views can't `FINAL`.
 
 ```ts
-// Runtime feature flag: does CH have updatedAt?
-const CH_HAS_UPDATED_AT = await hasClickhouseColumn('forska', 'judgments', 'updatedAt')
-
-// Pre-Phase-1: Use createdAt (limited - misses updates)
-// Post-Phase-1: Use updatedAt (correct - captures updates)
-const cursorCol = CH_HAS_UPDATED_AT ? 'updatedAt' : 'createdAt'
-
 // Basic count for CH judgments
 const result = await clickhouseClient.query({
   query: `
     SELECT
       count(*) as totalCount,
-      max(${cursorCol}) as maxCursorAt
+      max(updatedAt) as maxCursorAt
     FROM forska.judgments
   `,
 })
@@ -647,24 +657,6 @@ const exactUniqueResult = await clickhouseClient.query({
 })
 ```
 
-**Column existence helper:**
-
-```ts
-const hasClickhouseColumn = async (db: string, table: string, col: string) => {
-  const result = await clickhouseClient.query({
-    query: `
-      SELECT count() AS cnt
-      FROM system.columns
-      WHERE database = {db:String} AND table = {table:String} AND name = {col:String}
-    `,
-    query_params: {db, table, col},
-    format: 'JSONEachRow',
-  })
-  const row = await result.json<{cnt: string}>()
-  return Number(Array.isArray(row) ? row[0]?.cnt : row?.cnt) > 0
-}
-```
-
 **Unique count strategy:**
 
 | Context                | Function         | Error | Use When                               |
@@ -679,17 +671,17 @@ const hasClickhouseColumn = async (db: string, table: string, col: string) => {
 ```ts
 // NEVER run OPTIMIZE ... FINAL on full table in production
 // Instead, scope to specific partition if needed:
-await clickhouseClient.command({query: `OPTIMIZE TABLE forska.judgments PARTITION '202601' FINAL`})
+await clickhouseClient.command({query: `OPTIMIZE TABLE forska.judgments_raw PARTITION '202601' FINAL`})
 
 // Or let background merges happen naturally (usually sufficient)
 ```
 
-### Handling Deletes & Mutations (CH)
+### Handling Deletes & Versions (PeerDB)
 
-CH deletes (and delete+insert updates) apply via mutations (async). Even with PeerDB CDC, CH can temporarily contain both old+new versions until mutation completes. This can show:
+PeerDB writes INSERT-only into ReplacingMergeTree sinks. Updates/deletes become new versions (and tombstones). Until merges, CH can contain multiple versions per id. This can show:
 
 1. **CH count > PG count**: unmerged duplicates inflate `count(*)`
-2. **CH count < PG count**: replication lag (CDC and/or mutation backlog)
+2. **CH count < PG count**: replication lag (CDC)
 
 **Display logic:**
 
@@ -702,7 +694,7 @@ CH deletes (and delete+insert updates) apply via mutations (async). Even with Pe
 **Mitigations:**
 
 - Always show `dedupDrift` = `count(*) - uniqExact(id)` when available
-- Use `FINAL` modifier sparingly (expensive) for accurate counts
+- Use `FINAL`/`argMax(..., _peerdb_version)` sparingly (expensive) for exact comparisons
 - Show "approximate" label on all counts
 - Prefer PeerDB lag for replication; use `maxCursorAt` lag as fallback only when both sides use same cursorCol
 
@@ -847,8 +839,8 @@ Dedup drift: 150 rows — merge pending (count(*) - uniqCombined)
 
 32. [ ] Add PeerDB mirror status + lag to `GET /api/admin/sync-stats`
 33. [ ] Add PG slot health (active + retained WAL signal) to sync-stats
-34. [ ] Add CH mutation summary (`system.mutations`) to sync-stats
-35. [ ] UI: top banner + status override rules (CDC down, slot inactive, stuck mutations)
+34. [ ] Add CH merge/part summary (`system.merges`, `system.parts`) to sync-stats
+35. [ ] UI: top banner + status override rules (CDC down, slot inactive, stuck merges/parts)
 
 ---
 
