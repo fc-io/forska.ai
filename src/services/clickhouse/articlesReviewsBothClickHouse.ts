@@ -382,7 +382,7 @@ export const queryArticlesReviewsBothFromClickHouse = async (
   const articlesQuery = `
     SELECT
       articleId,
-      any(articleTitle) AS title_,
+      max(articleTitle) AS title_,
       max(articleCreatedAt) AS created_,
       max(articleUpdatedAt) AS updated_
     FROM judgments
@@ -541,12 +541,19 @@ export const queryArticlesReviewsBothFromClickHouse = async (
   }
   console.timeEnd('ch:both:human_answers')
 
-  const articleOriginalDataRows = await db
-    .select({id: articles.id, originalData: articles.originalData})
+  const articleRows = await db
+    .select({id: articles.id, articleTitle: articles.articleTitle, originalData: articles.originalData})
     .from(articles)
     .where(inArray(articles.id, articleIds))
 
-  const journalTitlesByArticleId = articleOriginalDataRows.reduce(
+  const articleTitlesByArticleId = articleRows.reduce(
+    (acc, row) => {
+      return {...acc, [row.id]: row.articleTitle}
+    },
+    {} as Record<string, string>,
+  )
+
+  const journalTitlesByArticleId = articleRows.reduce(
     (acc, row) => {
       return {...acc, [row.id]: getJournalTitleFromOriginalData(row.originalData)}
     },
@@ -564,9 +571,11 @@ export const queryArticlesReviewsBothFromClickHouse = async (
       return ao - bo
     })
 
+    const pgTitle = articleTitlesByArticleId[article.articleId]
+
     return {
       id: article.articleId,
-      articleTitle: article.title_,
+      articleTitle: pgTitle && pgTitle.trim() ? pgTitle : article.title_,
       articleCreatedAt: parseClickhouseDateTimeUtc(article.created_),
       articleUpdatedAt: parseClickhouseDateTimeUtc(article.updated_),
       judgments: sortedJudgments,

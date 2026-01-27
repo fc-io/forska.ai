@@ -522,7 +522,7 @@ export const queryArticlesReviewsFromClickHouse = async (
     const articlesQuery = `
       SELECT
         ${columnPrefix}articleId,
-        any(${columnPrefix}articleTitle) AS title_,
+        max(${columnPrefix}articleTitle) AS title_,
         max(${columnPrefix}articleCreatedAt) AS created_,
         max(${columnPrefix}articleUpdatedAt) AS updated_,
         groupArray(${columnPrefix}promptId) AS promptIds
@@ -617,12 +617,19 @@ export const queryArticlesReviewsFromClickHouse = async (
 
     // Build final results, preserving the order from articlesData
     const db = getDatabase()
-    const articleOriginalDataRows = await db
-      .select({id: articles.id, originalData: articles.originalData})
+    const articleRows = await db
+      .select({id: articles.id, articleTitle: articles.articleTitle, originalData: articles.originalData})
       .from(articles)
       .where(inArray(articles.id, articleIds))
 
-    const journalTitlesByArticleId = articleOriginalDataRows.reduce(
+    const articleTitlesByArticleId = articleRows.reduce(
+      (acc, row) => {
+        return {...acc, [row.id]: row.articleTitle}
+      },
+      {} as Record<string, string>,
+    )
+
+    const journalTitlesByArticleId = articleRows.reduce(
       (acc, row) => {
         return {...acc, [row.id]: getJournalTitleFromOriginalData(row.originalData)}
       },
@@ -631,6 +638,8 @@ export const queryArticlesReviewsFromClickHouse = async (
 
     const results: ArticleReviewResult[] = articlesData.map((article) => {
       const judgments = judgmentsByArticle.get(article.articleId) ?? []
+
+      const pgTitle = articleTitlesByArticleId[article.articleId]
 
       // Sort judgments by prompt order
       const sortedJudgments = [...judgments].sort((a, b) => {
@@ -650,7 +659,7 @@ export const queryArticlesReviewsFromClickHouse = async (
 
       return {
         id: article.articleId,
-        articleTitle: article.title_,
+        articleTitle: pgTitle && pgTitle.trim() ? pgTitle : article.title_,
         articleCreatedAt: parseClickhouseDateTimeUtc(article.created_),
         articleUpdatedAt: parseClickhouseDateTimeUtc(article.updated_),
         judgments: sortedJudgments,

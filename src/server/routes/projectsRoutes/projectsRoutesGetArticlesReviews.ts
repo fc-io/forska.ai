@@ -52,6 +52,7 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
           ? await db
               .select({
                 id: articles.id,
+                articleTitle: articles.articleTitle,
                 articleId: articles.articleId,
                 url: articles.url,
                 fullTextPDF: articles.fullTextPDF,
@@ -72,6 +73,7 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
         const fullText = fullTextById[article.id]
         return {
           ...article,
+          articleTitle: fullText?.articleTitle ?? article.articleTitle,
           articleId: fullText?.articleId ?? null,
           url: fullText?.url ?? null,
           fullTextPDF: fullText?.fullTextPDF ?? null,
