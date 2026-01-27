@@ -41,7 +41,8 @@ const createArticlesTableQuery = `
     full_text_pdf_uploaded_by Nullable(String),
     original_data Nullable(String),
     _peerdb_version Int64,
-    _peerdb_is_deleted Int8 DEFAULT 0
+    _peerdb_is_deleted Int8 DEFAULT 0,
+    _peerdb_synced_at DateTime64(9, 'UTC') DEFAULT now64(9)
   ) ENGINE = ReplacingMergeTree(_peerdb_version)
   PARTITION BY toYYYYMM(created_at)
   ORDER BY (id)
@@ -71,6 +72,7 @@ const createJudgmentsRawTableQuery = `
     snapshot_project_model_name Nullable(String),
     _peerdb_version Int64,
     _peerdb_is_deleted Int8 DEFAULT 0,
+    _peerdb_synced_at DateTime64(9, 'UTC') DEFAULT now64(9),
     INDEX idx_judgments_raw_id id TYPE bloom_filter(0.01) GRANULARITY 1
   ) ENGINE = ReplacingMergeTree(_peerdb_version)
   PARTITION BY toYYYYMM(created_at)
@@ -102,6 +104,7 @@ const createJudgmentsTableQuery = `
     quotes Nullable(String),
     _peerdb_version Int64,
     _peerdb_is_deleted Int8 DEFAULT 0,
+    _peerdb_synced_at DateTime64(9, 'UTC') DEFAULT now64(9),
     INDEX idx_judgments_id id TYPE bloom_filter(0.01) GRANULARITY 1
   ) ENGINE = ReplacingMergeTree(_peerdb_version)
   PARTITION BY toYYYYMM(createdAt)
@@ -357,8 +360,10 @@ export const ensureClickhouseSchema = async (): Promise<void> => {
   await runClickhouseCommands([
     'ALTER TABLE forska.articles ADD COLUMN IF NOT EXISTS _peerdb_version Int64',
     'ALTER TABLE forska.articles ADD COLUMN IF NOT EXISTS _peerdb_is_deleted Int8 DEFAULT 0',
+    "ALTER TABLE forska.articles ADD COLUMN IF NOT EXISTS _peerdb_synced_at DateTime64(9, 'UTC') DEFAULT now64(9)",
     'ALTER TABLE forska.judgments_raw ADD COLUMN IF NOT EXISTS _peerdb_version Int64',
     'ALTER TABLE forska.judgments_raw ADD COLUMN IF NOT EXISTS _peerdb_is_deleted Int8 DEFAULT 0',
+    "ALTER TABLE forska.judgments_raw ADD COLUMN IF NOT EXISTS _peerdb_synced_at DateTime64(9, 'UTC') DEFAULT now64(9)",
   ])
 
   const shouldReplaceJudgmentsView = judgmentsEngine === 'View'
@@ -380,6 +385,7 @@ export const ensureClickhouseSchema = async (): Promise<void> => {
         createJudgmentsTableQuery,
         'ALTER TABLE forska.judgments ADD COLUMN IF NOT EXISTS _peerdb_version Int64',
         'ALTER TABLE forska.judgments ADD COLUMN IF NOT EXISTS _peerdb_is_deleted Int8 DEFAULT 0',
+        "ALTER TABLE forska.judgments ADD COLUMN IF NOT EXISTS _peerdb_synced_at DateTime64(9, 'UTC') DEFAULT now64(9)",
         createJudgmentsMaterializedViewQuery,
       ]))
 

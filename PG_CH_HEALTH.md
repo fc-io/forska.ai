@@ -13,6 +13,14 @@
 
 Completed now:
 - PeerDB stack running via `docker compose --profile peerdb up -d`
+- Canonical shared stack (run from anywhere; avoids cross-repo mounts):
+
+```bash
+docker compose \
+  -f /Users/fredrc/Library/CloudStorage/ProtonDrive-bofredrikcarlsson@proton.me-folder/_projects/phd/dev/f1/docker-compose.yml \
+  -p forska-stack \
+  --profile peerdb up -d
+```
 - [x] PG logical repl role/publication via `scripts/setupPeerdbPostgres.ts` (ran 2026-01-27)
 - PeerDB peers + mirror via `scripts/setupPeerdbPgToClickhouse.ts`
 - CH sink tables were renamed/dropped to unblock PeerDB validation

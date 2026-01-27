@@ -37,8 +37,8 @@ services:
       - "8123:8123"   # HTTP API
       - "9000:9000"   # Native protocol
     volumes:
-      - ./data/clickhouse:/var/lib/clickhouse
-      - ./data/clickhouse-logs:/var/log/clickhouse-server
+      - clickhouse-data:/var/lib/clickhouse
+      - clickhouse-logs:/var/log/clickhouse-server
       - ./config/clickhouse/experimental-users.xml:/etc/clickhouse-server/users.d/experimental-users.xml:ro
     environment:
       CLICKHOUSE_DB: forska
@@ -460,6 +460,8 @@ services:
 
 volumes:
   pgdata:
+  clickhouse-data:
+  clickhouse-logs:
   peerdb-catalog-data:
   peerdb-seaweed-volume-data:
   peerdb-minio-data:
