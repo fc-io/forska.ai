@@ -542,7 +542,13 @@ export const queryArticlesReviewsBothFromClickHouse = async (
   console.timeEnd('ch:both:human_answers')
 
   const articleRows = await db
-    .select({id: articles.id, articleTitle: articles.articleTitle, originalData: articles.originalData})
+    .select({
+      id: articles.id,
+      articleTitle: articles.articleTitle,
+      articleCreatedAt: articles.articleCreatedAt,
+      articleUpdatedAt: articles.articleUpdatedAt,
+      originalData: articles.originalData,
+    })
     .from(articles)
     .where(inArray(articles.id, articleIds))
 
@@ -551,6 +557,20 @@ export const queryArticlesReviewsBothFromClickHouse = async (
       return {...acc, [row.id]: row.articleTitle}
     },
     {} as Record<string, string>,
+  )
+
+  const articleCreatedAtByArticleId = articleRows.reduce(
+    (acc, row) => {
+      return {...acc, [row.id]: row.articleCreatedAt}
+    },
+    {} as Record<string, Date | null>,
+  )
+
+  const articleUpdatedAtByArticleId = articleRows.reduce(
+    (acc, row) => {
+      return {...acc, [row.id]: row.articleUpdatedAt}
+    },
+    {} as Record<string, Date | null>,
   )
 
   const journalTitlesByArticleId = articleRows.reduce(
@@ -572,12 +592,16 @@ export const queryArticlesReviewsBothFromClickHouse = async (
     })
 
     const pgTitle = articleTitlesByArticleId[article.articleId]
+    const pgCreatedAt = articleCreatedAtByArticleId[article.articleId]
+    const pgUpdatedAt = articleUpdatedAtByArticleId[article.articleId]
+    const chCreatedAt = parseClickhouseDateTimeUtc(article.created_)
+    const chUpdatedAt = parseClickhouseDateTimeUtc(article.updated_)
 
     return {
       id: article.articleId,
       articleTitle: pgTitle && pgTitle.trim() ? pgTitle : article.title_,
-      articleCreatedAt: parseClickhouseDateTimeUtc(article.created_),
-      articleUpdatedAt: parseClickhouseDateTimeUtc(article.updated_),
+      articleCreatedAt: pgCreatedAt === undefined ? chCreatedAt : pgCreatedAt,
+      articleUpdatedAt: pgUpdatedAt === undefined ? chUpdatedAt : pgUpdatedAt,
       judgments: sortedJudgments,
       humanAnswersByPrompt: humanAnswersByArticlePrompt[article.articleId],
       journalTitle: journalTitlesByArticleId[article.articleId] ?? null,

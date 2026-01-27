@@ -37,6 +37,8 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
             .select({
               id: articles.id,
               articleTitle: articles.articleTitle,
+              articleCreatedAt: articles.articleCreatedAt,
+              articleUpdatedAt: articles.articleUpdatedAt,
               articleId: articles.articleId,
               url: articles.url,
               fullTextPDF: articles.fullTextPDF,
@@ -59,9 +61,9 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
       const fullText = fullTextById[article.id]
       return {
         id: article.id,
-        articleTitle: fullText?.articleTitle ?? article.articleTitle,
-        articleCreatedAt: article.articleCreatedAt,
-        articleUpdatedAt: article.articleUpdatedAt,
+        articleTitle: fullText ? fullText.articleTitle : article.articleTitle,
+        articleCreatedAt: fullText ? fullText.articleCreatedAt : article.articleCreatedAt,
+        articleUpdatedAt: fullText ? fullText.articleUpdatedAt : article.articleUpdatedAt,
         journalTitle: article.journalTitle,
         articleId: fullText?.articleId ?? null,
         url: fullText?.url ?? null,
