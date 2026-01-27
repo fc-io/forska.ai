@@ -333,6 +333,13 @@ export const Navigation = (props: NavigationProps) => {
                       Latest Articles
                     </Link>
                     <Link
+                      to="/admin/import-route-stats"
+                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
+                      onClick={closeAdminMenu}
+                    >
+                      Import Route Stats
+                    </Link>
+                    <Link
                       to="/admin/pdf-conversions"
                       class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
                       onClick={closeAdminMenu}

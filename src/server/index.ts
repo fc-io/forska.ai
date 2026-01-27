@@ -7,6 +7,7 @@ import {judgmentsJobsCron} from './cron/judgmentsJobs.ts'
 import {nvidiaSmiCron} from './cron/nvidiaSmi.ts'
 import {aaModelsRoutes} from './routes/AaModelsRoutes'
 import {adminClickhouseHealthRoutes} from './routes/AdminClickhouseHealthRoutes.ts'
+import {adminImportRouteStatsRoutes} from './routes/AdminImportRouteStatsRoutes.ts'
 import {adminInvestigateRoutes} from './routes/AdminInvestigateRoutes.ts'
 import {adminSyncStatsRoutes} from './routes/AdminSyncStatsRoutes.ts'
 import {articleAdminRoutes} from './routes/ArticleAdminRoutes.ts'
@@ -49,6 +50,7 @@ const _app = new Elysia()
   .use(authRoutes)
   .use(adminClickhouseHealthRoutes)
   .use(adminInvestigateRoutes)
+  .use(adminImportRouteStatsRoutes)
   .use(adminSyncStatsRoutes)
   .use(judgmentsJobsRoutes)
   .use(articlesRoutes)
