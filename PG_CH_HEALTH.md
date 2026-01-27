@@ -81,20 +81,6 @@ Delete propagation (current approach):
 - CH mutation backlog/stuck (if PeerDB uses UPDATE/DELETE → `system.mutations`)
 - Slow sanity (on-demand): PG vs CH counts + sample verify
 
-### 6.1 Setup
-
-- [x] Add PeerDB to infra (`docker-compose.yml`/k8s)
-- [ ] PG config for logical repl (wal_level=logical, slots, WAL retention)
-- [x] Create replication user + publication for `articles`,`judgments`
-
-CH currently uses MergeTree + physical deletes. Target: ReplacingMergeTree + soft deletes (Phase 6).
-
-- [x] Create mirrors PG→CH: `forska.articles`, `forska.judgments`
-- [ ] Decide snapshot mode + batch/parallelism
-- [ ] Type mapping: `text[]` → `Array(String)` (`quotes`, `answeredOriginalAsArray`)
-- [ ] Enforce non-null CH `String` cols (no `null` writes)
-- [ ] Denorm cols in judgments: keep as-is for now (Phase 5)
-
 ## Known Limitations (Current Manual Sync)
 
 *Most resolved by Phase 6 (PeerDB)*
