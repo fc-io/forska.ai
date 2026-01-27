@@ -39,6 +39,32 @@ const getPeerdbConnectionConfig = () => {
   return {host, port, user, password, database: user}
 }
 
+const getPeerdbErrorMessage = (error: unknown): string => {
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : 'unknown error'
+  return message
+}
+
+const getPeerdbErrorCode = (error: unknown): string | null => {
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error ? String((error as {code?: unknown}).code ?? '') : ''
+  return code || null
+}
+
+const logPeerdbError = (label: string, error: unknown): void => {
+  const message = getPeerdbErrorMessage(error)
+  const code = getPeerdbErrorCode(error)
+  const suffix = code ? ` (code: ${code})` : ''
+  console.error(`[PeerDB] ${label}: ${message}${suffix}`)
+}
+
+const handlePeerdbClientError = (error: unknown): void => {
+  logPeerdbError('Client error', error)
+}
+
+const attachPeerdbClientErrorHandler = (client: Client): void => {
+  client.on('error', handlePeerdbClientError)
+}
+
 const getPeerdbMirrorHealth = async (): Promise<{
   mirrorName: string
   reachable: boolean
@@ -48,6 +74,7 @@ const getPeerdbMirrorHealth = async (): Promise<{
   const mirrorName = getPeerdbMirrorName()
   const cfg = getPeerdbConnectionConfig()
   const client = new Client({...cfg, connectionTimeoutMillis: 2000})
+  attachPeerdbClientErrorHandler(client)
 
   try {
     await client.connect()
@@ -59,7 +86,7 @@ const getPeerdbMirrorHealth = async (): Promise<{
     await client.end()
     return {mirrorName, reachable: true, exists, status: exists ? 'running' : 'missing'}
   } catch (error) {
-    console.error('[PeerDB] Health check failed:', error)
+    logPeerdbError('Health check failed', error)
     await client.end().catch(() => {})
     return {mirrorName, reachable: false, exists: false, status: 'unreachable'}
   }

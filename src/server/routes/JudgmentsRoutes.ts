@@ -46,8 +46,8 @@ export const judgmentsRoutes = new Elysia().use(requireAdminAuth()).get('/api/ju
   try {
     const db = getDatabase()
     const modelName = query.name || 'Qwen3-32B-FP8'
-    const provider = query.provider || 'vLLM'
-    const baseURL = query.baseURL || 'http://localhost:8000/v1'
+    const provider = query.provider || 'SGLang'
+    const baseURL = query.baseURL || 'http://localhost:30000/v1'
 
     // Check if model exists
     const [existingModel] = await db
