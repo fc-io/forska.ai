@@ -1,5 +1,5 @@
 import {randomUUID} from 'crypto'
-import {and, eq} from 'drizzle-orm'
+import {and, eq, isNull} from 'drizzle-orm'
 
 import {articles, judgments, models, projects} from '../../db/schema.ts'
 import {judgeStoreJudgmentGetStringAsArrayOfStrings} from './judgeStoreJudgment/judgeStoreJudgmentGetStringAsArrayOfStrings.ts'
@@ -75,6 +75,7 @@ export const storeSinglePromptJudgment = async ({
           eq(judgments.useAbstract, useAbstract),
           eq(judgments.useFulltext, useFulltext),
           eq(judgments.useFulltextNoImages, useFulltextNoImages),
+          isNull(judgments.deletedAt),
         ),
       )
       .limit(1)

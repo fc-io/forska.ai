@@ -490,7 +490,9 @@ const promptsAdminRoutes = new Elysia()
         return {success: true, data: {deletedCount: 0}}
       }
 
-      await db.delete(judgments).where(
+      const now = new Date()
+
+      await db.update(judgments).set({deletedAt: now, updatedAt: now}).where(
         sql`${judgments.id} = ANY(ARRAY[${sql.join(
           judgmentIds.map((id) => {
             return sql`${id}::uuid`

@@ -584,7 +584,7 @@ export const queryArticlesReviewsFromClickHouse = async (
         answeredOriginalAsArray,
         explanation,
         quotes
-      FROM judgments
+      FROM judgments FINAL
       WHERE _peerdb_is_deleted = 0
         AND articleId IN (${articleIdsQuoted})
         AND promptId IN (${promptIdsQuoted})
@@ -954,8 +954,8 @@ export const countArticlesReviewsFromClickHouse = async (
       const tempTableName = tempTableInfo?.tableName ?? ''
       const useTempTableJoin = useCuratedTempTable && tempTableInfo !== null
       const fromClause = useTempTableJoin
-        ? `judgments j LEFT JOIN ${tempTableName} t ON j.articleId = t.articleId`
-        : 'judgments'
+        ? `judgments FINAL j LEFT JOIN ${tempTableName} t ON j.articleId = t.articleId`
+        : 'judgments FINAL'
 
       const columnPrefix = useTempTableJoin ? 'j.' : ''
 

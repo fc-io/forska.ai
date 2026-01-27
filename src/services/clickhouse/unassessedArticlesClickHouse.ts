@@ -313,7 +313,7 @@ export const getUnassessedCountFromClickHouse = async (params: UnassessedCountPa
 
     const totalScopedQuery = `
       SELECT COUNT(DISTINCT id) as total
-      FROM forska.articles
+      FROM forska.articles FINAL
       WHERE _peerdb_is_deleted = 0 AND ${articleWhereClause}
     `
 
@@ -321,7 +321,7 @@ export const getUnassessedCountFromClickHouse = async (params: UnassessedCountPa
       SELECT COUNT(*) as assessed
       FROM (
         SELECT articleId
-        FROM judgments
+        FROM judgments FINAL
         WHERE ${judgmentWhereClause}
         GROUP BY articleId
         HAVING COUNT(DISTINCT promptId) = ${metadata.promptIds.length}
@@ -463,7 +463,7 @@ export const getUnassessedArticlesFromClickHouse = async (
 
     const assessedSubquery = `
       SELECT articleId
-      FROM judgments
+      FROM judgments FINAL
       WHERE ${judgmentWhereClause}
       GROUP BY articleId
       HAVING COUNT(DISTINCT promptId) = ${metadata.promptIds.length}
@@ -471,7 +471,7 @@ export const getUnassessedArticlesFromClickHouse = async (
 
     const countQuery = `
       SELECT COUNT(*) as total_count
-      FROM forska.articles a
+      FROM forska.articles FINAL a
       WHERE a._peerdb_is_deleted = 0 AND ${articleWhereClause}
         AND a.id NOT IN (${assessedSubquery})
     `
@@ -483,7 +483,7 @@ export const getUnassessedArticlesFromClickHouse = async (
         a.article_title,
         a.article_created_at,
         a.article_updated_at
-      FROM forska.articles a
+      FROM forska.articles FINAL a
       WHERE a._peerdb_is_deleted = 0 AND ${articleWhereClause}
         AND a.id NOT IN (${assessedSubquery})
       ORDER BY COALESCE(a.article_updated_at, a.article_created_at, a.created_at) DESC, a.id DESC
@@ -661,7 +661,7 @@ export const getUnassessedPairsFromClickHouse = async (
 
     const assessedPairsSubquery = `
       SELECT articleId, promptId
-      FROM judgments
+      FROM judgments FINAL
       WHERE ${judgmentWhereClause}
     `
 
@@ -670,7 +670,7 @@ export const getUnassessedPairsFromClickHouse = async (
         a.id AS article_id,
         p.promptId AS prompt_id,
         COALESCE(a.article_updated_at, a.article_created_at, a.created_at) AS sort_date
-      FROM forska.articles a
+      FROM forska.articles FINAL a
       CROSS JOIN (
         SELECT arrayJoin([${promptIdsQuoted}]) AS promptId
       ) p

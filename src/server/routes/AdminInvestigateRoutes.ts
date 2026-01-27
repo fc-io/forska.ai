@@ -907,7 +907,7 @@ export const adminInvestigateRoutes = new Elysia()
 
       const chQuery = `
         SELECT count() AS count
-        FROM judgments
+        FROM judgments FINAL
         WHERE _peerdb_is_deleted = 0
           AND promptId IN (${promptIdsQuoted})
           AND modelId = '${project.modelId}'

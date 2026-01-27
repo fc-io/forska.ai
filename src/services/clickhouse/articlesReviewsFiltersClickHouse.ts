@@ -247,7 +247,7 @@ export const getDatabaseBasedFiltersFromClickHouse = async (
     FROM (
       -- Single-value answers from answeredOriginal
       SELECT promptId, answeredOriginal AS value
-      FROM judgments
+      FROM judgments FINAL
       WHERE ${whereClause}
         AND answeredOriginal IS NOT NULL
         AND answeredOriginal != ''
@@ -257,7 +257,7 @@ export const getDatabaseBasedFiltersFromClickHouse = async (
 
       -- Array answers from answeredOriginalAsArray (flattened)
       SELECT promptId, arrayJoin(answeredOriginalAsArray) AS value
-      FROM judgments
+      FROM judgments FINAL
       WHERE ${whereClause}
         AND length(answeredOriginalAsArray) > 0
     )
@@ -419,7 +419,7 @@ export const getNumericFiltersFromClickHouse = async (
       SELECT
         promptId,
         toInt64OrNull(answeredOriginal) AS numVal
-      FROM judgments
+      FROM judgments FINAL
       WHERE ${whereClause}
         AND answeredOriginal IS NOT NULL
         AND answeredOriginal != ''

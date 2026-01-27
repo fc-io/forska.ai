@@ -1,5 +1,4 @@
--- ClickHouse DDL for PeerDB PG→CH replication + app query layer
--- If legacy `forska.judgments` exists as a TABLE, migrate first: `scripts/clickhouse-migrate-judgments-to-view.sql`
+-- ClickHouse DDL for PeerDB PG→CH replication + app query layer (peerdb metadata + ReplacingMergeTree)
 
 CREATE DATABASE IF NOT EXISTS forska;
 
@@ -7,7 +6,7 @@ CREATE DATABASE IF NOT EXISTS forska;
 -- 1. ARTICLES (PeerDB target)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS forska.articles (
-    id UUID,
+    id String,
 
     created_at DateTime64(6, 'UTC'),
     updated_at DateTime64(6, 'UTC'),
@@ -49,7 +48,8 @@ CREATE TABLE IF NOT EXISTS forska.articles (
     original_data Nullable(String),
 
     _peerdb_version Int64,
-    _peerdb_is_deleted Int8 DEFAULT 0
+    _peerdb_is_deleted Int8 DEFAULT 0,
+    _peerdb_synced_at DateTime64(9, 'UTC') DEFAULT now64(9)
 ) ENGINE = ReplacingMergeTree(_peerdb_version)
 PARTITION BY toYYYYMM(created_at)
 ORDER BY (id);
@@ -58,15 +58,15 @@ ORDER BY (id);
 -- 2. JUDGMENTS RAW (PeerDB target)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS forska.judgments_raw (
-    id UUID,
+    id String,
     created_at DateTime64(3, 'UTC'),
     updated_at DateTime64(3, 'UTC'),
     deleted_at Nullable(DateTime64(3, 'UTC')),
 
-    article_id UUID,
-    model_id UUID,
-    prompt_id UUID,
-    project_id Nullable(UUID),
+    article_id String,
+    model_id String,
+    prompt_id String,
+    project_id Nullable(String),
 
     use_title Bool DEFAULT true,
     use_abstract Bool DEFAULT true,
@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS forska.judgments_raw (
 
     _peerdb_version Int64,
     _peerdb_is_deleted Int8 DEFAULT 0,
+    _peerdb_synced_at DateTime64(9, 'UTC') DEFAULT now64(9),
 
     INDEX idx_judgments_raw_id id TYPE bloom_filter(0.01) GRANULARITY 1
 ) ENGINE = ReplacingMergeTree(_peerdb_version)
@@ -91,9 +92,42 @@ PARTITION BY toYYYYMM(created_at)
 ORDER BY (article_id, prompt_id, model_id, id);
 
 -- ============================================================
--- 3. JUDGMENTS VIEW (app queries)
+-- 3. JUDGMENTS (denormalized table + MV for app queries)
 -- ============================================================
-CREATE VIEW IF NOT EXISTS forska.judgments AS
+CREATE TABLE IF NOT EXISTS forska.judgments (
+    id String,
+    createdAt DateTime64(3, 'UTC'),
+    updatedAt DateTime64(3, 'UTC'),
+    articleId String,
+    articleTitle String,
+    articleCreatedAt Nullable(DateTime64(6, 'UTC')),
+    articleUpdatedAt Nullable(DateTime64(6, 'UTC')),
+    articleCreatedYear Nullable(Int32),
+    articleUpdatedYear Nullable(Int32),
+    articleImportRoute Nullable(String),
+    articleImportedBy Nullable(String),
+    promptId String,
+    modelId String,
+    useTitle Bool DEFAULT true,
+    useAbstract Bool DEFAULT true,
+    useFulltext Bool DEFAULT false,
+    useFulltextNoImages Bool DEFAULT false,
+    answeredOriginal Nullable(String),
+    answeredOriginalAsArray Array(Nullable(String)) DEFAULT [],
+    explanation Nullable(String),
+    quotes Nullable(String),
+    _peerdb_version Int64,
+    _peerdb_is_deleted Int8 DEFAULT 0,
+    _peerdb_synced_at DateTime64(9, 'UTC') DEFAULT now64(9),
+    INDEX idx_judgments_id id TYPE bloom_filter(0.01) GRANULARITY 1
+) ENGINE = ReplacingMergeTree(_peerdb_version)
+PARTITION BY toYYYYMM(createdAt)
+ORDER BY (articleId, promptId, modelId, id);
+
+DROP TABLE IF EXISTS forska.judgments_mv;
+CREATE MATERIALIZED VIEW IF NOT EXISTS forska.judgments_mv
+TO forska.judgments
+AS
 SELECT
     j.id,
     j.created_at AS createdAt,
@@ -115,10 +149,11 @@ SELECT
     j.answered_original AS answeredOriginal,
     j.answered_original_as_array AS answeredOriginalAsArray,
     j.explanation,
-    j.quotes
+    j.quotes,
+    j._peerdb_version AS _peerdb_version,
+    if(j._peerdb_is_deleted = 1 OR isNotNull(j.deleted_at), 1, 0) AS _peerdb_is_deleted
 FROM forska.judgments_raw j
-LEFT JOIN forska.articles a ON j.article_id = a.id
-WHERE j.deleted_at IS NULL;
+ANY LEFT JOIN forska.articles a ON j.article_id = a.id AND a._peerdb_is_deleted = 0;
 
 -- ============================================================
 -- 4. ARTICLES STATS (health checks)

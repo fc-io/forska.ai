@@ -484,7 +484,7 @@ const getSampleVerifyResult = async (input: {
             toString(id) as id,
             article_title as articleTitle
           FROM forska.articles FINAL
-          WHERE id IN ({ids:Array(UUID)}) AND _peerdb_is_deleted = 0
+          WHERE id IN ({ids:Array(String)}) AND _peerdb_is_deleted = 0
         `
       : `
           SELECT
@@ -499,7 +499,7 @@ const getSampleVerifyResult = async (input: {
             answered_original as answeredOriginal,
             explanation
           FROM forska.judgments_raw FINAL
-          WHERE id IN ({ids:Array(UUID)}) AND deleted_at IS NULL AND _peerdb_is_deleted = 0
+          WHERE id IN ({ids:Array(String)}) AND deleted_at IS NULL AND _peerdb_is_deleted = 0
         `
 
   const chResult = await client.query({query: chQuery, query_params: {ids: sampleIds}, format: 'JSONEachRow'})

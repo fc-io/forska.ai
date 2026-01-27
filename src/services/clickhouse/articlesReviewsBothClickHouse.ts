@@ -362,7 +362,7 @@ export const queryArticlesReviewsBothFromClickHouse = async (
     SELECT COUNT(*) as totalCount
     FROM (
       SELECT articleId
-      FROM judgments
+      FROM judgments FINAL
       WHERE ${whereClause}
       GROUP BY articleId
       ${havingClause}
@@ -385,7 +385,7 @@ export const queryArticlesReviewsBothFromClickHouse = async (
       max(articleTitle) AS title_,
       max(articleCreatedAt) AS created_,
       max(articleUpdatedAt) AS updated_
-    FROM judgments
+    FROM judgments FINAL
     WHERE ${whereClause}
     GROUP BY articleId
     ${havingClause}
@@ -435,7 +435,7 @@ export const queryArticlesReviewsBothFromClickHouse = async (
       answeredOriginalAsArray,
       explanation,
       quotes
-    FROM judgments
+    FROM judgments FINAL
     WHERE _peerdb_is_deleted = 0
       AND articleId IN (${articleIdsQuoted})
       AND promptId IN (${promptIdsQuoted})
