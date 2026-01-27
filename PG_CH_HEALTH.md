@@ -278,7 +278,9 @@ ORDER BY (article_id, prompt_id, model_id, id);
 
 #### 6.4 Query Layer Changes
 
-All CH queries must handle dedup + filter deleted:
+Primary path: query a "current state" table populated by a materialized view (no `FINAL`/`argMax` in app queries).
+
+Raw/history table queries must handle dedup + filter deleted:
 
 ```sql
 -- Option A: FINAL (simple, slower)
@@ -295,7 +297,8 @@ GROUP BY id;
 - [ ] Audit all CH queries in codebase
 - [ ] Add `WHERE _peerdb_is_deleted = 0` filter to all queries
 - [ ] Add `FINAL` or implement `argMax` pattern for dedup
-- [ ] Consider materialized view for "current state" if FINAL too slow
+- [ ] Create materialized view + target table for "current state" (latest `_peerdb_version` per `id`, excludes deleted)
+- [ ] Switch app queries to "current state" table
 - [ ] Update health check queries
 
 #### 6.5 Remove Manual Sync Code
