@@ -290,6 +290,9 @@ GROUP BY id;
 
 #### 6.5 Remove Manual Sync Code
 
+- [x] Stub legacy sync endpoints/UI (2026-01-27)
+- [x] Drop legacy `pg_ch_sync_stats` (db:gen + db:mig, 2026-01-27)
+
 | To Remove | File |
 |-----------|------|
 | `POST /api/admin/sync-judgments-to-clickhouse` | `AdminInvestigateRoutes.ts` |
