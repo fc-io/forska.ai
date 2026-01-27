@@ -1,7 +1,7 @@
 import {getClickhouseClient} from './clickhouseClient.ts'
 
 const HEALTH_TABLES = ['articles', 'judgments'] as const
-const HEALTH_TABLE_MAP = {articles: 'articles', judgments: 'judgments_raw'} as const
+const HEALTH_TABLE_MAP = {articles: 'articles', judgments: 'judgments'} as const
 
 type HealthTable = (typeof HEALTH_TABLES)[number]
 

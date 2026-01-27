@@ -136,6 +136,7 @@ const selectLlmArticleIds = async (params: SelectArticleIdsParams): Promise<stri
 
   // Build WHERE conditions
   const whereParts: string[] = []
+  whereParts.push('_peerdb_is_deleted = 0')
 
   // Prompt filter
   const promptIdsQuoted = metadata.promptIds
@@ -276,6 +277,7 @@ const selectUnassessedArticleIds = async (params: SelectArticleIdsParams): Promi
 
   // Build WHERE conditions
   const whereParts: string[] = []
+  whereParts.push('_peerdb_is_deleted = 0')
 
   // Prompt filter
   const promptIdsQuoted = metadata.promptIds
@@ -447,6 +449,7 @@ const selectBothArticleIds = async (params: SelectArticleIdsParams): Promise<str
 
   // Step 2: Query ClickHouse for LLM judgments on human-assessed articles
   const whereParts: string[] = []
+  whereParts.push('_peerdb_is_deleted = 0')
 
   // Prompt filter
   const promptIdsQuoted = metadata.promptIds

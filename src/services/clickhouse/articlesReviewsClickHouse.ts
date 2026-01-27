@@ -323,6 +323,7 @@ export const queryArticlesReviewsFromClickHouse = async (
 
     // Build WHERE conditions
     const whereParts: string[] = []
+    whereParts.push('_peerdb_is_deleted = 0')
 
     // Prompt filter - must be in project's enabled prompts
     const promptIdsQuoted = metadata.promptIds
@@ -584,7 +585,8 @@ export const queryArticlesReviewsFromClickHouse = async (
         explanation,
         quotes
       FROM judgments
-      WHERE articleId IN (${articleIdsQuoted})
+      WHERE _peerdb_is_deleted = 0
+        AND articleId IN (${articleIdsQuoted})
         AND promptId IN (${promptIdsQuoted})
       ORDER BY articleId, createdAt DESC
     `
@@ -745,6 +747,7 @@ export const countArticlesReviewsFromClickHouse = async (
 
       // Build WHERE conditions (same as articles query)
       const whereParts: string[] = []
+      whereParts.push('_peerdb_is_deleted = 0')
 
       // Prompt filter
       const promptIdsQuoted = metadata.promptIds

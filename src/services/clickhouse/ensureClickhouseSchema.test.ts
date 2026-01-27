@@ -5,7 +5,7 @@ type EngineMap = Record<string, string | null | undefined>
 type QueryArgs = {query: string; query_params?: {db?: string; name?: string}}
 type CommandArgs = {query: string}
 
-const engineByTableRef: {current: EngineMap} = {current: {articles: null, judgments_raw: null, judgments: 'View'}}
+const engineByTableRef: {current: EngineMap} = {current: {articles: null, judgments_raw: null, judgments: null}}
 
 const commandCallsRef: {current: string[]} = {current: []}
 
@@ -52,7 +52,7 @@ test('ensureClickhouseSchema migrates MergeTree tables to ReplacingMergeTree', a
 })
 
 test('ensureClickhouseSchema skips migration when engines already match', async () => {
-  resetRefs({articles: 'ReplacingMergeTree', judgments_raw: 'ReplacingMergeTree', judgments: 'View'})
+  resetRefs({articles: 'ReplacingMergeTree', judgments_raw: 'ReplacingMergeTree', judgments: 'ReplacingMergeTree'})
 
   const {ensureClickhouseSchema} = await import('./ensureClickhouseSchema.ts')
   await ensureClickhouseSchema()

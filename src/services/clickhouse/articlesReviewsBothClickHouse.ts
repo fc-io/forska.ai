@@ -248,6 +248,7 @@ export const queryArticlesReviewsBothFromClickHouse = async (
   // Step 3: Query ClickHouse for LLM judgments on human-assessed articles
   // Build WHERE conditions
   const whereParts: string[] = []
+  whereParts.push('_peerdb_is_deleted = 0')
 
   // Prompt filter
   const promptIdsQuoted = promptIds
@@ -435,7 +436,8 @@ export const queryArticlesReviewsBothFromClickHouse = async (
       explanation,
       quotes
     FROM judgments
-    WHERE articleId IN (${articleIdsQuoted})
+    WHERE _peerdb_is_deleted = 0
+      AND articleId IN (${articleIdsQuoted})
       AND promptId IN (${promptIdsQuoted})
     ORDER BY articleId, createdAt DESC
   `

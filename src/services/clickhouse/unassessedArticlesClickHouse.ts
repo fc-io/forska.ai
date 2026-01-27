@@ -173,6 +173,7 @@ const buildJudgmentFilters = (
   useFulltextNoImages: boolean,
 ): string[] => {
   const filters: string[] = []
+  filters.push('_peerdb_is_deleted = 0')
 
   const promptIdsQuoted = promptIds
     .map((id) => {
@@ -313,7 +314,7 @@ export const getUnassessedCountFromClickHouse = async (params: UnassessedCountPa
     const totalScopedQuery = `
       SELECT COUNT(DISTINCT id) as total
       FROM forska.articles
-      WHERE ${articleWhereClause}
+      WHERE _peerdb_is_deleted = 0 AND ${articleWhereClause}
     `
 
     const assessedQuery = `
@@ -471,7 +472,7 @@ export const getUnassessedArticlesFromClickHouse = async (
     const countQuery = `
       SELECT COUNT(*) as total_count
       FROM forska.articles a
-      WHERE ${articleWhereClause}
+      WHERE a._peerdb_is_deleted = 0 AND ${articleWhereClause}
         AND a.id NOT IN (${assessedSubquery})
     `
 
@@ -483,7 +484,7 @@ export const getUnassessedArticlesFromClickHouse = async (
         a.article_created_at,
         a.article_updated_at
       FROM forska.articles a
-      WHERE ${articleWhereClause}
+      WHERE a._peerdb_is_deleted = 0 AND ${articleWhereClause}
         AND a.id NOT IN (${assessedSubquery})
       ORDER BY COALESCE(a.article_updated_at, a.article_created_at, a.created_at) DESC, a.id DESC
       LIMIT ${limit}
@@ -673,7 +674,7 @@ export const getUnassessedPairsFromClickHouse = async (
       CROSS JOIN (
         SELECT arrayJoin([${promptIdsQuoted}]) AS promptId
       ) p
-      WHERE ${articleWhereClause}
+      WHERE a._peerdb_is_deleted = 0 AND ${articleWhereClause}
         AND (a.id, p.promptId) NOT IN (${assessedPairsSubquery})
         ${cursorCondition}
       ORDER BY sort_date DESC, a.id DESC

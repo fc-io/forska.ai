@@ -42,23 +42,6 @@ const toNumber = (value: unknown): number => {
   if (typeof value === 'string') return parseInt(value, 10) || 0
   return typeof value === 'bigint' ? Number(value) : 0
 }
-
-const hasClickhouseColumn = async (dbName: string, table: string, col: string): Promise<boolean> => {
-  const client = getClickhouseClient()
-  const result = await client.query({
-    query: `
-      SELECT count() AS cnt
-      FROM system.columns
-      WHERE database = {db:String} AND table = {table:String} AND name = {col:String}
-    `,
-    query_params: {db: dbName, table, col},
-    format: 'JSONEachRow',
-  })
-  const rows = await result.json<{cnt: string | number}>()
-  const firstRow = Array.isArray(rows) ? rows[0] : rows
-  return toNumber(firstRow?.cnt) > 0
-}
-
 const getSampleIdsQuery = (input: {
   table: 'articles' | 'judgments'
   sampleType: 'recent' | 'random' | 'deleted'
@@ -209,38 +192,36 @@ const getSampleVerifyResult = async (input: {
   )
 
   const client = getClickhouseClient()
-  const judgmentsCursorCol =
-    input.table === 'judgments'
-      ? (await hasClickhouseColumn('forska', 'judgments', 'updatedAt'))
-        ? 'updatedAt'
-        : 'createdAt'
-      : null
 
   const chQuery =
     input.table === 'articles'
       ? `
           SELECT
             id,
-            argMax(article_title, updated_at) as articleTitle
+            argMax(article_title, _peerdb_version) as articleTitle,
+            argMax(_peerdb_is_deleted, _peerdb_version) as isDeleted
           FROM forska.articles
           WHERE id IN ({ids:Array(String)})
           GROUP BY id
+          HAVING isDeleted = 0
         `
       : `
           SELECT
             id,
-            argMax(articleId, ${judgmentsCursorCol}) as articleId,
-            argMax(promptId, ${judgmentsCursorCol}) as promptId,
-            argMax(modelId, ${judgmentsCursorCol}) as modelId,
-            argMax(useTitle, ${judgmentsCursorCol}) as useTitle,
-            argMax(useAbstract, ${judgmentsCursorCol}) as useAbstract,
-            argMax(useFulltext, ${judgmentsCursorCol}) as useFulltext,
-            argMax(useFulltextNoImages, ${judgmentsCursorCol}) as useFulltextNoImages,
-            argMax(answeredOriginal, ${judgmentsCursorCol}) as answeredOriginal,
-            argMax(explanation, ${judgmentsCursorCol}) as explanation
+            argMax(articleId, _peerdb_version) as articleId,
+            argMax(promptId, _peerdb_version) as promptId,
+            argMax(modelId, _peerdb_version) as modelId,
+            argMax(useTitle, _peerdb_version) as useTitle,
+            argMax(useAbstract, _peerdb_version) as useAbstract,
+            argMax(useFulltext, _peerdb_version) as useFulltext,
+            argMax(useFulltextNoImages, _peerdb_version) as useFulltextNoImages,
+            argMax(answeredOriginal, _peerdb_version) as answeredOriginal,
+            argMax(explanation, _peerdb_version) as explanation,
+            argMax(_peerdb_is_deleted, _peerdb_version) as isDeleted
           FROM forska.judgments
           WHERE id IN ({ids:Array(String)})
           GROUP BY id
+          HAVING isDeleted = 0
         `
 
   const chResult = await client.query({query: chQuery, query_params: {ids: sampleIds}, format: 'JSONEachRow'})
@@ -316,8 +297,8 @@ const getPartitionCoverage = async (input: {table: 'articles' | 'judgments'; mon
       SELECT
         formatDateTime(toTimeZone(${chCursorCol}, 'UTC'), '%Y-%m') as month,
         count() as count
-      FROM forska.${input.table}
-      WHERE ${chCursorCol} >= now64(3, 'UTC') - INTERVAL {months:Int32} MONTH
+      FROM forska.${input.table} FINAL
+      WHERE _peerdb_is_deleted = 0 AND ${chCursorCol} >= now64(3, 'UTC') - INTERVAL {months:Int32} MONTH
       GROUP BY month
       ORDER BY month DESC
     `,

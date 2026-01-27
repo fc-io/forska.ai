@@ -9,11 +9,11 @@ const clickhouseClientMockRef = {
           : query.includes('GROUP BY table, partition')
             ? [
                 {table: 'articles', partition: '202601', parts: '3', rows: '30', bytesOnDisk: '60'},
-                {table: 'judgments_raw', partition: '202601', parts: 7, rows: 70, bytesOnDisk: 140},
+                {table: 'judgments', partition: '202601', parts: 7, rows: 70, bytesOnDisk: 140},
               ]
             : [
                 {table: 'articles', parts: '10', rows: '100', bytesOnDisk: '200', bytesUncompressed: '300'},
-                {table: 'judgments_raw', parts: 5, rows: 50, bytesOnDisk: 1000, bytesUncompressed: 2000},
+                {table: 'judgments', parts: 5, rows: 50, bytesOnDisk: 1000, bytesUncompressed: 2000},
               ]
       }
 

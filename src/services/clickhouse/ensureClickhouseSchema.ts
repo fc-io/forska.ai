@@ -77,6 +77,69 @@ const createJudgmentsRawTableQuery = `
   ORDER BY (article_id, prompt_id, model_id, id)
 `
 
+const createJudgmentsTableQuery = `
+  CREATE TABLE IF NOT EXISTS forska.judgments (
+    id String,
+    createdAt DateTime64(3, 'UTC'),
+    updatedAt DateTime64(3, 'UTC'),
+    articleId String,
+    articleTitle String,
+    articleCreatedAt Nullable(DateTime64(6, 'UTC')),
+    articleUpdatedAt Nullable(DateTime64(6, 'UTC')),
+    articleCreatedYear Nullable(Int32),
+    articleUpdatedYear Nullable(Int32),
+    articleImportRoute Nullable(String),
+    articleImportedBy Nullable(String),
+    promptId String,
+    modelId String,
+    useTitle Bool DEFAULT true,
+    useAbstract Bool DEFAULT true,
+    useFulltext Bool DEFAULT false,
+    useFulltextNoImages Bool DEFAULT false,
+    answeredOriginal Nullable(String),
+    answeredOriginalAsArray Array(Nullable(String)) DEFAULT [],
+    explanation Nullable(String),
+    quotes Nullable(String),
+    _peerdb_version Int64,
+    _peerdb_is_deleted Int8 DEFAULT 0,
+    INDEX idx_judgments_id id TYPE bloom_filter(0.01) GRANULARITY 1
+  ) ENGINE = ReplacingMergeTree(_peerdb_version)
+  PARTITION BY toYYYYMM(createdAt)
+  ORDER BY (articleId, promptId, modelId, id)
+`
+
+const createJudgmentsMaterializedViewQuery = `
+  CREATE MATERIALIZED VIEW IF NOT EXISTS forska.judgments_mv
+  TO forska.judgments
+  AS
+  SELECT
+    j.id,
+    j.created_at AS createdAt,
+    j.updated_at AS updatedAt,
+    j.article_id AS articleId,
+    COALESCE(a.article_title, '') AS articleTitle,
+    a.article_created_at AS articleCreatedAt,
+    a.article_updated_at AS articleUpdatedAt,
+    if(isNull(a.article_created_at), NULL, toInt32(toYear(a.article_created_at))) AS articleCreatedYear,
+    if(isNull(a.article_updated_at), NULL, toInt32(toYear(a.article_updated_at))) AS articleUpdatedYear,
+    a.import_route AS articleImportRoute,
+    a.imported_by AS articleImportedBy,
+    j.prompt_id AS promptId,
+    j.model_id AS modelId,
+    j.use_title AS useTitle,
+    j.use_abstract AS useAbstract,
+    j.use_fulltext AS useFulltext,
+    j.use_fulltext_no_images AS useFulltextNoImages,
+    j.answered_original AS answeredOriginal,
+    j.answered_original_as_array AS answeredOriginalAsArray,
+    j.explanation,
+    j.quotes,
+    j._peerdb_version AS _peerdb_version,
+    if(j._peerdb_is_deleted = 1 OR isNotNull(j.deleted_at), 1, 0) AS _peerdb_is_deleted
+  FROM forska.judgments_raw j
+  ANY LEFT JOIN forska.articles a ON j.article_id = a.id AND a._peerdb_is_deleted = 0
+`
+
 const getClickhouseTableEngine = async (db: string, name: string): Promise<string | null> => {
   const client = getClickhouseClient()
   const result = await client.query({
@@ -298,51 +361,27 @@ export const ensureClickhouseSchema = async (): Promise<void> => {
     'ALTER TABLE forska.judgments_raw ADD COLUMN IF NOT EXISTS _peerdb_is_deleted Int8 DEFAULT 0',
   ])
 
-  const hasJudgmentsNameConflict = judgmentsEngine !== null && judgmentsEngine !== 'View'
-
-  const createJudgmentsViewQuery = `
-    CREATE VIEW forska.judgments AS
-    SELECT
-      j.id,
-      j.created_at AS createdAt,
-      j.updated_at AS updatedAt,
-      j.article_id AS articleId,
-      COALESCE(a.article_title, '') AS articleTitle,
-      a.article_created_at AS articleCreatedAt,
-      a.article_updated_at AS articleUpdatedAt,
-      if(isNull(a.article_created_at), NULL, toInt32(toYear(a.article_created_at))) AS articleCreatedYear,
-      if(isNull(a.article_updated_at), NULL, toInt32(toYear(a.article_updated_at))) AS articleUpdatedYear,
-      a.import_route AS articleImportRoute,
-      a.imported_by AS articleImportedBy,
-      j.prompt_id AS promptId,
-      j.model_id AS modelId,
-      j.use_title AS useTitle,
-      j.use_abstract AS useAbstract,
-      j.use_fulltext AS useFulltext,
-      j.use_fulltext_no_images AS useFulltextNoImages,
-      j.answered_original AS answeredOriginal,
-      j.answered_original_as_array AS answeredOriginalAsArray,
-      j.explanation,
-      j.quotes
-    FROM forska.judgments_raw j
-    LEFT JOIN forska.articles a ON j.article_id = a.id
-    WHERE j.deleted_at IS NULL
-  `
-
-  const judgmentViewQueries =
-    judgmentsEngine === 'View'
-      ? ['DROP VIEW IF EXISTS forska.judgments', createJudgmentsViewQuery]
-      : [createJudgmentsViewQuery]
+  const shouldReplaceJudgmentsView = judgmentsEngine === 'View'
+  const shouldDropJudgmentsMaterializedView = judgmentsEngine === null || judgmentsEngine === 'View'
+  const hasJudgmentsNameConflict =
+    judgmentsEngine !== null && judgmentsEngine !== 'View' && judgmentsEngine !== REPLACING_ENGINE
 
   if (hasJudgmentsNameConflict) {
     console.error(
-      `[CH] Expected forska.judgments to be a VIEW, found engine=${judgmentsEngine}. Rename/drop it and re-run setup.`,
+      `[CH] Expected forska.judgments to be ${REPLACING_ENGINE} or a VIEW, found engine=${judgmentsEngine}. Rename/drop it and re-run setup.`,
     )
   }
 
   await (hasJudgmentsNameConflict
     ? Promise.reject(new Error('ClickHouse schema conflict: forska.judgments'))
-    : runClickhouseCommands(judgmentViewQueries))
+    : runClickhouseCommands([
+        ...(shouldDropJudgmentsMaterializedView ? ['DROP TABLE IF EXISTS forska.judgments_mv'] : []),
+        ...(shouldReplaceJudgmentsView ? ['DROP VIEW IF EXISTS forska.judgments'] : []),
+        createJudgmentsTableQuery,
+        'ALTER TABLE forska.judgments ADD COLUMN IF NOT EXISTS _peerdb_version Int64',
+        'ALTER TABLE forska.judgments ADD COLUMN IF NOT EXISTS _peerdb_is_deleted Int8 DEFAULT 0',
+        createJudgmentsMaterializedViewQuery,
+      ]))
 
   await client.command({
     query: `

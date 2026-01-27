@@ -9,6 +9,7 @@ import {eq} from 'drizzle-orm'
 
 // Project with 93K curated articles
 const TEST_PROJECT_ID = '38b2dfb7-a8bc-4dd0-922f-2bf6c46a2dc9'
+const JUDGMENTS_TABLE = process.env.CH_USE_FINAL === 'false' ? 'judgments' : 'judgments FINAL'
 
 const main = async () => {
   const db = getDatabase()
@@ -68,10 +69,11 @@ const main = async () => {
         j.articleId,
         any(j.articleTitle) AS title_,
         any(j.articleCreatedAt) AS created_
-      FROM judgments j
+      FROM ${JUDGMENTS_TABLE} AS j
       INNER JOIN ${tempTableName} t ON j.articleId = t.articleId
-      WHERE j.promptId IN (
-        SELECT DISTINCT promptId FROM judgments LIMIT 2
+      WHERE j._peerdb_is_deleted = 0
+        AND j.promptId IN (
+        SELECT DISTINCT promptId FROM ${JUDGMENTS_TABLE} WHERE _peerdb_is_deleted = 0 LIMIT 2
       )
       GROUP BY j.articleId
       ORDER BY created_ DESC NULLS LAST
@@ -152,11 +154,12 @@ const main = async () => {
         j.articleId,
         any(j.articleTitle) AS title_,
         any(j.articleCreatedAt) AS created_
-      FROM judgments j
+      FROM ${JUDGMENTS_TABLE} AS j
       INNER JOIN project_articles_ch pa ON j.articleId = pa.articleId
       WHERE pa.projectId = '${TEST_PROJECT_ID}'
+        AND j._peerdb_is_deleted = 0
         AND j.promptId IN (
-          SELECT DISTINCT promptId FROM judgments LIMIT 2
+          SELECT DISTINCT promptId FROM ${JUDGMENTS_TABLE} WHERE _peerdb_is_deleted = 0 LIMIT 2
         )
       GROUP BY j.articleId
       ORDER BY created_ DESC NULLS LAST

@@ -154,6 +154,7 @@ export const getDatabaseBasedFiltersFromClickHouse = async (
 
   // Build WHERE conditions
   const whereParts: string[] = []
+  whereParts.push('_peerdb_is_deleted = 0')
 
   // Prompt filter - only the open-ended prompts we need filter values for
   const promptIdsQuoted = promptIds
@@ -338,6 +339,7 @@ export const getNumericFiltersFromClickHouse = async (
   }
 
   const whereParts: string[] = []
+  whereParts.push('_peerdb_is_deleted = 0')
 
   const promptIdsQuoted = promptIds
     .map((id) => {

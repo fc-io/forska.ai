@@ -877,7 +877,8 @@ export const adminInvestigateRoutes = new Elysia()
       const chQuery = `
         SELECT count() AS count
         FROM judgments
-        WHERE promptId IN (${promptIdsQuoted})
+        WHERE _peerdb_is_deleted = 0
+          AND promptId IN (${promptIdsQuoted})
           AND modelId = '${project.modelId}'
           AND useTitle = ${project.useTitle}
           AND useAbstract = ${project.useAbstract}
@@ -893,13 +894,13 @@ export const adminInvestigateRoutes = new Elysia()
       let chArticleCount = 0
       if (articleIds.length > 0) {
         const idsQuoted = articleIds.map((id) => `'${id}'`).join(', ')
-        const chArticleQuery = `SELECT count() AS count FROM forska.articles WHERE id IN (${idsQuoted})`
+        const chArticleQuery = `SELECT count() AS count FROM forska.articles FINAL WHERE _peerdb_is_deleted = 0 AND id IN (${idsQuoted})`
         const result = await chClient.query({query: chArticleQuery, format: 'JSONEachRow'})
         const [row] = await result.json<{count: number}>()
         chArticleCount = row?.count ?? 0
       } else if (routes.length > 0) {
         const routesQuoted = routes.map((r) => `'${r}'`).join(', ')
-        const chArticleQuery = `SELECT count() AS count FROM forska.articles WHERE import_route IN (${routesQuoted})`
+        const chArticleQuery = `SELECT count() AS count FROM forska.articles FINAL WHERE _peerdb_is_deleted = 0 AND import_route IN (${routesQuoted})`
         const result = await chClient.query({query: chArticleQuery, format: 'JSONEachRow'})
         const [row] = await result.json<{count: number}>()
         chArticleCount = row?.count ?? 0

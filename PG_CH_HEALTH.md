@@ -7,7 +7,7 @@
 - CH schema:
   - `forska.articles` = PeerDB sink (PG `articles`)
   - `forska.judgments_raw` = PeerDB sink (PG `judgments`)
-  - `forska.judgments` = live-only view (filters `deleted_at`, joins `articles`)
+  - `forska.judgments` = current-state table (MV from `judgments_raw`; joins `articles`; set `_peerdb_is_deleted` incl `deleted_at`)
 
 ## Setup
 
@@ -261,7 +261,7 @@ ORDER BY (article_id, prompt_id, model_id, id);
 - [x] Use ReplacingMergeTree(`_peerdb_version`) (PeerDB pattern)
 - [x] Enforce/migrate engine in setup: if existing `MergeTree` → rename to `*_legacy_<ts>`, recreate as ReplacingMergeTree, backfill with `_peerdb_version = toUnixTimestamp64Milli(updated_at)` (also for `forska.articles`) (`src/services/clickhouse/ensureClickhouseSchema.ts`)
 - [x] Keep `quotes` as JSON `Nullable(String)` + parse in query layer
-- [x] Keep `articleTitle/*` in `forska.judgments` view (join `articles`)
+- [x] Keep `articleTitle/*` in `forska.judgments` (now via MV join)
 
 #### 6.4 Query Layer Changes
 
@@ -281,12 +281,12 @@ WHERE _peerdb_is_deleted = 0
 GROUP BY id;
 ```
 
-- [ ] Audit all CH queries in codebase
-- [ ] Add `WHERE _peerdb_is_deleted = 0` filter to all queries
-- [ ] Add `FINAL` or implement `argMax` pattern for dedup
-- [ ] Create materialized view + target table for "current state" (latest `_peerdb_version` per `id`, excludes deleted)
-- [ ] Switch app queries to "current state" table
-- [ ] Update health check queries
+- [x] Audit all CH queries in codebase
+- [x] Add `WHERE _peerdb_is_deleted = 0` filter to all queries
+- [x] Add `FINAL` or implement `argMax` pattern for dedup
+- [x] Create materialized view + target table for "current state" (latest `_peerdb_version` per `id`, excludes deleted)
+- [x] Switch app queries to "current state" table
+- [x] Update health check queries
 
 #### 6.5 Remove Manual Sync Code
 
