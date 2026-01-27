@@ -368,9 +368,9 @@ const runAutoSyncAllAsync = async (projectId: string | null) => {
             if (projectScope.curatedArticleIds.length > 0) {
               articleScopeConditions.push(inArray(judgments.articleId, projectScope.curatedArticleIds))
             }
-            const articleScopeCondition = or(...articleScopeConditions)
-            if (articleScopeCondition) {
-              baseConditions.push(articleScopeCondition)
+            const scopeCondition = articleScopeConditions.length > 0 ? or(...articleScopeConditions) : null
+            if (scopeCondition) {
+              baseConditions.push(scopeCondition)
             }
 
             if (projectScope.dateFrom) {
