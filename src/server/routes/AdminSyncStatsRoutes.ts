@@ -26,6 +26,8 @@ const toMsOrNull = (value: unknown): number | null => {
   return value instanceof Date ? value.getTime() : null
 }
 
+const STATS_STATEMENT_TIMEOUT_MS = 10 * 60 * 1000
+
 const getPeerdbMirrorName = (): string => {
   const raw = String(process.env['PEERDB_MIRROR_NAME'] ?? '').trim()
   return raw ? raw : 'forska_pg_to_ch_cdc'
@@ -40,7 +42,8 @@ const getPeerdbConnectionConfig = () => {
   const portFromEnv = toNumber(process.env['PEERDB_PORT'] ?? '')
   const portFromCatalog = toNumber(process.env['PEERDB_CATALOG_PORT'] ?? '')
   const port = portFromEnv || (isLocalhost ? 9901 : portFromCatalog || 5432)
-  const user = String(process.env['PEERDB_CATALOG_USER'] ?? process.env['PEERDB_USER'] ?? 'postgres').trim() || 'postgres'
+  const user =
+    String(process.env['PEERDB_CATALOG_USER'] ?? process.env['PEERDB_USER'] ?? 'postgres').trim() || 'postgres'
   const password = String(process.env['PEERDB_CATALOG_PASSWORD'] ?? process.env['PEERDB_PASSWORD'] ?? 'postgres')
   const database =
     String(process.env['PEERDB_CATALOG_DATABASE'] ?? process.env['PEERDB_DATABASE'] ?? user).trim() || user
@@ -53,8 +56,12 @@ const getPeerdbErrorMessage = (error: unknown): string => {
 }
 
 const getPeerdbErrorCode = (error: unknown): string | null => {
+  const codeValue =
+    typeof error === 'object' && error !== null && 'code' in error ? (error as {code?: unknown}).code : null
   const code =
-    typeof error === 'object' && error !== null && 'code' in error ? String((error as {code?: unknown}).code ?? '') : ''
+    typeof codeValue === 'string' || typeof codeValue === 'number' || typeof codeValue === 'bigint'
+      ? String(codeValue)
+      : ''
   return code || null
 }
 
@@ -143,12 +150,15 @@ const getPgTableStats = async (
   const db = getDatabase()
 
   const where = table === 'judgments' ? sql`WHERE deleted_at IS NULL` : sql``
-  const result = await db.execute<{count: string | number; max_updated_at: Date | null}>(sql`
-    SELECT
-      COUNT(*)::text AS count,
-      MAX(updated_at) AS max_updated_at
-    FROM ${sql.identifier(table)} ${where}
-  `)
+  const result = await db.transaction(async (tx) => {
+    await tx.execute(sql.raw(`SET LOCAL statement_timeout = ${STATS_STATEMENT_TIMEOUT_MS}`))
+    return tx.execute<{count: string | number; max_updated_at: Date | null}>(sql`
+      SELECT
+        COUNT(*)::text AS count,
+        MAX(updated_at) AS max_updated_at
+      FROM ${sql.identifier(table)} ${where}
+    `)
+  })
 
   const row = result.rows[0]
   return row
@@ -202,6 +212,55 @@ const getClickhouseTableStats = async (table: 'articles' | 'judgments'): Promise
   const dedupDrift = Math.max(0, totalCount - liveCount)
 
   return {totalCount, maxUpdatedAtMs, liveCount, liveMaxUpdatedAtMs, dedupDrift}
+}
+
+const computeDiff = (pgCount: number, chCount: number | null) => {
+  if (chCount === null) return {absolute: null, percentage: null, direction: 'unknown' as const}
+  const absolute = pgCount - chCount
+  const percentage = pgCount > 0 ? absolute / pgCount : null
+  const direction = absolute === 0 ? 'synced' : absolute > 0 ? 'pg_ahead' : 'ch_ahead'
+  return {absolute, percentage, direction}
+}
+
+const computeLagSeconds = (pgMs: number | null, chMs: number | null) => {
+  if (pgMs === null || chMs === null) return null
+  return Math.trunc((pgMs - chMs) / 1000)
+}
+
+const buildSyncStatsData = async () => {
+  const clickhouseReachable = await pingClickhouse(2000)
+  await (clickhouseReachable ? ensureClickhouseSchema() : Promise.resolve())
+
+  const [peerdb, postgresSlot, clickhouseMergeParts, pgArticles, pgJudgments, chArticles, chJudgments] =
+    await Promise.all([
+      getPeerdbMirrorHealth(),
+      getPostgresSlotHealth(),
+      getClickhouseMergePartsSummary(),
+      getPgTableStats('articles'),
+      getPgTableStats('judgments'),
+      clickhouseReachable ? getClickhouseTableStats('articles') : null,
+      clickhouseReachable ? getClickhouseTableStats('judgments') : null,
+    ])
+
+  const articles = {
+    pg: pgArticles,
+    ch: chArticles,
+    diff: computeDiff(pgArticles.count, chArticles?.liveCount ?? null),
+    lagSeconds: computeLagSeconds(pgArticles.maxUpdatedAtMs, chArticles?.liveMaxUpdatedAtMs ?? null),
+  }
+
+  const judgments = {
+    pg: pgJudgments,
+    ch: chJudgments,
+    diff: computeDiff(pgJudgments.count, chJudgments?.liveCount ?? null),
+    lagSeconds: computeLagSeconds(pgJudgments.maxUpdatedAtMs, chJudgments?.liveMaxUpdatedAtMs ?? null),
+  }
+
+  return {
+    queriedAt: new Date().toISOString(),
+    replication: {peerdb, postgres: {slot: postgresSlot}, clickhouse: clickhouseMergeParts},
+    stats: {articles, judgments},
+  }
 }
 
 const getClickhouseMergePartsSummary = async (): Promise<{
@@ -587,59 +646,34 @@ export const adminSyncStatsRoutes = new Elysia()
   .use(withErrorHandler())
   .use(requireAdminAuth())
   .get('/api/admin/sync-stats', async () => {
-    const clickhouseReachable = await pingClickhouse(2000)
-    await (clickhouseReachable ? ensureClickhouseSchema() : Promise.resolve())
-
-    const [peerdb, postgresSlot, clickhouseMergeParts, pgArticles, pgJudgments, chArticles, chJudgments] =
-      await Promise.all([
-        getPeerdbMirrorHealth(),
-        getPostgresSlotHealth(),
-        getClickhouseMergePartsSummary(),
-        getPgTableStats('articles'),
-        getPgTableStats('judgments'),
-        clickhouseReachable ? getClickhouseTableStats('articles') : null,
-        clickhouseReachable ? getClickhouseTableStats('judgments') : null,
-      ])
-
-    const computeDiff = (pgCount: number, chCount: number | null) => {
-      if (chCount === null) return {absolute: null, percentage: null, direction: 'unknown' as const}
-      const absolute = pgCount - chCount
-      const percentage = pgCount > 0 ? absolute / pgCount : null
-      const direction = absolute === 0 ? 'synced' : absolute > 0 ? 'pg_ahead' : 'ch_ahead'
-      return {absolute, percentage, direction}
-    }
-
-    const computeLagSeconds = (pgMs: number | null, chMs: number | null) => {
-      if (pgMs === null || chMs === null) return null
-      return Math.trunc((pgMs - chMs) / 1000)
-    }
-
-    const articles = {
-      pg: pgArticles,
-      ch: chArticles,
-      diff: computeDiff(pgArticles.count, chArticles?.liveCount ?? null),
-      lagSeconds: computeLagSeconds(pgArticles.maxUpdatedAtMs, chArticles?.liveMaxUpdatedAtMs ?? null),
-    }
-
-    const judgments = {
-      pg: pgJudgments,
-      ch: chJudgments,
-      diff: computeDiff(pgJudgments.count, chJudgments?.liveCount ?? null),
-      lagSeconds: computeLagSeconds(pgJudgments.maxUpdatedAtMs, chJudgments?.liveMaxUpdatedAtMs ?? null),
-    }
-
-    return {
-      data: {
-        queriedAt: new Date().toISOString(),
-        replication: {peerdb, postgres: {slot: postgresSlot}, clickhouse: clickhouseMergeParts},
-        stats: {articles, judgments},
-      },
-    }
+    const data = await buildSyncStatsData()
+    return {data}
+  })
+  .get('/api/admin/sync-stats/pg-articles', async () => {
+    const data = await getPgTableStats('articles')
+    return {data}
+  })
+  .get('/api/admin/sync-stats/pg-judgments', async () => {
+    const data = await getPgTableStats('judgments')
+    return {data}
+  })
+  .get('/api/admin/sync-stats/ch-articles', async () => {
+    await ensureClickhouseSchema()
+    const stats = await getClickhouseTableStats('articles')
+    const data = {count: stats.liveCount, maxUpdatedAtMs: stats.liveMaxUpdatedAtMs}
+    return {data}
+  })
+  .get('/api/admin/sync-stats/ch-judgments', async () => {
+    await ensureClickhouseSchema()
+    const stats = await getClickhouseTableStats('judgments')
+    const data = {count: stats.liveCount, maxUpdatedAtMs: stats.liveMaxUpdatedAtMs}
+    return {data}
   })
   .post(
     '/api/admin/refresh-sync-stats',
     async () => {
-      return {started: true}
+      const data = await buildSyncStatsData()
+      return {data}
     },
     {
       body: t.Optional(

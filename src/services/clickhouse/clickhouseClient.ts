@@ -39,8 +39,8 @@ export const getClickhouseClient = (): ClickHouseClient => {
       database,
       username,
       password,
-      // Default timeout settings - 120s to accommodate external GROUP BY (disk-based)
-      request_timeout: 120000,
+      // Default timeout settings - 10 min to accommodate large scans and external GROUP BY (disk-based)
+      request_timeout: 600000,
       // Connection settings for better performance
       compression: {request: false, response: true},
       // Use JSON format for easy parsing

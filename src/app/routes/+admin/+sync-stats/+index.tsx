@@ -1,39 +1,10 @@
 import {useMutation, useQuery} from '@tanstack/solid-query'
 import {createFileRoute} from '@tanstack/solid-router'
-import {createMemo, createSignal, For, Match, Show, Switch} from 'solid-js'
+import {createMemo, createSignal, For, Match, Show, Suspense, Switch} from 'solid-js'
 
 import {apiClient} from '../../../../services/apiClient.ts'
 
-type SyncStatsDiff = {
-  absolute: number | null
-  percentage: number | null
-  direction: 'pg_ahead' | 'ch_ahead' | 'synced' | 'unknown'
-}
-
-type PgTableStats = {count: number; maxUpdatedAtMs: number | null}
-
-type ChTableStats = {
-  totalCount: number
-  maxUpdatedAtMs: number | null
-  liveCount: number
-  liveMaxUpdatedAtMs: number | null
-  dedupDrift: number
-}
-
-type TableSyncStats = {pg: PgTableStats; ch: ChTableStats | null; diff: SyncStatsDiff; lagSeconds: number | null}
-
-type SyncStatsData = {
-  queriedAt: string
-  replication: {
-    peerdb: {mirrorName: string; reachable: boolean; exists: boolean; status: 'running' | 'missing' | 'unreachable'}
-    postgres: {slot: {slotName: string; exists: boolean; active: boolean | null; retainedBytes: string | null}}
-    clickhouse: {
-      reachable: boolean
-      tables: Record<'articles' | 'judgments', {partsActive: number; mergesInProgress: number}>
-    }
-  }
-  stats: {articles: TableSyncStats; judgments: TableSyncStats}
-}
+type TableStats = {count: number; maxUpdatedAtMs: number | null}
 
 type SampleVerifyMismatch = {id: string; field: string; pg: unknown; ch: unknown}
 
@@ -62,10 +33,31 @@ type PartitionCoverageResult = {
   summary: {totalPg: number; totalCh: number; missingMonths: string[]; status: 'partition_gap' | 'synced' | 'diff'}
 }
 
-const fetchSyncStats = async (): Promise<SyncStatsData> => {
-  const response = await apiClient.api.admin['sync-stats'].get()
-  if (response.error) throw new Error('Failed to fetch sync stats')
-  if (!response.data) throw new Error('Failed to fetch sync stats')
+const fetchPgArticlesStats = async (): Promise<TableStats> => {
+  const response = await apiClient.api.admin['sync-stats']['pg-articles'].get()
+  if (response.error) throw new Error('Failed to fetch PG articles stats')
+  if (!response.data) throw new Error('Failed to fetch PG articles stats')
+  return response.data.data
+}
+
+const fetchPgJudgmentsStats = async (): Promise<TableStats> => {
+  const response = await apiClient.api.admin['sync-stats']['pg-judgments'].get()
+  if (response.error) throw new Error('Failed to fetch PG judgments stats')
+  if (!response.data) throw new Error('Failed to fetch PG judgments stats')
+  return response.data.data
+}
+
+const fetchChArticlesStats = async (): Promise<TableStats> => {
+  const response = await apiClient.api.admin['sync-stats']['ch-articles'].get()
+  if (response.error) throw new Error('Failed to fetch CH articles stats')
+  if (!response.data) throw new Error('Failed to fetch CH articles stats')
+  return response.data.data
+}
+
+const fetchChJudgmentsStats = async (): Promise<TableStats> => {
+  const response = await apiClient.api.admin['sync-stats']['ch-judgments'].get()
+  if (response.error) throw new Error('Failed to fetch CH judgments stats')
+  if (!response.data) throw new Error('Failed to fetch CH judgments stats')
   return response.data.data
 }
 
@@ -94,62 +86,82 @@ const formatCount = (value: number | null | undefined): string => {
   return value === null || value === undefined ? 'N/A' : value.toLocaleString()
 }
 
-const formatPercent = (value: number | null | undefined): string => {
-  return value === null || value === undefined ? 'N/A' : `${(value * 100).toFixed(2)}%`
-}
-
 const formatTime = (ms: number | null | undefined): string => {
   return ms === null || ms === undefined ? 'N/A' : new Date(ms).toLocaleString()
 }
 
-const formatLag = (seconds: number | null | undefined): string => {
-  if (seconds === null || seconds === undefined) return 'N/A'
-  const abs = Math.abs(seconds)
-  if (abs < 60) return `${seconds}s`
-  const mins = Math.trunc(seconds / 60)
-  if (Math.abs(mins) < 60) return `${mins}m`
-  const hours = Math.trunc(mins / 60)
-  return `${hours}h`
-}
-
-const getDirectionLabel = (direction: SyncStatsDiff['direction']): string => {
-  if (direction === 'pg_ahead') return 'CH behind'
-  if (direction === 'ch_ahead') return 'CH ahead'
-  return direction === 'synced' ? 'Synced' : 'Unknown'
-}
-
-const getStatusColor = (direction: SyncStatsDiff['direction']): string => {
-  if (direction === 'synced') return 'text-green-700'
-  if (direction === 'unknown') return 'text-gray-600'
-  return direction === 'pg_ahead' ? 'text-yellow-700' : 'text-orange-700'
-}
-
-const getSlotActiveLabel = (active: boolean | null): string => {
-  return active === null ? 'Unknown' : active ? 'Yes' : 'No'
-}
-
-const getSlotActiveClass = (active: boolean | null): string => {
-  return active === null
-    ? 'font-semibold text-gray-700'
-    : active
-      ? 'font-semibold text-green-700'
-      : 'font-semibold text-yellow-700'
-}
-
-const syncStatsQueryKey = ['admin', 'sync-stats'] as const
-
 const getErrorMessage = (error: unknown): string | null => {
   return error instanceof Error ? error.message : error ? 'Unknown error' : null
+}
+
+type StatsCardProps = {title: string; queryKey: readonly unknown[]; queryFn: () => Promise<TableStats>}
+
+const StatsCard = (props: StatsCardProps) => {
+  const query = useQuery(() => {
+    return {
+      queryKey: props.queryKey,
+      queryFn: props.queryFn,
+      staleTime: Infinity,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      retry: 0,
+    }
+  })
+
+  const errorMessage = createMemo(() => {
+    return getErrorMessage(query.error)
+  })
+
+  return (
+    <div class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+      <div class="mb-4 flex items-center justify-between">
+        <h2 class="text-lg font-semibold">{props.title}</h2>
+      </div>
+
+      <Show when={errorMessage()}>
+        <div class="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{errorMessage()}</div>
+      </Show>
+
+      <Show when={!errorMessage()}>
+        <div class="space-y-2 text-sm">
+          <div class="flex items-center gap-2">
+            <div class="text-gray-600">Count</div>
+            <div class="font-semibold text-gray-900">{formatCount(query.data?.count)}</div>
+          </div>
+          <div class="flex items-center gap-2">
+            <div class="text-gray-600">Max updated</div>
+            <div class="font-semibold text-gray-900">{formatTime(query.data?.maxUpdatedAtMs)}</div>
+          </div>
+        </div>
+      </Show>
+    </div>
+  )
+}
+
+const StatsCardSkeleton = (props: {title: string}) => {
+  return (
+    <div class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+      <div class="mb-4 flex items-center justify-between">
+        <h2 class="text-lg font-semibold">{props.title}</h2>
+      </div>
+      <div class="space-y-3 text-sm">
+        <div class="flex items-center gap-2">
+          <div class="text-gray-600">Count</div>
+          <div class="h-4 w-24 animate-pulse rounded bg-gray-200" />
+        </div>
+        <div class="flex items-center gap-2">
+          <div class="text-gray-600">Max updated</div>
+          <div class="h-4 w-44 animate-pulse rounded bg-gray-200" />
+        </div>
+      </div>
+    </div>
+  )
 }
 
 const AdminSyncStats = () => {
   const [sampleSize, setSampleSize] = createSignal(100)
   const [sampleType, setSampleType] = createSignal<'recent' | 'random' | 'deleted'>('recent')
   const [partitionMonths, setPartitionMonths] = createSignal(12)
-
-  const syncStatsQuery = useQuery(() => {
-    return {queryKey: syncStatsQueryKey, queryFn: fetchSyncStats, refetchOnWindowFocus: false}
-  })
 
   const sampleVerifyMutation = useMutation(() => {
     return {
@@ -167,20 +179,8 @@ const AdminSyncStats = () => {
     }
   })
 
-  const syncStatsData = createMemo(() => {
-    return syncStatsQuery.isSuccess ? syncStatsQuery.data : null
-  })
-
   const errorMessage = createMemo(() => {
-    return (
-      getErrorMessage(syncStatsQuery.error)
-      ?? getErrorMessage(sampleVerifyMutation.error)
-      ?? getErrorMessage(partitionCheckMutation.error)
-    )
-  })
-
-  const clickhouseReachable = createMemo(() => {
-    return syncStatsData()?.replication.clickhouse.reachable ?? false
+    return getErrorMessage(sampleVerifyMutation.error) ?? getErrorMessage(partitionCheckMutation.error)
   })
 
   return (
@@ -189,21 +189,8 @@ const AdminSyncStats = () => {
         <div class="mb-6 flex items-start justify-between gap-4">
           <div class="flex flex-col gap-1">
             <h1 class="text-2xl font-bold text-gray-900">Database Sync Status</h1>
-            <Show when={syncStatsData()}>
-              {(s) => {
-                return <div class="text-sm text-gray-600">Last checked: {s().queriedAt}</div>
-              }}
-            </Show>
+            <div class="text-sm text-gray-600">Runs once on load. Reload page to re-run.</div>
           </div>
-          <button
-            onClick={() => {
-              void syncStatsQuery.refetch()
-            }}
-            disabled={syncStatsQuery.isFetching}
-            class="rounded-md bg-gray-900 px-3 py-2 text-sm text-white disabled:opacity-50"
-          >
-            Refresh
-          </button>
         </div>
 
         <Show when={errorMessage()}>
@@ -212,132 +199,36 @@ const AdminSyncStats = () => {
           </div>
         </Show>
 
-        <Show when={syncStatsData()}>
-          {(s) => {
-            const peerdb = () => {
-              return s().replication.peerdb
-            }
-            const slot = () => {
-              return s().replication.postgres.slot
-            }
-            const ch = () => {
-              return s().replication.clickhouse
-            }
-
-            return (
-              <div class="mb-6 grid grid-cols-1 gap-4 rounded-lg border border-gray-200 bg-white p-5 shadow-sm lg:grid-cols-3">
-                <div class="text-sm">
-                  <div class="font-semibold text-gray-900">PeerDB</div>
-                  <div class="mt-1 text-gray-700">
-                    Mirror: <span class="font-mono">{peerdb().mirrorName}</span>
-                  </div>
-                  <div class="text-gray-700">
-                    Status:{' '}
-                    <span class={peerdb().status === 'running' ? 'font-semibold text-green-700' : 'font-semibold'}>
-                      {peerdb().status}
-                    </span>
-                  </div>
-                </div>
-                <div class="text-sm">
-                  <div class="font-semibold text-gray-900">Postgres Slot</div>
-                  <div class="mt-1 text-gray-700">
-                    Slot: <span class="font-mono">{slot().slotName}</span>
-                  </div>
-                  <div class="text-gray-700">
-                    Active: <span class={getSlotActiveClass(slot().active)}>{getSlotActiveLabel(slot().active)}</span>
-                  </div>
-                  <Show when={slot().retainedBytes !== null}>
-                    <div class="text-gray-700">Retained WAL: {slot().retainedBytes}</div>
-                  </Show>
-                </div>
-                <div class="text-sm">
-                  <div class="font-semibold text-gray-900">ClickHouse</div>
-                  <div class="mt-1 text-gray-700">
-                    Reachable:{' '}
-                    <span class={clickhouseReachable() ? 'font-semibold text-green-700' : 'font-semibold text-red-700'}>
-                      {clickhouseReachable() ? 'Yes' : 'No'}
-                    </span>
-                  </div>
-                  <div class="text-gray-700">
-                    Merges: A {ch().tables.articles.mergesInProgress} / J {ch().tables.judgments.mergesInProgress}
-                  </div>
-                  <div class="text-gray-700">
-                    Parts: A {ch().tables.articles.partsActive} / J {ch().tables.judgments.partsActive}
-                  </div>
-                </div>
-              </div>
-            )
-          }}
-        </Show>
-
-        <Show when={syncStatsData()}>
-          {(s) => {
-            const tableStats = (key: 'articles' | 'judgments') => {
-              return s().stats[key]
-            }
-            const renderCard = (key: 'articles' | 'judgments') => {
-              const st = () => {
-                return tableStats(key)
-              }
-              const ch = () => {
-                return st().ch
-              }
-
-              return (
-                <div class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
-                  <div class="mb-4 flex items-center justify-between">
-                    <h2 class="text-lg font-semibold">{key === 'articles' ? 'Articles' : 'Judgments'}</h2>
-                    <div class={`text-sm font-semibold ${getStatusColor(st().diff.direction)}`}>
-                      {getDirectionLabel(st().diff.direction)}
-                    </div>
-                  </div>
-
-                  <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <div class="rounded-md border border-gray-100 bg-gray-50 p-4 text-sm">
-                      <div class="font-semibold text-gray-700">PostgreSQL</div>
-                      <div class="mt-2 text-gray-900">Count: {formatCount(st().pg.count)}</div>
-                      <div class="text-gray-700">Max updated: {formatTime(st().pg.maxUpdatedAtMs)}</div>
-                    </div>
-                    <div class="rounded-md border border-gray-100 bg-gray-50 p-4 text-sm">
-                      <div class="font-semibold text-gray-700">ClickHouse</div>
-                      <div class="mt-2 text-gray-900">Live: {formatCount(ch()?.liveCount ?? null)}</div>
-                      <div class="text-gray-700">Raw: {formatCount(ch()?.totalCount ?? null)}</div>
-                      <div class="text-gray-700">Dedup drift: {formatCount(ch()?.dedupDrift ?? null)}</div>
-                      <div class="text-gray-700">Max updated: {formatTime(ch()?.liveMaxUpdatedAtMs ?? null)}</div>
-                    </div>
-                  </div>
-
-                  <div class="mt-4 grid grid-cols-1 gap-2 text-sm sm:grid-cols-3">
-                    <div class="rounded-md border border-gray-100 bg-white p-3">
-                      <div class="text-gray-600">Diff</div>
-                      <div class="font-semibold">
-                        {formatCount(st().diff.absolute)} ({formatPercent(st().diff.percentage)})
-                      </div>
-                    </div>
-                    <div class="rounded-md border border-gray-100 bg-white p-3">
-                      <div class="text-gray-600">Lag</div>
-                      <div class="font-semibold">{formatLag(st().lagSeconds)}</div>
-                    </div>
-                    <div class="rounded-md border border-gray-100 bg-white p-3">
-                      <div class="text-gray-600">CH reachable</div>
-                      <div class="font-semibold">{clickhouseReachable() ? 'Yes' : 'No'}</div>
-                    </div>
-                  </div>
-                </div>
-              )
-            }
-
-            return (
-              <div class="mb-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
-                <For each={['articles', 'judgments'] as const}>
-                  {(key) => {
-                    return renderCard(key)
-                  }}
-                </For>
-              </div>
-            )
-          }}
-        </Show>
+        <div class="mb-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
+          <Suspense fallback={<StatsCardSkeleton title="PG Articles" />}>
+            <StatsCard
+              title="PG Articles"
+              queryKey={['admin', 'sync-stats', 'pg-articles']}
+              queryFn={fetchPgArticlesStats}
+            />
+          </Suspense>
+          <Suspense fallback={<StatsCardSkeleton title="CH Articles" />}>
+            <StatsCard
+              title="CH Articles"
+              queryKey={['admin', 'sync-stats', 'ch-articles']}
+              queryFn={fetchChArticlesStats}
+            />
+          </Suspense>
+          <Suspense fallback={<StatsCardSkeleton title="PG Judgments" />}>
+            <StatsCard
+              title="PG Judgments"
+              queryKey={['admin', 'sync-stats', 'pg-judgments']}
+              queryFn={fetchPgJudgmentsStats}
+            />
+          </Suspense>
+          <Suspense fallback={<StatsCardSkeleton title="CH Judgments" />}>
+            <StatsCard
+              title="CH Judgments"
+              queryKey={['admin', 'sync-stats', 'ch-judgments']}
+              queryFn={fetchChJudgmentsStats}
+            />
+          </Suspense>
+        </div>
 
         <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
           <div class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">

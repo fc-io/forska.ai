@@ -59,7 +59,8 @@
     "docling:alvis:launch": "bun scripts/doclingAlvisLaunch.ts",
     "docling:alvis:status": "ssh alvis2 'squeue -u $USER -n forska-docling'",
     "docling:alvis:cancel": "ssh alvis2 'scancel -u $USER -n forska-docling'",
-    "docling:alvis:logs": "ssh alvis2 'tail -f /mimer/NOBACKUP/groups/clin-agent-bench/dev/logs/*/docling.log'"
+    "docling:alvis:logs": "ssh alvis2 'tail -f /mimer/NOBACKUP/groups/clin-agent-bench/dev/logs/*/docling.log'",
+    "admin:recount-pg-ch-sync": "bun --env-file=.env.local scripts/recountPgChSync.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^2.0.9",
