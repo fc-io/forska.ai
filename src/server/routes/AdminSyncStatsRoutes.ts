@@ -32,11 +32,19 @@ const getPeerdbMirrorName = (): string => {
 }
 
 const getPeerdbConnectionConfig = () => {
-  const host = String(process.env['PEERDB_HOST'] ?? 'localhost').trim() || 'localhost'
-  const port = toNumber(process.env['PEERDB_PORT'] ?? '9900') || 9900
-  const user = String(process.env['PEERDB_USER'] ?? 'peerdb').trim() || 'peerdb'
-  const password = String(process.env['PEERDB_PASSWORD'] ?? 'peerdb')
-  return {host, port, user, password, database: user}
+  const catalogHostRaw = String(process.env['PEERDB_CATALOG_HOST'] ?? '').trim()
+  const catalogHost = catalogHostRaw && catalogHostRaw !== 'peerdb-catalog' ? catalogHostRaw : ''
+  const hostRaw = String(process.env['PEERDB_HOST'] ?? '').trim()
+  const host = catalogHost || hostRaw || 'localhost'
+  const isLocalhost = host === 'localhost' || host === '127.0.0.1'
+  const portFromEnv = toNumber(process.env['PEERDB_PORT'] ?? '')
+  const portFromCatalog = toNumber(process.env['PEERDB_CATALOG_PORT'] ?? '')
+  const port = portFromEnv || (isLocalhost ? 9901 : portFromCatalog || 5432)
+  const user = String(process.env['PEERDB_CATALOG_USER'] ?? process.env['PEERDB_USER'] ?? 'postgres').trim() || 'postgres'
+  const password = String(process.env['PEERDB_CATALOG_PASSWORD'] ?? process.env['PEERDB_PASSWORD'] ?? 'postgres')
+  const database =
+    String(process.env['PEERDB_CATALOG_DATABASE'] ?? process.env['PEERDB_DATABASE'] ?? user).trim() || user
+  return {host, port, user, password, database}
 }
 
 const getPeerdbErrorMessage = (error: unknown): string => {
