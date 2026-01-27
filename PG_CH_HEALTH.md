@@ -13,7 +13,7 @@
 
 Completed now:
 - PeerDB stack running via `docker compose --profile peerdb up -d`
-- PG logical repl role/publication via `scripts/setupPeerdbPostgres.ts`
+- [x] PG logical repl role/publication via `scripts/setupPeerdbPostgres.ts` (ran 2026-01-27)
 - PeerDB peers + mirror via `scripts/setupPeerdbPgToClickhouse.ts`
 - CH sink tables were renamed/dropped to unblock PeerDB validation
 
@@ -236,7 +236,7 @@ Self-hosted PeerDB for real-time PG→CH replication. Uses **ReplacingMergeTree 
 
 - [x] Enable logical replication: `wal_level=logical` (`config/postgres/postgresql.conf`)
 - [x] Configure `pg_hba.conf` for replication connections (`config/postgres/pg_hba.conf`)
-- [ ] Run: `bun run scripts/setupPeerdbPostgres.ts` (role+publication+REPLICA IDENTITY; `PEERDB_CREATE_SLOT=1` to also create slot)
+- [x] Run: `bun run scripts/setupPeerdbPostgres.ts` (role+publication+REPLICA IDENTITY; `PEERDB_CREATE_SLOT=1` to also create slot) (ran 2026-01-27; slot: no)
 
 #### 6.2 PeerDB Infrastructure
 
