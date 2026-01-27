@@ -7,7 +7,7 @@ CREATE DATABASE IF NOT EXISTS forska;
 -- 1. ARTICLES (PeerDB target)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS forska.articles (
-    id String,
+    id UUID,
 
     created_at DateTime64(6, 'UTC'),
     updated_at DateTime64(6, 'UTC'),
@@ -55,15 +55,15 @@ ORDER BY (id);
 -- 2. JUDGMENTS RAW (PeerDB target)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS forska.judgments_raw (
-    id String,
+    id UUID,
     created_at DateTime64(3, 'UTC'),
     updated_at DateTime64(3, 'UTC'),
     deleted_at Nullable(DateTime64(3, 'UTC')),
 
-    article_id String,
-    model_id String,
-    prompt_id String,
-    project_id Nullable(String),
+    article_id UUID,
+    model_id UUID,
+    prompt_id UUID,
+    project_id Nullable(UUID),
 
     use_title Bool DEFAULT true,
     use_abstract Bool DEFAULT true,
@@ -76,7 +76,7 @@ CREATE TABLE IF NOT EXISTS forska.judgments_raw (
     confidence_original Nullable(Int32),
     explanation Nullable(String),
     quotes Nullable(String),
-    snapshot_project_id Nullable(String),
+    snapshot_project_id Nullable(UUID),
     snapshot_project_model_name Nullable(String),
 
     INDEX idx_judgments_raw_id id TYPE bloom_filter(0.01) GRANULARITY 1

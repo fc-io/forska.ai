@@ -6,6 +6,10 @@ const escapeSqlString = (value: string) => {
   return value.replaceAll("'", "''")
 }
 
+const quoteLiteral = (value: string) => {
+  return `'${escapeSqlString(value)}'`
+}
+
 const getEnvString = (key: string, fallback: string) => {
   return process.env[key] ?? fallback
 }
@@ -106,6 +110,36 @@ const runSqlStatements = async (client: pg.Client, statements: string[]) => {
   }, Promise.resolve())
 }
 
+const doesMirrorExist = async (client: pg.Client, mirrorName: string) => {
+  const mirrorLiteral = quoteLiteral(mirrorName)
+  const result = await client.query<{exists: true}>(
+    `SELECT true AS exists FROM flows WHERE name = ${mirrorLiteral} LIMIT 1`,
+  )
+  return Boolean(result.rowCount)
+}
+
+const doesPeerExist = async (client: pg.Client, peerName: string) => {
+  const peerLiteral = quoteLiteral(peerName)
+  const result = await client.query<{exists: true}>(
+    `SELECT true AS exists FROM peers WHERE name = ${peerLiteral} LIMIT 1`,
+  )
+  return Boolean(result.rowCount)
+}
+
+const dropMirrorIfExists = async (client: pg.Client, mirrorName: string) => {
+  const mirrorExists = await doesMirrorExist(client, mirrorName)
+  if (mirrorExists) {
+    await client.query(`DROP MIRROR ${mirrorName};`)
+  }
+}
+
+const dropPeerIfExists = async (client: pg.Client, peerName: string) => {
+  const peerExists = await doesPeerExist(client, peerName)
+  if (peerExists) {
+    await client.query(`DROP PEER ${peerName};`)
+  }
+}
+
 const setupPeerdbPgToClickhouse = async () => {
   const peerdbHost = getEnvString('PEERDB_HOST', 'localhost')
   const peerdbPort = getEnvNumber('PEERDB_PORT', 9900)
@@ -137,9 +171,6 @@ const setupPeerdbPgToClickhouse = async () => {
   const snapshotNumTablesInParallel = getEnvNumber('PEERDB_MIRROR_SNAPSHOT_NUM_TABLES_IN_PARALLEL', 2)
 
   const sql = [
-    `DROP MIRROR IF EXISTS ${mirrorName};`,
-    `DROP PEER IF EXISTS ${targetPeerName};`,
-    `DROP PEER IF EXISTS ${sourcePeerName};`,
     buildCreatePostgresPeerQuery({
       peerName: sourcePeerName,
       host: sourcePgHost,
@@ -181,6 +212,9 @@ const setupPeerdbPgToClickhouse = async () => {
   })
 
   await client.connect()
+  await dropMirrorIfExists(client, mirrorName)
+  await dropPeerIfExists(client, targetPeerName)
+  await dropPeerIfExists(client, sourcePeerName)
   await runSqlStatements(client, sql)
   await client.end()
 

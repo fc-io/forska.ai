@@ -11,8 +11,16 @@
 
 ## Setup
 
+Completed now:
+- PeerDB stack running via `docker compose --profile peerdb up -d`
+- PG logical repl role/publication via `scripts/setupPeerdbPostgres.ts`
+- PeerDB peers + mirror via `scripts/setupPeerdbPgToClickhouse.ts`
+- CH sink tables were renamed/dropped to unblock PeerDB validation
+
 ## Recent Fixes (Done)
 
+- [x] PeerDB PG setup: avoid `$1` in `CREATE/ALTER ROLE ... PASSWORD`
+- [x] PeerDB PG→CH setup: replace `DROP ... IF EXISTS` with catalog checks
 - [x] Fix CH DateTime parsing (UTC; no `new Date(str)` / `+ 'Z'`)
 - [x] Temp: filter live-only rows in CH query layer
 - [x] Normalize CH `quotes` to `string[]` (JSON string/array)
@@ -75,13 +83,13 @@ Delete propagation (current approach):
 
 ### 6.1 Setup
 
-- [ ] Add PeerDB to infra (`docker-compose.yml`/k8s)
+- [x] Add PeerDB to infra (`docker-compose.yml`/k8s)
 - [ ] PG config for logical repl (wal_level=logical, slots, WAL retention)
-- [ ] Create replication user + publication for `articles`,`judgments`
+- [x] Create replication user + publication for `articles`,`judgments`
 
 CH currently uses MergeTree + physical deletes. Target: ReplacingMergeTree + soft deletes (Phase 6).
 
-- [ ] Create mirrors PG→CH: `forska.articles`, `forska.judgments`
+- [x] Create mirrors PG→CH: `forska.articles`, `forska.judgments`
 - [ ] Decide snapshot mode + batch/parallelism
 - [ ] Type mapping: `text[]` → `Array(String)` (`quotes`, `answeredOriginalAsArray`)
 - [ ] Enforce non-null CH `String` cols (no `null` writes)
