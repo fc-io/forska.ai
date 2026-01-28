@@ -2,12 +2,12 @@
 #SBATCH -J forska-mn5-sglang
 #SBATCH -A ehpc482
 #SBATCH --partition=acc
-#SBATCH --qos=acc_debug
+#SBATCH --qos=acc_ehpc
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4
 #SBATCH --cpus-per-task=20
 #SBATCH --gres=gpu:4
-#SBATCH --time=01:59:00
+#SBATCH --time=07:59:00
 #SBATCH -o %x-%j.log
 #SBATCH --export=ALL
 #SBATCH --signal=B:USR1@120
