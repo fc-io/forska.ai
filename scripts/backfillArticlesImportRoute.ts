@@ -20,7 +20,9 @@ const fail = (s: string): never => {
   process.exit(1)
 }
 
-const escapeShell = (s: string): string => s.replace(/'/g, "'\\''")
+const escapeShell = (s: string): string => {
+  return s.replace(/'/g, "'\\''")
+}
 
 const assertLocalDbRunning = async (): Promise<void> => {
   const id = (await $.nothrow()`docker compose ps -q db`.text()).trim()
@@ -49,7 +51,9 @@ const formatMs = (ms: number): string => {
   const totalMinutes = Math.trunc(totalSeconds / 60)
   const minutes = totalMinutes % 60
   const hours = Math.trunc(totalMinutes / 60)
-  const pad2 = (n: number) => String(n).padStart(2, '0')
+  const pad2 = (n: number) => {
+    return String(n).padStart(2, '0')
+  }
   return hours > 0 ? `${hours}:${pad2(minutes)}:${pad2(seconds)}` : `${minutes}:${pad2(seconds)}`
 }
 
@@ -65,7 +69,10 @@ const getBatchSize = (): number => {
 }
 
 const getMissingCount = async (db: string): Promise<number> => {
-  const out = await runPsqlText(db, `SELECT COUNT(*) FROM articles WHERE import_route IS NULL OR btrim(import_route) = '';`)
+  const out = await runPsqlText(
+    db,
+    `SELECT COUNT(*) FROM articles WHERE import_route IS NULL OR btrim(import_route) = '';`,
+  )
   return toInt(out)
 }
 
@@ -116,11 +123,7 @@ const runBatches = async (input: {
 
   return updatedThisBatch === 0
     ? Promise.resolve()
-    : runBatches({
-        ...input,
-        updatedTotal,
-        batchNumber: input.batchNumber + 1,
-      })
+    : runBatches({...input, updatedTotal, batchNumber: input.batchNumber + 1})
 }
 
 const main = async (): Promise<void> => {
