@@ -1,5 +1,5 @@
 import {useQuery} from '@tanstack/solid-query'
-import {createFileRoute} from '@tanstack/solid-router'
+import {createFileRoute, Link} from '@tanstack/solid-router'
 import {createMemo, For, Show, Suspense} from 'solid-js'
 
 import {apiClient} from '../../../../services/apiClient.ts'
@@ -123,7 +123,15 @@ const AdminImportRouteStats = () => {
                             {(yearRow) => {
                               return (
                                 <tr>
-                                  <td class="px-4 py-2 text-sm text-gray-700">{yearRow.year}</td>
+                                  <td class="px-4 py-2 text-sm text-gray-700">
+                                    <Link
+                                      to="/admin/import-route-stats/$year"
+                                      params={{year: String(yearRow.year)}}
+                                      class="text-blue-600 hover:text-blue-800 hover:underline"
+                                    >
+                                      {yearRow.year}
+                                    </Link>
+                                  </td>
                                   <td class="px-4 py-2 text-right text-sm text-gray-900">
                                     {formatCountWithFallback(yearRow.count, yearRow.fallbackCount)}
                                   </td>

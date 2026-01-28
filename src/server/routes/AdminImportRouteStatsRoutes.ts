@@ -1,4 +1,4 @@
-import {Elysia} from 'elysia'
+import {Elysia, t} from 'elysia'
 
 import {importRoute as importRouteTable} from '../../db/schema.ts'
 import {getClickhouseClient} from '../../services/clickhouse/clickhouseClient.ts'
@@ -17,6 +17,22 @@ type ImportRouteStats = {
   years: ImportRouteYearCount[]
 }
 
+type ImportRouteStatsYearArticle = {
+  id: string
+  articleTitle: string | null
+  articleId: string | null
+  importRoute: string | null
+  date: string
+  isFallbackDate: boolean
+}
+
+type ImportRouteStatsYearArticles = {
+  year: number
+  total: number
+  fallbackTotal: number
+  articles: ImportRouteStatsYearArticle[]
+}
+
 type ClickhouseImportRouteTotalRow = {
   importRoute: string | null
   total: string | number
@@ -28,6 +44,17 @@ type ClickhouseImportRouteYearRow = {
   year: string | number
   count: string | number
   fallbackCount: string | number
+}
+
+type ClickhouseYearCountRow = {total: string | number; fallbackCount: string | number}
+
+type ClickhouseImportRouteStatsYearArticleRow = {
+  id: string
+  articleTitle: string | null
+  articleId: string | null
+  importRoute: string | null
+  date: string
+  isFallbackDate: string | number | boolean
 }
 
 const toNumber = (value: unknown): number => {
@@ -42,6 +69,27 @@ const toRows = <T>(value: T | T[]): T[] => {
 
 const importRouteKey = (route: string | null): string => {
   return route ?? '__null__'
+}
+
+const toBool = (value: unknown): boolean => {
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'number') return value !== 0
+  if (typeof value === 'string') {
+    const v = value.trim().toLowerCase()
+    return v === '1' || v === 'true'
+  }
+  return false
+}
+
+const parseYear = (value: string): number => {
+  const parsed = parseInt(value, 10)
+  if (!Number.isFinite(parsed)) {
+    throw new Error('Invalid year')
+  }
+  if (parsed < 1800 || parsed > 3000) {
+    throw new Error('Invalid year')
+  }
+  return parsed
 }
 
 const compareImportRoutes = (a: string | null, b: string | null): number => {
@@ -142,6 +190,63 @@ const buildImportRouteStatsFromClickhouse = async (): Promise<ImportRouteStats[]
     })
 }
 
+const buildYearArticlesFromClickhouse = async (year: number): Promise<ImportRouteStatsYearArticles> => {
+  await ensureClickhouseSchema()
+  const client = getClickhouseClient()
+
+  const [countResult, listResult] = await Promise.all([
+    client.query({
+      query: `
+        SELECT
+          count() AS total,
+          countIf(isNull(article_created_at)) AS fallbackCount
+        FROM forska.articles FINAL
+        WHERE _peerdb_is_deleted = 0
+          AND toInt32(toYear(coalesce(article_created_at, created_at))) = {year:Int32}
+      `,
+      query_params: {year},
+      format: 'JSONEachRow',
+    }),
+    client.query({
+      query: `
+        SELECT
+          toString(id) AS id,
+          article_title AS articleTitle,
+          article_id AS articleId,
+          import_route AS importRoute,
+          formatDateTime(toTimeZone(coalesce(article_created_at, created_at), 'UTC'), '%Y-%m-%dT%H:%M:%SZ') AS date,
+          isNull(article_created_at) AS isFallbackDate
+        FROM forska.articles FINAL
+        WHERE _peerdb_is_deleted = 0
+          AND toInt32(toYear(coalesce(article_created_at, created_at))) = {year:Int32}
+        ORDER BY coalesce(article_created_at, created_at) ASC, created_at ASC, id ASC
+        LIMIT 200
+      `,
+      query_params: {year},
+      format: 'JSONEachRow',
+    }),
+  ])
+
+  const countRows = toRows(await countResult.json<ClickhouseYearCountRow>())
+  const countRow = countRows[0]
+  const total = toNumber(countRow?.total)
+  const fallbackTotal = toNumber(countRow?.fallbackCount)
+
+  const rows = toRows(await listResult.json<ClickhouseImportRouteStatsYearArticleRow>())
+  const articles = rows.map((row) => {
+    return {
+      id: row.id,
+      articleTitle: row.articleTitle,
+      articleId: row.articleId,
+      importRoute: row.importRoute,
+      date: row.date,
+      isFallbackDate: toBool(row.isFallbackDate),
+    }
+  })
+
+  return {year, total, fallbackTotal, articles}
+}
+
 export const adminImportRouteStatsRoutes = new Elysia()
   .use(withErrorHandler())
   .use(requireAdminAuth())
@@ -149,3 +254,12 @@ export const adminImportRouteStatsRoutes = new Elysia()
     const data = await buildImportRouteStatsFromClickhouse()
     return {data}
   })
+  .get(
+    '/api/admin/import-route-stats/year-articles',
+    async ({query}) => {
+      const year = parseYear(query.year)
+      const data = await buildYearArticlesFromClickhouse(year)
+      return {data}
+    },
+    {query: t.Object({year: t.String()})},
+  )
