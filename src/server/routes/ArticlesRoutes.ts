@@ -140,6 +140,7 @@ export const articlesRoutes = new Elysia()
           articleVersion: parseInt(entry.article_version),
           arxivId: entry.arxiv_id,
           pubmedId: entry.pubmed_id,
+          importRoute: entry.import_route,
           originalData: entry.original_data as unknown,
         }
       })
@@ -157,6 +158,7 @@ export const articlesRoutes = new Elysia()
             articleVersion: sql`EXCLUDED.article_version`,
             arxivId: sql`EXCLUDED.arxiv_id`,
             pubmedId: sql`EXCLUDED.pubmed_id`,
+            importRoute: sql`EXCLUDED.import_route`,
             originalData: sql`EXCLUDED.original_data`,
             updatedAt: sql`CURRENT_TIMESTAMP`,
           },

@@ -48,6 +48,7 @@ const storeBatch = async (batch: DatabaseEntry[]): Promise<void> => {
       doi: entry.doi,
       url: entry.url,
       originalData: entry.original_data,
+      importRoute: entry.import_route,
     }
   })
 
@@ -66,6 +67,7 @@ const storeBatch = async (batch: DatabaseEntry[]): Promise<void> => {
         doi: sql`EXCLUDED.doi`,
         url: sql`EXCLUDED.url`,
         originalData: sql`EXCLUDED.original_data`,
+        importRoute: sql`EXCLUDED.import_route`,
         updatedAt: sql`CURRENT_TIMESTAMP`,
       },
     })
