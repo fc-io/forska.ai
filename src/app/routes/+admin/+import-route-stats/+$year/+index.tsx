@@ -1,6 +1,6 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
-import {format} from 'date-fns'
+import {format, parseISO} from 'date-fns'
 import {createMemo, For, Show, Suspense} from 'solid-js'
 
 import {apiClient} from '../../../../../services/apiClient.ts'
@@ -16,8 +16,9 @@ const parseYear = (value: string): string => {
 }
 
 const formatArticleDate = (value: string): string => {
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? value : format(date, 'yyyy-MM-dd')
+  const datePart = value.slice(0, 10)
+  const parsed = parseISO(datePart)
+  return Number.isNaN(parsed.getTime()) ? datePart : format(parsed, 'yyyy-MM-dd')
 }
 
 const fetchYearArticles = async (year: string) => {
