@@ -4,21 +4,14 @@ import {createMemo, For, Show, Suspense} from 'solid-js'
 
 import {apiClient} from '../../../../services/apiClient.ts'
 
-type ImportRouteYearCount = {year: number; count: number}
+type ImportRouteYearCount = {year: number; count: number; fallbackCount: number}
 
 type ImportRouteStats = {
   importRoute: string | null
   importRouteName: string | null
   total: number
+  fallbackTotal: number
   years: ImportRouteYearCount[]
-}
-
-type TableRow = {
-  kind: 'total' | 'year'
-  importRoute: string | null
-  importRouteName: string | null
-  year: number | null
-  count: number
 }
 
 const formatImportRoute = (value: string | null): string => {
@@ -30,33 +23,18 @@ const formatCount = (value: number | null | undefined): string => {
   return value === null || value === undefined ? '0' : value.toLocaleString()
 }
 
+const formatCountWithFallback = (
+  value: number | null | undefined,
+  fallbackCount: number | null | undefined,
+): string => {
+  return `${formatCount(value)} (${formatCount(fallbackCount)})`
+}
+
 const fetchImportRouteStats = async (): Promise<ImportRouteStats[]> => {
   const response = await apiClient.api.admin['import-route-stats'].get()
   if (response.error) throw new Error('Failed to fetch import route stats')
   if (!response.data) throw new Error('Failed to fetch import route stats')
   return response.data.data
-}
-
-const toTableRows = (stats: ImportRouteStats[]): TableRow[] => {
-  return stats.flatMap((row) => {
-    const totalRow: TableRow = {
-      kind: 'total',
-      importRoute: row.importRoute,
-      importRouteName: row.importRouteName,
-      year: null,
-      count: row.total,
-    }
-    const yearRows = row.years.map((y): TableRow => {
-      return {
-        kind: 'year',
-        importRoute: row.importRoute,
-        importRouteName: row.importRouteName,
-        year: y.year,
-        count: y.count,
-      }
-    })
-    return [totalRow, ...yearRows]
-  })
 }
 
 const AdminImportRouteStats = () => {
@@ -71,8 +49,8 @@ const AdminImportRouteStats = () => {
     }
   })
 
-  const tableRows = createMemo(() => {
-    return toTableRows(statsQuery.data ?? [])
+  const routeStats = createMemo(() => {
+    return statsQuery.data ?? []
   })
 
   const totalArticles = createMemo(() => {
@@ -88,7 +66,7 @@ const AdminImportRouteStats = () => {
           <div class="flex flex-col gap-1">
             <h1 class="text-2xl font-bold text-gray-900">Articles by Import Route</h1>
             <div class="text-sm text-gray-600">
-              Counts are grouped by year from article date (fallback: import date).
+              Counts are grouped by year from article date (fallback: import date). Parentheses show fallback count.
             </div>
           </div>
           <div class="text-sm text-gray-700">
@@ -119,44 +97,52 @@ const AdminImportRouteStats = () => {
           </Show>
 
           <Show when={!statsQuery.isLoading && !statsQuery.isError}>
-            <div class="overflow-x-auto rounded-lg border border-gray-200 bg-white shadow-sm">
-              <table class="min-w-full divide-y divide-gray-200">
-                <thead class="bg-gray-50">
-                  <tr>
-                    <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                      Import route
-                    </th>
-                    <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Name</th>
-                    <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Year</th>
-                    <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500">
-                      Count
-                    </th>
-                  </tr>
-                </thead>
-                <tbody class="divide-y divide-gray-100">
-                  <For each={tableRows()}>
-                    {(row) => {
-                      const isTotal = row.kind === 'total'
-                      return (
-                        <tr class={isTotal ? 'bg-gray-50' : ''}>
-                          <td class="px-4 py-2 text-sm font-medium text-gray-900">
-                            {isTotal ? formatImportRoute(row.importRoute) : ''}
-                          </td>
-                          <td class="px-4 py-2 text-sm text-gray-700">{isTotal ? (row.importRouteName ?? '—') : ''}</td>
-                          <td class="px-4 py-2 text-sm text-gray-700">{isTotal ? 'Total' : row.year}</td>
-                          <td
-                            class={`px-4 py-2 text-right text-sm ${
-                              isTotal ? 'font-semibold text-gray-900' : 'text-gray-900'
-                            }`}
-                          >
-                            {formatCount(row.count)}
-                          </td>
-                        </tr>
-                      )
-                    }}
-                  </For>
-                </tbody>
-              </table>
+            <div class="flex flex-col gap-4">
+              <For each={routeStats()}>
+                {(row) => {
+                  return (
+                    <div class="overflow-x-auto rounded-lg border border-gray-200 bg-white shadow-sm">
+                      <div class="border-b border-gray-200 bg-gray-50 px-4 py-3">
+                        <div class="text-sm font-semibold text-gray-900">{formatImportRoute(row.importRoute)}</div>
+                        <div class="text-xs text-gray-600">{row.importRouteName ?? '—'}</div>
+                      </div>
+
+                      <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-white">
+                          <tr>
+                            <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                              Year
+                            </th>
+                            <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500">
+                              Count
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-100">
+                          <For each={row.years}>
+                            {(yearRow) => {
+                              return (
+                                <tr>
+                                  <td class="px-4 py-2 text-sm text-gray-700">{yearRow.year}</td>
+                                  <td class="px-4 py-2 text-right text-sm text-gray-900">
+                                    {formatCountWithFallback(yearRow.count, yearRow.fallbackCount)}
+                                  </td>
+                                </tr>
+                              )
+                            }}
+                          </For>
+                          <tr class="bg-gray-50">
+                            <td class="px-4 py-2 text-sm font-medium text-gray-700">Total</td>
+                            <td class="px-4 py-2 text-right text-sm font-semibold text-gray-900">
+                              {formatCountWithFallback(row.total, row.fallbackTotal)}
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  )
+                }}
+              </For>
             </div>
           </Show>
         </Suspense>
