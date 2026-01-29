@@ -56,8 +56,8 @@ const getAvatarLabel = (user: User | undefined) => {
 
 type LlmMetricsSummary = {waiting: number; running: number; lastUpdate: Date | null}
 
-const getLlmMetricsRefetchInterval = (pathname: string) => {
-  return pathname ? 2000 : 2000
+const getLlmMetricsRefetchInterval = (_pathname: string) => {
+  return 30 * 1000
 }
 
 const fetchLlmMetricsSummary = async (): Promise<LlmMetricsSummary | null> => {

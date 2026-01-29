@@ -114,7 +114,7 @@ const AdminLlm = () => {
     return {
       queryKey: ['llmstatus', 'latest30'],
       queryFn: fetchLlmStatus,
-      refetchInterval: 2 * 1000,
+      refetchInterval: 30 * 1000,
       refetchOnWindowFocus: true,
       refetchOnReconnect: true,
     }
