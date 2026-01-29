@@ -2,6 +2,7 @@ import {and, count, eq, isNull, or} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../db/schema.ts'
+import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
 import {judgmentsJobsCronGetPrompts} from './judgmentsJobsCronGetPrompts.ts'
 import {judgmentsJobsGetRunningJobs} from './judgmentsJobsGetRunningJobs.ts'
@@ -15,6 +16,8 @@ type JobConfig = {
   useFulltext: boolean
   useFulltextNoImages: boolean
 }
+
+const addToQueueLogger = createRateLimitedLogger({windowMs: 30_000})
 
 /** Counts the number of prompts in 'ready' status for a given job */
 const getCountOfReadyPrompts = async (db: PostgresJsDatabase<typeof schema>, jobId: string): Promise<number> => {
@@ -140,7 +143,8 @@ const getNewPromptsForJob = async (
 ) => {
   const countOfReadyPrompts = await getCountOfReadyPrompts(db, job.id)
   const promptsToFetchCount = getPromptsToFetchCount(countOfReadyPrompts, readyTargetPerJob, addToQueueMaxBatchSize)
-  return promptsToFetchCount > 0 ? fetchPromptsForJob(job, promptsToFetchCount) : {promptEntries: [], job}
+  const result = promptsToFetchCount > 0 ? await fetchPromptsForJob(job, promptsToFetchCount) : {promptEntries: []}
+  return {promptEntries: result.promptEntries, job, countOfReadyPrompts, promptsToFetchCount}
 }
 
 const getJobConfig = async (db: PostgresJsDatabase<typeof schema>, jobId: string): Promise<JobConfig | null> => {
@@ -168,14 +172,46 @@ export const judgmentsJobsAddToQueue = async (
   const runningJobs = await judgmentsJobsGetRunningJobs(db)
   const capacity = getJudgmentsCapacity(runningJobs.length)
 
+  addToQueueLogger.log('addToQueue:tick', '[addToQueue] tick', {
+    serverJobId,
+    jobCount: runningJobs.length,
+    readyTargetPerJob: capacity.readyTargetPerJob,
+    addToQueueMaxBatchSize: capacity.addToQueueMaxBatchSize,
+  })
+
   await Promise.all(
     runningJobs.map(async (job) => {
-      const {promptEntries} = await getNewPromptsForJob(
+      const getNewStartMs = Date.now()
+      const {countOfReadyPrompts, promptEntries, promptsToFetchCount} = await getNewPromptsForJob(
         db,
         job,
         capacity.readyTargetPerJob,
         capacity.addToQueueMaxBatchSize,
       )
+      const getNewMs = Date.now() - getNewStartMs
+
+      if (promptsToFetchCount > 0 && promptEntries.length === 0) {
+        addToQueueLogger.warn(`addToQueue:job:${job.id}:empty`, '[addToQueue] got 0 pairs from ClickHouse', {
+          jobId: job.id,
+          projectId: job.projectId,
+          ready: countOfReadyPrompts,
+          readyTargetPerJob: capacity.readyTargetPerJob,
+          requested: promptsToFetchCount,
+          ms: getNewMs,
+        })
+      }
+
+      if (promptsToFetchCount > 0 || getNewMs > 5_000) {
+        addToQueueLogger.log(`addToQueue:job:${job.id}`, '[addToQueue] top-up check', {
+          jobId: job.id,
+          projectId: job.projectId,
+          ready: countOfReadyPrompts,
+          readyTargetPerJob: capacity.readyTargetPerJob,
+          requested: promptsToFetchCount,
+          fetched: promptEntries.length,
+          ms: getNewMs,
+        })
+      }
 
       // Filter out entries that already have judgments in PostgreSQL
       // This handles ClickHouse replication lag - CH may return pairs that were just judged
@@ -185,8 +221,32 @@ export const judgmentsJobsAddToQueue = async (
         return
       }
 
+      const filterStartMs = Date.now()
       const filteredEntries = await filterAlreadyJudged(db, promptEntries, jobConfig)
+      const filterMs = Date.now() - filterStartMs
+
+      if (promptEntries.length > 0 && (filteredEntries.length === 0 || filterMs > 5_000)) {
+        addToQueueLogger.warn(`addToQueue:job:${job.id}:filtered`, '[addToQueue] filtered pairs', {
+          jobId: job.id,
+          projectId: job.projectId,
+          before: promptEntries.length,
+          after: filteredEntries.length,
+          ms: filterMs,
+        })
+      }
+
+      const insertStartMs = Date.now()
       await addPromptsToQueue(db, job.id, filteredEntries, serverJobId)
+      const insertMs = Date.now() - insertStartMs
+
+      if (filteredEntries.length > 0 && insertMs > 5_000) {
+        addToQueueLogger.warn(`addToQueue:job:${job.id}:insert`, '[addToQueue] slow insert', {
+          jobId: job.id,
+          projectId: job.projectId,
+          attempted: filteredEntries.length,
+          ms: insertMs,
+        })
+      }
     }),
   )
 }

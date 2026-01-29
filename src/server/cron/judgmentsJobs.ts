@@ -3,6 +3,7 @@ import {Elysia} from 'elysia'
 
 import {env} from '../utils/env.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
+import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 import {judgmentsJobsAddToQueue} from './judgmentsJobs/judgmentsJobsAddToQueue.ts'
 import {judgmentsJobsCheckLLMStatus} from './judgmentsJobs/judgmentsJobsCheckLLMStatus.ts'
 import {judgmentsJobsCleanupStale} from './judgmentsJobs/judgmentsJobsCleanupStale.ts'
@@ -17,6 +18,8 @@ const buildDefaultServerJobId = (): string => {
 
 const serverJobId = String(process.env.SERVER_JOB_ID ?? '').trim() || buildDefaultServerJobId()
 
+const cronLogger = createRateLimitedLogger({windowMs: 30_000})
+
 const shouldRunJudgingCron = (): boolean => {
   return env.RUN_SERVER_JUDGING && !!env.SGLANG_MODEL && env.SGLANG_MODEL !== 'not set'
 }
@@ -28,10 +31,22 @@ const CLEANUP_STALE_REQUESTS = '0 */1 * * * *'
 const START_DELAY_MS = 1000
 
 let isAddingToQueue = false
+let addToQueueStartedAtMs: number | null = null
 
 const runAddToQueue = async (): Promise<void> => {
-  if (!shouldRunJudgingCron() || isAddingToQueue) return
+  if (!shouldRunJudgingCron()) return
+
+  if (isAddingToQueue) {
+    const runningForMs = addToQueueStartedAtMs ? Date.now() - addToQueueStartedAtMs : null
+    cronLogger.warn('cron:add-to-queue:already-running', '[cron] add-to-queue still running', {
+      serverJobId,
+      runningForMs,
+    })
+    return
+  }
+
   isAddingToQueue = true
+  addToQueueStartedAtMs = Date.now()
   try {
     const db = getDatabase()
     await judgmentsJobsAddToQueue(db, serverJobId)
@@ -39,6 +54,7 @@ const runAddToQueue = async (): Promise<void> => {
     console.error('[cron] runAddToQueue error:', err instanceof Error ? err.message : err)
   } finally {
     isAddingToQueue = false
+    addToQueueStartedAtMs = null
   }
 }
 
