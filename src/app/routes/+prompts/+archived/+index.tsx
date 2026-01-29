@@ -7,10 +7,20 @@ import {Button} from '../../../../components/ui/button'
 import {
   fetchArchivedPrompts,
   formatPromptTimestamp,
+  getPromptDisplayText,
   getPromptPreview,
   isPromptPreviewTruncated,
   setPromptArchived,
 } from '../promptsUtils'
+
+const togglePromptExpandedState = (
+  promptId: string,
+  setExpandedPromptById: (value: (prev: Record<string, boolean>) => Record<string, boolean>) => void,
+) => {
+  setExpandedPromptById((prev) => {
+    return {...prev, [promptId]: !prev[promptId]}
+  })
+}
 
 const updatePromptArchivedState = (
   queryClient: QueryClient,
@@ -93,6 +103,21 @@ export const ArchivedPromptsPage = () => {
                         </div>
                         <div class="mt-1 text-xs text-muted-foreground">
                           Created {formatPromptTimestamp(prompt.createdAt)} • Owner {prompt.ownerId.slice(0, 8)}
+                          <Show when={isPromptPreviewTruncated(prompt.originalText)}>
+                            <>
+                              {' • '}
+                              <Button
+                                variant="link"
+                                size="sm"
+                                class="h-auto px-0 py-0"
+                                onClick={() => {
+                                  togglePromptExpandedState(prompt.id, setExpandedPromptById)
+                                }}
+                              >
+                                {expandedPromptById()[prompt.id] ? 'Show less' : 'Show full'}
+                              </Button>
+                            </>
+                          </Show>
                         </div>
                       </div>
                       <Button
@@ -118,25 +143,9 @@ export const ArchivedPromptsPage = () => {
                     </div>
                     <div class="mt-3 bg-gray-50 rounded p-3 text-sm font-mono whitespace-pre-wrap">
                       <Show when={expandedPromptById()[prompt.id]} fallback={getPromptPreview(prompt.originalText)}>
-                        {prompt.originalText}
+                        {getPromptDisplayText(prompt.originalText)}
                       </Show>
                     </div>
-                    <Show when={isPromptPreviewTruncated(prompt.originalText)}>
-                      <div class="mt-1 flex justify-end">
-                        <Button
-                          variant="link"
-                          size="sm"
-                          class="h-auto px-0 py-0 text-xs"
-                          onClick={() => {
-                            setExpandedPromptById((prev) => {
-                              return {...prev, [prompt.id]: !prev[prompt.id]}
-                            })
-                          }}
-                        >
-                          {expandedPromptById()[prompt.id] ? 'Show less' : 'Show full'}
-                        </Button>
-                      </div>
-                    </Show>
                   </div>
                 )
               }}
