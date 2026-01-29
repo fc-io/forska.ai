@@ -4,6 +4,7 @@ import {createSignal, Show, Suspense} from 'solid-js'
 
 import {ReviewsArticlesHumanTableContainer} from '../../../../../components/main/reviews/reviewsArticlesTable/reviewsArticlesHumanTableContainer.tsx'
 import {ReviewsHumanFilterControls} from '../../../../../components/main/reviews/reviewsHumanFilterControls.tsx'
+import {ReviewsProjectWarnings} from '../../../../../components/main/reviews/reviewsProjectWarnings.tsx'
 import {ReviewsTabs} from '../../../../../components/main/reviews/reviewsTabs.tsx'
 import {Button} from '../../../../../components/ui/button'
 import {fetchSession} from '../../../../../services/fetchSession'
@@ -96,6 +97,8 @@ const ReviewsHuman = () => {
           </Show>
         </div>
         <ReviewsTabs projectId={params().id} active="assessedHuman" />
+
+        <ReviewsProjectWarnings projectId={params().id} showClickhouse={false} />
 
         <ReviewsHumanFilterControls
           projectId={params().id}

@@ -26,6 +26,7 @@ import {projectsRoutesGetArticlesReviewsFilters} from './projectsRoutes/projects
 import {projectsRoutesGetArticlesReviewsHuman} from './projectsRoutes/projectsRoutesGetArticlesReviewsHuman.ts'
 import {projectsRoutesGetArticlesReviewsHumanFilters} from './projectsRoutes/projectsRoutesGetArticlesReviewsHumanFilters.ts'
 import {projectsRoutesGetArticlesReviewsUnassessed} from './projectsRoutes/projectsRoutesGetArticlesReviewsUnassessed.ts'
+import {projectsRoutesGetReviewsHealth} from './projectsRoutes/projectsRoutesGetReviewsHealth.ts'
 import {projectsRoutesPostArticleReviewDetails} from './projectsRoutes/projectsRoutesPostArticleReviewDetails.ts'
 
 const parseOptionalDate = (value?: string | null) => {
@@ -89,6 +90,7 @@ export const projectsRoutes = new Elysia()
   .use(projectsRoutesGetArticlesReviewsHumanFilters)
   .use(projectsRoutesPostArticleReviewDetails)
   .use(projectsRoutesGetArticlesReviewsClickHouse)
+  .use(projectsRoutesGetReviewsHealth)
   .use(
     new Elysia().use(requireAdminAuth()).get('/api/projects-without-jobs', async () => {
       const db = getDatabase()

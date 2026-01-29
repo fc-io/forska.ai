@@ -4,6 +4,7 @@ import {createSignal, Show, Suspense} from 'solid-js'
 
 import {ReviewsArticlesBothTableContainer} from '../../../../../components/main/reviews/reviewsArticlesTable/reviewsArticlesBothTableContainer.tsx'
 import {ReviewsFilterControls} from '../../../../../components/main/reviews/reviewsFilterControls.tsx'
+import {ReviewsProjectWarnings} from '../../../../../components/main/reviews/reviewsProjectWarnings.tsx'
 import {ReviewsTabs} from '../../../../../components/main/reviews/reviewsTabs.tsx'
 import {Button} from '../../../../../components/ui/button'
 import {fetchSession} from '../../../../../services/fetchSession'
@@ -96,6 +97,8 @@ const ReviewsBoth = () => {
           </Show>
         </div>
         <ReviewsTabs projectId={params().id} active="assessedBoth" />
+
+        <ReviewsProjectWarnings projectId={params().id} showClickhouse={true} />
 
         <ReviewsFilterControls
           projectId={params().id}
