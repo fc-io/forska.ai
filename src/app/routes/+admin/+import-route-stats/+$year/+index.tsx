@@ -57,10 +57,6 @@ const AdminImportRouteStatsYear = () => {
     return yearArticlesQuery.data?.total ?? 0
   })
 
-  const fallbackTotal = createMemo(() => {
-    return yearArticlesQuery.data?.fallbackTotal ?? 0
-  })
-
   return (
     <div class="min-h-screen bg-gray-50 p-6">
       <div class="max-w-6xl mx-auto space-y-6">
@@ -82,7 +78,6 @@ const AdminImportRouteStatsYear = () => {
           </div>
           <div class="text-sm text-gray-700">
             Total: <span class="font-semibold text-gray-900">{formatCount(total())}</span>
-            <span class="text-gray-500"> ({formatCount(fallbackTotal())} fallback)</span>
           </div>
         </div>
 
@@ -137,12 +132,7 @@ const AdminImportRouteStatsYear = () => {
                       return (
                         <tr class="hover:bg-gray-50">
                           <td class="px-4 py-2 text-sm text-gray-700 whitespace-nowrap">
-                            <span class={article.isFallbackDate ? 'text-gray-500' : 'text-gray-700'}>
-                              {formatArticleDate(article.date)}
-                            </span>
-                            <Show when={article.isFallbackDate}>
-                              <span class="ml-2 rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600">fallback</span>
-                            </Show>
+                            <span class="text-gray-700">{formatArticleDate(article.date)}</span>
                           </td>
                           <td class="px-4 py-2 text-sm text-gray-900">
                             <Link

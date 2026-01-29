@@ -7,13 +7,12 @@ import {requireAdminAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 
-type ImportRouteYearCount = {year: number; count: number; fallbackCount: number}
+type ImportRouteYearCount = {year: number; count: number}
 
 type ImportRouteStats = {
   importRoute: string | null
   importRouteName: string | null
   total: number
-  fallbackTotal: number
   years: ImportRouteYearCount[]
 }
 
@@ -23,30 +22,15 @@ type ImportRouteStatsYearArticle = {
   articleId: string | null
   importRoute: string | null
   date: string
-  isFallbackDate: boolean
 }
 
-type ImportRouteStatsYearArticles = {
-  year: number
-  total: number
-  fallbackTotal: number
-  articles: ImportRouteStatsYearArticle[]
-}
+type ImportRouteStatsYearArticles = {year: number; total: number; articles: ImportRouteStatsYearArticle[]}
 
-type ClickhouseImportRouteTotalRow = {
-  importRoute: string | null
-  total: string | number
-  fallbackCount: string | number
-}
+type ClickhouseImportRouteTotalRow = {importRoute: string | null; total: string | number}
 
-type ClickhouseImportRouteYearRow = {
-  importRoute: string | null
-  year: string | number
-  count: string | number
-  fallbackCount: string | number
-}
+type ClickhouseImportRouteYearRow = {importRoute: string | null; year: string | number; count: string | number}
 
-type ClickhouseYearCountRow = {total: string | number; fallbackCount: string | number}
+type ClickhouseYearCountRow = {total: string | number}
 
 type ClickhouseImportRouteStatsYearArticleRow = {
   id: string
@@ -54,7 +38,6 @@ type ClickhouseImportRouteStatsYearArticleRow = {
   articleId: string | null
   importRoute: string | null
   date: string
-  isFallbackDate: string | number | boolean
 }
 
 const toNumber = (value: unknown): number => {
@@ -69,16 +52,6 @@ const toRows = <T>(value: T | T[]): T[] => {
 
 const importRouteKey = (route: string | null): string => {
   return route ?? '__null__'
-}
-
-const toBool = (value: unknown): boolean => {
-  if (typeof value === 'boolean') return value
-  if (typeof value === 'number') return value !== 0
-  if (typeof value === 'string') {
-    const v = value.trim().toLowerCase()
-    return v === '1' || v === 'true'
-  }
-  return false
 }
 
 const parseYear = (value: string): number => {
@@ -122,8 +95,7 @@ const buildImportRouteStatsFromClickhouse = async (): Promise<ImportRouteStats[]
       query: `
         SELECT
           import_route AS importRoute,
-          count() AS total,
-          countIf(isNull(article_created_at)) AS fallbackCount
+          count() AS total
         FROM forska.articles FINAL
         WHERE _peerdb_is_deleted = 0
         GROUP BY import_route
@@ -136,8 +108,7 @@ const buildImportRouteStatsFromClickhouse = async (): Promise<ImportRouteStats[]
         SELECT
           import_route AS importRoute,
           toInt32(toYear(coalesce(article_created_at, created_at))) AS year,
-          count() AS count,
-          countIf(isNull(article_created_at)) AS fallbackCount
+          count() AS count
         FROM forska.articles FINAL
         WHERE _peerdb_is_deleted = 0
         GROUP BY import_route, year
@@ -153,13 +124,7 @@ const buildImportRouteStatsFromClickhouse = async (): Promise<ImportRouteStats[]
   const byRoute = totalsRows.reduce((map, row) => {
     const importRoute = row.importRoute ?? null
     const importRouteName = getImportRouteName(nameMap, importRoute)
-    map.set(importRouteKey(importRoute), {
-      importRoute,
-      importRouteName,
-      total: toNumber(row.total),
-      fallbackTotal: toNumber(row.fallbackCount),
-      years: [],
-    })
+    map.set(importRouteKey(importRoute), {importRoute, importRouteName, total: toNumber(row.total), years: []})
     return map
   }, new Map<string, ImportRouteStats>())
 
@@ -169,11 +134,8 @@ const buildImportRouteStatsFromClickhouse = async (): Promise<ImportRouteStats[]
     const existing = map.get(key)
     const updated = existing
       ? existing
-      : {importRoute, importRouteName: getImportRouteName(nameMap, importRoute), total: 0, fallbackTotal: 0, years: []}
-    const years = [
-      ...updated.years,
-      {year: toNumber(row.year), count: toNumber(row.count), fallbackCount: toNumber(row.fallbackCount)},
-    ]
+      : {importRoute, importRouteName: getImportRouteName(nameMap, importRoute), total: 0, years: []}
+    const years = [...updated.years, {year: toNumber(row.year), count: toNumber(row.count)}]
     map.set(key, {...updated, years})
     return map
   }, byRoute)
@@ -198,8 +160,7 @@ const buildYearArticlesFromClickhouse = async (year: number): Promise<ImportRout
     client.query({
       query: `
         SELECT
-          count() AS total,
-          countIf(isNull(article_created_at)) AS fallbackCount
+          count() AS total
         FROM forska.articles FINAL
         WHERE _peerdb_is_deleted = 0
           AND toInt32(toYear(coalesce(article_created_at, created_at))) = {year:Int32}
@@ -214,8 +175,7 @@ const buildYearArticlesFromClickhouse = async (year: number): Promise<ImportRout
           article_title AS articleTitle,
           article_id AS articleId,
           import_route AS importRoute,
-          formatDateTime(toTimeZone(coalesce(article_created_at, created_at), 'UTC'), '%Y-%m-%dT%H:%M:%SZ') AS date,
-          isNull(article_created_at) AS isFallbackDate
+          formatDateTime(toTimeZone(coalesce(article_created_at, created_at), 'UTC'), '%Y-%m-%dT%H:%M:%SZ') AS date
         FROM forska.articles FINAL
         WHERE _peerdb_is_deleted = 0
           AND toInt32(toYear(coalesce(article_created_at, created_at))) = {year:Int32}
@@ -230,7 +190,6 @@ const buildYearArticlesFromClickhouse = async (year: number): Promise<ImportRout
   const countRows = toRows(await countResult.json<ClickhouseYearCountRow>())
   const countRow = countRows[0]
   const total = toNumber(countRow?.total)
-  const fallbackTotal = toNumber(countRow?.fallbackCount)
 
   const rows = toRows(await listResult.json<ClickhouseImportRouteStatsYearArticleRow>())
   const articles = rows.map((row) => {
@@ -240,11 +199,10 @@ const buildYearArticlesFromClickhouse = async (year: number): Promise<ImportRout
       articleId: row.articleId,
       importRoute: row.importRoute,
       date: row.date,
-      isFallbackDate: toBool(row.isFallbackDate),
     }
   })
 
-  return {year, total, fallbackTotal, articles}
+  return {year, total, articles}
 }
 
 export const adminImportRouteStatsRoutes = new Elysia()

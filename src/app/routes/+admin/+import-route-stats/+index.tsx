@@ -4,13 +4,12 @@ import {createMemo, For, Show, Suspense} from 'solid-js'
 
 import {apiClient} from '../../../../services/apiClient.ts'
 
-type ImportRouteYearCount = {year: number; count: number; fallbackCount: number}
+type ImportRouteYearCount = {year: number; count: number}
 
 type ImportRouteStats = {
   importRoute: string | null
   importRouteName: string | null
   total: number
-  fallbackTotal: number
   years: ImportRouteYearCount[]
 }
 
@@ -21,13 +20,6 @@ const formatImportRoute = (value: string | null): string => {
 
 const formatCount = (value: number | null | undefined): string => {
   return value === null || value === undefined ? '0' : value.toLocaleString()
-}
-
-const formatCountWithFallback = (
-  value: number | null | undefined,
-  fallbackCount: number | null | undefined,
-): string => {
-  return `${formatCount(value)} (${formatCount(fallbackCount)})`
 }
 
 const fetchImportRouteStats = async (): Promise<ImportRouteStats[]> => {
@@ -66,7 +58,7 @@ const AdminImportRouteStats = () => {
           <div class="flex flex-col gap-1">
             <h1 class="text-2xl font-bold text-gray-900">Articles by Import Route</h1>
             <div class="text-sm text-gray-600">
-              Counts are grouped by year from article date (fallback: import date). Parentheses show fallback count.
+              Counts are grouped by year from article date (fallback: import date).
             </div>
           </div>
           <div class="text-sm text-gray-700">
@@ -133,7 +125,7 @@ const AdminImportRouteStats = () => {
                                     </Link>
                                   </td>
                                   <td class="px-4 py-2 text-right text-sm text-gray-900">
-                                    {formatCountWithFallback(yearRow.count, yearRow.fallbackCount)}
+                                    {formatCount(yearRow.count)}
                                   </td>
                                 </tr>
                               )
@@ -142,7 +134,7 @@ const AdminImportRouteStats = () => {
                           <tr class="bg-gray-50">
                             <td class="px-4 py-2 text-sm font-medium text-gray-700">Total</td>
                             <td class="px-4 py-2 text-right text-sm font-semibold text-gray-900">
-                              {formatCountWithFallback(row.total, row.fallbackTotal)}
+                              {formatCount(row.total)}
                             </td>
                           </tr>
                         </tbody>
