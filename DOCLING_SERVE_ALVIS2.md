@@ -86,8 +86,8 @@ echo "[docling] starting Docling Serve on :$DOCLING_PORT"
 
 apptainer exec --cleanenv --nv \
   --env DOCLING_SERVE_ARTIFACTS_PATH=/opt/app-root/src/.cache/docling/models \
-  --env GUNICORN_TIMEOUT="300" \
-  --env DOCLING_SERVE_MAX_SYNC_WAIT="300" \
+  --env GUNICORN_TIMEOUT="600" \
+  --env DOCLING_SERVE_MAX_SYNC_WAIT="600" \
   --bind "$STACK_ROOT/.cache/docling:/opt/app-root/src/.cache/docling:rw" \
   "$SIF_DOCLING" \
   python -m docling_serve --host 0.0.0.0 --port "$DOCLING_PORT" \
@@ -140,6 +140,7 @@ wait
 **File**: `scripts/doclingAlvisLaunch.ts`
 
 Orchestration script (run locally) that:
+
 1. Pulls/builds the Apptainer SIF if needed
 2. Deploys sbatch file
 3. Submits job
@@ -157,7 +158,7 @@ Orchestration script (run locally) that:
 import {$, spawn} from 'bun'
 
 const STACK_ROOT = '/mimer/NOBACKUP/groups/clin-agent-bench/dev'
-const SSH_HOST = 'alvis2'  // Login node for sbatch and tunnel
+const SSH_HOST = 'alvis2' // Login node for sbatch and tunnel
 const DOCLING_PORT = 5001
 const SBATCH_FILE = 'forska-docling-alvis.sbatch'
 const SIF_NAME = 'docling_serve_pytorch.sif'
@@ -194,7 +195,8 @@ const main = async () => {
 
   // 2. Check for existing jobs
   log('Checking for existing Docling jobs...')
-  const existingJob = await $`ssh ${SSH_HOST} "squeue -u \\$USER -n forska-docling -h -o '%i|%T|%N' 2>/dev/null || echo ''"`.text()
+  const existingJob =
+    await $`ssh ${SSH_HOST} "squeue -u \\$USER -n forska-docling -h -o '%i|%T|%N' 2>/dev/null || echo ''"`.text()
   // ... similar to mn5Launch.ts job management ...
 
   // 3. Deploy sbatch file
@@ -232,20 +234,29 @@ const startTunnel = async (computeNode: string): Promise<void> => {
   await $`lsof -i :${DOCLING_PORT} -t 2>/dev/null | xargs kill 2>/dev/null || true`
   await sleep(500)
 
-  const proc = spawn([
-    'ssh', '-N',
-    '-o', 'ServerAliveInterval=30',
-    '-o', 'ServerAliveCountMax=3',
-    '-o', 'ExitOnForwardFailure=yes',
-    '-L', `${DOCLING_PORT}:${computeNode}:${DOCLING_PORT}`,
-    SSH_HOST
-  ], {stdout: 'inherit', stderr: 'inherit'})
+  const proc = spawn(
+    [
+      'ssh',
+      '-N',
+      '-o',
+      'ServerAliveInterval=30',
+      '-o',
+      'ServerAliveCountMax=3',
+      '-o',
+      'ExitOnForwardFailure=yes',
+      '-L',
+      `${DOCLING_PORT}:${computeNode}:${DOCLING_PORT}`,
+      SSH_HOST,
+    ],
+    {stdout: 'inherit', stderr: 'inherit'},
+  )
 
   // Wait for tunnel to be ready
   await sleep(2000)
 
   // Verify connection
-  const check = await $`curl -sf --connect-timeout 5 http://localhost:${DOCLING_PORT}/health && echo OK || echo FAIL`.text()
+  const check =
+    await $`curl -sf --connect-timeout 5 http://localhost:${DOCLING_PORT}/health && echo OK || echo FAIL`.text()
   if (check.includes('OK')) {
     log('✓ Tunnel connected and Docling responding')
   }
@@ -277,6 +288,7 @@ Add to `package.json`:
 ### Docker Image
 
 Use the **PyTorch** variant for GPU acceleration:
+
 ```
 ghcr.io/docling-project/docling-serve:pytorch
 ```
@@ -303,6 +315,7 @@ bun run docling:alvis:launch
 ```
 
 This will:
+
 1. Build the SIF image (first run only, ~10-15 minutes)
 2. Submit the sbatch job
 3. Wait for job to start (queue time varies)
@@ -327,12 +340,14 @@ bun run docling:alvis:launch
 ### Running with Local Dev Server
 
 Terminal 1:
+
 ```bash
 bun run docling:alvis:launch
 # Keep this running for the tunnel
 ```
 
 Terminal 2:
+
 ```bash
 bun run dev:server
 # Uses DOCLING_SERVE_URL=http://localhost:5001 (default)
@@ -347,8 +362,9 @@ No changes needed! The existing `DOCLING_SERVE_URL=http://localhost:5001` works 
 ### Timeout Settings
 
 The sbatch configures these env vars in the container:
-- `GUNICORN_TIMEOUT=300` — Worker timeout (5 minutes)
-- `DOCLING_SERVE_MAX_SYNC_WAIT=300` — Max time to wait for sync conversion
+
+- `GUNICORN_TIMEOUT=600` — Worker timeout (10 minutes)
+- `DOCLING_SERVE_MAX_SYNC_WAIT=600` — Max time to wait for sync conversion
 
 These match the current `docker-compose.yml` settings.
 
@@ -363,6 +379,7 @@ The sbatch requests `--gpus-per-node=A100fat:1`.
 ## Model Caching
 
 Docling downloads ~5GB of models on first run. These are cached in:
+
 ```
 $STACK_ROOT/.cache/docling/
 ```
@@ -371,17 +388,18 @@ Bound into the container at `/opt/app-root/src/.cache/docling`.
 
 ## Comparison with Local Docker
 
-| Aspect | Local (CPU) | Alvis2 (GPU) |
-|--------|-------------|--------------|
-| Conversion time | 2-5 min/PDF | 10-30 sec/PDF |
-| Setup | `docker compose up docling` | `bun run docling:alvis:launch` |
-| Port | 5001 | 5001 (via tunnel) |
-| Cost | Free | Uses GPU allocation |
-| Persistence | Always running | Sbatch job (8 hours) |
+| Aspect          | Local (CPU)                 | Alvis2 (GPU)                   |
+| --------------- | --------------------------- | ------------------------------ |
+| Conversion time | 2-5 min/PDF                 | 10-30 sec/PDF                  |
+| Setup           | `docker compose up docling` | `bun run docling:alvis:launch` |
+| Port            | 5001                        | 5001 (via tunnel)              |
+| Cost            | Free                        | Uses GPU allocation            |
+| Persistence     | Always running              | Sbatch job (8 hours)           |
 
 ## Checklist
 
 ### Setup
+
 - [x] Create `forska-docling-alvis.sbatch`
 - [x] Create `scripts/doclingAlvisLaunch.ts`
 - [x] Add package.json scripts
@@ -391,12 +409,14 @@ Bound into the container at `/opt/app-root/src/.cache/docling`.
 - [ ] Verify SSH tunnel works
 
 ### Testing
+
 - [ ] Verify GPU detection in sbatch logs
 - [ ] Test conversion speed vs local CPU
 - [ ] Test with large/complex PDFs
 - [ ] Verify integration with `fullTextConversionJobs.ts`
 
 ### Documentation
+
 - [ ] Add to `README.md`
 - [ ] Add troubleshooting section
 
@@ -415,6 +435,7 @@ apptainer pull --force docling_serve_pytorch.sif docker://ghcr.io/docling-projec
 ```
 
 If `apptainer` is missing:
+
 ```bash
 ssh alvis2 'module load Apptainer || true; apptainer --version'
 ```
@@ -434,6 +455,7 @@ ssh alvis2 'scontrol show job <jobid> | grep -i reason'
 ### Tunnel Disconnects
 
 The launch script uses keepalives, but if it disconnects:
+
 ```bash
 # Reconnect (finds existing job)
 bun run docling:alvis:launch
@@ -442,11 +464,13 @@ bun run docling:alvis:launch
 ### Slow Conversions
 
 Check the logs:
+
 ```bash
 ssh alvis2 'tail -100 /mimer/NOBACKUP/groups/clin-agent-bench/dev/logs/*/docling.log'
 ```
 
 Common issues:
+
 - First conversion is slow (model loading)
 - Very large PDFs still take time even with GPU
 - Check if using GPU: look for CUDA messages in logs

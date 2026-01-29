@@ -32,10 +32,10 @@ services:
   # Port 8123: HTTP API, Port 9000: Native protocol
   # ============================================================
   clickhouse:
-    image: clickhouse/clickhouse-server:24.9  # LTS version
+    image: clickhouse/clickhouse-server:24.9 # LTS version
     ports:
-      - "8123:8123"   # HTTP API
-      - "9000:9000"   # Native protocol
+      - '8123:8123' # HTTP API
+      - '9000:9000' # Native protocol
     volumes:
       - clickhouse-data:/var/lib/clickhouse
       - clickhouse-logs:/var/log/clickhouse-server
@@ -46,7 +46,7 @@ services:
       CLICKHOUSE_PASSWORD: clickhouse
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
     healthcheck:
-      test: ["CMD-SHELL", "clickhouse-client --password clickhouse -q 'SELECT 1'"]
+      test: ['CMD-SHELL', "clickhouse-client --password clickhouse -q 'SELECT 1'"]
       interval: 10s
       timeout: 5s
       retries: 6
@@ -70,20 +70,20 @@ services:
       - ./config/postgres/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
     command: postgres -c config_file=/etc/postgresql/postgresql.conf
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-postgres} -h 127.0.0.1 -p 5432"]
+      test: ['CMD-SHELL', 'pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-postgres} -h 127.0.0.1 -p 5432']
       interval: 10s
       timeout: 5s
       retries: 6
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"   # optional for local psql access
+      - '${POSTGRES_PORT:-5432}:5432' # optional for local psql access
 
   peerdb-catalog:
-    profiles: ["peerdb"]
+    profiles: ['peerdb']
     image: postgres:18-alpine
     command: -c config_file=/etc/postgresql.conf
     restart: unless-stopped
     ports:
-      - "9901:5432"
+      - '9901:5432'
     environment:
       PGUSER: postgres
       POSTGRES_PASSWORD: postgres
@@ -94,14 +94,14 @@ services:
       - ./config/peerdb/postgresql.conf:/etc/postgresql.conf:ro
       - ./config/peerdb/docker-entrypoint-initdb.d:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD", "pg_isready", "-d", "postgres", "-U", "postgres"]
+      test: ['CMD', 'pg_isready', '-d', 'postgres', '-U', 'postgres']
       interval: 10s
       timeout: 30s
       retries: 5
       start_period: 60s
 
   peerdb-temporal:
-    profiles: ["peerdb"]
+    profiles: ['peerdb']
     restart: unless-stopped
     depends_on:
       peerdb-catalog:
@@ -115,12 +115,12 @@ services:
       - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/development-sql.yaml
     image: temporalio/auto-setup:1.29
     ports:
-      - "7233:7233"
+      - '7233:7233'
     volumes:
       - ./config/peerdb/temporal-dynamicconfig:/etc/temporal/config/dynamicconfig:ro
 
   peerdb-temporal-admin-tools:
-    profiles: ["peerdb"]
+    profiles: ['peerdb']
     restart: unless-stopped
     depends_on:
       - peerdb-temporal
@@ -133,7 +133,7 @@ services:
     tty: true
     entrypoint: /etc/temporal/entrypoint.sh
     healthcheck:
-      test: ["CMD", "tctl", "workflow", "list"]
+      test: ['CMD', 'tctl', 'workflow', 'list']
       interval: 1s
       timeout: 5s
       retries: 30
@@ -141,7 +141,7 @@ services:
       - ./config/peerdb/mirror-name-search.sh:/etc/temporal/entrypoint.sh:ro
 
   peerdb-temporal-ui:
-    profiles: ["peerdb"]
+    profiles: ['peerdb']
     restart: unless-stopped
     depends_on:
       - peerdb-temporal
@@ -151,15 +151,15 @@ services:
       - TEMPORAL_CSRF_COOKIE_INSECURE=true
     image: temporalio/ui:2.44.1
     ports:
-      - "8085:8080"
+      - '8085:8080'
 
   peerdb-flow-api:
-    profiles: ["peerdb"]
+    profiles: ['peerdb']
     image: ghcr.io/peerdb-io/flow-api:stable-v0.36.3
     restart: unless-stopped
     ports:
-      - "8112:8112"
-      - "8113:8113"
+      - '8112:8112'
+      - '8113:8113'
     environment:
       <<: [*peerdb-catalog-config, *peerdb-flow-worker-env, *peerdb-s3-config]
       PEERDB_ALLOWED_TARGETS:
@@ -168,7 +168,7 @@ services:
         condition: service_healthy
 
   peerdb-flow-snapshot-worker:
-    profiles: ["peerdb"]
+    profiles: ['peerdb']
     image: ghcr.io/peerdb-io/flow-snapshot-worker:stable-v0.36.3
     restart: unless-stopped
     environment:
@@ -178,7 +178,7 @@ services:
         condition: service_healthy
 
   peerdb-flow-worker:
-    profiles: ["peerdb"]
+    profiles: ['peerdb']
     image: ghcr.io/peerdb-io/flow-worker:stable-v0.36.3
     restart: unless-stopped
     environment:
@@ -188,7 +188,7 @@ services:
         condition: service_healthy
 
   peerdb-server:
-    profiles: ["peerdb"]
+    profiles: ['peerdb']
     stop_signal: SIGINT
     image: ghcr.io/peerdb-io/peerdb-server:stable-v0.36.3
     restart: unless-stopped
@@ -199,17 +199,17 @@ services:
       RUST_LOG: info
       RUST_BACKTRACE: 1
     ports:
-      - "9900:9900"
+      - '9900:9900'
     depends_on:
       peerdb-catalog:
         condition: service_healthy
 
   peerdb-ui:
-    profiles: ["peerdb"]
+    profiles: ['peerdb']
     image: ghcr.io/peerdb-io/peerdb-ui:stable-v0.36.3
     restart: unless-stopped
     ports:
-      - "3001:3000"
+      - '3001:3000'
     environment:
       <<: *peerdb-catalog-config
       PEERDB_FLOW_SERVER_HTTP: http://peerdb-flow-api:8113
@@ -222,13 +222,13 @@ services:
       - peerdb-flow-api
 
   peerdb-seaweed-master:
-    profiles: ["peerdb"]
+    profiles: ['peerdb']
     image: chrislusf/seaweedfs:latest
     restart: unless-stopped
     command: 'master -ip=peerdb-seaweed-master -ip.bind=0.0.0.0'
 
   peerdb-seaweed-volume:
-    profiles: ["peerdb"]
+    profiles: ['peerdb']
     image: chrislusf/seaweedfs:latest
     restart: unless-stopped
     command: 'volume -ip=peerdb-seaweed-volume -master="peerdb-seaweed-master:9333" -ip.bind=0.0.0.0 -port=8080 -dir=/data'
@@ -238,7 +238,7 @@ services:
       - peerdb-seaweed-master
 
   peerdb-seaweed-s3:
-    profiles: ["peerdb"]
+    profiles: ['peerdb']
     image: chrislusf/seaweedfs:latest
     restart: unless-stopped
     command: 'filer -ip=peerdb-seaweed-s3 -master="peerdb-seaweed-master:9333" -s3 -s3.port=8333 -s3.config=/etc/seaweedfs/s3.json -ip.bind=0.0.0.0'
@@ -249,9 +249,9 @@ services:
       - peerdb-seaweed-volume
 
   peerdb-s3-bucket-init:
-    profiles: ["peerdb"]
+    profiles: ['peerdb']
     image: amazon/aws-cli:latest
-    restart: "no"
+    restart: 'no'
     environment:
       AWS_ACCESS_KEY_ID: ${PEERDB_CLICKHOUSE_AWS_CREDENTIALS_AWS_ACCESS_KEY_ID:-_peerdb_seaweed}
       AWS_SECRET_ACCESS_KEY: ${PEERDB_CLICKHOUSE_AWS_CREDENTIALS_AWS_SECRET_ACCESS_KEY:-_peerdb_seaweed}
@@ -267,14 +267,14 @@ services:
       - peerdb-seaweed-s3
 
   peerdb-minio:
-    profiles: ["peerdb-minio"]
+    profiles: ['peerdb-minio']
     image: minio/minio:latest
     restart: unless-stopped
     volumes:
       - peerdb-minio-data:/data
     ports:
-      - "9001:9000"
-      - "9002:36987"
+      - '9001:9000'
+      - '9002:36987'
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-_peerdb_minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-_peerdb_minioadmin}
@@ -289,9 +289,9 @@ services:
       "
 
   sglang:
-    profiles: ["gpu"]
+    profiles: ['gpu']
     image: lmsysorg/sglang:latest
-    entrypoint: ["python", "-m", "sglang.launch_server"]
+    entrypoint: ['python', '-m', 'sglang.launch_server']
     environment:
       HF_HOME: /cache/hf
       XDG_CACHE_HOME: /cache/xdg
@@ -313,12 +313,12 @@ services:
       --download-dir /cache/hf
     gpus: all
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:30000/v1/models >/dev/null"]
+      test: ['CMD-SHELL', 'curl -sf http://localhost:30000/v1/models >/dev/null']
       interval: 20s
       timeout: 5s
       retries: 12
     ports:
-      - "30000:30000"
+      - '30000:30000'
 
   # ============================================================
   # Docling Serve - PDF to Markdown conversion
@@ -327,17 +327,17 @@ services:
   docling:
     image: ghcr.io/docling-project/docling-serve
     ports:
-      - "5001:5001"
+      - '5001:5001'
     volumes:
-      - ./cache/docling:/opt/app-root/src/.cache/docling  # Persist model downloads (~5GB)
+      - ./cache/docling:/opt/app-root/src/.cache/docling # Persist model downloads (~5GB)
     environment:
       DOCLING_SERVE_ARTIFACTS_PATH: /opt/app-root/src/.cache/docling/models
       # Increase worker timeout for large PDFs (default is 60s)
-      GUNICORN_TIMEOUT: "300"
+      GUNICORN_TIMEOUT: '600'
       # Max time in seconds to wait for sync conversion (default is 120s)
-      DOCLING_SERVE_MAX_SYNC_WAIT: "300"
+      DOCLING_SERVE_MAX_SYNC_WAIT: '600'
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:5001/health > /dev/null || exit 1"]
+      test: ['CMD-SHELL', 'curl -sf http://localhost:5001/health > /dev/null || exit 1']
       interval: 30s
       timeout: 10s
       retries: 3
@@ -358,7 +358,7 @@ services:
       OPENAI_API_KEY: ${SGLANG_API_KEY:-fake_key}
       MODEL_ID: /models/Qwen3-32B-FP8
     ports:
-      - "3000:3000"
+      - '3000:3000'
 
   app-server:
     build:
@@ -368,8 +368,8 @@ services:
         DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASS:-postgres}@db:5432/${DB_NAME:-postgres}
         BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-unused-better-auth-secret}
         BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:3006}
-        VITE_PORT: "8080"
-        API_SERVER_PORT: "3000"
+        VITE_PORT: '8080'
+        API_SERVER_PORT: '3000'
         VITE_LLM_SERVER_URL: http://sglang:30000/v1
         VITE_SERVER_API: ${VITE_SERVER_API:-http://localhost:3006}
     env_file:
@@ -384,12 +384,12 @@ services:
     #   api-server:
     #     condition: service_healthy
     ports:
-      - "8080:8080"
+      - '8080:8080'
 
   # Host-network variants to simulate Apptainer/Singularity where localhost is shared
   # These services are only included when the 'hostnet' profile is enabled.
   db-hostnet:
-    profiles: ["hostnet"]
+    profiles: ['hostnet']
     image: postgres:18
     platform: linux/amd64
     environment:
@@ -404,7 +404,7 @@ services:
       - ./config/postgres/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
     command: postgres -c config_file=/etc/postgresql/postgresql.conf
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-postgres} -h 127.0.0.1 -p 5432"]
+      test: ['CMD-SHELL', 'pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-postgres} -h 127.0.0.1 -p 5432']
       interval: 10s
       timeout: 5s
       retries: 6
@@ -413,7 +413,7 @@ services:
       - db_password
 
   api-server-hostnet:
-    profiles: ["hostnet"]
+    profiles: ['hostnet']
     image: ghcr.io/${GHCR_OWNER:-local}/api-server:${TAG:-dev}
     platform: linux/amd64
     build:
@@ -434,7 +434,7 @@ services:
       - database_url
 
   app-server-hostnet:
-    profiles: ["hostnet"]
+    profiles: ['hostnet']
     image: ghcr.io/${GHCR_OWNER:-local}/app-server:${TAG:-dev}
     platform: linux/amd64
     build:
@@ -444,8 +444,8 @@ services:
         DATABASE_URL: postgresql://${DB_USER:-postgres}:***@localhost:${POSTGRES_PORT:-5432}/${DB_NAME:-postgres}
         BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-unused-better-auth-secret}
         BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:3006}
-        VITE_PORT: "8080"
-        API_SERVER_PORT: "3000"
+        VITE_PORT: '8080'
+        API_SERVER_PORT: '3000'
         VITE_LLM_SERVER_URL: http://localhost:30000/v1
         VITE_SERVER_API: http://localhost:3000
     env_file:

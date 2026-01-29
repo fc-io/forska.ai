@@ -5,7 +5,7 @@ import * as schema from '../../db/schema.ts'
 import {ConversionError, convertPdfToText} from './convertPdfToText.ts'
 import {rateLimitedLogger} from './rateLimitedLogger.ts'
 
-const DOCLING_CONVERSION_TIMEOUT_MS = 300_000 // 5 minutes - same as cron job
+const DOCLING_CONVERSION_TIMEOUT_MS = 600_000 // 10 minutes - same as cron job
 
 // In-memory lock map to prevent concurrent conversions of the same article
 const conversionLocks = new Map<string, Promise<void>>()

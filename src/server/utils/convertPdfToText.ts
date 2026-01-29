@@ -206,6 +206,7 @@ export const convertPdfToText = async (
       const isConnectionError =
         msg.includes('econnrefused')
         || msg.includes('etimedout')
+        || msg.includes('timed out')
         || msg.includes('enotfound')
         || msg.includes('network')
         || msg.includes('socket')
