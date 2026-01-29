@@ -5,6 +5,9 @@ import {articles, importRoute, projectArticles, projectPrompts, projectRouteLink
 import {getClickhouseClient} from '../../../services/clickhouse/clickhouseClient.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
+const CURATED_ARTICLES_TEMP_TABLE_THRESHOLD = 1000
+const TEMP_TABLE_INSERT_BATCH_SIZE = 10000
+
 const escapeClickHouseString = (value: string): string => {
   return value.replace(/'/g, "''").replace(/\\/g, '\\\\')
 }
@@ -24,7 +27,7 @@ const getCuratedArticleCount = async (projectId: string): Promise<number> => {
   const db = getDatabase()
 
   const rows = await db
-    .select({count: sql<number>`COUNT(*)::int`.as('count')})
+    .select({count: sql<number>`COUNT(DISTINCT ${projectArticles.articleId})::int`.as('count')})
     .from(projectArticles)
     .where(eq(projectArticles.projectId, projectId))
 
@@ -105,14 +108,15 @@ const getPostgresArticlesInScope = async (projectId: string, curatedCount: numbe
   return rows[0]?.count ?? 0
 }
 
-const getCuratedSampleIds = async (projectId: string, sampleSize: number): Promise<string[]> => {
+type TempTableInfo = {tableName: string; cleanup: () => Promise<void>}
+
+const getCuratedArticleIds = async (projectId: string): Promise<string[]> => {
   const db = getDatabase()
 
   const rows = await db
     .select({articleId: projectArticles.articleId})
     .from(projectArticles)
     .where(eq(projectArticles.projectId, projectId))
-    .limit(sampleSize)
 
   return rows
     .map((r) => {
@@ -121,6 +125,76 @@ const getCuratedSampleIds = async (projectId: string, sampleSize: number): Promi
     .filter((id): id is string => {
       return typeof id === 'string' && id.trim() !== ''
     })
+}
+
+const createTempTable = async (articleIds: string[]): Promise<TempTableInfo> => {
+  const client = getClickhouseClient()
+  const tableName = `temp_reviews_health_${Date.now()}_${Math.random().toString(36).substring(7)}`
+
+  await client.command({query: `CREATE TABLE ${tableName} (articleId String) ENGINE = Memory`})
+
+  const insertBatch = async (offset: number): Promise<void> => {
+    const batch = articleIds.slice(offset, offset + TEMP_TABLE_INSERT_BATCH_SIZE)
+    if (batch.length === 0) {
+      return
+    }
+
+    await client.insert({
+      table: tableName,
+      values: batch.map((id) => {
+        return {articleId: id}
+      }),
+      format: 'JSONEachRow',
+    })
+
+    return insertBatch(offset + TEMP_TABLE_INSERT_BATCH_SIZE)
+  }
+
+  await insertBatch(0)
+
+  const cleanup = async () => {
+    await client.command({query: `DROP TABLE IF EXISTS ${tableName}`}).catch(() => {
+      return
+    })
+  }
+
+  return {tableName, cleanup}
+}
+
+const countClickhouseCuratedArticles = async (curatedIds: string[]): Promise<number> => {
+  if (curatedIds.length === 0) {
+    return 0
+  }
+
+  const client = getClickhouseClient()
+  const useTempTable = curatedIds.length > CURATED_ARTICLES_TEMP_TABLE_THRESHOLD
+  const tempTableInfo = useTempTable ? await createTempTable(curatedIds) : null
+
+  try {
+    const wherePart = tempTableInfo
+      ? `id IN (SELECT articleId FROM ${tempTableInfo.tableName})`
+      : `id IN (${curatedIds
+          .map((id) => {
+            return `'${escapeClickHouseString(id)}'`
+          })
+          .join(', ')})`
+
+    const query = `
+      SELECT count() AS count
+      FROM forska.articles FINAL
+      WHERE _peerdb_is_deleted = 0
+        AND ${wherePart}
+    `
+
+    const result = await client.query({query, format: 'JSONEachRow'})
+    const data = await result.json<{count: string | number}>()
+    const raw = data[0]?.count ?? 0
+    return typeof raw === 'number' ? raw : parseInt(raw, 10) || 0
+  } finally {
+    if (tempTableInfo) {
+      await tempTableInfo.cleanup()
+    }
+  }
 }
 
 const countClickhouseArticlesByRoutes = async (routes: string[]): Promise<number> => {
@@ -148,31 +222,6 @@ const countClickhouseArticlesByRoutes = async (routes: string[]): Promise<number
   return typeof raw === 'number' ? raw : parseInt(raw, 10) || 0
 }
 
-const countClickhouseArticlesByIds = async (ids: string[]): Promise<number> => {
-  if (ids.length === 0) {
-    return 0
-  }
-
-  const client = getClickhouseClient()
-  const idsQuoted = ids
-    .map((id) => {
-      return `'${escapeClickHouseString(id)}'`
-    })
-    .join(', ')
-
-  const query = `
-    SELECT count() AS count
-    FROM forska.articles FINAL
-    WHERE _peerdb_is_deleted = 0
-      AND id IN (${idsQuoted})
-  `
-
-  const result = await client.query({query, format: 'JSONEachRow'})
-  const data = await result.json<{count: string | number}>()
-  const raw = data[0]?.count ?? 0
-  return typeof raw === 'number' ? raw : parseInt(raw, 10) || 0
-}
-
 export const projectsRoutesGetReviewsHealth = new Elysia().post(
   '/api/projectsreviewshealth',
   async ({body}) => {
@@ -187,24 +236,31 @@ export const projectsRoutesGetReviewsHealth = new Elysia().post(
     const importRouteArticlesCount = await getImportRouteArticlesCount(importRoutes)
     const postgresArticlesInScope = await getPostgresArticlesInScope(projectId, curatedArticleCount, importRoutes)
 
-    const curatedSampleSize = curatedArticleCount > 0 ? 25 : 0
-    const curatedSampleIds = curatedSampleSize > 0 ? await getCuratedSampleIds(projectId, curatedSampleSize) : []
+    const shouldSkipClickhouse = enabledPromptCount === 0 || postgresArticlesInScope === 0
 
     const clickhouse = await (async () => {
-      try {
-        const [routeArticlesInScope, curatedSampleFound] = await Promise.all([
-          countClickhouseArticlesByRoutes(importRoutes),
-          countClickhouseArticlesByIds(curatedSampleIds),
-        ])
+      if (shouldSkipClickhouse) {
+        return {ok: true as const, skipped: true as const, routeArticlesInScope: 0, curatedArticlesInScope: null}
+      }
 
-        return {ok: true as const, routeArticlesInScope, curatedSampleSize: curatedSampleIds.length, curatedSampleFound}
+      try {
+        const routeArticlesInScope = await countClickhouseArticlesByRoutes(importRoutes)
+        const needsCuratedFullCheck =
+          curatedArticleCount > 0 && importRouteArticlesCount === 0 && routeArticlesInScope === 0
+        const curatedArticlesInScope = needsCuratedFullCheck
+          ? await (async () => {
+              const curatedIds = await getCuratedArticleIds(projectId)
+              return countClickhouseCuratedArticles(curatedIds)
+            })()
+          : null
+
+        return {ok: true as const, skipped: false as const, routeArticlesInScope, curatedArticlesInScope}
       } catch (error) {
         return {
           ok: false as const,
           error: error instanceof Error ? error.message : 'ClickHouse query failed',
           routeArticlesInScope: 0,
-          curatedSampleSize: curatedSampleIds.length,
-          curatedSampleFound: 0,
+          curatedArticlesInScope: null,
         }
       }
     })()

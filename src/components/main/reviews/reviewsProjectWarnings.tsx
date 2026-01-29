@@ -15,8 +15,8 @@ type ReviewsHealthData = {
     postgresArticlesInScope: number
   }
   clickhouse:
-    | {ok: true; routeArticlesInScope: number; curatedSampleSize: number; curatedSampleFound: number}
-    | {ok: false; error: string; routeArticlesInScope: number; curatedSampleSize: number; curatedSampleFound: number}
+    | {ok: true; skipped: boolean; routeArticlesInScope: number; curatedArticlesInScope: number | null}
+    | {ok: false; error: string; routeArticlesInScope: number; curatedArticlesInScope: number | null}
 }
 
 export const ReviewsProjectWarnings = (props: {projectId: string; showClickhouse?: boolean}) => {
@@ -26,7 +26,7 @@ export const ReviewsProjectWarnings = (props: {projectId: string; showClickhouse
       queryFn: async () => {
         const response = await apiClient.api.projectsreviewshealth.post({projectId: props.projectId})
         const data = handleApiResponse(response, 'Failed to check project health')
-        return data.data as ReviewsHealthData
+        return data.data as unknown as ReviewsHealthData
       },
       refetchOnWindowFocus: false,
       staleTime: 1000 * 60,
@@ -62,6 +62,10 @@ export const ReviewsProjectWarnings = (props: {projectId: string; showClickhouse
       return false
     }
 
+    if (query.data.clickhouse.skipped) {
+      return false
+    }
+
     const hasEnabledPrompts = query.data.enabledPromptCount > 0
     const hasAnyArticlesInScope = query.data.scope.postgresArticlesInScope > 0
     if (!hasEnabledPrompts || !hasAnyArticlesInScope) {
@@ -72,12 +76,12 @@ export const ReviewsProjectWarnings = (props: {projectId: string; showClickhouse
       query.data.scope.importRouteArticlesCount > 0
       && query.data.clickhouse.routeArticlesInScope < query.data.scope.importRouteArticlesCount
 
-    const curatedSampleMissing =
+    const curatedMissing =
       query.data.scope.curatedArticleCount > 0
-      && query.data.clickhouse.curatedSampleSize > 0
-      && query.data.clickhouse.curatedSampleFound === 0
+      && query.data.clickhouse.curatedArticlesInScope !== null
+      && query.data.clickhouse.curatedArticlesInScope < query.data.scope.curatedArticleCount
 
-    return routeMissing || curatedSampleMissing
+    return routeMissing || curatedMissing
   })
 
   return (
@@ -127,14 +131,16 @@ export const ReviewsProjectWarnings = (props: {projectId: string; showClickhouse
           <div class="p-4 bg-red-50 border border-red-200 rounded-lg">
             <p class="font-medium text-red-800">ClickHouse missing articles</p>
             <p class="text-sm text-red-700 mt-1">
-              Articles exist in Postgres for this project, but ClickHouse appears to be missing them, so “Assessed by
-              LLM” and “Unassessed” can show empty.
+              Articles exist in Postgres for this project, but ClickHouse appears to be missing them, so "Assessed by
+              LLM" and "Unassessed" can show empty.
             </p>
             <div class="text-xs text-red-700 mt-2">
               <span class="font-mono">PG scoped:</span> {query.data?.scope.postgresArticlesInScope.toLocaleString()}{' '}
               <span class="font-mono">CH routes:</span> {query.data?.clickhouse.routeArticlesInScope.toLocaleString()}{' '}
-              <span class="font-mono">CH curated sample:</span> {query.data?.clickhouse.curatedSampleFound}/
-              {query.data?.clickhouse.curatedSampleSize}
+              <Show when={query.data?.clickhouse.curatedArticlesInScope !== null}>
+                <span class="font-mono">CH curated:</span>{' '}
+                {query.data?.clickhouse.curatedArticlesInScope?.toLocaleString()}
+              </Show>
             </div>
           </div>
         </Show>
