@@ -4,7 +4,13 @@ import {createFileRoute, Link} from '@tanstack/solid-router'
 import {createSignal, For, Show, Suspense} from 'solid-js'
 
 import {Button} from '../../../components/ui/button'
-import {fetchActivePrompts, formatPromptTimestamp, getPromptPreview, setPromptArchived} from './promptsUtils'
+import {
+  fetchActivePrompts,
+  formatPromptTimestamp,
+  getPromptPreview,
+  isPromptPreviewTruncated,
+  setPromptArchived,
+} from './promptsUtils'
 
 const updatePromptArchivedState = (
   queryClient: QueryClient,
@@ -34,6 +40,7 @@ export const PromptsPage = () => {
   })
   const [pendingPromptId, setPendingPromptId] = createSignal<string | null>(null)
   const [errorMessage, setErrorMessage] = createSignal<string | null>(null)
+  const [expandedPromptById, setExpandedPromptById] = createSignal<Record<string, boolean>>({})
 
   return (
     <div class="min-h-screen bg-gray-50 p-6 mx-auto">
@@ -111,8 +118,26 @@ export const PromptsPage = () => {
                       </Button>
                     </div>
                     <div class="mt-3 bg-gray-50 rounded p-3 text-sm font-mono whitespace-pre-wrap">
-                      {getPromptPreview(prompt.originalText)}
+                      <Show when={expandedPromptById()[prompt.id]} fallback={getPromptPreview(prompt.originalText)}>
+                        {prompt.originalText}
+                      </Show>
                     </div>
+                    <Show when={isPromptPreviewTruncated(prompt.originalText)}>
+                      <div class="mt-1 flex justify-end">
+                        <Button
+                          variant="link"
+                          size="sm"
+                          class="h-auto px-0 py-0 text-xs"
+                          onClick={() => {
+                            setExpandedPromptById((prev) => {
+                              return {...prev, [prompt.id]: !prev[prompt.id]}
+                            })
+                          }}
+                        >
+                          {expandedPromptById()[prompt.id] ? 'Show less' : 'Show full'}
+                        </Button>
+                      </div>
+                    </Show>
                   </div>
                 )
               }}

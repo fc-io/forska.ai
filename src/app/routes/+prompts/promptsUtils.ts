@@ -51,7 +51,15 @@ export const formatPromptTimestamp = (value: string | Date): string => {
   return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString()
 }
 
+const normalizePromptText = (text: string): string => {
+  return text.trim().replace(/\s+/g, ' ')
+}
+
+export const isPromptPreviewTruncated = (text: string, maxLength = 240): boolean => {
+  return normalizePromptText(text).length > maxLength
+}
+
 export const getPromptPreview = (text: string, maxLength = 240): string => {
-  const normalized = text.trim().replace(/\s+/g, ' ')
+  const normalized = normalizePromptText(text)
   return normalized.length <= maxLength ? normalized : `${normalized.slice(0, Math.max(0, maxLength - 1))}…`
 }
