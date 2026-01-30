@@ -1,6 +1,6 @@
 /**
  * Launch SGLang on MareNostrum 5 and wait for it to be ready
- * Usage: bun run mn5:launch [--force] [--model <id>]
+ * Usage: bun run mn5:launch [--force] [--model <id>] [--large-context]
  */
 
 import {$, spawn} from 'bun'
@@ -20,7 +20,10 @@ const LOCAL_TUNNEL_PORT_OFFSET = 10000
 const LOCAL_CADDY_CONTAINER_NAME = 'forska-caddy'
 const LOCAL_CADDY_IMAGE = 'caddy:2.8.4-alpine'
 const LOCAL_CADDYFILE_PATH = 'cache/mn5Local.Caddyfile'
-const SBATCH_FILE = 'forska-mn5-sglang.sbatch'
+const DEFAULT_SBATCH_FILE = 'forska-mn5-sglang.sbatch'
+const LARGE_CONTEXT_SATCH_FILE = 'forska-mn5-sglang-largre-context.sbatch'
+const DEFAULT_JOB_NAME = 'forska-mn5-sglang'
+const LARGE_CONTEXT_JOB_NAME = 'forska-mn5-sglang-large-context'
 
 // Track the active job ID and tunnels for cleanup
 let activeJobId: string | null = null
@@ -359,7 +362,11 @@ const getLocalTunnelPortBase = (localPortBase: number): number => {
   return localPortBase + LOCAL_TUNNEL_PORT_OFFSET
 }
 
-const spawnTunnelProcess = (computeNode: string, localTunnelPort: number, remoteCaddyPort: number): ReturnType<typeof spawn> => {
+const spawnTunnelProcess = (
+  computeNode: string,
+  localTunnelPort: number,
+  remoteCaddyPort: number,
+): ReturnType<typeof spawn> => {
   const logFile = Bun.file(`mn5-tunnel-${computeNode}.log`)
   const proc = spawn(
     [
@@ -616,18 +623,23 @@ const main = async () => {
   let model: string | undefined
   let force = false
   let localPort = LOCAL_PORT_BASE
+  let largeContext = false
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
     if (arg === '--force') force = true
     else if (arg === '--model') model = args[++i]
     else if (arg === '--local-port') localPort = Number(args[++i] ?? LOCAL_PORT_BASE)
+    else if (arg === '--large-context') largeContext = true
   }
+
+  const sbatchFile = largeContext ? LARGE_CONTEXT_SATCH_FILE : DEFAULT_SBATCH_FILE
+  const jobName = largeContext ? LARGE_CONTEXT_JOB_NAME : DEFAULT_JOB_NAME
 
   // 1. Check for existing pending/running jobs
   log('Checking for existing jobs...')
   const existingJobsOutput =
-    await $`ssh ${GLOG} "squeue -u \\$USER -n forska-mn5-sglang -h -o '%i|%T|%.200N' 2>/dev/null || echo ''"`.text()
+    await $`ssh ${GLOG} "squeue -u \\$USER -n ${jobName} -h -o '%i|%T|%.200N' 2>/dev/null || echo ''"`.text()
   const existingJobs = existingJobsOutput
     .trim()
     .split('\n')
@@ -689,14 +701,14 @@ const main = async () => {
 
   // 2. Copy sbatch file to MN5
   log('Deploying sbatch file...')
-  await $`scp ${SBATCH_FILE} ${TLOG}:${MN5_ROOT}/`
+  await $`scp ${sbatchFile} ${TLOG}:${MN5_ROOT}/`
 
   // 3. Submit job
   log('Submitting job...')
   const exportVars = model
     ? `ALL,SGLANG_MODEL=${model},SGLANG_LOCAL_PORT_BASE=${localPort}`
     : `ALL,SGLANG_LOCAL_PORT_BASE=${localPort}`
-  const result = await $`ssh ${GLOG} "cd ${MN5_ROOT} && sbatch --export=${exportVars} ${SBATCH_FILE}"`.text()
+  const result = await $`ssh ${GLOG} "cd ${MN5_ROOT} && sbatch --export=${exportVars} ${sbatchFile}"`.text()
   const jobIdMatch = result.match(/Submitted batch job (\d+)/)
   const jobId = jobIdMatch?.[1]
   if (!jobId) {

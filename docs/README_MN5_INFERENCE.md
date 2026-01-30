@@ -72,6 +72,12 @@ If you've already done the first-time setup (model and container transferred), u
 bun run mn5:launch
 ```
 
+Large-context profile:
+
+```bash
+bun run mn5:launch -- --large-context
+```
+
 This automated command will:
 
 1. Deploy the sbatch script to MN5
@@ -95,6 +101,7 @@ bun run mn5:transfer
 ```
 
 This will:
+
 - Download the model from HuggingFace (if not cached locally)
 - Pull the SGLang Docker container (linux/amd64)
 - Transfer both to MN5 via the `tlog` transfer node
@@ -133,6 +140,7 @@ bun run mn5:tunnel
 ```
 
 This script:
+
 - Auto-detects which compute node is running your job
 - Establishes an SSH tunnel via `alog` (ACC login node)
 - Forwards `localhost:30000` to the SGLang API on the compute node
@@ -190,12 +198,12 @@ INFERENCE_URL=http://localhost:30000/v1
 
 The SGLang server exposes an OpenAI-compatible API. Use it like any OpenAI endpoint:
 
-| Endpoint | Description |
-|----------|-------------|
-| `GET /v1/models` | List available models |
-| `POST /v1/chat/completions` | Chat completions |
-| `POST /v1/completions` | Text completions |
-| `GET /health` | Health check |
+| Endpoint                    | Description           |
+| --------------------------- | --------------------- |
+| `GET /v1/models`            | List available models |
+| `POST /v1/chat/completions` | Chat completions      |
+| `POST /v1/completions`      | Text completions      |
+| `GET /health`               | Health check          |
 
 ---
 
@@ -307,14 +315,17 @@ autossh -M 0 -o "ServerAliveInterval 30" -o "ServerAliveCountMax 3" -N -L 30000:
 ### "Connection Refused" on localhost:30000
 
 1. **Check if job is running**:
+
    ```bash
    ssh alog "squeue -u \$USER"
    ```
 
 2. **Check if SGLang is ready** (large models take 15-20 min to load):
+
    ```bash
    ssh alog "tail -20 /gpfs/projects/ehpc482/dev/logs/*/sglang.log"
    ```
+
    Look for: `INFO: Started server process`
 
 3. **Verify tunnel is active**: Check if the SSH tunnel process is running
@@ -327,6 +338,7 @@ ssh alog "squeue -u \$USER -t pending -o '%i %j %R'"
 ```
 
 Common reasons:
+
 - **Resources**: Waiting for GPU nodes to become available
 - **Priority**: Other jobs in queue have higher priority
 
@@ -352,16 +364,16 @@ ssh alog "tail -100 /gpfs/projects/ehpc482/dev/logs/*/sglang.log"
 
 ## Quick Reference
 
-| Task | Command |
-|------|---------|
-| Full launch (one-command) | `bun run mn5:launch` |
-| Transfer model + container | `bun run mn5:transfer` |
-| Connect to running job | `bun run mn5:tunnel` |
-| Check job status | `bun run mn5:status` |
-| Submit job only | `bun run mn5:submit` |
-| Deploy sbatch script | `bun run mn5:sbatch:push` |
-| Mount MN5 storage | `bun run mn5:mount` |
-| Unmount MN5 storage | `bun run mn5:unmount` |
+| Task                       | Command                   |
+| -------------------------- | ------------------------- |
+| Full launch (one-command)  | `bun run mn5:launch`      |
+| Transfer model + container | `bun run mn5:transfer`    |
+| Connect to running job     | `bun run mn5:tunnel`      |
+| Check job status           | `bun run mn5:status`      |
+| Submit job only            | `bun run mn5:submit`      |
+| Deploy sbatch script       | `bun run mn5:sbatch:push` |
+| Mount MN5 storage          | `bun run mn5:mount`       |
+| Unmount MN5 storage        | `bun run mn5:unmount`     |
 
 ---
 

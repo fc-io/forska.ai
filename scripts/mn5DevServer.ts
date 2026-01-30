@@ -20,6 +20,8 @@ const MN5_ROOT = '/gpfs/projects/ehpc482/dev'
 const SSH_HOST = 'alog' // ACC login node for tunneling
 const GLOG = 'glog' // General login for squeue
 
+const JOB_NAMES = ['forska-mn5-sglang-large-context', 'forska-mn5-sglang']
+
 interface MN5Config {
   SGLANG_HOST: string
   SGLANG_PORT: string
@@ -61,19 +63,44 @@ const sshCommand = async (host: string, cmd: string): Promise<string> => {
 /**
  * Find the most recent running job and its log file
  */
-const findLatestJob = async (): Promise<{jobId: string; computeNode: string} | null> => {
+const findLatestJob = async (): Promise<{jobId: string; jobName: string; computeNode: string} | null> => {
   try {
-    // Look specifically for forska-mn5-sglang jobs
-    const result = await sshCommand(GLOG, 'squeue -u $USER -n forska-mn5-sglang -h -o "%i %N" -t RUNNING | head -1')
+    const result = await sshCommand(GLOG, 'squeue -u $USER -h -o "%i|%j|%N" -t RUNNING')
     log(`squeue result: "${result}"`)
 
-    const parts = result.split(/\s+/)
-    const jobId = parts[0]
-    const nodeList = parts[1]
+    const jobs = result
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line.length > 0
+      })
+      .map((line) => {
+        const [jobId, jobName, nodeList] = line.split('|').map((part) => {
+          return part.trim()
+        })
+        return jobId && jobName && nodeList ? {jobId, jobName, nodeList} : undefined
+      })
+      .filter((row): row is {jobId: string; jobName: string; nodeList: string} => {
+        return Boolean(row)
+      })
+      .filter((row) => {
+        return JOB_NAMES.includes(row.jobName)
+      })
 
-    if (!jobId || !nodeList) {
-      return null
-    }
+    const bestJob = jobs.sort((a, b) => {
+      const aPref = JOB_NAMES.indexOf(a.jobName)
+      const bPref = JOB_NAMES.indexOf(b.jobName)
+      if (aPref !== bPref) return aPref - bPref
+      return Number(b.jobId) - Number(a.jobId)
+    })[0]
+
+    if (!bestJob) return null
+
+    const jobId = bestJob.jobId
+    const jobName = bestJob.jobName
+    const nodeList = bestJob.nodeList
 
     // The node list might be in compressed format like "as02r3b[05,16]"
     // Use scontrol to expand it
@@ -85,9 +112,7 @@ const findLatestJob = async (): Promise<{jobId: string; computeNode: string} | n
       computeNode = nodeList.split(',')[0] ?? ''
     }
 
-    if (jobId && computeNode) {
-      return {jobId, computeNode}
-    }
+    if (jobId && jobName && computeNode) return {jobId, jobName, computeNode}
   } catch (e) {
     log(`Error finding job: ${e}`)
   }
@@ -97,10 +122,10 @@ const findLatestJob = async (): Promise<{jobId: string; computeNode: string} | n
 /**
  * Parse the [mn5:config:start]...[mn5:config:end] block from log file
  */
-const parseConfigFromLog = async (jobId: string): Promise<MN5Config | null> => {
+const parseConfigFromLog = async (jobId: string, jobName: string): Promise<MN5Config | null> => {
   try {
     // Read the log file from the remote
-    const logPath = `${MN5_ROOT}/forska-mn5-sglang-${jobId}.log`
+    const logPath = `${MN5_ROOT}/${jobName}-${jobId}.log`
     log(`Reading config from: ${logPath}`)
 
     const logContent = await $`ssh ${SSH_HOST} "cat ${logPath} 2>/dev/null || echo ''"`.text()

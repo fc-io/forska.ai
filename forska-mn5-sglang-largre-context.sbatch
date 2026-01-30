@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -J forska-mn5-sglang
+#SBATCH -J forska-mn5-sglang-large-context
 #SBATCH -A ehpc482
 #SBATCH --partition=acc
 #SBATCH --qos=acc_ehpc
@@ -12,14 +12,14 @@
 #SBATCH --export=ALL
 #SBATCH --signal=B:USR1@120
 
-# MareNostrum 5 SGLang inference server for GPT-OSS-120B
+# MareNostrum 5 SGLang inference server for GPT-OSS-120B (large-context profile)
 # Default config uses 1 node (4 H100s total) with tp=4
 #
 # Standard (1 node, tp=4):
-#   sbatch --export=ALL forska-mn5-sglang.sbatch
+#   sbatch --export=ALL forska-mn5-sglang-largre-context.sbatch
 #
 # Multi-node throughput mode (independent worker per node, tp=4 per node, dp=1, router on head):
-#   sbatch -N 2 --export=ALL forska-mn5-sglang.sbatch
+#   sbatch -N 2 --export=ALL forska-mn5-sglang-largre-context.sbatch
 
 set -euo pipefail
 
@@ -109,20 +109,12 @@ fi
 # Resolve model path: if it looks like a HuggingFace ID (contains /), try to find it in the cache
 # Otherwise assume it's already a local path
 if [[ "$SGLANG_MODEL" == */* && ! -d "$SGLANG_MODEL" ]]; then
-  # Convert HF ID to cache directory format: org/model -> models--org--model
-  # Note: tr cannot replace single char with multiple chars, use sed instead
   HF_CACHE_NAME="models--$(echo "$SGLANG_MODEL" | sed 's|/|--|g')"
 
-  # Check multiple possible locations:
-  # 1. Direct download: $HF_HOME/models--org--model/
-  # 2. Standard HF cache: $HF_HOME/hub/models--org--model/snapshots/<hash>/
-
   if [[ -d "$HF_HOME/$HF_CACHE_NAME" && -f "$HF_HOME/$HF_CACHE_NAME/config.json" ]]; then
-    # Direct download structure (what user has)
     SGLANG_MODEL_PATH="$HF_HOME/$HF_CACHE_NAME"
     echo "[mn5] resolved model to: $SGLANG_MODEL_PATH"
   elif [[ -d "$HF_HOME/hub/$HF_CACHE_NAME/snapshots" ]]; then
-    # Standard HF cache structure
     SNAPSHOT_DIR=$(ls -t "$HF_HOME/hub/$HF_CACHE_NAME/snapshots" 2>/dev/null | head -1)
     if [[ -n "$SNAPSHOT_DIR" && -d "$HF_HOME/hub/$HF_CACHE_NAME/snapshots/$SNAPSHOT_DIR" ]]; then
       SGLANG_MODEL_PATH="$HF_HOME/hub/$HF_CACHE_NAME/snapshots/$SNAPSHOT_DIR"
@@ -143,7 +135,6 @@ if [[ "$SGLANG_MODEL" == */* && ! -d "$SGLANG_MODEL" ]]; then
     exit 1
   fi
 else
-  # Already a local path or doesn't contain /
   SGLANG_MODEL_PATH="$SGLANG_MODEL"
 fi
 
@@ -225,21 +216,16 @@ if [[ -n "$FP8_TP_RECOMMENDED" && "$FP8_TP_RECOMMENDED" -ne "$TP_SIZE" ]]; then
   echo "[mn5] note: fp8 block-size suggests tp=$FP8_TP_RECOMMENDED (current tp=$TP_SIZE)" >&2
 fi
 
-# Model-specific settings
-# Fulltext prompts are much longer (KV cache heavy) → default to lower concurrency + bigger context.
-# Max context: 128K (131072) - requires trading throughput for context length
-# Memory fraction: 0.90 - allocate most GPU memory to KV cache
-# Max running requests: 64 - reduced to fit longer context windows in memory
-
-export SGLANG_MAX_RUNNING_REQUESTS=${SGLANG_MAX_RUNNING_REQUESTS:-450}
-export SGLANG_API_MAX_INFLIGHT_REQUESTS=${SGLANG_API_MAX_INFLIGHT_REQUESTS:-800}
-export SGLANG_API_MAX_BURST_REQUESTS=${SGLANG_API_MAX_BURST_REQUESTS:-60}
-export SGLANG_MEM_FRACTION=${SGLANG_MEM_FRACTION:-0.90}
+# Large-context settings (KV cache heavy):
+# - increase context length
+# - reduce concurrency so long prompts fit in memory
+export SGLANG_CONTEXT_LENGTH=${SGLANG_CONTEXT_LENGTH:-131072}
+export SGLANG_MAX_RUNNING_REQUESTS=${SGLANG_MAX_RUNNING_REQUESTS:-64}
+export SGLANG_API_MAX_INFLIGHT_REQUESTS=${SGLANG_API_MAX_INFLIGHT_REQUESTS:-256}
+export SGLANG_API_MAX_BURST_REQUESTS=${SGLANG_API_MAX_BURST_REQUESTS:-32}
+export SGLANG_MEM_FRACTION=${SGLANG_MEM_FRACTION:-0.92}
 export SGLANG_CHUNKED_PREFILL_SIZE=${SGLANG_CHUNKED_PREFILL_SIZE:-8192}
-export SGLANG_CONTEXT_LENGTH=${SGLANG_CONTEXT_LENGTH:-32768}
-# export SGLANG_DTYPE=${SGLANG_DTYPE:-bfloat16}
-# Reasoning parser for models with thinking/channel tokens (gpt-oss, deepseek-r1, qwen3)
-# This separates reasoning traces into 'reasoning_content' field in the API response
+export SGLANG_DTYPE=${SGLANG_DTYPE:-bfloat16}
 export SGLANG_REASONING_PARSER=${SGLANG_REASONING_PARSER:-gpt-oss}
 
 echo "[mn5] model=$SGLANG_MODEL (path: $SGLANG_MODEL_PATH)"
@@ -247,12 +233,10 @@ echo "[mn5] nodes=$NNODES gpus/node=$GPUS_PER_NODE total_gpus=$TOTAL_GPUS tp/nod
 echo "[mn5] ports: Caddy(H2):$CADDY_PORT -> SGLang(H1):$SGLANG_INTERNAL_PORT"
 echo "[mn5] context=$SGLANG_CONTEXT_LENGTH chunked_prefill=$SGLANG_CHUNKED_PREFILL_SIZE max_running_requests=$SGLANG_MAX_RUNNING_REQUESTS"
 
-# GPU detection
 if command -v nvidia-smi &>/dev/null; then
   nvidia-smi --query-gpu=name,memory.total --format=csv
 fi
 
-# Cleanup handler
 graceful_shutdown() {
   echo "[mn5] shutting down..."
   [[ -n "${CADDY_PID:-}" ]] && kill -TERM "$CADDY_PID" 2>/dev/null || true
@@ -264,7 +248,6 @@ graceful_shutdown() {
 }
 trap graceful_shutdown EXIT INT TERM USR1
 
-# Wait for HTTP endpoint
 wait_for_http() {
   local url="$1" timeout="${2:-600}" pid="${3:-}"
   echo "[mn5] waiting for $url (timeout: ${timeout}s, large model load may take 10-20 min)..."
@@ -283,10 +266,8 @@ wait_for_http() {
   return 1
 }
 
-# Set environment for multi-node
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
 
-# Caddy config for H2 proxy (Caddy:30002 -> SGLang:30001)
 CADDY_CONFIG="{
   auto_https off
   servers {
@@ -299,9 +280,6 @@ CADDY_CONFIG="{
 
 echo "[mn5] launching SGLang with tp=$TP_SIZE dp=$DP_SIZE"
 
-# Build SGLang command with model-specific settings
-# Note: Some flags like --moe-a2a-backend, --attention-backend, --speculative-*
-# may require specific SGLang versions - using conservative defaults
 SGLANG_ARGS=(
   --model-path "$SGLANG_MODEL_PATH"
   --served-model-name "$SGLANG_MODEL"
@@ -314,7 +292,7 @@ SGLANG_ARGS=(
   --max-running-requests "$SGLANG_MAX_RUNNING_REQUESTS"
   --chunked-prefill-size "$SGLANG_CHUNKED_PREFILL_SIZE"
   --context-length "$SGLANG_CONTEXT_LENGTH"
-  # --dtype "$SGLANG_DTYPE"
+  --dtype "$SGLANG_DTYPE"
   --enable-metrics
   --download-dir /hf
 )
@@ -327,12 +305,8 @@ if (( NNODES > 1 && DP_SIZE > 1 )); then
   [[ "${SGLANG_ENABLE_DP_ATTENTION:-1}" -eq 1 ]] && SGLANG_ARGS+=( --enable-dp-attention )
 fi
 
-# Launch SGLang
 echo "[mn5] SGLang args: ${SGLANG_ARGS[*]}"
 
-# Build the container command (using absolute path resolved earlier)
-# Note: No HF token needed - models are pre-downloaded and no outbound access
-# HF_HUB_OFFLINE=1 ensures no download attempts are made
 CONTAINER_CMD="$SINGULARITY_BIN exec --cleanenv --nv \
   --env HF_HOME=/hf --env HUGGINGFACE_HUB_CACHE=/hf \
   --env HF_HUB_OFFLINE=1 \
@@ -342,25 +316,20 @@ CONTAINER_CMD="$SINGULARITY_BIN exec --cleanenv --nv \
   $SIF_SGLANG \
   python -m sglang.launch_server ${SGLANG_ARGS[*]}"
 
-# Create a per-node wrapper script that starts Caddy + SGLang together
-# This ensures each node has its own Caddy H2 proxy for SSH tunnel connectivity
 NODE_WRAPPER_SCRIPT="$STACK_ROOT/tmp/node_wrapper_${SLURM_JOB_ID}.sh"
 cat > "$NODE_WRAPPER_SCRIPT" << 'WRAPPER_EOF'
 #!/bin/bash
 set -euo pipefail
 
-# Arguments passed from srun:
 CADDY_BIN="$1"
 CADDY_PORT="$2"
 SGLANG_INTERNAL_PORT="$3"
 LOG_DIR="$4"
 shift 4
-# Rest is the container command
 
 NODE_NAME=$(hostname -s)
 echo "[mn5:$NODE_NAME] starting Caddy H2 proxy on :$CADDY_PORT -> localhost:$SGLANG_INTERNAL_PORT"
 
-# Start Caddy
 CADDY_CONFIG="{
   auto_https off
   servers {
@@ -381,7 +350,6 @@ if ! kill -0 "$CADDY_PID" 2>/dev/null; then
 fi
 echo "[mn5:$NODE_NAME] Caddy started (PID=$CADDY_PID)"
 
-# Cleanup handler for this node
 cleanup_node() {
   echo "[mn5:$NODE_NAME] shutting down..."
   kill -TERM "$CADDY_PID" 2>/dev/null || true
@@ -390,12 +358,9 @@ cleanup_node() {
 }
 trap cleanup_node EXIT INT TERM
 
-# Launch SGLang (container command is passed as remaining args)
 echo "[mn5:$NODE_NAME] starting SGLang worker..."
 bash -lc "$*" &
 SGLANG_PID=$!
-
-# Wait for SGLang to exit
 wait "$SGLANG_PID"
 WRAPPER_EOF
 chmod +x "$NODE_WRAPPER_SCRIPT"
@@ -410,7 +375,6 @@ if (( NNODES > 1 )); then
     "$NODE_WRAPPER_SCRIPT" "$CADDY_BIN" "$CADDY_PORT" "$SGLANG_INTERNAL_PORT" "$LOG_DIR" "$CONTAINER_CMD" &
   SGLANG_PID=$!
 else
-  # Single-node: start Caddy on head node directly
   echo "[mn5] starting Caddy H2 proxy on :$CADDY_PORT -> localhost:$SGLANG_INTERNAL_PORT"
   echo "$CADDY_CONFIG" | "$CADDY_BIN" run --config - --adapter caddyfile >"$LOG_DIR/caddy.log" 2>&1 &
   CADDY_PID=$!
@@ -427,7 +391,6 @@ else
   SGLANG_PID=$!
 fi
 
-# Wait for head-node worker - large models can take 15-20 minutes to load
 wait_for_http "http://localhost:$SGLANG_WORKER_PORT/v1/models" 2400 "$SGLANG_PID"
 
 if [[ "${SGLANG_ENABLE_ROUTER}" == "1" ]]; then
@@ -465,35 +428,28 @@ if [[ "${SGLANG_ENABLE_ROUTER}" == "1" ]]; then
   wait_for_http "http://localhost:$SGLANG_PORT/v1/models" 600 "$SGLANG_ROUTER_PID"
 fi
 
-# Build WORKER_URLS for API server metrics collection
 WORKER_URLS_ARRAY=()
 WORKER_URLS_LOCAL_ARRAY=()
 LOCAL_PORT_BASE=$((SGLANG_LOCAL_PORT_BASE))
 if [[ "${SGLANG_ENABLE_ROUTER:-0}" == "1" ]]; then
-  # Router mode: workers are on SGLANG_WORKER_PORT on each node
   local_port_idx=0
   for node_host in "${HOSTS[@]}"; do
     node_addr=$(resolve_ipv4 "$node_host")
     WORKER_URLS_ARRAY+=("http://${node_addr}:${SGLANG_WORKER_PORT}")
-    # Each worker gets a unique local port for tunneling
     local_port=$((LOCAL_PORT_BASE + local_port_idx))
     WORKER_URLS_LOCAL_ARRAY+=("http://localhost:${local_port}")
     local_port_idx=$((local_port_idx + 1))
   done
 elif (( NNODES > 1 )); then
-  # Multi-node Direct Worker mode (Router disabled):
-  # All workers are listening on SGLANG_WORKER_PORT (which is same as SGLANG_PORT)
   local_port_idx=0
   for node_host in "${HOSTS[@]}"; do
     node_addr=$(resolve_ipv4 "$node_host")
     WORKER_URLS_ARRAY+=("http://${node_addr}:${SGLANG_WORKER_PORT}")
-    # Assign unique local ports for tunneling (base, base+1, etc)
     local_port=$((LOCAL_PORT_BASE + local_port_idx))
     WORKER_URLS_LOCAL_ARRAY+=("http://localhost:${local_port}")
     local_port_idx=$((local_port_idx + 1))
   done
 else
-  # Single worker mode
   WORKER_URLS_ARRAY+=("http://$(hostname):${SGLANG_PORT}")
   WORKER_URLS_LOCAL_ARRAY+=("http://localhost:${SGLANG_LOCAL_PORT_BASE}")
 fi
@@ -507,6 +463,7 @@ echo "  Host:     $(hostname)"
 echo "  Endpoint: http://$(hostname):$SGLANG_PORT/v1"
 echo "  Model:    $SGLANG_MODEL"
 echo "  Config:   ${NNODES} worker(s) × ${GPUS_PER_NODE} GPU(s) (tp=$TP_SIZE dp=$DP_SIZE per worker)"
+echo "  Profile:  large-context (context=$SGLANG_CONTEXT_LENGTH, max_running=$SGLANG_MAX_RUNNING_REQUESTS)"
 if [[ "${SGLANG_ENABLE_ROUTER}" == "1" ]]; then
   echo "  Router:   enabled (policy=$SGLANG_ROUTER_POLICY)"
   echo "  Workers:  ${WORKER_URLS_ARRAY[*]}"
@@ -535,7 +492,6 @@ cat <<EOF
 EOF
 echo "=============================================="
 
-# Machine-readable config block for scripts to parse
 echo ""
 echo "[mn5:config:start]"
 echo "SGLANG_HOST=$(hostname)"
@@ -559,5 +515,4 @@ echo "SGLANG_CONTEXT_LENGTH=$SGLANG_CONTEXT_LENGTH"
 echo "SGLANG_LOCAL_PORT_BASE=$SGLANG_LOCAL_PORT_BASE"
 echo "[mn5:config:end]"
 
-# Keep running
 wait
