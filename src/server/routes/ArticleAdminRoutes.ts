@@ -1,4 +1,4 @@
-import {eq} from 'drizzle-orm'
+import {eq, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 import {mkdir, writeFile} from 'fs/promises'
 import path from 'path'
@@ -301,6 +301,8 @@ export const articleAdminRoutes = new Elysia()
         throw new Error('No PDF available for this article')
       }
 
+      const fullTextPDF = article.fullTextPDF
+
       await db
         .update(articles)
         .set({fullTextConversionStatus: 'pending', fullTextConversionError: null})
@@ -311,7 +313,7 @@ export const articleAdminRoutes = new Elysia()
         console.log(`[convertPdf] Converting article ${article.id}`)
 
         try {
-          const {md, html} = await convertPdfToText(article.fullTextPDF, DOCLING_CONVERSION_TIMEOUT_MS)
+          const {md, html} = await convertPdfToText(fullTextPDF, DOCLING_CONVERSION_TIMEOUT_MS)
 
           await db
             .update(articles)
@@ -319,6 +321,7 @@ export const articleAdminRoutes = new Elysia()
               fullText: md,
               fullTextHtml: html,
               fullTextConversionStatus: 'success',
+              fullTextConversionError: null,
               fullTextCharCount: md.length,
               fullTextConversionAttempts: (article.fullTextConversionAttempts ?? 0) + 1,
             })
@@ -338,20 +341,18 @@ export const articleAdminRoutes = new Elysia()
             || msg.includes('file not found')
 
           const attempts = (article.fullTextConversionAttempts ?? 0) + 1
-          const finalStatus = isPerm || attempts >= MAX_CONVERSION_ATTEMPTS ? 'failed' : 'pending'
+          const isFinalFailure = isPerm || attempts >= MAX_CONVERSION_ATTEMPTS
 
           await db
             .update(articles)
             .set({
-              fullTextConversionStatus: finalStatus,
+              fullTextConversionStatus: isFinalFailure ? 'failed' : sql`NULL`,
               fullTextConversionError: errorMessage,
               fullTextConversionAttempts: attempts,
             })
             .where(eq(articles.id, article.id))
 
-          console.log(
-            `[convertPdf] ${finalStatus === 'failed' ? 'Failed' : 'Retry'}: article ${article.id} - ${errorMessage}`,
-          )
+          console.log(`[convertPdf] ${isFinalFailure ? 'Failed' : 'Retry'}: article ${article.id} - ${errorMessage}`)
         }
       }
 

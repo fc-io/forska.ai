@@ -1,4 +1,4 @@
-import {eq} from 'drizzle-orm'
+import {eq, sql} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../db/schema.ts'
@@ -90,6 +90,7 @@ export const ensureFullText = async (
         fullText: md,
         fullTextHtml: html,
         fullTextConversionStatus: 'success',
+        fullTextConversionError: null,
         fullTextCharCount: md.length,
         fullTextConversionAttempts: (fresh.fullTextConversionAttempts ?? 0) + 1,
       })
@@ -119,24 +120,24 @@ export const ensureFullText = async (
     const maxRetries = 3
 
     // If permanent OR max retries exceeded → 'failed'
-    const finalStatus = isPerm || attempts >= maxRetries ? 'failed' : 'pending'
+    const isFinalFailure = isPerm || attempts >= maxRetries
 
     await db
       .update(schema.articles)
       .set({
-        fullTextConversionStatus: finalStatus,
+        fullTextConversionStatus: isFinalFailure ? 'failed' : sql`NULL`,
         fullTextConversionError: errorMessage,
         fullTextConversionAttempts: attempts,
       })
       .where(eq(schema.articles.id, articleId))
 
     rateLimitedLogger.log(
-      `fulltext:conversion:${finalStatus}`,
-      `[ensureFullText] ${finalStatus === 'failed' ? 'Failed' : 'Retry'}: article ${articleId} - ${errorMessage}`,
+      `fulltext:conversion:${isFinalFailure ? 'failed' : 'retry'}`,
+      `[ensureFullText] ${isFinalFailure ? 'Failed' : 'Retry'}: article ${articleId} - ${errorMessage}`,
     )
 
     // Return status to indicate whether caller should skip or requeue
-    if (finalStatus === 'failed') {
+    if (isFinalFailure) {
       return {text: null, shouldSkip: true, reason: 'conversion_failed'}
     }
     return {text: null, shouldSkip: false, reason: 'transient_failure'}
