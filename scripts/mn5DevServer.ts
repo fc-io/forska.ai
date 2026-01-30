@@ -621,12 +621,12 @@ const main = async () => {
     process.exit(1)
   }
 
-  log(`Found job ${job.jobId} on ${job.computeNode}`)
+  log(`Found job ${job.jobId} (${job.jobName}) on ${job.computeNode}`)
 
   // 2. Parse config from log
   let config: MN5Config | null = null
   for (let i = 0; i < 10; i++) {
-    config = await parseConfigFromLog(job.jobId)
+    config = await parseConfigFromLog(job.jobId, job.jobName)
     if (config) break
     log('Waiting for config block in log file...')
     await sleep(5000)
