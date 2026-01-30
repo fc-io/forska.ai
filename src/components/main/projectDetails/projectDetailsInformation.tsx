@@ -139,7 +139,7 @@ export const ProjectDetailsInformation = (props: ProjectDetailsInformationProps)
               useFlags().fulltextNoImages ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-600'
             }`}
           >
-            No images {useFlags().fulltextNoImages ? 'on' : 'off'}
+            Full text - no images: {useFlags().fulltextNoImages ? 'on' : 'off'}
           </span>
         </div>
       </div>

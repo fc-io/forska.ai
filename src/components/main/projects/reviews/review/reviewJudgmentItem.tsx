@@ -192,7 +192,7 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
                   props.judgment.useFulltextNoImages ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-500'
                 }`}
               >
-                No images
+                Full text - no images
               </span>
             </div>
           </Show>
