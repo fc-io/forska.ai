@@ -112,7 +112,7 @@ const AdminLlm = () => {
 
   const statusQuery = useQuery(() => {
     return {
-      queryKey: ['llmstatus', 'latest30'],
+      queryKey: ['llmstatus', 'latest50'],
       queryFn: fetchLlmStatus,
       refetchInterval: 30 * 1000,
       refetchOnWindowFocus: true,
@@ -175,7 +175,7 @@ const AdminLlm = () => {
           }
         >
           <div class="flex justify-between items-center mb-6">
-            <h1 class="text-2xl font-bold">LLM Metrics (latest 30)</h1>
+            <h1 class="text-2xl font-bold">LLM Metrics (latest 50)</h1>
           </div>
 
           <Show when={statusQuery.isLoading}>

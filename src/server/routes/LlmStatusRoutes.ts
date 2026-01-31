@@ -44,7 +44,7 @@ export const llmStatusRoutes = new Elysia()
       .from(llmStatus)
       .where(eq(llmStatus.engine, 'sglang'))
       .orderBy(desc(llmStatus.ts))
-      .limit(30)
+      .limit(50)
 
     return {data}
   })
