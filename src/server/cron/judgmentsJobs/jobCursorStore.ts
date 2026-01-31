@@ -1,19 +1,45 @@
-type JobCursor = {lastDate: Date; lastArticleId: string}
+import {eq} from 'drizzle-orm'
+import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
-const cursors = new Map<string, JobCursor>()
+import * as schema from '../../../db/schema.ts'
 
-export const getJobCursor = (jobId: string): JobCursor | null => {
-  return cursors.get(jobId) ?? null
+type CursorDb = PostgresJsDatabase<typeof schema>
+
+export type JobCursor = {lastDate: Date; lastArticleId: string}
+
+const getCursorFromRow = (row: {lastDate: Date | null; lastArticleId: string | null} | undefined): JobCursor | null => {
+  const lastDate = row?.lastDate ?? null
+  const lastArticleId = row?.lastArticleId ?? null
+  return lastDate && lastArticleId ? {lastDate, lastArticleId} : null
 }
 
-export const setJobCursor = (jobId: string, cursor: JobCursor): void => {
-  cursors.set(jobId, cursor)
+export const getJobCursor = async (db: CursorDb, jobId: string): Promise<JobCursor | null> => {
+  const rows = await db
+    .select({
+      lastDate: schema.judgmentsJobs.chCursorLastDate,
+      lastArticleId: schema.judgmentsJobs.chCursorLastArticleId,
+    })
+    .from(schema.judgmentsJobs)
+    .where(eq(schema.judgmentsJobs.id, jobId))
+    .limit(1)
+
+  return getCursorFromRow(rows[0])
 }
 
-export const clearJobCursor = (jobId: string): void => {
-  cursors.delete(jobId)
+export const setJobCursor = async (db: CursorDb, jobId: string, cursor: JobCursor): Promise<void> => {
+  await db
+    .update(schema.judgmentsJobs)
+    .set({chCursorLastDate: cursor.lastDate, chCursorLastArticleId: cursor.lastArticleId})
+    .where(eq(schema.judgmentsJobs.id, jobId))
 }
 
-export const clearAllJobCursors = (): void => {
-  cursors.clear()
+export const clearJobCursor = async (db: CursorDb, jobId: string): Promise<void> => {
+  await db
+    .update(schema.judgmentsJobs)
+    .set({chCursorLastDate: null, chCursorLastArticleId: null})
+    .where(eq(schema.judgmentsJobs.id, jobId))
+}
+
+export const clearAllJobCursors = async (db: CursorDb): Promise<void> => {
+  await db.update(schema.judgmentsJobs).set({chCursorLastDate: null, chCursorLastArticleId: null})
 }

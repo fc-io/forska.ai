@@ -4,6 +4,7 @@ import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 import * as schema from '../../../db/schema.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
+import {clearJobCursor, setJobCursor} from './jobCursorStore.ts'
 import {judgmentsJobsCronGetPrompts} from './judgmentsJobsCronGetPrompts.ts'
 import {judgmentsJobsGetRunningJobs} from './judgmentsJobsGetRunningJobs.ts'
 
@@ -135,6 +136,14 @@ const fetchPromptsForJob = async (job: Job, numberOfPromptsToGet: number) => {
   return {...promptData, job}
 }
 
+const updateJobCursorAfterFetch = async (
+  db: PostgresJsDatabase<typeof schema>,
+  jobId: string,
+  nextCursor: Awaited<ReturnType<typeof judgmentsJobsCronGetPrompts>>['nextCursor'],
+): Promise<void> => {
+  return nextCursor ? setJobCursor(db, jobId, nextCursor) : clearJobCursor(db, jobId)
+}
+
 const getNewPromptsForJob = async (
   db: PostgresJsDatabase<typeof schema>,
   job: Job,
@@ -143,8 +152,16 @@ const getNewPromptsForJob = async (
 ) => {
   const countOfReadyPrompts = await getCountOfReadyPrompts(db, job.id)
   const promptsToFetchCount = getPromptsToFetchCount(countOfReadyPrompts, readyTargetPerJob, addToQueueMaxBatchSize)
-  const result = promptsToFetchCount > 0 ? await fetchPromptsForJob(job, promptsToFetchCount) : {promptEntries: []}
-  return {promptEntries: result.promptEntries, job, countOfReadyPrompts, promptsToFetchCount}
+  const didFetch = promptsToFetchCount > 0
+  const result = didFetch ? await fetchPromptsForJob(job, promptsToFetchCount) : {promptEntries: [], nextCursor: null}
+  return {
+    promptEntries: result.promptEntries,
+    nextCursor: result.nextCursor,
+    didFetch,
+    job,
+    countOfReadyPrompts,
+    promptsToFetchCount,
+  }
 }
 
 const getJobConfig = async (db: PostgresJsDatabase<typeof schema>, jobId: string): Promise<JobConfig | null> => {
@@ -182,7 +199,7 @@ export const judgmentsJobsAddToQueue = async (
   await Promise.all(
     runningJobs.map(async (job) => {
       const getNewStartMs = Date.now()
-      const {countOfReadyPrompts, promptEntries, promptsToFetchCount} = await getNewPromptsForJob(
+      const {countOfReadyPrompts, didFetch, nextCursor, promptEntries, promptsToFetchCount} = await getNewPromptsForJob(
         db,
         job,
         capacity.readyTargetPerJob,
@@ -238,6 +255,20 @@ export const judgmentsJobsAddToQueue = async (
       const insertStartMs = Date.now()
       await addPromptsToQueue(db, job.id, filteredEntries, serverJobId)
       const insertMs = Date.now() - insertStartMs
+
+      if (didFetch) {
+        const cursorUpdateStartMs = Date.now()
+        await updateJobCursorAfterFetch(db, job.id, nextCursor)
+        const cursorUpdateMs = Date.now() - cursorUpdateStartMs
+
+        if (cursorUpdateMs > 5_000) {
+          addToQueueLogger.warn(`addToQueue:job:${job.id}:cursor`, '[addToQueue] slow cursor update', {
+            jobId: job.id,
+            projectId: job.projectId,
+            ms: cursorUpdateMs,
+          })
+        }
+      }
 
       if (filteredEntries.length > 0 && insertMs > 5_000) {
         addToQueueLogger.warn(`addToQueue:job:${job.id}:insert`, '[addToQueue] slow insert', {

@@ -463,6 +463,13 @@
       "when": 1769502734149,
       "tag": "0066_useful_the_hand",
       "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1769882342906,
+      "tag": "0067_wide_wraith",
+      "breakpoints": true
     }
   ]
 }

@@ -400,6 +400,8 @@ export const judgmentsJobs = pgTable(
     error: text('error').array(),
     sendToLLMBatchSize: integer('send_to_llm_batch_size').default(5).notNull(),
     sendToLLMInterval: integer('send_to_llm_interval').default(15).notNull(),
+    chCursorLastDate: timestamp('ch_cursor_last_date', {withTimezone: true}),
+    chCursorLastArticleId: uuid('ch_cursor_last_article_id'),
   },
   (table) => {
     return [index('judgments_jobs_project_idx').on(table.projectId)]

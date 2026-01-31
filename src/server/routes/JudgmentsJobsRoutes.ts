@@ -364,6 +364,11 @@ export const judgmentsJobsRoutes = new Elysia()
 
       if (shouldClearQueue) {
         await db.delete(judgmentsJobsPrompts).where(eq(judgmentsJobsPrompts.jobId, updatedJob.id))
+
+        await db
+          .update(judgmentsJobs)
+          .set({chCursorLastDate: null, chCursorLastArticleId: null})
+          .where(eq(judgmentsJobs.id, updatedJob.id))
       }
 
       return {

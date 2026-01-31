@@ -4,11 +4,11 @@ import * as schema from '../../../db/schema.ts'
 import {getUnassessedPairsFromClickHouse} from '../../../services/clickhouse/unassessedArticlesClickHouse.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
-import {clearJobCursor, getJobCursor, setJobCursor} from './jobCursorStore.ts'
+import {getJobCursor, type JobCursor} from './jobCursorStore.ts'
 
 export type PromptQueueEntry = {articleId: string; promptId: string}
 
-export type QueuePromptsResult = {promptEntries: PromptQueueEntry[]}
+export type QueuePromptsResult = {promptEntries: PromptQueueEntry[]; nextCursor: JobCursor | null}
 
 const getPromptsLogger = createRateLimitedLogger({windowMs: 30_000})
 
@@ -43,7 +43,7 @@ export const judgmentsJobsCronGetPrompts = async (
         requested: numberOfPromptsToGet,
       })
     }
-    return {promptEntries: []}
+    return {promptEntries: [], nextCursor: null}
   }
 
   if (project.archived) {
@@ -54,7 +54,7 @@ export const judgmentsJobsCronGetPrompts = async (
         requested: numberOfPromptsToGet,
       })
     }
-    return {promptEntries: []}
+    return {promptEntries: [], nextCursor: null}
   }
 
   if (!enabledPromptCount[0] || enabledPromptCount[0].count === 0) {
@@ -65,10 +65,10 @@ export const judgmentsJobsCronGetPrompts = async (
         requested: numberOfPromptsToGet,
       })
     }
-    return {promptEntries: []}
+    return {promptEntries: [], nextCursor: null}
   }
 
-  const cursor = getJobCursor(jobId)
+  const cursor = await getJobCursor(db, jobId)
   const cursorSummary = cursor
     ? {lastDate: cursor.lastDate.toISOString(), lastArticleId: cursor.lastArticleId.slice(0, 8)}
     : null
@@ -98,12 +98,6 @@ export const judgmentsJobsCronGetPrompts = async (
 
   const cursorAction = result.nextCursor ? 'advance' : cursor ? 'clear' : 'none'
 
-  if (result.nextCursor) {
-    setJobCursor(jobId, result.nextCursor)
-  } else if (cursor) {
-    clearJobCursor(jobId)
-  }
-
   if (numberOfPromptsToGet > 0 && result.promptEntries.length === 0) {
     getPromptsLogger.warn(`getPrompts:${jobId}:empty`, '[getPrompts] ClickHouse returned 0 pairs', {
       projectId,
@@ -127,5 +121,5 @@ export const judgmentsJobsCronGetPrompts = async (
     })
   }
 
-  return {promptEntries: result.promptEntries}
+  return {promptEntries: result.promptEntries, nextCursor: result.nextCursor}
 }
