@@ -227,12 +227,15 @@ const getClickhouseTableStats = async (table: 'articles' | 'judgments'): Promise
   const liveWhere =
     table === 'articles' ? 'WHERE _peerdb_is_deleted = 0' : 'WHERE deleted_at IS NULL AND _peerdb_is_deleted = 0'
 
+  const maxUpdatedAtMsExpr =
+    'max(if(toYear(updated_at) = 2299, intDiv(toUnixTimestamp64Milli(updated_at), 1000), toUnixTimestamp64Milli(updated_at)))'
+
   const [rawResult, liveResult] = await Promise.all([
     client.query({
       query: `
         SELECT
           count() as totalCount,
-          if(count() = 0, NULL, toUnixTimestamp64Milli(max(updated_at))) as maxUpdatedAtMs
+          if(count() = 0, NULL, ${maxUpdatedAtMsExpr}) as maxUpdatedAtMs
         FROM forska.${targetTable}
       `,
       format: 'JSONEachRow',
@@ -241,7 +244,7 @@ const getClickhouseTableStats = async (table: 'articles' | 'judgments'): Promise
       query: `
         SELECT
           count() as liveCount,
-          if(count() = 0, NULL, toUnixTimestamp64Milli(max(updated_at))) as liveMaxUpdatedAtMs
+          if(count() = 0, NULL, ${maxUpdatedAtMsExpr}) as liveMaxUpdatedAtMs
         FROM forska.${targetTable} FINAL
         ${liveWhere}
       `,
@@ -267,11 +270,14 @@ const getClickhouseIngestionStats = async (table: 'articles' | 'judgments'): Pro
   const client = getClickhouseClient()
   const targetTable = table === 'articles' ? 'articles' : 'judgments_raw'
 
+  const maxUpdatedAtMsExpr =
+    'max(if(toYear(updated_at) = 2299, intDiv(toUnixTimestamp64Milli(updated_at), 1000), toUnixTimestamp64Milli(updated_at)))'
+
   const result = await client.query({
     query: `
       SELECT
         if(count() = 0, NULL, toUnixTimestamp64Milli(max(_peerdb_synced_at))) as maxPeerdbSyncedAtMs,
-        if(count() = 0, NULL, toUnixTimestamp64Milli(max(updated_at))) as maxUpdatedAtMs
+        if(count() = 0, NULL, ${maxUpdatedAtMsExpr}) as maxUpdatedAtMs
       FROM forska.${targetTable}
     `,
     format: 'JSONEachRow',
