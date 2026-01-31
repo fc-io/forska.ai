@@ -217,6 +217,11 @@ const StatsCard = (props: StatsCardProps) => {
             <div class="text-gray-600">{query.data?.countType === 'estimated' ? 'Count (estimated)' : 'Count'}</div>
             <div class="font-semibold text-gray-900">{formatCount(query.data?.count)}</div>
           </div>
+          <Show when={query.data?.countType === 'estimated'}>
+            <div class="text-xs text-gray-500">
+              Fast estimate from Postgres stats (pg_class.reltuples); may differ from exact until ANALYZE.
+            </div>
+          </Show>
           <div class="flex items-center gap-2">
             <div class="text-gray-600">Max updated</div>
             <div class="font-semibold text-gray-900">{formatTime(query.data?.maxUpdatedAtMs)}</div>
