@@ -4,6 +4,7 @@ import {requireAdminAuth} from '../utils/authGuard.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {dataSourcesImportRoutesPostArxiv} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostArxiv.ts'
 import {dataSourcesImportRoutesPostBiorxiv} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostBiorxiv.ts'
+import {dataSourcesImportRoutesPostEuropePmcPpr} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostEuropePmcPpr.ts'
 import {dataSourcesImportRoutesPostMedrxiv} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostMedrxiv.ts'
 import {dataSourcesImportRoutesPostOpenalex} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostOpenalex.ts'
 import {dataSourcesImportRoutesPostPubmed} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostPubmed.ts'
@@ -36,6 +37,13 @@ export const dataSourcesImportRoutes = new Elysia()
     '/api/datasources/import/pubmed',
     async ({body}) => {
       return await dataSourcesImportRoutesPostPubmed(body)
+    },
+    {body: t.Object({id: t.String()})},
+  )
+  .post(
+    '/api/datasources/import/europe-pmc-ppr',
+    async ({body}) => {
+      return await dataSourcesImportRoutesPostEuropePmcPpr(body)
     },
     {body: t.Object({id: t.String()})},
   )

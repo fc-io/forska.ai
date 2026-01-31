@@ -393,6 +393,19 @@ const AdminDataSources = () => {
                                           })
                                         return
                                       }
+                                      if (entry.importRoute === '/api/datasources/import/europe-pmc-ppr') {
+                                        void apiClient.api.datasources.import['europe-pmc-ppr']
+                                          .post({id: entry.id})
+                                          .then((response) => {
+                                            if (response.error || !response.data?.success) {
+                                              console.error('Failed to start import', response.error)
+                                              alert('Failed to start import')
+                                              return
+                                            }
+                                            void dataSourcesQuery.refetch()
+                                          })
+                                        return
+                                      }
                                       if (entry.importRoute === '/api/datasources/import/openalex') {
                                         void apiClient.api.datasources.import.openalex
                                           .post({id: entry.id})
