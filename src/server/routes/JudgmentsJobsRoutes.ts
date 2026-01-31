@@ -360,6 +360,12 @@ export const judgmentsJobsRoutes = new Elysia()
         throw new Error('Job not found')
       }
 
+      const shouldClearQueue = body.status === 'paused_by_user' || body.status === 'paused_by_admin'
+
+      if (shouldClearQueue) {
+        await db.delete(judgmentsJobsPrompts).where(eq(judgmentsJobsPrompts.jobId, updatedJob.id))
+      }
+
       return {
         data: {
           jobId: updatedJob.id,
