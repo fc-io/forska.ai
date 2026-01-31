@@ -121,7 +121,7 @@ const getPeerdbMirrorHealth = async (): Promise<{
 
 const getPeerdbSlotName = (): string => {
   const raw = String(process.env['PEERDB_SLOT'] ?? '').trim()
-  return raw ? raw : 'peerdb_slot'
+  return raw ? raw : `peerflow_slot_${getPeerdbMirrorName().replaceAll(/[^a-zA-Z0-9_]/g, '_')}`
 }
 
 type PostgresSlotRow = {slot_name: string; active: boolean; retained_bytes: string | null}
