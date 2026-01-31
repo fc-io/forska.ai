@@ -6,6 +6,22 @@ import {apiClient} from '../../../../services/apiClient.ts'
 
 type TableStats = {count: number; countType: 'exact' | 'estimated'; maxUpdatedAtMs: number | null}
 
+type ClickhouseIngestionStats = {maxPeerdbSyncedAtMs: number | null; maxUpdatedAtMs: number | null}
+
+type PgUpdatedAfterStats = {afterMs: number; count: number}
+
+type PeerdbMirrorHealth = {mirrorName: string; reachable: boolean; exists: boolean; status: string}
+
+type PgReplicationSlotHealth = {slotName: string; exists: boolean; active: boolean | null; retainedBytes: string | null}
+
+type ClickhouseMergePartsSummary = {
+  reachable: boolean
+  tables: {
+    articles: {partsActive: number; mergesInProgress: number}
+    judgments: {partsActive: number; mergesInProgress: number}
+  }
+}
+
 type SampleVerifyMismatch = {id: string; field: string; pg: unknown; ch: unknown}
 
 type SampleVerifyResult = {
@@ -18,19 +34,13 @@ type SampleVerifyResult = {
   fieldMismatches: SampleVerifyMismatch[]
 }
 
-type PartitionCoverageMonth = {
-  month: string
-  pg: number
-  ch: number
-  diff: number
-  status: 'synced' | 'missing' | 'diff'
-}
+type PartitionCoverageMonth = {month: string; pg: number; ch: number; diff: number; status: string}
 
 type PartitionCoverageResult = {
   table: 'articles' | 'judgments'
   monthsChecked: number
   months: PartitionCoverageMonth[]
-  summary: {totalPg: number; totalCh: number; missingMonths: string[]; status: 'partition_gap' | 'synced' | 'diff'}
+  summary: {totalPg: number; totalCh: number; missingMonths: string[]; status: string}
 }
 
 const fetchPgArticlesStats = async (): Promise<TableStats> => {
@@ -61,6 +71,59 @@ const fetchChJudgmentsStats = async (): Promise<TableStats> => {
   return response.data.data
 }
 
+const fetchChArticlesIngestionStats = async (): Promise<ClickhouseIngestionStats> => {
+  const response = await apiClient.api.admin['sync-stats']['ch-articles-ingestion'].get()
+  if (response.error) throw new Error('Failed to fetch CH articles ingestion stats')
+  if (!response.data) throw new Error('Failed to fetch CH articles ingestion stats')
+  return response.data.data
+}
+
+const fetchChJudgmentsIngestionStats = async (): Promise<ClickhouseIngestionStats> => {
+  const response = await apiClient.api.admin['sync-stats']['ch-judgments-ingestion'].get()
+  if (response.error) throw new Error('Failed to fetch CH judgments ingestion stats')
+  if (!response.data) throw new Error('Failed to fetch CH judgments ingestion stats')
+  return response.data.data
+}
+
+const fetchPgArticlesUpdatedAfter = async (afterMs: number): Promise<PgUpdatedAfterStats> => {
+  const response = await apiClient.api.admin['sync-stats']['pg-articles-updated-after'].get({
+    query: {afterMs: String(afterMs)},
+  })
+  if (response.error) throw new Error('Failed to fetch PG articles updated-after stats')
+  if (!response.data) throw new Error('Failed to fetch PG articles updated-after stats')
+  return response.data.data
+}
+
+const fetchPgJudgmentsUpdatedAfter = async (afterMs: number): Promise<PgUpdatedAfterStats> => {
+  const response = await apiClient.api.admin['sync-stats']['pg-judgments-updated-after'].get({
+    query: {afterMs: String(afterMs)},
+  })
+  if (response.error) throw new Error('Failed to fetch PG judgments updated-after stats')
+  if (!response.data) throw new Error('Failed to fetch PG judgments updated-after stats')
+  return response.data.data
+}
+
+const fetchPeerdbMirrorHealth = async (): Promise<PeerdbMirrorHealth> => {
+  const response = await apiClient.api.admin['sync-stats']['peerdb-mirror-health'].get()
+  if (response.error) throw new Error('Failed to fetch PeerDB mirror health')
+  if (!response.data) throw new Error('Failed to fetch PeerDB mirror health')
+  return response.data.data
+}
+
+const fetchPgReplicationSlotHealth = async (): Promise<PgReplicationSlotHealth> => {
+  const response = await apiClient.api.admin['sync-stats']['pg-replication-slot-health'].get()
+  if (response.error) throw new Error('Failed to fetch PG replication slot health')
+  if (!response.data) throw new Error('Failed to fetch PG replication slot health')
+  return response.data.data
+}
+
+const fetchChMergePartsSummary = async (): Promise<ClickhouseMergePartsSummary> => {
+  const response = await apiClient.api.admin['sync-stats']['ch-merge-parts-summary'].get()
+  if (response.error) throw new Error('Failed to fetch ClickHouse merge/parts summary')
+  if (!response.data) throw new Error('Failed to fetch ClickHouse merge/parts summary')
+  return response.data.data
+}
+
 const sampleVerify = async (input: {
   table: 'articles' | 'judgments'
   sampleSize: number
@@ -88,6 +151,32 @@ const formatCount = (value: number | null | undefined): string => {
 
 const formatTime = (ms: number | null | undefined): string => {
   return ms === null || ms === undefined ? 'N/A' : new Date(ms).toLocaleString()
+}
+
+const formatBool = (value: boolean | null | undefined): string => {
+  return value === null || value === undefined ? 'N/A' : value ? 'true' : 'false'
+}
+
+const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
+
+const formatBytesMagnitude = (bytes: number, unitIdx: number): string => {
+  const clampedUnit = Math.max(0, Math.min(BYTE_UNITS.length - 1, unitIdx))
+  const unit = BYTE_UNITS[clampedUnit] ?? 'B'
+  const nextBytes = bytes / 1024
+  const canPromoteUnit = bytes >= 1024 && clampedUnit < BYTE_UNITS.length - 1
+  const formatted = clampedUnit === 0 ? `${Math.trunc(bytes)} ${unit}` : `${bytes.toFixed(2)} ${unit}`
+  return canPromoteUnit ? formatBytesMagnitude(nextBytes, clampedUnit + 1) : formatted
+}
+
+const formatBytesNumber = (bytes: number): string => {
+  const safe = Number.isFinite(bytes) ? Math.max(0, bytes) : 0
+  return formatBytesMagnitude(safe, 0)
+}
+
+const formatBytes = (value: string | null | undefined): string => {
+  const n = value === null || value === undefined ? null : Number(value)
+  const ok = n !== null && Number.isFinite(n)
+  return ok ? formatBytesNumber(n) : 'N/A'
 }
 
 const getErrorMessage = (error: unknown): string | null => {
@@ -154,6 +243,421 @@ const StatsCardSkeleton = (props: {title: string}) => {
           <div class="h-4 w-44 animate-pulse rounded bg-gray-200" />
         </div>
       </div>
+    </div>
+  )
+}
+
+type IngestionCardProps = {
+  title: string
+  queryKey: readonly unknown[]
+  queryFn: () => Promise<ClickhouseIngestionStats>
+}
+
+const IngestionCard = (props: IngestionCardProps) => {
+  const query = useQuery(() => {
+    return {
+      queryKey: props.queryKey,
+      queryFn: props.queryFn,
+      staleTime: Infinity,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      retry: 0,
+    }
+  })
+
+  const errorMessage = createMemo(() => {
+    return getErrorMessage(query.error)
+  })
+
+  return (
+    <div class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+      <div class="mb-4 flex items-center justify-between">
+        <h2 class="text-lg font-semibold">{props.title}</h2>
+      </div>
+
+      <Show when={errorMessage()}>
+        <div class="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{errorMessage()}</div>
+      </Show>
+
+      <Show when={!errorMessage()}>
+        <div class="space-y-2 text-sm">
+          <div class="flex items-center gap-2">
+            <div class="text-gray-600">Max _peerdb_synced_at</div>
+            <div class="font-semibold text-gray-900">{formatTime(query.data?.maxPeerdbSyncedAtMs)}</div>
+          </div>
+          <div class="flex items-center gap-2">
+            <div class="text-gray-600">Max updated (raw)</div>
+            <div class="font-semibold text-gray-900">{formatTime(query.data?.maxUpdatedAtMs)}</div>
+          </div>
+        </div>
+      </Show>
+    </div>
+  )
+}
+
+const IngestionCardSkeleton = (props: {title: string}) => {
+  return (
+    <div class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+      <div class="mb-4 flex items-center justify-between">
+        <h2 class="text-lg font-semibold">{props.title}</h2>
+      </div>
+      <div class="space-y-3 text-sm">
+        <div class="flex items-center gap-2">
+          <div class="text-gray-600">Max _peerdb_synced_at</div>
+          <div class="h-4 w-44 animate-pulse rounded bg-gray-200" />
+        </div>
+        <div class="flex items-center gap-2">
+          <div class="text-gray-600">Max updated (raw)</div>
+          <div class="h-4 w-44 animate-pulse rounded bg-gray-200" />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const PgArticlesUpdatedAfterChCard = () => {
+  const chQuery = useQuery(() => {
+    return {
+      queryKey: ['admin', 'sync-stats', 'ch-articles'],
+      queryFn: fetchChArticlesStats,
+      staleTime: Infinity,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      retry: 0,
+    }
+  })
+
+  const afterMs = createMemo(() => {
+    return chQuery.data?.maxUpdatedAtMs ?? null
+  })
+
+  const pgQuery = useQuery(() => {
+    const after = afterMs()
+    return {
+      queryKey: ['admin', 'sync-stats', 'pg-articles-updated-after', after],
+      queryFn: () => {
+        return fetchPgArticlesUpdatedAfter(after ?? 0)
+      },
+      enabled: after !== null,
+      staleTime: Infinity,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      retry: 0,
+    }
+  })
+
+  const errorMessage = createMemo(() => {
+    return getErrorMessage(chQuery.error) ?? getErrorMessage(pgQuery.error)
+  })
+
+  return (
+    <div class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+      <div class="mb-4 flex items-center justify-between">
+        <h2 class="text-lg font-semibold">PG Articles &gt; CH Max Updated</h2>
+      </div>
+
+      <Show when={errorMessage()}>
+        <div class="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{errorMessage()}</div>
+      </Show>
+
+      <Show when={!errorMessage()}>
+        <div class="space-y-2 text-sm">
+          <div class="flex items-center gap-2">
+            <div class="text-gray-600">After (CH max updated)</div>
+            <div class="font-semibold text-gray-900">{formatTime(afterMs())}</div>
+          </div>
+          <div class="flex items-center gap-2">
+            <div class="text-gray-600">Rows in PG</div>
+            <div class="font-semibold text-gray-900">{formatCount(pgQuery.data?.count)}</div>
+          </div>
+        </div>
+      </Show>
+    </div>
+  )
+}
+
+const PgJudgmentsUpdatedAfterChCard = () => {
+  const chQuery = useQuery(() => {
+    return {
+      queryKey: ['admin', 'sync-stats', 'ch-judgments'],
+      queryFn: fetchChJudgmentsStats,
+      staleTime: Infinity,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      retry: 0,
+    }
+  })
+
+  const afterMs = createMemo(() => {
+    return chQuery.data?.maxUpdatedAtMs ?? null
+  })
+
+  const pgQuery = useQuery(() => {
+    const after = afterMs()
+    return {
+      queryKey: ['admin', 'sync-stats', 'pg-judgments-updated-after', after],
+      queryFn: () => {
+        return fetchPgJudgmentsUpdatedAfter(after ?? 0)
+      },
+      enabled: after !== null,
+      staleTime: Infinity,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      retry: 0,
+    }
+  })
+
+  const errorMessage = createMemo(() => {
+    return getErrorMessage(chQuery.error) ?? getErrorMessage(pgQuery.error)
+  })
+
+  return (
+    <div class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+      <div class="mb-4 flex items-center justify-between">
+        <h2 class="text-lg font-semibold">PG Judgments &gt; CH Max Updated</h2>
+      </div>
+
+      <Show when={errorMessage()}>
+        <div class="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{errorMessage()}</div>
+      </Show>
+
+      <Show when={!errorMessage()}>
+        <div class="space-y-2 text-sm">
+          <div class="flex items-center gap-2">
+            <div class="text-gray-600">After (CH max updated)</div>
+            <div class="font-semibold text-gray-900">{formatTime(afterMs())}</div>
+          </div>
+          <div class="flex items-center gap-2">
+            <div class="text-gray-600">Rows in PG</div>
+            <div class="font-semibold text-gray-900">{formatCount(pgQuery.data?.count)}</div>
+          </div>
+        </div>
+      </Show>
+    </div>
+  )
+}
+
+const UpdatedAfterCardSkeleton = (props: {title: string}) => {
+  return (
+    <div class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+      <div class="mb-4 flex items-center justify-between">
+        <h2 class="text-lg font-semibold">{props.title}</h2>
+      </div>
+      <div class="space-y-3 text-sm">
+        <div class="flex items-center gap-2">
+          <div class="text-gray-600">After (CH max updated)</div>
+          <div class="h-4 w-44 animate-pulse rounded bg-gray-200" />
+        </div>
+        <div class="flex items-center gap-2">
+          <div class="text-gray-600">Rows in PG</div>
+          <div class="h-4 w-24 animate-pulse rounded bg-gray-200" />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const formatBytesWithRaw = (value: string | null | undefined): string => {
+  const formatted = formatBytes(value)
+  return value === null || value === undefined ? formatted : `${formatted} (${value})`
+}
+
+const HealthCardSkeleton = (props: {title: string}) => {
+  return (
+    <div class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+      <div class="mb-4 flex items-center justify-between">
+        <h2 class="text-lg font-semibold">{props.title}</h2>
+      </div>
+      <div class="space-y-3 text-sm">
+        <div class="flex items-center gap-2">
+          <div class="text-gray-600">Status</div>
+          <div class="h-4 w-32 animate-pulse rounded bg-gray-200" />
+        </div>
+        <div class="flex items-center gap-2">
+          <div class="text-gray-600">Details</div>
+          <div class="h-4 w-44 animate-pulse rounded bg-gray-200" />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const PeerdbMirrorHealthCard = () => {
+  const query = useQuery(() => {
+    return {
+      queryKey: ['admin', 'sync-stats', 'peerdb-mirror-health'],
+      queryFn: fetchPeerdbMirrorHealth,
+      staleTime: Infinity,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      retry: 0,
+    }
+  })
+
+  const errorMessage = createMemo(() => {
+    return getErrorMessage(query.error)
+  })
+
+  return (
+    <div class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+      <div class="mb-4 flex items-center justify-between">
+        <h2 class="text-lg font-semibold">PeerDB Mirror</h2>
+      </div>
+
+      <Show when={errorMessage()}>
+        <div class="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{errorMessage()}</div>
+      </Show>
+
+      <Show when={!errorMessage()}>
+        <div class="space-y-2 text-sm">
+          <div class="flex items-center gap-2">
+            <div class="text-gray-600">Mirror</div>
+            <div class="font-semibold text-gray-900">{query.data?.mirrorName ?? 'N/A'}</div>
+          </div>
+          <div class="flex items-center gap-2">
+            <div class="text-gray-600">Status</div>
+            <div class="font-semibold text-gray-900">{query.data?.status ?? 'N/A'}</div>
+          </div>
+          <div class="flex items-center gap-2">
+            <div class="text-gray-600">Reachable</div>
+            <div class="font-semibold text-gray-900">{formatBool(query.data?.reachable)}</div>
+          </div>
+          <div class="flex items-center gap-2">
+            <div class="text-gray-600">Exists</div>
+            <div class="font-semibold text-gray-900">{formatBool(query.data?.exists)}</div>
+          </div>
+        </div>
+      </Show>
+    </div>
+  )
+}
+
+const PgReplicationSlotHealthCard = () => {
+  const query = useQuery(() => {
+    return {
+      queryKey: ['admin', 'sync-stats', 'pg-replication-slot-health'],
+      queryFn: fetchPgReplicationSlotHealth,
+      staleTime: Infinity,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      retry: 0,
+    }
+  })
+
+  const errorMessage = createMemo(() => {
+    return getErrorMessage(query.error)
+  })
+
+  return (
+    <div class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+      <div class="mb-4 flex items-center justify-between">
+        <h2 class="text-lg font-semibold">PG Replication Slot</h2>
+      </div>
+
+      <Show when={errorMessage()}>
+        <div class="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{errorMessage()}</div>
+      </Show>
+
+      <Show when={!errorMessage()}>
+        <div class="space-y-2 text-sm">
+          <div class="flex items-center gap-2">
+            <div class="text-gray-600">Slot</div>
+            <div class="font-semibold text-gray-900">{query.data?.slotName ?? 'N/A'}</div>
+          </div>
+          <div class="flex items-center gap-2">
+            <div class="text-gray-600">Exists</div>
+            <div class="font-semibold text-gray-900">{formatBool(query.data?.exists)}</div>
+          </div>
+          <div class="flex items-center gap-2">
+            <div class="text-gray-600">Active</div>
+            <div class="font-semibold text-gray-900">{formatBool(query.data?.active)}</div>
+          </div>
+          <div class="flex items-center gap-2">
+            <div class="text-gray-600">Retained WAL</div>
+            <div class="font-semibold text-gray-900">{formatBytesWithRaw(query.data?.retainedBytes)}</div>
+          </div>
+        </div>
+      </Show>
+    </div>
+  )
+}
+
+const ClickhouseMergePartsSummaryCard = () => {
+  const query = useQuery(() => {
+    return {
+      queryKey: ['admin', 'sync-stats', 'ch-merge-parts-summary'],
+      queryFn: fetchChMergePartsSummary,
+      staleTime: Infinity,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      retry: 0,
+    }
+  })
+
+  const errorMessage = createMemo(() => {
+    return getErrorMessage(query.error)
+  })
+
+  const rows = createMemo(() => {
+    const tables = query.data?.tables
+    return !tables
+      ? []
+      : [
+          {
+            table: 'articles',
+            partsActive: tables.articles.partsActive,
+            mergesInProgress: tables.articles.mergesInProgress,
+          },
+          {
+            table: 'judgments_raw',
+            partsActive: tables.judgments.partsActive,
+            mergesInProgress: tables.judgments.mergesInProgress,
+          },
+        ]
+  })
+
+  return (
+    <div class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+      <div class="mb-4 flex items-center justify-between">
+        <h2 class="text-lg font-semibold">ClickHouse Parts/Merges</h2>
+      </div>
+
+      <Show when={errorMessage()}>
+        <div class="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{errorMessage()}</div>
+      </Show>
+
+      <Show when={!errorMessage()}>
+        <div class="space-y-3 text-sm">
+          <div class="flex items-center gap-2">
+            <div class="text-gray-600">Reachable</div>
+            <div class="font-semibold text-gray-900">{formatBool(query.data?.reachable)}</div>
+          </div>
+          <div class="overflow-hidden rounded-md border border-gray-200">
+            <table class="min-w-full text-xs">
+              <thead class="bg-gray-50">
+                <tr>
+                  <th class="px-3 py-2 text-left font-semibold text-gray-600">Table</th>
+                  <th class="px-3 py-2 text-right font-semibold text-gray-600">Parts</th>
+                  <th class="px-3 py-2 text-right font-semibold text-gray-600">Merges</th>
+                </tr>
+              </thead>
+              <tbody>
+                <For each={rows()}>
+                  {(r) => {
+                    return (
+                      <tr class="border-t border-gray-100">
+                        <td class="font-mono px-3 py-2">{r.table}</td>
+                        <td class="px-3 py-2 text-right">{formatCount(r.partsActive)}</td>
+                        <td class="px-3 py-2 text-right">{formatCount(r.mergesInProgress)}</td>
+                      </tr>
+                    )
+                  }}
+                </For>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </Show>
     </div>
   )
 }
@@ -228,6 +732,53 @@ const AdminSyncStats = () => {
               queryFn={fetchChJudgmentsStats}
             />
           </Suspense>
+        </div>
+
+        <div class="mb-6">
+          <div class="mb-4">
+            <h2 class="text-lg font-semibold text-gray-900">Freshness Diagnostics</h2>
+            <div class="text-sm text-gray-600">Helps explain “counts match but max updated differs”.</div>
+          </div>
+          <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+            <Suspense fallback={<IngestionCardSkeleton title="CH Articles Ingestion" />}>
+              <IngestionCard
+                title="CH Articles Ingestion"
+                queryKey={['admin', 'sync-stats', 'ch-articles-ingestion']}
+                queryFn={fetchChArticlesIngestionStats}
+              />
+            </Suspense>
+            <Suspense fallback={<UpdatedAfterCardSkeleton title="PG Articles > CH Max Updated" />}>
+              <PgArticlesUpdatedAfterChCard />
+            </Suspense>
+            <Suspense fallback={<IngestionCardSkeleton title="CH Judgments Ingestion" />}>
+              <IngestionCard
+                title="CH Judgments Ingestion"
+                queryKey={['admin', 'sync-stats', 'ch-judgments-ingestion']}
+                queryFn={fetchChJudgmentsIngestionStats}
+              />
+            </Suspense>
+            <Suspense fallback={<UpdatedAfterCardSkeleton title="PG Judgments > CH Max Updated" />}>
+              <PgJudgmentsUpdatedAfterChCard />
+            </Suspense>
+          </div>
+        </div>
+
+        <div class="mb-6">
+          <div class="mb-4">
+            <h2 class="text-lg font-semibold text-gray-900">Pipeline Health</h2>
+            <div class="text-sm text-gray-600">PeerDB + PG slot + ClickHouse merge pressure.</div>
+          </div>
+          <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
+            <Suspense fallback={<HealthCardSkeleton title="PeerDB Mirror" />}>
+              <PeerdbMirrorHealthCard />
+            </Suspense>
+            <Suspense fallback={<HealthCardSkeleton title="PG Replication Slot" />}>
+              <PgReplicationSlotHealthCard />
+            </Suspense>
+            <Suspense fallback={<HealthCardSkeleton title="ClickHouse Parts/Merges" />}>
+              <ClickhouseMergePartsSummaryCard />
+            </Suspense>
+          </div>
         </div>
 
         <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">

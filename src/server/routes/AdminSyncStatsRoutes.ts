@@ -1,4 +1,4 @@
-import {sql} from 'drizzle-orm'
+import {and, count, gt, isNull, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 import {Client} from 'pg'
 
@@ -219,6 +219,8 @@ type ClickhouseTableStats = {
   dedupDrift: number
 }
 
+type ClickhouseIngestionStats = {maxPeerdbSyncedAtMs: number | null; maxUpdatedAtMs: number | null}
+
 const getClickhouseTableStats = async (table: 'articles' | 'judgments'): Promise<ClickhouseTableStats> => {
   const client = getClickhouseClient()
   const targetTable = table === 'articles' ? 'articles' : 'judgments_raw'
@@ -259,6 +261,54 @@ const getClickhouseTableStats = async (table: 'articles' | 'judgments'): Promise
   const dedupDrift = Math.max(0, totalCount - liveCount)
 
   return {totalCount, maxUpdatedAtMs, liveCount, liveMaxUpdatedAtMs, dedupDrift}
+}
+
+const getClickhouseIngestionStats = async (table: 'articles' | 'judgments'): Promise<ClickhouseIngestionStats> => {
+  const client = getClickhouseClient()
+  const targetTable = table === 'articles' ? 'articles' : 'judgments_raw'
+
+  const result = await client.query({
+    query: `
+      SELECT
+        if(count() = 0, NULL, toUnixTimestamp64Milli(max(_peerdb_synced_at))) as maxPeerdbSyncedAtMs,
+        if(count() = 0, NULL, toUnixTimestamp64Milli(max(updated_at))) as maxUpdatedAtMs
+      FROM forska.${targetTable}
+    `,
+    format: 'JSONEachRow',
+  })
+
+  const row = await result.json<{maxPeerdbSyncedAtMs: string | number | null; maxUpdatedAtMs: string | number | null}>()
+  const firstRow = Array.isArray(row) ? row[0] : row
+
+  const maxPeerdbSyncedAtMs = normalizeEpochMs(toMsOrNull(firstRow?.maxPeerdbSyncedAtMs ?? null))
+  const maxUpdatedAtMs = normalizeEpochMs(toMsOrNull(firstRow?.maxUpdatedAtMs ?? null))
+
+  return {maxPeerdbSyncedAtMs, maxUpdatedAtMs}
+}
+
+const getPgArticlesUpdatedAfter = async (afterMs: number): Promise<number> => {
+  const db = getDatabase()
+  const afterDate = new Date(afterMs)
+  const result = await db.transaction(async (tx) => {
+    await tx.execute(sql.raw(`SET LOCAL statement_timeout = ${STATS_STATEMENT_TIMEOUT_MS}`))
+    return tx.select({count: count()}).from(articles).where(gt(articles.updatedAt, afterDate))
+  })
+
+  return result[0]?.count ?? 0
+}
+
+const getPgJudgmentsUpdatedAfter = async (afterMs: number): Promise<number> => {
+  const db = getDatabase()
+  const afterDate = new Date(afterMs)
+  const result = await db.transaction(async (tx) => {
+    await tx.execute(sql.raw(`SET LOCAL statement_timeout = ${STATS_STATEMENT_TIMEOUT_MS}`))
+    return tx
+      .select({count: count()})
+      .from(judgments)
+      .where(and(isNull(judgments.deletedAt), gt(judgments.updatedAt, afterDate)))
+  })
+
+  return result[0]?.count ?? 0
 }
 
 const computeDiff = (pgCount: number, chCount: number | null) => {
@@ -570,7 +620,17 @@ const getSampleVerifyResult = async (input: {
     (acc, id) => {
       const pg = pgById[id]
       const ch = chById[id]
-      const next = pg && ch ? acc.concat(getFieldMismatches(input.table, id, pg, ch)) : acc
+      const next =
+        pg && ch
+          ? acc.concat(
+              getFieldMismatches(
+                input.table,
+                id,
+                pg as unknown as Record<string, unknown>,
+                ch as unknown as Record<string, unknown>,
+              ),
+            )
+          : acc
       return next.length > 50 ? next.slice(0, 50) : next
     },
     [] as Array<{id: string; field: string; pg: unknown; ch: unknown}>,
@@ -696,6 +756,18 @@ export const adminSyncStatsRoutes = new Elysia()
     const data = await buildSyncStatsData()
     return {data}
   })
+  .get('/api/admin/sync-stats/peerdb-mirror-health', async () => {
+    const data = await getPeerdbMirrorHealth()
+    return {data}
+  })
+  .get('/api/admin/sync-stats/pg-replication-slot-health', async () => {
+    const data = await getPostgresSlotHealth()
+    return {data}
+  })
+  .get('/api/admin/sync-stats/ch-merge-parts-summary', async () => {
+    const data = await getClickhouseMergePartsSummary()
+    return {data}
+  })
   .get('/api/admin/sync-stats/pg-articles', async () => {
     const data = await getPgArticlesFastStats()
     return {data}
@@ -717,6 +789,36 @@ export const adminSyncStatsRoutes = new Elysia()
     const data = {count: stats.liveCount, countType: 'exact' as const, maxUpdatedAtMs: stats.liveMaxUpdatedAtMs}
     return {data}
   })
+  .get('/api/admin/sync-stats/ch-articles-ingestion', async () => {
+    await ensureClickhouseSchema()
+    const data = await getClickhouseIngestionStats('articles')
+    return {data}
+  })
+  .get('/api/admin/sync-stats/ch-judgments-ingestion', async () => {
+    await ensureClickhouseSchema()
+    const data = await getClickhouseIngestionStats('judgments')
+    return {data}
+  })
+  .get(
+    '/api/admin/sync-stats/pg-articles-updated-after',
+    async ({query}) => {
+      const afterMs = Math.max(0, toNumber(query.afterMs))
+      const count = await getPgArticlesUpdatedAfter(afterMs)
+      const data = {afterMs, count}
+      return {data}
+    },
+    {query: t.Object({afterMs: t.String()})},
+  )
+  .get(
+    '/api/admin/sync-stats/pg-judgments-updated-after',
+    async ({query}) => {
+      const afterMs = Math.max(0, toNumber(query.afterMs))
+      const count = await getPgJudgmentsUpdatedAfter(afterMs)
+      const data = {afterMs, count}
+      return {data}
+    },
+    {query: t.Object({afterMs: t.String()})},
+  )
   .post(
     '/api/admin/refresh-sync-stats',
     async () => {
