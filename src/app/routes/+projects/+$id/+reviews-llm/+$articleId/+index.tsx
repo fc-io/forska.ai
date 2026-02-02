@@ -1,6 +1,6 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute} from '@tanstack/solid-router'
-import {createEffect, createSignal, Show, Suspense} from 'solid-js'
+import {createEffect, createMemo, createSignal, Show, Suspense} from 'solid-js'
 
 import {ArticleAdminSection} from '../../../../../../components/main/articles/articleAdminSection'
 import {ArticleTabs} from '../../../../../../components/main/articles/articleTabs'
@@ -44,6 +44,21 @@ export const ReviewDetail = () => {
     }
   })
 
+  const selectedJudgment = createMemo(() => {
+    const data = articleQuery.data
+    const selectedId = articleViewToShow()
+    if (!data || !selectedId) return undefined
+
+    const inProject = (data.judgments || []).find((j) => {
+      return j.id === selectedId
+    })
+    return inProject
+      ? inProject
+      : (data.allJudgments || []).find((j) => {
+          return j.id === selectedId
+        })
+  })
+
   createEffect(() => {
     document.title = getArticleDocumentTitle(articleQuery.data?.article?.articleTitle)
   })
@@ -85,41 +100,15 @@ export const ReviewDetail = () => {
                       basePath={`/projects/${projectId}/reviews-llm/${articleId}`}
                     />
 
-                    {/* Default view: no selection */}
-                    <Show when={articleViewToShow() === undefined}>
-                      <ReviewArticleDetails
-                        article={data().article}
-                        showTitle={false}
-                        isFulltextExpanded={isFulltextExpanded()}
-                        setIsFulltextExpanded={setIsFulltextExpanded}
-                        viewMode="summary"
-                        hidePdfButton={true}
-                      />
-                    </Show>
-
-                    {/* LLM judgment selected */}
-                    <Show
-                      when={
-                        articleViewToShow() !== undefined
-                        && [...(data().judgments || []), ...(data().allJudgments || [])].find((j) => {
-                          return j.id === articleViewToShow()
-                        })
-                      }
-                    >
-                      {(selected) => {
-                        return (
-                          <ReviewArticleDetails
-                            article={data().article}
-                            judgment={selected()}
-                            showTitle={false}
-                            isFulltextExpanded={isFulltextExpanded()}
-                            setIsFulltextExpanded={setIsFulltextExpanded}
-                            viewMode="summary"
-                            hidePdfButton={true}
-                          />
-                        )
-                      }}
-                    </Show>
+                    <ReviewArticleDetails
+                      article={data().article}
+                      judgment={selectedJudgment()}
+                      showTitle={false}
+                      isFulltextExpanded={isFulltextExpanded()}
+                      setIsFulltextExpanded={setIsFulltextExpanded}
+                      viewMode="summary"
+                      hidePdfButton={true}
+                    />
 
                     <Show when={data().review}>
                       <ReviewStatus review={data().review} />

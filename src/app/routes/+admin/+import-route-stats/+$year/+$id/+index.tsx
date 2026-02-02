@@ -1,6 +1,6 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
-import {createEffect, createSignal, Show, Suspense} from 'solid-js'
+import {createEffect, createMemo, createSignal, Show, Suspense} from 'solid-js'
 
 import {ArticleAdminSection} from '../../../../../../components/main/articles/articleAdminSection'
 import {ArticleTabs} from '../../../../../../components/main/articles/articleTabs'
@@ -38,6 +38,16 @@ const AdminImportRouteStatsArticleDetails = () => {
         return fetchArticleDetails(articleId())
       },
     }
+  })
+
+  const selectedJudgment = createMemo(() => {
+    const data = articleQuery.data
+    const selectedId = articleViewToShow()
+    if (!data || !selectedId) return undefined
+
+    return data.allJudgments.find((j) => {
+      return j.id === selectedId
+    })
   })
 
   createEffect(() => {
@@ -92,41 +102,16 @@ const AdminImportRouteStatsArticleDetails = () => {
                       basePath={basePath()}
                     />
 
-                    <Show when={articleViewToShow() === undefined}>
-                      <ReviewArticleDetails
-                        article={data().article}
-                        showTitle={false}
-                        enableSticky={true}
-                        isFulltextExpanded={isFulltextExpanded()}
-                        setIsFulltextExpanded={setIsFulltextExpanded}
-                        viewMode="summary"
-                        hidePdfButton={true}
-                      />
-                    </Show>
-
-                    <Show
-                      when={
-                        articleViewToShow() !== undefined
-                        && data().allJudgments.find((j) => {
-                          return j.id === articleViewToShow()
-                        })
-                      }
-                    >
-                      {(selected) => {
-                        return (
-                          <ReviewArticleDetails
-                            article={data().article}
-                            judgment={selected()}
-                            showTitle={false}
-                            enableSticky={true}
-                            isFulltextExpanded={isFulltextExpanded()}
-                            setIsFulltextExpanded={setIsFulltextExpanded}
-                            viewMode="summary"
-                            hidePdfButton={true}
-                          />
-                        )
-                      }}
-                    </Show>
+                    <ReviewArticleDetails
+                      article={data().article}
+                      judgment={selectedJudgment()}
+                      showTitle={false}
+                      enableSticky={true}
+                      isFulltextExpanded={isFulltextExpanded()}
+                      setIsFulltextExpanded={setIsFulltextExpanded}
+                      viewMode="summary"
+                      hidePdfButton={true}
+                    />
                   </div>
                   <StickyColumn class="w-96">
                     <Show when={isAdmin()}>

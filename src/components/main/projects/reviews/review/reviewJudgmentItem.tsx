@@ -142,7 +142,7 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
   return (
     <div
       class="border-b last:border-b-0 p-3 hover:bg-gray-50 cursor-pointer transition-colors"
-      onPointerOver={() => {
+      onPointerEnter={() => {
         props.setArticleViewToShow(props.judgment.id)
       }}
       onPointerLeave={() => {

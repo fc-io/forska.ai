@@ -1,4 +1,4 @@
-import {createSignal, onCleanup, onMount, Show} from 'solid-js'
+import {createEffect, createMemo, createSignal, onCleanup, onMount, Show} from 'solid-js'
 
 import {decodeAndSanitize} from '../../../../../app/utils/decodeAndSanitize'
 import {getArticleUrl} from '../../../../../app/utils/getArticleUrl.ts'
@@ -15,6 +15,7 @@ type Judgment = {
 }
 
 type ReviewArticleDetailsArticle = {
+  id?: string
   articleTitle: string
   articleAuthors?: string[] | null
   articleSummary?: string | null
@@ -22,6 +23,7 @@ type ReviewArticleDetailsArticle = {
   fullText?: string | null
   fullTextHtml?: string | null
   fullTextPDF?: string | null
+  contentHash?: string | null
 }
 
 type ReviewArticleDetailsProps = {
@@ -39,6 +41,30 @@ type ReviewArticleDetailsProps = {
 
 const stickyOffsets = {top: 24, bottom: 24}
 
+type FulltextHighlightWorkerRequest =
+  | {type: 'setText'; text: string}
+  | {type: 'clear'}
+  | {type: 'highlight'; requestId: number; cacheKey: string; quotes: string[]}
+
+type FulltextHighlightWorkerResponse = {type: 'highlightResult'; requestId: number; cacheKey: string; html: string}
+
+const createFulltextHighlightWorker = (): Worker | undefined => {
+  return typeof Worker === 'undefined'
+    ? undefined
+    : new Worker(new URL('./reviewArticleDetails/reviewArticleDetailsHighlightWorker.ts', import.meta.url), {
+        type: 'module',
+      })
+}
+
+const getArticleCacheKey = (article: ReviewArticleDetailsArticle): string => {
+  const id = article.id ?? undefined
+  const externalId = article.articleId ?? undefined
+  const title = article.articleTitle
+  const contentHash = article.contentHash ?? undefined
+  const base = id ?? externalId ?? title
+  return contentHash ? `${base}::${contentHash}` : base
+}
+
 const toNonEmptyStringOrNull = (value: string | null | undefined): string | null | undefined => {
   const trimmed = value?.trim()
   return trimmed ? value : null
@@ -51,6 +77,15 @@ const getArticleFulltextForDisplay = (article: ReviewArticleDetailsArticle) => {
 const getArticleFulltextSanitizeOptions = (article: ReviewArticleDetailsArticle): DecodeAndSanitizeOptions => {
   const isHtml = Boolean(toNonEmptyStringOrNull(article.fullTextHtml))
   return {convertNewlines: !isHtml}
+}
+
+const getNormalizedQuotes = (judgment: Judgment | undefined): string[] => {
+  const quotes = judgment && Array.isArray(judgment.quotes) ? judgment.quotes : []
+  return (quotes as string[])
+    .map((quote) => {
+      return quote.replace(/^\.{3}|\.{3}$/g, '')
+    })
+    .filter(Boolean)
 }
 
 /**
@@ -97,38 +132,14 @@ const getHighlightedText = (text: string, judgment: Judgment) => {
   return getHighlightedTextWithScrollHandler(text, judgment)
 }
 
-/**
- * Creates highlighted fulltext with data attributes for scroll targeting
- */
-const getHighlightedFulltext = (text: string, judgment: Judgment, sanitizeOptions?: DecodeAndSanitizeOptions) => {
-  const sanitizedText = decodeAndSanitize(text, sanitizeOptions)
-  const quotes = Array.isArray(judgment.quotes) ? judgment.quotes : []
-  const normalizedQuotes = (quotes as string[]).map((quote) => {
-    return quote.replace(/^\.{3}|\.{3}$/g, '')
-  })
-
-  const pieces = reviewArticleDetailsGetHighlightedText(sanitizedText, normalizedQuotes, {
-    maxDistance: 1,
-    caseInsensitive: true,
-    fuzzyScanLimit: 'auto',
-  })
-
-  const html = pieces
-    .map(([pieceText, isHit], index) => {
-      if (isHit) {
-        return `<span class="text-red-500 underline bg-red-50 scroll-mt-4" data-fulltext-highlight="${index}">${pieceText}</span>`
-      }
-      return pieceText
-    })
-    .join('')
-
-  // eslint-disable-next-line solid/no-innerhtml
-  return <span innerHTML={html} />
-}
-
 export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
   const [stickyTop, setStickyTop] = createSignal<number | undefined>(undefined)
   const [localIsFulltextExpanded, setLocalIsFulltextExpanded] = createSignal(false)
+  const [highlightedFulltextHtml, setHighlightedFulltextHtml] = createSignal<string | undefined>(undefined)
+  let fulltextHighlightWorker: Worker | undefined = undefined
+  let activeHighlightRequestId = 0
+  let activeHighlightCacheKey: string | undefined
+  let highlightDebounceTimeout: number | undefined
   const isFulltextExpandedControlled = () => {
     return props.isFulltextExpanded !== undefined && props.setIsFulltextExpanded !== undefined
   }
@@ -148,6 +159,15 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
     return getArticleFulltextSanitizeOptions(props.article)
   }
 
+  const articleCacheKey = createMemo(() => {
+    return getArticleCacheKey(props.article)
+  })
+
+  const sanitizedFulltext = createMemo(() => {
+    const text = fulltextForDisplay() ?? ''
+    return text ? decodeAndSanitize(text, fulltextSanitizeOptions()) : ''
+  })
+
   // Default props
   const showTitle = () => {
     return props.showTitle ?? true
@@ -161,6 +181,102 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
   const hidePdfButton = () => {
     return props.hidePdfButton ?? false
   }
+
+  const shouldComputeFulltextHighlight = () => {
+    const mode = viewMode()
+    return mode === 'fulltext' || (mode === 'all' && isFulltextExpanded())
+  }
+
+  const getFulltextHighlightWorker = () => {
+    const existing = fulltextHighlightWorker
+    if (existing) return existing
+
+    const created = createFulltextHighlightWorker()
+    if (!created) return undefined
+
+    created.onmessage = (event: MessageEvent<FulltextHighlightWorkerResponse>) => {
+      const msg = event.data
+      if (
+        msg.type === 'highlightResult'
+        && msg.requestId === activeHighlightRequestId
+        && msg.cacheKey === activeHighlightCacheKey
+      ) {
+        setHighlightedFulltextHtml(msg.html)
+      }
+    }
+
+    fulltextHighlightWorker = created
+    return created
+  }
+
+  createEffect(() => {
+    const shouldCompute = shouldComputeFulltextHighlight()
+    if (!shouldCompute) return
+
+    const worker = getFulltextHighlightWorker()
+    if (!worker) return
+
+    const text = sanitizedFulltext()
+    return worker.postMessage({type: 'setText', text} as FulltextHighlightWorkerRequest)
+  })
+
+  createEffect(() => {
+    if (highlightDebounceTimeout !== undefined) {
+      window.clearTimeout(highlightDebounceTimeout)
+      highlightDebounceTimeout = undefined
+    }
+
+    const judgment = props.judgment
+    const shouldCompute = shouldComputeFulltextHighlight()
+    if (!shouldCompute) {
+      activeHighlightCacheKey = undefined
+      setHighlightedFulltextHtml(undefined)
+      return
+    }
+
+    const worker = getFulltextHighlightWorker()
+    const canCompute = Boolean(worker)
+
+    if (!judgment || !canCompute) {
+      activeHighlightCacheKey = undefined
+      setHighlightedFulltextHtml(undefined)
+      return
+    }
+
+    const text = sanitizedFulltext()
+    if (!text) {
+      activeHighlightCacheKey = undefined
+      setHighlightedFulltextHtml(undefined)
+      return
+    }
+
+    const quotes = getNormalizedQuotes(judgment)
+    if (quotes.length === 0) {
+      activeHighlightCacheKey = undefined
+      setHighlightedFulltextHtml(undefined)
+      return
+    }
+
+    const requestId = activeHighlightRequestId + 1
+    activeHighlightRequestId = requestId
+    const cacheKey = `${articleCacheKey()}::${judgment.id}`
+    activeHighlightCacheKey = cacheKey
+    setHighlightedFulltextHtml(undefined)
+
+    highlightDebounceTimeout = window.setTimeout(() => {
+      return worker?.postMessage({type: 'highlight', requestId, cacheKey, quotes} as FulltextHighlightWorkerRequest)
+    }, 75)
+  })
+
+  onCleanup(() => {
+    if (highlightDebounceTimeout !== undefined) {
+      window.clearTimeout(highlightDebounceTimeout)
+    }
+    if (fulltextHighlightWorker) {
+      fulltextHighlightWorker.postMessage({type: 'clear'} as FulltextHighlightWorkerRequest)
+      fulltextHighlightWorker.terminate()
+    }
+  })
 
   const setStickiness = () => {
     if (!enableSticky()) {
@@ -361,12 +477,18 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
                       class="text-gray-700 assessment-container leading-relaxed"
                       classList={{'mt-2 border-l border-gray-400 pl-[25px]': viewMode() === 'all'}}
                     >
-                      {props.judgment ? (
-                        getHighlightedFulltext(fulltextValue() ?? '', props.judgment, fulltextSanitizeOptions())
-                      ) : (
-                        // eslint-disable-next-line solid/no-innerhtml
-                        <span innerHTML={decodeAndSanitize(fulltextValue() ?? '', fulltextSanitizeOptions())} />
-                      )}
+                      <Show
+                        when={props.judgment && highlightedFulltextHtml()}
+                        fallback={
+                          // eslint-disable-next-line solid/no-innerhtml
+                          <span innerHTML={sanitizedFulltext()} />
+                        }
+                      >
+                        {(html) => {
+                          // eslint-disable-next-line solid/no-innerhtml
+                          return <span innerHTML={html()} />
+                        }}
+                      </Show>
                     </div>
                   </Show>
                 </div>

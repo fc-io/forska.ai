@@ -1,6 +1,6 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute} from '@tanstack/solid-router'
-import {createEffect, createSignal, Show, Suspense} from 'solid-js'
+import {createEffect, createMemo, createSignal, Show, Suspense} from 'solid-js'
 
 import {ArticleAdminSection} from '../../../../components/main/articles/articleAdminSection'
 import {ArticleTabs} from '../../../../components/main/articles/articleTabs'
@@ -30,6 +30,16 @@ const AdminArticleDetailsFulltext = () => {
         return fetchArticleDetails(params().id)
       },
     }
+  })
+
+  const selectedJudgment = createMemo(() => {
+    const data = articleQuery.data
+    const selectedId = articleViewToShow()
+    if (!data || !selectedId) return undefined
+
+    return data.allJudgments.find((j) => {
+      return j.id === selectedId
+    })
   })
 
   createEffect(() => {
@@ -69,39 +79,14 @@ const AdminArticleDetailsFulltext = () => {
                       basePath={`/articles/${params().id}`}
                     />
 
-                    {/* Default view: no selection */}
-                    <Show when={articleViewToShow() === undefined}>
-                      <ReviewArticleDetails
-                        article={data().article}
-                        showTitle={false}
-                        enableSticky={true}
-                        viewMode="fulltext"
-                        hidePdfButton={true}
-                      />
-                    </Show>
-
-                    {/* LLM judgment selected */}
-                    <Show
-                      when={
-                        articleViewToShow() !== undefined
-                        && data().allJudgments.find((j) => {
-                          return j.id === articleViewToShow()
-                        })
-                      }
-                    >
-                      {(selected) => {
-                        return (
-                          <ReviewArticleDetails
-                            article={data().article}
-                            judgment={selected()}
-                            showTitle={false}
-                            enableSticky={true}
-                            viewMode="fulltext"
-                            hidePdfButton={true}
-                          />
-                        )
-                      }}
-                    </Show>
+                    <ReviewArticleDetails
+                      article={data().article}
+                      judgment={selectedJudgment()}
+                      showTitle={false}
+                      enableSticky={true}
+                      viewMode="fulltext"
+                      hidePdfButton={true}
+                    />
                   </div>
                   <StickyColumn class="w-96">
                     <Show when={isAdmin()}>
