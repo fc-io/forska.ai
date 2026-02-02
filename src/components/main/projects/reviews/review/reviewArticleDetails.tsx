@@ -2,7 +2,6 @@ import {createEffect, createMemo, createSignal, onCleanup, onMount, Show} from '
 
 import {decodeAndSanitize} from '../../../../../app/utils/decodeAndSanitize'
 import {getArticleUrl} from '../../../../../app/utils/getArticleUrl.ts'
-import {reviewArticleDetailsGetHighlightedText} from './reviewArticleDetails/reviewArticleDetailsGetHighlightedText.ts'
 
 type DecodeAndSanitizeOptions = Parameters<typeof decodeAndSanitize>[1]
 
@@ -41,12 +40,24 @@ type ReviewArticleDetailsProps = {
 
 const stickyOffsets = {top: 24, bottom: 24}
 
+type HighlightTextKind = 'title' | 'summary'
+
 type FulltextHighlightWorkerRequest =
   | {type: 'setText'; text: string}
   | {type: 'clear'}
   | {type: 'highlight'; requestId: number; cacheKey: string; quotes: string[]}
+  | {
+      type: 'highlightText'
+      requestId: number
+      cacheKey: string
+      kind: HighlightTextKind
+      text: string
+      quotes: string[]
+    }
 
-type FulltextHighlightWorkerResponse = {type: 'highlightResult'; requestId: number; cacheKey: string; html: string}
+type FulltextHighlightWorkerResponse =
+  | {type: 'highlightResult'; requestId: number; cacheKey: string; html: string}
+  | {type: 'highlightTextResult'; requestId: number; cacheKey: string; kind: HighlightTextKind; html: string}
 
 const createFulltextHighlightWorker = (): Worker | undefined => {
   return typeof Worker === 'undefined'
@@ -88,58 +99,21 @@ const getNormalizedQuotes = (judgment: Judgment | undefined): string[] => {
     .filter(Boolean)
 }
 
-/**
- * Creates highlighted text with clickable highlights that scroll to fulltext.
- * Returns both the JSX element and a function to scroll to first highlight in fulltext.
- */
-const getHighlightedTextWithScrollHandler = (
-  text: string,
-  judgment: Judgment,
-  options?: {onHighlightClick?: (quote: string) => void; highlightId?: string},
-  sanitizeOptions?: DecodeAndSanitizeOptions,
-) => {
-  const sanitizedText = decodeAndSanitize(text, sanitizeOptions)
-  const quotes = Array.isArray(judgment.quotes) ? judgment.quotes : []
-  const normalizedQuotes = (quotes as string[]).map((quote) => {
-    return quote.replace(/^\.{3}|\.{3}$/g, '')
-  })
-
-  const pieces = reviewArticleDetailsGetHighlightedText(sanitizedText, normalizedQuotes, {
-    maxDistance: 1,
-    caseInsensitive: true,
-    fuzzyScanLimit: 'auto',
-  })
-
-  const html = pieces
-    .map(([pieceText, isHit], index) => {
-      if (isHit) {
-        const dataAttr = options?.highlightId ? `data-highlight-id="${options.highlightId}-${index}"` : ''
-        const clickableClass = options?.onHighlightClick ? 'cursor-pointer hover:bg-red-100' : ''
-        return `<span class="text-red-500 underline ${clickableClass}" ${dataAttr}>${pieceText}</span>`
-      }
-      return pieceText
-    })
-    .join('')
-
-  // eslint-disable-next-line solid/no-innerhtml
-  return <span innerHTML={html} />
-}
-
-/**
- * Simple highlighted text (backward compatible)
- */
-const getHighlightedText = (text: string, judgment: Judgment) => {
-  return getHighlightedTextWithScrollHandler(text, judgment)
-}
-
 export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
   const [stickyTop, setStickyTop] = createSignal<number | undefined>(undefined)
   const [localIsFulltextExpanded, setLocalIsFulltextExpanded] = createSignal(false)
   const [highlightedFulltextHtml, setHighlightedFulltextHtml] = createSignal<string | undefined>(undefined)
+  const [highlightedTitleHtml, setHighlightedTitleHtml] = createSignal<string | undefined>(undefined)
+  const [highlightedSummaryHtml, setHighlightedSummaryHtml] = createSignal<string | undefined>(undefined)
   let fulltextHighlightWorker: Worker | undefined = undefined
   let activeHighlightRequestId = 0
   let activeHighlightCacheKey: string | undefined
   let highlightDebounceTimeout: number | undefined
+  let lastFulltextSentToWorker: string | undefined
+  let activeTitleHighlightRequestId = 0
+  let activeTitleHighlightCacheKey: string | undefined
+  let activeSummaryHighlightRequestId = 0
+  let activeSummaryHighlightCacheKey: string | undefined
   const isFulltextExpandedControlled = () => {
     return props.isFulltextExpanded !== undefined && props.setIsFulltextExpanded !== undefined
   }
@@ -168,6 +142,14 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
     return text ? decodeAndSanitize(text, fulltextSanitizeOptions()) : ''
   })
 
+  const sanitizedTitle = createMemo(() => {
+    return decodeAndSanitize(props.article.articleTitle)
+  })
+
+  const sanitizedSummary = createMemo(() => {
+    return decodeAndSanitize(props.article.articleSummary ?? '')
+  })
+
   // Default props
   const showTitle = () => {
     return props.showTitle ?? true
@@ -187,6 +169,11 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
     return mode === 'fulltext' || (mode === 'all' && isFulltextExpanded())
   }
 
+  const shouldComputeTitleSummaryHighlight = () => {
+    const mode = viewMode()
+    return mode === 'all' || mode === 'summary'
+  }
+
   const getFulltextHighlightWorker = () => {
     const existing = fulltextHighlightWorker
     if (existing) return existing
@@ -203,6 +190,22 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
       ) {
         setHighlightedFulltextHtml(msg.html)
       }
+      if (
+        msg.type === 'highlightTextResult'
+        && msg.kind === 'title'
+        && msg.requestId === activeTitleHighlightRequestId
+        && msg.cacheKey === activeTitleHighlightCacheKey
+      ) {
+        setHighlightedTitleHtml(msg.html)
+      }
+      if (
+        msg.type === 'highlightTextResult'
+        && msg.kind === 'summary'
+        && msg.requestId === activeSummaryHighlightRequestId
+        && msg.cacheKey === activeSummaryHighlightCacheKey
+      ) {
+        setHighlightedSummaryHtml(msg.html)
+      }
     }
 
     fulltextHighlightWorker = created
@@ -217,7 +220,101 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
     if (!worker) return
 
     const text = sanitizedFulltext()
+    if (lastFulltextSentToWorker === text) return
+    lastFulltextSentToWorker = text
     return worker.postMessage({type: 'setText', text} as FulltextHighlightWorkerRequest)
+  })
+
+  createEffect(() => {
+    const shouldCompute = shouldComputeTitleSummaryHighlight()
+    const judgment = props.judgment
+
+    if (!shouldCompute || !judgment) {
+      activeTitleHighlightCacheKey = undefined
+      setHighlightedTitleHtml(undefined)
+      return
+    }
+
+    const worker = getFulltextHighlightWorker()
+    if (!worker) {
+      activeTitleHighlightCacheKey = undefined
+      setHighlightedTitleHtml(undefined)
+      return
+    }
+
+    const quotes = getNormalizedQuotes(judgment)
+    if (quotes.length === 0) {
+      activeTitleHighlightCacheKey = undefined
+      setHighlightedTitleHtml(undefined)
+      return
+    }
+
+    const text = sanitizedTitle()
+    if (!text) {
+      activeTitleHighlightCacheKey = undefined
+      setHighlightedTitleHtml(undefined)
+      return
+    }
+
+    const requestId = activeTitleHighlightRequestId + 1
+    activeTitleHighlightRequestId = requestId
+    const cacheKey = `${articleCacheKey()}::${judgment.id}::title`
+    activeTitleHighlightCacheKey = cacheKey
+    setHighlightedTitleHtml(undefined)
+    return worker.postMessage({
+      type: 'highlightText',
+      requestId,
+      cacheKey,
+      kind: 'title',
+      text,
+      quotes,
+    } as FulltextHighlightWorkerRequest)
+  })
+
+  createEffect(() => {
+    const shouldCompute = shouldComputeTitleSummaryHighlight() && Boolean(props.article.articleSummary)
+    const judgment = props.judgment
+
+    if (!shouldCompute || !judgment) {
+      activeSummaryHighlightCacheKey = undefined
+      setHighlightedSummaryHtml(undefined)
+      return
+    }
+
+    const worker = getFulltextHighlightWorker()
+    if (!worker) {
+      activeSummaryHighlightCacheKey = undefined
+      setHighlightedSummaryHtml(undefined)
+      return
+    }
+
+    const quotes = getNormalizedQuotes(judgment)
+    if (quotes.length === 0) {
+      activeSummaryHighlightCacheKey = undefined
+      setHighlightedSummaryHtml(undefined)
+      return
+    }
+
+    const text = sanitizedSummary()
+    if (!text) {
+      activeSummaryHighlightCacheKey = undefined
+      setHighlightedSummaryHtml(undefined)
+      return
+    }
+
+    const requestId = activeSummaryHighlightRequestId + 1
+    activeSummaryHighlightRequestId = requestId
+    const cacheKey = `${articleCacheKey()}::${judgment.id}::summary`
+    activeSummaryHighlightCacheKey = cacheKey
+    setHighlightedSummaryHtml(undefined)
+    return worker.postMessage({
+      type: 'highlightText',
+      requestId,
+      cacheKey,
+      kind: 'summary',
+      text,
+      quotes,
+    } as FulltextHighlightWorkerRequest)
   })
 
   createEffect(() => {
@@ -366,12 +463,18 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
           {/* Title with clickable highlights - shown in summary and all modes */}
           <Show when={viewMode() === 'all' || viewMode() === 'summary'}>
             <p class="text-lg font-semibold" onClick={handleTitleSummaryClick}>
-              {props.judgment ? (
-                getHighlightedText(props.article.articleTitle, props.judgment)
-              ) : (
-                // eslint-disable-next-line solid/no-innerhtml
-                <span innerHTML={decodeAndSanitize(props.article.articleTitle)} />
-              )}
+              <Show
+                when={props.judgment && highlightedTitleHtml()}
+                fallback={
+                  // eslint-disable-next-line solid/no-innerhtml
+                  <span innerHTML={sanitizedTitle()} />
+                }
+              >
+                {(html) => {
+                  // eslint-disable-next-line solid/no-innerhtml
+                  return <span innerHTML={html()} />
+                }}
+              </Show>
             </p>
           </Show>
 
@@ -426,12 +529,18 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
             <div class="mt-4">
               <h3 class="font-semibold mb-2">Summary</h3>
               <div class="text-gray-700 assessment-container leading-relaxed" onClick={handleTitleSummaryClick}>
-                {props.judgment && props.article.articleSummary ? (
-                  getHighlightedText(props.article.articleSummary, props.judgment)
-                ) : (
-                  // eslint-disable-next-line solid/no-innerhtml
-                  <span innerHTML={decodeAndSanitize(props.article.articleSummary ?? '')} />
-                )}
+                <Show
+                  when={props.judgment && highlightedSummaryHtml()}
+                  fallback={
+                    // eslint-disable-next-line solid/no-innerhtml
+                    <span innerHTML={sanitizedSummary()} />
+                  }
+                >
+                  {(html) => {
+                    // eslint-disable-next-line solid/no-innerhtml
+                    return <span innerHTML={html()} />
+                  }}
+                </Show>
               </div>
             </div>
           </Show>

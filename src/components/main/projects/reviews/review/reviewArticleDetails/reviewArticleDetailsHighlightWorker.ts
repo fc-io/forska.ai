@@ -2,17 +2,38 @@ import {reviewArticleDetailsGetHighlightedText} from './reviewArticleDetailsGetH
 
 type HighlightRequest = {type: 'highlight'; requestId: number; cacheKey: string; quotes: string[]}
 
+type HighlightTextKind = 'title' | 'summary'
+
+type HighlightTextRequest = {
+  type: 'highlightText'
+  requestId: number
+  cacheKey: string
+  kind: HighlightTextKind
+  text: string
+  quotes: string[]
+}
+
 type SetTextRequest = {type: 'setText'; text: string}
 
 type ClearRequest = {type: 'clear'}
 
-type WorkerRequest = HighlightRequest | SetTextRequest | ClearRequest
+type WorkerRequest = HighlightRequest | HighlightTextRequest | SetTextRequest | ClearRequest
 
 type HighlightResponse = {type: 'highlightResult'; requestId: number; cacheKey: string; html: string}
+
+type HighlightTextResponse = {
+  type: 'highlightTextResult'
+  requestId: number
+  cacheKey: string
+  kind: HighlightTextKind
+  html: string
+}
 
 let fulltext: string | undefined
 
 const hitRangesByCacheKey = new Map<string, Array<[number, number]>>()
+
+const highlightedTextByCacheKey = new Map<string, string>()
 
 const getHitRangesFromPieces = (pieces: Array<[string, boolean]>): Array<[number, number]> => {
   const initial = {offset: 0, ranges: [] as Array<[number, number]>}
@@ -48,6 +69,7 @@ const getHighlightOptions = (textLength: number) => {
 }
 
 const handleSetText = (text: string) => {
+  if (fulltext === text) return
   fulltext = text
   hitRangesByCacheKey.clear()
 }
@@ -55,6 +77,7 @@ const handleSetText = (text: string) => {
 const handleClear = () => {
   fulltext = undefined
   hitRangesByCacheKey.clear()
+  highlightedTextByCacheKey.clear()
 }
 
 const handleHighlight = (request: HighlightRequest): HighlightResponse => {
@@ -85,6 +108,46 @@ const handleHighlight = (request: HighlightRequest): HighlightResponse => {
   }
 }
 
+const handleHighlightText = (request: HighlightTextRequest): HighlightTextResponse => {
+  if (!request.text || request.quotes.length === 0) {
+    return {
+      type: 'highlightTextResult',
+      requestId: request.requestId,
+      cacheKey: request.cacheKey,
+      kind: request.kind,
+      html: request.text,
+    }
+  }
+
+  const cached = highlightedTextByCacheKey.get(request.cacheKey)
+  if (cached) {
+    return {
+      type: 'highlightTextResult',
+      requestId: request.requestId,
+      cacheKey: request.cacheKey,
+      kind: request.kind,
+      html: cached,
+    }
+  }
+
+  const options = getHighlightOptions(request.text.length)
+  const pieces = reviewArticleDetailsGetHighlightedText(request.text, request.quotes, options)
+  const html = pieces
+    .map(([pieceText, isHit]) => {
+      return isHit ? `<span class="text-red-500 underline">${pieceText}</span>` : pieceText
+    })
+    .join('')
+
+  highlightedTextByCacheKey.set(request.cacheKey, html)
+  return {
+    type: 'highlightTextResult',
+    requestId: request.requestId,
+    cacheKey: request.cacheKey,
+    kind: request.kind,
+    html,
+  }
+}
+
 self.onmessage = (event: MessageEvent<WorkerRequest>) => {
   const msg = event.data
   if (msg.type === 'setText') {
@@ -95,6 +158,10 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
   }
   if (msg.type === 'highlight') {
     const response = handleHighlight(msg)
+    ;(self as unknown as {postMessage: (message: unknown) => void}).postMessage(response)
+  }
+  if (msg.type === 'highlightText') {
+    const response = handleHighlightText(msg)
     ;(self as unknown as {postMessage: (message: unknown) => void}).postMessage(response)
   }
 }
