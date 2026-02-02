@@ -34,11 +34,11 @@ export const articlesRoutes = new Elysia()
 
     // Count by linked import routes (via article_route_link)
     const linkedCounts = await db
-      .select({importRoute: importRouteTable.route, count: count()})
+      .select({importRoute: importRouteTable.route, importRouteName: importRouteTable.name, count: count()})
       .from(articles)
       .innerJoin(articleRouteLink, eq(articleRouteLink.articleId, articles.id))
       .innerJoin(importRouteTable, eq(importRouteTable.id, articleRouteLink.importRouteId))
-      .groupBy(importRouteTable.route)
+      .groupBy(importRouteTable.route, importRouteTable.name)
 
     // Count articles with NO import_route link via NOT EXISTS
     const [{count: withoutImportRoute = 0} = {count: 0}] = await db

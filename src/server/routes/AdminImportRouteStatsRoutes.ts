@@ -21,6 +21,7 @@ type ImportRouteStatsYearArticle = {
   articleTitle: string | null
   articleId: string | null
   importRoute: string | null
+  importRouteName: string | null
   date: string
 }
 
@@ -156,7 +157,8 @@ const buildYearArticlesFromClickhouse = async (year: number): Promise<ImportRout
   await ensureClickhouseSchema()
   const client = getClickhouseClient()
 
-  const [countResult, listResult] = await Promise.all([
+  const [nameMap, countResult, listResult] = await Promise.all([
+    fetchImportRouteNameMap(),
     client.query({
       query: `
         SELECT
@@ -193,11 +195,13 @@ const buildYearArticlesFromClickhouse = async (year: number): Promise<ImportRout
 
   const rows = toRows(await listResult.json<ClickhouseImportRouteStatsYearArticleRow>())
   const articles = rows.map((row) => {
+    const importRoute = row.importRoute ?? null
     return {
       id: row.id,
       articleTitle: row.articleTitle,
       articleId: row.articleId,
-      importRoute: row.importRoute,
+      importRoute,
+      importRouteName: getImportRouteName(nameMap, importRoute),
       date: row.date,
     }
   })

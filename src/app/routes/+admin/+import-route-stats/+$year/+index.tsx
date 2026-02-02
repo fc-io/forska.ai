@@ -129,6 +129,10 @@ const AdminImportRouteStatsYear = () => {
                 <tbody class="divide-y divide-gray-100 bg-white">
                   <For each={articles()}>
                     {(article) => {
+                      const route = article.importRoute ?? '(none)'
+                      const name = article.importRouteName?.trim() ?? ''
+                      const displayName = name ? name : route
+                      const showRouteHint = Boolean(name) && name !== route && route !== '(none)'
                       return (
                         <tr class="hover:bg-gray-50">
                           <td class="px-4 py-2 text-sm text-gray-700 whitespace-nowrap">
@@ -143,8 +147,13 @@ const AdminImportRouteStatsYear = () => {
                               {article.articleTitle ?? 'Untitled'}
                             </Link>
                           </td>
-                          <td class="px-4 py-2 text-sm text-gray-700 whitespace-nowrap">
-                            {article.importRoute ?? '(none)'}
+                          <td class="px-4 py-2 text-sm text-gray-700">
+                            <div class="space-y-0.5">
+                              <div class="text-gray-900 break-all">{displayName}</div>
+                              <Show when={showRouteHint}>
+                                <div class="text-xs text-gray-500 font-mono break-all">{route}</div>
+                              </Show>
+                            </div>
                           </td>
                           <td class="px-4 py-2 text-sm text-gray-700 whitespace-nowrap font-mono">
                             {article.articleId ?? '(none)'}

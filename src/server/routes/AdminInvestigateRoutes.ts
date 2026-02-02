@@ -1,7 +1,7 @@
 /**
  * Admin routes for investigating unexpected answer values
  */
-import {and, eq, inArray, isNotNull, or, sql} from 'drizzle-orm'
+import {and, eq, inArray, isNotNull, or, type SQL, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {
@@ -82,7 +82,7 @@ const deleteUnexpectedJudgments = async (
     baseConditions.push(eq(judgments.useFulltext, projectScope.useFulltext))
     baseConditions.push(eq(judgments.useFulltextNoImages, projectScope.useFulltextNoImages))
 
-    const articleScopeConditions = []
+    const articleScopeConditions: SQL<unknown>[] = []
     if (projectScope.importRoutes.length > 0) {
       articleScopeConditions.push(
         sql`EXISTS (
@@ -98,10 +98,10 @@ const deleteUnexpectedJudgments = async (
       )
     }
     if (projectScope.curatedArticleIds.length > 0) {
-      articleScopeConditions.push(inArray(judgments.articleId, projectScope.curatedArticleIds))
+      articleScopeConditions.push(inArray(judgments.articleId, projectScope.curatedArticleIds) ?? sql`FALSE`)
     }
     if (articleScopeConditions.length > 0) {
-      baseConditions.push(or(...articleScopeConditions))
+      baseConditions.push(or(...articleScopeConditions) ?? sql`FALSE`)
     }
 
     if (projectScope.dateFrom) {
@@ -221,7 +221,7 @@ const fetchProjectScope = async (projectId: string): Promise<ProjectScope | null
   if (!project) return null
 
   const projectImportRoutes = await db
-    .select({route: importRoute.route})
+    .select({route: importRoute.route, name: importRoute.name})
     .from(projectRouteLink)
     .innerJoin(importRoute, eq(importRoute.id, projectRouteLink.importRouteId))
     .where(eq(projectRouteLink.projectId, projectId))
@@ -350,7 +350,7 @@ const runAutoSyncAllAsync = async (projectId: string | null) => {
             baseConditions.push(eq(judgments.useFulltext, projectScope.useFulltext))
             baseConditions.push(eq(judgments.useFulltextNoImages, projectScope.useFulltextNoImages))
 
-            const articleScopeConditions = []
+            const articleScopeConditions: SQL<unknown>[] = []
             if (projectScope.importRoutes.length > 0) {
               articleScopeConditions.push(
                 sql`EXISTS (
@@ -366,7 +366,7 @@ const runAutoSyncAllAsync = async (projectId: string | null) => {
               )
             }
             if (projectScope.curatedArticleIds.length > 0) {
-              articleScopeConditions.push(inArray(judgments.articleId, projectScope.curatedArticleIds))
+              articleScopeConditions.push(inArray(judgments.articleId, projectScope.curatedArticleIds) ?? sql`FALSE`)
             }
             const scopeCondition = articleScopeConditions.length > 0 ? or(...articleScopeConditions) : null
             if (scopeCondition) {
@@ -647,7 +647,7 @@ export const adminInvestigateRoutes = new Elysia()
             articleScopeConditions.push(inArray(judgments.articleId, projectScope.curatedArticleIds))
           }
           if (articleScopeConditions.length > 0) {
-            baseConditions.push(or(...articleScopeConditions))
+            baseConditions.push(or(...articleScopeConditions) ?? sql`FALSE`)
           }
 
           if (projectScope.dateFrom) {
@@ -788,7 +788,7 @@ export const adminInvestigateRoutes = new Elysia()
       })
 
       const projectImportRoutes = await db
-        .select({route: importRoute.route})
+        .select({route: importRoute.route, name: importRoute.name})
         .from(projectRouteLink)
         .innerJoin(importRoute, eq(importRoute.id, projectRouteLink.importRouteId))
         .where(eq(projectRouteLink.projectId, projectId))
@@ -801,6 +801,10 @@ export const adminInvestigateRoutes = new Elysia()
       const routes = projectImportRoutes.map((r) => {
         return r.route
       })
+      const importRouteNamesByRoute = projectImportRoutes.reduce<Record<string, string | null>>((acc, row) => {
+        acc[row.route] = row.name ?? null
+        return acc
+      }, {})
       const curatedIds = curatedArticleRows.map((r) => {
         return r.articleId
       })
@@ -972,6 +976,7 @@ export const adminInvestigateRoutes = new Elysia()
           enabledPromptCount: enabledPromptIds.length,
           enabledPromptIds,
           importRoutes: routes,
+          importRouteNamesByRoute,
           curatedArticleCount: curatedIds.length,
         },
         postgres: {

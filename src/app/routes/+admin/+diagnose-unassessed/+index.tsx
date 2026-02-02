@@ -16,7 +16,13 @@ type DiagnoseResult = {
     useFulltext: boolean
     useFulltextNoImages: boolean
   }
-  scope: {enabledPromptCount: number; enabledPromptIds: string[]; importRoutes: string[]; curatedArticleCount: number}
+  scope: {
+    enabledPromptCount: number
+    enabledPromptIds: string[]
+    importRoutes: string[]
+    importRouteNamesByRoute?: Record<string, string | null>
+    curatedArticleCount: number
+  }
   postgres: {articlesInScope: number; judgmentsInScope: number; judgmentsTotalMatchingSettings: number}
   clickhouse: {articlesInScope: number; judgmentsInScope: number}
   analysis: {
@@ -27,6 +33,19 @@ type DiagnoseResult = {
     articlesRemaining: number
   }
   error?: string
+}
+
+const formatImportRoute = (route: string, name: string | null | undefined): string => {
+  const trimmedName = name?.trim() ?? ''
+  return trimmedName && trimmedName !== route ? `${trimmedName} (${route})` : trimmedName || route
+}
+
+const formatImportRoutes = (routes: string[], namesByRoute?: Record<string, string | null>): string => {
+  return routes
+    .map((route) => {
+      return formatImportRoute(route, namesByRoute?.[route] ?? null)
+    })
+    .join(', ')
 }
 
 const fetchDiagnosis = async (projectId: string): Promise<DiagnoseResult> => {
@@ -216,7 +235,9 @@ const AdminDiagnoseUnassessed = () => {
                   <div class="col-span-2">
                     <span class="text-gray-500">Import Routes:</span>
                     <span class="ml-2">
-                      {r().scope.importRoutes.length > 0 ? r().scope.importRoutes.join(', ') : 'None'}
+                      {r().scope.importRoutes.length > 0
+                        ? formatImportRoutes(r().scope.importRoutes, r().scope.importRouteNamesByRoute)
+                        : 'None'}
                     </span>
                   </div>
                 </div>

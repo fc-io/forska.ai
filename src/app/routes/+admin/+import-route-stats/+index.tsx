@@ -92,11 +92,17 @@ const AdminImportRouteStats = () => {
             <div class="flex flex-col gap-4">
               <For each={routeStats()}>
                 {(row) => {
+                  const routeText = formatImportRoute(row.importRoute)
+                  const name = row.importRouteName?.trim() ?? ''
+                  const displayName = name ? name : routeText
+                  const showRouteHint = Boolean(name) && name !== routeText
                   return (
                     <div class="overflow-x-auto rounded-lg border border-gray-200 bg-white shadow-sm">
                       <div class="border-b border-gray-200 bg-gray-50 px-4 py-3">
-                        <div class="text-sm font-semibold text-gray-900">{formatImportRoute(row.importRoute)}</div>
-                        <div class="text-xs text-gray-600">{row.importRouteName ?? '—'}</div>
+                        <div class="text-sm font-semibold text-gray-900">{displayName}</div>
+                        <Show when={showRouteHint}>
+                          <div class="text-xs text-gray-600 font-mono break-all">{routeText}</div>
+                        </Show>
                       </div>
 
                       <table class="min-w-full divide-y divide-gray-200">

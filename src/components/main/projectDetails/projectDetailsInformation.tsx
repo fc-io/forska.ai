@@ -153,7 +153,15 @@ export const ProjectDetailsInformation = (props: ProjectDetailsInformationProps)
                 const name = props.importRouteNamesByRoute?.[route] ?? null
                 const trimmedName = name?.trim() ?? ''
                 const displayName = trimmedName ? trimmedName : route
-                return <li class="font-medium text-gray-900 break-all">{displayName}</li>
+                const showRouteHint = Boolean(trimmedName) && trimmedName !== route
+                return (
+                  <li class="text-gray-900">
+                    <div class="font-medium break-all">{displayName}</div>
+                    <Show when={showRouteHint}>
+                      <div class="text-xs text-gray-500 font-mono break-all">{route}</div>
+                    </Show>
+                  </li>
+                )
               }}
             </For>
           </ul>

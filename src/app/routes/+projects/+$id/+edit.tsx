@@ -712,6 +712,7 @@ const EditProject = (): JSX.Element => {
                       {(r) => {
                         const name = r.name?.trim() ?? ''
                         const displayName = name ? name : r.route
+                        const showRouteHint = Boolean(name) && name !== r.route
                         return (
                           <label
                             class={`flex items-start gap-3 border rounded-md p-3 cursor-pointer ${isLocked() ? 'opacity-60' : 'border-input'}`}
@@ -727,6 +728,9 @@ const EditProject = (): JSX.Element => {
                             />
                             <div class="flex-1">
                               <p class="text-sm font-medium text-gray-900">{displayName}</p>
+                              <Show when={showRouteHint}>
+                                <p class="text-xs text-gray-600 font-mono break-all">{r.route}</p>
+                              </Show>
                             </div>
                           </label>
                         )

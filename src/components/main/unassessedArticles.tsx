@@ -1,6 +1,6 @@
 import {useQuery} from '@tanstack/solid-query'
 import {format} from 'date-fns'
-import {For, type JSX, Suspense} from 'solid-js'
+import {For, type JSX, Show, Suspense} from 'solid-js'
 
 import {apiClient} from '../../services/apiClient.ts'
 // import {fetchLatestArticles} from '../../services/articlesService.ts'
@@ -74,9 +74,17 @@ export const UnassessedArticles = (): JSX.Element => {
               <ul class="list-disc list-inside text-muted-foreground">
                 <For each={articlesStatsQuery.data?.byImportRoute || []}>
                   {(r) => {
+                    const route = r.importRoute ?? 'Not set'
+                    const name = r.importRouteName?.trim() ?? ''
+                    const displayName = name ? name : route
+                    const showRouteHint = Boolean(name) && name !== route && route !== 'Not set'
                     return (
                       <li>
-                        <span class="font-mono">{r.importRoute ?? 'Not set'}</span>: {formatNumber(r.count || 0)}
+                        <span>{displayName}</span>
+                        <Show when={showRouteHint}>
+                          <span class="ml-2 text-xs text-gray-500 font-mono break-all">{route}</span>
+                        </Show>
+                        : {formatNumber(r.count || 0)}
                       </li>
                     )
                   }}
