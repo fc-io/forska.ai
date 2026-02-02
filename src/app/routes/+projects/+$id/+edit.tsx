@@ -50,7 +50,9 @@ type ProjectSummary = {
 
 type ModelOption = {id: string; name: string; provider: string | null; modelName: string | null}
 type ModelsResponse = {data: ModelOption[]}
-type ImportRoutesResponse = {data: string[]}
+type ImportRouteOption = {route: string; name: string | null}
+
+type ImportRoutesResponse = {data: ImportRouteOption[]}
 
 type ProjectDetailsResponse = {
   project: ProjectSummary
@@ -58,6 +60,7 @@ type ProjectDetailsResponse = {
   hasJudgedArticles: boolean
   model?: {id: string; name: string; provider?: string | null; modelName?: string | null} | null
   importRoutes?: string[]
+  importRouteNamesByRoute?: Record<string, string | null>
 }
 
 type ParsedDateResult = {date: Date | null; normalized: string | null; error: string | null}
@@ -321,7 +324,7 @@ const EditProject = (): JSX.Element => {
     return {
       queryKey: ['importroutes'],
       queryFn: async () => {
-        const response = await apiClient.api.importroutes.get()
+        const response = await apiClient.api['import-routes'].get()
         const result = handleApiResponse<ImportRoutesResponse>(response, 'Failed to load import routes')
         return result.data ?? []
       },
@@ -706,7 +709,9 @@ const EditProject = (): JSX.Element => {
                 >
                   <div class="space-y-2">
                     <For each={availableImportRoutes()}>
-                      {(route) => {
+                      {(r) => {
+                        const name = r.name?.trim() ?? ''
+                        const displayName = name ? name : r.route
                         return (
                           <label
                             class={`flex items-start gap-3 border rounded-md p-3 cursor-pointer ${isLocked() ? 'opacity-60' : 'border-input'}`}
@@ -714,16 +719,14 @@ const EditProject = (): JSX.Element => {
                             <input
                               type="checkbox"
                               class="mt-1"
-                              checked={selectedImportRoutes().includes(route)}
+                              checked={selectedImportRoutes().includes(r.route)}
                               onChange={() => {
-                                return toggleImportRouteSelection(route)
+                                return toggleImportRouteSelection(r.route)
                               }}
                               disabled={isLocked()}
                             />
                             <div class="flex-1">
-                              <p class="text-sm font-medium text-gray-900">
-                                <span class="font-mono">{route}</span>
-                              </p>
+                              <p class="text-sm font-medium text-gray-900">{displayName}</p>
                             </div>
                           </label>
                         )

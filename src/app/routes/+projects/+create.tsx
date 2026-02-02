@@ -31,7 +31,9 @@ type ExistingPromptsResponse = {
 
 type ParsedDateResult = {date: Date | null; normalized: string | null; error: string | null}
 
-type ImportRoutesResponse = {data: string[]}
+type ImportRouteOption = {route: string; name: string | null}
+
+type ImportRoutesResponse = {data: ImportRouteOption[]}
 
 type ModelOption = {id: string; name: string; provider: string | null; modelName: string | null}
 type ModelsResponse = {data: ModelOption[]}
@@ -66,7 +68,7 @@ const CreateProject = () => {
     return {
       queryKey: ['importroutes'],
       queryFn: async () => {
-        const response = await apiClient.api.importroutes.get()
+        const response = await apiClient.api['import-routes'].get()
         const result = handleApiResponse<ImportRoutesResponse>(response, 'Failed to load import routes')
         return result.data ?? []
       },
@@ -468,21 +470,21 @@ const CreateProject = () => {
               >
                 <div class="space-y-2">
                   <For each={availableImportRoutes()}>
-                    {(route) => {
+                    {(r) => {
+                      const name = r.name?.trim() ?? ''
+                      const displayName = name ? name : r.route
                       return (
                         <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer">
                           <input
                             type="checkbox"
                             class="mt-1"
-                            checked={selectedImportRoutes().includes(route)}
+                            checked={selectedImportRoutes().includes(r.route)}
                             onChange={() => {
-                              return toggleImportRouteSelection(route)
+                              return toggleImportRouteSelection(r.route)
                             }}
                           />
                           <div class="flex-1">
-                            <p class="text-sm font-medium text-gray-900">
-                              <span class="font-mono">{route}</span>
-                            </p>
+                            <p class="text-sm font-medium text-gray-900">{displayName}</p>
                           </div>
                         </label>
                       )

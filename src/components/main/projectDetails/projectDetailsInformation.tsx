@@ -18,6 +18,7 @@ interface ProjectDetailsInformationProject {
 type ProjectDetailsInformationProps = {
   project: ProjectDetailsInformationProject
   importRoutes: string[]
+  importRouteNamesByRoute?: Record<string, string | null>
   model?: {id: string; name: string; provider?: string | null; modelName?: string | null} | null
 }
 
@@ -149,7 +150,10 @@ export const ProjectDetailsInformation = (props: ProjectDetailsInformationProps)
           <ul class="space-y-1 text-sm">
             <For each={props.importRoutes}>
               {(route) => {
-                return <li class="font-medium text-gray-900 break-all">{route}</li>
+                const name = props.importRouteNamesByRoute?.[route] ?? null
+                const trimmedName = name?.trim() ?? ''
+                const displayName = trimmedName ? trimmedName : route
+                return <li class="font-medium text-gray-900 break-all">{displayName}</li>
               }}
             </For>
           </ul>

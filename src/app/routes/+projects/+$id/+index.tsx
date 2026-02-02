@@ -102,6 +102,13 @@ const ProjectDetail = () => {
             const importRoutes = Array.isArray((result as {importRoutes?: unknown}).importRoutes)
               ? (result as {importRoutes: string[]}).importRoutes
               : []
+            const namesByRouteCandidate = (result as {importRouteNamesByRoute?: unknown}).importRouteNamesByRoute
+            const importRouteNamesByRoute =
+              namesByRouteCandidate
+              && typeof namesByRouteCandidate === 'object'
+              && !Array.isArray(namesByRouteCandidate)
+                ? (namesByRouteCandidate as Record<string, string | null>)
+                : undefined
 
             interface RawPrompt {
               id: string
@@ -154,7 +161,12 @@ const ProjectDetail = () => {
                     </div>
                   }
                 >
-                  <ProjectDetailsInformation project={project} importRoutes={importRoutes} model={model} />
+                  <ProjectDetailsInformation
+                    project={project}
+                    importRoutes={importRoutes}
+                    importRouteNamesByRoute={importRouteNamesByRoute}
+                    model={model}
+                  />
                 </Suspense>
 
                 {/* Project Prompts - Suspense Boundary */}
