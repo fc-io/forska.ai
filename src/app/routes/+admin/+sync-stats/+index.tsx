@@ -1,4 +1,4 @@
-import {useMutation, useQuery} from '@tanstack/solid-query'
+import {useMutation, useQuery, useQueryClient} from '@tanstack/solid-query'
 import {createFileRoute} from '@tanstack/solid-router'
 import {createMemo, createSignal, For, Match, Show, Suspense, Switch} from 'solid-js'
 
@@ -20,6 +20,14 @@ type ClickhouseMergePartsSummary = {
     articles: {partsActive: number; mergesInProgress: number}
     judgments: {partsActive: number; mergesInProgress: number}
   }
+}
+
+type RebuildClickhouseJudgmentsDerivedTableResult = {
+  startedAt: string
+  finishedAt: string
+  durationMs: number
+  before: {count: number}
+  after: {count: number}
 }
 
 type SampleVerifyMismatch = {id: string; field: string; pg: unknown; ch: unknown}
@@ -142,6 +150,13 @@ const partitionCoverageCheck = async (input: {
   const response = await apiClient.api.admin['partition-coverage-check'].post(input)
   if (response.error) throw new Error('Failed to run partition coverage check')
   if (!response.data) throw new Error('Failed to run partition coverage check')
+  return response.data.data
+}
+
+const rebuildClickhouseJudgmentsDerivedTable = async (): Promise<RebuildClickhouseJudgmentsDerivedTableResult> => {
+  const response = await apiClient.api.admin['sync-stats']['rebuild-ch-judgments-derived-table'].post()
+  if (response.error) throw new Error('Failed to rebuild ClickHouse judgments derived table')
+  if (!response.data) throw new Error('Failed to rebuild ClickHouse judgments derived table')
   return response.data.data
 }
 
@@ -671,6 +686,7 @@ const AdminSyncStats = () => {
   const [sampleSize, setSampleSize] = createSignal(100)
   const [sampleType, setSampleType] = createSignal<'recent' | 'random' | 'deleted'>('recent')
   const [partitionMonths, setPartitionMonths] = createSignal(12)
+  const queryClient = useQueryClient()
 
   const sampleVerifyMutation = useMutation(() => {
     return {
@@ -688,8 +704,23 @@ const AdminSyncStats = () => {
     }
   })
 
+  const rebuildChJudgmentsDerivedTableMutation = useMutation(() => {
+    return {
+      mutationFn: () => {
+        return rebuildClickhouseJudgmentsDerivedTable()
+      },
+      onSuccess: () => {
+        void queryClient.invalidateQueries({queryKey: ['admin', 'sync-stats']})
+      },
+    }
+  })
+
   const errorMessage = createMemo(() => {
-    return getErrorMessage(sampleVerifyMutation.error) ?? getErrorMessage(partitionCheckMutation.error)
+    return (
+      getErrorMessage(sampleVerifyMutation.error)
+      ?? getErrorMessage(partitionCheckMutation.error)
+      ?? getErrorMessage(rebuildChJudgmentsDerivedTableMutation.error)
+    )
   })
 
   return (
@@ -707,6 +738,50 @@ const AdminSyncStats = () => {
             <p class="text-red-600">{errorMessage()}</p>
           </div>
         </Show>
+
+        <div class="mb-6 rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+          <div class="mb-4 flex items-start justify-between gap-4">
+            <div>
+              <h2 class="text-lg font-semibold">Maintenance</h2>
+              <div class="text-sm text-gray-600">Rebuild derived ClickHouse tables used for app queries.</div>
+            </div>
+            <button
+              onClick={() => {
+                const ok = window.confirm(
+                  'Rebuild ClickHouse judgments derived table (forska.judgments)? This drops/recreates the materialized view and rewrites the table. It can take a while on large datasets.',
+                )
+                if (!ok) return
+                rebuildChJudgmentsDerivedTableMutation.reset()
+                void rebuildChJudgmentsDerivedTableMutation.mutateAsync()
+              }}
+              disabled={rebuildChJudgmentsDerivedTableMutation.isPending}
+              class="rounded-md bg-gray-900 px-3 py-2 text-sm text-white disabled:opacity-50"
+            >
+              Rebuild CH Judgments Derived Table
+            </button>
+          </div>
+
+          <Show when={rebuildChJudgmentsDerivedTableMutation.isPending}>
+            <div class="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-700">Running…</div>
+          </Show>
+
+          <Show when={rebuildChJudgmentsDerivedTableMutation.data}>
+            {(r) => {
+              return (
+                <div class="space-y-2 text-sm">
+                  <div>
+                    Done in <span class="font-semibold">{Math.trunc(r().durationMs / 1000).toLocaleString()}</span>s
+                  </div>
+                  <div class="text-gray-600">
+                    Before: {formatCount(r().before.count)} — After: {formatCount(r().after.count)}
+                  </div>
+                  <div class="text-xs text-gray-500">Started: {new Date(r().startedAt).toLocaleString()}</div>
+                  <div class="text-xs text-gray-500">Finished: {new Date(r().finishedAt).toLocaleString()}</div>
+                </div>
+              )
+            }}
+          </Show>
+        </div>
 
         <div class="mb-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
           <Suspense fallback={<StatsCardSkeleton title="PG Articles" />}>

@@ -5,6 +5,7 @@ import {Client} from 'pg'
 import {articles, judgments} from '../../db/schema.ts'
 import {getClickhouseClient, pingClickhouse} from '../../services/clickhouse/clickhouseClient.ts'
 import {ensureClickhouseSchema} from '../../services/clickhouse/ensureClickhouseSchema.ts'
+import {rebuildClickhouseJudgmentsDerivedTable} from '../../services/clickhouse/rebuildClickhouseJudgmentsDerivedTable.ts'
 import {requireAdminAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
@@ -803,6 +804,10 @@ export const adminSyncStatsRoutes = new Elysia()
   .get('/api/admin/sync-stats/ch-judgments-ingestion', async () => {
     await ensureClickhouseSchema()
     const data = await getClickhouseIngestionStats('judgments')
+    return {data}
+  })
+  .post('/api/admin/sync-stats/rebuild-ch-judgments-derived-table', async () => {
+    const data = await rebuildClickhouseJudgmentsDerivedTable()
     return {data}
   })
   .get(
