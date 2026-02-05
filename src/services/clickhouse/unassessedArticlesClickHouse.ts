@@ -192,6 +192,34 @@ const buildJudgmentFilters = (
   return filters
 }
 
+const buildJudgmentRawFilters = (
+  promptIds: string[],
+  modelId: string,
+  useTitle: boolean,
+  useAbstract: boolean,
+  useFulltext: boolean,
+  useFulltextNoImages: boolean,
+): string[] => {
+  const filters: string[] = []
+  filters.push('_peerdb_is_deleted = 0')
+  filters.push('deleted_at IS NULL')
+
+  const promptIdsQuoted = promptIds
+    .map((id) => {
+      return `'${escapeClickHouseString(id)}'`
+    })
+    .join(', ')
+  filters.push(`prompt_id IN (${promptIdsQuoted})`)
+
+  filters.push(`model_id = '${escapeClickHouseString(modelId)}'`)
+  filters.push(`use_title = ${useTitle}`)
+  filters.push(`use_abstract = ${useAbstract}`)
+  filters.push(`use_fulltext = ${useFulltext}`)
+  filters.push(`use_fulltext_no_images = ${useFulltextNoImages}`)
+
+  return filters
+}
+
 const buildDateFilters = (
   projectDateFrom: Date | null | undefined,
   projectDateTo: Date | null | undefined,
@@ -586,41 +614,16 @@ export const getUnassessedPairsFromClickHouse = async (
       tempTableInfo = await createTempTable(metadata.curatedArticleIds)
     }
 
-    const judgmentFilters = buildJudgmentFilters(
+    const judgmentRawWhereClause = buildJudgmentRawFilters(
       metadata.promptIds,
       metadata.modelId,
       metadata.useTitle,
       metadata.useAbstract,
       metadata.useFulltext,
       metadata.useFulltextNoImages,
-    )
+    ).join(' AND ')
+
     const dateFilters = buildDateFilters(metadata.dateFrom, metadata.dateTo)
-
-    // Build scope filter for judgments table (camelCase)
-    const judgmentScopeParts: string[] = []
-    if (hasCurated) {
-      if (useTempTable && tempTableInfo) {
-        judgmentScopeParts.push(`articleId IN (SELECT articleId FROM ${tempTableInfo.tableName})`)
-      } else {
-        const curatedIdsQuoted = metadata.curatedArticleIds
-          .map((id) => {
-            return `'${escapeClickHouseString(id)}'`
-          })
-          .join(', ')
-        judgmentScopeParts.push(`articleId IN (${curatedIdsQuoted})`)
-      }
-    }
-    if (hasRoutes) {
-      const routesQuoted = metadata.routeTexts
-        .map((r) => {
-          return `'${escapeClickHouseString(r)}'`
-        })
-        .join(', ')
-      judgmentScopeParts.push(`articleImportRoute IN (${routesQuoted})`)
-    }
-    const judgmentScopeFilter = `(${judgmentScopeParts.join(' OR ')})`
-
-    const judgmentWhereClause = [...judgmentFilters, judgmentScopeFilter].join(' AND ')
 
     // Build scope filter for forska.articles (snake_case)
     const articleScopeParts: string[] = []
@@ -660,9 +663,9 @@ export const getUnassessedPairsFromClickHouse = async (
       .join(', ')
 
     const assessedPairsSubquery = `
-      SELECT articleId, promptId
-      FROM judgments FINAL
-      WHERE ${judgmentWhereClause}
+      SELECT article_id, prompt_id
+      FROM forska.judgments_raw FINAL
+      WHERE ${judgmentRawWhereClause}
     `
 
     const query = `
