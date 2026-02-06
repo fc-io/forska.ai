@@ -1,7 +1,7 @@
 import {Menu} from '@ark-ui/solid'
 import {useQuery} from '@tanstack/solid-query'
 import {Link, useLocation} from '@tanstack/solid-router'
-import {createSignal, onCleanup, onMount, Show} from 'solid-js'
+import {createMemo, createSignal, onCleanup, onMount, Show} from 'solid-js'
 
 import {apiClient} from '../services/apiClient'
 import type {User} from '../types/user'
@@ -55,6 +55,25 @@ const getAvatarLabel = (user: User | undefined) => {
 }
 
 type LlmMetricsSummary = {waiting: number; running: number; lastUpdate: Date | null}
+
+type LlmMetricsIndicator = {waiting: number; running: number; lastUpdate: Date | null; isFresh: boolean}
+
+const llmMetricsFreshnessWindowMs = 3 * 60 * 1000
+
+const getLlmMetricsIndicator = (metrics: LlmMetricsSummary | null, nowMs: number): LlmMetricsIndicator => {
+  const lastUpdate = metrics?.lastUpdate ?? null
+  const ageMs = lastUpdate ? Math.max(0, nowMs - lastUpdate.getTime()) : null
+  const isFresh = ageMs !== null && ageMs <= llmMetricsFreshnessWindowMs
+  const waiting = isFresh ? (metrics?.waiting ?? 0) : 0
+  const running = isFresh ? (metrics?.running ?? 0) : 0
+  return {waiting, running, lastUpdate, isFresh}
+}
+
+const getLlmMetricsIndicatorTitle = (isFresh: boolean) => {
+  return isFresh
+    ? 'Waiting / Running requests across all workers'
+    : 'Waiting / Running requests across all workers (no metrics update in last 3m)'
+}
 
 const getLlmMetricsRefetchInterval = (_pathname: string) => {
   return 30 * 1000
@@ -138,6 +157,10 @@ export const Navigation = (props: NavigationProps) => {
   const llmMetrics = () => {
     return llmMetricsQuery.data ?? null
   }
+
+  const llmMetricsIndicator = createMemo(() => {
+    return getLlmMetricsIndicator(llmMetrics(), Date.now())
+  })
 
   const closeAdminMenu = () => {
     setIsAdminMenuOpen(false)
@@ -232,14 +255,17 @@ export const Navigation = (props: NavigationProps) => {
           </div>
           <div class="flex items-center space-x-4">
             <Show when={props.user?.role === 'admin'}>
-              <Show when={llmMetrics()}>
-                <div class="flex flex-col items-end px-2 py-1" title="Waiting / Running requests across all workers">
-                  <div class={`text-sm font-medium ${llmMetrics()?.waiting === 0 ? 'text-red-600' : 'text-gray-700'}`}>
-                    {llmMetrics()?.waiting}/{llmMetrics()?.running}
-                  </div>
-                  <div class="text-xs text-gray-400">{formatLastUpdate(llmMetrics()?.lastUpdate ?? null)}</div>
+              <div
+                class="flex flex-col items-end px-2 py-1"
+                title={getLlmMetricsIndicatorTitle(llmMetricsIndicator().isFresh)}
+              >
+                <div class={`text-sm font-medium ${llmMetricsIndicator().isFresh ? 'text-gray-700' : 'text-red-600'}`}>
+                  {llmMetricsIndicator().waiting}/{llmMetricsIndicator().running}
                 </div>
-              </Show>
+                <div class={`text-xs ${llmMetricsIndicator().isFresh ? 'text-gray-400' : 'text-red-400'}`}>
+                  {formatLastUpdate(llmMetricsIndicator().lastUpdate)}
+                </div>
+              </div>
               <div
                 ref={(element) => {
                   adminMenuTriggerElement = element
