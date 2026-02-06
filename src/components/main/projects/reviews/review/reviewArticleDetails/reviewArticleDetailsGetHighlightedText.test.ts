@@ -2,6 +2,7 @@
 import {describe, expect, it} from 'vitest'
 
 import {reviewArticleDetailsGetHighlightedText} from './reviewArticleDetailsGetHighlightedText.ts'
+import {reviewArticleDetailsNormalizeQuoteForHtmlMatch} from './reviewArticleDetailsNormalizeQuoteForHtmlMatch.ts'
 
 type Piece = [string, boolean]
 
@@ -533,6 +534,32 @@ describe('HTML tag-agnostic matching', () => {
     ]
 
     expect(expected).toEqual(reviewArticleDetailsGetHighlightedText(s, keys))
+  })
+})
+
+describe('HTML entity matching', () => {
+  it('matches a raw quote with & against &amp; fulltext', () => {
+    const quoteRaw = `
+The human-led manuscript was produced according to the expert's routine evidence-synthesis practices. This was led by two authors (AM & NA) that conducted the query generation, screening articles, decided on field extraction, performed the data extraction, and drafted the manuscript. 
+`
+
+    const quoteInHtml =
+      "The human-led manuscript was produced according to the expert's routine evidence-synthesis practices. This was led by two authors (AM &amp; NA) that conducted the query generation, screening articles, decided on field extraction, performed the data extraction, and drafted the manuscript."
+
+    const s = `2.2.2. Human-led review<br>${quoteInHtml} No LLM used in the process except for grammatical corrections and rephrasing in manuscript writing.<br><br>2.3. Evaluation and Rating`
+
+    const keys = [reviewArticleDetailsNormalizeQuoteForHtmlMatch(quoteRaw)]
+
+    const expected: Piece[] = [
+      ['2.2.2. Human-led review<br>', false],
+      [quoteInHtml, true],
+      [
+        ' No LLM used in the process except for grammatical corrections and rephrasing in manuscript writing.<br><br>2.3. Evaluation and Rating',
+        false,
+      ],
+    ]
+
+    expect(reviewArticleDetailsGetHighlightedText(s, keys)).toEqual(expected)
   })
 })
 

@@ -2,6 +2,7 @@ import {createEffect, createMemo, createSignal, onCleanup, onMount, Show} from '
 
 import {decodeAndSanitize} from '../../../../../app/utils/decodeAndSanitize'
 import {getArticleUrl} from '../../../../../app/utils/getArticleUrl.ts'
+import {reviewArticleDetailsNormalizeQuoteForHtmlMatch} from './reviewArticleDetails/reviewArticleDetailsNormalizeQuoteForHtmlMatch.ts'
 import {
   type ReviewArticleDetailsScrollToQuoteDetail,
   reviewArticleDetailsScrollToQuoteEventName,
@@ -98,7 +99,7 @@ const getNormalizedQuotes = (judgment: Judgment | undefined): string[] => {
   const quotes = judgment && Array.isArray(judgment.quotes) ? judgment.quotes : []
   return (quotes as string[])
     .map((quote) => {
-      return quote.replace(/^\.{3}|\.{3}$/g, '')
+      return reviewArticleDetailsNormalizeQuoteForHtmlMatch(quote)
     })
     .filter(Boolean)
 }
