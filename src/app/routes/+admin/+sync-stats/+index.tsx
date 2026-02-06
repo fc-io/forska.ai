@@ -41,6 +41,68 @@ type ClickhouseJudgmentsDerivedHealth = {
   }
 }
 
+type DerivedHealthSeverity = 'ok' | 'warning' | 'critical'
+
+const isNonZero = (value: number | null | undefined): boolean => {
+  return (value ?? 0) > 0
+}
+
+const isCriticalDerivedHealth = (data: ClickhouseJudgmentsDerivedHealth | null | undefined): boolean => {
+  const mvMissing = data ? !data.mv.exists : false
+  const drift = data ? data.drift.status !== 'synced' || data.drift.recentStatus !== 'synced' : false
+  const missingDerivedRecent = isNonZero(data?.drift.missingDerivedRecent)
+  const articlesMissing =
+    isNonZero(data?.missingTitleBreakdown.missingArticleInClickhouse)
+    || isNonZero(data?.missingTitleBreakdown.recentMissingArticleInClickhouse)
+  return Boolean(data) && (mvMissing || drift || missingDerivedRecent || articlesMissing)
+}
+
+const isWarningDerivedHealth = (data: ClickhouseJudgmentsDerivedHealth | null | undefined): boolean => {
+  const missingTitle = isNonZero(data?.enrichment.missingTitle) || isNonZero(data?.enrichment.recentMissingTitle)
+  const missingImportRoute =
+    isNonZero(data?.enrichment.missingImportRoute) || isNonZero(data?.enrichment.recentMissingImportRoute)
+  const staleMissingTitle =
+    isNonZero(data?.missingTitleBreakdown.staleMissingTitle)
+    || isNonZero(data?.missingTitleBreakdown.recentStaleMissingTitle)
+  return Boolean(data) && !isCriticalDerivedHealth(data) && (missingTitle || missingImportRoute || staleMissingTitle)
+}
+
+const getDerivedHealthSeverity = (
+  data: ClickhouseJudgmentsDerivedHealth | null | undefined,
+): DerivedHealthSeverity | null => {
+  return !data ? null : isCriticalDerivedHealth(data) ? 'critical' : isWarningDerivedHealth(data) ? 'warning' : 'ok'
+}
+
+const getDerivedHealthCardClass = (severity: DerivedHealthSeverity | null): string => {
+  const base = 'rounded-lg p-6 shadow-sm'
+  return severity === 'critical'
+    ? `${base} border border-red-200 bg-red-50`
+    : severity === 'warning'
+      ? `${base} border border-orange-200 bg-orange-50`
+      : `${base} border border-gray-200 bg-white`
+}
+
+const getDerivedHealthPillClass = (severity: DerivedHealthSeverity | null): string => {
+  const base = 'rounded-full px-2 py-1 text-xs font-semibold'
+  return severity === 'critical'
+    ? `${base} bg-red-100 text-red-800`
+    : severity === 'warning'
+      ? `${base} bg-orange-100 text-orange-800`
+      : severity === 'ok'
+        ? `${base} bg-green-100 text-green-800`
+        : `${base} bg-gray-100 text-gray-700`
+}
+
+const getDerivedHealthPillText = (severity: DerivedHealthSeverity | null): string => {
+  return severity === 'critical'
+    ? 'Critical'
+    : severity === 'warning'
+      ? 'Needs rebuild'
+      : severity === 'ok'
+        ? 'OK'
+        : 'Unknown'
+}
+
 type PgUpdatedAfterStats = {afterMs: number; count: number}
 
 type PeerdbMirrorHealth = {mirrorName: string; reachable: boolean; exists: boolean; status: string}
@@ -575,10 +637,15 @@ const ClickhouseJudgmentsDerivedHealthCard = () => {
     return live > 0 ? Math.round((missing / live) * 10000) / 100 : null
   })
 
+  const severity = createMemo(() => {
+    return getDerivedHealthSeverity(query.data)
+  })
+
   return (
-    <div class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+    <div class={getDerivedHealthCardClass(severity())}>
       <div class="mb-4 flex items-center justify-between">
         <h2 class="text-lg font-semibold">CH Judgments Derived Health</h2>
+        <div class={getDerivedHealthPillClass(severity())}>{getDerivedHealthPillText(severity())}</div>
       </div>
 
       <Show when={errorMessage()}>
@@ -587,9 +654,24 @@ const ClickhouseJudgmentsDerivedHealthCard = () => {
 
       <Show when={!errorMessage()}>
         <div class="space-y-3 text-sm">
+          <Switch>
+            <Match when={severity() === 'critical'}>
+              <div class="rounded-md border border-red-200 bg-red-100 p-3 text-sm text-red-800">
+                Derived judgments are unreliable for scoped queries (MV drift or missing articles in ClickHouse).
+              </div>
+            </Match>
+            <Match when={severity() === 'warning'}>
+              <div class="rounded-md border border-orange-200 bg-orange-100 p-3 text-sm text-orange-800">
+                Derived judgments need a rebuild to refresh article enrichment.
+              </div>
+            </Match>
+          </Switch>
+
           <div class="flex items-center justify-between gap-4">
             <div class="text-gray-600">Materialized view</div>
-            <div class="font-semibold text-gray-900">{query.data?.mv.exists ? 'present' : 'missing'}</div>
+            <div class={query.data?.mv.exists ? 'font-semibold text-gray-900' : 'font-semibold text-red-800'}>
+              {query.data?.mv.exists ? 'present' : 'missing'}
+            </div>
           </div>
 
           <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -621,7 +703,7 @@ const ClickhouseJudgmentsDerivedHealthCard = () => {
           <div class="rounded-md border border-gray-200 p-3">
             <div class="flex items-center justify-between gap-4">
               <div class="text-gray-600">Derived drift (derived - raw)</div>
-              <div class={query.data?.drift.status === 'synced' ? 'font-semibold' : 'font-semibold text-orange-700'}>
+              <div class={query.data?.drift.status === 'synced' ? 'font-semibold' : 'font-semibold text-red-800'}>
                 {formatSigned(query.data?.drift.liveCountDiff)} ({query.data?.drift.status})
               </div>
             </div>
@@ -640,7 +722,15 @@ const ClickhouseJudgmentsDerivedHealthCard = () => {
           <div class="rounded-md border border-gray-200 p-3">
             <div class="flex items-center justify-between gap-4">
               <div class="text-gray-600">Unenriched judgments (articleTitle = '')</div>
-              <div class={query.data?.enrichment.missingTitle ? 'font-semibold text-orange-700' : 'font-semibold'}>
+              <div
+                class={
+                  query.data?.missingTitleBreakdown.missingArticleInClickhouse
+                    ? 'font-semibold text-red-800'
+                    : query.data?.enrichment.missingTitle
+                      ? 'font-semibold text-orange-800'
+                      : 'font-semibold'
+                }
+              >
                 {formatCount(query.data?.enrichment.missingTitle)}
                 <Show when={missingTitlePct() !== null}>
                   <span class="ml-1 text-gray-600">({missingTitlePct()}%)</span>
@@ -672,7 +762,7 @@ const ClickhouseJudgmentsDerivedHealthCard = () => {
                 <div
                   class={
                     query.data?.missingTitleBreakdown.missingArticleInClickhouse
-                      ? 'font-semibold text-red-700'
+                      ? 'font-semibold text-red-800'
                       : 'font-semibold text-gray-900'
                   }
                 >
@@ -682,7 +772,7 @@ const ClickhouseJudgmentsDerivedHealthCard = () => {
             </div>
 
             <Show when={query.data?.missingTitleBreakdown.missingArticleInClickhouse}>
-              <div class="mt-2 rounded-md border border-orange-200 bg-orange-50 p-3 text-xs text-orange-800">
+              <div class="mt-2 rounded-md border border-red-200 bg-red-100 p-3 text-xs text-red-800">
                 Articles are missing in ClickHouse. Derived enrichment can’t self-heal until `forska.articles` catches
                 up.
               </div>
