@@ -464,6 +464,42 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
     }
   }
 
+  const clickFlashClass = 'fulltext-quote-click-flash'
+  const clickFlashTimeoutByElement = new WeakMap<HTMLElement, number>()
+  let lastFlashedElement: HTMLElement | undefined
+
+  const flashClickedHighlight = (el: HTMLElement) => {
+    const previous = lastFlashedElement
+    if (previous && previous !== el) {
+      const prevTimeout = clickFlashTimeoutByElement.get(previous)
+      if (prevTimeout !== undefined) {
+        window.clearTimeout(prevTimeout)
+        clickFlashTimeoutByElement.delete(previous)
+      }
+      previous.classList.remove(clickFlashClass)
+    }
+
+    const existingTimeout = clickFlashTimeoutByElement.get(el)
+    if (existingTimeout !== undefined) {
+      window.clearTimeout(existingTimeout)
+    }
+
+    el.classList.remove(clickFlashClass)
+    void el.offsetWidth
+    el.classList.add(clickFlashClass)
+
+    const timeout = window.setTimeout(() => {
+      el.classList.remove(clickFlashClass)
+      clickFlashTimeoutByElement.delete(el)
+      if (lastFlashedElement === el) {
+        lastFlashedElement = undefined
+      }
+    }, 1300)
+
+    clickFlashTimeoutByElement.set(el, timeout)
+    lastFlashedElement = el
+  }
+
   const getConnectedFulltextContainer = (): HTMLDivElement | undefined => {
     const container = fulltextContainerRef
     return container && container.isConnected ? container : undefined
@@ -471,6 +507,7 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
 
   const scrollElementIntoView = (el: HTMLElement): boolean => {
     el.scrollIntoView({behavior: 'smooth', block: 'center'})
+    flashClickedHighlight(el)
     return true
   }
 

@@ -54,7 +54,7 @@ const getHighlightedHtmlFromRanges = (text: string, ranges: Array<[number, numbe
   const reduced = ranges.reduce((acc, [start, end], index) => {
     const before = text.slice(acc.cursor, start)
     const inside = text.slice(start, end)
-    const highlighted = `<span class="text-red-500 underline bg-red-50 scroll-mt-4" data-fulltext-highlight="${index}">${inside}</span>`
+    const highlighted = `<span class="text-red-500 underline scroll-mt-4" data-fulltext-highlight="${index}">${inside}</span>`
     return {cursor: end, html: `${acc.html}${before}${highlighted}`}
   }, initial)
 
