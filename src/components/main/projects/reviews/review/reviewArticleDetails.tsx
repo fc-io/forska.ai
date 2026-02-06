@@ -2,6 +2,10 @@ import {createEffect, createMemo, createSignal, onCleanup, onMount, Show} from '
 
 import {decodeAndSanitize} from '../../../../../app/utils/decodeAndSanitize'
 import {getArticleUrl} from '../../../../../app/utils/getArticleUrl.ts'
+import {
+  type ReviewArticleDetailsScrollToQuoteDetail,
+  reviewArticleDetailsScrollToQuoteEventName,
+} from './reviewArticleDetails/reviewArticleDetailsScrollEvents.ts'
 
 type DecodeAndSanitizeOptions = Parameters<typeof decodeAndSanitize>[1]
 
@@ -99,12 +103,63 @@ const getNormalizedQuotes = (judgment: Judgment | undefined): string[] => {
     .filter(Boolean)
 }
 
+type PendingScrollRequest =
+  | {type: 'highlightIndex'; index: number; judgmentId?: string}
+  | {type: 'quote'; quote: string; judgmentId?: string}
+
+type QuoteCycleState = {anchorIndex: number; nextIndex: number}
+
+const normalizeScrollText = (text: string): string => {
+  const trimmed = text.replace(/^[\s"“”']+|[\s"“”']+$/g, '').trim()
+  const withoutEllipses = trimmed.replace(/^(?:\.{3}|…)+|(?:\.{3}|…)+$/g, '').trim()
+  return withoutEllipses.toLowerCase().replace(/\s+/g, ' ').trim()
+}
+
+const clampIndex = (index: number, length: number): number => {
+  const n = Math.max(0, length)
+  const i = Number.isFinite(index) ? Math.trunc(index) : -1
+  return n === 0 ? -1 : i < 0 ? 0 : i >= n ? n - 1 : i
+}
+
+const getClickedQuoteIndex = (detail: ReviewArticleDetailsScrollToQuoteDetail, quotes: string[]): number => {
+  const i = typeof detail.quoteIndex === 'number' ? detail.quoteIndex : undefined
+  if (i !== undefined) return i
+
+  const needle = normalizeScrollText(detail.quote)
+  return needle
+    ? quotes.findIndex((q) => {
+        return normalizeScrollText(q) === needle
+      })
+    : -1
+}
+
+const getQuoteCycleResult = (params: {
+  clickedIndex: number
+  quotesLength: number
+  state: QuoteCycleState | undefined
+}): {targetIndex: number; nextState: QuoteCycleState} => {
+  const n = params.quotesLength
+  const clicked = clampIndex(params.clickedIndex, n)
+  const state = params.state
+
+  if (!state || state.anchorIndex !== clicked) {
+    const nextIndex = n > 0 ? (clicked + 1) % n : 0
+    return {targetIndex: clicked, nextState: {anchorIndex: clicked, nextIndex}}
+  }
+
+  const targetIndex = clampIndex(state.nextIndex, n)
+  const nextIndex = n > 0 ? (targetIndex + 1) % n : 0
+  return {targetIndex, nextState: {anchorIndex: state.anchorIndex, nextIndex}}
+}
+
 export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
   const [stickyTop, setStickyTop] = createSignal<number | undefined>(undefined)
   const [localIsFulltextExpanded, setLocalIsFulltextExpanded] = createSignal(false)
   const [highlightedFulltextHtml, setHighlightedFulltextHtml] = createSignal<string | undefined>(undefined)
   const [highlightedTitleHtml, setHighlightedTitleHtml] = createSignal<string | undefined>(undefined)
   const [highlightedSummaryHtml, setHighlightedSummaryHtml] = createSignal<string | undefined>(undefined)
+  const [pendingScrollRequest, setPendingScrollRequest] = createSignal<PendingScrollRequest | undefined>(undefined)
+  const quoteCycleStateByJudgmentId = new Map<string, QuoteCycleState>()
   let fulltextHighlightWorker: Worker | undefined = undefined
   let activeHighlightRequestId = 0
   let activeHighlightCacheKey: string | undefined
@@ -393,25 +448,96 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
     }
   }
 
-  const scrollToFirstHighlightInFulltext = () => {
-    if (!fulltextContainerRef) return
+  const getConnectedFulltextContainer = (): HTMLDivElement | undefined => {
+    const container = fulltextContainerRef
+    return container && container.isConnected ? container : undefined
+  }
 
-    // First expand the fulltext section if collapsed
-    if (!isFulltextExpanded()) {
+  const scrollElementIntoView = (el: HTMLElement): boolean => {
+    el.scrollIntoView({behavior: 'smooth', block: 'center'})
+    return true
+  }
+
+  const scrollToFulltextHighlightIndex = (index: number): boolean => {
+    const container = getConnectedFulltextContainer()
+    const el = container?.querySelector<HTMLElement>(`[data-fulltext-highlight="${index}"]`)
+    return el ? scrollElementIntoView(el) : false
+  }
+
+  const getBestHighlightElementForQuote = (container: HTMLDivElement, quote: string): HTMLElement | undefined => {
+    const normalizedQuote = normalizeScrollText(quote)
+    if (!normalizedQuote) return undefined
+
+    const highlights = Array.from(container.querySelectorAll<HTMLElement>('[data-fulltext-highlight]'))
+    const initial = {score: 0, el: undefined as HTMLElement | undefined}
+
+    const reduced = highlights.reduce((acc, el) => {
+      const text = normalizeScrollText(el.textContent ?? '')
+      if (!text) return acc
+
+      const score = text.includes(normalizedQuote)
+        ? normalizedQuote.length
+        : normalizedQuote.includes(text)
+          ? text.length
+          : 0
+      return score > acc.score ? {score, el} : acc
+    }, initial)
+
+    return reduced.el
+  }
+
+  const scrollToQuoteInFulltext = (quote: string): boolean => {
+    const container = getConnectedFulltextContainer()
+    if (!container) return false
+
+    const best = getBestHighlightElementForQuote(container, quote)
+    return best ? scrollElementIntoView(best) : scrollToFulltextHighlightIndex(0)
+  }
+
+  const attemptScrollRequest = (request: PendingScrollRequest): boolean => {
+    const mode = viewMode()
+    if (mode !== 'fulltext' && mode !== 'all') return false
+
+    if (mode === 'all' && !isFulltextExpanded()) {
       setIsFulltextExpanded(true)
-      // Wait for DOM update, then scroll
-      requestAnimationFrame(() => {
-        const firstHighlight = fulltextContainerRef?.querySelector('[data-fulltext-highlight="0"]')
-        if (firstHighlight) {
-          firstHighlight.scrollIntoView({behavior: 'smooth', block: 'center'})
-        }
-      })
-    } else {
-      const firstHighlight = fulltextContainerRef?.querySelector('[data-fulltext-highlight="0"]')
-      if (firstHighlight) {
-        firstHighlight.scrollIntoView({behavior: 'smooth', block: 'center'})
-      }
+      return false
     }
+
+    return request.type === 'highlightIndex'
+      ? scrollToFulltextHighlightIndex(request.index)
+      : scrollToQuoteInFulltext(request.quote)
+  }
+
+  const requestScrollToHighlightIndex = (index: number, judgmentId?: string) => {
+    const request: PendingScrollRequest = {type: 'highlightIndex', index, judgmentId}
+    setPendingScrollRequest(request)
+    return attemptScrollRequest(request) ? setPendingScrollRequest(undefined) : undefined
+  }
+
+  const requestScrollToQuote = (quote: string, judgmentId?: string) => {
+    const request: PendingScrollRequest = {type: 'quote', quote, judgmentId}
+    setPendingScrollRequest(request)
+    return attemptScrollRequest(request) ? setPendingScrollRequest(undefined) : undefined
+  }
+
+  createEffect(() => {
+    const pending = pendingScrollRequest()
+    const mode = viewMode()
+    const fulltext = fulltextForDisplay()
+    const currentJudgmentId = props.judgment?.id
+    const highlighted = highlightedFulltextHtml()
+
+    if (!pending) return
+    if (mode !== 'fulltext' && mode !== 'all') return setPendingScrollRequest(undefined)
+    if (!fulltext) return setPendingScrollRequest(undefined)
+    if (pending.judgmentId && pending.judgmentId !== currentJudgmentId) return
+    if (!highlighted) return
+
+    return attemptScrollRequest(pending) ? setPendingScrollRequest(undefined) : undefined
+  })
+
+  const scrollToFirstHighlightInFulltext = () => {
+    return requestScrollToHighlightIndex(0, props.judgment?.id)
   }
 
   // Handle clicks on highlights in title/summary to scroll to fulltext
@@ -426,6 +552,38 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
   }
 
   onMount(() => {
+    const handleScrollToQuoteEvent = (event: Event) => {
+      const detail = (event as CustomEvent<ReviewArticleDetailsScrollToQuoteDetail>).detail
+      if (!detail?.quote) return
+
+      const judgmentId = detail.judgmentId
+      const currentJudgmentId = props.judgment?.id
+
+      if (!judgmentId || judgmentId !== currentJudgmentId || !props.judgment) {
+        requestScrollToQuote(detail.quote, judgmentId)
+        return
+      }
+
+      const quotes = Array.isArray(props.judgment.quotes) ? (props.judgment.quotes as string[]) : []
+      if (quotes.length === 0) {
+        requestScrollToQuote(detail.quote, judgmentId)
+        return
+      }
+
+      const clickedIndex = getClickedQuoteIndex(detail, quotes)
+      const state = quoteCycleStateByJudgmentId.get(judgmentId)
+      const result = getQuoteCycleResult({clickedIndex, quotesLength: quotes.length, state})
+      quoteCycleStateByJudgmentId.set(judgmentId, result.nextState)
+
+      const quoteToScroll = quotes[result.targetIndex] ?? detail.quote
+      requestScrollToQuote(quoteToScroll, judgmentId)
+    }
+
+    window.addEventListener(reviewArticleDetailsScrollToQuoteEventName, handleScrollToQuoteEvent as EventListener)
+    onCleanup(() => {
+      window.removeEventListener(reviewArticleDetailsScrollToQuoteEventName, handleScrollToQuoteEvent as EventListener)
+    })
+
     if (enableSticky()) {
       setStickiness()
       const resizeObserver = new ResizeObserver(() => {

@@ -1,5 +1,6 @@
 import {createSignal, For, Show} from 'solid-js'
 
+import {reviewArticleDetailsDispatchScrollToQuote} from './reviewArticleDetails/reviewArticleDetailsScrollEvents.ts'
 import {ReviewJudgmentAssessments} from './reviewJudgmentAssessments.tsx'
 
 type SetArticleViewToShow = (articleViewToShow: string | undefined) => void
@@ -264,8 +265,23 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
       >
         <div class="mt-2 space-y-1">
           <For each={props.judgment.quotes as string[]}>
-            {(quote) => {
-              return <p class="text-xs text-gray-500 italic">"{quote}"</p>
+            {(quote, quoteIndex) => {
+              return (
+                <button
+                  type="button"
+                  class="text-xs text-gray-500 italic text-left w-full hover:text-gray-700 hover:bg-gray-50 rounded px-1 -mx-1"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    reviewArticleDetailsDispatchScrollToQuote({
+                      quote,
+                      judgmentId: props.judgment.id,
+                      quoteIndex: quoteIndex(),
+                    })
+                  }}
+                >
+                  "{quote}"
+                </button>
+              )
             }}
           </For>
         </div>
