@@ -110,10 +110,25 @@ type PendingScrollRequest =
 
 type QuoteCycleState = {anchorIndex: number; nextIndex: number}
 
+const ellipsisSplitRegex = /(?:\.{3,}|\u2026)+/g
+
+const getScrollTargetQuote = (quote: string): string => {
+  const parts = quote
+    .split(ellipsisSplitRegex)
+    .map((part) => {
+      return part.trim()
+    })
+    .filter(Boolean)
+  return (parts[0] ?? quote).trim()
+}
+
 const normalizeScrollText = (text: string): string => {
   const trimmed = text.replace(/^[\s"“”']+|[\s"“”']+$/g, '').trim()
   const withoutEllipses = trimmed.replace(/^(?:\.{3}|…)+|(?:\.{3}|…)+$/g, '').trim()
-  return withoutEllipses.toLowerCase().replace(/\s+/g, ' ').trim()
+  const withSpaces = withoutEllipses.replace(/\u00A0/g, ' ')
+  const withNormalizedHyphens = withSpaces.replace(/[\u00AD\u2010\u2011\u2012\u2013\u2014\u2015\u2212]/g, '-')
+  const withNormalizedTimes = withNormalizedHyphens.replace(/\u00D7/g, 'x')
+  return withNormalizedTimes.toLowerCase().replace(/\s+/g, ' ').trim()
 }
 
 const clampIndex = (index: number, length: number): number => {
@@ -516,7 +531,7 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
   }
 
   const requestScrollToQuote = (quote: string, judgmentId?: string) => {
-    const request: PendingScrollRequest = {type: 'quote', quote, judgmentId}
+    const request: PendingScrollRequest = {type: 'quote', quote: getScrollTargetQuote(quote), judgmentId}
     setPendingScrollRequest(request)
     return attemptScrollRequest(request) ? setPendingScrollRequest(undefined) : undefined
   }

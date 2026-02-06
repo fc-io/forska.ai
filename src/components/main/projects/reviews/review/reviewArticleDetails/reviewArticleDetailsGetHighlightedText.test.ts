@@ -563,6 +563,42 @@ The human-led manuscript was produced according to the expert's routine evidence
   })
 })
 
+describe('Unicode punctuation matching', () => {
+  it('matches ASCII hyphens/minus and x against unicode variants in fulltext HTML', () => {
+    const quoteRaw =
+      'Mean total scores: human 74.7%, AIPRA 65.3%. The mean difference (AIPRA - Human) was -9.3% (95% CI, -18.8% to 0.0%), meeting the pre-specified non-inferiority criterion. Domain means were identical for query development (66.7% each); the human-led pipeline scored higher in screening, field selection, full-text extraction, and manuscript writing. AIPRA completed the workflow in approximately 2 hours versus about 1 month for the human pipeline (375x faster).'
+
+    const s =
+      'Mean total scores: human 74.7%, AIPRA 65.3%. The mean difference (AIPRA \u2013 Human) was \u22129.3% (95% CI, \u221218.8% to 0.0%), meeting the pre\u2011specified non\u2011inferiority criterion. Domain means were identical for query development (66.7% each); the human\u2011led pipeline scored higher in screening, field selection, full\u2011text extraction, and manuscript writing. AIPRA completed the workflow in approximately 2 hours versus about 1 month for the human pipeline (375\u00D7 faster).'
+
+    const keys = [reviewArticleDetailsNormalizeQuoteForHtmlMatch(quoteRaw)]
+    const expected: Piece[] = [[s, true]]
+    expect(reviewArticleDetailsGetHighlightedText(s, keys, {caseInsensitive: true, maxDistance: 1})).toEqual(expected)
+  })
+})
+
+describe('Ellipsis snippet matching', () => {
+  it('matches quote snippets that omit middle text via ellipses', () => {
+    const quoteRaw =
+      'Mean total scores: human 74.7%, AIPRA 65.3%... AIPRA completed the workflow in approximately 2 hours versus about 1 month for the human pipeline (375x faster).'
+
+    const s =
+      'Results : Mean total scores: human 74.7%, AIPRA 65.3%. The mean difference (AIPRA \u2013 Human) was \u22129.3% (95% CI, \u221218.8% to 0.0%), meeting the pre\u2011specified non\u2011inferiority criterion. Domain means were identical for query development (66.7% each); the human\u2011led pipeline scored higher in screening, field selection, full\u2011text extraction, and manuscript writing. AIPRA completed the workflow in approximately 2 hours versus about 1 month for the human pipeline (375\u00D7 faster).'
+
+    const keys = [reviewArticleDetailsNormalizeQuoteForHtmlMatch(quoteRaw)]
+
+    const expected: Piece[] = [
+      ['Results : ', false],
+      [
+        'Mean total scores: human 74.7%, AIPRA 65.3%. The mean difference (AIPRA \u2013 Human) was \u22129.3% (95% CI, \u221218.8% to 0.0%), meeting the pre\u2011specified non\u2011inferiority criterion. Domain means were identical for query development (66.7% each); the human\u2011led pipeline scored higher in screening, field selection, full\u2011text extraction, and manuscript writing. AIPRA completed the workflow in approximately 2 hours versus about 1 month for the human pipeline (375\u00D7 faster).',
+        true,
+      ],
+    ]
+
+    expect(reviewArticleDetailsGetHighlightedText(s, keys, {caseInsensitive: true, maxDistance: 1})).toEqual(expected)
+  })
+})
+
 describe('Fuzzy scan window', () => {
   const longHtml =
     '<h4>Objectives</h4>As the use of artificial intelligence (AI) in healthcare is rapidly expanding, there is also growing recognition of the need for ongoing monitoring of AI after implementation, called <i>algorithmovigilance</i>. Yet, there remain few systems that support systematic monitoring and governance of AI used across a health system. In this study, we identify end-user needs for a novel AI monitoring system-the Vanderbilt Algorithmovigilance Monitoring and Operations System (VAMOS)-using human-centered design (HCD).<h4>Materials and methods</h4>We assembled a multidisciplinary team to plan AI monitoring and governance at Vanderbilt University Medical Center. We then conducted 9 participatory design sessions with diverse stakeholders to develop prototypes of VAMOS. Once we had a working prototype, we conducted 8 formative design interviews with key stakeholders to gather feedback on the system. We analyzed the interviews using a rapid qualitative analysis approach and revised the mock-ups. We then conducted a multidisciplinary heuristic evaluation to identify further improvements to the tool.<h4>Results</h4>Through an iterative, HCD process that engaged diverse end-users, we identified key components needed in AI monitoring systems. We identified specific data views and functionality required by end users across several user interfaces including a performance monitoring dashboard, accordion snapshots, and model-specific pages.<h4>Discussion</h4>We distilled general design requirements for systems to support AI monitoring throughout its lifecycle. One important consideration is how to support teams of health system leaders, clinical experts, and technical personnel that are distributed across the organization as they monitor and respond to algorithm deterioration.<h4>Conclusion</h4>VAMOS aims to support systematic and proactive monitoring of AI tools in healthcare organizations. Our findings and recommendations can support the design of AI monitoring systems to support health systems, improve quality of care, and ensure patient safety.'

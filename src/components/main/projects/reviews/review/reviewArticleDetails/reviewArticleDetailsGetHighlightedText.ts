@@ -197,30 +197,89 @@ const escapeRegExp = (s: string) => {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+const hyphenLikeCharClass = '[\\-\\u00AD\\u2010\\u2011\\u2012\\u2013\\u2014\\u2015\\u2212]'
+const apostropheLikeCharClass = "[\\'\\u2018\\u2019]"
+const doubleQuoteLikeCharClass = '[\\"\\u201C\\u201D]'
+const multiplicationSign = '\\u00D7'
+
+const isHyphenLikeToken = (token: string): boolean => {
+  return /^[-\u00AD\u2010\u2011\u2012\u2013\u2014\u2015\u2212]+$/.test(token)
+}
+
+const buildTokenPattern = (token: string, caseInsensitive: boolean): string => {
+  const digitsTimesMatch = token.match(/^(\d+)[xX]$/)
+  if (digitsTimesMatch) {
+    const digits = digitsTimesMatch[1] ?? ''
+    const xPart = caseInsensitive ? 'x' : 'x|X'
+    return `${digits}(?:${xPart}|${multiplicationSign})`
+  }
+
+  if (/^[xX]$/.test(token)) {
+    const xPart = caseInsensitive ? 'x' : 'x|X'
+    return `(?:${xPart}|${multiplicationSign})`
+  }
+
+  if (isHyphenLikeToken(token)) {
+    return `${hyphenLikeCharClass}*`
+  }
+
+  const withHyphenVariants = token.replace(/[-\u00AD\u2010\u2011\u2012\u2013\u2014\u2015\u2212]/g, hyphenLikeCharClass)
+  const withApostropheVariants = withHyphenVariants.replace(/[\u2018\u2019']/g, apostropheLikeCharClass)
+  const withQuoteVariants = withApostropheVariants.replace(/[\u201C\u201D"]/g, doubleQuoteLikeCharClass)
+  return escapeRegExp(withQuoteVariants)
+    .replaceAll(escapeRegExp(hyphenLikeCharClass), hyphenLikeCharClass)
+    .replaceAll(escapeRegExp(apostropheLikeCharClass), apostropheLikeCharClass)
+    .replaceAll(escapeRegExp(doubleQuoteLikeCharClass), doubleQuoteLikeCharClass)
+}
+
 const buildTagAgnosticRegex = (key: string, caseInsensitive: boolean): RegExp | null => {
   if (!key) return null
+  const keyWithSeparatedEllipses = key.replace(/(\.{3,}|\u2026+)/g, ' $1 ')
   // Split into word and punctuation tokens, excluding whitespace, so we can
   // allow tags/entities/whitespace between words and punctuation like '.'
-  const rawTokens = key.match(/([A-Za-z0-9]+|[^A-Za-z0-9\s]+)/g) || []
-  const tokens = rawTokens
+  const rawTokens = keyWithSeparatedEllipses.match(/([A-Za-z0-9]+|[^A-Za-z0-9\s]+)/g) || []
+  const isEllipsisToken = (token: string): boolean => {
+    return /^(?:\.{3,}|\u2026+)$/.test(token)
+  }
+
+  const tokenPatterns = rawTokens
     .filter((t) => {
       return t && !/^\s+$/.test(t)
     })
-    .map(escapeRegExp)
-  if (tokens.length === 0) return null
-  if (tokens.length === 1) {
-    // Single token adds no benefit over exact search
+    .map((token) => {
+      return {token, pattern: buildTokenPattern(token, caseInsensitive)}
+    })
+
+  const meaningful = tokenPatterns.filter((t) => {
+    return !isEllipsisToken(t.token)
+  })
+  if (meaningful.length === 0) return null
+  if (meaningful.length === 1) {
     try {
-      return new RegExp(tokens[0] ?? '', caseInsensitive ? 'i' : '')
+      return new RegExp(meaningful[0]?.pattern ?? '', caseInsensitive ? 'i' : '')
     } catch {
       return null
     }
   }
 
-  // Allow zero or more whitespace/tags/entities between tokens so punctuation
-  // adjacent to words still matches while bridging across markup.
   const gap = '(?:\\s|<[^>]*>|&[#a-zA-Z0-9]+;)*'
-  const pattern = tokens.join(gap)
+  const wildcardGap = '(?:[\\s\\S]{0,50000}?)'
+
+  const initial = {pattern: '', hasToken: false, needsWildcardGap: false}
+  const reduced = tokenPatterns.reduce((acc, t) => {
+    if (isEllipsisToken(t.token)) {
+      return {pattern: acc.pattern, hasToken: acc.hasToken, needsWildcardGap: true}
+    }
+
+    if (!acc.hasToken) {
+      return {pattern: t.pattern, hasToken: true, needsWildcardGap: false}
+    }
+
+    const joiner = acc.needsWildcardGap ? wildcardGap : gap
+    return {pattern: `${acc.pattern}${joiner}${t.pattern}`, hasToken: true, needsWildcardGap: false}
+  }, initial)
+
+  const pattern = reduced.pattern
   try {
     return new RegExp(pattern, caseInsensitive ? 'i' : '')
   } catch {
