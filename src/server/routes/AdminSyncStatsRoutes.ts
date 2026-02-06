@@ -222,6 +222,198 @@ type ClickhouseTableStats = {
 
 type ClickhouseIngestionStats = {maxPeerdbSyncedAtMs: number | null; maxUpdatedAtMs: number | null}
 
+const getClickhouseEngineForTable = async (name: string): Promise<string | null> => {
+  const client = getClickhouseClient()
+  const result = await client.query({
+    query: `
+      SELECT engine
+      FROM system.tables
+      WHERE database = 'forska' AND name = {name:String}
+      LIMIT 1
+    `,
+    query_params: {name},
+    format: 'JSONEachRow',
+  })
+  const rows = await result.json<{engine?: string}>()
+  const row = Array.isArray(rows) ? rows[0] : rows
+  const engine = row?.engine
+  return typeof engine === 'string' ? engine : null
+}
+
+const buildMaxUpdatedAtMsExprForColumn = (column: string): string => {
+  return `max(if(toYear(${column}) = 2299, intDiv(toUnixTimestamp64Milli(${column}), 1000), toUnixTimestamp64Milli(${column})))`
+}
+
+const toDriftStatus = (diff: number): 'synced' | 'raw_ahead' | 'derived_ahead' => {
+  return diff === 0 ? 'synced' : diff > 0 ? 'derived_ahead' : 'raw_ahead'
+}
+
+const getClickhouseJudgmentsDerivedHealth = async () => {
+  const client = getClickhouseClient()
+  const windowHours = 24
+  const windowStartExpr = `now64(3) - INTERVAL ${windowHours} HOUR`
+  const rawMaxUpdatedAtMsExpr = buildMaxUpdatedAtMsExprForColumn('updated_at')
+  const derivedMaxUpdatedAtMsExpr = buildMaxUpdatedAtMsExprForColumn('updatedAt')
+
+  const [rawStatsResult, derivedStatsResult, mvStatsResult, missingDerivedRecentResult] = await Promise.all([
+    client.query({
+      query: `
+        SELECT
+          count() as liveCount,
+          if(count() = 0, NULL, ${rawMaxUpdatedAtMsExpr}) as maxUpdatedAtMs,
+          countIf(updated_at >= ${windowStartExpr}) as recentLiveCount,
+          if(countIf(updated_at >= ${windowStartExpr}) = 0, NULL,
+            maxIf(
+              if(toYear(updated_at) = 2299, intDiv(toUnixTimestamp64Milli(updated_at), 1000), toUnixTimestamp64Milli(updated_at)),
+              updated_at >= ${windowStartExpr}
+            )
+          ) as recentMaxUpdatedAtMs
+        FROM forska.judgments_raw FINAL
+        WHERE _peerdb_is_deleted = 0 AND deleted_at IS NULL
+      `,
+      format: 'JSONEachRow',
+    }),
+    client.query({
+      query: `
+        SELECT
+          count() as liveCount,
+          if(count() = 0, NULL, ${derivedMaxUpdatedAtMsExpr}) as maxUpdatedAtMs,
+          countIf(updatedAt >= ${windowStartExpr}) as recentLiveCount,
+          if(countIf(updatedAt >= ${windowStartExpr}) = 0, NULL,
+            maxIf(
+              if(toYear(updatedAt) = 2299, intDiv(toUnixTimestamp64Milli(updatedAt), 1000), toUnixTimestamp64Milli(updatedAt)),
+              updatedAt >= ${windowStartExpr}
+            )
+          ) as recentMaxUpdatedAtMs,
+          countIf(articleTitle = '') as missingTitle,
+          countIf(articleTitle = '' AND updatedAt >= ${windowStartExpr}) as recentMissingTitle,
+          countIf(isNull(articleImportRoute)) as missingImportRoute,
+          countIf(isNull(articleImportRoute) AND updatedAt >= ${windowStartExpr}) as recentMissingImportRoute
+        FROM forska.judgments FINAL
+        WHERE _peerdb_is_deleted = 0
+      `,
+      format: 'JSONEachRow',
+    }),
+    client.query({
+      query: `
+        SELECT
+          ${windowHours} as windowHours,
+          count() as missingTitle,
+          countIf(isNotNull(a.id)) as staleMissingTitle,
+          countIf(isNull(a.id)) as missingArticleInClickhouse,
+          countIf(j.updatedAt >= ${windowStartExpr}) as recentMissingTitle,
+          countIf(j.updatedAt >= ${windowStartExpr} AND isNotNull(a.id)) as recentStaleMissingTitle,
+          countIf(j.updatedAt >= ${windowStartExpr} AND isNull(a.id)) as recentMissingArticleInClickhouse
+        FROM (
+          SELECT articleId, updatedAt
+          FROM forska.judgments FINAL
+          WHERE _peerdb_is_deleted = 0 AND articleTitle = ''
+        ) j
+        ANY LEFT JOIN forska.articles a ON j.articleId = a.id AND a._peerdb_is_deleted = 0
+      `,
+      format: 'JSONEachRow',
+    }),
+    client.query({
+      query: `
+        SELECT count() as missingDerived
+        FROM (
+          SELECT id
+          FROM forska.judgments_raw FINAL
+          WHERE _peerdb_is_deleted = 0
+            AND deleted_at IS NULL
+            AND updated_at >= ${windowStartExpr}
+        ) r
+        LEFT ANTI JOIN (
+          SELECT id
+          FROM forska.judgments FINAL
+          WHERE _peerdb_is_deleted = 0
+        ) d USING (id)
+      `,
+      format: 'JSONEachRow',
+    }),
+  ])
+
+  const rawStatsRows = await rawStatsResult.json<{
+    liveCount: string | number
+    maxUpdatedAtMs: string | number | null
+    recentLiveCount: string | number
+    recentMaxUpdatedAtMs: string | number | null
+  }>()
+  const derivedStatsRows = await derivedStatsResult.json<{
+    liveCount: string | number
+    maxUpdatedAtMs: string | number | null
+    recentLiveCount: string | number
+    recentMaxUpdatedAtMs: string | number | null
+    missingTitle: string | number
+    recentMissingTitle: string | number
+    missingImportRoute: string | number
+    recentMissingImportRoute: string | number
+  }>()
+  const mvStatsRows = await mvStatsResult.json<{
+    windowHours: string | number
+    missingTitle: string | number
+    staleMissingTitle: string | number
+    missingArticleInClickhouse: string | number
+    recentMissingTitle: string | number
+    recentStaleMissingTitle: string | number
+    recentMissingArticleInClickhouse: string | number
+  }>()
+  const missingDerivedRows = await missingDerivedRecentResult.json<{missingDerived: string | number}>()
+
+  const rawStats = Array.isArray(rawStatsRows) ? rawStatsRows[0] : rawStatsRows
+  const derivedStats = Array.isArray(derivedStatsRows) ? derivedStatsRows[0] : derivedStatsRows
+  const mvStats = Array.isArray(mvStatsRows) ? mvStatsRows[0] : mvStatsRows
+  const missingDerived = Array.isArray(missingDerivedRows) ? missingDerivedRows[0] : missingDerivedRows
+
+  const derivedLiveCount = toNumber(derivedStats?.liveCount)
+  const rawLiveCount = toNumber(rawStats?.liveCount)
+  const liveCountDiff = derivedLiveCount - rawLiveCount
+
+  const derivedRecentLiveCount = toNumber(derivedStats?.recentLiveCount)
+  const rawRecentLiveCount = toNumber(rawStats?.recentLiveCount)
+  const recentLiveCountDiff = derivedRecentLiveCount - rawRecentLiveCount
+
+  const mvEngine = await getClickhouseEngineForTable('judgments_mv')
+
+  return {
+    mv: {engine: mvEngine, exists: mvEngine !== null},
+    windowHours,
+    raw: {
+      liveCount: rawLiveCount,
+      maxUpdatedAtMs: normalizeEpochMs(toMsOrNull(rawStats?.maxUpdatedAtMs ?? null)),
+      recentLiveCount: rawRecentLiveCount,
+      recentMaxUpdatedAtMs: normalizeEpochMs(toMsOrNull(rawStats?.recentMaxUpdatedAtMs ?? null)),
+    },
+    derived: {
+      liveCount: derivedLiveCount,
+      maxUpdatedAtMs: normalizeEpochMs(toMsOrNull(derivedStats?.maxUpdatedAtMs ?? null)),
+      recentLiveCount: derivedRecentLiveCount,
+      recentMaxUpdatedAtMs: normalizeEpochMs(toMsOrNull(derivedStats?.recentMaxUpdatedAtMs ?? null)),
+    },
+    drift: {
+      liveCountDiff,
+      status: toDriftStatus(liveCountDiff),
+      recentLiveCountDiff,
+      recentStatus: toDriftStatus(recentLiveCountDiff),
+      missingDerivedRecent: toNumber(missingDerived?.missingDerived),
+    },
+    enrichment: {
+      missingTitle: toNumber(derivedStats?.missingTitle),
+      recentMissingTitle: toNumber(derivedStats?.recentMissingTitle),
+      missingImportRoute: toNumber(derivedStats?.missingImportRoute),
+      recentMissingImportRoute: toNumber(derivedStats?.recentMissingImportRoute),
+    },
+    missingTitleBreakdown: {
+      missingTitle: toNumber(mvStats?.missingTitle),
+      staleMissingTitle: toNumber(mvStats?.staleMissingTitle),
+      missingArticleInClickhouse: toNumber(mvStats?.missingArticleInClickhouse),
+      recentMissingTitle: toNumber(mvStats?.recentMissingTitle),
+      recentStaleMissingTitle: toNumber(mvStats?.recentStaleMissingTitle),
+      recentMissingArticleInClickhouse: toNumber(mvStats?.recentMissingArticleInClickhouse),
+    },
+  }
+}
+
 const getClickhouseTableStats = async (table: 'articles' | 'judgments'): Promise<ClickhouseTableStats> => {
   const client = getClickhouseClient()
   const targetTable = table === 'articles' ? 'articles' : 'judgments_raw'
@@ -804,6 +996,11 @@ export const adminSyncStatsRoutes = new Elysia()
   .get('/api/admin/sync-stats/ch-judgments-ingestion', async () => {
     await ensureClickhouseSchema()
     const data = await getClickhouseIngestionStats('judgments')
+    return {data}
+  })
+  .get('/api/admin/sync-stats/ch-judgments-derived-health', async () => {
+    await ensureClickhouseSchema()
+    const data = await getClickhouseJudgmentsDerivedHealth()
     return {data}
   })
   .post('/api/admin/sync-stats/rebuild-ch-judgments-derived-table', async () => {

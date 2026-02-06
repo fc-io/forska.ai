@@ -8,6 +8,39 @@ type TableStats = {count: number; countType: 'exact' | 'estimated'; maxUpdatedAt
 
 type ClickhouseIngestionStats = {maxPeerdbSyncedAtMs: number | null; maxUpdatedAtMs: number | null}
 
+type ClickhouseJudgmentsDerivedHealth = {
+  mv: {engine: string | null; exists: boolean}
+  windowHours: number
+  raw: {liveCount: number; maxUpdatedAtMs: number | null; recentLiveCount: number; recentMaxUpdatedAtMs: number | null}
+  derived: {
+    liveCount: number
+    maxUpdatedAtMs: number | null
+    recentLiveCount: number
+    recentMaxUpdatedAtMs: number | null
+  }
+  drift: {
+    liveCountDiff: number
+    status: 'synced' | 'raw_ahead' | 'derived_ahead'
+    recentLiveCountDiff: number
+    recentStatus: 'synced' | 'raw_ahead' | 'derived_ahead'
+    missingDerivedRecent: number
+  }
+  enrichment: {
+    missingTitle: number
+    recentMissingTitle: number
+    missingImportRoute: number
+    recentMissingImportRoute: number
+  }
+  missingTitleBreakdown: {
+    missingTitle: number
+    staleMissingTitle: number
+    missingArticleInClickhouse: number
+    recentMissingTitle: number
+    recentStaleMissingTitle: number
+    recentMissingArticleInClickhouse: number
+  }
+}
+
 type PgUpdatedAfterStats = {afterMs: number; count: number}
 
 type PeerdbMirrorHealth = {mirrorName: string; reachable: boolean; exists: boolean; status: string}
@@ -93,6 +126,13 @@ const fetchChJudgmentsIngestionStats = async (): Promise<ClickhouseIngestionStat
   return response.data.data
 }
 
+const fetchChJudgmentsDerivedHealth = async (): Promise<ClickhouseJudgmentsDerivedHealth> => {
+  const response = await apiClient.api.admin['sync-stats']['ch-judgments-derived-health'].get()
+  if (response.error) throw new Error('Failed to fetch CH judgments derived health')
+  if (!response.data) throw new Error('Failed to fetch CH judgments derived health')
+  return response.data.data
+}
+
 const fetchPgArticlesUpdatedAfter = async (afterMs: number): Promise<PgUpdatedAfterStats> => {
   const response = await apiClient.api.admin['sync-stats']['pg-articles-updated-after'].get({
     query: {afterMs: String(afterMs)},
@@ -170,6 +210,11 @@ const formatTime = (ms: number | null | undefined): string => {
 
 const formatBool = (value: boolean | null | undefined): string => {
   return value === null || value === undefined ? 'N/A' : value ? 'true' : 'false'
+}
+
+const formatSigned = (value: number | null | undefined): string => {
+  if (value === null || value === undefined) return 'N/A'
+  return value === 0 ? '0' : value > 0 ? `+${value.toLocaleString()}` : value.toLocaleString()
 }
 
 const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
@@ -498,6 +543,153 @@ const HealthCardSkeleton = (props: {title: string}) => {
           <div class="h-4 w-44 animate-pulse rounded bg-gray-200" />
         </div>
       </div>
+    </div>
+  )
+}
+
+const ClickhouseJudgmentsDerivedHealthCard = () => {
+  const query = useQuery(() => {
+    return {
+      queryKey: ['admin', 'sync-stats', 'ch-judgments-derived-health'],
+      queryFn: fetchChJudgmentsDerivedHealth,
+      staleTime: Infinity,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      retry: 0,
+    }
+  })
+
+  const errorMessage = createMemo(() => {
+    return getErrorMessage(query.error)
+  })
+
+  const missingTitlePct = createMemo(() => {
+    const live = query.data?.derived.liveCount ?? 0
+    const missing = query.data?.enrichment.missingTitle ?? 0
+    return live > 0 ? Math.round((missing / live) * 10000) / 100 : null
+  })
+
+  const missingTitleRecentPct = createMemo(() => {
+    const live = query.data?.derived.recentLiveCount ?? 0
+    const missing = query.data?.enrichment.recentMissingTitle ?? 0
+    return live > 0 ? Math.round((missing / live) * 10000) / 100 : null
+  })
+
+  return (
+    <div class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+      <div class="mb-4 flex items-center justify-between">
+        <h2 class="text-lg font-semibold">CH Judgments Derived Health</h2>
+      </div>
+
+      <Show when={errorMessage()}>
+        <div class="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{errorMessage()}</div>
+      </Show>
+
+      <Show when={!errorMessage()}>
+        <div class="space-y-3 text-sm">
+          <div class="flex items-center justify-between gap-4">
+            <div class="text-gray-600">Materialized view</div>
+            <div class="font-semibold text-gray-900">{query.data?.mv.exists ? 'present' : 'missing'}</div>
+          </div>
+
+          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div class="rounded-md border border-gray-200 bg-gray-50 p-3">
+              <div class="text-xs font-semibold text-gray-600">judgments_raw (replicated)</div>
+              <div class="mt-1 flex items-center justify-between">
+                <div class="text-gray-600">Count</div>
+                <div class="font-semibold">{formatCount(query.data?.raw.liveCount)}</div>
+              </div>
+              <div class="mt-1 flex items-center justify-between">
+                <div class="text-gray-600">Max updated</div>
+                <div class="font-semibold">{formatTime(query.data?.raw.maxUpdatedAtMs)}</div>
+              </div>
+            </div>
+
+            <div class="rounded-md border border-gray-200 bg-gray-50 p-3">
+              <div class="text-xs font-semibold text-gray-600">judgments (derived)</div>
+              <div class="mt-1 flex items-center justify-between">
+                <div class="text-gray-600">Count</div>
+                <div class="font-semibold">{formatCount(query.data?.derived.liveCount)}</div>
+              </div>
+              <div class="mt-1 flex items-center justify-between">
+                <div class="text-gray-600">Max updated</div>
+                <div class="font-semibold">{formatTime(query.data?.derived.maxUpdatedAtMs)}</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="rounded-md border border-gray-200 p-3">
+            <div class="flex items-center justify-between gap-4">
+              <div class="text-gray-600">Derived drift (derived - raw)</div>
+              <div class={query.data?.drift.status === 'synced' ? 'font-semibold' : 'font-semibold text-orange-700'}>
+                {formatSigned(query.data?.drift.liveCountDiff)} ({query.data?.drift.status})
+              </div>
+            </div>
+            <div class="mt-1 flex items-center justify-between gap-4">
+              <div class="text-gray-600">Missing derived rows (last {query.data?.windowHours}h)</div>
+              <div
+                class={
+                  query.data?.drift.missingDerivedRecent ? 'font-semibold text-red-700' : 'font-semibold text-gray-900'
+                }
+              >
+                {formatCount(query.data?.drift.missingDerivedRecent)}
+              </div>
+            </div>
+          </div>
+
+          <div class="rounded-md border border-gray-200 p-3">
+            <div class="flex items-center justify-between gap-4">
+              <div class="text-gray-600">Unenriched judgments (articleTitle = '')</div>
+              <div class={query.data?.enrichment.missingTitle ? 'font-semibold text-orange-700' : 'font-semibold'}>
+                {formatCount(query.data?.enrichment.missingTitle)}
+                <Show when={missingTitlePct() !== null}>
+                  <span class="ml-1 text-gray-600">({missingTitlePct()}%)</span>
+                </Show>
+              </div>
+            </div>
+
+            <div class="mt-1 flex items-center justify-between gap-4">
+              <div class="text-gray-600">Unenriched (last {query.data?.windowHours}h)</div>
+              <div
+                class={query.data?.enrichment.recentMissingTitle ? 'font-semibold text-orange-700' : 'font-semibold'}
+              >
+                {formatCount(query.data?.enrichment.recentMissingTitle)}
+                <Show when={missingTitleRecentPct() !== null}>
+                  <span class="ml-1 text-gray-600">({missingTitleRecentPct()}%)</span>
+                </Show>
+              </div>
+            </div>
+
+            <div class="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <div class="rounded-md border border-gray-200 bg-gray-50 p-2">
+                <div class="text-xs text-gray-600">Stale enrichment (article exists now)</div>
+                <div class="font-semibold text-gray-900">
+                  {formatCount(query.data?.missingTitleBreakdown.staleMissingTitle)}
+                </div>
+              </div>
+              <div class="rounded-md border border-gray-200 bg-gray-50 p-2">
+                <div class="text-xs text-gray-600">Articles missing in CH</div>
+                <div
+                  class={
+                    query.data?.missingTitleBreakdown.missingArticleInClickhouse
+                      ? 'font-semibold text-red-700'
+                      : 'font-semibold text-gray-900'
+                  }
+                >
+                  {formatCount(query.data?.missingTitleBreakdown.missingArticleInClickhouse)}
+                </div>
+              </div>
+            </div>
+
+            <Show when={query.data?.missingTitleBreakdown.missingArticleInClickhouse}>
+              <div class="mt-2 rounded-md border border-orange-200 bg-orange-50 p-3 text-xs text-orange-800">
+                Articles are missing in ClickHouse. Derived enrichment can’t self-heal until `forska.articles` catches
+                up.
+              </div>
+            </Show>
+          </div>
+        </div>
+      </Show>
     </div>
   )
 }
@@ -839,6 +1031,18 @@ const AdminSyncStats = () => {
             </Suspense>
             <Suspense fallback={<UpdatedAfterCardSkeleton title="PG Judgments > CH Max Updated" />}>
               <PgJudgmentsUpdatedAfterChCard />
+            </Suspense>
+          </div>
+        </div>
+
+        <div class="mb-6">
+          <div class="mb-4">
+            <h2 class="text-lg font-semibold text-gray-900">Derived Tables</h2>
+            <div class="text-sm text-gray-600">Detect MV drift + missing article enrichment.</div>
+          </div>
+          <div class="grid grid-cols-1 gap-6">
+            <Suspense fallback={<HealthCardSkeleton title="CH Judgments Derived Health" />}>
+              <ClickhouseJudgmentsDerivedHealthCard />
             </Suspense>
           </div>
         </div>
