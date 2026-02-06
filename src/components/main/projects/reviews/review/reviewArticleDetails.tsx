@@ -494,7 +494,7 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
       if (lastFlashedElement === el) {
         lastFlashedElement = undefined
       }
-    }, 1300)
+    }, 2400)
 
     clickFlashTimeoutByElement.set(el, timeout)
     lastFlashedElement = el

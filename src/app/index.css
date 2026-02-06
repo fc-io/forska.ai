@@ -124,13 +124,17 @@ pre code {
     background-color: rgba(239, 68, 68, 0.35);
     box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.22);
   }
+  65% {
+    background-color: rgba(239, 68, 68, 0.28);
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.12);
+  }
   100% {
     background-color: rgba(239, 68, 68, 0);
-    box-shadow: 0 0 0 8px rgba(239, 68, 68, 0);
+    box-shadow: 0 0 0 10px rgba(239, 68, 68, 0);
   }
 }
 
 .fulltext-quote-click-flash {
-  animation: fulltextQuoteClickFlash 1200ms ease-out;
+  animation: fulltextQuoteClickFlash 2200ms ease-out;
   border-radius: 0.125rem;
 }
