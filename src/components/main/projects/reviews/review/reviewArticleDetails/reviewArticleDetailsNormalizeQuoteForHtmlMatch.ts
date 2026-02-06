@@ -19,5 +19,6 @@ const escapeAngleBracketsOutsideTags = (s: string): string => {
 export const reviewArticleDetailsNormalizeQuoteForHtmlMatch = (quote: string): string => {
   const trimmed = quote.trim()
   const withoutOuterEllipses = stripOuterEllipses(trimmed).trim()
-  return escapeAngleBracketsOutsideTags(escapeAmpersands(withoutOuterEllipses))
+  const withSplitCamelCase = withoutOuterEllipses.replace(/([a-z])([A-Z])/g, '$1 $2')
+  return escapeAngleBracketsOutsideTags(escapeAmpersands(withSplitCamelCase))
 }

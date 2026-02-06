@@ -262,7 +262,7 @@ const buildTagAgnosticRegex = (key: string, caseInsensitive: boolean): RegExp | 
     }
   }
 
-  const gap = '(?:\\s|<[^>]*>|&[#a-zA-Z0-9]+;)*'
+  const gap = '(?:\\s|<[^>]*>|&[#a-zA-Z0-9]+;|[,:;])*'
   const wildcardGap = '(?:[\\s\\S]{0,50000}?)'
 
   const initial = {pattern: '', hasToken: false, needsWildcardGap: false}
