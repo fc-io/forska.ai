@@ -4,6 +4,7 @@ import {Elysia, t} from 'elysia'
 import {
   articleRouteLink,
   articles,
+  importRoute,
   judgments,
   models,
   projectArticles,
@@ -12,6 +13,7 @@ import {
   projects,
   prompts,
 } from '../../db/schema.ts'
+import {getClickhouseClient} from '../../services/clickhouse/clickhouseClient.ts'
 import {requireUserAuth} from '../utils/authGuard.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
@@ -46,6 +48,128 @@ type ProjectBound = {
 }
 
 type PromptFilter = {promptId: string; types: string[]}
+
+const escapeClickHouseString = (value: string): string => {
+  return value.replace(/'/g, "''")
+}
+
+const formatDateForClickHouse = (date: Date): string => {
+  const year = date.getUTCFullYear()
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0')
+  const day = String(date.getUTCDate()).padStart(2, '0')
+  const hours = String(date.getUTCHours()).padStart(2, '0')
+  const minutes = String(date.getUTCMinutes()).padStart(2, '0')
+  const seconds = String(date.getUTCSeconds()).padStart(2, '0')
+  const millis = String(date.getUTCMilliseconds()).padStart(3, '0')
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}.${millis}`
+}
+
+const queryArticleIdsWithPromptFiltersFromClickHouse = async (params: {
+  logLabel: string
+  promptFilters: PromptFilter[]
+  modelId: string
+  useTitle: boolean
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  dateFrom: Date | null
+  dateTo: Date | null
+  userDateFrom: Date | null
+  userDateTo: Date | null
+  routeTexts: string[]
+}) => {
+  const client = getClickhouseClient()
+
+  const promptFilters = params.promptFilters.filter((f) => {
+    return f.types.length > 0
+  })
+  if (promptFilters.length === 0) {
+    return [] as string[]
+  }
+  if (params.routeTexts.length === 0) {
+    return [] as string[]
+  }
+
+  const effectiveFromDate =
+    params.dateFrom && params.userDateFrom
+      ? params.dateFrom > params.userDateFrom
+        ? params.dateFrom
+        : params.userDateFrom
+      : (params.dateFrom ?? params.userDateFrom)
+
+  const effectiveToDate =
+    params.dateTo && params.userDateTo
+      ? params.dateTo < params.userDateTo
+        ? params.dateTo
+        : params.userDateTo
+      : (params.dateTo ?? params.userDateTo)
+
+  const promptIdsQuoted = Array.from(
+    new Set(
+      promptFilters.map((f) => {
+        return f.promptId
+      }),
+    ),
+  )
+    .map((id) => {
+      return `'${escapeClickHouseString(id)}'`
+    })
+    .join(', ')
+
+  const routesQuoted = Array.from(new Set(params.routeTexts))
+    .map((r) => {
+      return `'${escapeClickHouseString(r)}'`
+    })
+    .join(', ')
+
+  const whereParts: string[] = []
+  whereParts.push('_peerdb_is_deleted = 0')
+  whereParts.push(`promptId IN (${promptIdsQuoted})`)
+  whereParts.push(`modelId = '${escapeClickHouseString(params.modelId)}'`)
+  whereParts.push(`useTitle = ${params.useTitle ? 'true' : 'false'}`)
+  whereParts.push(`useAbstract = ${params.useAbstract ? 'true' : 'false'}`)
+  whereParts.push(`useFulltext = ${params.useFulltext ? 'true' : 'false'}`)
+  whereParts.push(`useFulltextNoImages = ${params.useFulltextNoImages ? 'true' : 'false'}`)
+  whereParts.push(`articleImportRoute IN (${routesQuoted})`)
+
+  if (effectiveFromDate) {
+    whereParts.push(`articleCreatedAt >= toDateTime64('${formatDateForClickHouse(effectiveFromDate)}', 3)`)
+  }
+  if (effectiveToDate) {
+    whereParts.push(`articleCreatedAt <= toDateTime64('${formatDateForClickHouse(effectiveToDate)}', 3)`)
+  }
+
+  const havingParts = promptFilters.map((filter) => {
+    const valuesQuoted = Array.from(new Set(filter.types))
+      .map((v) => {
+        return `'${escapeClickHouseString(v)}'`
+      })
+      .join(', ')
+
+    return `sumIf(1, promptId = '${escapeClickHouseString(filter.promptId)}' AND (
+      (length(answeredOriginalAsArray) > 0 AND hasAny(arrayMap(x -> assumeNotNull(x), arrayFilter(x -> x IS NOT NULL, answeredOriginalAsArray)), [${valuesQuoted}]))
+      OR (length(answeredOriginalAsArray) = 0 AND answeredOriginal IN (${valuesQuoted}))
+    )) > 0`
+  })
+
+  const query = `
+    SELECT articleId
+    FROM judgments FINAL
+    WHERE ${whereParts.join(' AND ')}
+    GROUP BY articleId
+    HAVING ${havingParts.join(' AND ')}
+  `
+
+  const label = `ch:subproject_select_ids:${params.logLabel}`
+  console.time(label)
+  const result = await client.query({query, format: 'JSONEachRow'})
+  const data = await result.json<{articleId: string}>()
+  console.timeEnd(label)
+
+  return data.map((r) => {
+    return r.articleId
+  })
+}
 
 const queryArticlesWithPromptFilters = async (
   db: ReturnType<typeof getDatabase>,
@@ -267,10 +391,14 @@ export const subprojectsRoutes = new Elysia()
         return f.promptId
       })
 
-      // For each source project, get its import routes
       const projectImportRoutes = await db
-        .select({projectId: projectRouteLink.projectId, importRouteId: projectRouteLink.importRouteId})
+        .select({
+          projectId: projectRouteLink.projectId,
+          importRouteId: projectRouteLink.importRouteId,
+          routeText: importRoute.route,
+        })
         .from(projectRouteLink)
+        .innerJoin(importRoute, eq(projectRouteLink.importRouteId, importRoute.id))
         .where(inArray(projectRouteLink.projectId, body.sourceProjectIds))
 
       // Get project date bounds and content/model settings
@@ -288,11 +416,16 @@ export const subprojectsRoutes = new Elysia()
         .from(projects)
         .where(inArray(projects.id, body.sourceProjectIds))
 
-      const importRoutesByProjectId = new Map<string, string[]>()
+      const importRouteIdsByProjectId = new Map<string, string[]>()
+      const importRouteTextsByProjectId = new Map<string, string[]>()
       for (const row of projectImportRoutes) {
-        const current = importRoutesByProjectId.get(row.projectId) ?? []
-        current.push(row.importRouteId)
-        importRoutesByProjectId.set(row.projectId, current)
+        const currentIds = importRouteIdsByProjectId.get(row.projectId) ?? []
+        currentIds.push(row.importRouteId)
+        importRouteIdsByProjectId.set(row.projectId, currentIds)
+
+        const currentTexts = importRouteTextsByProjectId.get(row.projectId) ?? []
+        currentTexts.push(row.routeText)
+        importRouteTextsByProjectId.set(row.projectId, currentTexts)
       }
 
       const promptIdsForMapping = allSelectedPromptIds.length > 0 ? Array.from(new Set(allSelectedPromptIds)) : []
@@ -321,75 +454,108 @@ export const subprojectsRoutes = new Elysia()
 
       const uniqueArticleIds = new Set<string>()
 
-      for (const sourceProject of projectBounds) {
-        const projectPromptIdSet = promptIdsByProjectId.get(sourceProject.id) ?? new Set<string>()
-        const applicablePromptFilters = promptFilters.filter((f) => {
-          return projectPromptIdSet.has(f.promptId)
-        })
-        const applicablePromptIds = applicablePromptFilters.map((f) => {
-          return f.promptId
-        })
+      const projectQueryConcurrency = 3
+      for (const boundsChunk of chunk(projectBounds, projectQueryConcurrency)) {
+        const chunkResults = await Promise.all(
+          boundsChunk.map(async (sourceProject) => {
+            const projectPromptIdSet = promptIdsByProjectId.get(sourceProject.id) ?? new Set<string>()
+            const applicablePromptFilters = promptFilters.filter((f) => {
+              return projectPromptIdSet.has(f.promptId)
+            })
+            const applicablePromptIds = applicablePromptFilters.map((f) => {
+              return f.promptId
+            })
 
-        const projectScopeParts: Array<ReturnType<typeof sql>> = []
+            const projectScopeParts: Array<ReturnType<typeof sql>> = []
 
-        const routeIds = importRoutesByProjectId.get(sourceProject.id) ?? []
-        if (routeIds.length > 0) {
-          const routeIdArray = sql.join(
-            routeIds.map((r) => {
-              return sql`${r}::uuid`
-            }),
-            sql`,`,
-          )
-          projectScopeParts.push(
-            sql`EXISTS (
-              SELECT 1 FROM ${articleRouteLink} arl
-              WHERE arl."article_id" = ${articles.id}
-                AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
-            )`,
-          )
-        }
+            const routeIds = importRouteIdsByProjectId.get(sourceProject.id) ?? []
+            const routeTexts = importRouteTextsByProjectId.get(sourceProject.id) ?? []
+            if (routeIds.length > 0) {
+              const routeIdArray = sql.join(
+                routeIds.map((r) => {
+                  return sql`${r}::uuid`
+                }),
+                sql`,`,
+              )
+              projectScopeParts.push(
+                sql`EXISTS (
+                  SELECT 1 FROM ${articleRouteLink} arl
+                  WHERE arl."article_id" = ${articles.id}
+                    AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
+                )`,
+              )
+            }
 
-        projectScopeParts.push(
-          sql`EXISTS (
-            SELECT 1 FROM ${projectArticles} pa
-            WHERE pa."article_id" = ${articles.id}
-              AND pa."project_id" = ${sourceProject.id}::uuid
-          )`,
+            projectScopeParts.push(
+              sql`EXISTS (
+                SELECT 1 FROM ${projectArticles} pa
+                WHERE pa."article_id" = ${articles.id}
+                  AND pa."project_id" = ${sourceProject.id}::uuid
+              )`,
+            )
+
+            const projectScopeCondition =
+              (projectScopeParts.length > 1 ? or(...projectScopeParts) : projectScopeParts[0]) ?? sql`FALSE`
+
+            const projectWhereParts: Array<ReturnType<typeof sql>> = []
+            if (sourceProject.dateFrom) {
+              projectWhereParts.push(gte(articles.articleCreatedAt, sourceProject.dateFrom))
+            }
+            if (sourceProject.dateTo) {
+              projectWhereParts.push(lte(articles.articleCreatedAt, sourceProject.dateTo))
+            }
+            if (userDateFrom) {
+              projectWhereParts.push(gte(articles.articleCreatedAt, userDateFrom))
+            }
+            if (userDateTo) {
+              projectWhereParts.push(lte(articles.articleCreatedAt, userDateTo))
+            }
+            projectWhereParts.push(projectScopeCondition)
+
+            const projectWhereCondition =
+              projectWhereParts.length > 1 ? and(...projectWhereParts) : projectWhereParts[0]
+
+            const shouldUseClickHouse = applicablePromptFilters.length > 0 && routeTexts.length > 0
+
+            return shouldUseClickHouse
+              ? queryArticleIdsWithPromptFiltersFromClickHouse({
+                  logLabel: sourceProject.id,
+                  promptFilters: applicablePromptFilters,
+                  modelId: sourceProject.modelId,
+                  useTitle: sourceProject.useTitle,
+                  useAbstract: sourceProject.useAbstract,
+                  useFulltext: sourceProject.useFulltext,
+                  useFulltextNoImages: sourceProject.useFulltextNoImages,
+                  dateFrom: sourceProject.dateFrom,
+                  dateTo: sourceProject.dateTo,
+                  userDateFrom,
+                  userDateTo,
+                  routeTexts,
+                })
+              : applicablePromptFilters.length > 0
+                ? queryArticlesWithPromptFilters(
+                    db,
+                    applicablePromptFilters,
+                    applicablePromptIds,
+                    [sourceProject],
+                    projectWhereCondition,
+                  ).then((rows) => {
+                    return rows.map((row) => {
+                      return row.id
+                    })
+                  })
+                : queryAllArticlesInScope(db, projectWhereCondition).then((rows) => {
+                    return rows.map((row) => {
+                      return row.id
+                    })
+                  })
+          }),
         )
 
-        const projectScopeCondition =
-          (projectScopeParts.length > 1 ? or(...projectScopeParts) : projectScopeParts[0]) ?? sql`FALSE`
-
-        const projectWhereParts: Array<ReturnType<typeof sql>> = []
-        if (sourceProject.dateFrom) {
-          projectWhereParts.push(gte(articles.articleCreatedAt, sourceProject.dateFrom))
-        }
-        if (sourceProject.dateTo) {
-          projectWhereParts.push(lte(articles.articleCreatedAt, sourceProject.dateTo))
-        }
-        if (userDateFrom) {
-          projectWhereParts.push(gte(articles.articleCreatedAt, userDateFrom))
-        }
-        if (userDateTo) {
-          projectWhereParts.push(lte(articles.articleCreatedAt, userDateTo))
-        }
-        projectWhereParts.push(projectScopeCondition)
-
-        const projectWhereCondition = projectWhereParts.length > 1 ? and(...projectWhereParts) : projectWhereParts[0]
-
-        const matchingArticles =
-          applicablePromptFilters.length > 0
-            ? await queryArticlesWithPromptFilters(
-                db,
-                applicablePromptFilters,
-                applicablePromptIds,
-                [sourceProject],
-                projectWhereCondition,
-              )
-            : await queryAllArticlesInScope(db, projectWhereCondition)
-
-        for (const row of matchingArticles) {
-          uniqueArticleIds.add(row.id)
+        for (const ids of chunkResults) {
+          for (const id of ids) {
+            uniqueArticleIds.add(id)
+          }
         }
       }
 
@@ -399,20 +565,22 @@ export const subprojectsRoutes = new Elysia()
       )
 
       // Insert articles into the new project in batches
-      const batchSize = 1000
+      const batchSize = 5000
       let insertedCount = 0
-      for (const idsChunk of chunk(articleIds, batchSize)) {
-        if (idsChunk.length === 0) continue
-        await db
-          .insert(projectArticles)
-          .values(
-            idsChunk.map((articleId) => {
-              return {projectId: newProject.id, articleId, importedFromProjectId: null}
-            }),
-          )
-          .onConflictDoNothing({target: [projectArticles.projectId, projectArticles.articleId]})
-        insertedCount += idsChunk.length
-      }
+      await db.transaction(async (tx) => {
+        for (const idsChunk of chunk(articleIds, batchSize)) {
+          if (idsChunk.length === 0) continue
+          await tx
+            .insert(projectArticles)
+            .values(
+              idsChunk.map((articleId) => {
+                return {projectId: newProject.id, articleId, importedFromProjectId: null}
+              }),
+            )
+            .onConflictDoNothing({target: [projectArticles.projectId, projectArticles.articleId]})
+          insertedCount += idsChunk.length
+        }
+      })
 
       console.log(`[subprojects] Inserted ${insertedCount} articles into project ${newProject.id}`)
 
