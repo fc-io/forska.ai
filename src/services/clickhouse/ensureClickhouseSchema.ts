@@ -140,7 +140,17 @@ const createJudgmentsMaterializedViewQuery = `
     j._peerdb_version AS _peerdb_version,
     if(j._peerdb_is_deleted = 1 OR isNotNull(j.deleted_at), 1, 0) AS _peerdb_is_deleted
   FROM forska.judgments_raw j
-  ANY LEFT JOIN forska.articles a ON j.article_id = a.id AND a._peerdb_is_deleted = 0
+  ANY LEFT JOIN (
+    SELECT
+      id,
+      article_title,
+      article_created_at,
+      article_updated_at,
+      import_route,
+      imported_by
+    FROM forska.articles FINAL
+    WHERE _peerdb_is_deleted = 0
+  ) a ON j.article_id = a.id
 `
 
 const getClickhouseTableEngine = async (db: string, name: string): Promise<string | null> => {

@@ -255,9 +255,10 @@ const getClickhouseJudgmentsDerivedHealth = async () => {
   const rawMaxUpdatedAtMsExpr = buildMaxUpdatedAtMsExprForColumn('updated_at')
   const derivedMaxUpdatedAtMsExpr = buildMaxUpdatedAtMsExprForColumn('updatedAt')
 
-  const [rawStatsResult, derivedStatsResult, mvStatsResult, missingDerivedRecentResult] = await Promise.all([
-    client.query({
-      query: `
+  const [rawStatsResult, derivedStatsResult, titleStatsResult, importRouteStatsResult, missingDerivedRecentResult] =
+    await Promise.all([
+      client.query({
+        query: `
         SELECT
           count() as liveCount,
           if(count() = 0, NULL, ${rawMaxUpdatedAtMsExpr}) as maxUpdatedAtMs,
@@ -271,10 +272,10 @@ const getClickhouseJudgmentsDerivedHealth = async () => {
         FROM forska.judgments_raw FINAL
         WHERE _peerdb_is_deleted = 0 AND deleted_at IS NULL
       `,
-      format: 'JSONEachRow',
-    }),
-    client.query({
-      query: `
+        format: 'JSONEachRow',
+      }),
+      client.query({
+        query: `
         SELECT
           count() as liveCount,
           if(count() = 0, NULL, ${derivedMaxUpdatedAtMsExpr}) as maxUpdatedAtMs,
@@ -292,29 +293,60 @@ const getClickhouseJudgmentsDerivedHealth = async () => {
         FROM forska.judgments FINAL
         WHERE _peerdb_is_deleted = 0
       `,
-      format: 'JSONEachRow',
-    }),
-    client.query({
-      query: `
+        format: 'JSONEachRow',
+      }),
+      client.query({
+        query: `
         SELECT
           ${windowHours} as windowHours,
           count() as missingTitle,
-          countIf(isNotNull(a.id)) as staleMissingTitle,
-          countIf(isNull(a.id)) as missingArticleInClickhouse,
+          countIf(a.id IS NULL) as missingArticleInClickhouse,
+          countIf(a.id IS NOT NULL AND a.article_title != '') as staleMissingTitle,
+          countIf(a.id IS NOT NULL AND a.article_title = '') as emptyTitleInArticles,
           countIf(j.updatedAt >= ${windowStartExpr}) as recentMissingTitle,
-          countIf(j.updatedAt >= ${windowStartExpr} AND isNotNull(a.id)) as recentStaleMissingTitle,
-          countIf(j.updatedAt >= ${windowStartExpr} AND isNull(a.id)) as recentMissingArticleInClickhouse
+          countIf(j.updatedAt >= ${windowStartExpr} AND a.id IS NULL) as recentMissingArticleInClickhouse,
+          countIf(j.updatedAt >= ${windowStartExpr} AND a.id IS NOT NULL AND a.article_title != '') as recentStaleMissingTitle,
+          countIf(j.updatedAt >= ${windowStartExpr} AND a.id IS NOT NULL AND a.article_title = '') as recentEmptyTitleInArticles
         FROM (
           SELECT articleId, updatedAt
           FROM forska.judgments FINAL
           WHERE _peerdb_is_deleted = 0 AND articleTitle = ''
         ) j
-        ANY LEFT JOIN forska.articles a ON j.articleId = a.id AND a._peerdb_is_deleted = 0
+        LEFT JOIN (
+          SELECT id, article_title
+          FROM forska.articles FINAL
+          WHERE _peerdb_is_deleted = 0
+        ) a ON j.articleId = a.id
       `,
-      format: 'JSONEachRow',
-    }),
-    client.query({
-      query: `
+        format: 'JSONEachRow',
+      }),
+      client.query({
+        query: `
+        SELECT
+          ${windowHours} as windowHours,
+          count() as missingImportRoute,
+          countIf(a.id IS NULL) as missingArticleInClickhouse,
+          countIf(a.id IS NOT NULL AND isNotNull(a.import_route)) as staleMissingImportRoute,
+          countIf(a.id IS NOT NULL AND isNull(a.import_route)) as bothNullImportRoute,
+          countIf(j.updatedAt >= ${windowStartExpr}) as recentMissingImportRoute,
+          countIf(j.updatedAt >= ${windowStartExpr} AND a.id IS NULL) as recentMissingArticleInClickhouse,
+          countIf(j.updatedAt >= ${windowStartExpr} AND a.id IS NOT NULL AND isNotNull(a.import_route)) as recentStaleMissingImportRoute,
+          countIf(j.updatedAt >= ${windowStartExpr} AND a.id IS NOT NULL AND isNull(a.import_route)) as recentBothNullImportRoute
+        FROM (
+          SELECT articleId, updatedAt
+          FROM forska.judgments FINAL
+          WHERE _peerdb_is_deleted = 0 AND isNull(articleImportRoute)
+        ) j
+        LEFT JOIN (
+          SELECT id, import_route
+          FROM forska.articles FINAL
+          WHERE _peerdb_is_deleted = 0
+        ) a ON j.articleId = a.id
+      `,
+        format: 'JSONEachRow',
+      }),
+      client.query({
+        query: `
         SELECT count() as missingDerived
         FROM (
           SELECT id
@@ -329,9 +361,9 @@ const getClickhouseJudgmentsDerivedHealth = async () => {
           WHERE _peerdb_is_deleted = 0
         ) d USING (id)
       `,
-      format: 'JSONEachRow',
-    }),
-  ])
+        format: 'JSONEachRow',
+      }),
+    ])
 
   const rawStatsRows = await rawStatsResult.json<{
     liveCount: string | number
@@ -349,20 +381,34 @@ const getClickhouseJudgmentsDerivedHealth = async () => {
     missingImportRoute: string | number
     recentMissingImportRoute: string | number
   }>()
-  const mvStatsRows = await mvStatsResult.json<{
+  const titleStatsRows = await titleStatsResult.json<{
     windowHours: string | number
     missingTitle: string | number
-    staleMissingTitle: string | number
     missingArticleInClickhouse: string | number
+    staleMissingTitle: string | number
+    emptyTitleInArticles: string | number
     recentMissingTitle: string | number
-    recentStaleMissingTitle: string | number
     recentMissingArticleInClickhouse: string | number
+    recentStaleMissingTitle: string | number
+    recentEmptyTitleInArticles: string | number
+  }>()
+  const importRouteStatsRows = await importRouteStatsResult.json<{
+    windowHours: string | number
+    missingImportRoute: string | number
+    missingArticleInClickhouse: string | number
+    staleMissingImportRoute: string | number
+    bothNullImportRoute: string | number
+    recentMissingImportRoute: string | number
+    recentMissingArticleInClickhouse: string | number
+    recentStaleMissingImportRoute: string | number
+    recentBothNullImportRoute: string | number
   }>()
   const missingDerivedRows = await missingDerivedRecentResult.json<{missingDerived: string | number}>()
 
   const rawStats = Array.isArray(rawStatsRows) ? rawStatsRows[0] : rawStatsRows
   const derivedStats = Array.isArray(derivedStatsRows) ? derivedStatsRows[0] : derivedStatsRows
-  const mvStats = Array.isArray(mvStatsRows) ? mvStatsRows[0] : mvStatsRows
+  const titleStats = Array.isArray(titleStatsRows) ? titleStatsRows[0] : titleStatsRows
+  const importRouteStats = Array.isArray(importRouteStatsRows) ? importRouteStatsRows[0] : importRouteStatsRows
   const missingDerived = Array.isArray(missingDerivedRows) ? missingDerivedRows[0] : missingDerivedRows
 
   const derivedLiveCount = toNumber(derivedStats?.liveCount)
@@ -404,12 +450,24 @@ const getClickhouseJudgmentsDerivedHealth = async () => {
       recentMissingImportRoute: toNumber(derivedStats?.recentMissingImportRoute),
     },
     missingTitleBreakdown: {
-      missingTitle: toNumber(mvStats?.missingTitle),
-      staleMissingTitle: toNumber(mvStats?.staleMissingTitle),
-      missingArticleInClickhouse: toNumber(mvStats?.missingArticleInClickhouse),
-      recentMissingTitle: toNumber(mvStats?.recentMissingTitle),
-      recentStaleMissingTitle: toNumber(mvStats?.recentStaleMissingTitle),
-      recentMissingArticleInClickhouse: toNumber(mvStats?.recentMissingArticleInClickhouse),
+      missingTitle: toNumber(titleStats?.missingTitle),
+      missingArticleInClickhouse: toNumber(titleStats?.missingArticleInClickhouse),
+      staleMissingTitle: toNumber(titleStats?.staleMissingTitle),
+      emptyTitleInArticles: toNumber(titleStats?.emptyTitleInArticles),
+      recentMissingTitle: toNumber(titleStats?.recentMissingTitle),
+      recentMissingArticleInClickhouse: toNumber(titleStats?.recentMissingArticleInClickhouse),
+      recentStaleMissingTitle: toNumber(titleStats?.recentStaleMissingTitle),
+      recentEmptyTitleInArticles: toNumber(titleStats?.recentEmptyTitleInArticles),
+    },
+    importRouteBreakdown: {
+      missingImportRoute: toNumber(importRouteStats?.missingImportRoute),
+      missingArticleInClickhouse: toNumber(importRouteStats?.missingArticleInClickhouse),
+      staleMissingImportRoute: toNumber(importRouteStats?.staleMissingImportRoute),
+      bothNullImportRoute: toNumber(importRouteStats?.bothNullImportRoute),
+      recentMissingImportRoute: toNumber(importRouteStats?.recentMissingImportRoute),
+      recentMissingArticleInClickhouse: toNumber(importRouteStats?.recentMissingArticleInClickhouse),
+      recentStaleMissingImportRoute: toNumber(importRouteStats?.recentStaleMissingImportRoute),
+      recentBothNullImportRoute: toNumber(importRouteStats?.recentBothNullImportRoute),
     },
   }
 }

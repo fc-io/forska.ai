@@ -33,11 +33,23 @@ type ClickhouseJudgmentsDerivedHealth = {
   }
   missingTitleBreakdown: {
     missingTitle: number
-    staleMissingTitle: number
     missingArticleInClickhouse: number
+    staleMissingTitle: number
+    emptyTitleInArticles: number
     recentMissingTitle: number
-    recentStaleMissingTitle: number
     recentMissingArticleInClickhouse: number
+    recentStaleMissingTitle: number
+    recentEmptyTitleInArticles: number
+  }
+  importRouteBreakdown: {
+    missingImportRoute: number
+    missingArticleInClickhouse: number
+    staleMissingImportRoute: number
+    bothNullImportRoute: number
+    recentMissingImportRoute: number
+    recentMissingArticleInClickhouse: number
+    recentStaleMissingImportRoute: number
+    recentBothNullImportRoute: number
   }
 }
 
@@ -54,17 +66,19 @@ const isCriticalDerivedHealth = (data: ClickhouseJudgmentsDerivedHealth | null |
   const articlesMissing =
     isNonZero(data?.missingTitleBreakdown.missingArticleInClickhouse)
     || isNonZero(data?.missingTitleBreakdown.recentMissingArticleInClickhouse)
+    || isNonZero(data?.importRouteBreakdown.missingArticleInClickhouse)
+    || isNonZero(data?.importRouteBreakdown.recentMissingArticleInClickhouse)
   return Boolean(data) && (mvMissing || drift || missingDerivedRecent || articlesMissing)
 }
 
 const isWarningDerivedHealth = (data: ClickhouseJudgmentsDerivedHealth | null | undefined): boolean => {
-  const missingTitle = isNonZero(data?.enrichment.missingTitle) || isNonZero(data?.enrichment.recentMissingTitle)
-  const missingImportRoute =
-    isNonZero(data?.enrichment.missingImportRoute) || isNonZero(data?.enrichment.recentMissingImportRoute)
   const staleMissingTitle =
     isNonZero(data?.missingTitleBreakdown.staleMissingTitle)
     || isNonZero(data?.missingTitleBreakdown.recentStaleMissingTitle)
-  return Boolean(data) && !isCriticalDerivedHealth(data) && (missingTitle || missingImportRoute || staleMissingTitle)
+  const staleMissingImportRoute =
+    isNonZero(data?.importRouteBreakdown.staleMissingImportRoute)
+    || isNonZero(data?.importRouteBreakdown.recentStaleMissingImportRoute)
+  return Boolean(data) && !isCriticalDerivedHealth(data) && (staleMissingTitle || staleMissingImportRoute)
 }
 
 const getDerivedHealthSeverity = (
@@ -721,14 +735,16 @@ const ClickhouseJudgmentsDerivedHealthCard = () => {
 
           <div class="rounded-md border border-gray-200 p-3">
             <div class="flex items-center justify-between gap-4">
-              <div class="text-gray-600">Unenriched judgments (articleTitle = '')</div>
+              <div class="text-gray-600">Blank article titles (derived: articleTitle = '')</div>
               <div
                 class={
                   query.data?.missingTitleBreakdown.missingArticleInClickhouse
                     ? 'font-semibold text-red-800'
-                    : query.data?.enrichment.missingTitle
+                    : query.data?.missingTitleBreakdown.staleMissingTitle
                       ? 'font-semibold text-orange-800'
-                      : 'font-semibold'
+                      : query.data?.missingTitleBreakdown.emptyTitleInArticles
+                        ? 'font-semibold text-gray-700'
+                        : 'font-semibold'
                 }
               >
                 {formatCount(query.data?.enrichment.missingTitle)}
@@ -741,7 +757,15 @@ const ClickhouseJudgmentsDerivedHealthCard = () => {
             <div class="mt-1 flex items-center justify-between gap-4">
               <div class="text-gray-600">Unenriched (last {query.data?.windowHours}h)</div>
               <div
-                class={query.data?.enrichment.recentMissingTitle ? 'font-semibold text-orange-700' : 'font-semibold'}
+                class={
+                  query.data?.missingTitleBreakdown.recentMissingArticleInClickhouse
+                    ? 'font-semibold text-red-800'
+                    : query.data?.missingTitleBreakdown.recentStaleMissingTitle
+                      ? 'font-semibold text-orange-800'
+                      : query.data?.missingTitleBreakdown.recentEmptyTitleInArticles
+                        ? 'font-semibold text-gray-700'
+                        : 'font-semibold'
+                }
               >
                 {formatCount(query.data?.enrichment.recentMissingTitle)}
                 <Show when={missingTitleRecentPct() !== null}>
@@ -750,13 +774,27 @@ const ClickhouseJudgmentsDerivedHealthCard = () => {
               </div>
             </div>
 
-            <div class="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <div class="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
               <div class="rounded-md border border-gray-200 bg-gray-50 p-2">
-                <div class="text-xs text-gray-600">Stale enrichment (article exists now)</div>
-                <div class="font-semibold text-gray-900">
+                <div class="text-xs text-gray-600">Stale join (articles has title)</div>
+                <div
+                  class={
+                    query.data?.missingTitleBreakdown.staleMissingTitle
+                      ? 'font-semibold text-orange-800'
+                      : 'font-semibold text-gray-900'
+                  }
+                >
                   {formatCount(query.data?.missingTitleBreakdown.staleMissingTitle)}
                 </div>
               </div>
+
+              <div class="rounded-md border border-gray-200 bg-gray-50 p-2">
+                <div class="text-xs text-gray-600">Title empty in articles</div>
+                <div class="font-semibold text-gray-900">
+                  {formatCount(query.data?.missingTitleBreakdown.emptyTitleInArticles)}
+                </div>
+              </div>
+
               <div class="rounded-md border border-gray-200 bg-gray-50 p-2">
                 <div class="text-xs text-gray-600">Articles missing in CH</div>
                 <div
@@ -772,6 +810,84 @@ const ClickhouseJudgmentsDerivedHealthCard = () => {
             </div>
 
             <Show when={query.data?.missingTitleBreakdown.missingArticleInClickhouse}>
+              <div class="mt-2 rounded-md border border-red-200 bg-red-100 p-3 text-xs text-red-800">
+                Articles are missing in ClickHouse. Derived enrichment can’t self-heal until `forska.articles` catches
+                up.
+              </div>
+            </Show>
+          </div>
+
+          <div class="rounded-md border border-gray-200 p-3">
+            <div class="flex items-center justify-between gap-4">
+              <div class="text-gray-600">Missing import route (derived: articleImportRoute IS NULL)</div>
+              <div
+                class={
+                  query.data?.importRouteBreakdown.missingArticleInClickhouse
+                    ? 'font-semibold text-red-800'
+                    : query.data?.importRouteBreakdown.staleMissingImportRoute
+                      ? 'font-semibold text-orange-800'
+                      : query.data?.importRouteBreakdown.bothNullImportRoute
+                        ? 'font-semibold text-gray-700'
+                        : 'font-semibold'
+                }
+              >
+                {formatCount(query.data?.importRouteBreakdown.missingImportRoute)}
+              </div>
+            </div>
+
+            <div class="mt-1 flex items-center justify-between gap-4">
+              <div class="text-gray-600">Missing import route (last {query.data?.windowHours}h)</div>
+              <div
+                class={
+                  query.data?.importRouteBreakdown.recentMissingArticleInClickhouse
+                    ? 'font-semibold text-red-800'
+                    : query.data?.importRouteBreakdown.recentStaleMissingImportRoute
+                      ? 'font-semibold text-orange-800'
+                      : query.data?.importRouteBreakdown.recentBothNullImportRoute
+                        ? 'font-semibold text-gray-700'
+                        : 'font-semibold'
+                }
+              >
+                {formatCount(query.data?.importRouteBreakdown.recentMissingImportRoute)}
+              </div>
+            </div>
+
+            <div class="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
+              <div class="rounded-md border border-gray-200 bg-gray-50 p-2">
+                <div class="text-xs text-gray-600">Stale route (articles has import_route)</div>
+                <div
+                  class={
+                    query.data?.importRouteBreakdown.staleMissingImportRoute
+                      ? 'font-semibold text-orange-800'
+                      : 'font-semibold text-gray-900'
+                  }
+                >
+                  {formatCount(query.data?.importRouteBreakdown.staleMissingImportRoute)}
+                </div>
+              </div>
+
+              <div class="rounded-md border border-gray-200 bg-gray-50 p-2">
+                <div class="text-xs text-gray-600">Both NULL (articles import_route NULL)</div>
+                <div class="font-semibold text-gray-900">
+                  {formatCount(query.data?.importRouteBreakdown.bothNullImportRoute)}
+                </div>
+              </div>
+
+              <div class="rounded-md border border-gray-200 bg-gray-50 p-2">
+                <div class="text-xs text-gray-600">Articles missing in CH</div>
+                <div
+                  class={
+                    query.data?.importRouteBreakdown.missingArticleInClickhouse
+                      ? 'font-semibold text-red-800'
+                      : 'font-semibold text-gray-900'
+                  }
+                >
+                  {formatCount(query.data?.importRouteBreakdown.missingArticleInClickhouse)}
+                </div>
+              </div>
+            </div>
+
+            <Show when={query.data?.importRouteBreakdown.missingArticleInClickhouse}>
               <div class="mt-2 rounded-md border border-red-200 bg-red-100 p-3 text-xs text-red-800">
                 Articles are missing in ClickHouse. Derived enrichment can’t self-heal until `forska.articles` catches
                 up.
