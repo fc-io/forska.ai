@@ -1,7 +1,7 @@
 import {useQuery} from '@tanstack/solid-query'
 import {Link} from '@tanstack/solid-router'
 import {type ColumnDef, createSolidTable, flexRender, getCoreRowModel} from '@tanstack/solid-table'
-import {createSignal, For, Show, Suspense} from 'solid-js'
+import {createSignal, For, Show} from 'solid-js'
 
 import {apiClient} from '../../../services/apiClient.ts'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse.ts'
@@ -111,73 +111,71 @@ export const ProjectDetailsCuratedArticles = (props: {projectId: string}) => {
           }}
         />
       </Show>
-      <Suspense>
-        <Show when={query.isPending}>
-          <div class="text-sm text-gray-500">Loading imported articles…</div>
-        </Show>
-        <Show when={query.error}>
-          <div class="text-sm text-red-600">{(query.error as Error).message}</div>
-        </Show>
-        <Show when={query.data && Number(query.data.totalCount ?? 0) > 0}>
-          <div class="overflow-x-auto bg-white rounded-lg shadow">
-            <table class="min-w-full divide-y divide-gray-200">
-              <thead class="bg-gray-50">
-                <For each={table.getHeaderGroups()}>
-                  {(headerGroup) => {
-                    return (
-                      <tr>
-                        <For each={headerGroup.headers}>
-                          {(header) => {
-                            return (
-                              <th
-                                class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
-                                style={{width: `${header.getSize()}px`}}
-                              >
-                                {header.isPlaceholder
-                                  ? null
-                                  : flexRender(header.column.columnDef.header, header.getContext())}
-                              </th>
-                            )
-                          }}
-                        </For>
-                      </tr>
-                    )
-                  }}
-                </For>
-              </thead>
-              <tbody class="bg-white divide-y divide-gray-200">
-                <For each={table.getRowModel().rows}>
-                  {(row) => {
-                    return (
-                      <tr class="hover:bg-gray-50">
-                        <For each={row.getVisibleCells()}>
-                          {(cell) => {
-                            return (
-                              <td
-                                class={
-                                  cell.column.id === 'articleTitle'
-                                    ? 'px-6 py-4 text-sm text-gray-900'
-                                    : 'px-6 py-4 whitespace-nowrap text-sm text-gray-900'
-                                }
-                                style={{width: `${cell.column.getSize()}px`}}
-                              >
-                                {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                              </td>
-                            )
-                          }}
-                        </For>
-                      </tr>
-                    )
-                  }}
-                </For>
-              </tbody>
-            </table>
-          </div>
-        </Show>
-        <Show when={query.data && Number(query.data.totalCount ?? 0) <= 0}>
-          <div class="p-8 text-center text-gray-500">There are no imported articles from other projects.</div>
-        </Show>
-      </Suspense>
+      <Show when={query.isPending}>
+        <div class="text-sm text-gray-500">Loading imported articles...</div>
+      </Show>
+      <Show when={query.error}>
+        <div class="text-sm text-red-600">{(query.error as Error).message}</div>
+      </Show>
+      <Show when={query.data && Number(query.data.totalCount ?? 0) > 0}>
+        <div class="overflow-x-auto bg-white rounded-lg shadow">
+          <table class="min-w-full divide-y divide-gray-200">
+            <thead class="bg-gray-50">
+              <For each={table.getHeaderGroups()}>
+                {(headerGroup) => {
+                  return (
+                    <tr>
+                      <For each={headerGroup.headers}>
+                        {(header) => {
+                          return (
+                            <th
+                              class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                              style={{width: `${header.getSize()}px`}}
+                            >
+                              {header.isPlaceholder
+                                ? null
+                                : flexRender(header.column.columnDef.header, header.getContext())}
+                            </th>
+                          )
+                        }}
+                      </For>
+                    </tr>
+                  )
+                }}
+              </For>
+            </thead>
+            <tbody class="bg-white divide-y divide-gray-200">
+              <For each={table.getRowModel().rows}>
+                {(row) => {
+                  return (
+                    <tr class="hover:bg-gray-50">
+                      <For each={row.getVisibleCells()}>
+                        {(cell) => {
+                          return (
+                            <td
+                              class={
+                                cell.column.id === 'articleTitle'
+                                  ? 'px-6 py-4 text-sm text-gray-900'
+                                  : 'px-6 py-4 whitespace-nowrap text-sm text-gray-900'
+                              }
+                              style={{width: `${cell.column.getSize()}px`}}
+                            >
+                              {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                            </td>
+                          )
+                        }}
+                      </For>
+                    </tr>
+                  )
+                }}
+              </For>
+            </tbody>
+          </table>
+        </div>
+      </Show>
+      <Show when={query.data && Number(query.data.totalCount ?? 0) <= 0}>
+        <div class="p-8 text-center text-gray-500">There are no imported articles from other projects.</div>
+      </Show>
       <Show when={query.data && Number(query.data.totalCount ?? 0) > 0}>
         <div class="mt-3">
           <ImportedArticlesPaginationControls

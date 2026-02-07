@@ -602,7 +602,7 @@ const EditProject = (): JSX.Element => {
         <h1 class="text-3xl font-bold">Edit Project</h1>
       </div>
 
-      <Suspense>
+      <Suspense fallback={<div class="text-center py-8">Loading project data...</div>}>
         <Show when={projectData.isLoading}>
           <div class="text-center py-8">Loading project data...</div>
         </Show>

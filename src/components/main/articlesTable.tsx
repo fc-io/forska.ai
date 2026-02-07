@@ -1,5 +1,5 @@
 import {useQuery} from '@tanstack/solid-query'
-import {type JSX, Show, Suspense} from 'solid-js'
+import {type JSX, Show} from 'solid-js'
 
 import {apiClient} from '../../services/apiClient.ts'
 import {handleApiResponse} from '../../services/utils/handleApiResponse'
@@ -22,19 +22,17 @@ export const ArticlesTable = (): JSX.Element => {
   })
 
   return (
-    <Suspense>
-      <div class="space-y-4">
-        <div>
-          <h2 class="text-2xl font-bold tracking-tight">Articles</h2>
-        </div>
-        <Show when={articlesQuery.isLoading}>
-          <p class="text-muted-foreground">Loading articles...</p>
-        </Show>
-        <Show when={articlesQuery.isError}>
-          <p class="text-red-600">Failed to load latest articles</p>
-        </Show>
-        <ArticlesTableTable articles={articlesQuery.data || []} />
+    <div class="space-y-4">
+      <div>
+        <h2 class="text-2xl font-bold tracking-tight">Articles</h2>
       </div>
-    </Suspense>
+      <Show when={articlesQuery.isLoading}>
+        <p class="text-muted-foreground">Loading articles...</p>
+      </Show>
+      <Show when={articlesQuery.isError}>
+        <p class="text-red-600">Failed to load latest articles</p>
+      </Show>
+      <ArticlesTableTable articles={articlesQuery.data || []} />
+    </div>
   )
 }

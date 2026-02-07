@@ -5,11 +5,9 @@ import {env} from '../../../app/utils/client-env.ts'
 import {apiClient} from '../../../services/apiClient.ts'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse.ts'
 
-interface ArticleAdminSectionProps {
-  articleId: string
-}
+type ArticleAdminSectionProps = {articleId: string}
 
-interface PdfFetchAttempt {
+type PdfFetchAttempt = {
   source: string
   tried: boolean
   success: boolean
@@ -18,7 +16,7 @@ interface PdfFetchAttempt {
   details?: string
 }
 
-interface OriginalFullTextUrl {
+type OriginalFullTextUrl = {
   url: string
   site: string | null
   availability: string | null
@@ -31,11 +29,6 @@ const fetchArticleAdminInfo = async (articleId: string) => {
   return handleApiResponse(response, 'Failed to load admin info')
 }
 
-/**
- * Admin-only section that displays article metadata and provides
- * a button to force refetch the PDF. This component should be wrapped
- * in a Suspense boundary to avoid blocking the rest of the page.
- */
 export const ArticleAdminSection = (props: ArticleAdminSectionProps) => {
   const queryClient = useQueryClient()
   const [selectedFile, setSelectedFile] = createSignal<File | null>(null)

@@ -1,4 +1,4 @@
-import {useQuery} from '@tanstack/solid-query'
+import {useMutation, useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
 import {format} from 'date-fns'
 import {createEffect, createSignal, For, Show, Suspense} from 'solid-js'
@@ -67,8 +67,6 @@ const ExportData = () => {
   const [includeArticleUpdatedAt, setIncludeArticleUpdatedAt] = createSignal(false)
   const [includePromptType, setIncludePromptType] = createSignal(false)
   const [includePromptContent, setIncludePromptContent] = createSignal(false)
-  const [isExporting, setIsExporting] = createSignal(false)
-  const [isExportingPrompts, setIsExportingPrompts] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
   const [hasInitializedPrompts, setHasInitializedPrompts] = createSignal(false)
   const [promptAnswerFilters, setPromptAnswerFilters] = createSignal<Record<string, string[]>>({})
@@ -243,83 +241,89 @@ const ExportData = () => {
     }
   })
 
-  const handleExport = async () => {
+  const exportMutation = useMutation(() => {
+    return {
+      mutationFn: async (body: unknown) => {
+        const response = await fetch(`${env.VITE_SERVER_API}/api/projects/${projectId}/export`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          credentials: 'include',
+          body: JSON.stringify(body),
+        })
+
+        if (!response.ok) {
+          throw new Error('Export failed')
+        }
+
+        const filename = `export-${projectId}.csv`
+        await downloadResponseAsCsv(response, filename)
+        return {success: true}
+      },
+      onError: (err) => {
+        const message = err instanceof Error ? err.message : 'An unexpected error occurred'
+        setError(message)
+      },
+    }
+  })
+
+  const exportPromptsMutation = useMutation(() => {
+    return {
+      mutationFn: async (body: unknown) => {
+        const response = await fetch(`${env.VITE_SERVER_API}/api/projects/${projectId}/export-prompts`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          credentials: 'include',
+          body: JSON.stringify(body),
+        })
+
+        if (!response.ok) {
+          throw new Error('Prompt export failed')
+        }
+
+        const filename = `prompts-${projectId}.csv`
+        await downloadResponseAsCsv(response, filename)
+        return {success: true}
+      },
+      onError: (err) => {
+        const message = err instanceof Error ? err.message : 'An unexpected error occurred'
+        setError(message)
+      },
+    }
+  })
+
+  const handleExport = () => {
     setError(null)
-    setIsExporting(true)
-
-    try {
-      const selectedPromptIds = Object.keys(selectedPrompts())
-      const promptSelections = Object.entries(promptAnswerFilters())
-        .filter(([_, types]) => {
-          return types.length > 0
-        })
-        .map(([promptId, types]) => {
-          return {promptId, types}
-        })
-
-      // Use native fetch for streaming response
-      const response = await fetch(`${env.VITE_SERVER_API}/api/projects/${projectId}/export`, {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        credentials: 'include',
-        body: JSON.stringify({
-          promptIds: selectedPromptIds,
-          promptSelections,
-          sourceProjectIds: [projectId],
-          includeExplanation: includeExplanation(),
-          includeQuotes: includeQuotes(),
-          includeJournal: includeJournal(),
-          includeSummary: includeSummary(),
-          includeArticleId: includeArticleId(),
-          includeArticleLink: includeArticleLink(),
-          includeArticleAuthors: includeArticleAuthors(),
-          includeArticleCreatedAt: includeArticleCreatedAt(),
-          includeArticleUpdatedAt: includeArticleUpdatedAt(),
-          includePromptType: includePromptType(),
-          includePromptContent: includePromptContent(),
-        }),
+    const selectedPromptIds = Object.keys(selectedPrompts())
+    const promptSelections = Object.entries(promptAnswerFilters())
+      .filter(([_, types]) => {
+        return types.length > 0
+      })
+      .map(([promptId, types]) => {
+        return {promptId, types}
       })
 
-      if (!response.ok) {
-        throw new Error('Export failed')
-      }
-
-      const filename = `export-${projectId}.csv`
-      await downloadResponseAsCsv(response, filename)
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'An unexpected error occurred'
-      setError(errorMessage)
-    } finally {
-      setIsExporting(false)
-    }
+    exportMutation.mutate({
+      promptIds: selectedPromptIds,
+      promptSelections,
+      sourceProjectIds: [projectId],
+      includeExplanation: includeExplanation(),
+      includeQuotes: includeQuotes(),
+      includeJournal: includeJournal(),
+      includeSummary: includeSummary(),
+      includeArticleId: includeArticleId(),
+      includeArticleLink: includeArticleLink(),
+      includeArticleAuthors: includeArticleAuthors(),
+      includeArticleCreatedAt: includeArticleCreatedAt(),
+      includeArticleUpdatedAt: includeArticleUpdatedAt(),
+      includePromptType: includePromptType(),
+      includePromptContent: includePromptContent(),
+    })
   }
 
-  const handleExportPrompts = async () => {
+  const handleExportPrompts = () => {
     setError(null)
-    setIsExportingPrompts(true)
-
-    try {
-      const selectedPromptIds = Object.keys(selectedPrompts())
-
-      const response = await fetch(`${env.VITE_SERVER_API}/api/projects/${projectId}/export-prompts`, {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        credentials: 'include',
-        body: JSON.stringify({promptIds: selectedPromptIds}),
-      })
-
-      if (!response.ok) {
-        throw new Error('Prompt export failed')
-      }
-
-      const filename = `prompts-${projectId}.csv`
-      await downloadResponseAsCsv(response, filename)
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'An unexpected error occurred'
-      setError(errorMessage)
-    } finally {
-      setIsExportingPrompts(false)
-    }
+    const selectedPromptIds = Object.keys(selectedPrompts())
+    exportPromptsMutation.mutate({promptIds: selectedPromptIds})
   }
 
   const formatDate = (date: Date | string | null | undefined) => {
@@ -705,20 +709,20 @@ const ExportData = () => {
           <div class="flex gap-3 pt-4">
             <Button
               onClick={() => {
-                return void handleExport()
+                handleExport()
               }}
-              disabled={isExporting() || isExportingPrompts()}
+              disabled={exportMutation.isPending || exportPromptsMutation.isPending}
             >
-              {isExporting() ? 'Exporting...' : 'Export to CSV'}
+              {exportMutation.isPending ? 'Exporting...' : 'Export to CSV'}
             </Button>
             <Button
               variant="outline"
               onClick={() => {
-                return void handleExportPrompts()
+                handleExportPrompts()
               }}
-              disabled={isExporting() || isExportingPrompts()}
+              disabled={exportMutation.isPending || exportPromptsMutation.isPending}
             >
-              {isExportingPrompts() ? 'Exporting Prompts...' : 'Export Prompt Info'}
+              {exportPromptsMutation.isPending ? 'Exporting Prompts...' : 'Export Prompt Info'}
             </Button>
           </div>
         </div>

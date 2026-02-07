@@ -1,8 +1,8 @@
-import {useQuery} from '@tanstack/solid-query'
+import {useMutation, useQuery} from '@tanstack/solid-query'
 import {createFileRoute} from '@tanstack/solid-router'
 import {createMemo, createSignal, For, Show} from 'solid-js'
 
-import {env} from '../../../utils/client-env.ts'
+import {apiClient} from '../../../../services/apiClient.ts'
 
 type Project = {id: string; name: string; archived: boolean; modelName: string | null}
 
@@ -48,41 +48,38 @@ const formatImportRoutes = (routes: string[], namesByRoute?: Record<string, stri
     .join(', ')
 }
 
-const fetchDiagnosis = async (projectId: string): Promise<DiagnoseResult> => {
-  const response = await fetch(`${env.VITE_SERVER_API}/api/admin/diagnose-unassessed?projectId=${projectId}`, {
-    credentials: 'include',
-  })
-  if (!response.ok) {
-    throw new Error('Failed to fetch diagnosis')
-  }
-  return response.json() as Promise<DiagnoseResult>
-}
-
 const fetchProjects = async (includeArchived: boolean): Promise<Project[]> => {
-  const [activeRes, archivedRes] = await Promise.all([
-    fetch(`${env.VITE_SERVER_API}/api/projects`, {credentials: 'include'}),
-    includeArchived ? fetch(`${env.VITE_SERVER_API}/api/projects/archived`, {credentials: 'include'}) : null,
-  ])
+  const activeResponse = await apiClient.api.projects.get()
+  if (activeResponse.error) {
+    throw new Error('Failed to fetch projects')
+  }
 
-  if (!activeRes.ok) throw new Error('Failed to fetch projects')
+  const activeData = activeResponse.data?.data ?? []
+  const archivedResponse = includeArchived ? await apiClient.api.projects.archived.get() : null
+  const archivedData = archivedResponse?.data?.data ?? []
 
-  const activeData = (await activeRes.json()) as {data: Project[]}
-  const archivedData = archivedRes ? ((await archivedRes.json()) as {data: Project[]}) : {data: []}
-
-  return [
-    ...activeData.data,
-    ...archivedData.data.map((p) => {
-      return {...p, archived: true}
-    }),
-  ]
+  return [...activeData, ...archivedData]
 }
 
 const AdminDiagnoseUnassessed = () => {
   const [selectedProjectId, setSelectedProjectId] = createSignal<string | null>(null)
   const [includeArchived, setIncludeArchived] = createSignal(false)
-  const [loading, setLoading] = createSignal(false)
-  const [error, setError] = createSignal<string | null>(null)
-  const [result, setResult] = createSignal<DiagnoseResult | null>(null)
+  const [formError, setFormError] = createSignal<string | null>(null)
+
+  const diagnoseMutation = useMutation(() => {
+    return {
+      mutationFn: async (projectId: string): Promise<DiagnoseResult> => {
+        const response = await apiClient.api.admin['diagnose-unassessed'].get({query: {projectId}})
+        if (response.error) {
+          throw new Error('Failed to fetch diagnosis')
+        }
+        if (!response.data) {
+          throw new Error('No data returned')
+        }
+        return response.data as DiagnoseResult
+      },
+    }
+  })
 
   const projectsQuery = useQuery(() => {
     return {
@@ -100,29 +97,20 @@ const AdminDiagnoseUnassessed = () => {
     })
   })
 
-  const handleDiagnose = async () => {
+  const diagnosis = createMemo(() => {
+    const data = diagnoseMutation.data
+    return data && !data.error ? data : null
+  })
+
+  const handleDiagnose = () => {
     const id = selectedProjectId()
     if (!id) {
-      setError('Please select a project')
+      setFormError('Please select a project')
       return
     }
 
-    setLoading(true)
-    setError(null)
-    setResult(null)
-
-    try {
-      const data = await fetchDiagnosis(id)
-      if (data.error) {
-        setError(data.error)
-      } else {
-        setResult(data)
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error')
-    } finally {
-      setLoading(false)
-    }
+    setFormError(null)
+    diagnoseMutation.mutate(id)
   }
 
   return (
@@ -176,23 +164,27 @@ const AdminDiagnoseUnassessed = () => {
           </div>
           <button
             onClick={() => {
-              void handleDiagnose()
+              handleDiagnose()
             }}
-            disabled={loading() || !selectedProjectId()}
+            disabled={diagnoseMutation.isPending || !selectedProjectId()}
             class="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 font-medium"
           >
-            {loading() ? 'Diagnosing...' : 'Diagnose'}
+            {diagnoseMutation.isPending ? 'Diagnosing...' : 'Diagnose'}
           </button>
         </div>
       </div>
 
-      <Show when={error()}>
+      <Show when={formError() || diagnoseMutation.isError || diagnoseMutation.data?.error}>
         <div class="p-4 rounded-md bg-red-50 border border-red-200 mb-6">
-          <p class="text-red-600">{error()}</p>
+          <p class="text-red-600">
+            {formError()
+              || (diagnoseMutation.error instanceof Error ? diagnoseMutation.error.message : null)
+              || diagnoseMutation.data?.error}
+          </p>
         </div>
       </Show>
 
-      <Show when={result()}>
+      <Show when={diagnosis()}>
         {(r) => {
           return (
             <div class="space-y-6">

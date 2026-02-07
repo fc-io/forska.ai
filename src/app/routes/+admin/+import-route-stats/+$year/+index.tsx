@@ -81,7 +81,14 @@ const AdminImportRouteStatsYear = () => {
           </div>
         </div>
 
-        <Suspense>
+        <Suspense
+          fallback={
+            <div class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+              <div class="h-5 w-56 animate-pulse rounded bg-gray-200" />
+              <div class="mt-4 h-4 w-80 animate-pulse rounded bg-gray-200" />
+            </div>
+          }
+        >
           <Show when={year() === '0'}>
             <div class="rounded-md border border-red-200 bg-red-50 p-4">
               <div class="text-red-700">Invalid year.</div>

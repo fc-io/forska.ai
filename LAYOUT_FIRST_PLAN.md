@@ -12,7 +12,7 @@ Parents' creed (Ryan Carniato x Tanner Linsley)
 
 Global checklist (apply everywhere)
 
-- [ ] never let queries suspend root `<Outlet />` (no “one big `<Suspense>`” around app content)
+- [x] never let queries suspend root `<Outlet />` (no “one big `<Suspense>`” around app content)
 - [ ] per query: either local `<Suspense fallback=...>` wraps FIRST read OR set `suspense: false` + explicit loading UI
 - [ ] no `<Suspense>` without `fallback`
 - [ ] client network only via TanStack (`useQuery`/`createMutation`/`useMutation`); raw `fetch` only inside mutationFn when streaming/upload forces it
@@ -20,23 +20,23 @@ Global checklist (apply everywhere)
 
 Core roots / globals
 
-- [ ] `src/app/index.tsx`: set QueryClient default `suspense: false` (recommended) + opt-in suspense per section; keep retry/refetch sane
+- [x] `src/app/index.tsx`: set QueryClient default `suspense: false` (recommended) + opt-in suspense per section; keep retry/refetch sane
 - [ ] `src/app/router.tsx`: add route transition pending UI if needed (keep previous layout; avoid blank)
-- [ ] `src/app/routes/+__root.tsx`: split Suspense so nav shell + Outlet don’t blank; `session` query `suspense:false`; remove `throw` in signOut
+- [x] `src/app/routes/+__root.tsx`: split Suspense so nav shell + Outlet don’t blank; `session` query `suspense:false`; remove `throw` in signOut
 
 Shared components (high blast radius)
 
-- [ ] `src/components/Navigation.tsx`: admin metrics query `suspense:false` + placeholders; CLAUDE: `type` not `interface`
-- [ ] `src/components/login.tsx`: remove `throw` control-flow; keep errors as values
+- [x] `src/components/Navigation.tsx`: admin metrics query `suspense:false` + placeholders; CLAUDE: `type` not `interface`
+- [x] `src/components/login.tsx`: remove `throw` control-flow; keep errors as values
 - [ ] `src/components/TokenUsageTimeline.tsx`: keep stats non-suspending; chart shell always renders; consider code-split chart bundle
 
 Client raw fetch (convert to TanStack + Eden)
 
-- [ ] `src/app/routes/+admin/+diagnose-unassessed/+index.tsx`: replace direct `fetch` + `try/catch/finally` with TanStack query/mutation via `apiClient`
-- [ ] `src/app/routes/+admin/+unexpected-answers/+all-prompts/+index.tsx`: replace direct `fetch` with `apiClient`; add Suspense fallback
-- [ ] `src/app/routes/+admin/+unexpected-answers/+all-prompts/+$promptId/+index.tsx`: replace direct `fetch` with `apiClient` (query + delete mutation)
-- [ ] `src/app/routes/+admin/+unexpected-answers/+$projectId/+$promptId/+index.tsx`: replace direct `fetch` with `apiClient` (query + delete mutation)
-- [ ] `src/app/routes/+projects/+$id/+export.tsx`: keep streaming if needed, but move `fetch` into TanStack mutationFn; avoid `try/catch/throw` if feasible
+- [x] `src/app/routes/+admin/+diagnose-unassessed/+index.tsx`: replace direct `fetch` + `try/catch/finally` with TanStack query/mutation via `apiClient`
+- [x] `src/app/routes/+admin/+unexpected-answers/+all-prompts/+index.tsx`: replace direct `fetch` with `apiClient`; add Suspense fallback
+- [x] `src/app/routes/+admin/+unexpected-answers/+all-prompts/+$promptId/+index.tsx`: replace direct `fetch` with `apiClient` (query + delete mutation)
+- [x] `src/app/routes/+admin/+unexpected-answers/+$projectId/+$promptId/+index.tsx`: replace direct `fetch` with `apiClient` (query + delete mutation)
+- [x] `src/app/routes/+projects/+$id/+export.tsx`: keep streaming if needed, but move `fetch` into TanStack mutationFn; avoid `try/catch/throw` if feasible
 - [ ] `src/components/main/articles/articleAdminSection.tsx`: move upload `fetch` into TanStack mutationFn using Eden if possible; remove block comment; `type` not `interface`
 
 Routes (layout-first audit: header outside Suspense; section-level fallbacks; no route-level query reads)

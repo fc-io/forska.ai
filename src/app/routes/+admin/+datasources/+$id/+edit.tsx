@@ -1,6 +1,6 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
-import {createEffect, createSignal, Show, Suspense} from 'solid-js'
+import {createEffect, createSignal, Show} from 'solid-js'
 
 import {apiClient} from '../../../../../services/apiClient.ts'
 
@@ -231,152 +231,150 @@ const AdminEditDataSource = () => {
           </Link>
         </div>
 
-        <Suspense>
-          <Show when={dataSourceQuery.isLoading}>
-            <p class="text-sm text-gray-500">Loading data source details...</p>
-          </Show>
+        <Show when={dataSourceQuery.isLoading}>
+          <p class="text-sm text-gray-500">Loading data source details...</p>
+        </Show>
 
-          <Show when={dataSourceQuery.isError}>
-            <p class="text-sm text-red-600">Failed to load data source.</p>
-          </Show>
+        <Show when={dataSourceQuery.isError}>
+          <p class="text-sm text-red-600">Failed to load data source.</p>
+        </Show>
 
-          <Show when={dataSourceQuery.data}>
-            <form class="space-y-6" onSubmit={handleSubmit}>
-              <div>
-                <label class="block text-sm font-medium text-gray-700 mb-2">Title</label>
-                <input
-                  type="text"
-                  value={title()}
-                  onInput={(event) => {
-                    setTitle(event.currentTarget.value)
-                  }}
-                  required
-                  class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
+        <Show when={dataSourceQuery.data}>
+          <form class="space-y-6" onSubmit={handleSubmit}>
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-2">Title</label>
+              <input
+                type="text"
+                value={title()}
+                onInput={(event) => {
+                  setTitle(event.currentTarget.value)
+                }}
+                required
+                class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-2">Description</label>
+              <textarea
+                value={description()}
+                onInput={(event) => {
+                  setDescription(event.currentTarget.value)
+                }}
+                rows={4}
+                class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-2">Import Route</label>
+              <input
+                type="text"
+                value={importRoute()}
+                onInput={(event) => {
+                  setImportRoute(event.currentTarget.value)
+                }}
+                placeholder="/api/imports/example"
+                class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+              />
+            </div>
+
+            <div>
+              <p class="block text-sm font-medium mb-2">Date Range</p>
+              <div class="grid grid-cols-2 gap-4">
+                <label class="flex flex-col text-sm font-medium gap-1">
+                  <span>Date From</span>
+                  <input
+                    type="text"
+                    value={dateFrom()}
+                    onInput={(event) => {
+                      setDateFrom(event.currentTarget.value)
+                    }}
+                    placeholder="YYYY-MM-DD"
+                    class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+                  />
+                </label>
+                <label class="flex flex-col text-sm font-medium gap-1">
+                  <span>Date To</span>
+                  <input
+                    type="text"
+                    value={dateTo()}
+                    onInput={(event) => {
+                      setDateTo(event.currentTarget.value)
+                    }}
+                    placeholder="YYYY-MM-DD"
+                    class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+                  />
+                </label>
               </div>
+            </div>
 
-              <div>
-                <label class="block text-sm font-medium text-gray-700 mb-2">Description</label>
-                <textarea
-                  value={description()}
-                  onInput={(event) => {
-                    setDescription(event.currentTarget.value)
-                  }}
-                  rows={4}
-                  class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
+            <Show when={error()}>
+              <p class="text-sm text-red-600">{error()}</p>
+            </Show>
 
-              <div>
-                <label class="block text-sm font-medium text-gray-700 mb-2">Import Route</label>
-                <input
-                  type="text"
-                  value={importRoute()}
-                  onInput={(event) => {
-                    setImportRoute(event.currentTarget.value)
-                  }}
-                  placeholder="/api/imports/example"
-                  class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
-                />
-              </div>
+            <Show when={successMessage()}>
+              <p class="text-sm text-green-600">{successMessage()}</p>
+            </Show>
 
-              <div>
-                <p class="block text-sm font-medium mb-2">Date Range</p>
-                <div class="grid grid-cols-2 gap-4">
-                  <label class="flex flex-col text-sm font-medium gap-1">
-                    <span>Date From</span>
-                    <input
-                      type="text"
-                      value={dateFrom()}
-                      onInput={(event) => {
-                        setDateFrom(event.currentTarget.value)
+            <div class="flex items-center gap-3">
+              <button
+                type="submit"
+                class="px-4 py-2 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                disabled={isSaving()}
+              >
+                {isSaving() ? 'Saving...' : 'Save Changes'}
+              </button>
+              <Link
+                to="/admin/datasources"
+                class="px-4 py-2 rounded-md border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              >
+                Cancel
+              </Link>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowArchiveConfirm(true)
+                }}
+                class="ml-auto px-4 py-2 rounded-md border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500"
+              >
+                Archive Data Source
+              </button>
+            </div>
+
+            <Show when={showArchiveConfirm()}>
+              <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                <div class="bg-white rounded-lg shadow-xl p-6 max-w-md mx-4">
+                  <h2 class="text-lg font-semibold text-gray-900 mb-2">Archive Data Source</h2>
+                  <p class="text-gray-600 mb-4">
+                    Are you sure you want to archive this data source? You can restore it later from the archived data
+                    sources page.
+                  </p>
+                  <div class="flex justify-end gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowArchiveConfirm(false)
                       }}
-                      placeholder="YYYY-MM-DD"
-                      class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
-                    />
-                  </label>
-                  <label class="flex flex-col text-sm font-medium gap-1">
-                    <span>Date To</span>
-                    <input
-                      type="text"
-                      value={dateTo()}
-                      onInput={(event) => {
-                        setDateTo(event.currentTarget.value)
-                      }}
-                      placeholder="YYYY-MM-DD"
-                      class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
-                    />
-                  </label>
-                </div>
-              </div>
-
-              <Show when={error()}>
-                <p class="text-sm text-red-600">{error()}</p>
-              </Show>
-
-              <Show when={successMessage()}>
-                <p class="text-sm text-green-600">{successMessage()}</p>
-              </Show>
-
-              <div class="flex items-center gap-3">
-                <button
-                  type="submit"
-                  class="px-4 py-2 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  disabled={isSaving()}
-                >
-                  {isSaving() ? 'Saving...' : 'Save Changes'}
-                </button>
-                <Link
-                  to="/admin/datasources"
-                  class="px-4 py-2 rounded-md border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50"
-                >
-                  Cancel
-                </Link>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowArchiveConfirm(true)
-                  }}
-                  class="ml-auto px-4 py-2 rounded-md border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500"
-                >
-                  Archive Data Source
-                </button>
-              </div>
-
-              <Show when={showArchiveConfirm()}>
-                <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-                  <div class="bg-white rounded-lg shadow-xl p-6 max-w-md mx-4">
-                    <h2 class="text-lg font-semibold text-gray-900 mb-2">Archive Data Source</h2>
-                    <p class="text-gray-600 mb-4">
-                      Are you sure you want to archive this data source? You can restore it later from the archived data
-                      sources page.
-                    </p>
-                    <div class="flex justify-end gap-3">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setShowArchiveConfirm(false)
-                        }}
-                        class="px-4 py-2 rounded-md border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50"
-                        disabled={isArchiving()}
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleArchive}
-                        class="px-4 py-2 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        disabled={isArchiving()}
-                      >
-                        {isArchiving() ? 'Archiving...' : 'Archive'}
-                      </button>
-                    </div>
+                      class="px-4 py-2 rounded-md border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                      disabled={isArchiving()}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleArchive}
+                      class="px-4 py-2 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      disabled={isArchiving()}
+                    >
+                      {isArchiving() ? 'Archiving...' : 'Archive'}
+                    </button>
                   </div>
                 </div>
-              </Show>
-            </form>
-          </Show>
-        </Suspense>
+              </div>
+            </Show>
+          </form>
+        </Show>
       </div>
     </div>
   )

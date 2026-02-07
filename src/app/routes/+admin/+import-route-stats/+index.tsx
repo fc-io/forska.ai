@@ -66,7 +66,14 @@ const AdminImportRouteStats = () => {
           </div>
         </div>
 
-        <Suspense>
+        <Suspense
+          fallback={
+            <div class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+              <div class="h-5 w-48 animate-pulse rounded bg-gray-200" />
+              <div class="mt-4 h-4 w-80 animate-pulse rounded bg-gray-200" />
+            </div>
+          }
+        >
           <Show when={statsQuery.isLoading}>
             <div class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
               <div class="h-5 w-48 animate-pulse rounded bg-gray-200" />

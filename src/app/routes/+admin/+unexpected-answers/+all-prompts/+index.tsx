@@ -2,7 +2,7 @@ import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
 import {createSignal, For, Show, Suspense} from 'solid-js'
 
-import {env} from '../../../../utils/client-env.ts'
+import {apiClient} from '../../../../../services/apiClient.ts'
 
 type Prompt = {
   id: string
@@ -27,11 +27,14 @@ const getPromptPreview = (text: string, maxLength = 240): string => {
 }
 
 const fetchAllPromptsWithTypes = async (): Promise<PromptsListResponse> => {
-  const response = await fetch(`${env.VITE_SERVER_API}/api/admin/list-prompts-with-types`, {credentials: 'include'})
-  if (!response.ok) {
+  const response = await apiClient.api.admin['list-prompts-with-types'].get()
+  if (response.error) {
     throw new Error('Failed to fetch prompts list')
   }
-  return response.json() as Promise<PromptsListResponse>
+  if (!response.data) {
+    throw new Error('No data returned')
+  }
+  return response.data
 }
 
 const AdminUnexpectedAnswersAllPrompts = () => {
@@ -63,7 +66,13 @@ const AdminUnexpectedAnswersAllPrompts = () => {
         </p>
       </div>
 
-      <Suspense>
+      <Suspense
+        fallback={
+          <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-8 text-center">
+            <div class="text-gray-500">Loading prompts...</div>
+          </div>
+        }
+      >
         <div class="space-y-4">
           {/* Loading and Error States */}
           <Show when={promptsList.isLoading}>

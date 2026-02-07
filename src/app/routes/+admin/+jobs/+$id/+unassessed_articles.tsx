@@ -1,6 +1,6 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
-import {Show, Suspense} from 'solid-js'
+import {Show} from 'solid-js'
 
 import {UnassessedArticlesTable} from '../../../../../components/main/unassessedArticles/unassessedArticlesTable.tsx'
 import {getJudgmentsJobUnassessedArticles} from '../../../../../services/judgmentsJobsService'
@@ -53,41 +53,39 @@ const AdminJobUnassessedArticles = () => {
           </div>
         </div>
 
-        <Suspense>
-          <Show when={unassessedArticles.isLoading}>
-            <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
-              <p class="text-gray-500 text-center">Loading unassessed articles...</p>
-            </div>
-          </Show>
+        <Show when={unassessedArticles.isLoading}>
+          <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
+            <p class="text-gray-500 text-center">Loading unassessed articles...</p>
+          </div>
+        </Show>
 
-          <Show when={unassessedArticles.isError}>
-            <div class="p-4 rounded-md bg-red-50 border border-red-200">
-              <p class="text-red-600">Failed to load unassessed articles</p>
-              <button
-                onClick={() => {
-                  return void unassessedArticles.refetch()
-                }}
-                class="mt-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
-              >
-                Retry
-              </button>
-            </div>
-          </Show>
+        <Show when={unassessedArticles.isError}>
+          <div class="p-4 rounded-md bg-red-50 border border-red-200">
+            <p class="text-red-600">Failed to load unassessed articles</p>
+            <button
+              onClick={() => {
+                return void unassessedArticles.refetch()
+              }}
+              class="mt-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+            >
+              Retry
+            </button>
+          </div>
+        </Show>
 
-          <Show when={!unassessedArticles.isLoading && !unassessedArticles.isError}>
-            <Show when={totalArticles() > 0} fallback={<div class="text-gray-500">No unassessed articles found.</div>}>
-              <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4 space-y-4">
-                <div class="flex justify-between items-center">
-                  <h2 class="text-lg font-semibold text-gray-900">Articles awaiting assessment</h2>
-                  <span class="text-sm text-gray-600">{totalArticles()} articles</span>
-                </div>
-                <div class="overflow-x-auto">
-                  <UnassessedArticlesTable articles={unassessedArticles.data ?? []} />
-                </div>
+        <Show when={!unassessedArticles.isLoading && !unassessedArticles.isError}>
+          <Show when={totalArticles() > 0} fallback={<div class="text-gray-500">No unassessed articles found.</div>}>
+            <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4 space-y-4">
+              <div class="flex justify-between items-center">
+                <h2 class="text-lg font-semibold text-gray-900">Articles awaiting assessment</h2>
+                <span class="text-sm text-gray-600">{totalArticles()} articles</span>
               </div>
-            </Show>
+              <div class="overflow-x-auto">
+                <UnassessedArticlesTable articles={unassessedArticles.data ?? []} />
+              </div>
+            </div>
           </Show>
-        </Suspense>
+        </Show>
       </div>
     </div>
   )

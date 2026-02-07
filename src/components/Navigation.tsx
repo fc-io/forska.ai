@@ -6,10 +6,7 @@ import {createMemo, createSignal, onCleanup, onMount, Show} from 'solid-js'
 import {apiClient} from '../services/apiClient'
 import type {User} from '../types/user'
 
-interface NavigationProps {
-  user: User | undefined
-  onSignOut: () => void
-}
+type NavigationProps = {user: User | undefined; onSignOut: () => void}
 
 const isEventTargetWithinElement = (target: EventTarget | null, element: HTMLElement | undefined) => {
   return target instanceof Node && !!element && element.contains(target)
@@ -151,6 +148,7 @@ export const Navigation = (props: NavigationProps) => {
       queryFn: fetchLlmMetricsSummary,
       refetchInterval: getLlmMetricsRefetchInterval(location().pathname),
       enabled: props.user?.role === 'admin',
+      suspense: false,
     }
   })
 

@@ -1,8 +1,8 @@
-import {useQuery, useQueryClient} from '@tanstack/solid-query'
+import {useMutation, useQuery, useQueryClient} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
 import {createSignal, For, Show, Suspense} from 'solid-js'
 
-import {env} from '../../../../../utils/client-env.ts'
+import {apiClient} from '../../../../../../services/apiClient.ts'
 
 type UnexpectedAnswer = {value: string | null; count: number}
 
@@ -18,31 +18,17 @@ type PromptResult = {
 type InvestigationResponse = {projectName: string; promptHeading: string; result: PromptResult | null}
 
 const fetchUnexpectedAnswersForPrompt = async (projectId: string, promptId: string): Promise<InvestigationResponse> => {
-  const response = await fetch(
-    `${env.VITE_SERVER_API}/api/admin/investigate-unexpected-answers?projectId=${encodeURIComponent(projectId)}&promptId=${encodeURIComponent(promptId)}`,
-    {credentials: 'include'},
-  )
-  if (!response.ok) {
+  const response = await apiClient.api.admin['investigate-unexpected-answers'].get({query: {projectId, promptId}})
+  if (response.error) {
     throw new Error('Failed to fetch unexpected answers data')
   }
-  return response.json() as Promise<InvestigationResponse>
-}
-
-const deleteUnexpectedValue = async (
-  projectId: string,
-  promptId: string,
-  unexpectedValue: string | null,
-): Promise<{deleted: number}> => {
-  const response = await fetch(`${env.VITE_SERVER_API}/api/admin/delete-unexpected-answers`, {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    credentials: 'include',
-    body: JSON.stringify({projectId, promptId, unexpectedValue}),
-  })
-  if (!response.ok) {
-    throw new Error('Failed to delete unexpected judgments')
+  if (!response.data) {
+    throw new Error('No data returned')
   }
-  return response.json() as Promise<{deleted: number}>
+  const data = response.data as {projectName: string; promptHeading?: string; result?: PromptResult | null}
+  const promptHeading = typeof data.promptHeading === 'string' ? data.promptHeading : 'Untitled'
+  const result: PromptResult | null = data.result ?? null
+  return {projectName: data.projectName, promptHeading, result}
 }
 
 const AdminUnexpectedAnswersPromptDetail = () => {
@@ -52,6 +38,28 @@ const AdminUnexpectedAnswersPromptDetail = () => {
   const queryClient = useQueryClient()
 
   const [deletingValue, setDeletingValue] = createSignal<string | null | undefined>(undefined)
+
+  const deleteMutation = useMutation(() => {
+    return {
+      mutationFn: async (unexpectedValue: string | null): Promise<{deleted: number}> => {
+        const response = await apiClient.api.admin['delete-unexpected-answers'].post({
+          projectId,
+          promptId,
+          unexpectedValue,
+        })
+        if (response.error) {
+          throw new Error('Failed to delete unexpected judgments')
+        }
+        if (!response.data) {
+          throw new Error('No data returned')
+        }
+        return response.data
+      },
+      onSettled: () => {
+        setDeletingValue(undefined)
+      },
+    }
+  })
 
   const investigation = useQuery(() => {
     return {
@@ -77,9 +85,7 @@ const AdminUnexpectedAnswersPromptDetail = () => {
     }
 
     setDeletingValue(unexpectedValue)
-    const result = await deleteUnexpectedValue(projectId, promptId, unexpectedValue)
-    setDeletingValue(undefined)
-
+    const result = await deleteMutation.mutateAsync(unexpectedValue)
     if (result.deleted > 0) {
       await queryClient.invalidateQueries({queryKey: ['admin-unexpected-answers', projectId, promptId]})
     }
@@ -128,7 +134,13 @@ const AdminUnexpectedAnswersPromptDetail = () => {
         <p class="text-sm text-gray-600 mt-1">Unexpected Answer Values</p>
       </div>
 
-      <Suspense>
+      <Suspense
+        fallback={
+          <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-8 text-center">
+            <div class="text-gray-500">Analyzing prompt judgments...</div>
+          </div>
+        }
+      >
         <div class="space-y-4">
           {/* Loading and Error States */}
           <Show when={investigation.isLoading}>

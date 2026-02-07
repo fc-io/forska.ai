@@ -328,7 +328,7 @@ const CreateProject = () => {
         <h1 class="text-3xl font-bold">Create New Project</h1>
       </div>
 
-      <Suspense>
+      <Suspense fallback={<div class="bg-card border rounded-lg p-6 text-sm text-muted-foreground">Loading...</div>}>
         <div class="bg-card border rounded-lg p-6">
           <Show when={error()}>
             <div class="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm">{error()}</div>

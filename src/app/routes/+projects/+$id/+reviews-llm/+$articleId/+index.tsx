@@ -73,7 +73,13 @@ export const ReviewDetail = () => {
   return (
     <div class="min-h-screen bg-gray-50 p-6">
       <div class="max-w-7xl mx-auto space-y-6">
-        <Suspense>
+        <Suspense
+          fallback={
+            <div class="p-4 bg-white rounded-lg shadow">
+              <p class="text-gray-500">Loading article details...</p>
+            </div>
+          }
+        >
           <Show when={articleQuery.isLoading}>
             <div class="p-4 bg-white rounded-lg shadow">
               <p class="text-gray-500">Loading article details...</p>

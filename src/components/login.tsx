@@ -16,6 +16,10 @@ export const Login = (): JSX.Element => {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
 
+  const getAuthErrorMessage = (value: unknown): string => {
+    return value instanceof Error ? value.message : typeof value === 'string' ? value : 'Authentication failed'
+  }
+
   const handleSubmit = async (e: Event) => {
     e.preventDefault()
     setError('')
@@ -29,13 +33,23 @@ export const Login = (): JSX.Element => {
 
     try {
       if (isSignUp()) {
-        const {error} = await authClient.signUp.email({email: email(), password: password(), name: name() || ''})
+        const {error: signUpError} = await authClient.signUp.email({
+          email: email(),
+          password: password(),
+          name: name() || '',
+        })
 
-        if (error) throw error
+        if (signUpError) {
+          setError(getAuthErrorMessage(signUpError))
+          return
+        }
         // After signup, automatically sign in
         const {error: signInError} = await authClient.signIn.email({email: email(), password: password()})
 
-        if (signInError) throw signInError
+        if (signInError) {
+          setError(getAuthErrorMessage(signInError))
+          return
+        }
         // Invalidate session query to trigger refetch
         await queryClient.invalidateQueries({queryKey: ['session']})
         // Navigate to home on successful login
@@ -43,14 +57,17 @@ export const Login = (): JSX.Element => {
       } else {
         const {error} = await authClient.signIn.email({email: email(), password: password()})
 
-        if (error) throw error
+        if (error) {
+          setError(getAuthErrorMessage(error))
+          return
+        }
         // Invalidate session query to trigger refetch
         await queryClient.invalidateQueries({queryKey: ['session']})
         // Navigate to home on successful login
         void navigate({to: '/'})
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Authentication failed')
+      setError(getAuthErrorMessage(err))
     } finally {
       setIsLoading(false)
     }
