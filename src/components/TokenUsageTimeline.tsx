@@ -12,7 +12,7 @@ import {
 } from 'chart.js'
 import {format} from 'date-fns'
 import {Bar} from 'solid-chartjs'
-import {createEffect, createMemo, createSignal, onCleanup, onMount, Show, Suspense} from 'solid-js'
+import {type Accessor, createEffect, createMemo, createSignal, onCleanup, onMount, Show} from 'solid-js'
 
 import {apiClient} from '../services/apiClient.ts'
 import {TokenUsageTimelineDatePicker} from './TokenUsageTimeline/TokenUsageTimelineDatePicker.tsx'
@@ -40,6 +40,76 @@ type TokenTimelineData = {
 type UsageStat = {timestamp: string; totalTokens: number}
 
 type TokenUsageTimelineProps = {projectId?: string; allJobs?: boolean}
+
+type TokenUsageTimelineStatsProps = {
+  allJobs: boolean
+  intervalBucketLabel: Accessor<string>
+  intervalHistoryLabel: Accessor<string>
+  interval: Accessor<TimeInterval>
+  projectId: string | undefined
+}
+
+const TokenUsageTimelineStats = (props: TokenUsageTimelineStatsProps) => {
+  const tokenStats = useQuery(() => {
+    return {
+      queryKey: ['token-timeline-stats', props.allJobs ? 'all-jobs' : props.projectId, props.interval()],
+      enabled: Boolean(props.allJobs || props.projectId),
+      queryFn: async () => {
+        const response = props.allJobs
+          ? await apiClient.api.tokens.timelineAllJobsStats.post({interval: props.interval()})
+          : await apiClient.api.tokens.timelineStats.post({
+              projectId: props.projectId as string,
+              interval: props.interval(),
+            })
+
+        if (!response.data || !response.data.success) {
+          throw new Error('Failed to fetch token timeline stats')
+        }
+
+        return response.data
+      },
+      refetchInterval: false,
+      staleTime: 5 * 60 * 1000,
+      placeholderData: (prev) => {
+        return prev
+      },
+      suspense: false,
+    }
+  })
+
+  const highestUsageStat = createMemo(() => {
+    return (tokenStats.data?.highestUsage ?? null) as UsageStat | null
+  })
+
+  const p90UsageStat = createMemo(() => {
+    return (tokenStats.data?.p90Usage ?? null) as UsageStat | null
+  })
+
+  return (
+    <>
+      <Show when={tokenStats.isLoading}>
+        <div class="text-sm text-gray-400 mt-1">Loading usage stats...</div>
+      </Show>
+      <Show when={tokenStats.isError}>
+        <div class="text-sm text-red-600 mt-1">Failed to load usage stats</div>
+      </Show>
+      <Show when={highestUsageStat()}>
+        <div class="text-sm text-gray-600 mt-1">
+          <span class="font-medium">Highest per {props.intervalBucketLabel()}: </span>
+          <span>{highestUsageStat()?.totalTokens.toLocaleString()} tokens</span>
+          <span class="text-gray-400 ml-1">({props.intervalHistoryLabel()})</span>
+        </div>
+      </Show>
+      <Show when={p90UsageStat()}>
+        <div class="text-sm text-gray-600 mt-1">
+          <span class="font-medium">90th percentile per {props.intervalBucketLabel()}: </span>
+          <span>{p90UsageStat()?.totalTokens.toLocaleString()} tokens</span>
+          <span class="text-gray-400 ml-1">({props.intervalHistoryLabel()})</span>
+        </div>
+      </Show>
+    </>
+  )
+}
 
 export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
   const [selectedInterval, setSelectedInterval] = createSignal<TimeInterval>('1min')
@@ -207,32 +277,7 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
       placeholderData: (prev) => {
         return prev
       },
-    }
-  })
-
-  const tokenStats = useQuery(() => {
-    return {
-      queryKey: ['token-timeline-stats', props.allJobs ? 'all-jobs' : props.projectId, selectedInterval()],
-      enabled: Boolean(props.allJobs || props.projectId) && tokenData.isSuccess,
-      queryFn: async () => {
-        const response = props.allJobs
-          ? await apiClient.api.tokens.timelineAllJobsStats.post({interval: selectedInterval()})
-          : await apiClient.api.tokens.timelineStats.post({
-              projectId: props.projectId as string,
-              interval: selectedInterval(),
-            })
-
-        if (!response.data || !response.data.success) {
-          throw new Error('Failed to fetch token timeline stats')
-        }
-
-        return response.data
-      },
-      refetchInterval: false,
-      staleTime: 5 * 60 * 1000,
-      placeholderData: (prev) => {
-        return prev
-      },
+      suspense: false,
     }
   })
 
@@ -278,14 +323,6 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
     const start = format(range.start, 'MMM d, yyyy HH:mm')
     const end = format(range.end, 'MMM d, yyyy HH:mm')
     return `${start} – ${end}`
-  })
-
-  const highestUsageStat = createMemo(() => {
-    return (tokenStats.data?.highestUsage ?? null) as UsageStat | null
-  })
-
-  const p90UsageStat = createMemo(() => {
-    return (tokenStats.data?.p90Usage ?? null) as UsageStat | null
   })
 
   // Boundary-aligned refetching to sync with system clock
@@ -564,105 +601,103 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
   })
 
   return (
-    <Suspense>
-      <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-        <div class="mb-6">
-          <div class="flex justify-between items-center mb-4">
-            <div>
-              <div class="flex items-center gap-2">
-                <h2 class="text-lg font-semibold text-gray-900">Token Usage Timeline</h2>
-              </div>
-              <div>
-                <Show when={highestUsageStat()}>
-                  <div class="text-sm text-gray-600 mt-1">
-                    <span class="font-medium">Highest per {intervalBucketLabel()}: </span>
-                    <span>{highestUsageStat()?.totalTokens.toLocaleString()} tokens</span>
-                    <span class="text-gray-400 ml-1">({intervalHistoryLabel()})</span>
-                  </div>
-                </Show>
-                <Show when={p90UsageStat()}>
-                  <div class="text-sm text-gray-600 mt-1">
-                    <span class="font-medium">90th percentile per {intervalBucketLabel()}: </span>
-                    <span>{p90UsageStat()?.totalTokens.toLocaleString()} tokens</span>
-                    <span class="text-gray-400 ml-1">({intervalHistoryLabel()})</span>
-                  </div>
-                </Show>
-              </div>
-            </div>
-          </div>
-
-          <div class="flex flex-col items-end gap-2">
-            <Show when={formattedActiveRange()}>
-              <p class="text-xs text-gray-500">{formattedActiveRange()}</p>
-            </Show>
+    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+      <div class="mb-6">
+        <div class="flex justify-between items-center mb-4">
+          <div>
             <div class="flex items-center gap-2">
-              <TokenUsageTimelineDatePicker
-                hasCustomRange={hasCustomRange}
-                maxSelectableDate={maxSelectableDate}
-                onPendingChange={setPendingPickerValues}
-                onRangeCommit={setCustomRange}
-                onReset={() => {
-                  clearCustomRange({setCustomRange, setPendingPickerValues})
-                }}
-                pickerValue={pickerValue}
-                timeZone={timeZone}
+              <h2 class="text-lg font-semibold text-gray-900">Token Usage Timeline</h2>
+            </div>
+            <div>
+              <TokenUsageTimelineStats
+                allJobs={Boolean(props.allJobs)}
+                interval={selectedInterval}
+                intervalBucketLabel={intervalBucketLabel}
+                intervalHistoryLabel={intervalHistoryLabel}
+                projectId={props.projectId}
               />
-              <select
-                value={selectedInterval()}
-                onChange={(e) => {
-                  const newInterval = e.target.value as TimeInterval
-                  setCustomRange(null)
-                  setPendingPickerValues(undefined)
-                  return setSelectedInterval(newInterval)
-                }}
-                class="px-3 py-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="1min">1 minute</option>
-                <option value="5min">5 minutes</option>
-                <option value="15min">15 minutes</option>
-                <option value="1h">1 hour</option>
-                <option value="24h">24 hours</option>
-                <option value="1w">1 week</option>
-                <option value="1m">1 month</option>
-              </select>
             </div>
           </div>
         </div>
 
-        <Show when={tokenData.isLoading}>
-          <div class="h-64 flex items-center justify-center">
-            <p class="text-gray-500">Loading token usage data...</p>
-          </div>
-        </Show>
-
-        <Show when={tokenData.isError}>
-          <div class="h-64 flex items-center justify-center">
-            <div class="text-center">
-              <p class="text-red-600 mb-2">Failed to load token usage data</p>
-              <button
-                onClick={() => {
-                  return void tokenData.refetch()
-                }}
-                class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm"
-              >
-                Retry
-              </button>
-            </div>
-          </div>
-        </Show>
-
-        <div class="h-64">
-          <Show when={chartReady() && chartData()}>
-            <Bar data={chartData() || {labels: [], datasets: []}} options={chartOptions} />
+        <div class="flex flex-col items-end gap-2">
+          <Show when={formattedActiveRange()}>
+            <p class="text-xs text-gray-500">{formattedActiveRange()}</p>
           </Show>
-        </div>
-
-        <Show when={tokenData.data && (tokenData.data?.data as TokenTimelineData[])?.length === 0}>
-          <div class="h-64 flex items-center justify-center">
-            <p class="text-gray-500">No token usage data available for this period</p>
+          <div class="flex items-center gap-2">
+            <TokenUsageTimelineDatePicker
+              hasCustomRange={hasCustomRange}
+              maxSelectableDate={maxSelectableDate}
+              onPendingChange={setPendingPickerValues}
+              onRangeCommit={setCustomRange}
+              onReset={() => {
+                clearCustomRange({setCustomRange, setPendingPickerValues})
+              }}
+              pickerValue={pickerValue}
+              timeZone={timeZone}
+            />
+            <select
+              value={selectedInterval()}
+              onChange={(e) => {
+                const newInterval = e.target.value as TimeInterval
+                setCustomRange(null)
+                setPendingPickerValues(undefined)
+                return setSelectedInterval(newInterval)
+              }}
+              class="px-3 py-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="1min">1 minute</option>
+              <option value="5min">5 minutes</option>
+              <option value="15min">15 minutes</option>
+              <option value="1h">1 hour</option>
+              <option value="24h">24 hours</option>
+              <option value="1w">1 week</option>
+              <option value="1m">1 month</option>
+            </select>
           </div>
-        </Show>
+        </div>
       </div>
-    </Suspense>
+
+      <Show when={tokenData.isLoading}>
+        <div class="h-64 flex items-center justify-center">
+          <p class="text-gray-500">Loading token usage data...</p>
+        </div>
+      </Show>
+
+      <Show when={tokenData.isError}>
+        <div class="h-64 flex items-center justify-center">
+          <div class="text-center">
+            <p class="text-red-600 mb-2">Failed to load token usage data</p>
+            <button
+              onClick={() => {
+                return void tokenData.refetch()
+              }}
+              class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm"
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      </Show>
+
+      <Show when={!tokenData.isLoading && !tokenData.isError && chartReady() && chartData()}>
+        <div class="h-64">
+          <Bar data={chartData() || {labels: [], datasets: []}} options={chartOptions} />
+        </div>
+      </Show>
+
+      <Show
+        when={
+          !tokenData.isLoading
+          && !tokenData.isError
+          && tokenData.data
+          && (tokenData.data?.data as TokenTimelineData[])?.length === 0
+        }
+      >
+        <div class="h-64 flex items-center justify-center">
+          <p class="text-gray-500">No token usage data available for this period</p>
+        </div>
+      </Show>
+    </div>
   )
 }
