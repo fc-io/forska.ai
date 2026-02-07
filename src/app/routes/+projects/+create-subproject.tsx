@@ -405,9 +405,10 @@ const CreateSubproject = () => {
               <div>
                 <p class="block text-sm font-medium mb-2">Select Prompts and Answer Types</p>
                 <p class="text-xs text-muted-foreground mb-3">
-                  For each prompt, select which answer types to filter by. Articles must match ALL selected prompt/type
-                  combinations to be included. Only judgments matching the source project's model and content settings
-                  are considered.
+                  For each prompt, select which answer types to filter by. Filters apply per source project (a prompt
+                  only filters articles from projects that include it). Within a project, articles must match ALL
+                  selected prompt/type combinations. Only judgments matching each source project's model and content
+                  settings are considered.
                 </p>
                 <div class="space-y-4">
                   <For each={availablePrompts()}>

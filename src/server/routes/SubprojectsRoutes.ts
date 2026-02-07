@@ -1,4 +1,4 @@
-import {and, eq, gte, inArray, lte, or, sql} from 'drizzle-orm'
+import {and, eq, gte, inArray, isNull, lte, or, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {
@@ -88,6 +88,7 @@ const queryArticlesWithPromptFilters = async (
       and(
         eq(judgments.articleId, articles.id),
         inArray(judgments.promptId, allSelectedPromptIds),
+        isNull(judgments.deletedAt),
         judgmentConfigCondition,
       ),
     )
@@ -248,8 +249,8 @@ export const subprojectsRoutes = new Elysia()
         }
       }
 
-      // Build filter conditions: articles must match ALL selected prompt/type combinations
-      // across all source projects (AND logic, not OR)
+      // Build filter conditions per source project (AND within a project),
+      // then union matching articles across all selected projects.
 
       if (body.sourceProjectIds.length === 0) {
         console.log(`[subprojects] No source projects selected, no articles added`)
@@ -272,11 +273,6 @@ export const subprojectsRoutes = new Elysia()
         .from(projectRouteLink)
         .where(inArray(projectRouteLink.projectId, body.sourceProjectIds))
 
-      // Collect all import route IDs
-      const allImportRouteIds = projectImportRoutes.map((r) => {
-        return r.importRouteId
-      })
-
       // Get project date bounds and content/model settings
       const projectBounds = await db
         .select({
@@ -292,94 +288,115 @@ export const subprojectsRoutes = new Elysia()
         .from(projects)
         .where(inArray(projects.id, body.sourceProjectIds))
 
-      // Calculate the most restrictive date bounds across all source projects
-      let effectiveDateFrom: Date | null = null
-      let effectiveDateTo: Date | null = null
-      for (const row of projectBounds) {
-        if (row.dateFrom && (!effectiveDateFrom || row.dateFrom > effectiveDateFrom)) {
-          effectiveDateFrom = row.dateFrom
-        }
-        if (row.dateTo && (!effectiveDateTo || row.dateTo < effectiveDateTo)) {
-          effectiveDateTo = row.dateTo
+      const importRoutesByProjectId = new Map<string, string[]>()
+      for (const row of projectImportRoutes) {
+        const current = importRoutesByProjectId.get(row.projectId) ?? []
+        current.push(row.importRouteId)
+        importRoutesByProjectId.set(row.projectId, current)
+      }
+
+      const promptIdsForMapping = allSelectedPromptIds.length > 0 ? Array.from(new Set(allSelectedPromptIds)) : []
+      const promptIdsByProjectId = new Map<string, Set<string>>()
+      if (promptIdsForMapping.length > 0) {
+        const projectPromptRows = await db
+          .select({projectId: projectPrompts.projectId, promptId: projectPrompts.promptId})
+          .from(projectPrompts)
+          .where(
+            and(
+              inArray(projectPrompts.projectId, body.sourceProjectIds),
+              inArray(projectPrompts.promptId, promptIdsForMapping),
+              eq(projectPrompts.enabled, true),
+            ),
+          )
+
+        for (const row of projectPromptRows) {
+          const current = promptIdsByProjectId.get(row.projectId) ?? new Set<string>()
+          current.add(row.promptId)
+          promptIdsByProjectId.set(row.projectId, current)
         }
       }
 
-      // Build scope condition: articles accessible via ANY source project's import routes or project_articles
-      const scopeParts: Array<ReturnType<typeof sql>> = []
+      const userDateFrom = body.dateFrom ? new Date(`${body.dateFrom}T00:00:00.000Z`) : null
+      const userDateTo = body.dateTo ? new Date(`${body.dateTo}T23:59:59.999Z`) : null
 
-      // Add import route scope if any exist
-      if (allImportRouteIds.length > 0) {
-        const routeIdArray = sql.join(
-          allImportRouteIds.map((r) => {
-            return sql`${r}::uuid`
-          }),
-          sql`,`,
-        )
-        scopeParts.push(
-          sql`EXISTS (
-            SELECT 1 FROM ${articleRouteLink} arl
-            WHERE arl."article_id" = ${articles.id}
-              AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
-          )`,
-        )
-      }
+      const uniqueArticleIds = new Set<string>()
 
-      // Add project_articles scope for each source project
-      for (const sourceProjectId of body.sourceProjectIds) {
-        scopeParts.push(
+      for (const sourceProject of projectBounds) {
+        const projectPromptIdSet = promptIdsByProjectId.get(sourceProject.id) ?? new Set<string>()
+        const applicablePromptFilters = promptFilters.filter((f) => {
+          return projectPromptIdSet.has(f.promptId)
+        })
+        const applicablePromptIds = applicablePromptFilters.map((f) => {
+          return f.promptId
+        })
+
+        const projectScopeParts: Array<ReturnType<typeof sql>> = []
+
+        const routeIds = importRoutesByProjectId.get(sourceProject.id) ?? []
+        if (routeIds.length > 0) {
+          const routeIdArray = sql.join(
+            routeIds.map((r) => {
+              return sql`${r}::uuid`
+            }),
+            sql`,`,
+          )
+          projectScopeParts.push(
+            sql`EXISTS (
+              SELECT 1 FROM ${articleRouteLink} arl
+              WHERE arl."article_id" = ${articles.id}
+                AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
+            )`,
+          )
+        }
+
+        projectScopeParts.push(
           sql`EXISTS (
             SELECT 1 FROM ${projectArticles} pa
             WHERE pa."article_id" = ${articles.id}
-              AND pa."project_id" = ${sourceProjectId}::uuid
+              AND pa."project_id" = ${sourceProject.id}::uuid
           )`,
         )
+
+        const projectScopeCondition =
+          (projectScopeParts.length > 1 ? or(...projectScopeParts) : projectScopeParts[0]) ?? sql`FALSE`
+
+        const projectWhereParts: Array<ReturnType<typeof sql>> = []
+        if (sourceProject.dateFrom) {
+          projectWhereParts.push(gte(articles.articleCreatedAt, sourceProject.dateFrom))
+        }
+        if (sourceProject.dateTo) {
+          projectWhereParts.push(lte(articles.articleCreatedAt, sourceProject.dateTo))
+        }
+        if (userDateFrom) {
+          projectWhereParts.push(gte(articles.articleCreatedAt, userDateFrom))
+        }
+        if (userDateTo) {
+          projectWhereParts.push(lte(articles.articleCreatedAt, userDateTo))
+        }
+        projectWhereParts.push(projectScopeCondition)
+
+        const projectWhereCondition = projectWhereParts.length > 1 ? and(...projectWhereParts) : projectWhereParts[0]
+
+        const matchingArticles =
+          applicablePromptFilters.length > 0
+            ? await queryArticlesWithPromptFilters(
+                db,
+                applicablePromptFilters,
+                applicablePromptIds,
+                [sourceProject],
+                projectWhereCondition,
+              )
+            : await queryAllArticlesInScope(db, projectWhereCondition)
+
+        for (const row of matchingArticles) {
+          uniqueArticleIds.add(row.id)
+        }
       }
 
-      const scopeCondition = scopeParts.length > 1 ? or(...scopeParts) : scopeParts[0]
-
-      // Build where conditions
-      const whereParts: Array<ReturnType<typeof sql>> = []
-
-      // Apply most restrictive date bounds from source projects
-      if (effectiveDateFrom) {
-        whereParts.push(gte(articles.articleCreatedAt, effectiveDateFrom))
-      }
-      if (effectiveDateTo) {
-        whereParts.push(lte(articles.articleCreatedAt, effectiveDateTo))
-      }
-
-      // User-specified date range
-      if (body.dateFrom) {
-        const fromDate = new Date(`${body.dateFrom}T00:00:00.000Z`)
-        whereParts.push(gte(articles.articleCreatedAt, fromDate))
-      }
-      if (body.dateTo) {
-        const toDate = new Date(`${body.dateTo}T23:59:59.999Z`)
-        whereParts.push(lte(articles.articleCreatedAt, toDate))
-      }
-
-      // Add scope condition
-      if (scopeCondition) {
-        whereParts.push(scopeCondition)
-      }
-
-      const combinedWhereCondition = whereParts.length > 1 ? and(...whereParts) : whereParts[0]
-
-      // Query articles - with or without prompt filtering
-      const matchingArticles =
-        promptFilters.length > 0
-          ? await queryArticlesWithPromptFilters(
-              db,
-              promptFilters,
-              allSelectedPromptIds,
-              projectBounds,
-              combinedWhereCondition,
-            )
-          : await queryAllArticlesInScope(db, combinedWhereCondition)
-      const articleIds = matchingArticles.map((row) => {
-        return row.id
-      })
-      console.log(`[subprojects] Found ${articleIds.length} articles matching ALL criteria`)
+      const articleIds = Array.from(uniqueArticleIds)
+      console.log(
+        `[subprojects] Found ${articleIds.length} articles matching criteria across ${projectBounds.length} projects`,
+      )
 
       // Insert articles into the new project in batches
       const batchSize = 1000
