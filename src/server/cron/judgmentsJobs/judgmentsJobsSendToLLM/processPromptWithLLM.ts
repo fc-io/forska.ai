@@ -6,7 +6,7 @@ import * as schema from '../../../../db/schema.ts'
 import {ensureFullText} from '../../../utils/ensureFullText.ts'
 import {env} from '../../../utils/env.ts'
 import {processFulltextForLLM} from '../../../utils/fulltextProcessing.ts'
-import {rateLimitedLogger} from '../../../utils/rateLimitedLogger.ts'
+import {createRateLimitedLogger, rateLimitedLogger} from '../../../utils/rateLimitedLogger.ts'
 import {ConnectionError} from '../connectionHealth.ts'
 import type {PromptToProcess} from './getAndUpdateReadyPrompts.ts'
 
@@ -40,6 +40,8 @@ type PromptDefinition = {
   order: number | null
   type: string | null
 }
+
+const processPromptLogger = createRateLimitedLogger({windowMs: 30_000})
 
 const processSinglePrompt = async (
   promptToProcess: PromptToProcess,
@@ -244,12 +246,16 @@ export const processPromptWithLLM = async (
   // console.log(`Processing prompt ${promptToProcess.promptId} for article ${promptToProcess.articleId}`)
 
   try {
-    console.log('[llm] Calling LLM for article:', promptToProcess.articleId.slice(0, 8))
+    processPromptLogger.log(
+      `llm:calling:${promptToProcess.modelBaseUrl}`,
+      '[llm] Calling LLM for article:',
+      promptToProcess.articleId.slice(0, 8),
+    )
     await processSinglePrompt(promptToProcess, articleForJudging, prompt)
     // Success - mark as judged
     await markAsJudged(db, promptToProcess.jobId, promptToProcess.articleId, promptToProcess.promptId)
     const duration = Date.now() - startTime
-    console.log(`[llm] Success - processed in ${duration}ms`)
+    processPromptLogger.log(`llm:success:${promptToProcess.modelBaseUrl}`, `[llm] Success - processed in ${duration}ms`)
   } catch (error) {
     // Check if this is a connection error - if so, don't mark as judged
     // The prompt will be retried on the next cron cycle when the server is back up
