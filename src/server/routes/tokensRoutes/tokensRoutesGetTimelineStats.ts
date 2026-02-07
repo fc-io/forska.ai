@@ -82,12 +82,15 @@ export const tokensRoutesGetTimelineStats = async ({projectId, interval}: Timeli
     return {success: true, highestUsage: null, p90Usage: null}
   }
 
-  const intervalSeconds = interval === '1m' ? null : getIntervalSeconds(interval)
-  const bucketOrigin = new Date(0)
+  const intervalSeconds = interval === '1m' ? undefined : getIntervalSeconds(interval)
   const timeBucket =
     interval === '1m'
       ? sql`date_trunc('month', ${tokenUse.createdAt})`
-      : sql`date_bin(make_interval(secs => ${intervalSeconds}), ${tokenUse.createdAt}, ${bucketOrigin})`
+      : sql`date_bin(
+        ${sql.raw(`interval '${intervalSeconds} seconds'`)},
+        ${tokenUse.createdAt},
+        ${sql.raw(`timestamptz '1970-01-01T00:00:00.000Z'`)}
+      )`
 
   const totalTokensSum = sum(tokenUse.totalTokens).as('totalTokens')
   const usageDistribution = await db
