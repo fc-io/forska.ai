@@ -2,7 +2,13 @@
 
 Target
 
-- route shell renders sync (header + section containers); data fills later; no full-page spinner for slow APIs
+- fastest possible layout: header + section containers first
+- data later: async fill / update; keep UI interactive; no full-page spinner for slow APIs
+
+Parents' creed (Ryan Carniato x Tanner Linsley)
+
+- [ ] Solid: fine-grain; never read async data unguarded; shell first
+- [ ] TanStack: explicit queries; stable keys; suspense scoped; cache used intentionally
 
 Global checklist (apply everywhere)
 
