@@ -5,7 +5,7 @@ import type {Accessor, Setter} from 'solid-js'
 import {For, Show} from 'solid-js'
 
 import {getArticleUrl} from '../../../../app/utils/getArticleUrl.ts'
-import {getJournalTitleFromOriginalData} from '../../../../utils/getJournalTitleFromOriginalData.ts'
+import {getJournalDisplayTitleForArticle} from '../../../../utils/getJournalDisplayTitleForArticle.ts'
 import {ReviewsArticlesPdfCell} from './reviewsArticlesPdfCell.tsx'
 
 declare module '@tanstack/solid-table' {
@@ -79,11 +79,6 @@ const selectionColumn: ColumnDef<ArticleWithJudgments, unknown> = {
   },
 }
 
-const getJournalTitleForArticle = (article: {journalTitle?: unknown; originalData?: unknown}) => {
-  const fromField = typeof article.journalTitle === 'string' ? article.journalTitle.trim() : null
-  return fromField ? fromField : getJournalTitleFromOriginalData(article.originalData)
-}
-
 const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
   selectionColumn,
   {
@@ -142,7 +137,7 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
     minSize: 160,
     maxSize: 300,
     cell: (info) => {
-      const journalTitle = getJournalTitleForArticle(info.row.original)
+      const journalTitle = getJournalDisplayTitleForArticle(info.row.original)
       return (
         <Show when={journalTitle} fallback={<span class="text-gray-400">—</span>}>
           {(title) => {
