@@ -210,6 +210,32 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
     }
   })
 
+  const tokenStats = useQuery(() => {
+    return {
+      queryKey: ['token-timeline-stats', props.allJobs ? 'all-jobs' : props.projectId, selectedInterval()],
+      enabled: Boolean(props.allJobs || props.projectId) && tokenData.isSuccess,
+      queryFn: async () => {
+        const response = props.allJobs
+          ? await apiClient.api.tokens.timelineAllJobsStats.post({interval: selectedInterval()})
+          : await apiClient.api.tokens.timelineStats.post({
+              projectId: props.projectId as string,
+              interval: selectedInterval(),
+            })
+
+        if (!response.data || !response.data.success) {
+          throw new Error('Failed to fetch token timeline stats')
+        }
+
+        return response.data
+      },
+      refetchInterval: false,
+      staleTime: 5 * 60 * 1000,
+      placeholderData: (prev) => {
+        return prev
+      },
+    }
+  })
+
   const intervalBucketLabel = createMemo(() => {
     const interval = selectedInterval()
     return interval === '1m' ? 'month' : interval === '1w' ? 'week' : interval
@@ -255,11 +281,11 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
   })
 
   const highestUsageStat = createMemo(() => {
-    return (tokenData.data?.highestUsage ?? null) as UsageStat | null
+    return (tokenStats.data?.highestUsage ?? null) as UsageStat | null
   })
 
   const p90UsageStat = createMemo(() => {
-    return (tokenData.data?.p90Usage ?? null) as UsageStat | null
+    return (tokenStats.data?.p90Usage ?? null) as UsageStat | null
   })
 
   // Boundary-aligned refetching to sync with system clock

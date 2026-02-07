@@ -9,10 +9,6 @@ type TimelineParams = {
   endDate: string
 }
 
-type UsageBucket = {timestamp: string; totalTokens: number}
-
-type UsageStats = {highestUsage: UsageBucket | null; p90Usage: UsageBucket | null}
-
 const getIntervalSeconds = (interval: Exclude<TimelineParams['interval'], '1m'>): number => {
   const intervals = {
     '1min': 60,
@@ -23,23 +19,6 @@ const getIntervalSeconds = (interval: Exclude<TimelineParams['interval'], '1m'>)
     '1w': 7 * 24 * 60 * 60,
   }
   return intervals[interval]
-}
-
-const calculateUsageStats = (buckets: UsageBucket[]): UsageStats => {
-  if (buckets.length === 0) {
-    return {highestUsage: null, p90Usage: null}
-  }
-
-  const sortedBuckets = [...buckets].sort((a, b) => {
-    return a.totalTokens - b.totalTokens
-  })
-
-  const percentileIndex = Math.min(sortedBuckets.length - 1, Math.max(0, Math.ceil(sortedBuckets.length * 0.9) - 1))
-
-  return {
-    highestUsage: sortedBuckets[sortedBuckets.length - 1] ?? null,
-    p90Usage: sortedBuckets[percentileIndex] ?? null,
-  }
 }
 
 export const tokensRoutesGetTimelineAllJobs = async ({interval, startDate, endDate}: TimelineParams) => {
@@ -163,40 +142,5 @@ export const tokensRoutesGetTimelineAllJobs = async ({interval, startDate, endDa
     )
   })
 
-  const getHighestUsagePeriod = () => {
-    const now = new Date()
-    const periods = {
-      '1min': new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000),
-      '5min': new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000),
-      '15min': new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000),
-      '1h': new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000),
-      '24h': new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000),
-      '1w': new Date(now.getTime() - 30 * 7 * 24 * 60 * 60 * 1000),
-      '1m': new Date(now.getTime() - 730 * 24 * 60 * 60 * 1000),
-    }
-    return periods[interval]
-  }
-
-  const totalTokensSum = sum(tokenUse.totalTokens).as('totalTokens')
-
-  const usageDistribution = await db
-    .select({timeBucket: timeBucket, totalTokens: totalTokensSum})
-    .from(tokenUse)
-    .where(
-      and(
-        isNotNull(tokenUse.judgmentsJobId),
-        gte(tokenUse.createdAt, getHighestUsagePeriod()),
-        lt(tokenUse.createdAt, new Date()),
-      ),
-    )
-    .groupBy(timeBucket)
-    .orderBy(desc(totalTokensSum))
-
-  const usageStatsInput = usageDistribution.map((row) => {
-    return {timestamp: row.timeBucket as string, totalTokens: Number(row.totalTokens ?? 0)}
-  })
-
-  const {highestUsage, p90Usage} = calculateUsageStats(usageStatsInput)
-
-  return {success: true, data: completeData, highestUsage, p90Usage}
+  return {success: true, data: completeData}
 }

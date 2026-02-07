@@ -10,6 +10,8 @@ import {tokensRoutesGetFailedRequestById} from './tokensRoutes/tokensRoutesGetFa
 import {tokensRoutesGetFailedRequests} from './tokensRoutes/tokensRoutesGetFailedRequests.ts'
 import {tokensRoutesGetTimeline} from './tokensRoutes/tokensRoutesGetTimeline.ts'
 import {tokensRoutesGetTimelineAllJobs} from './tokensRoutes/tokensRoutesGetTimelineAllJobs.ts'
+import {tokensRoutesGetTimelineAllJobsStats} from './tokensRoutes/tokensRoutesGetTimelineAllJobsStats.ts'
+import {tokensRoutesGetTimelineStats} from './tokensRoutes/tokensRoutesGetTimelineStats.ts'
 
 export const tokensRoutes = new Elysia()
   .use(requireAdminAuth())
@@ -224,6 +226,45 @@ export const tokensRoutes = new Elysia()
         ]),
         startDate: t.String(),
         endDate: t.String(),
+      }),
+    },
+  )
+  .post(
+    '/api/tokens/timelineStats',
+    async ({body}) => {
+      return await tokensRoutesGetTimelineStats(body)
+    },
+    {
+      body: t.Object({
+        projectId: t.String(),
+        interval: t.Union([
+          t.Literal('1min'),
+          t.Literal('5min'),
+          t.Literal('15min'),
+          t.Literal('1h'),
+          t.Literal('24h'),
+          t.Literal('1w'),
+          t.Literal('1m'),
+        ]),
+      }),
+    },
+  )
+  .post(
+    '/api/tokens/timelineAllJobsStats',
+    async ({body}) => {
+      return await tokensRoutesGetTimelineAllJobsStats(body)
+    },
+    {
+      body: t.Object({
+        interval: t.Union([
+          t.Literal('1min'),
+          t.Literal('5min'),
+          t.Literal('15min'),
+          t.Literal('1h'),
+          t.Literal('24h'),
+          t.Literal('1w'),
+          t.Literal('1m'),
+        ]),
       }),
     },
   )
