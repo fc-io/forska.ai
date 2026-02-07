@@ -7,6 +7,10 @@ import {createArticlesReviewsQueryOptions} from '../../projects/projectsArticles
 import {ReviewsPaginationControls} from '../reviewsPaginationControls.tsx'
 import {ReviewsArticlesTable} from './reviewsArticlesTable.tsx'
 
+const formatThousandSeparatedNumber = (value: number) => {
+  return value.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
+}
+
 interface ReviewsArticlesTableContainerProps {
   projectId: string
   promptFilters: Accessor<Record<string, string[] | null>>
@@ -107,7 +111,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
                         const count = totalCount()
                         if (count === null) return '0'
                         return count > 0
-                          ? `Showing ${Math.min((response().page - 1) * props.pageLimit() + 1, count)}-${Math.min(response().page * props.pageLimit(), count)} of ${count}`
+                          ? `Showing ${Math.min((response().page - 1) * props.pageLimit() + 1, count)}-${Math.min(response().page * props.pageLimit(), count)} of ${formatThousandSeparatedNumber(count)}`
                           : '0'
                       })()}
                     </Show>
