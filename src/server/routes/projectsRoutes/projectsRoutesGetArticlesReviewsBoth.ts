@@ -81,7 +81,7 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
             answeredOriginal: j.answeredOriginal,
             answeredOriginalAsArray: j.answeredOriginalAsArray,
             explanation: j.explanation,
-            quotes: j.quotes ? (JSON.parse(j.quotes) as unknown) : null,
+            quotes: Array.isArray(j.quotes) ? j.quotes : null,
           }
         }),
         humanAnswersByPrompt: article.humanAnswersByPrompt,

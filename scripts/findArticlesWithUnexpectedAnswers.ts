@@ -3,9 +3,9 @@
  *
  * Shows article details and the unexpected answers they have
  */
-import {and, eq, inArray, isNotNull, isNull, sql} from 'drizzle-orm'
+import {and, eq, isNotNull, isNull, sql} from 'drizzle-orm'
 
-import {articles, judgments, prompts} from '../src/db/schema.ts'
+import {articles, judgments, prompts, projectPrompts} from '../src/db/schema.ts'
 import {getDatabase} from '../src/server/utils/getDatabase.ts'
 
 const parseArktypeOptions = (typeStr: string | null): string[] => {
@@ -24,18 +24,17 @@ const findArticlesWithUnexpectedAnswers = async (projectId: string, promptId?: s
   console.log(`Finding articles with unexpected answers for project: ${projectId}`)
 
   // Get prompts for the project
-  const projectPrompts = await db
-    .select({
-      id: prompts.id,
-      promptHeading: prompts.promptHeading,
-      type: prompts.type,
-    })
-    .from(prompts)
-    .where(and(eq(prompts.projectId, projectId), isNotNull(prompts.type)))
+  const projectPromptRows = await db
+    .select({id: prompts.id, promptHeading: prompts.promptHeading, type: prompts.type})
+    .from(projectPrompts)
+    .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
+    .where(and(eq(projectPrompts.projectId, projectId), eq(projectPrompts.enabled, true), isNotNull(prompts.type)))
 
-  const promptsToCheck = promptId ? projectPrompts.filter((p) => {
-    return p.id === promptId
-  }) : projectPrompts
+  const promptsToCheck = promptId
+    ? projectPromptRows.filter((p) => {
+        return p.id === promptId
+      })
+    : projectPromptRows
 
   if (promptsToCheck.length === 0) {
     console.log('No prompts found with defined types')
@@ -77,9 +76,7 @@ const findArticlesWithUnexpectedAnswers = async (projectId: string, promptId?: s
     if (unexpectedJudgments.length > 0) {
       console.log(`\nFound ${unexpectedJudgments.length}+ articles with unexpected answers (showing first 20):`)
       for (const j of unexpectedJudgments) {
-        console.log(
-          `  - ${j.articleTitle?.substring(0, 60) || 'Untitled'} (${j.articleExternalId || j.articleId})`,
-        )
+        console.log(`  - ${j.articleTitle?.substring(0, 60) || 'Untitled'} (${j.articleExternalId || j.articleId})`)
         console.log(`    Answer: "${j.answeredOriginal}" (expected one of: ${expectedOptions.join(', ')})`)
         console.log(`    Judged at: ${j.createdAt}`)
       }

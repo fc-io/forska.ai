@@ -110,7 +110,7 @@ const ProjectDetail = () => {
                 ? (namesByRouteCandidate as Record<string, string | null>)
                 : undefined
 
-            interface RawPrompt {
+            type RawPrompt = {
               id: string
               createdAt?: Date
               updatedAt?: Date

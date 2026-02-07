@@ -18,6 +18,7 @@ const getDateParts = (value: string): DateParts | null => {
 
   const [yearStr, monthStr, dayStr] = datePart.split('-')
   const [timePart, fractionPart] = timePartRaw.split('.')
+  if (!timePart) return null
   const [hourStr, minuteStr, secondStr] = timePart.split(':')
 
   const year = Number(yearStr)

@@ -1,13 +1,32 @@
 import {useMutation, useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
 import {format} from 'date-fns'
-import {createEffect, createSignal, For, Show, Suspense} from 'solid-js'
+import {createEffect, createSignal, For, Show} from 'solid-js'
 
 import {Button} from '../../../../components/ui/button'
 import {fetchProjectWithPrompts} from '../../../../services/projectsService'
 import {env} from '../../../utils/client-env'
 
 type PromptInfo = {id: string; promptHeading: string | null; originalText: string; type: string | null}
+
+type ExportRequestBody = {
+  promptIds: string[]
+  promptSelections: Array<{promptId: string; types: string[]}>
+  sourceProjectIds: string[]
+  includeExplanation: boolean
+  includeQuotes: boolean
+  includeJournal: boolean
+  includeSummary: boolean
+  includeArticleId: boolean
+  includeArticleLink: boolean
+  includeArticleAuthors: boolean
+  includeArticleCreatedAt: boolean
+  includeArticleUpdatedAt: boolean
+  includePromptType: boolean
+  includePromptContent: boolean
+}
+
+type ExportPromptsRequestBody = {promptIds: string[]}
 
 const parseArktypeOptions = (typeStr: string | null): string[] => {
   if (!typeStr) return []
@@ -243,7 +262,7 @@ const ExportData = () => {
 
   const exportMutation = useMutation(() => {
     return {
-      mutationFn: async (body: unknown) => {
+      mutationFn: async (body: ExportRequestBody) => {
         const response = await fetch(`${env.VITE_SERVER_API}/api/projects/${projectId}/export`, {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
@@ -255,8 +274,7 @@ const ExportData = () => {
           throw new Error('Export failed')
         }
 
-        const filename = `export-${projectId}.csv`
-        await downloadResponseAsCsv(response, filename)
+        await downloadResponseAsCsv(response, `export-${projectId}.csv`)
         return {success: true}
       },
       onError: (err) => {
@@ -268,7 +286,7 @@ const ExportData = () => {
 
   const exportPromptsMutation = useMutation(() => {
     return {
-      mutationFn: async (body: unknown) => {
+      mutationFn: async (body: ExportPromptsRequestBody) => {
         const response = await fetch(`${env.VITE_SERVER_API}/api/projects/${projectId}/export-prompts`, {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
@@ -280,8 +298,7 @@ const ExportData = () => {
           throw new Error('Prompt export failed')
         }
 
-        const filename = `prompts-${projectId}.csv`
-        await downloadResponseAsCsv(response, filename)
+        await downloadResponseAsCsv(response, `prompts-${projectId}.csv`)
         return {success: true}
       },
       onError: (err) => {
@@ -343,7 +360,17 @@ const ExportData = () => {
         <h1 class="text-3xl font-bold">Export data</h1>
       </div>
 
-      <Suspense fallback={<div class="text-center py-8">Loading...</div>}>
+      <Show when={projectData.isLoading}>
+        <div class="text-center py-8">Loading...</div>
+      </Show>
+
+      <Show when={projectData.isError}>
+        <div class="text-center py-8 text-red-600">
+          Failed to load project: {projectData.error instanceof Error ? projectData.error.message : 'Unknown error'}
+        </div>
+      </Show>
+
+      <Show when={!projectData.isLoading && !projectData.isError}>
         <div class="bg-card border rounded-lg p-6">
           <Show when={error()}>
             <div class="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm">{error()}</div>
@@ -726,7 +753,7 @@ const ExportData = () => {
             </Button>
           </div>
         </div>
-      </Suspense>
+      </Show>
     </div>
   )
 }

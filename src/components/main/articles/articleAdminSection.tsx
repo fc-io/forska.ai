@@ -1,7 +1,6 @@
 import {createMutation, useQuery, useQueryClient} from '@tanstack/solid-query'
 import {createEffect, createSignal, For, onCleanup, Show} from 'solid-js'
 
-import {env} from '../../../app/utils/client-env.ts'
 import {apiClient} from '../../../services/apiClient.ts'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse.ts'
 
@@ -88,23 +87,8 @@ export const ArticleAdminSection = (props: ArticleAdminSectionProps) => {
   const uploadPdfMutation = createMutation(() => {
     return {
       mutationFn: async (file: File): Promise<{success: boolean; fullTextPDF: string; message: string}> => {
-        const formData = new FormData()
-        formData.append('pdf', file)
-
-        const response = await fetch(`${env.VITE_SERVER_API}/api/articles/${props.articleId}/upload-pdf`, {
-          method: 'POST',
-          body: formData,
-          credentials: 'include',
-        })
-
-        if (!response.ok) {
-          const errorData = (await response.json().catch(() => {
-            return {}
-          })) as {error?: string}
-          throw new Error(errorData.error ?? 'Failed to upload PDF')
-        }
-
-        return response.json() as Promise<{success: boolean; fullTextPDF: string; message: string}>
+        const response = await apiClient.api.articles({id: props.articleId})['upload-pdf'].post({pdf: file})
+        return handleApiResponse(response, 'Failed to upload PDF')
       },
       onSuccess: () => {
         setSelectedFile(null)

@@ -1,7 +1,7 @@
 import {createForm} from '@tanstack/solid-form'
 import {useMutation, useQuery, useQueryClient} from '@tanstack/solid-query'
 import {createFileRoute} from '@tanstack/solid-router'
-import {For, Suspense} from 'solid-js'
+import {For, Show} from 'solid-js'
 
 import {apiClient} from '../../../../services/apiClient'
 import {handleApiResponse} from '../../../../services/utils/handleApiResponse'
@@ -76,8 +76,18 @@ export const HumanAssessment = () => {
   }
 
   return (
-    <Suspense fallback={<div class="min-h-screen bg-gray-50 p-6">Loading assessment...</div>}>
-      <div class="min-h-screen bg-gray-50 p-6 mx-auto">
+    <div class="min-h-screen bg-gray-50 p-6 mx-auto">
+      <Show when={query.isLoading}>
+        <div class="text-center py-8">Loading assessment...</div>
+      </Show>
+
+      <Show when={query.isError}>
+        <div class="text-center py-8 text-red-600">
+          Failed to load assessment: {query.error instanceof Error ? query.error.message : 'Unknown error'}
+        </div>
+      </Show>
+
+      <Show when={!query.isLoading && !query.isError && data()}>
         <div class="flex justify-between items-center mb-6">
           <div class="flex items-center gap-4">
             <h1 class="text-2xl font-bold">Human Assessment</h1>
@@ -205,8 +215,8 @@ export const HumanAssessment = () => {
             </form>
           </div>
         </div>
-      </div>
-    </Suspense>
+      </Show>
+    </div>
   )
 }
 

@@ -1,6 +1,6 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
-import {createSignal, Show, Suspense} from 'solid-js'
+import {createSignal, Show} from 'solid-js'
 
 import {apiClient} from '../../../../services/apiClient.ts'
 import {fetchSession} from '../../../../services/fetchSession.ts'
@@ -112,8 +112,25 @@ const AdminCreateDataSource = () => {
           </Link>
         </div>
 
-        <Suspense fallback={<p class="text-sm text-gray-500">Checking permissions...</p>}>
-          <Show when={isAdmin()}>
+        <Show when={sessionQuery.isLoading}>
+          <p class="text-sm text-gray-500">Checking permissions...</p>
+        </Show>
+
+        <Show when={sessionQuery.isError}>
+          <p class="text-sm text-red-600">
+            Failed to load session: {sessionQuery.error instanceof Error ? sessionQuery.error.message : 'Unknown error'}
+          </p>
+        </Show>
+
+        <Show when={!sessionQuery.isLoading && !sessionQuery.isError}>
+          <Show
+            when={isAdmin()}
+            fallback={
+              <div class="p-4 rounded-md bg-red-50 border border-red-200">
+                <p class="text-red-600">Administrator access required.</p>
+              </div>
+            }
+          >
             <form
               class="space-y-6"
               onSubmit={(e) => {
@@ -213,7 +230,7 @@ const AdminCreateDataSource = () => {
               </div>
             </form>
           </Show>
-        </Suspense>
+        </Show>
       </div>
     </div>
   )

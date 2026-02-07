@@ -1,7 +1,7 @@
 import type {QueryClient} from '@tanstack/solid-query'
 import {useQuery, useQueryClient} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
-import {createSignal, For, Show, Suspense} from 'solid-js'
+import {createSignal, For, Show} from 'solid-js'
 
 import {Button} from '../../../../components/ui/button'
 import {
@@ -67,7 +67,7 @@ export const ArchivedPromptsPage = () => {
         <div class="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm">{errorMessage()}</div>
       </Show>
 
-      <Suspense fallback={<div class="text-center py-8">Loading archived prompts...</div>}>
+      <Show when={!promptsQuery.isLoading} fallback={<div class="text-center py-8">Loading archived prompts...</div>}>
         <Show when={promptsQuery.isError}>
           <div class="text-center py-8 text-red-600">
             Error loading archived prompts:{' '}
@@ -75,7 +75,7 @@ export const ArchivedPromptsPage = () => {
           </div>
         </Show>
 
-        <Show when={Array.isArray(promptsQuery.data) && promptsQuery.data.length === 0}>
+        <Show when={!promptsQuery.isError && (promptsQuery.data?.length ?? 0) === 0}>
           <div class="text-center py-12">
             <h2 class="text-xl font-semibold mb-4">No archived prompts</h2>
             <p class="text-muted-foreground mb-6">Prompts you archive will show up here.</p>
@@ -85,7 +85,7 @@ export const ArchivedPromptsPage = () => {
           </div>
         </Show>
 
-        <Show when={Array.isArray(promptsQuery.data) && (promptsQuery.data.length ?? 0) > 0}>
+        <Show when={!promptsQuery.isError && (promptsQuery.data?.length ?? 0) > 0}>
           <div class="space-y-3">
             <For each={promptsQuery.data ?? []}>
               {(prompt) => {
@@ -152,7 +152,7 @@ export const ArchivedPromptsPage = () => {
             </For>
           </div>
         </Show>
-      </Suspense>
+      </Show>
     </div>
   )
 }

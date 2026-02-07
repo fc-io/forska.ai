@@ -60,58 +60,63 @@ const AdminArticleDetailsFulltext = () => {
           <h1 class="text-2xl font-bold">Admin Article View</h1>
         </div>
 
-        <Suspense fallback={<div class="p-4 bg-white rounded-lg shadow">Loading...</div>}>
-          <Show when={articleQuery.error}>
-            <div class="p-4 bg-red-50 rounded-lg shadow">
-              <p class="text-red-600">Error loading article: {articleQuery.error?.message}</p>
-            </div>
-          </Show>
+        <Show when={articleQuery.isLoading}>
+          <div class="p-4 bg-white rounded-lg shadow">Loading...</div>
+        </Show>
 
-          <Show when={articleQuery.data}>
-            {(data) => {
-              return (
-                <div class="flex gap-6">
-                  <div class="flex-1 space-y-6">
-                    <ArticleTabs
-                      activeTab="fulltext"
-                      hasFullText={hasFullText()}
-                      fullTextPDF={data().article.fullTextPDF}
-                      basePath={`/articles/${params().id}`}
-                    />
+        <Show when={articleQuery.error}>
+          <div class="p-4 bg-red-50 rounded-lg shadow">
+            <p class="text-red-600">
+              Error loading article:{' '}
+              {articleQuery.error instanceof Error ? articleQuery.error.message : 'Unknown error'}
+            </p>
+          </div>
+        </Show>
 
-                    <ReviewArticleDetails
-                      article={data().article}
-                      judgment={selectedJudgment()}
-                      showTitle={false}
-                      enableSticky={true}
-                      viewMode="fulltext"
-                      hidePdfButton={true}
-                    />
-                  </div>
-                  <StickyColumn class="w-96">
-                    <Show when={isAdmin()}>
-                      <Suspense
-                        fallback={
-                          <div class="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-4 animate-pulse">
-                            <div class="h-4 bg-amber-200 rounded w-24 mb-2" />
-                            <div class="h-3 bg-amber-200 rounded w-full" />
-                          </div>
-                        }
-                      >
-                        <ArticleAdminSection articleId={params().id} />
-                      </Suspense>
-                    </Show>
-                    <ReviewAvailableJudgments
-                      judgments={data().allJudgments}
-                      projectsById={data().projectsById}
-                      setArticleViewToShow={setArticleViewToShow}
-                    />
-                  </StickyColumn>
+        <Show when={!articleQuery.isLoading && !articleQuery.error && articleQuery.data}>
+          {(data) => {
+            return (
+              <div class="flex gap-6">
+                <div class="flex-1 space-y-6">
+                  <ArticleTabs
+                    activeTab="fulltext"
+                    hasFullText={hasFullText()}
+                    fullTextPDF={data().article.fullTextPDF}
+                    basePath={`/articles/${params().id}`}
+                  />
+
+                  <ReviewArticleDetails
+                    article={data().article}
+                    judgment={selectedJudgment()}
+                    showTitle={false}
+                    enableSticky={true}
+                    viewMode="fulltext"
+                    hidePdfButton={true}
+                  />
                 </div>
-              )
-            }}
-          </Show>
-        </Suspense>
+                <StickyColumn class="w-96">
+                  <Show when={isAdmin()}>
+                    <Suspense
+                      fallback={
+                        <div class="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-4 animate-pulse">
+                          <div class="h-4 bg-amber-200 rounded w-24 mb-2" />
+                          <div class="h-3 bg-amber-200 rounded w-full" />
+                        </div>
+                      }
+                    >
+                      <ArticleAdminSection articleId={params().id} />
+                    </Suspense>
+                  </Show>
+                  <ReviewAvailableJudgments
+                    judgments={data().allJudgments}
+                    projectsById={data().projectsById}
+                    setArticleViewToShow={setArticleViewToShow}
+                  />
+                </StickyColumn>
+              </div>
+            )
+          }}
+        </Show>
       </div>
     </div>
   )

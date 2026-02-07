@@ -1,7 +1,7 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
 import {formatDate} from 'date-fns'
-import {createSignal, For, Show, Suspense} from 'solid-js'
+import {createSignal, For, Show} from 'solid-js'
 
 import {apiClient} from '../../../../services/apiClient.ts'
 import {fetchSession} from '../../../../services/fetchSession.ts'
@@ -309,13 +309,21 @@ const DeduplicatePrompts = () => {
 
   return (
     <div class="min-h-screen bg-gray-50 p-6 mx-auto">
-      <Suspense
-        fallback={
-          <div class="flex items-center justify-center h-64">
-            <span class="text-gray-600">Loading...</span>
-          </div>
-        }
-      >
+      <Show when={sessionQuery.isLoading}>
+        <div class="flex items-center justify-center h-64">
+          <span class="text-gray-600">Checking permissions...</span>
+        </div>
+      </Show>
+
+      <Show when={sessionQuery.isError}>
+        <div class="p-4 rounded-md bg-red-50 border border-red-200 mb-6">
+          <p class="text-red-600">
+            Failed to load session: {sessionQuery.error instanceof Error ? sessionQuery.error.message : 'Unknown error'}
+          </p>
+        </div>
+      </Show>
+
+      <Show when={!sessionQuery.isLoading && !sessionQuery.isError}>
         <Show
           when={isAdmin()}
           fallback={
@@ -374,7 +382,7 @@ const DeduplicatePrompts = () => {
               </div>
             </Show>
 
-            <For each={duplicatesQuery.data}>
+            <For each={duplicatesQuery.data ?? []}>
               {(group, index) => {
                 return (
                   <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
@@ -573,7 +581,7 @@ const DeduplicatePrompts = () => {
                             </tr>
                           }
                         >
-                          <For each={invalidJudgmentsQuery.data}>
+                          <For each={invalidJudgmentsQuery.data ?? []}>
                             {(judgment) => {
                               return (
                                 <tr class="hover:bg-gray-50">
@@ -684,7 +692,7 @@ const DeduplicatePrompts = () => {
                             </tr>
                           }
                         >
-                          <For each={orphansQuery.data?.noProjects}>
+                          <For each={orphansQuery.data?.noProjects ?? []}>
                             {(prompt) => {
                               const fullyOrphaned = isFullyOrphaned(prompt.id)
                               return (
@@ -792,7 +800,7 @@ const DeduplicatePrompts = () => {
                             </tr>
                           }
                         >
-                          <For each={orphansQuery.data?.noJudgments}>
+                          <For each={orphansQuery.data?.noJudgments ?? []}>
                             {(prompt) => {
                               const fullyOrphaned = isFullyOrphaned(prompt.id)
                               return (
@@ -902,7 +910,7 @@ const DeduplicatePrompts = () => {
                             </tr>
                           }
                         >
-                          <For each={orphansQuery.data?.noProjectsAndJudgments}>
+                          <For each={orphansQuery.data?.noProjectsAndJudgments ?? []}>
                             {(prompt) => {
                               return (
                                 <tr class="hover:bg-gray-50">
@@ -945,7 +953,7 @@ const DeduplicatePrompts = () => {
             </div>
           </div>
         </Show>
-      </Suspense>
+      </Show>
     </div>
   )
 }

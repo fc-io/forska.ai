@@ -1,6 +1,6 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
-import {Show, Suspense} from 'solid-js'
+import {Show} from 'solid-js'
 
 import {ProjectsGrid} from '../../../../components/main/ProjectsGrid'
 import {Button} from '../../../../components/ui/button'
@@ -22,7 +22,7 @@ export const ArchivedProjectsPage = () => {
         </div>
       </div>
 
-      <Suspense fallback={<div class="text-center py-8">Loading archived projects...</div>}>
+      <Show when={!projects.isLoading} fallback={<div class="text-center py-8">Loading archived projects...</div>}>
         <Show when={projects.isError}>
           <div class="text-center py-8 text-red-600">
             Error loading archived projects:{' '}
@@ -30,7 +30,7 @@ export const ArchivedProjectsPage = () => {
           </div>
         </Show>
 
-        <Show when={projects.data && projects.data?.length === 0}>
+        <Show when={!projects.isError && (projects.data?.length ?? 0) === 0}>
           <div class="text-center py-12">
             <h2 class="text-xl font-semibold mb-4">No archived projects</h2>
             <p class="text-muted-foreground mb-6">
@@ -42,16 +42,16 @@ export const ArchivedProjectsPage = () => {
           </div>
         </Show>
 
-        <Show when={projects.data && Array.isArray(projects.data) && (projects.data?.length ?? 0) > 0}>
+        <Show when={!projects.isError && (projects.data?.length ?? 0) > 0}>
           <ProjectsGrid
-            projects={projects.data || []}
+            projects={projects.data ?? []}
             isArchived
             onUnarchive={() => {
               void projects.refetch()
             }}
           />
         </Show>
-      </Suspense>
+      </Show>
     </div>
   )
 }
