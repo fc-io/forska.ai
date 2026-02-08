@@ -8,6 +8,18 @@ IMPORTANT: when writing plans or md files in general; be extremely concise. Sacr
 IMPORTANT: Please don't create postgres migration files for me. I want to create migrations using the Drizzle CLI (bun db:gen, bun db:migrate) if possible.
 IMPORTANT: We use Eden/RPC so derive the types from the API when possible and don't make up new types.
 IMPORTANT: I don't like try, catch, finally, throw. Only use when absolutely necessary.
+IMPORTANT: Layout-first UI (shell first; data later; no full-page spinner)
+
+- Never suspend root `<Outlet />` or wrap an entire route in `<Suspense>`
+- Keep headers/nav/containers outside any async boundary
+- Per `useQuery`: pick ONE loading model
+  - (Recommended) `suspense:false` + explicit `isLoading/isError` UI; never treat `undefined` as empty state
+  - (Allowed) `suspense:true` + _small_ local `<Suspense fallback=...>` around the FIRST `data` read
+- No `<Suspense>` without `fallback`
+- Client network via TanStack Query + Eden; `fetch` only if streaming/upload/download forces it (inside mutationFn)
+
+See `LAYOUT_FIRST_PLAN.md`.
+
 IMPORTANT: Avoid branching. If something can be done without, please do without. For example have an type ArrayThatWillLop = array and initalize with an empty array, instead of type LopIfArray = [] | null.
 IMPORTANT: If there is only one export in a file, then the filename should match the name of the exported function
 IMPORTANT: On the server – prefer Drizzle ORM over executing pure SQL commands
@@ -202,7 +214,7 @@ We use "eslint-plugin-prettier" so there is no need to run prettier separately.
 - Complex route logic should be extracted to separate files in a subfolder (e.g., `projectsRoutes/projectsRoutesGetArticlesReviews.ts`). In general, any route logic over 15 lines should be in a separate file.
 - Use Elysia framework patterns for route definitions.
 - IMPORTANT: Do not nest routes – prefer flat route structures with POST requests and body parameters over nested URL paths
-- IMPORTANT: Always use Eden/RPC on the client; never use fetch directly
+- IMPORTANT: Always use Eden/RPC on the client; avoid fetch. Exception: streaming/upload/download; fetch ok inside TanStack mutationFn.
 - Try to keep fetch logic local (in the same file) to the tanstack useQuery. Avoid creating services files for the fetch logic.
 - IMPORTANT: Prefer POST with request body over complex nested URL parameters
 
