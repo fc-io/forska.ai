@@ -287,7 +287,7 @@ export const Navigation = (props: NavigationProps) => {
               </div>
             </Show>
             <Show when={props.user}>
-              <Menu.Root positioning={{placement: 'bottom-end'}}>
+              <Menu.Root lazyMount unmountOnExit positioning={{placement: 'bottom-end'}}>
                 <Menu.Trigger class="inline-flex items-center justify-center w-9 h-9 rounded-full bg-gray-200 text-sm font-semibold text-gray-700 hover:bg-gray-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">
                   <span aria-hidden="true">{getAvatarLabel(props.user)}</span>
                   <span class="sr-only">Open user menu</span>

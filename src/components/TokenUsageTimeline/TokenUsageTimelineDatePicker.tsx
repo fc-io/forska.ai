@@ -100,6 +100,8 @@ const updateRangeFromValues = (params: ValueChangeParams) => {
 export const TokenUsageTimelineDatePicker = (props: TokenUsageTimelineDatePickerProps) => {
   return (
     <DatePicker
+      lazyMount
+      unmountOnExit
       locale="sv-SE"
       max={props.maxSelectableDate}
       numOfMonths={2}

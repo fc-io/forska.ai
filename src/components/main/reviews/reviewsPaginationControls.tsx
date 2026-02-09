@@ -115,6 +115,8 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
               <label class="text-xs text-gray-700">Select all rows</label>
               <Show when={selectedCount() > 0}>
                 <Menu.Root
+                  lazyMount
+                  unmountOnExit
                   positioning={{placement: 'bottom-start'}}
                   onOpenChange={(e) => {
                     const isOpen =

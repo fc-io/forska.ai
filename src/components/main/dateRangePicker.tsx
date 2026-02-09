@@ -44,6 +44,8 @@ export const DateRangePicker = (props: DateRangePickerProps): JSX.Element => {
 
   return (
     <DatePicker
+      lazyMount
+      unmountOnExit
       max={max()}
       locale={props.locale ?? 'sv-SE'}
       numOfMonths={props.numOfMonths ?? 2}
