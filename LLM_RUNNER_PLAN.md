@@ -16,7 +16,7 @@ Create a dedicated Bun/Elysia `llm-runner` that can:
 
 - No UI
 - No long-term persistence (beyond optional re-discovery from Slurm on startup)
-- No model transfer/build automation (assume models/containers already exist on each HPC)
+- Model transfer is explicit: no automatic transfer from initiating node unless `autoTransfer` is enabled for that request. On MN5 (no outbound internet), use `autoTransfer` when artifacts are not already present.
 - No generic “run arbitrary shell” API
 
 ## Constraints / Style
@@ -71,6 +71,10 @@ Additional fields to add to existing schema:
 - How to launch SGLang:
   - reference to an `SBATCH_FILE` already on the cluster (or repo-relative file to upload)
   - which env vars/exports to pass (`SGLANG_MODEL`, `SGLANG_PORT`, `TP_SIZE`, etc.)
+- Transfer behavior for runs:
+  - `autoTransfer` (default false): pull model/container from Hugging Face on initiating node + rsync to HPC only when true
+  - `autoTransfer=false`: require artifacts already present on target HPC
+  - MN5 policy: this flag must be true whenever required artifacts are missing because MN5 cannot reach Hugging Face directly.
 - Local tunnel policy:
   - local bind host (`127.0.0.1` default)
   - allowed local port range (to avoid collisions with the API server and other tools)
@@ -291,7 +295,7 @@ Response per model:
   // Lifecycle state
   state:
     | "idle"                    // not running, ready to start
-    | "transferring"            // transferring files to remote host
+    | "transferring"            // explicit transfer from initiating node: HF pull + rsync to remote host
     | "initializing"            // submitting sbatch
     | "pending"                 // queued in Slurm (PENDING)
     | "started"                // sbatch stared, tunnel not up

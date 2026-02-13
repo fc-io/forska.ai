@@ -5,7 +5,7 @@
 
 ## Overview
 
-Deploy SGLang inference server to MareNostrum 5 at Barcelona Supercomputing Center (BSC). Due to MN5's restriction on outbound network calls, we pre-download models and containers locally, then transfer them via the `tlog` transfer node.
+Deploy SGLang inference server to MareNostrum 5 at Barcelona Supercomputing Center (BSC). MN5 has no outbound internet, so models/containers must either already exist on MN5 or be synced via `tlog` after pulling from Hugging Face on the initiating node.
 
 **Current Model**: `openai/gpt-oss-120b` (large model; multi-node recommended)
 
@@ -29,7 +29,7 @@ This will:
 
 ### First-Time Setup
 
-If you haven't transferred the model and container yet:
+If artifacts are not already on MN5, enable auto-transfer for this run:
 
 ```bash
 # Step 1: Transfer model + container to MN5 (one-time, ~1 hour)
@@ -63,6 +63,7 @@ curl http://localhost:30000/v1/chat/completions \
 |--------|---------|-------------|
 | **mn5:launch** | `bun run mn5:launch` | Full automation: deploy, submit, wait, tunnel |
 | **mn5:transfer** | `bun run mn5:transfer` | Download model/container, transfer to MN5 |
+| **mn5:launch --auto-transfer** | `bun run mn5:launch -- --model ... --auto-transfer` | Pull from Hugging Face on initiating node and rsync model/container to MN5 |
 | **mn5:tunnel** | `bun run mn5:tunnel` | Connect to running job (auto-detects node) |
 | **mn5:status** | `bun run mn5:status` | Check job queue status |
 | **mn5:submit** | `bun run mn5:submit` | Submit job (sbatch already deployed) |
@@ -81,6 +82,9 @@ bun run mn5:launch -- --no-tunnel
 
 # Transfer with different model
 bun run mn5:transfer -- --model Qwen/Qwen3-30B-A3B-Instruct-2507
+
+# Launch with auto transfer from initiating node
+bun run mn5:launch -- --model Qwen/Qwen3-30B-A3B-Instruct-2507 --auto-transfer
 
 # Transfer skipping download (if model already exists locally)
 bun run mn5:transfer -- --skip-download
@@ -133,6 +137,12 @@ bun run mn5:transfer -- --skip-container
 ```
 
 ---
+
+## Transfer behavior
+
+- Default: use existing synced artifacts on MN5.
+- If model/container is missing on MN5, launch must use `--auto-transfer`.
+- Auto transfer flow: download from Hugging Face on initiating node (or reuse cache), then rsync artifacts to MN5 over `tlog`.
 
 ## Files on MN5
 
