@@ -58,6 +58,7 @@ const processSinglePrompt = async (
       modelId: promptToProcess.modelId,
       modelName: promptToProcess.modelName,
       baseURL: promptToProcess.modelBaseUrl,
+      provider: promptToProcess.modelProvider,
     },
     projectId: promptToProcess.projectId,
     contentSettings: {

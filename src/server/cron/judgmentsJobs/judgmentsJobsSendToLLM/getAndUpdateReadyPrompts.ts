@@ -11,12 +11,28 @@ export type PromptToProcess = {
   recordId: string
   projectId: string
   modelId: string
+  modelProvider: string
   modelName: string
   modelBaseUrl: string
   useTitle: boolean
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+}
+
+const normalizeProvider = (value: string | null | undefined): string => {
+  const v = String(value ?? '')
+    .trim()
+    .toLowerCase()
+  return v.length > 0 ? v : 'unknown'
+}
+
+const isCodexProvider = (provider: string): boolean => {
+  return provider === 'codex'
+}
+
+const getCodexPlaceholderBaseUrl = (): string => {
+  return 'codex://app-server'
 }
 
 const processReadyRows = async (
@@ -56,6 +72,7 @@ const processReadyRows = async (
             jobId: schema.judgmentsJobs.id,
             projectId: schema.judgmentsJobs.projectId,
             modelId: schema.projects.modelId,
+            modelProvider: schema.models.provider,
             modelName: schema.models.modelName,
             modelBaseUrl: schema.models.baseURL,
             useTitle: schema.projects.useTitle,
@@ -80,7 +97,7 @@ const processReadyRows = async (
   const promptsWithProjects = promptsWithJobs
     .map((prompt) => {
       const config = jobConfigMap.get(prompt.jobId)
-      if (!config?.projectId || !config?.modelId || !config?.modelName || !config?.modelBaseUrl) {
+      if (!config?.projectId || !config?.modelId || !config?.modelName) {
         console.error('Prompt missing required model config:', {
           articleId: prompt.articleId,
           promptId: prompt.promptId,
@@ -88,23 +105,39 @@ const processReadyRows = async (
           hasConfig: !!config,
           projectId: config?.projectId,
           modelId: config?.modelId,
+          modelProvider: config?.modelProvider,
           modelName: config?.modelName,
           modelBaseUrl: config?.modelBaseUrl,
         })
         return null
       }
 
-      // Use random worker URL if direct-to-worker mode enabled, otherwise use DB config
-      let baseUrl = config.modelBaseUrl
-      const lbWorker = workerLoadBalancer.getWorkerUrl()
-      if (lbWorker) {
-        baseUrl = `${lbWorker}/v1`
+      const provider = normalizeProvider(config.modelProvider)
+      if (!isCodexProvider(provider) && !config.modelBaseUrl) {
+        console.error('Prompt missing required model baseURL:', {
+          articleId: prompt.articleId,
+          promptId: prompt.promptId,
+          jobId: prompt.jobId,
+          modelProvider: config.modelProvider,
+          modelName: config.modelName,
+        })
+        return null
       }
+
+      const baseUrl = isCodexProvider(provider)
+        ? getCodexPlaceholderBaseUrl()
+        : (() => {
+            let url = String(config.modelBaseUrl)
+            const lbWorker = workerLoadBalancer.getWorkerUrl()
+            if (lbWorker) url = `${lbWorker}/v1`
+            return url
+          })()
 
       return {
         ...prompt,
         projectId: config.projectId,
         modelId: config.modelId,
+        modelProvider: provider,
         modelName: config.modelName,
         modelBaseUrl: baseUrl,
         useTitle: config.useTitle ?? true,

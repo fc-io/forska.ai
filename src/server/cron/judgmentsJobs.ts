@@ -21,7 +21,7 @@ const serverJobId = String(process.env.SERVER_JOB_ID ?? '').trim() || buildDefau
 const cronLogger = createRateLimitedLogger({windowMs: 30_000})
 
 const shouldRunJudgingCron = (): boolean => {
-  return env.RUN_SERVER_JUDGING && !!env.SGLANG_MODEL && env.SGLANG_MODEL !== 'not set'
+  return env.RUN_SERVER_JUDGING
 }
 
 const NEW_ARTICLES_INTERVAL = '*/1 * * * * *'

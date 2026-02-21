@@ -27,6 +27,8 @@ type SourcesResponse = {data: ProjectSource[]}
 type ModelOption = {id: string; name: string; provider: string | null; modelName: string | null}
 type ModelsResponse = {data: ModelOption[]}
 
+type EnsureModelResponse = {data: {modelId: string}; error: null}
+
 // Parse arktype definition like "'yes' | 'no' | 'unsure' | 'potentially' | 'marginally'" into array
 const parseArktypeOptions = (typeStr: string | null): string[] => {
   if (!typeStr) return []
@@ -75,7 +77,7 @@ const CreateSubproject = () => {
       queryFn: async () => {
         const response = await apiClient.api.models.get()
         const result = handleApiResponse<ModelsResponse>(
-          response as {data?: ModelsResponse; error?: unknown; status?: number},
+          response as unknown as {data?: ModelsResponse; error?: unknown; status?: number},
           'Failed to load models',
         )
         return result.data ?? []
@@ -193,7 +195,10 @@ const CreateSubproject = () => {
       return
     }
 
-    if (!selectedModelId()) {
+    const selectedModel = availableModels().find((m) => {
+      return m.id === selectedModelId()
+    })
+    if (!selectedModel) {
       setError('Please select a model for this project')
       return
     }
@@ -206,6 +211,24 @@ const CreateSubproject = () => {
     setIsLoading(true)
 
     try {
+      const ensuredModelId =
+        selectedModel.provider?.toLowerCase() === 'codex'
+          ? await (async () => {
+              const modelName = selectedModel.modelName?.trim() ?? ''
+              if (!modelName) throw new Error('Selected Codex model is missing modelName')
+              const response = await apiClient.api.models.ensure.post({
+                provider: 'codex',
+                modelName,
+                name: selectedModel.name,
+              })
+              const result = handleApiResponse<EnsureModelResponse>(
+                response as unknown as {data?: EnsureModelResponse; error?: unknown; status?: number},
+                'Failed to ensure Codex model',
+              )
+              return result.data.modelId
+            })()
+          : selectedModel.id
+
       // Build prompt selections from selected answer types
       const promptSelections = Object.entries(promptAnswerTypes()).map(([promptId, types]) => {
         return {promptId, types}
@@ -215,7 +238,7 @@ const CreateSubproject = () => {
         name: projectName(),
         description: description().trim() || undefined,
         ownerId: sessionQuery.data.user.id,
-        modelId: selectedModelId(),
+        modelId: ensuredModelId,
         dateFrom: dateFrom() || undefined,
         dateTo: dateTo() || undefined,
         promptSelections,
@@ -279,7 +302,8 @@ const CreateSubproject = () => {
                 >
                   <For each={availableModels()}>
                     {(m) => {
-                      return <option value={m.id}>{m.name}</option>
+                      const label = m.provider?.toLowerCase() === 'codex' ? `Codex: ${m.name}` : m.name
+                      return <option value={m.id}>{label}</option>
                     }}
                   </For>
                 </select>

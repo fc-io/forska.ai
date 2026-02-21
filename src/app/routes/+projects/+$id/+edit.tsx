@@ -50,6 +50,8 @@ type ProjectSummary = {
 
 type ModelOption = {id: string; name: string; provider: string | null; modelName: string | null}
 type ModelsResponse = {data: ModelOption[]}
+
+type EnsureModelResponse = {data: {modelId: string}; error: null}
 type ImportRouteOption = {route: string; name: string | null}
 
 type ImportRoutesResponse = {data: ImportRouteOption[]}
@@ -307,13 +309,17 @@ const EditProject = (): JSX.Element => {
 
   // Track whether we've loaded initial data to avoid overwriting local changes on refetch
   let initialDataLoaded = false
+  let initialModelLoaded = false
 
   const modelsQuery = useQuery(() => {
     return {
       queryKey: ['models'],
       queryFn: async () => {
         const response = await apiClient.api.models.get()
-        const result = handleApiResponse<ModelsResponse>(response, 'Failed to load models')
+        const result = handleApiResponse<ModelsResponse>(
+          response as unknown as {data?: ModelsResponse; error?: unknown; status?: number},
+          'Failed to load models',
+        )
         return result.data ?? []
       },
       staleTime: 1000 * 60 * 5,
@@ -423,8 +429,15 @@ const EditProject = (): JSX.Element => {
       setUseAbstract(details.project.useAbstract)
       setUseFulltext(details.project.useFulltext)
       setUseFulltextNoImages(details.project.useFulltextNoImages)
-      if (!selectedModelId() && details.model?.id) {
-        setSelectedModelId(details.model.id)
+      if (!initialModelLoaded && details.model?.id) {
+        const provider = String(details.model?.provider ?? '')
+          .trim()
+          .toLowerCase()
+        const isCodex = provider === 'codex'
+        const codexId = String(details.model?.modelName ?? '').trim()
+        const initialModelId = isCodex && codexId ? `codex:${codexId}` : details.model.id
+        setSelectedModelId(initialModelId)
+        initialModelLoaded = true
       }
       const routes = Array.isArray(details.importRoutes) ? details.importRoutes : []
       setSelectedImportRoutes(routes)
@@ -441,9 +454,11 @@ const EditProject = (): JSX.Element => {
   createEffect(() => {
     const models = availableModels()
     const firstId = models[0]?.id
-    if (!selectedModelId() && firstId) {
-      setSelectedModelId(firstId)
-    }
+    const currentId = selectedModelId()
+    const hasCurrent = models.some((m) => {
+      return m.id === currentId
+    })
+    if ((!currentId || !hasCurrent) && firstId) setSelectedModelId(firstId)
   })
 
   const addPromptInput = () => {
@@ -498,22 +513,51 @@ const EditProject = (): JSX.Element => {
     }
   }
 
-  const sendUpdateRequest = async (startDate: string | null, endDate: string | null): Promise<void> => {
-    const promptsPayload = buildPromptsPayload(ownedPrompts, importedPrompts)
+  const getModelIdForUpdate = async (): Promise<string | undefined> => {
+    const selected = availableModels().find((m) => {
+      return m.id === selectedModelId()
+    })
+    if (!selected) return undefined
+
+    if (selected.provider?.toLowerCase() !== 'codex') return selected.id
+
+    const modelName = selected.modelName?.trim() ?? ''
+    if (!modelName) throw new Error('Selected Codex model is missing modelName')
+    const response = await apiClient.api.models.ensure.post({provider: 'codex', modelName, name: selected.name})
+    const result = handleApiResponse<EnsureModelResponse>(
+      response as unknown as {data?: EnsureModelResponse; error?: unknown; status?: number},
+      'Failed to ensure Codex model',
+    )
+    return result.data.modelId
+  }
+
+  const sendUpdateRequest = async (payload: {
+    name: string
+    description: string | null
+    prompts: PromptPayload[]
+    dateFrom: string | null
+    dateTo: string | null
+    modelId: string | undefined
+    importRoutes: string[]
+    useTitle: boolean
+    useAbstract: boolean
+    useFulltext: boolean
+    useFulltextNoImages: boolean
+  }): Promise<void> => {
     const response = await apiClient.api
       .projects({id: projectId})
       .edit.patch({
-        name: projectName(),
-        description: description() || null,
-        prompts: promptsPayload,
-        dateFrom: startDate,
-        dateTo: endDate,
-        modelId: selectedModelId() || undefined,
-        importRoutes: selectedImportRoutes(),
-        useTitle: useTitle(),
-        useAbstract: useAbstract(),
-        useFulltext: useFulltext(),
-        useFulltextNoImages: useFulltextNoImages(),
+        name: payload.name,
+        description: payload.description,
+        prompts: payload.prompts,
+        dateFrom: payload.dateFrom,
+        dateTo: payload.dateTo,
+        modelId: payload.modelId,
+        importRoutes: payload.importRoutes,
+        useTitle: payload.useTitle,
+        useAbstract: payload.useAbstract,
+        useFulltext: payload.useFulltext,
+        useFulltextNoImages: payload.useFulltextNoImages,
       })
 
     if (response.error || !response.data?.data) {
@@ -587,10 +631,26 @@ const EditProject = (): JSX.Element => {
       setIsLoading(false)
     }
 
-    void sendUpdateRequest(startDateResult.normalized ?? null, endDateResult.normalized ?? null).then(
-      onFulfilled,
-      onRejected,
-    )
+    const promptsPayload = buildPromptsPayload(ownedPrompts, importedPrompts)
+    const updatePayload = {
+      name: projectName(),
+      description: description() || null,
+      prompts: promptsPayload,
+      dateFrom: startDateResult.normalized ?? null,
+      dateTo: endDateResult.normalized ?? null,
+      modelId: undefined as string | undefined,
+      importRoutes: selectedImportRoutes(),
+      useTitle: useTitle(),
+      useAbstract: useAbstract(),
+      useFulltext: useFulltext(),
+      useFulltextNoImages: useFulltextNoImages(),
+    }
+
+    void getModelIdForUpdate()
+      .then((modelId) => {
+        return sendUpdateRequest({...updatePayload, modelId})
+      })
+      .then(onFulfilled, onRejected)
   }
 
   return (
@@ -660,7 +720,8 @@ const EditProject = (): JSX.Element => {
                   >
                     <For each={availableModels()}>
                       {(m) => {
-                        return <option value={m.id}>{m.name}</option>
+                        const label = m.provider?.toLowerCase() === 'codex' ? `Codex: ${m.name}` : m.name
+                        return <option value={m.id}>{label}</option>
                       }}
                     </For>
                   </select>

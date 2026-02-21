@@ -23,6 +23,23 @@ const shuffle = <T>(items: T[]): T[] => {
     })
 }
 
+const normalizeProvider = (value: string | null | undefined): string => {
+  const v = String(value ?? '')
+    .trim()
+    .toLowerCase()
+  return v.length > 0 ? v : 'unknown'
+}
+
+const isCodexJob = (job: {modelProvider: string | null}): boolean => {
+  return normalizeProvider(job.modelProvider) === 'codex'
+}
+
+const getCodexMaxInflight = (): number => {
+  const raw = Number(process.env.CODEX_MAX_INFLIGHT)
+  const n = Number.isFinite(raw) ? Math.trunc(raw) : 0
+  return n > 0 ? n : 1
+}
+
 const getReadyCountsByJob = async (
   db: PostgresJsDatabase<typeof schema>,
   jobIds: string[],
@@ -157,24 +174,129 @@ const processPrompts = async (
   return {connectionErrors}
 }
 
-const getNumberOfPromptsInFlight = async (
-  db: PostgresJsDatabase<typeof schema>,
-  _serverJobId: string, // Kept for API compat but not used - we count ALL sent prompts
-): Promise<number> => {
-  // IMPORTANT: Count ALL 'sent' prompts, not just this server's.
-  // This prevents queue overflow when the server restarts:
-  // - Old prompts with old serverJobId are still in DB with status='sent'
-  // - Old prompts are still in SGLang's queue
-  // - If we only counted our own serverJobId, we'd send 2000 more requests
+const getNumberOfPromptsInFlight = async (db: PostgresJsDatabase<typeof schema>, jobIds: string[]): Promise<number> => {
+  if (jobIds.length === 0) return 0
   const result = await db
     .select({count: count()})
     .from(schema.judgmentsJobsPrompts)
-    .where(eq(schema.judgmentsJobsPrompts.status, 'sent'))
+    .where(and(eq(schema.judgmentsJobsPrompts.status, 'sent'), inArray(schema.judgmentsJobsPrompts.jobId, jobIds)))
 
   return result[0]?.count || 0
 }
 
 let isRunningJudgmentsJobsSendToLLM = false
+
+const sendToLLMForJobs = async (
+  db: PostgresJsDatabase<typeof schema>,
+  jobs: Awaited<ReturnType<typeof judgmentsJobsGetRunningJobs>>,
+  serverJobId: string,
+  capacity: {maxInflight: number; maxBurst: number; workerCount: number},
+  label: 'codex' | 'non-codex',
+): Promise<void> => {
+  if (jobs.length === 0) return
+
+  const jobIds = jobs.map((job) => {
+    return job.id
+  })
+  const promptsInFlight = await getNumberOfPromptsInFlight(db, jobIds)
+  const deficit = Math.max(0, capacity.maxInflight - promptsInFlight)
+  const requestsToSend = Math.min(deficit, capacity.maxBurst)
+  const readyCounts = await getReadyCountsByJob(db, jobIds)
+
+  if (requestsToSend > 0 || promptsInFlight > capacity.maxInflight * 0.9) {
+    const readyCountsObj = Object.fromEntries(readyCounts)
+    console.log(`[capacity:${label}]`, {
+      requestsToSend,
+      promptsInFlight,
+      maxInflight: capacity.maxInflight,
+      maxBurst: capacity.maxBurst,
+      workerCount: capacity.workerCount,
+      deficit,
+      jobCount: jobs.length,
+      readyCounts: readyCountsObj,
+    })
+  }
+
+  if (requestsToSend <= 0) return
+
+  const requestsToSendByJob = getRequestsToSendByJob(jobs, requestsToSend, readyCounts)
+  console.log(
+    `[capacity:${label}] requestsToSendByJob:`,
+    requestsToSendByJob.map(({job, limit}) => {
+      return {jobId: job.id.slice(0, 8), limit}
+    }),
+  )
+
+  const promptsToProcess = await Promise.allSettled(
+    requestsToSendByJob.map(({job, limit}) => {
+      return getAndUpdateReadyPrompts(db, serverJobId, job.id, limit)
+    }),
+  ).then((results) => {
+    return results
+      .filter((result) => {
+        return result.status === 'fulfilled'
+      })
+      .map((result) => {
+        return result.value
+      })
+  })
+
+  const totalPromptsFetched = promptsToProcess.reduce((sum, arr) => {
+    return sum + arr.length
+  }, 0)
+  if (totalPromptsFetched !== requestsToSend) {
+    console.warn(`[capacity:${label}] mismatch: fetched`, totalPromptsFetched, 'but requested', requestsToSend)
+  }
+
+  promptsToProcess.map((prompts) => {
+    void (async () => {
+      if (prompts.length > 0) {
+        const blockedByCircuitBreaker: PromptToProcess[] = []
+        const promptsToSend = prompts.filter((prompt) => {
+          if (isCircuitOpen(prompt.modelBaseUrl)) {
+            blockedByCircuitBreaker.push(prompt)
+            workerLoadBalancer.releaseWorker(prompt.modelBaseUrl)
+            return false
+          }
+          return true
+        })
+
+        if (blockedByCircuitBreaker.length > 0) {
+          const uniqueUrls = [
+            ...new Set(
+              blockedByCircuitBreaker.map((p) => {
+                return p.modelBaseUrl
+              }),
+            ),
+          ]
+          const key = `circuit:blocked:${uniqueUrls.join(',')}`
+          rateLimitedLogger.log(
+            key,
+            `Circuit breaker blocked ${blockedByCircuitBreaker.length} prompts for: ${uniqueUrls.join(', ')}`,
+          )
+
+          const blockedIds = blockedByCircuitBreaker.map((p) => {
+            return p.recordId
+          })
+          await db
+            .update(schema.judgmentsJobsPrompts)
+            .set({status: 'ready', updatedAt: new Date()})
+            .where(inArray(schema.judgmentsJobsPrompts.id, blockedIds))
+        }
+
+        if (promptsToSend.length > 0) {
+          await processPrompts(db, promptsToSend)
+        }
+      }
+    })().catch((error) => {
+      const safeError =
+        error instanceof Error
+          ? {name: error.name, message: error.message, stack: error.stack}
+          : {message: String(error)}
+      console.error('judgmentsJobsSendToLLM job failed', {error: safeError})
+    })
+  })
+}
 
 export const judgmentsJobsSendToLLM = async (
   db: PostgresJsDatabase<typeof schema>,
@@ -185,120 +307,17 @@ export const judgmentsJobsSendToLLM = async (
   isRunningJudgmentsJobsSendToLLM = true
 
   try {
-    // Note: Circuit breaker is checked per-prompt below, since prompts have modelBaseUrl
-    // and we don't have a global SGLANG_BASE_URL in the env schema
-
-    const capacity = getJudgmentsCapacity(allJobs.length)
-    const promptsInFlight = await getNumberOfPromptsInFlight(db, serverJobId)
-    const deficit = Math.max(0, capacity.maxInflight - promptsInFlight)
-    const requestsToSend = Math.min(deficit, capacity.maxBurst)
-    const jobIds = allJobs.map((job) => {
-      return job.id
+    const codexJobs = allJobs.filter(isCodexJob)
+    const nonCodexJobs = allJobs.filter((job) => {
+      return !isCodexJob(job)
     })
-    const readyCounts = await getReadyCountsByJob(db, jobIds)
 
-    // Debug logging for capacity issues
-    if (requestsToSend > 0 || promptsInFlight > capacity.maxInflight * 0.9) {
-      const readyCountsObj = Object.fromEntries(readyCounts)
-      console.log('[capacity]', {
-        requestsToSend,
-        promptsInFlight,
-        maxInflight: capacity.maxInflight,
-        maxBurst: capacity.maxBurst,
-        workerCount: capacity.workerCount,
-        deficit,
-        jobCount: allJobs.length,
-        readyCounts: readyCountsObj,
-      })
-    }
+    const nonCodexCapacity = getJudgmentsCapacity(nonCodexJobs.length)
+    const codexMaxInflight = getCodexMaxInflight()
+    const codexCapacity = {maxInflight: codexMaxInflight, maxBurst: codexMaxInflight, workerCount: codexMaxInflight}
 
-    if (requestsToSend > 0 && allJobs.length > 0) {
-      const requestsToSendByJob = getRequestsToSendByJob(allJobs, requestsToSend, readyCounts)
-      console.log(
-        '[capacity] requestsToSendByJob:',
-        requestsToSendByJob.map(({job, limit}) => {
-          return {jobId: job.id.slice(0, 8), limit}
-        }),
-      )
-
-      const promptsToProcess = await Promise.allSettled(
-        requestsToSendByJob.map(({job, limit}) => {
-          return getAndUpdateReadyPrompts(db, serverJobId, job.id, limit)
-        }),
-      ).then((results) => {
-        return results
-          .filter((result) => {
-            return result.status === 'fulfilled'
-          })
-          .map((result) => {
-            return result.value
-          })
-      })
-
-      // Log actual prompts fetched vs requested - detect if more are being sent than allowed
-      const totalPromptsFetched = promptsToProcess.reduce((sum, arr) => {
-        return sum + arr.length
-      }, 0)
-      if (totalPromptsFetched !== requestsToSend) {
-        console.warn('[capacity] MISMATCH: fetched', totalPromptsFetched, 'but requested', requestsToSend)
-      }
-
-      promptsToProcess.map((prompts) => {
-        void (async () => {
-          if (prompts.length > 0) {
-            // Filter out prompts for servers with open circuit breakers
-            const blockedByCircuitBreaker: PromptToProcess[] = []
-            const promptsToSend = prompts.filter((prompt) => {
-              if (isCircuitOpen(prompt.modelBaseUrl)) {
-                blockedByCircuitBreaker.push(prompt)
-                workerLoadBalancer.releaseWorker(prompt.modelBaseUrl)
-                return false
-              }
-              return true
-            })
-
-            if (blockedByCircuitBreaker.length > 0) {
-              // Rate-limited log to avoid spam when circuit breaker is blocking many prompts
-              const uniqueUrls = [
-                ...new Set(
-                  blockedByCircuitBreaker.map((p) => {
-                    return p.modelBaseUrl
-                  }),
-                ),
-              ]
-              const key = `circuit:blocked:${uniqueUrls.join(',')}`
-              rateLimitedLogger.log(
-                key,
-                `Circuit breaker blocked ${blockedByCircuitBreaker.length} prompts for: ${uniqueUrls.join(', ')}`,
-              )
-
-              // Reset blocked prompts back to 'ready' so they can be retried
-              // These were marked as 'sent' in getAndUpdateReadyPrompts but never actually dispatched
-              const blockedIds = blockedByCircuitBreaker.map((p) => {
-                return p.recordId
-              })
-              await db
-                .update(schema.judgmentsJobsPrompts)
-                .set({status: 'ready', updatedAt: new Date()})
-                .where(inArray(schema.judgmentsJobsPrompts.id, blockedIds))
-            }
-
-            if (promptsToSend.length > 0) {
-              await processPrompts(db, promptsToSend)
-            }
-            // Removed redundant "All prompts blocked" log - the above log already covers this
-          } else {
-            // console.log('No prompts to process – this should not happen, prob bug if it does')
-          }
-        })().catch((error) => {
-          const safeError =
-            error instanceof Error
-              ? {name: error.name, message: error.message, stack: error.stack}
-              : {message: String(error)}
-          console.error('judgmentsJobsSendToLLM job failed', {error: safeError})
-        })
-      })
-    }
+    await sendToLLMForJobs(db, nonCodexJobs, serverJobId, nonCodexCapacity, 'non-codex')
+    await sendToLLMForJobs(db, codexJobs, serverJobId, codexCapacity, 'codex')
   } finally {
     isRunningJudgmentsJobsSendToLLM = false
   }

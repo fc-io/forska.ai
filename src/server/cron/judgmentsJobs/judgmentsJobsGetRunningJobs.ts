@@ -17,33 +17,38 @@ let hasLoggedSglangModel = false
 export const judgmentsJobsGetRunningJobs = (db: PostgresJsDatabase<typeof schema>) => {
   const sglangModel = env.SGLANG_MODEL
 
-  // If SGLANG_MODEL is not set, return no jobs and warn
-  if (!sglangModel || sglangModel === 'not set') {
-    console.warn(
-      '[getRunningJobs] WARNING: SGLANG_MODEL not set. No jobs will be processed. Set SGLANG_MODEL env variable to enable inference.',
-    )
-    // Return a query that will always return empty results (WHERE false)
-    return db
-      .select({id: schema.judgmentsJobs.id, projectId: schema.judgmentsJobs.projectId})
-      .from(schema.judgmentsJobs)
-      .where(sql`false`)
+  const hasSglang = Boolean(sglangModel && sglangModel !== 'not set')
+
+  if (!hasSglang && !hasLoggedSglangModel) {
+    console.warn('[getRunningJobs] SGLANG_MODEL not set; non-codex jobs will not run')
+    hasLoggedSglangModel = true
   }
 
   // SGLANG_MODEL should be a full HuggingFace ID (e.g., "XiaomiMiMo/MiMo-V2-Flash")
   // For backward compatibility, also match against lowercase and basename variants
-  const sglangModelLower = sglangModel.toLowerCase()
-  const sglangModelBaseName = sglangModel.split('/').pop() ?? sglangModel
+  const sglangModelLower = hasSglang ? String(sglangModel).toLowerCase() : ''
+  const sglangModelBaseName = hasSglang ? (String(sglangModel).split('/').pop() ?? String(sglangModel)) : ''
 
-  if (!hasLoggedSglangModel) {
-    console.log(`[getRunningJobs] Filtering jobs for SGLANG_MODEL: ${sglangModel}`)
+  if (hasSglang && !hasLoggedSglangModel) {
+    console.log(`[getRunningJobs] Filtering non-codex jobs for SGLANG_MODEL: ${String(sglangModel)}`)
     hasLoggedSglangModel = true
   }
 
-  // Filter jobs to only include those whose project uses the matching model
-  // Primary match: exact HuggingFace ID
-  // Fallback: lowercase match or basename match (for migration period)
+  const nonCodexModelCondition = hasSglang
+    ? or(
+        eq(schema.models.modelName, String(sglangModel)),
+        eq(schema.models.modelName, sglangModelLower),
+        eq(schema.models.modelName, sglangModelBaseName),
+      )
+    : sql`false`
+
   return db
-    .select({id: schema.judgmentsJobs.id, projectId: schema.judgmentsJobs.projectId})
+    .select({
+      id: schema.judgmentsJobs.id,
+      projectId: schema.judgmentsJobs.projectId,
+      modelProvider: schema.models.provider,
+      modelName: schema.models.modelName,
+    })
     .from(schema.judgmentsJobs)
     .innerJoin(schema.projects, eq(schema.judgmentsJobs.projectId, schema.projects.id))
     .innerJoin(schema.models, eq(schema.projects.modelId, schema.models.id))
@@ -51,11 +56,7 @@ export const judgmentsJobsGetRunningJobs = (db: PostgresJsDatabase<typeof schema
       and(
         eq(schema.judgmentsJobs.status, 'running'),
         eq(schema.projects.archived, false),
-        or(
-          eq(schema.models.modelName, sglangModel), // Exact HuggingFace ID match
-          eq(schema.models.modelName, sglangModelLower), // Lowercase variant
-          eq(schema.models.modelName, sglangModelBaseName), // Basename only (e.g., "MiMo-V2-Flash")
-        ),
+        or(eq(schema.models.provider, 'codex'), nonCodexModelCondition),
       ),
     )
 }

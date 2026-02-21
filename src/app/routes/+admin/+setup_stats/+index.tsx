@@ -59,7 +59,7 @@ const AdminConfiguration = () => {
       queryFn: async () => {
         const response = await apiClient.api.models.get()
         const result = handleApiResponse<ModelsResponse>(
-          response as {data?: ModelsResponse; error?: unknown},
+          response as unknown as {data?: ModelsResponse; error?: unknown; status?: number},
           'Failed to load models',
         )
         return result.data ?? []

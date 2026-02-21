@@ -30,7 +30,9 @@ import {promptsRoutes} from './routes/PromptsRoutes.ts'
 import {subprojectsRoutes} from './routes/SubprojectsRoutes.ts'
 import {tokensRoutes} from './routes/TokensRoutes'
 import {usersRoutes} from './routes/UsersRoutes'
+import {getCodexCliLoginStatus} from './utils/codexCliAuth.ts'
 import {env} from './utils/env'
+import {warmCodexAppServer} from './utils/getCodexAppServerClient.ts'
 
 const allowedOrigins = [`http://localhost:${env.VITE_PORT}`, `http://localhost:${process.env.PROD_SERVER ?? 8080}`]
 
@@ -77,5 +79,26 @@ const _app = new Elysia()
 console.log(
   `🦊 Elysia is running on :${env.API_SERVER_PORT} (nodes=${env.GPU_NNODES}, gpus/node=${env.GPU_GPUS_PER_NODE}, total_gpus=${env.GPU_TOTAL_GPUS}, shape=${env.GPU_SHAPE}, tp=${env.TP_SIZE}, pp=${env.PP_SIZE}, dp=${env.DP_SIZE}, SGLANG_MAX_RUNNING_REQUESTS=${env.SGLANG_MAX_RUNNING_REQUESTS}, SGLANG_API_MAX_INFLIGHT_REQUESTS=${env.SGLANG_API_MAX_INFLIGHT_REQUESTS}, SGLANG_CONTEXT_LENGTH=${env.SGLANG_CONTEXT_LENGTH}, BUN_CONFIG_MAX_HTTP_REQUESTS=${process.env.BUN_CONFIG_MAX_HTTP_REQUESTS})`,
 )
+
+void warmCodexAppServer()
+
+void getCodexCliLoginStatus().then((status) => {
+  if (!status.ok) {
+    console.warn(
+      '[codex] CLI not available. Install @openai/codex and/or set CODEX_BIN. Then visit /settings to connect.',
+    )
+    return
+  }
+
+  if (!status.loggedIn) {
+    console.log(
+      `[codex] Not logged in. Run \`codex login\` or open http://localhost:${env.VITE_PORT}/settings to start device login.`,
+    )
+    return
+  }
+
+  const method = status.method ?? 'unknown'
+  console.log(`[codex] Logged in (${method}).`)
+})
 
 export type App = typeof _app

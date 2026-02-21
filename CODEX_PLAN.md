@@ -1,70 +1,62 @@
-# Codex Local Provider
+# Codex app-server (local)
 
-## Options
+Decision
 
-- B (Recommend): Codex models listed via API (not from DB); DB only stores chosen model on demand
-- C: runner impl: `@openai/codex-sdk` vs spawn `codex exec` vs `codex app-server` (JSON-RPC)
+- UI lists Codex + HPC models via `GET /api/models` (combined)
+- DB only stores selected Codex model (for `projects.modelId` FK)
+- Judging uses `codex app-server` JSON-RPC (no SDK, no `codex exec`)
 
-## Plan (B + runner=C; start w/ SDK)
+Prereqs
 
-### 1) Dependencies / prereqs
+- OpenAI Codex CLI installed (must support `codex app-server`)
+- optional: `CODEX_BIN` env var to point at the right `codex`
+- user runs `codex login`
 
-- Add deps: `@openai/codex-sdk` (+ `@openai/codex` if not pulled in)
-- User prereq: run `codex login` once (ChatGPT OAuth / device auth)
+Plan
 
-### 2) Model catalog (no sync)
+1. app-server client (server)
 
-- Add server-side static catalog: codex model ids + labels
-- Add `GET /api/codex/models`: return catalog (UI dropdown)
-- Add `POST /api/codex/models/ensure`: upsert ONE selected codex model into `models` table, return `{modelId}`
-- Add `GET /api/codex/status`: “Codex usable?” (CLI present + logged in)
+- spawn `codex app-server` (stdio JSONL)
+- `initialize` once; set `optOutNotificationMethods` to drop deltas
+- always force a safe turn config: `cwd` empty dir, `sandboxPolicy.type="workspaceWrite"` (writableRoots only that dir), `networkAccess:false`, `approvalPolicy:"unlessTrusted"`
+- handle server->client JSON-RPC _requests_ for approvals; always `decline`
+- helper: `modelList()` => `model/list`
+- helper: `runJsonTurn({model,input,outputSchema})` => `thread/start` + `turn/start`, collect final `agentMessage.text`
 
-Files
+2. routes
 
-- `src/server/routes/CodexRoutes.ts` (new)
-- `src/server/index.ts` register route
+- `GET /api/models`
+  - returns DB HPC models + Codex models from app-server as virtual ids `codex:<modelName>`
+  - includes DB Codex models (also as `codex:<modelName>`) as fallback if app-server is unavailable
+- `POST /api/models/ensure`
+  - input: `{provider:"codex", modelName: string, name: string}`
+  - insert if missing (no real upsert): dedupe by `ownerId + provider + modelName`
+  - must set `models.name` (notNull) + `ownerId` + `provider:"codex"` + `modelName` + `baseURL:null`
 
-### 3) UI: show Codex models like other models
+3. UI
 
-- Keep `GET /api/models` for HPC models
-- Add provider toggle: `HPC` vs `Codex`
-- If `Codex`: load `GET /api/codex/models`, store selected codex model id (string)
-- On submit: if `Codex`, call `POST /api/codex/models/ensure` then call existing `POST /api/projects` with returned `modelId`
+- all model selects use one list from `GET /api/models` (no toggle)
+- if selected model has `provider=="codex"`: call `POST /api/models/ensure` before submitting, then use returned UUID `modelId`
 
-Files
+4. judging
 
-- `src/app/routes/+projects/+create.tsx`
-- `src/app/routes/+projects/+create-subproject.tsx`
-- `src/app/routes/+projects/+$id/+edit.tsx`
+- extend `ModelConfigInput` with `provider` + `codexModelId`
+- `provider!="codex"`: keep current OpenAI-compatible baseURL path
+- `provider=="codex"`: call app-server client `runJsonTurn` w/ `outputSchema` for `SinglePromptJudgmentResult`
+- on app-server error / not logged in: throw `ConnectionError` (requeue)
 
-### 4) Job runner: allow Codex jobs to run
+5. jobs
 
-- `src/server/cron/judgmentsJobs/judgmentsJobsGetRunningJobs.ts`
-  - include `models.provider=="codex"` jobs regardless of `env.SGLANG_MODEL`
-  - keep current `env.SGLANG_MODEL` gating for non-codex models
-- `src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts`
-  - carry `models.provider`
-  - allow `models.baseURL` null when provider=`codex` and set placeholder `modelBaseUrl="codex://local"`
-- `src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/processPromptWithLLM.ts`
-  - pass provider through to judging
-- `src/server/cron/judgmentsJobs/judgmentsJobsCheckLLMStatus.ts`
-  - ignore provider=`codex` (no SGLang metrics)
+- cron runs when `RUN_SERVER_JUDGING=true` (no SGLANG_MODEL gate)
+- split running jobs: `provider=="codex"` vs non-codex
+- non-codex path keeps current `env.SGLANG_MODEL` filtering + capacity
+- codex path:
+  - `getAndUpdateReadyPrompts` must carry `models.provider`; allow `models.baseURL` null; skip `workerLoadBalancer`
+  - set placeholder `modelBaseUrl="codex://app-server"` for logging/circuit keys
+  - enforce concurrency before marking prompts `sent`: `CODEX_MAX_INFLIGHT` (default 1) using count of `sent` prompts for codex jobs
 
-### 5) Judging: branch provider => Codex runner vs HPC baseURL
+Verify
 
-- Extend `ModelConfigInput` to include `provider`
-- In `src/agent/judge.ts`:
-  - non-codex: keep current `/v1/chat/completions`
-  - codex: call runner
-    - `read-only` sandbox, approvals off, web search off
-    - `outputSchema` => strict JSON (`SinglePromptJudgmentResult`)
-    - if not logged in: throw `ConnectionError` (requeue)
-
-### 6) Verify
-
-- Manual: `codex login` -> sync models -> create project selecting codex -> start judgments job -> confirm `judgments` rows insert
-- Regression: ensure non-codex models still run via existing HPC baseURL flow
-
-## Notes
-
-- Runner details: see Option C (SDK persists `~/.codex/sessions`; `--ephemeral` avoids it; app-server is long-lived JSON-RPC but more work/experimental)
+- `codex login`
+- create project (Codex model) + start judgments job
+- confirm `judgments` rows insert; codex jobs dont touch `llm_status`

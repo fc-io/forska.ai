@@ -38,6 +38,8 @@ type ImportRoutesResponse = {data: ImportRouteOption[]}
 type ModelOption = {id: string; name: string; provider: string | null; modelName: string | null}
 type ModelsResponse = {data: ModelOption[]}
 
+type EnsureModelResponse = {data: {modelId: string}; error: null}
+
 const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/
 
 const parseDateInput = (value: string): ParsedDateResult => {
@@ -80,7 +82,10 @@ const CreateProject = () => {
       queryKey: ['models'],
       queryFn: async () => {
         const response = await apiClient.api.models.get()
-        const result = handleApiResponse<ModelsResponse>(response, 'Failed to load models')
+        const result = handleApiResponse<ModelsResponse>(
+          response as unknown as {data?: ModelsResponse; error?: unknown; status?: number},
+          'Failed to load models',
+        )
         return result.data ?? []
       },
       staleTime: 1000 * 60 * 5,
@@ -133,9 +138,7 @@ const CreateProject = () => {
   createEffect(() => {
     const models = availableModels()
     const firstModel = models[0]
-    if (firstModel && !selectedModelId()) {
-      setSelectedModelId(firstModel.id)
-    }
+    if (firstModel && !selectedModelId()) setSelectedModelId(firstModel.id)
   })
 
   createEffect(() => {
@@ -293,16 +296,33 @@ const CreateProject = () => {
     setIsLoading(true)
 
     try {
-      if (!selectedModelId()) {
-        setError('Please select a model for this project')
-        setIsLoading(false)
-        return
-      }
+      const selected = availableModels().find((m) => {
+        return m.id === selectedModelId()
+      })
+      if (!selected) throw new Error('Please select a model for this project')
+
+      const ensuredModelId =
+        selected.provider?.toLowerCase() === 'codex'
+          ? await (async () => {
+              const modelName = selected.modelName?.trim() ?? ''
+              if (!modelName) throw new Error('Selected Codex model is missing modelName')
+              const response = await apiClient.api.models.ensure.post({
+                provider: 'codex',
+                modelName,
+                name: selected.name,
+              })
+              const result = handleApiResponse<EnsureModelResponse>(
+                response as unknown as {data?: EnsureModelResponse; error?: unknown; status?: number},
+                'Failed to ensure Codex model',
+              )
+              return result.data.modelId
+            })()
+          : selected.id
 
       await createProject(
         projectName(),
         description(),
-        selectedModelId(),
+        ensuredModelId,
         prompts,
         existingPrompts,
         selectedImportRoutes(),
@@ -362,7 +382,8 @@ const CreateProject = () => {
                 >
                   <For each={availableModels()}>
                     {(m) => {
-                      return <option value={m.id}>{m.name}</option>
+                      const label = m.provider?.toLowerCase() === 'codex' ? `Codex: ${m.name}` : m.name
+                      return <option value={m.id}>{label}</option>
                     }}
                   </For>
                 </select>

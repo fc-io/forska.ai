@@ -8,6 +8,7 @@ import {
   recordConnectionFailure,
   recordConnectionSuccess,
 } from '../server/cron/judgmentsJobs/connectionHealth.ts'
+import {getCodexAppServerClient} from '../server/utils/getCodexAppServerClient.ts'
 import {rateLimitedLogger} from '../server/utils/rateLimitedLogger.ts'
 import type {ContentSettings} from './judge/judgeGetPrompt.ts'
 import {judgeGetSinglePrompt} from './judge/judgeGetPrompt.ts'
@@ -22,7 +23,7 @@ import {storeSinglePromptJudgment} from './judge/storeSinglePromptJudgment.ts'
 
 const openAIClients = new Map<string, OpenAI>()
 
-type ModelConfigInput = {modelId: string; modelName: string; baseURL: string}
+type ModelConfigInput = {modelId: string; modelName: string; baseURL: string; provider: string | null}
 
 const loggedFirstJudgeRequestByJobId = new Map<string, true>()
 
@@ -171,6 +172,26 @@ const hasReasoningContent = (
   return typeof (message as {reasoning_content?: unknown}).reasoning_content === 'string'
 }
 
+const normalizeProvider = (value: string | null | undefined): string => {
+  const v = String(value ?? '')
+    .trim()
+    .toLowerCase()
+  return v.length > 0 ? v : 'unknown'
+}
+
+const getSinglePromptOutputSchema = (): unknown => {
+  return {
+    type: 'object',
+    properties: {
+      answer: {anyOf: [{type: 'string'}, {type: 'array', items: {type: 'string'}}]},
+      explanation: {type: 'string'},
+      quotes: {anyOf: [{type: 'array', items: {type: 'string'}}, {type: 'null'}]},
+    },
+    required: ['answer', 'explanation', 'quotes'],
+    additionalProperties: false,
+  }
+}
+
 const formatAssistantMessage = (message: ChatCompletionMessage): AssistantMessageShape => {
   const reasoningContent = hasReasoningContent(message) ? message.reasoning_content : null
   const textContent = typeof message.content === 'string' ? message.content : ''
@@ -224,11 +245,31 @@ const generateSinglePromptResponse = async ({
   prompt,
   baseURL,
   modelName,
+  provider,
 }: {
   prompt: string
   baseURL: string
   modelName: string
+  provider: string | null
 }): Promise<{text: string; usage: {promptTokens: number; completionTokens: number; totalTokens: number}}> => {
+  const providerNormalized = normalizeProvider(provider)
+  if (providerNormalized === 'codex') {
+    try {
+      const client = getCodexAppServerClient()
+      const combined = `${SINGLE_PROMPT_SYSTEM_PROMPT}\n\n${prompt}`
+      const result = await client.runJsonTurn({
+        model: modelName,
+        inputText: combined,
+        outputSchema: getSinglePromptOutputSchema(),
+        timeoutMs: 900_000,
+      })
+      return {text: result.text, usage: {promptTokens: 0, completionTokens: 0, totalTokens: 0}}
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      throw new Error(`Connection error: codex app-server: ${msg}`)
+    }
+  }
+
   const client = getOpenAIClient(baseURL)
   const modelToUse = normalizeModelName(modelName)
   const response = await client.chat.completions.create({
@@ -280,11 +321,7 @@ export const judgeSinglePrompt = async ({
   projectId: string
   contentSettings: ContentSettings
 }): Promise<void> => {
-  const {baseURL, modelName, modelId} = modelConfig
-  if (!baseURL) {
-    console.log('missing baseURL', modelConfig, baseURL)
-    return
-  }
+  const {baseURL, modelName, modelId, provider} = modelConfig
 
   const tokenUse: JudgeTokenUsageEntry[] = []
   const startedAt = new Date().toISOString()
@@ -317,7 +354,7 @@ export const judgeSinglePrompt = async ({
     } | null = null
 
     try {
-      currentResponse = await generateSinglePromptResponse({prompt: userPrompt, baseURL, modelName})
+      currentResponse = await generateSinglePromptResponse({prompt: userPrompt, baseURL, modelName, provider})
 
       // Try to parse the response - validate against prompt type
       const judgment = parseSinglePromptJudgment(currentResponse.text, prompt.type)
