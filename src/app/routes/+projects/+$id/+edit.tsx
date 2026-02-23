@@ -345,9 +345,27 @@ const EditProject = (): JSX.Element => {
 
   const availableModels = () => {
     const models = modelsQuery.data ?? []
-    return [...models].sort((a, b) => {
-      return a.name.localeCompare(b.name)
-    })
+    const normalizeProvider = (provider: string | null): string => {
+      const v = String(provider ?? '')
+        .trim()
+        .toLowerCase()
+      return v.length > 0 ? v : 'unknown'
+    }
+    const isCodex = (m: ModelOption): boolean => {
+      return normalizeProvider(m.provider) === 'codex'
+    }
+
+    const hpcSorted = models
+      .filter((m) => {
+        return !isCodex(m)
+      })
+      .sort((a, b) => {
+        return a.name.localeCompare(b.name)
+      })
+
+    const codexInApiOrder = models.filter(isCodex)
+
+    return [...hpcSorted, ...codexInApiOrder]
   }
 
   const availableImportRoutes = () => {
