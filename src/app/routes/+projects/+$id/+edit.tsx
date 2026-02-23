@@ -48,7 +48,7 @@ type ProjectSummary = {
   useFulltextNoImages: boolean
 }
 
-type ModelOption = {id: string; name: string; provider: string | null; modelName: string | null}
+type ModelOption = {id: string; name: string; provider: string | null; modelName: string | null; version: string | null}
 type ModelsResponse = {data: ModelOption[]}
 
 type EnsureModelResponse = {data: {modelId: string}; error: null}
@@ -435,7 +435,9 @@ const EditProject = (): JSX.Element => {
           .toLowerCase()
         const isCodex = provider === 'codex'
         const codexId = String(details.model?.modelName ?? '').trim()
-        const initialModelId = isCodex && codexId ? `codex:${codexId}` : details.model.id
+        const effort = String(details.model?.version ?? '').trim()
+        const initialModelId =
+          isCodex && codexId ? (effort ? `codex:${codexId}:${effort}` : `codex:${codexId}`) : details.model.id
         setSelectedModelId(initialModelId)
         initialModelLoaded = true
       }
@@ -523,7 +525,12 @@ const EditProject = (): JSX.Element => {
 
     const modelName = selected.modelName?.trim() ?? ''
     if (!modelName) throw new Error('Selected Codex model is missing modelName')
-    const response = await apiClient.api.models.ensure.post({provider: 'codex', modelName, name: selected.name})
+    const response = await apiClient.api.models.ensure.post({
+      provider: 'codex',
+      modelName,
+      name: selected.name,
+      version: selected.version ?? undefined,
+    })
     const result = handleApiResponse<EnsureModelResponse>(
       response as unknown as {data?: EnsureModelResponse; error?: unknown; status?: number},
       'Failed to ensure Codex model',

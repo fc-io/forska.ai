@@ -23,7 +23,13 @@ import {storeSinglePromptJudgment} from './judge/storeSinglePromptJudgment.ts'
 
 const openAIClients = new Map<string, OpenAI>()
 
-type ModelConfigInput = {modelId: string; modelName: string; baseURL: string; provider: string | null}
+type ModelConfigInput = {
+  modelId: string
+  modelName: string
+  baseURL: string
+  provider: string | null
+  version: string | null
+}
 
 const loggedFirstJudgeRequestByJobId = new Map<string, true>()
 
@@ -246,11 +252,13 @@ const generateSinglePromptResponse = async ({
   baseURL,
   modelName,
   provider,
+  version,
 }: {
   prompt: string
   baseURL: string
   modelName: string
   provider: string | null
+  version: string | null
 }): Promise<{text: string; usage: {promptTokens: number; completionTokens: number; totalTokens: number}}> => {
   const providerNormalized = normalizeProvider(provider)
   if (providerNormalized === 'codex') {
@@ -259,6 +267,7 @@ const generateSinglePromptResponse = async ({
       const combined = `${SINGLE_PROMPT_SYSTEM_PROMPT}\n\n${prompt}`
       const result = await client.runJsonTurn({
         model: modelName,
+        effort: version,
         inputText: combined,
         outputSchema: getSinglePromptOutputSchema(),
         timeoutMs: 900_000,
@@ -321,7 +330,7 @@ export const judgeSinglePrompt = async ({
   projectId: string
   contentSettings: ContentSettings
 }): Promise<void> => {
-  const {baseURL, modelName, modelId, provider} = modelConfig
+  const {baseURL, modelName, modelId, provider, version} = modelConfig
 
   const tokenUse: JudgeTokenUsageEntry[] = []
   const startedAt = new Date().toISOString()
@@ -354,7 +363,7 @@ export const judgeSinglePrompt = async ({
     } | null = null
 
     try {
-      currentResponse = await generateSinglePromptResponse({prompt: userPrompt, baseURL, modelName, provider})
+      currentResponse = await generateSinglePromptResponse({prompt: userPrompt, baseURL, modelName, provider, version})
 
       // Try to parse the response - validate against prompt type
       const judgment = parseSinglePromptJudgment(currentResponse.text, prompt.type)

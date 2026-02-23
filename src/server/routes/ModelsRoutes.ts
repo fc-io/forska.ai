@@ -15,8 +15,28 @@ const normalizeDisplayName = (value: string): string => {
   return trimmed.length > 0 ? trimmed : 'Codex model'
 }
 
-const toCodexVirtualId = (modelName: string): string => {
-  return `codex:${modelName}`
+const toCodexVirtualId = (modelName: string, effort?: string | null): string => {
+  const trimmedEffort = String(effort ?? '').trim()
+  return trimmedEffort.length > 0 ? `codex:${modelName}:${trimmedEffort}` : `codex:${modelName}`
+}
+
+const effortSortKey = (effort: string): number => {
+  switch (effort) {
+    case 'none':
+      return 0
+    case 'minimal':
+      return 1
+    case 'low':
+      return 2
+    case 'medium':
+      return 3
+    case 'high':
+      return 4
+    case 'xhigh':
+      return 5
+    default:
+      return 99
+  }
 }
 
 export const modelsRoutes = new Elysia()
@@ -51,9 +71,10 @@ export const modelsRoutes = new Elysia()
           })
           .map((m) => {
             const modelName = String(m.modelName).trim()
+            const effort = typeof m.version === 'string' ? m.version.trim() : null
             return {
               ...m,
-              id: toCodexVirtualId(modelName),
+              id: toCodexVirtualId(modelName, effort),
               provider: 'codex',
               modelName,
               baseURL: null,
@@ -70,13 +91,26 @@ export const modelsRoutes = new Elysia()
               .filter((m) => {
                 return !m.hidden
               })
-              .map((m) => {
+              .flatMap((m) => {
                 const modelName = String(m.id).trim()
-                return {
+                const baseName = normalizeDisplayName(m.displayName ?? m.id)
+                const supported = Array.isArray(m.supportedReasoningEfforts) ? m.supportedReasoningEfforts : []
+                const defaultEffort = typeof m.defaultReasoningEffort === 'string' ? m.defaultReasoningEffort : null
+                const sortedEfforts = [...supported].sort((a, b) => {
+                  const aEffort = String(a.reasoningEffort)
+                  const bEffort = String(b.reasoningEffort)
+                  const aIsDefault = Boolean(defaultEffort && aEffort === defaultEffort)
+                  const bIsDefault = Boolean(defaultEffort && bEffort === defaultEffort)
+                  if (aIsDefault && !bIsDefault) return -1
+                  if (!aIsDefault && bIsDefault) return 1
+                  return effortSortKey(aEffort) - effortSortKey(bEffort)
+                })
+
+                const auto = {
                   id: toCodexVirtualId(modelName),
                   createdAt: null,
                   updatedAt: null,
-                  name: normalizeDisplayName(m.displayName ?? m.id),
+                  name: `${baseName} (thinking: auto)`,
                   provider: 'codex',
                   baseURL: null,
                   modelName,
@@ -85,6 +119,30 @@ export const modelsRoutes = new Elysia()
                   ownerId: sessionUserId,
                   workerUrls: null,
                 }
+
+                const variants = sortedEfforts
+                  .map((eff) => {
+                    const effort = String(eff.reasoningEffort).trim()
+                    if (!effort) return null
+                    return {
+                      id: toCodexVirtualId(modelName, effort),
+                      createdAt: null,
+                      updatedAt: null,
+                      name: `${baseName} (thinking: ${effort})`,
+                      provider: 'codex',
+                      baseURL: null,
+                      modelName,
+                      version: effort,
+                      apiKeyVariable: null,
+                      ownerId: sessionUserId,
+                      workerUrls: null,
+                    }
+                  })
+                  .filter((v): v is NonNullable<typeof v> => {
+                    return Boolean(v)
+                  })
+
+                return [auto, ...variants]
               })
           } catch (error) {
             console.warn('[models] Failed to load Codex models:', error instanceof Error ? error.message : error)
@@ -92,16 +150,8 @@ export const modelsRoutes = new Elysia()
           }
         })()
 
-        const codexById = new Map(
-          codexVirtualFromDb.map((m) => {
-            return [m.id, m] as const
-          }),
-        )
-        codexVirtualFromServer.forEach((m) => {
-          codexById.set(m.id, m as unknown as (typeof codexVirtualFromDb)[number])
-        })
-
-        const combined = [...hpcModels, ...Array.from(codexById.values())]
+        const codexModels = codexVirtualFromServer.length > 0 ? codexVirtualFromServer : codexVirtualFromDb
+        const combined = [...hpcModels, ...codexModels]
         return {data: combined}
       })
       .get('/api/models/codex/status', async () => {
@@ -171,6 +221,9 @@ export const modelsRoutes = new Elysia()
             return {data: null, error: 'modelName is required'}
           }
 
+          const rawVersion = typeof body.version === 'string' ? body.version.trim() : ''
+          const version = rawVersion.length > 0 ? rawVersion : null
+
           const name = normalizeDisplayName(body.name)
           const db = getDatabase()
 
@@ -178,7 +231,12 @@ export const modelsRoutes = new Elysia()
             .select({id: models.id})
             .from(models)
             .where(
-              and(eq(models.ownerId, sessionUserId), eq(models.provider, 'codex'), eq(models.modelName, modelName)),
+              and(
+                eq(models.ownerId, sessionUserId),
+                eq(models.provider, 'codex'),
+                eq(models.modelName, modelName),
+                version ? eq(models.version, version) : isNull(models.version),
+              ),
             )
             .limit(1)
 
@@ -188,7 +246,7 @@ export const modelsRoutes = new Elysia()
 
           const [inserted] = await db
             .insert(models)
-            .values({name, provider: 'codex', modelName, baseURL: null, ownerId: sessionUserId})
+            .values({name, provider: 'codex', modelName, version, baseURL: null, ownerId: sessionUserId})
             .returning({id: models.id})
 
           if (!inserted) {
@@ -197,7 +255,14 @@ export const modelsRoutes = new Elysia()
 
           return {data: {modelId: inserted.id}, error: null}
         },
-        {body: t.Object({provider: t.String(), modelName: t.String(), name: t.String()})},
+        {
+          body: t.Object({
+            provider: t.String(),
+            modelName: t.String(),
+            name: t.String(),
+            version: t.Optional(t.String()),
+          }),
+        },
       ),
   )
   .use(

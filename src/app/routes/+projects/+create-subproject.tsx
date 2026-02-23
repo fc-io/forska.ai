@@ -24,7 +24,7 @@ type ProjectSource = {
 
 type SourcesResponse = {data: ProjectSource[]}
 
-type ModelOption = {id: string; name: string; provider: string | null; modelName: string | null}
+type ModelOption = {id: string; name: string; provider: string | null; modelName: string | null; version: string | null}
 type ModelsResponse = {data: ModelOption[]}
 
 type EnsureModelResponse = {data: {modelId: string}; error: null}
@@ -220,6 +220,7 @@ const CreateSubproject = () => {
                 provider: 'codex',
                 modelName,
                 name: selectedModel.name,
+                version: selectedModel.version ?? undefined,
               })
               const result = handleApiResponse<EnsureModelResponse>(
                 response as unknown as {data?: EnsureModelResponse; error?: unknown; status?: number},

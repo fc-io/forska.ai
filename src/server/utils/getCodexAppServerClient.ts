@@ -57,12 +57,28 @@ const buildSafeTurnConfig = () => {
   const cwd = getCodexSafeCwd()
   return {
     cwd,
-    approvalPolicy: 'unlessTrusted',
-    sandboxPolicy: {type: 'workspaceWrite', writableRoots: [cwd], networkAccess: false},
+    approvalPolicy: 'untrusted',
+    sandboxPolicy: {
+      type: 'workspaceWrite',
+      writableRoots: [cwd],
+      networkAccess: false,
+      excludeSlashTmp: true,
+      excludeTmpdirEnvVar: true,
+      readOnlyAccess: {type: 'restricted', includePlatformDefaults: false, readableRoots: [cwd]},
+    },
   } as const
 }
 
-type ModelListEntry = {id: string; model?: string; displayName?: string; hidden?: boolean; isDefault?: boolean}
+type ModelListEntry = {
+  id: string
+  model?: string
+  displayName?: string
+  description?: string
+  hidden?: boolean
+  isDefault?: boolean
+  supportedReasoningEfforts?: Array<{reasoningEffort: string; description: string}>
+  defaultReasoningEffort?: string
+}
 
 type ModelListResult = {data: ModelListEntry[]; nextCursor: string | null}
 
@@ -91,6 +107,7 @@ type CodexAppServerClient = {
   modelList: (params?: {limit?: number; includeHidden?: boolean; cursor?: string | null}) => Promise<ModelListResult>
   runJsonTurn: (params: {
     model: string
+    effort?: string | null
     inputText: string
     outputSchema: unknown
     timeoutMs?: number
@@ -239,7 +256,7 @@ export const getCodexAppServerClient = (): CodexAppServerClient => {
 
     if (isServerRequest(msg)) {
       if (shouldDeclineApproval(msg.method)) {
-        send({id: msg.id, result: 'decline'})
+        send({id: msg.id, result: {decision: 'decline'}})
         return
       }
       send({id: msg.id, error: {code: -32601, message: `Unsupported request: ${msg.method}`}})
@@ -293,6 +310,7 @@ export const getCodexAppServerClient = (): CodexAppServerClient => {
 
   const runJsonTurn = async (params: {
     model: string
+    effort?: string | null
     inputText: string
     outputSchema: unknown
     timeoutMs?: number
@@ -311,6 +329,7 @@ export const getCodexAppServerClient = (): CodexAppServerClient => {
         threadId,
         input: [{type: 'text', text: params.inputText}],
         model: params.model,
+        effort: params.effort ?? null,
         approvalPolicy: safe.approvalPolicy,
         cwd: safe.cwd,
         sandboxPolicy: safe.sandboxPolicy,

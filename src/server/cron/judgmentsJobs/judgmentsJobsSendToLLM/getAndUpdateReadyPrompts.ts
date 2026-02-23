@@ -13,6 +13,7 @@ export type PromptToProcess = {
   modelId: string
   modelProvider: string
   modelName: string
+  modelVersion: string | null
   modelBaseUrl: string
   useTitle: boolean
   useAbstract: boolean
@@ -74,6 +75,7 @@ const processReadyRows = async (
             modelId: schema.projects.modelId,
             modelProvider: schema.models.provider,
             modelName: schema.models.modelName,
+            modelVersion: schema.models.version,
             modelBaseUrl: schema.models.baseURL,
             useTitle: schema.projects.useTitle,
             useAbstract: schema.projects.useAbstract,
@@ -139,6 +141,7 @@ const processReadyRows = async (
         modelId: config.modelId,
         modelProvider: provider,
         modelName: config.modelName,
+        modelVersion: config.modelVersion ?? null,
         modelBaseUrl: baseUrl,
         useTitle: config.useTitle ?? true,
         useAbstract: config.useAbstract ?? true,
