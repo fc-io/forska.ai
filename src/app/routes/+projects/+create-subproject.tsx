@@ -403,6 +403,26 @@ const CreateSubproject = () => {
               </div>
             </div>
 
+            <div class="border border-input rounded-md p-4 bg-muted/20">
+              <label class="flex items-start gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  class="mt-1"
+                  checked={enableAllSourcePrompts()}
+                  onChange={(e) => {
+                    return setEnableAllSourcePrompts(e.currentTarget.checked)
+                  }}
+                />
+                <div class="flex-1">
+                  <p class="text-sm font-medium text-gray-900">Enable all prompts from selected projects</p>
+                  <p class="text-xs text-muted-foreground mt-1">
+                    Adds {availablePrompts().length} prompts to this subproject. Filtering still only uses the answer
+                    types you select.
+                  </p>
+                </div>
+              </label>
+            </div>
+
             <div>
               <p class="block text-sm font-medium mb-2">Import from Projects</p>
               <Show when={sourcesQuery.isLoading}>
@@ -449,26 +469,6 @@ const CreateSubproject = () => {
                   </For>
                 </div>
               </Show>
-            </div>
-
-            <div class="border border-input rounded-md p-4 bg-muted/20">
-              <label class="flex items-start gap-3 cursor-pointer">
-                <input
-                  type="checkbox"
-                  class="mt-1"
-                  checked={enableAllSourcePrompts()}
-                  onChange={(e) => {
-                    return setEnableAllSourcePrompts(e.currentTarget.checked)
-                  }}
-                />
-                <div class="flex-1">
-                  <p class="text-sm font-medium text-gray-900">Enable all prompts from selected projects</p>
-                  <p class="text-xs text-muted-foreground mt-1">
-                    Adds {availablePrompts().length} prompts to this subproject. Filtering still only uses the answer
-                    types you select.
-                  </p>
-                </div>
-              </label>
             </div>
 
             <Show when={selectedProjects().length > 0}>
