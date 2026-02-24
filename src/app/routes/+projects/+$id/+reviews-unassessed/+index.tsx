@@ -127,6 +127,7 @@ const ReviewsUnassessed = () => {
 
         <ReviewsArticlesUnassessedTableContainer
           projectId={projectId}
+          isAdmin={isAdmin()}
           currentPage={filters.currentPage}
           setCurrentPage={filters.setCurrentPage}
           pageLimit={filters.pageLimit}

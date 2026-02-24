@@ -8,6 +8,7 @@ import {ReviewsArticlesTable} from './reviewsArticlesTable.tsx'
 
 interface ReviewsArticlesBothTableContainerProps {
   projectId: string
+  isAdmin: boolean
   promptFilters: Accessor<Record<string, string[] | null>>
   currentPage: Accessor<number>
   setCurrentPage: Setter<number>
@@ -84,6 +85,7 @@ export const ReviewsArticlesBothTableContainer = (props: ReviewsArticlesBothTabl
                   page={props.currentPage()}
                   totalPages={response().totalPages}
                   setCurrentPage={props.setCurrentPage}
+                  isAdmin={props.isAdmin}
                   currentPageRowIds={response().data.map((a) => {
                     return a.id
                   })}
@@ -138,6 +140,7 @@ export const ReviewsArticlesBothTableContainer = (props: ReviewsArticlesBothTabl
                   page={props.currentPage()}
                   totalPages={response().totalPages}
                   setCurrentPage={props.setCurrentPage}
+                  isAdmin={props.isAdmin}
                   currentPageRowIds={response().data.map((a) => {
                     return a.id
                   })}

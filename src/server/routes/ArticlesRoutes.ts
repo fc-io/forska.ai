@@ -1,4 +1,4 @@
-import {count, desc, eq, inArray, isNull, sql} from 'drizzle-orm'
+import {and, count, desc, eq, inArray, isNull, or, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {
@@ -7,9 +7,13 @@ import {
   importRoute as importRouteTable,
   judgments,
   models,
+  projectArticles,
+  projectRouteLink,
   projects,
   prompts,
 } from '../../db/schema.ts'
+import {selectArticleIdsByFilterClickHouse} from '../../services/clickhouse/selectArticleIdsClickHouse.ts'
+import {getPdfFetchJob, startPdfFetchJob} from '../services/pdfFetchJobs.ts'
 import {requireAdminAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
@@ -101,6 +105,174 @@ export const articlesRoutes = new Elysia()
 
     return {success: true, message: 'Reset started in background'}
   })
+  .post(
+    '/api/articles/pdf-fetch-bulk',
+    ({body, set}) => {
+      const job = startPdfFetchJob({
+        articleIds: body.articleIds,
+        concurrency: body.concurrency,
+        forceRefetch: body.forceRefetch,
+      })
+
+      set.status = 202
+      return {success: true, job}
+    },
+    {
+      body: t.Object({
+        articleIds: t.Array(t.String()),
+        concurrency: t.Optional(t.Number()),
+        forceRefetch: t.Optional(t.Boolean()),
+      }),
+    },
+  )
+  .post(
+    '/api/articles/pdf-fetch-by-filter',
+    async ({body, set}) => {
+      const articleIds = await selectArticleIdsByFilterClickHouse(
+        body.sourceProjectId,
+        body.listType,
+        body.prompts,
+        body.from,
+        body.to,
+        body.search,
+      )
+
+      const job = startPdfFetchJob({articleIds, concurrency: body.concurrency, forceRefetch: body.forceRefetch})
+
+      set.status = 202
+      return {success: true, selectionTotal: articleIds.length, job}
+    },
+    {
+      body: t.Object({
+        sourceProjectId: t.String(),
+        listType: t.Union([t.Literal('llm'), t.Literal('human'), t.Literal('both'), t.Literal('unassessed')]),
+        prompts: t.Optional(t.Record(t.String(), t.Array(t.String()))),
+        from: t.Optional(t.String()),
+        to: t.Optional(t.String()),
+        search: t.Optional(t.String()),
+        concurrency: t.Optional(t.Number()),
+        forceRefetch: t.Optional(t.Boolean()),
+      }),
+    },
+  )
+  .post(
+    '/api/articles/pdf-fetch-by-project',
+    async ({body, set}) => {
+      const db = getDatabase()
+      const fromDate = body.from ? new Date(`${body.from}T00:00:00.000Z`) : null
+      const toDate = body.to ? new Date(`${body.to}T23:59:59.999Z`) : null
+      const searchTitle = typeof body.search === 'string' ? body.search.trim() : ''
+
+      const [[projectBounds], projectImportRoutes] = await Promise.all([
+        db
+          .select({dateFrom: projects.dateFrom, dateTo: projects.dateTo})
+          .from(projects)
+          .where(eq(projects.id, body.projectId))
+          .limit(1),
+        db
+          .select({importRouteId: projectRouteLink.importRouteId})
+          .from(projectRouteLink)
+          .where(eq(projectRouteLink.projectId, body.projectId)),
+      ])
+
+      if (!projectBounds) {
+        throw new Error('Project not found')
+      }
+
+      const effectiveFromDate = (() => {
+        if (projectBounds.dateFrom && fromDate) {
+          return projectBounds.dateFrom > fromDate ? projectBounds.dateFrom : fromDate
+        }
+        return projectBounds.dateFrom ?? fromDate
+      })()
+
+      const effectiveToDate = (() => {
+        if (projectBounds.dateTo && toDate) {
+          return projectBounds.dateTo < toDate ? projectBounds.dateTo : toDate
+        }
+        return projectBounds.dateTo ?? toDate
+      })()
+
+      const importRouteIds = projectImportRoutes.map((r) => {
+        return r.importRouteId
+      })
+
+      const scopeParts: Array<ReturnType<typeof sql>> = []
+
+      if (importRouteIds.length > 0) {
+        const routeIdArray = sql.join(
+          importRouteIds.map((r) => {
+            return sql`${r}::uuid`
+          }),
+          sql`,`,
+        )
+
+        scopeParts.push(
+          sql`EXISTS (
+            SELECT 1 FROM ${articleRouteLink} arl
+            WHERE arl."article_id" = ${articles.id}
+              AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
+          )`,
+        )
+      }
+
+      scopeParts.push(
+        sql`EXISTS (
+          SELECT 1 FROM ${projectArticles} pa
+          WHERE pa."article_id" = ${articles.id}
+            AND pa."project_id" = ${body.projectId}::uuid
+        )`,
+      )
+
+      const scopeCondition = scopeParts.length > 1 ? or(...scopeParts) : scopeParts[0]
+
+      const dateParts: Array<ReturnType<typeof sql>> = []
+      if (effectiveFromDate) {
+        dateParts.push(sql`${articles.articleCreatedAt} >= ${effectiveFromDate}`)
+      }
+      if (effectiveToDate) {
+        dateParts.push(sql`${articles.articleCreatedAt} <= ${effectiveToDate}`)
+      }
+
+      const searchPart = searchTitle ? sql`${articles.articleTitle} ILIKE ${'%' + searchTitle + '%'}` : null
+      const whereParts = [scopeCondition, ...dateParts, ...(searchPart ? [searchPart] : [])]
+
+      const idRows = await db
+        .select({id: articles.id})
+        .from(articles)
+        .where(and(...whereParts))
+
+      const articleIds = idRows.map((r) => {
+        return r.id
+      })
+
+      const job = startPdfFetchJob({articleIds, concurrency: body.concurrency, forceRefetch: body.forceRefetch})
+
+      set.status = 202
+      return {success: true, selectionTotal: articleIds.length, job}
+    },
+    {
+      body: t.Object({
+        projectId: t.String(),
+        from: t.Optional(t.String()),
+        to: t.Optional(t.String()),
+        search: t.Optional(t.String()),
+        concurrency: t.Optional(t.Number()),
+        forceRefetch: t.Optional(t.Boolean()),
+      }),
+    },
+  )
+  .get(
+    '/api/articles/pdf-fetch-jobs/:jobId',
+    ({params}) => {
+      const job = getPdfFetchJob(params.jobId)
+      if (!job) {
+        throw new Error('Job not found')
+      }
+      return {job}
+    },
+    {params: t.Object({jobId: t.String()})},
+  )
   .get('/api/articles/latest', async () => {
     const db = getDatabase()
 

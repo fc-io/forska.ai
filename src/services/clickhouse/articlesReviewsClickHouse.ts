@@ -524,8 +524,7 @@ export const queryArticlesReviewsFromClickHouse = async (
         ${columnPrefix}articleId,
         max(${columnPrefix}articleTitle) AS title_,
         max(${columnPrefix}articleCreatedAt) AS created_,
-        max(${columnPrefix}articleUpdatedAt) AS updated_,
-        groupArray(${columnPrefix}promptId) AS promptIds
+        max(${columnPrefix}articleUpdatedAt) AS updated_
       FROM ${fromClause}
       WHERE ${whereClause}
       GROUP BY ${columnPrefix}articleId
@@ -545,7 +544,6 @@ export const queryArticlesReviewsFromClickHouse = async (
       title_: string
       created_: string | null
       updated_: string | null
-      promptIds: string[]
     }>()
 
     console.timeEnd('ch:articles_query')

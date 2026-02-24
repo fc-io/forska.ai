@@ -6,10 +6,7 @@ import path from 'path'
 import {user} from '../../../auth-schema.ts'
 import {auth} from '../../auth.ts'
 import {articles} from '../../db/schema.ts'
-import {fullTextArticleFetchFromArxiv} from '../cron/fullTextJobs/fullTextArticleFetchFromArxiv.ts'
-import {fullTextArticleFetchFromOriginalUrls} from '../cron/fullTextJobs/fullTextArticleFetchFromOriginalUrls.ts'
-import {fullTextArticleFetchFromUnpaywall} from '../cron/fullTextJobs/fullTextArticleFetchFromUnpaywall.ts'
-import {attemptsToLegacyResult, type PdfFetchAttemptResult} from '../cron/fullTextJobs/pdfFetchTypes.ts'
+import {fetchPdfForArticle} from '../cron/fullTextJobs/fetchPdfForArticle.ts'
 import {requireAdminAuth} from '../utils/authGuard.ts'
 import {ConversionError, convertPdfToText} from '../utils/convertPdfToText.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
@@ -56,34 +53,6 @@ const getOriginalFullTextUrls = (originalData: unknown): OriginalFullTextUrl[] =
       return v !== null
     })
     .slice(0, 25)
-}
-
-/**
- * Fetch PDF for a single article using the same logic as the cron job.
- * This function always attempts to fetch, regardless of whether fullTextFetchedAt is set.
- * Returns both the final result and detailed attempt information for each source.
- */
-const fetchPdfForArticle = async (articleData: {arxivId: string | null; originalData: unknown}) => {
-  const fetchSources = [
-    fullTextArticleFetchFromOriginalUrls,
-    fullTextArticleFetchFromUnpaywall,
-    fullTextArticleFetchFromArxiv,
-  ]
-  const attempts: PdfFetchAttemptResult[] = []
-
-  for (const fetchSource of fetchSources) {
-    const attempt = await fetchSource(articleData)
-    attempts.push(attempt)
-
-    // Short-circuit on first success (same behavior as cron job)
-    if (attempt.success && attempt.result) {
-      break
-    }
-  }
-
-  const legacyResult = attemptsToLegacyResult(attempts)
-
-  return {attempts, ...legacyResult}
 }
 
 /**

@@ -1,9 +1,10 @@
 import {Menu} from '@ark-ui/solid'
-import {useQuery, useQueryClient} from '@tanstack/solid-query'
+import {createMutation, useQuery, useQueryClient} from '@tanstack/solid-query'
 import type {Accessor, Setter} from 'solid-js'
-import {createEffect, createMemo, For, Show} from 'solid-js'
+import {createEffect, createMemo, createSignal, For, Show} from 'solid-js'
 
 import {apiClient} from '../../../services/apiClient.ts'
+import {handleApiResponse} from '../../../services/utils/handleApiResponse.ts'
 
 type ListType = 'llm' | 'human' | 'both' | 'unassessed'
 
@@ -20,12 +21,14 @@ interface ReviewsPaginationControlsProps {
   // Source context
   sourceProjectId?: string
   listType?: ListType
+  isAdmin?: boolean
   // Provide filter payload for server-side selection when selecting across all matching
   buildAddAllFilterBody?: () => {prompts?: Record<string, string[]>; from?: string; to?: string; search?: string}
 }
 
 export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps) => {
   const queryClient = useQueryClient()
+  const [lastPdfJobId, setLastPdfJobId] = createSignal<string | null>(null)
 
   const handlePageChange = (newPage: number) => {
     props.setCurrentPage(newPage)
@@ -79,6 +82,47 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
     }
   })
 
+  const startPdfFetchJobMutation = createMutation(() => {
+    return {
+      mutationFn: async (args: {mode: 'ids'; articleIds: string[]} | {mode: 'filter'}) => {
+        if (args.mode === 'filter') {
+          const sourceProjectId = props.sourceProjectId
+          const listType = props.listType
+          if (!sourceProjectId || !listType) {
+            throw new Error('Missing project context for PDF fetch')
+          }
+          const filter = props.buildAddAllFilterBody ? props.buildAddAllFilterBody() : {}
+          const response =
+            listType === 'unassessed'
+              ? await apiClient.api.articles['pdf-fetch-by-project'].post({
+                  projectId: sourceProjectId,
+                  from: filter.from,
+                  to: filter.to,
+                  search: filter.search,
+                })
+              : await apiClient.api.articles['pdf-fetch-by-filter'].post({sourceProjectId, listType, ...filter})
+          return handleApiResponse(response, 'Failed to start PDF fetch job')
+        }
+
+        const response = await apiClient.api.articles['pdf-fetch-bulk'].post({articleIds: args.articleIds})
+        return handleApiResponse(response, 'Failed to start PDF fetch job')
+      },
+      onSuccess: (data) => {
+        const jobIdCandidate =
+          data
+          && typeof data === 'object'
+          && 'job' in data
+          && data.job
+          && typeof data.job === 'object'
+          && 'jobId' in data.job
+            ? (data.job as {jobId?: unknown}).jobId
+            : null
+        const jobId = typeof jobIdCandidate === 'string' ? jobIdCandidate : null
+        setLastPdfJobId(jobId)
+      },
+    }
+  })
+
   return (
     <>
       <div class="flex items-center justify-between gap-2 p-2 bg-white rounded-lg shadow">
@@ -114,92 +158,122 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
               />
               <label class="text-xs text-gray-700">Select all rows</label>
               <Show when={selectedCount() > 0}>
-                <Menu.Root
-                  lazyMount
-                  unmountOnExit
-                  positioning={{placement: 'bottom-start'}}
-                  onOpenChange={(e) => {
-                    const isOpen =
-                      typeof e === 'object' && e !== null && 'open' in e
-                        ? Boolean((e as {open?: unknown}).open)
-                        : Boolean(e)
-                    if (!isOpen) {
-                      void queryClient.invalidateQueries({queryKey: ['projects-without-jobs']})
-                    }
-                  }}
-                >
-                  <Menu.Trigger class="px-2 py-1 text-xs font-medium text-gray-700 bg-gray-100 border border-gray-300 rounded hover:bg-gray-200">
-                    Add to sub-project
-                  </Menu.Trigger>
-                  <Menu.Positioner>
-                    <Menu.Content class="mt-2 w-72 rounded-md bg-white py-2 shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none">
-                      {(() => {
-                        const maybe = (projectsWithoutJobsQuery as unknown as {data?: unknown}).data
-                        const projects =
-                          typeof maybe === 'function'
-                            ? (maybe as () => Array<{id: string; name: string}>)()
-                            : (maybe as Array<{id: string; name: string}> | undefined)
+                <div class="flex items-center gap-2">
+                  <Menu.Root
+                    lazyMount
+                    unmountOnExit
+                    positioning={{placement: 'bottom-start'}}
+                    onOpenChange={(e) => {
+                      const isOpen =
+                        typeof e === 'object' && e !== null && 'open' in e
+                          ? Boolean((e as {open?: unknown}).open)
+                          : Boolean(e)
+                      if (!isOpen) {
+                        void queryClient.invalidateQueries({queryKey: ['projects-without-jobs']})
+                      }
+                    }}
+                  >
+                    <Menu.Trigger class="px-2 py-1 text-xs font-medium text-gray-700 bg-gray-100 border border-gray-300 rounded hover:bg-gray-200">
+                      Add to sub-project
+                    </Menu.Trigger>
+                    <Menu.Positioner>
+                      <Menu.Content class="mt-2 w-72 rounded-md bg-white py-2 shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none">
+                        {(() => {
+                          const maybe = (projectsWithoutJobsQuery as unknown as {data?: unknown}).data
+                          const projects =
+                            typeof maybe === 'function'
+                              ? (maybe as () => Array<{id: string; name: string}>)()
+                              : (maybe as Array<{id: string; name: string}> | undefined)
 
-                        return (
-                          <>
-                            <Show
-                              when={projects && projects.length > 0}
-                              fallback={<div class="px-4 py-2 text-sm text-gray-500">No available projects</div>}
-                            >
-                              <For each={projects || []}>
-                                {(p) => {
-                                  return (
-                                    <Menu.Item value={p.id} id={p.id} class="p-0">
-                                      <a
-                                        href="#"
-                                        class="block w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"
-                                        onClick={(e) => {
-                                          e.preventDefault()
-                                          void (async () => {
-                                            const allAcross = props.selectAllMatching && props.selectAllMatching()
-                                            if (allAcross) {
-                                              const filter = props.buildAddAllFilterBody
-                                                ? props.buildAddAllFilterBody()
-                                                : {}
-                                              await apiClient.api.projects['add_articles_by_filter'].post({
-                                                targetProjectId: p.id,
-                                                sourceProjectId: props.sourceProjectId || '',
-                                                listType: (props.listType as ListType) || 'llm',
-                                                ...filter,
-                                              })
-                                            } else {
-                                              const sel = props.rowSelection ? props.rowSelection() : {}
-                                              const ids = Object.entries(sel)
-                                                .filter(([, v]) => {
-                                                  return Boolean(v)
-                                                })
-                                                .map(([k]) => {
-                                                  return k
-                                                })
-                                              if (ids.length > 0) {
-                                                await apiClient.api.projects['add_artilces_by_ids'].post({
+                          return (
+                            <>
+                              <Show
+                                when={projects && projects.length > 0}
+                                fallback={<div class="px-4 py-2 text-sm text-gray-500">No available projects</div>}
+                              >
+                                <For each={projects || []}>
+                                  {(p) => {
+                                    return (
+                                      <Menu.Item value={p.id} id={p.id} class="p-0">
+                                        <a
+                                          href="#"
+                                          class="block w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"
+                                          onClick={(e) => {
+                                            e.preventDefault()
+                                            void (async () => {
+                                              const allAcross = props.selectAllMatching && props.selectAllMatching()
+                                              if (allAcross) {
+                                                const filter = props.buildAddAllFilterBody
+                                                  ? props.buildAddAllFilterBody()
+                                                  : {}
+                                                await apiClient.api.projects['add_articles_by_filter'].post({
                                                   targetProjectId: p.id,
                                                   sourceProjectId: props.sourceProjectId || '',
-                                                  articleIds: ids,
+                                                  listType: (props.listType as ListType) || 'llm',
+                                                  ...filter,
                                                 })
+                                              } else {
+                                                const sel = props.rowSelection ? props.rowSelection() : {}
+                                                const ids = Object.entries(sel)
+                                                  .filter(([, v]) => {
+                                                    return Boolean(v)
+                                                  })
+                                                  .map(([k]) => {
+                                                    return k
+                                                  })
+                                                if (ids.length > 0) {
+                                                  await apiClient.api.projects['add_artilces_by_ids'].post({
+                                                    targetProjectId: p.id,
+                                                    sourceProjectId: props.sourceProjectId || '',
+                                                    articleIds: ids,
+                                                  })
+                                                }
                                               }
-                                            }
-                                          })()
-                                        }}
-                                      >
-                                        {p.name}
-                                      </a>
-                                    </Menu.Item>
-                                  )
-                                }}
-                              </For>
-                            </Show>
-                          </>
-                        )
-                      })()}
-                    </Menu.Content>
-                  </Menu.Positioner>
-                </Menu.Root>
+                                            })()
+                                          }}
+                                        >
+                                          {p.name}
+                                        </a>
+                                      </Menu.Item>
+                                    )
+                                  }}
+                                </For>
+                              </Show>
+                            </>
+                          )
+                        })()}
+                      </Menu.Content>
+                    </Menu.Positioner>
+                  </Menu.Root>
+
+                  <Show when={props.isAdmin}>
+                    <button
+                      type="button"
+                      disabled={startPdfFetchJobMutation.isPending}
+                      class="px-2 py-1 text-xs font-medium text-gray-700 bg-gray-100 border border-gray-300 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                      onClick={() => {
+                        const allAcross = props.selectAllMatching && props.selectAllMatching()
+                        if (allAcross) {
+                          return startPdfFetchJobMutation.mutate({mode: 'filter'})
+                        }
+
+                        const sel = props.rowSelection ? props.rowSelection() : {}
+                        const ids = Object.entries(sel)
+                          .filter(([, v]) => {
+                            return Boolean(v)
+                          })
+                          .map(([k]) => {
+                            return k
+                          })
+                        return ids.length > 0
+                          ? startPdfFetchJobMutation.mutate({mode: 'ids', articleIds: ids})
+                          : undefined
+                      }}
+                    >
+                      Download PDFs for selected
+                    </button>
+                  </Show>
+                </div>
               </Show>
             </div>
           </Show>
@@ -293,6 +367,18 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
             </>
           )
         })()}
+      </Show>
+
+      <Show when={startPdfFetchJobMutation.isSuccess && lastPdfJobId()}>
+        <div class="mt-2 text-xs text-gray-700 p-2 bg-white rounded-lg shadow">
+          PDF fetch job started: <span class="font-mono select-all">{lastPdfJobId()}</span>
+        </div>
+      </Show>
+
+      <Show when={startPdfFetchJobMutation.isError}>
+        <div class="mt-2 text-xs text-red-700 p-2 bg-red-50 border border-red-200 rounded-lg shadow">
+          Failed to start PDF fetch job: {String(startPdfFetchJobMutation.error)}
+        </div>
       </Show>
     </>
   )

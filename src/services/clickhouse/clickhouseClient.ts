@@ -47,6 +47,7 @@ export const getClickhouseClient = (): ClickHouseClient => {
       clickhouse_settings: {
         output_format_json_quote_64bit_integers: 0,
         output_format_json_quote_denormals: 1,
+        optimize_aggregation_in_order: 1,
         // Memory management: prevent OOM on large aggregations
         // When GROUP BY needs more than 8GB, spill to disk
         max_bytes_before_external_group_by: '8589934592', // 8 GB

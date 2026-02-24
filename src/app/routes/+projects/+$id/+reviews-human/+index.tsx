@@ -119,6 +119,7 @@ const ReviewsHuman = () => {
 
         <ReviewsArticlesHumanTableContainer
           projectId={params().id}
+          isAdmin={isAdmin()}
           promptFilters={filters.promptFilters}
           currentPage={filters.currentPage}
           setCurrentPage={filters.setCurrentPage}
