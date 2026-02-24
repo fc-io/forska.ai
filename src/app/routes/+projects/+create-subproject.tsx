@@ -93,6 +93,7 @@ const CreateSubproject = () => {
   const [selectedProjects, setSelectedProjects] = createSignal<string[]>([])
   // Map of promptId -> selected answer types
   const [promptAnswerTypes, setPromptAnswerTypes] = createSignal<Record<string, string[]>>({})
+  const [enableAllSourcePrompts, setEnableAllSourcePrompts] = createSignal(false)
   const [isLoading, setIsLoading] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
   const [dateFrom, setDateFrom] = createSignal('')
@@ -248,10 +249,16 @@ const CreateSubproject = () => {
             })()
           : selectedModel.id
 
-      // Build prompt selections from selected answer types
-      const promptSelections = Object.entries(promptAnswerTypes()).map(([promptId, types]) => {
-        return {promptId, types}
-      })
+      const currentPromptAnswerTypes = promptAnswerTypes()
+      const currentAvailablePrompts = availablePrompts()
+
+      const promptSelections = enableAllSourcePrompts()
+        ? currentAvailablePrompts.map((p) => {
+            return {promptId: p.id, types: currentPromptAnswerTypes[p.id] ?? []}
+          })
+        : Object.entries(currentPromptAnswerTypes).map(([promptId, types]) => {
+            return {promptId, types}
+          })
 
       const response = await apiClient.api.subprojects.post({
         name: projectName(),
@@ -443,6 +450,28 @@ const CreateSubproject = () => {
                 </div>
               </Show>
             </div>
+
+            <Show when={hasSelectedProjects()}>
+              <div class="border border-input rounded-md p-4 bg-muted/20">
+                <label class="flex items-start gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    class="mt-1"
+                    checked={enableAllSourcePrompts()}
+                    onChange={(e) => {
+                      return setEnableAllSourcePrompts(e.currentTarget.checked)
+                    }}
+                  />
+                  <div class="flex-1">
+                    <p class="text-sm font-medium text-gray-900">Enable all prompts from selected projects</p>
+                    <p class="text-xs text-muted-foreground mt-1">
+                      Adds {availablePrompts().length} prompts to this subproject. Filtering still only uses the answer
+                      types you select.
+                    </p>
+                  </div>
+                </label>
+              </div>
+            </Show>
 
             <Show when={selectedProjects().length > 0}>
               <div>
