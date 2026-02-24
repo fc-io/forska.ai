@@ -238,7 +238,7 @@ const selectLlmArticleIds = async (params: SelectArticleIdsParams): Promise<stri
 
   const query = `
     SELECT articleId
-    FROM judgments FINAL
+    FROM judgments
     WHERE ${whereClause}
     GROUP BY articleId
     ${havingClause}
@@ -359,7 +359,7 @@ const selectUnassessedArticleIds = async (params: SelectArticleIdsParams): Promi
   // First get fully assessed article IDs
   const fullyAssessedQuery = `
     SELECT articleId
-    FROM judgments FINAL
+    FROM judgments
     WHERE ${whereClause}
     GROUP BY articleId
     HAVING COUNT(DISTINCT promptId) = ${metadata.promptIds.length}
@@ -381,7 +381,7 @@ const selectUnassessedArticleIds = async (params: SelectArticleIdsParams): Promi
   // For articles with some judgments, query ClickHouse
   const partiallyAssessedQuery = `
     SELECT DISTINCT articleId
-    FROM judgments FINAL
+    FROM judgments
     WHERE ${whereClause}
   `
 
@@ -562,7 +562,7 @@ const selectBothArticleIds = async (params: SelectArticleIdsParams): Promise<str
 
   const query = `
     SELECT articleId
-    FROM judgments FINAL
+    FROM judgments
     WHERE ${whereClause}
     GROUP BY articleId
     ${havingClause}

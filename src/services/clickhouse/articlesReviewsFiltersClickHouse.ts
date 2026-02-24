@@ -245,21 +245,21 @@ export const getDatabaseBasedFiltersFromClickHouse = async (
   const query = `
     SELECT promptId, value
     FROM (
-      -- Single-value answers from answeredOriginal
-      SELECT promptId, answeredOriginal AS value
-      FROM judgments FINAL
-      WHERE ${whereClause}
-        AND answeredOriginal IS NOT NULL
-        AND answeredOriginal != ''
-        AND length(answeredOriginalAsArray) = 0
+       -- Single-value answers from answeredOriginal
+       SELECT promptId, answeredOriginal AS value
+       FROM judgments
+       WHERE ${whereClause}
+         AND answeredOriginal IS NOT NULL
+         AND answeredOriginal != ''
+         AND length(answeredOriginalAsArray) = 0
 
       UNION ALL
 
-      -- Array answers from answeredOriginalAsArray (flattened)
-      SELECT promptId, arrayJoin(answeredOriginalAsArray) AS value
-      FROM judgments FINAL
-      WHERE ${whereClause}
-        AND length(answeredOriginalAsArray) > 0
+       -- Array answers from answeredOriginalAsArray (flattened)
+       SELECT promptId, arrayJoin(answeredOriginalAsArray) AS value
+       FROM judgments
+       WHERE ${whereClause}
+         AND length(answeredOriginalAsArray) > 0
     )
     WHERE value IS NOT NULL AND value != ''
     GROUP BY promptId, value
@@ -416,14 +416,14 @@ export const getNumericFiltersFromClickHouse = async (
       promptId,
       groupArray(DISTINCT numVal) AS distinctValues
     FROM (
-      SELECT
-        promptId,
-        toInt64OrNull(answeredOriginal) AS numVal
-      FROM judgments FINAL
-      WHERE ${whereClause}
-        AND answeredOriginal IS NOT NULL
-        AND answeredOriginal != ''
-        AND toInt64OrNull(answeredOriginal) IS NOT NULL
+       SELECT
+         promptId,
+         toInt64OrNull(answeredOriginal) AS numVal
+       FROM judgments
+       WHERE ${whereClause}
+         AND answeredOriginal IS NOT NULL
+         AND answeredOriginal != ''
+         AND toInt64OrNull(answeredOriginal) IS NOT NULL
     )
     WHERE numVal IS NOT NULL
     GROUP BY promptId

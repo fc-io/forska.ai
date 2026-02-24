@@ -148,7 +148,7 @@ const createJudgmentsMaterializedViewQuery = `
       article_updated_at,
       import_route,
       imported_by
-    FROM forska.articles FINAL
+    FROM forska.articles
     WHERE _peerdb_is_deleted = 0
   ) a ON j.article_id = a.id
 `

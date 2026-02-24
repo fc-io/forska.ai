@@ -154,7 +154,7 @@ const queryArticleIdsWithPromptFiltersFromClickHouse = async (params: {
 
   const query = `
     SELECT articleId
-    FROM judgments FINAL
+    FROM judgments
     WHERE ${whereParts.join(' AND ')}
     GROUP BY articleId
     HAVING ${havingParts.join(' AND ')}

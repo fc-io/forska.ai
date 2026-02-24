@@ -181,7 +181,7 @@ const countClickhouseCuratedArticles = async (curatedIds: string[]): Promise<num
 
     const query = `
       SELECT count() AS count
-      FROM forska.articles FINAL
+      FROM forska.articles
       WHERE _peerdb_is_deleted = 0
         AND ${wherePart}
     `
@@ -211,7 +211,7 @@ const countClickhouseArticlesByRoutes = async (routes: string[]): Promise<number
 
   const query = `
     SELECT count() AS count
-    FROM forska.articles FINAL
+    FROM forska.articles
     WHERE _peerdb_is_deleted = 0
       AND import_route IN (${routesQuoted})
   `

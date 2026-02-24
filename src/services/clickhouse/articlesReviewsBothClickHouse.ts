@@ -362,7 +362,7 @@ export const queryArticlesReviewsBothFromClickHouse = async (
     SELECT COUNT(*) as totalCount
     FROM (
       SELECT articleId
-      FROM judgments FINAL
+      FROM judgments
       WHERE ${whereClause}
       GROUP BY articleId
       ${havingClause}
@@ -385,7 +385,7 @@ export const queryArticlesReviewsBothFromClickHouse = async (
       max(articleTitle) AS title_,
       max(articleCreatedAt) AS created_,
       max(articleUpdatedAt) AS updated_
-    FROM judgments FINAL
+    FROM judgments
     WHERE ${whereClause}
     GROUP BY articleId
     ${havingClause}
@@ -424,21 +424,28 @@ export const queryArticlesReviewsBothFromClickHouse = async (
     .join(', ')
 
   console.time('ch:both:judgments')
+  const modelFilter = modelId ? `AND modelId = '${escapeClickHouseString(modelId)}'` : ''
   const judgmentsQuery = `
     SELECT
       id,
-      createdAt,
-      articleId,
-      promptId,
-      modelId,
-      answeredOriginal,
-      answeredOriginalAsArray,
-      explanation,
-      quotes
-    FROM judgments FINAL
-    WHERE _peerdb_is_deleted = 0
-      AND articleId IN (${articleIdsQuoted})
+      argMax(createdAt, _peerdb_version) AS createdAt,
+      argMax(articleId, _peerdb_version) AS articleId,
+      argMax(promptId, _peerdb_version) AS promptId,
+      argMax(modelId, _peerdb_version) AS modelId,
+      argMax(answeredOriginal, _peerdb_version) AS answeredOriginal,
+      argMax(answeredOriginalAsArray, _peerdb_version) AS answeredOriginalAsArray,
+      argMax(explanation, _peerdb_version) AS explanation,
+      argMax(quotes, _peerdb_version) AS quotes
+    FROM judgments
+    WHERE articleId IN (${articleIdsQuoted})
       AND promptId IN (${promptIdsQuoted})
+      ${modelFilter}
+      AND useTitle = ${useTitle ? 'true' : 'false'}
+      AND useAbstract = ${useAbstract ? 'true' : 'false'}
+      AND useFulltext = ${useFulltext ? 'true' : 'false'}
+      AND useFulltextNoImages = ${useFulltextNoImages ? 'true' : 'false'}
+    GROUP BY id
+    HAVING argMax(_peerdb_is_deleted, _peerdb_version) = 0
     ORDER BY articleId, createdAt DESC
   `
   const judgmentsResult = await client.query({query: judgmentsQuery, format: 'JSONEachRow'})

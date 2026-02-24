@@ -564,28 +564,35 @@ export const queryArticlesReviewsFromClickHouse = async (
       .join(', ')
 
     // Fetch full judgment data for the paginated articles
+    const modelFilter = metadata.modelId ? `AND modelId = '${escapeClickHouseString(metadata.modelId)}'` : ''
     const judgmentsQuery = `
       SELECT
         id,
-        createdAt,
-        articleId,
-        articleTitle,
-        articleCreatedAt,
-        articleUpdatedAt,
-        articleCreatedYear,
-        articleUpdatedYear,
-        articleImportRoute,
-        articleImportedBy,
-        promptId,
-        modelId,
-        answeredOriginal,
-        answeredOriginalAsArray,
-        explanation,
-        quotes
-      FROM judgments FINAL
-      WHERE _peerdb_is_deleted = 0
-        AND articleId IN (${articleIdsQuoted})
+        argMax(createdAt, _peerdb_version) AS createdAt,
+        argMax(articleId, _peerdb_version) AS articleId,
+        argMax(articleTitle, _peerdb_version) AS articleTitle,
+        argMax(articleCreatedAt, _peerdb_version) AS articleCreatedAt,
+        argMax(articleUpdatedAt, _peerdb_version) AS articleUpdatedAt,
+        argMax(articleCreatedYear, _peerdb_version) AS articleCreatedYear,
+        argMax(articleUpdatedYear, _peerdb_version) AS articleUpdatedYear,
+        argMax(articleImportRoute, _peerdb_version) AS articleImportRoute,
+        argMax(articleImportedBy, _peerdb_version) AS articleImportedBy,
+        argMax(promptId, _peerdb_version) AS promptId,
+        argMax(modelId, _peerdb_version) AS modelId,
+        argMax(answeredOriginal, _peerdb_version) AS answeredOriginal,
+        argMax(answeredOriginalAsArray, _peerdb_version) AS answeredOriginalAsArray,
+        argMax(explanation, _peerdb_version) AS explanation,
+        argMax(quotes, _peerdb_version) AS quotes
+      FROM judgments
+      WHERE articleId IN (${articleIdsQuoted})
         AND promptId IN (${promptIdsQuoted})
+        ${modelFilter}
+        AND useTitle = ${metadata.useTitle ? 'true' : 'false'}
+        AND useAbstract = ${metadata.useAbstract ? 'true' : 'false'}
+        AND useFulltext = ${metadata.useFulltext ? 'true' : 'false'}
+        AND useFulltextNoImages = ${metadata.useFulltextNoImages ? 'true' : 'false'}
+      GROUP BY id
+      HAVING argMax(_peerdb_is_deleted, _peerdb_version) = 0
       ORDER BY articleId, createdAt DESC
     `
 
@@ -952,8 +959,8 @@ export const countArticlesReviewsFromClickHouse = async (
       const tempTableName = tempTableInfo?.tableName ?? ''
       const useTempTableJoin = useCuratedTempTable && tempTableInfo !== null
       const fromClause = useTempTableJoin
-        ? `judgments j FINAL LEFT JOIN ${tempTableName} t ON j.articleId = t.articleId`
-        : 'judgments FINAL'
+        ? `judgments j LEFT JOIN ${tempTableName} t ON j.articleId = t.articleId`
+        : 'judgments'
 
       const columnPrefix = useTempTableJoin ? 'j.' : ''
 

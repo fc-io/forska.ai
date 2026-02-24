@@ -18,7 +18,7 @@ const toNumber = (value: unknown): number => {
 const getJudgmentsDerivedStats = async (): Promise<DerivedStats> => {
   const client = getClickhouseClient()
   const result = await client.query({
-    query: `SELECT count() as count FROM forska.judgments FINAL WHERE _peerdb_is_deleted = 0`,
+    query: `SELECT count() as count FROM forska.judgments WHERE _peerdb_is_deleted = 0`,
     format: 'JSONEachRow',
   })
   const rows = await result.json<{count: string | number}>()
@@ -63,7 +63,7 @@ const createJudgmentsDerivedMaterializedViewQuery = `
       article_updated_at,
       import_route,
       imported_by
-    FROM forska.articles FINAL
+    FROM forska.articles
     WHERE _peerdb_is_deleted = 0
   ) a ON j.article_id = a.id
 `
@@ -127,7 +127,7 @@ const insertIntoJudgmentsDerivedQuery = `
       article_updated_at,
       import_route,
       imported_by
-    FROM forska.articles FINAL
+    FROM forska.articles
     WHERE _peerdb_is_deleted = 0
   ) a ON j.article_id = a.id
 `

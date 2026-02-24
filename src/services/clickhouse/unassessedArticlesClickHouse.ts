@@ -341,7 +341,7 @@ export const getUnassessedCountFromClickHouse = async (params: UnassessedCountPa
 
     const totalScopedQuery = `
       SELECT COUNT(DISTINCT id) as total
-      FROM forska.articles FINAL
+      FROM forska.articles
       WHERE _peerdb_is_deleted = 0 AND ${articleWhereClause}
     `
 
@@ -349,7 +349,7 @@ export const getUnassessedCountFromClickHouse = async (params: UnassessedCountPa
       SELECT COUNT(*) as assessed
       FROM (
         SELECT articleId
-        FROM judgments FINAL
+        FROM judgments
         WHERE ${judgmentWhereClause}
         GROUP BY articleId
         HAVING COUNT(DISTINCT promptId) = ${metadata.promptIds.length}
@@ -491,7 +491,7 @@ export const getUnassessedArticlesFromClickHouse = async (
 
     const assessedSubquery = `
       SELECT articleId
-      FROM judgments FINAL
+      FROM judgments
       WHERE ${judgmentWhereClause}
       GROUP BY articleId
       HAVING COUNT(DISTINCT promptId) = ${metadata.promptIds.length}
@@ -499,7 +499,7 @@ export const getUnassessedArticlesFromClickHouse = async (
 
     const countQuery = `
       SELECT COUNT(*) as total_count
-      FROM forska.articles a FINAL
+      FROM forska.articles a
       WHERE a._peerdb_is_deleted = 0 AND ${articleWhereClause}
         AND a.id NOT IN (${assessedSubquery})
     `
@@ -511,7 +511,7 @@ export const getUnassessedArticlesFromClickHouse = async (
 	        a.article_title,
 	        a.article_created_at,
 	        a.article_updated_at
-	      FROM forska.articles a FINAL
+	      FROM forska.articles a
 	      WHERE a._peerdb_is_deleted = 0 AND ${articleWhereClause}
 	        AND a.id NOT IN (${assessedSubquery})
 	      ORDER BY COALESCE(a.article_updated_at, a.article_created_at, a.created_at) DESC, a.id DESC
@@ -568,6 +568,12 @@ const extractNextCursor = (data: Array<{article_id: string; sort_date: string}>)
   const lastRow = data[data.length - 1]
   const lastDate = lastRow ? parseClickhouseDateTimeUtc(lastRow.sort_date) : null
   return lastRow && lastDate ? {lastDate, lastArticleId: lastRow.article_id} : null
+}
+
+const getCandidateArticlesLimit = (numberOfPromptsToGet: number): number => {
+  const requested = Math.max(1, Math.trunc(numberOfPromptsToGet))
+  const scaled = requested * 5
+  return Math.min(20_000, Math.max(2_000, scaled))
 }
 
 export const getUnassessedPairsFromClickHouse = async (
@@ -656,30 +662,41 @@ export const getUnassessedPairsFromClickHouse = async (
 
     const cursorCondition = buildCursorCondition(cursor)
 
-    const promptIdsQuoted = metadata.promptIds
+    const promptList = metadata.promptIds
       .map((id) => {
         return `'${escapeClickHouseString(id)}'`
       })
       .join(', ')
 
-    const assessedPairsSubquery = `
-      SELECT article_id, prompt_id
-      FROM forska.judgments_raw FINAL
-      WHERE ${judgmentRawWhereClause}
-    `
+    const candidateArticlesLimit = getCandidateArticlesLimit(numberOfPromptsToGet)
 
     const query = `
+      WITH
+        [${promptList}] AS prompt_list,
+        candidate_articles AS (
+          SELECT
+            a.id AS id,
+            COALESCE(a.article_updated_at, a.article_created_at, a.created_at) AS sort_date
+          FROM forska.articles a
+          WHERE a._peerdb_is_deleted = 0 AND ${articleWhereClause}
+          ${cursorCondition}
+          ORDER BY sort_date DESC, a.id DESC
+          LIMIT ${candidateArticlesLimit}
+        ),
+        assessed_prompts_by_article AS (
+          SELECT
+            article_id,
+            groupUniqArray(prompt_id) AS assessed_prompts
+          FROM forska.judgments_raw
+          WHERE ${judgmentRawWhereClause} AND article_id IN (SELECT id FROM candidate_articles)
+          GROUP BY article_id
+        )
       SELECT
-	        a.id AS article_id,
-	        p.promptId AS prompt_id,
-	        COALESCE(a.article_updated_at, a.article_created_at, a.created_at) AS sort_date
-	      FROM forska.articles a FINAL
-	      CROSS JOIN (
-	        SELECT arrayJoin([${promptIdsQuoted}]) AS promptId
-	      ) p
-	      WHERE a._peerdb_is_deleted = 0 AND ${articleWhereClause}
-        AND (a.id, p.promptId) NOT IN (${assessedPairsSubquery})
-        ${cursorCondition}
+        a.id AS article_id,
+        arrayJoin(arrayFilter(p -> NOT has(ifNull(j.assessed_prompts, []), p), prompt_list)) AS prompt_id,
+        a.sort_date AS sort_date
+      FROM candidate_articles a
+      ANY LEFT JOIN assessed_prompts_by_article j ON j.article_id = a.id
       ORDER BY sort_date DESC, a.id DESC
       LIMIT ${numberOfPromptsToGet}
     `
