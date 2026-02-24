@@ -564,35 +564,35 @@ export const queryArticlesReviewsFromClickHouse = async (
       .join(', ')
 
     // Fetch full judgment data for the paginated articles
-    const modelFilter = metadata.modelId ? `AND modelId = '${escapeClickHouseString(metadata.modelId)}'` : ''
+    const modelFilter = metadata.modelId ? `AND j.modelId = '${escapeClickHouseString(metadata.modelId)}'` : ''
     const judgmentsQuery = `
       SELECT
-        id,
-        argMax(createdAt, _peerdb_version) AS createdAt,
-        argMax(articleId, _peerdb_version) AS articleId,
-        argMax(articleTitle, _peerdb_version) AS articleTitle,
-        argMax(articleCreatedAt, _peerdb_version) AS articleCreatedAt,
-        argMax(articleUpdatedAt, _peerdb_version) AS articleUpdatedAt,
-        argMax(articleCreatedYear, _peerdb_version) AS articleCreatedYear,
-        argMax(articleUpdatedYear, _peerdb_version) AS articleUpdatedYear,
-        argMax(articleImportRoute, _peerdb_version) AS articleImportRoute,
-        argMax(articleImportedBy, _peerdb_version) AS articleImportedBy,
-        argMax(promptId, _peerdb_version) AS promptId,
-        argMax(modelId, _peerdb_version) AS modelId,
-        argMax(answeredOriginal, _peerdb_version) AS answeredOriginal,
-        argMax(answeredOriginalAsArray, _peerdb_version) AS answeredOriginalAsArray,
-        argMax(explanation, _peerdb_version) AS explanation,
-        argMax(quotes, _peerdb_version) AS quotes
-      FROM judgments
-      WHERE articleId IN (${articleIdsQuoted})
-        AND promptId IN (${promptIdsQuoted})
+        j.id AS id,
+        argMax(j.createdAt, j._peerdb_version) AS createdAt,
+        argMax(j.articleId, j._peerdb_version) AS articleId,
+        argMax(j.articleTitle, j._peerdb_version) AS articleTitle,
+        argMax(j.articleCreatedAt, j._peerdb_version) AS articleCreatedAt,
+        argMax(j.articleUpdatedAt, j._peerdb_version) AS articleUpdatedAt,
+        argMax(j.articleCreatedYear, j._peerdb_version) AS articleCreatedYear,
+        argMax(j.articleUpdatedYear, j._peerdb_version) AS articleUpdatedYear,
+        argMax(j.articleImportRoute, j._peerdb_version) AS articleImportRoute,
+        argMax(j.articleImportedBy, j._peerdb_version) AS articleImportedBy,
+        argMax(j.promptId, j._peerdb_version) AS promptId,
+        argMax(j.modelId, j._peerdb_version) AS modelId,
+        argMax(j.answeredOriginal, j._peerdb_version) AS answeredOriginal,
+        argMax(j.answeredOriginalAsArray, j._peerdb_version) AS answeredOriginalAsArray,
+        argMax(j.explanation, j._peerdb_version) AS explanation,
+        argMax(j.quotes, j._peerdb_version) AS quotes
+      FROM judgments j
+      WHERE j.articleId IN (${articleIdsQuoted})
+        AND j.promptId IN (${promptIdsQuoted})
         ${modelFilter}
-        AND useTitle = ${metadata.useTitle ? 'true' : 'false'}
-        AND useAbstract = ${metadata.useAbstract ? 'true' : 'false'}
-        AND useFulltext = ${metadata.useFulltext ? 'true' : 'false'}
-        AND useFulltextNoImages = ${metadata.useFulltextNoImages ? 'true' : 'false'}
-      GROUP BY id
-      HAVING argMax(_peerdb_is_deleted, _peerdb_version) = 0
+        AND j.useTitle = ${metadata.useTitle ? 'true' : 'false'}
+        AND j.useAbstract = ${metadata.useAbstract ? 'true' : 'false'}
+        AND j.useFulltext = ${metadata.useFulltext ? 'true' : 'false'}
+        AND j.useFulltextNoImages = ${metadata.useFulltextNoImages ? 'true' : 'false'}
+      GROUP BY j.id
+      HAVING argMax(j._peerdb_is_deleted, j._peerdb_version) = 0
       ORDER BY articleId, createdAt DESC
     `
 
