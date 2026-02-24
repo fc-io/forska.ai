@@ -96,36 +96,33 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
         </div>
       </Show>
 
-      <Show when={articlesQuery.isSuccess}>
-        {() => {
-          const response = () => {
-            return articlesQuery.data
-          }
-          const responseValue = response()
-          if (!responseValue) return null
-
+      <Show when={articlesQuery.isSuccess && articlesQuery.data}>
+        {(response) => {
           return (
             <div class="space-y-4">
               <div class="p-4 bg-white rounded-lg shadow">
                 <h3 class="text-lg font-semibold mb-2">
                   Articles with Judgments (
-                  <span class={totalCount() === null ? 'text-gray-400 animate-pulse' : undefined}>
-                    {(() => {
-                      const page = responseValue.page
-                      const limit = props.pageLimit()
-                      const len = responseValue.data.length
-                      const count = totalCount()
-                      const start = len > 0 ? (page - 1) * limit + 1 : 0
-                      const end = len > 0 ? (page - 1) * limit + len : 0
-
-                      if (count === null) {
-                        return len > 0 ? `Showing ${start}-${end} of ...` : '0'
+                  <span class="font-normal">
+                    <Show
+                      when={totalCount() !== null}
+                      fallback={
+                        response().data.length > 0 ? (
+                          <span class="inline-flex items-center gap-2">
+                            <span class="text-gray-600">
+                              {`Showing ${(response().page - 1) * props.pageLimit() + 1}-${(response().page - 1) * props.pageLimit() + response().data.length} of`}
+                            </span>
+                            <span class="h-4 w-16 animate-pulse rounded bg-gray-200" />
+                          </span>
+                        ) : (
+                          '0'
+                        )
                       }
-
-                      return count > 0
-                        ? `Showing ${Math.min((page - 1) * limit + 1, count)}-${Math.min(page * limit, count)} of ${formatThousandSeparatedNumber(count)}`
-                        : '0'
-                    })()}
+                    >
+                      {(totalCount() ?? 0) > 0
+                        ? `Showing ${Math.min((response().page - 1) * props.pageLimit() + 1, totalCount() ?? 0)}-${Math.min(response().page * props.pageLimit(), totalCount() ?? 0)} of ${formatThousandSeparatedNumber(totalCount() ?? 0)}`
+                        : '0'}
+                    </Show>
                   </span>
                   )
                 </h3>
@@ -143,7 +140,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
                 totalPages={totalPages()}
                 setCurrentPage={props.setCurrentPage}
                 isAdmin={props.isAdmin}
-                currentPageRowIds={responseValue.data.map((a) => {
+                currentPageRowIds={response().data.map((a) => {
                   return a.id
                 })}
                 rowSelection={rowSelection}
@@ -174,7 +171,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
               />
 
               <Show
-                when={responseValue.data.length > 0}
+                when={response().data.length > 0}
                 fallback={
                   <div class="p-8 text-center text-gray-500">
                     No articles found with judgments
@@ -187,7 +184,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
               >
                 <ReviewsArticlesTable
                   projectId={props.projectId}
-                  articles={responseValue.data}
+                  articles={response().data}
                   rowSelection={rowSelection}
                   setRowSelection={setRowSelection}
                 />
@@ -198,7 +195,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
                 totalPages={totalPages()}
                 setCurrentPage={props.setCurrentPage}
                 isAdmin={props.isAdmin}
-                currentPageRowIds={responseValue.data.map((a) => {
+                currentPageRowIds={response().data.map((a) => {
                   return a.id
                 })}
                 rowSelection={rowSelection}

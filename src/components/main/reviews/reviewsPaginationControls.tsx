@@ -294,7 +294,12 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
             <span class="mx-2 text-xs text-gray-700">
               <Show
                 when={props.totalPages !== null}
-                fallback={<span class="text-gray-400 animate-pulse">Page {props.page} of ...</span>}
+                fallback={
+                  <span class="inline-flex items-center gap-2">
+                    <span class="text-gray-600">Page {props.page} of</span>
+                    <span class="h-4 w-8 animate-pulse rounded bg-gray-200" />
+                  </span>
+                }
               >
                 Page {props.page} of {props.totalPages}
               </Show>
@@ -341,7 +346,12 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
                 <div class="mt-2 text-xs text-gray-700 p-2 bg-white rounded-lg shadow">
                   <Show
                     when={total !== null}
-                    fallback={<span class="text-gray-400 animate-pulse">Counting selected articles...</span>}
+                    fallback={
+                      <span class="inline-flex items-center gap-2">
+                        <span class="text-gray-600">Counting selected articles</span>
+                        <span class="h-3 w-16 animate-pulse rounded bg-gray-200" />
+                      </span>
+                    }
                   >
                     All {total} articles matching filter is selected.
                   </Show>
@@ -360,7 +370,10 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
                     </button>
                   </Show>
                   <Show when={total === null}>
-                    <span class="text-gray-400 animate-pulse">Counting...</span>
+                    <span class="inline-flex items-center gap-2">
+                      <span class="text-gray-600">Counting</span>
+                      <span class="h-3 w-12 animate-pulse rounded bg-gray-200" />
+                    </span>
                   </Show>
                 </div>
               )}
