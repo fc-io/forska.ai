@@ -73,6 +73,7 @@ export const createArticlesReviewsCountQueryOptions = (
 
       return response.data
     },
+    refetchOnWindowFocus: false,
     // Cache count for longer since it's expensive to compute
     staleTime: 1000 * 60 * 5, // 5 minutes
   }

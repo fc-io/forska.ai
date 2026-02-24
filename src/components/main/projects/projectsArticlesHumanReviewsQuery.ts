@@ -68,5 +68,6 @@ export const createArticlesHumanReviewsQueryOptions = (
 
       return response.data
     },
+    refetchOnWindowFocus: false,
   }
 }

@@ -68,5 +68,6 @@ export const createArticlesBothReviewsQueryOptions = (
 
       return response.data
     },
+    refetchOnWindowFocus: false,
   }
 }

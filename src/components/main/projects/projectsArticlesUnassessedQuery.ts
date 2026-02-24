@@ -57,5 +57,6 @@ export const createArticlesUnassessedQueryOptions = (
 
       return response.data
     },
+    refetchOnWindowFocus: false,
   }
 }
