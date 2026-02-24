@@ -33,17 +33,20 @@ export const ReviewsProjectWarnings = (props: {projectId: string; showClickhouse
     }
   })
 
+  const healthData = () => {
+    return query.isSuccess ? (query.data ?? null) : null
+  }
+
   const noEnabledPrompts = createMemo(() => {
-    return (query.data?.enabledPromptCount ?? 0) === 0
+    return (healthData()?.enabledPromptCount ?? 0) === 0
   })
 
   const noArticlesInProject = createMemo(() => {
-    if (!query.data) {
-      return false
-    }
+    const data = healthData()
+    if (!data) return false
 
-    const hasEnabledPrompts = query.data.enabledPromptCount > 0
-    const hasAnyArticlesInScope = query.data.scope.postgresArticlesInScope > 0
+    const hasEnabledPrompts = data.enabledPromptCount > 0
+    const hasAnyArticlesInScope = data.scope.postgresArticlesInScope > 0
     return hasEnabledPrompts && !hasAnyArticlesInScope
   })
 
@@ -51,41 +54,41 @@ export const ReviewsProjectWarnings = (props: {projectId: string; showClickhouse
     if (!props.showClickhouse) {
       return false
     }
-    return query.data ? query.data.clickhouse.ok === false : false
+    const data = healthData()
+    return data ? data.clickhouse.ok === false : false
   })
 
   const clickhouseMissingArticles = createMemo(() => {
     if (!props.showClickhouse) {
       return false
     }
-    if (!query.data || query.data.clickhouse.ok === false) {
+    const data = healthData()
+    if (!data || data.clickhouse.ok === false) return false
+
+    if (data.clickhouse.skipped) {
       return false
     }
 
-    if (query.data.clickhouse.skipped) {
-      return false
-    }
-
-    const hasEnabledPrompts = query.data.enabledPromptCount > 0
-    const hasAnyArticlesInScope = query.data.scope.postgresArticlesInScope > 0
+    const hasEnabledPrompts = data.enabledPromptCount > 0
+    const hasAnyArticlesInScope = data.scope.postgresArticlesInScope > 0
     if (!hasEnabledPrompts || !hasAnyArticlesInScope) {
       return false
     }
 
     const routeMissing =
-      query.data.scope.importRouteArticlesCount > 0
-      && query.data.clickhouse.routeArticlesInScope < query.data.scope.importRouteArticlesCount
+      data.scope.importRouteArticlesCount > 0
+      && data.clickhouse.routeArticlesInScope < data.scope.importRouteArticlesCount
 
     const curatedMissing =
-      query.data.scope.curatedArticleCount > 0
-      && query.data.clickhouse.curatedArticlesInScope !== null
-      && query.data.clickhouse.curatedArticlesInScope < query.data.scope.curatedArticleCount
+      data.scope.curatedArticleCount > 0
+      && data.clickhouse.curatedArticlesInScope !== null
+      && data.clickhouse.curatedArticlesInScope < data.scope.curatedArticleCount
 
     return routeMissing || curatedMissing
   })
 
   return (
-    <Show when={query.data}>
+    <Show when={healthData()}>
       <div class="space-y-3">
         <Show when={noEnabledPrompts()}>
           <div class="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
@@ -122,7 +125,7 @@ export const ReviewsProjectWarnings = (props: {projectId: string; showClickhouse
             <p class="font-medium text-red-800">ClickHouse unavailable</p>
             <p class="text-sm text-red-700 mt-1">The reviews lists use ClickHouse. It failed to respond.</p>
             <p class="text-xs text-red-700 mt-2 font-mono break-all">
-              {(query.data?.clickhouse as {error?: string}).error}
+              {(healthData()?.clickhouse as {error?: string}).error}
             </p>
           </div>
         </Show>
@@ -135,11 +138,11 @@ export const ReviewsProjectWarnings = (props: {projectId: string; showClickhouse
               LLM" and "Unassessed" can show empty.
             </p>
             <div class="text-xs text-red-700 mt-2">
-              <span class="font-mono">PG scoped:</span> {query.data?.scope.postgresArticlesInScope.toLocaleString()}{' '}
-              <span class="font-mono">CH routes:</span> {query.data?.clickhouse.routeArticlesInScope.toLocaleString()}{' '}
-              <Show when={query.data?.clickhouse.curatedArticlesInScope !== null}>
+              <span class="font-mono">PG scoped:</span> {healthData()?.scope.postgresArticlesInScope.toLocaleString()}{' '}
+              <span class="font-mono">CH routes:</span> {healthData()?.clickhouse.routeArticlesInScope.toLocaleString()}{' '}
+              <Show when={healthData()?.clickhouse.curatedArticlesInScope !== null}>
                 <span class="font-mono">CH curated:</span>{' '}
-                {query.data?.clickhouse.curatedArticlesInScope?.toLocaleString()}
+                {healthData()?.clickhouse.curatedArticlesInScope?.toLocaleString()}
               </Show>
             </div>
           </div>
