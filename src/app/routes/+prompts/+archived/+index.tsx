@@ -103,21 +103,6 @@ export const ArchivedPromptsPage = () => {
                         </div>
                         <div class="mt-1 text-xs text-muted-foreground">
                           Created {formatPromptTimestamp(prompt.createdAt)} • Owner {prompt.ownerId.slice(0, 8)}
-                          <Show when={isPromptPreviewTruncated(prompt.originalText)}>
-                            <>
-                              {' • '}
-                              <Button
-                                variant="link"
-                                size="sm"
-                                class="h-auto px-0 py-0"
-                                onClick={() => {
-                                  togglePromptExpandedState(prompt.id, setExpandedPromptById)
-                                }}
-                              >
-                                {expandedPromptById()[prompt.id] ? 'Show less' : 'Show full'}
-                              </Button>
-                            </>
-                          </Show>
                         </div>
                       </div>
                       <Button
@@ -146,6 +131,20 @@ export const ArchivedPromptsPage = () => {
                         {getPromptDisplayText(prompt.originalText)}
                       </Show>
                     </div>
+                    <Show when={isPromptPreviewTruncated(prompt.originalText)}>
+                      <div class="mt-2 flex justify-start">
+                        <Button
+                          variant="link"
+                          size="sm"
+                          class="h-auto px-0 py-0"
+                          onClick={() => {
+                            togglePromptExpandedState(prompt.id, setExpandedPromptById)
+                          }}
+                        >
+                          {expandedPromptById()[prompt.id] ? 'Show less' : 'Show full'}
+                        </Button>
+                      </div>
+                    </Show>
                   </div>
                 )
               }}

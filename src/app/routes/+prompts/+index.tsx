@@ -133,7 +133,7 @@ export const PromptsPage = () => {
                       </Show>
                     </div>
                     <Show when={isPromptPreviewTruncated(prompt.originalText)}>
-                      <div class="mt-2 flex justify-end">
+                      <div class="mt-2 flex justify-start">
                         <Button
                           variant="link"
                           size="sm"
