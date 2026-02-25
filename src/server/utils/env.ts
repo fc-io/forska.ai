@@ -40,6 +40,7 @@ const envShape = arktype({
   BETTER_AUTH_SECRET: 'string',
   BETTER_AUTH_URL: 'string | null | undefined',
   OPENALEX_MAILTO: 'string',
+  OLAP_DB: '"clickhouse" | "duckdb" | null | undefined',
   VITE_PORT: 'number | string.integer.parse',
   API_SERVER_PORT: 'number | string.integer.parse',
   RUN_SERVER_FULL_TEXT_FETCHING: arktype('"true" | "false" | boolean').pipe((v) => {
@@ -118,6 +119,9 @@ const loadEnv = (): typeof envShape.infer => {
   if (merged.RUN_SERVER_JUDGING == null || merged.RUN_SERVER_JUDGING === '') {
     // string form to satisfy shape before parsing to boolean via pipe
     ;(merged as Record<string, string>).RUN_SERVER_JUDGING = 'true'
+  }
+  if (merged.OLAP_DB == null || String(merged.OLAP_DB).trim() === '') {
+    ;(merged as Record<string, string>).OLAP_DB = 'clickhouse'
   }
   // Default to false when not provided (prevents accidental background fetching)
   if (merged.RUN_SERVER_FULL_TEXT_FETCHING == null || merged.RUN_SERVER_FULL_TEXT_FETCHING === '') {

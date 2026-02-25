@@ -2,7 +2,7 @@ import {desc, eq, inArray} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {articles, projectRouteLink, projects} from '../../../db/schema.ts'
-import {getUnassessedArticlesFromClickHouse} from '../../../services/clickhouse/unassessedArticlesClickHouse.ts'
+import {getUnassessedArticlesFromOlap} from '../../../services/olap/unassessedArticlesOlap.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
 export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
@@ -59,7 +59,7 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
       return r.importRouteId
     })
 
-    const {articles: unassessedFromCH, totalCount} = await getUnassessedArticlesFromClickHouse({
+    const {articles: unassessedFromCH, totalCount} = await getUnassessedArticlesFromOlap({
       projectId: body.projectId,
       projectModelId: projectBounds.modelId,
       projectDateFrom: effectiveFromDate,

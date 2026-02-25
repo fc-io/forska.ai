@@ -14,6 +14,8 @@ import {
   prompts,
 } from '../../db/schema.ts'
 import {getClickhouseClient} from '../../services/clickhouse/clickhouseClient.ts'
+import {getOlapDb} from '../../services/olap/olapDb.ts'
+import {rejectDuckdbNotImplemented} from '../../services/olap/rejectDuckdbNotImplemented.ts'
 import {requireUserAuth} from '../utils/authGuard.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
@@ -78,6 +80,10 @@ const queryArticleIdsWithPromptFiltersFromClickHouse = async (params: {
   userDateTo: Date | null
   routeTexts: string[]
 }) => {
+  if (getOlapDb() === 'duckdb') {
+    return rejectDuckdbNotImplemented('subprojects:queryArticleIdsWithPromptFilters')
+  }
+
   const client = getClickhouseClient()
 
   const promptFilters = params.promptFilters.filter((f) => {

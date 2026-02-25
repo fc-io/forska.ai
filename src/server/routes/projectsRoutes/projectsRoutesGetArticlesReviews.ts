@@ -13,7 +13,7 @@ import {inArray} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {articles} from '../../../db/schema.ts'
-import {queryArticlesReviewsFromClickHouse} from '../../../services/clickhouse/articlesReviewsClickHouse.ts'
+import {queryArticlesReviewsFromOlap} from '../../../services/olap/articlesReviewsOlap.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
 export const projectsRoutesGetArticlesReviews = new Elysia().post(
@@ -33,7 +33,7 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
       const page = parseInt(body?.page ?? '1', 10)
       const limit = parseInt(body?.limit ?? '100', 10)
 
-      const result = await queryArticlesReviewsFromClickHouse({
+      const result = await queryArticlesReviewsFromOlap({
         projectId: body.projectId,
         page,
         limit,

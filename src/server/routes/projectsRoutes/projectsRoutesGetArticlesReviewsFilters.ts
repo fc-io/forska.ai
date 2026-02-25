@@ -15,9 +15,9 @@ import {Elysia, t} from 'elysia'
 import {projectPrompts, prompts} from '../../../db/schema.ts'
 import {
   type ClickHouseFilterResult,
-  getDatabaseBasedFiltersFromClickHouse,
-  getNumericFiltersFromClickHouse,
-} from '../../../services/clickhouse/articlesReviewsFiltersClickHouse.ts'
+  getDatabaseBasedFiltersFromOlap,
+  getNumericFiltersFromOlap,
+} from '../../../services/olap/articlesReviewsFiltersOlap.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 import {type EnumFilterResult, getEnumBasedFilters} from './articlesReviewsFiltersEnum.ts'
 import type {NumericFilterResult} from './articlesReviewsFiltersNumeric.ts'
@@ -74,7 +74,7 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
       // Run both queries in parallel if needed
       const [databaseFilters, numericFilters] = await Promise.all([
         hasDatabasePrompts
-          ? getDatabaseBasedFiltersFromClickHouse({
+          ? getDatabaseBasedFiltersFromOlap({
               projectId: query.projectId,
               prompts: analyzedPrompts,
               fromDate,
@@ -83,7 +83,7 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
             })
           : ([] as ClickHouseFilterResult[]),
         hasNumericPrompts
-          ? getNumericFiltersFromClickHouse({
+          ? getNumericFiltersFromOlap({
               projectId: query.projectId,
               prompts: analyzedPrompts,
               fromDate,

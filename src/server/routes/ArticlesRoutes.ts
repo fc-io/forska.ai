@@ -12,7 +12,7 @@ import {
   projects,
   prompts,
 } from '../../db/schema.ts'
-import {selectArticleIdsByFilterClickHouse} from '../../services/clickhouse/selectArticleIdsClickHouse.ts'
+import {selectArticleIdsByFilterOlap} from '../../services/olap/selectArticleIdsOlap.ts'
 import {getPdfFetchJob, startPdfFetchJob} from '../services/pdfFetchJobs.ts'
 import {requireAdminAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
@@ -128,7 +128,7 @@ export const articlesRoutes = new Elysia()
   .post(
     '/api/articles/pdf-fetch-by-filter',
     async ({body, set}) => {
-      const articleIds = await selectArticleIdsByFilterClickHouse(
+      const articleIds = await selectArticleIdsByFilterOlap(
         body.sourceProjectId,
         body.listType,
         body.prompts,

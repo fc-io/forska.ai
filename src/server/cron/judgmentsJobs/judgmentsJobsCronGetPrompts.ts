@@ -1,7 +1,8 @@
 import {and, eq, sql} from 'drizzle-orm'
 
 import * as schema from '../../../db/schema.ts'
-import {getUnassessedPairsFromClickHouse} from '../../../services/clickhouse/unassessedArticlesClickHouse.ts'
+import {getOlapDb} from '../../../services/olap/olapDb.ts'
+import {getUnassessedPairsFromOlap} from '../../../services/olap/unassessedArticlesOlap.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {getJobCursor, type JobCursor} from './jobCursorStore.ts'
@@ -76,20 +77,19 @@ export const judgmentsJobsCronGetPrompts = async (
   const slowLogMs = 30_000
   const startedAtMs = Date.now()
   const slowTimer = setTimeout(() => {
-    console.warn('[getPrompts] slow ClickHouse query', {
+    console.warn('[getPrompts] slow OLAP query', {
       projectId,
       jobId,
       requested: numberOfPromptsToGet,
       cursor: cursorSummary,
+      olapDb: getOlapDb(),
       runningForMs: Date.now() - startedAtMs,
     })
   }, slowLogMs)
 
-  const result = await getUnassessedPairsFromClickHouse({projectId, jobId, numberOfPromptsToGet, cursor}).finally(
-    () => {
-      clearTimeout(slowTimer)
-    },
-  )
+  const result = await getUnassessedPairsFromOlap({projectId, jobId, numberOfPromptsToGet, cursor}).finally(() => {
+    clearTimeout(slowTimer)
+  })
   const durationMs = Date.now() - startedAtMs
 
   const nextCursorSummary = result.nextCursor
@@ -99,7 +99,7 @@ export const judgmentsJobsCronGetPrompts = async (
   const cursorAction = result.nextCursor ? 'advance' : cursor ? 'clear' : 'none'
 
   if (numberOfPromptsToGet > 0 && result.promptEntries.length === 0) {
-    getPromptsLogger.warn(`getPrompts:${jobId}:empty`, '[getPrompts] ClickHouse returned 0 pairs', {
+    getPromptsLogger.warn(`getPrompts:${jobId}:empty`, '[getPrompts] OLAP returned 0 pairs', {
       projectId,
       jobId,
       requested: numberOfPromptsToGet,
@@ -107,9 +107,10 @@ export const judgmentsJobsCronGetPrompts = async (
       nextCursor: nextCursorSummary,
       cursorAction,
       durationMs,
+      olapDb: getOlapDb(),
     })
   } else if (durationMs > 5_000) {
-    getPromptsLogger.warn(`getPrompts:${jobId}:slow`, '[getPrompts] slow ClickHouse query', {
+    getPromptsLogger.warn(`getPrompts:${jobId}:slow`, '[getPrompts] slow OLAP query', {
       projectId,
       jobId,
       requested: numberOfPromptsToGet,
@@ -118,6 +119,7 @@ export const judgmentsJobsCronGetPrompts = async (
       nextCursor: nextCursorSummary,
       cursorAction,
       durationMs,
+      olapDb: getOlapDb(),
     })
   }
 

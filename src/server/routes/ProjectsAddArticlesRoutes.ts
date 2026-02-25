@@ -1,6 +1,6 @@
 import {Elysia, t} from 'elysia'
 
-import {selectArticleIdsByFilterClickHouse} from '../../services/clickhouse/selectArticleIdsClickHouse.ts'
+import {selectArticleIdsByFilterOlap} from '../../services/olap/selectArticleIdsOlap.ts'
 import {insertArticlesIntoProject} from '../services/insertArticlesIntoProject.ts'
 import {requireUserAuth} from '../utils/authGuard.ts'
 
@@ -15,7 +15,7 @@ export const projectsAddArticlesRoutes = new Elysia()
   .post(
     '/api/projects/add_articles_by_filter',
     async ({body}) => {
-      const articleIds = await selectArticleIdsByFilterClickHouse(
+      const articleIds = await selectArticleIdsByFilterOlap(
         body.sourceProjectId,
         body.listType,
         body.prompts,
