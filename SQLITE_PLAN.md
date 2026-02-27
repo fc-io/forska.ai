@@ -11,7 +11,8 @@
 ## Checklist
 
 - [ ] Add SQLite database file + environment variable (example: `SQLITE_PATH=./data/app.sqlite`).
-- [ ] Add SQLite connection helper (`bun:sqlite`) + pragmas: `foreign_keys=ON`, `journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout`.
+- [ ] Add SQLite connection helper (`bun:sqlite`) + pragmas: `foreign_keys=ON`, `synchronous=NORMAL`, `busy_timeout`.
+- [ ] Enable write-ahead log (WAL) mode (`PRAGMA journal_mode = WAL`) per Bun docs: https://bun.com/docs/runtime/sqlite#wal-mode.
 - [ ] Add SQLite migration runner (own table like `schema_migrations`, ordered `.sql` files).
 - [ ] Build target SQLite schema (tables + indexes + views) as SQL source of truth.
 - [ ] Add database adapter layer so routes do not depend on Drizzle types.
