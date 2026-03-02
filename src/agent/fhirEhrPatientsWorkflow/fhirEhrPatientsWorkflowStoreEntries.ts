@@ -84,12 +84,18 @@ const hasResourceType = (value: unknown): value is {resourceType: string} => {
 
 const getFirstDateField = (line: FhirNdjsonLineType): string | null => {
   const candidates = [
+    line.period?.start,
     line.effectiveDateTime,
-    line.issued,
-    line.date,
-    line.authoredOn,
-    line.recordedDate,
+    line.effectivePeriod?.start,
+    line.occurrenceDateTime,
+    line.occurrencePeriod?.start,
+    line.performedDateTime,
+    line.performedPeriod?.start,
     line.onsetDateTime,
+    line.recordedDate,
+    line.authoredOn,
+    line.date,
+    line.issued,
   ]
   const first = candidates.find((v) => {
     return typeof v === 'string' && v.trim().length > 0
@@ -339,20 +345,527 @@ const getArkErrorMessage = (errors: unknown): string => {
   return typeof msg === 'string' ? msg : 'ArkType error'
 }
 
-const compareSpoolEntries = (a: SpoolEntry, b: SpoolEntry): number => {
+const isRecordValue = (value: unknown): value is Record<string, unknown> => {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
+const getSortMsFromSortDate = (sortDate: string | null): number | null => {
+  const value = (sortDate ?? '').trim()
+  if (!value) {
+    return null
+  }
+  const ms = Date.parse(value)
+  return Number.isFinite(ms) ? ms : null
+}
+
+const getDateHeadingFromSortDate = (sortDate: string | null): string => {
+  const value = (sortDate ?? '').trim()
+  return /^\d{4}-\d{2}-\d{2}/.test(value)
+    ? value.slice(0, 10)
+    : /^\d{4}-\d{2}/.test(value)
+      ? value.slice(0, 7)
+      : /^\d{4}/.test(value)
+        ? value.slice(0, 4)
+        : 'Undated'
+}
+
+const getLongestBacktickRun = (text: string): number => {
+  let maxRun = 0
+  let currentRun = 0
+  for (let i = 0; i < text.length; i += 1) {
+    const isTick = text[i] === '`'
+    currentRun = isTick ? currentRun + 1 : 0
+    maxRun = currentRun > maxRun ? currentRun : maxRun
+  }
+  return maxRun
+}
+
+const getMarkdownFenceForText = (text: string): string => {
+  const run = getLongestBacktickRun(text)
+  const length = Math.max(3, run + 1)
+  return '`'.repeat(length)
+}
+
+const getStringOrNull = (value: unknown): string | null => {
+  const str = typeof value === 'string' ? value.trim() : ''
+  return str.length > 0 ? str : null
+}
+
+const getNumberOrStringOrNull = (value: unknown): string | null => {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? String(value) : null
+  }
+  return getStringOrNull(value)
+}
+
+const getArrayOrEmpty = (value: unknown): unknown[] => {
+  return Array.isArray(value) ? value : []
+}
+
+const getFirstRecordOrNull = (value: unknown): Record<string, unknown> | null => {
+  const first = getArrayOrEmpty(value)[0]
+  return isRecordValue(first) ? first : null
+}
+
+const getStringAtPath = (value: unknown, path: string[], index = 0): string | null => {
+  if (index >= path.length) {
+    return getStringOrNull(value)
+  }
+
+  const key = path[index] ?? ''
+  const next = Array.isArray(value) ? (value as unknown[])[Number(key)] : isRecordValue(value) ? value[key] : null
+  return getStringAtPath(next, path, index + 1)
+}
+
+const getCodeableConceptDisplay = (value: unknown): string | null => {
+  if (!isRecordValue(value)) {
+    return null
+  }
+
+  const text = getStringOrNull(value.text)
+  if (text) {
+    return text
+  }
+
+  const coding = getFirstRecordOrNull(value.coding)
+  const display = getStringOrNull(coding?.display)
+  const code = getStringOrNull(coding?.code)
+  return display ?? code
+}
+
+const getFirstCodeableConceptDisplay = (resource: unknown, key: string): string | null => {
+  if (!isRecordValue(resource)) {
+    return null
+  }
+  const first = getFirstRecordOrNull(resource[key])
+  return getCodeableConceptDisplay(first)
+}
+
+const getReferenceDisplay = (value: unknown): string | null => {
+  if (!isRecordValue(value)) {
+    return null
+  }
+  return getStringOrNull(value.display) ?? getStringOrNull(value.reference)
+}
+
+const buildBullet = (label: string, value: string | null): string[] => {
+  return value ? [`- ${label}: ${value}`] : []
+}
+
+const buildIdBullet = (resourceId: string | null): string[] => {
+  return resourceId ? [`- id: \`${resourceId}\``] : []
+}
+
+const buildTimeBullet = (sortDate: string | null): string[] => {
+  const value = (sortDate ?? '').trim()
+  return value && value.includes('T') ? [`- time: ${value}`] : []
+}
+
+const buildCodeTitle = (prefix: string, value: string | null): string => {
+  const normalized = (value ?? '').trim()
+  return normalized ? `${prefix}: ${normalized}` : prefix
+}
+
+const buildObservationValueText = (resource: unknown): string | null => {
+  const quantity = isRecordValue(resource) && isRecordValue(resource.valueQuantity) ? resource.valueQuantity : null
+  const value = quantity ? getNumberOrStringOrNull(quantity.value) : null
+  const unit = quantity ? getStringOrNull(quantity.unit) : null
+  const both = value && unit ? `${value} ${unit}` : null
+  const asQuantity = both ?? value
+  const asString = isRecordValue(resource) ? getStringOrNull(resource.valueString) : null
+  const asConcept = isRecordValue(resource) ? getCodeableConceptDisplay(resource.valueCodeableConcept) : null
+  return asQuantity ?? asString ?? asConcept
+}
+
+type EventTitleAndBullets = {title: string; bullets: string[]}
+
+type EventBuilder = (args: {
+  resourceId: string | null
+  resource: unknown
+  sortDate: string | null
+}) => EventTitleAndBullets
+
+const buildDefaultEvent = ({
+  resourceId,
+  sortDate,
+}: {
+  resourceId: string | null
+  sortDate: string | null
+}): EventTitleAndBullets => {
+  return {title: 'Event', bullets: [...buildIdBullet(resourceId), ...buildTimeBullet(sortDate)]}
+}
+
+const buildEncounterEvent: EventBuilder = ({resourceId, resource, sortDate}) => {
+  const typeDisplay = getFirstCodeableConceptDisplay(resource, 'type')
+  const status = getStringAtPath(resource, ['status'])
+  const periodStart = getStringAtPath(resource, ['period', 'start'])
+  const periodEnd = getStringAtPath(resource, ['period', 'end'])
+  const period = periodStart && periodEnd ? `${periodStart} to ${periodEnd}` : (periodStart ?? periodEnd)
+  const reason = getStringAtPath(resource, ['reasonCode', '0', 'coding', '0', 'display'])
+  const location = getStringAtPath(resource, ['location', '0', 'location', 'display'])
+  const provider = getStringAtPath(resource, ['serviceProvider', 'display'])
+  const title = buildCodeTitle('Encounter', typeDisplay)
+  const bullets = [
+    ...buildIdBullet(resourceId),
+    ...buildTimeBullet(sortDate),
+    ...buildBullet('status', status),
+    ...buildBullet('period', period),
+    ...buildBullet('reason', reason),
+    ...buildBullet('location', location),
+    ...buildBullet('provider', provider),
+  ]
+  return {title, bullets}
+}
+
+const buildConditionEvent: EventBuilder = ({resourceId, resource, sortDate}) => {
+  const code = getCodeableConceptDisplay(isRecordValue(resource) ? resource.code : null)
+  const clinicalStatus = getStringAtPath(resource, ['clinicalStatus', 'coding', '0', 'code'])
+  const verificationStatus = getStringAtPath(resource, ['verificationStatus', 'coding', '0', 'code'])
+  const onset = getStringAtPath(resource, ['onsetDateTime'])
+  const abatement = getStringAtPath(resource, ['abatementDateTime'])
+  const recorded = getStringAtPath(resource, ['recordedDate'])
+  const encounter = getStringAtPath(resource, ['encounter', 'reference'])
+  const title = buildCodeTitle('Condition', code)
+  const bullets = [
+    ...buildIdBullet(resourceId),
+    ...buildTimeBullet(sortDate),
+    ...buildBullet('clinicalStatus', clinicalStatus),
+    ...buildBullet('verificationStatus', verificationStatus),
+    ...buildBullet('onset', onset),
+    ...buildBullet('abatement', abatement),
+    ...buildBullet('recordedDate', recorded),
+    ...buildBullet('encounter', encounter),
+  ]
+  return {title, bullets}
+}
+
+const buildObservationEvent: EventBuilder = ({resourceId, resource, sortDate}) => {
+  const code = getCodeableConceptDisplay(isRecordValue(resource) ? resource.code : null)
+  const status = getStringAtPath(resource, ['status'])
+  const value = buildObservationValueText(resource)
+  const title = buildCodeTitle('Observation', code)
+  const bullets = [
+    ...buildIdBullet(resourceId),
+    ...buildTimeBullet(sortDate),
+    ...buildBullet('status', status),
+    ...buildBullet('value', value),
+  ]
+  return {title, bullets}
+}
+
+const buildProcedureEvent: EventBuilder = ({resourceId, resource, sortDate}) => {
+  const code = getCodeableConceptDisplay(isRecordValue(resource) ? resource.code : null)
+  const status = getStringAtPath(resource, ['status'])
+  const performedStart = getStringAtPath(resource, ['performedPeriod', 'start'])
+  const performedEnd = getStringAtPath(resource, ['performedPeriod', 'end'])
+  const performed =
+    performedStart && performedEnd ? `${performedStart} to ${performedEnd}` : (performedStart ?? performedEnd)
+  const reason = getStringAtPath(resource, ['reasonReference', '0', 'display'])
+  const title = buildCodeTitle('Procedure', code)
+  const bullets = [
+    ...buildIdBullet(resourceId),
+    ...buildTimeBullet(sortDate),
+    ...buildBullet('status', status),
+    ...buildBullet('performed', performed),
+    ...buildBullet('reason', reason),
+  ]
+  return {title, bullets}
+}
+
+const buildImmunizationEvent: EventBuilder = ({resourceId, resource, sortDate}) => {
+  const vaccine = getCodeableConceptDisplay(isRecordValue(resource) ? resource.vaccineCode : null)
+  const status = getStringAtPath(resource, ['status'])
+  const occurrence = getStringAtPath(resource, ['occurrenceDateTime'])
+  const location = getStringAtPath(resource, ['location', 'display'])
+  const title = buildCodeTitle('Immunization', vaccine)
+  const bullets = [
+    ...buildIdBullet(resourceId),
+    ...buildTimeBullet(sortDate),
+    ...buildBullet('status', status),
+    ...buildBullet('occurrence', occurrence),
+    ...buildBullet('location', location),
+  ]
+  return {title, bullets}
+}
+
+const buildMedicationRequestEvent: EventBuilder = ({resourceId, resource, sortDate}) => {
+  const med = isRecordValue(resource) ? (resource.medicationCodeableConcept ?? resource.medicationReference) : null
+  const medication = getCodeableConceptDisplay(med) ?? (isRecordValue(med) ? getReferenceDisplay(med) : null)
+  const status = getStringAtPath(resource, ['status'])
+  const intent = getStringAtPath(resource, ['intent'])
+  const authoredOn = getStringAtPath(resource, ['authoredOn'])
+  const reason =
+    getStringAtPath(resource, ['reasonCode', '0', 'text'])
+    ?? getStringAtPath(resource, ['reasonCode', '0', 'coding', '0', 'display'])
+    ?? getStringAtPath(resource, ['reasonReference', '0', 'display'])
+  const title = buildCodeTitle('MedicationRequest', medication)
+  const bullets = [
+    ...buildIdBullet(resourceId),
+    ...buildTimeBullet(sortDate),
+    ...buildBullet('status', status),
+    ...buildBullet('intent', intent),
+    ...buildBullet('authoredOn', authoredOn),
+    ...buildBullet('reason', reason),
+  ]
+  return {title, bullets}
+}
+
+const buildAllergyIntoleranceEvent: EventBuilder = ({resourceId, resource, sortDate}) => {
+  const code = getCodeableConceptDisplay(isRecordValue(resource) ? resource.code : null)
+  const type = getStringAtPath(resource, ['type'])
+  const categoryList = getArrayOrEmpty(isRecordValue(resource) ? resource.category : null)
+    .map((c) => {
+      return getStringOrNull(c)
+    })
+    .filter((v): v is string => {
+      return v !== null
+    })
+    .join(', ')
+  const category = categoryList.length > 0 ? categoryList : null
+  const criticality = getStringAtPath(resource, ['criticality'])
+  const clinicalStatus = getStringAtPath(resource, ['clinicalStatus', 'coding', '0', 'code'])
+  const recordedDate = getStringAtPath(resource, ['recordedDate'])
+  const title = buildCodeTitle('AllergyIntolerance', code)
+  const bullets = [
+    ...buildIdBullet(resourceId),
+    ...buildTimeBullet(sortDate),
+    ...buildBullet('type', type),
+    ...buildBullet('category', category),
+    ...buildBullet('criticality', criticality),
+    ...buildBullet('clinicalStatus', clinicalStatus),
+    ...buildBullet('recordedDate', recordedDate),
+  ]
+  return {title, bullets}
+}
+
+const buildDocumentReferenceEvent: EventBuilder = ({resourceId, resource, sortDate}) => {
+  const docType = getCodeableConceptDisplay(isRecordValue(resource) ? resource.type : null)
+  const status = getStringAtPath(resource, ['status'])
+  const date = getStringAtPath(resource, ['date'])
+  const author = getStringAtPath(resource, ['author', '0', 'display'])
+  const custodian = getStringAtPath(resource, ['custodian', 'display'])
+  const title = buildCodeTitle('DocumentReference', docType)
+  const bullets = [
+    ...buildIdBullet(resourceId),
+    ...buildTimeBullet(sortDate),
+    ...buildBullet('status', status),
+    ...buildBullet('date', date),
+    ...buildBullet('author', author),
+    ...buildBullet('custodian', custodian),
+  ]
+  return {title, bullets}
+}
+
+const buildDiagnosticReportEvent: EventBuilder = ({resourceId, resource, sortDate}) => {
+  const code = getCodeableConceptDisplay(isRecordValue(resource) ? resource.code : null)
+  const status = getStringAtPath(resource, ['status'])
+  const effective = getStringAtPath(resource, ['effectiveDateTime'])
+  const issued = getStringAtPath(resource, ['issued'])
+  const performer = getStringAtPath(resource, ['performer', '0', 'display'])
+  const title = buildCodeTitle('DiagnosticReport', code)
+  const bullets = [
+    ...buildIdBullet(resourceId),
+    ...buildTimeBullet(sortDate),
+    ...buildBullet('status', status),
+    ...buildBullet('effective', effective),
+    ...buildBullet('issued', issued),
+    ...buildBullet('performer', performer),
+  ]
+  return {title, bullets}
+}
+
+const eventBuilders: Record<string, EventBuilder> = {
+  AllergyIntolerance: buildAllergyIntoleranceEvent,
+  Condition: buildConditionEvent,
+  DiagnosticReport: buildDiagnosticReportEvent,
+  DocumentReference: buildDocumentReferenceEvent,
+  Encounter: buildEncounterEvent,
+  Immunization: buildImmunizationEvent,
+  MedicationRequest: buildMedicationRequestEvent,
+  Observation: buildObservationEvent,
+  Procedure: buildProcedureEvent,
+}
+
+const buildEventTitleAndBullets = ({
+  resourceType,
+  resourceId,
+  resource,
+  sortDate,
+}: {
+  resourceType: string
+  resourceId: string | null
+  resource: unknown
+  sortDate: string | null
+}): EventTitleAndBullets => {
+  const builder = eventBuilders[resourceType]
+  const built = builder ? builder({resourceId, resource, sortDate}) : buildDefaultEvent({resourceId, sortDate})
+  const fallbackTitle = resourceId ? `${resourceType}/${resourceId}` : resourceType
+  const title = built.title === 'Event' ? fallbackTitle : built.title
+  return {title, bullets: built.bullets}
+}
+
+const buildDecodedNotesMarkdown = (notes: {path: string; text: string; truncated: boolean}[]): string[] => {
+  return notes.flatMap((note, idx) => {
+    const fence = getMarkdownFenceForText(note.text)
+    const header = `##### Note (${note.path}) truncated=${note.truncated ? 'true' : 'false'}`
+    const body = [header, `${fence}text`, note.text.trimEnd(), fence]
+    return idx === 0 ? ['', ...body] : ['', '', ...body]
+  })
+}
+
+type FhirMarkdownEvent = {
+  dateHeading: string
+  sortMs: number | null
+  sortDate: string | null
+  resourceType: string
+  resourceId: string | null
+  title: string
+  bullets: string[]
+  noteBlocks: string[]
+}
+
+const buildMarkdownEventFromEntry = (entry: SpoolEntry): FhirMarkdownEvent => {
+  const parsed = tryJsonParse(entry.rawLine)
+  const resource = parsed.ok ? parsed.value : null
+  const sortMs = getSortMsFromSortDate(entry.sortDate)
+  const dateHeading = getDateHeadingFromSortDate(entry.sortDate)
+  const built = buildEventTitleAndBullets({
+    resourceType: entry.resourceType,
+    resourceId: entry.resourceId,
+    resource,
+    sortDate: entry.sortDate,
+  })
+  const noteBlocks = buildDecodedNotesMarkdown(entry.decodedNotes)
+
+  return {
+    dateHeading,
+    sortMs,
+    sortDate: entry.sortDate,
+    resourceType: entry.resourceType,
+    resourceId: entry.resourceId,
+    title: built.title,
+    bullets: built.bullets,
+    noteBlocks,
+  }
+}
+
+const compareEventsChronologically = (a: FhirMarkdownEvent, b: FhirMarkdownEvent): number => {
+  const aMs = a.sortMs
+  const bMs = b.sortMs
+  const t = aMs !== null && bMs !== null ? aMs - bMs : aMs !== null ? -1 : bMs !== null ? 1 : 0
   const rt = a.resourceType.localeCompare(b.resourceType)
-  const dt = (a.sortDate ?? '').localeCompare(b.sortDate ?? '')
   const id = (a.resourceId ?? '').localeCompare(b.resourceId ?? '')
-  return rt !== 0 ? rt : dt !== 0 ? dt : id
+  return t !== 0 ? t : rt !== 0 ? rt : id
 }
 
-const formatDecodedNoteBlock = (entry: SpoolEntry, note: {path: string; text: string; truncated: boolean}): string => {
-  const rid = entry.resourceId ? `${entry.resourceType}/${entry.resourceId}` : entry.resourceType
-  const truncated = note.truncated ? 'true' : 'false'
-  return `decoded_note_begin: ${rid} ${note.path} truncated=${truncated}\n${note.text}\ndecoded_note_end: ${rid} ${note.path}`
+const buildEventMarkdownLines = (event: FhirMarkdownEvent): string[] => {
+  const heading = `#### ${event.title}`
+  const bullets = event.bullets.length > 0 ? ['', ...event.bullets] : []
+  return [heading, ...bullets, ...event.noteBlocks]
 }
 
-const buildRecordText = ({
+const buildTimelineMarkdown = (events: FhirMarkdownEvent[]): string => {
+  const sorted = [...events].sort(compareEventsChronologically)
+  const state = sorted.reduce(
+    (acc, event) => {
+      const isNewDate = acc.currentDate !== event.dateHeading
+      const shouldAddDivider = !isNewDate && acc.eventsInDate > 0
+
+      if (isNewDate) {
+        acc.lines.push('', `### ${event.dateHeading}`, '')
+        acc.currentDate = event.dateHeading
+        acc.eventsInDate = 0
+      }
+
+      if (shouldAddDivider) {
+        acc.lines.push('', '---', '')
+      }
+
+      acc.lines.push(...buildEventMarkdownLines(event))
+      acc.eventsInDate += 1
+      return acc
+    },
+    {currentDate: null as string | null, eventsInDate: 0, lines: [] as string[]},
+  )
+
+  return state.lines.join('\n').trim()
+}
+
+const buildPatientDemographicsMarkdown = (patientEntry: SpoolEntry | null): string[] => {
+  const parsed = patientEntry ? tryJsonParse(patientEntry.rawLine) : {ok: false as const, error: 'missing'}
+  const resource = parsed.ok ? parsed.value : null
+  const nameText = getStringAtPath(resource, ['name', '0', 'text'])
+  const family = getStringAtPath(resource, ['name', '0', 'family'])
+  const givenList = getArrayOrEmpty(isRecordValue(resource) ? resource.name : null)
+  const firstNameRecord = getFirstRecordOrNull(givenList)
+  const given = getArrayOrEmpty(firstNameRecord?.given)
+    .map((v) => {
+      return getStringOrNull(v)
+    })
+    .filter((v): v is string => {
+      return v !== null
+    })
+    .join(' ')
+
+  const name = nameText ?? (family || given ? `${given} ${family ?? ''}`.trim() : null)
+  const gender = getStringAtPath(resource, ['gender'])
+  const birthDate = getStringAtPath(resource, ['birthDate'])
+
+  return [...buildBullet('name', name), ...buildBullet('gender', gender), ...buildBullet('birthDate', birthDate)]
+}
+
+const buildPatientOriginalData = ({
+  patientId,
+  importRoute,
+  assetsFolder,
+  entries,
+}: {
+  patientId: string
+  importRoute: string
+  assetsFolder: string
+  entries: SpoolEntry[]
+}) => {
+  const patient = entries.find((e) => {
+    return e.resourceType === 'Patient'
+  })
+  const rest = entries
+    .filter((e) => {
+      return e.resourceType !== 'Patient'
+    })
+    .map((e) => {
+      return {event: buildMarkdownEventFromEntry(e), entry: e}
+    })
+    .sort((a, b) => {
+      return compareEventsChronologically(a.event, b.event)
+    })
+    .map((v) => {
+      return v.entry
+    })
+
+  const ordered = patient ? [patient, ...rest] : rest
+
+  return {
+    recordType: 'fhir_patient',
+    patientId,
+    importRoute,
+    assetsFolder,
+    resourceCount: ordered.length,
+    hasDecodedNotes: ordered.some((e) => {
+      return e.decodedNotes.length > 0
+    }),
+    resources: ordered.map((e) => {
+      return {
+        resourceType: e.resourceType,
+        resourceId: e.resourceId,
+        sortDate: e.sortDate,
+        rawLine: e.rawLine,
+        decodedNotes: e.decodedNotes,
+      }
+    }),
+  }
+}
+
+const buildPatientRecordMarkdown = ({
   patientId,
   importRoute,
   assetsFolder,
@@ -365,26 +878,36 @@ const buildRecordText = ({
   articleTitle: string
   entries: SpoolEntry[]
 }): string => {
-  const sorted = [...entries].sort(compareSpoolEntries)
-  const header = [
-    'record_type: fhir_patient',
-    `patient_id: ${patientId}`,
-    `import_route: ${importRoute}`,
-    `title: ${articleTitle}`,
-    `assets_folder: ${assetsFolder}`,
-    '',
-  ].join('\n')
+  const patientEntry =
+    entries.find((e) => {
+      return e.resourceType === 'Patient'
+    }) ?? null
 
-  const body = sorted
-    .flatMap((entry) => {
-      const notes = entry.decodedNotes.flatMap((note) => {
-        return formatDecodedNoteBlock(entry, note).split('\n')
-      })
-      return [entry.rawLine, ...notes]
+  const patientLines = buildPatientDemographicsMarkdown(patientEntry)
+  const timelineEvents = entries
+    .filter((e) => {
+      return e.resourceType !== 'Patient'
     })
-    .join('\n')
+    .map(buildMarkdownEventFromEntry)
 
-  return `${header}${body}\n`
+  const timeline = buildTimelineMarkdown(timelineEvents)
+
+  const lines = [
+    `# ${articleTitle}`,
+    '',
+    `- patient_id: \`${patientId}\``,
+    `- import_route: \`${importRoute}\``,
+    `- assets_folder: \`${assetsFolder}\``,
+    '',
+    '## Patient',
+    ...(patientLines.length > 0 ? patientLines : ['- (no demographics found)']),
+    '',
+    '## Timeline',
+    ...(timeline.length > 0 ? [timeline] : ['(no linked events found)']),
+    '',
+  ]
+
+  return lines.join('\n')
 }
 
 const upsertArticlesBatch = async ({
@@ -555,20 +1078,15 @@ const processPatientShard = async ({
     }
 
     const articleTitle = `FHIR Patient ${patientId}`
-    const recordText = buildRecordText({patientId, importRoute, assetsFolder, articleTitle, entries})
-    const articleId = `${importRoute}:Patient/${patientId}`
-    const originalData = {
-      recordType: 'fhir_patient',
-      patientId,
-      importRoute,
-      assetsFolder,
-      resourceCount: entries.length,
-      hasDecodedNotes: entries.some((e) => {
-        return e.decodedNotes.length > 0
-      }),
+    stats.patientsTotal += 1
+
+    if (dryRun) {
+      return await processPatients(idx + 1, batch)
     }
 
-    stats.patientsTotal += 1
+    const recordText = buildPatientRecordMarkdown({patientId, importRoute, assetsFolder, articleTitle, entries})
+    const articleId = `${importRoute}:Patient/${patientId}`
+    const originalData = buildPatientOriginalData({patientId, importRoute, assetsFolder, entries})
 
     const nextBatch: ArticleUpsertEntry[] = [...batch, {articleId, articleTitle, recordText, originalData}]
     const shouldFlush = !dryRun && nextBatch.length >= 50

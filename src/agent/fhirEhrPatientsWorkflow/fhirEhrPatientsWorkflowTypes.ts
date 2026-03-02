@@ -92,12 +92,19 @@ export const FhirNdjsonLine = type({
   'subject?': {'reference?': 'string'},
   'patient?': {'reference?': 'string'},
   'encounter?': {'reference?': 'string'},
+  'period?': {'start?': 'string', 'end?': 'string'},
+  'effectivePeriod?': {'start?': 'string', 'end?': 'string'},
+  'performedPeriod?': {'start?': 'string', 'end?': 'string'},
+  'occurrenceDateTime?': 'string',
+  'occurrencePeriod?': {'start?': 'string', 'end?': 'string'},
+  'performedDateTime?': 'string',
   'effectiveDateTime?': 'string',
   'issued?': 'string',
   'date?': 'string',
   'authoredOn?': 'string',
   'recordedDate?': 'string',
   'onsetDateTime?': 'string',
+  'abatementDateTime?': 'string',
 })
 
 export type FhirNdjsonLineType = typeof FhirNdjsonLine.infer
