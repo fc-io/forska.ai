@@ -111,10 +111,6 @@ export const PromptsPage = () => {
                         size="sm"
                         disabled={pendingPromptId() === prompt.id}
                         onClick={() => {
-                          if (!confirm('Archive this prompt? It will be hidden from prompt lists.')) {
-                            return
-                          }
-
                           return void updatePromptArchivedState(
                             queryClient,
                             prompt.id,
