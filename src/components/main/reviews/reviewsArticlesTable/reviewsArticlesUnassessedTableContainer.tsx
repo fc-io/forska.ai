@@ -6,6 +6,10 @@ import {createArticlesUnassessedQueryOptions} from '../../projects/projectsArtic
 import {ReviewsPaginationControls} from '../reviewsPaginationControls.tsx'
 import {ReviewsArticlesTable} from './reviewsArticlesTable.tsx'
 
+const formatThousandSeparatedNumber = (value: number) => {
+  return value.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
+}
+
 interface ReviewsArticlesUnassessedTableContainerProps {
   projectId: string
   isAdmin: boolean
@@ -65,7 +69,7 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
                   <h3 class="text-lg font-semibold mb-2">
                     Articles with No Judgments (
                     {response().totalCount > 0
-                      ? `Showing ${Math.min((response().page - 1) * props.pageLimit() + 1, response().totalCount)}-${Math.min(response().page * props.pageLimit(), response().totalCount)} of ${response().totalCount}`
+                      ? `Showing ${Math.min((response().page - 1) * props.pageLimit() + 1, response().totalCount)}-${Math.min(response().page * props.pageLimit(), response().totalCount)} of ${formatThousandSeparatedNumber(response().totalCount)}`
                       : '0'}
                     )
                   </h3>
