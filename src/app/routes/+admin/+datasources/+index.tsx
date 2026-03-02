@@ -349,6 +349,19 @@ const AdminDataSources = () => {
                                   <button
                                     type="button"
                                     onClick={() => {
+                                      if (entry.importRoute?.startsWith('fhir:')) {
+                                        void apiClient.api.datasources.import['fhir-ehr-patients']
+                                          .post({id: entry.id})
+                                          .then((response) => {
+                                            if (response.error || !response.data?.success) {
+                                              console.error('Failed to start import', response.error)
+                                              alert('Failed to start import')
+                                              return
+                                            }
+                                            void dataSourcesQuery.refetch()
+                                          })
+                                        return
+                                      }
                                       if (entry.importRoute === '/api/datasources/import/arxiv') {
                                         void apiClient.api.datasources.import.arxiv
                                           .post({id: entry.id})

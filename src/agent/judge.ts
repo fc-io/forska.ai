@@ -13,6 +13,7 @@ import {rateLimitedLogger} from '../server/utils/rateLimitedLogger.ts'
 import type {ContentSettings} from './judge/judgeGetPrompt.ts'
 import {judgeGetSinglePrompt} from './judge/judgeGetPrompt.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT} from './judge/judgeSinglePromptSystemPrompt.ts'
+import {SINGLE_PROMPT_SYSTEM_PROMPT_PATIENT} from './judge/judgeSinglePromptSystemPromptPatient.ts'
 import {judgeStoreTokenUse, type JudgeTokenUsageEntry} from './judge/judgeStoreTokenUse.ts'
 import {
   type ParseAttemptResult,
@@ -232,6 +233,16 @@ Please try again, ensuring you respond ONLY with valid JSON matching the schema.
 
 type ArticlesType = (typeof schema.articles.$inferSelect)[]
 
+const isFhirEhrPatientArticle = (article: ArticlesType[number]): boolean => {
+  const articleId = article.articleId ?? ''
+  const importRoute = article.importRoute ?? ''
+  return articleId.startsWith('fhir:') || importRoute.startsWith('fhir:')
+}
+
+const getSinglePromptSystemPromptForArticle = (article: ArticlesType[number]): string => {
+  return isFhirEhrPatientArticle(article) ? SINGLE_PROMPT_SYSTEM_PROMPT_PATIENT : SINGLE_PROMPT_SYSTEM_PROMPT
+}
+
 let abortCount = 0
 let successCount = 0
 let errorCount = 0
@@ -249,12 +260,14 @@ type SinglePromptInput = {
  */
 const generateSinglePromptResponse = async ({
   prompt,
+  systemPrompt,
   baseURL,
   modelName,
   provider,
   version,
 }: {
   prompt: string
+  systemPrompt: string
   baseURL: string
   modelName: string
   provider: string | null
@@ -264,7 +277,7 @@ const generateSinglePromptResponse = async ({
   if (providerNormalized === 'codex') {
     try {
       const client = getCodexAppServerClient()
-      const combined = `${SINGLE_PROMPT_SYSTEM_PROMPT}\n\n${prompt}`
+      const combined = `${systemPrompt}\n\n${prompt}`
       const result = await client.runJsonTurn({
         model: modelName,
         effort: version,
@@ -284,7 +297,7 @@ const generateSinglePromptResponse = async ({
   const response = await client.chat.completions.create({
     model: modelToUse,
     messages: [
-      {role: 'system', content: SINGLE_PROMPT_SYSTEM_PROMPT},
+      {role: 'system', content: systemPrompt},
       {role: 'user', content: prompt},
     ],
     max_completion_tokens: 2000, // Single prompt needs less tokens
@@ -336,6 +349,8 @@ export const judgeSinglePrompt = async ({
   const startedAt = new Date().toISOString()
   const startDuration = performance.now()
 
+  const systemPrompt = getSinglePromptSystemPromptForArticle(article)
+
   const basePrompt = judgeGetSinglePrompt(article, prompt, contentSettings)
   logFirstJudgeRequestIfNeeded({
     judgmentsJobId,
@@ -343,7 +358,7 @@ export const judgeSinglePrompt = async ({
     promptId: prompt.id,
     baseURL,
     modelName,
-    systemPrompt: SINGLE_PROMPT_SYSTEM_PROMPT,
+    systemPrompt,
     userPrompt: basePrompt,
     requestConfig: {temperature: 0.1, maxCompletionTokens: 2000},
   })
@@ -363,7 +378,14 @@ export const judgeSinglePrompt = async ({
     } | null = null
 
     try {
-      currentResponse = await generateSinglePromptResponse({prompt: userPrompt, baseURL, modelName, provider, version})
+      currentResponse = await generateSinglePromptResponse({
+        prompt: userPrompt,
+        systemPrompt,
+        baseURL,
+        modelName,
+        provider,
+        version,
+      })
 
       // Try to parse the response - validate against prompt type
       const judgment = parseSinglePromptJudgment(currentResponse.text, prompt.type)
@@ -428,7 +450,7 @@ export const judgeSinglePrompt = async ({
               sanitizedError: null,
               sanitizedResponse: null,
               lastResponse: null,
-              systemPrompt: SINGLE_PROMPT_SYSTEM_PROMPT,
+              systemPrompt,
               userPrompt,
             },
           ],
@@ -476,7 +498,7 @@ export const judgeSinglePrompt = async ({
         sanitizedError,
         sanitizedResponse,
         lastResponse: responseText,
-        systemPrompt: SINGLE_PROMPT_SYSTEM_PROMPT,
+        systemPrompt,
         userPrompt,
       })
       errorCount += 1
