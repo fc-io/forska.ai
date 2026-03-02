@@ -2,15 +2,16 @@
 
 ## Goal
 
-- Import `assets/sample-bulk-fhir-datasets-100-patients/**.ndjson` into Postgres `articles`.
+- Import FHIR Bulk NDJSON patient datasets (any size/sharding) from `assets/**` into Postgres `articles`.
+- Example dataset: `assets/sample-bulk-fhir-datasets-100-patients/**.ndjson`.
 - 1 FHIR Patient == 1 `articles` row.
 - `articleSummary` == `fullText` (identical string).
 - Title info duplicated inside summary/fulltext.
 
 ## Decisions (IDs + routing)
 
-- import_route (linking + project scoping): `fhir:synthea:100`.
-- `articles.articleId` (unique): `fhir:synthea:100:Patient/<patientId>`.
+- importRoute (linking + project scoping): `fhir:<datasetId>` (caller-provided; size-agnostic).
+- `articles.articleId` (unique): `<importRoute>:Patient/<patientId>`.
 - `articles.articleTitle`: `FHIR Patient <patientId>` (option: include name/sex/birthDate if present).
 
 ## Record text (stored in articleSummary + fullText)
@@ -19,6 +20,7 @@
 - Top header includes:
   - `record_type: fhir_patient`
   - `patient_id: <id>`
+  - `import_route: <importRoute>`
   - `title: <articleTitle>` (duplicate)
   - `assets_folder: <path>`
 - Then include ALL patient-linked FHIR resources (raw JSON), grouped by `resourceType`.
@@ -37,17 +39,17 @@
 
 - [ ] Add workflow module (pattern: `src/agent/pubmedWorkflowStoreEntries.ts`):
   - `src/agent/fhirEhrPatientsWorkflow/fhirEhrPatientsWorkflowStoreEntries.ts`
-  - input: `{assetsFolder, importRoute}`
+  - input: `{assetsFolder, importRoute?}` (default importRoute derived from assetsFolder)
   - output: stats `{patientsTotal, inserted, updated, skipped, errors}`
-- [ ] Walk shards under assetsFolder (stream line-by-line; multiple `*.ndjson` files):
-  - pass1 `Patient.*` init buckets
-  - pass2 `Encounter.*` index `Encounter/<id> -> Patient/<id>`
-  - pass3 all other types: attach to patient via `subject.reference`/`patient.reference`, else via `encounter.reference` -> encounter index
+- [ ] Walk `*.ndjson` shards under assetsFolder (stream line-by-line; dataset size unknown):
+  - pass1 `resourceType=="Patient"` init buckets
+  - pass2 `resourceType=="Encounter"` index `Encounter/<id> -> Patient/<id>`
+  - pass3 all other types: attach via `subject.reference`/`patient.reference`, else via `encounter.reference` -> encounter index
 - [ ] Build `Map<patientId, {patient: Patient|null, resources: Record<resourceType, unknown[]>}>`.
 - [ ] For each patientId with Patient present: build `recordText` then upsert:
   - `articles.articleId`, `articles.articleTitle`, `articles.articleSummary`, `articles.fullText`, `articles.importRoute`, `articles.originalData`.
   - set `fullTextConversionStatus` = `success` and `fullTextCharCount`.
-- [ ] Ensure `import_route` row exists (`route=fhir:synthea:100`), then insert `article_route_link` rows.
+- [ ] Ensure `import_route` row exists (`route=<importRoute>`), then insert `article_route_link` rows.
 - [ ] Keep import repeatable: onConflict update content fields + `updatedAt`.
 
 ## APIs
@@ -57,8 +59,8 @@
 - [ ] Add route: `POST /api/datasources/import/fhir-ehr-patients`.
 - [ ] Body: `{id: string}` (datasource id).
 - [ ] Store local assets path on datasource:
-  - `datasource.cursor` = `assets/sample-bulk-fhir-datasets-100-patients` (treat as config, not cursor).
-  - `datasource.importRoute` default `fhir:synthea:100`.
+  - `datasource.cursor` = `assets/<datasetFolder>` (treat as config, not cursor).
+  - `datasource.importRoute` default derived from `cursor`.
 - [ ] Handler:
   - `src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostFhirEhrPatients.ts`
   - validate `cursor` startsWith `assets/`.
@@ -70,7 +72,7 @@
 
 - [ ] Add route: `POST /api/fhir-ehr/import/patients-from-assets`.
 - [ ] Body: `{assetsFolder: string, importRoute?: string, limit?: number, dryRun?: boolean}`.
-- [ ] Same importer + same path validation (`assets/` prefix).
+- [ ] Same importer + same path validation (`assets/` prefix); if importRoute missing, derive.
 - [ ] Response includes stats + sample imported `articleId`s.
 
 ## Patient system prompt (different from articles)
@@ -87,6 +89,6 @@
 - Patient projects recommended content settings (avoids fulltext token-budget skip; summary==fulltext anyway):
   - `useTitle=false`, `useAbstract=true`, `useFulltext=false`, `useFulltextNoImages=false`.
 - Validate quickly:
-  - create datasource with `cursor=assets/sample-bulk-fhir-datasets-100-patients`, `importRoute=fhir:synthea:100`
+  - create datasource with `cursor=assets/<datasetFolder>`, `importRoute=fhir:<datasetId>`
   - call import endpoint
-  - create project linked to `fhir:synthea:100`, run judgments job
+  - create project linked to `fhir:<datasetId>`, run judgments job
