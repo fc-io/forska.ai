@@ -55,6 +55,15 @@
 - [ ] Ensure `import_route` row exists (`route=<importRoute>`), then insert `article_route_link` rows.
 - [ ] Keep import repeatable: onConflict update content fields + `updatedAt`.
 
+## ArkType validation (imports)
+
+- [ ] Add ArkTypes: `src/agent/fhirEhrPatientsWorkflow/fhirEhrPatientsWorkflowTypes.ts`
+  - import bodies: `{assetsFolder, importRoute?, dryRun?}`; trim; enforce `assets/` prefix; enforce `importRoute` startsWith `fhir:` (derive if missing)
+  - NDJSON line (open object; validate only read-fields): `resourceType`, `id?`, `subject?.reference?`, `patient?.reference?`, `encounter?.reference?`, `effectiveDateTime?`, `issued?`, `date?`, `authoredOn?`, `recordedDate?`, `onsetDateTime?`
+  - type-specific required: `Patient.id`; `Encounter.id` + `Encounter.subject.reference`
+  - note payloads: `DocumentReference.content[].attachment.data?` + `DiagnosticReport.presentedForm[].data?`
+- [ ] Use non-throwing `Type(value)` (no try/catch): invalid body => 400; invalid line => `errors++` + skip (keep N=25 sample errs)
+
 ## APIs
 
 ### A) DataSource import (Admin)
