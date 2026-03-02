@@ -18,7 +18,7 @@ export const ReviewJudgmentAssessments = (props: ReviewJudgmentAssessmentsProps)
                 </span>
               </div>
               <Show when={assessment.assessmentComment}>
-                <p class="text-gray-600 mt-1">{assessment.assessmentComment}</p>
+                <p class="text-gray-600 mt-1 break-words">{assessment.assessmentComment}</p>
               </Show>
             </div>
           )

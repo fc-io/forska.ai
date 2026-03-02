@@ -673,7 +673,7 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
         <div class="space-y-2">
           {/* Title with clickable highlights - shown in summary and all modes */}
           <Show when={viewMode() === 'all' || viewMode() === 'summary'}>
-            <p class="text-lg font-semibold" onClick={handleTitleSummaryClick}>
+            <p class="text-lg font-semibold break-words" onClick={handleTitleSummaryClick}>
               <Show
                 when={props.judgment && highlightedTitleHtml()}
                 fallback={
@@ -696,7 +696,7 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
                 href={getArticleUrl(props.article.articleId)}
                 target="_blank"
                 rel="noopener noreferrer"
-                class="text-blue-600 hover:underline"
+                class="text-blue-600 hover:underline break-all"
               >
                 {props.article.articleId}
               </a>

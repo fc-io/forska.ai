@@ -18,7 +18,7 @@ export const ReviewHumanJudgmentItem = (props: ReviewHumanJudgmentItemProps) => 
         <span class="ml-2 text-gray-800 break-words">{props.judgment.answer ?? '—'}</span>
       </div>
       <Show when={props.judgment.comment}>
-        <p class="text-xs text-gray-600 mt-2">{props.judgment.comment}</p>
+        <p class="text-xs text-gray-600 mt-2 break-words">{props.judgment.comment}</p>
       </Show>
     </div>
   )

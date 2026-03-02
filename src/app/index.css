@@ -2,6 +2,14 @@
 
 .assessment-container {
   line-height: 1.8;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.assessment-container th,
+.assessment-container td {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .assessment-container h2,

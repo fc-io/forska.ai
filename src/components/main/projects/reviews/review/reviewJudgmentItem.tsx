@@ -161,7 +161,7 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
         <p class="text-sm font-medium text-gray-900 line-clamp-2" title={props.judgment.prompt.originalText}>
           {props.judgment.prompt.originalText}
         </p>
-        <div class="mt-1 text-[11px] text-gray-500 space-y-0.5">
+        <div class="mt-1 text-[11px] text-gray-500 space-y-0.5 break-words">
           {promptId() ? <div>Prompt ID: {String(promptId()).slice(0, 8)}</div> : null}
           {modelName() ? <div>Model: {modelName()}</div> : null}
           <Show when={hasContentFlags()}>
@@ -201,13 +201,13 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
       </div>
 
       {/* LLM Answer row */}
-      <div class="flex items-center justify-between text-xs">
-        <div class="flex items-center gap-2">
+      <div class="flex items-start justify-between gap-2 text-xs">
+        <div class="flex items-start gap-2 min-w-0 flex-1">
           <span class="font-medium w-[70px] text-right shrink-0">Answer:</span>
-          <span class={getAnswerColorClass()}>{llmAnswerDisplay()}</span>
+          <span class={`${getAnswerColorClass()} min-w-0 flex-1 break-words`}>{llmAnswerDisplay()}</span>
         </div>
         <Show when={props.judgment.confidenceOriginal}>
-          <div class="text-gray-500">{props.judgment.confidenceOriginal}%</div>
+          <div class="text-gray-500 shrink-0">{props.judgment.confidenceOriginal}%</div>
         </Show>
       </div>
 
@@ -217,9 +217,12 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
           <For each={visibleHumanAnswers()}>
             {(humanAnswer) => {
               return (
-                <div class="flex items-center gap-2 text-xs">
+                <div class="flex items-start gap-2 text-xs">
                   <span class="font-medium w-[70px] text-right shrink-0">{humanAnswer.userName}:</span>
-                  <span class={getAnswerColorClass()} style={{'text-transform': 'uppercase'}}>
+                  <span
+                    class={`${getAnswerColorClass()} min-w-0 flex-1 break-words`}
+                    style={{'text-transform': 'uppercase'}}
+                  >
                     {humanAnswer.answer}
                   </span>
                 </div>
@@ -254,7 +257,7 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
       </Show>
 
       <Show when={props.judgment.explanation}>
-        <p class="text-xs text-gray-600 mt-2">{props.judgment.explanation}</p>
+        <p class="text-xs text-gray-600 mt-2 break-words">{props.judgment.explanation}</p>
       </Show>
       <Show
         when={
@@ -269,7 +272,7 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
               return (
                 <button
                   type="button"
-                  class="text-xs text-gray-500 italic text-left w-full hover:text-gray-700 hover:bg-gray-50 rounded px-1 -mx-1"
+                  class="text-xs text-gray-500 italic text-left w-full break-words hover:text-gray-700 hover:bg-gray-50 rounded px-1 -mx-1"
                   onClick={(e) => {
                     e.stopPropagation()
                     reviewArticleDetailsDispatchScrollToQuote({
