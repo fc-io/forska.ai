@@ -3,7 +3,7 @@
 ## Goal
 
 - Import FHIR Bulk NDJSON patient datasets (any size/sharding) from `assets/**` into Postgres `articles`.
-- Example dataset: `assets/sample-bulk-fhir-datasets-100-patients/**.ndjson`.
+- Example dataset: `assets/sample-bulk-fhir-datasets-100-patients/**/*.ndjson`.
 - 1 FHIR Patient == 1 `articles` row.
 - `articleSummary` == `fullText` (identical string).
 - Title info duplicated inside summary/fulltext.
@@ -11,6 +11,7 @@
 ## Decisions (IDs + routing)
 
 - importRoute (linking + project scoping): `fhir:<datasetId>` (caller-provided; size-agnostic).
+- default importRoute (if missing): `fhir:` + rel path from `assets/` (`assets/foo/bar` -> `fhir:foo:bar`).
 - `articles.articleId` (unique): `<importRoute>:Patient/<patientId>`.
 - `articles.articleTitle`: `FHIR Patient <patientId>` (option: include name/sex/birthDate if present).
 
@@ -23,14 +24,16 @@
   - `import_route: <importRoute>`
   - `title: <articleTitle>` (duplicate)
   - `assets_folder: <path>`
-- Then include ALL patient-linked FHIR resources (raw JSON), grouped by `resourceType`.
+- Include Patient + linked resources as raw JSON lines (preserve original NDJSON line; no re-stringify).
 - Patient linkage extraction (per resource):
-  - prefer `subject.reference == "Patient/<id>"`
-  - else `patient.reference == "Patient/<id>"`
+  - normalize `*.reference` (accept `Patient/<id>`, `*/Patient/<id>`, `Patient/<id>/_history/*`)
+  - prefer `subject.reference`
+  - else `patient.reference`
   - else ignore.
 - Decode and include embedded note text when present:
   - `DocumentReference.content[].attachment.data` (base64 -> utf8)
   - `DiagnosticReport.presentedForm[].data` (base64 -> utf8)
+  - cap bytes; skip non-utf8/binary-ish
 - Ordering (stable):
   - `resourceType` alpha
   - within type: `effectiveDateTime`/`issued`/`date`/`authoredOn`/`recordedDate`/`onsetDateTime` (first present), then `id`.
@@ -41,11 +44,11 @@
   - `src/agent/fhirEhrPatientsWorkflow/fhirEhrPatientsWorkflowStoreEntries.ts`
   - input: `{assetsFolder, importRoute?}` (default importRoute derived from assetsFolder)
   - output: stats `{patientsTotal, inserted, updated, skipped, errors}`
-- [ ] Walk `*.ndjson` shards under assetsFolder (stream line-by-line; dataset size unknown):
-  - pass1 `resourceType=="Patient"` init buckets
-  - pass2 `resourceType=="Encounter"` index `Encounter/<id> -> Patient/<id>`
-  - pass3 all other types: attach via `subject.reference`/`patient.reference`, else via `encounter.reference` -> encounter index
-- [ ] Build `Map<patientId, {patient: Patient|null, resources: Record<resourceType, unknown[]>}>`.
+- [ ] Walk `**/*.{ndjson,ndjson.gz}` shards under assetsFolder (recursive; stream line-by-line; no limit):
+  - pass1 `resourceType=="Patient"` -> spool patient line
+  - pass2 `resourceType=="Encounter"` -> index `Encounter/<id> -> Patient/<id>`
+  - pass3 all other types -> resolve patientId (subject/patient ref; else encounter ref) -> spool line
+- [ ] Avoid full-dataset memory: spool to tmp shards (hash(patientId)%N) then process shard-by-shard.
 - [ ] For each patientId with Patient present: build `recordText` then upsert:
   - `articles.articleId`, `articles.articleTitle`, `articles.articleSummary`, `articles.fullText`, `articles.importRoute`, `articles.originalData`.
   - set `fullTextConversionStatus` = `success` and `fullTextCharCount`.
@@ -71,7 +74,7 @@
 ### B) Direct import API (Admin)
 
 - [ ] Add route: `POST /api/fhir-ehr/import/patients-from-assets`.
-- [ ] Body: `{assetsFolder: string, importRoute?: string, limit?: number, dryRun?: boolean}`.
+- [ ] Body: `{assetsFolder: string, importRoute?: string, dryRun?: boolean}`.
 - [ ] Same importer + same path validation (`assets/` prefix); if importRoute missing, derive.
 - [ ] Response includes stats + sample imported `articleId`s.
 
