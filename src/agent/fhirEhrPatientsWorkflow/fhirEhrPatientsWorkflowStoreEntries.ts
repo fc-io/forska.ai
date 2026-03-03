@@ -707,14 +707,14 @@ const buildEventTitleAndBullets = ({
 const buildDecodedNotesMarkdown = (notes: {path: string; text: string; truncated: boolean}[]): string[] => {
   return notes.flatMap((note, idx) => {
     const fence = getMarkdownFenceForText(note.text)
-    const header = `##### Note (${note.path}) truncated=${note.truncated ? 'true' : 'false'}`
+    const header = `#### Note (${note.path}) | truncated: ${note.truncated ? 'true' : 'false'}`
     const body = [header, `${fence}text`, note.text.trimEnd(), fence]
-    return idx === 0 ? ['', ...body] : ['', '', ...body]
+    return idx === 0 ? body : ['', ...body]
   })
 }
 
 type FhirMarkdownEvent = {
-  dateHeading: string
+  addedDate: string
   sortMs: number | null
   sortDate: string | null
   resourceType: string
@@ -728,7 +728,7 @@ const buildMarkdownEventFromEntry = (entry: SpoolEntry): FhirMarkdownEvent => {
   const parsed = tryJsonParse(entry.rawLine)
   const resource = parsed.ok ? parsed.value : null
   const sortMs = getSortMsFromSortDate(entry.sortDate)
-  const dateHeading = getDateHeadingFromSortDate(entry.sortDate)
+  const addedDate = getDateHeadingFromSortDate(entry.sortDate)
   const built = buildEventTitleAndBullets({
     resourceType: entry.resourceType,
     resourceId: entry.resourceId,
@@ -738,7 +738,7 @@ const buildMarkdownEventFromEntry = (entry: SpoolEntry): FhirMarkdownEvent => {
   const noteBlocks = buildDecodedNotesMarkdown(entry.decodedNotes)
 
   return {
-    dateHeading,
+    addedDate,
     sortMs,
     sortDate: entry.sortDate,
     resourceType: entry.resourceType,
@@ -758,37 +758,30 @@ const compareEventsChronologically = (a: FhirMarkdownEvent, b: FhirMarkdownEvent
   return t !== 0 ? t : rt !== 0 ? rt : id
 }
 
+const compareEventsByNewestFirst = (a: FhirMarkdownEvent, b: FhirMarkdownEvent): number => {
+  const aMs = a.sortMs
+  const bMs = b.sortMs
+  const t = aMs !== null && bMs !== null ? bMs - aMs : aMs !== null ? -1 : bMs !== null ? 1 : 0
+  const rt = a.resourceType.localeCompare(b.resourceType)
+  const id = (a.resourceId ?? '').localeCompare(b.resourceId ?? '')
+  return t !== 0 ? t : rt !== 0 ? rt : id
+}
+
 const buildEventMarkdownLines = (event: FhirMarkdownEvent): string[] => {
-  const heading = `#### ${event.title}`
-  const bullets = event.bullets.length > 0 ? ['', ...event.bullets] : []
-  return [heading, ...bullets, ...event.noteBlocks]
+  const title = event.title.trim()
+  const heading = `## ${title} | Added date: ${event.addedDate}`
+  const notes = event.noteBlocks.length > 0 ? ['', '### Notes', ...event.noteBlocks] : []
+  return [heading, ...event.bullets, ...notes]
 }
 
 const buildTimelineMarkdown = (events: FhirMarkdownEvent[]): string => {
-  const sorted = [...events].sort(compareEventsChronologically)
-  const state = sorted.reduce(
-    (acc, event) => {
-      const isNewDate = acc.currentDate !== event.dateHeading
-      const shouldAddDivider = !isNewDate && acc.eventsInDate > 0
+  const sorted = [...events].sort(compareEventsByNewestFirst)
+  const lines = sorted.flatMap((event, idx) => {
+    const built = buildEventMarkdownLines(event)
+    return idx === 0 ? built : ['', ...built]
+  })
 
-      if (isNewDate) {
-        acc.lines.push('', `### ${event.dateHeading}`, '')
-        acc.currentDate = event.dateHeading
-        acc.eventsInDate = 0
-      }
-
-      if (shouldAddDivider) {
-        acc.lines.push('', '---', '')
-      }
-
-      acc.lines.push(...buildEventMarkdownLines(event))
-      acc.eventsInDate += 1
-      return acc
-    },
-    {currentDate: null as string | null, eventsInDate: 0, lines: [] as string[]},
-  )
-
-  return state.lines.join('\n').trim()
+  return lines.join('\n').trim()
 }
 
 const buildPatientDemographicsMarkdown = (patientEntry: SpoolEntry | null): string[] => {
@@ -896,13 +889,10 @@ const buildPatientRecordMarkdown = ({
     `# ${articleTitle}`,
     '',
     `- patient_id: \`${patientId}\``,
+    ...(patientLines.length > 0 ? patientLines : []),
     `- import_route: \`${importRoute}\``,
     `- assets_folder: \`${assetsFolder}\``,
     '',
-    '## Patient',
-    ...(patientLines.length > 0 ? patientLines : ['- (no demographics found)']),
-    '',
-    '## Timeline',
     ...(timeline.length > 0 ? [timeline] : ['(no linked events found)']),
     '',
   ]

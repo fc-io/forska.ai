@@ -906,7 +906,7 @@ export const adminInvestigateRoutes = new Elysia()
             return `'${r}'`
           })
           .join(', ')
-        chScopeFilter = `AND articleImportRoute IN (${routesQuoted})`
+        chScopeFilter = `AND articleId IN (SELECT id FROM forska.articles FINAL WHERE _peerdb_is_deleted = 0 AND import_route IN (${routesQuoted}))`
       }
 
       const chQuery = `

@@ -321,7 +321,9 @@ export const queryArticlesReviewsBothFromClickHouse = async (
         return `'${escapeClickHouseString(r)}'`
       })
       .join(', ')
-    scopeParts.push(`articleImportRoute IN (${routesQuoted})`)
+    scopeParts.push(
+      `articleId IN (SELECT id FROM forska.articles FINAL WHERE _peerdb_is_deleted = 0 AND import_route IN (${routesQuoted}))`,
+    )
   }
   if (scopeParts.length > 0) {
     whereParts.push(`(${scopeParts.join(' OR ')})`)

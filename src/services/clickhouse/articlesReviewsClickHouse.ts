@@ -399,7 +399,9 @@ export const queryArticlesReviewsFromClickHouse = async (
           return `'${escapeClickHouseString(r)}'`
         })
         .join(', ')
-      scopeParts.push(`articleImportRoute IN (${routesQuoted})`)
+      scopeParts.push(
+        `articleId IN (SELECT id FROM forska.articles FINAL WHERE _peerdb_is_deleted = 0 AND import_route IN (${routesQuoted}))`,
+      )
     }
 
     // If using temp table for curated articles, we need a different query structure
@@ -856,7 +858,9 @@ export const countArticlesReviewsFromClickHouse = async (
             return `'${escapeClickHouseString(r)}'`
           })
           .join(', ')
-        scopeParts.push(`articleImportRoute IN (${routesQuoted})`)
+        scopeParts.push(
+          `articleId IN (SELECT id FROM forska.articles FINAL WHERE _peerdb_is_deleted = 0 AND import_route IN (${routesQuoted}))`,
+        )
       }
 
       // If using temp table for curated articles

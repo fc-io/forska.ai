@@ -204,7 +204,9 @@ const selectLlmArticleIds = async (params: SelectArticleIdsParams): Promise<stri
         return `'${escapeClickHouseString(r)}'`
       })
       .join(', ')
-    scopeParts.push(`articleImportRoute IN (${routesQuoted})`)
+    scopeParts.push(
+      `articleId IN (SELECT id FROM forska.articles FINAL WHERE _peerdb_is_deleted = 0 AND import_route IN (${routesQuoted}))`,
+    )
   }
   if (scopeParts.length > 0) {
     whereParts.push(`(${scopeParts.join(' OR ')})`)
@@ -345,7 +347,9 @@ const selectUnassessedArticleIds = async (params: SelectArticleIdsParams): Promi
         return `'${escapeClickHouseString(r)}'`
       })
       .join(', ')
-    scopeParts.push(`articleImportRoute IN (${routesQuoted})`)
+    scopeParts.push(
+      `articleId IN (SELECT id FROM forska.articles FINAL WHERE _peerdb_is_deleted = 0 AND import_route IN (${routesQuoted}))`,
+    )
   }
   if (scopeParts.length > 0) {
     whereParts.push(`(${scopeParts.join(' OR ')})`)
@@ -528,7 +532,9 @@ const selectBothArticleIds = async (params: SelectArticleIdsParams): Promise<str
         return `'${escapeClickHouseString(r)}'`
       })
       .join(', ')
-    scopeParts.push(`articleImportRoute IN (${routesQuoted})`)
+    scopeParts.push(
+      `articleId IN (SELECT id FROM forska.articles FINAL WHERE _peerdb_is_deleted = 0 AND import_route IN (${routesQuoted}))`,
+    )
   }
   if (scopeParts.length > 0) {
     whereParts.push(`(${scopeParts.join(' OR ')})`)

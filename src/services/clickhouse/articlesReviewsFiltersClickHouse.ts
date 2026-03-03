@@ -225,7 +225,9 @@ export const getDatabaseBasedFiltersFromClickHouse = async (
         return `'${escapeClickHouseString(r)}'`
       })
       .join(', ')
-    scopeParts.push(`articleImportRoute IN (${routesQuoted})`)
+    scopeParts.push(
+      `articleId IN (SELECT id FROM forska.articles FINAL WHERE _peerdb_is_deleted = 0 AND import_route IN (${routesQuoted}))`,
+    )
   }
 
   // If curated articles are large and no import routes, we still query but with a limit
@@ -400,7 +402,9 @@ export const getNumericFiltersFromClickHouse = async (
         return `'${escapeClickHouseString(r)}'`
       })
       .join(', ')
-    scopeParts.push(`articleImportRoute IN (${routesQuoted})`)
+    scopeParts.push(
+      `articleId IN (SELECT id FROM forska.articles FINAL WHERE _peerdb_is_deleted = 0 AND import_route IN (${routesQuoted}))`,
+    )
   }
 
   if (scopeParts.length > 0) {

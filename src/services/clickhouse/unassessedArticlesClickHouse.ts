@@ -303,7 +303,9 @@ export const getUnassessedCountFromClickHouse = async (params: UnassessedCountPa
           return `'${escapeClickHouseString(r)}'`
         })
         .join(', ')
-      judgmentScopeParts.push(`articleImportRoute IN (${routesQuoted})`)
+      judgmentScopeParts.push(
+        `articleId IN (SELECT id FROM forska.articles FINAL WHERE _peerdb_is_deleted = 0 AND import_route IN (${routesQuoted}))`,
+      )
     }
     const judgmentScopeFilter = `(${judgmentScopeParts.join(' OR ')})`
 
@@ -340,8 +342,8 @@ export const getUnassessedCountFromClickHouse = async (params: UnassessedCountPa
     const articleWhereClause = [articleScopeFilter, ...articleDateFilters].join(' AND ')
 
     const totalScopedQuery = `
-      SELECT COUNT(DISTINCT id) as total
-      FROM forska.articles
+      SELECT COUNT() as total
+      FROM forska.articles FINAL
       WHERE _peerdb_is_deleted = 0 AND ${articleWhereClause}
     `
 
@@ -452,7 +454,9 @@ export const getUnassessedArticlesFromClickHouse = async (
           return `'${escapeClickHouseString(r)}'`
         })
         .join(', ')
-      judgmentScopeParts.push(`articleImportRoute IN (${routesQuoted})`)
+      judgmentScopeParts.push(
+        `articleId IN (SELECT id FROM forska.articles FINAL WHERE _peerdb_is_deleted = 0 AND import_route IN (${routesQuoted}))`,
+      )
     }
     const judgmentScopeFilter = `(${judgmentScopeParts.join(' OR ')})`
 
@@ -499,7 +503,7 @@ export const getUnassessedArticlesFromClickHouse = async (
 
     const countQuery = `
       SELECT COUNT(*) as total_count
-      FROM forska.articles a
+      FROM forska.articles AS a FINAL
       WHERE a._peerdb_is_deleted = 0 AND ${articleWhereClause}
         AND a.id NOT IN (${assessedSubquery})
     `
@@ -508,10 +512,10 @@ export const getUnassessedArticlesFromClickHouse = async (
       SELECT
         a.id,
         a.article_id,
-	        a.article_title,
-	        a.article_created_at,
-	        a.article_updated_at
-	      FROM forska.articles a
+	      a.article_title,
+	      a.article_created_at,
+	      a.article_updated_at
+	      FROM forska.articles AS a FINAL
 	      WHERE a._peerdb_is_deleted = 0 AND ${articleWhereClause}
 	        AND a.id NOT IN (${assessedSubquery})
 	      ORDER BY COALESCE(a.article_updated_at, a.article_created_at, a.created_at) DESC, a.id DESC
@@ -675,9 +679,9 @@ export const getUnassessedPairsFromClickHouse = async (
         [${promptList}] AS prompt_list,
         candidate_articles AS (
           SELECT
-            a.id AS id,
-            COALESCE(a.article_updated_at, a.article_created_at, a.created_at) AS sort_date
-          FROM forska.articles a
+           a.id AS id,
+           COALESCE(a.article_updated_at, a.article_created_at, a.created_at) AS sort_date
+          FROM forska.articles AS a FINAL
           WHERE a._peerdb_is_deleted = 0 AND ${articleWhereClause}
           ${cursorCondition}
           ORDER BY sort_date DESC, a.id DESC

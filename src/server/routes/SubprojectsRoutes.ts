@@ -136,7 +136,9 @@ const queryArticleIdsWithPromptFiltersFromClickHouse = async (params: {
   whereParts.push(`useAbstract = ${params.useAbstract ? 'true' : 'false'}`)
   whereParts.push(`useFulltext = ${params.useFulltext ? 'true' : 'false'}`)
   whereParts.push(`useFulltextNoImages = ${params.useFulltextNoImages ? 'true' : 'false'}`)
-  whereParts.push(`articleImportRoute IN (${routesQuoted})`)
+  whereParts.push(
+    `articleId IN (SELECT id FROM forska.articles FINAL WHERE _peerdb_is_deleted = 0 AND import_route IN (${routesQuoted}))`,
+  )
 
   if (effectiveFromDate) {
     whereParts.push(`articleCreatedAt >= toDateTime64('${formatDateForClickHouse(effectiveFromDate)}', 3)`)
