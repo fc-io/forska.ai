@@ -972,19 +972,26 @@ const buildDiagnosticReportResultsBlockLines = ({
     }),
   )
 
-  const headerParts = [`results (${items.length})`]
-  if (sharedStatus) {
-    headerParts.push(`status: ${truncateInlineText(sharedStatus, 40)}`)
+  const reportStatus = getStringAtPath(resource, ['status'])
+  const reportIssued = getStringAtPath(resource, ['issued'])
+  const headerStatus = sharedStatus ?? reportStatus
+  const headerIssued = sharedIssued ?? reportIssued
+
+  const headerParts = [`Results (${items.length})`]
+  if (headerStatus) {
+    headerParts.push(`status: ${truncateInlineText(headerStatus, 40)}`)
   }
-  if (sharedIssued) {
-    headerParts.push(`issued: ${truncateInlineText(sharedIssued, 120)}`)
+  if (headerIssued) {
+    headerParts.push(`issued: ${truncateInlineText(headerIssued, 120)}`)
   }
 
-  const headerLine = `- ${headerParts.join(' | ')}`
+  const headerLine = `##### ${headerParts.join(' | ')}`
   const itemLines = items.map((i) => {
     const extras = [
-      sharedStatus ? null : i.status ? `status: ${truncateInlineText(i.status, 40)}` : null,
-      sharedIssued ? null : i.issued ? `issued: ${truncateInlineText(i.issued, 120)}` : null,
+      headerStatus && i.status && i.status !== headerStatus ? `status: ${truncateInlineText(i.status, 40)}` : null,
+      headerStatus ? null : i.status ? `status: ${truncateInlineText(i.status, 40)}` : null,
+      headerIssued && i.issued && i.issued !== headerIssued ? `issued: ${truncateInlineText(i.issued, 120)}` : null,
+      headerIssued ? null : i.issued ? `issued: ${truncateInlineText(i.issued, 120)}` : null,
     ].filter((v): v is string => {
       return Boolean(v)
     })
@@ -1090,8 +1097,12 @@ const buildTimelineLines = ({
 
     lines.push(`#### ${event.resourceType}: ${event.display}`)
     lines.push(...event.bullets)
-    lines.push(...(event.resultBullets.length > 0 ? event.resultBullets : []))
     lines.push(...(event.refBullets.length > 0 ? event.refBullets : []))
+
+    if (event.resultBullets.length > 0) {
+      lines.push('')
+      lines.push(...event.resultBullets)
+    }
 
     if (event.noteLines.length > 0) {
       lines.push('')

@@ -25,6 +25,7 @@
   - `## Timeline`
   - `### <YYYY-MM-DD>` (bucket by event date)
   - `#### <ResourceType>: <display>` (event/resource)
+  - `##### Results (N) | ...` (DiagnosticReport result panels)
   - `##### Note ...` then note headings demoted to `###### ...` (never `# ...` inside patient doc)
 - Code fences:
   - never wrap Markdown headings in fences (seen in sample `articles.id=12cf...` where fences swallow `## Plan`)
@@ -53,7 +54,7 @@
 - [x] refs: inline target fields only; remove `Type/id` + `Type?identifier=...` + `missing=true`; omit `subject=Patient/<this>` repeats
 - [x] notes: keep `##### Note ...`; show `truncated=true` only; strip note-leading date line when it equals bucket date
 - [x] identifiers: keep full values (synthetic/needed; no redaction)
-- [x] DiagnosticReport results: format `result[]` as `- results (N) | ...` + nested list; preserve index order; dedupe shared fields (status/issued)
+- [x] DiagnosticReport results: format `result[]` as `##### Results (N) | ...` + list; preserve index order; dedupe shared fields (status/issued)
 
 ### Checklist: fix heading hierarchy
 

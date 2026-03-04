@@ -134,7 +134,7 @@ test('buildFhirPatientMarkdown builds strict headings and inlines refs', () => {
   expect(built.markdown).toContain('performer[0]: Practitioner: Dr Example')
   expect(built.markdown).not.toContain('?identifier=')
 
-  expect(built.markdown).toContain('- results (2)')
+  expect(built.markdown).toContain('##### Results (2)')
   expect(built.markdown).toContain('issued: 2024-01-05T12:00:00Z')
   expect(built.markdown).toContain('  - Leukocytes [#/volume] in Blood by Automated count: 5.1 10^3/uL')
   expect(built.markdown).not.toContain('result[0]:')
