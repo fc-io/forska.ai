@@ -28,14 +28,14 @@ export const buildFhirPatientMarkdown = ({
       return e.resourceType === 'Patient'
     }) ?? null
 
-  const {contextByKey, identifierToKey} = buildResourceIndex(entries)
+  const {resourceByKey, contextByKey, identifierToKey} = buildResourceIndex(entries)
   const renderRef = ({reference, display}: {reference: string; display: string | null}): string => {
     return renderInlineReference({reference, display, contextByKey, identifierToKey})
   }
 
   const patientSectionLines = buildPatientSectionLines({patientId, patientEntry})
 
-  const timelineLines = buildTimelineLines({patientId, entries, renderRef})
+  const timelineLines = buildTimelineLines({patientId, entries, renderRef, resourceByKey, identifierToKey})
 
   const markdownLines = [
     `# ${articleTitle}`,
@@ -228,8 +228,9 @@ const buildTimeAndIdBullet = ({
   const sources = getUniqueTimeSourcesForValue(candidates, timeValue)
   const labelSources = sources.length > 0 ? sources : sortValue ? ['sortDate'] : []
   const label = labelSources.length > 0 ? `time(${labelSources.join(', ')})` : 'time'
-  const idPart = resourceId ? ` | id: \`${resourceId}\`` : ''
-  return [`- ${label}: ${truncateInlineText(timeValue, 120)}${idPart}`]
+  const timeLine = `- ${label}: ${truncateInlineText(timeValue, 120)}`
+  const idLine = resourceId ? `- id: \`${resourceId}\`` : null
+  return [timeLine, ...(idLine ? [idLine] : [])]
 }
 
 const buildEventBullets = ({
@@ -810,6 +811,7 @@ type TimelineEvent = {
   resourceId: string | null
   display: string
   bullets: string[]
+  resultBullets: string[]
   refBullets: string[]
   noteLines: string[]
 }
@@ -849,14 +851,162 @@ const compareTimelineEvents = (a: TimelineEvent, b: TimelineEvent): number => {
   return t !== 0 ? t : rt !== 0 ? rt : id
 }
 
+const resolveReferenceToKey = ({
+  reference,
+  identifierToKey,
+}: {
+  reference: string
+  identifierToKey: Map<string, string>
+}): string | null => {
+  const trimmed = reference.trim()
+  const direct = normalizeFhirReferenceKey(trimmed)
+  const byIdentifier = direct ? null : parseIdentifierQueryReference(trimmed)
+  const resolved =
+    direct?.key
+    ?? (byIdentifier
+      ? identifierToKey.get(`${byIdentifier.resourceType}|${byIdentifier.system}|${byIdentifier.value}`)
+      : null)
+  return resolved ?? null
+}
+
+type ObservationPanelItem = {text: string; status: string | null; issued: string | null}
+
+const buildObservationPanelItem = ({
+  resource,
+  fallbackDisplay,
+}: {
+  resource: unknown
+  fallbackDisplay: string | null
+}) => {
+  const status = getStringAtPath(resource, ['status'])
+  const issued = getStringAtPath(resource, ['issued']) ?? getStringAtPath(resource, ['effectiveDateTime'])
+  const code = isRecordValue(resource) ? getCodeableConceptDisplay(resource.code) : null
+  const value = buildObservationValueText(resource)
+
+  const base =
+    code && value
+      ? `${truncateInlineText(code, 220)}: ${truncateInlineText(value, 120)}`
+      : code
+        ? truncateInlineText(code, 260)
+        : fallbackDisplay
+          ? truncateInlineText(fallbackDisplay, 260)
+          : 'Observation'
+
+  return {text: base, status, issued} satisfies ObservationPanelItem
+}
+
+const getSharedNonNullValue = (values: (string | null)[]): string | null => {
+  if (values.length === 0) {
+    return null
+  }
+  const nonNull = values.filter((v): v is string => {
+    return Boolean(v && v.trim().length > 0)
+  })
+  if (nonNull.length !== values.length) {
+    return null
+  }
+  const first = nonNull[0] ?? null
+  if (!first) {
+    return null
+  }
+  const allSame = nonNull.every((v) => {
+    return v === first
+  })
+  return allSame ? first : null
+}
+
+const buildDiagnosticReportResultsBlockLines = ({
+  resource,
+  renderRef,
+  resourceByKey,
+  identifierToKey,
+}: {
+  resource: unknown
+  renderRef: (ref: {reference: string; display: string | null}) => string
+  resourceByKey: Map<string, unknown>
+  identifierToKey: Map<string, string>
+}): string[] => {
+  if (!isRecordValue(resource)) {
+    return []
+  }
+
+  const results = getArrayOrEmpty(resource.result)
+    .map((r) => {
+      return isRecordValue(r) ? r : null
+    })
+    .filter((r): r is Record<string, unknown> => {
+      return Boolean(r)
+    })
+    .map((r) => {
+      const reference = getStringOrNull(r.reference)
+      const display = getStringOrNull(r.display)
+      return reference ? {reference, display} : null
+    })
+    .filter((r): r is {reference: string; display: string | null} => {
+      return Boolean(r)
+    })
+
+  if (results.length === 0) {
+    return []
+  }
+
+  const items = results.map((r) => {
+    const key = resolveReferenceToKey({reference: r.reference, identifierToKey})
+    const resolved = key ? (resourceByKey.get(key) ?? null) : null
+    const isObs = Boolean(isRecordValue(resolved) && getStringOrNull(resolved.resourceType) === 'Observation')
+    if (isObs) {
+      return buildObservationPanelItem({resource: resolved, fallbackDisplay: r.display})
+    }
+    const fallback = renderRef({reference: r.reference, display: r.display})
+    return {text: truncateInlineText(fallback, 320), status: null, issued: null} satisfies ObservationPanelItem
+  })
+
+  const sharedStatus = getSharedNonNullValue(
+    items.map((i) => {
+      return i.status
+    }),
+  )
+  const sharedIssued = getSharedNonNullValue(
+    items.map((i) => {
+      return i.issued
+    }),
+  )
+
+  const headerParts = [`results (${items.length})`]
+  if (sharedStatus) {
+    headerParts.push(`status: ${truncateInlineText(sharedStatus, 40)}`)
+  }
+  if (sharedIssued) {
+    headerParts.push(`issued: ${truncateInlineText(sharedIssued, 120)}`)
+  }
+
+  const headerLine = `- ${headerParts.join(' | ')}`
+  const itemLines = items.map((i) => {
+    const extras = [
+      sharedStatus ? null : i.status ? `status: ${truncateInlineText(i.status, 40)}` : null,
+      sharedIssued ? null : i.issued ? `issued: ${truncateInlineText(i.issued, 120)}` : null,
+    ].filter((v): v is string => {
+      return Boolean(v)
+    })
+    const suffix = extras.length > 0 ? ` (${extras.join('; ')})` : ''
+    return `  - ${i.text}${suffix}`
+  })
+
+  return [headerLine, ...itemLines]
+}
+
 const buildTimelineLines = ({
   patientId,
   entries,
   renderRef,
+  resourceByKey,
+  identifierToKey,
 }: {
   patientId: string
   entries: FhirPatientMarkdownEntry[]
   renderRef: (ref: {reference: string; display: string | null}) => string
+  resourceByKey: Map<string, unknown>
+  identifierToKey: Map<string, string>
 }): string[] => {
   const events = entries
     .filter((e) => {
@@ -876,6 +1026,11 @@ const buildTimelineLines = ({
       })
 
       const refs = parsed.ok && parsed.value ? extractReferencesFromResource(parsed.value) : []
+
+      const resultBullets =
+        entry.resourceType === 'DiagnosticReport'
+          ? buildDiagnosticReportResultsBlockLines({resource, renderRef, resourceByKey, identifierToKey})
+          : []
       const refBullets = refs
         .filter((r) => {
           return r.path.length > 0
@@ -883,6 +1038,9 @@ const buildTimelineLines = ({
         .filter((r) => {
           const normalized = normalizeFhirReferenceKey(r.reference)
           return !(normalized?.resourceType === 'Patient' && normalized.id === patientId)
+        })
+        .filter((r) => {
+          return !(entry.resourceType === 'DiagnosticReport' && /^result\[\d+\]$/.test(r.path))
         })
         .map((r) => {
           const rendered = renderRef({reference: r.reference, display: r.display})
@@ -907,6 +1065,7 @@ const buildTimelineLines = ({
         resourceId: entry.resourceId,
         display,
         bullets,
+        resultBullets,
         refBullets,
         noteLines,
       } satisfies TimelineEvent
@@ -931,6 +1090,7 @@ const buildTimelineLines = ({
 
     lines.push(`#### ${event.resourceType}: ${event.display}`)
     lines.push(...event.bullets)
+    lines.push(...(event.resultBullets.length > 0 ? event.resultBullets : []))
     lines.push(...(event.refBullets.length > 0 ? event.refBullets : []))
 
     if (event.noteLines.length > 0) {

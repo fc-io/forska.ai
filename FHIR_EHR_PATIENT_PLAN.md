@@ -49,10 +49,11 @@
 - [x] drop non-patient metadata noise (`import_route`, `assets_folder`) from markdown (already in DB columns + `originalData`)
 - [x] collapse duplicate info: if heading has display, don't repeat as `- code:`/`- medication:` etc
 - [x] time fields: emit 1 timestamp; label source(s) (e.g. `time(authoredOn)`); dedupe equal timestamps
-- [x] ids: avoid per-event `- id:` spam; if kept, combine with time into 1 compact line
+- [x] ids: avoid per-event `- id:` spam; if kept, keep `- time(...)` and `- id: ...` on separate lines
 - [x] refs: inline target fields only; remove `Type/id` + `Type?identifier=...` + `missing=true`; omit `subject=Patient/<this>` repeats
 - [x] notes: keep `##### Note ...`; show `truncated=true` only; strip note-leading date line when it equals bucket date
 - [x] identifiers: keep full values (synthetic/needed; no redaction)
+- [x] DiagnosticReport results: format `result[]` as `- results (N) | ...` + nested list; preserve index order; dedupe shared fields (status/issued)
 
 ### Checklist: fix heading hierarchy
 

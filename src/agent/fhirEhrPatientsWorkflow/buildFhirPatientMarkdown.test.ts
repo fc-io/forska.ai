@@ -57,6 +57,51 @@ test('buildFhirPatientMarkdown builds strict headings and inlines refs', () => {
         decodedNotes: [],
       },
       {
+        resourceType: 'Observation',
+        resourceId: 'lab1',
+        sortDate: '2024-01-05T12:00:00Z',
+        rawLine: JSON.stringify({
+          resourceType: 'Observation',
+          id: 'lab1',
+          status: 'final',
+          issued: '2024-01-05T12:00:00Z',
+          code: {text: 'Leukocytes [#/volume] in Blood by Automated count'},
+          subject: {reference: 'Patient/p1'},
+          valueQuantity: {value: 5.1, unit: '10^3/uL'},
+        }),
+        decodedNotes: [],
+      },
+      {
+        resourceType: 'Observation',
+        resourceId: 'lab2',
+        sortDate: '2024-01-05T12:00:00Z',
+        rawLine: JSON.stringify({
+          resourceType: 'Observation',
+          id: 'lab2',
+          status: 'final',
+          issued: '2024-01-05T12:00:00Z',
+          code: {text: 'Erythrocytes [#/volume] in Blood by Automated count'},
+          subject: {reference: 'Patient/p1'},
+          valueQuantity: {value: 4.8, unit: '10^6/uL'},
+        }),
+        decodedNotes: [],
+      },
+      {
+        resourceType: 'DiagnosticReport',
+        resourceId: 'dr1',
+        sortDate: '2024-01-05T12:00:00Z',
+        rawLine: JSON.stringify({
+          resourceType: 'DiagnosticReport',
+          id: 'dr1',
+          status: 'final',
+          issued: '2024-01-05T12:00:00Z',
+          code: {text: 'CBC panel'},
+          subject: {reference: 'Patient/p1'},
+          result: [{reference: 'Observation/lab1'}, {reference: 'Observation/lab2'}],
+        }),
+        decodedNotes: [],
+      },
+      {
         resourceType: 'DocumentReference',
         resourceId: 'd1',
         sortDate: '2024-01-03T09:00:00Z',
@@ -88,4 +133,10 @@ test('buildFhirPatientMarkdown builds strict headings and inlines refs', () => {
 
   expect(built.markdown).toContain('performer[0]: Practitioner: Dr Example')
   expect(built.markdown).not.toContain('?identifier=')
+
+  expect(built.markdown).toContain('- results (2)')
+  expect(built.markdown).toContain('issued: 2024-01-05T12:00:00Z')
+  expect(built.markdown).toContain('  - Leukocytes [#/volume] in Blood by Automated count: 5.1 10^3/uL')
+  expect(built.markdown).not.toContain('result[0]:')
+  expect(built.markdown).not.toContain('| id:')
 })
