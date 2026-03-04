@@ -38,6 +38,7 @@ const SHARD_COUNT = 256
 const MAX_ERROR_SAMPLES = 25
 const MAX_NOTE_BYTES = 200_000
 const MAX_OPEN_SPOOL_STREAMS = 32
+const MAX_ARTICLE_SUMMARY_EVENTS = 5
 
 const isGzFile = (filePath: string): boolean => {
   return filePath.toLowerCase().endsWith('.gz')
@@ -774,9 +775,11 @@ const buildEventMarkdownLines = (event: FhirMarkdownEvent): string[] => {
   return [heading, ...event.bullets, ...notes]
 }
 
-const buildTimelineMarkdown = (events: FhirMarkdownEvent[]): string => {
+const buildTimelineMarkdown = (events: FhirMarkdownEvent[], maxEvents?: number): string => {
   const sorted = [...events].sort(compareEventsByNewestFirst)
-  const lines = sorted.flatMap((event, idx) => {
+  const limit = typeof maxEvents === 'number' ? Math.max(0, maxEvents) : sorted.length
+  const limited = sorted.slice(0, limit)
+  const lines = limited.flatMap((event, idx) => {
     const built = buildEventMarkdownLines(event)
     return idx === 0 ? built : ['', ...built]
   })
@@ -858,33 +861,21 @@ const buildPatientOriginalData = ({
   }
 }
 
-const buildPatientRecordMarkdown = ({
+const buildPatientRecordMarkdownFromTimeline = ({
   patientId,
   importRoute,
   assetsFolder,
   articleTitle,
-  entries,
+  patientLines,
+  timeline,
 }: {
   patientId: string
   importRoute: string
   assetsFolder: string
   articleTitle: string
-  entries: SpoolEntry[]
+  patientLines: string[]
+  timeline: string
 }): string => {
-  const patientEntry =
-    entries.find((e) => {
-      return e.resourceType === 'Patient'
-    }) ?? null
-
-  const patientLines = buildPatientDemographicsMarkdown(patientEntry)
-  const timelineEvents = entries
-    .filter((e) => {
-      return e.resourceType !== 'Patient'
-    })
-    .map(buildMarkdownEventFromEntry)
-
-  const timeline = buildTimelineMarkdown(timelineEvents)
-
   const lines = [
     `# ${articleTitle}`,
     '',
@@ -900,6 +891,55 @@ const buildPatientRecordMarkdown = ({
   return lines.join('\n')
 }
 
+const buildPatientRecordMarkdownForArticle = ({
+  patientId,
+  importRoute,
+  assetsFolder,
+  articleTitle,
+  entries,
+}: {
+  patientId: string
+  importRoute: string
+  assetsFolder: string
+  articleTitle: string
+  entries: SpoolEntry[]
+}): {articleSummary: string; fullText: string} => {
+  const patientEntry =
+    entries.find((e) => {
+      return e.resourceType === 'Patient'
+    }) ?? null
+
+  const patientLines = buildPatientDemographicsMarkdown(patientEntry)
+  const timelineEvents = entries
+    .filter((e) => {
+      return e.resourceType !== 'Patient'
+    })
+    .map(buildMarkdownEventFromEntry)
+
+  const timelineFull = buildTimelineMarkdown(timelineEvents)
+  const timelineSummary = buildTimelineMarkdown(timelineEvents, MAX_ARTICLE_SUMMARY_EVENTS)
+
+  const articleSummary = buildPatientRecordMarkdownFromTimeline({
+    patientId,
+    importRoute,
+    assetsFolder,
+    articleTitle,
+    patientLines,
+    timeline: timelineSummary,
+  })
+
+  const fullText = buildPatientRecordMarkdownFromTimeline({
+    patientId,
+    importRoute,
+    assetsFolder,
+    articleTitle,
+    patientLines,
+    timeline: timelineFull,
+  })
+
+  return {articleSummary, fullText}
+}
+
 const upsertArticlesBatch = async ({
   importRoute,
   importRouteId,
@@ -907,7 +947,7 @@ const upsertArticlesBatch = async ({
 }: {
   importRoute: string
   importRouteId: string
-  batch: {articleId: string; articleTitle: string; recordText: string; originalData: unknown}[]
+  batch: {articleId: string; articleTitle: string; articleSummary: string; fullText: string; originalData: unknown}[]
 }): Promise<{inserted: number; updated: number}> => {
   const db = getDatabase()
   const articleIds = batch.map((b) => {
@@ -933,12 +973,12 @@ const upsertArticlesBatch = async ({
     return {
       articleId: b.articleId,
       articleTitle: b.articleTitle,
-      articleSummary: b.recordText,
-      fullText: b.recordText,
+      articleSummary: b.articleSummary,
+      fullText: b.fullText,
       importRoute,
       originalData: b.originalData,
       fullTextConversionStatus: 'success',
-      fullTextCharCount: b.recordText.length,
+      fullTextCharCount: b.fullText.length,
     }
   })
 
@@ -1045,7 +1085,13 @@ const processPatientShard = async ({
 
   const patientIds = Array.from(groups.keys())
 
-  type ArticleUpsertEntry = {articleId: string; articleTitle: string; recordText: string; originalData: unknown}
+  type ArticleUpsertEntry = {
+    articleId: string
+    articleTitle: string
+    articleSummary: string
+    fullText: string
+    originalData: unknown
+  }
 
   const processPatients = async (idx: number, batch: ArticleUpsertEntry[]): Promise<ArticleUpsertEntry[]> => {
     if (idx >= patientIds.length) {
@@ -1074,11 +1120,20 @@ const processPatientShard = async ({
       return await processPatients(idx + 1, batch)
     }
 
-    const recordText = buildPatientRecordMarkdown({patientId, importRoute, assetsFolder, articleTitle, entries})
+    const recordText = buildPatientRecordMarkdownForArticle({
+      patientId,
+      importRoute,
+      assetsFolder,
+      articleTitle,
+      entries,
+    })
     const articleId = `${importRoute}:Patient/${patientId}`
     const originalData = buildPatientOriginalData({patientId, importRoute, assetsFolder, entries})
 
-    const nextBatch: ArticleUpsertEntry[] = [...batch, {articleId, articleTitle, recordText, originalData}]
+    const nextBatch: ArticleUpsertEntry[] = [
+      ...batch,
+      {articleId, articleTitle, articleSummary: recordText.articleSummary, fullText: recordText.fullText, originalData},
+    ]
     const shouldFlush = !dryRun && nextBatch.length >= 50
 
     if (!shouldFlush) {
