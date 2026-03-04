@@ -69,7 +69,13 @@ export const dataSourcesImportRoutesPostFhirEhrPatients = async ({
     }
   }
 
-  const importRoute = record.importRoute ?? deriveFhirImportRouteFromAssetsFolder(assetsFolder)
+  const importRouteFromRecord = String(record.importRoute ?? '').trim()
+  const importRoute =
+    importRouteFromRecord.length > 0 ? importRouteFromRecord : deriveFhirImportRouteFromAssetsFolder(assetsFolder)
+  if (importRouteFromRecord.length > 0 && !importRoute.startsWith('fhir:')) {
+    set.status = 400
+    return {data: null, error: 'Data source importRoute must start with fhir:'}
+  }
   const stats = await fhirEhrPatientsWorkflowStoreEntries({assetsFolder, importRoute})
   const itemsAfterLastImport = stats.patientsTotal
   const updated = await updateDataSourceAfterImport({id: record.id, importRoute, itemsAfterLastImport})

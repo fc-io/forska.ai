@@ -43,6 +43,17 @@
   - timeline sort by event datetime (`effectiveDateTime/issued/date/authoredOn/recordedDate/onsetDateTime`, else resourceType+id)
   - within same timestamp: resourceType alpha, then id
 
+### Checklist: human formatting (store only this)
+
+- [ ] store human-mode only in DB: `articleSummary===fullText`; provenance lives in `originalData` (no debug markdown)
+- [ ] drop non-patient metadata noise (`import_route`, `assets_folder`) from markdown (already in DB columns + `originalData`)
+- [ ] collapse duplicate info: if heading has display, don't repeat as `- code:`/`- medication:` etc
+- [ ] time fields: emit 1 timestamp; label source(s) (e.g. `time(authoredOn)`); dedupe equal timestamps
+- [ ] ids: avoid per-event `- id:` spam; if kept, combine with time into 1 compact line
+- [ ] refs: keep inline renderer + backticks; remove `ref.<path>` noise; omit `subject=Patient/<this>` repeats
+- [ ] notes: keep `##### Note ...`; show `truncated=true` only; strip note-leading date line when it equals bucket date
+- [ ] identifiers: keep full values (synthetic/needed; no redaction)
+
 ### Checklist: fix heading hierarchy
 
 - [ ] 1 H1 only; `## Patient` + `## Timeline` only top-level
