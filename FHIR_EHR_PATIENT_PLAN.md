@@ -18,7 +18,7 @@
 ## Record markdown (articleSummary + fullText)
 
 - Goal: 1 self-contained Markdown doc per patient (no ref pointers like `Encounter/<id>` or `Practitioner?identifier=...`).
-- Current issues (sample `articles.id=12cfb96e-4908-49c6-9f29-30f0af21e6e2`): refs like `Encounter/<uuid>` not inlined; decoded notes contain `# ...`/`## ...`.
+- Current issues (historic sample `articles.id=12cfb96e-4908-49c6-9f29-30f0af21e6e2`): fixed; keep validating on larger datasets.
 - Headings (strict; ToC must work):
   - `# FHIR Patient <patientId>` (exactly once)
   - `## Patient` (all demographics/identifiers/addresses/telecom; no refs out)
@@ -45,31 +45,31 @@
 
 ### Checklist: human formatting (store only this)
 
-- [ ] store human-mode only in DB: `articleSummary===fullText`; provenance lives in `originalData` (no debug markdown)
-- [ ] drop non-patient metadata noise (`import_route`, `assets_folder`) from markdown (already in DB columns + `originalData`)
-- [ ] collapse duplicate info: if heading has display, don't repeat as `- code:`/`- medication:` etc
-- [ ] time fields: emit 1 timestamp; label source(s) (e.g. `time(authoredOn)`); dedupe equal timestamps
-- [ ] ids: avoid per-event `- id:` spam; if kept, combine with time into 1 compact line
-- [ ] refs: inline target fields only; remove `Type/id` + `Type?identifier=...` + `missing=true`; omit `subject=Patient/<this>` repeats
-- [ ] notes: keep `##### Note ...`; show `truncated=true` only; strip note-leading date line when it equals bucket date
-- [ ] identifiers: keep full values (synthetic/needed; no redaction)
+- [x] store human-mode only in DB: `articleSummary===fullText`; provenance lives in `originalData` (no debug markdown)
+- [x] drop non-patient metadata noise (`import_route`, `assets_folder`) from markdown (already in DB columns + `originalData`)
+- [x] collapse duplicate info: if heading has display, don't repeat as `- code:`/`- medication:` etc
+- [x] time fields: emit 1 timestamp; label source(s) (e.g. `time(authoredOn)`); dedupe equal timestamps
+- [x] ids: avoid per-event `- id:` spam; if kept, combine with time into 1 compact line
+- [x] refs: inline target fields only; remove `Type/id` + `Type?identifier=...` + `missing=true`; omit `subject=Patient/<this>` repeats
+- [x] notes: keep `##### Note ...`; show `truncated=true` only; strip note-leading date line when it equals bucket date
+- [x] identifiers: keep full values (synthetic/needed; no redaction)
 
 ### Checklist: fix heading hierarchy
 
-- [ ] 1 H1 only; `## Patient` + `## Timeline` only top-level
-- [ ] timeline: `### <date>` then `#### <ResourceType>: ...` only (no level jumps)
-- [ ] notes: never emit `#`/`##` lines from decoded note text; demote to `######` or strip
-- [ ] fences: only for raw note payload; always closed; never contain timeline headings
-- [ ] validator after render: multiple H1 / unmatched fences / bad jumps => errors++ + sample
+- [x] 1 H1 only; `## Patient` + `## Timeline` only top-level
+- [x] timeline: `### <date>` then `#### <ResourceType>: ...` only (no level jumps)
+- [x] notes: never emit `#`/`##` lines from decoded note text; demote to `######` or strip
+- [x] fences: only for raw note payload; always closed; never contain timeline headings
+- [x] validator after render: multiple H1 / unmatched fences / bad jumps => errors++ + sample
 
 ### Checklist: inline references
 
-- [ ] build per-patient map `Type/id -> parsed resource` (+ `identifier` query resolver)
-- [ ] inline EVERY ref field as plain text context (no ids): encounter/status/period/location/provider; org/name; practitioner/name; device/type+model; location/name
-- [ ] if target missing: use available `display` only (no `missing=true`, no query/id)
-- [ ] post-render: scan summary/full for `\b[A-Za-z]+\?identifier=` + `\b[A-Za-z]+/[A-Za-z0-9.-]{1,64}\b` and fail if any remain
-- [ ] notes: replace `Type/id` and `Type?identifier=...` tokens with context-only text
-- [ ] Patient section: include identifiers/telecom/address so summary/full is self-contained
+- [x] build per-patient map `Type/id -> parsed resource` (+ `identifier` query resolver)
+- [x] inline EVERY ref field as plain text context (no ids): encounter/status/period/location/provider; org/name; practitioner/name; device/type+model; location/name
+- [x] if target missing: use available `display` only (no `missing=true`, no query/id)
+- [x] post-render: scan summary/full for `\b[A-Za-z]+\?identifier=` + `\b[A-Za-z]+/[A-Za-z0-9.-]{1,64}\b` and fail if any remain
+- [x] notes: replace `Type/id` and `Type?identifier=...` tokens with context-only text
+- [x] Patient section: include identifiers/telecom/address so summary/full is self-contained
 
 ## Importer (server-side, idempotent)
 
@@ -94,7 +94,7 @@
   - NDJSON line (open object; validate only read-fields): `resourceType`, `id?`, `subject?.reference?`, `patient?.reference?`, `encounter?.reference?`, `effectiveDateTime?`, `issued?`, `date?`, `authoredOn?`, `recordedDate?`, `onsetDateTime?`
   - type-specific required: `Patient.id`; `Encounter.id` + `Encounter.subject.reference`
   - note payloads: `DocumentReference.content[].attachment.data?` + `DiagnosticReport.presentedForm[].data?`
-- [ ] Invalid body => 400 (today: importer throws; route handler maps to 500)
+- [x] Invalid body => 400
 
 ## APIs
 

@@ -41,6 +41,22 @@ test('buildFhirPatientMarkdown builds strict headings and inlines refs', () => {
         decodedNotes: [],
       },
       {
+        resourceType: 'Observation',
+        resourceId: 'obs1',
+        sortDate: '2024-01-04T09:00:00Z',
+        rawLine: JSON.stringify({
+          resourceType: 'Observation',
+          id: 'obs1',
+          status: 'final',
+          code: {text: 'Test'},
+          subject: {reference: 'Patient/p1'},
+          performer: [
+            {reference: 'Practitioner?identifier=http://hl7.org/fhir/sid/us-npi|9999995993', display: 'Dr Example'},
+          ],
+        }),
+        decodedNotes: [],
+      },
+      {
         resourceType: 'DocumentReference',
         resourceId: 'd1',
         sortDate: '2024-01-03T09:00:00Z',
@@ -69,4 +85,7 @@ test('buildFhirPatientMarkdown builds strict headings and inlines refs', () => {
   expect(built.markdown).toContain('###### Plan')
   expect(built.markdown).toContain('Encounter (status: finished')
   expect(built.markdown).not.toContain('Encounter/e1')
+
+  expect(built.markdown).toContain('performer[0]: Practitioner: Dr Example')
+  expect(built.markdown).not.toContain('?identifier=')
 })
