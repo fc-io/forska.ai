@@ -34,8 +34,8 @@
   - prefer `subject.reference`; else `patient.reference`; else resolve via `encounter.reference`; else ignore
 - Inline references:
   - build `resourceByKey["Type/id"] -> resource` for patient
-  - render references as `Type/id` + inline target key fields (else `missing=true`)
-  - ensure every referenced `Type/id` is either rendered somewhere in doc or fully inlined at ref site
+  - render ALL references as `Type/id` + inline target key fields (else `missing=true`)
+  - post-render: no bare `Type/<uuid>` left in summary/full (only via the inline renderer)
 - Notes inlining:
   - decode base64 (`DocumentReference.content[].attachment.data`, `DiagnosticReport.presentedForm[].data`)
   - render as Markdown; demote headings to keep hierarchy (avoid note `# ...` -> extra H1s)
@@ -54,9 +54,10 @@
 ### Checklist: inline references
 
 - [ ] build per-patient map `Type/id -> parsed resource + key bullets`
-- [ ] replace `encounter: Encounter/<id>` with inline Encounter key fields (time/status/location/provider/period)
-- [ ] inline other refs (Device/Location/Practitioner/Organization/etc); fallback: `Type/id` + `display/status` if present
-- [ ] missing target: keep `Type/id` + `missing=true`
+- [ ] inline EVERY ref field (encounter/subject/patient/performer/author/custodian/location/serviceProvider/device/medicationReference/reasonReference/...)
+- [ ] ref renderer: `Type/id` + key bullets from target resource (Encounter: time/status/location/provider/period; Device: type/model/udi?; Org: name; Practitioner: name)
+- [ ] if target not present in patient graph: inline `Type/id` + any available `display` + `missing=true`
+- [ ] post-render: scan summary/full for `\b[A-Za-z]+/<uuid>\b` and fail if any bare refs remain
 - [ ] Patient section: include identifiers/telecom/address so summary/full is self-contained
 
 ## Importer (server-side, idempotent)
