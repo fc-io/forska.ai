@@ -15,72 +15,88 @@
 - `articles.articleId` (unique): `<importRoute>:Patient/<patientId>`.
 - `articles.articleTitle`: `FHIR Patient <patientId>` (option: include name/sex/birthDate if present).
 
-## Record text (stored in articleSummary + fullText)
+## Record markdown (articleSummary + fullText)
 
-- Deterministic, append-only-ish format (easy diffing).
-- Top header includes:
-  - `record_type: fhir_patient`
-  - `patient_id: <id>`
-  - `import_route: <importRoute>`
-  - `title: <articleTitle>` (duplicate)
-  - `assets_folder: <path>`
-- Include Patient + linked resources as raw JSON lines (preserve original NDJSON line; no re-stringify).
-- Patient linkage extraction (per resource):
+- Goal: 1 self-contained Markdown doc per patient (no "Encounter/<id>" pointers w/o inline context).
+- Current issues (sample `articles.id=12cfb96e-4908-49c6-9f29-30f0af21e6e2`): refs like `Encounter/<uuid>` not inlined; decoded notes contain `# ...`/`## ...`.
+- Headings (strict; ToC must work):
+  - `# FHIR Patient <patientId>` (exactly once)
+  - `## Patient` (all demographics/identifiers/addresses/telecom; no refs out)
+  - `## Timeline`
+  - `### <YYYY-MM-DD>` (bucket by event date)
+  - `#### <ResourceType>: <display>` (event/resource)
+  - `##### Note ...` then note headings demoted to `###### ...` (never `# ...` inside patient doc)
+- Code fences:
+  - never wrap Markdown headings in fences (seen in sample `articles.id=12cf...` where fences swallow `## Plan`)
+  - optional: raw JSON/text payloads only; always close immediately
+- Patient linkage (per resource):
   - normalize `*.reference` (accept `Patient/<id>`, `*/Patient/<id>`, `Patient/<id>/_history/*`)
-  - prefer `subject.reference`
-  - else `patient.reference`
-  - else ignore.
-- Decode and include embedded note text when present:
-  - `DocumentReference.content[].attachment.data` (base64 -> utf8)
-  - `DiagnosticReport.presentedForm[].data` (base64 -> utf8)
-  - cap bytes; skip non-utf8/binary-ish
+  - prefer `subject.reference`; else `patient.reference`; else resolve via `encounter.reference`; else ignore
+- Inline references:
+  - build `resourceByKey["Type/id"] -> resource` for patient
+  - render references as `Type/id` + inline target key fields (else `missing=true`)
+  - ensure every referenced `Type/id` is either rendered somewhere in doc or fully inlined at ref site
+- Notes inlining:
+  - decode base64 (`DocumentReference.content[].attachment.data`, `DiagnosticReport.presentedForm[].data`)
+  - render as Markdown; demote headings to keep hierarchy (avoid note `# ...` -> extra H1s)
 - Ordering (stable):
-  - `resourceType` alpha
-  - within type: `effectiveDateTime`/`issued`/`date`/`authoredOn`/`recordedDate`/`onsetDateTime` (first present), then `id`.
+  - timeline sort by event datetime (`effectiveDateTime/issued/date/authoredOn/recordedDate/onsetDateTime`, else resourceType+id)
+  - within same timestamp: resourceType alpha, then id
+
+### Checklist: fix heading hierarchy
+
+- [ ] 1 H1 only; `## Patient` + `## Timeline` only top-level
+- [ ] timeline: `### <date>` then `#### <ResourceType>: ...` only (no level jumps)
+- [ ] notes: never emit `#`/`##` lines from decoded note text; demote to `######` or strip
+- [ ] fences: only for raw note payload; always closed; never contain timeline headings
+- [ ] validator after render: multiple H1 / unmatched fences / bad jumps => errors++ + sample
+
+### Checklist: inline references
+
+- [ ] build per-patient map `Type/id -> parsed resource + key bullets`
+- [ ] replace `encounter: Encounter/<id>` with inline Encounter key fields (time/status/location/provider/period)
+- [ ] inline other refs (Device/Location/Practitioner/Organization/etc); fallback: `Type/id` + `display/status` if present
+- [ ] missing target: keep `Type/id` + `missing=true`
+- [ ] Patient section: include identifiers/telecom/address so summary/full is self-contained
 
 ## Importer (server-side, idempotent)
 
-- [ ] Add workflow module (pattern: `src/agent/pubmedWorkflowStoreEntries.ts`):
-  - `src/agent/fhirEhrPatientsWorkflow/fhirEhrPatientsWorkflowStoreEntries.ts`
-  - input: `{assetsFolder, importRoute?}` (default importRoute derived from assetsFolder)
+- [x] Workflow importer: `src/agent/fhirEhrPatientsWorkflow/fhirEhrPatientsWorkflowStoreEntries.ts`
+  - input: `{assetsFolder, importRoute?, dryRun?}`
   - output: stats `{patientsTotal, inserted, updated, skipped, errors}`
-- [ ] Walk `**/*.{ndjson,ndjson.gz}` shards under assetsFolder (recursive; stream line-by-line; no limit):
+- [x] Walk `**/*.{ndjson,ndjson.gz}` shards under assetsFolder (recursive; stream line-by-line; no limit):
   - pass1 `resourceType=="Patient"` -> spool patient line
-  - pass2 `resourceType=="Encounter"` -> index `Encounter/<id> -> Patient/<id>`
+  - pass2 `resourceType=="Encounter"` -> index `Encounter/<id> -> Patient/<id>` AND spool Encounter (needed for ref inlining)
   - pass3 all other types -> resolve patientId (subject/patient ref; else encounter ref) -> spool line
-- [ ] Avoid full-dataset memory: spool to tmp shards (hash(patientId)%N) then process shard-by-shard.
-- [ ] For each patientId with Patient present: build `recordText` then upsert:
+- [x] Avoid full-dataset memory: spool to tmp shards (hash(patientId)%N) then process shard-by-shard.
+- [x] For each patientId with Patient present: build markdown then upsert:
   - `articles.articleId`, `articles.articleTitle`, `articles.articleSummary`, `articles.fullText`, `articles.importRoute`, `articles.originalData`.
   - set `fullTextConversionStatus` = `success` and `fullTextCharCount`.
-- [ ] Ensure `import_route` row exists (`route=<importRoute>`), then insert `article_route_link` rows.
-- [ ] Keep import repeatable: onConflict update content fields + `updatedAt`.
+- [x] Ensure `import_route` row exists (`route=<importRoute>`), then insert `article_route_link` rows.
+- [x] Keep import repeatable: onConflict update content fields + `updatedAt`.
 
 ## ArkType validation (imports)
 
-- [ ] Add ArkTypes: `src/agent/fhirEhrPatientsWorkflow/fhirEhrPatientsWorkflowTypes.ts`
+- [x] ArkTypes: `src/agent/fhirEhrPatientsWorkflow/fhirEhrPatientsWorkflowTypes.ts`
   - import bodies: `{assetsFolder, importRoute?, dryRun?}`; trim; enforce `assets/` prefix; enforce `importRoute` startsWith `fhir:` (derive if missing)
   - NDJSON line (open object; validate only read-fields): `resourceType`, `id?`, `subject?.reference?`, `patient?.reference?`, `encounter?.reference?`, `effectiveDateTime?`, `issued?`, `date?`, `authoredOn?`, `recordedDate?`, `onsetDateTime?`
   - type-specific required: `Patient.id`; `Encounter.id` + `Encounter.subject.reference`
   - note payloads: `DocumentReference.content[].attachment.data?` + `DiagnosticReport.presentedForm[].data?`
-- [ ] Use non-throwing `Type(value)` (no try/catch): invalid body => 400; invalid line => `errors++` + skip (keep N=25 sample errs)
+- [ ] Invalid body => 400 (today: importer throws; route handler maps to 500)
 
 ## APIs
 
 ### A) DataSource import (Admin)
 
-- [ ] Add route: `POST /api/datasources/import/fhir-ehr-patients`.
-- [ ] Body: `{id: string}` (datasource id).
-- [ ] Store local assets path on datasource:
+- [x] Route: `POST /api/datasources/import/fhir-ehr-patients`.
+- [x] Body: `{id: string}` (datasource id).
+- [x] Store local assets path on datasource:
   - `datasource.cursor` = `assets/<datasetFolder>` (treat as config, not cursor).
   - `datasource.importRoute` default derived from `cursor`.
-- [ ] Handler:
-  - `src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostFhirEhrPatients.ts`
-  - validate `cursor` startsWith `assets/`.
-  - call workflow importer.
-  - update datasource: `lastImportAt`, `itemsAfterLastImport` (=patients imported); keep `cursor`.
-- [ ] Wire into `src/server/routes/DataSourcesImportRoutes.ts`.
+- [x] Handler: `src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostFhirEhrPatients.ts`
+- [x] Wired: `src/server/routes/DataSourcesImportRoutes.ts`
 
-### B) Direct import API (Admin)
+### B) Direct import API (Admin) (dont implement yet)
 
 - [ ] Add route: `POST /api/fhir-ehr/import/patients-from-assets`.
 - [ ] Body: `{assetsFolder: string, importRoute?: string, dryRun?: boolean}`.
@@ -89,12 +105,11 @@
 
 ## Patient system prompt (different from articles)
 
-- [ ] Add new constants:
-  - `src/agent/judge/judgeSinglePromptSystemPromptPatient.ts` (patient EHR wording, same JSON contract)
-  - optional: `src/agent/judge/judgeSystemPromptPatient.ts` (multi-prompt parity)
-- [ ] Select system prompt at runtime (no schema change):
-  - in `src/agent/judge.ts` / `judgeSinglePrompt`: if `article.articleId` startsWith `fhir:` OR `article.importRoute` startsWith `fhir:` => patient system prompt else article system prompt.
-- [ ] Keep output identical shape: `{answer, explanation, quotes}`.
+- [x] Constants:
+  - `src/agent/judge/judgeSinglePromptSystemPromptPatient.ts`
+  - `src/agent/judge/judgeSystemPromptPatient.ts`
+- [x] Runtime select (no schema change): `src/agent/judge.ts` (articleId/importRoute startsWith `fhir:`)
+- [x] Output shape unchanged: `{answer, explanation, quotes}`.
 
 ## Ops / usage
 
