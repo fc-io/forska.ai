@@ -1,5 +1,7 @@
 import {Elysia} from 'elysia'
 
+import {isHttpError} from './httpError.ts'
+
 const getCause = (value: unknown) => {
   if (typeof value !== 'object' || value === null || !('cause' in value)) {
     return undefined
@@ -27,6 +29,11 @@ export const withErrorHandler = () => {
       console.error(`Route error [${code}]`, {message, cause})
     } else {
       console.error(`Route error [${code}]:`, error)
+    }
+
+    if (isHttpError(error)) {
+      set.status = error.status
+      return {data: null, error: message}
     }
 
     if (code === 'NOT_FOUND') {

@@ -67,5 +67,6 @@ test('buildFhirPatientMarkdown builds strict headings and inlines refs', () => {
   expect(built.markdown).toContain('#### Encounter: Visit')
   expect(built.markdown).toContain('##### Note (DocumentReference.content[0].attachment.data)')
   expect(built.markdown).toContain('###### Plan')
-  expect(built.markdown).toContain('`Encounter/e1` (')
+  expect(built.markdown).toContain('Encounter (status: finished')
+  expect(built.markdown).not.toContain('Encounter/e1')
 })

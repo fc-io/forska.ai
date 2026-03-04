@@ -17,7 +17,7 @@
 
 ## Record markdown (articleSummary + fullText)
 
-- Goal: 1 self-contained Markdown doc per patient (no "Encounter/<id>" pointers w/o inline context).
+- Goal: 1 self-contained Markdown doc per patient (no ref pointers like `Encounter/<id>` or `Practitioner?identifier=...`).
 - Current issues (sample `articles.id=12cfb96e-4908-49c6-9f29-30f0af21e6e2`): refs like `Encounter/<uuid>` not inlined; decoded notes contain `# ...`/`## ...`.
 - Headings (strict; ToC must work):
   - `# FHIR Patient <patientId>` (exactly once)
@@ -34,8 +34,8 @@
   - prefer `subject.reference`; else `patient.reference`; else resolve via `encounter.reference`; else ignore
 - Inline references:
   - build `resourceByKey["Type/id"] -> resource` for patient
-  - render ALL references as `Type/id` + inline target key fields (else `missing=true`)
-  - post-render: no bare `Type/<uuid>` left in summary/full (only via the inline renderer)
+  - render refs as inline target fields ONLY (no `Type/id`, no `Type?identifier=...`, no `missing=true`)
+  - post-render: no reference-like tokens left in summary/full
 - Notes inlining:
   - decode base64 (`DocumentReference.content[].attachment.data`, `DiagnosticReport.presentedForm[].data`)
   - render as Markdown; demote headings to keep hierarchy (avoid note `# ...` -> extra H1s)
@@ -50,7 +50,7 @@
 - [ ] collapse duplicate info: if heading has display, don't repeat as `- code:`/`- medication:` etc
 - [ ] time fields: emit 1 timestamp; label source(s) (e.g. `time(authoredOn)`); dedupe equal timestamps
 - [ ] ids: avoid per-event `- id:` spam; if kept, combine with time into 1 compact line
-- [ ] refs: keep inline renderer + backticks; remove `ref.<path>` noise; omit `subject=Patient/<this>` repeats
+- [ ] refs: inline target fields only; remove `Type/id` + `Type?identifier=...` + `missing=true`; omit `subject=Patient/<this>` repeats
 - [ ] notes: keep `##### Note ...`; show `truncated=true` only; strip note-leading date line when it equals bucket date
 - [ ] identifiers: keep full values (synthetic/needed; no redaction)
 
@@ -64,11 +64,11 @@
 
 ### Checklist: inline references
 
-- [ ] build per-patient map `Type/id -> parsed resource + key bullets`
-- [ ] inline EVERY ref field (encounter/subject/patient/performer/author/custodian/location/serviceProvider/device/medicationReference/reasonReference/...)
-- [ ] ref renderer: `Type/id` + key bullets from target resource (Encounter: time/status/location/provider/period; Device: type/model/udi?; Org: name; Practitioner: name)
-- [ ] if target not present in patient graph: inline `Type/id` + any available `display` + `missing=true`
-- [ ] post-render: scan summary/full for `\b[A-Za-z]+/<uuid>\b` and fail if any bare refs remain
+- [ ] build per-patient map `Type/id -> parsed resource` (+ `identifier` query resolver)
+- [ ] inline EVERY ref field as plain text context (no ids): encounter/status/period/location/provider; org/name; practitioner/name; device/type+model; location/name
+- [ ] if target missing: use available `display` only (no `missing=true`, no query/id)
+- [ ] post-render: scan summary/full for `\b[A-Za-z]+\?identifier=` + `\b[A-Za-z]+/[A-Za-z0-9.-]{1,64}\b` and fail if any remain
+- [ ] notes: replace `Type/id` and `Type?identifier=...` tokens with context-only text
 - [ ] Patient section: include identifiers/telecom/address so summary/full is self-contained
 
 ## Importer (server-side, idempotent)

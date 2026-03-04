@@ -9,6 +9,7 @@ import {inArray, sql} from 'drizzle-orm'
 
 import {articleRouteLink, articles, importRoute as importRouteTable} from '../../db/schema.ts'
 import {getDatabase} from '../../server/utils/getDatabase.ts'
+import {HttpError} from '../../server/utils/httpError.ts'
 import {buildFhirPatientMarkdown} from './buildFhirPatientMarkdown.ts'
 import {
   FhirDiagnosticReportLine,
@@ -630,7 +631,7 @@ export const fhirEhrPatientsWorkflowStoreEntries = async (
 ): Promise<{patientsTotal: number; inserted: number; updated: number; skipped: number; errors: number}> => {
   const normalized = normalizeFhirEhrPatientsImportBody(input)
   if (!normalized.ok) {
-    throw new Error(normalized.error)
+    throw new HttpError(400, normalized.error)
   }
 
   const {assetsFolder, importRoute, dryRun} = normalized.value
