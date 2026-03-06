@@ -6,17 +6,21 @@ type Judgment = {
   id: string
   promptId: string
   answeredOriginal?: string | null
+  answeredOriginalAsArray?: string[] | null
   confidenceOriginal?: number | null
   explanation?: string | null
   quotes?: unknown
   snapshotProjectId?: string | null
   snapshotProjectModelName?: string | null
   modelName?: string | null
+  modelProvider?: string | null
+  modelVersion?: string | null
   prompt?: {id?: string; originalText: string; promptHeading?: string | null; contentHash?: string | null}
   useTitle?: boolean
   useAbstract?: boolean
   useFulltext?: boolean
   useFulltextNoImages?: boolean
+  chunkingStrategy?: string | null
 }
 
 type SetArticleViewToShow = (articleViewToShow: string | undefined) => void
@@ -131,15 +135,19 @@ export const ReviewAvailableJudgments = (props: ReviewAvailableJudgmentsProps) =
                                   promptHeading: j.prompt?.promptHeading,
                                 },
                                 answeredOriginal: j.answeredOriginal,
+                                answeredOriginalAsArray: j.answeredOriginalAsArray,
                                 confidenceOriginal: j.confidenceOriginal ?? undefined,
                                 explanation: j.explanation ?? undefined,
                                 quotes: j.quotes,
                                 modelName: j.modelName,
+                                modelProvider: j.modelProvider,
+                                modelVersion: j.modelVersion,
                                 snapshotProjectModelName: j.snapshotProjectModelName,
                                 useTitle: j.useTitle,
                                 useAbstract: j.useAbstract,
                                 useFulltext: j.useFulltext,
                                 useFulltextNoImages: j.useFulltextNoImages,
+                                chunkingStrategy: j.chunkingStrategy,
                               }}
                               setArticleViewToShow={props.setArticleViewToShow}
                             />

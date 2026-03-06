@@ -7,6 +7,33 @@ type SetArticleViewToShow = (articleViewToShow: string | undefined) => void
 
 type HumanAnswer = {userName: string; answer: string}
 
+const isPlaceholderJudgmentId = (judgmentId: string): boolean => {
+  return judgmentId.startsWith('placeholder:')
+}
+
+const toThinkingLevelLabel = ({
+  modelProvider,
+  modelVersion,
+}: {
+  modelProvider: string | null | undefined
+  modelVersion: string | null | undefined
+}): string => {
+  const provider = String(modelProvider ?? '')
+    .trim()
+    .toLowerCase()
+  const version = String(modelVersion ?? '').trim()
+  const hasVersion = version.length > 0
+  const hasProvider = provider.length > 0
+  const isCodex = provider === 'codex'
+
+  return isCodex ? (hasVersion ? version : 'auto') : hasVersion ? version : hasProvider ? 'n/a' : 'unknown'
+}
+
+const toChunkingLabel = (chunkingStrategy: string | null | undefined): string => {
+  const strategy = String(chunkingStrategy ?? '').trim()
+  return strategy.length > 0 ? `yes (${strategy})` : 'no'
+}
+
 type ReviewJudgmentItemProps = {
   judgment: {
     id: string
@@ -19,11 +46,14 @@ type ReviewJudgmentItemProps = {
     quotes?: unknown
     assessments?: Array<{assessmentIsCorrect?: boolean | null; assessmentComment?: string | null}>
     modelName?: string | null
+    modelProvider?: string | null
+    modelVersion?: string | null
     snapshotProjectModelName?: string | null
     useTitle?: boolean
     useAbstract?: boolean
     useFulltext?: boolean
     useFulltextNoImages?: boolean
+    chunkingStrategy?: string | null
   }
   setArticleViewToShow: SetArticleViewToShow
   humanAnswers?: HumanAnswer[]
@@ -37,12 +67,27 @@ const normalizeAnswer = (answer: string | null | undefined): string => {
 export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
   const [showAllHumanAnswers, setShowAllHumanAnswers] = createSignal(false)
 
+  const isPlaceholder = () => {
+    return isPlaceholderJudgmentId(props.judgment.id)
+  }
+
   const promptId = () => {
     return props.judgment.prompt?.id || props.judgment.promptId || undefined
   }
   const modelName = () => {
     // Use modelName (from joined models table) or fall back to snapshotProjectModelName
     return props.judgment.modelName || props.judgment.snapshotProjectModelName || undefined
+  }
+
+  const thinkingLevel = () => {
+    return toThinkingLevelLabel({
+      modelProvider: props.judgment.modelProvider,
+      modelVersion: props.judgment.modelVersion,
+    })
+  }
+
+  const chunking = () => {
+    return toChunkingLabel(props.judgment.chunkingStrategy)
   }
 
   const hasContentFlags = () => {
@@ -164,6 +209,10 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
         <div class="mt-1 text-[11px] text-gray-500 space-y-0.5 break-words">
           {promptId() ? <div>Prompt ID: {String(promptId()).slice(0, 8)}</div> : null}
           {modelName() ? <div>Model: {modelName()}</div> : null}
+          <Show when={!isPlaceholder()}>
+            <div>Thinking level: {thinkingLevel()}</div>
+            <div>Chunking: {chunking()}</div>
+          </Show>
           <Show when={hasContentFlags()}>
             <div class="flex flex-wrap items-center gap-1 mt-0.5">
               <span class="mr-0.5">Content:</span>

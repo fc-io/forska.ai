@@ -16,11 +16,14 @@ type Judgment = {
   quotes?: unknown
   assessments?: Array<{assessmentIsCorrect?: boolean | null; assessmentComment?: string | null}>
   modelName?: string | null
+  modelProvider?: string | null
+  modelVersion?: string | null
   snapshotProjectModelName?: string | null
   useTitle?: boolean
   useAbstract?: boolean
   useFulltext?: boolean
   useFulltextNoImages?: boolean
+  chunkingStrategy?: string | null
 }
 
 type ReviewJudgmentsProps = {

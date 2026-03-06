@@ -459,14 +459,20 @@ export const articlesRoutes = new Elysia()
 
       // Get all judgments for this article (Cross-Project / Admin View)
       const allArticleJudgments = await db
-        .select({judgment: judgments, prompt: prompts, modelName: models.modelName})
+        .select({
+          judgment: judgments,
+          prompt: prompts,
+          modelName: models.modelName,
+          modelProvider: models.provider,
+          modelVersion: models.version,
+        })
         .from(judgments)
         .innerJoin(prompts, eq(judgments.promptId, prompts.id))
         .leftJoin(models, eq(judgments.modelId, models.id))
         .where(eq(judgments.articleId, id))
 
-      const allJudgments = allArticleJudgments.map(({judgment, prompt, modelName}) => {
-        return {...judgment, prompt, modelName}
+      const allJudgments = allArticleJudgments.map(({judgment, prompt, modelName, modelProvider, modelVersion}) => {
+        return {...judgment, prompt, modelName, modelProvider, modelVersion}
       })
 
       // Resolve project names for snapshotProjectId when present
