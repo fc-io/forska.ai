@@ -1,13 +1,12 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
-import {createSignal, Show, Suspense} from 'solid-js'
+import {createSignal, Suspense} from 'solid-js'
 
 import {ReviewsArticlesBothTableContainer} from '../../../../../components/main/reviews/reviewsArticlesTable/reviewsArticlesBothTableContainer.tsx'
 import {ReviewsFilterControls} from '../../../../../components/main/reviews/reviewsFilterControls.tsx'
 import {ReviewsProjectWarnings} from '../../../../../components/main/reviews/reviewsProjectWarnings.tsx'
 import {ReviewsTabs} from '../../../../../components/main/reviews/reviewsTabs.tsx'
 import {Button} from '../../../../../components/ui/button'
-import {fetchSession} from '../../../../../services/fetchSession'
 import {archiveProject, fetchProjectWithPrompts} from '../../../../../services/projectsService'
 import {useUrlFilters} from '../../../../../utils/useUrlFilters.ts'
 
@@ -17,14 +16,6 @@ const ReviewsBoth = () => {
   const [archivingProject, setArchivingProject] = createSignal(false)
 
   const filters = useUrlFilters({routePath: '/projects/$id/reviews-both/', routeParams: {id: params().id}})
-
-  const sessionQuery = useQuery(() => {
-    return {queryKey: ['session'], queryFn: fetchSession}
-  })
-
-  const isAdmin = () => {
-    return sessionQuery.data?.user?.role === 'admin'
-  }
 
   const projectQuery = useQuery(() => {
     return {
@@ -69,32 +60,25 @@ const ReviewsBoth = () => {
             <h1 class="text-2xl font-bold">Project Reviews</h1>
             <span class="text-sm text-gray-500">{projectQuery.data?.project?.name ?? 'Loading...'}</span>
           </div>
-          <Show when={isAdmin()}>
-            <div class="flex gap-2">
-              <Button as={Link} to="/projects/$id" params={{id: params().id} as never} variant="outline">
-                Project Details
-              </Button>
-              <Button
-                as={Link}
-                to="/projects/$id/humanAssessment"
-                params={{id: params().id} as never}
-                variant="outline"
-              >
-                Human Assessment
-              </Button>
-              <Button as={Link} to="/projects/$id/edit" params={{id: params().id} as never}>
-                Edit Project
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => {
-                  return void handleArchiveProject()
-                }}
-              >
-                {archivingProject() ? 'Archiving...' : 'Archive Project'}
-              </Button>
-            </div>
-          </Show>
+          <div class="flex gap-2">
+            <Button as={Link} to="/projects/$id" params={{id: params().id} as never} variant="outline">
+              Project Details
+            </Button>
+            <Button as={Link} to="/projects/$id/humanAssessment" params={{id: params().id} as never} variant="outline">
+              Human Assessment
+            </Button>
+            <Button as={Link} to="/projects/$id/edit" params={{id: params().id} as never}>
+              Edit Project
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => {
+                return void handleArchiveProject()
+              }}
+            >
+              {archivingProject() ? 'Archiving...' : 'Archive Project'}
+            </Button>
+          </div>
         </div>
         <ReviewsTabs projectId={params().id} active="assessedBoth" />
 
@@ -119,7 +103,6 @@ const ReviewsBoth = () => {
 
         <ReviewsArticlesBothTableContainer
           projectId={params().id}
-          isAdmin={isAdmin()}
           promptFilters={filters.promptFilters}
           currentPage={filters.currentPage}
           setCurrentPage={filters.setCurrentPage}

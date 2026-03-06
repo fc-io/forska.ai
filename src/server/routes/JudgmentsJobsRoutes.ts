@@ -3,7 +3,7 @@ import {Elysia, t} from 'elysia'
 
 import {judgmentsJobs, judgmentsJobsPrompts, projectRouteLink, projects, tokenUse} from '../../db/schema'
 import {getUnassessedArticlesFromOlap, getUnassessedCountFromOlap} from '../../services/olap/unassessedArticlesOlap.ts'
-import {requireAdminAuth} from '../utils/authGuard.ts'
+import {requireUserAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
@@ -122,7 +122,7 @@ const getJobContext = async ({
 
 export const judgmentsJobsRoutes = new Elysia()
   .use(withErrorHandler())
-  .use(requireAdminAuth())
+  .use(requireUserAuth())
   .post(
     '/api/judgmentsjobs',
     async ({body}) => {

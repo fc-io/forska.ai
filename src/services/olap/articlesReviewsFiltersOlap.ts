@@ -1,11 +1,9 @@
+import type {NumericFilterResult} from '../../server/routes/projectsRoutes/articlesReviewsFiltersNumeric.ts'
 import type {ClickHouseFilterParams, ClickHouseFilterResult} from '../clickhouse/articlesReviewsFiltersClickHouse.ts'
 import {
   getDatabaseBasedFiltersFromClickHouse,
   getNumericFiltersFromClickHouse,
 } from '../clickhouse/articlesReviewsFiltersClickHouse.ts'
-
-import type {NumericFilterResult} from '../../server/routes/projectsRoutes/articlesReviewsFiltersNumeric.ts'
-
 import {getOlapDb} from './olapDb.ts'
 import {rejectDuckdbNotImplemented} from './rejectDuckdbNotImplemented.ts'
 

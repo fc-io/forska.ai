@@ -21,7 +21,6 @@ interface ReviewsPaginationControlsProps {
   // Source context
   sourceProjectId?: string
   listType?: ListType
-  isAdmin?: boolean
   // Provide filter payload for server-side selection when selecting across all matching
   buildAddAllFilterBody?: () => {prompts?: Record<string, string[]>; from?: string; to?: string; search?: string}
 }
@@ -246,33 +245,31 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
                     </Menu.Positioner>
                   </Menu.Root>
 
-                  <Show when={props.isAdmin}>
-                    <button
-                      type="button"
-                      disabled={startPdfFetchJobMutation.isPending}
-                      class="px-2 py-1 text-xs font-medium text-gray-700 bg-gray-100 border border-gray-300 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                      onClick={() => {
-                        const allAcross = props.selectAllMatching && props.selectAllMatching()
-                        if (allAcross) {
-                          return startPdfFetchJobMutation.mutate({mode: 'filter'})
-                        }
+                  <button
+                    type="button"
+                    disabled={startPdfFetchJobMutation.isPending}
+                    class="px-2 py-1 text-xs font-medium text-gray-700 bg-gray-100 border border-gray-300 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                    onClick={() => {
+                      const allAcross = props.selectAllMatching && props.selectAllMatching()
+                      if (allAcross) {
+                        return startPdfFetchJobMutation.mutate({mode: 'filter'})
+                      }
 
-                        const sel = props.rowSelection ? props.rowSelection() : {}
-                        const ids = Object.entries(sel)
-                          .filter(([, v]) => {
-                            return Boolean(v)
-                          })
-                          .map(([k]) => {
-                            return k
-                          })
-                        return ids.length > 0
-                          ? startPdfFetchJobMutation.mutate({mode: 'ids', articleIds: ids})
-                          : undefined
-                      }}
-                    >
-                      Download PDFs for selected
-                    </button>
-                  </Show>
+                      const sel = props.rowSelection ? props.rowSelection() : {}
+                      const ids = Object.entries(sel)
+                        .filter(([, v]) => {
+                          return Boolean(v)
+                        })
+                        .map(([k]) => {
+                          return k
+                        })
+                      return ids.length > 0
+                        ? startPdfFetchJobMutation.mutate({mode: 'ids', articleIds: ids})
+                        : undefined
+                    }}
+                  >
+                    Download PDFs for selected
+                  </button>
                 </div>
               </Show>
             </div>

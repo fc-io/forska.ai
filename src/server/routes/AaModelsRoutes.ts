@@ -7,8 +7,7 @@
 
 import {Elysia} from 'elysia'
 
-import {auth} from '../../auth'
-import {requireAdminAuth} from '../utils/authGuard'
+import {requireUserAuth} from '../utils/authGuard'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -526,15 +525,8 @@ const processOneModel = async (m: AAModel, hfToken: string | null, skipHf: boole
 
 export const aaModelsRoutes = new Elysia()
   .use(withErrorHandler())
-  .use(requireAdminAuth())
+  .use(requireUserAuth())
   .get('/api/aa-models', async ({request, set}) => {
-    const session = await auth.api.getSession({headers: request.headers})
-    const role = session?.user?.role ?? null
-    if (role !== 'admin') {
-      set.status = 403
-      return {data: null, error: 'Administrator access required'}
-    }
-
     const aaKey = process.env.AA_API_KEY
     const hfToken = process.env.HF_TOKEN ?? null
     const skipHf = !hfToken // Skip HF enrichment if no token

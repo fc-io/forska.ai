@@ -3,7 +3,7 @@ import {Elysia, t} from 'elysia'
 
 import {session} from '../../../auth-schema.ts'
 import {tokenUse} from '../../db/schema.ts'
-import {requireAdminAuth} from '../utils/authGuard.ts'
+import {requireUserAuth} from '../utils/authGuard.ts'
 import {env} from '../utils/env.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {tokensRoutesGetFailedRequestById} from './tokensRoutes/tokensRoutesGetFailedRequestById.ts'
@@ -14,7 +14,7 @@ import {tokensRoutesGetTimelineAllJobsStats} from './tokensRoutes/tokensRoutesGe
 import {tokensRoutesGetTimelineStats} from './tokensRoutes/tokensRoutesGetTimelineStats.ts'
 
 export const tokensRoutes = new Elysia()
-  .use(requireAdminAuth())
+  .use(requireUserAuth())
   .post(
     '/api/tokens/usage',
     async ({body}) => {

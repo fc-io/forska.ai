@@ -2,18 +2,15 @@ import {eq, sql} from 'drizzle-orm'
 import type {Context} from 'elysia'
 
 import {user} from '../../../../auth-schema.ts'
-import {auth} from '../../../auth.ts'
 import {judgmentsHuman, projects} from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
-export const humanAssessmentRoutesGetOverview = async ({request, set}: {request: Request; set: Context['set']}) => {
-  const session = await auth.api.getSession({headers: request.headers})
-  const role = session?.user?.role ?? null
-  if (role !== 'admin') {
-    set.status = 403
-    return {data: null, error: 'Administrator access required'}
-  }
-
+export const humanAssessmentRoutesGetOverview = async ({
+  request: _request,
+}: {
+  request: Request
+  set: Context['set']
+}) => {
   const db = getDatabase()
 
   const perProject = await db

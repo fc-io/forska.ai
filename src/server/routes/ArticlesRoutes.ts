@@ -14,13 +14,13 @@ import {
 } from '../../db/schema.ts'
 import {selectArticleIdsByFilterOlap} from '../../services/olap/selectArticleIdsOlap.ts'
 import {getPdfFetchJob, startPdfFetchJob} from '../services/pdfFetchJobs.ts'
-import {requireAdminAuth} from '../utils/authGuard.ts'
+import {requireUserAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
 export const articlesRoutes = new Elysia()
   .use(withErrorHandler())
-  .use(requireAdminAuth())
+  .use(requireUserAuth())
   .get('/api/unassessed-count', async () => {
     const db = getDatabase()
     const result = await db

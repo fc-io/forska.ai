@@ -3,7 +3,7 @@ import {Elysia, t} from 'elysia'
 
 import {user} from '../../../auth-schema'
 import {dataSource, dataSourceAccess} from '../../db/schema.ts'
-import {requireAdminAuth} from '../utils/authGuard.ts'
+import {requireUserAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
@@ -60,7 +60,7 @@ const dataSourceListGroupBy = [
 
 export const dataSourcesRoutes = new Elysia()
   .use(withErrorHandler())
-  .use(requireAdminAuth())
+  .use(requireUserAuth())
   .get('/api/datasources', async () => {
     const db = getDatabase()
 

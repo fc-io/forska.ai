@@ -147,7 +147,7 @@ export const Navigation = (props: NavigationProps) => {
       queryKey: ['llm-metrics-summary'],
       queryFn: fetchLlmMetricsSummary,
       refetchInterval: getLlmMetricsRefetchInterval(location().pathname),
-      enabled: props.user?.role === 'admin',
+      enabled: Boolean(props.user),
       suspense: false,
     }
   })
@@ -211,7 +211,7 @@ export const Navigation = (props: NavigationProps) => {
       return
     }
 
-    if (props.user?.role !== 'admin') {
+    if (!props.user) {
       return
     }
 
@@ -252,7 +252,7 @@ export const Navigation = (props: NavigationProps) => {
             </Link>
           </div>
           <div class="flex items-center space-x-4">
-            <Show when={props.user?.role === 'admin'}>
+            <Show when={props.user}>
               <div
                 class="flex flex-col items-end px-2 py-1"
                 title={getLlmMetricsIndicatorTitle(llmMetricsIndicator().isFresh)}
@@ -282,7 +282,7 @@ export const Navigation = (props: NavigationProps) => {
                     isAdminMenuOpen() ? 'bg-stone-100 text-gray-900' : ''
                   }`}
                 >
-                  Admin Menu
+                  Tools
                 </div>
               </div>
             </Show>
@@ -320,7 +320,7 @@ export const Navigation = (props: NavigationProps) => {
           </div>
         </div>
       </div>
-      <Show when={props.user?.role === 'admin' && isAdminMenuOpen()}>
+      <Show when={props.user && isAdminMenuOpen()}>
         <div
           ref={(element) => {
             adminMenuElement = element
@@ -427,7 +427,7 @@ export const Navigation = (props: NavigationProps) => {
                   </div>
                 </div>
                 <div class="flex flex-col gap-4">
-                  <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">Admin</div>
+                  <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">Manage</div>
                   <div class="flex flex-col gap-1">
                     <Link
                       to="/admin/users"

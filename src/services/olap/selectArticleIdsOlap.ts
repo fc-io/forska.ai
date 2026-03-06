@@ -1,5 +1,4 @@
 import {selectArticleIdsByFilterClickHouse} from '../clickhouse/selectArticleIdsClickHouse.ts'
-
 import {getOlapDb} from './olapDb.ts'
 import {rejectDuckdbNotImplemented} from './rejectDuckdbNotImplemented.ts'
 

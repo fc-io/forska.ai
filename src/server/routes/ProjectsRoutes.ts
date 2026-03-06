@@ -14,7 +14,7 @@ import {
   projects,
   prompts,
 } from '../../db/schema.ts'
-import {requireAdminAuth, requireUserAuth} from '../utils/authGuard.ts'
+import {requireUserAuth} from '../utils/authGuard.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
@@ -92,7 +92,7 @@ export const projectsRoutes = new Elysia()
   .use(projectsRoutesGetArticlesReviewsClickHouse)
   .use(projectsRoutesGetReviewsHealth)
   .use(
-    new Elysia().use(requireAdminAuth()).get('/api/projects-without-jobs', async () => {
+    new Elysia().use(requireUserAuth()).get('/api/projects-without-jobs', async () => {
       const db = getDatabase()
       const rows = await db
         .select({id: projects.id, name: projects.name, description: projects.description})

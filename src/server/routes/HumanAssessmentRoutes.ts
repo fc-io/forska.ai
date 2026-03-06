@@ -1,6 +1,6 @@
 import {Elysia, t} from 'elysia'
 
-import {requireAdminAuth, requireUserAuth} from '../utils/authGuard.ts'
+import {requireUserAuth} from '../utils/authGuard.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 import {humanAssessmentRoutesGetOverview} from './HumanAssessmentRoutes/humanAssessmentRoutesGetOverview.ts'
 import {humanAssessmentRoutesGetOverviewBothProjects} from './HumanAssessmentRoutes/humanAssessmentRoutesGetOverviewBothProjects.ts'
@@ -12,7 +12,7 @@ export const humanAssessmentRoutes = new Elysia()
   .use(withErrorHandler())
   .use(
     new Elysia()
-      .use(requireAdminAuth())
+      .use(requireUserAuth())
       .get('/api/humanassessment/overview', async ({request, set}) => {
         return humanAssessmentRoutesGetOverview({request, set})
       })

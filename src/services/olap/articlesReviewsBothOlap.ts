@@ -3,7 +3,6 @@ import type {
   ArticlesReviewsBothResponse,
 } from '../clickhouse/articlesReviewsBothClickHouse.ts'
 import {queryArticlesReviewsBothFromClickHouse} from '../clickhouse/articlesReviewsBothClickHouse.ts'
-
 import {getOlapDb} from './olapDb.ts'
 import {rejectDuckdbNotImplemented} from './rejectDuckdbNotImplemented.ts'
 

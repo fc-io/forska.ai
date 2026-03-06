@@ -1,5 +1,5 @@
 import {useQuery} from '@tanstack/solid-query'
-import {createFileRoute, Link} from '@tanstack/solid-router'
+import {createFileRoute} from '@tanstack/solid-router'
 import {format, fromUnixTime, isValid, parseISO} from 'date-fns'
 import {For, Show} from 'solid-js'
 
@@ -110,19 +110,20 @@ const AdminLlm = () => {
     return {queryKey: ['session'], queryFn: fetchSession}
   })
 
+  const isSignedIn = () => {
+    return Boolean(sessionQuery.data?.user)
+  }
+
   const statusQuery = useQuery(() => {
     return {
       queryKey: ['llmstatus', 'latest50'],
       queryFn: fetchLlmStatus,
+      enabled: isSignedIn(),
       refetchInterval: 30 * 1000,
       refetchOnWindowFocus: true,
       refetchOnReconnect: true,
     }
   })
-
-  const isAdmin = () => {
-    return sessionQuery.data?.user?.role === 'admin'
-  }
 
   const rows = () => {
     return statusQuery.data ?? []
@@ -168,17 +169,11 @@ const AdminLlm = () => {
 
       <Show when={!sessionQuery.isLoading && !sessionQuery.isError}>
         <Show
-          when={isAdmin()}
+          when={isSignedIn()}
           fallback={
             <div class="bg-white border border-gray-200 rounded-lg shadow-sm max-w-xl mx-auto p-10 text-center">
-              <h1 class="text-2xl font-semibold text-gray-900 mb-2">Administrator Access Required</h1>
-              <p class="text-gray-500 mb-6">You need administrator privileges to view LLM Metrics.</p>
-              <Link
-                to="/"
-                class="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-              >
-                Go back home
-              </Link>
+              <h1 class="text-2xl font-semibold text-gray-900 mb-2">Sign in required</h1>
+              <p class="text-gray-500 mb-6">You need to be signed in to view LLM Metrics.</p>
             </div>
           }
         >

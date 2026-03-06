@@ -13,7 +13,6 @@ const formatThousandSeparatedNumber = (value: number) => {
 
 interface ReviewsArticlesTableContainerProps {
   projectId: string
-  isAdmin: boolean
   promptFilters: Accessor<Record<string, string[] | null>>
   currentPage: Accessor<number>
   setCurrentPage: Setter<number>
@@ -139,7 +138,6 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
                 page={props.currentPage()}
                 totalPages={totalPages()}
                 setCurrentPage={props.setCurrentPage}
-                isAdmin={props.isAdmin}
                 currentPageRowIds={response().data.map((a) => {
                   return a.id
                 })}
@@ -194,7 +192,6 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
                 page={props.currentPage()}
                 totalPages={totalPages()}
                 setCurrentPage={props.setCurrentPage}
-                isAdmin={props.isAdmin}
                 currentPageRowIds={response().data.map((a) => {
                   return a.id
                 })}

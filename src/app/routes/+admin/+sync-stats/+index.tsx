@@ -1091,8 +1091,8 @@ const AdminSyncStats = () => {
     return {queryKey: ['session'], queryFn: fetchSession}
   })
 
-  const isAdmin = () => {
-    return sessionQuery.data?.user?.role === 'admin'
+  const isSignedIn = () => {
+    return Boolean(sessionQuery.data?.user)
   }
 
   const sampleVerifyMutation = useMutation(() => {
@@ -1160,11 +1160,11 @@ const AdminSyncStats = () => {
 
         <Show when={!sessionQuery.isLoading && !sessionQuery.isError}>
           <Show
-            when={isAdmin()}
+            when={isSignedIn()}
             fallback={
               <div class="max-w-xl mx-auto text-center py-12">
-                <h2 class="text-xl font-semibold text-gray-900">Unauthorized</h2>
-                <p class="mt-2 text-gray-600">You need admin access to view this page.</p>
+                <h2 class="text-xl font-semibold text-gray-900">Sign in required</h2>
+                <p class="mt-2 text-gray-600">You need to be signed in to view this page.</p>
                 <Link to="/" class="mt-4 inline-block text-blue-600 hover:underline">
                   Go back home
                 </Link>

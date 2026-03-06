@@ -8,7 +8,6 @@ import {
   countArticlesReviewsFromClickHouse,
   queryArticlesReviewsFromClickHouse,
 } from '../clickhouse/articlesReviewsClickHouse.ts'
-
 import {getOlapDb} from './olapDb.ts'
 import {rejectDuckdbNotImplemented} from './rejectDuckdbNotImplemented.ts'
 

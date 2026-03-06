@@ -7,7 +7,7 @@ import {user} from '../../../auth-schema.ts'
 import {auth} from '../../auth.ts'
 import {articles} from '../../db/schema.ts'
 import {fetchPdfForArticle} from '../cron/fullTextJobs/fetchPdfForArticle.ts'
-import {requireAdminAuth} from '../utils/authGuard.ts'
+import {requireUserAuth} from '../utils/authGuard.ts'
 import {ConversionError, convertPdfToText} from '../utils/convertPdfToText.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
@@ -78,8 +78,8 @@ const storeUploadedPdf = async (userId: string, articleId: string, pdfBuffer: Bu
 
 export const articleAdminRoutes = new Elysia()
   .use(withErrorHandler())
-  .use(requireAdminAuth())
-  // Get admin-specific article info (lightweight, for suspense boundary)
+  .use(requireUserAuth())
+  // Extra article info (lightweight, for suspense boundary)
   .get(
     '/api/articles/:id/admin-info',
     async ({params}) => {
@@ -182,13 +182,9 @@ export const articleAdminRoutes = new Elysia()
       // Get session directly (consistent with other routes)
       const session = await auth.api.getSession({headers: request.headers})
       const userId = session?.user?.id ?? null
-      const role = session?.user?.role ?? null
 
       if (!userId) {
         throw new Error('You must be signed in')
-      }
-      if (role !== 'admin') {
-        throw new Error('Administrator access required')
       }
 
       // Check if article exists

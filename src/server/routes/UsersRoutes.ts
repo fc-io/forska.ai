@@ -4,14 +4,14 @@ import {Elysia, t} from 'elysia'
 
 import {user} from '../../../auth-schema'
 import {auth} from '../../auth.ts'
-import {requireAdminAuth, requireUserAuth} from '../utils/authGuard.ts'
+import {requireUserAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
 export const usersRoutes = new Elysia()
   .use(withErrorHandler())
   .use(
-    new Elysia().use(requireAdminAuth()).get('/api/users', async () => {
+    new Elysia().use(requireUserAuth()).get('/api/users', async () => {
       const db = getDatabase()
       const users = await db.select().from(user).orderBy(user.createdAt)
       return {data: users}

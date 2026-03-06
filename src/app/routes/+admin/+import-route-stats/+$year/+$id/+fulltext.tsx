@@ -8,10 +8,9 @@ import {StickyColumn} from '../../../../../../components/main/common/stickyColum
 import {ReviewArticleDetails} from '../../../../../../components/main/projects/reviews/review/reviewArticleDetails'
 import {ReviewAvailableJudgments} from '../../../../../../components/main/projects/reviews/review/reviewAvailableJudgments'
 import {fetchArticleDetails} from '../../../../../../services/articlesService'
-import {fetchSession} from '../../../../../../services/fetchSession'
 import {getArticleDocumentTitle} from '../../../../../utils/getArticleDocumentTitle'
 
-const AdminImportRouteStatsArticleDetailsFulltext = () => {
+const ImportRouteStatsArticleDetailsFulltext = () => {
   const params = Route.useParams()
   const year = () => {
     return (params() as {year: string; id: string}).year
@@ -22,17 +21,9 @@ const AdminImportRouteStatsArticleDetailsFulltext = () => {
 
   const [articleViewToShow, setArticleViewToShow] = createSignal<string | undefined>(undefined)
 
-  const sessionQuery = useQuery(() => {
-    return {queryKey: ['session'], queryFn: fetchSession}
-  })
-
-  const isAdmin = () => {
-    return sessionQuery.data?.user?.role === 'admin'
-  }
-
   const articleQuery = useQuery(() => {
     return {
-      queryKey: ['admin-import-route-stats-article-details', articleId()],
+      queryKey: ['import-route-stats-article-details', articleId()],
       queryFn: () => {
         return fetchArticleDetails(articleId())
       },
@@ -79,7 +70,7 @@ const AdminImportRouteStatsArticleDetailsFulltext = () => {
         </Link>
 
         <div class="flex items-center gap-4 mb-4">
-          <h1 class="text-2xl font-bold">Admin Article View</h1>
+          <h1 class="text-2xl font-bold">Article View</h1>
         </div>
 
         <Suspense fallback={<div class="p-4 bg-white rounded-lg shadow">Loading...</div>}>
@@ -111,18 +102,16 @@ const AdminImportRouteStatsArticleDetailsFulltext = () => {
                     />
                   </div>
                   <StickyColumn class="w-96">
-                    <Show when={isAdmin()}>
-                      <Suspense
-                        fallback={
-                          <div class="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-4 animate-pulse">
-                            <div class="h-4 bg-amber-200 rounded w-24 mb-2" />
-                            <div class="h-3 bg-amber-200 rounded w-full" />
-                          </div>
-                        }
-                      >
-                        <ArticleAdminSection articleId={articleId()} />
-                      </Suspense>
-                    </Show>
+                    <Suspense
+                      fallback={
+                        <div class="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-4 animate-pulse">
+                          <div class="h-4 bg-amber-200 rounded w-24 mb-2" />
+                          <div class="h-3 bg-amber-200 rounded w-full" />
+                        </div>
+                      }
+                    >
+                      <ArticleAdminSection articleId={articleId()} />
+                    </Suspense>
                     <ReviewAvailableJudgments
                       judgments={data().allJudgments}
                       projectsById={data().projectsById}
@@ -140,5 +129,5 @@ const AdminImportRouteStatsArticleDetailsFulltext = () => {
 }
 
 export const Route = createFileRoute('/admin/import-route-stats/$year/$id/fulltext')({
-  component: AdminImportRouteStatsArticleDetailsFulltext,
+  component: ImportRouteStatsArticleDetailsFulltext,
 })

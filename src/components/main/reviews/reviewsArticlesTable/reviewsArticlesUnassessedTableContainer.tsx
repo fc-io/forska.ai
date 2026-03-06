@@ -12,7 +12,6 @@ const formatThousandSeparatedNumber = (value: number) => {
 
 interface ReviewsArticlesUnassessedTableContainerProps {
   projectId: string
-  isAdmin: boolean
   currentPage: Accessor<number>
   setCurrentPage: Setter<number>
   pageLimit: Accessor<number>
@@ -82,7 +81,6 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
                   page={props.currentPage()}
                   totalPages={response().totalPages}
                   setCurrentPage={props.setCurrentPage}
-                  isAdmin={props.isAdmin}
                   currentPageRowIds={response().data.map((a) => {
                     return a.id
                   })}
@@ -121,7 +119,6 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
                   page={props.currentPage()}
                   totalPages={response().totalPages}
                   setCurrentPage={props.setCurrentPage}
-                  isAdmin={props.isAdmin}
                   currentPageRowIds={response().data.map((a) => {
                     return a.id
                   })}

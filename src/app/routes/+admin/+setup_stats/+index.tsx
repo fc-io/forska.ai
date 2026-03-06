@@ -53,6 +53,10 @@ const AdminConfiguration = () => {
     return {queryKey: ['session'], queryFn: fetchSession}
   })
 
+  const isSignedIn = () => {
+    return Boolean(sessionQuery.data?.user)
+  }
+
   const modelsQuery = useQuery(() => {
     return {
       queryKey: ['models', 'admin-list'],
@@ -64,6 +68,7 @@ const AdminConfiguration = () => {
         )
         return result.data ?? []
       },
+      enabled: isSignedIn(),
       staleTime: 1000 * 60 * 5,
       refetchOnWindowFocus: true,
     }
@@ -80,6 +85,7 @@ const AdminConfiguration = () => {
         )
         return result.data
       },
+      enabled: isSignedIn(),
       staleTime: 1000 * 30,
       refetchOnWindowFocus: true,
     }
@@ -96,6 +102,7 @@ const AdminConfiguration = () => {
         )
         return result.data ?? []
       },
+      enabled: isSignedIn(),
       staleTime: 1000 * 60 * 5,
       refetchOnWindowFocus: true,
     }
@@ -112,14 +119,11 @@ const AdminConfiguration = () => {
         )
         return result.data ?? []
       },
+      enabled: isSignedIn(),
       staleTime: 1000 * 60 * 5,
       refetchOnWindowFocus: true,
     }
   })
-
-  const isAdmin = () => {
-    return sessionQuery.data?.user?.role === 'admin'
-  }
 
   const rows = () => {
     return modelsQuery.data ?? []
@@ -166,11 +170,11 @@ const AdminConfiguration = () => {
 
       <Show when={!sessionQuery.isLoading && !sessionQuery.isError}>
         <Show
-          when={isAdmin()}
+          when={isSignedIn()}
           fallback={
             <div class="max-w-xl mx-auto text-center py-12">
-              <h2 class="text-xl font-semibold text-gray-900">Unauthorized</h2>
-              <p class="mt-2 text-gray-600">You need admin access to view this page.</p>
+              <h2 class="text-xl font-semibold text-gray-900">Sign in required</h2>
+              <p class="mt-2 text-gray-600">You need to be signed in to view this page.</p>
               <Link to="/" class="mt-4 inline-block text-blue-600 hover:underline">
                 Go back home
               </Link>

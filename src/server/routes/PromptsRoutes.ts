@@ -3,7 +3,7 @@ import {Elysia, t} from 'elysia'
 
 import {auth} from '../../auth.ts'
 import {judgments, judgmentsHuman, projectPrompts, prompts} from '../../db/schema'
-import {requireAdminAuth, requireUserAuth} from '../utils/authGuard.ts'
+import {requireUserAuth} from '../utils/authGuard.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash'
 import {getDatabase} from '../utils/getDatabase'
 import {withErrorHandler} from '../utils/routeErrorHandler'
@@ -118,7 +118,6 @@ const promptsUserRoutes = new Elysia()
       // Get session directly (consistent with other routes like NvidiaSmiRoutes, ParquetRoutes)
       const session = await auth.api.getSession({headers: request.headers})
       const userId = session?.user?.id ?? null
-      const userRole = session?.user?.role ?? null
 
       if (!userId) {
         set.status = 401
@@ -137,12 +136,6 @@ const promptsUserRoutes = new Elysia()
         return {data: null, error: 'Prompt not found'}
       }
 
-      const isAllowed = userRole === 'admin' || existingPrompt.ownerId === userId
-      if (!isAllowed) {
-        set.status = 403
-        return {data: null, error: 'You are not allowed to update this prompt'}
-      }
-
       const [updatedPrompt] = await db
         .update(prompts)
         .set({archived: body.archived})
@@ -155,7 +148,7 @@ const promptsUserRoutes = new Elysia()
   )
 
 const promptsAdminRoutes = new Elysia()
-  .use(requireAdminAuth())
+  .use(requireUserAuth())
   .get('/api/prompts/duplicates', async () => {
     const db = getDatabase()
     const allPrompts = await db.select().from(prompts)

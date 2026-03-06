@@ -11,6 +11,10 @@ const AdminPdfReset = () => {
     return {queryKey: ['session'], queryFn: fetchSession}
   })
 
+  const isSignedIn = () => {
+    return Boolean(sessionQuery.data?.user)
+  }
+
   const resetMutation = createMutation(() => {
     return {
       mutationFn: async () => {
@@ -19,10 +23,6 @@ const AdminPdfReset = () => {
       },
     }
   })
-
-  const isAdmin = () => {
-    return sessionQuery.data?.user?.role === 'admin'
-  }
 
   return (
     <div class="min-h-screen bg-gray-50 p-6 mx-auto max-w-2xl">
@@ -52,11 +52,11 @@ const AdminPdfReset = () => {
 
       <Show when={!sessionQuery.isLoading && !sessionQuery.isError}>
         <Show
-          when={isAdmin()}
+          when={isSignedIn()}
           fallback={
             <div class="max-w-xl mx-auto text-center py-12">
-              <h2 class="text-xl font-semibold text-gray-900">Unauthorized</h2>
-              <p class="mt-2 text-gray-600">You need admin access to view this page.</p>
+              <h2 class="text-xl font-semibold text-gray-900">Sign in required</h2>
+              <p class="mt-2 text-gray-600">You need to be signed in to view this page.</p>
               <Link to="/" class="mt-4 inline-block text-blue-600 hover:underline">
                 Go back home
               </Link>

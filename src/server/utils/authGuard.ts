@@ -14,19 +14,8 @@ const unauthorized = (set: Context['set'], request: Request) => {
   return {data: null, error: 'You must be signed in', meta: {hasAuthCookie: hasAuthCookie(request)}}
 }
 
-const forbidden = (set: Context['set']) => {
-  set.status = 403
-  return {data: null, error: 'Administrator access required'}
-}
-
-const guardResponse = (
-  sessionUserId: string | null,
-  role: string | null,
-  requireAdmin: boolean,
-  set: Context['set'],
-  request: Request,
-) => {
-  return !sessionUserId ? unauthorized(set, request) : requireAdmin && role !== 'admin' ? forbidden(set) : null
+const guardResponse = (sessionUserId: string | null, set: Context['set'], request: Request) => {
+  return !sessionUserId ? unauthorized(set, request) : null
 }
 
 const getSessionDetails = async (request: Request) => {
@@ -38,25 +27,20 @@ const getSessionDetails = async (request: Request) => {
   const session = await auth.api.getSession({headers: request.headers})
   console.error('[authGuard] Session result:', session ? 'found' : 'null', session?.user?.id ?? 'no-user-id')
   const sessionUserId = session?.user?.id ?? session?.session?.userId ?? null
-  const role = session?.user?.role ?? null
-  return {session, sessionUserId, role}
+  return {session, sessionUserId}
 }
 
-const createAuthGuard = (requireAdmin: boolean) => {
+const createAuthGuard = () => {
   return new Elysia()
     .derive(async ({request}) => {
       console.error('[authGuard] derive called for:', request.url)
       return await getSessionDetails(request)
     })
-    .onBeforeHandle(({set, sessionUserId, role, request}) => {
-      return guardResponse(sessionUserId, role, requireAdmin, set, request)
+    .onBeforeHandle(({set, sessionUserId, request}) => {
+      return guardResponse(sessionUserId, set, request)
     })
 }
 
 export const requireUserAuth = () => {
-  return createAuthGuard(false)
-}
-
-export const requireAdminAuth = () => {
-  return createAuthGuard(true)
+  return createAuthGuard()
 }

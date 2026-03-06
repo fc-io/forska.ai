@@ -3,7 +3,7 @@ import {Elysia, t} from 'elysia'
 
 import {auth} from '../../auth.ts'
 import {models} from '../../db/schema.ts'
-import {requireAdminAuth, requireUserAuth} from '../utils/authGuard.ts'
+import {requireUserAuth} from '../utils/authGuard.ts'
 import {getCodexCliLoginStatus, getCodexDeviceAuthLoginJob, startCodexDeviceAuthLogin} from '../utils/codexCliAuth.ts'
 import {env} from '../utils/env.ts'
 import {getCodexAppServerClient, getCodexBinPath} from '../utils/getCodexAppServerClient.ts'
@@ -266,7 +266,7 @@ export const modelsRoutes = new Elysia()
       ),
   )
   .use(
-    new Elysia().use(requireAdminAuth()).get('/api/models/gpu-info', async () => {
+    new Elysia().use(requireUserAuth()).get('/api/models/gpu-info', async () => {
       return {
         data: {
           GPU_NNODES: env.GPU_NNODES,

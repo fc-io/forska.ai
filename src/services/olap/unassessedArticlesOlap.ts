@@ -3,7 +3,6 @@ import {
   getUnassessedCountFromClickHouse,
   getUnassessedPairsFromClickHouse,
 } from '../clickhouse/unassessedArticlesClickHouse.ts'
-
 import {getOlapDb} from './olapDb.ts'
 import {rejectDuckdbNotImplemented} from './rejectDuckdbNotImplemented.ts'
 

@@ -2,7 +2,7 @@ import {and, eq} from 'drizzle-orm'
 import {Elysia} from 'elysia'
 
 import {models} from '../../db/schema.ts'
-import {requireAdminAuth} from '../utils/authGuard.ts'
+import {requireUserAuth} from '../utils/authGuard.ts'
 import {env} from '../utils/env.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 
@@ -42,7 +42,7 @@ const syncWorkerUrls = async (db: ReturnType<typeof getDatabase>, modelRow: Mode
   return updated ?? modelRow
 }
 
-export const judgmentsRoutes = new Elysia().use(requireAdminAuth()).get('/api/judgments/model', async ({query}) => {
+export const judgmentsRoutes = new Elysia().use(requireUserAuth()).get('/api/judgments/model', async ({query}) => {
   try {
     const db = getDatabase()
     const modelName = query.name || 'Qwen3-32B-FP8'

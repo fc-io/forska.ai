@@ -11,7 +11,6 @@ import {ReviewHumanAssessments} from '../../../../../../components/main/projects
 import {ReviewJudgments} from '../../../../../../components/main/projects/reviews/review/reviewJudgments.tsx'
 import {ReviewStatus} from '../../../../../../components/main/projects/reviews/review/reviewStatus.tsx'
 import {apiClient} from '../../../../../../services/apiClient.ts'
-import {fetchSession} from '../../../../../../services/fetchSession'
 import {getArticleDocumentTitle} from '../../../../../utils/getArticleDocumentTitle'
 
 export const ReviewDetail = () => {
@@ -20,14 +19,6 @@ export const ReviewDetail = () => {
   const articleId = (params() as {id: string; articleId: string}).articleId
   const [articleViewToShow, setArticleViewToShow] = createSignal<string | undefined>(undefined)
   const [isFulltextExpanded, setIsFulltextExpanded] = createSignal(false)
-
-  const sessionQuery = useQuery(() => {
-    return {queryKey: ['session'], queryFn: fetchSession}
-  })
-
-  const isAdmin = () => {
-    return sessionQuery.data?.user?.role === 'admin'
-  }
 
   const articleQuery = useQuery(() => {
     return {
@@ -121,18 +112,16 @@ export const ReviewDetail = () => {
                     </Show>
                   </div>
                   <StickyColumn class="w-96">
-                    <Show when={isAdmin()}>
-                      <Suspense
-                        fallback={
-                          <div class="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-4 animate-pulse">
-                            <div class="h-4 bg-amber-200 rounded w-24 mb-2" />
-                            <div class="h-3 bg-amber-200 rounded w-full" />
-                          </div>
-                        }
-                      >
-                        <ArticleAdminSection articleId={articleId} />
-                      </Suspense>
-                    </Show>
+                    <Suspense
+                      fallback={
+                        <div class="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-4 animate-pulse">
+                          <div class="h-4 bg-amber-200 rounded w-24 mb-2" />
+                          <div class="h-3 bg-amber-200 rounded w-full" />
+                        </div>
+                      }
+                    >
+                      <ArticleAdminSection articleId={articleId} />
+                    </Suspense>
                     <ReviewJudgments
                       judgments={data().judgments}
                       setArticleViewToShow={setArticleViewToShow}

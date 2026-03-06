@@ -5,7 +5,6 @@ import {env} from './server/utils/env.ts'
 // import {Pool} from 'pg'
 import {getDatabase} from './server/utils/getDatabase'
 const db = getDatabase()
-import {admin} from 'better-auth/plugins'
 
 export const auth = betterAuth({
   database: drizzleAdapter(db, {
@@ -21,6 +20,5 @@ export const auth = betterAuth({
   //       clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
   //     },
   //   },
-  plugins: [admin()],
   telemetry: {enabled: false},
 })
