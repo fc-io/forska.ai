@@ -16,6 +16,8 @@ type FailedRequestRow = {
   projectName: string | null
   promptHeadings: string | null
   modelName: string | null
+  modelProvider: string | null
+  modelVersion: string | null
   failedRequests: number | null
   failedRequestsDetails: FailedRequestDetailItem[] | null
   totalTokens: number
@@ -51,6 +53,21 @@ const getFirstError = (details: FailedRequestDetailItem[] | null): string | null
     return d.error != null
   })
   return first?.error ?? null
+}
+
+const formatModelVersionLabel = (row: FailedRequestRow): string => {
+  const modelName = String(row.modelName ?? '').trim()
+  const provider = String(row.modelProvider ?? '')
+    .trim()
+    .toLowerCase()
+  const version = String(row.modelVersion ?? '').trim()
+
+  const isCodex = provider === 'codex'
+  const codexThinking = isCodex ? (version.length > 0 ? version : 'auto') : ''
+  const suffix = isCodex ? `thinking: ${codexThinking}` : version.length > 0 ? `v: ${version}` : ''
+
+  const base = modelName.length > 0 ? modelName : '—'
+  return suffix.length > 0 ? `${base} (${suffix})` : base
 }
 
 const AdminFailedRequests = () => {
@@ -133,6 +150,9 @@ const AdminFailedRequests = () => {
                     <th class="w-[260px] px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Project
                     </th>
+                    <th class="w-[220px] px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Model
+                    </th>
                     <th class="w-[150px] px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Prompt
                     </th>
@@ -184,6 +204,12 @@ const AdminFailedRequests = () => {
                                 )
                               }}
                             </Show>
+                          </td>
+                          <td
+                            class="px-4 py-4 text-sm text-gray-700 overflow-hidden text-ellipsis whitespace-nowrap"
+                            title={formatModelVersionLabel(row)}
+                          >
+                            {formatModelVersionLabel(row)}
                           </td>
                           <td
                             class="px-4 py-4 text-sm text-gray-700 overflow-hidden text-ellipsis whitespace-nowrap"

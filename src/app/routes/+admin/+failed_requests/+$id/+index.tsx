@@ -32,6 +32,8 @@ type FailedRequest = {
   judgmentsJobId: string | null
   projectId: string | null
   modelName: string | null
+  modelProvider: string | null
+  modelVersion: string | null
   failedRequests: number | null
   failedRequestsDetails: FailedRequestDetailItem[] | null
   totalTokens: number
@@ -39,6 +41,25 @@ type FailedRequest = {
   sessionId: string | null
   requests: number
   successfulRequests: number | null
+}
+
+const formatModelVersionLabel = (request: {
+  modelName: string | null
+  modelProvider: string | null
+  modelVersion: string | null
+}): string => {
+  const modelName = String(request.modelName ?? '').trim()
+  const provider = String(request.modelProvider ?? '')
+    .trim()
+    .toLowerCase()
+  const version = String(request.modelVersion ?? '').trim()
+
+  const isCodex = provider === 'codex'
+  const codexThinking = isCodex ? (version.length > 0 ? version : 'auto') : ''
+  const suffix = isCodex ? `thinking: ${codexThinking}` : version.length > 0 ? `v: ${version}` : ''
+
+  const base = modelName.length > 0 ? modelName : 'N/A'
+  return suffix.length > 0 ? `${base} (${suffix})` : base
 }
 
 const fetchFailedRequest = async (id: string) => {
@@ -180,7 +201,9 @@ const FailedRequestDetail = () => {
                     </div>
                     <div class="bg-gray-50 px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
                       <dt class="text-sm font-medium text-gray-500">Model</dt>
-                      <dd class="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">{request().modelName ?? 'N/A'}</dd>
+                      <dd class="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
+                        {formatModelVersionLabel(request())}
+                      </dd>
                     </div>
                     <div class="bg-white px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
                       <dt class="text-sm font-medium text-gray-500">Failures</dt>

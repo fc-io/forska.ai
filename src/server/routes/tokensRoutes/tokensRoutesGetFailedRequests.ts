@@ -1,9 +1,20 @@
 import {desc, eq, inArray, sql} from 'drizzle-orm'
 
-import {judgmentsJobs, projects, prompts, tokenUse} from '../../../db/schema.ts'
+import {judgmentsJobs, models, projects, prompts, tokenUse} from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
-type FailedRequestDetailItem = {promptIds?: string[]; [key: string]: unknown}
+type FailedRequestDetailItem = {promptIds?: string[]; modelId?: string; [key: string]: unknown}
+
+type ModelInfo = {provider: string | null; modelName: string | null; version: string | null}
+
+const getFirstModelId = (details: FailedRequestDetailItem[] | null): string | null => {
+  const array = Array.isArray(details) ? details : []
+  const found = array.find((d) => {
+    return typeof d.modelId === 'string' && d.modelId.trim().length > 0
+  })
+  const modelId = typeof found?.modelId === 'string' ? found.modelId.trim() : ''
+  return modelId.length > 0 ? modelId : null
+}
 
 type GetFailedRequestsParams = {limit?: number; offset?: number}
 
@@ -32,10 +43,14 @@ export const tokensRoutesGetFailedRequests = async ({limit = 50, offset = 0}: Ge
 
   // Collect all unique promptIds from failedRequestsDetails across all rows
   const allPromptIds = new Set<string>()
+  const allModelIds = new Set<string>()
   for (const row of result) {
     const details = row.failedRequestsDetails as FailedRequestDetailItem[] | null
     if (Array.isArray(details)) {
       for (const detail of details) {
+        if (typeof detail.modelId === 'string' && detail.modelId.trim().length > 0) {
+          allModelIds.add(detail.modelId.trim())
+        }
         if (Array.isArray(detail.promptIds)) {
           for (const pid of detail.promptIds) {
             allPromptIds.add(pid)
@@ -59,10 +74,30 @@ export const tokensRoutesGetFailedRequests = async ({limit = 50, offset = 0}: Ge
     )
   }
 
+  let modelInfoMap = new Map<string, ModelInfo>()
+  if (allModelIds.size > 0) {
+    const modelRows = await db
+      .select({id: models.id, provider: models.provider, modelName: models.modelName, version: models.version})
+      .from(models)
+      .where(inArray(models.id, Array.from(allModelIds)))
+
+    modelInfoMap = new Map(
+      modelRows.map((m) => {
+        return [m.id, {provider: m.provider ?? null, modelName: m.modelName ?? null, version: m.version ?? null}]
+      }),
+    )
+  }
+
   // Build prompt headings string for each row (using first promptIds from first detail)
   const dataWithHeadings = result.map((row) => {
     const details = row.failedRequestsDetails as FailedRequestDetailItem[] | null
     let promptHeadings: string | null = null
+
+    const modelId = getFirstModelId(details)
+    const model = modelId ? modelInfoMap.get(modelId) : null
+    const modelName = model?.modelName ?? row.modelName ?? null
+    const modelProvider = model?.provider ?? null
+    const modelVersion = model?.version ?? null
 
     if (Array.isArray(details) && details.length > 0) {
       const firstDetail = details[0]
@@ -78,7 +113,7 @@ export const tokensRoutesGetFailedRequests = async ({limit = 50, offset = 0}: Ge
       }
     }
 
-    return {...row, promptHeadings}
+    return {...row, promptHeadings, modelName, modelProvider, modelVersion}
   })
 
   // Get total count for pagination
