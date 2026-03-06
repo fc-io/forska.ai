@@ -6,6 +6,7 @@
 - [ ] Remove admin goal/wording; stop treating `/admin/*` as privileged area
 - [ ] State new target: standalone local app; single-user; local-first storage; hosted/multi-tenant not a goal
 - [ ] Align roadmaps: `SQLITE_PLAN.md` + `DUCK_PLAN.md` reinforce local-first (SQLite app DB, DuckDB analytics)
+- [ ] ClickHouse -> DuckDB: no overlap; cutover + delete ClickHouse in same change set; update `DUCK_PLAN.md`
 
 ## Step 2: Admin-free (keep Better Auth + multi-user)
 
