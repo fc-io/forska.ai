@@ -1,0 +1,2 @@
+CREATE TYPE "public"."judgment_chunking_strategy_enum" AS ENUM('patient_h3_greedy', 'article_heading_greedy', 'article_paragraph_greedy');--> statement-breakpoint
+ALTER TABLE "judgments" ADD COLUMN "chunking_strategy" "judgment_chunking_strategy_enum";
