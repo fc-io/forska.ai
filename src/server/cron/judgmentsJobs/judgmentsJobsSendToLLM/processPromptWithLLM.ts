@@ -43,10 +43,26 @@ type PromptDefinition = {
 
 const processPromptLogger = createRateLimitedLogger({windowMs: 30_000})
 
+const DEFAULT_MODEL_CONTEXT = 32768
+
+const normalizeProvider = (value: string | null | undefined): string => {
+  const v = String(value ?? '')
+    .trim()
+    .toLowerCase()
+  return v.length > 0 ? v : 'unknown'
+}
+
+const getModelContextForProvider = (provider: string | null | undefined): number => {
+  const normalized = normalizeProvider(provider)
+  const fromEnv = normalized === 'codex' ? env.CODEX_CONTEXT_LENGTH : env.SGLANG_CONTEXT_LENGTH
+  return fromEnv > 0 ? fromEnv : DEFAULT_MODEL_CONTEXT
+}
+
 const processSinglePrompt = async (
   promptToProcess: PromptToProcess,
   article: typeof schema.articles.$inferSelect,
   prompt: PromptDefinition,
+  modelContext: number,
 ): Promise<void> => {
   const sessionId = null
   await judgeSinglePrompt({
@@ -61,6 +77,7 @@ const processSinglePrompt = async (
       provider: promptToProcess.modelProvider,
       version: promptToProcess.modelVersion,
     },
+    modelContext,
     projectId: promptToProcess.projectId,
     contentSettings: {
       useTitle: promptToProcess.useTitle,
@@ -139,6 +156,7 @@ export const processPromptWithLLM = async (
   promptToProcess: PromptToProcess,
 ): Promise<void> => {
   const startTime = Date.now()
+  const modelContext = getModelContextForProvider(promptToProcess.modelProvider)
   const judgmentExists = await checkJudgmentExistsInPostgres(db, promptToProcess)
   if (judgmentExists) {
     await markAsJudged(db, promptToProcess.jobId, promptToProcess.articleId, promptToProcess.promptId)
@@ -191,26 +209,17 @@ export const processPromptWithLLM = async (
       }
     }
 
-    // Process fulltext: optionally strip images and check token budget
-    // Use SGLANG_CONTEXT_LENGTH if available (> 0), otherwise fall back to default
-    const modelContext = env.SGLANG_CONTEXT_LENGTH > 0 ? env.SGLANG_CONTEXT_LENGTH : undefined
+    // Process fulltext: optionally strip images. Chunking happens later during judging.
     const processResult = processFulltextForLLM(result.text, {
       stripImages: promptToProcess.useFulltextNoImages,
       modelContext,
     })
-    if (!processResult.success) {
-      // Token budget exceeded → mark as skipped
-      console.log(
-        `[fulltext] Skipping article ${article.id}: fulltext too large (${processResult.tokenCount.toLocaleString()} tokens, max: ${processResult.maxTokens.toLocaleString()})`,
+
+    if (!processResult.withinBudget) {
+      rateLimitedLogger.log(
+        'fulltext:large:chunked-mode',
+        `[fulltext] Large fulltext for ${article.id}: ~${processResult.tokenCount.toLocaleString()} tokens (max ~${processResult.maxTokens.toLocaleString()}); will rely on chunked judging`,
       )
-      await markAsSkipped(
-        db,
-        promptToProcess.jobId,
-        promptToProcess.articleId,
-        promptToProcess.promptId,
-        'fulltext_too_large',
-      )
-      return
     }
 
     // Update the article object with the processed fulltext for use in prompt generation
@@ -253,7 +262,7 @@ export const processPromptWithLLM = async (
       '[llm] Calling LLM for article:',
       promptToProcess.articleId.slice(0, 8),
     )
-    await processSinglePrompt(promptToProcess, articleForJudging, prompt)
+    await processSinglePrompt(promptToProcess, articleForJudging, prompt, modelContext)
     // Success - mark as judged
     await markAsJudged(db, promptToProcess.jobId, promptToProcess.articleId, promptToProcess.promptId)
     const duration = Date.now() - startTime

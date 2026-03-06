@@ -51,6 +51,12 @@ export const judgmentsJobsPromptsSkipReasonEnum = pgEnum('judgments_jobs_prompts
   'fulltext_too_large',
 ])
 
+export const judgmentChunkingStrategyEnum = pgEnum('judgment_chunking_strategy_enum', [
+  'patient_h3_greedy',
+  'article_heading_greedy',
+  'article_paragraph_greedy',
+])
+
 export const engineEnum = pgEnum('engine_enum', ['sglang', 'vllm'])
 
 export const articles = pgTable(
@@ -605,6 +611,8 @@ export const judgments = pgTable(
     useAbstract: boolean('use_abstract').default(true).notNull(),
     useFulltext: boolean('use_fulltext').default(false).notNull(),
     useFulltextNoImages: boolean('use_fulltext_no_images').default(false).notNull(),
+
+    chunkingStrategy: judgmentChunkingStrategyEnum('chunking_strategy'),
 
     // Whether this LLM judgment has been answered (may have null answer fields in some cases)
     isAnswered: boolean('is_answered').default(false),

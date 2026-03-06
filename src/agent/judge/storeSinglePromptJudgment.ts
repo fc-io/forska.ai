@@ -15,12 +15,14 @@ export const storeSinglePromptJudgment = async ({
   modelId,
   projectId,
   judgment,
+  chunkingStrategy,
 }: {
   article: typeof articles.$inferSelect
   promptId: string
   modelId: string
   projectId: string
   judgment: SinglePromptJudgmentResult
+  chunkingStrategy: (typeof judgments.$inferInsert)['chunkingStrategy']
 }): Promise<void> => {
   try {
     const {getDatabase} = await import('../../server/utils/getDatabase.ts')
@@ -115,6 +117,7 @@ export const storeSinglePromptJudgment = async ({
       useAbstract,
       useFulltext,
       useFulltextNoImages,
+      chunkingStrategy,
       // Snapshots (kept for cross-project display)
       snapshotProjectId: snapshotValues.snapshotProjectId,
       snapshotProjectModelName: snapshotValues.snapshotProjectModelName,

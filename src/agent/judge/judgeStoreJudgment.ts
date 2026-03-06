@@ -25,6 +25,7 @@ export const judgeStoreJudgment = async (
   promptIds: string[] | undefined,
   projectId: string | undefined,
   shortIdMapping: ShortIdMapping,
+  chunkingStrategy: (typeof judgments.$inferInsert)['chunkingStrategy'] = null,
 ): Promise<void> => {
   try {
     if (!modelId || !promptIds || promptIds.length === 0) {
@@ -94,6 +95,7 @@ export const judgeStoreJudgment = async (
             confidenceOriginal: 50,
             explanation: answeredExplanation || null,
             quotes: answeredQuotes || null,
+            chunkingStrategy,
             updatedAt: new Date(),
           })
           .where(eq(judgments.id, existingId))
@@ -113,6 +115,7 @@ export const judgeStoreJudgment = async (
           confidenceOriginal: 50,
           explanation: answeredExplanation || null,
           quotes: answeredQuotes || null,
+          chunkingStrategy,
           // Snapshots (kept for cross-project display)
           snapshotProjectId: snapshotValues.snapshotProjectId,
           snapshotProjectModelName: snapshotValues.snapshotProjectModelName,

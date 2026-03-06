@@ -69,9 +69,7 @@ const RESERVED_FOR_RESPONSE = 2000 // max_completion_tokens is 2000 in judge.ts
  */
 const DEFAULT_MODEL_CONTEXT = 32768
 
-export type TokenBudgetResult =
-  | {withinBudget: true; tokenCount: number}
-  | {withinBudget: false; tokenCount: number; maxTokens: number}
+export type TokenBudgetResult = {withinBudget: boolean; tokenCount: number; maxTokens: number}
 
 /**
  * Check if fulltext fits within the token budget.
@@ -89,11 +87,7 @@ export const checkFulltextTokenBudget = (
   // Estimate token count (conservative: 4 chars per token)
   const estimatedTokens = Math.ceil(fullText.length / CHARS_PER_TOKEN)
 
-  if (estimatedTokens <= maxFulltextTokens) {
-    return {withinBudget: true, tokenCount: estimatedTokens}
-  }
-
-  return {withinBudget: false, tokenCount: estimatedTokens, maxTokens: maxFulltextTokens}
+  return {withinBudget: estimatedTokens <= maxFulltextTokens, tokenCount: estimatedTokens, maxTokens: maxFulltextTokens}
 }
 
 /**
@@ -107,9 +101,12 @@ export const checkFulltextTokenBudget = (
  */
 export type ProcessFulltextOptions = {stripImages: boolean; modelContext?: number}
 
-export type ProcessFulltextResult =
-  | {success: true; processedText: string; tokenCount: number}
-  | {success: false; reason: 'fulltext_too_large'; tokenCount: number; maxTokens: number}
+export type ProcessFulltextResult = {
+  processedText: string
+  tokenCount: number
+  maxTokens: number
+  withinBudget: boolean
+}
 
 export const processFulltextForLLM = (fullText: string, options: ProcessFulltextOptions): ProcessFulltextResult => {
   // Step 1: Optionally strip images
@@ -118,14 +115,10 @@ export const processFulltextForLLM = (fullText: string, options: ProcessFulltext
   // Step 2: Check token budget
   const budgetResult = checkFulltextTokenBudget(processedText, options.modelContext)
 
-  if (budgetResult.withinBudget) {
-    return {success: true, processedText, tokenCount: budgetResult.tokenCount}
-  }
-
   return {
-    success: false,
-    reason: 'fulltext_too_large',
+    processedText,
     tokenCount: budgetResult.tokenCount,
     maxTokens: budgetResult.maxTokens,
+    withinBudget: budgetResult.withinBudget,
   }
 }
