@@ -837,10 +837,12 @@ export const judgeSinglePrompt = async ({
           ? withoutSummary
           : minimal
 
+    const safeMaxChunkChars = Math.max(0, Math.floor(chosen.maxChunkChars * 0.75))
+
     const chunking =
       isFhirEhrPatientArticle(article) && chunkTarget.field === 'fullText'
-        ? chunkPatientMarkdown({markdown: chunkTarget.text, maxChunkChars: chosen.maxChunkChars})
-        : chunkArticleText({text: chunkTarget.text, maxChunkChars: chosen.maxChunkChars})
+        ? chunkPatientMarkdown({markdown: chunkTarget.text, maxChunkChars: safeMaxChunkChars})
+        : chunkArticleText({text: chunkTarget.text, maxChunkChars: safeMaxChunkChars})
 
     const chunks = chunking.chunks
     const chunkingStrategy: JudgmentChunkingStrategy = chunking.strategy
