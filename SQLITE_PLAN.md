@@ -4,6 +4,7 @@
 
 - Bun SQLite is primary application database.
 - Keep PostgreSQL until data migrated + verified.
+- Single-user local app (no Better Auth/users).
 - Remove Better Auth.
 - Remove all admin validation in API router.
 - Remove Drizzle.

@@ -3,6 +3,7 @@
 ## Goal
 
 - DuckDB is only analytics engine.
+- No overlap: DuckDB cutover + ClickHouse delete in same change set.
 - Remove ClickHouse.
 - Remove Drizzle.
 
@@ -23,5 +24,4 @@
   - [ ] Both human and model assessed list (if still needed).
 - [ ] Correctness gates: golden cases, row counts, stable samples.
 - [ ] Performance gates: median and 95th percentile timings on real dataset.
-- [ ] Cutover: route all analytics endpoints to DuckDB.
-- [ ] Delete old stack: ClickHouse code, containers, environment variables.
+- [ ] Cutover + delete ClickHouse (same change set): route all analytics endpoints to DuckDB; delete ClickHouse code/containers/env vars.

@@ -153,7 +153,7 @@ We can:
 
 - Provide recovery UX:
   - Safe: show copy-pastable `docker compose restart ...` commands for PeerDB
-  - Optional (gated): a button that executes docker restarts only when `ENABLE_ADMIN_DOCKER_CONTROLS=1` and the server host has Docker access
+  - Optional (env flag): a button that executes docker restarts only when `ENABLE_ADMIN_DOCKER_CONTROLS=1` and the server host has Docker access
 
 ## Rollout Plan
 
@@ -161,7 +161,7 @@ We can:
 2. Add metrics/logging; test on a staging dataset (simulate `articles` lag).
 3. Enable repair cron; verify the derived-health card converges to near-zero enrichment gaps.
 4. Add Postgres fallback; verify judging continues when CH is down or `articles` is lagging.
-5. Consider optional admin recovery actions for PeerDB (gated).
+5. Consider optional recovery actions for PeerDB (env flag).
 
 ## Testing / Verification
 

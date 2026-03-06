@@ -1,8 +1,8 @@
-# PostgreSQL / ClickHouse Sync Admin UI
+# PostgreSQL / ClickHouse Sync Tools UI
 
 ## Overview
 
-Admin page to monitor PG (source) ↔ CH (replica) consistency + PeerDB CDC health. Shows counts, cursor lag, PeerDB lag/slot health, CH merge/dedup backlog.
+Tools page (path `/admin/sync-stats`; naming legacy) to monitor PG (source) ↔ CH (replica) consistency + PeerDB CDC health. Shows counts, cursor lag, PeerDB lag/slot health, CH merge/dedup backlog.
 
 ## Policy (Deletes)
 
@@ -17,30 +17,30 @@ Admin page to monitor PG (source) ↔ CH (replica) consistency + PeerDB CDC heal
 
 This plan addresses several subtle correctness and performance issues:
 
-| Issue                                                            | Solution                                             | Section                                                                 |
-| ---------------------------------------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------- |
-| Timestamp-only watermark skips rows on ties                      | Keyset `(updatedAt, id)` tuple                       | [Why Keyset Watermarks](#why-keyset-watermarks)                         |
-| Retroactive timestamps bypass watermark                          | Document limitation + periodic full recount          | [Keyset Limitation](#why-keyset-watermarks)                             |
-| `totalCount` inflates on updates (re-counting)                   | Use `uniqueCount` for alerts/diffs, not `totalCount` | [Why Counts Are Approximate](#why-counts-are-approximate)               |
-| `to_char(..., 'Z')` emits local time                             | Use `AT TIME ZONE 'UTC'`                             | [Batched Counting](#solution-batched-incremental-counting-with-locking) |
-| `GREATEST` on nullable text stays NULL                           | Use `COALESCE` with conditional                      | [Batched Counting](#solution-batched-incremental-counting-with-locking) |
-| Stale job detection using start time misclassifies long recounts | Heartbeat-based detection via `lastUpdatedAt`        | [Stale Job Detection](#stale-job-detection-heartbeat-based)             |
-| Missing `pgChSyncStats` seed rows makes locks no-op              | Seed/upsert 4 rows before refresh                    | [Batched Counting](#solution-batched-incremental-counting-with-locking) |
-| Hard deletes invisible to keyset scans                           | Accept drift; periodic full recount; alert on `uniqueCount` only        | [Why Counts Are Approximate](#why-counts-are-approximate)               |
-| `forska.judgments` is a VIEW (no `FINAL`)                       | Use `judgments_raw` for `FINAL`/`argMax`             | [ClickHouse Judgments](#clickhouse-judgments-camelcase-columns)         |
-| PeerDB ordering isn't `updatedAt`                               | Use `_peerdb_version` for `argMax` (sink tables)     | [Sample Verify](#post-apiadminsample-verify)                            |
-| `uniqExact()` expensive on large tables                          | Default to `uniqCombined()`, exact on-demand         | [ClickHouse Judgments](#clickhouse-judgments-camelcase-columns)         |
-| `uniqCombined()` error conflicts with tight thresholds           | Widen thresholds unless exact counts                 | [Status Thresholds](#status-thresholds)                                 |
-| Fetching 50k rows per batch wastes bandwidth                     | CTE computes counts in-database                      | [Batched Counting](#solution-batched-incremental-counting-with-locking) |
-| CH keyset WHERE can full-scan (ORDER BY/partition mismatch)      | Default to full `count()`; keyset only if aligned    | [Counting Logic](#counting-logic)                                       |
-| Single-column index causes heap fetches                          | Composite covering index with `INCLUDE`              | [Required Indexes](#required-indexes-for-performance)                   |
-| Lag alone misses old partition gaps                              | Partition coverage check endpoint                    | [Partition Coverage Check](#post-apiadminpartition-coverage-check)      |
-| PG month query risk (string INTERVAL, TZ drift)                  | `make_interval` + `AT TIME ZONE 'UTC'`               | [Partition Coverage Check](#post-apiadminpartition-coverage-check)      |
-| Sample-verify gets false mismatches during merge lag             | Use `FINAL` or `argMax` for CH queries               | [Sample Verify](#post-apiadminsample-verify)                            |
-| `OPTIMIZE TABLE FINAL` blocks production                         | Partition-scoped or avoid entirely                   | [ClickHouse Judgments](#clickhouse-judgments-camelcase-columns)         |
-| PeerDB mirror down/degraded                                      | Surface mirror status + lag; override to Critical    | [Status Thresholds](#status-thresholds)                                 |
-| PG replication slot inactive / WAL bloat                         | Surface slot active + retained WAL signals           | [Status Thresholds](#status-thresholds)                                 |
-| CH merges stuck/backlogged                                       | Surface `system.merges` + part counts                | [Status Thresholds](#status-thresholds)                                 |
+| Issue                                                            | Solution                                                         | Section                                                                 |
+| ---------------------------------------------------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Timestamp-only watermark skips rows on ties                      | Keyset `(updatedAt, id)` tuple                                   | [Why Keyset Watermarks](#why-keyset-watermarks)                         |
+| Retroactive timestamps bypass watermark                          | Document limitation + periodic full recount                      | [Keyset Limitation](#why-keyset-watermarks)                             |
+| `totalCount` inflates on updates (re-counting)                   | Use `uniqueCount` for alerts/diffs, not `totalCount`             | [Why Counts Are Approximate](#why-counts-are-approximate)               |
+| `to_char(..., 'Z')` emits local time                             | Use `AT TIME ZONE 'UTC'`                                         | [Batched Counting](#solution-batched-incremental-counting-with-locking) |
+| `GREATEST` on nullable text stays NULL                           | Use `COALESCE` with conditional                                  | [Batched Counting](#solution-batched-incremental-counting-with-locking) |
+| Stale job detection using start time misclassifies long recounts | Heartbeat-based detection via `lastUpdatedAt`                    | [Stale Job Detection](#stale-job-detection-heartbeat-based)             |
+| Missing `pgChSyncStats` seed rows makes locks no-op              | Seed/upsert 4 rows before refresh                                | [Batched Counting](#solution-batched-incremental-counting-with-locking) |
+| Hard deletes invisible to keyset scans                           | Accept drift; periodic full recount; alert on `uniqueCount` only | [Why Counts Are Approximate](#why-counts-are-approximate)               |
+| `forska.judgments` is a VIEW (no `FINAL`)                        | Use `judgments_raw` for `FINAL`/`argMax`                         | [ClickHouse Judgments](#clickhouse-judgments-camelcase-columns)         |
+| PeerDB ordering isn't `updatedAt`                                | Use `_peerdb_version` for `argMax` (sink tables)                 | [Sample Verify](#post-apiadminsample-verify)                            |
+| `uniqExact()` expensive on large tables                          | Default to `uniqCombined()`, exact on-demand                     | [ClickHouse Judgments](#clickhouse-judgments-camelcase-columns)         |
+| `uniqCombined()` error conflicts with tight thresholds           | Widen thresholds unless exact counts                             | [Status Thresholds](#status-thresholds)                                 |
+| Fetching 50k rows per batch wastes bandwidth                     | CTE computes counts in-database                                  | [Batched Counting](#solution-batched-incremental-counting-with-locking) |
+| CH keyset WHERE can full-scan (ORDER BY/partition mismatch)      | Default to full `count()`; keyset only if aligned                | [Counting Logic](#counting-logic)                                       |
+| Single-column index causes heap fetches                          | Composite covering index with `INCLUDE`                          | [Required Indexes](#required-indexes-for-performance)                   |
+| Lag alone misses old partition gaps                              | Partition coverage check endpoint                                | [Partition Coverage Check](#post-apiadminpartition-coverage-check)      |
+| PG month query risk (string INTERVAL, TZ drift)                  | `make_interval` + `AT TIME ZONE 'UTC'`                           | [Partition Coverage Check](#post-apiadminpartition-coverage-check)      |
+| Sample-verify gets false mismatches during merge lag             | Use `FINAL` or `argMax` for CH queries                           | [Sample Verify](#post-apiadminsample-verify)                            |
+| `OPTIMIZE TABLE FINAL` blocks production                         | Partition-scoped or avoid entirely                               | [ClickHouse Judgments](#clickhouse-judgments-camelcase-columns)         |
+| PeerDB mirror down/degraded                                      | Surface mirror status + lag; override to Critical                | [Status Thresholds](#status-thresholds)                                 |
+| PG replication slot inactive / WAL bloat                         | Surface slot active + retained WAL signals                       | [Status Thresholds](#status-thresholds)                                 |
+| CH merges stuck/backlogged                                       | Surface `system.merges` + part counts                            | [Status Thresholds](#status-thresholds)                                 |
 
 ## Dependencies
 
@@ -65,7 +65,7 @@ Instead of running expensive `COUNT(*)` queries on every page load, we:
 1. **Store cached counts** in a PostgreSQL table (`pgChSyncStats`)
 2. **PG:** keyset watermark + batched scans (cheap incremental)
 3. **CH:** sinks are ReplacingMergeTree; cheap `count()/uniqCombined()` for UI, exact checks use `FINAL`/`argMax(..., _peerdb_version)` + tombstone filters
-4. **Refresh on-demand** via admin UI button with progress tracking
+4. **Refresh on-demand** via tools UI button with progress tracking
 
 ### Why Keyset Watermarks?
 
@@ -86,7 +86,7 @@ Keyset pagination assumes `updatedAt` increases monotonically. Rows with **retro
 1. **Backfill detection:** Before inserting rows with `updatedAt < NOW() - 1 hour`, set a flag that triggers a full recount
 2. **Periodic full recount:** Schedule weekly/monthly full recounts to correct any drift
 3. **Watermark reset on schema changes:** Any migration touching `updated_at` should reset watermarks
-4. **Admin UI warning:** Show "approximate" label and age of last full recount
+4. **UI warning:** Show "approximate" label and age of last full recount
 
 ### Why Counts Are Approximate
 
@@ -659,12 +659,12 @@ const exactUniqueResult = await clickhouseClient.query({
 
 **Unique count strategy:**
 
-| Context                | Function         | Error | Use When                               |
-| ---------------------- | ---------------- | ----- | -------------------------------------- |
-| Dashboard display      | `uniqCombined()` | ~1%   | Always (fast, good enough)             |
+| Context                | Function         | Error | Use When                                |
+| ---------------------- | ---------------- | ----- | --------------------------------------- |
+| Dashboard display      | `uniqCombined()` | ~1%   | Always (fast, good enough)              |
 | Drift alerts           | `uniqCombined()` | ~1%   | Threshold >= 2% so error doesn't matter |
-| Export/audit           | `uniqExact()`    | 0%    | On-demand button, warn about latency   |
-| Partition-scoped check | `uniqExact()`    | 0%    | Scope to recent 90 days for speed      |
+| Export/audit           | `uniqExact()`    | 0%    | On-demand button, warn about latency    |
+| Partition-scoped check | `uniqExact()`    | 0%    | Scope to recent 90 days for speed       |
 
 **OPTIMIZE TABLE usage:**
 

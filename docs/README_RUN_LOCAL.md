@@ -1,6 +1,9 @@
 # Run local dev build
 
+Goal: standalone local app; admin-free; single-user soon. See `REMOVE_ADMIN_AND_USERS.md`.
+
 Prereqs
+
 - Bun installed
 - Docker
 - A GPU if you plan to run VLLM locally
@@ -8,13 +11,12 @@ Prereqs
 
 ## 1) Install dependencies
 
-
-``` bash
+```bash
 # cd into the project folder, then:
 bun install
 ```
 
-## 2) Configure env variables and  validate
+## 2) Configure env variables and validate
 
 Create `.env.local` (gitignored) and set required values. At minimum:
 

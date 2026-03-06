@@ -2,11 +2,11 @@
 
 ## Step 1: Docs + goals (local-first)
 
-- [ ] Sweep docs: `README.md`, `CLAUDE.md`, `AGENTS.md`, `docs/**`, `*PLAN*.md`
-- [ ] Remove admin goal/wording; stop treating `/admin/*` as privileged area
-- [ ] State new target: standalone local app; single-user; local-first storage; hosted/multi-tenant not a goal
-- [ ] Align roadmaps: `SQLITE_PLAN.md` + `DUCK_PLAN.md` reinforce local-first (SQLite app DB, DuckDB analytics)
-- [ ] ClickHouse -> DuckDB: no overlap; cutover + delete ClickHouse in same change set; update `DUCK_PLAN.md`
+- [x] Sweep docs: `README.md`, `CLAUDE.md`, `AGENTS.md`, `docs/**`, `*PLAN*.md`
+- [x] Remove admin goal/wording; stop treating `/admin/*` as privileged area
+- [x] State new target: standalone local app; single-user; local-first storage; hosted/multi-tenant not a goal
+- [x] Align roadmaps: `SQLITE_PLAN.md` + `DUCK_PLAN.md` reinforce local-first (SQLite app DB, DuckDB analytics)
+- [x] ClickHouse -> DuckDB: no overlap; cutover + delete ClickHouse in same change set; update `DUCK_PLAN.md`
 
 ## Step 2: Admin-free (keep Better Auth + multi-user)
 
@@ -63,5 +63,5 @@
 
 ## Related
 
-- `SQLITE_PLAN.md` (if combining step 2 with SQLite + Drizzle removal)
+- `SQLITE_PLAN.md` (if combining step 3 with SQLite + Drizzle removal)
 - `DUCK_PLAN.md`

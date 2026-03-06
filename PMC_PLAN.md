@@ -36,7 +36,7 @@ Gotchas / bug risks
 
 - Never overwrite `importRoute`/`importRoutes` values with display names; many branches compare exact route strings (ex: datasource `New Import` dispatch)
 - `import_route.name` can be `NULL`/blank or equal to route (current inserts often default `name=route`); UI must handle fallback
-- Auth: `GET /api/importroutes` is admin-guarded; keep it that way. Non-admin pages must get display names via user-scoped endpoints (ex: project details includes `importRouteNamesByRoute`)
+- Auth: `GET /api/importroutes` should be user-guarded only (no admin role). Prefer using it for display mapping everywhere.
 - Inactive routes: `/api/importroutes` filters `active=true`; existing projects/datasources may reference inactive routes -> mapping must include them or UI falls back to raw route
 - Datasource `importRoute` is free-text (not FK); may not exist in `import_route` table -> expected fallbacks
 - Duplicate names across routes: keep route visible somewhere (secondary mono, tooltip, `copy route` action) to avoid ambiguity/support debugging

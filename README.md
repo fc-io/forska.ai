@@ -1,9 +1,13 @@
 # forska.ai - AI Agents for systematic reviews in healthcare
 
-This is a really deep, "deep research agent". It's actively developed, it's going to be a lot of changes.
-You can run it yourself if you have the technical understanding. There will probably be a hosted publicly available version eventually.
+Local-first deep research agent for systematic reviews.
 
-It uses Elysia/Bun for the API server. Solid.js/Tanstack/Vite on the client. Uses Drizzle ORM with Postgres and Better Auth. It then hooks up to open ai compatible apis – vllm or something, to analyze data in various forms (though mainly research papers for the time being).
+Goal: standalone single-user app (your own computer). No admin role. No hosted multi-tenant web app.
+
+Current: Bun/Elysia API, SolidJS/Vite client, Drizzle+Postgres+Better Auth (temporary).
+Roadmap: admin-free -> remove Better Auth/users -> SQLite app DB -> DuckDB analytics (drop ClickHouse).
+
+Plans: `REMOVE_ADMIN_AND_USERS.md`, `SQLITE_PLAN.md`, `DUCK_PLAN.md`.
 
 ## Abstract
 
@@ -23,8 +27,8 @@ Expected outcomes are higher-quality systematic reviews delivered faster and wit
 
 We also plan to release all the code for the system as open source.
 
-
 ## Resource Usage
+
 The system will store article "meta data" from openalex and a large amount of open access pdfs. These articles will then be connected to a client facing api and a app server on the same server. These will in turn be connected to our hpc resources where we do inference.
 
 The system used docker with postgres, aws cli and bun.
