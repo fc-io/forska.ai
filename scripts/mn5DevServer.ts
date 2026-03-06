@@ -160,8 +160,8 @@ const parseConfigFromLog = async (jobId: string, jobName: string): Promise<MN5Co
     }
 
     // Backwards-compat defaults for newer keys (older logs won't have them)
-    if (!config.SGLANG_API_MAX_INFLIGHT_REQUESTS) config.SGLANG_API_MAX_INFLIGHT_REQUESTS = '0'
-    if (!config.SGLANG_API_MAX_BURST_REQUESTS) config.SGLANG_API_MAX_BURST_REQUESTS = '0'
+    if (!config.SGLANG_API_MAX_INFLIGHT_REQUESTS) config.SGLANG_API_MAX_INFLIGHT_REQUESTS = '20'
+    if (!config.SGLANG_API_MAX_BURST_REQUESTS) config.SGLANG_API_MAX_BURST_REQUESTS = '20'
 
     return config as MN5Config
   } catch (e) {
