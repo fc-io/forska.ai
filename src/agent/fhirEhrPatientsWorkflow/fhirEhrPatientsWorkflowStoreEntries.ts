@@ -597,13 +597,14 @@ const processPatientShard = async ({
       stats.errors += 1
       addErrorSample(errorSamples, `markdown_validation:${patientId}:${built.validationErrors.join('|')}`)
     }
-    const recordText = built.markdown
+    const articleSummary = built.summaryMarkdown
+    const fullText = built.fulltextMarkdown
     const articleId = `${importRoute}:Patient/${patientId}`
     const originalData = buildPatientOriginalData({patientId, importRoute, assetsFolder, entries})
 
     const nextBatch: ArticleUpsertEntry[] = [
       ...batch,
-      {articleId, articleTitle, articleSummary: recordText, fullText: recordText, originalData},
+      {articleId, articleTitle, articleSummary, fullText, originalData},
     ]
     const shouldFlush = !dryRun && nextBatch.length >= 50
 

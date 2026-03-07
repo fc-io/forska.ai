@@ -177,6 +177,7 @@ const getQuoteCycleResult = (params: {
 export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
   const [stickyTop, setStickyTop] = createSignal<number | undefined>(undefined)
   const [localIsFulltextExpanded, setLocalIsFulltextExpanded] = createSignal(false)
+  const [showFhirRecordId, setShowFhirRecordId] = createSignal(false)
   const [highlightedFulltextHtml, setHighlightedFulltextHtml] = createSignal<string | undefined>(undefined)
   const [highlightedTitleHtml, setHighlightedTitleHtml] = createSignal<string | undefined>(undefined)
   const [highlightedSummaryHtml, setHighlightedSummaryHtml] = createSignal<string | undefined>(undefined)
@@ -713,20 +714,52 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
 
           {/* Article ID link - shown in summary and all modes */}
           <Show when={viewMode() === 'all' || viewMode() === 'summary'}>
-            <p class="text-gray-600">
-              <a
-                href={getArticleUrl(props.article.articleId)}
-                target="_blank"
-                rel="noopener noreferrer"
-                class="text-blue-600 hover:underline break-all"
-              >
-                {props.article.articleId}
-              </a>
-            </p>
+            <Show when={!isFhirPatientRecord()}>
+              <p class="text-gray-600">
+                <a
+                  href={getArticleUrl(props.article.articleId)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="text-blue-600 hover:underline break-all"
+                >
+                  {props.article.articleId}
+                </a>
+              </p>
 
-            {/* Authors */}
-            <Show when={props.article.articleAuthors}>
-              <p class="text-gray-600">Authors: {props.article.articleAuthors?.join(', ')}</p>
+              <Show when={props.article.articleAuthors}>
+                <p class="text-gray-600">Authors: {props.article.articleAuthors?.join(', ')}</p>
+              </Show>
+            </Show>
+
+            <Show when={isFhirPatientRecord()}>
+              <div class="flex items-center gap-2 text-gray-600">
+                <button
+                  type="button"
+                  class="text-sm text-blue-600 hover:underline"
+                  onClick={() => {
+                    return setShowFhirRecordId(!showFhirRecordId())
+                  }}
+                >
+                  {showFhirRecordId() ? 'Hide record ID' : 'Show record ID'}
+                </button>
+
+                <Show when={showFhirRecordId()}>
+                  <span class="font-mono text-xs bg-gray-50 border border-gray-200 px-2 py-1 rounded select-all break-all">
+                    {props.article.articleId}
+                  </span>
+                  <button
+                    type="button"
+                    class="text-xs text-gray-600 hover:text-gray-800"
+                    onClick={() => {
+                      const value = String(props.article.articleId ?? '').trim()
+                      if (value.length === 0) return
+                      void navigator.clipboard?.writeText(value)
+                    }}
+                  >
+                    Copy
+                  </button>
+                </Show>
+              </div>
             </Show>
           </Show>
 

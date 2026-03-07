@@ -10,6 +10,16 @@ export type FhirPatientMarkdownEntry = {
   decodedNotes: FhirDecodedNote[]
 }
 
+type FhirPatientMarkdownProfile = 'summary' | 'fulltext'
+
+export type FhirPatientMarkdownBuilt = {
+  summaryMarkdown: string
+  fulltextMarkdown: string
+  summaryValidationErrors: string[]
+  fulltextValidationErrors: string[]
+  validationErrors: string[]
+}
+
 export const buildFhirPatientMarkdown = ({
   patientId,
   importRoute: _importRoute,
@@ -22,7 +32,7 @@ export const buildFhirPatientMarkdown = ({
   assetsFolder: string
   articleTitle: string
   entries: FhirPatientMarkdownEntry[]
-}): {markdown: string; validationErrors: string[]} => {
+}): FhirPatientMarkdownBuilt => {
   const patientEntry =
     entries.find((e) => {
       return e.resourceType === 'Patient'
@@ -33,9 +43,63 @@ export const buildFhirPatientMarkdown = ({
     return renderInlineReference({reference, display, contextByKey, identifierToKey})
   }
 
-  const patientSectionLines = buildPatientSectionLines({patientId, patientEntry})
+  const summaryMarkdown = buildFhirPatientMarkdownProfile({
+    profile: 'summary',
+    patientId,
+    patientEntry,
+    articleTitle,
+    entries,
+    renderRef,
+    resourceByKey,
+    identifierToKey,
+  })
 
-  const timelineLines = buildTimelineLines({patientId, entries, renderRef, resourceByKey, identifierToKey})
+  const fulltextMarkdown = buildFhirPatientMarkdownProfile({
+    profile: 'fulltext',
+    patientId,
+    patientEntry,
+    articleTitle,
+    entries,
+    renderRef,
+    resourceByKey,
+    identifierToKey,
+  })
+
+  const summaryValidationErrors = validateFhirPatientSummaryMarkdown(summaryMarkdown)
+  const fulltextValidationErrors = validateFhirPatientMarkdown(fulltextMarkdown)
+  const validationErrors = [
+    ...summaryValidationErrors.map((e) => {
+      return `summary:${e}`
+    }),
+    ...fulltextValidationErrors.map((e) => {
+      return `fulltext:${e}`
+    }),
+  ]
+
+  return {summaryMarkdown, fulltextMarkdown, summaryValidationErrors, fulltextValidationErrors, validationErrors}
+}
+
+const buildFhirPatientMarkdownProfile = ({
+  profile,
+  patientId,
+  patientEntry,
+  articleTitle,
+  entries,
+  renderRef,
+  resourceByKey,
+  identifierToKey,
+}: {
+  profile: FhirPatientMarkdownProfile
+  patientId: string
+  patientEntry: FhirPatientMarkdownEntry | null
+  articleTitle: string
+  entries: FhirPatientMarkdownEntry[]
+  renderRef: (ref: {reference: string; display: string | null}) => string
+  resourceByKey: Map<string, unknown>
+  identifierToKey: Map<string, string>
+}): string => {
+  const patientSectionLines = buildPatientSectionLines({profile, patientId, patientEntry})
+  const timelineLines = buildTimelineLines({profile, patientId, entries, renderRef, resourceByKey, identifierToKey})
 
   const markdownLines = [
     `# ${articleTitle}`,
@@ -48,9 +112,7 @@ export const buildFhirPatientMarkdown = ({
     '',
   ]
 
-  const markdown = `${markdownLines.join('\n').trimEnd()}\n`
-  const validationErrors = validateFhirPatientMarkdown(markdown)
-  return {markdown, validationErrors}
+  return `${markdownLines.join('\n').trimEnd()}\n`
 }
 
 const tryJsonParse = (raw: string): JsonParseResult => {
@@ -210,13 +272,17 @@ const getUniqueTimeSourcesForValue = (candidates: TimeCandidate[], timeValue: st
 }
 
 const buildTimeAndIdBullet = ({
+  profile,
   resource,
   resourceId,
   sortDate,
+  includeId,
 }: {
+  profile: FhirPatientMarkdownProfile
   resource: unknown
   resourceId: string | null
   sortDate: string | null
+  includeId: boolean
 }): string[] => {
   const sortValue = getStringOrNull(sortDate)
   const candidates = getTimeCandidatesFromResource(resource)
@@ -227,24 +293,26 @@ const buildTimeAndIdBullet = ({
 
   const sources = getUniqueTimeSourcesForValue(candidates, timeValue)
   const labelSources = sources.length > 0 ? sources : sortValue ? ['sortDate'] : []
-  const label = labelSources.length > 0 ? `time(${labelSources.join(', ')})` : 'time'
+  const label = profile === 'summary' ? 'time' : labelSources.length > 0 ? `time(${labelSources.join(', ')})` : 'time'
   const timeLine = `- ${label}: ${truncateInlineText(timeValue, 120)}`
-  const idLine = resourceId ? `- id: \`${resourceId}\`` : null
+  const idLine = includeId && resourceId ? `- id: \`${resourceId}\`` : null
   return [timeLine, ...(idLine ? [idLine] : [])]
 }
 
 const buildEventBullets = ({
+  profile,
   resourceType,
   resourceId,
   resource,
   sortDate,
 }: {
+  profile: FhirPatientMarkdownProfile
   resourceType: string
   resourceId: string | null
   resource: unknown
   sortDate: string | null
 }): string[] => {
-  const base = buildTimeAndIdBullet({resource, resourceId, sortDate})
+  const base = buildTimeAndIdBullet({profile, resource, resourceId, sortDate, includeId: false})
 
   if (!isRecordValue(resource)) {
     return base
@@ -334,15 +402,47 @@ const buildEventBullets = ({
 
 const getEventDisplay = ({
   resourceType,
-  resourceId,
+  resourceId: _resourceId,
   resource,
 }: {
   resourceType: string
   resourceId: string | null
   resource: unknown
-}): string => {
+}): string | null => {
   if (!isRecordValue(resource)) {
-    return resourceId ?? 'Event'
+    return null
+  }
+
+  if (resourceType === 'Practitioner') {
+    const firstName = getFirstRecordOrNull(resource.name)
+    const asHumanName = firstName ? buildHumanName(firstName) : null
+    return asHumanName ? truncateInlineText(asHumanName, 140) : null
+  }
+
+  if (resourceType === 'Organization') {
+    const name = getStringAtPath(resource, ['name'])
+    return name ? truncateInlineText(name, 140) : null
+  }
+
+  if (resourceType === 'Location') {
+    const name = getStringAtPath(resource, ['name'])
+    const city = getStringAtPath(resource, ['address', 'city'])
+    const state = getStringAtPath(resource, ['address', 'state'])
+    const locality = joinNonEmptyParts([city, state], ', ')
+    const combined = joinNonEmptyParts([name, locality], ' - ')
+    return combined ? truncateInlineText(combined, 140) : null
+  }
+
+  if (resourceType === 'Device') {
+    const type = getCodeableConceptDisplay(resource.type)
+    const name = getStringAtPath(resource, ['deviceName', '0', 'name'])
+    const manufacturer = getStringAtPath(resource, ['manufacturer'])
+    const model = getStringAtPath(resource, ['modelNumber'])
+    const base = type ?? name ?? manufacturer ?? model
+    const modelSuffix = base && model && base !== model ? `model ${model}` : null
+    const suffix = joinNonEmptyParts([modelSuffix], '; ')
+    const combined = base ? (suffix ? `${base} (${suffix})` : base) : null
+    return combined ? truncateInlineText(combined, 140) : null
   }
 
   const display =
@@ -369,7 +469,7 @@ const getEventDisplay = ({
                       ? getCodeableConceptDisplay(resource.code)
                       : null
 
-  return display ? truncateInlineText(display, 140) : (resourceId ?? 'Event')
+  return display ? truncateInlineText(display, 140) : null
 }
 
 type ExtractedReference = {path: string; reference: string; display: string | null}
@@ -626,18 +726,18 @@ const renderInlineReference = ({
 }
 
 const buildPatientSectionLines = ({
-  patientId,
+  profile,
+  patientId: _patientId,
   patientEntry,
 }: {
+  profile: FhirPatientMarkdownProfile
   patientId: string
   patientEntry: FhirPatientMarkdownEntry | null
 }): string[] => {
-  const base = patientEntry ? [] : [`- patient_id: \`${patientId}\``]
-
   const parsed = patientEntry ? tryJsonParse(patientEntry.rawLine) : {ok: false as const, error: 'missing'}
   const resource = parsed.ok ? parsed.value : null
   if (!isRecordValue(resource)) {
-    return base
+    return []
   }
 
   const names = getArrayOrEmpty(resource.name)
@@ -648,8 +748,8 @@ const buildPatientSectionLines = ({
       return Boolean(v)
     })
 
-  const nameLines = names.flatMap((name, idx) => {
-    return idx === 0 ? buildBullet('name', name) : [`- name[${idx}]: ${truncateInlineText(name, 250)}`]
+  const nameLines = names.flatMap((name) => {
+    return buildBullet('name', name)
   })
 
   const gender = getStringAtPath(resource, ['gender'])
@@ -658,44 +758,19 @@ const buildPatientSectionLines = ({
   const deceasedDateTime = getStringAtPath(resource, ['deceasedDateTime'])
   const deceased = deceasedDateTime ?? deceasedBoolean
 
-  const identifiers = getArrayOrEmpty(resource.identifier)
-    .map((ident) => {
-      return isRecordValue(ident) ? buildIdentifierText(ident) : null
-    })
-    .filter((v): v is string => {
-      return Boolean(v)
-    })
-    .flatMap((text, idx) => {
-      const normalized = normalizeInlineText(text)
-      return idx === 0 ? [`- identifier: ${normalized}`] : [`- identifier[${idx}]: ${normalized}`]
-    })
+  const identifiers = getArrayOrEmpty(resource.identifier).flatMap((ident) => {
+    return isRecordValue(ident) ? buildIdentifierLines(ident, profile) : []
+  })
 
-  const telecom = getArrayOrEmpty(resource.telecom)
-    .map((t) => {
-      return isRecordValue(t) ? buildTelecomText(t) : null
-    })
-    .filter((v): v is string => {
-      return Boolean(v)
-    })
-    .flatMap((text, idx) => {
-      const normalized = normalizeInlineText(text)
-      return idx === 0 ? [`- telecom: ${normalized}`] : [`- telecom[${idx}]: ${normalized}`]
-    })
+  const telecom = getArrayOrEmpty(resource.telecom).flatMap((t) => {
+    return isRecordValue(t) ? buildTelecomLines(t, profile) : []
+  })
 
-  const addresses = getArrayOrEmpty(resource.address)
-    .map((a) => {
-      return isRecordValue(a) ? buildAddressText(a) : null
-    })
-    .filter((v): v is string => {
-      return Boolean(v)
-    })
-    .flatMap((text, idx) => {
-      const normalized = normalizeInlineText(text)
-      return idx === 0 ? [`- address: ${normalized}`] : [`- address[${idx}]: ${normalized}`]
-    })
+  const addresses = getArrayOrEmpty(resource.address).flatMap((a) => {
+    return isRecordValue(a) ? buildAddressLines(a, profile) : []
+  })
 
   return [
-    ...base,
     ...nameLines,
     ...buildBullet('gender', gender),
     ...buildBullet('birthDate', birthDate),
@@ -754,36 +829,46 @@ const joinNonEmptyParts = (parts: (string | null)[], sep: string): string => {
     .join(sep)
 }
 
-const buildIdentifierText = (ident: Record<string, unknown>): string | null => {
-  const system = getStringOrNull(ident.system)
+const buildIdentifierLines = (ident: Record<string, unknown>, profile: FhirPatientMarkdownProfile): string[] => {
   const value = getStringOrNull(ident.value)
-  const use = getStringOrNull(ident.use)
   const type = getCodeableConceptDisplay(ident.type)
-  const joined = joinNonEmptyParts(
-    [
-      system ? `system=${system}` : null,
-      value ? `value=${value}` : null,
-      type ? `type=${type}` : null,
-      use ? `use=${use}` : null,
-    ],
-    ' | ',
-  )
-  return joined.length > 0 ? joined : null
+  const use = getStringOrNull(ident.use)
+
+  const labelBase = type ?? 'identifier'
+  const label = profile === 'fulltext' && use ? `${labelBase} (${use})` : labelBase
+  return value ? [`- ${label}: ${truncateInlineText(value, 250)}`] : []
 }
 
-const buildTelecomText = (telecom: Record<string, unknown>): string | null => {
+const getTelecomSystemLabel = (system: string | null): string => {
+  const normalized = (system ?? '').trim().toLowerCase()
+  return normalized === 'phone'
+    ? 'Phone'
+    : normalized === 'email'
+      ? 'Email'
+      : normalized === 'fax'
+        ? 'Fax'
+        : normalized === 'sms'
+          ? 'SMS'
+          : normalized === 'pager'
+            ? 'Pager'
+            : normalized === 'url'
+              ? 'URL'
+              : 'Contact'
+}
+
+const buildTelecomLines = (telecom: Record<string, unknown>, _profile: FhirPatientMarkdownProfile): string[] => {
   const system = getStringOrNull(telecom.system)
   const value = getStringOrNull(telecom.value)
   const use = getStringOrNull(telecom.use)
-  const joined = joinNonEmptyParts(
-    [system ? `system=${system}` : null, value ? `value=${value}` : null, use ? `use=${use}` : null],
-    ' | ',
-  )
-  return joined.length > 0 ? joined : null
+
+  const labelBase = getTelecomSystemLabel(system)
+  const label = use ? `${labelBase} (${use})` : labelBase
+  return value ? [`- ${label}: ${truncateInlineText(value, 250)}`] : []
 }
 
-const buildAddressText = (address: Record<string, unknown>): string | null => {
+const buildAddressLines = (address: Record<string, unknown>, _profile: FhirPatientMarkdownProfile): string[] => {
   const use = getStringOrNull(address.use)
+  const text = getStringOrNull(address.text)
   const lines = getArrayOrEmpty(address.line)
     .map((l) => {
       return getStringOrNull(l)
@@ -797,11 +882,10 @@ const buildAddressText = (address: Record<string, unknown>): string | null => {
   const postalCode = getStringOrNull(address.postalCode)
   const country = getStringOrNull(address.country)
   const locality = joinNonEmptyParts([city, state, postalCode, country], ', ')
-  const joined = joinNonEmptyParts(
-    [use ? `use=${use}` : null, lines ? `line=${lines}` : null, locality ? `locality=${locality}` : null],
-    ' | ',
-  )
-  return joined.length > 0 ? joined : null
+
+  const value = text ?? joinNonEmptyParts([lines || null, locality || null], ', ')
+  const label = use ? `address (${use})` : 'address'
+  return value ? [`- ${label}: ${truncateInlineText(value, 400)}`] : []
 }
 
 type TimelineEvent = {
@@ -809,7 +893,7 @@ type TimelineEvent = {
   bucketDate: string
   resourceType: string
   resourceId: string | null
-  display: string
+  display: string | null
   bullets: string[]
   resultBullets: string[]
   refBullets: string[]
@@ -1002,13 +1086,65 @@ const buildDiagnosticReportResultsBlockLines = ({
   return [headerLine, ...itemLines]
 }
 
+const buildHumanReferenceLabel = (path: string): string => {
+  const noIndexes = path.replace(/\[\d+\]/g, '')
+  const noDots = noIndexes.replace(/\./g, ' ')
+  const compact = noDots.replace(/\s+/g, ' ').trim()
+
+  const mapped =
+    compact === 'serviceProvider'
+      ? 'provider'
+      : compact === 'managingOrganization'
+        ? 'organization'
+        : compact === 'location location'
+          ? 'location'
+          : compact === 'participant individual'
+            ? 'participant'
+            : compact
+
+  return mapped
+}
+
+const SUMMARY_REF_LABEL_ALLOWLIST = new Set([
+  'author',
+  'asserter',
+  'custodian',
+  'device',
+  'encounter',
+  'facility',
+  'location',
+  'organization',
+  'participant',
+  'performer',
+  'provider',
+  'recorder',
+  'requester',
+])
+
+const isAllowedSummaryReferenceLabel = (label: string): boolean => {
+  return SUMMARY_REF_LABEL_ALLOWLIST.has(label)
+}
+
+const isLowInfoRenderedReference = (rendered: string): boolean => {
+  const trimmed = rendered.trim()
+  if (trimmed.length === 0) {
+    return true
+  }
+  if (trimmed === 'Reference') {
+    return true
+  }
+  return /^[A-Z][A-Za-z]+$/.test(trimmed)
+}
+
 const buildTimelineLines = ({
+  profile,
   patientId,
   entries,
   renderRef,
   resourceByKey,
   identifierToKey,
 }: {
+  profile: FhirPatientMarkdownProfile
   patientId: string
   entries: FhirPatientMarkdownEntry[]
   renderRef: (ref: {reference: string; display: string | null}) => string
@@ -1026,6 +1162,7 @@ const buildTimelineLines = ({
       const bucketDate = getBucketDateFromSort(sortMs, entry.sortDate)
       const display = getEventDisplay({resourceType: entry.resourceType, resourceId: entry.resourceId, resource})
       const bullets = buildEventBullets({
+        profile,
         resourceType: entry.resourceType,
         resourceId: entry.resourceId,
         resource,
@@ -1051,17 +1188,36 @@ const buildTimelineLines = ({
         })
         .map((r) => {
           const rendered = renderRef({reference: r.reference, display: r.display})
-          return {path: r.path, rendered}
+          const label = buildHumanReferenceLabel(r.path)
+          return {path: r.path, label, rendered}
         })
         .sort((a, b) => {
-          return a.path.localeCompare(b.path)
+          const byLabel = a.label.localeCompare(b.label)
+          return byLabel !== 0 ? byLabel : a.path.localeCompare(b.path)
         })
+        .filter((r) => {
+          return r.label.length > 0
+        })
+        .filter((r) => {
+          return profile === 'summary' ? isAllowedSummaryReferenceLabel(r.label) : true
+        })
+        .filter((r) => {
+          return !isLowInfoRenderedReference(r.rendered)
+        })
+        .reduce<{path: string; label: string; rendered: string}[]>((acc, r) => {
+          const key = `${r.label}::${r.rendered}`
+          return acc.some((x) => {
+            return `${x.label}::${x.rendered}` === key
+          })
+            ? acc
+            : [...acc, r]
+        }, [])
         .map((r) => {
-          return `- ${r.path}: ${r.rendered}`
+          return `- ${r.label}: ${r.rendered}`
         })
 
       const noteLines = entry.decodedNotes.flatMap((note, idx) => {
-        const rendered = renderDecodedNoteLines({note, bucketDate, renderRef})
+        const rendered = renderDecodedNoteLines({profile, note, bucketDate, renderRef})
         return idx === 0 ? rendered : rendered.length > 0 ? ['', ...rendered] : []
       })
 
@@ -1076,6 +1232,15 @@ const buildTimelineLines = ({
         refBullets,
         noteLines,
       } satisfies TimelineEvent
+    })
+    .filter((e) => {
+      const hasAny =
+        Boolean(e.display)
+        || e.bullets.length > 0
+        || e.refBullets.length > 0
+        || e.resultBullets.length > 0
+        || e.noteLines.length > 0
+      return hasAny
     })
     .sort(compareTimelineEvents)
 
@@ -1095,7 +1260,7 @@ const buildTimelineLines = ({
       lines.push('')
     }
 
-    lines.push(`#### ${event.resourceType}: ${event.display}`)
+    lines.push(event.display ? `#### ${event.resourceType}: ${event.display}` : `#### ${event.resourceType}`)
     lines.push(...event.bullets)
     lines.push(...(event.refBullets.length > 0 ? event.refBullets : []))
 
@@ -1308,7 +1473,7 @@ const isFhirResourceType = (value: string): boolean => {
 }
 
 const splitTrailingPunctuation = (value: string): {core: string; suffix: string} => {
-  const match = value.match(/^(.*?)([)\].,;:\}]*)$/)
+  const match = value.match(/^(.*?)([)\].,;:}]*)$/)
   const core = String(match?.[1] ?? value)
   const suffix = String(match?.[2] ?? '')
   return {core, suffix}
@@ -1377,7 +1542,63 @@ const stripLeadingBucketDateLine = ({text, bucketDate}: {text: string; bucketDat
   return rest
 }
 
-const renderDecodedNoteLines = ({
+const getNoteSourceLabel = (path: string): string | null => {
+  const match = path.match(/^([A-Z][A-Za-z]+)/)
+  return match ? getStringOrNull(match[1]) : null
+}
+
+const stripMarkdownForExcerpt = (text: string): string => {
+  const lines = text.replace(/\r\n/g, '\n').split('\n')
+  const withoutFences = lines.filter((l) => {
+    return getFenceRunLength(l) === null
+  })
+
+  return withoutFences
+    .map((l) => {
+      const noHeading = l.replace(/^\s{0,3}#{1,6}\s*/g, '')
+      const noList = noHeading.replace(/^\s*(?:[-*+]\s+|\d+\.\s+)/g, '')
+      const noBackticks = noList.replace(/`+/g, '')
+      return noBackticks.trim()
+    })
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+const renderDecodedNoteLinesSummary = ({
+  note,
+  bucketDate,
+  renderRef,
+}: {
+  note: FhirDecodedNote
+  bucketDate: string
+  renderRef: (ref: {reference: string; display: string | null}) => string
+}): string[] => {
+  const raw = String(note.text ?? '')
+  const trimmed = raw.trim()
+  if (trimmed.length === 0) {
+    return []
+  }
+
+  const stripped = stripLeadingBucketDateLine({text: trimmed, bucketDate}).trim()
+  if (stripped.length === 0) {
+    return []
+  }
+
+  const demoted = demoteMarkdownHeadingsToH6(stripped)
+  const inlined = inlineReferencesInMarkdown(demoted, renderRef)
+  const excerpt = truncateInlineText(stripMarkdownForExcerpt(inlined), 700)
+  if (excerpt.length === 0) {
+    return []
+  }
+
+  const source = getNoteSourceLabel(note.path)
+  const truncatedSuffix = note.truncated ? ' | truncated=true' : ''
+  const header = `##### Note${source ? ` (${source})` : ''}${truncatedSuffix}`
+  return [header, '', excerpt]
+}
+
+const renderDecodedNoteLinesFulltext = ({
   note,
   bucketDate,
   renderRef,
@@ -1404,8 +1625,26 @@ const renderDecodedNoteLines = ({
     return l.trimEnd()
   })
 
+  const source = getNoteSourceLabel(note.path)
   const truncatedSuffix = note.truncated ? ' | truncated=true' : ''
-  return [`##### Note (${note.path})${truncatedSuffix}`, '', ...finalLines]
+  const header = `##### Note${source ? ` (${source})` : ''}${truncatedSuffix}`
+  return [header, '', ...finalLines]
+}
+
+const renderDecodedNoteLines = ({
+  profile,
+  note,
+  bucketDate,
+  renderRef,
+}: {
+  profile: FhirPatientMarkdownProfile
+  note: FhirDecodedNote
+  bucketDate: string
+  renderRef: (ref: {reference: string; display: string | null}) => string
+}): string[] => {
+  return profile === 'summary'
+    ? renderDecodedNoteLinesSummary({note, bucketDate, renderRef})
+    : renderDecodedNoteLinesFulltext({note, bucketDate, renderRef})
 }
 
 const validateFhirPatientMarkdown = (markdown: string): string[] => {
@@ -1526,4 +1765,41 @@ const validateFhirPatientMarkdown = (markdown: string): string[] => {
   }
 
   return errors
+}
+
+const validateFhirPatientSummaryMarkdown = (markdown: string): string[] => {
+  const base = validateFhirPatientMarkdown(markdown)
+  const errors = [...base]
+
+  const lines = markdown.replace(/\r\n/g, '\n').split('\n')
+  let openRun: number | null = null
+
+  lines.forEach((line) => {
+    const run = getFenceRunLength(line)
+    if (run !== null) {
+      openRun = openRun === null ? run : run >= openRun ? null : openRun
+      return
+    }
+    if (openRun !== null) {
+      return
+    }
+
+    if (/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i.test(line)) {
+      errors.push('uuid_token')
+    }
+    if (/\bsystem=https?:\/\//i.test(line)) {
+      errors.push('system_url')
+    }
+    if (/\[\d+\]/.test(line)) {
+      errors.push('array_index_token')
+    }
+    if (/^\s*-\s*id:\s*/i.test(line)) {
+      errors.push('id_bullet')
+    }
+  })
+
+  const unique = errors.reduce<string[]>((acc, e) => {
+    return acc.includes(e) ? acc : [...acc, e]
+  }, [])
+  return unique
 }

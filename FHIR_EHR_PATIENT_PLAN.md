@@ -5,8 +5,8 @@
 - Import FHIR Bulk NDJSON patient datasets (any size/sharding) from `assets/**` into Postgres `articles`.
 - Example dataset: `assets/sample-bulk-fhir-datasets-100-patients/**/*.ndjson`.
 - 1 FHIR Patient == 1 `articles` row.
-- `articleSummary` == `fullText` (identical string).
-- Title info duplicated inside summary/fulltext.
+- `articleSummary`: human-only markdown (no ids/refs; note excerpts).
+- `fullText`: fuller markdown (still no ids/refs; full notes).
 
 ## Decisions (IDs + routing)
 
@@ -46,7 +46,7 @@
 
 ### Checklist: human formatting (store only this)
 
-- [x] store human-mode only in DB: `articleSummary===fullText`; provenance lives in `originalData` (no debug markdown)
+- [x] store human-mode only in DB: `articleSummary` + `fullText`; provenance lives in `originalData` (no debug markdown)
 - [x] drop non-patient metadata noise (`import_route`, `assets_folder`) from markdown (already in DB columns + `originalData`)
 - [x] collapse duplicate info: if heading has display, don't repeat as `- code:`/`- medication:` etc
 - [x] time fields: emit 1 timestamp; label source(s) (e.g. `time(authoredOn)`); dedupe equal timestamps
@@ -128,7 +128,8 @@
 ## Ops / usage
 
 - Patient projects recommended content settings (avoids fulltext token-budget skip; summary==fulltext anyway):
-  - `useTitle=false`, `useAbstract=true`, `useFulltext=false`, `useFulltextNoImages=false`.
+  - default: `useTitle=false`, `useAbstract=true`, `useFulltext=false` (lighter; notes excerpted)
+  - if need full notes: `useFulltext=true`
 - Validate quickly:
   - create datasource with `cursor=assets/<datasetFolder>`, `importRoute=fhir:<datasetId>`
   - call import endpoint
