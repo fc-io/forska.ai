@@ -140,13 +140,8 @@ const normalizeInlineText = (value: string): string => {
   return value.replace(/\s+/g, ' ').trim()
 }
 
-const truncateInlineText = (value: string, maxLen: number): string => {
-  const normalized = normalizeInlineText(value)
-  if (normalized.length <= maxLen) {
-    return normalized
-  }
-  const head = normalized.slice(0, Math.max(0, maxLen - 3)).trimEnd()
-  return `${head}...`
+const truncateInlineText = (value: string, _maxLen: number): string => {
+  return normalizeInlineText(value)
 }
 
 const safeDecodeURIComponent = (value: string): string => {
@@ -1518,14 +1513,13 @@ const uniqueInOrder = (values: string[]): string[] => {
 }
 
 const renderDedupedNoteGroupLines = ({
-  profile,
+  profile: _profile,
   group,
 }: {
   profile: FhirPatientMarkdownProfile
   group: DedupedNoteGroup
 }): string[] => {
-  const excerpt = profile === 'summary' ? buildNoteExcerpt(group.canonicalText) : null
-  const textLines = profile === 'summary' ? (excerpt ? [excerpt] : []) : group.canonicalText.split('\n')
+  const textLines = group.canonicalText.split('\n')
 
   if (textLines.length === 0) {
     return []
@@ -1979,24 +1973,6 @@ const getNoteSourceLabel = (path: string): string | null => {
   return match ? getStringOrNull(match[1]) : null
 }
 
-const stripMarkdownForExcerpt = (text: string): string => {
-  const lines = text.replace(/\r\n/g, '\n').split('\n')
-  const withoutFences = lines.filter((l) => {
-    return getFenceRunLength(l) === null
-  })
-
-  return withoutFences
-    .map((l) => {
-      const noHeading = l.replace(/^\s{0,3}#{1,6}\s*/g, '')
-      const noList = noHeading.replace(/^\s*(?:[-*+]\s+|\d+\.\s+)/g, '')
-      const noBackticks = noList.replace(/`+/g, '')
-      return noBackticks.trim()
-    })
-    .join(' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
 const NOTE_SECTION_HEADINGS = [
   'Chief Complaint',
   'History of Present Illness',
@@ -2027,7 +2003,8 @@ const NOTE_SECTION_REGEX = new RegExp(
 
 const splitNoteIntoSentenceLikeParts = (text: string): string[] => {
   const normalized = normalizeInlineText(text)
-  const withBreaks = normalized.replace(/([.!?])\s+(?=[A-Z])/g, '$1\n')
+  const withSemicolons = normalized.replace(/;\s*/g, '\n')
+  const withBreaks = withSemicolons.replace(/([.!?])\s+(?=[A-Z])/g, '$1\n')
   return withBreaks
     .split('\n')
     .map((m) => {
@@ -2145,11 +2122,6 @@ const buildCanonicalNoteText = ({
   })
   const finalText = finalLines.join('\n').trim()
   return finalText.length > 0 ? finalText : null
-}
-
-const buildNoteExcerpt = (canonicalText: string): string | null => {
-  const excerpt = truncateInlineText(stripMarkdownForExcerpt(canonicalText), 700)
-  return excerpt.length > 0 ? excerpt : null
 }
 
 const validateFhirPatientMarkdown = (markdown: string): string[] => {
