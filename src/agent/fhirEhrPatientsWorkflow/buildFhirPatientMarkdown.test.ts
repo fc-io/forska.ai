@@ -324,3 +324,186 @@ test('buildFhirPatientMarkdown formats sectioned note blobs into readable lines'
     '- The patient was prescribed the following medications: levora 0.15/30 28 day pack',
   )
 })
+
+test('buildFhirPatientMarkdown groups observations with shared metadata into one block', () => {
+  const built = buildFhirPatientMarkdown({
+    patientId: 'p1',
+    importRoute: 'fhir:demo',
+    assetsFolder: 'assets/demo',
+    articleTitle: 'FHIR Patient p1',
+    entries: [
+      {
+        resourceType: 'Patient',
+        resourceId: 'p1',
+        sortDate: null,
+        rawLine: JSON.stringify({resourceType: 'Patient', id: 'p1'}),
+        decodedNotes: [],
+      },
+      {
+        resourceType: 'Encounter',
+        resourceId: 'e1',
+        sortDate: '2007-11-04T16:55:34Z',
+        rawLine: JSON.stringify({
+          resourceType: 'Encounter',
+          id: 'e1',
+          status: 'finished',
+          type: [{text: 'Admission to intensive care unit (procedure)'}],
+          subject: {reference: 'Patient/p1'},
+          period: {start: '2007-11-04T16:55:34Z'},
+        }),
+        decodedNotes: [],
+      },
+      {
+        resourceType: 'Observation',
+        resourceId: 'obs1',
+        sortDate: '2007-11-04T16:55:34Z',
+        rawLine: JSON.stringify({
+          resourceType: 'Observation',
+          id: 'obs1',
+          status: 'final',
+          effectiveDateTime: '2007-11-04T16:55:34Z',
+          code: {text: 'Alkaline phosphatase [Enzymatic activity/volume] in Serum or Plasma'},
+          subject: {reference: 'Patient/p1'},
+          encounter: {reference: 'Encounter/e1'},
+          valueQuantity: {value: 53.911, unit: 'U/L'},
+        }),
+        decodedNotes: [],
+      },
+      {
+        resourceType: 'Observation',
+        resourceId: 'obs2',
+        sortDate: '2007-11-04T16:55:34Z',
+        rawLine: JSON.stringify({
+          resourceType: 'Observation',
+          id: 'obs2',
+          status: 'final',
+          effectiveDateTime: '2007-11-04T16:55:34Z',
+          code: {text: 'Protein [Mass/volume] in Serum or Plasma'},
+          subject: {reference: 'Patient/p1'},
+          encounter: {reference: 'Encounter/e1'},
+          valueQuantity: {value: 7.5109, unit: 'g/dL'},
+        }),
+        decodedNotes: [],
+      },
+      {
+        resourceType: 'Observation',
+        resourceId: 'obs3',
+        sortDate: '2007-11-04T16:55:34Z',
+        rawLine: JSON.stringify({
+          resourceType: 'Observation',
+          id: 'obs3',
+          status: 'final',
+          effectiveDateTime: '2007-11-04T16:55:34Z',
+          code: {text: 'Low Density Lipoprotein Cholesterol'},
+          subject: {reference: 'Patient/p1'},
+          encounter: {reference: 'Encounter/e1'},
+          valueQuantity: {value: 81.88, unit: 'mg/dL'},
+        }),
+        decodedNotes: [],
+      },
+    ],
+  })
+
+  expect(built.validationErrors).toEqual([])
+  expect(built.summaryMarkdown).toContain('#### Observations (3)')
+  expect(built.summaryMarkdown).toContain('- time: 2007-11-04T16:55:34Z')
+  expect(built.summaryMarkdown).toContain('- status: final')
+  expect(built.summaryMarkdown).toContain('- encounter: Admission to intensive care unit (procedure)')
+  expect(built.summaryMarkdown).toContain(
+    '- Alkaline phosphatase [Enzymatic activity/volume] in Serum or Plasma: 53.911 U/L',
+  )
+  expect(built.summaryMarkdown).toContain('- Protein [Mass/volume] in Serum or Plasma: 7.5109 g/dL')
+  expect(built.summaryMarkdown).toContain('- Low Density Lipoprotein Cholesterol: 81.88 mg/dL')
+  expect((built.summaryMarkdown.match(/#### Observation:/g) ?? []).length).toBe(0)
+})
+
+test('buildFhirPatientMarkdown groups immunizations with shared metadata into one block', () => {
+  const built = buildFhirPatientMarkdown({
+    patientId: 'p1',
+    importRoute: 'fhir:demo',
+    assetsFolder: 'assets/demo',
+    articleTitle: 'FHIR Patient p1',
+    entries: [
+      {
+        resourceType: 'Patient',
+        resourceId: 'p1',
+        sortDate: null,
+        rawLine: JSON.stringify({resourceType: 'Patient', id: 'p1'}),
+        decodedNotes: [],
+      },
+      {
+        resourceType: 'Encounter',
+        resourceId: 'e1',
+        sortDate: '2021-06-22T03:34:04Z',
+        rawLine: JSON.stringify({
+          resourceType: 'Encounter',
+          id: 'e1',
+          status: 'finished',
+          type: [{text: 'Well child visit (procedure)'}],
+          subject: {reference: 'Patient/p1'},
+          period: {start: '2021-06-22T03:34:04Z'},
+        }),
+        decodedNotes: [],
+      },
+      {
+        resourceType: 'Immunization',
+        resourceId: 'imm1',
+        sortDate: '2021-06-22T03:34:04Z',
+        rawLine: JSON.stringify({
+          resourceType: 'Immunization',
+          id: 'imm1',
+          status: 'completed',
+          occurrenceDateTime: '2021-06-22T03:34:04Z',
+          vaccineCode: {text: 'Hib (PRP-OMP)'},
+          patient: {reference: 'Patient/p1'},
+          location: {display: 'HEARTLAND MEDICAL CLINIC INC'},
+          encounter: {reference: 'Encounter/e1'},
+        }),
+        decodedNotes: [],
+      },
+      {
+        resourceType: 'Immunization',
+        resourceId: 'imm2',
+        sortDate: '2021-06-22T03:34:04Z',
+        rawLine: JSON.stringify({
+          resourceType: 'Immunization',
+          id: 'imm2',
+          status: 'completed',
+          occurrenceDateTime: '2021-06-22T03:34:04Z',
+          vaccineCode: {text: 'DTaP'},
+          patient: {reference: 'Patient/p1'},
+          location: {display: 'HEARTLAND MEDICAL CLINIC INC'},
+          encounter: {reference: 'Encounter/e1'},
+        }),
+        decodedNotes: [],
+      },
+      {
+        resourceType: 'Immunization',
+        resourceId: 'imm3',
+        sortDate: '2021-06-22T03:34:04Z',
+        rawLine: JSON.stringify({
+          resourceType: 'Immunization',
+          id: 'imm3',
+          status: 'completed',
+          occurrenceDateTime: '2021-06-22T03:34:04Z',
+          vaccineCode: {text: 'Pneumococcal conjugate PCV 13'},
+          patient: {reference: 'Patient/p1'},
+          location: {display: 'HEARTLAND MEDICAL CLINIC INC'},
+          encounter: {reference: 'Encounter/e1'},
+        }),
+        decodedNotes: [],
+      },
+    ],
+  })
+
+  expect(built.validationErrors).toEqual([])
+  expect(built.summaryMarkdown).toContain('#### Immunizations (3)')
+  expect(built.summaryMarkdown).toContain('- time: 2021-06-22T03:34:04Z')
+  expect(built.summaryMarkdown).toContain('- status: completed')
+  expect(built.summaryMarkdown).toContain('- location: HEARTLAND MEDICAL CLINIC INC')
+  expect(built.summaryMarkdown).toContain('- encounter: Well child visit (procedure)')
+  expect(built.summaryMarkdown).toContain('- Hib (PRP-OMP)')
+  expect(built.summaryMarkdown).toContain('- DTaP')
+  expect(built.summaryMarkdown).toContain('- Pneumococcal conjugate PCV 13')
+  expect((built.summaryMarkdown.match(/#### Immunization:/g) ?? []).length).toBe(0)
+})

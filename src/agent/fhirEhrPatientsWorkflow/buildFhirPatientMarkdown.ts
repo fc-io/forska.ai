@@ -895,6 +895,10 @@ type TimelineEvent = {
   noteKeysInOrder: string[]
 }
 
+type TimelineRenderBlock =
+  | {kind: 'event'; bucketDate: string; lines: string[]; noteKeysInOrder: string[]}
+  | {kind: 'eventGroup'; bucketDate: string; lines: string[]; noteKeysInOrder: string[]; events: TimelineEvent[]}
+
 const getSortMsFromSortDate = (sortDate: string | null): number | null => {
   const value = (sortDate ?? '').trim()
   if (!value) {
@@ -1213,6 +1217,184 @@ const collapseDuplicateRoleBullets = (bullets: string[]): string[] => {
     const combined = combinedByFirstIndex.get(idx) ?? null
     return combined ? [combined] : [line]
   })
+}
+
+const buildCompactItemSuffixFromLines = (lines: string[]): string | null => {
+  if (lines.length === 0) {
+    return null
+  }
+
+  const formatted = lines
+    .map((line) => {
+      const parsed = parseSimpleBulletLabelValue(line)
+      return parsed ? `${parsed.label}: ${truncateInlineText(parsed.value, 140)}` : line.replace(/^\s*-\s*/, '').trim()
+    })
+    .filter((value) => {
+      return value.length > 0
+    })
+
+  if (formatted.length === 0) {
+    return null
+  }
+
+  return formatted.length === 1 && formatted[0]?.startsWith('value: ')
+    ? formatted[0].slice('value: '.length)
+    : `(${formatted.join('; ')})`
+}
+
+const buildCompactItemLine = ({
+  event,
+  sharedBullets,
+  sharedRefs,
+}: {
+  event: TimelineEvent
+  sharedBullets: string[]
+  sharedRefs: string[]
+}): string => {
+  const label = event.display ? truncateInlineText(event.display, 260) : event.resourceType
+  const uniqueBullets = event.bullets.filter((line) => {
+    return !sharedBullets.includes(line)
+  })
+  const uniqueRefs = event.refBullets.filter((line) => {
+    return !sharedRefs.includes(line)
+  })
+  const suffix = buildCompactItemSuffixFromLines([...uniqueBullets, ...uniqueRefs])
+  return suffix ? (suffix.startsWith('(') ? `- ${label} ${suffix}` : `- ${label}: ${suffix}`) : `- ${label}`
+}
+
+const canGroupTimelineEvent = (event: TimelineEvent): boolean => {
+  return event.resultBullets.length === 0 && event.noteKeysInOrder.length === 0
+}
+
+const buildCompactGroupSignature = (event: TimelineEvent): string | null => {
+  if (!canGroupTimelineEvent(event)) {
+    return null
+  }
+
+  return JSON.stringify({bucketDate: event.bucketDate, resourceType: event.resourceType})
+}
+
+const getSharedLines = (groups: string[][]): string[] => {
+  const first = groups[0] ?? []
+  return first.filter((line) => {
+    return groups.every((group) => {
+      return group.includes(line)
+    })
+  })
+}
+
+const pluralizeResourceType = (resourceType: string): string => {
+  return resourceType.endsWith('y') ? `${resourceType.slice(0, -1)}ies` : `${resourceType}s`
+}
+
+const buildSingleEventLines = (event: TimelineEvent): string[] => {
+  const resultBlockLines = event.resultBullets.length > 0 ? ['', ...event.resultBullets] : []
+  return [
+    event.display ? `#### ${event.resourceType}: ${event.display}` : `#### ${event.resourceType}`,
+    ...event.bullets,
+    ...(event.refBullets.length > 0 ? event.refBullets : []),
+    ...resultBlockLines,
+  ]
+}
+
+const buildEventGroupBlock = (events: TimelineEvent[]): TimelineRenderBlock => {
+  const first = events[0] as TimelineEvent
+  const sharedBullets = getSharedLines(
+    events.map((event) => {
+      return event.bullets
+    }),
+  )
+  const sharedRefs = getSharedLines(
+    events.map((event) => {
+      return event.refBullets
+    }),
+  )
+  const itemLines = events.map((event) => {
+    return buildCompactItemLine({event, sharedBullets, sharedRefs})
+  })
+
+  return {
+    kind: 'eventGroup',
+    bucketDate: first.bucketDate,
+    noteKeysInOrder: [],
+    events,
+    lines: [
+      `#### ${pluralizeResourceType(first.resourceType)} (${events.length})`,
+      ...sharedBullets,
+      ...sharedRefs,
+      ...itemLines,
+    ],
+  }
+}
+
+const collectMatchingCompactEvents = ({
+  events,
+  index,
+  signature,
+}: {
+  events: TimelineEvent[]
+  index: number
+  signature: string
+}): TimelineEvent[] => {
+  const event = events[index] ?? null
+  const eventSignature = event ? buildCompactGroupSignature(event) : null
+  if (!event || !canGroupTimelineEvent(event) || eventSignature !== signature) {
+    return []
+  }
+
+  return [event, ...collectMatchingCompactEvents({events, index: index + 1, signature})]
+}
+
+const hasUsefulSharedCompactMetadata = (events: TimelineEvent[]): boolean => {
+  const sharedBullets = getSharedLines(
+    events.map((event) => {
+      return event.bullets
+    }),
+  )
+  const sharedRefs = getSharedLines(
+    events.map((event) => {
+      return event.refBullets
+    }),
+  )
+
+  return sharedBullets.length + sharedRefs.length > 0
+}
+
+const buildTimelineRenderBlocksFromIndex = (events: TimelineEvent[], index: number): TimelineRenderBlock[] => {
+  const event = events[index] ?? null
+  if (!event) {
+    return []
+  }
+
+  if (!canGroupTimelineEvent(event)) {
+    return [
+      {
+        kind: 'event',
+        bucketDate: event.bucketDate,
+        lines: buildSingleEventLines(event),
+        noteKeysInOrder: event.noteKeysInOrder,
+      },
+      ...buildTimelineRenderBlocksFromIndex(events, index + 1),
+    ]
+  }
+
+  const signature = buildCompactGroupSignature(event)
+  const matchingEvents = signature ? collectMatchingCompactEvents({events, index, signature}) : [event]
+  const block =
+    matchingEvents.length > 1 && hasUsefulSharedCompactMetadata(matchingEvents)
+      ? buildEventGroupBlock(matchingEvents)
+      : {
+          kind: 'event' as const,
+          bucketDate: event.bucketDate,
+          lines: buildSingleEventLines(event),
+          noteKeysInOrder: event.noteKeysInOrder,
+        }
+
+  return [block, ...buildTimelineRenderBlocksFromIndex(events, index + matchingEvents.length)]
+}
+
+const buildTimelineRenderBlocks = (events: TimelineEvent[]): TimelineRenderBlock[] => {
+  return buildTimelineRenderBlocksFromIndex(events, 0)
 }
 
 const buildConciseReferenceDisplayFromResource = ({
@@ -1661,32 +1843,26 @@ const buildTimelineLines = ({
   const lines: string[] = []
   let currentBucket: string | null = null
   const renderedNoteKeys = new Set<string>()
+  const renderBlocks = buildTimelineRenderBlocks(events)
 
-  events.forEach((event) => {
-    if (event.bucketDate !== currentBucket) {
+  renderBlocks.forEach((block) => {
+    if (block.bucketDate !== currentBucket) {
       if (lines.length > 0) {
         lines.push('')
       }
-      lines.push(`### ${event.bucketDate}`)
-      currentBucket = event.bucketDate
+      lines.push(`### ${block.bucketDate}`)
+      currentBucket = block.bucketDate
     }
 
     if (lines.length > 0) {
       lines.push('')
     }
 
-    lines.push(event.display ? `#### ${event.resourceType}: ${event.display}` : `#### ${event.resourceType}`)
-    lines.push(...event.bullets)
-    lines.push(...(event.refBullets.length > 0 ? event.refBullets : []))
-
-    if (event.resultBullets.length > 0) {
-      lines.push('')
-      lines.push(...event.resultBullets)
-    }
+    lines.push(...block.lines)
 
     const noteLines = buildDedupedNoteLinesForEvent({
       profile,
-      noteKeysInOrder: event.noteKeysInOrder,
+      noteKeysInOrder: block.noteKeysInOrder,
       groups: noteGroups,
       renderedKeys: renderedNoteKeys,
     })
