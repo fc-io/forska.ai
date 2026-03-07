@@ -24,14 +24,14 @@
   position: relative;
   display: inline-block;
   width: 100%;
-  font-weight: 600;
-  line-height: 1.4;
-  color: rgb(17 24 39);
+  font-weight: 400;
+  line-height: inherit;
+  color: inherit;
 }
 
 .assessment-container .patient-timeline-toggle {
   position: absolute;
-  left: -1.5rem;
+  left: -2.875rem;
   top: 0.7em;
   transform: translateY(-50%);
   height: 1.375rem;
