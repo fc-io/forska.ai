@@ -10,7 +10,8 @@ const buildMissingJob = () => {
     status: '',
     error: '',
     projectName: '',
-    promptStats: {ready: 0, sent: 0, judged: 0},
+    promptStats: {ready: 0, sent: 0, judged: 0, skipped: 0},
+    requestStats: {inFlight: 0, attempts: 0},
   }
 }
 

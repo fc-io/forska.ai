@@ -8,6 +8,7 @@ import {
   recordConnectionFailure,
   recordConnectionSuccess,
 } from '../server/cron/judgmentsJobs/connectionHealth.ts'
+import {withJudgmentRequest} from '../server/cron/judgmentsJobs/judgmentsRequestRuntime.ts'
 import {getCodexAppServerClient} from '../server/utils/getCodexAppServerClient.ts'
 import {rateLimitedLogger} from '../server/utils/rateLimitedLogger.ts'
 import {
@@ -23,6 +24,7 @@ import {SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT_PATIENT} from './judge/judgeSingleP
 import {SINGLE_PROMPT_SYSTEM_PROMPT} from './judge/judgeSinglePromptSystemPrompt.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT_PATIENT} from './judge/judgeSinglePromptSystemPromptPatient.ts'
 import {judgeStoreTokenUse, type JudgeTokenUsageEntry} from './judge/judgeStoreTokenUse.ts'
+import {mapAsyncWithConcurrency} from './judge/mapAsyncWithConcurrency.ts'
 import {parseSinglePromptEvidence} from './judge/parseSinglePromptEvidence.ts'
 import {
   type ParseAttemptResult,
@@ -303,6 +305,7 @@ const storeTokenUseAndThrowConnectionError = async ({
   systemPrompt,
   userPrompt,
   errorMessage,
+  appendFailureEntry = true,
 }: {
   tokenUse: JudgeTokenUsageEntry[]
   sessionId: string | null
@@ -317,37 +320,35 @@ const storeTokenUseAndThrowConnectionError = async ({
   systemPrompt: string
   userPrompt: string
   errorMessage: string
+  appendFailureEntry?: boolean
 }): Promise<void> => {
   const duration = performance.now() - startDuration
   const finishedAt = new Date().toISOString()
+  const entries = appendFailureEntry
+    ? [
+        ...tokenUse,
+        {
+          articleId,
+          promptIds,
+          modelId,
+          modelName,
+          baseURL,
+          promptTokens: 0,
+          completionTokens: 0,
+          totalTokens: 0,
+          outcome: 'failure' as const,
+          error: 'Connection error',
+          sanitizationAttempted: false,
+          sanitizedError: null,
+          sanitizedResponse: null,
+          lastResponse: null,
+          systemPrompt,
+          userPrompt,
+        },
+      ]
+    : tokenUse
 
-  await judgeStoreTokenUse(
-    [
-      ...tokenUse,
-      {
-        articleId,
-        promptIds,
-        modelId,
-        modelName,
-        baseURL,
-        promptTokens: 0,
-        completionTokens: 0,
-        totalTokens: 0,
-        outcome: 'failure',
-        error: 'Connection error',
-        sanitizationAttempted: false,
-        sanitizedError: null,
-        sanitizedResponse: null,
-        lastResponse: null,
-        systemPrompt,
-        userPrompt,
-      },
-    ],
-    sessionId,
-    {startedAt, finishedAt, duration},
-    judgmentsJobId,
-    {totalRequests: 1},
-  ).catch((err) => {
+  await judgeStoreTokenUse(entries, sessionId, {startedAt, finishedAt, duration}, judgmentsJobId).catch((err) => {
     console.error('judgeStoreTokenUse failed; continuing', err instanceof Error ? err.message : err)
   })
 
@@ -384,10 +385,17 @@ type SinglePromptInput = {
   type: string | null
 }
 
+type GeneratedPromptResponse = {
+  text: string
+  usage: {promptTokens: number; completionTokens: number; totalTokens: number}
+  baseURL: string
+}
+
 /**
  * Helper to generate a single-prompt response from the LLM.
  */
 const generateSinglePromptResponse = async ({
+  judgmentsJobId,
   prompt,
   systemPrompt,
   baseURL,
@@ -396,6 +404,7 @@ const generateSinglePromptResponse = async ({
   version,
   outputSchema,
 }: {
+  judgmentsJobId: string
   prompt: string
   systemPrompt: string
   baseURL: string
@@ -403,50 +412,57 @@ const generateSinglePromptResponse = async ({
   provider: string | null
   version: string | null
   outputSchema: unknown
-}): Promise<{text: string; usage: {promptTokens: number; completionTokens: number; totalTokens: number}}> => {
+}): Promise<GeneratedPromptResponse> => {
   const providerNormalized = normalizeProvider(provider)
-  if (providerNormalized === 'codex') {
-    try {
-      const client = getCodexAppServerClient()
-      const combined = `${systemPrompt}\n\n${prompt}`
-      const result = await client.runJsonTurn({
-        model: modelName,
-        effort: version,
-        inputText: combined,
-        outputSchema,
-        timeoutMs: 900_000,
-      })
-      return {text: result.text, usage: {promptTokens: 0, completionTokens: 0, totalTokens: 0}}
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error)
-      throw new Error(`Connection error: codex app-server: ${msg}`)
+  return withJudgmentRequest({judgmentsJobId, provider, fallbackBaseURL: baseURL}, async (requestBaseURL) => {
+    if (providerNormalized === 'codex') {
+      try {
+        const client = getCodexAppServerClient()
+        const combined = `${systemPrompt}\n\n${prompt}`
+        const result = await client.runJsonTurn({
+          model: modelName,
+          effort: version,
+          inputText: combined,
+          outputSchema,
+          timeoutMs: 900_000,
+        })
+        return {
+          text: result.text,
+          usage: {promptTokens: 0, completionTokens: 0, totalTokens: 0},
+          baseURL: requestBaseURL,
+        }
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error)
+        throw new Error(`Connection error: codex app-server: ${msg}`)
+      }
     }
-  }
 
-  const client = getOpenAIClient(baseURL)
-  const modelToUse = normalizeModelName(modelName)
-  const response = await client.chat.completions.create({
-    model: modelToUse,
-    messages: [
-      {role: 'system', content: systemPrompt},
-      {role: 'user', content: prompt},
-    ],
-    max_completion_tokens: MAX_COMPLETION_TOKENS,
-    temperature: 0.2,
+    const client = getOpenAIClient(requestBaseURL)
+    const modelToUse = normalizeModelName(modelName)
+    const response = await client.chat.completions.create({
+      model: modelToUse,
+      messages: [
+        {role: 'system', content: systemPrompt},
+        {role: 'user', content: prompt},
+      ],
+      max_completion_tokens: MAX_COMPLETION_TOKENS,
+      temperature: 0.2,
+    })
+
+    const message = response.choices[0]?.message
+    if (!message) throw new Error('No message in response')
+    const assistantMessage = formatAssistantMessage(message)
+
+    return {
+      text: assistantMessage.content,
+      usage: {
+        promptTokens: response.usage?.prompt_tokens || 0,
+        completionTokens: response.usage?.completion_tokens || 0,
+        totalTokens: response.usage?.total_tokens || 0,
+      },
+      baseURL: requestBaseURL,
+    }
   })
-
-  const message = response.choices[0]?.message
-  if (!message) throw new Error('No message in response')
-  const assistantMessage = formatAssistantMessage(message)
-
-  return {
-    text: assistantMessage.content,
-    usage: {
-      promptTokens: response.usage?.prompt_tokens || 0,
-      completionTokens: response.usage?.completion_tokens || 0,
-      totalTokens: response.usage?.total_tokens || 0,
-    },
-  }
 }
 
 const shouldIncludeFullText = (contentSettings: ContentSettings): boolean => {
@@ -492,6 +508,18 @@ const getQuoteValidation = (quotes: string[], recordText: string): {valid: strin
   )
 }
 
+const getRequestBaseURL = ({
+  baseURL,
+  currentResponse,
+  error,
+}: {
+  baseURL: string
+  currentResponse: {baseURL: string} | null
+  error: unknown
+}): string => {
+  return error instanceof ConnectionError ? error.baseURL : (currentResponse?.baseURL ?? baseURL)
+}
+
 const dedupeStrings = (items: string[]): string[] => {
   const seen = new Set<string>()
   return items.filter((item) => {
@@ -515,6 +543,13 @@ const getMaxUserPromptChars = ({
   const maxPromptTokens = Math.max(0, modelContext - maxCompletionTokens)
   const maxPromptChars = maxPromptTokens * CHARS_PER_TOKEN
   return Math.max(0, maxPromptChars - systemPrompt.length)
+}
+
+const getChunkParallelLimit = (chunkCount: number): number => {
+  const raw = Number(process.env.JUDGE_CHUNK_MAX_PARALLEL)
+  const normalized = Number.isFinite(raw) ? Math.trunc(raw) : 0
+  const configured = normalized > 0 ? normalized : 4
+  return Math.max(1, Math.min(chunkCount, configured))
 }
 
 const buildEvidenceUserPrompt = ({
@@ -677,13 +712,11 @@ export const judgeSinglePrompt = async ({
     while (attempts <= MAX_RETRIES) {
       attempts += 1
 
-      let currentResponse: {
-        text: string
-        usage: {promptTokens: number; completionTokens: number; totalTokens: number}
-      } | null = null
+      let currentResponse: GeneratedPromptResponse | null = null
 
       try {
         currentResponse = await generateSinglePromptResponse({
+          judgmentsJobId,
           prompt: userPrompt,
           systemPrompt,
           baseURL,
@@ -704,14 +737,14 @@ export const judgeSinglePrompt = async ({
           chunkingStrategy: null,
         })
 
-        recordConnectionSuccess(baseURL)
+        recordConnectionSuccess(currentResponse.baseURL)
 
         tokenUse.push({
           articleId: article.id,
           promptIds,
           modelId,
           modelName,
-          baseURL,
+          baseURL: currentResponse.baseURL,
           promptTokens: currentResponse.usage.promptTokens,
           completionTokens: currentResponse.usage.completionTokens,
           totalTokens: currentResponse.usage.totalTokens,
@@ -728,14 +761,15 @@ export const judgeSinglePrompt = async ({
         break
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+        const requestBaseURL = getRequestBaseURL({baseURL, currentResponse, error})
 
         if (isConnectionError(error)) {
-          recordConnectionFailure(baseURL)
+          recordConnectionFailure(requestBaseURL)
           abortCount += 1
           errorCount += 1
           rateLimitedLogger.error(
-            `judge:connection-error:${baseURL}`,
-            `Connection error for ${baseURL} - aborting prompts`,
+            `judge:connection-error:${requestBaseURL}`,
+            `Connection error for ${requestBaseURL} - aborting prompts`,
           )
 
           await storeTokenUseAndThrowConnectionError({
@@ -748,7 +782,7 @@ export const judgeSinglePrompt = async ({
             promptIds,
             modelId,
             modelName,
-            baseURL,
+            baseURL: requestBaseURL,
             systemPrompt,
             userPrompt,
             errorMessage,
@@ -775,7 +809,7 @@ export const judgeSinglePrompt = async ({
           promptIds,
           modelId,
           modelName,
-          baseURL,
+          baseURL: requestBaseURL,
           promptTokens: usage.promptTokens,
           completionTokens: usage.completionTokens,
           totalTokens: usage.totalTokens,
@@ -855,183 +889,232 @@ export const judgeSinglePrompt = async ({
 
     try {
       const evidenceOutputSchema = getSinglePromptEvidenceOutputSchema()
-
-      const allFacts: string[] = []
-      const allQuotes: string[] = []
-
-      for (const [chunkIndex, chunkText] of chunks.entries()) {
-        const baseEvidencePrompt = buildEvidenceUserPrompt({
-          article,
-          prompt,
-          contentSettings,
-          chunkField: chunkTarget.field,
-          chunkText,
-          chunkIndex,
-          chunkCount: chunks.length,
-          includeTitle: chosen.includeTitle,
-          includeSummary: chosen.includeSummary,
-        })
-
-        if (chunkIndex === 0) {
-          logFirstJudgeRequestIfNeeded({
-            judgmentsJobId,
-            articleId: article.id,
-            promptId: prompt.id,
-            baseURL,
-            modelName,
-            systemPrompt: evidenceSystemPrompt,
-            userPrompt: baseEvidencePrompt,
-            requestConfig: {temperature: 0.1, maxCompletionTokens: MAX_COMPLETION_TOKENS},
+      const chunkParallelLimit = getChunkParallelLimit(chunks.length)
+      const chunkResults = await mapAsyncWithConcurrency({
+        items: chunks,
+        limit: chunkParallelLimit,
+        mapItem: async (chunkText, chunkIndex) => {
+          const baseEvidencePrompt = buildEvidenceUserPrompt({
+            article,
+            prompt,
+            contentSettings,
+            chunkField: chunkTarget.field,
+            chunkText,
+            chunkIndex,
+            chunkCount: chunks.length,
+            includeTitle: chosen.includeTitle,
+            includeSummary: chosen.includeSummary,
           })
-        }
 
-        let attempts = 0
-        let userPrompt = baseEvidencePrompt
-        let lastError: string | null = null
-        let lastResponse = ''
-        let evidence: {facts: string[]; quotes: string[]} | null = null
-
-        while (attempts <= MAX_RETRIES) {
-          attempts += 1
-
-          let currentResponse: {
-            text: string
-            usage: {promptTokens: number; completionTokens: number; totalTokens: number}
-          } | null = null
-
-          try {
-            currentResponse = await generateSinglePromptResponse({
-              prompt: userPrompt,
-              systemPrompt: evidenceSystemPrompt,
-              baseURL,
-              modelName,
-              provider,
-              version,
-              outputSchema: evidenceOutputSchema,
-            })
-
-            evidence = parseSinglePromptEvidence(currentResponse.text)
-            recordConnectionSuccess(baseURL)
-
-            tokenUse.push({
+          if (chunkIndex === 0) {
+            logFirstJudgeRequestIfNeeded({
+              judgmentsJobId,
               articleId: article.id,
-              promptIds,
-              modelId,
-              modelName,
+              promptId: prompt.id,
               baseURL,
-              promptTokens: currentResponse.usage.promptTokens,
-              completionTokens: currentResponse.usage.completionTokens,
-              totalTokens: currentResponse.usage.totalTokens,
-              outcome: 'success',
-              error: null,
-              sanitizationAttempted: false,
-              sanitizedError: null,
-              sanitizedResponse: null,
-              lastResponse: null,
-              systemPrompt: null,
-              userPrompt: null,
+              modelName,
+              systemPrompt: evidenceSystemPrompt,
+              userPrompt: baseEvidencePrompt,
+              requestConfig: {temperature: 0.1, maxCompletionTokens: MAX_COMPLETION_TOKENS},
             })
+          }
 
-            const normalizedFacts = dedupeStrings(
-              (evidence.facts ?? []).map((f) => {
-                return String(f ?? '').trim()
-              }),
-            )
-            const normalizedQuotes = dedupeStrings(
-              (evidence.quotes ?? []).map((q) => {
-                return String(q ?? '').trim()
-              }),
-            )
-            const validatedQuotes = getQuoteValidation(normalizedQuotes, recordTextForQuoteValidation).valid
+          let attempts = 0
+          let userPrompt = baseEvidencePrompt
+          let lastError: string | null = null
+          let lastResponse = ''
+          let evidence: {facts: string[]; quotes: string[]} | null = null
 
-            allFacts.push(...normalizedFacts)
-            allQuotes.push(...validatedQuotes)
-            break
-          } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+          while (attempts <= MAX_RETRIES) {
+            attempts += 1
 
-            if (isConnectionError(error)) {
-              recordConnectionFailure(baseURL)
-              abortCount += 1
-              errorCount += 1
-              rateLimitedLogger.error(
-                `judge:connection-error:${baseURL}`,
-                `Connection error for ${baseURL} - aborting prompts`,
-              )
+            let currentResponse: GeneratedPromptResponse | null = null
 
-              await storeTokenUseAndThrowConnectionError({
-                tokenUse,
-                sessionId,
-                startedAt,
-                startDuration,
+            try {
+              currentResponse = await generateSinglePromptResponse({
                 judgmentsJobId,
+                prompt: userPrompt,
+                systemPrompt: evidenceSystemPrompt,
+                baseURL,
+                modelName,
+                provider,
+                version,
+                outputSchema: evidenceOutputSchema,
+              })
+
+              evidence = parseSinglePromptEvidence(currentResponse.text)
+              recordConnectionSuccess(currentResponse.baseURL)
+
+              tokenUse.push({
                 articleId: article.id,
                 promptIds,
                 modelId,
                 modelName,
-                baseURL,
+                baseURL: currentResponse.baseURL,
+                promptTokens: currentResponse.usage.promptTokens,
+                completionTokens: currentResponse.usage.completionTokens,
+                totalTokens: currentResponse.usage.totalTokens,
+                outcome: 'success',
+                error: null,
+                sanitizationAttempted: false,
+                sanitizedError: null,
+                sanitizedResponse: null,
+                lastResponse: null,
+                systemPrompt: null,
+                userPrompt: null,
+              })
+
+              const normalizedFacts = dedupeStrings(
+                (evidence.facts ?? []).map((f) => {
+                  return String(f ?? '').trim()
+                }),
+              )
+              const normalizedQuotes = dedupeStrings(
+                (evidence.quotes ?? []).map((q) => {
+                  return String(q ?? '').trim()
+                }),
+              )
+              const validatedQuotes = getQuoteValidation(normalizedQuotes, recordTextForQuoteValidation).valid
+
+              return {status: 'success' as const, facts: normalizedFacts, quotes: validatedQuotes}
+            } catch (error) {
+              const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+              const requestBaseURL = getRequestBaseURL({baseURL, currentResponse, error})
+              const connectionFailure = isConnectionError(error)
+
+              if (connectionFailure) {
+                recordConnectionFailure(requestBaseURL)
+                abortCount += 1
+                errorCount += 1
+                rateLimitedLogger.error(
+                  `judge:connection-error:${requestBaseURL}`,
+                  `Connection error for ${requestBaseURL} - aborting prompts`,
+                )
+              }
+
+              const responseText = currentResponse?.text ?? lastResponse
+              const usage = currentResponse?.usage ?? {promptTokens: 0, completionTokens: 0, totalTokens: 0}
+
+              let sanitizationAttempted = false
+              let sanitizedError: string | null = null
+              let sanitizedResponse: string | null = null
+              if (responseText) {
+                const parseAttempt: ParseAttemptResult = tryParseJsonWithSanitization(responseText)
+                if (!parseAttempt.success) {
+                  sanitizationAttempted = parseAttempt.sanitizationAttempted
+                  sanitizedError = parseAttempt.sanitizedError
+                  sanitizedResponse = parseAttempt.sanitizedResponse
+                }
+              }
+
+              tokenUse.push({
+                articleId: article.id,
+                promptIds,
+                modelId,
+                modelName,
+                baseURL: requestBaseURL,
+                promptTokens: usage.promptTokens,
+                completionTokens: usage.completionTokens,
+                totalTokens: usage.totalTokens,
+                outcome: 'failure',
+                error: errorMessage,
+                sanitizationAttempted,
+                sanitizedError,
+                sanitizedResponse,
+                lastResponse: responseText,
                 systemPrompt: evidenceSystemPrompt,
                 userPrompt,
-                errorMessage,
               })
-            }
+              errorCount += 1
 
-            const responseText = currentResponse?.text ?? lastResponse
-            const usage = currentResponse?.usage ?? {promptTokens: 0, completionTokens: 0, totalTokens: 0}
+              lastError = errorMessage
+              lastResponse = responseText
 
-            let sanitizationAttempted = false
-            let sanitizedError: string | null = null
-            let sanitizedResponse: string | null = null
-            if (responseText) {
-              const parseAttempt: ParseAttemptResult = tryParseJsonWithSanitization(responseText)
-              if (!parseAttempt.success) {
-                sanitizationAttempted = parseAttempt.sanitizationAttempted
-                sanitizedError = parseAttempt.sanitizedError
-                sanitizedResponse = parseAttempt.sanitizedResponse
+              if (attempts < MAX_RETRIES) {
+                userPrompt = buildRetryPrompt(baseEvidencePrompt, lastError, lastResponse)
+              } else {
+                abortCount += 1
+                console.error(`${article.id} | Prompt ${prompt.id} | Aborting evidence chunk: ${lastError}`)
+              }
+
+              if (connectionFailure) {
+                return {
+                  status: 'connection_error' as const,
+                  baseURL: requestBaseURL,
+                  errorMessage,
+                  facts: [],
+                  quotes: [],
+                }
               }
             }
+          }
 
-            tokenUse.push({
-              articleId: article.id,
-              promptIds,
-              modelId,
-              modelName,
-              baseURL,
-              promptTokens: usage.promptTokens,
-              completionTokens: usage.completionTokens,
-              totalTokens: usage.totalTokens,
-              outcome: 'failure',
-              error: errorMessage,
-              sanitizationAttempted,
-              sanitizedError,
-              sanitizedResponse,
-              lastResponse: responseText,
-              systemPrompt: evidenceSystemPrompt,
-              userPrompt,
-            })
-            errorCount += 1
-
-            lastError = errorMessage
-            lastResponse = responseText
-
-            if (attempts < MAX_RETRIES) {
-              userPrompt = buildRetryPrompt(baseEvidencePrompt, lastError, lastResponse)
-            } else {
-              abortCount += 1
-              console.error(`${article.id} | Prompt ${prompt.id} | Aborting evidence chunk: ${lastError}`)
+          if (!evidence) {
+            return {
+              status: 'error' as const,
+              message: `Aborting chunked mode: failed to extract evidence for chunk ${chunkIndex + 1}/${chunks.length}`,
+              facts: [],
+              quotes: [],
             }
           }
-        }
 
-        if (!evidence) {
-          throw new Error(
-            `Aborting chunked mode: failed to extract evidence for chunk ${chunkIndex + 1}/${chunks.length}`,
-          )
-        }
+          return {status: 'error' as const, message: 'Chunked mode ended without evidence', facts: [], quotes: []}
+        },
+      })
+
+      const connectionErrorResult = chunkResults.find((result) => {
+        return result.status === 'connection_error'
+      })
+
+      if (connectionErrorResult && connectionErrorResult.status === 'connection_error') {
+        await storeTokenUseAndThrowConnectionError({
+          tokenUse,
+          sessionId,
+          startedAt,
+          startDuration,
+          judgmentsJobId,
+          articleId: article.id,
+          promptIds,
+          modelId,
+          modelName,
+          baseURL: connectionErrorResult.baseURL,
+          systemPrompt: evidenceSystemPrompt,
+          userPrompt: chunks[0]
+            ? buildEvidenceUserPrompt({
+                article,
+                prompt,
+                contentSettings,
+                chunkField: chunkTarget.field,
+                chunkText: chunks[0],
+                chunkIndex: 0,
+                chunkCount: chunks.length,
+                includeTitle: chosen.includeTitle,
+                includeSummary: chosen.includeSummary,
+              })
+            : '',
+          errorMessage: connectionErrorResult.errorMessage,
+          appendFailureEntry: false,
+        })
       }
 
-      const mergedFacts = dedupeStrings(allFacts)
-      const mergedQuotes = dedupeStrings(allQuotes)
+      const failedChunkResult = chunkResults.find((result) => {
+        return result.status === 'error'
+      })
+
+      if (failedChunkResult && failedChunkResult.status === 'error') {
+        throw new Error(failedChunkResult.message)
+      }
+
+      const mergedFacts = dedupeStrings(
+        chunkResults.flatMap((result) => {
+          return result.status === 'success' ? result.facts : []
+        }),
+      )
+      const mergedQuotes = dedupeStrings(
+        chunkResults.flatMap((result) => {
+          return result.status === 'success' ? result.quotes : []
+        }),
+      )
 
       const fittedFinal = fitChunkedFinalPromptToBudget({
         systemPrompt,
@@ -1049,13 +1132,11 @@ export const judgeSinglePrompt = async ({
       while (attempts <= MAX_RETRIES) {
         attempts += 1
 
-        let currentResponse: {
-          text: string
-          usage: {promptTokens: number; completionTokens: number; totalTokens: number}
-        } | null = null
+        let currentResponse: GeneratedPromptResponse | null = null
 
         try {
           currentResponse = await generateSinglePromptResponse({
+            judgmentsJobId,
             prompt: finalUserPrompt,
             systemPrompt,
             baseURL,
@@ -1070,14 +1151,14 @@ export const judgeSinglePrompt = async ({
           const quoteValidation = getQuoteValidation(rawQuotes, recordTextForQuoteValidation)
 
           if (quoteValidation.invalid.length > 0 && attempts < MAX_RETRIES) {
-            recordConnectionSuccess(baseURL)
+            recordConnectionSuccess(currentResponse.baseURL)
 
             tokenUse.push({
               articleId: article.id,
               promptIds,
               modelId,
               modelName,
-              baseURL,
+              baseURL: currentResponse.baseURL,
               promptTokens: currentResponse.usage.promptTokens,
               completionTokens: currentResponse.usage.completionTokens,
               totalTokens: currentResponse.usage.totalTokens,
@@ -1113,14 +1194,14 @@ export const judgeSinglePrompt = async ({
             chunkingStrategy,
           })
 
-          recordConnectionSuccess(baseURL)
+          recordConnectionSuccess(currentResponse.baseURL)
 
           tokenUse.push({
             articleId: article.id,
             promptIds,
             modelId,
             modelName,
-            baseURL,
+            baseURL: currentResponse.baseURL,
             promptTokens: currentResponse.usage.promptTokens,
             completionTokens: currentResponse.usage.completionTokens,
             totalTokens: currentResponse.usage.totalTokens,
@@ -1138,14 +1219,15 @@ export const judgeSinglePrompt = async ({
           break
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+          const requestBaseURL = getRequestBaseURL({baseURL, currentResponse, error})
 
           if (isConnectionError(error)) {
-            recordConnectionFailure(baseURL)
+            recordConnectionFailure(requestBaseURL)
             abortCount += 1
             errorCount += 1
             rateLimitedLogger.error(
-              `judge:connection-error:${baseURL}`,
-              `Connection error for ${baseURL} - aborting prompts`,
+              `judge:connection-error:${requestBaseURL}`,
+              `Connection error for ${requestBaseURL} - aborting prompts`,
             )
 
             await storeTokenUseAndThrowConnectionError({
@@ -1158,7 +1240,7 @@ export const judgeSinglePrompt = async ({
               promptIds,
               modelId,
               modelName,
-              baseURL,
+              baseURL: requestBaseURL,
               systemPrompt,
               userPrompt: finalUserPrompt,
               errorMessage,
@@ -1185,7 +1267,7 @@ export const judgeSinglePrompt = async ({
             promptIds,
             modelId,
             modelName,
-            baseURL,
+            baseURL: requestBaseURL,
             promptTokens: usage.promptTokens,
             completionTokens: usage.completionTokens,
             totalTokens: usage.totalTokens,
@@ -1229,9 +1311,7 @@ export const judgeSinglePrompt = async ({
     `Total: ${errorCount} errorCount,${abortCount} aborts, ${successCount} successes`,
   )
 
-  await judgeStoreTokenUse(tokenUse, sessionId, {startedAt, finishedAt, duration}, judgmentsJobId, {
-    totalRequests: 1,
-  }).catch((err) => {
+  await judgeStoreTokenUse(tokenUse, sessionId, {startedAt, finishedAt, duration}, judgmentsJobId).catch((err) => {
     console.error('judgeStoreTokenUse failed; continuing', err instanceof Error ? err.message : err)
   })
 }

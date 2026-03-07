@@ -2,7 +2,6 @@ import {and, eq, inArray, isNull, sql} from 'drizzle-orm'
 import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../../db/schema.ts'
-import {workerLoadBalancer} from '../../../utils/workerLoadBalancer.ts'
 
 export type PromptToProcess = {
   jobId: string
@@ -92,10 +91,6 @@ const processReadyRows = async (
   })
   const jobConfigMap = new Map(jobConfigPairs)
 
-  // Use load balancer to get worker URL
-  // This helps distribute load better than random selection
-  // and keeps track of active connections per worker
-
   const promptsWithProjects = promptsWithJobs
     .map((prompt) => {
       const config = jobConfigMap.get(prompt.jobId)
@@ -126,14 +121,7 @@ const processReadyRows = async (
         return null
       }
 
-      const baseUrl = isCodexProvider(provider)
-        ? getCodexPlaceholderBaseUrl()
-        : (() => {
-            let url = String(config.modelBaseUrl)
-            const lbWorker = workerLoadBalancer.getWorkerUrl()
-            if (lbWorker) url = `${lbWorker}/v1`
-            return url
-          })()
+      const baseUrl = isCodexProvider(provider) ? getCodexPlaceholderBaseUrl() : String(config.modelBaseUrl)
 
       return {
         ...prompt,

@@ -2,38 +2,74 @@ import {env} from './env.ts'
 
 const activeRequests = new Map<string, number>()
 
+const getWorkerUrls = (): string[] => {
+  return env.WORKER_URLS
+}
+
+const ensureWorkersInitialized = (): void => {
+  return getWorkerUrls().forEach((url) => {
+    if (!activeRequests.has(url)) {
+      activeRequests.set(url, 0)
+    }
+  })
+}
+
+const getEligibleWorkers = ({
+  maxActiveRequests,
+  canUse,
+}: {
+  maxActiveRequests: number
+  canUse?: (url: string) => boolean
+}): string[] => {
+  ensureWorkersInitialized()
+
+  return getWorkerUrls().filter((url) => {
+    const active = activeRequests.get(url) || 0
+    const allowedByPredicate = canUse ? canUse(url) : true
+    return allowedByPredicate && active < maxActiveRequests
+  })
+}
+
+const getLeastBusyWorker = (workerUrls: string[]): string | null => {
+  const selected = workerUrls.reduce<{url: string | null; active: number}>(
+    (acc, url) => {
+      const active = activeRequests.get(url) || 0
+      return active < acc.active ? {url, active} : acc
+    },
+    {url: null, active: Number.POSITIVE_INFINITY},
+  )
+
+  return selected.url
+}
+
 export const workerLoadBalancer = {
   /**
    * Gets a worker URL with the fewest active requests.
    * Increments the active request count for the selected worker.
    */
   getWorkerUrl: (): string | null => {
-    const workerUrls = env.WORKER_URLS
-    if (workerUrls.length === 0) return null
-
-    // Initialize missing keys
-    workerUrls.forEach((url) => {
-      if (!activeRequests.has(url)) {
-        activeRequests.set(url, 0)
-      }
-    })
-
-    // Find worker with min count
-    let minCount = Infinity
-    let selectedWorker: string | null = workerUrls[0] ?? null
-
-    // Simple robust selection
-    for (const url of workerUrls) {
-      const count = activeRequests.get(url) || 0
-      if (count < minCount) {
-        minCount = count
-        selectedWorker = url
-      }
-    }
+    const workerUrls = getWorkerUrls()
+    const selectedWorker = workerUrls.length === 0 ? null : getLeastBusyWorker(workerUrls)
 
     if (!selectedWorker) return null
 
-    // Increment
+    activeRequests.set(selectedWorker, (activeRequests.get(selectedWorker) || 0) + 1)
+
+    return selectedWorker
+  },
+
+  acquireWorkerUrl: ({
+    maxActiveRequests,
+    canUse,
+  }: {
+    maxActiveRequests: number
+    canUse?: (url: string) => boolean
+  }): string | null => {
+    const eligibleWorkers = getEligibleWorkers({maxActiveRequests, canUse})
+    const selectedWorker = eligibleWorkers.length === 0 ? null : getLeastBusyWorker(eligibleWorkers)
+
+    if (!selectedWorker) return null
+
     activeRequests.set(selectedWorker, (activeRequests.get(selectedWorker) || 0) + 1)
 
     return selectedWorker

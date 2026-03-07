@@ -2,6 +2,7 @@ import {eq} from 'drizzle-orm'
 
 import {session} from '../../../auth-schema.ts'
 import {tokenUse} from '../../db/schema.ts'
+import {markJudgmentRequestsPersisted} from '../../server/cron/judgmentsJobs/judgmentsRequestRuntime.ts'
 import {env} from '../../server/utils/env.ts'
 import {apiClient} from '../../services/apiClient.ts'
 
@@ -78,6 +79,7 @@ const isConnectionError = (error: string | null): boolean => {
 }
 
 type TokenUseTotals = {
+  totalRequests: number
   totalPromptTokens: number
   totalCompletionTokens: number
   totalTokens: number
@@ -93,18 +95,11 @@ type TokenUseTotals = {
   failedRequestsDetails: FailedRequestDetail[]
 }
 
-/**
- * Context for storing token usage.
- * totalRequests is the number of prompts being processed (one LLM request per prompt).
- */
-type JudgeTokenUseContext = {totalRequests: number}
-
 const isServerEnvironment = (): boolean => {
   return typeof window === 'undefined' || typeof Bun !== 'undefined'
 }
 
 const storeTokenUseDirectly = async (
-  totalRequests: number,
   totalTokenUse: TokenUseTotals,
   sessionId: string | null,
   {startedAt, finishedAt, duration}: {startedAt: string; finishedAt: string; duration: number},
@@ -131,7 +126,7 @@ const storeTokenUseDirectly = async (
       gpuShape: env.GPU_SHAPE ?? null,
       sglangMaxRunningRequests: env.SGLANG_MAX_RUNNING_REQUESTS,
       sglangModel: env.SGLANG_MODEL ?? null,
-      requests: totalRequests,
+      requests: totalTokenUse.totalRequests,
       totalPromptTokens: totalTokenUse.totalPromptTokens,
       totalCompletionTokens: totalTokenUse.totalCompletionTokens,
       totalTokens: totalTokenUse.totalTokens,
@@ -158,14 +153,13 @@ const storeTokenUseDirectly = async (
 }
 
 const storeTokenUseViaAPI = async (
-  totalRequests: number,
   totalTokenUse: TokenUseTotals,
   sessionId: string,
   {startedAt, finishedAt, duration}: {startedAt: string; finishedAt: string; duration: number},
 ): Promise<void> => {
   const response = await apiClient.api.tokens.usage.post({
     sessionId,
-    requests: totalRequests,
+    requests: totalTokenUse.totalRequests,
     totalPromptTokens: totalTokenUse.totalPromptTokens,
     totalCompletionTokens: totalTokenUse.totalCompletionTokens,
     totalTokens: totalTokenUse.totalTokens,
@@ -200,10 +194,7 @@ const storeTokenUseViaAPI = async (
   }
 }
 
-const buildTokenUseTotals = (
-  tokenUseEntries: JudgeTokenUsageEntry[],
-  context: JudgeTokenUseContext,
-): TokenUseTotals => {
+export const buildTokenUseTotals = (tokenUseEntries: JudgeTokenUsageEntry[]): TokenUseTotals => {
   const totals = tokenUseEntries.reduce(
     (acc, entry) => {
       const totalPromptTokens = acc.totalPromptTokens + entry.promptTokens
@@ -218,6 +209,7 @@ const buildTokenUseTotals = (
       const totalFailedTokens = acc.totalFailedTokens + (isFailure ? entry.totalTokens : 0)
 
       return {
+        totalRequests: acc.totalRequests,
         totalPromptTokens,
         totalCompletionTokens,
         totalTokens,
@@ -234,6 +226,7 @@ const buildTokenUseTotals = (
       }
     },
     {
+      totalRequests: tokenUseEntries.length,
       totalPromptTokens: 0,
       totalCompletionTokens: 0,
       totalTokens: 0,
@@ -276,25 +269,29 @@ const buildTokenUseTotals = (
       } satisfies FailedRequestAggregation)
 
     const attempts = existing.attempts + 1
-    const failedAttempts = existing.failedAttempts + (entry.outcome === 'failure' ? 1 : 0)
+    const isFailure = entry.outcome === 'failure'
+    const isConnectionFailure = isFailure && isConnectionError(entry.error)
+    const failedAttempts = existing.failedAttempts + (isFailure ? 1 : 0)
     const hasSuccess = existing.hasSuccess || entry.outcome === 'success'
-    const failedPromptTokens = existing.failedPromptTokens + (entry.outcome === 'failure' ? entry.promptTokens : 0)
-    const failedCompletionTokens =
-      existing.failedCompletionTokens + (entry.outcome === 'failure' ? entry.completionTokens : 0)
-    const failedTotalTokens = existing.failedTotalTokens + (entry.outcome === 'failure' ? entry.totalTokens : 0)
-    const lastError = entry.outcome === 'failure' ? (entry.error ?? existing.lastError) : existing.lastError
+    const failedPromptTokens = existing.failedPromptTokens + (isFailure ? entry.promptTokens : 0)
+    const failedCompletionTokens = existing.failedCompletionTokens + (isFailure ? entry.completionTokens : 0)
+    const failedTotalTokens = existing.failedTotalTokens + (isFailure ? entry.totalTokens : 0)
+    const lastError = isFailure && !isConnectionFailure ? (entry.error ?? existing.lastError) : existing.lastError
     const lastResponse =
-      entry.outcome === 'failure' ? (entry.lastResponse ?? existing.lastResponse) : existing.lastResponse
+      isFailure && !isConnectionFailure ? (entry.lastResponse ?? existing.lastResponse) : existing.lastResponse
     const systemPrompt =
-      entry.outcome === 'failure' ? (entry.systemPrompt ?? existing.systemPrompt) : existing.systemPrompt
-    const userPrompt = entry.outcome === 'failure' ? (entry.userPrompt ?? existing.userPrompt) : existing.userPrompt
+      isFailure && !isConnectionFailure ? (entry.systemPrompt ?? existing.systemPrompt) : existing.systemPrompt
+    const userPrompt =
+      isFailure && !isConnectionFailure ? (entry.userPrompt ?? existing.userPrompt) : existing.userPrompt
 
     const sanitizationAttempted =
-      entry.outcome === 'failure' ? entry.sanitizationAttempted : existing.sanitizationAttempted
+      isFailure && !isConnectionFailure ? entry.sanitizationAttempted : existing.sanitizationAttempted
     const sanitizedError =
-      entry.outcome === 'failure' ? (entry.sanitizedError ?? existing.sanitizedError) : existing.sanitizedError
+      isFailure && !isConnectionFailure ? (entry.sanitizedError ?? existing.sanitizedError) : existing.sanitizedError
     const sanitizedResponse =
-      entry.outcome === 'failure' ? (entry.sanitizedResponse ?? existing.sanitizedResponse) : existing.sanitizedResponse
+      isFailure && !isConnectionFailure
+        ? (entry.sanitizedResponse ?? existing.sanitizedResponse)
+        : existing.sanitizedResponse
 
     map.set(key, {
       articleId: existing.articleId,
@@ -322,9 +319,7 @@ const buildTokenUseTotals = (
 
   const failedRequestsDetails: FailedRequestDetail[] = Array.from(groupedByRequest.values())
     .filter((request) => {
-      // Exclude connection errors - these are transient network failures
-      if (isConnectionError(request.lastError)) return false
-      return request.failedAttempts > 0
+      return request.failedAttempts > 0 && request.lastError !== null
     })
     .map((request) => {
       const failureType: FailedRequestDetail['failureType'] = request.hasSuccess ? 'retry' : 'total_failure'
@@ -351,14 +346,17 @@ const buildTokenUseTotals = (
       }
     })
 
-  const failedRequests = failedRequestsDetails.filter((request) => {
-    return request.failureType === 'total_failure'
+  const failedRequests = tokenUseEntries.filter((entry) => {
+    return entry.outcome === 'failure' && !isConnectionError(entry.error)
   }).length
 
-  const successfulRequests = context.totalRequests - failedRequests
+  const successfulRequests = tokenUseEntries.filter((entry) => {
+    return entry.outcome === 'success'
+  }).length
   const hasFailedRequests = failedRequestsDetails.length > 0
 
   return {
+    totalRequests: totals.totalRequests,
     totalPromptTokens: totals.totalPromptTokens,
     totalCompletionTokens: totals.totalCompletionTokens,
     totalTokens: totals.totalTokens,
@@ -380,22 +378,17 @@ export const judgeStoreTokenUse = async (
   sessionId: string | null,
   {startedAt, finishedAt, duration}: {startedAt: string; finishedAt: string; duration: number},
   judgmentsJobId: string,
-  context: JudgeTokenUseContext,
 ): Promise<void> => {
-  const totalTokenUse = buildTokenUseTotals(tokenUseEntries, context)
+  const totalTokenUse = buildTokenUseTotals(tokenUseEntries)
 
   if (isServerEnvironment()) {
-    await storeTokenUseDirectly(
-      context.totalRequests,
-      totalTokenUse,
-      null,
-      {startedAt, finishedAt, duration},
-      judgmentsJobId,
-    )
+    await storeTokenUseDirectly(totalTokenUse, null, {startedAt, finishedAt, duration}, judgmentsJobId)
   } else {
     if (!sessionId) {
       throw new Error('sessionId is required when running in client environment')
     }
-    await storeTokenUseViaAPI(context.totalRequests, totalTokenUse, sessionId, {startedAt, finishedAt, duration})
+    await storeTokenUseViaAPI(totalTokenUse, sessionId, {startedAt, finishedAt, duration})
   }
+
+  markJudgmentRequestsPersisted(judgmentsJobId, totalTokenUse.totalRequests)
 }

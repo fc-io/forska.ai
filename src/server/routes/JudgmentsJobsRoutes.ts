@@ -3,6 +3,7 @@ import {Elysia, t} from 'elysia'
 
 import {judgmentsJobs, judgmentsJobsPrompts, projectRouteLink, projects, tokenUse} from '../../db/schema'
 import {getUnassessedArticlesFromOlap, getUnassessedCountFromOlap} from '../../services/olap/unassessedArticlesOlap.ts'
+import {getJudgmentRequestStats} from '../cron/judgmentsJobs/judgmentsRequestRuntime.ts'
 import {requireUserAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase'
 import {withErrorHandler} from '../utils/routeErrorHandler'
@@ -172,6 +173,7 @@ export const judgmentsJobsRoutes = new Elysia()
             totalTokens: sum(tokenUse.totalTokens),
             totalPromptTokens: sum(tokenUse.totalPromptTokens),
             totalCompletionTokens: sum(tokenUse.totalCompletionTokens),
+            totalRequests: sum(tokenUse.requests),
           })
           .from(tokenUse)
           .where(eq(tokenUse.judgmentsJobId, job.id)),
@@ -190,6 +192,7 @@ export const judgmentsJobsRoutes = new Elysia()
       ])
 
       const stats = {ready: 0, sent: 0, judged: 0, skipped: 0}
+      const requestRuntimeStats = getJudgmentRequestStats(job.id)
 
       promptStats.forEach((stat) => {
         if (stat.status === 'ready') stats.ready = stat.count
@@ -205,6 +208,10 @@ export const judgmentsJobsRoutes = new Elysia()
           totalTokens: Number(totalTokenUsage[0]?.totalTokens || 0),
           totalPromptTokens: Number(totalTokenUsage[0]?.totalPromptTokens || 0),
           totalCompletionTokens: Number(totalTokenUsage[0]?.totalCompletionTokens || 0),
+        },
+        requestStats: {
+          inFlight: requestRuntimeStats.inFlight,
+          attempts: Number(totalTokenUsage[0]?.totalRequests || 0) + requestRuntimeStats.pendingPersistedAttempts,
         },
         tokenUsagePerDay: tokenUsagePerDay.map((row) => {
           const dailyTokens = Number(row.dailyTokens ?? 0)
