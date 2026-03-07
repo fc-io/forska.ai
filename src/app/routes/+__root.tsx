@@ -5,6 +5,7 @@ import {createEffect, Show} from 'solid-js'
 
 import {Navigation} from '../../components/Navigation'
 import {fetchSession} from '../../services/fetchSession'
+import {localSession} from '../../utils/localUser.ts'
 import {authClient} from '../lib/auth-client'
 
 const sessionQueryKey = ['session'] as const
@@ -23,6 +24,11 @@ const signOut = async (queryClient: QueryClient) => {
     },
   )
 }
+
+const normalizePathname = (pathname: string) => {
+  return pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname
+}
+
 const RootComponent = () => {
   console.log('import.meta.env.DEV', import.meta.env.DEV)
   const queryClient = useQueryClient()
@@ -41,18 +47,24 @@ const RootComponent = () => {
   })
   createEffect(() => {
     const user = sessionQuery.data?.user
-    const pathname = location().pathname
-    const isReady = !sessionQuery.isLoading
-    const shouldRedirectToHome = isReady && Boolean(user) && pathname === '/login'
-    const shouldRedirectToLogin = isReady && !user && pathname !== '/login'
+    const pathname = normalizePathname(location().pathname)
+    const isReady = !sessionQuery.isLoading && !sessionQuery.isFetching
+    const isLoginRoute = pathname === '/login'
+    const shouldRedirectToHome = isReady && Boolean(user) && isLoginRoute
+    const shouldRedirectToLogin = isReady && !user && !isLoginRoute
 
     shouldRedirectToHome ? void navigate({to: '/'}) : shouldRedirectToLogin ? void navigate({to: '/login'}) : null
   })
+
+  const isLoginRoute = () => {
+    return normalizePathname(location().pathname) === '/login'
+  }
+
   return (
     <>
-      <Show when={location().pathname !== '/login'}>
+      <Show when={!isLoginRoute()}>
         <Navigation
-          user={sessionQuery.data?.user}
+          user={sessionQuery.data?.user ?? localSession.user}
           onSignOut={() => {
             return void signOut(queryClient)
           }}

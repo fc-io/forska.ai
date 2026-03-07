@@ -28,15 +28,15 @@ export const humanAssessmentRoutes = new Elysia()
       .use(requireUserAuth())
       .post(
         '/api/humanassessment/init',
-        async ({body, request, set}) => {
-          return humanAssessmentRoutesPostInit({body, request, set})
+        async ({body, set}) => {
+          return humanAssessmentRoutesPostInit({body, set})
         },
         {body: t.Object({projectId: t.String()})},
       )
       .post(
         '/api/humanassessment/submit',
-        async ({body, request, set}) => {
-          return humanAssessmentRoutesPostSubmit({body, request, set})
+        async ({body, set}) => {
+          return humanAssessmentRoutesPostSubmit({body, set})
         },
         {
           body: t.Object({

@@ -1,8 +1,8 @@
 import {and, asc, eq, isNull, ne, or} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {auth} from '../../auth.ts'
 import {models} from '../../db/schema.ts'
+import {localUserId} from '../../utils/localUser.ts'
 import {requireUserAuth} from '../utils/authGuard.ts'
 import {getCodexCliLoginStatus, getCodexDeviceAuthLoginJob, startCodexDeviceAuthLogin} from '../utils/codexCliAuth.ts'
 import {env} from '../utils/env.ts'
@@ -44,14 +44,8 @@ export const modelsRoutes = new Elysia()
   .use(
     new Elysia()
       .use(requireUserAuth())
-      .get('/api/models', async ({request, set}) => {
-        const session = await auth.api.getSession({headers: request.headers})
-        const sessionUserId = session?.user?.id ?? session?.session?.userId ?? null
-        if (!sessionUserId) {
-          set.status = 401
-          return {data: null, error: 'You must be signed in'}
-        }
-
+      .get('/api/models', async () => {
+        const sessionUserId = localUserId
         const db = getDatabase()
         const hpcModels = await db
           .select()
@@ -202,14 +196,8 @@ export const modelsRoutes = new Elysia()
       )
       .post(
         '/api/models/ensure',
-        async ({body, request, set}) => {
-          const session = await auth.api.getSession({headers: request.headers})
-          const sessionUserId = session?.user?.id ?? session?.session?.userId ?? null
-          if (!sessionUserId) {
-            set.status = 401
-            return {data: null, error: 'You must be signed in'}
-          }
-
+        async ({body, set}) => {
+          const sessionUserId = localUserId
           if (body.provider !== 'codex') {
             set.status = 400
             return {data: null, error: 'Unsupported provider'}

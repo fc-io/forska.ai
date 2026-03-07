@@ -2,27 +2,19 @@ import {type as arktype} from 'arktype'
 import {and, eq, inArray} from 'drizzle-orm'
 import type {Context} from 'elysia'
 
-import {auth} from '../../../auth.ts'
 import {judgmentsHuman, projectPrompts, prompts} from '../../../db/schema.ts'
+import {localUserId} from '../../../utils/localUser.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
 export const humanAssessmentRoutesPostSubmit = async ({
   body,
-  request,
   set,
 }: {
   body: {projectId: string; answers: Array<{judgmentHumanId: string; answer: string; comment?: string}>}
-  request: Request
   set: Context['set']
 }) => {
   const db = getDatabase()
-  const session = await auth.api.getSession({headers: request.headers})
-  const sessionUserId = session?.user?.id ?? session?.session?.userId
-
-  if (!sessionUserId) {
-    set.status = 401
-    return {data: null, error: 'You must be signed in to submit a human assessment'}
-  }
+  const sessionUserId = localUserId
 
   const pending = await db
     .select({

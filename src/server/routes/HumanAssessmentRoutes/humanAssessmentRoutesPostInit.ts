@@ -1,7 +1,6 @@
 import {and, desc, eq, gte, inArray, lte, or, sql} from 'drizzle-orm'
 import type {Context} from 'elysia'
 
-import {auth} from '../../../auth.ts'
 import {
   articleRouteLink,
   articles,
@@ -12,6 +11,7 @@ import {
   projects,
   prompts,
 } from '../../../db/schema.ts'
+import {localUserId} from '../../../utils/localUser.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
 type InitResponse = {
@@ -27,23 +27,9 @@ type InitResponse = {
   judgmentsHuman: Array<{id: string; promptId: string}>
 }
 
-export const humanAssessmentRoutesPostInit = async ({
-  body,
-  request,
-  set,
-}: {
-  body: {projectId: string}
-  request: Request
-  set: Context['set']
-}) => {
+export const humanAssessmentRoutesPostInit = async ({body, set}: {body: {projectId: string}; set: Context['set']}) => {
   const db = getDatabase()
-  const session = await auth.api.getSession({headers: request.headers})
-  const sessionUserId = session?.user?.id ?? session?.session?.userId
-
-  if (!sessionUserId) {
-    set.status = 401
-    return {data: null, error: 'You must be signed in to start a human assessment'}
-  }
+  const sessionUserId = localUserId
 
   const [project] = await db.select().from(projects).where(eq(projects.id, body.projectId)).limit(1)
   if (!project) {

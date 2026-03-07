@@ -1,7 +1,6 @@
 import {and, asc, desc, eq, inArray, isNull, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {auth} from '../../auth.ts'
 import {
   importRoute as importRouteTable,
   judgments,
@@ -14,6 +13,7 @@ import {
   projects,
   prompts,
 } from '../../db/schema.ts'
+import {localUserId} from '../../utils/localUser.ts'
 import {requireUserAuth} from '../utils/authGuard.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
@@ -476,10 +476,8 @@ export const projectsRoutes = new Elysia()
   )
   .patch(
     '/api/projects/:id/edit',
-    async ({params, body, request}) => {
-      // Get session directly (consistent with other routes)
-      const session = await auth.api.getSession({headers: request.headers})
-      const sessionUserId = session?.user?.id ?? null
+    async ({params, body}) => {
+      const sessionUserId = localUserId
 
       const db = getDatabase()
       // Disallow edits when a judgments job exists for this project
@@ -631,7 +629,7 @@ export const projectsRoutes = new Elysia()
                       promptHeading: headingVal,
                       type: typeVal,
                       contentHash: h4b,
-                      ownerId: sessionUserId as string,
+                      ownerId: sessionUserId,
                     })
                     .onConflictDoNothing({target: prompts.contentHash})
                     .returning({id: prompts.id})
@@ -713,7 +711,7 @@ export const projectsRoutes = new Elysia()
                     promptHeading: headingVal,
                     type: typeVal,
                     contentHash: h4b,
-                    ownerId: sessionUserId as string,
+                    ownerId: sessionUserId,
                   })
                   .onConflictDoNothing({target: prompts.contentHash})
                   .returning({id: prompts.id})

@@ -1,7 +1,6 @@
 import {and, desc, eq, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {auth} from '../../auth.ts'
 import {judgments, judgmentsHuman, projectPrompts, prompts} from '../../db/schema'
 import {requireUserAuth} from '../utils/authGuard.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash'
@@ -114,16 +113,7 @@ const promptsUserRoutes = new Elysia()
   })
   .patch(
     '/api/prompts/:id',
-    async ({params, body, set, request}) => {
-      // Get session directly (consistent with other routes like NvidiaSmiRoutes, ParquetRoutes)
-      const session = await auth.api.getSession({headers: request.headers})
-      const userId = session?.user?.id ?? null
-
-      if (!userId) {
-        set.status = 401
-        return {data: null, error: 'You must be signed in'}
-      }
-
+    async ({params, body, set}) => {
       const db = getDatabase()
       const [existingPrompt] = await db
         .select({id: prompts.id, ownerId: prompts.ownerId})

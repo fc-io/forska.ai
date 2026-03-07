@@ -4,8 +4,8 @@ import {mkdir, writeFile} from 'fs/promises'
 import path from 'path'
 
 import {user} from '../../../auth-schema.ts'
-import {auth} from '../../auth.ts'
 import {articles} from '../../db/schema.ts'
+import {localUserId} from '../../utils/localUser.ts'
 import {fetchPdfForArticle} from '../cron/fullTextJobs/fetchPdfForArticle.ts'
 import {requireUserAuth} from '../utils/authGuard.ts'
 import {ConversionError, convertPdfToText} from '../utils/convertPdfToText.ts'
@@ -175,17 +175,11 @@ export const articleAdminRoutes = new Elysia()
   // Upload a PDF for an article
   .post(
     '/api/articles/:id/upload-pdf',
-    async ({params, body, request}) => {
+    async ({params, body}) => {
       const db = getDatabase()
       const {id} = params
 
-      // Get session directly (consistent with other routes)
-      const session = await auth.api.getSession({headers: request.headers})
-      const userId = session?.user?.id ?? null
-
-      if (!userId) {
-        throw new Error('You must be signed in')
-      }
+      const userId = localUserId
 
       // Check if article exists
       const [article] = await db.select({id: articles.id}).from(articles).where(eq(articles.id, id)).limit(1)
