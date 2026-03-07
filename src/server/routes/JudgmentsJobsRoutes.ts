@@ -357,7 +357,7 @@ export const judgmentsJobsRoutes = new Elysia()
         throw new Error('Job not found')
       }
 
-      const shouldClearQueue = body.status === 'paused_by_user' || body.status === 'paused_by_admin'
+      const shouldClearQueue = body.status === 'paused_by_user'
 
       if (shouldClearQueue) {
         await db.delete(judgmentsJobsPrompts).where(eq(judgmentsJobsPrompts.jobId, updatedJob.id))
@@ -388,7 +388,6 @@ export const judgmentsJobsRoutes = new Elysia()
             t.Literal('waiting_on_db_connection'),
             t.Literal('running'),
             t.Literal('paused_by_user'),
-            t.Literal('paused_by_admin'),
             t.Literal('failed'),
             t.Literal('completed'),
             t.Literal('project_removed'),

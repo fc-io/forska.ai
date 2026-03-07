@@ -38,6 +38,7 @@ const getStatusColor = (status: string | null) => {
 
 const formatStatus = (status: string | null) => {
   if (!status) return 'Unknown'
+  if (status === 'paused_by_admin' || status === 'paused_by_user') return 'Paused'
   return status
     .split('_')
     .map((word) => {

@@ -25,7 +25,7 @@ type OriginalFullTextUrl = {
 
 const fetchArticleAdminInfo = async (articleId: string) => {
   const response = await apiClient.api.articles({id: articleId})['admin-info'].get()
-  return handleApiResponse(response, 'Failed to load admin info')
+  return handleApiResponse(response, 'Failed to load article tools')
 }
 
 export const ArticleAdminSection = (props: ArticleAdminSectionProps) => {
@@ -52,7 +52,8 @@ export const ArticleAdminSection = (props: ArticleAdminSectionProps) => {
 
     if (prev === 'pending' && conversionStatus === 'success') {
       setConversionJustCompleted(true)
-      void queryClient.invalidateQueries({queryKey: ['admin-article-details', props.articleId]})
+      void queryClient.invalidateQueries({queryKey: ['article-details', props.articleId]})
+      void queryClient.invalidateQueries({queryKey: ['import-route-stats-article-details', props.articleId]})
       void queryClient.invalidateQueries({queryKey: ['article-review-details']})
     }
 
@@ -78,7 +79,8 @@ export const ArticleAdminSection = (props: ArticleAdminSectionProps) => {
         // Invalidate the admin info query to refresh the data
         void queryClient.invalidateQueries({queryKey: ['article-admin-info', props.articleId]})
         // Also invalidate the main article query in case it's being used
-        void queryClient.invalidateQueries({queryKey: ['admin-article-details', props.articleId]})
+        void queryClient.invalidateQueries({queryKey: ['article-details', props.articleId]})
+        void queryClient.invalidateQueries({queryKey: ['import-route-stats-article-details', props.articleId]})
         void queryClient.invalidateQueries({queryKey: ['article-review-details']})
       },
     }
@@ -95,7 +97,8 @@ export const ArticleAdminSection = (props: ArticleAdminSectionProps) => {
         // Invalidate the admin info query to refresh the data
         void queryClient.invalidateQueries({queryKey: ['article-admin-info', props.articleId]})
         // Also invalidate the main article query in case it's being used
-        void queryClient.invalidateQueries({queryKey: ['admin-article-details', props.articleId]})
+        void queryClient.invalidateQueries({queryKey: ['article-details', props.articleId]})
+        void queryClient.invalidateQueries({queryKey: ['import-route-stats-article-details', props.articleId]})
         void queryClient.invalidateQueries({queryKey: ['article-review-details']})
       },
     }
@@ -109,7 +112,8 @@ export const ArticleAdminSection = (props: ArticleAdminSectionProps) => {
       },
       onSuccess: () => {
         void queryClient.invalidateQueries({queryKey: ['article-admin-info', props.articleId]})
-        void queryClient.invalidateQueries({queryKey: ['admin-article-details', props.articleId]})
+        void queryClient.invalidateQueries({queryKey: ['article-details', props.articleId]})
+        void queryClient.invalidateQueries({queryKey: ['import-route-stats-article-details', props.articleId]})
         void queryClient.invalidateQueries({queryKey: ['article-review-details']})
       },
     }
@@ -158,7 +162,7 @@ export const ArticleAdminSection = (props: ArticleAdminSectionProps) => {
               d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
             />
           </svg>
-          <h3 class="text-sm font-semibold text-amber-800">Admin Info</h3>
+          <h3 class="text-sm font-semibold text-amber-800">Article Tools</h3>
         </div>
 
         <button
@@ -185,11 +189,11 @@ export const ArticleAdminSection = (props: ArticleAdminSectionProps) => {
 
       <Show when={isOpen()}>
         <Show when={adminInfoQuery.isLoading}>
-          <div class="text-sm text-amber-700">Loading admin info...</div>
+          <div class="text-sm text-amber-700">Loading article tools...</div>
         </Show>
 
         <Show when={adminInfoQuery.isError}>
-          <div class="text-sm text-red-600">Failed to load admin info</div>
+          <div class="text-sm text-red-600">Failed to load article tools</div>
         </Show>
 
         <Show when={adminInfoQuery.data?.article}>

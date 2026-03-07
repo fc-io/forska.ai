@@ -49,7 +49,7 @@
   - server: `src/server/utils/authGuard.ts` (ensure local user; always derive `sessionUserId`)
 - [x] Verify: `bun run lint`, `bun test`
 - [ ] Manual smoke: open `/admin/*`, run 1 job, upload PDF, edit prompts
-- [ ] Optional cleanup: remove/rename leftover user-facing strings/enums containing "admin" (eg `paused_by_admin`)
+- [x] Cleanup: remove leftover user-facing "admin" strings/enums (eg `paused_by_admin` label)
 
 ## Step 3: Single-user local app (no Better Auth, no users)
 
