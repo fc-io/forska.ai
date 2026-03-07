@@ -118,8 +118,8 @@ export const humanAssessmentRoutesPostInit = async ({
         return r.importRouteId
       })
       articleScopeConditions.push(sql`EXISTS (
-        SELECT 1 FROM ${articleRouteLink} arl
-        WHERE arl."article_id" = ${articles.id}
+        SELECT 1 FROM ${articleRouteLink}
+        WHERE ${eq(articleRouteLink.articleId, articles.id)}
         AND ${inArray(articleRouteLink.importRouteId, routeIds)}
       )`)
     }
