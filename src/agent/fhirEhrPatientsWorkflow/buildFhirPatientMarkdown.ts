@@ -897,7 +897,7 @@ type TimelineEvent = {
   bullets: string[]
   resultBullets: string[]
   refBullets: string[]
-  noteLines: string[]
+  noteKeysInOrder: string[]
 }
 
 const getSortMsFromSortDate = (sortDate: string | null): number | null => {
@@ -1136,6 +1136,448 @@ const isLowInfoRenderedReference = (rendered: string): boolean => {
   return /^[A-Z][A-Za-z]+$/.test(trimmed)
 }
 
+const getBulletLabelFromLine = (line: string): string | null => {
+  const match = line.match(/^\s*-\s*([^:]+):/)
+  const label = getStringOrNull(match?.[1])
+  return label ? label.trim().toLowerCase() : null
+}
+
+const getExistingBulletLabels = (bullets: string[]): Set<string> => {
+  return bullets
+    .map((l) => {
+      return getBulletLabelFromLine(l)
+    })
+    .filter((v): v is string => {
+      return Boolean(v)
+    })
+    .reduce<Set<string>>((acc, label) => {
+      acc.add(label)
+      return acc
+    }, new Set<string>())
+}
+
+const COLLAPSIBLE_ROLE_LABELS = new Set(['location', 'provider', 'participant', 'performer'])
+
+const parseSimpleBulletLabelValue = (line: string): {label: string; value: string} | null => {
+  const match = line.match(/^\s*-\s*([^:]+):\s*(.*)$/)
+  const label = getStringOrNull(match?.[1])
+  const value = getStringOrNull(match?.[2])
+  return label && value ? {label: label.trim().toLowerCase(), value: value.trim()} : null
+}
+
+const collapseDuplicateRoleBullets = (bullets: string[]): string[] => {
+  const parsed = bullets
+    .map((line, idx) => {
+      const parts = parseSimpleBulletLabelValue(line)
+      if (!parts) {
+        return null
+      }
+      if (!COLLAPSIBLE_ROLE_LABELS.has(parts.label)) {
+        return null
+      }
+      const valueKey = normalizeInlineText(parts.value)
+      return {idx, label: parts.label, value: parts.value, valueKey}
+    })
+    .filter((v): v is {idx: number; label: string; value: string; valueKey: string} => {
+      return Boolean(v)
+    })
+
+  const grouped = parsed.reduce<Map<string, {value: string; labels: string[]; indexes: number[]}>>((acc, p) => {
+    const existing = acc.get(p.valueKey) ?? null
+    const next = existing
+      ? {value: existing.value, labels: [...existing.labels, p.label], indexes: [...existing.indexes, p.idx]}
+      : {value: p.value, labels: [p.label], indexes: [p.idx]}
+    acc.set(p.valueKey, next)
+    return acc
+  }, new Map())
+
+  const combinedByFirstIndex = new Map<number, string>()
+  const skipIndexes = new Set<number>()
+
+  Array.from(grouped.values()).forEach((g) => {
+    const labels = uniqueInOrder(g.labels)
+    if (labels.length < 2) {
+      return
+    }
+    const firstIdx = Math.min(...g.indexes)
+    const combinedLine = `- ${labels.join(', ')}: ${g.value}`
+    combinedByFirstIndex.set(firstIdx, combinedLine)
+    g.indexes
+      .filter((idx) => {
+        return idx !== firstIdx
+      })
+      .forEach((idx) => {
+        skipIndexes.add(idx)
+      })
+  })
+
+  return bullets.flatMap((line, idx) => {
+    if (skipIndexes.has(idx)) {
+      return []
+    }
+    const combined = combinedByFirstIndex.get(idx) ?? null
+    return combined ? [combined] : [line]
+  })
+}
+
+const buildConciseReferenceDisplayFromResource = ({
+  resourceType,
+  resource,
+}: {
+  resourceType: string
+  resource: unknown
+}): string | null => {
+  if (!isRecordValue(resource)) {
+    return null
+  }
+
+  if (resourceType === 'Practitioner') {
+    const firstName = getFirstRecordOrNull(resource.name)
+    const asHumanName = firstName ? buildHumanName(firstName) : null
+    return asHumanName ? truncateInlineText(asHumanName, 160) : null
+  }
+
+  if (resourceType === 'Organization') {
+    const name = getStringAtPath(resource, ['name'])
+    return name ? truncateInlineText(name, 160) : null
+  }
+
+  if (resourceType === 'Location') {
+    const name = getStringAtPath(resource, ['name'])
+    return name ? truncateInlineText(name, 160) : null
+  }
+
+  if (resourceType === 'Encounter') {
+    const type = getFirstCodeableConceptDisplay(resource, 'type')
+    return type ? truncateInlineText(type, 160) : null
+  }
+
+  if (resourceType === 'Device') {
+    const type = getCodeableConceptDisplay(resource.type)
+    const name = getStringAtPath(resource, ['deviceName', '0', 'name'])
+    const manufacturer = getStringAtPath(resource, ['manufacturer'])
+    const model = getStringAtPath(resource, ['modelNumber'])
+    const base = type ?? name ?? manufacturer ?? model
+    return base ? truncateInlineText(base, 160) : null
+  }
+
+  return getEventDisplay({resourceType, resourceId: null, resource})
+}
+
+const extractConciseValueFromRenderedReference = (rendered: string): string | null => {
+  const trimmed = rendered.trim()
+  if (trimmed.length === 0) {
+    return null
+  }
+
+  const asTypeColon = trimmed.match(/^[A-Z][A-Za-z]+:\s*(.+)$/)
+  const colonValue = getStringOrNull(asTypeColon?.[1])
+  if (colonValue) {
+    return truncateInlineText(colonValue, 200)
+  }
+
+  const asTypeParen = trimmed.match(/^([A-Z][A-Za-z]+)\s*\((.*)\)$/)
+  const inner = getStringOrNull(asTypeParen?.[2])
+  if (!inner) {
+    return null
+  }
+
+  const kv = inner
+    .split(';')
+    .map((p) => {
+      const part = String(p ?? '').trim()
+      const idx = part.indexOf(':')
+      const key = idx > 0 ? part.slice(0, idx).trim() : ''
+      const value = idx > 0 ? part.slice(idx + 1).trim() : ''
+      return key && value ? {key, value} : null
+    })
+    .filter((v): v is {key: string; value: string} => {
+      return Boolean(v)
+    })
+
+  const byKey = new Map<string, string>(
+    kv.map((p) => {
+      return [p.key, p.value]
+    }),
+  )
+
+  const preferred = byKey.get('type') ?? byKey.get('name') ?? byKey.get('text') ?? null
+  const fallback = preferred ?? inner
+  return fallback ? truncateInlineText(fallback, 220) : null
+}
+
+const buildConciseReferenceValue = ({
+  reference,
+  display,
+  renderRef,
+  resourceByKey,
+  identifierToKey,
+}: {
+  reference: string
+  display: string | null
+  renderRef: (ref: {reference: string; display: string | null}) => string
+  resourceByKey: Map<string, unknown>
+  identifierToKey: Map<string, string>
+}): string | null => {
+  const resolvedKey = resolveReferenceToKey({reference, identifierToKey})
+  const resolvedType = resolvedKey ? getStringOrNull(resolvedKey.split('/')[0]) : null
+  const resolvedResource = resolvedKey ? (resourceByKey.get(resolvedKey) ?? null) : null
+  const fromResolved =
+    resolvedType && resolvedResource
+      ? buildConciseReferenceDisplayFromResource({resourceType: resolvedType, resource: resolvedResource})
+      : null
+  const displayTrimmed = getStringOrNull(display)
+  const fromDisplay = displayTrimmed
+    ? (extractConciseValueFromRenderedReference(displayTrimmed) ?? truncateInlineText(displayTrimmed, 200))
+    : null
+  if (fromResolved || fromDisplay) {
+    return fromResolved ?? fromDisplay
+  }
+
+  const fallbackRendered = renderRef({reference, display})
+  const extracted = extractConciseValueFromRenderedReference(fallbackRendered)
+  const best = extracted ?? fallbackRendered
+  return best && !isLowInfoRenderedReference(best) ? best : null
+}
+
+type ReferenceBulletCandidate = {label: string; value: string; path: string}
+
+const buildReferenceBulletsForEvent = ({
+  profile,
+  patientId,
+  eventResourceType,
+  refs,
+  bullets,
+  renderRef,
+  resourceByKey,
+  identifierToKey,
+}: {
+  profile: FhirPatientMarkdownProfile
+  patientId: string
+  eventResourceType: string
+  refs: ExtractedReference[]
+  bullets: string[]
+  renderRef: (ref: {reference: string; display: string | null}) => string
+  resourceByKey: Map<string, unknown>
+  identifierToKey: Map<string, string>
+}): string[] => {
+  const existingLabels = getExistingBulletLabels(bullets)
+
+  const candidates = refs
+    .filter((r) => {
+      return r.path.length > 0
+    })
+    .filter((r) => {
+      const normalized = normalizeFhirReferenceKey(r.reference)
+      return !(normalized?.resourceType === 'Patient' && normalized.id === patientId)
+    })
+    .filter((r) => {
+      return !(eventResourceType === 'DiagnosticReport' && /^result\[\d+\]$/.test(r.path))
+    })
+    .map((r) => {
+      const label = buildHumanReferenceLabel(r.path).trim().toLowerCase()
+      const value = buildConciseReferenceValue({
+        reference: r.reference,
+        display: r.display,
+        renderRef,
+        resourceByKey,
+        identifierToKey,
+      })
+      return label && value ? ({label, value, path: r.path} satisfies ReferenceBulletCandidate) : null
+    })
+    .filter((v): v is ReferenceBulletCandidate => {
+      return Boolean(v)
+    })
+    .filter((r) => {
+      return r.label.length > 0
+    })
+    .filter((r) => {
+      return existingLabels.has(r.label) ? false : true
+    })
+    .filter((r) => {
+      return profile === 'summary' ? isAllowedSummaryReferenceLabel(r.label) : true
+    })
+    .sort((a, b) => {
+      const byLabel = a.label.localeCompare(b.label)
+      return byLabel !== 0 ? byLabel : a.path.localeCompare(b.path)
+    })
+
+  const uniqueByLabelValue = candidates.reduce<ReferenceBulletCandidate[]>((acc, r) => {
+    const key = `${r.label}::${r.value}`
+    const exists = acc.some((x) => {
+      return `${x.label}::${x.value}` === key
+    })
+    return exists ? acc : [...acc, r]
+  }, [])
+
+  const grouped = uniqueByLabelValue.reduce<{value: string; labels: string[]}[]>((acc, r) => {
+    const existing = acc.find((g) => {
+      return g.value === r.value
+    })
+    if (!existing) {
+      return [...acc, {value: r.value, labels: [r.label]}]
+    }
+    const nextLabels = existing.labels.includes(r.label) ? existing.labels : [...existing.labels, r.label]
+    return acc.map((g) => {
+      return g.value === r.value ? {value: g.value, labels: nextLabels} : g
+    })
+  }, [])
+
+  return grouped.map((g) => {
+    const labelText = g.labels.join(', ')
+    return `- ${labelText}: ${g.value}`
+  })
+}
+
+type DedupedNoteGroup = {key: string; canonicalText: string; truncated: boolean; sources: string[]}
+
+const addUniqueString = (list: string[], value: string): string[] => {
+  return list.includes(value) ? list : [...list, value]
+}
+
+const fnv1a32 = (value: string): number => {
+  let hash = 2166136261
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i)
+    hash = Math.imul(hash, 16777619)
+  }
+  return hash >>> 0
+}
+
+const buildNoteDedupKey = (canonicalText: string): string => {
+  const normalized = canonicalText.replace(/\s+/g, ' ').trim()
+  const hash = fnv1a32(normalized).toString(16).padStart(8, '0')
+  return `${normalized.length}:${hash}`
+}
+
+const isPreferredNoteCandidate = ({
+  current,
+  candidate,
+}: {
+  current: {canonicalText: string; truncated: boolean}
+  candidate: {canonicalText: string; truncated: boolean}
+}): boolean => {
+  if (current.truncated && !candidate.truncated) {
+    return true
+  }
+  if (!current.truncated && candidate.truncated) {
+    return false
+  }
+  return candidate.canonicalText.length > current.canonicalText.length
+}
+
+const upsertDedupedNoteGroup = ({
+  groups,
+  note,
+  bucketDate,
+  renderRef,
+}: {
+  groups: Map<string, DedupedNoteGroup>
+  note: FhirDecodedNote
+  bucketDate: string
+  renderRef: (ref: {reference: string; display: string | null}) => string
+}): string | null => {
+  const canonicalText = buildCanonicalNoteText({note, bucketDate, renderRef})
+  if (!canonicalText) {
+    return null
+  }
+
+  const key = buildNoteDedupKey(canonicalText)
+  const source = getNoteSourceLabel(note.path)
+  const existing = groups.get(key) ?? null
+  const nextSources = source ? addUniqueString(existing?.sources ?? [], source) : (existing?.sources ?? [])
+
+  if (!existing) {
+    groups.set(key, {key, canonicalText, truncated: note.truncated, sources: nextSources})
+    return key
+  }
+
+  const shouldReplace = isPreferredNoteCandidate({
+    current: {canonicalText: existing.canonicalText, truncated: existing.truncated},
+    candidate: {canonicalText, truncated: note.truncated},
+  })
+  const updated = shouldReplace
+    ? {key, canonicalText, truncated: note.truncated, sources: nextSources}
+    : {key, canonicalText: existing.canonicalText, truncated: existing.truncated, sources: nextSources}
+  groups.set(key, updated)
+  return key
+}
+
+const uniqueInOrder = (values: string[]): string[] => {
+  return values.reduce<{seen: Set<string>; out: string[]}>(
+    (acc, v) => {
+      if (acc.seen.has(v)) {
+        return acc
+      }
+      acc.seen.add(v)
+      acc.out.push(v)
+      return acc
+    },
+    {seen: new Set<string>(), out: []},
+  ).out
+}
+
+const renderDedupedNoteGroupLines = ({
+  profile,
+  group,
+}: {
+  profile: FhirPatientMarkdownProfile
+  group: DedupedNoteGroup
+}): string[] => {
+  const excerpt = profile === 'summary' ? buildNoteExcerpt(group.canonicalText) : null
+  const textLines = profile === 'summary' ? (excerpt ? [excerpt] : []) : group.canonicalText.split('\n')
+
+  if (textLines.length === 0) {
+    return []
+  }
+
+  const sources = [...group.sources].sort((a, b) => {
+    return a.localeCompare(b)
+  })
+  const truncatedSuffix = group.truncated ? ' | truncated=true' : ''
+  const header =
+    sources.length === 1 ? `##### Note (${sources[0] ?? ''})${truncatedSuffix}` : `##### Note${truncatedSuffix}`
+  const sourceLines = sources.length > 1 ? [`- sources: ${sources.join(', ')}`] : []
+  const bodyLines = textLines.map((l) => {
+    return l.trimEnd()
+  })
+  return [header, ...(sourceLines.length > 0 ? sourceLines : []), '', ...bodyLines]
+}
+
+const buildDedupedNoteLinesForEvent = ({
+  profile,
+  noteKeysInOrder,
+  groups,
+  renderedKeys,
+}: {
+  profile: FhirPatientMarkdownProfile
+  noteKeysInOrder: string[]
+  groups: Map<string, DedupedNoteGroup>
+  renderedKeys: Set<string>
+}): string[] => {
+  const uniqueKeys = uniqueInOrder(noteKeysInOrder)
+
+  return uniqueKeys.reduce<{count: number; out: string[]}>(
+    (acc, key) => {
+      if (renderedKeys.has(key)) {
+        return acc
+      }
+      const group = groups.get(key) ?? null
+      if (!group) {
+        return acc
+      }
+      const rendered = renderDedupedNoteGroupLines({profile, group})
+      if (rendered.length === 0) {
+        return acc
+      }
+      renderedKeys.add(key)
+      const next = acc.count === 0 ? rendered : ['', ...rendered]
+      return {count: acc.count + 1, out: [...acc.out, ...next]}
+    },
+    {count: 0, out: []},
+  ).out
+}
+
 const buildTimelineLines = ({
   profile,
   patientId,
@@ -1151,6 +1593,8 @@ const buildTimelineLines = ({
   resourceByKey: Map<string, unknown>
   identifierToKey: Map<string, string>
 }): string[] => {
+  const noteGroups = new Map<string, DedupedNoteGroup>()
+
   const events = entries
     .filter((e) => {
       return e.resourceType !== 'Patient'
@@ -1161,7 +1605,7 @@ const buildTimelineLines = ({
       const sortMs = getSortMsFromSortDate(entry.sortDate)
       const bucketDate = getBucketDateFromSort(sortMs, entry.sortDate)
       const display = getEventDisplay({resourceType: entry.resourceType, resourceId: entry.resourceId, resource})
-      const bullets = buildEventBullets({
+      const bulletsRaw = buildEventBullets({
         profile,
         resourceType: entry.resourceType,
         resourceId: entry.resourceId,
@@ -1175,51 +1619,27 @@ const buildTimelineLines = ({
         entry.resourceType === 'DiagnosticReport'
           ? buildDiagnosticReportResultsBlockLines({resource, renderRef, resourceByKey, identifierToKey})
           : []
-      const refBullets = refs
-        .filter((r) => {
-          return r.path.length > 0
-        })
-        .filter((r) => {
-          const normalized = normalizeFhirReferenceKey(r.reference)
-          return !(normalized?.resourceType === 'Patient' && normalized.id === patientId)
-        })
-        .filter((r) => {
-          return !(entry.resourceType === 'DiagnosticReport' && /^result\[\d+\]$/.test(r.path))
-        })
-        .map((r) => {
-          const rendered = renderRef({reference: r.reference, display: r.display})
-          const label = buildHumanReferenceLabel(r.path)
-          return {path: r.path, label, rendered}
-        })
-        .sort((a, b) => {
-          const byLabel = a.label.localeCompare(b.label)
-          return byLabel !== 0 ? byLabel : a.path.localeCompare(b.path)
-        })
-        .filter((r) => {
-          return r.label.length > 0
-        })
-        .filter((r) => {
-          return profile === 'summary' ? isAllowedSummaryReferenceLabel(r.label) : true
-        })
-        .filter((r) => {
-          return !isLowInfoRenderedReference(r.rendered)
-        })
-        .reduce<{path: string; label: string; rendered: string}[]>((acc, r) => {
-          const key = `${r.label}::${r.rendered}`
-          return acc.some((x) => {
-            return `${x.label}::${x.rendered}` === key
-          })
-            ? acc
-            : [...acc, r]
-        }, [])
-        .map((r) => {
-          return `- ${r.label}: ${r.rendered}`
-        })
 
-      const noteLines = entry.decodedNotes.flatMap((note, idx) => {
-        const rendered = renderDecodedNoteLines({profile, note, bucketDate, renderRef})
-        return idx === 0 ? rendered : rendered.length > 0 ? ['', ...rendered] : []
+      const refBullets = buildReferenceBulletsForEvent({
+        profile,
+        patientId,
+        eventResourceType: entry.resourceType,
+        refs,
+        bullets: bulletsRaw,
+        renderRef,
+        resourceByKey,
+        identifierToKey,
       })
+
+      const bullets = collapseDuplicateRoleBullets(bulletsRaw)
+
+      const noteKeysInOrder = entry.decodedNotes
+        .map((note) => {
+          return upsertDedupedNoteGroup({groups: noteGroups, note, bucketDate, renderRef})
+        })
+        .filter((v): v is string => {
+          return Boolean(v)
+        })
 
       return {
         sortMs,
@@ -1230,7 +1650,7 @@ const buildTimelineLines = ({
         bullets,
         resultBullets,
         refBullets,
-        noteLines,
+        noteKeysInOrder,
       } satisfies TimelineEvent
     })
     .filter((e) => {
@@ -1239,13 +1659,14 @@ const buildTimelineLines = ({
         || e.bullets.length > 0
         || e.refBullets.length > 0
         || e.resultBullets.length > 0
-        || e.noteLines.length > 0
+        || e.noteKeysInOrder.length > 0
       return hasAny
     })
     .sort(compareTimelineEvents)
 
   const lines: string[] = []
   let currentBucket: string | null = null
+  const renderedNoteKeys = new Set<string>()
 
   events.forEach((event) => {
     if (event.bucketDate !== currentBucket) {
@@ -1269,9 +1690,16 @@ const buildTimelineLines = ({
       lines.push(...event.resultBullets)
     }
 
-    if (event.noteLines.length > 0) {
+    const noteLines = buildDedupedNoteLinesForEvent({
+      profile,
+      noteKeysInOrder: event.noteKeysInOrder,
+      groups: noteGroups,
+      renderedKeys: renderedNoteKeys,
+    })
+
+    if (noteLines.length > 0) {
       lines.push('')
-      lines.push(...event.noteLines)
+      lines.push(...noteLines)
     }
   })
 
@@ -1530,16 +1958,20 @@ const inlineReferencesInMarkdown = (
 }
 
 const stripLeadingBucketDateLine = ({text, bucketDate}: {text: string; bucketDate: string}): string => {
-  const isDateBucket = /^\d{4}-\d{2}-\d{2}$/.test(bucketDate)
-  if (!isDateBucket) {
+  const lines = text.replace(/\r\n/g, '\n').split('\n')
+  const first = String(lines[0] ?? '').trim()
+  const rest = lines.slice(1).join('\n').trim()
+  if (rest.length === 0) {
     return text
   }
 
-  const lines = text.replace(/\r\n/g, '\n').split('\n')
-  const first = String(lines[0] ?? '').trim()
-  const pattern = new RegExp(`^${bucketDate}(?:\\s*[:\\-]\\s*)?$`)
-  const rest = pattern.test(first) ? lines.slice(1).join('\n').trim() : text
-  return rest
+  const isDateBucket = /^\d{4}-\d{2}-\d{2}$/.test(bucketDate)
+  const bucketPattern = isDateBucket ? new RegExp(`^${bucketDate}(?:\\s*[:\\-]\\s*)?$`) : null
+  const isBucketLine = bucketPattern ? bucketPattern.test(first) : false
+  const isIsoDateLine = /^\d{4}-\d{2}-\d{2}(?:\s*[:\-]\s*)?$/.test(first)
+  const shouldStrip = isBucketLine || isIsoDateLine
+
+  return shouldStrip ? rest : text
 }
 
 const getNoteSourceLabel = (path: string): string | null => {
@@ -1565,7 +1997,7 @@ const stripMarkdownForExcerpt = (text: string): string => {
     .trim()
 }
 
-const renderDecodedNoteLinesSummary = ({
+const buildCanonicalNoteText = ({
   note,
   bucketDate,
   renderRef,
@@ -1573,49 +2005,16 @@ const renderDecodedNoteLinesSummary = ({
   note: FhirDecodedNote
   bucketDate: string
   renderRef: (ref: {reference: string; display: string | null}) => string
-}): string[] => {
+}): string | null => {
   const raw = String(note.text ?? '')
   const trimmed = raw.trim()
   if (trimmed.length === 0) {
-    return []
+    return null
   }
 
   const stripped = stripLeadingBucketDateLine({text: trimmed, bucketDate}).trim()
   if (stripped.length === 0) {
-    return []
-  }
-
-  const demoted = demoteMarkdownHeadingsToH6(stripped)
-  const inlined = inlineReferencesInMarkdown(demoted, renderRef)
-  const excerpt = truncateInlineText(stripMarkdownForExcerpt(inlined), 700)
-  if (excerpt.length === 0) {
-    return []
-  }
-
-  const source = getNoteSourceLabel(note.path)
-  const truncatedSuffix = note.truncated ? ' | truncated=true' : ''
-  const header = `##### Note${source ? ` (${source})` : ''}${truncatedSuffix}`
-  return [header, '', excerpt]
-}
-
-const renderDecodedNoteLinesFulltext = ({
-  note,
-  bucketDate,
-  renderRef,
-}: {
-  note: FhirDecodedNote
-  bucketDate: string
-  renderRef: (ref: {reference: string; display: string | null}) => string
-}): string[] => {
-  const raw = String(note.text ?? '')
-  const trimmed = raw.trim()
-  if (trimmed.length === 0) {
-    return []
-  }
-
-  const stripped = stripLeadingBucketDateLine({text: trimmed, bucketDate}).trim()
-  if (stripped.length === 0) {
-    return []
+    return null
   }
 
   const demoted = demoteMarkdownHeadingsToH6(stripped)
@@ -1624,27 +2023,13 @@ const renderDecodedNoteLinesFulltext = ({
   const finalLines = fenced.split('\n').map((l) => {
     return l.trimEnd()
   })
-
-  const source = getNoteSourceLabel(note.path)
-  const truncatedSuffix = note.truncated ? ' | truncated=true' : ''
-  const header = `##### Note${source ? ` (${source})` : ''}${truncatedSuffix}`
-  return [header, '', ...finalLines]
+  const finalText = finalLines.join('\n').trim()
+  return finalText.length > 0 ? finalText : null
 }
 
-const renderDecodedNoteLines = ({
-  profile,
-  note,
-  bucketDate,
-  renderRef,
-}: {
-  profile: FhirPatientMarkdownProfile
-  note: FhirDecodedNote
-  bucketDate: string
-  renderRef: (ref: {reference: string; display: string | null}) => string
-}): string[] => {
-  return profile === 'summary'
-    ? renderDecodedNoteLinesSummary({note, bucketDate, renderRef})
-    : renderDecodedNoteLinesFulltext({note, bucketDate, renderRef})
+const buildNoteExcerpt = (canonicalText: string): string | null => {
+  const excerpt = truncateInlineText(stripMarkdownForExcerpt(canonicalText), 700)
+  return excerpt.length > 0 ? excerpt : null
 }
 
 const validateFhirPatientMarkdown = (markdown: string): string[] => {

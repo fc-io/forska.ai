@@ -134,7 +134,7 @@ test('buildFhirPatientMarkdown builds strict headings and inlines refs', () => {
   expect(built.summaryMarkdown).not.toContain('system=')
   expect(built.summaryMarkdown).not.toContain('- id:')
   expect(built.summaryMarkdown).not.toContain('[0]')
-  expect(built.summaryMarkdown).toContain('- performer: Practitioner: Dr Example')
+  expect(built.summaryMarkdown).toContain('- performer: Dr Example')
   expect(built.summaryMarkdown).toContain('##### Results (2)')
   expect(built.summaryMarkdown).toContain('issued: 2024-01-05T12:00:00Z')
   expect(built.summaryMarkdown).toContain('  - Leukocytes [#/volume] in Blood by Automated count: 5.1 10^3/uL')
@@ -153,9 +153,99 @@ test('buildFhirPatientMarkdown builds strict headings and inlines refs', () => {
   expect(built.fulltextMarkdown).not.toContain('system=')
   expect(built.fulltextMarkdown).not.toContain('- id:')
   expect(built.fulltextMarkdown).not.toContain('[0]')
-  expect(built.fulltextMarkdown).toContain('- performer: Practitioner: Dr Example')
+  expect(built.fulltextMarkdown).toContain('- performer: Dr Example')
   expect(built.fulltextMarkdown).toContain('##### Results (2)')
   expect(built.fulltextMarkdown).toContain('issued: 2024-01-05T12:00:00Z')
   expect(built.fulltextMarkdown).toContain('  - Leukocytes [#/volume] in Blood by Automated count: 5.1 10^3/uL')
   expect(built.fulltextMarkdown).not.toContain('result[0]:')
+})
+
+test('buildFhirPatientMarkdown collapses duplicate role bullets (location/provider)', () => {
+  const built = buildFhirPatientMarkdown({
+    patientId: 'p1',
+    importRoute: 'fhir:demo',
+    assetsFolder: 'assets/demo',
+    articleTitle: 'FHIR Patient p1',
+    entries: [
+      {
+        resourceType: 'Patient',
+        resourceId: 'p1',
+        sortDate: null,
+        rawLine: JSON.stringify({resourceType: 'Patient', id: 'p1', name: [{text: 'Alice Example'}]}),
+        decodedNotes: [],
+      },
+      {
+        resourceType: 'Encounter',
+        resourceId: 'e1',
+        sortDate: '2024-01-02T10:00:00Z',
+        rawLine: JSON.stringify({
+          resourceType: 'Encounter',
+          id: 'e1',
+          status: 'finished',
+          type: [{text: 'Visit'}],
+          subject: {reference: 'Patient/p1'},
+          serviceProvider: {reference: 'Organization/o1', display: 'PROVIDENCE MEDICAL CENTER'},
+          location: [{location: {reference: 'Location/l1', display: 'PROVIDENCE MEDICAL CENTER'}}],
+          period: {start: '2024-01-02T10:00:00Z', end: '2024-01-02T11:00:00Z'},
+        }),
+        decodedNotes: [],
+      },
+    ],
+  })
+
+  expect(built.validationErrors).toEqual([])
+  expect(built.summaryMarkdown).toContain('- location, provider: PROVIDENCE MEDICAL CENTER')
+  expect(built.summaryMarkdown).not.toContain('- location: PROVIDENCE MEDICAL CENTER')
+  expect(built.summaryMarkdown).not.toContain('- provider: PROVIDENCE MEDICAL CENTER')
+})
+
+test('buildFhirPatientMarkdown de-duplicates identical note bodies across resources', () => {
+  const noteText = '# Note\nSame text'
+
+  const built = buildFhirPatientMarkdown({
+    patientId: 'p1',
+    importRoute: 'fhir:demo',
+    assetsFolder: 'assets/demo',
+    articleTitle: 'FHIR Patient p1',
+    entries: [
+      {
+        resourceType: 'Patient',
+        resourceId: 'p1',
+        sortDate: null,
+        rawLine: JSON.stringify({resourceType: 'Patient', id: 'p1'}),
+        decodedNotes: [],
+      },
+      {
+        resourceType: 'DiagnosticReport',
+        resourceId: 'dr1',
+        sortDate: '2024-01-03T09:00:00Z',
+        rawLine: JSON.stringify({
+          resourceType: 'DiagnosticReport',
+          id: 'dr1',
+          status: 'final',
+          subject: {reference: 'Patient/p1'},
+        }),
+        decodedNotes: [{path: 'DiagnosticReport.presentedForm[0].data', text: noteText, truncated: false}],
+      },
+      {
+        resourceType: 'DocumentReference',
+        resourceId: 'd1',
+        sortDate: '2024-01-03T09:00:00Z',
+        rawLine: JSON.stringify({
+          resourceType: 'DocumentReference',
+          id: 'd1',
+          status: 'current',
+          subject: {reference: 'Patient/p1'},
+        }),
+        decodedNotes: [{path: 'DocumentReference.content[0].attachment.data', text: noteText, truncated: false}],
+      },
+    ],
+  })
+
+  expect(built.validationErrors).toEqual([])
+  expect(built.fulltextMarkdown).toContain('##### Note')
+  expect(built.fulltextMarkdown).toContain('- sources: DiagnosticReport, DocumentReference')
+  expect((built.fulltextMarkdown.match(/Same text/g) ?? []).length).toBe(1)
+  expect(built.fulltextMarkdown).not.toContain('##### Note (DiagnosticReport)')
+  expect(built.fulltextMarkdown).not.toContain('##### Note (DocumentReference)')
 })
