@@ -380,7 +380,7 @@ const buildPatientOriginalData = ({
     .sort((a, b) => {
       const aMs = a.sortMs
       const bMs = b.sortMs
-      const t = aMs !== null && bMs !== null ? aMs - bMs : aMs !== null ? -1 : bMs !== null ? 1 : 0
+      const t = aMs !== null && bMs !== null ? bMs - aMs : aMs !== null ? -1 : bMs !== null ? 1 : 0
       const rt = a.entry.resourceType.localeCompare(b.entry.resourceType)
       const id = (a.entry.resourceId ?? '').localeCompare(b.entry.resourceId ?? '')
       return t !== 0 ? t : rt !== 0 ? rt : id

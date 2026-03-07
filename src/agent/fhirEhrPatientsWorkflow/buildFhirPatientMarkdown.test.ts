@@ -159,6 +159,15 @@ test('buildFhirPatientMarkdown builds strict headings and inlines refs', () => {
   expect(built.fulltextMarkdown).toContain('issued: 2024-01-05T12:00:00Z')
   expect(built.fulltextMarkdown).toContain('  - Leukocytes [#/volume] in Blood by Automated count: 5.1 10^3/uL')
   expect(built.fulltextMarkdown).not.toContain('result[0]:')
+
+  expect(built.summaryMarkdown.indexOf('### 2024-01-05')).toBeLessThan(built.summaryMarkdown.indexOf('### 2024-01-03'))
+  expect(built.summaryMarkdown.indexOf('### 2024-01-03')).toBeLessThan(built.summaryMarkdown.indexOf('### 2024-01-02'))
+  expect(built.fulltextMarkdown.indexOf('### 2024-01-05')).toBeLessThan(
+    built.fulltextMarkdown.indexOf('### 2024-01-03'),
+  )
+  expect(built.fulltextMarkdown.indexOf('### 2024-01-03')).toBeLessThan(
+    built.fulltextMarkdown.indexOf('### 2024-01-02'),
+  )
 })
 
 test('buildFhirPatientMarkdown collapses duplicate role bullets (location/provider)', () => {

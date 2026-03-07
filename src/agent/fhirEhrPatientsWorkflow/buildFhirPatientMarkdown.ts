@@ -924,7 +924,7 @@ const getBucketDateFromSort = (sortMs: number | null, sortDate: string | null): 
 const compareTimelineEvents = (a: TimelineEvent, b: TimelineEvent): number => {
   const aMs = a.sortMs
   const bMs = b.sortMs
-  const t = aMs !== null && bMs !== null ? aMs - bMs : aMs !== null ? -1 : bMs !== null ? 1 : 0
+  const t = aMs !== null && bMs !== null ? bMs - aMs : aMs !== null ? -1 : bMs !== null ? 1 : 0
   const rt = a.resourceType.localeCompare(b.resourceType)
   const id = (a.resourceId ?? '').localeCompare(b.resourceId ?? '')
   return t !== 0 ? t : rt !== 0 ? rt : id
