@@ -1,5 +1,12 @@
 # Nice FHIR patient records (summary vs fulltext)
 
+## General goals
+
+- Readable at a glance: one fact per row (avoid `(...; ...; ...)` blobs).
+- Concise by default: remove duplicate labels/types and repeated identical values.
+- Roles > resource types: prefer `Performer/Participant/Provider/Location` labels; only add `(Practitioner/Organization/Location)` when it disambiguates.
+- Preserve provenance without duplication: when collapsing identical content, keep a short `Sources:` list (and raw ids behind the technical toggle).
+
 ## Output split
 
 - [x] Stop `articleSummary===fullText` for `fhir:` imports; store 2 markdown strings.
@@ -13,12 +20,16 @@
 - [x] No FHIR path noise: remove `identifier[4]`, `performer[0]`, etc; map to human labels.
 - [x] Identifiers: keep `type` + `value` only (eg `Passport Number: X25219320X`); drop `system=` + `use=` + indexes.
 - [x] Devices: never render `#### Device: <id>`; render `Device: <type/model/udi>` or omit if empty.
+- [ ] Encounter context: render `Encounter: <type>` once, with details on separate rows (status/period/location/provider); never `Encounter: Encounter ...`.
+- [ ] Avoid double-label: never render `X: X: ...` (eg `Location: Location: ...`, `Performer: Practitioner: ...`).
+- [ ] Collapse repeated roles: if the same display repeats across `location/provider/participant/performer`, render once with combined role label(s).
 
 ## Fulltext = complete, still readable
 
 - [x] Keep full timeline; still prefer displays over ids; ids only behind UI toggle.
 - [x] Event heading display: add Device/Practitioner/Organization/Location/etc (no fallback to raw id).
 - [x] References: avoid generic `- <path>: ...` dump when a resource-specific bullet exists; keep high-signal only.
+- [ ] De-duplicate identical narrative bodies across resources (eg DiagnosticReport vs DocumentReference); show text once + `Sources:`.
 
 ## Humanization (both)
 
@@ -27,6 +38,9 @@
 - [ ] Dates: show human date/time; keep raw only in technical toggle.
 - [ ] Observations: `code: value unit`; add interpretation + ref range; summary shows abnormal/latest.
 - [x] Notes: summary excerpt; fulltext full note; keep heading demotion + fence-close.
+- [ ] Notes: if content is structured (multiple source fields), render each field on its own row; if free-text, keep as a single block.
+- [ ] Notes: detect identical note bodies (normalize whitespace) and collapse duplicates; include `Sources: DiagnosticReport, DocumentReference`.
+- [ ] Layout: prefer multi-row key/value blocks over parenthetical summaries for composite items (Encounter, etc).
 
 ## UI
 
@@ -38,5 +52,7 @@
 
 - [x] Tests: summary has no UUIDs, no `system=http`, no `?identifier=`, no `Type/<id>`, no `[...]`, no `- id:`.
 - [x] Add summary validator (heading/fence + no-ids/no-refs).
+- [ ] Tests: no `X: X:` double-label patterns; no repeated identical role/value rows within the same event.
+- [ ] Tests: identical note text only renders once (with a `Sources:` list).
 - [ ] Backfill script/job: re-render summary/fulltext for existing `articleId` starting `fhir:` (idempotent).
 - [x] Update `FHIR_EHR_PATIENT_PLAN.md` (new decision + new human-only rules).
