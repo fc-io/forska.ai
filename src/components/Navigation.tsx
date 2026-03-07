@@ -282,7 +282,7 @@ export const Navigation = (props: NavigationProps) => {
                     isAdminMenuOpen() ? 'bg-stone-100 text-gray-900' : ''
                   }`}
                 >
-                  Tools
+                  Admin
                 </div>
               </div>
             </Show>
@@ -427,7 +427,7 @@ export const Navigation = (props: NavigationProps) => {
                   </div>
                 </div>
                 <div class="flex flex-col gap-4">
-                  <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">Manage</div>
+                  <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">Admin</div>
                   <div class="flex flex-col gap-1">
                     <Link
                       to="/admin/users"
