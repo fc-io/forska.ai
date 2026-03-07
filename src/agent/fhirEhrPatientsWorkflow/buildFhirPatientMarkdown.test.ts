@@ -249,3 +249,48 @@ test('buildFhirPatientMarkdown de-duplicates identical note bodies across resour
   expect(built.fulltextMarkdown).not.toContain('##### Note (DiagnosticReport)')
   expect(built.fulltextMarkdown).not.toContain('##### Note (DocumentReference)')
 })
+
+test('buildFhirPatientMarkdown formats sectioned note blobs into readable lines', () => {
+  const noteText =
+    'Chief Complaint No complaints. History of Present Illness Dawne25 is a 20 year-old nonhispanic white female. Patient has a history of reports of violence in the environment (finding), full-time employment (finding), stress (finding). Social History Patient is single. Patient has a documented history of opioid addiction. Patient has never smoked. Patient identifies as heterosexual. Patient comes from a middle socioeconomic background. Patient has completed some college courses. Patient currently has UnitedHealthcare. Allergies No Known Allergies. Medications No Active Medications. Assessment and Plan Plan The patient was prescribed the following medications: levora 0.15/30 28 day pack'
+
+  const built = buildFhirPatientMarkdown({
+    patientId: 'p1',
+    importRoute: 'fhir:demo',
+    assetsFolder: 'assets/demo',
+    articleTitle: 'FHIR Patient p1',
+    entries: [
+      {
+        resourceType: 'Patient',
+        resourceId: 'p1',
+        sortDate: null,
+        rawLine: JSON.stringify({resourceType: 'Patient', id: 'p1'}),
+        decodedNotes: [],
+      },
+      {
+        resourceType: 'DocumentReference',
+        resourceId: 'd1',
+        sortDate: '2024-01-03T09:00:00Z',
+        rawLine: JSON.stringify({
+          resourceType: 'DocumentReference',
+          id: 'd1',
+          status: 'current',
+          subject: {reference: 'Patient/p1'},
+        }),
+        decodedNotes: [{path: 'DocumentReference.content[0].attachment.data', text: noteText, truncated: false}],
+      },
+    ],
+  })
+
+  expect(built.validationErrors).toEqual([])
+  expect(built.fulltextMarkdown).toContain('###### Chief Complaint')
+  expect(built.fulltextMarkdown).toContain('- No complaints.')
+  expect(built.fulltextMarkdown).toContain('###### Social History')
+  expect(built.fulltextMarkdown).toContain('- Patient is single.')
+  expect(built.fulltextMarkdown).toContain('###### Allergies')
+  expect(built.fulltextMarkdown).toContain('- No Known Allergies.')
+  expect(built.fulltextMarkdown).toContain('###### Assessment and Plan')
+  expect(built.fulltextMarkdown).toContain(
+    '- The patient was prescribed the following medications: levora 0.15/30 28 day pack',
+  )
+})

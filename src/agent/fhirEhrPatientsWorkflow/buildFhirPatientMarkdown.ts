@@ -1997,6 +1997,124 @@ const stripMarkdownForExcerpt = (text: string): string => {
     .trim()
 }
 
+const NOTE_SECTION_HEADINGS = [
+  'Chief Complaint',
+  'History of Present Illness',
+  'Social History',
+  'Allergies',
+  'Medications',
+  'Assessment and Plan',
+] as const
+
+type NoteSectionHeading = (typeof NOTE_SECTION_HEADINGS)[number]
+
+const escapeRegex = (value: string): string => {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+const NOTE_SECTION_CANONICAL_BY_LOWER = new Map<string, NoteSectionHeading>(
+  NOTE_SECTION_HEADINGS.map((h) => {
+    return [h.toLowerCase(), h]
+  }),
+)
+
+const NOTE_SECTION_REGEX = new RegExp(
+  `(?:^|[.!?]\\s+)(${NOTE_SECTION_HEADINGS.map((h) => {
+    return escapeRegex(h)
+  }).join('|')})\\b`,
+  'gi',
+)
+
+const splitNoteIntoSentenceLikeParts = (text: string): string[] => {
+  const normalized = normalizeInlineText(text)
+  const withBreaks = normalized.replace(/([.!?])\s+(?=[A-Z])/g, '$1\n')
+  return withBreaks
+    .split('\n')
+    .map((m) => {
+      return String(m ?? '').trim()
+    })
+    .filter((m) => {
+      return m.length > 0
+    })
+}
+
+const stripRedundantAssessmentPlanPrefix = (text: string): string => {
+  return text.replace(/^Plan\s+(?=(?:The patient|Patient)\b)/i, '').trim()
+}
+
+type SectionedNotePart = {heading: NoteSectionHeading; body: string}
+
+type NoteSectionOccurrence = {heading: NoteSectionHeading; start: number; end: number}
+
+const parseSectionedNarrativeNoteParts = (text: string): SectionedNotePart[] => {
+  const matches = Array.from(text.matchAll(NOTE_SECTION_REGEX))
+
+  const occurrences = matches
+    .map((m) => {
+      const rawHeading = getStringOrNull(m[1])
+      const heading = rawHeading ? (NOTE_SECTION_CANONICAL_BY_LOWER.get(rawHeading.toLowerCase()) ?? null) : null
+      const matchStart = typeof m.index === 'number' ? m.index : null
+      const fullMatch = String(m[0] ?? '')
+      const headingStart =
+        matchStart !== null && rawHeading ? matchStart + Math.max(0, fullMatch.length - rawHeading.length) : null
+      const headingEnd = headingStart !== null && rawHeading ? headingStart + rawHeading.length : null
+      return heading && headingStart !== null && headingEnd !== null
+        ? {heading, start: headingStart, end: headingEnd}
+        : null
+    })
+    .filter((v): v is NoteSectionOccurrence => {
+      return Boolean(v)
+    })
+
+  if (occurrences.length < 2) {
+    return []
+  }
+
+  const firstStart = occurrences[0]?.start ?? 0
+  if (firstStart > 30) {
+    return []
+  }
+
+  return occurrences
+    .map((occ, idx) => {
+      const nextStart = occurrences[idx + 1]?.start ?? text.length
+      const rawBody = text.slice(occ.end, nextStart).trim()
+      const body = occ.heading === 'Assessment and Plan' ? stripRedundantAssessmentPlanPrefix(rawBody) : rawBody
+      return body.length > 0 ? ({heading: occ.heading, body} satisfies SectionedNotePart) : null
+    })
+    .filter((v): v is SectionedNotePart => {
+      return Boolean(v)
+    })
+}
+
+const formatSectionedNarrativeNoteBlobAsMarkdown = (text: string): string | null => {
+  const normalized = text.replace(/\r\n/g, '\n').trim()
+  if (normalized.length === 0) {
+    return null
+  }
+  if (normalized.includes('\n')) {
+    return null
+  }
+
+  const parts = parseSectionedNarrativeNoteParts(normalized)
+  if (parts.length === 0) {
+    return null
+  }
+
+  const lines = parts.flatMap((part, idx) => {
+    const bodyNormalized = normalizeInlineText(part.body)
+    const statements = splitNoteIntoSentenceLikeParts(bodyNormalized)
+    const bodyLines = statements.map((s) => {
+      return `- ${s}`
+    })
+    const block = [`###### ${part.heading}`, ...(bodyLines.length > 0 ? bodyLines : [`- ${bodyNormalized}`])]
+    return idx === 0 ? block : ['', ...block]
+  })
+
+  const joined = lines.join('\n').trim()
+  return joined.length > 0 ? joined : null
+}
+
 const buildCanonicalNoteText = ({
   note,
   bucketDate,
@@ -2017,7 +2135,9 @@ const buildCanonicalNoteText = ({
     return null
   }
 
-  const demoted = demoteMarkdownHeadingsToH6(stripped)
+  const formatted = formatSectionedNarrativeNoteBlobAsMarkdown(stripped) ?? stripped
+
+  const demoted = demoteMarkdownHeadingsToH6(formatted)
   const inlined = inlineReferencesInMarkdown(demoted, renderRef)
   const fenced = ensureFencesClosed(inlined)
   const finalLines = fenced.split('\n').map((l) => {
