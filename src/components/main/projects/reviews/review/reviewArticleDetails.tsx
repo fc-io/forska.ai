@@ -3,6 +3,7 @@ import {createEffect, createMemo, createSignal, onCleanup, onMount, Show} from '
 import {decodeAndSanitize} from '../../../../../app/utils/decodeAndSanitize'
 import {getArticleUrl} from '../../../../../app/utils/getArticleUrl.ts'
 import {reviewArticleDetailsNormalizeQuoteForHtmlMatch} from './reviewArticleDetails/reviewArticleDetailsNormalizeQuoteForHtmlMatch.ts'
+import {ReviewArticleDetailsPatientTimelineExpandable} from './reviewArticleDetails/reviewArticleDetailsPatientTimelineExpandable.tsx'
 import {
   type ReviewArticleDetailsScrollToQuoteDetail,
   reviewArticleDetailsScrollToQuoteEventName,
@@ -93,6 +94,11 @@ const getArticleFulltextForDisplay = (article: ReviewArticleDetailsArticle) => {
 const getArticleFulltextSanitizeOptions = (article: ReviewArticleDetailsArticle): DecodeAndSanitizeOptions => {
   const isHtml = Boolean(toNonEmptyStringOrNull(article.fullTextHtml))
   return {convertNewlines: !isHtml}
+}
+
+const isFhirPatientRecordArticleId = (articleId: string | null | undefined): boolean => {
+  const id = String(articleId ?? '').trim()
+  return id.startsWith('fhir:') && id.includes(':Patient/')
 }
 
 const getNormalizedQuotes = (judgment: Judgment | undefined): string[] => {
@@ -219,6 +225,22 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
 
   const sanitizedSummary = createMemo(() => {
     return decodeAndSanitize(props.article.articleSummary ?? '')
+  })
+
+  const isFhirPatientRecord = createMemo(() => {
+    return isFhirPatientRecordArticleId(props.article.articleId)
+  })
+
+  const patientTimelineCollapsedByBucketKey = new Map<string, boolean>()
+
+  const summaryHtmlForDisplay = createMemo(() => {
+    const highlighted = props.judgment ? highlightedSummaryHtml() : undefined
+    return highlighted ?? sanitizedSummary()
+  })
+
+  const fulltextHtmlForDisplay = createMemo(() => {
+    const highlighted = props.judgment ? highlightedFulltextHtml() : undefined
+    return highlighted ?? sanitizedFulltext()
   })
 
   // Default props
@@ -740,17 +762,25 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
             <div class="mt-4">
               <h3 class="font-semibold mb-2">Summary</h3>
               <div class="text-gray-700 assessment-container leading-relaxed" onClick={handleTitleSummaryClick}>
-                <Show
-                  when={props.judgment && highlightedSummaryHtml()}
-                  fallback={
-                    // eslint-disable-next-line solid/no-innerhtml
-                    <span innerHTML={sanitizedSummary()} />
-                  }
-                >
-                  {(html) => {
-                    // eslint-disable-next-line solid/no-innerhtml
-                    return <span innerHTML={html()} />
-                  }}
+                <Show when={isFhirPatientRecord()}>
+                  <ReviewArticleDetailsPatientTimelineExpandable
+                    html={summaryHtmlForDisplay()}
+                    collapsedByBucketKey={patientTimelineCollapsedByBucketKey}
+                  />
+                </Show>
+                <Show when={!isFhirPatientRecord()}>
+                  <Show
+                    when={props.judgment && highlightedSummaryHtml()}
+                    fallback={
+                      // eslint-disable-next-line solid/no-innerhtml
+                      <span innerHTML={sanitizedSummary()} />
+                    }
+                  >
+                    {(html) => {
+                      // eslint-disable-next-line solid/no-innerhtml
+                      return <span innerHTML={html()} />
+                    }}
+                  </Show>
                 </Show>
               </div>
             </div>
@@ -797,17 +827,25 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
                       class="text-gray-700 assessment-container leading-relaxed"
                       classList={{'mt-2 border-l border-gray-400 pl-[25px]': viewMode() === 'all'}}
                     >
-                      <Show
-                        when={props.judgment && highlightedFulltextHtml()}
-                        fallback={
-                          // eslint-disable-next-line solid/no-innerhtml
-                          <span innerHTML={sanitizedFulltext()} />
-                        }
-                      >
-                        {(html) => {
-                          // eslint-disable-next-line solid/no-innerhtml
-                          return <span innerHTML={html()} />
-                        }}
+                      <Show when={isFhirPatientRecord()}>
+                        <ReviewArticleDetailsPatientTimelineExpandable
+                          html={fulltextHtmlForDisplay()}
+                          collapsedByBucketKey={patientTimelineCollapsedByBucketKey}
+                        />
+                      </Show>
+                      <Show when={!isFhirPatientRecord()}>
+                        <Show
+                          when={props.judgment && highlightedFulltextHtml()}
+                          fallback={
+                            // eslint-disable-next-line solid/no-innerhtml
+                            <span innerHTML={sanitizedFulltext()} />
+                          }
+                        >
+                          {(html) => {
+                            // eslint-disable-next-line solid/no-innerhtml
+                            return <span innerHTML={html()} />
+                          }}
+                        </Show>
                       </Show>
                     </div>
                   </Show>
