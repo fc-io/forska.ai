@@ -8,12 +8,12 @@
 - [x] Align roadmaps: `SQLITE_PLAN.md` + `DUCK_PLAN.md` reinforce local-first (SQLite app DB, DuckDB analytics)
 - [x] ClickHouse -> DuckDB: no overlap; cutover + delete ClickHouse in same change set; update `DUCK_PLAN.md`
 
-## Step 2: Admin-free (keep Better Auth + multi-user)
+## Step 2: Admin-free (no roles; /admin public; assume signed-in)
 
-- [ ] Remove Better Auth admin plugin: `src/auth.ts` (drop `admin()`), `src/app/lib/auth-client.ts` (drop `adminClient()`)
-- [ ] Remove role field usage everywhere (no `session.user.role`, no `'admin'` string checks)
-- [ ] Auth guard: delete `requireAdminAuth` + all 403/"Administrator" paths; keep only "signed in" guard (`src/server/utils/authGuard.ts`)
-- [ ] Server routes: replace `.use(requireAdminAuth())` -> `.use(requireUserAuth())`:
+- [x] Remove Better Auth admin plugin: `src/auth.ts` (drop `admin()`), `src/app/lib/auth-client.ts` (drop `adminClient()`)
+- [x] Remove role field usage everywhere (no `session.user.role`, no `'admin'` string checks)
+- [x] Auth guard: delete `requireAdminAuth` + 403/"Administrator" paths (`src/server/utils/authGuard.ts`)
+- [x] Server routes: replace `.use(requireAdminAuth())` -> `.use(requireUserAuth())`:
   - `src/server/routes/ArticlesRoutes.ts`
   - `src/server/routes/ArticleAdminRoutes.ts` (also delete inline role check)
   - `src/server/routes/JudgmentsJobsRoutes.ts`
@@ -33,15 +33,23 @@
   - `src/server/routes/NvidiaSmiRoutes.ts`
   - `src/server/routes/AaModelsRoutes.ts`
   - `src/server/routes/HumanAssessmentRoutes.ts` + `src/server/routes/HumanAssessmentRoutes/*`
-- [ ] Client: remove all `isAdmin()` gates + "Administrator access required" UI blocks
-  - `src/components/Navigation.tsx` (no admin-only menu; rename label)
+- [x] Client: remove all `isAdmin()` gates + "Administrator access required" UI blocks
+  - `src/components/Navigation.tsx` (Admin menu visible for all users)
   - `src/app/routes/+admin/**` (accessible to all signed-in)
   - `src/app/routes/+admin/+users/+index.tsx` (remove role UI; remove "make admin" actions)
   - `src/app/routes/+projects/**` + `src/app/routes/+articles/**` (admin-only sections show for all)
   - `src/components/main/articles/articleAdminSection.tsx` (rename / stop calling "admin" endpoints if renamed)
-- [ ] Decide: keep URL `/admin/*` + `/api/admin/*` (but public) vs rename to `/tools/*` + `/api/tools/*` (recommended: rename)
-- [ ] Optional cleanup: remove/rename user-facing strings/enums containing "admin" (eg `paused_by_admin`, labels)
-- [ ] Verify: `bun run lint`, `bun test`, manual smoke (login, open all former admin pages, run one job, edit prompts)
+- [x] Keep `/admin/*` + `/api/admin/*` URLs (public); nav label "Admin"
+- [x] Enable former admin-only actions for all users
+  - `src/components/main/reviews/reviewsPaginationControls.tsx` (PDF download action)
+  - `src/app/routes/+projects/**` + `src/app/routes/+articles/**` (ArticleAdminSection shown)
+- [x] Always signed-in (local user) while keeping Better Auth installed
+  - `src/utils/localUser.ts`
+  - client: `src/services/fetchSession.ts` (always non-null session)
+  - server: `src/server/utils/authGuard.ts` (ensure local user; always derive `sessionUserId`)
+- [x] Verify: `bun run lint`, `bun test`
+- [ ] Manual smoke: open `/admin/*`, run 1 job, upload PDF, edit prompts
+- [ ] Optional cleanup: remove/rename leftover user-facing strings/enums containing "admin" (eg `paused_by_admin`)
 
 ## Step 3: Single-user local app (no Better Auth, no users)
 
