@@ -2,11 +2,13 @@
 
 ## Critique
 
-- Good idea. Current page mixes logical request failure and subrequest failure. Chunk retries show up only as generic `retry`.
-- `ordinary article` is vague. Better: `singleRequest`, `chunkEvidence`, `finalSynthesis`.
-- Do not overload `failedRequests`. It currently means logical requests that never succeeded. Counting chunk retries there will make the column misleading.
-- One `tokenUse` row can contain multiple failed stages. Table should show stage set + subrequest-failure count, not force one type.
-- Old rows cannot be classified perfectly. Show `unknown (legacy)` for rows without new metadata.
+- Good idea. Current page mixes logical prompt failure and failed stages. Chunk retries collapse into generic `retry`.
+- Use `singleRequest`, `chunkEvidence`, `finalSynthesis`. `ordinary article` is vague.
+- Keep `failedRequests` = logical prompts that never succeeded.
+- Keep `requests` = real LLM attempts. Queue plan already moves that direction.
+- Do not group by `baseURL`. One stage can retry on worker A then B.
+- One `tokenUse` row can contain multiple failed stages. Show stage set + failed-stage count.
+- Old rows cannot be classified perfectly. Show `unknown (legacy)`.
 
 ## Plan
 
@@ -19,19 +21,27 @@
   - chunk evidence loop -> `chunkEvidence` + chunk position
   - final synthesis loop -> `finalSynthesis`
 - Change failed-detail aggregation in `src/agent/judge/judgeStoreTokenUse.ts`:
-  - group by article + prompt + model + baseURL + requestKind + chunkIndex
+  - group by article + prompt + model + requestKind + chunkIndex
+  - keep `baseURL` as detail data, not grouping key
   - stop collapsing all chunk failures into one article-level detail
   - keep `failureType` (`retry` vs `total_failure`)
-- Keep `failedRequests` semantics as-is.
+  - exclude connection-only groups
+  - keep mixed groups if they contain any non-connection failure
+- Keep counter semantics explicit:
+  - `requests` = real LLM attempts
+  - `failedRequests` = logical prompts that never succeeded
+  - `failedSubrequests` = failed stages with at least one non-connection failure
 - Add derived server fields for list page in `src/server/routes/tokensRoutes/tokensRoutesGetFailedRequests.ts`:
   - `requestKinds`
+  - `stageLabels`
   - `failedSubrequests`
-  - readable stage labels like `chunk 2/7`
+- Stage column rule:
+  - one stage -> show exact label (`singleRequest`, `chunk 2/7`, `finalSynthesis`)
+  - multiple stages -> join labels; use `Mixed` only if truncation is needed
 - Update `src/app/routes/+admin/+failed_requests/+index.tsx`:
   - add `Stage` column
   - add `Failed subrequests` column
   - keep logical failure count separate
-  - show `Mixed` if row has multiple stage kinds
 - Update `src/app/routes/+admin/+failed_requests/+$id/+index.tsx`:
   - show request kind per detail card
   - show chunk position when present
@@ -42,5 +52,8 @@
 - Verify:
   - single-request failure shows `singleRequest`
   - chunk retry-success shows `chunkEvidence` or `finalSynthesis` + `failedSubrequests > 0`
+  - same stage retry on worker A then worker B still renders as one stage detail
+  - one token row with chunk-evidence + final-synthesis failures shows both stages
   - total request failure still increments `failedRequests`
-  - connection errors remain excluded unless policy changes
+  - connection-only failures remain excluded unless policy changes
+  - mixed connection + parse/schema failure still shows the non-connection stage detail
