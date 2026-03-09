@@ -19,17 +19,17 @@ const formatArticleCreatedAt = (value: Date | string | null) => {
 export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgmentsTableProps) => {
   return (
     <div class="overflow-x-auto bg-white rounded-lg shadow border border-gray-200">
-      <table class="min-w-full divide-y divide-gray-200">
+      <table class="min-w-full table-fixed divide-y divide-gray-200">
         <thead class="bg-gray-50">
           <tr>
-            <th class="sticky left-0 z-20 min-w-80 bg-gray-50 px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+            <th class="sticky left-0 z-20 w-[22rem] min-w-[22rem] max-w-[22rem] bg-gray-50 px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
               Title
             </th>
             <For each={props.columns}>
               {(column) => {
                 return (
                   <th
-                    class={`min-w-64 px-4 py-3 text-left text-xs font-medium uppercase tracking-wider ${column.kind === 'human' ? 'bg-amber-50 text-amber-800' : 'text-gray-500'}`}
+                    class={`w-[18rem] min-w-[18rem] max-w-[18rem] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider ${column.kind === 'human' ? 'bg-amber-50 text-amber-800' : 'text-gray-500'}`}
                   >
                     <div class="space-y-1 normal-case tracking-normal">
                       <div class="text-sm font-semibold">{column.promptLabel}</div>
@@ -48,7 +48,7 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
 
               return (
                 <tr class="align-top">
-                  <td class="sticky left-0 z-10 min-w-80 bg-white px-6 py-4">
+                  <td class="sticky left-0 z-10 w-[22rem] min-w-[22rem] max-w-[22rem] bg-white px-6 py-4">
                     <div class="space-y-2">
                       <Link
                         to="/articles/$id"
@@ -67,7 +67,7 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
                       const cellValue = row.cells[column.id]?.trim() || null
 
                       return (
-                        <td class="min-w-64 px-4 py-4 text-sm text-gray-800">
+                        <td class="w-[18rem] min-w-[18rem] max-w-[18rem] px-4 py-4 text-sm text-gray-800">
                           <Show when={cellValue} fallback={<span class="text-gray-300">-</span>}>
                             <div class="whitespace-pre-wrap break-words leading-6">{cellValue}</div>
                           </Show>

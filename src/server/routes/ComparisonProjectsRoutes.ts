@@ -399,6 +399,10 @@ const getComparisonProjectLlmExistsCondition = (scope: ComparisonProjectScope) =
       AND j."use_abstract" = ${scope.useAbstract}
       AND j."use_fulltext" = ${scope.useFulltext}
       AND j."use_fulltext_no_images" = ${scope.useFulltextNoImages}
+      AND (
+        NULLIF(BTRIM(j."answered_original"), '') IS NOT NULL
+        OR COALESCE(array_length(j."answered_original_as_array", 1), 0) > 0
+      )
   )`
 }
 
@@ -418,7 +422,154 @@ const getComparisonProjectHumanExistsCondition = (scope: ComparisonProjectScope)
     WHERE jh."article_id" = ${articles.id}
       AND jh."prompt_id" = ANY(ARRAY[${promptIdArray}])
       AND jh."is_answered" = true
-      AND jh."answer" IS NOT NULL
+      AND NULLIF(BTRIM(jh."answer"), '') IS NOT NULL
+  )`
+}
+
+const getComparisonProjectMinimumAnsweredPromptsCondition = (
+  scope: ComparisonProjectScope,
+  minimumAnsweredPrompts: number,
+) => {
+  const promptIdArray = getUuidArraySql(
+    scope.prompts.map((prompt) => {
+      return prompt.id
+    }),
+  )
+  const modelIdArray = getUuidArraySql(
+    scope.models.map((model) => {
+      return model.id
+    }),
+  )
+  const llmAnsweredPromptsQuery = modelIdArray
+    ? sql`
+        SELECT j."prompt_id" AS prompt_id
+        FROM ${judgments} j
+        WHERE j."article_id" = ${articles.id}
+          AND j."deleted_at" IS NULL
+          AND j."prompt_id" = ANY(ARRAY[${promptIdArray}])
+          AND j."model_id" = ANY(ARRAY[${modelIdArray}])
+          AND j."use_title" = ${scope.useTitle}
+          AND j."use_abstract" = ${scope.useAbstract}
+          AND j."use_fulltext" = ${scope.useFulltext}
+          AND j."use_fulltext_no_images" = ${scope.useFulltextNoImages}
+          AND (
+            NULLIF(BTRIM(j."answered_original"), '') IS NOT NULL
+            OR COALESCE(array_length(j."answered_original_as_array", 1), 0) > 0
+          )
+      `
+    : null
+  const humanAnsweredPromptsQuery = scope.compareWithHumans
+    ? sql`
+        SELECT jh."prompt_id" AS prompt_id
+        FROM ${judgmentsHuman} jh
+        WHERE jh."article_id" = ${articles.id}
+          AND jh."prompt_id" = ANY(ARRAY[${promptIdArray}])
+          AND jh."is_answered" = true
+          AND NULLIF(BTRIM(jh."answer"), '') IS NOT NULL
+      `
+    : null
+  const answeredPromptsQueries = [llmAnsweredPromptsQuery, humanAnsweredPromptsQuery].filter(isDefined)
+
+  if (!promptIdArray || answeredPromptsQueries.length === 0) {
+    return null
+  }
+
+  return sql`(
+    SELECT COUNT(DISTINCT answered_prompts.prompt_id)::int
+    FROM (${sql.join(answeredPromptsQueries, sql` UNION `)}) AS answered_prompts
+  ) >= ${minimumAnsweredPrompts}`
+}
+
+const getComparisonProjectAllShownColumnsAnsweredCondition = (scope: ComparisonProjectScope) => {
+  const promptIdArray = getUuidArraySql(
+    scope.prompts.map((prompt) => {
+      return prompt.id
+    }),
+  )
+  const modelIdArray = getUuidArraySql(
+    scope.models.map((model) => {
+      return model.id
+    }),
+  )
+
+  if (!promptIdArray || !modelIdArray) {
+    return null
+  }
+
+  const requiredLlmColumnCount = scope.prompts.length * scope.models.length
+  const llmColumnsCondition = sql`(
+    SELECT COUNT(DISTINCT (j."prompt_id", j."model_id"))::int
+    FROM ${judgments} j
+    WHERE j."article_id" = ${articles.id}
+      AND j."deleted_at" IS NULL
+      AND j."prompt_id" = ANY(ARRAY[${promptIdArray}])
+      AND j."model_id" = ANY(ARRAY[${modelIdArray}])
+      AND j."use_title" = ${scope.useTitle}
+      AND j."use_abstract" = ${scope.useAbstract}
+      AND j."use_fulltext" = ${scope.useFulltext}
+      AND j."use_fulltext_no_images" = ${scope.useFulltextNoImages}
+      AND (
+        NULLIF(BTRIM(j."answered_original"), '') IS NOT NULL
+        OR COALESCE(array_length(j."answered_original_as_array", 1), 0) > 0
+      )
+  ) = ${requiredLlmColumnCount}`
+  const humanColumnsCondition = scope.compareWithHumans
+    ? sql`(
+        SELECT COUNT(DISTINCT jh."prompt_id")::int
+        FROM ${judgmentsHuman} jh
+        WHERE jh."article_id" = ${articles.id}
+          AND jh."prompt_id" = ANY(ARRAY[${promptIdArray}])
+          AND jh."is_answered" = true
+          AND NULLIF(BTRIM(jh."answer"), '') IS NOT NULL
+      ) = ${scope.prompts.length}`
+    : null
+
+  return humanColumnsCondition ? and(llmColumnsCondition, humanColumnsCondition) : llmColumnsCondition
+}
+
+const getComparisonProjectModelDifferenceCondition = (scope: ComparisonProjectScope) => {
+  const promptIdArray = getUuidArraySql(
+    scope.prompts.map((prompt) => {
+      return prompt.id
+    }),
+  )
+  const modelIdArray = getUuidArraySql(
+    scope.models.map((model) => {
+      return model.id
+    }),
+  )
+
+  if (!promptIdArray || !modelIdArray || scope.models.length < 2) {
+    return sql`false`
+  }
+
+  return sql`EXISTS (
+    SELECT 1
+    FROM ${judgments} j
+    WHERE j."article_id" = ${articles.id}
+      AND j."deleted_at" IS NULL
+      AND j."prompt_id" = ANY(ARRAY[${promptIdArray}])
+      AND j."model_id" = ANY(ARRAY[${modelIdArray}])
+      AND j."use_title" = ${scope.useTitle}
+      AND j."use_abstract" = ${scope.useAbstract}
+      AND j."use_fulltext" = ${scope.useFulltext}
+      AND j."use_fulltext_no_images" = ${scope.useFulltextNoImages}
+      AND (
+        NULLIF(BTRIM(j."answered_original"), '') IS NOT NULL
+        OR COALESCE(array_length(j."answered_original_as_array", 1), 0) > 0
+      )
+    GROUP BY j."prompt_id"
+    HAVING COUNT(
+      DISTINCT LOWER(
+        BTRIM(
+          CASE
+            WHEN COALESCE(array_length(j."answered_original_as_array", 1), 0) > 0
+              THEN array_to_string(j."answered_original_as_array", E'\n')
+            ELSE j."answered_original"
+          END
+        )
+      )
+    ) > 1
   )`
 }
 
@@ -486,6 +637,10 @@ const getComparisonProjectLlmRows = async (scope: ComparisonProjectScope, articl
         eq(judgments.useFulltext, scope.useFulltext),
         eq(judgments.useFulltextNoImages, scope.useFulltextNoImages),
         sql`${judgments.deletedAt} IS NULL`,
+        sql`(
+          NULLIF(BTRIM(${judgments.answeredOriginal}), '') IS NOT NULL
+          OR COALESCE(array_length(${judgments.answeredOriginalAsArray}, 1), 0) > 0
+        )`,
       ),
     )
 }
@@ -515,7 +670,7 @@ const getComparisonProjectHumanRows = async (scope: ComparisonProjectScope, arti
         inArray(judgmentsHuman.articleId, articleIds),
         inArray(judgmentsHuman.promptId, promptIds),
         eq(judgmentsHuman.isAnswered, true),
-        sql`${judgmentsHuman.answer} IS NOT NULL`,
+        sql`NULLIF(BTRIM(${judgmentsHuman.answer}), '') IS NOT NULL`,
       ),
     )
 }
@@ -584,7 +739,14 @@ const getComparisonProjectHumanCells = (rows: ComparisonProjectHumanRow[]) => {
   )
 }
 
-const getComparisonProjectJudgmentsPage = async (scope: ComparisonProjectScope, page: number, limit: number) => {
+const getComparisonProjectJudgmentsPage = async (
+  scope: ComparisonProjectScope,
+  page: number,
+  limit: number,
+  hideSparseRows: boolean,
+  showOnlyFullyAnsweredPrompts: boolean,
+  showOnlyModelDifferences: boolean,
+) => {
   if (scope.prompts.length === 0 || scope.columns.length === 0) {
     return {data: [], totalCount: 0, page: 1, limit, totalPages: 0}
   }
@@ -593,6 +755,13 @@ const getComparisonProjectJudgmentsPage = async (scope: ComparisonProjectScope, 
   const articleScopeConditions = getArticleScopeConditions(scope.importRouteIds, scope.dateFrom, scope.dateTo)
   const llmExistsCondition = getComparisonProjectLlmExistsCondition(scope)
   const humanExistsCondition = getComparisonProjectHumanExistsCondition(scope)
+  const minimumAnsweredPromptsCondition = hideSparseRows
+    ? getComparisonProjectMinimumAnsweredPromptsCondition(scope, 2)
+    : null
+  const fullyAnsweredPromptsCondition = showOnlyFullyAnsweredPrompts
+    ? getComparisonProjectAllShownColumnsAnsweredCondition(scope)
+    : null
+  const modelDifferenceCondition = showOnlyModelDifferences ? getComparisonProjectModelDifferenceCondition(scope) : null
   const articleDataCondition =
     llmExistsCondition && humanExistsCondition
       ? or(llmExistsCondition, humanExistsCondition)
@@ -602,7 +771,13 @@ const getComparisonProjectJudgmentsPage = async (scope: ComparisonProjectScope, 
     return {data: [], totalCount: 0, page: 1, limit, totalPages: 0}
   }
 
-  const whereConditions = [...articleScopeConditions, articleDataCondition]
+  const whereConditions = [
+    ...articleScopeConditions,
+    articleDataCondition,
+    minimumAnsweredPromptsCondition,
+    fullyAnsweredPromptsCondition,
+    modelDifferenceCondition,
+  ].filter(isDefined)
   const whereCondition = whereConditions.length > 1 ? and(...whereConditions) : whereConditions[0]
   const [countRow] = await db
     .select({count: sql<number>`count(*)::int`.as('count')})
@@ -742,11 +917,26 @@ export const comparisonProjectsRoutes = new Elysia()
       const parsedLimit = Number.parseInt(body.limit, 10)
       const page = Number.isNaN(parsedPage) ? 1 : parsedPage
       const limit = Number.isNaN(parsedLimit) ? 50 : Math.min(Math.max(parsedLimit, 1), 100)
-      const judgmentsPage = await getComparisonProjectJudgmentsPage(data, page, limit)
+      const judgmentsPage = await getComparisonProjectJudgmentsPage(
+        data,
+        page,
+        limit,
+        body.hideSparseRows ?? false,
+        body.showOnlyFullyAnsweredPrompts ?? false,
+        body.showOnlyModelDifferences ?? false,
+      )
 
       return {data: judgmentsPage}
     },
-    {body: t.Object({page: t.String(), limit: t.String()})},
+    {
+      body: t.Object({
+        page: t.String(),
+        limit: t.String(),
+        hideSparseRows: t.Optional(t.Boolean()),
+        showOnlyFullyAnsweredPrompts: t.Optional(t.Boolean()),
+        showOnlyModelDifferences: t.Optional(t.Boolean()),
+      }),
+    },
   )
   .post(
     '/api/comparison-projects',

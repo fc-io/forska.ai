@@ -36,13 +36,74 @@ const getRangeLabel = (page: number, limit: number, totalCount: number) => {
   return `Showing ${start}-${end} of ${totalCount}`
 }
 
+const getAnsweredPromptCount = (
+  cells: Record<string, string | null>,
+  columns: Array<{id: string; promptId: string}>,
+) => {
+  return new Set(
+    columns
+      .filter((column) => {
+        return (cells[column.id]?.trim() ?? '') !== ''
+      })
+      .map((column) => {
+        return column.promptId
+      }),
+  ).size
+}
+
+const getConfiguredPromptCount = (columns: Array<{promptId: string}>) => {
+  return new Set(
+    columns.map((column) => {
+      return column.promptId
+    }),
+  ).size
+}
+
+const getHasAllShownColumnsAnswered = (cells: Record<string, string | null>, columns: Array<{id: string}>) => {
+  return columns.every((column) => {
+    return (cells[column.id]?.trim() ?? '') !== ''
+  })
+}
+
+const normalizeAnswerValue = (value: string | null) => {
+  return value?.trim().toLowerCase() ?? ''
+}
+
+const getHasModelDifferences = (
+  cells: Record<string, string | null>,
+  columns: Array<{id: string; kind: 'llm' | 'human'; promptId: string}>,
+) => {
+  const llmAnswersByPrompt = columns.reduce<Record<string, string[]>>((answerMap, column) => {
+    if (column.kind !== 'llm') {
+      return answerMap
+    }
+
+    const normalizedAnswer = normalizeAnswerValue(cells[column.id] ?? null)
+
+    if (!normalizedAnswer) {
+      return answerMap
+    }
+
+    return {...answerMap, [column.promptId]: [...(answerMap[column.promptId] ?? []), normalizedAnswer]}
+  }, {})
+
+  return Object.values(llmAnswersByPrompt).some((answers) => {
+    return new Set(answers).size > 1
+  })
+}
+
 const CompareProjectJudgmentsPage = () => {
   const params = Route.useParams()
   const comparisonProjectId = () => {
-    return params().id
+    const routeParams = params()
+
+    return 'id' in routeParams ? routeParams.id : ''
   }
   const [currentPage, setCurrentPage] = createSignal(1)
   const [pageLimit, setPageLimit] = createSignal(50)
+  const [hideSparseRows, setHideSparseRows] = createSignal(false)
+  const [showOnlyFullyAnsweredPrompts, setShowOnlyFullyAnsweredPrompts] = createSignal(false)
+  const [showOnlyModelDifferences, setShowOnlyModelDifferences] = createSignal(false)
 
   const comparisonProjectQuery = useQuery(() => {
     return {
@@ -55,9 +116,24 @@ const CompareProjectJudgmentsPage = () => {
   })
   const judgmentsPageQuery = useQuery(() => {
     return {
-      queryKey: ['comparison-project-judgments-page', comparisonProjectId(), currentPage(), pageLimit()],
+      queryKey: [
+        'comparison-project-judgments-page',
+        comparisonProjectId(),
+        currentPage(),
+        pageLimit(),
+        hideSparseRows(),
+        showOnlyFullyAnsweredPrompts(),
+        showOnlyModelDifferences(),
+      ],
       queryFn: () => {
-        return fetchComparisonProjectJudgmentsPage(comparisonProjectId(), currentPage(), pageLimit())
+        return fetchComparisonProjectJudgmentsPage(
+          comparisonProjectId(),
+          currentPage(),
+          pageLimit(),
+          hideSparseRows(),
+          showOnlyFullyAnsweredPrompts(),
+          showOnlyModelDifferences(),
+        )
       },
       refetchOnWindowFocus: false,
     }
@@ -68,6 +144,25 @@ const CompareProjectJudgmentsPage = () => {
   })
   const canGoToNextPage = createMemo(() => {
     return currentPage() < (judgmentsPageQuery.data?.totalPages ?? 0)
+  })
+  const filteredRows = createMemo(() => {
+    const rows = judgmentsPageQuery.data?.data ?? []
+    const columns = comparisonProjectQuery.data?.columns ?? []
+    return rows.filter((row) => {
+      const answeredPromptCount = getAnsweredPromptCount(row.cells, columns)
+      const configuredPromptCount = getConfiguredPromptCount(columns)
+      const passesSparseRowsFilter = !hideSparseRows() || answeredPromptCount >= 2
+      const passesFullyAnsweredFilter =
+        !showOnlyFullyAnsweredPrompts() || getHasAllShownColumnsAnswered(row.cells, columns)
+      const passesModelDifferenceFilter = !showOnlyModelDifferences() || getHasModelDifferences(row.cells, columns)
+
+      return configuredPromptCount === 0
+        ? false
+        : passesSparseRowsFilter && passesFullyAnsweredFilter && passesModelDifferenceFilter
+    })
+  })
+  const hasRowFilters = createMemo(() => {
+    return hideSparseRows() || showOnlyFullyAnsweredPrompts() || showOnlyModelDifferences()
   })
 
   return (
@@ -134,15 +229,54 @@ const CompareProjectJudgmentsPage = () => {
                     <h2 class="text-lg font-semibold">Article Judgments</h2>
                     <p class="text-sm text-gray-600">
                       {judgmentsPageQuery.data
-                        ? getRangeLabel(
-                            judgmentsPageQuery.data.page,
-                            judgmentsPageQuery.data.limit,
-                            judgmentsPageQuery.data.totalCount,
-                          )
+                        ? hasRowFilters()
+                          ? `${filteredRows().length} visible on this page · ${getRangeLabel(
+                              judgmentsPageQuery.data.page,
+                              judgmentsPageQuery.data.limit,
+                              judgmentsPageQuery.data.totalCount,
+                            )}`
+                          : getRangeLabel(
+                              judgmentsPageQuery.data.page,
+                              judgmentsPageQuery.data.limit,
+                              judgmentsPageQuery.data.totalCount,
+                            )
                         : 'Loading results...'}
                     </p>
                   </div>
                   <div class="flex items-center gap-3">
+                    <label class="flex items-center gap-2 text-sm text-gray-600">
+                      <input
+                        type="checkbox"
+                        checked={hideSparseRows()}
+                        onChange={(event) => {
+                          setHideSparseRows(event.currentTarget.checked)
+                          setCurrentPage(1)
+                        }}
+                      />
+                      <span>Hide rows with under 2 answered prompts</span>
+                    </label>
+                    <label class="flex items-center gap-2 text-sm text-gray-600">
+                      <input
+                        type="checkbox"
+                        checked={showOnlyFullyAnsweredPrompts()}
+                        onChange={(event) => {
+                          setShowOnlyFullyAnsweredPrompts(event.currentTarget.checked)
+                          setCurrentPage(1)
+                        }}
+                      />
+                      <span>Show only rows where all prompts are answered</span>
+                    </label>
+                    <label class="flex items-center gap-2 text-sm text-gray-600">
+                      <input
+                        type="checkbox"
+                        checked={showOnlyModelDifferences()}
+                        onChange={(event) => {
+                          setShowOnlyModelDifferences(event.currentTarget.checked)
+                          setCurrentPage(1)
+                        }}
+                      />
+                      <span>Show only rows with model differences</span>
+                    </label>
                     <label class="flex items-center gap-2 text-sm text-gray-600">
                       <span>Rows</span>
                       <select
@@ -224,13 +358,10 @@ const CompareProjectJudgmentsPage = () => {
                     !judgmentsPageQuery.isPending
                     && !judgmentsPageQuery.isError
                     && comparisonProject().columns.length > 0
-                    && (judgmentsPageQuery.data?.data.length ?? 0) > 0
+                    && filteredRows().length > 0
                   }
                 >
-                  <ComparisonProjectJudgmentsTable
-                    columns={comparisonProject().columns}
-                    rows={judgmentsPageQuery.data?.data ?? []}
-                  />
+                  <ComparisonProjectJudgmentsTable columns={comparisonProject().columns} rows={filteredRows()} />
                 </Show>
 
                 <Show
@@ -238,11 +369,11 @@ const CompareProjectJudgmentsPage = () => {
                     !judgmentsPageQuery.isPending
                     && !judgmentsPageQuery.isError
                     && comparisonProject().columns.length > 0
-                    && (judgmentsPageQuery.data?.data.length ?? 0) === 0
+                    && filteredRows().length === 0
                   }
                 >
                   <div class="rounded-lg bg-white p-8 text-center text-gray-500 shadow">
-                    No matching article judgments found.
+                    {hasRowFilters() ? 'No rows match the selected filters.' : 'No matching article judgments found.'}
                   </div>
                 </Show>
               </div>

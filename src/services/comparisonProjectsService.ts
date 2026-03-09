@@ -101,10 +101,20 @@ export const fetchComparisonProjectJudgmentsMetadata = async (comparisonProjectI
   return getResponseData<ComparisonProjectJudgmentsMetadata>(response, 'Failed to fetch comparison project')
 }
 
-export const fetchComparisonProjectJudgmentsPage = async (comparisonProjectId: string, page: number, limit: number) => {
+export const fetchComparisonProjectJudgmentsPage = async (
+  comparisonProjectId: string,
+  page: number,
+  limit: number,
+  hideSparseRows?: boolean,
+  showOnlyFullyAnsweredPrompts?: boolean,
+  showOnlyModelDifferences?: boolean,
+) => {
   const response = await apiClient.api['comparison-projects']({id: comparisonProjectId}).judgments.post({
     page: String(page),
     limit: String(limit),
+    hideSparseRows,
+    showOnlyFullyAnsweredPrompts,
+    showOnlyModelDifferences,
   })
 
   return getResponseData<ComparisonProjectJudgmentsPage>(response, 'Failed to fetch comparison project judgments')
