@@ -1,0 +1,185 @@
+import {format} from 'date-fns'
+import {createMemo, createSignal, For, Show} from 'solid-js'
+
+import {
+  archiveComparisonProject,
+  fetchComparisonProjects,
+  unarchiveComparisonProject,
+} from '../../services/comparisonProjectsService'
+import {Button} from '../ui/button'
+
+type ComparisonProject = Awaited<ReturnType<typeof fetchComparisonProjects>>[number]
+
+type ComparisonProjectsGridProps = {
+  comparisonProjects: ComparisonProject[]
+  isArchived?: boolean
+  onChange?: () => void
+}
+
+const getComparisonProjectContentUsedLabel = (comparisonProject: ComparisonProject) => {
+  const fulltextLabel = comparisonProject.useFulltextNoImages
+    ? 'fulltext (no images)'
+    : comparisonProject.useFulltext
+      ? 'fulltext'
+      : null
+  const parts = [
+    comparisonProject.useTitle ? 'title' : null,
+    comparisonProject.useAbstract ? 'abstract' : null,
+    fulltextLabel,
+  ].filter(Boolean) as string[]
+
+  return parts.length > 0 ? parts.join(', ') : 'none'
+}
+
+const formatDateValue = (value: Date | string) => {
+  return format(new Date(value), 'yyyy-MM-dd HH:mm')
+}
+
+const getTimelineLabel = (comparisonProject: ComparisonProject) => {
+  if (!comparisonProject.dateFrom && !comparisonProject.dateTo) {
+    return 'Any time'
+  }
+
+  const startLabel = comparisonProject.dateFrom
+    ? format(new Date(comparisonProject.dateFrom), 'yyyy-MM-dd')
+    : 'Any time'
+  const endLabel = comparisonProject.dateTo ? format(new Date(comparisonProject.dateTo), 'yyyy-MM-dd') : 'Any time'
+
+  return `${startLabel} -> ${endLabel}`
+}
+
+export const ComparisonProjectsGrid = (props: ComparisonProjectsGridProps) => {
+  const sortedComparisonProjects = createMemo(() => {
+    return [...props.comparisonProjects].sort((left, right) => {
+      return left.name.localeCompare(right.name)
+    })
+  })
+
+  const [pendingComparisonProjects, setPendingComparisonProjects] = createSignal<Set<string>>(new Set())
+
+  const updatePendingComparisonProjects = (comparisonProjectId: string, isPending: boolean) => {
+    setPendingComparisonProjects((current) => {
+      const next = new Set(current)
+
+      if (isPending) {
+        next.add(comparisonProjectId)
+      } else {
+        next.delete(comparisonProjectId)
+      }
+
+      return next
+    })
+  }
+
+  const handleArchiveComparisonProject = async (comparisonProjectId: string) => {
+    updatePendingComparisonProjects(comparisonProjectId, true)
+
+    try {
+      await archiveComparisonProject(comparisonProjectId)
+      props.onChange?.()
+    } catch (error) {
+      console.error('Failed to archive comparison project:', error)
+    } finally {
+      updatePendingComparisonProjects(comparisonProjectId, false)
+    }
+  }
+
+  const handleUnarchiveComparisonProject = async (comparisonProjectId: string) => {
+    updatePendingComparisonProjects(comparisonProjectId, true)
+
+    try {
+      await unarchiveComparisonProject(comparisonProjectId)
+      props.onChange?.()
+    } catch (error) {
+      console.error('Failed to unarchive comparison project:', error)
+    } finally {
+      updatePendingComparisonProjects(comparisonProjectId, false)
+    }
+  }
+
+  return (
+    <ul class="flex flex-col gap-6 mb-8 list-none p-0">
+      <For each={sortedComparisonProjects()}>
+        {(comparisonProject) => {
+          return (
+            <li>
+              <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+                <div class="flex items-start justify-between gap-3 mb-3">
+                  <div class="flex flex-col gap-1 min-w-0">
+                    <h2 class="text-xl font-semibold truncate">{comparisonProject.name}</h2>
+                    <p class="text-sm text-muted-foreground">
+                      Content: {getComparisonProjectContentUsedLabel(comparisonProject)}
+                    </p>
+                  </div>
+                  <div class="flex items-center gap-2 flex-wrap justify-end">
+                    <Show
+                      when={props.isArchived}
+                      fallback={
+                        <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                          Active
+                        </span>
+                      }
+                    >
+                      <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                        Archived
+                      </span>
+                    </Show>
+                    <span
+                      class={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${comparisonProject.compareWithHumans ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-700'}`}
+                    >
+                      {comparisonProject.compareWithHumans ? 'Compare with humans' : 'LLM only'}
+                    </span>
+                    <span class="text-sm text-muted-foreground">
+                      Created: {formatDateValue(comparisonProject.createdAt)}
+                    </span>
+                  </div>
+                </div>
+                <Show when={comparisonProject.description}>
+                  <p class="text-muted-foreground mb-4">
+                    {comparisonProject.description.length > 120
+                      ? `${comparisonProject.description.slice(0, 120).trim()}...`
+                      : comparisonProject.description}
+                  </p>
+                </Show>
+                <div class="grid gap-2 text-sm text-muted-foreground mb-4 sm:grid-cols-3">
+                  <p>
+                    Prompts: {comparisonProject.promptCount} · Import routes: {comparisonProject.routeCount}
+                  </p>
+                  <p>Timeline: {getTimelineLabel(comparisonProject)}</p>
+                  <p>Article content: {getComparisonProjectContentUsedLabel(comparisonProject)}</p>
+                </div>
+                <div class="flex gap-2">
+                  <Show when={props.isArchived}>
+                    <Button
+                      size="sm"
+                      class="px-3 py-1 text-sm"
+                      disabled={pendingComparisonProjects().has(comparisonProject.id)}
+                      onClick={() => {
+                        void handleUnarchiveComparisonProject(comparisonProject.id)
+                      }}
+                    >
+                      {pendingComparisonProjects().has(comparisonProject.id) ? 'Unarchiving...' : 'Unarchive'}
+                    </Button>
+                  </Show>
+                  <Show when={!props.isArchived}>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      class="px-3 py-1 text-sm"
+                      disabled={pendingComparisonProjects().has(comparisonProject.id)}
+                      onClick={() => {
+                        void handleArchiveComparisonProject(comparisonProject.id)
+                      }}
+                    >
+                      {pendingComparisonProjects().has(comparisonProject.id) ? 'Archiving...' : 'Archive'}
+                    </Button>
+                  </Show>
+                </div>
+              </div>
+            </li>
+          )
+        }}
+      </For>
+    </ul>
+  )
+}

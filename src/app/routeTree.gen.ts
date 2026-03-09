@@ -12,10 +12,12 @@ import { Route as rootRouteImport } from './routes/+__root'
 import { Route as IndexRouteImport } from './routes/+index'
 import { Route as ProjectsCreateSubprojectRouteImport } from './routes/+projects/+create-subproject'
 import { Route as ProjectsCreateRouteImport } from './routes/+projects/+create'
+import { Route as CompareJudgmentsCreateRouteImport } from './routes/+compare-judgments/+create'
 import { Route as SettingsIndexRouteImport } from './routes/+settings/+index'
 import { Route as PromptsIndexRouteImport } from './routes/+prompts/+index'
 import { Route as ProjectsIndexRouteImport } from './routes/+projects/+index'
 import { Route as LoginIndexRouteImport } from './routes/+login/+index'
+import { Route as CompareJudgmentsIndexRouteImport } from './routes/+compare-judgments/+index'
 import { Route as ArticlesIndexRouteImport } from './routes/+articles/+index'
 import { Route as ProjectsIdHumanAssessmentRouteImport } from './routes/+projects/+$id/+humanAssessment'
 import { Route as ProjectsIdExportRouteImport } from './routes/+projects/+$id/+export'
@@ -26,6 +28,7 @@ import { Route as AdminDatasourcesCreateRouteImport } from './routes/+admin/+dat
 import { Route as PromptsArchivedIndexRouteImport } from './routes/+prompts/+archived/+index'
 import { Route as ProjectsArchivedIndexRouteImport } from './routes/+projects/+archived/+index'
 import { Route as ProjectsIdIndexRouteImport } from './routes/+projects/+$id/+index'
+import { Route as CompareJudgmentsArchivedIndexRouteImport } from './routes/+compare-judgments/+archived/+index'
 import { Route as ArticlesIdIndexRouteImport } from './routes/+articles/+$id/+index'
 import { Route as AdminUsersIndexRouteImport } from './routes/+admin/+users/+index'
 import { Route as AdminUnexpectedAnswersIndexRouteImport } from './routes/+admin/+unexpected-answers/+index'
@@ -82,6 +85,11 @@ const ProjectsCreateRoute = ProjectsCreateRouteImport.update({
   path: '/projects/create',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CompareJudgmentsCreateRoute = CompareJudgmentsCreateRouteImport.update({
+  id: '/compare-judgments/create',
+  path: '/compare-judgments/create',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SettingsIndexRoute = SettingsIndexRouteImport.update({
   id: '/settings/',
   path: '/settings/',
@@ -100,6 +108,11 @@ const ProjectsIndexRoute = ProjectsIndexRouteImport.update({
 const LoginIndexRoute = LoginIndexRouteImport.update({
   id: '/login/',
   path: '/login/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CompareJudgmentsIndexRoute = CompareJudgmentsIndexRouteImport.update({
+  id: '/compare-judgments/',
+  path: '/compare-judgments/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ArticlesIndexRoute = ArticlesIndexRouteImport.update({
@@ -153,6 +166,12 @@ const ProjectsIdIndexRoute = ProjectsIdIndexRouteImport.update({
   path: '/projects/$id/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CompareJudgmentsArchivedIndexRoute =
+  CompareJudgmentsArchivedIndexRouteImport.update({
+    id: '/compare-judgments/archived/',
+    path: '/compare-judgments/archived/',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ArticlesIdIndexRoute = ArticlesIdIndexRouteImport.update({
   id: '/articles/$id/',
   path: '/articles/$id/',
@@ -377,10 +396,12 @@ const AdminImportRouteStatsYearIdIndexRoute =
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/articles': typeof ArticlesIndexRoute
+  '/compare-judgments': typeof CompareJudgmentsIndexRoute
   '/login': typeof LoginIndexRoute
   '/projects': typeof ProjectsIndexRoute
   '/prompts': typeof PromptsIndexRoute
   '/settings': typeof SettingsIndexRoute
+  '/compare-judgments/create': typeof CompareJudgmentsCreateRoute
   '/projects/create': typeof ProjectsCreateRoute
   '/projects/create-subproject': typeof ProjectsCreateSubprojectRoute
   '/admin/aa-models': typeof AdminAaModelsIndexRoute
@@ -401,6 +422,7 @@ export interface FileRoutesByFullPath {
   '/admin/unexpected-answers': typeof AdminUnexpectedAnswersIndexRoute
   '/admin/users': typeof AdminUsersIndexRoute
   '/articles/$id': typeof ArticlesIdIndexRoute
+  '/compare-judgments/archived': typeof CompareJudgmentsArchivedIndexRoute
   '/projects/$id': typeof ProjectsIdIndexRoute
   '/projects/archived': typeof ProjectsArchivedIndexRoute
   '/prompts/archived': typeof PromptsArchivedIndexRoute
@@ -435,10 +457,12 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/articles': typeof ArticlesIndexRoute
+  '/compare-judgments': typeof CompareJudgmentsIndexRoute
   '/login': typeof LoginIndexRoute
   '/projects': typeof ProjectsIndexRoute
   '/prompts': typeof PromptsIndexRoute
   '/settings': typeof SettingsIndexRoute
+  '/compare-judgments/create': typeof CompareJudgmentsCreateRoute
   '/projects/create': typeof ProjectsCreateRoute
   '/projects/create-subproject': typeof ProjectsCreateSubprojectRoute
   '/admin/aa-models': typeof AdminAaModelsIndexRoute
@@ -459,6 +483,7 @@ export interface FileRoutesByTo {
   '/admin/unexpected-answers': typeof AdminUnexpectedAnswersIndexRoute
   '/admin/users': typeof AdminUsersIndexRoute
   '/articles/$id': typeof ArticlesIdIndexRoute
+  '/compare-judgments/archived': typeof CompareJudgmentsArchivedIndexRoute
   '/projects/$id': typeof ProjectsIdIndexRoute
   '/projects/archived': typeof ProjectsArchivedIndexRoute
   '/prompts/archived': typeof PromptsArchivedIndexRoute
@@ -494,10 +519,12 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/articles/': typeof ArticlesIndexRoute
+  '/compare-judgments/': typeof CompareJudgmentsIndexRoute
   '/login/': typeof LoginIndexRoute
   '/projects/': typeof ProjectsIndexRoute
   '/prompts/': typeof PromptsIndexRoute
   '/settings/': typeof SettingsIndexRoute
+  '/compare-judgments/create': typeof CompareJudgmentsCreateRoute
   '/projects/create': typeof ProjectsCreateRoute
   '/projects/create-subproject': typeof ProjectsCreateSubprojectRoute
   '/admin/aa-models/': typeof AdminAaModelsIndexRoute
@@ -518,6 +545,7 @@ export interface FileRoutesById {
   '/admin/unexpected-answers/': typeof AdminUnexpectedAnswersIndexRoute
   '/admin/users/': typeof AdminUsersIndexRoute
   '/articles/$id/': typeof ArticlesIdIndexRoute
+  '/compare-judgments/archived/': typeof CompareJudgmentsArchivedIndexRoute
   '/projects/$id/': typeof ProjectsIdIndexRoute
   '/projects/archived/': typeof ProjectsArchivedIndexRoute
   '/prompts/archived/': typeof PromptsArchivedIndexRoute
@@ -554,10 +582,12 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/articles'
+    | '/compare-judgments'
     | '/login'
     | '/projects'
     | '/prompts'
     | '/settings'
+    | '/compare-judgments/create'
     | '/projects/create'
     | '/projects/create-subproject'
     | '/admin/aa-models'
@@ -578,6 +608,7 @@ export interface FileRouteTypes {
     | '/admin/unexpected-answers'
     | '/admin/users'
     | '/articles/$id'
+    | '/compare-judgments/archived'
     | '/projects/$id'
     | '/projects/archived'
     | '/prompts/archived'
@@ -612,10 +643,12 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/articles'
+    | '/compare-judgments'
     | '/login'
     | '/projects'
     | '/prompts'
     | '/settings'
+    | '/compare-judgments/create'
     | '/projects/create'
     | '/projects/create-subproject'
     | '/admin/aa-models'
@@ -636,6 +669,7 @@ export interface FileRouteTypes {
     | '/admin/unexpected-answers'
     | '/admin/users'
     | '/articles/$id'
+    | '/compare-judgments/archived'
     | '/projects/$id'
     | '/projects/archived'
     | '/prompts/archived'
@@ -670,10 +704,12 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/articles/'
+    | '/compare-judgments/'
     | '/login/'
     | '/projects/'
     | '/prompts/'
     | '/settings/'
+    | '/compare-judgments/create'
     | '/projects/create'
     | '/projects/create-subproject'
     | '/admin/aa-models/'
@@ -694,6 +730,7 @@ export interface FileRouteTypes {
     | '/admin/unexpected-answers/'
     | '/admin/users/'
     | '/articles/$id/'
+    | '/compare-judgments/archived/'
     | '/projects/$id/'
     | '/projects/archived/'
     | '/prompts/archived/'
@@ -729,10 +766,12 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ArticlesIndexRoute: typeof ArticlesIndexRoute
+  CompareJudgmentsIndexRoute: typeof CompareJudgmentsIndexRoute
   LoginIndexRoute: typeof LoginIndexRoute
   ProjectsIndexRoute: typeof ProjectsIndexRoute
   PromptsIndexRoute: typeof PromptsIndexRoute
   SettingsIndexRoute: typeof SettingsIndexRoute
+  CompareJudgmentsCreateRoute: typeof CompareJudgmentsCreateRoute
   ProjectsCreateRoute: typeof ProjectsCreateRoute
   ProjectsCreateSubprojectRoute: typeof ProjectsCreateSubprojectRoute
   AdminAaModelsIndexRoute: typeof AdminAaModelsIndexRoute
@@ -753,6 +792,7 @@ export interface RootRouteChildren {
   AdminUnexpectedAnswersIndexRoute: typeof AdminUnexpectedAnswersIndexRoute
   AdminUsersIndexRoute: typeof AdminUsersIndexRoute
   ArticlesIdIndexRoute: typeof ArticlesIdIndexRoute
+  CompareJudgmentsArchivedIndexRoute: typeof CompareJudgmentsArchivedIndexRoute
   ProjectsIdIndexRoute: typeof ProjectsIdIndexRoute
   ProjectsArchivedIndexRoute: typeof ProjectsArchivedIndexRoute
   PromptsArchivedIndexRoute: typeof PromptsArchivedIndexRoute
@@ -808,6 +848,13 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof ProjectsCreateRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/compare-judgments/create': {
+      id: '/compare-judgments/create'
+      path: '/compare-judgments/create'
+      fullPath: '/compare-judgments/create'
+      preLoaderRoute: typeof CompareJudgmentsCreateRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/settings/': {
       id: '/settings/'
       path: '/settings'
@@ -834,6 +881,13 @@ declare module '@tanstack/solid-router' {
       path: '/login'
       fullPath: '/login'
       preLoaderRoute: typeof LoginIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/compare-judgments/': {
+      id: '/compare-judgments/'
+      path: '/compare-judgments'
+      fullPath: '/compare-judgments'
+      preLoaderRoute: typeof CompareJudgmentsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/articles/': {
@@ -904,6 +958,13 @@ declare module '@tanstack/solid-router' {
       path: '/projects/$id'
       fullPath: '/projects/$id'
       preLoaderRoute: typeof ProjectsIdIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/compare-judgments/archived/': {
+      id: '/compare-judgments/archived/'
+      path: '/compare-judgments/archived'
+      fullPath: '/compare-judgments/archived'
+      preLoaderRoute: typeof CompareJudgmentsArchivedIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/articles/$id/': {
@@ -1185,10 +1246,12 @@ declare module '@tanstack/solid-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ArticlesIndexRoute: ArticlesIndexRoute,
+  CompareJudgmentsIndexRoute: CompareJudgmentsIndexRoute,
   LoginIndexRoute: LoginIndexRoute,
   ProjectsIndexRoute: ProjectsIndexRoute,
   PromptsIndexRoute: PromptsIndexRoute,
   SettingsIndexRoute: SettingsIndexRoute,
+  CompareJudgmentsCreateRoute: CompareJudgmentsCreateRoute,
   ProjectsCreateRoute: ProjectsCreateRoute,
   ProjectsCreateSubprojectRoute: ProjectsCreateSubprojectRoute,
   AdminAaModelsIndexRoute: AdminAaModelsIndexRoute,
@@ -1209,6 +1272,7 @@ const rootRouteChildren: RootRouteChildren = {
   AdminUnexpectedAnswersIndexRoute: AdminUnexpectedAnswersIndexRoute,
   AdminUsersIndexRoute: AdminUsersIndexRoute,
   ArticlesIdIndexRoute: ArticlesIdIndexRoute,
+  CompareJudgmentsArchivedIndexRoute: CompareJudgmentsArchivedIndexRoute,
   ProjectsIdIndexRoute: ProjectsIdIndexRoute,
   ProjectsArchivedIndexRoute: ProjectsArchivedIndexRoute,
   PromptsArchivedIndexRoute: PromptsArchivedIndexRoute,

@@ -13,6 +13,7 @@ import {adminSyncStatsRoutes} from './routes/AdminSyncStatsRoutes.ts'
 import {articleAdminRoutes} from './routes/ArticleAdminRoutes.ts'
 import {articlesRoutes} from './routes/ArticlesRoutes.ts'
 import {authRoutes} from './routes/AuthRoutes.ts'
+import {comparisonProjectsRoutes} from './routes/ComparisonProjectsRoutes.ts'
 import {dataSourcesImportRoutes} from './routes/DataSourcesImportRoutes.ts'
 import {dataSourcesRoutes} from './routes/DataSourcesRoutes.ts'
 import {humanAssessmentRoutes} from './routes/HumanAssessmentRoutes.ts'
@@ -54,6 +55,7 @@ const _app = new Elysia()
   .use(adminInvestigateRoutes)
   .use(adminImportRouteStatsRoutes)
   .use(adminSyncStatsRoutes)
+  .use(comparisonProjectsRoutes)
   .use(judgmentsJobsRoutes)
   .use(articlesRoutes)
   .use(articleAdminRoutes)

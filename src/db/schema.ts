@@ -388,6 +388,73 @@ export const projects = pgTable('projects', {
   updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
 })
 
+export const comparisonProject = pgTable(
+  'comparison_project',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    name: text('name').notNull(),
+    description: text('description'),
+    ownerId: text('owner_id')
+      .notNull()
+      .references(
+        () => {
+          return user.id
+        },
+        {onDelete: 'cascade'},
+      ),
+    modelIds: uuid('model_ids').array(),
+    compareWithHumans: boolean('compare_with_humans').default(false).notNull(),
+    useTitle: boolean('use_title').default(true).notNull(),
+    useAbstract: boolean('use_abstract').default(true).notNull(),
+    useFulltext: boolean('use_fulltext').default(false).notNull(),
+    useFulltextNoImages: boolean('use_fulltext_no_images').default(false).notNull(),
+    dateFrom: timestamp('date_from', {withTimezone: true}),
+    dateTo: timestamp('date_to', {withTimezone: true}),
+    archived: boolean('archived').default(false).notNull(),
+    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
+  },
+  (table) => {
+    return [
+      index('comparison_project_owner_idx').on(table.ownerId),
+      index('comparison_project_archived_idx').on(table.archived),
+      index('comparison_project_created_idx').on(table.createdAt),
+    ]
+  },
+)
+
+export const comparisonProjectRouteLink = pgTable(
+  'comparison_project_route_link',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
+    comparisonProjectId: uuid('comparison_project_id')
+      .notNull()
+      .references(
+        () => {
+          return comparisonProject.id
+        },
+        {onDelete: 'cascade'},
+      ),
+    importRouteId: uuid('import_route_id')
+      .notNull()
+      .references(
+        () => {
+          return importRoute.id
+        },
+        {onDelete: 'cascade'},
+      ),
+  },
+  (table) => {
+    return [
+      uniqueIndex('comparison_project_route_link_unique').on(table.comparisonProjectId, table.importRouteId),
+      index('comparison_project_route_link_project_idx').on(table.comparisonProjectId),
+      index('comparison_project_route_link_route_idx').on(table.importRouteId),
+    ]
+  },
+)
+
 export const judgmentsJobs = pgTable(
   'judgments_jobs',
   {
@@ -532,6 +599,40 @@ export const projectPrompts = pgTable(
       index('project_prompts_project_idx').on(table.projectId),
       index('project_prompts_prompt_idx').on(table.promptId),
       index('project_prompts_project_order_idx').on(table.projectId, table.order),
+    ]
+  },
+)
+
+export const comparisonProjectPrompt = pgTable(
+  'comparison_project_prompt',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
+    comparisonProjectId: uuid('comparison_project_id')
+      .notNull()
+      .references(
+        () => {
+          return comparisonProject.id
+        },
+        {onDelete: 'cascade'},
+      ),
+    promptId: uuid('prompt_id')
+      .notNull()
+      .references(
+        () => {
+          return prompts.id
+        },
+        {onDelete: 'cascade'},
+      ),
+    order: integer('order'),
+  },
+  (table) => {
+    return [
+      uniqueIndex('comparison_project_prompt_unique').on(table.comparisonProjectId, table.promptId),
+      index('comparison_project_prompt_project_idx').on(table.comparisonProjectId),
+      index('comparison_project_prompt_prompt_idx').on(table.promptId),
+      index('comparison_project_prompt_project_order_idx').on(table.comparisonProjectId, table.order),
     ]
   },
 )

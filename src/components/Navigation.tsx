@@ -245,6 +245,12 @@ export const Navigation = (props: NavigationProps) => {
               Prompts
             </Link>
             <Link
+              to="/compare-judgments"
+              class="text-gray-900 hover:text-blue-600 px-3 py-2 text-sm font-medium [&.active]:text-blue-600 [&.active]:font-semibold"
+            >
+              Compare Judgments
+            </Link>
+            <Link
               to="/articles"
               class="text-gray-900 hover:text-blue-600 px-3 py-2 text-sm font-medium [&.active]:text-blue-600 [&.active]:font-semibold"
             >
