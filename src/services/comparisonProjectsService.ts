@@ -16,6 +16,48 @@ export type CreateComparisonProjectInput = {
   promptSelections?: Array<{promptId: string; order: number}>
 }
 
+export type ComparisonProjectJudgmentsColumn = {
+  id: string
+  kind: 'llm' | 'human'
+  promptId: string
+  promptLabel: string
+  modelId: string | null
+  modelLabel: string
+}
+
+export type ComparisonProjectJudgmentsMetadata = {
+  id: string
+  name: string
+  description: string | null
+  compareWithHumans: boolean
+  useTitle: boolean
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  dateFrom: Date | string | null
+  dateTo: Date | string | null
+  archived: boolean
+  createdAt: Date | string
+  prompts: Array<{id: string; promptHeading: string | null; promptLabel: string; order: number}>
+  models: Array<{id: string; name: string}>
+  columns: ComparisonProjectJudgmentsColumn[]
+}
+
+export type ComparisonProjectJudgmentsRow = {
+  id: string
+  articleTitle: string | null
+  articleCreatedAt: Date | string | null
+  cells: Record<string, string | null>
+}
+
+export type ComparisonProjectJudgmentsPage = {
+  data: ComparisonProjectJudgmentsRow[]
+  totalCount: number
+  page: number
+  limit: number
+  totalPages: number
+}
+
 const getResponseData = <T>(response: {data?: {data?: T | null} | null; error?: unknown}, errorMessage: string) => {
   if (response.error || !response.data?.data) {
     console.error(errorMessage, response.error)
@@ -51,6 +93,21 @@ export const createComparisonProject = async (input: CreateComparisonProjectInpu
   const response = await apiClient.api['comparison-projects'].post(input)
 
   return getResponseData(response, 'Failed to create comparison project')
+}
+
+export const fetchComparisonProjectJudgmentsMetadata = async (comparisonProjectId: string) => {
+  const response = await apiClient.api['comparison-projects']({id: comparisonProjectId}).get()
+
+  return getResponseData<ComparisonProjectJudgmentsMetadata>(response, 'Failed to fetch comparison project')
+}
+
+export const fetchComparisonProjectJudgmentsPage = async (comparisonProjectId: string, page: number, limit: number) => {
+  const response = await apiClient.api['comparison-projects']({id: comparisonProjectId}).judgments.post({
+    page: String(page),
+    limit: String(limit),
+  })
+
+  return getResponseData<ComparisonProjectJudgmentsPage>(response, 'Failed to fetch comparison project judgments')
 }
 
 export const archiveComparisonProject = async (comparisonProjectId: string): Promise<void> => {

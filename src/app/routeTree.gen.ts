@@ -29,6 +29,7 @@ import { Route as PromptsArchivedIndexRouteImport } from './routes/+prompts/+arc
 import { Route as ProjectsArchivedIndexRouteImport } from './routes/+projects/+archived/+index'
 import { Route as ProjectsIdIndexRouteImport } from './routes/+projects/+$id/+index'
 import { Route as CompareJudgmentsArchivedIndexRouteImport } from './routes/+compare-judgments/+archived/+index'
+import { Route as CompareJudgmentsIdIndexRouteImport } from './routes/+compare-judgments/+$id/+index'
 import { Route as ArticlesIdIndexRouteImport } from './routes/+articles/+$id/+index'
 import { Route as AdminUsersIndexRouteImport } from './routes/+admin/+users/+index'
 import { Route as AdminUnexpectedAnswersIndexRouteImport } from './routes/+admin/+unexpected-answers/+index'
@@ -172,6 +173,11 @@ const CompareJudgmentsArchivedIndexRoute =
     path: '/compare-judgments/archived/',
     getParentRoute: () => rootRouteImport,
   } as any)
+const CompareJudgmentsIdIndexRoute = CompareJudgmentsIdIndexRouteImport.update({
+  id: '/compare-judgments/$id/',
+  path: '/compare-judgments/$id/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ArticlesIdIndexRoute = ArticlesIdIndexRouteImport.update({
   id: '/articles/$id/',
   path: '/articles/$id/',
@@ -422,6 +428,7 @@ export interface FileRoutesByFullPath {
   '/admin/unexpected-answers': typeof AdminUnexpectedAnswersIndexRoute
   '/admin/users': typeof AdminUsersIndexRoute
   '/articles/$id': typeof ArticlesIdIndexRoute
+  '/compare-judgments/$id': typeof CompareJudgmentsIdIndexRoute
   '/compare-judgments/archived': typeof CompareJudgmentsArchivedIndexRoute
   '/projects/$id': typeof ProjectsIdIndexRoute
   '/projects/archived': typeof ProjectsArchivedIndexRoute
@@ -483,6 +490,7 @@ export interface FileRoutesByTo {
   '/admin/unexpected-answers': typeof AdminUnexpectedAnswersIndexRoute
   '/admin/users': typeof AdminUsersIndexRoute
   '/articles/$id': typeof ArticlesIdIndexRoute
+  '/compare-judgments/$id': typeof CompareJudgmentsIdIndexRoute
   '/compare-judgments/archived': typeof CompareJudgmentsArchivedIndexRoute
   '/projects/$id': typeof ProjectsIdIndexRoute
   '/projects/archived': typeof ProjectsArchivedIndexRoute
@@ -545,6 +553,7 @@ export interface FileRoutesById {
   '/admin/unexpected-answers/': typeof AdminUnexpectedAnswersIndexRoute
   '/admin/users/': typeof AdminUsersIndexRoute
   '/articles/$id/': typeof ArticlesIdIndexRoute
+  '/compare-judgments/$id/': typeof CompareJudgmentsIdIndexRoute
   '/compare-judgments/archived/': typeof CompareJudgmentsArchivedIndexRoute
   '/projects/$id/': typeof ProjectsIdIndexRoute
   '/projects/archived/': typeof ProjectsArchivedIndexRoute
@@ -608,6 +617,7 @@ export interface FileRouteTypes {
     | '/admin/unexpected-answers'
     | '/admin/users'
     | '/articles/$id'
+    | '/compare-judgments/$id'
     | '/compare-judgments/archived'
     | '/projects/$id'
     | '/projects/archived'
@@ -669,6 +679,7 @@ export interface FileRouteTypes {
     | '/admin/unexpected-answers'
     | '/admin/users'
     | '/articles/$id'
+    | '/compare-judgments/$id'
     | '/compare-judgments/archived'
     | '/projects/$id'
     | '/projects/archived'
@@ -730,6 +741,7 @@ export interface FileRouteTypes {
     | '/admin/unexpected-answers/'
     | '/admin/users/'
     | '/articles/$id/'
+    | '/compare-judgments/$id/'
     | '/compare-judgments/archived/'
     | '/projects/$id/'
     | '/projects/archived/'
@@ -792,6 +804,7 @@ export interface RootRouteChildren {
   AdminUnexpectedAnswersIndexRoute: typeof AdminUnexpectedAnswersIndexRoute
   AdminUsersIndexRoute: typeof AdminUsersIndexRoute
   ArticlesIdIndexRoute: typeof ArticlesIdIndexRoute
+  CompareJudgmentsIdIndexRoute: typeof CompareJudgmentsIdIndexRoute
   CompareJudgmentsArchivedIndexRoute: typeof CompareJudgmentsArchivedIndexRoute
   ProjectsIdIndexRoute: typeof ProjectsIdIndexRoute
   ProjectsArchivedIndexRoute: typeof ProjectsArchivedIndexRoute
@@ -965,6 +978,13 @@ declare module '@tanstack/solid-router' {
       path: '/compare-judgments/archived'
       fullPath: '/compare-judgments/archived'
       preLoaderRoute: typeof CompareJudgmentsArchivedIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/compare-judgments/$id/': {
+      id: '/compare-judgments/$id/'
+      path: '/compare-judgments/$id'
+      fullPath: '/compare-judgments/$id'
+      preLoaderRoute: typeof CompareJudgmentsIdIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/articles/$id/': {
@@ -1272,6 +1292,7 @@ const rootRouteChildren: RootRouteChildren = {
   AdminUnexpectedAnswersIndexRoute: AdminUnexpectedAnswersIndexRoute,
   AdminUsersIndexRoute: AdminUsersIndexRoute,
   ArticlesIdIndexRoute: ArticlesIdIndexRoute,
+  CompareJudgmentsIdIndexRoute: CompareJudgmentsIdIndexRoute,
   CompareJudgmentsArchivedIndexRoute: CompareJudgmentsArchivedIndexRoute,
   ProjectsIdIndexRoute: ProjectsIdIndexRoute,
   ProjectsArchivedIndexRoute: ProjectsArchivedIndexRoute,

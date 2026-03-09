@@ -2,7 +2,7 @@
 
 ## Goal
 
-Build phase-1 `Compare Judgments`: users can create, list, archive, and unarchive comparison projects that save prompts, import routes, article-content settings, timeline, and a `compareWithHumans` flag. No actual comparison-results pages yet.
+Build phase-1 `Compare Judgments`: users can create, list, archive, and unarchive comparison projects that save prompts, import routes, article-content settings, timeline, and a `compareWithHumans` flag. Next, add a `Compare Project Judgments` page that shows article rows with prompt/model answer columns for a comparison project.
 
 ## App UI
 
@@ -33,10 +33,32 @@ Build phase-1 `Compare Judgments`: users can create, list, archive, and unarchiv
 
 - [x] Add `src/services/comparisonProjectsService.ts` for client queries/mutations.
 
+## Compare Project Judgments Page
+
+### App UI
+
+- [x] Add a `Compare Project Judgments` page for a comparison project.
+- [x] Take style and layout inspiration from the Project Reviews page.
+- [x] Add a route and entry point from the compare judgments list/cards to open the page.
+- [x] Show the page title and an articles table.
+- [x] Use `Title` as the first column in the table, and make each title link to the article view page for that article.
+- [x] Add one column for each prompt + model combination, using the prompt heading and model as the column header.
+- [x] Render each cell with the answer for that article/prompt/model combination.
+- [x] If human answers are included, render those columns furthest to the right.
+
+### Server API
+
+- [x] Add an API to load the comparison project metadata needed to build the page.
+- [x] Add an API to return the article rows and prompt/model answers for the table.
+- [x] Return any human answers in a way that lets the client place them in rightmost columns.
+- [x] Filter and resolve judgments using the comparison project's selected routes, timeline, prompts, models, and article-content settings.
+
+### Client Data
+
+- [x] Add client queries/services for the `Compare Project Judgments` page.
+
 ## Out Of Scope
 
-- comparison results pages
-- comparison detail page
 - edit page
 - clone flow
 - model picker UI

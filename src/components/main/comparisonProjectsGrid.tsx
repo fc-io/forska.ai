@@ -1,3 +1,4 @@
+import {Link} from '@tanstack/solid-router'
 import {format} from 'date-fns'
 import {createMemo, createSignal, For, Show} from 'solid-js'
 
@@ -101,12 +102,22 @@ export const ComparisonProjectsGrid = (props: ComparisonProjectsGridProps) => {
     <ul class="flex flex-col gap-6 mb-8 list-none p-0">
       <For each={sortedComparisonProjects()}>
         {(comparisonProject) => {
+          const description = comparisonProject.description ?? ''
+
           return (
             <li>
               <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
                 <div class="flex items-start justify-between gap-3 mb-3">
                   <div class="flex flex-col gap-1 min-w-0">
-                    <h2 class="text-xl font-semibold truncate">{comparisonProject.name}</h2>
+                    <h2 class="text-xl font-semibold truncate">
+                      <Link
+                        to="/compare-judgments/$id"
+                        params={{id: comparisonProject.id} as never}
+                        class="hover:text-blue-600"
+                      >
+                        {comparisonProject.name}
+                      </Link>
+                    </h2>
                     <p class="text-sm text-muted-foreground">
                       Content: {getComparisonProjectContentUsedLabel(comparisonProject)}
                     </p>
@@ -134,11 +145,9 @@ export const ComparisonProjectsGrid = (props: ComparisonProjectsGridProps) => {
                     </span>
                   </div>
                 </div>
-                <Show when={comparisonProject.description}>
+                <Show when={description !== ''}>
                   <p class="text-muted-foreground mb-4">
-                    {comparisonProject.description.length > 120
-                      ? `${comparisonProject.description.slice(0, 120).trim()}...`
-                      : comparisonProject.description}
+                    {description.length > 120 ? `${description.slice(0, 120).trim()}...` : description}
                   </p>
                 </Show>
                 <div class="grid gap-2 text-sm text-muted-foreground mb-4 sm:grid-cols-3">
@@ -149,6 +158,9 @@ export const ComparisonProjectsGrid = (props: ComparisonProjectsGridProps) => {
                   <p>Article content: {getComparisonProjectContentUsedLabel(comparisonProject)}</p>
                 </div>
                 <div class="flex gap-2">
+                  <Button as={Link} to="/compare-judgments/$id" params={{id: comparisonProject.id} as never} size="sm">
+                    Open Comparison
+                  </Button>
                   <Show when={props.isArchived}>
                     <Button
                       size="sm"
