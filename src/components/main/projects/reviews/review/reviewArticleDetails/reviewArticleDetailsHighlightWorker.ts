@@ -54,7 +54,7 @@ const getHighlightedHtmlFromRanges = (text: string, ranges: Array<[number, numbe
   const reduced = ranges.reduce((acc, [start, end], index) => {
     const before = text.slice(acc.cursor, start)
     const inside = text.slice(start, end)
-    const highlighted = `<span class="text-red-500 underline scroll-mt-4" data-fulltext-highlight="${index}">${inside}</span>`
+    const highlighted = `<span class="text-red-500 underline scroll-mt-4" data-review-highlight="true" data-fulltext-highlight="${index}">${inside}</span>`
     return {cursor: end, html: `${acc.html}${before}${highlighted}`}
   }, initial)
 
@@ -134,7 +134,7 @@ const handleHighlightText = (request: HighlightTextRequest): HighlightTextRespon
   const pieces = reviewArticleDetailsGetHighlightedText(request.text, request.quotes, options)
   const html = pieces
     .map(([pieceText, isHit]) => {
-      return isHit ? `<span class="text-red-500 underline">${pieceText}</span>` : pieceText
+      return isHit ? `<span class="text-red-500 underline" data-review-highlight="true">${pieceText}</span>` : pieceText
     })
     .join('')
 

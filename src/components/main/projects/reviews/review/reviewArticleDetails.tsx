@@ -3,7 +3,12 @@ import {createEffect, createMemo, createSignal, onCleanup, onMount, Show} from '
 import {decodeAndSanitize} from '../../../../../app/utils/decodeAndSanitize'
 import {getArticleUrl} from '../../../../../app/utils/getArticleUrl.ts'
 import {reviewArticleDetailsNormalizeQuoteForHtmlMatch} from './reviewArticleDetails/reviewArticleDetailsNormalizeQuoteForHtmlMatch.ts'
-import {ReviewArticleDetailsPatientTimelineExpandable} from './reviewArticleDetails/reviewArticleDetailsPatientTimelineExpandable.tsx'
+import {
+  ReviewArticleDetailsPatientTimelineExpandable,
+  reviewArticleDetailsPatientTimelineExpandBucket,
+  reviewArticleDetailsPatientTimelineExpandBucketForElement,
+  reviewArticleDetailsPatientTimelineGetBucketKeyForQuote,
+} from './reviewArticleDetails/reviewArticleDetailsPatientTimelineExpandable.tsx'
 import {
   type ReviewArticleDetailsScrollToQuoteDetail,
   reviewArticleDetailsScrollToQuoteEventName,
@@ -187,6 +192,8 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
   let activeHighlightRequestId = 0
   let activeHighlightCacheKey: string | undefined
   let highlightDebounceTimeout: number | undefined
+  let scheduledScrollFrame: number | undefined
+  let scheduledScrollInnerFrame: number | undefined
   let lastFulltextSentToWorker: string | undefined
   let activeTitleHighlightRequestId = 0
   let activeTitleHighlightCacheKey: string | undefined
@@ -203,6 +210,8 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
     return isFulltextExpandedControlled() && setControlled ? setControlled(value) : setLocalIsFulltextExpanded(value)
   }
   let containerRef: HTMLDivElement | undefined
+  let titleContainerRef: HTMLParagraphElement | undefined
+  let summaryContainerRef: HTMLDivElement | undefined
   let fulltextContainerRef: HTMLDivElement | undefined
   const fulltextForDisplay = () => {
     return getArticleFulltextForDisplay(props.article)
@@ -463,6 +472,12 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
     if (highlightDebounceTimeout !== undefined) {
       window.clearTimeout(highlightDebounceTimeout)
     }
+    if (scheduledScrollFrame !== undefined) {
+      window.cancelAnimationFrame(scheduledScrollFrame)
+    }
+    if (scheduledScrollInnerFrame !== undefined) {
+      window.cancelAnimationFrame(scheduledScrollInnerFrame)
+    }
     if (fulltextHighlightWorker) {
       fulltextHighlightWorker.postMessage({type: 'clear'} as FulltextHighlightWorkerRequest)
       fulltextHighlightWorker.terminate()
@@ -528,23 +543,111 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
     return container && container.isConnected ? container : undefined
   }
 
-  const scrollElementIntoView = (el: HTMLElement): boolean => {
-    el.scrollIntoView({behavior: 'smooth', block: 'center'})
-    flashClickedHighlight(el)
+  const getConnectedTitleContainer = (): HTMLParagraphElement | undefined => {
+    const container = titleContainerRef
+    return container && container.isConnected ? container : undefined
+  }
+
+  const getConnectedSummaryContainer = (): HTMLDivElement | undefined => {
+    const container = summaryContainerRef
+    return container && container.isConnected ? container : undefined
+  }
+
+  const reviewHighlightSelector = '[data-review-highlight="true"], [data-fulltext-highlight]'
+  const timelineBucketBodySelector = '[data-timeline-bucket-body-key]'
+
+  const getBestTimelineBucketBodyForQuote = (container: ParentNode, quote: string): HTMLElement | undefined => {
+    const normalizedQuote = normalizeScrollText(quote)
+    if (!normalizedQuote) return undefined
+
+    const bodies = Array.from(container.querySelectorAll<HTMLElement>(timelineBucketBodySelector))
+    const initial = {score: 0, el: undefined as HTMLElement | undefined}
+
+    const reduced = bodies.reduce((acc, el) => {
+      const text = normalizeScrollText(el.textContent ?? '')
+      if (!text) return acc
+
+      const score = text.includes(normalizedQuote)
+        ? normalizedQuote.length
+        : normalizedQuote.includes(text)
+          ? text.length
+          : 0
+      return score > acc.score ? {score, el} : acc
+    }, initial)
+
+    return reduced.el
+  }
+
+  const expandPatientTimelineBucketByQuote = (params: {
+    container: HTMLDivElement
+    html: string
+    quote: string
+  }): HTMLElement | undefined => {
+    const bucketKey = reviewArticleDetailsPatientTimelineGetBucketKeyForQuote({html: params.html, quote: params.quote})
+    const bodyByKey = bucketKey
+      ? reviewArticleDetailsPatientTimelineExpandBucket({
+          root: params.container,
+          bucketKey,
+          collapsedByBucketKey: patientTimelineCollapsedByBucketKey,
+        })
+      : undefined
+    const fallbackBody = bodyByKey ?? getBestTimelineBucketBodyForQuote(params.container, params.quote)
+
+    return fallbackBody
+      ? reviewArticleDetailsPatientTimelineExpandBucketForElement({
+          element: fallbackBody,
+          collapsedByBucketKey: patientTimelineCollapsedByBucketKey,
+        })
+      : undefined
+  }
+
+  const expandPatientTimelineBucketsForElement = (container: HTMLDivElement | undefined, el: HTMLElement) => {
+    return container
+      ? reviewArticleDetailsPatientTimelineExpandBucketForElement({
+          element: el,
+          collapsedByBucketKey: patientTimelineCollapsedByBucketKey,
+        })
+      : false
+  }
+
+  const scheduleScrollIntoView = (el: HTMLElement) => {
+    if (scheduledScrollFrame !== undefined) {
+      window.cancelAnimationFrame(scheduledScrollFrame)
+      scheduledScrollFrame = undefined
+    }
+    if (scheduledScrollInnerFrame !== undefined) {
+      window.cancelAnimationFrame(scheduledScrollInnerFrame)
+      scheduledScrollInnerFrame = undefined
+    }
+
+    scheduledScrollFrame = window.requestAnimationFrame(() => {
+      scheduledScrollFrame = undefined
+      scheduledScrollInnerFrame = window.requestAnimationFrame(() => {
+        scheduledScrollInnerFrame = undefined
+        if (!el.isConnected) return
+        el.scrollIntoView({behavior: 'smooth', block: 'center'})
+        flashClickedHighlight(el)
+      })
+    })
+  }
+
+  const scrollElementIntoView = (el: HTMLElement, container?: HTMLDivElement): boolean => {
+    expandPatientTimelineBucketsForElement(container, el)
+    scheduleScrollIntoView(el)
     return true
   }
 
   const scrollToFulltextHighlightIndex = (index: number): boolean => {
     const container = getConnectedFulltextContainer()
     const el = container?.querySelector<HTMLElement>(`[data-fulltext-highlight="${index}"]`)
-    return el ? scrollElementIntoView(el) : false
+    return el ? scrollElementIntoView(el, container) : false
   }
 
-  const getBestHighlightElementForQuote = (container: HTMLDivElement, quote: string): HTMLElement | undefined => {
+  const getBestHighlightElementForQuote = (container: ParentNode, quote: string): HTMLElement | undefined => {
     const normalizedQuote = normalizeScrollText(quote)
     if (!normalizedQuote) return undefined
 
-    const highlights = Array.from(container.querySelectorAll<HTMLElement>('[data-fulltext-highlight]'))
+    const highlights = Array.from(container.querySelectorAll<HTMLElement>(reviewHighlightSelector))
     const initial = {score: 0, el: undefined as HTMLElement | undefined}
 
     const reduced = highlights.reduce((acc, el) => {
@@ -566,13 +669,50 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
     const container = getConnectedFulltextContainer()
     if (!container) return false
 
+    const expandedBody = expandPatientTimelineBucketByQuote({container, html: fulltextHtmlForDisplay(), quote})
     const best = getBestHighlightElementForQuote(container, quote)
-    return best ? scrollElementIntoView(best) : scrollToFulltextHighlightIndex(0)
+    return best
+      ? scrollElementIntoView(best, container)
+      : expandedBody
+        ? scrollElementIntoView(expandedBody, container)
+        : scrollToFulltextHighlightIndex(0)
+  }
+
+  const scrollToQuoteInContainer = (container: HTMLDivElement | HTMLParagraphElement, quote: string): boolean => {
+    const expandedBody =
+      container instanceof HTMLDivElement
+        ? expandPatientTimelineBucketByQuote({container, html: summaryHtmlForDisplay(), quote})
+        : undefined
+
+    const best = getBestHighlightElementForQuote(container, quote)
+    return best
+      ? scrollElementIntoView(best, container instanceof HTMLDivElement ? container : undefined)
+      : expandedBody
+        ? scrollElementIntoView(expandedBody, container)
+        : false
+  }
+
+  const scrollToQuoteInSummary = (quote: string): boolean => {
+    const titleContainer = getConnectedTitleContainer()
+    const summaryContainer = getConnectedSummaryContainer()
+
+    return (
+      (titleContainer ? scrollToQuoteInContainer(titleContainer, quote) : false)
+      || (summaryContainer ? scrollToQuoteInContainer(summaryContainer, quote) : false)
+    )
   }
 
   const attemptScrollRequest = (request: PendingScrollRequest): boolean => {
     const mode = viewMode()
+    if (mode === 'summary') {
+      return request.type === 'quote' ? scrollToQuoteInSummary(request.quote) : false
+    }
+
     if (mode !== 'fulltext' && mode !== 'all') return false
+
+    if (mode === 'all' && request.type === 'quote' && scrollToQuoteInSummary(request.quote)) {
+      return true
+    }
 
     if (mode === 'all' && !isFulltextExpanded()) {
       setIsFulltextExpanded(true)
@@ -602,11 +742,28 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
     const fulltext = fulltextForDisplay()
     const currentJudgmentId = props.judgment?.id
     const highlighted = highlightedFulltextHtml()
+    const highlightedTitle = highlightedTitleHtml()
+    const highlightedSummary = highlightedSummaryHtml()
 
     if (!pending) return
-    if (mode !== 'fulltext' && mode !== 'all') return setPendingScrollRequest(undefined)
-    if (!fulltext) return setPendingScrollRequest(undefined)
     if (pending.judgmentId && pending.judgmentId !== currentJudgmentId) return
+
+    if (mode === 'summary') {
+      if (!highlightedTitle && !highlightedSummary) return
+      return attemptScrollRequest(pending) ? setPendingScrollRequest(undefined) : undefined
+    }
+
+    if (mode !== 'fulltext' && mode !== 'all') return setPendingScrollRequest(undefined)
+
+    if (mode === 'all' && pending.type === 'quote' && (highlightedTitle || highlightedSummary)) {
+      const didScrollInSummary = attemptScrollRequest(pending)
+      if (didScrollInSummary) {
+        setPendingScrollRequest(undefined)
+        return
+      }
+    }
+
+    if (!fulltext) return setPendingScrollRequest(undefined)
     if (!highlighted) return
 
     return attemptScrollRequest(pending) ? setPendingScrollRequest(undefined) : undefined
@@ -696,7 +853,13 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
         <div class="space-y-2">
           {/* Title with clickable highlights - shown in summary and all modes */}
           <Show when={viewMode() === 'all' || viewMode() === 'summary'}>
-            <p class="text-lg font-semibold break-words" onClick={handleTitleSummaryClick}>
+            <p
+              ref={(el) => {
+                titleContainerRef = el
+              }}
+              class="text-lg font-semibold break-words"
+              onClick={handleTitleSummaryClick}
+            >
               <Show
                 when={props.judgment && highlightedTitleHtml()}
                 fallback={
@@ -794,7 +957,13 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
           <Show when={(viewMode() === 'all' || viewMode() === 'summary') && props.article.articleSummary}>
             <div class="mt-4">
               <h3 class="font-semibold mb-2">Summary</h3>
-              <div class="text-gray-700 assessment-container leading-relaxed" onClick={handleTitleSummaryClick}>
+              <div
+                ref={(el) => {
+                  summaryContainerRef = el
+                }}
+                class="text-gray-700 assessment-container leading-relaxed"
+                onClick={handleTitleSummaryClick}
+              >
                 <Show when={isFhirPatientRecord()}>
                   <ReviewArticleDetailsPatientTimelineExpandable
                     html={summaryHtmlForDisplay()}

@@ -1,6 +1,10 @@
 import {createEffect} from 'solid-js'
 
 type HtmlLine = {nodes: Node[]; br: HTMLBRElement | null; text: string}
+type TimelineBucketMatch = {key: string; text: string}
+
+const patientTimelineToggleClassName = 'patient-timeline-toggle'
+const timelineBucketBodySelector = '[data-timeline-bucket-body-key]'
 
 const getTextFromNodes = (nodes: Node[]): string => {
   return nodes
@@ -61,6 +65,154 @@ const appendLine = (parent: ParentNode, line: HtmlLine) => {
   }
 }
 
+const setTimelineToggleButtonState = (button: HTMLButtonElement, collapsed: boolean) => {
+  button.textContent = collapsed ? '+' : '-'
+  button.setAttribute('aria-expanded', String(!collapsed))
+  button.setAttribute('aria-label', collapsed ? 'Expand timeline section' : 'Collapse timeline section')
+}
+
+const getPreviousTimelineBucketHeading = (element: Element | null): HTMLElement | undefined => {
+  const previous = element?.previousElementSibling
+  if (!previous) return undefined
+  return previous instanceof HTMLElement && previous.dataset.timelineBucketKey
+    ? previous
+    : getPreviousTimelineBucketHeading(previous)
+}
+
+const normalizePatientTimelineText = (text: string): string => {
+  const trimmed = text.replace(/^[\s"“”']+|[\s"“”']+$/g, '').trim()
+  const withoutEllipses = trimmed.replace(/^(?:\.{3}|…)+|(?:\.{3}|…)+$/g, '').trim()
+  const withSpaces = withoutEllipses.replace(/\u00A0/g, ' ')
+  const withNormalizedHyphens = withSpaces.replace(/[\u00AD\u2010\u2011\u2012\u2013\u2014\u2015\u2212]/g, '-')
+  const withNormalizedTimes = withNormalizedHyphens.replace(/\u00D7/g, 'x')
+  return withNormalizedTimes.toLowerCase().replace(/\s+/g, ' ').trim()
+}
+
+const getTimelineLines = (html: string): HtmlLine[] => {
+  const lines = splitHtmlIntoLines(html)
+  const timelineHeaderIndex = lines.findIndex((l) => {
+    return isTimelineHeaderLine(l.text)
+  })
+
+  if (timelineHeaderIndex === -1) return []
+
+  const afterTimelineHeader = lines.slice(timelineHeaderIndex + 1)
+  const timelineEndOffset = afterTimelineHeader.findIndex((l) => {
+    return isH2Line(l.text) && !isTimelineHeaderLine(l.text)
+  })
+  const timelineEndIndex = timelineEndOffset === -1 ? lines.length : timelineHeaderIndex + 1 + timelineEndOffset
+  return lines.slice(timelineHeaderIndex + 1, timelineEndIndex)
+}
+
+const getTimelineBucketMatches = (html: string): TimelineBucketMatch[] => {
+  const timelineLines = getTimelineLines(html)
+  const matches: TimelineBucketMatch[] = []
+  let i = 0
+
+  while (i < timelineLines.length) {
+    const line = timelineLines[i]
+    if (!line) {
+      i += 1
+      continue
+    }
+
+    if (!isTimelineBucketHeadingLine(line.text)) {
+      i += 1
+      continue
+    }
+
+    const key = getTimelineBucketKey(line.text)
+    let text = ''
+    let j = i + 1
+
+    while (j < timelineLines.length) {
+      const next = timelineLines[j]
+      if (!next) {
+        j += 1
+        continue
+      }
+      if (isTimelineBucketHeadingLine(next.text)) {
+        break
+      }
+      text += `${next.text}\n`
+      j += 1
+    }
+
+    matches.push({key, text})
+    i = j
+  }
+
+  return matches
+}
+
+const getTimelineBucketBodies = (root: ParentNode): HTMLElement[] => {
+  return Array.from(root.querySelectorAll<HTMLElement>(timelineBucketBodySelector))
+}
+
+const expandTimelineBucketBody = (params: {
+  body: HTMLElement
+  collapsedByBucketKey: Map<string, boolean>
+}): HTMLElement | undefined => {
+  const bucketKey = params.body.dataset.timelineBucketBodyKey
+
+  if (!bucketKey) return undefined
+
+  params.collapsedByBucketKey.set(bucketKey, false)
+  params.body.hidden = false
+
+  const heading = getPreviousTimelineBucketHeading(params.body)
+  const toggleButton = heading?.querySelector<HTMLButtonElement>(`.${patientTimelineToggleClassName}`)
+  if (toggleButton) {
+    setTimelineToggleButtonState(toggleButton, false)
+  }
+
+  return params.body
+}
+
+export const reviewArticleDetailsPatientTimelineGetBucketKeyForQuote = (params: {
+  html: string
+  quote: string
+}): string | undefined => {
+  const normalizedQuote = normalizePatientTimelineText(params.quote)
+  if (!normalizedQuote) return undefined
+
+  const initial = {score: 0, key: undefined as string | undefined}
+  const reduced = getTimelineBucketMatches(params.html).reduce((acc, bucket) => {
+    const normalizedText = normalizePatientTimelineText(bucket.text)
+    if (!normalizedText) return acc
+
+    const score = normalizedText.includes(normalizedQuote)
+      ? normalizedQuote.length
+      : normalizedQuote.includes(normalizedText)
+        ? normalizedText.length
+        : 0
+
+    return score > acc.score ? {score, key: bucket.key} : acc
+  }, initial)
+
+  return reduced.key
+}
+
+export const reviewArticleDetailsPatientTimelineExpandBucket = (params: {
+  root: ParentNode
+  bucketKey: string
+  collapsedByBucketKey: Map<string, boolean>
+}): HTMLElement | undefined => {
+  const body = getTimelineBucketBodies(params.root).find((candidate) => {
+    return candidate.dataset.timelineBucketBodyKey === params.bucketKey
+  })
+
+  return body ? expandTimelineBucketBody({body, collapsedByBucketKey: params.collapsedByBucketKey}) : undefined
+}
+
+export const reviewArticleDetailsPatientTimelineExpandBucketForElement = (params: {
+  element: HTMLElement
+  collapsedByBucketKey: Map<string, boolean>
+}): HTMLElement | undefined => {
+  const body = params.element.closest<HTMLElement>('[data-timeline-bucket-body-key]')
+  return body ? expandTimelineBucketBody({body, collapsedByBucketKey: params.collapsedByBucketKey}) : undefined
+}
+
 const createTimelineToggleButton = ({
   collapsed,
   onToggle,
@@ -70,10 +222,8 @@ const createTimelineToggleButton = ({
 }): HTMLButtonElement => {
   const button = document.createElement('button')
   button.type = 'button'
-  button.className = 'patient-timeline-toggle'
-  button.setAttribute('aria-expanded', String(!collapsed))
-  button.setAttribute('aria-label', collapsed ? 'Expand timeline section' : 'Collapse timeline section')
-  button.textContent = collapsed ? '+' : '-'
+  button.className = patientTimelineToggleClassName
+  setTimelineToggleButtonState(button, collapsed)
   button.addEventListener('click', (event) => {
     event.preventDefault()
     event.stopPropagation()
@@ -147,9 +297,7 @@ const buildEnhancedPatientTimelineFragment = (params: {
 
     const setCollapsed = (collapsed: boolean) => {
       body.hidden = collapsed
-      toggleButton.textContent = collapsed ? '+' : '-'
-      toggleButton.setAttribute('aria-expanded', String(!collapsed))
-      toggleButton.setAttribute('aria-label', collapsed ? 'Expand timeline section' : 'Collapse timeline section')
+      setTimelineToggleButtonState(toggleButton, collapsed)
     }
 
     const toggleButton = createTimelineToggleButton({
