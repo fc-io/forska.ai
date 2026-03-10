@@ -11,6 +11,7 @@ import {
   judgments,
   judgmentsHuman,
   models,
+  projectArticles,
   projectPrompts,
   projectRouteLink,
   projects,
@@ -57,6 +58,7 @@ type ComparisonProjectScope = {
   archived: boolean
   createdAt: Date
   modelIds: string[] | null
+  sourceProjectId: string | null
   contentVariants: ComparisonProjectContentVariant[]
   prompts: ComparisonProjectPromptConfig[]
   models: ComparisonProjectModelConfig[]
@@ -453,16 +455,141 @@ const getComparisonProjectSources = async (): Promise<ComparisonProjectSource[]>
     .filter(isDefined)
 }
 
+const getSortedUniqueStringValues = (values: string[]) => {
+  return Array.from(new Set(values)).sort((left, right) => {
+    return left.localeCompare(right)
+  })
+}
+
+const getHasSameStringValues = (left: string[], right: string[]) => {
+  const leftValues = getSortedUniqueStringValues(left)
+  const rightValues = getSortedUniqueStringValues(right)
+
+  return (
+    leftValues.length === rightValues.length
+    && leftValues.every((value, index) => {
+      return value === rightValues[index]
+    })
+  )
+}
+
+const getHasSameOptionalDateValue = (left: Date | null, right: Date | null) => {
+  return (left?.getTime() ?? null) === (right?.getTime() ?? null)
+}
+
+const getNormalizedComparisonScopeName = (value: string) => {
+  return value.trim().toLowerCase()
+}
+
+const getInferredSourceProjectId = async (
+  comparisonProjectRow: {
+    name: string
+    modelIds: string[] | null
+    useTitle: boolean
+    useAbstract: boolean
+    useFulltext: boolean
+    useFulltextNoImages: boolean
+    dateFrom: Date | null
+    dateTo: Date | null
+  },
+  promptConfigs: ComparisonProjectPromptConfig[],
+  importRouteIds: string[],
+) => {
+  const modelId = comparisonProjectRow.modelIds?.length === 1 ? comparisonProjectRow.modelIds[0] : null
+
+  if (!modelId || promptConfigs.length === 0) {
+    return null
+  }
+
+  const db = getDatabase()
+  const candidateProjects = await db
+    .select({id: projects.id, name: projects.name, dateFrom: projects.dateFrom, dateTo: projects.dateTo})
+    .from(projects)
+    .where(
+      and(
+        eq(projects.modelId, modelId),
+        eq(projects.useTitle, comparisonProjectRow.useTitle),
+        eq(projects.useAbstract, comparisonProjectRow.useAbstract),
+        eq(projects.useFulltext, comparisonProjectRow.useFulltext),
+        eq(projects.useFulltextNoImages, comparisonProjectRow.useFulltextNoImages),
+      ),
+    )
+
+  if (candidateProjects.length === 0) {
+    return null
+  }
+
+  const candidateProjectIds = candidateProjects.map((candidateProject) => {
+    return candidateProject.id
+  })
+  const [candidatePromptRows, candidateRouteRows] = await Promise.all([
+    db
+      .select({projectId: projectPrompts.projectId, promptId: projectPrompts.promptId})
+      .from(projectPrompts)
+      .where(and(inArray(projectPrompts.projectId, candidateProjectIds), eq(projectPrompts.enabled, true))),
+    db
+      .select({projectId: projectRouteLink.projectId, importRouteId: projectRouteLink.importRouteId})
+      .from(projectRouteLink)
+      .where(inArray(projectRouteLink.projectId, candidateProjectIds)),
+  ])
+  const promptIdsByProjectId = candidatePromptRows.reduce<Map<string, string[]>>((rowMap, promptRow) => {
+    const currentPromptIds = rowMap.get(promptRow.projectId) ?? []
+    currentPromptIds.push(promptRow.promptId)
+    rowMap.set(promptRow.projectId, currentPromptIds)
+    return rowMap
+  }, new Map<string, string[]>())
+  const routeIdsByProjectId = candidateRouteRows.reduce<Map<string, string[]>>((rowMap, routeRow) => {
+    const currentRouteIds = rowMap.get(routeRow.projectId) ?? []
+    currentRouteIds.push(routeRow.importRouteId)
+    rowMap.set(routeRow.projectId, currentRouteIds)
+    return rowMap
+  }, new Map<string, string[]>())
+  const comparisonPromptIds = promptConfigs.map((promptConfig) => {
+    return promptConfig.id
+  })
+  const exactCandidates = candidateProjects.filter((candidateProject) => {
+    const candidatePromptIds = promptIdsByProjectId.get(candidateProject.id) ?? []
+    const candidateRouteIds = routeIdsByProjectId.get(candidateProject.id) ?? []
+
+    return (
+      getHasSameStringValues(candidatePromptIds, comparisonPromptIds)
+      && getHasSameStringValues(candidateRouteIds, importRouteIds)
+    )
+  })
+  const dateMatchedCandidates = exactCandidates.filter((candidateProject) => {
+    return (
+      getHasSameOptionalDateValue(candidateProject.dateFrom, comparisonProjectRow.dateFrom)
+      && getHasSameOptionalDateValue(candidateProject.dateTo, comparisonProjectRow.dateTo)
+    )
+  })
+  const comparisonProjectName = getNormalizedComparisonScopeName(comparisonProjectRow.name)
+  const nameMatchedCandidates = (dateMatchedCandidates.length > 0 ? dateMatchedCandidates : exactCandidates).filter(
+    (candidateProject) => {
+      const candidateProjectName = getNormalizedComparisonScopeName(candidateProject.name)
+
+      return (
+        candidateProjectName.length > 0
+        && (comparisonProjectName === candidateProjectName
+          || comparisonProjectName.startsWith(`${candidateProjectName} |`)
+          || comparisonProjectName.includes(candidateProjectName))
+      )
+    },
+  )
+  const [matchedCandidate] = nameMatchedCandidates
+
+  return nameMatchedCandidates.length === 1 ? (matchedCandidate?.id ?? null) : null
+}
+
 const getArticleScopeConditions = (
   routeIds: string[],
   dateFrom: Date | null,
   dateTo: Date | null,
+  sourceProjectId: string | null,
   searchTitle?: string | null,
 ) => {
   const routeIdArray = getUuidArraySql(routeIds)
   const trimmedSearchTitle = searchTitle?.trim() ?? ''
-
-  return [
+  const scopeConditions = [
     routeIdArray
       ? sql`EXISTS (
           SELECT 1 FROM ${articleRouteLink} arl
@@ -470,6 +597,19 @@ const getArticleScopeConditions = (
             AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
         )`
       : null,
+    sourceProjectId
+      ? sql`EXISTS (
+          SELECT 1 FROM ${projectArticles} pa
+          WHERE pa."article_id" = ${articles.id}
+            AND pa."project_id" = ${sourceProjectId}::uuid
+        )`
+      : null,
+  ].filter(isDefined)
+  const scopeCondition =
+    scopeConditions.length > 1 ? or(...scopeConditions) : scopeConditions.length === 1 ? scopeConditions[0] : null
+
+  return [
+    scopeCondition,
     dateFrom ? gte(articles.articleCreatedAt, dateFrom) : null,
     dateTo ? lte(articles.articleCreatedAt, dateTo) : null,
     trimmedSearchTitle ? ilike(articles.articleTitle, `%${trimmedSearchTitle}%`) : null,
@@ -479,6 +619,7 @@ const getArticleScopeConditions = (
 const getComparisonProjectModels = async (
   comparisonProjectRow: {
     modelIds: string[] | null
+    sourceProjectId: string | null
     contentVariants: ComparisonProjectContentVariant[]
     dateFrom: Date | null
     dateTo: Date | null
@@ -517,6 +658,7 @@ const getComparisonProjectModels = async (
     importRouteIds,
     comparisonProjectRow.dateFrom,
     comparisonProjectRow.dateTo,
+    comparisonProjectRow.sourceProjectId,
   )
   const queryConditions = [
     inArray(judgments.promptId, promptIds),
@@ -625,9 +767,10 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
   const importRouteIds = routeRows.map((routeRow) => {
     return routeRow.importRouteId
   })
+  const sourceProjectId = await getInferredSourceProjectId(comparisonProjectRow, promptConfigs, importRouteIds)
   const contentVariants = getComparisonProjectContentVariants(comparisonProjectRow)
   const modelRows = await getComparisonProjectModels(
-    {...comparisonProjectRow, contentVariants},
+    {...comparisonProjectRow, sourceProjectId, contentVariants},
     promptConfigs.map((prompt) => {
       return prompt.id
     }),
@@ -640,7 +783,15 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
     comparisonProjectRow.compareWithHumans,
   )
 
-  return {...comparisonProjectRow, contentVariants, prompts: promptConfigs, models: modelRows, importRouteIds, columns}
+  return {
+    ...comparisonProjectRow,
+    sourceProjectId,
+    contentVariants,
+    prompts: promptConfigs,
+    models: modelRows,
+    importRouteIds,
+    columns,
+  }
 }
 
 const getComparisonProjectEditFormData = async (comparisonProjectId: string) => {
@@ -1151,7 +1302,12 @@ const getComparisonProjectJudgmentsPage = async (
     return {data: [], totalCount: 0, page: 1, limit, totalPages: 0}
   }
 
-  const articleScopeConditions = getArticleScopeConditions(scope.importRouteIds, scope.dateFrom, scope.dateTo)
+  const articleScopeConditions = getArticleScopeConditions(
+    scope.importRouteIds,
+    scope.dateFrom,
+    scope.dateTo,
+    scope.sourceProjectId,
+  )
   const useDefaultLlmPath =
     !scope.compareWithHumans && !hideSparseRows && !showOnlyFullyAnsweredPrompts && !showOnlyModelDifferences
 
