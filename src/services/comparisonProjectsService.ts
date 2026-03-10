@@ -43,6 +43,12 @@ export type ComparisonProjectEditFormData = {
   name: string
   description: string | null
   compareWithHumans: boolean
+  updatedAt: Date | string
+  selectedModelIds: string[]
+  useTitle: boolean
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
   promptSelections: Array<{promptId: string; order: number}>
   availablePrompts: Array<{
     id: string
@@ -58,6 +64,11 @@ export type UpdateComparisonProjectInput = {
   name: string
   description?: string | null
   compareWithHumans: boolean
+  modelIds?: string[]
+  useTitle: boolean
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
   promptSelections: Array<{promptId: string; order: number}>
 }
 

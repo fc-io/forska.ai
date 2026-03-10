@@ -1,14 +1,21 @@
-import {useQuery} from '@tanstack/solid-query'
+import * as Select from '@kobalte/core/select'
+import {useQuery, useQueryClient} from '@tanstack/solid-query'
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
-import {createEffect, createSignal, For, Show} from 'solid-js'
+import {createEffect, createMemo, createSignal, For, Show} from 'solid-js'
 
 import {Button} from '../../../../components/ui/button'
+import {apiClient} from '../../../../services/apiClient'
 import {
   type ComparisonProjectEditFormData,
   fetchComparisonProjectEditFormData,
   updateComparisonProject,
   type UpdateComparisonProjectInput,
 } from '../../../../services/comparisonProjectsService'
+import {handleApiResponse} from '../../../../services/utils/handleApiResponse'
+
+type ModelOption = {id: string; name: string; provider: string | null; modelName: string | null; version: string | null}
+type ModelsResponse = {data: ModelOption[]}
+type EnsureModelResponse = {data: {modelId: string}; error: null}
 
 const formatPromptCreatedAt = (value: Date | string) => {
   return new Date(value).toLocaleDateString()
@@ -22,6 +29,14 @@ const togglePromptSelection = (currentValues: string[], nextValue: string) => {
     : [...currentValues, nextValue]
 }
 
+const getSelectedContentOptionCount = (options: {
+  compareTitleAndAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+}) => {
+  return [options.compareTitleAndAbstract, options.useFulltext, options.useFulltextNoImages].filter(Boolean).length
+}
+
 const getSelectedPromptIds = (comparisonProject: ComparisonProjectEditFormData) => {
   return [...comparisonProject.promptSelections]
     .sort((left, right) => {
@@ -32,8 +47,52 @@ const getSelectedPromptIds = (comparisonProject: ComparisonProjectEditFormData) 
     })
 }
 
+const getSelectedModelIds = (comparisonProject: ComparisonProjectEditFormData) => {
+  return comparisonProject.selectedModelIds ?? []
+}
+
+const getResolvedModelIdsForUpdate = async (selectedModelIds: string[], availableModels: ModelOption[]) => {
+  const resolvedModelIds = await Promise.all(
+    selectedModelIds.map(async (selectedModelId) => {
+      const selectedModel = availableModels.find((model) => {
+        return model.id === selectedModelId
+      })
+
+      if (!selectedModel) {
+        return selectedModelId
+      }
+
+      if (selectedModel.provider?.toLowerCase() !== 'codex') {
+        return selectedModel.id
+      }
+
+      const modelName = selectedModel.modelName?.trim() ?? ''
+
+      if (!modelName) {
+        throw new Error('Selected Codex model is missing modelName')
+      }
+
+      const response = await apiClient.api.models.ensure.post({
+        provider: 'codex',
+        modelName,
+        name: selectedModel.name,
+        version: selectedModel.version ?? undefined,
+      })
+      const result = handleApiResponse<EnsureModelResponse>(
+        response as unknown as {data?: EnsureModelResponse; error?: unknown; status?: number},
+        'Failed to ensure Codex model',
+      )
+
+      return result.data.modelId
+    }),
+  )
+
+  return Array.from(new Set(resolvedModelIds))
+}
+
 const EditComparisonProjectPage = () => {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const params = Route.useParams()
   const comparisonProjectId = () => {
     const routeParams = params()
@@ -49,45 +108,104 @@ const EditComparisonProjectPage = () => {
       suspense: false,
     }
   })
+  const modelsQuery = useQuery(() => {
+    return {
+      queryKey: ['comparison-project-models'],
+      queryFn: async () => {
+        const response = await apiClient.api.models.get()
+        const result = handleApiResponse<ModelsResponse>(
+          response as unknown as {data?: ModelsResponse; error?: unknown; status?: number},
+          'Failed to load models',
+        )
+
+        return result.data ?? []
+      },
+      staleTime: 1000 * 60 * 5,
+      suspense: false,
+    }
+  })
   const [comparisonProjectName, setComparisonProjectName] = createSignal('')
   const [description, setDescription] = createSignal('')
   const [compareWithHumans, setCompareWithHumans] = createSignal(false)
+  const [selectedModelIds, setSelectedModelIds] = createSignal<string[]>([])
+  const [compareTitleAndAbstract, setCompareTitleAndAbstract] = createSignal(true)
+  const [useFulltext, setUseFulltext] = createSignal(false)
+  const [useFulltextNoImages, setUseFulltextNoImages] = createSignal(false)
   const [selectedPromptIds, setSelectedPromptIds] = createSignal<string[]>([])
   const [isLoading, setIsLoading] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
-  const [initializedComparisonProjectId, setInitializedComparisonProjectId] = createSignal<string | null>(null)
+  const [initializedComparisonProjectVersion, setInitializedComparisonProjectVersion] = createSignal<string | null>(
+    null,
+  )
+  const modelOptions = createMemo(() => {
+    return (modelsQuery.data ?? []).map((model) => {
+      return {value: model.id, label: model.name}
+    })
+  })
+  const selectedContentOptionCount = createMemo(() => {
+    return getSelectedContentOptionCount({
+      compareTitleAndAbstract: compareTitleAndAbstract(),
+      useFulltext: useFulltext(),
+      useFulltextNoImages: useFulltextNoImages(),
+    })
+  })
+  const hasSelectedContentOptions = createMemo(() => {
+    return selectedContentOptionCount() > 0
+  })
 
   createEffect(() => {
     const comparisonProject = comparisonProjectQuery.data
+    const comparisonProjectVersion = comparisonProject
+      ? `${comparisonProject.id}:${new Date(comparisonProject.updatedAt).toISOString()}`
+      : null
 
-    if (!comparisonProject || initializedComparisonProjectId() === comparisonProject.id) {
+    if (!comparisonProject || initializedComparisonProjectVersion() === comparisonProjectVersion) {
       return
     }
 
     setComparisonProjectName(comparisonProject.name)
     setDescription(comparisonProject.description ?? '')
     setCompareWithHumans(comparisonProject.compareWithHumans)
+    setSelectedModelIds(getSelectedModelIds(comparisonProject))
+    setCompareTitleAndAbstract(comparisonProject.useTitle || comparisonProject.useAbstract)
+    setUseFulltext(comparisonProject.useFulltext)
+    setUseFulltextNoImages(comparisonProject.useFulltextNoImages)
     setSelectedPromptIds(getSelectedPromptIds(comparisonProject))
-    setInitializedComparisonProjectId(comparisonProject.id)
+    setInitializedComparisonProjectVersion(comparisonProjectVersion)
   })
 
   const handleSubmit = async (event: Event) => {
     event.preventDefault()
     setError(null)
 
-    const updateComparisonProjectInput: UpdateComparisonProjectInput = {
-      name: comparisonProjectName().trim(),
-      description: description().trim() || null,
-      compareWithHumans: compareWithHumans(),
-      promptSelections: selectedPromptIds().map((promptId, index) => {
-        return {promptId, order: index}
-      }),
+    if (!hasSelectedContentOptions()) {
+      setError('Select at least one article content option to compare')
+      return
     }
 
     setIsLoading(true)
 
     try {
+      const resolvedModelIds = await getResolvedModelIdsForUpdate(selectedModelIds(), modelsQuery.data ?? [])
+      const updateComparisonProjectInput: UpdateComparisonProjectInput = {
+        name: comparisonProjectName().trim(),
+        description: description().trim() || null,
+        compareWithHumans: compareWithHumans(),
+        modelIds: resolvedModelIds.length > 0 ? resolvedModelIds : undefined,
+        useTitle: compareTitleAndAbstract(),
+        useAbstract: compareTitleAndAbstract(),
+        useFulltext: useFulltext(),
+        useFulltextNoImages: useFulltextNoImages(),
+        promptSelections: selectedPromptIds().map((promptId, index) => {
+          return {promptId, order: index}
+        }),
+      }
+
       await updateComparisonProject(comparisonProjectId(), updateComparisonProjectInput)
+      await Promise.all([
+        queryClient.invalidateQueries({queryKey: ['comparison-project-edit', comparisonProjectId()]}),
+        queryClient.invalidateQueries({queryKey: ['comparison-project', comparisonProjectId()]}),
+      ])
       void navigate({to: '/compare-judgments/$id', params: {id: comparisonProjectId()} as never})
     } catch (submitError) {
       const message = submitError instanceof Error ? submitError.message : 'An unexpected error occurred'
@@ -167,6 +285,221 @@ const EditComparisonProjectPage = () => {
                 rows="4"
                 class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent resize-none"
               />
+            </div>
+
+            <div>
+              <label class="block text-sm font-medium mb-2">Models to Compare</label>
+              <Show when={modelsQuery.isLoading}>
+                <p class="text-sm text-muted-foreground">Loading models...</p>
+              </Show>
+              <Show when={modelsQuery.isError}>
+                <p class="text-sm text-red-600">
+                  {modelsQuery.error instanceof Error ? modelsQuery.error.message : 'Failed to load models'}
+                </p>
+              </Show>
+              <Show when={!modelsQuery.isLoading && !modelsQuery.isError}>
+                <Select.Root<{value: string; label: string}>
+                  multiple
+                  value={modelOptions().filter((option) => {
+                    return selectedModelIds().includes(option.value)
+                  })}
+                  onChange={(values) => {
+                    return setSelectedModelIds(
+                      values.map((value) => {
+                        return value.value
+                      }),
+                    )
+                  }}
+                  options={modelOptions()}
+                  optionValue="value"
+                  optionTextValue="label"
+                  placeholder="All models"
+                  name="comparison-project-models"
+                  itemComponent={(itemProps) => {
+                    return (
+                      <Select.Item
+                        item={itemProps.item}
+                        class="relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-2 pr-8 text-sm outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-muted data-[disabled]:opacity-50"
+                      >
+                        <Select.ItemLabel class="truncate">{itemProps.item.rawValue.label}</Select.ItemLabel>
+                        <Select.ItemIndicator class="absolute right-2 flex h-3.5 w-3.5 items-center justify-center">
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="3"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            class="size-3"
+                          >
+                            <path d="M5 12l5 5l10 -10" />
+                          </svg>
+                        </Select.ItemIndicator>
+                      </Select.Item>
+                    )
+                  }}
+                >
+                  <Select.Trigger
+                    class="group min-h-11 w-full rounded-md border border-input bg-background bg-white px-2 py-1.5 text-sm shadow-sm transition-[box-shadow,background-color] flex items-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[expanded]:ring-2 data-[expanded]:ring-ring"
+                    aria-label="Models to compare"
+                  >
+                    <div class="flex flex-wrap gap-2 grow">
+                      <Show
+                        when={selectedModelIds().length > 0}
+                        fallback={<span class="text-muted-foreground">All models</span>}
+                      >
+                        <For each={selectedModelIds()}>
+                          {(modelId) => {
+                            const displayLabel =
+                              modelOptions().find((option) => {
+                                return option.value === modelId
+                              })?.label ?? modelId
+
+                            return (
+                              <span class="inline-flex items-center gap-1 rounded-md border border-input bg-muted/70 px-2 py-1 text-sm text-foreground">
+                                <span class="truncate max-w-[10rem]" title={displayLabel}>
+                                  {displayLabel}
+                                </span>
+                                <button
+                                  type="button"
+                                  class="inline-flex size-4 items-center justify-center rounded hover:bg-muted-foreground/10"
+                                  aria-label={`Remove ${displayLabel}`}
+                                  onClick={() => {
+                                    setSelectedModelIds((current) => {
+                                      return current.filter((value) => {
+                                        return value !== modelId
+                                      })
+                                    })
+                                  }}
+                                >
+                                  <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    class="size-3"
+                                  >
+                                    <path d="M18 6L6 18" />
+                                    <path d="M6 6l12 12" />
+                                  </svg>
+                                </button>
+                              </span>
+                            )
+                          }}
+                        </For>
+                      </Show>
+                    </div>
+                    <div class="ml-auto flex items-center gap-1">
+                      <button
+                        type="button"
+                        class="inline-flex size-6 items-center justify-center rounded hover:bg-muted-foreground/10"
+                        title="Clear selection"
+                        aria-label="Clear selection"
+                        onClick={() => {
+                          return setSelectedModelIds([])
+                        }}
+                      >
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="2"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          class="size-4 opacity-70"
+                        >
+                          <path d="M18 6L6 18" />
+                          <path d="M6 6l12 12" />
+                        </svg>
+                      </button>
+                      <Select.Icon>
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="2"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          class="size-4 opacity-60"
+                        >
+                          <path d="M6 9l6 6l6 -6" />
+                        </svg>
+                      </Select.Icon>
+                    </div>
+                  </Select.Trigger>
+                  <Select.Portal>
+                    <Select.Content class="z-50 min-w-56 rounded-md border bg-popover bg-white p-1 text-popover-foreground shadow-xl outline-none">
+                      <Select.Listbox class="max-h-60 overflow-auto outline-none" />
+                    </Select.Content>
+                  </Select.Portal>
+                </Select.Root>
+              </Show>
+            </div>
+
+            <div>
+              <div class="flex items-center justify-between mb-2">
+                <p class="block text-sm font-medium">Compare Article Content Used *</p>
+                <span class="text-xs text-muted-foreground">{selectedContentOptionCount()} selected</span>
+              </div>
+              <div class="space-y-2">
+                <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    class="mt-1"
+                    checked={compareTitleAndAbstract()}
+                    onChange={(event) => {
+                      return setCompareTitleAndAbstract(event.currentTarget.checked)
+                    }}
+                  />
+                  <div class="flex-1">
+                    <p class="text-sm font-medium text-gray-900">Article Title and Abstract</p>
+                    <p class="text-xs text-gray-500 mt-0.5">
+                      Compare judgments that use the article title plus abstract.
+                    </p>
+                  </div>
+                </label>
+                <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    class="mt-1"
+                    checked={useFulltext()}
+                    onChange={(event) => {
+                      return setUseFulltext(event.currentTarget.checked)
+                    }}
+                  />
+                  <div class="flex-1">
+                    <p class="text-sm font-medium text-gray-900">Use Full Text (with images)</p>
+                    <p class="text-xs text-gray-500 mt-0.5">
+                      Compare judgments that use the complete article text including embedded images.
+                    </p>
+                  </div>
+                </label>
+                <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    class="mt-1"
+                    checked={useFulltextNoImages()}
+                    onChange={(event) => {
+                      return setUseFulltextNoImages(event.currentTarget.checked)
+                    }}
+                  />
+                  <div class="flex-1">
+                    <p class="text-sm font-medium text-gray-900">Use Full Text (without images)</p>
+                    <p class="text-xs text-gray-500 mt-0.5">
+                      Compare judgments that use article text with embedded images stripped out.
+                    </p>
+                  </div>
+                </label>
+              </div>
+              <Show when={!hasSelectedContentOptions()}>
+                <p class="mt-2 text-sm text-red-600">Pick at least one content option.</p>
+              </Show>
             </div>
 
             <div class="border border-input rounded-md p-4 bg-muted/20">
@@ -278,7 +611,10 @@ const EditComparisonProjectPage = () => {
             </div>
 
             <div class="flex gap-3 pt-4">
-              <Button type="submit" disabled={!comparisonProjectName().trim() || isLoading()}>
+              <Button
+                type="submit"
+                disabled={!comparisonProjectName().trim() || !hasSelectedContentOptions() || isLoading()}
+              >
                 {isLoading() ? 'Saving...' : 'Save Comparison Project'}
               </Button>
               <Button
