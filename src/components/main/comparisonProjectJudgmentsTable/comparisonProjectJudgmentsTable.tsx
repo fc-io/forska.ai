@@ -24,6 +24,35 @@ const getModelLabelParts = (label: string) => {
     : {name: label, thinking: null}
 }
 
+const normalizeAnswerValue = (value: string | null | undefined) => {
+  return value?.trim().toLowerCase() ?? ''
+}
+
+const getRowHighlightState = (
+  cells: Record<string, string | null>,
+  columns: ComparisonProjectJudgmentsColumn[],
+): 'match' | 'mismatch' | 'neutral' => {
+  const answeredValues = columns
+    .map((column) => {
+      return normalizeAnswerValue(cells[column.id])
+    })
+    .filter(Boolean)
+
+  if (answeredValues.length < 2) {
+    return 'neutral'
+  }
+
+  return new Set(answeredValues).size === 1 ? 'match' : 'mismatch'
+}
+
+const getRowHighlightClasses = (state: 'match' | 'mismatch' | 'neutral') => {
+  return state === 'match'
+    ? {cell: 'bg-green-50', stickyCell: 'bg-green-50'}
+    : state === 'mismatch'
+      ? {cell: 'bg-red-50', stickyCell: 'bg-red-50'}
+      : {cell: 'bg-white', stickyCell: 'bg-white'}
+}
+
 export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgmentsTableProps) => {
   return (
     <div class="overflow-x-auto bg-white rounded-lg shadow border border-gray-200">
@@ -67,10 +96,14 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
           <For each={props.rows}>
             {(row) => {
               const articleCreatedAt = formatArticleCreatedAt(row.articleCreatedAt)
+              const rowHighlightState = getRowHighlightState(row.cells, props.columns)
+              const rowHighlightClasses = getRowHighlightClasses(rowHighlightState)
 
               return (
                 <tr class="align-top">
-                  <td class="sticky left-0 z-10 w-[22rem] min-w-[22rem] max-w-[22rem] bg-white px-6 py-4">
+                  <td
+                    class={`sticky left-0 z-10 w-[22rem] min-w-[22rem] max-w-[22rem] px-6 py-4 ${rowHighlightClasses.stickyCell}`}
+                  >
                     <div class="space-y-2">
                       <Link
                         to="/articles/$id"
@@ -89,7 +122,9 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
                       const cellValue = row.cells[column.id]?.trim() || null
 
                       return (
-                        <td class="w-[18rem] min-w-[18rem] max-w-[18rem] px-4 py-4 text-sm text-gray-800">
+                        <td
+                          class={`w-[18rem] min-w-[18rem] max-w-[18rem] px-4 py-4 text-sm text-gray-800 ${rowHighlightClasses.cell}`}
+                        >
                           <Show when={cellValue} fallback={<span class="text-gray-300">-</span>}>
                             <div class="whitespace-pre-wrap break-words leading-6">{cellValue}</div>
                           </Show>

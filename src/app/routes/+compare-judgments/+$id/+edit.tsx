@@ -55,12 +55,12 @@ const EditComparisonProjectPage = () => {
   const [selectedPromptIds, setSelectedPromptIds] = createSignal<string[]>([])
   const [isLoading, setIsLoading] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
-  const [hasInitialized, setHasInitialized] = createSignal(false)
+  const [initializedComparisonProjectId, setInitializedComparisonProjectId] = createSignal<string | null>(null)
 
   createEffect(() => {
     const comparisonProject = comparisonProjectQuery.data
 
-    if (!comparisonProject || hasInitialized()) {
+    if (!comparisonProject || initializedComparisonProjectId() === comparisonProject.id) {
       return
     }
 
@@ -68,7 +68,7 @@ const EditComparisonProjectPage = () => {
     setDescription(comparisonProject.description ?? '')
     setCompareWithHumans(comparisonProject.compareWithHumans)
     setSelectedPromptIds(getSelectedPromptIds(comparisonProject))
-    setHasInitialized(true)
+    setInitializedComparisonProjectId(comparisonProject.id)
   })
 
   const handleSubmit = async (event: Event) => {

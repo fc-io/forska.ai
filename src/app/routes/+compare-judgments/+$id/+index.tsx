@@ -5,6 +5,7 @@ import {createMemo, createSignal, For, Show} from 'solid-js'
 import {ComparisonProjectJudgmentsTable} from '../../../../components/main/comparisonProjectJudgmentsTable/comparisonProjectJudgmentsTable.tsx'
 import {Button} from '../../../../components/ui/button'
 import {
+  type ComparisonProjectJudgmentsColumn,
   fetchComparisonProjectJudgmentsMetadata,
   fetchComparisonProjectJudgmentsPage,
 } from '../../../../services/comparisonProjectsService'
@@ -88,6 +89,38 @@ const getHasModelDifferences = (
   })
 }
 
+const getOrderedJudgmentColumns = (
+  columns: ComparisonProjectJudgmentsColumn[],
+  prompts: Array<{id: string; order: number}>,
+) => {
+  const promptOrderMap = prompts.reduce<Record<string, number>>((orderMap, prompt) => {
+    return {...orderMap, [prompt.id]: prompt.order}
+  }, {})
+
+  return columns
+    .map((column, index) => {
+      return {column, index}
+    })
+    .sort((left, right) => {
+      const promptDiff =
+        (promptOrderMap[left.column.promptId] ?? Number.MAX_SAFE_INTEGER)
+        - (promptOrderMap[right.column.promptId] ?? Number.MAX_SAFE_INTEGER)
+
+      if (promptDiff !== 0) {
+        return promptDiff
+      }
+
+      if (left.column.kind !== right.column.kind) {
+        return left.column.kind === 'llm' ? -1 : 1
+      }
+
+      return left.index - right.index
+    })
+    .map(({column}) => {
+      return column
+    })
+}
+
 const CompareProjectJudgmentsPage = () => {
   const params = Route.useParams()
   const comparisonProjectId = () => {
@@ -141,9 +174,15 @@ const CompareProjectJudgmentsPage = () => {
   const canGoToNextPage = createMemo(() => {
     return currentPage() < (judgmentsPageQuery.data?.totalPages ?? 0)
   })
+  const orderedColumns = createMemo(() => {
+    return getOrderedJudgmentColumns(
+      comparisonProjectQuery.data?.columns ?? [],
+      comparisonProjectQuery.data?.prompts ?? [],
+    )
+  })
   const filteredRows = createMemo(() => {
     const rows = judgmentsPageQuery.data?.data ?? []
-    const columns = comparisonProjectQuery.data?.columns ?? []
+    const columns = orderedColumns()
     return rows.filter((row) => {
       const answeredPromptCount = getAnsweredPromptCount(row.cells, columns)
       const configuredPromptCount = getConfiguredPromptCount(columns)
@@ -340,11 +379,7 @@ const CompareProjectJudgmentsPage = () => {
                 </Show>
 
                 <Show
-                  when={
-                    !judgmentsPageQuery.isPending
-                    && !judgmentsPageQuery.isError
-                    && comparisonProject().columns.length === 0
-                  }
+                  when={!judgmentsPageQuery.isPending && !judgmentsPageQuery.isError && orderedColumns().length === 0}
                 >
                   <div class="rounded-lg bg-white p-8 text-center text-gray-500 shadow">
                     No comparison columns are available yet for this comparison project.
@@ -355,18 +390,18 @@ const CompareProjectJudgmentsPage = () => {
                   when={
                     !judgmentsPageQuery.isPending
                     && !judgmentsPageQuery.isError
-                    && comparisonProject().columns.length > 0
+                    && orderedColumns().length > 0
                     && filteredRows().length > 0
                   }
                 >
-                  <ComparisonProjectJudgmentsTable columns={comparisonProject().columns} rows={filteredRows()} />
+                  <ComparisonProjectJudgmentsTable columns={orderedColumns()} rows={filteredRows()} />
                 </Show>
 
                 <Show
                   when={
                     !judgmentsPageQuery.isPending
                     && !judgmentsPageQuery.isError
-                    && comparisonProject().columns.length > 0
+                    && orderedColumns().length > 0
                     && filteredRows().length === 0
                   }
                 >
