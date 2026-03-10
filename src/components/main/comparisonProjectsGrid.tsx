@@ -161,6 +161,17 @@ export const ComparisonProjectsGrid = (props: ComparisonProjectsGridProps) => {
                   <Button as={Link} to="/compare-judgments/$id" params={{id: comparisonProject.id} as never} size="sm">
                     Open Comparison
                   </Button>
+                  <Show when={!props.isArchived}>
+                    <Button
+                      as={Link}
+                      to="/compare-judgments/$id/edit"
+                      params={{id: comparisonProject.id} as never}
+                      size="sm"
+                      variant="outline"
+                    >
+                      Edit
+                    </Button>
+                  </Show>
                   <Show when={props.isArchived}>
                     <Button
                       size="sm"

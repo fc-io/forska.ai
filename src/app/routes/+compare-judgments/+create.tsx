@@ -5,7 +5,6 @@ import {createMemo, createSignal, For, Show} from 'solid-js'
 import {Button} from '../../../components/ui/button'
 import {apiClient} from '../../../services/apiClient'
 import {createComparisonProject, type CreateComparisonProjectInput} from '../../../services/comparisonProjectsService'
-import {fetchSession} from '../../../services/fetchSession'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse'
 
 type ExistingPrompt = {
@@ -58,9 +57,6 @@ const getPromptDateValue = (value: Date | string | null) => {
 
 const CreateCompareJudgmentsPage = () => {
   const navigate = useNavigate()
-  const sessionQuery = useQuery(() => {
-    return {queryKey: ['session'], queryFn: fetchSession, staleTime: 1000 * 60 * 5, suspense: false}
-  })
   const importRoutesQuery = useQuery(() => {
     return {
       queryKey: ['comparison-project-import-routes'],
@@ -127,12 +123,6 @@ const CreateCompareJudgmentsPage = () => {
       return
     }
 
-    const ownerId = sessionQuery.data?.user.id
-    if (!ownerId) {
-      setError('User must be authenticated to create a comparison project')
-      return
-    }
-
     const promptSelections = sortedExistingPrompts()
       .filter((prompt) => {
         return selectedPromptIds().includes(prompt.id)
@@ -144,7 +134,6 @@ const CreateCompareJudgmentsPage = () => {
     const createComparisonProjectInput: CreateComparisonProjectInput = {
       name: comparisonProjectName(),
       description: description().trim() || undefined,
-      ownerId,
       compareWithHumans: compareWithHumans(),
       dateFrom: startDateResult.normalized ?? undefined,
       dateTo: endDateResult.normalized ?? undefined,
@@ -508,7 +497,7 @@ const CreateCompareJudgmentsPage = () => {
           </div>
 
           <div class="flex gap-3 pt-4">
-            <Button type="submit" disabled={!comparisonProjectName().trim() || isLoading() || sessionQuery.isLoading}>
+            <Button type="submit" disabled={!comparisonProjectName().trim() || isLoading()}>
               {isLoading() ? 'Creating...' : 'Create Comparison Project'}
             </Button>
             <Button as={Link} to="/compare-judgments" variant="outline">

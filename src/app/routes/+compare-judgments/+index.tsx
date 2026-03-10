@@ -19,6 +19,9 @@ export const CompareJudgmentsPage = () => {
           <Button as={Link} to="/compare-judgments/archived" variant="outline">
             Show Archived
           </Button>
+          <Button as={Link} to="/compare-judgments/create-from-project" variant="outline">
+            Compare Project
+          </Button>
           <Button as={Link} to="/compare-judgments/create">
             Create New Comparison
           </Button>

@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/+__root'
 import { Route as IndexRouteImport } from './routes/+index'
 import { Route as ProjectsCreateSubprojectRouteImport } from './routes/+projects/+create-subproject'
 import { Route as ProjectsCreateRouteImport } from './routes/+projects/+create'
+import { Route as CompareJudgmentsCreateFromProjectRouteImport } from './routes/+compare-judgments/+create-from-project'
 import { Route as CompareJudgmentsCreateRouteImport } from './routes/+compare-judgments/+create'
 import { Route as SettingsIndexRouteImport } from './routes/+settings/+index'
 import { Route as PromptsIndexRouteImport } from './routes/+prompts/+index'
@@ -22,6 +23,7 @@ import { Route as ArticlesIndexRouteImport } from './routes/+articles/+index'
 import { Route as ProjectsIdHumanAssessmentRouteImport } from './routes/+projects/+$id/+humanAssessment'
 import { Route as ProjectsIdExportRouteImport } from './routes/+projects/+$id/+export'
 import { Route as ProjectsIdEditRouteImport } from './routes/+projects/+$id/+edit'
+import { Route as CompareJudgmentsIdEditRouteImport } from './routes/+compare-judgments/+$id/+edit'
 import { Route as ArticlesIdFulltextRouteImport } from './routes/+articles/+$id/+fulltext'
 import { Route as AdminPromptsDeduplicateRouteImport } from './routes/+admin/+prompts/+deduplicate'
 import { Route as AdminDatasourcesCreateRouteImport } from './routes/+admin/+datasources/+create'
@@ -86,6 +88,12 @@ const ProjectsCreateRoute = ProjectsCreateRouteImport.update({
   path: '/projects/create',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CompareJudgmentsCreateFromProjectRoute =
+  CompareJudgmentsCreateFromProjectRouteImport.update({
+    id: '/compare-judgments/create-from-project',
+    path: '/compare-judgments/create-from-project',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const CompareJudgmentsCreateRoute = CompareJudgmentsCreateRouteImport.update({
   id: '/compare-judgments/create',
   path: '/compare-judgments/create',
@@ -135,6 +143,11 @@ const ProjectsIdExportRoute = ProjectsIdExportRouteImport.update({
 const ProjectsIdEditRoute = ProjectsIdEditRouteImport.update({
   id: '/projects/$id/edit',
   path: '/projects/$id/edit',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CompareJudgmentsIdEditRoute = CompareJudgmentsIdEditRouteImport.update({
+  id: '/compare-judgments/$id/edit',
+  path: '/compare-judgments/$id/edit',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ArticlesIdFulltextRoute = ArticlesIdFulltextRouteImport.update({
@@ -408,6 +421,7 @@ export interface FileRoutesByFullPath {
   '/prompts': typeof PromptsIndexRoute
   '/settings': typeof SettingsIndexRoute
   '/compare-judgments/create': typeof CompareJudgmentsCreateRoute
+  '/compare-judgments/create-from-project': typeof CompareJudgmentsCreateFromProjectRoute
   '/projects/create': typeof ProjectsCreateRoute
   '/projects/create-subproject': typeof ProjectsCreateSubprojectRoute
   '/admin/aa-models': typeof AdminAaModelsIndexRoute
@@ -436,6 +450,7 @@ export interface FileRoutesByFullPath {
   '/admin/datasources/create': typeof AdminDatasourcesCreateRoute
   '/admin/prompts/deduplicate': typeof AdminPromptsDeduplicateRoute
   '/articles/$id/fulltext': typeof ArticlesIdFulltextRoute
+  '/compare-judgments/$id/edit': typeof CompareJudgmentsIdEditRoute
   '/projects/$id/edit': typeof ProjectsIdEditRoute
   '/projects/$id/export': typeof ProjectsIdExportRoute
   '/projects/$id/humanAssessment': typeof ProjectsIdHumanAssessmentRoute
@@ -470,6 +485,7 @@ export interface FileRoutesByTo {
   '/prompts': typeof PromptsIndexRoute
   '/settings': typeof SettingsIndexRoute
   '/compare-judgments/create': typeof CompareJudgmentsCreateRoute
+  '/compare-judgments/create-from-project': typeof CompareJudgmentsCreateFromProjectRoute
   '/projects/create': typeof ProjectsCreateRoute
   '/projects/create-subproject': typeof ProjectsCreateSubprojectRoute
   '/admin/aa-models': typeof AdminAaModelsIndexRoute
@@ -498,6 +514,7 @@ export interface FileRoutesByTo {
   '/admin/datasources/create': typeof AdminDatasourcesCreateRoute
   '/admin/prompts/deduplicate': typeof AdminPromptsDeduplicateRoute
   '/articles/$id/fulltext': typeof ArticlesIdFulltextRoute
+  '/compare-judgments/$id/edit': typeof CompareJudgmentsIdEditRoute
   '/projects/$id/edit': typeof ProjectsIdEditRoute
   '/projects/$id/export': typeof ProjectsIdExportRoute
   '/projects/$id/humanAssessment': typeof ProjectsIdHumanAssessmentRoute
@@ -533,6 +550,7 @@ export interface FileRoutesById {
   '/prompts/': typeof PromptsIndexRoute
   '/settings/': typeof SettingsIndexRoute
   '/compare-judgments/create': typeof CompareJudgmentsCreateRoute
+  '/compare-judgments/create-from-project': typeof CompareJudgmentsCreateFromProjectRoute
   '/projects/create': typeof ProjectsCreateRoute
   '/projects/create-subproject': typeof ProjectsCreateSubprojectRoute
   '/admin/aa-models/': typeof AdminAaModelsIndexRoute
@@ -561,6 +579,7 @@ export interface FileRoutesById {
   '/admin/datasources/create': typeof AdminDatasourcesCreateRoute
   '/admin/prompts/deduplicate': typeof AdminPromptsDeduplicateRoute
   '/articles/$id/fulltext': typeof ArticlesIdFulltextRoute
+  '/compare-judgments/$id/edit': typeof CompareJudgmentsIdEditRoute
   '/projects/$id/edit': typeof ProjectsIdEditRoute
   '/projects/$id/export': typeof ProjectsIdExportRoute
   '/projects/$id/humanAssessment': typeof ProjectsIdHumanAssessmentRoute
@@ -597,6 +616,7 @@ export interface FileRouteTypes {
     | '/prompts'
     | '/settings'
     | '/compare-judgments/create'
+    | '/compare-judgments/create-from-project'
     | '/projects/create'
     | '/projects/create-subproject'
     | '/admin/aa-models'
@@ -625,6 +645,7 @@ export interface FileRouteTypes {
     | '/admin/datasources/create'
     | '/admin/prompts/deduplicate'
     | '/articles/$id/fulltext'
+    | '/compare-judgments/$id/edit'
     | '/projects/$id/edit'
     | '/projects/$id/export'
     | '/projects/$id/humanAssessment'
@@ -659,6 +680,7 @@ export interface FileRouteTypes {
     | '/prompts'
     | '/settings'
     | '/compare-judgments/create'
+    | '/compare-judgments/create-from-project'
     | '/projects/create'
     | '/projects/create-subproject'
     | '/admin/aa-models'
@@ -687,6 +709,7 @@ export interface FileRouteTypes {
     | '/admin/datasources/create'
     | '/admin/prompts/deduplicate'
     | '/articles/$id/fulltext'
+    | '/compare-judgments/$id/edit'
     | '/projects/$id/edit'
     | '/projects/$id/export'
     | '/projects/$id/humanAssessment'
@@ -721,6 +744,7 @@ export interface FileRouteTypes {
     | '/prompts/'
     | '/settings/'
     | '/compare-judgments/create'
+    | '/compare-judgments/create-from-project'
     | '/projects/create'
     | '/projects/create-subproject'
     | '/admin/aa-models/'
@@ -749,6 +773,7 @@ export interface FileRouteTypes {
     | '/admin/datasources/create'
     | '/admin/prompts/deduplicate'
     | '/articles/$id/fulltext'
+    | '/compare-judgments/$id/edit'
     | '/projects/$id/edit'
     | '/projects/$id/export'
     | '/projects/$id/humanAssessment'
@@ -784,6 +809,7 @@ export interface RootRouteChildren {
   PromptsIndexRoute: typeof PromptsIndexRoute
   SettingsIndexRoute: typeof SettingsIndexRoute
   CompareJudgmentsCreateRoute: typeof CompareJudgmentsCreateRoute
+  CompareJudgmentsCreateFromProjectRoute: typeof CompareJudgmentsCreateFromProjectRoute
   ProjectsCreateRoute: typeof ProjectsCreateRoute
   ProjectsCreateSubprojectRoute: typeof ProjectsCreateSubprojectRoute
   AdminAaModelsIndexRoute: typeof AdminAaModelsIndexRoute
@@ -812,6 +838,7 @@ export interface RootRouteChildren {
   AdminDatasourcesCreateRoute: typeof AdminDatasourcesCreateRoute
   AdminPromptsDeduplicateRoute: typeof AdminPromptsDeduplicateRoute
   ArticlesIdFulltextRoute: typeof ArticlesIdFulltextRoute
+  CompareJudgmentsIdEditRoute: typeof CompareJudgmentsIdEditRoute
   ProjectsIdEditRoute: typeof ProjectsIdEditRoute
   ProjectsIdExportRoute: typeof ProjectsIdExportRoute
   ProjectsIdHumanAssessmentRoute: typeof ProjectsIdHumanAssessmentRoute
@@ -859,6 +886,13 @@ declare module '@tanstack/solid-router' {
       path: '/projects/create'
       fullPath: '/projects/create'
       preLoaderRoute: typeof ProjectsCreateRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/compare-judgments/create-from-project': {
+      id: '/compare-judgments/create-from-project'
+      path: '/compare-judgments/create-from-project'
+      fullPath: '/compare-judgments/create-from-project'
+      preLoaderRoute: typeof CompareJudgmentsCreateFromProjectRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/compare-judgments/create': {
@@ -929,6 +963,13 @@ declare module '@tanstack/solid-router' {
       path: '/projects/$id/edit'
       fullPath: '/projects/$id/edit'
       preLoaderRoute: typeof ProjectsIdEditRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/compare-judgments/$id/edit': {
+      id: '/compare-judgments/$id/edit'
+      path: '/compare-judgments/$id/edit'
+      fullPath: '/compare-judgments/$id/edit'
+      preLoaderRoute: typeof CompareJudgmentsIdEditRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/articles/$id/fulltext': {
@@ -1272,6 +1313,8 @@ const rootRouteChildren: RootRouteChildren = {
   PromptsIndexRoute: PromptsIndexRoute,
   SettingsIndexRoute: SettingsIndexRoute,
   CompareJudgmentsCreateRoute: CompareJudgmentsCreateRoute,
+  CompareJudgmentsCreateFromProjectRoute:
+    CompareJudgmentsCreateFromProjectRoute,
   ProjectsCreateRoute: ProjectsCreateRoute,
   ProjectsCreateSubprojectRoute: ProjectsCreateSubprojectRoute,
   AdminAaModelsIndexRoute: AdminAaModelsIndexRoute,
@@ -1300,6 +1343,7 @@ const rootRouteChildren: RootRouteChildren = {
   AdminDatasourcesCreateRoute: AdminDatasourcesCreateRoute,
   AdminPromptsDeduplicateRoute: AdminPromptsDeduplicateRoute,
   ArticlesIdFulltextRoute: ArticlesIdFulltextRoute,
+  CompareJudgmentsIdEditRoute: CompareJudgmentsIdEditRoute,
   ProjectsIdEditRoute: ProjectsIdEditRoute,
   ProjectsIdExportRoute: ProjectsIdExportRoute,
   ProjectsIdHumanAssessmentRoute: ProjectsIdHumanAssessmentRoute,

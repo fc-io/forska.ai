@@ -11,6 +11,9 @@ import {
   judgments,
   judgmentsHuman,
   models,
+  projectPrompts,
+  projectRouteLink,
+  projects,
   prompts,
 } from '../../db/schema.ts'
 import {requireUserAuth} from '../utils/authGuard.ts'
@@ -63,6 +66,29 @@ type ComparisonProjectHumanRow = {
   userId: string
   answer: string | null
   updatedAt: Date | null
+}
+type ComparisonProjectSourcePrompt = {id: string; promptHeading: string | null; order: number}
+type ComparisonProjectSourceImportRoute = {route: string; name: string | null}
+type ComparisonProjectSource = {
+  id: string
+  name: string
+  description: string | null
+  modelId: string
+  modelName: string
+  useTitle: boolean
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  prompts: ComparisonProjectSourcePrompt[]
+  importRoutes: ComparisonProjectSourceImportRoute[]
+}
+type ComparisonProjectEditPrompt = {
+  id: string
+  originalText: string
+  promptHeading: string | null
+  type: string | null
+  createdAt: Date
+  archived: boolean
 }
 
 const isDefined = <T>(value: T | null | undefined): value is T => {
@@ -164,7 +190,7 @@ const getComparisonProjectRouteCounts = (db: Database) => {
     .as('comparison_project_route_counts')
 }
 
-const getComparisonProjectsList = async (archived: boolean) => {
+const getComparisonProjectsList = async (archived: boolean, ownerId: string) => {
   const db = getDatabase()
   const promptCounts = getComparisonProjectPromptCounts(db)
   const routeCounts = getComparisonProjectRouteCounts(db)
@@ -190,8 +216,88 @@ const getComparisonProjectsList = async (archived: boolean) => {
     .from(comparisonProject)
     .leftJoin(promptCounts, eq(promptCounts.comparisonProjectId, comparisonProject.id))
     .leftJoin(routeCounts, eq(routeCounts.comparisonProjectId, comparisonProject.id))
-    .where(eq(comparisonProject.archived, archived))
+    .where(and(eq(comparisonProject.archived, archived), eq(comparisonProject.ownerId, ownerId)))
     .orderBy(orderByClause)
+}
+
+const getComparisonProjectSources = async (ownerId: string): Promise<ComparisonProjectSource[]> => {
+  const db = getDatabase()
+  const projectRows = await db
+    .select({
+      id: projects.id,
+      name: projects.name,
+      description: projects.description,
+      modelId: projects.modelId,
+      modelName: models.name,
+      useTitle: projects.useTitle,
+      useAbstract: projects.useAbstract,
+      useFulltext: projects.useFulltext,
+      useFulltextNoImages: projects.useFulltextNoImages,
+    })
+    .from(projects)
+    .innerJoin(models, eq(models.id, projects.modelId))
+    .where(and(eq(projects.ownerId, ownerId), eq(projects.archived, false)))
+    .orderBy(asc(projects.name))
+
+  if (projectRows.length === 0) {
+    return []
+  }
+
+  const projectIds = projectRows.map((projectRow) => {
+    return projectRow.id
+  })
+  const [promptRows, routeRows] = await Promise.all([
+    db
+      .select({
+        projectId: projectPrompts.projectId,
+        promptId: prompts.id,
+        promptHeading: prompts.promptHeading,
+        order: projectPrompts.order,
+      })
+      .from(projectPrompts)
+      .innerJoin(prompts, eq(prompts.id, projectPrompts.promptId))
+      .where(and(inArray(projectPrompts.projectId, projectIds), eq(projectPrompts.enabled, true)))
+      .orderBy(asc(projectPrompts.projectId), asc(projectPrompts.order), asc(prompts.createdAt)),
+    db
+      .select({projectId: projectRouteLink.projectId, route: importRouteTable.route, name: importRouteTable.name})
+      .from(projectRouteLink)
+      .innerJoin(importRouteTable, eq(projectRouteLink.importRouteId, importRouteTable.id))
+      .where(inArray(projectRouteLink.projectId, projectIds))
+      .orderBy(asc(projectRouteLink.projectId), asc(importRouteTable.route)),
+  ])
+  const promptRowsByProjectId = promptRows.reduce<Map<string, typeof promptRows>>((rowMap, promptRow) => {
+    const currentRows = rowMap.get(promptRow.projectId) ?? []
+    currentRows.push(promptRow)
+    rowMap.set(promptRow.projectId, currentRows)
+    return rowMap
+  }, new Map<string, typeof promptRows>())
+  const routeRowsByProjectId = routeRows.reduce<Map<string, typeof routeRows>>((rowMap, routeRow) => {
+    const currentRows = rowMap.get(routeRow.projectId) ?? []
+    currentRows.push(routeRow)
+    rowMap.set(routeRow.projectId, currentRows)
+    return rowMap
+  }, new Map<string, typeof routeRows>())
+
+  return projectRows
+    .map<ComparisonProjectSource | null>((projectRow) => {
+      const sourcePromptRows = promptRowsByProjectId.get(projectRow.id) ?? []
+      const sourceImportRouteRows = routeRowsByProjectId.get(projectRow.id) ?? []
+
+      if (sourcePromptRows.length === 0) {
+        return null
+      }
+
+      return {
+        ...projectRow,
+        prompts: sourcePromptRows.map<ComparisonProjectSourcePrompt>((promptRow, index) => {
+          return {id: promptRow.promptId, promptHeading: promptRow.promptHeading, order: promptRow.order ?? index}
+        }),
+        importRoutes: sourceImportRouteRows.map<ComparisonProjectSourceImportRoute>((routeRow) => {
+          return {route: routeRow.route, name: routeRow.name}
+        }),
+      }
+    })
+    .filter(isDefined)
 }
 
 const getArticleScopeConditions = (
@@ -309,7 +415,10 @@ const getComparisonProjectColumns = (
   return [...llmColumns, ...humanColumns]
 }
 
-const getComparisonProjectScope = async (comparisonProjectId: string): Promise<ComparisonProjectScope | null> => {
+const getComparisonProjectScope = async (
+  comparisonProjectId: string,
+  ownerId: string,
+): Promise<ComparisonProjectScope | null> => {
   const db = getDatabase()
   const [comparisonProjectRow] = await db
     .select({
@@ -328,7 +437,7 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
       modelIds: comparisonProject.modelIds,
     })
     .from(comparisonProject)
-    .where(eq(comparisonProject.id, comparisonProjectId))
+    .where(and(eq(comparisonProject.id, comparisonProjectId), eq(comparisonProject.ownerId, ownerId)))
     .limit(1)
 
   if (!comparisonProjectRow) {
@@ -371,6 +480,92 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
   const columns = getComparisonProjectColumns(promptConfigs, modelRows, comparisonProjectRow.compareWithHumans)
 
   return {...comparisonProjectRow, prompts: promptConfigs, models: modelRows, importRouteIds, columns}
+}
+
+const getComparisonProjectEditFormData = async (comparisonProjectId: string, ownerId: string) => {
+  const db = getDatabase()
+  const [comparisonProjectRow] = await db
+    .select({
+      id: comparisonProject.id,
+      name: comparisonProject.name,
+      description: comparisonProject.description,
+      compareWithHumans: comparisonProject.compareWithHumans,
+    })
+    .from(comparisonProject)
+    .where(and(eq(comparisonProject.id, comparisonProjectId), eq(comparisonProject.ownerId, ownerId)))
+    .limit(1)
+
+  if (!comparisonProjectRow) {
+    return null
+  }
+
+  const [selectedPromptRows, availablePromptRows] = await Promise.all([
+    db
+      .select({
+        id: prompts.id,
+        originalText: prompts.originalText,
+        promptHeading: prompts.promptHeading,
+        type: prompts.type,
+        createdAt: prompts.createdAt,
+        archived: prompts.archived,
+        order: comparisonProjectPrompt.order,
+      })
+      .from(comparisonProjectPrompt)
+      .innerJoin(prompts, eq(prompts.id, comparisonProjectPrompt.promptId))
+      .where(eq(comparisonProjectPrompt.comparisonProjectId, comparisonProjectId))
+      .orderBy(asc(comparisonProjectPrompt.order), asc(prompts.createdAt)),
+    db
+      .select({
+        id: prompts.id,
+        originalText: prompts.originalText,
+        promptHeading: prompts.promptHeading,
+        type: prompts.type,
+        createdAt: prompts.createdAt,
+        archived: prompts.archived,
+      })
+      .from(prompts)
+      .where(eq(prompts.archived, false))
+      .orderBy(desc(prompts.createdAt)),
+  ])
+  const selectedPromptIds = new Set(
+    selectedPromptRows.map((promptRow) => {
+      return promptRow.id
+    }),
+  )
+  const availablePrompts = [
+    ...selectedPromptRows.map<ComparisonProjectEditPrompt>((promptRow) => {
+      return {
+        id: promptRow.id,
+        originalText: promptRow.originalText,
+        promptHeading: promptRow.promptHeading,
+        type: promptRow.type,
+        createdAt: promptRow.createdAt,
+        archived: promptRow.archived,
+      }
+    }),
+    ...availablePromptRows
+      .filter((promptRow) => {
+        return !selectedPromptIds.has(promptRow.id)
+      })
+      .map<ComparisonProjectEditPrompt>((promptRow) => {
+        return {
+          id: promptRow.id,
+          originalText: promptRow.originalText,
+          promptHeading: promptRow.promptHeading,
+          type: promptRow.type,
+          createdAt: promptRow.createdAt,
+          archived: promptRow.archived,
+        }
+      }),
+  ]
+
+  return {
+    ...comparisonProjectRow,
+    promptSelections: selectedPromptRows.map((promptRow, index) => {
+      return {promptId: promptRow.id, order: promptRow.order ?? index}
+    }),
+    availablePrompts,
+  }
 }
 
 const getComparisonProjectLlmExistsCondition = (scope: ComparisonProjectScope) => {
@@ -880,21 +1075,165 @@ const getValidatedModelIds = async (tx: DatabaseClient, modelIds: string[]) => {
   return modelIds
 }
 
+const getSessionUserId = (context: {sessionUserId?: string}) => {
+  const sessionUserId = context.sessionUserId?.trim()
+
+  if (!sessionUserId) {
+    throw new Error('User must be authenticated')
+  }
+
+  return sessionUserId
+}
+
+const createComparisonProjectRecord = async (
+  tx: DatabaseClient,
+  body: {
+    name: string
+    description?: string | null
+    modelIds?: string[]
+    compareWithHumans?: boolean
+    dateFrom?: string | null
+    dateTo?: string | null
+    useTitle?: boolean
+    useAbstract?: boolean
+    useFulltext?: boolean
+    useFulltextNoImages?: boolean
+    importRoutes?: string[]
+    promptSelections?: PromptSelection[]
+  },
+  ownerId: string,
+) => {
+  const dateFrom = parseOptionalDate(body.dateFrom)
+  const dateTo = parseOptionalDate(body.dateTo)
+
+  if (dateFrom && dateTo && dateFrom > dateTo) {
+    throw new Error('date_from must be on or before date_to')
+  }
+
+  if (body.useFulltext && body.useFulltextNoImages) {
+    throw new Error('Cannot enable both "Use Full Text" and "Use Full Text (No Images)" at the same time')
+  }
+
+  const validatedModelIds = await getValidatedModelIds(tx, getUniqueStringValues(body.modelIds ?? []))
+  const uniquePromptSelections = getUniquePromptSelections(body.promptSelections ?? [])
+  const uniqueImportRoutes = getUniqueStringValues(body.importRoutes ?? [])
+  const [newComparisonProject] = await tx
+    .insert(comparisonProject)
+    .values({
+      name: body.name,
+      description: body.description?.trim() || null,
+      ownerId,
+      modelIds: validatedModelIds,
+      compareWithHumans: body.compareWithHumans ?? false,
+      useTitle: body.useTitle ?? true,
+      useAbstract: body.useAbstract ?? true,
+      useFulltext: body.useFulltext ?? false,
+      useFulltextNoImages: body.useFulltextNoImages ?? false,
+      dateFrom,
+      dateTo,
+    })
+    .returning()
+
+  if (!newComparisonProject) {
+    throw new Error('Failed to create comparison project')
+  }
+
+  await insertComparisonProjectPromptLinks(tx, newComparisonProject.id, uniquePromptSelections)
+  await insertComparisonProjectRouteLinks(tx, newComparisonProject.id, uniqueImportRoutes)
+
+  return newComparisonProject
+}
+
 export const comparisonProjectsRoutes = new Elysia()
   .use(withErrorHandler())
   .use(requireUserAuth())
-  .get('/api/comparison-projects', async () => {
-    const data = await getComparisonProjectsList(false)
+  .get('/api/comparison-projects', async (context) => {
+    const sessionUserId = getSessionUserId(context as {sessionUserId?: string})
+    const data = await getComparisonProjectsList(false, sessionUserId)
 
     return {data}
   })
-  .get('/api/comparison-projects/archived', async () => {
-    const data = await getComparisonProjectsList(true)
+  .get('/api/comparison-projects/archived', async (context) => {
+    const sessionUserId = getSessionUserId(context as {sessionUserId?: string})
+    const data = await getComparisonProjectsList(true, sessionUserId)
 
     return {data}
   })
-  .get('/api/comparison-projects/:id', async ({params, set}) => {
-    const data = await getComparisonProjectScope(params.id)
+  .get('/api/comparison-projects/sources', async (context) => {
+    const sessionUserId = getSessionUserId(context as {sessionUserId?: string})
+    const data = await getComparisonProjectSources(sessionUserId)
+
+    return {data}
+  })
+  .post(
+    '/api/comparison-projects/from-project',
+    async (context) => {
+      const sessionUserId = getSessionUserId(context as {sessionUserId?: string})
+      const {body} = context
+      const sources = await getComparisonProjectSources(sessionUserId)
+      const sourceProject = sources.find((source) => {
+        return source.id === body.sourceProjectId
+      })
+
+      if (!sourceProject) {
+        throw new Error('Source project not found')
+      }
+
+      const db = getDatabase()
+      const createdComparisonProject = await db.transaction(async (tx) => {
+        return createComparisonProjectRecord(
+          tx,
+          {
+            name: body.name,
+            description: body.description,
+            modelIds: [sourceProject.modelId],
+            compareWithHumans: body.compareWithHumans,
+            dateFrom: body.dateFrom,
+            dateTo: body.dateTo,
+            useTitle: sourceProject.useTitle,
+            useAbstract: sourceProject.useAbstract,
+            useFulltext: sourceProject.useFulltext,
+            useFulltextNoImages: sourceProject.useFulltextNoImages,
+            importRoutes: sourceProject.importRoutes.map((importRoute) => {
+              return importRoute.route
+            }),
+            promptSelections: sourceProject.prompts.map((prompt) => {
+              return {promptId: prompt.id, order: prompt.order}
+            }),
+          },
+          sessionUserId,
+        )
+      })
+
+      return {data: createdComparisonProject}
+    },
+    {
+      body: t.Object({
+        name: t.String(),
+        description: t.Optional(t.Union([t.String(), t.Null()])),
+        compareWithHumans: t.Optional(t.Boolean()),
+        dateFrom: t.Optional(t.Union([t.String(), t.Null()])),
+        dateTo: t.Optional(t.Union([t.String(), t.Null()])),
+        sourceProjectId: t.String(),
+      }),
+    },
+  )
+  .get('/api/comparison-projects/:id/edit', async (context) => {
+    const sessionUserId = getSessionUserId(context as {sessionUserId?: string})
+    const {params, set} = context
+    const data = await getComparisonProjectEditFormData(params.id, sessionUserId)
+
+    if (!data) {
+      set.status = 404
+      return {data: null, error: 'Comparison project not found'}
+    }
+
+    return {data}
+  })
+  .get('/api/comparison-projects/:id', async (context) => {
+    const sessionUserId = getSessionUserId(context as {sessionUserId?: string})
+    const {params, set} = context
+    const data = await getComparisonProjectScope(params.id, sessionUserId)
 
     if (!data) {
       set.status = 404
@@ -905,8 +1244,10 @@ export const comparisonProjectsRoutes = new Elysia()
   })
   .post(
     '/api/comparison-projects/:id/judgments',
-    async ({params, body, set}) => {
-      const data = await getComparisonProjectScope(params.id)
+    async (context) => {
+      const sessionUserId = getSessionUserId(context as {sessionUserId?: string})
+      const {params, body, set} = context
+      const data = await getComparisonProjectScope(params.id, sessionUserId)
 
       if (!data) {
         set.status = 404
@@ -940,50 +1281,12 @@ export const comparisonProjectsRoutes = new Elysia()
   )
   .post(
     '/api/comparison-projects',
-    async ({body}) => {
+    async (context) => {
+      const sessionUserId = getSessionUserId(context as {sessionUserId?: string})
+      const {body} = context
       const db = getDatabase()
-      const dateFrom = parseOptionalDate(body.dateFrom)
-      const dateTo = parseOptionalDate(body.dateTo)
-
-      if (dateFrom && dateTo && dateFrom > dateTo) {
-        throw new Error('date_from must be on or before date_to')
-      }
-
-      if (body.useFulltext && body.useFulltextNoImages) {
-        throw new Error('Cannot enable both "Use Full Text" and "Use Full Text (No Images)" at the same time')
-      }
-
-      const uniqueModelIds = getUniqueStringValues(body.modelIds ?? [])
-      const uniquePromptSelections = getUniquePromptSelections(body.promptSelections ?? [])
-      const uniqueImportRoutes = getUniqueStringValues(body.importRoutes ?? [])
-
       const createdComparisonProject = await db.transaction(async (tx) => {
-        const validatedModelIds = await getValidatedModelIds(tx, uniqueModelIds)
-        const [newComparisonProject] = await tx
-          .insert(comparisonProject)
-          .values({
-            name: body.name,
-            description: body.description?.trim() || null,
-            ownerId: body.ownerId,
-            modelIds: validatedModelIds,
-            compareWithHumans: body.compareWithHumans ?? false,
-            useTitle: body.useTitle ?? true,
-            useAbstract: body.useAbstract ?? true,
-            useFulltext: body.useFulltext ?? false,
-            useFulltextNoImages: body.useFulltextNoImages ?? false,
-            dateFrom,
-            dateTo,
-          })
-          .returning()
-
-        if (!newComparisonProject) {
-          throw new Error('Failed to create comparison project')
-        }
-
-        await insertComparisonProjectPromptLinks(tx, newComparisonProject.id, uniquePromptSelections)
-        await insertComparisonProjectRouteLinks(tx, newComparisonProject.id, uniqueImportRoutes)
-
-        return newComparisonProject
+        return createComparisonProjectRecord(tx, body, sessionUserId)
       })
 
       return {data: createdComparisonProject}
@@ -992,7 +1295,6 @@ export const comparisonProjectsRoutes = new Elysia()
       body: t.Object({
         name: t.String(),
         description: t.Optional(t.Union([t.String(), t.Null()])),
-        ownerId: t.String(),
         modelIds: t.Optional(t.Array(t.String())),
         compareWithHumans: t.Optional(t.Boolean()),
         dateFrom: t.Optional(t.Union([t.String(), t.Null()])),
@@ -1006,30 +1308,82 @@ export const comparisonProjectsRoutes = new Elysia()
       }),
     },
   )
-  .delete('/api/comparison-projects/:id', async ({params}) => {
+  .patch(
+    '/api/comparison-projects/:id',
+    async (context) => {
+      const sessionUserId = getSessionUserId(context as {sessionUserId?: string})
+      const {params, body, set} = context
+      const db = getDatabase()
+      const existingComparisonProject = await getComparisonProjectEditFormData(params.id, sessionUserId)
+
+      if (!existingComparisonProject) {
+        set.status = 404
+        return {data: null, error: 'Comparison project not found'}
+      }
+
+      const updatedComparisonProject = await db.transaction(async (tx) => {
+        const [updatedComparisonProjectRow] = await tx
+          .update(comparisonProject)
+          .set({
+            name: body.name,
+            description: body.description?.trim() || null,
+            compareWithHumans: body.compareWithHumans,
+            updatedAt: new Date(),
+          })
+          .where(and(eq(comparisonProject.id, params.id), eq(comparisonProject.ownerId, sessionUserId)))
+          .returning()
+
+        if (!updatedComparisonProjectRow) {
+          throw new Error('Comparison project not found')
+        }
+
+        await tx.delete(comparisonProjectPrompt).where(eq(comparisonProjectPrompt.comparisonProjectId, params.id))
+        await insertComparisonProjectPromptLinks(tx, params.id, getUniquePromptSelections(body.promptSelections))
+
+        return updatedComparisonProjectRow
+      })
+
+      return {data: updatedComparisonProject}
+    },
+    {
+      body: t.Object({
+        name: t.String(),
+        description: t.Optional(t.Union([t.String(), t.Null()])),
+        compareWithHumans: t.Boolean(),
+        promptSelections: t.Array(t.Object({promptId: t.String(), order: t.Number()})),
+      }),
+    },
+  )
+  .delete('/api/comparison-projects/:id', async (context) => {
+    const sessionUserId = getSessionUserId(context as {sessionUserId?: string})
+    const {params, set} = context
     const db = getDatabase()
     const [archivedComparisonProject] = await db
       .update(comparisonProject)
       .set({archived: true, updatedAt: new Date()})
-      .where(eq(comparisonProject.id, params.id))
+      .where(and(eq(comparisonProject.id, params.id), eq(comparisonProject.ownerId, sessionUserId)))
       .returning()
 
     if (!archivedComparisonProject) {
-      throw new Error('Comparison project not found')
+      set.status = 404
+      return {success: false, error: 'Comparison project not found'}
     }
 
     return {success: true}
   })
-  .post('/api/comparison-projects/:id/unarchive', async ({params}) => {
+  .post('/api/comparison-projects/:id/unarchive', async (context) => {
+    const sessionUserId = getSessionUserId(context as {sessionUserId?: string})
+    const {params, set} = context
     const db = getDatabase()
     const [unarchivedComparisonProject] = await db
       .update(comparisonProject)
       .set({archived: false, updatedAt: new Date()})
-      .where(eq(comparisonProject.id, params.id))
+      .where(and(eq(comparisonProject.id, params.id), eq(comparisonProject.ownerId, sessionUserId)))
       .returning()
 
     if (!unarchivedComparisonProject) {
-      throw new Error('Comparison project not found')
+      set.status = 404
+      return {success: false, error: 'Comparison project not found'}
     }
 
     return {success: true}

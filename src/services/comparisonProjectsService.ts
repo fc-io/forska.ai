@@ -3,7 +3,6 @@ import {apiClient} from './apiClient.ts'
 export type CreateComparisonProjectInput = {
   name: string
   description?: string | null
-  ownerId: string
   modelIds?: string[]
   compareWithHumans?: boolean
   dateFrom?: string | null
@@ -14,6 +13,52 @@ export type CreateComparisonProjectInput = {
   useFulltextNoImages?: boolean
   importRoutes?: string[]
   promptSelections?: Array<{promptId: string; order: number}>
+}
+
+export type CreateComparisonProjectFromProjectInput = {
+  name: string
+  description?: string | null
+  compareWithHumans?: boolean
+  dateFrom?: string | null
+  dateTo?: string | null
+  sourceProjectId: string
+}
+
+export type ComparisonProjectSource = {
+  id: string
+  name: string
+  description: string | null
+  modelId: string
+  modelName: string
+  useTitle: boolean
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  prompts: Array<{id: string; promptHeading: string | null; order: number}>
+  importRoutes: Array<{route: string; name: string | null}>
+}
+
+export type ComparisonProjectEditFormData = {
+  id: string
+  name: string
+  description: string | null
+  compareWithHumans: boolean
+  promptSelections: Array<{promptId: string; order: number}>
+  availablePrompts: Array<{
+    id: string
+    originalText: string
+    promptHeading: string | null
+    type: string | null
+    createdAt: Date | string
+    archived: boolean
+  }>
+}
+
+export type UpdateComparisonProjectInput = {
+  name: string
+  description?: string | null
+  compareWithHumans: boolean
+  promptSelections: Array<{promptId: string; order: number}>
 }
 
 export type ComparisonProjectJudgmentsColumn = {
@@ -38,6 +83,7 @@ export type ComparisonProjectJudgmentsMetadata = {
   dateTo: Date | string | null
   archived: boolean
   createdAt: Date | string
+  importRouteIds: string[]
   prompts: Array<{id: string; promptHeading: string | null; promptLabel: string; order: number}>
   models: Array<{id: string; name: string}>
   columns: ComparisonProjectJudgmentsColumn[]
@@ -95,10 +141,28 @@ export const createComparisonProject = async (input: CreateComparisonProjectInpu
   return getResponseData(response, 'Failed to create comparison project')
 }
 
+export const fetchComparisonProjectSources = async () => {
+  const response = await apiClient.api['comparison-projects'].sources.get()
+
+  return getResponseData<ComparisonProjectSource[]>(response, 'Failed to fetch comparison project sources')
+}
+
+export const createComparisonProjectFromProject = async (input: CreateComparisonProjectFromProjectInput) => {
+  const response = await apiClient.api['comparison-projects']['from-project'].post(input)
+
+  return getResponseData(response, 'Failed to create comparison project from project')
+}
+
 export const fetchComparisonProjectJudgmentsMetadata = async (comparisonProjectId: string) => {
   const response = await apiClient.api['comparison-projects']({id: comparisonProjectId}).get()
 
   return getResponseData<ComparisonProjectJudgmentsMetadata>(response, 'Failed to fetch comparison project')
+}
+
+export const fetchComparisonProjectEditFormData = async (comparisonProjectId: string) => {
+  const response = await apiClient.api['comparison-projects']({id: comparisonProjectId}).edit.get()
+
+  return getResponseData<ComparisonProjectEditFormData>(response, 'Failed to fetch comparison project edit data')
 }
 
 export const fetchComparisonProjectJudgmentsPage = async (
@@ -136,4 +200,10 @@ export const unarchiveComparisonProject = async (comparisonProjectId: string): P
     console.error('Error unarchiving comparison project:', response.error)
     throw new Error('Failed to unarchive comparison project')
   }
+}
+
+export const updateComparisonProject = async (comparisonProjectId: string, input: UpdateComparisonProjectInput) => {
+  const response = await apiClient.api['comparison-projects']({id: comparisonProjectId}).patch(input)
+
+  return getResponseData(response, 'Failed to update comparison project')
 }
