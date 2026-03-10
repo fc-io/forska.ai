@@ -1,44 +1,60 @@
-// TODO:  handleApiResponse is an not needed abstraction that should be removed,
-// every service or api call should handle there own errors etc.
+const getErrorWithMessage = (error: unknown): {message: string} | undefined => {
+  return typeof error === 'object'
+    && error !== null
+    && 'message' in error
+    && typeof (error as {message?: unknown}).message === 'string'
+    ? ({message: (error as {message: string}).message} as const)
+    : undefined
+}
+
+const getNestedErrorValue = (error: unknown): unknown => {
+  return typeof error === 'object' && error !== null && 'value' in error
+    ? (error as {value?: unknown}).value
+    : typeof error === 'object' && error !== null && 'error' in error
+      ? (error as {error?: unknown}).error
+      : undefined
+}
+
+const getSerializedError = (error: unknown): string | undefined => {
+  return typeof error === 'object' && error !== null ? JSON.stringify(error) : undefined
+}
+
+const getApiErrorMessage = (error: unknown, fallback: string): string => {
+  const nested = getNestedErrorValue(error)
+  const message = getErrorWithMessage(error)?.message
+  const serialized = getSerializedError(error)
+
+  return typeof error === 'string'
+    ? error
+    : typeof error === 'number' || typeof error === 'boolean'
+      ? String(error)
+      : message && message.trim().length > 0
+        ? message
+        : nested !== undefined
+          ? getApiErrorMessage(nested, fallback)
+          : serialized && serialized !== '{}'
+            ? serialized
+            : fallback
+}
+
 export const handleApiResponse = <T>(
   response: {data?: T | null; error?: unknown; status?: number},
   errorMessage = 'An error occurred',
 ): NonNullable<T> => {
-  // Check for Eden/Treaty level errors (network, parsing, etc.)
   if (response.error) {
-    if (typeof response.error === 'object' && response.error !== null && 'message' in response.error) {
-      throw new Error((response.error as {message: string}).message || errorMessage)
-    }
-    throw new Error(errorMessage)
+    throw new Error(getApiErrorMessage(response.error, errorMessage))
   }
 
-  // Check for application-level errors in the data
   if (response.data && typeof response.data === 'object' && response.data !== null) {
     if ('error' in response.data && response.data.error) {
-      const error = response.data.error
-      const errorMsg =
-        typeof error === 'string'
-          ? error
-          : typeof error === 'object' && error !== null && 'message' in error
-            ? String((error as {message: unknown}).message)
-            : JSON.stringify(error)
-      throw new Error(errorMsg)
+      throw new Error(getApiErrorMessage(response.data.error, errorMessage))
     }
 
-    // Also check for nested data.error pattern
     if ('data' in response.data && response.data.data === null && 'error' in response.data && response.data.error) {
-      const error = response.data.error
-      const errorMsg =
-        typeof error === 'string'
-          ? error
-          : typeof error === 'object' && error !== null && 'message' in error
-            ? String((error as {message: unknown}).message)
-            : JSON.stringify(error)
-      throw new Error(errorMsg)
+      throw new Error(getApiErrorMessage(response.data.error, errorMessage))
     }
   }
 
-  // Check if data exists
   if (response.data === undefined || response.data === null) {
     throw new Error('No data returned')
   }

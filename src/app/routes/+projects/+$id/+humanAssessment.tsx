@@ -7,6 +7,16 @@ import {apiClient} from '../../../../services/apiClient'
 import {handleApiResponse} from '../../../../services/utils/handleApiResponse'
 import {decodeAndSanitize} from '../../../utils/decodeAndSanitize'
 
+const humanAssessmentEmptyStateMessages = new Set(['No articles left to judge', 'No pending human assessments found'])
+
+const getHumanAssessmentErrorMessage = (error: unknown): string => {
+  return error instanceof Error ? error.message : 'Unknown error'
+}
+
+const isHumanAssessmentEmptyStateError = (error: unknown): boolean => {
+  return humanAssessmentEmptyStateMessages.has(getHumanAssessmentErrorMessage(error))
+}
+
 export const HumanAssessment = () => {
   const params = Route.useParams()
   const queryClient = useQueryClient()
@@ -82,9 +92,26 @@ export const HumanAssessment = () => {
       </Show>
 
       <Show when={query.isError}>
-        <div class="text-center py-8 text-red-600">
-          Failed to load assessment: {query.error instanceof Error ? query.error.message : 'Unknown error'}
-        </div>
+        <Show
+          when={isHumanAssessmentEmptyStateError(query.error)}
+          fallback={
+            <div class="text-center py-8 text-red-600">
+              Failed to load assessment: {getHumanAssessmentErrorMessage(query.error)}
+            </div>
+          }
+        >
+          <div class="max-w-2xl mx-auto py-10">
+            <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-6 py-8 text-center">
+              <h2 class="text-xl font-semibold text-emerald-900">All caught up</h2>
+              <p class="mt-2 text-sm text-emerald-800">
+                There are no articles left to judge in this project right now.
+              </p>
+              <p class="mt-1 text-sm text-emerald-700">
+                Check back later after more articles are added for assessment.
+              </p>
+            </div>
+          </div>
+        </Show>
       </Show>
 
       <Show when={!query.isLoading && !query.isError && data()}>
