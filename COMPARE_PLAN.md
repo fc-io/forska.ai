@@ -33,6 +33,31 @@ Build phase-1 `Compare Judgments`: users can create, list, archive, and unarchiv
 
 - [x] Add `src/services/comparisonProjectsService.ts` for client queries/mutations.
 
+## Create Comparison From Project
+
+### App UI
+
+- [ ] Add `Compare Project` on `/compare-judgments` alongside the existing create CTA.
+- [ ] Add `/compare-judgments/create-from-project`.
+- [ ] Base the page on `Create New Comparison`.
+- [ ] Keep: name, description, timeline, compare with humans.
+- [ ] Keep model behavior unchanged; no model picker in this flow.
+- [ ] Remove: `Import Routes`, `Article Content Used`, `Existing Prompts`.
+- [ ] Add `Import from Project` based on `Create New Subproject`.
+- [ ] Make `Import from Project` single-select only via radio, not checkbox.
+- [ ] Do not show `Select Prompts and Answer Types`.
+- [ ] On submit, copy the selected project's import routes, content settings, and enabled prompts into the new comparison project.
+
+### Server API
+
+- [ ] Add/reuse a source-project query for the page.
+- [ ] Validate exactly one source project is selected.
+- [ ] Create the comparison project from page fields plus the selected project's routes, content flags, and prompt order.
+
+### Client Data
+
+- [ ] Add client query/service support for source-project options and create-from-project submit.
+
 ## Compare Project Judgments Page
 
 ### App UI
@@ -56,6 +81,24 @@ Build phase-1 `Compare Judgments`: users can create, list, archive, and unarchiv
 ### Client Data
 
 - [x] Add client queries/services for the `Compare Project Judgments` page.
+
+## Edit Comparison Project
+
+### App UI
+
+- [ ] Add an `Edit` button to compare project cards on `/compare-judgments`.
+- [ ] Add `/compare-judgments/$id/edit`.
+- [ ] Build an edit page for comparison projects.
+- [ ] Allow editing: title, description, `compareWithHumans`, prompts used.
+
+### Server API
+
+- [ ] Add an API to load comparison project edit form data.
+- [ ] Add an API to update title, description, `compareWithHumans`, and prompt selections.
+
+### Client Data
+
+- [ ] Add client query/service support for loading and updating comparison projects in the edit flow.
 
 ## Out Of Scope
 
