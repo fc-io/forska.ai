@@ -16,6 +16,14 @@ const formatArticleCreatedAt = (value: Date | string | null) => {
   return value ? format(new Date(value), 'yyyy-MM-dd') : null
 }
 
+const getModelLabelParts = (label: string) => {
+  const thinkingMatch = label.match(/\s+\(thinking:\s*([^)]+)\)$/i)
+
+  return thinkingMatch
+    ? {name: label.replace(/\s+\(thinking:\s*([^)]+)\)$/i, ''), thinking: `thinking: ${thinkingMatch[1]}`}
+    : {name: label, thinking: null}
+}
+
 export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgmentsTableProps) => {
   return (
     <div class="overflow-x-auto bg-white rounded-lg shadow border border-gray-200">
@@ -27,13 +35,22 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
             </th>
             <For each={props.columns}>
               {(column) => {
+                const modelLabelParts = getModelLabelParts(column.modelLabel)
+
                 return (
                   <th
                     class={`w-[18rem] min-w-[18rem] max-w-[18rem] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider ${column.kind === 'human' ? 'bg-amber-50 text-amber-800' : 'text-gray-500'}`}
                   >
                     <div class="space-y-1 normal-case tracking-normal">
                       <div class="text-sm font-semibold">{column.promptLabel}</div>
-                      <div class="text-xs font-medium uppercase tracking-wide opacity-80">{column.modelLabel}</div>
+                      <div class="text-xs font-medium uppercase tracking-wide opacity-80">
+                        <div>{modelLabelParts.name}</div>
+                        <Show when={modelLabelParts.thinking}>
+                          {(thinking) => {
+                            return <div>{thinking()}</div>
+                          }}
+                        </Show>
+                      </div>
                     </div>
                   </th>
                 )
