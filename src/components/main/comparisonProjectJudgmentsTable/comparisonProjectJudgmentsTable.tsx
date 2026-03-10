@@ -45,6 +45,11 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
                       <div class="text-sm font-semibold">{column.promptLabel}</div>
                       <div class="text-xs font-medium uppercase tracking-wide opacity-80">
                         <div>{modelLabelParts.name}</div>
+                        <Show when={column.contentLabel}>
+                          {(contentLabel) => {
+                            return <div>{contentLabel()}</div>
+                          }}
+                        </Show>
                         <Show when={modelLabelParts.thinking}>
                           {(thinking) => {
                             return <div>{thinking()}</div>

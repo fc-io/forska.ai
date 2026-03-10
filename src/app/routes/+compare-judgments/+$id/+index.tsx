@@ -11,18 +11,14 @@ import {
 
 const pageLimitOptions = [25, 50, 100]
 
-const getContentSettingsLabel = (settings: {
-  useTitle: boolean
-  useAbstract: boolean
-  useFulltext: boolean
-  useFulltextNoImages: boolean
-}) => {
-  const fulltextLabel = settings.useFulltextNoImages ? 'fulltext (no images)' : settings.useFulltext ? 'fulltext' : null
-  const parts = [settings.useTitle ? 'title' : null, settings.useAbstract ? 'abstract' : null, fulltextLabel].filter(
-    Boolean,
-  )
-
-  return parts.length > 0 ? parts.join(', ') : 'none'
+const getContentSettingsLabel = (contentVariants: Array<{label: string}>) => {
+  return contentVariants.length > 0
+    ? contentVariants
+        .map((contentVariant) => {
+          return contentVariant.label
+        })
+        .join(' · ')
+    : 'none'
 }
 
 const getRangeLabel = (page: number, limit: number, totalCount: number) => {
@@ -205,8 +201,10 @@ const CompareProjectJudgmentsPage = () => {
                     </p>
                   </div>
                   <div>
-                    <p class="text-xs font-medium uppercase tracking-wide text-gray-500">Content</p>
-                    <p class="mt-2 text-sm text-gray-700">{getContentSettingsLabel(comparisonProject())}</p>
+                    <p class="text-xs font-medium uppercase tracking-wide text-gray-500">Compare Content</p>
+                    <p class="mt-2 text-sm text-gray-700">
+                      {getContentSettingsLabel(comparisonProject().contentVariants)}
+                    </p>
                   </div>
                   <div>
                     <p class="text-xs font-medium uppercase tracking-wide text-gray-500">Prompts and Models</p>
@@ -264,7 +262,7 @@ const CompareProjectJudgmentsPage = () => {
                           setCurrentPage(1)
                         }}
                       />
-                      <span>Show only rows where all prompts are answered</span>
+                      <span>Show only rows where all shown columns are answered</span>
                     </label>
                     <label class="flex items-center gap-2 text-sm text-gray-600">
                       <input
@@ -275,7 +273,7 @@ const CompareProjectJudgmentsPage = () => {
                           setCurrentPage(1)
                         }}
                       />
-                      <span>Show only rows with model differences</span>
+                      <span>Show only rows with LLM differences</span>
                     </label>
                     <label class="flex items-center gap-2 text-sm text-gray-600">
                       <span>Rows</span>

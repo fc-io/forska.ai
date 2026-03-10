@@ -55,6 +55,14 @@ const getPromptDateValue = (value: Date | string | null) => {
   return value ? new Date(value).getTime() : 0
 }
 
+const getSelectedContentOptionCount = (options: {
+  compareTitleAndAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+}) => {
+  return [options.compareTitleAndAbstract, options.useFulltext, options.useFulltextNoImages].filter(Boolean).length
+}
+
 const CreateCompareJudgmentsPage = () => {
   const navigate = useNavigate()
   const importRoutesQuery = useQuery(() => {
@@ -88,8 +96,7 @@ const CreateCompareJudgmentsPage = () => {
   const [dateTo, setDateTo] = createSignal('')
   const [selectedImportRoutes, setSelectedImportRoutes] = createSignal<string[]>([])
   const [selectedPromptIds, setSelectedPromptIds] = createSignal<string[]>([])
-  const [useTitle, setUseTitle] = createSignal(true)
-  const [useAbstract, setUseAbstract] = createSignal(true)
+  const [compareTitleAndAbstract, setCompareTitleAndAbstract] = createSignal(true)
   const [useFulltext, setUseFulltext] = createSignal(false)
   const [useFulltextNoImages, setUseFulltextNoImages] = createSignal(false)
   const [compareWithHumans, setCompareWithHumans] = createSignal(false)
@@ -100,6 +107,16 @@ const CreateCompareJudgmentsPage = () => {
     return [...(existingPromptsQuery.data ?? [])].sort((left, right) => {
       return getPromptDateValue(right.createdAt) - getPromptDateValue(left.createdAt)
     })
+  })
+  const selectedContentOptionCount = createMemo(() => {
+    return getSelectedContentOptionCount({
+      compareTitleAndAbstract: compareTitleAndAbstract(),
+      useFulltext: useFulltext(),
+      useFulltextNoImages: useFulltextNoImages(),
+    })
+  })
+  const hasSelectedContentOptions = createMemo(() => {
+    return selectedContentOptionCount() > 0
   })
 
   const handleSubmit = async (event: Event) => {
@@ -123,6 +140,11 @@ const CreateCompareJudgmentsPage = () => {
       return
     }
 
+    if (!hasSelectedContentOptions()) {
+      setError('Select at least one article content option to compare')
+      return
+    }
+
     const promptSelections = sortedExistingPrompts()
       .filter((prompt) => {
         return selectedPromptIds().includes(prompt.id)
@@ -137,8 +159,8 @@ const CreateCompareJudgmentsPage = () => {
       compareWithHumans: compareWithHumans(),
       dateFrom: startDateResult.normalized ?? undefined,
       dateTo: endDateResult.normalized ?? undefined,
-      useTitle: useTitle(),
-      useAbstract: useAbstract(),
+      useTitle: compareTitleAndAbstract(),
+      useAbstract: compareTitleAndAbstract(),
       useFulltext: useFulltext(),
       useFulltextNoImages: useFulltextNoImages(),
       importRoutes: selectedImportRoutes().length > 0 ? selectedImportRoutes() : undefined,
@@ -300,32 +322,25 @@ const CreateCompareJudgmentsPage = () => {
           </div>
 
           <div>
-            <p class="block text-sm font-medium mb-2">Article Content Used</p>
+            <div class="flex items-center justify-between mb-2">
+              <p class="block text-sm font-medium">Compare Article Content Used *</p>
+              <span class="text-xs text-muted-foreground">{selectedContentOptionCount()} selected</span>
+            </div>
             <div class="space-y-2">
               <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer">
                 <input
                   type="checkbox"
                   class="mt-1"
-                  checked={useTitle()}
+                  checked={compareTitleAndAbstract()}
                   onChange={(event) => {
-                    return setUseTitle(event.currentTarget.checked)
+                    return setCompareTitleAndAbstract(event.currentTarget.checked)
                   }}
                 />
                 <div class="flex-1">
-                  <p class="text-sm font-medium text-gray-900">Use Article Title</p>
-                </div>
-              </label>
-              <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer">
-                <input
-                  type="checkbox"
-                  class="mt-1"
-                  checked={useAbstract()}
-                  onChange={(event) => {
-                    return setUseAbstract(event.currentTarget.checked)
-                  }}
-                />
-                <div class="flex-1">
-                  <p class="text-sm font-medium text-gray-900">Use Article Abstract</p>
+                  <p class="text-sm font-medium text-gray-900">Article Title and Abstract</p>
+                  <p class="text-xs text-gray-500 mt-0.5">
+                    Compare judgments that use the article title plus abstract.
+                  </p>
                 </div>
               </label>
               <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer">
@@ -334,18 +349,13 @@ const CreateCompareJudgmentsPage = () => {
                   class="mt-1"
                   checked={useFulltext()}
                   onChange={(event) => {
-                    const isChecked = event.currentTarget.checked
-                    setUseFulltext(isChecked)
-
-                    if (isChecked) {
-                      setUseFulltextNoImages(false)
-                    }
+                    return setUseFulltext(event.currentTarget.checked)
                   }}
                 />
                 <div class="flex-1">
                   <p class="text-sm font-medium text-gray-900">Use Full Text (with images)</p>
                   <p class="text-xs text-gray-500 mt-0.5">
-                    Include the complete article text including embedded images.
+                    Compare judgments that use the complete article text including embedded images.
                   </p>
                 </div>
               </label>
@@ -355,22 +365,20 @@ const CreateCompareJudgmentsPage = () => {
                   class="mt-1"
                   checked={useFulltextNoImages()}
                   onChange={(event) => {
-                    const isChecked = event.currentTarget.checked
-                    setUseFulltextNoImages(isChecked)
-
-                    if (isChecked) {
-                      setUseFulltext(false)
-                    }
+                    return setUseFulltextNoImages(event.currentTarget.checked)
                   }}
                 />
                 <div class="flex-1">
                   <p class="text-sm font-medium text-gray-900">Use Full Text (without images)</p>
                   <p class="text-xs text-gray-500 mt-0.5">
-                    Include article text but strip embedded images to reduce token usage.
+                    Compare judgments that use article text with embedded images stripped out.
                   </p>
                 </div>
               </label>
             </div>
+            <Show when={!hasSelectedContentOptions()}>
+              <p class="mt-2 text-sm text-red-600">Pick at least one content option.</p>
+            </Show>
           </div>
 
           <div class="border border-input rounded-md p-4 bg-muted/20">
@@ -497,7 +505,10 @@ const CreateCompareJudgmentsPage = () => {
           </div>
 
           <div class="flex gap-3 pt-4">
-            <Button type="submit" disabled={!comparisonProjectName().trim() || isLoading()}>
+            <Button
+              type="submit"
+              disabled={!comparisonProjectName().trim() || !hasSelectedContentOptions() || isLoading()}
+            >
               {isLoading() ? 'Creating...' : 'Create Comparison Project'}
             </Button>
             <Button as={Link} to="/compare-judgments" variant="outline">

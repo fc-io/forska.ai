@@ -7,10 +7,10 @@ export type CreateComparisonProjectInput = {
   compareWithHumans?: boolean
   dateFrom?: string | null
   dateTo?: string | null
-  useTitle?: boolean
-  useAbstract?: boolean
-  useFulltext?: boolean
-  useFulltextNoImages?: boolean
+  useTitle: boolean
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
   importRoutes?: string[]
   promptSelections?: Array<{promptId: string; order: number}>
 }
@@ -68,7 +68,10 @@ export type ComparisonProjectJudgmentsColumn = {
   promptLabel: string
   modelId: string | null
   modelLabel: string
+  contentLabel: string | null
 }
+
+export type ComparisonProjectContentVariant = {key: string; label: string}
 
 export type ComparisonProjectJudgmentsMetadata = {
   id: string
@@ -84,6 +87,7 @@ export type ComparisonProjectJudgmentsMetadata = {
   archived: boolean
   createdAt: Date | string
   importRouteIds: string[]
+  contentVariants: ComparisonProjectContentVariant[]
   prompts: Array<{id: string; promptHeading: string | null; promptLabel: string; order: number}>
   models: Array<{id: string; name: string}>
   columns: ComparisonProjectJudgmentsColumn[]

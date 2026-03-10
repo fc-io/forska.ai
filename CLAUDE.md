@@ -9,6 +9,7 @@ IMPORTANT: Please don't create postgres migration files for me. I want to create
 IMPORTANT: We use Eden/RPC so derive the types from the API when possible and don't make up new types.
 IMPORTANT: I don't like try, catch, finally, throw. Only use when absolutely necessary.
 IMPORTANT: Layout-first UI (shell first; data later; no full-page spinner)
+IMPORTANT: Do not add auth/session/user/admin requirements unless explicitly asked. Default to no-auth single-user behavior.
 
 - Never suspend root `<Outlet />` or wrap an entire route in `<Suspense>`
 - Keep headers/nav/containers outside any async boundary

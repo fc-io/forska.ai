@@ -18,18 +18,19 @@ type ComparisonProjectsGridProps = {
 }
 
 const getComparisonProjectContentUsedLabel = (comparisonProject: ComparisonProject) => {
-  const fulltextLabel = comparisonProject.useFulltextNoImages
-    ? 'fulltext (no images)'
-    : comparisonProject.useFulltext
-      ? 'fulltext'
-      : null
   const parts = [
-    comparisonProject.useTitle ? 'title' : null,
-    comparisonProject.useAbstract ? 'abstract' : null,
-    fulltextLabel,
+    comparisonProject.useTitle || comparisonProject.useAbstract
+      ? comparisonProject.useTitle && comparisonProject.useAbstract
+        ? 'Article Title and Abstract'
+        : comparisonProject.useTitle
+          ? 'Article Title'
+          : 'Article Abstract'
+      : null,
+    comparisonProject.useFulltext ? 'Use Full Text (with images)' : null,
+    comparisonProject.useFulltextNoImages ? 'Use Full Text (without images)' : null,
   ].filter(Boolean) as string[]
 
-  return parts.length > 0 ? parts.join(', ') : 'none'
+  return parts.length > 0 ? parts.join(' · ') : 'none'
 }
 
 const formatDateValue = (value: Date | string) => {
