@@ -4,7 +4,8 @@
 
 - [ ] App DB: SQLite via `bun:sqlite` + `drizzle-orm/bun-sqlite`.
 - [ ] Analytics: DuckDB only; query final SQLite shape; no ClickHouse at runtime.
-- [ ] No Better Auth. No users. No roles. No owner/ownerId.
+- [ ] No Better Auth. Single local `user` row only; no sessions, no roles, no owner/ownerId.
+- [ ] Move user/app config now in `.env.local` into SQLite `user`; keep env for secrets + external/runtime values only.
 - [ ] No bridge. No dual-write. No shadow Postgres. No shadow ClickHouse.
 - [ ] Keep old Docker/Postgres/ClickHouse stack runnable on same machine until final step; Docker/deploy breakage last.
 
@@ -14,6 +15,7 @@
 - [ ] SQLite types: ids=`text`; timestamps=`integer` unix ms; booleans=`integer`; enums=`text`; json/arrays=`text` JSON.
 - [ ] `fullTextSource` contract: manual iff `user_upload`; fetched iff non-null and != `user_upload`.
 - [ ] Server/client contract drops `ownerId`, `userId`, `sessionId`, `reviewerId`, `assessedBy`.
+- [ ] Config contract: SQLite `user` table is source of truth for local user config; `.env.local` is not.
 - [ ] Human/review single-user contract: no per-user rows at runtime; importer resolves collisions deterministically and reports them.
 - [ ] Token-use contract: no session lookup; client/server writes app/job-scoped rows only.
 - [ ] Keep existing Docker env/compose/build files untouched until final cleanup.
@@ -22,6 +24,7 @@
 
 - [ ] Add Bun SQLite connection helper; set `journal_mode=WAL`, `foreign_keys=ON`, `synchronous=NORMAL`, `busy_timeout`.
 - [ ] Add `SQLITE_PATH`; local-first code reads it; keep `DATABASE_URL` for old stack until final cleanup.
+- [ ] Local-first path reads user config from SQLite `user`; env keeps secrets + external/runtime values only.
 - [ ] Switch app DB wiring from `drizzle-orm/node-postgres` to `drizzle-orm/bun-sqlite`.
 - [ ] Use separate SQLite Drizzle migration lineage/meta; do not reuse current Postgres journal.
 - [ ] Stop merging `auth-schema.ts` into DB bootstrap.
@@ -29,7 +32,8 @@
 ## Step 1B - Schema rewrite (`src/db/schema.ts`, `auth-schema.ts`, migrations)
 
 - [ ] Rewrite `pgTable`/`pgEnum`/`pgView` to SQLite schema.
-- [ ] Drop tables: `user`, `session`, `account`, `verification`, `datasource_access`, `model_access`.
+- [ ] Rewrite `user` into single-user config table; move `.env.local` user/app config into columns here.
+- [ ] Drop tables: `session`, `account`, `verification`, `datasource_access`, `model_access`.
 - [ ] Drop columns: `models.ownerId`, `dataSource.ownerId`, `projects.ownerId`, `comparisonProject.ownerId`, `prompts.ownerId`.
 - [ ] Drop columns: `articles.importedBy`, `articles.fullTextPdfUploadedBy`, `tokenUse.userId`, `tokenUse.sessionId`, `reviews.reviewerId`, `judgmentAssessments.assessedBy`.
 - [ ] `judgmentsHuman`: drop user dimension; unique key `(projectId, articleId, promptId)`.
@@ -43,15 +47,16 @@
 ## Step 1C - Auth removal (`src/auth.ts`, `src/app/lib/**`, `src/services/**`, `src/server/routes/**`)
 
 - [ ] Delete Better Auth server/client code.
-- [ ] Delete `authGuard`; stop deriving `session`, `sessionUserId`, local fallback user.
+- [ ] Delete `authGuard`; stop deriving `session`/`sessionUserId`; load single local `user` config row explicitly.
 - [ ] Delete login/signout/session fetch flows and root-route redirects.
-- [ ] Delete `UsersRoutes`.
+- [ ] Delete auth `UsersRoutes`; keep only local user-config CRUD if needed.
 - [ ] Remove Better Auth deps/scripts/seeds at final cleanup, not before.
 
 ## Step 1D - Server contract cleanup (`src/server/routes/**`, `src/server/services/**`)
 
 - [ ] Remove auth/owner/user joins, filters, guards, route params, body fields.
 - [ ] Remove user-scoped create/update logic; server fills no owner fields.
+- [ ] Replace server reads of user config from env with reads from single SQLite `user` row.
 - [ ] Rewrite human-assessment/review flows to single-user shape; delete both-user flows.
 - [ ] Rewrite token routes and agent token logging to no-session contract.
 - [ ] Replace Postgres-only SQL/operators/functions with SQLite-safe equivalents.
@@ -82,6 +87,7 @@
 ## Step 2C - One-shot migration + local-first validation (`scripts/**`, docs)
 
 - [ ] Add one-shot importer: current Postgres -> final SQLite schema.
+- [ ] Add one-shot config bootstrap: current `.env.local` user/app config -> SQLite `user` row.
 - [ ] Import into final shape only; no compatibility columns, no runtime bridge.
 - [ ] Importer resolves single-user collisions deterministically and emits a report.
 - [ ] Validate: empty SQLite boot, import snapshot, import articles, upload PDF, run job, review judgments, analytics pages.
