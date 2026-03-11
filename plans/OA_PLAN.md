@@ -22,6 +22,7 @@ Goal: load the full OpenAlex snapshot into its own Postgres database on the HPC,
 - [ ] Optionally add a separate DB user/role (e.g. `openalex_app`) for read‑only access from Forska.
 
 Why this is easiest:
+
 - You already have a working Apptainer + Postgres setup, including secrets and data directory.
 - Creating another DB inside the same instance is a single `CREATE DATABASE` command.
 - You avoid compiling or installing Postgres under your user account, and you keep all DB state in the same `$STACK_ROOT/pgdata`.
@@ -42,6 +43,7 @@ Why this is easiest:
 ## 3. Flatten JSONL to CSV + load into Postgres via split sbatch jobs
 
 Use the numbered sbatch files in this repo:
+
 - `01-openalex-flatten-topics.sbatch` through `07-openalex-flatten-works.sbatch` (one per flatten task)
 - `08-openalex-dis-db-rest.sbatch` (Postgres startup + schema + CSV load)
 

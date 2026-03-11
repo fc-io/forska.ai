@@ -6,6 +6,7 @@
 ## Purpose
 
 Implement only the minimum needed to move llm/judge work to MN5 via rsync:
+
 - local request staging
 - rsync to remote shared storage
 - remote worker executes request
@@ -16,7 +17,7 @@ No UI, no DB, no generic shell API.
 
 ## Core rule
 
-- MN5 has no outbound internet (no direct HF access).  
+- MN5 has no outbound internet (no direct HF access).
 - For MN5, run assets/model containers must either already exist on MN5 or be synced explicitly.
 - For a run, set `autoTransfer=true` when missing assets are needed: pull on initiating node -> rsync via `tlog`.
 

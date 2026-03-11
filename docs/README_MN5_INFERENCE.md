@@ -380,5 +380,5 @@ ssh alog "tail -100 /gpfs/projects/ehpc482/dev/logs/*/sglang.log"
 ## Related Documentation
 
 - [README_MN5_SETUP.md](./README_MN5_SETUP.md) - Initial MN5 account setup
-- [MN5_PLAN.md](../MN5_PLAN.md) - Full deployment plan with architecture details
+- [MN5_PLAN.md](../plans/MN5_PLAN.md) - Full deployment plan with architecture details
 - [forska-mn5-sglang.sbatch](../forska-mn5-sglang.sbatch) - The Slurm batch script

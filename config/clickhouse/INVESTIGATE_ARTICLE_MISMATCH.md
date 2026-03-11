@@ -3,28 +3,35 @@
 ## ✅ RESOLVED (2026-01-16)
 
 **Final Status:**
+
 - PostgreSQL: 10,526,004 articles
 - ClickHouse: 10,526,004 articles (forska.articles)
 - **100% match achieved**
 
 ### Root Cause
+
 MaterializedPostgreSQL engine has a bug with large table initial snapshots. Multiple attempts produced incomplete syncs:
+
 - 1st attempt: 10,341,151 rows (98.2%)
 - 2nd attempt: 6,737,127 rows (64%)
 
 ### Solution
+
 Created a standard MergeTree table (`forska.articles`) and synced via batch INSERT from `postgresql()` function (legacy):
+
 1. Created `forska.articles` with ReplacingMergeTree(updated_at)
 2. Full sync via: `INSERT INTO forska.articles SELECT ... FROM postgresql('db:5432', ...)`
 3. Sync completed in ~3 minutes
 4. PeerDB CDC now handles ongoing PG→CH sync (no scripts)
 
 ### Changes Made
+
 - Created `forska.articles` MergeTree table (replacing unreliable `pg.articles`)
 - Updated `forska_helpers.scoped_articles` view to use `forska.articles`
 - PeerDB CDC is now the sync mechanism
 
 ### Next Steps
+
 - [ ] Ensure PeerDB mirror health + lag alerts
 - [ ] Consider cleaning up incomplete `pg` database
 - [ ] Monitor memory usage on `scoped_articles` view queries
@@ -34,6 +41,7 @@ Created a standard MergeTree table (`forska.articles`) and synced via batch INSE
 ## Original Problem Statement
 
 **Original Status:**
+
 - PostgreSQL: 10,526,004 articles
 - ClickHouse: 10,341,151 articles
 - **Missing: 184,853 articles (1.8%)**
@@ -58,6 +66,7 @@ SELECT id FROM pg.articles ORDER BY id INTO OUTFILE '/tmp/ch_article_ids.csv';
 ```
 
 **Alternative approach (if file export not feasible):**
+
 ```sql
 -- Get sample of article IDs from both systems
 -- PostgreSQL
@@ -187,30 +196,36 @@ LIMIT 20;
 ## Potential Root Causes
 
 ### A. Snapshot Timing Issue
+
 - Articles created/updated during initial snapshot may have been skipped
 - Replication slot created after snapshot started
 - **Fix:** Drop and recreate pg database to retrigger full snapshot
 
 ### B. ReplacingMergeTree Not Merged
+
 - Duplicate rows exist but `COUNT(*)` counts them all
 - `OPTIMIZE TABLE FINAL` needed to merge
 - **Fix:** Run OPTIMIZE TABLE pg.articles FINAL
 
 ### C. Transaction Isolation
+
 - Long-running transactions during snapshot
 - Articles in uncommitted state during snapshot
 - **Fix:** May self-resolve as replication catches up
 
 ### D. MaterializedPostgreSQL Bug
+
 - Known issue with large tables in ClickHouse 24.9.3
 - Partial snapshot completion without error
 - **Fix:** Check ClickHouse GitHub issues, consider upgrade
 
 ### E. Articles Soft-Deleted
-- If articles table has deleted_at, PG COUNT(*) excludes them but CH replica includes
+
+- If articles table has deleted_at, PG COUNT(\*) excludes them but CH replica includes
 - **Fix:** Update PG query to match CH replica scope
 
 ### F. Data Type Conversion Issues
+
 - Some articles have data that fails conversion (e.g., invalid UTF-8, large blobs)
 - Silent failures during replication
 - **Fix:** Check error logs, fix data, resync
@@ -246,8 +261,9 @@ LIMIT 20;
 ## Next Steps
 
 After investigation completes:
+
 1. Document root cause
 2. Implement fix
 3. Verify 100% sync
 4. Add monitoring to prevent future drift
-5. Update ARTICLE_IN_CH.md with lessons learned
+5. Update `plans/ARTICLE_IN_CH.md` with lessons learned

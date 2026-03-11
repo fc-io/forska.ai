@@ -3,10 +3,12 @@
 ## Data Model
 
 ### Two ways projects get articles:
+
 1. **importRoute**: `project_route_link` → `article_route_link` → `articles`
 2. **project_articles**: direct `project_articles` → `articles`
 
 ### Projects have:
+
 - `useFulltext` — if true, needs PDFs
 - `dateFrom` / `dateTo` — article date range filter
 
@@ -44,11 +46,13 @@
 ```
 
 ## Priority Order
+
 1. Projects w/ running job + `useFulltext=true`
 2. Projects w/ running job + `useFulltext=false`
 3. Any articles by `created_at DESC` (fallback)
 
 ## Why Not Single CTE?
+
 - importRoute vs project_articles require different joins
 - Date filtering per-project
 - Looping allows early exit once batch filled
@@ -57,6 +61,7 @@
 ## Indexes Analysis
 
 ### importRoute path query:
+
 ```sql
 FROM articles
 JOIN article_route_link ON article_id = articles.id
@@ -66,14 +71,15 @@ WHERE project_route_link.project_id = ?
   AND articles.article_created_at BETWEEN ? AND ?
 ```
 
-| Index | Status |
-|-------|--------|
-| `project_route_link(project_id)` | ✅ exists |
-| `article_route_link(import_route_id)` | ✅ exists |
-| `articles(article_created_at, ...)` | ✅ exists (`articles_article_created_created_id_idx`) |
-| `articles(full_text_fetched_at)` | ⏸ skip for now |
+| Index                                 | Status                                                |
+| ------------------------------------- | ----------------------------------------------------- |
+| `project_route_link(project_id)`      | ✅ exists                                             |
+| `article_route_link(import_route_id)` | ✅ exists                                             |
+| `articles(article_created_at, ...)`   | ✅ exists (`articles_article_created_created_id_idx`) |
+| `articles(full_text_fetched_at)`      | ⏸ skip for now                                       |
 
 ### project_articles path query:
+
 ```sql
 FROM articles
 JOIN project_articles ON article_id = articles.id
@@ -82,17 +88,19 @@ WHERE project_articles.project_id = ?
   AND articles.article_created_at BETWEEN ? AND ?
 ```
 
-| Index | Status |
-|-------|--------|
-| `project_articles(project_id)` | ✅ exists |
-| `project_articles(article_id)` | ✅ exists |
-| `articles(article_created_at, ...)` | ✅ exists |
-| `articles(full_text_fetched_at)` | ⏸ skip for now |
+| Index                               | Status          |
+| ----------------------------------- | --------------- |
+| `project_articles(project_id)`      | ✅ exists       |
+| `project_articles(article_id)`      | ✅ exists       |
+| `articles(article_created_at, ...)` | ✅ exists       |
+| `articles(full_text_fetched_at)`    | ⏸ skip for now |
 
 ### Future: Partial Index (if slow)
+
 ```sql
 CREATE INDEX articles_no_fulltext_idx ON articles(id) WHERE full_text_fetched_at IS NULL;
 ```
+
 Drizzle: `index(...).on(table.id).where(sql\`full_text_fetched_at IS NULL\`)`
 
 ## Checklist

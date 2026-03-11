@@ -21,6 +21,7 @@ bun run mn5:launch
 ```
 
 This will:
+
 1. Deploy the sbatch script to MN5
 2. Submit the job
 3. Wait for the job to start running
@@ -59,17 +60,17 @@ curl http://localhost:30000/v1/chat/completions \
 
 ## 📋 Available Scripts
 
-| Script | Command | Description |
-|--------|---------|-------------|
-| **mn5:launch** | `bun run mn5:launch` | Full automation: deploy, submit, wait, tunnel |
-| **mn5:transfer** | `bun run mn5:transfer` | Download model/container, transfer to MN5 |
+| Script                         | Command                                             | Description                                                                |
+| ------------------------------ | --------------------------------------------------- | -------------------------------------------------------------------------- |
+| **mn5:launch**                 | `bun run mn5:launch`                                | Full automation: deploy, submit, wait, tunnel                              |
+| **mn5:transfer**               | `bun run mn5:transfer`                              | Download model/container, transfer to MN5                                  |
 | **mn5:launch --auto-transfer** | `bun run mn5:launch -- --model ... --auto-transfer` | Pull from Hugging Face on initiating node and rsync model/container to MN5 |
-| **mn5:tunnel** | `bun run mn5:tunnel` | Connect to running job (auto-detects node) |
-| **mn5:status** | `bun run mn5:status` | Check job queue status |
-| **mn5:submit** | `bun run mn5:submit` | Submit job (sbatch already deployed) |
-| **mn5:sbatch:push** | `bun run mn5:sbatch:push` | Just copy sbatch file to MN5 |
-| **mn5:mount** | `bun run mn5:mount` | Mount MN5 storage via SSHFS |
-| **mn5:unmount** | `bun run mn5:unmount` | Unmount MN5 storage |
+| **mn5:tunnel**                 | `bun run mn5:tunnel`                                | Connect to running job (auto-detects node)                                 |
+| **mn5:status**                 | `bun run mn5:status`                                | Check job queue status                                                     |
+| **mn5:submit**                 | `bun run mn5:submit`                                | Submit job (sbatch already deployed)                                       |
+| **mn5:sbatch:push**            | `bun run mn5:sbatch:push`                           | Just copy sbatch file to MN5                                               |
+| **mn5:mount**                  | `bun run mn5:mount`                                 | Mount MN5 storage via SSHFS                                                |
+| **mn5:unmount**                | `bun run mn5:unmount`                               | Unmount MN5 storage                                                        |
 
 ### Script Options
 
@@ -146,25 +147,25 @@ bun run mn5:transfer -- --skip-container
 
 ## Files on MN5
 
-| Path | Description | Size |
-|------|-------------|------|
-| `/gpfs/projects/ehpc482/dev/sglang_latest.sif` | Singularity container (amd64) | ~14GB |
-| `/gpfs/projects/ehpc482/dev/hf_cache/models--openai--gpt-oss-120b/` | GPT-OSS-120B model | large (varies) |
-| `/gpfs/projects/ehpc482/dev/forska-mn5-sglang.sbatch` | Batch job script | ~7KB |
-| `/gpfs/projects/ehpc482/dev/logs/` | Job output logs | varies |
-| `/gpfs/projects/ehpc482/dev/.secrets/hf_token.txt` | HuggingFace token (optional) | <1KB |
+| Path                                                                | Description                   | Size           |
+| ------------------------------------------------------------------- | ----------------------------- | -------------- |
+| `/gpfs/projects/ehpc482/dev/sglang_latest.sif`                      | Singularity container (amd64) | ~14GB          |
+| `/gpfs/projects/ehpc482/dev/hf_cache/models--openai--gpt-oss-120b/` | GPT-OSS-120B model            | large (varies) |
+| `/gpfs/projects/ehpc482/dev/forska-mn5-sglang.sbatch`               | Batch job script              | ~7KB           |
+| `/gpfs/projects/ehpc482/dev/logs/`                                  | Job output logs               | varies         |
+| `/gpfs/projects/ehpc482/dev/.secrets/hf_token.txt`                  | HuggingFace token (optional)  | <1KB           |
 
 ---
 
 ## Files in Repository
 
-| File | Purpose | Status |
-|------|---------|--------|
-| `MN5_PLAN.md` | This deployment guide | ✅ Done |
-| `forska-mn5-sglang.sbatch` | Slurm job script for SGLang | ✅ Done |
-| `scripts/mn5Transfer.ts` | Download + transfer automation | ✅ Done |
-| `scripts/mn5Launch.ts` | Full launch automation | ✅ Done |
-| `scripts/mn5Tunnel.sh` | SSH tunnel helper (auto-detect) | ✅ Done |
+| File                       | Purpose                         | Status  |
+| -------------------------- | ------------------------------- | ------- |
+| `MN5_PLAN.md`              | This deployment guide           | ✅ Done |
+| `forska-mn5-sglang.sbatch` | Slurm job script for SGLang     | ✅ Done |
+| `scripts/mn5Transfer.ts`   | Download + transfer automation  | ✅ Done |
+| `scripts/mn5Launch.ts`     | Full launch automation          | ✅ Done |
+| `scripts/mn5Tunnel.sh`     | SSH tunnel helper (auto-detect) | ✅ Done |
 
 ---
 
@@ -172,19 +173,20 @@ bun run mn5:transfer -- --skip-container
 
 The sbatch script is configured with the GPT-OSS-120B defaults:
 
-| Parameter | Value | Notes |
-|-----------|-------|-------|
-| `--model-path` | `openai/gpt-oss-120b` | From HF cache |
-| `--served-model-name` | `openai/gpt-oss-120b` | API name |
-| `--tensor-parallel-size` | 8 | Across 2 nodes |
-| `--context-length` | 131072 | 128K context |
-| `--chunked-prefill-size` | 16384 | Per HF recommendation |
-| `--max-running-requests` | 128 | Concurrency limit |
-| `--mem-fraction-static` | 0.75 | GPU memory allocation |
+| Parameter                | Value                 | Notes                 |
+| ------------------------ | --------------------- | --------------------- |
+| `--model-path`           | `openai/gpt-oss-120b` | From HF cache         |
+| `--served-model-name`    | `openai/gpt-oss-120b` | API name              |
+| `--tensor-parallel-size` | 8                     | Across 2 nodes        |
+| `--context-length`       | 131072                | 128K context          |
+| `--chunked-prefill-size` | 16384                 | Per HF recommendation |
+| `--max-running-requests` | 128                   | Concurrency limit     |
+| `--mem-fraction-static`  | 0.75                  | GPU memory allocation |
 
 ### Multi-Node Distributed Setup
 
 The sbatch script uses `srun` for proper multi-node tensor parallelism:
+
 - Node 0 (`--node-rank 0`): Head node, exposes API on `:30000`
 - Node 1 (`--node-rank 1`): Worker node, communicates via NCCL
 

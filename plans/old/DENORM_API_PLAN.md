@@ -6,16 +6,16 @@
 
 The `judgments` table has been denormalized with the following fields that APIs can now leverage:
 
-| Field | Purpose |
-|-------|---------|
-| `promptId` | Primary query anchor - immutable, used to find judgments for a project's prompts |
-| `articleTitle` | Eliminates JOIN to `articles` for display |
-| `articleCreatedAt` | Eliminates JOIN to `articles` for date filtering |
-| `articleUpdatedAt` | Eliminates JOIN to `articles` for date filtering |
-| `articleImportRoute` | Eliminates EXISTS on `article_route_link` - immutable |
-| `projectId` | Indicates originating project (informational only - judgments can be shared) |
+| Field                | Purpose                                                                          |
+| -------------------- | -------------------------------------------------------------------------------- |
+| `promptId`           | Primary query anchor - immutable, used to find judgments for a project's prompts |
+| `articleTitle`       | Eliminates JOIN to `articles` for display                                        |
+| `articleCreatedAt`   | Eliminates JOIN to `articles` for date filtering                                 |
+| `articleUpdatedAt`   | Eliminates JOIN to `articles` for date filtering                                 |
+| `articleImportRoute` | Eliminates EXISTS on `article_route_link` - immutable                            |
+| `projectId`          | Indicates originating project (informational only - judgments can be shared)     |
 
-**Key Constraint**: `projectId` indicates where a judgment was *created*, but judgments/articles can be shared across projects. Use `articleImportRoute` and `project_articles` for scope determination.
+**Key Constraint**: `projectId` indicates where a judgment was _created_, but judgments/articles can be shared across projects. Use `articleImportRoute` and `project_articles` for scope determination.
 
 ---
 
@@ -33,6 +33,7 @@ The `judgments` table has been denormalized with the following fields that APIs 
 ```
 
 **Problems**:
+
 - Two EXISTS subqueries evaluated per article row
 - JOIN to `articles` table for title and date filtering
 - UUID-based import route matching through link table
@@ -135,13 +136,13 @@ WHERE j.article_id = ANY(SELECT article_id FROM complete_articles)
 
 ## Performance Comparison
 
-| Aspect | Before | After |
-|--------|--------|-------|
-| Tables in main query | `articles`, `judgments`, `project_articles`, `article_route_link` | `judgments` only |
-| EXISTS subqueries | 2 per row | 0 |
-| JOIN to articles | Required | Not needed |
-| Import route check | UUID EXISTS on link table | TEXT = ANY() on denormalized field |
-| Curated articles check | Double EXISTS in OR | Simple subquery (query planner optimizes) |
+| Aspect                 | Before                                                            | After                                     |
+| ---------------------- | ----------------------------------------------------------------- | ----------------------------------------- |
+| Tables in main query   | `articles`, `judgments`, `project_articles`, `article_route_link` | `judgments` only                          |
+| EXISTS subqueries      | 2 per row                                                         | 0                                         |
+| JOIN to articles       | Required                                                          | Not needed                                |
+| Import route check     | UUID EXISTS on link table                                         | TEXT = ANY() on denormalized field        |
+| Curated articles check | Double EXISTS in OR                                               | Simple subquery (query planner optimizes) |
 
 ---
 
@@ -210,6 +211,7 @@ The count query (`COUNT(*)` over grouped articles) was taking ~60s and blocking 
    - Shows "Counting..." animation while count loads
 
 **User experience:**
+
 - Data table loads immediately (fast perceived load)
 - "Counting..." shows in header and pagination
 - Count updates asynchronously when ready
@@ -217,6 +219,7 @@ The count query (`COUNT(*)` over grouped articles) was taking ~60s and blocking 
 ### Phase 2.6: Two-Phase Fetch & HAVING Simplification (Completed)
 
 The Phase 1 GROUP BY query was still slow (~49s) due to:
+
 1. Single query with subquery join causing PostgreSQL to potentially scan the entire judgments table twice
 2. `COUNT(DISTINCT prompt_id) = N` HAVING clause requiring expensive aggregation over all rows
 
@@ -246,10 +249,10 @@ The Phase 1 GROUP BY query was still slow (~49s) due to:
 
 **Big O Analysis:**
 
-| Query Part | Before | After |
-|------------|--------|-------|
-| Phase 1 (article IDs) | O(N) with `COUNT(DISTINCT)` + sort | O(N) with simple hash aggregate |
-| Phase 2 (fetch judgments) | O(N) or O(L×J×P) (subquery join) | O(L×J×P) guaranteed (literal UUIDs) |
+| Query Part                | Before                             | After                               |
+| ------------------------- | ---------------------------------- | ----------------------------------- |
+| Phase 1 (article IDs)     | O(N) with `COUNT(DISTINCT)` + sort | O(N) with simple hash aggregate     |
+| Phase 2 (fetch judgments) | O(N) or O(L×J×P) (subquery join)   | O(L×J×P) guaranteed (literal UUIDs) |
 
 Where: N = total matching rows, L = limit (100), J = judgments per article, P = prompts
 
@@ -260,11 +263,13 @@ After extensive investigation, we've concluded that **PostgreSQL cannot make thi
 #### The Core Problem
 
 The query requires:
+
 1. **Filter** by cross-prompt answer conditions (HAVING clause)
 2. **Sort** by `article_created_at DESC`
 3. **Paginate** with LIMIT/OFFSET
 
 The HAVING clause filters on aggregates across multiple prompts:
+
 ```sql
 HAVING
   SUM(CASE WHEN prompt_id = 'A' AND answer = 'Yes' THEN 1 ELSE 0 END) > 0
@@ -275,15 +280,15 @@ This requires scanning ALL matching judgment rows to compute the aggregates befo
 
 #### Optimizations Attempted
 
-| Approach | Result | Why It Failed |
-|----------|--------|---------------|
-| **Two-Phase Fetch** | ✅ Phase 2 fast, ❌ Phase 1 still slow | Phase 1 still requires GROUP BY + aggregate + sort |
-| **Remove COUNT(DISTINCT)** | ⚠️ Partial improvement | Still need HAVING for answer filters (always used) |
-| **EXISTS on articles table** | ❌ Not applicable | Answer filters require aggregation, EXISTS can't help |
-| **Pre-computed stats table** | ❌ Doesn't scale | Cross-prompt answer filters require JSONB + GIN, which doesn't combine well with ORDER BY |
-| **Flattened answer table** | ❌ Cross-prompt joins | Filtering multiple prompts requires self-joins, potentially slower |
-| **Partial indexes** | ❌ Marginal improvement | Index speeds up row access but doesn't help aggregation |
-| **Covering indexes** | ❌ Marginal improvement | Same issue — aggregation is the bottleneck, not row access |
+| Approach                     | Result                                 | Why It Failed                                                                             |
+| ---------------------------- | -------------------------------------- | ----------------------------------------------------------------------------------------- |
+| **Two-Phase Fetch**          | ✅ Phase 2 fast, ❌ Phase 1 still slow | Phase 1 still requires GROUP BY + aggregate + sort                                        |
+| **Remove COUNT(DISTINCT)**   | ⚠️ Partial improvement                 | Still need HAVING for answer filters (always used)                                        |
+| **EXISTS on articles table** | ❌ Not applicable                      | Answer filters require aggregation, EXISTS can't help                                     |
+| **Pre-computed stats table** | ❌ Doesn't scale                       | Cross-prompt answer filters require JSONB + GIN, which doesn't combine well with ORDER BY |
+| **Flattened answer table**   | ❌ Cross-prompt joins                  | Filtering multiple prompts requires self-joins, potentially slower                        |
+| **Partial indexes**          | ❌ Marginal improvement                | Index speeds up row access but doesn't help aggregation                                   |
+| **Covering indexes**         | ❌ Marginal improvement                | Same issue — aggregation is the bottleneck, not row access                                |
 
 #### Big O Analysis: Why It's Inherently Slow
 
@@ -313,7 +318,8 @@ Steps 2-5 cannot be optimized with indexes because they operate on aggregated da
 The answer filters (HAVING on cross-prompt aggregates) combined with ORDER BY + pagination is a fundamental mismatch with PostgreSQL's row-based processing model.
 
 **Recommended solutions:**
-1. **ClickHouse** (see CLICK_PLAN.md) — Columnar storage handles aggregations efficiently
+
+1. **ClickHouse** (see ../CLICK_PLAN.md) — Columnar storage handles aggregations efficiently
 2. **Aggressive caching** — Cache query results for common filter combinations
 3. **Accept latency** — Show loading spinner for complex queries (~10-50s)
 
@@ -324,6 +330,7 @@ After further analysis, we discovered a fundamentally different approach that av
 #### The Insight
 
 The previous approaches all used `GROUP BY article_id` which forces PostgreSQL to:
+
 1. Scan all matching rows (millions)
 2. Hash-aggregate into ~500K groups
 3. Apply HAVING filters
@@ -358,6 +365,7 @@ The previous approaches all used `GROUP BY article_id` which forces PostgreSQL t
 #### Implementation Details
 
 **Query used:**
+
 ```sql
 SELECT *
 FROM judgments
@@ -370,12 +378,12 @@ LIMIT $batchSize           -- typically 500
 ```
 
 **In-memory filtering:**
+
 ```typescript
 const passesAnswerFilters = (judgments, filters) => {
   for (const {promptId, answeredValues} of filters) {
-    const hasMatch = judgments.some(j =>
-      j.promptId === promptId &&
-      j.answeredOriginalAsArray?.some(a => answeredValues.includes(a))
+    const hasMatch = judgments.some(
+      (j) => j.promptId === promptId && j.answeredOriginalAsArray?.some((a) => answeredValues.includes(a)),
     )
     if (!hasMatch) return false
   }
@@ -385,12 +393,12 @@ const passesAnswerFilters = (judgments, filters) => {
 
 #### Performance Characteristics
 
-| Scenario | Batches Needed | Expected Time |
-|----------|----------------|---------------|
-| No answer filters | 1-2 | ~100-300ms |
-| Filters match ~50% of articles | 2-4 | ~200-500ms |
-| Filters match ~10% of articles | ~10 | ~500-1500ms |
-| Filters match ~1% of articles | ~50 | ~2-5s |
+| Scenario                       | Batches Needed | Expected Time |
+| ------------------------------ | -------------- | ------------- |
+| No answer filters              | 1-2            | ~100-300ms    |
+| Filters match ~50% of articles | 2-4            | ~200-500ms    |
+| Filters match ~10% of articles | ~10            | ~500-1500ms   |
+| Filters match ~1% of articles  | ~50            | ~2-5s         |
 
 **Worst case**: If filters match very few articles, we may need many batches. This is bounded by `MAX_ITERATIONS = 50`, so worst case is ~50 index scans.
 
@@ -398,13 +406,13 @@ const passesAnswerFilters = (judgments, filters) => {
 
 #### Trade-offs
 
-| Aspect | Before (GROUP BY) | After (Progressive Fetch) |
-|--------|-------------------|---------------------------|
-| Query complexity | Complex SQL with HAVING | Simple SELECT + LIMIT |
-| Filter location | Database (HAVING) | Application code |
-| Consistency | Fixed ~50s regardless | Variable: 100ms-5s |
-| Ordering | By article_created_at DESC | By article_id (stable, but not by date) |
-| Memory usage | Database holds all groups | App holds only batches |
+| Aspect           | Before (GROUP BY)          | After (Progressive Fetch)               |
+| ---------------- | -------------------------- | --------------------------------------- |
+| Query complexity | Complex SQL with HAVING    | Simple SELECT + LIMIT                   |
+| Filter location  | Database (HAVING)          | Application code                        |
+| Consistency      | Fixed ~50s regardless      | Variable: 100ms-5s                      |
+| Ordering         | By article_created_at DESC | By article_id (stable, but not by date) |
+| Memory usage     | Database holds all groups  | App holds only batches                  |
 
 #### Files Changed
 
@@ -418,6 +426,7 @@ Initial progressive fetch was still slow (~2.2s per batch) because of the OR con
 #### The Problem
 
 The original scope condition killed index performance:
+
 ```sql
 WHERE prompt_id IN (...)
   AND article_id > $cursor
@@ -432,17 +441,18 @@ WHERE prompt_id IN (...)
 #### The Solution
 
 Move scope filtering to memory:
+
 1. **Pre-fetch curated article IDs** in metadata (added to `fetchProjectMetadata()`)
 2. **Remove OR from DB query** — only `prompt_id + cursor + date filters`
 3. **Check scope in memory** using `isInScope()` function
 
 #### Performance Results
 
-| Metric | Before (OR in DB) | After (scope in memory) |
-|--------|-------------------|-------------------------|
-| Per batch | ~2.2s | ~50-100ms |
-| Total (19 batches) | ~40s | ~2-12s |
-| Index usage | Seq scan | Index scan ✅ |
+| Metric             | Before (OR in DB) | After (scope in memory) |
+| ------------------ | ----------------- | ----------------------- |
+| Per batch          | ~2.2s             | ~50-100ms               |
+| Total (19 batches) | ~40s              | ~2-12s                  |
+| Index usage        | Seq scan          | Index scan ✅           |
 
 ### Phase 2.10: Count Endpoint ⚠️ REQUIRES PRE-COMPUTED COUNTS
 
@@ -469,6 +479,7 @@ CREATE TABLE project_article_counts (
 ```
 
 **Update strategy:**
+
 - Increment on judgment insert (new article)
 - Decrement on judgment delete (article no longer has judgments)
 - Recompute periodically as fallback
@@ -508,14 +519,15 @@ This moves the cost from query-time (slow) to write-time (amortized).
 
 The denormalized fields were backfilled using `scripts/backfillJudgmentsDenormalizedFast.ts`:
 
-| Field | Filled | Status |
-|-------|--------|--------|
-| `article_title` | 24,946,050 (100%) | ✅ Complete |
-| `article_created_at` | 24,946,050 (100%) | ✅ Complete |
-| `project_id` | 19,986,558 (80.1%) | ✅ Expected |
+| Field                | Filled             | Status      |
+| -------------------- | ------------------ | ----------- |
+| `article_title`      | 24,946,050 (100%)  | ✅ Complete |
+| `article_created_at` | 24,946,050 (100%)  | ✅ Complete |
+| `project_id`         | 19,986,558 (80.1%) | ✅ Expected |
 
 **~5 million judgments (20%) have NULL `project_id`** — this is expected and acceptable because:
-1. `project_id` is purely informational (indicates where judgment was *created*)
+
+1. `project_id` is purely informational (indicates where judgment was _created_)
 2. These judgments were created before project association was tracked, or via bulk imports
 3. Project scope is determined by `article_import_route` and `project_articles`, not `project_id`
 4. No functionality depends on `project_id` being filled
@@ -527,19 +539,21 @@ The denormalized fields were backfilled using `scripts/backfillJudgmentsDenormal
 #### Root Cause
 
 The backfill script was using `articles.import_route` directly:
+
 ```sql
 article_import_route = a.import_route
 ```
 
 However, `articles.import_route` is **NULL for most articles** because:
 
-| Workflow | Sets `articles.import_route`? | Sets `article_route_link`? |
-|----------|-------------------------------|---------------------------|
-| **pubmedWorkflowStoreEntries.ts** | ❌ **NO** (bug) | ✅ Yes |
-| **medrxivWorkflowStoreEntries.ts** | ✅ Yes | ✅ Yes |
-| **biorxivWorkflowStoreEntries.ts** | ✅ Yes | ✅ Yes |
+| Workflow                           | Sets `articles.import_route`? | Sets `article_route_link`? |
+| ---------------------------------- | ----------------------------- | -------------------------- |
+| **pubmedWorkflowStoreEntries.ts**  | ❌ **NO** (bug)               | ✅ Yes                     |
+| **medrxivWorkflowStoreEntries.ts** | ✅ Yes                        | ✅ Yes                     |
+| **biorxivWorkflowStoreEntries.ts** | ✅ Yes                        | ✅ Yes                     |
 
 **Stats** (2024-12-22):
+
 - Articles with `import_route = NULL`: **9,780,508** (93%)
 - Articles with `import_route` populated: **727,053** (7%)
 - **All** articles have `article_route_link` entries ✅
@@ -559,13 +573,14 @@ LEFT JOIN article_route_link arl ON arl.article_id = a.id
 LEFT JOIN import_route ir ON ir.id = arl.import_route_id
 ```
 
-**NOTE**: An article can have multiple route links (imported via multiple routes). The query uses `LIMIT 1` to pick one deterministically. For denormalization purposes, having *any* valid route is sufficient for scope filtering.
+**NOTE**: An article can have multiple route links (imported via multiple routes). The query uses `LIMIT 1` to pick one deterministically. For denormalization purposes, having _any_ valid route is sufficient for scope filtering.
 
 #### Implementation Status ✅
 
 **Fixes applied (2024-12-22):**
 
 1. **`pubmedWorkflowStoreEntries.ts`** — Added `importRoute` to article upserts:
+
    ```typescript
    // In articlesToUpsert:
    importRoute: entry.import_route,
@@ -592,4 +607,3 @@ PHASE=4 bun scripts/backfillJudgmentsDenormalizedFast.ts
 # Dry run first to see stats
 DRY_RUN=true PHASE=import_route bun scripts/backfillJudgmentsDenormalizedFast.ts
 ```
-

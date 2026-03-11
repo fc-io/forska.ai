@@ -1,6 +1,6 @@
 # Run local dev build
 
-Goal: standalone local app; admin-free; single-user soon. See `REMOVE_ADMIN_AND_USERS.md`.
+Goal: standalone local app; admin-free; single-user soon. See `../plans/REMOVE_ADMIN_AND_USERS.md`.
 
 Prereqs
 

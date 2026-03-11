@@ -12,20 +12,21 @@ After extensive investigation, we've concluded that **PostgreSQL cannot efficien
 
 ### Optimizations Attempted (All Failed to Achieve <5s)
 
-| Approach | Result |
-|----------|--------|
-| Denormalized fields (removed JOINs) | ⚠️ Reduced from ~120s to ~50s |
-| Two-Phase Fetch (literal UUIDs) | ⚠️ Phase 2 fast (~200ms), Phase 1 still ~50s |
-| Removed COUNT(DISTINCT) from HAVING | ⚠️ Minor improvement, still ~40s |
-| EXISTS on articles table | ❌ Answer filters require aggregation, EXISTS can't help |
-| Pre-computed stats table (JSONB) | ❌ GIN index + ORDER BY don't combine well |
-| Flattened answer table | ❌ Cross-prompt filters require self-joins |
-| Partial/Covering indexes | ❌ Index helps row access, not aggregation |
-| Async count endpoint | ✅ UX improvement only (data loads faster) |
+| Approach                            | Result                                                   |
+| ----------------------------------- | -------------------------------------------------------- |
+| Denormalized fields (removed JOINs) | ⚠️ Reduced from ~120s to ~50s                            |
+| Two-Phase Fetch (literal UUIDs)     | ⚠️ Phase 2 fast (~200ms), Phase 1 still ~50s             |
+| Removed COUNT(DISTINCT) from HAVING | ⚠️ Minor improvement, still ~40s                         |
+| EXISTS on articles table            | ❌ Answer filters require aggregation, EXISTS can't help |
+| Pre-computed stats table (JSONB)    | ❌ GIN index + ORDER BY don't combine well               |
+| Flattened answer table              | ❌ Cross-prompt filters require self-joins               |
+| Partial/Covering indexes            | ❌ Index helps row access, not aggregation               |
+| Async count endpoint                | ✅ UX improvement only (data loads faster)               |
 
 ### The Fundamental Problem
 
 The query must:
+
 1. Scan millions of judgment rows matching the prompt filter
 2. Group by `article_id` (~500K groups)
 3. Compute HAVING aggregates per group
@@ -37,6 +38,7 @@ Steps 2-5 operate on aggregated data and **cannot be optimized by indexes**. Pos
 ### Why ClickHouse Solves This
 
 ClickHouse is designed for exactly this pattern:
+
 - **Columnar storage**: Only reads columns needed for the query
 - **Vectorized execution**: Processes data in batches, not row-by-row
 - **Parallel aggregation**: Distributes GROUP BY across CPU cores
@@ -44,7 +46,7 @@ ClickHouse is designed for exactly this pattern:
 
 Expected improvement: **~50s → <2s**
 
-For detailed investigation, see `DENORM_API_PLAN.md` Phase 2.7.
+For detailed investigation, see `old/DENORM_API_PLAN.md` Phase 2.7.
 
 ---
 
@@ -94,9 +96,9 @@ For detailed investigation, see `DENORM_API_PLAN.md` Phase 2.7.
 
 ## Environment-Specific S3 Storage
 
-| Environment | S3 Provider | Notes |
-|-------------|-------------|-------|
-| **Local Dev (Mac)** | **SeaweedFS** | Lightweight, S3-compatible, single container |
+| Environment                | S3 Provider          | Notes                                        |
+| -------------------------- | -------------------- | -------------------------------------------- |
+| **Local Dev (Mac)**        | **SeaweedFS**        | Lightweight, S3-compatible, single container |
 | **Production (OpenShift)** | **Ceph RGW via ODF** | Native OpenShift Data Foundation integration |
 
 **Why not MinIO?** MinIO's community edition entered maintenance mode in 2024 (no new features, case-by-case security fixes only). SeaweedFS and Ceph RGW are actively maintained alternatives.
@@ -108,43 +110,54 @@ For detailed investigation, see `DENORM_API_PLAN.md` Phase 2.7.
 ## Core Design Decisions
 
 ### 1. Parquet as Source of Truth
+
 **Decision**: The canonical record of a judgment is the Parquet file. PostgreSQL is treated as a downstream "materialized view" used only for serving specific UI needs (like `ById` lookups) that are inefficient in columnar stores.
+
 - **Benefit**: Decouples the core data asset from the operational database.
 - **Tradeoff**: **Eventual Consistency**. There will be a slight delay (seconds) between a judgment being written and it appearing in the PostgreSQL-backed Detail page.
 
 ### 2. Immutability & Soft Deletes (Tombstone Pattern)
+
 **Decision**: Parquet files are **append-only and immutable**. Logical deletes are handled via **tombstone records**.
+
 - **Append-Only**: Each Parquet file, once written, is never modified.
 - **Soft Deletes via Tombstones**: To delete a judgment, write a new record with the same `id` but with `deletedAt` set to the deletion timestamp. The original record remains in Parquet, but downstream queries see the "tombstone" as the current state.
 - **Deduplication Required**: Since the same `id` can appear multiple times (original + tombstone), ClickHouse uses `ReplacingMergeTree(deletedAt)` to deduplicate. Queries use `FINAL` or subquery patterns to get the latest state.
 - **Query Filtering**: After deduplication, filter with `WHERE deletedAt IS NULL` to exclude soft-deleted judgments.
 
 ### 3. Partitioning Strategy
+
 **Decision**: Partition strictly by time using Hive-style partitioning.
+
 - **Structure**: `/data/judgments/year=YYYY/month=MM/{ulid}.parquet`
 - **Naming**: Using `ulid` ensures time-sorted, unique filenames.
 
 ### 4. ClickHouse as the Central Sync Engine
-**Decision**: ClickHouse handles *all* downstream synchronization via Materialized Views and table engines.
+
+**Decision**: ClickHouse handles _all_ downstream synchronization via Materialized Views and table engines.
+
 - **No custom Node.js "Tailer"**: We eliminate the unreliability of `fs.watch`/`chokidar`.
 - **S3Queue Engine**: Processes each new Parquet file exactly once, with built-in checkpointing.
 - **Materialized Views**: Automatically route new data to the main `MergeTree` analytics table.
 
 ### 5. PostgreSQL Stays Slim
+
 **Decision**: PostgreSQL `judgments` table keeps only fields needed for the detail view. All denormalized and snapshot fields move exclusively to Parquet/ClickHouse.
 
 **Fields to KEEP in PostgreSQL** (for detail view):
--   `id`, `createdAt`, `updatedAt`, `deletedAt`
--   `articleId`, `modelId`, `promptId`, `projectId`, `reviewId`
--   `isAnswered`
--   `answeredOriginal`, `answeredOriginalAsArray`, `answeredTransformed`
--   `confidenceOriginal`, `explanation`, `quotes`
+
+- `id`, `createdAt`, `updatedAt`, `deletedAt`
+- `articleId`, `modelId`, `promptId`, `projectId`, `reviewId`
+- `isAnswered`
+- `answeredOriginal`, `answeredOriginalAsArray`, `answeredTransformed`
+- `confidenceOriginal`, `explanation`, `quotes`
 
 **Fields to REMOVE from PostgreSQL** (analytics only, live in ClickHouse):
--   `articleTitle`, `articleCreatedAt`, `articleUpdatedAt`
--   `articleCreatedYear`, `articleUpdatedYear`
--   `articleImportRoute`, `articleImportedBy`
--   All `snapshot*` fields
+
+- `articleTitle`, `articleCreatedAt`, `articleUpdatedAt`
+- `articleCreatedYear`, `articleUpdatedYear`
+- `articleImportRoute`, `articleImportedBy`
+- All `snapshot*` fields
 
 **Estimated savings**: ~800-5500 bytes per row → **~8-55 GB** for 10M judgments.
 
@@ -159,6 +172,7 @@ Instead of a Node.js service, ClickHouse itself orchestrates the sync:
 3.  **No PG Sync from ClickHouse**: PostgreSQL receives writes directly from the LLM worker (core fields only).
 
 **Benefits**:
+
 - **Exactly-once processing**: `S3Queue` tracks consumed files internally.
 - **Battle-tested reliability**: No fragile file-system watchers.
 - **High performance**: ClickHouse's native Parquet reader is highly optimized.
@@ -188,34 +202,63 @@ Instead of a Node.js service, ClickHouse itself orchestrates the sync:
 ## PostgreSQL Schema: Before & After
 
 ### Before (Current — 25+ columns, large)
+
 ```typescript
 judgments = {
   // Core (keep)
-  id, createdAt, updatedAt, deletedAt,
-  articleId, modelId, promptId, projectId, reviewId,
+  id,
+  createdAt,
+  updatedAt,
+  deletedAt,
+  articleId,
+  modelId,
+  promptId,
+  projectId,
+  reviewId,
   isAnswered,
-  answeredOriginal, answeredOriginalAsArray, answeredTransformed,
-  confidenceOriginal, explanation, quotes,
+  answeredOriginal,
+  answeredOriginalAsArray,
+  answeredTransformed,
+  confidenceOriginal,
+  explanation,
+  quotes,
 
   // Denormalized article fields (REMOVE - 7 columns)
-  articleTitle, articleCreatedAt, articleUpdatedAt,
-  articleCreatedYear, articleUpdatedYear,
-  articleImportRoute, articleImportedBy,
+  articleTitle,
+  articleCreatedAt,
+  articleUpdatedAt,
+  articleCreatedYear,
+  articleUpdatedYear,
+  articleImportRoute,
+  articleImportedBy,
 
   // Snapshots (REMOVE - 9 columns)
-  snapshotProjectId, snapshotProjectOwnerId,
-  snapshotProjectUseTitle, snapshotProjectUseAbstract, snapshotProjectUseFulltext,
-  snapshotProjectModelName, snapshotProjectProvider,
-  snapshotArticleOriginalData, snapshotArticlePdfHash,
+  snapshotProjectId,
+  snapshotProjectOwnerId,
+  snapshotProjectUseTitle,
+  snapshotProjectUseAbstract,
+  snapshotProjectUseFulltext,
+  snapshotProjectModelName,
+  snapshotProjectProvider,
+  snapshotArticleOriginalData,
+  snapshotArticlePdfHash,
 }
 ```
 
 ### After (Slim — 16 columns)
+
 ```typescript
 judgments = {
   // Core identifiers
-  id, createdAt, updatedAt, deletedAt,
-  articleId, modelId, promptId, projectId, reviewId,
+  id,
+  createdAt,
+  updatedAt,
+  deletedAt,
+  articleId,
+  modelId,
+  promptId,
+  projectId,
+  reviewId,
 
   // Answer data (for detail view)
   isAnswered,
@@ -403,7 +446,6 @@ WHERE promptId = 'yyy'
 ORDER BY createdAt DESC;
 ```
 
-
 ### Pattern 4: `/api/articlesreviews` Query (The Hard One)
 
 This is the query pattern that PostgreSQL couldn't handle efficiently (~50s). In ClickHouse, it should run in **1-5 seconds**.
@@ -431,6 +473,7 @@ LIMIT 100 OFFSET 0
 ```
 
 **Why this is fast in ClickHouse:**
+
 - **Columnar storage**: Only reads needed columns (not entire rows)
 - **Vectorized execution**: Processes millions of rows in SIMD batches
 - **Parallel aggregation**: GROUP BY uses all CPU cores
@@ -518,17 +561,17 @@ LIMIT 100
 
 Set up the new infrastructure **before** modifying any existing code or schema.
 
-- [x] **docker-compose.yml**: Add SeaweedFS container *(2024-12-19)*
+- [x] **docker-compose.yml**: Add SeaweedFS container _(2024-12-19)_
   - [x] Image: `chrislusf/seaweedfs:latest`
   - [x] Command: `server -s3 -dir=/data -s3.port=8333`
   - [x] Ports: `8333:8333` (S3 API), `9333:9333` (Master UI)
   - [x] Volume: `./data/seaweedfs:/data`
-- [x] **docker-compose.yml**: Add ClickHouse container *(2024-12-19)*
+- [x] **docker-compose.yml**: Add ClickHouse container _(2024-12-19)_
   - [x] Image: `clickhouse/clickhouse-server:24.9` (LTS)
   - [x] Ports: `8123:8123` (HTTP), `9000:9000` (Native)
   - [x] Volume: `./data/clickhouse:/var/lib/clickhouse`
   - [x] Environment: `CLICKHOUSE_DB=forska`, `CLICKHOUSE_USER=default`, `CLICKHOUSE_PASSWORD=clickhouse`
-- [x] **Verify local setup**: Both containers running and accessible *(2024-12-19)*
+- [x] **Verify local setup**: Both containers running and accessible _(2024-12-19)_
   - SeaweedFS: S3 API at `localhost:8333`, Master UI at `localhost:9333`
   - ClickHouse: HTTP API at `localhost:8123`, Native at `localhost:9000`
   - Bucket `forska-judgments` created in SeaweedFS
@@ -537,15 +580,15 @@ Set up the new infrastructure **before** modifying any existing code or schema.
 
 Build the Parquet writer that will become the new write path.
 
-- [x] **Schema**: Define `DenormalizedJudgmentAnalytics` TypeScript interface *(2024-12-22)*
+- [x] **Schema**: Define `DenormalizedJudgmentAnalytics` TypeScript interface _(2024-12-22)_
   - Created `src/services/parquet/types.ts` with full schema
-- [x] **Parquet Writer**: Create `src/services/parquet/parquetWriter.ts` *(2024-12-22)*
+- [x] **Parquet Writer**: Create `src/services/parquet/parquetWriter.ts` _(2024-12-22)_
   - [x] Use `@dsnp/parquetjs` for Parquet serialization
   - [x] Implement `writeBatch(judgments)` that writes to S3 (SeaweedFS)
   - [x] Path format: `{bucket}/year=YYYY/month=MM/{ulid}.parquet`
   - [x] Includes `JudgmentParquetWriter` class for streaming/batched writes
   - [x] Supports tombstone records for soft deletes via `writeTombstone()`
-- [x] **S3 Client**: Create `src/services/s3/s3Client.ts` *(2024-12-22)*
+- [x] **S3 Client**: Create `src/services/s3/s3Client.ts` _(2024-12-22)_
   - [x] Use `@aws-sdk/client-s3` configured for SeaweedFS/Ceph RGW endpoints
   - [x] Environment-based configuration: `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET`
   - [x] Utility functions: `ensureBucket`, `uploadToS3`, `downloadFromS3`, `listObjects`, `deleteFromS3`
@@ -556,23 +599,23 @@ Backfill all existing judgments to Parquet first, so we have real data to test C
 
 > **Note**: Originally Phase 4, moved earlier because using real ~25M judgments for testing is more practical than a synthetic 1000-row subset.
 
-- [x] **Script**: Create `scripts/backfillPostgresToParquet.ts` *(2024-12-22)*
+- [x] **Script**: Create `scripts/backfillPostgresToParquet.ts` _(2024-12-22)_
   - [x] Stream rows from PostgreSQL `judgments` table (with JOINs to get article metadata)
   - [x] Denormalize each judgment into `DenormalizedJudgmentAnalytics` format
   - [x] Write batches to Parquet files in SeaweedFS
   - [x] Use judgment's `createdAt` for partitioning
   - [x] Log progress with rate and ETA
   - [x] Configurable: `LIMIT` (default 1000), `BATCH_SIZE`, `OFFSET`, `DRY_RUN`
-  - [x] **Optimized**: Created `scripts/backfillPostgresToParquetDuckDB.ts` using DuckDB for ~2750x faster export *(2024-12-23)*
-- [x] **Test run (1000 rows)**: Verify script works with limited subset *(2024-12-23)*
+  - [x] **Optimized**: Created `scripts/backfillPostgresToParquetDuckDB.ts` using DuckDB for ~2750x faster export _(2024-12-23)_
+- [x] **Test run (1000 rows)**: Verify script works with limited subset _(2024-12-23)_
   - [x] Set S3 env vars: `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET`
   - [x] Run: `bun scripts/backfillPostgresToParquetDuckDB.ts`
   - [x] Verify Parquet file written to SeaweedFS
   - [x] Inspect with DuckDB/pandas (see script output for commands)
-- [x] **Full backfill**: Run with `LIMIT=0` to process all ~25M rows *(2024-12-23)*
+- [x] **Full backfill**: Run with `LIMIT=0` to process all ~25M rows _(2024-12-23)_
   - Completed in **6 minutes 19 seconds** using DuckDB script
   - **24,946,050 rows** exported to 5 Parquet files (~10.3 GB total, ~2.5 GB compressed in S3)
-- [x] **Verify files**: Confirm Parquet files are written to SeaweedFS with expected partitioning *(2024-12-23)*
+- [x] **Verify files**: Confirm Parquet files are written to SeaweedFS with expected partitioning _(2024-12-23)_
   - Files at: `s3://forska-judgments/judgments/year=2025/month={08,09,10,11,12}/data_0.parquet`
   - Verified with DuckDB: `SELECT COUNT(*) FROM read_parquet('s3://...')` returns 24,946,050
 
@@ -616,30 +659,30 @@ A safe transition phase where both paths are active:
 
 > **Note**: Running Phase 6 before Phase 5 (Dual-Write) because we want to validate ClickHouse query performance with the existing backfilled data before modifying the write path.
 
-- [x] **Create ClickHouse client**: `src/services/clickhouse/clickhouseClient.ts` *(2024-12-23)*
+- [x] **Create ClickHouse client**: `src/services/clickhouse/clickhouseClient.ts` _(2024-12-23)_
   - Singleton client with environment-based configuration
   - Default connection: `localhost:8123`, database `forska`
-- [x] **Create ClickHouse query service**: `src/services/clickhouse/articlesReviewsClickHouse.ts` *(2024-12-23)*
+- [x] **Create ClickHouse query service**: `src/services/clickhouse/articlesReviewsClickHouse.ts` _(2024-12-23)_
   - Two-phase query: aggregate articles, then fetch judgments
   - Uses PostgreSQL for project metadata (prompts, routes, curated articles)
   - ClickHouse for judgment data (GROUP BY, HAVING, ORDER BY)
-- [x] **Create test endpoint**: `/api/articlesreviews/clickhouse` *(2024-12-23)*
+- [x] **Create test endpoint**: `/api/articlesreviews/clickhouse` _(2024-12-23)_
   - Same API contract as PostgreSQL version
   - Accessible alongside existing endpoint for A/B comparison
-- [x] **Performance testing**: Verified <5s response times! *(2024-12-23)*
+- [x] **Performance testing**: Verified <5s response times! _(2024-12-23)_
   - Test project: "All 2023 | AI? Healthcare?" with 4 import routes
   - Articles query: **1.36s** (GROUP BY + ORDER BY on 24.9M rows)
   - Judgments query: **0.29s** (fetch judgment details)
   - **Total: 1.67s** (vs ~50s in PostgreSQL = **96% improvement!**)
   - `FINAL` clause removed for performance (no duplicates in current data)
-- [x] **Update `/api/articlesreviews`**: Replace PostgreSQL with ClickHouse (after validation) *(2024-12-30)*
-- [x] **Update `/api/articlesreviewsfilters`**: Query ClickHouse *(2024-12-30)*
+- [x] **Update `/api/articlesreviews`**: Replace PostgreSQL with ClickHouse (after validation) _(2024-12-30)_
+- [x] **Update `/api/articlesreviewsfilters`**: Query ClickHouse _(2024-12-30)_
   - Enum-based prompts: No database query needed (parsed from type definition)
   - Database-based prompts: Query ClickHouse for distinct answer values
 - [x] **Update other analytics endpoints using PostgreSQL `judgments` table**:
   - **Analytics (MIGRATE to ClickHouse)**:
-    - [x] `/api/articlesreviewsboth` — GROUP BY + HAVING for articles with both LLM and human assessments *(2024-12-30)*
-    - [x] `/api/projects/add_articles_by_filter` — Aggregation queries for `llm`, `both`, and `unassessed` list types *(2024-12-30)*
+    - [x] `/api/articlesreviewsboth` — GROUP BY + HAVING for articles with both LLM and human assessments _(2024-12-30)_
+    - [x] `/api/projects/add_articles_by_filter` — Aggregation queries for `llm`, `both`, and `unassessed` list types _(2024-12-30)_
   - **Detail View (KEEP in PostgreSQL — per architecture decision)**:
     - [x] `/api/projectsreview` — Single article judgment lookup (O(1) by ID)
   - **Project Management (KEEP — non-analytics, prompt linking logic)**:
@@ -668,55 +711,55 @@ Based on code review of all API routes and services, here's the actual usage of 
 
 #### ✅ KEEP (Actively Used in PostgreSQL Queries)
 
-| Field | Used In | Notes |
-|-------|---------|-------|
-| `id`, `createdAt`, `updatedAt` | Everywhere | Core identifiers |
-| `deletedAt` | `ProjectExportRoutes.ts` | `isNull(judgments.deletedAt)` filter |
-| `articleId`, `modelId`, `promptId` | All routes | Foreign keys, JOIN conditions |
-| `isAnswered` | `PromptsRoutes.ts` | Invalid judgments validation |
-| `answeredOriginal` | Multiple routes | Answer data for export/validation |
-| `answeredOriginalAsArray` | Multiple routes | Multi-value answers |
-| `explanation` | `ProjectExportRoutes.ts` | CSV export with explanations |
-| `quotes` | `ProjectExportRoutes.ts` | CSV export with quotes |
+| Field                              | Used In                  | Notes                                |
+| ---------------------------------- | ------------------------ | ------------------------------------ |
+| `id`, `createdAt`, `updatedAt`     | Everywhere               | Core identifiers                     |
+| `deletedAt`                        | `ProjectExportRoutes.ts` | `isNull(judgments.deletedAt)` filter |
+| `articleId`, `modelId`, `promptId` | All routes               | Foreign keys, JOIN conditions        |
+| `isAnswered`                       | `PromptsRoutes.ts`       | Invalid judgments validation         |
+| `answeredOriginal`                 | Multiple routes          | Answer data for export/validation    |
+| `answeredOriginalAsArray`          | Multiple routes          | Multi-value answers                  |
+| `explanation`                      | `ProjectExportRoutes.ts` | CSV export with explanations         |
+| `quotes`                           | `ProjectExportRoutes.ts` | CSV export with quotes               |
 
 #### ⚠️ USED BUT MIGRATED TO CLICKHOUSE (Need coordination)
 
 These are currently queried from PostgreSQL but were **already migrated** in Phase 6:
 
-| Field | Used In | Migration Status |
-|-------|---------|------------------|
-| `articleTitle` | `articlesReviewsQueryBuilder.ts` | ⚠️ **Still queried** for search filter |
-| `articleCreatedAt` | `articlesReviewsQueryBuilder.ts` | ⚠️ **Still queried** for date filter |
-| `articleImportRoute` | `articlesReviewsQueryBuilder.ts` | ⚠️ **Still queried** for scope filter |
+| Field                | Used In                          | Migration Status                       |
+| -------------------- | -------------------------------- | -------------------------------------- |
+| `articleTitle`       | `articlesReviewsQueryBuilder.ts` | ⚠️ **Still queried** for search filter |
+| `articleCreatedAt`   | `articlesReviewsQueryBuilder.ts` | ⚠️ **Still queried** for date filter   |
+| `articleImportRoute` | `articlesReviewsQueryBuilder.ts` | ⚠️ **Still queried** for scope filter  |
 
 **⚠️ ACTION REQUIRED**: `articlesReviewsQueryBuilder.ts` is still used for **fallback/human judgments queries**. These fields cannot be removed until human judgment queries are also migrated to ClickHouse or use JOINs with the `articles` table.
 
 #### 🗑️ SAFE TO REMOVE (Only Written, Never Read)
 
-| Field | Why Safe |
-|-------|----------|
-| `reviewId` | Only schema definition, no queries reference it |
-| `answeredTransformed` | Always written as `null`, never read |
-| `articleUpdatedAt` | Only in ClickHouse/Parquet types |
-| `articleCreatedYear` | Only in ClickHouse/Parquet |
-| `articleUpdatedYear` | Only in ClickHouse/Parquet |
-| `articleImportedBy` | Only in ClickHouse/Parquet |
-| `snapshotProjectOwnerId` | Written but never queried |
-| `snapshotProjectUseTitle` | Written but never queried |
-| `snapshotProjectUseAbstract` | Written but never queried |
-| `snapshotProjectUseFulltext` | Written but never queried |
-| `snapshotProjectProvider` | Written but never queried |
-| `snapshotArticleOriginalData` | Written but never queried |
-| `snapshotArticlePdfHash` | Written but never queried |
+| Field                         | Why Safe                                        |
+| ----------------------------- | ----------------------------------------------- |
+| `reviewId`                    | Only schema definition, no queries reference it |
+| `answeredTransformed`         | Always written as `null`, never read            |
+| `articleUpdatedAt`            | Only in ClickHouse/Parquet types                |
+| `articleCreatedYear`          | Only in ClickHouse/Parquet                      |
+| `articleUpdatedYear`          | Only in ClickHouse/Parquet                      |
+| `articleImportedBy`           | Only in ClickHouse/Parquet                      |
+| `snapshotProjectOwnerId`      | Written but never queried                       |
+| `snapshotProjectUseTitle`     | Written but never queried                       |
+| `snapshotProjectUseAbstract`  | Written but never queried                       |
+| `snapshotProjectUseFulltext`  | Written but never queried                       |
+| `snapshotProjectProvider`     | Written but never queried                       |
+| `snapshotArticleOriginalData` | Written but never queried                       |
+| `snapshotArticlePdfHash`      | Written but never queried                       |
 
 #### ⚠️ LIMITED USE (Keep for now, review later)
 
-| Field | Used In | Notes |
-|-------|---------|-------|
-| `projectId` | Schema only | Rarely queried, kept for referential integrity |
-| `confidenceOriginal` | Detail view UI | Always stored as `50`, only displayed |
-| `snapshotProjectId` | `projectsRoutesPostArticleReviewDetails.ts` | Cross-project judgment display |
-| `snapshotProjectModelName` | `reviewJudgmentItem.tsx` | UI displays model name for cross-project judgments |
+| Field                      | Used In                                     | Notes                                              |
+| -------------------------- | ------------------------------------------- | -------------------------------------------------- |
+| `projectId`                | Schema only                                 | Rarely queried, kept for referential integrity     |
+| `confidenceOriginal`       | Detail view UI                              | Always stored as `50`, only displayed              |
+| `snapshotProjectId`        | `projectsRoutesPostArticleReviewDetails.ts` | Cross-project judgment display                     |
+| `snapshotProjectModelName` | `reviewJudgmentItem.tsx`                    | UI displays model name for cross-project judgments |
 
 ### Migration Plan (Updated)
 
@@ -754,6 +797,7 @@ These are currently queried from PostgreSQL but were **already migrated** in Pha
 - [ ] **Verify storage savings**: Check PostgreSQL database size reduction
 
 **Revised savings estimate**:
+
 - Phase 8a: ~13 columns × ~400-4000 bytes = **~4-40 GB** for 10M judgments
 - Phase 8b (if completed): Additional ~3 columns = **~1-5 GB**
 - Total: **~5-45 GB** savings
@@ -774,18 +818,18 @@ These are currently queried from PostgreSQL but were **already migrated** in Pha
 
 ## Query Routing Summary
 
-| API Endpoint | Data Source | Notes |
-|--------------|-------------|-------|
-| `GET /api/judgment/:id` | **PostgreSQL** | O(1) lookup, core answer data |
-| `GET /api/articlesreviews` | **ClickHouse** | GROUP BY, ORDER BY, filters |
-| `GET /api/articlesreviewsfilters` | **ClickHouse** | Aggregation queries |
-| Stats/analytics | **ClickHouse** | All aggregation queries |
+| API Endpoint                      | Data Source    | Notes                         |
+| --------------------------------- | -------------- | ----------------------------- |
+| `GET /api/judgment/:id`           | **PostgreSQL** | O(1) lookup, core answer data |
+| `GET /api/articlesreviews`        | **ClickHouse** | GROUP BY, ORDER BY, filters   |
+| `GET /api/articlesreviewsfilters` | **ClickHouse** | Aggregation queries           |
+| Stats/analytics                   | **ClickHouse** | All aggregation queries       |
 
 ---
 
 ## Open Questions / Future Considerations
 
-- [x] **Large curated article sets**: ~~Projects with >10K curated articles exceed ClickHouse's max query size when using IN clause.~~ **SOLVED!** *(2024-12-23)*
+- [x] **Large curated article sets**: ~~Projects with >10K curated articles exceed ClickHouse's max query size when using IN clause.~~ **SOLVED!** _(2024-12-23)_
   - **Solution**: When curated articles > 1000, create a Memory engine temp table, insert IDs in batches, and use JOIN
   - **Performance**: 93K curated articles now works in ~1.9 seconds (82ms for insert, 1.4s for query)
   - **Code**: `articlesReviewsClickHouse.ts` detects large sets and uses `createCuratedArticlesTempTable()`
@@ -819,32 +863,35 @@ cd node_modules/chdb-bun && bun install && bun run build
 ### Usage
 
 ```typescript
-import { query, Session } from 'chdb-bun';
+import {query, Session} from 'chdb-bun'
 
 // Ephemeral query (stateless)
-const result = query("SELECT version()", "JSON");
+const result = query('SELECT version()', 'JSON')
 
 // Query Parquet files directly
-const parquetResult = query(`
+const parquetResult = query(
+  `
   SELECT COUNT(*) as total
   FROM file('/path/to/file.parquet', Parquet)
-`, "JSON");
+`,
+  'JSON',
+)
 
 // Persistent session (for creating tables, etc.)
-const sess = new Session('./chdb-data');
-sess.query("CREATE DATABASE IF NOT EXISTS analytics", "CSV");
-sess.cleanup();
+const sess = new Session('./chdb-data')
+sess.query('CREATE DATABASE IF NOT EXISTS analytics', 'CSV')
+sess.cleanup()
 ```
 
 ### When to Use chDB vs ClickHouse Server
 
-| Use Case | Recommendation |
-|----------|---------------|
-| Production analytics API | **ClickHouse Server** (already has data via S3Queue) |
-| Local development/testing | chDB or ClickHouse Server |
-| Ad-hoc Parquet file queries | **chDB** (no server needed) |
-| Backfill verification scripts | **chDB** (simple, embedded) |
-| CI/CD test suites | **chDB** (no Docker dependency) |
+| Use Case                      | Recommendation                                       |
+| ----------------------------- | ---------------------------------------------------- |
+| Production analytics API      | **ClickHouse Server** (already has data via S3Queue) |
+| Local development/testing     | chDB or ClickHouse Server                            |
+| Ad-hoc Parquet file queries   | **chDB** (no server needed)                          |
+| Backfill verification scripts | **chDB** (simple, embedded)                          |
+| CI/CD test suites             | **chDB** (no Docker dependency)                      |
 
 ### Limitations
 

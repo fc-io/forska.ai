@@ -12,6 +12,7 @@
 ## Key Features Verified
 
 ### Supported Features
+
 - ✅ MaterializedPostgreSQL database engine
 - ✅ Logical replication via PostgreSQL WAL
 - ✅ Initial snapshot + CDC (Change Data Capture)
@@ -20,17 +21,21 @@
 - ✅ Schema flexibility (single/multiple schemas)
 
 ### Requirements Met
+
 - ✅ `wal_level = logical` (configured in config/postgres/postgresql.conf)
 - ✅ `max_replication_slots >= 2` (set to 10 in our config)
 - ✅ `max_wal_senders >= 1` (set to 10 in our config)
 
 ### Monitoring Capabilities
+
 ⚠️ **`system.postgres_replication_slots` NOT documented** in official MaterializedPostgreSQL docs
 
-As noted in ARTICLE_IN_CH.md lines 450-462:
+As noted in `plans/ARTICLE_IN_CH.md` lines 450-462:
+
 > ⚠️ **Version check**: `system.postgres_replication_slots` view may not exist or may have different columns depending on CH version. Test in target environment first.
 
-**Recommendation**: Use Option B or C from ARTICLE_IN_CH.md:
+**Recommendation**: Use Option B or C from `plans/ARTICLE_IN_CH.md`:
+
 - Option B: Check MaterializedPostgreSQL database status via `system.databases`
 - Option C: Compare row counts between PG and CH as lag proxy
 
@@ -42,9 +47,11 @@ As noted in ARTICLE_IN_CH.md lines 450-462:
 4. **No automatic views**: Cannot create views in MaterializedPostgreSQL databases (use separate `forska_helpers` DB as planned)
 
 ## Recent Fixes in 24.9
+
 - Replication of subset of columns (PR #69092)
 
 ## Recent Fixes in 24.8 LTS
+
 - Fixed error on generated columns when adnum ordering is broken
 - Fixed error on id column with nextval expression as default
 - Fixed error on dropping publication with symbols except [a-z1-9-]
@@ -52,6 +59,7 @@ As noted in ARTICLE_IN_CH.md lines 450-462:
 ## PostgreSQL Requirements
 
 Configured in `config/postgres/postgresql.conf` and `init-db/002-ch-replication-user.sql`:
+
 - ✅ Replication user created: `ch_replicator`
 - ✅ Grants: USAGE on schema, SELECT on all tables + future tables
 - ✅ Default privileges for postgres and forska_admin roles
@@ -59,13 +67,15 @@ Configured in `config/postgres/postgresql.conf` and `init-db/002-ch-replication-
 ## Recommendation
 
 **Consider upgrading to ClickHouse 24.8 LTS** for production use:
+
 - Change `docker-compose.yml` line 36 from `clickhouse/clickhouse-server:24.9` to `clickhouse/clickhouse-server:24.8`
 - 24.8 is LTS (12 months support) and includes all MaterializedPostgreSQL fixes
 - 24.9 is a regular release with shorter support window
 
 ## Next Steps
 
-Per ARTICLE_IN_CH.md Phase 2:
+Per `plans/ARTICLE_IN_CH.md` Phase 2:
+
 - [ ] **Initial sync**: Estimate ~1-10 min per million articles (full_text + network dependent); 10M articles ≈ 2-6 hours. Run `CREATE DATABASE` command (dev system, no scheduling needed)
 - [ ] Create `pg` database in ClickHouse with full `articles` table (C.1 approach)
 - [ ] Create `forska_helpers` database for views/CTEs

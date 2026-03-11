@@ -7,6 +7,7 @@
 Before starting, ensure:
 
 1. **SSH keys are loaded**:
+
    ```bash
    ssh-add -l  # Check if keys are loaded
    ssh-add ~/.ssh/id_ed25519_bsc  # Add if needed
@@ -39,11 +40,13 @@ ssh glog "cd /gpfs/projects/ehpc482/dev && sbatch --export=ALL forska-mn5-sglang
 ```
 
 **What this does:**
+
 - Submits the job to the ACC queue (`--qos=acc_ehpc`)
 - Requests 2 nodes with 4 GPUs each (8 H100s total for GPT-OSS-120B)
 - Job will run for up to 8 hours
 
 **Expected output:**
+
 ```
 Submitted batch job 12345678
 ```
@@ -68,14 +71,14 @@ Or, with more detail:
 ssh glog "squeue -u \$USER -o '%i %j %T %M %N %R'"
 ```
 
-| Column | Meaning |
-|--------|---------|
-| `%i` | Job ID |
-| `%j` | Job name |
-| `%T` | State (PENDING/RUNNING/etc) |
-| `%M` | Time running |
-| `%N` | Node list |
-| `%R` | Reason (if pending) |
+| Column | Meaning                     |
+| ------ | --------------------------- |
+| `%i`   | Job ID                      |
+| `%j`   | Job name                    |
+| `%T`   | State (PENDING/RUNNING/etc) |
+| `%M`   | Time running                |
+| `%N`   | Node list                   |
+| `%R`   | Reason (if pending)         |
 
 ### Repeatedly check until RUNNING:
 
@@ -85,16 +88,19 @@ ssh glog "squeue -j 12345678 -h -o '%T %N'"
 ```
 
 **Expected output when pending:**
+
 ```
 PENDING (Resources)
 ```
 
 **Expected output when running:**
+
 ```
 RUNNING acc020,acc021
 ```
 
 **Extract the head node** (first node in the list):
+
 - If output is `RUNNING acc020,acc021`, the head node is `acc020`
 - Save this node name for the next steps
 
@@ -114,11 +120,13 @@ ssh alog "curl -sf http://acc020:30000/v1/models && echo OK || echo NOTREADY"
 ```
 
 **When not ready yet:**
+
 ```
 NOTREADY
 ```
 
 **When ready (you'll see model data):**
+
 ```json
 {"object":"list","data":[{"id":"openai/gpt-oss-120b",... }]}
 OK
@@ -136,12 +144,14 @@ ssh alog "tail -100 /gpfs/projects/ehpc482/dev/logs/*/sglang.log"
 **Look for these log messages:**
 
 Early stage (loading):
+
 ```
 [mn5] launching SGLang with tp=8 dp=1
 Loading model weights...
 ```
 
 Ready:
+
 ```
 INFO:     Started server process [12345]
 INFO:     Uvicorn running on http://0.0.0.0:30000
@@ -170,6 +180,7 @@ ssh -N -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -L 30000:acc020:30000 
 ```
 
 **What this does:**
+
 - `-N`: No remote command (just tunnel)
 - `-L 30000:acc020:30000`: Forward local port 30000 → compute node port 30000
 - `ServerAliveInterval/CountMax`: Keep connection alive
@@ -186,11 +197,13 @@ ssh -N -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -L 30000:acc020:30000 
 Open a **new terminal** and test the connection:
 
 ### List models:
+
 ```bash
 curl http://localhost:30000/v1/models | jq .
 ```
 
 ### Simple chat completion:
+
 ```bash
 curl http://localhost:30000/v1/chat/completions \
   -H "Content-Type: application/json" \
@@ -202,6 +215,7 @@ curl http://localhost:30000/v1/chat/completions \
 ```
 
 ### Longer response:
+
 ```bash
 curl http://localhost:30000/v1/chat/completions \
   -H "Content-Type: application/json" \
@@ -224,17 +238,20 @@ For the forska.ai API server to process judgments, it needs to know which model 
 The server filters jobs to only process projects using the current model. Set this **before** starting your API server:
 
 **Option A: Add to `.env.local`** (persistent):
+
 ```bash
 # In your .env.local file
 SGLANG_MODEL=openai/gpt-oss-120b
 ```
 
 **Option B: Set inline** (temporary):
+
 ```bash
 SGLANG_MODEL=openai/gpt-oss-120b bun run dev:server
 ```
 
 > **Note**: If `SGLANG_MODEL` is not set, the server will **not process any judgment jobs** and will log a warning:
+>
 > ```
 > [getRunningJobs] WARNING: SGLANG_MODEL not set. No jobs will be processed.
 > ```
@@ -285,6 +302,7 @@ ssh glog "squeue -u \$USER -t pending -o '%i %j %R'"
 ```
 
 Common reasons:
+
 - `(Resources)`: Waiting for GPUs to become available
 - `(Priority)`: Other jobs have higher priority
 
@@ -317,13 +335,13 @@ ssh glog "scancel 12345678"  # Replace with your job ID
 
 ## Key Paths on MN5
 
-| Path | Description |
-|------|-------------|
-| `/gpfs/projects/ehpc482/dev/` | Main development directory |
-| `/gpfs/projects/ehpc482/dev/hf_cache/` | HuggingFace model cache |
-| `/gpfs/projects/ehpc482/dev/logs/<jobid>/` | Job-specific logs |
-| `/gpfs/projects/ehpc482/dev/sglang_latest.sif` | SGLang container |
-| `/gpfs/projects/ehpc482/dev/forska-mn5-sglang.sbatch` | Slurm batch script |
+| Path                                                  | Description                |
+| ----------------------------------------------------- | -------------------------- |
+| `/gpfs/projects/ehpc482/dev/`                         | Main development directory |
+| `/gpfs/projects/ehpc482/dev/hf_cache/`                | HuggingFace model cache    |
+| `/gpfs/projects/ehpc482/dev/logs/<jobid>/`            | Job-specific logs          |
+| `/gpfs/projects/ehpc482/dev/sglang_latest.sif`        | SGLang container           |
+| `/gpfs/projects/ehpc482/dev/forska-mn5-sglang.sbatch` | Slurm batch script         |
 
 ---
 
@@ -331,5 +349,5 @@ ssh glog "scancel 12345678"  # Replace with your job ID
 
 - [README_MN5_INFERENCE.md](./README_MN5_INFERENCE.md) - Quick-start and automated commands
 - [README_MN5_SETUP.md](./README_MN5_SETUP.md) - Initial MN5 account setup
-- [MN5_PLAN.md](../MN5_PLAN.md) - Full deployment architecture
+- [MN5_PLAN.md](../plans/MN5_PLAN.md) - Full deployment architecture
 - [forska-mn5-sglang.sbatch](../forska-mn5-sglang.sbatch) - The Slurm batch script (detailed comments)

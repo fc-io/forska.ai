@@ -2,7 +2,8 @@
 
 LEGACY. Current PG→CH sync uses PeerDB; manual scripts/routes removed. See `PG_CH_HEALTH.md`.
 
-Goal: CH has *exact* project-scope articles + judgments state, continuously from Postgres, to power:
+Goal: CH has _exact_ project-scope articles + judgments state, continuously from Postgres, to power:
+
 - Jobs page: Unassessed Articles count (`/api/judgmentsjobs-unassessed-count`)
 - Project Reviews Unassessed page: list+count (`/api/articlesreviewsunassessed`)
 - Cron queue fill: ready (article×prompt) pairs (`src/server/cron/judgmentsJobs/judgmentsJobsCronGetPrompts.ts`)
@@ -27,6 +28,7 @@ Goal: CH has *exact* project-scope articles + judgments state, continuously from
 > ⚠️ **Schema note**: FK column is `import_route_id` (not `route_id`). Cron currently has 3 paths; CH should use canonical 2-way union only. Document legacy path as deprecated.
 
 **Canonical scope** (2-way union):
+
 ```sql
 -- Path 1: Direct article assignment
 SELECT article_id FROM project_articles WHERE project_id = ?
@@ -39,6 +41,7 @@ WHERE prl.project_id = ?
 ```
 
 **Legacy path (kept for compatibility)**:
+
 ```sql
 -- Path 3: Legacy string-match on articles.import_route → import_route.route
 SELECT a.id AS article_id
@@ -53,6 +56,7 @@ WHERE prl.project_id = ?
 ### "Assessed" judgment
 
 A judgment qualifies as "assessed" if **all** are true:
+
 1. `deleted_at IS NULL`
 2. `is_answered = true`
 3. Content settings match project: `(model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)` = project values
@@ -61,6 +65,7 @@ A judgment qualifies as "assessed" if **all** are true:
 > ⚠️ **`project_prompts` semantics**: Both `enabled` and `archived` columns exist. A prompt is considered "active" only when `enabled = true AND archived = false`. Ensure CH and PG queries agree on this to prevent drift.
 
 > ⚠️ **Current PG inconsistencies**:
+>
 > - `JudgmentsJobsRoutes.ts` (line ~124): Jobs count join does NOT filter `is_answered`, `deleted_at`, or `project_prompts.enabled`
 > - `projectsRoutesGetArticlesReviewsUnassessed.ts` (line ~84): Reviews join does NOT filter `is_answered` or `deleted_at`
 > - `judgmentsJobsCronGetPrompts.ts` (line ~67): Cron NOT EXISTS correctly filters `is_answered = true` but NOT `deleted_at`
@@ -74,10 +79,12 @@ Article is "unassessed" if missing ≥1 assessed judgment for any enabled prompt
 ### Edge case: 0 enabled prompts
 
 > ⚠️ If a project has 0 enabled prompts:
+>
 > - CH spot-check query returns ALL scoped articles as unassessed (because `assessed` CTE is empty)
 > - Current cron returns early with `{promptEntries: []}` (line ~144)
 >
 > **CH behavior**: Query should return 0 unassessed (no prompts = nothing to assess). Add guard:
+>
 > ```sql
 > -- Return 0 if no enabled prompts
 > SELECT CASE WHEN (SELECT COUNT(*) FROM enabled_prompts) = 0 THEN 0
@@ -92,23 +99,26 @@ Article is "unassessed" if missing ≥1 assessed judgment for any enabled prompt
 
 The `articles` table has heavy columns (`full_text`, `full_text_html`, `full_text_pdf`, `full_text_assets`) that impact storage and WAL bandwidth (the volume of data streamed over PostgreSQL's logical replication — larger rows = more network/disk I/O per change). Choose one of three approaches:
 
-| Option | What's replicated | CH Storage | WAL Bandwidth | Sort in CH? | Hydrate from PG? |
-|--------|-------------------|------------|---------------|-------------|------------------|
-| **(A) No replication** | Nothing | None | None | ❌ No | ✅ Full (IDs + all metadata) |
-| **(B) Skinny replica** | `id`, timestamps only | ~50-100 bytes/row | Low | ✅ Yes | ✅ Title/abstract/etc. |
-| **(C.2) Metadata replica** | All except `full_text_*` | ~1-5 KB/row | Medium | ✅ Yes | ❌ Not needed |
-| **(C.1) Full replica** | All columns | ~10-500 KB/row | High | ✅ Yes | ❌ Not needed |
+| Option                     | What's replicated        | CH Storage        | WAL Bandwidth | Sort in CH? | Hydrate from PG?             |
+| -------------------------- | ------------------------ | ----------------- | ------------- | ----------- | ---------------------------- |
+| **(A) No replication**     | Nothing                  | None              | None          | ❌ No       | ✅ Full (IDs + all metadata) |
+| **(B) Skinny replica**     | `id`, timestamps only    | ~50-100 bytes/row | Low           | ✅ Yes      | ✅ Title/abstract/etc.       |
+| **(C.2) Metadata replica** | All except `full_text_*` | ~1-5 KB/row       | Medium        | ✅ Yes      | ❌ Not needed                |
+| **(C.1) Full replica**     | All columns              | ~10-500 KB/row    | High          | ✅ Yes      | ❌ Not needed                |
 
 **Option A: No replication (hydrate from PG)**
+
 - Query CH for article IDs only, then hydrate from Postgres via `WHERE id IN (...)`
 - ⚠️ CH cannot sort by `article_updated_at` — each hydrated batch from PG is sorted independently
 - Works well for **count-only endpoints**; causes page-boundary inconsistencies for **paginated lists**
 
 **Option B: Skinny replica (recommended for list/pagination)**
+
 - Replicate only `articles.id`, `article_created_at`, `article_updated_at`
 - Enables correct `ORDER BY article_updated_at DESC` pagination in CH
 - Still hydrate title, abstract, etc. from PG after getting sorted IDs
 - Requires a **PostgreSQL view or separate table** since MaterializedPostgreSQL replicates all columns by default:
+
   ```sql
   -- Option B.1: Create a view (CH may not support replicating views — check version)
   CREATE VIEW articles_skinny AS SELECT id, article_created_at, article_updated_at FROM articles;
@@ -119,9 +129,11 @@ The `articles` table has heavy columns (`full_text`, `full_text_html`, `full_tex
   ```
 
 **Option C: Full replication**
+
 - Replicate the `articles` table to avoid any PG hydration round-trips
 - Maximum query flexibility in CH (search, sort, filter all in one place)
 - Two sub-approaches:
+
   ```sql
   -- Option C.1: True full replication (includes full_text columns)
   -- Just add 'articles' to materialized_postgresql_tables_list
@@ -144,6 +156,7 @@ The `articles` table has heavy columns (`full_text`, `full_text_html`, `full_tex
 **Recommendation: C.1 (full replication)**
 
 The idiomatic ClickHouse approach — just replicate everything:
+
 - ✅ **Simplest setup**: Just add `articles` to the table list, no views/triggers needed
 - ✅ CH can sort, filter, and display article lists without PG round-trips
 - ✅ Columnar storage: unused columns (full_text) don't hurt query performance
@@ -153,27 +166,27 @@ The idiomatic ClickHouse approach — just replicate everything:
 
 **Potential downsides of C.1:**
 
-| Downside | Impact | Mitigation |
-|----------|--------|------------|
-| **Initial sync time** | Large articles table × full rows = longer first sync | One-time cost; run during low-traffic window |
-| **WAL bandwidth** | Full row sent on every UPDATE | Acceptable if article updates are infrequent |
-| **Disk usage** | ~10-500 KB/article before compression | Compression helps; monitor and scale storage |
-| **Replication lag** | CH lags PG by 1-5s | Accept as-is; 1-5s lag expected for MaterializedPostgreSQL |
+| Downside              | Impact                                               | Mitigation                                                 |
+| --------------------- | ---------------------------------------------------- | ---------------------------------------------------------- |
+| **Initial sync time** | Large articles table × full rows = longer first sync | One-time cost; run during low-traffic window               |
+| **WAL bandwidth**     | Full row sent on every UPDATE                        | Acceptable if article updates are infrequent               |
+| **Disk usage**        | ~10-500 KB/article before compression                | Compression helps; monitor and scale storage               |
+| **Replication lag**   | CH lags PG by 1-5s                                   | Accept as-is; 1-5s lag expected for MaterializedPostgreSQL |
 
 Fallback: If storage becomes a concern, switch to C.2 (metadata-only) or B (skinny + PG hydration).
 
 ### Tables to replicate
 
-| Postgres Table         | Key Columns                                                         | Notes                          |
-|------------------------|---------------------------------------------------------------------|--------------------------------|
-| `articles`             | `id`, `article_created_at`, `article_updated_at`, `title`, `abstract`, ... | **Full replication (C.1)** |
-| `projects`             | `id`, `model_id`, `date_from`, `date_to`, `use_*`, `archived` | Small, replicate fully |
-| `project_prompts`      | `project_id`, `prompt_id`, `enabled`                                | Small, replicate fully |
-| `judgments`            | `article_id`, `prompt_id`, `model_id`, `is_answered`, `deleted_at`, `use_*` | Main assessment table |
-| `project_articles`     | `project_id`, `article_id`                                          | Direct scope link              |
-| `project_route_link`   | `project_id`, `import_route_id`                                     | Note: FK is `import_route_id`  |
-| `article_route_link`   | `article_id`, `import_route_id`                                     | Note: FK is `import_route_id`  |
-| `import_route`         | `id`, `route`                                                       | Replicate (legacy path kept)   |
+| Postgres Table       | Key Columns                                                                 | Notes                         |
+| -------------------- | --------------------------------------------------------------------------- | ----------------------------- |
+| `articles`           | `id`, `article_created_at`, `article_updated_at`, `title`, `abstract`, ...  | **Full replication (C.1)**    |
+| `projects`           | `id`, `model_id`, `date_from`, `date_to`, `use_*`, `archived`               | Small, replicate fully        |
+| `project_prompts`    | `project_id`, `prompt_id`, `enabled`                                        | Small, replicate fully        |
+| `judgments`          | `article_id`, `prompt_id`, `model_id`, `is_answered`, `deleted_at`, `use_*` | Main assessment table         |
+| `project_articles`   | `project_id`, `article_id`                                                  | Direct scope link             |
+| `project_route_link` | `project_id`, `import_route_id`                                             | Note: FK is `import_route_id` |
+| `article_route_link` | `article_id`, `import_route_id`                                             | Note: FK is `import_route_id` |
+| `import_route`       | `id`, `route`                                                               | Replicate (legacy path kept)  |
 
 ---
 
@@ -182,8 +195,10 @@ Fallback: If storage becomes a concern, switch to C.2 (metadata-only) or B (skin
 ### 1) PostgreSQL: enable logical replication
 
 > ⚠️ **CRITICAL**: Two key configuration changes required for Docker environments:
+>
 > 1. `listen_addresses = '*'` in postgresql.conf (default 'localhost' blocks container-to-container connections)
 > 2. `SUPERUSER` privilege for ch_replicator (MaterializedPostgreSQL requires it for publication management)
+
 ```ini
 # postgresql.conf
 # Enable logical replication for MaterializedPostgreSQL
@@ -196,6 +211,7 @@ listen_addresses = '*'
 ```
 
 Create replication user with default privileges (so new tables don't break replication):
+
 ```sql
 -- SUPERUSER required for MaterializedPostgreSQL to manage publications and replication slots
 CREATE USER ch_replicator WITH REPLICATION SUPERUSER PASSWORD 'xxx';
@@ -227,8 +243,9 @@ SELECT DISTINCT tableowner FROM pg_tables WHERE schemaname = 'public';
 -- If other roles exist, run: ALTER DEFAULT PRIVILEGES FOR ROLE <other_role> IN SCHEMA public GRANT SELECT ON TABLES TO ch_replicator;
 ```
 
-> ⚠️ **`ALTER DEFAULT PRIVILEGES` ownership caveat**: This only applies to tables created by the *current role* (or the role specified via `FOR ROLE`). If database migrations run as a different user (e.g., `forska_admin`), new tables they create will NOT inherit grants to `ch_replicator`. The commands above handle both the current role and `forska_admin`. If you discover other roles creating tables (via the `tableowner` query above), add `ALTER DEFAULT PRIVILEGES FOR ROLE` for those roles too.
+> ⚠️ **`ALTER DEFAULT PRIVILEGES` ownership caveat**: This only applies to tables created by the _current role_ (or the role specified via `FOR ROLE`). If database migrations run as a different user (e.g., `forska_admin`), new tables they create will NOT inherit grants to `ch_replicator`. The commands above handle both the current role and `forska_admin`. If you discover other roles creating tables (via the `tableowner` query above), add `ALTER DEFAULT PRIVILEGES FOR ROLE` for those roles too.
 > **Publication/Replication Slot**: MaterializedPostgreSQL creates its own publication and replication slot automatically. However, some setups may require explicit creation:
+>
 > ```sql
 > -- If CH requires explicit publication (check CH version docs):
 > CREATE PUBLICATION forska_ch_pub FOR TABLE projects, project_prompts, judgments, project_articles, project_route_link, article_route_link, import_route;
@@ -260,6 +277,7 @@ CREATE DATABASE pg ENGINE = MaterializedPostgreSQL(
 > ⚠️ MaterializedPostgreSQL databases may not support creating views directly in `pg.*`. CH behavior varies by version.
 
 **Recommended**: Create a separate normal DB for helper views:
+
 ```sql
 CREATE DATABASE forska_helpers;
 
@@ -275,6 +293,7 @@ JOIN pg.article_route_link arl ON arl.import_route_id = prl.import_route_id;
 ### 4) Verification queries
 
 **Row count sanity:**
+
 ```sql
 -- In Postgres
 SELECT 'projects' AS tbl, COUNT(*) FROM projects
@@ -340,14 +359,15 @@ SELECT
 
 Create in `forska_helpers` DB (not `pg.*`):
 
-| Query Template | Returns | Notes |
-|----------------|---------|-------|
-| `scoped_article_ids` CTE | `DISTINCT article_id` | 2-way union (direct + route-based), filter by `project_id = ?` |
-| `enabled_prompt_ids` CTE | `DISTINCT prompt_id` | From `project_prompts WHERE project_id = ? AND enabled = true AND archived = false` |
-| `assessed_article_ids` CTE | `DISTINCT article_id` | Articles with ALL enabled prompts judged |
-| `unassessed_article_ids` CTE | `DISTINCT article_id` | `scoped - assessed` (guard for 0 prompts) |
+| Query Template               | Returns               | Notes                                                                               |
+| ---------------------------- | --------------------- | ----------------------------------------------------------------------------------- |
+| `scoped_article_ids` CTE     | `DISTINCT article_id` | 2-way union (direct + route-based), filter by `project_id = ?`                      |
+| `enabled_prompt_ids` CTE     | `DISTINCT prompt_id`  | From `project_prompts WHERE project_id = ? AND enabled = true AND archived = false` |
+| `assessed_article_ids` CTE   | `DISTINCT article_id` | Articles with ALL enabled prompts judged                                            |
+| `unassessed_article_ids` CTE | `DISTINCT article_id` | `scoped - assessed` (guard for 0 prompts)                                           |
 
 Alternatively, create parameterizable **views** over all projects:
+
 ```sql
 -- View: all scoped (project_id, article_id) pairs
 CREATE VIEW forska_helpers.scoped_articles AS
@@ -365,16 +385,20 @@ JOIN pg.article_route_link arl ON arl.import_route_id = prl.import_route_id;
 ## Feature implementations
 
 ### 1) Jobs page: unassessed count
+
 **Current**: Heavy Postgres query with cross join + NOT EXISTS.
 
 **CH strategy**:
+
 1. Keep job context fetch in Postgres (`jobId → projectId`) — fast, single row
 2. Compute in CH: `unassessed_count = scoped_count - fully_assessed_count`
 3. Guard: return 0 if 0 enabled prompts
 4. Keep existing 10s cache (can relax after perf confirmation)
 
 ### 2) Jobs page: unassessed articles list
+
 **CH strategy**:
+
 1. Query `unassessed_article_ids(projectId)` with keyset pagination
 2. Order by `article_updated_at DESC` (canonical sort column)
 3. Use keyset cursor: `WHERE (article_updated_at, article_id) < (?, ?) ORDER BY article_updated_at DESC, article_id DESC LIMIT 100`
@@ -383,9 +407,11 @@ JOIN pg.article_route_link arl ON arl.import_route_id = prl.import_route_id;
 > ⚠️ **Index for pagination**: Ensure CH has an index on `(article_updated_at, article_id)` for efficient keyset pagination. MaterializedPostgreSQL may auto-create indexes based on PG indexes. Verify with `SHOW CREATE TABLE pg.articles;` and create manually if needed.
 
 ### 3) Project Reviews Unassessed page
+
 **Endpoint**: `/api/articlesreviewsunassessed`
 
 **CH strategy**:
+
 1. CH query for count + paginated article IDs
 2. **Use keyset pagination** (prevents duplicates/skips during concurrent updates):
    ```sql
@@ -396,17 +422,20 @@ JOIN pg.article_route_link arl ON arl.import_route_id = prl.import_route_id;
    > ⚠️ **Why keyset over offset**: If articles update between page requests, offset pagination can skip/duplicate rows. Keyset pagination uses cursor position (last seen timestamp + id) to maintain consistency.
 
 ### 4) Cron: `judgmentsJobsCronGetPrompts`
+
 **Goal**: Avoid Postgres cross join + NOT EXISTS scans.
 
 **CH strategy**:
 
 > ⚠️ **0 enabled prompts guard**: Add app-level check BEFORE running CH query. If 0 prompts, return early `{promptEntries: []}` to avoid unnecessary CROSS JOIN:
+>
 > ```ts
 > const enabledPromptsCount = await getEnabledPromptsCount(projectId)
-> if (enabledPromptsCount === 0) return { promptEntries: [] }
+> if (enabledPromptsCount === 0) return {promptEntries: []}
 > ```
 
 **CH query** (run only if prompts exist):
+
 ```sql
 WITH
   scoped AS (
@@ -445,13 +474,12 @@ LIMIT 1000
 ```
 
 Insert to `judgments_jobs_prompts` with conflict handling:
+
 ```ts
-await db.insert(judgmentsJobsPrompts)
-  .values(pairs)
-  .onConflictDoNothing();
+await db.insert(judgmentsJobsPrompts).values(pairs).onConflictDoNothing()
 ```
 
-> ⚠️ **Replication lag caveat**: CH may return pairs that were *just* judged in Postgres.
+> ⚠️ **Replication lag caveat**: CH may return pairs that were _just_ judged in Postgres.
 > `onConflictDoNothing` prevents duplicates. Downstream worker checks if already judged (no-op if so).
 
 ---
@@ -463,6 +491,7 @@ await db.insert(judgmentsJobsPrompts)
 > ⚠️ **Version check**: `system.postgres_replication_slots` view may not exist or may have different columns depending on CH version. Test in target environment first.
 
 **Option A (if `system.postgres_replication_slots` exists)**:
+
 ```sql
 SELECT database, table, total_lag_seconds
 FROM system.postgres_replication_slots
@@ -470,6 +499,7 @@ WHERE database = 'pg';
 ```
 
 **Option B (check MaterializedPostgreSQL database status)**:
+
 ```sql
 -- Check if MaterializedPostgreSQL engine is running
 SELECT
@@ -490,24 +520,28 @@ WHERE database = 'pg';
 ```
 
 **Option C (compare row counts for lag detection)**:
+
 ```sql
 -- Compare PG vs CH counts as proxy for lag
 -- Run periodically and alert if delta persists > 60s
 ```
 
 Add to runtime logging:
+
 ```ts
 // Verify query works in your CH version before using
-const lagQuery = `SELECT max(total_lag_seconds) as lag FROM system.postgres_replication_slots WHERE database = 'pg'`;
-const lag = await clickhouse.query(lagQuery).catch(() => null);
-if (lag) logger.info({ chReplicationLagSec: lag }, 'CH replication status');
+const lagQuery = `SELECT max(total_lag_seconds) as lag FROM system.postgres_replication_slots WHERE database = 'pg'`
+const lag = await clickhouse.query(lagQuery).catch(() => null)
+if (lag) logger.info({chReplicationLagSec: lag}, 'CH replication status')
 ```
 
 **Alert thresholds**:
+
 - ⚠️ Warning: lag > 10s
 - 🚨 Critical: lag > 60s → investigate CH health
 
 ### WAL slot size (Postgres side)
+
 ```sql
 SELECT slot_name,
        pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)) as lag_bytes
@@ -521,17 +555,17 @@ WHERE slot_type = 'logical';
 
 ## Risks & mitigations
 
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| **Assessed semantics drift** | CH/PG counts differ | Unify PG queries first (`is_answered`, `deleted_at`, `enabled`) |
-| **Assessed CTE performance** | Scanning all judgments instead of scoped only | Add `j.article_id IN (SELECT article_id FROM scoped)` filter |
-| **0 enabled prompts** | CH returns all articles as unassessed | Add guard clause in queries (return 0 or early exit) |
-| **Full articles replication** | Storage/WAL bloat | Monitor disk usage; articles replicated in controlled manner |
-| **Views in MaterializedPG DB** | May fail or behave unexpectedly | Use separate `forska_helpers` DB |
-| **Monitoring query** | `system.postgres_replication_slots` may not exist | Test in target CH version; fallback to row count comparison |
-| **Replication lag** | Stale counts, missed articles | Accept 1-5s lag expected for MaterializedPostgreSQL |
-| **WAL growth** | Disk full on Postgres | Monitor slot size; alert on > 1GB; emergency slot drop procedure |
-| **Type mapping** | UUID/timestamp params from app | MaterializedPostgreSQL auto-converts PG types; if manual casts needed: `toUUID('...')`, `toDateTime('...')` |
+| Risk                           | Impact                                            | Mitigation                                                                                                  |
+| ------------------------------ | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| **Assessed semantics drift**   | CH/PG counts differ                               | Unify PG queries first (`is_answered`, `deleted_at`, `enabled`)                                             |
+| **Assessed CTE performance**   | Scanning all judgments instead of scoped only     | Add `j.article_id IN (SELECT article_id FROM scoped)` filter                                                |
+| **0 enabled prompts**          | CH returns all articles as unassessed             | Add guard clause in queries (return 0 or early exit)                                                        |
+| **Full articles replication**  | Storage/WAL bloat                                 | Monitor disk usage; articles replicated in controlled manner                                                |
+| **Views in MaterializedPG DB** | May fail or behave unexpectedly                   | Use separate `forska_helpers` DB                                                                            |
+| **Monitoring query**           | `system.postgres_replication_slots` may not exist | Test in target CH version; fallback to row count comparison                                                 |
+| **Replication lag**            | Stale counts, missed articles                     | Accept 1-5s lag expected for MaterializedPostgreSQL                                                         |
+| **WAL growth**                 | Disk full on Postgres                             | Monitor slot size; alert on > 1GB; emergency slot drop procedure                                            |
+| **Type mapping**               | UUID/timestamp params from app                    | MaterializedPostgreSQL auto-converts PG types; if manual casts needed: `toUUID('...')`, `toDateTime('...')` |
 
 ---
 
@@ -555,10 +589,12 @@ WHERE slot_type = 'logical';
 ## Rollout plan
 
 ### Phase 1: PG cleanup
+
 - [x] Unify assessed semantics in all PG queries (add `is_answered`, `deleted_at`, `enabled`, `archived` filters)
 - [ ] Backfill `article_route_link` if needed (see pre-flight checklist for SQL; only needed if deprecating Path 3 or articles missing FK entries)
 
 ### Phase 2: Infrastructure
+
 - [x] Enable logical replication in Postgres (`wal_level = logical`)
 - [x] Fix PostgreSQL network config: Added `listen_addresses = '*'` to `config/postgres/postgresql.conf` (required for Docker container-to-container communication)
 - [x] Create CH replication user with appropriate grants (including `FOR ROLE` if migrations run as different user)
@@ -590,17 +626,20 @@ WHERE slot_type = 'logical';
 **Phase 2 Status**: ✅ COMPLETE
 
 **Critical Fixes Applied**:
+
 1. PostgreSQL `listen_addresses = '*'` (was `localhost`, blocked CH connections)
 2. Granted SUPERUSER to ch_replicator (MaterializedPostgreSQL requirement)
 3. **Articles replication workaround**: MaterializedPostgreSQL has a bug with large tables. Created `forska.articles` (MergeTree) synced via batch INSERT from `postgresql()` function instead of relying on `pg.articles`.
 
 **Articles Table Architecture**:
+
 - `pg.articles` - MaterializedPostgreSQL replica (incomplete, ~64% of rows, DO NOT USE)
 - `forska.articles` - MergeTree table with ReplacingMergeTree(updated_at), 100% synced
 - Excluded columns: `article_authors`, `original_data`, `full_text_assets` (null byte issues)
 - Sync: PeerDB CDC (no scripts)
 
 **Documentation Created**:
+
 - `config/clickhouse/STATUS.md` - Current status and quick reference
 - `config/clickhouse/SETUP_PROGRESS.md` - Step-by-step setup log
 - `config/clickhouse/TROUBLESHOOTING.md` - Common issues and solutions
@@ -608,6 +647,7 @@ WHERE slot_type = 'logical';
 - `config/clickhouse/INVESTIGATE_ARTICLE_MISMATCH.md` - Investigation and resolution details
 
 ### Phase 3: Deploy
+
 **Status**: 🚧 IN PROGRESS
 
 - [x] Implement CH queries for:
@@ -620,6 +660,7 @@ WHERE slot_type = 'logical';
 - [ ] Observe query latency + CH disk usage
 
 **Implementation Notes**:
+
 - Created `src/services/clickhouse/unassessedArticlesClickHouse.ts` with 3 CH query functions
 - Updated `JudgmentsJobsRoutes.ts` to use CH for `/api/judgmentsjobs-unassessed-count`
 - Updated `projectsRoutesGetArticlesReviewsUnassessed.ts` to use CH for `/api/articlesreviewsunassessed`
@@ -628,6 +669,7 @@ WHERE slot_type = 'logical';
 - CH queries use `pg.*` tables (MaterializedPostgreSQL) + `forska.articles` (MergeTree workaround)
 
 ### Phase 4: Evaluate
+
 - [ ] Compare CH vs PG counts for sample projects
 - [ ] Verify pagination consistency (no page-boundary issues)
 - [ ] Monitor WAL slot size on PG side
@@ -640,6 +682,7 @@ WHERE slot_type = 'logical';
 ## Remaining Tasks (Post-Resolution)
 
 ### High Priority
+
 - [ ] Ensure PeerDB mirror health + lag alerts
 - [ ] **Clean up incomplete `pg` database** (optional - uses 237 GiB disk)
   ```sql
@@ -650,6 +693,7 @@ WHERE slot_type = 'logical';
   ```
 
 ### Medium Priority
+
 - [ ] **Monitor memory usage on `scoped_articles` view** - Currently hits memory limit on large queries
 - [ ] **Add missing columns to `forska.articles`** if needed:
   - `article_authors` (Array - excluded due to null byte issues)
@@ -657,5 +701,6 @@ WHERE slot_type = 'logical';
   - `full_text_assets` (JSON)
 
 ### Low Priority
+
 - [ ] Consider upgrading ClickHouse to fix MaterializedPostgreSQL bug
 - [ ] Evaluate if `pg.articles` can be dropped entirely (other tables in `pg.*` still useful)

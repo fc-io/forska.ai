@@ -7,7 +7,7 @@ Goal: standalone single-user app (your own computer). No admin role. No hosted m
 Current: Bun/Elysia API, SolidJS/Vite client, Drizzle+Postgres+Better Auth (temporary).
 Roadmap: admin-free -> remove Better Auth/users -> SQLite app DB -> DuckDB analytics (drop ClickHouse).
 
-Plans: `REMOVE_ADMIN_AND_USERS.md`, `SQLITE_PLAN.md`, `DUCK_PLAN.md`.
+Plans: `plans/REMOVE_ADMIN_AND_USERS.md`, `plans/SQLITE_PLAN.md`, `plans/DUCK_PLAN.md`.
 
 ## Abstract
 

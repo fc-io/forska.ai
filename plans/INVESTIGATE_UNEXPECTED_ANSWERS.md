@@ -25,12 +25,14 @@ bun run scripts/investigateUnexpectedAnswers.ts <project-id>
 ```
 
 **Output:**
+
 - Summary of all prompts with unexpected answers
 - Count and percentage of unexpected answers
 - List of unexpected values found
 - Breakdown by prompt
 
 **Use when:**
+
 - You want a quick overview
 - You're not sure which prompts are affected
 - You want to see patterns across all projects
@@ -50,12 +52,14 @@ bun run scripts/findArticlesWithUnexpectedAnswers.ts <project-id> <prompt-id>
 ```
 
 **Output:**
+
 - Article titles and IDs
 - The unexpected answer value
 - When it was judged
 - Shows first 20 articles per prompt
 
 **Use when:**
+
 - You want to see which specific articles are affected
 - You need to review or re-judge specific articles
 - You're investigating a specific prompt
@@ -69,6 +73,7 @@ Create a web interface to explore unexpected answers visually.
 See: `scripts/createUnexpectedAnswersAdminPage.md`
 
 **Features:**
+
 - Visual table interface
 - Filter by project
 - Click through to affected articles
@@ -76,6 +81,7 @@ See: `scripts/createUnexpectedAnswersAdminPage.md`
 - No command-line needed
 
 **Use when:**
+
 - You want to share findings with non-technical team members
 - You need to regularly monitor this
 - You prefer UI over command-line
@@ -114,6 +120,7 @@ ORDER BY count DESC;
 ```
 
 **Use when:**
+
 - You need custom analysis
 - You want to join with other tables
 - You're comfortable with SQL
@@ -123,28 +130,35 @@ ORDER BY count DESC;
 ## Common Causes and Solutions
 
 ### 1. NULL or Empty Answers
+
 **Cause:** Judgment failed, timed out, or LLM returned no answer
 **Solution:** Re-run judgments for affected articles
 
 ### 2. Old Values After Type Change
+
 **Cause:** Prompt options were changed after judgments existed
 **Solution:** Either:
+
 - Re-judge articles with old values
 - Add old values to the type definition
 - Use migration to map old → new values
 
 ### 3. LLM Hallucination
+
 **Cause:** LLM returned creative variations (e.g., "not sure" instead of "unsure")
 **Solution:**
+
 - Improve prompt instructions
 - Use stricter output formatting
 - Add post-processing to normalize answers
 
 ### 4. Case Sensitivity
+
 **Cause:** Answer was "Yes" but type defines "yes"
 **Solution:** Normalize case in type definitions or storage
 
 ### 5. Whitespace Issues
+
 **Cause:** Answer has leading/trailing spaces
 **Solution:** Trim answers before storing
 

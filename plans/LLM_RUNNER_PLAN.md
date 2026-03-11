@@ -84,6 +84,7 @@ Additional fields to add to existing schema:
 **Approach**: Keep sbatch scripts as the canonical source of truth. Make them parseable by llm-runner using a standardized `FORSKA_*` env var defaults block.
 
 **Key insight**: The `: "${VAR:=default}"` bash pattern serves dual purpose:
+
 1. **Functional**: Sets the variable for use later in the script
 2. **Parseable**: llm-runner can extract config by parsing these lines
 
@@ -143,25 +144,25 @@ sbatch --export=ALL,FORSKA_MODEL=Qwen/Qwen3-30B-A3B forska-mn5-sglang.sbatch
 
 ```typescript
 interface ForskaConfig {
-  hpc: string;
-  model: string;
-  port: number;
-  tpSize: number;
-  dpSize: number;
-  maxRunning: number;
-  memFraction: number;
-  container: 'singularity' | 'apptainer';
-  scriptType: 'sglang-only' | 'full-stack';
+  hpc: string
+  model: string
+  port: number
+  tpSize: number
+  dpSize: number
+  maxRunning: number
+  memFraction: number
+  container: 'singularity' | 'apptainer'
+  scriptType: 'sglang-only' | 'full-stack'
 }
 
 const parseForskaConfig = (script: string): ForskaConfig => {
-  const defaults: Record<string, string> = {};
+  const defaults: Record<string, string> = {}
 
   // Match: : "${FORSKA_XXX:=value}"
-  const regex = /: "\$\{FORSKA_(\w+):=([^}]+)\}"/g;
-  let match;
+  const regex = /: "\$\{FORSKA_(\w+):=([^}]+)\}"/g
+  let match
   while ((match = regex.exec(script)) !== null) {
-    defaults[match[1]] = match[2];
+    defaults[match[1]] = match[2]
   }
 
   return {
@@ -174,30 +175,30 @@ const parseForskaConfig = (script: string): ForskaConfig => {
     memFraction: Number(defaults.MEM_FRACTION) || 0.9,
     container: (defaults.CONTAINER as 'singularity' | 'apptainer') ?? 'apptainer',
     scriptType: (defaults.SCRIPT_TYPE as 'sglang-only' | 'full-stack') ?? 'sglang-only',
-  };
-};
+  }
+}
 ```
 
 **Parse Slurm directives** (for resource allocation info):
 
 ```typescript
 interface SlurmConfig {
-  jobName?: string;
-  account?: string;
-  partition?: string;
-  qos?: string;
-  nodes: number;
-  gpusPerNode: number;
-  gpuType?: string;
-  time?: string;
+  jobName?: string
+  account?: string
+  partition?: string
+  qos?: string
+  nodes: number
+  gpusPerNode: number
+  gpuType?: string
+  time?: string
 }
 
 const parseSlurmConfig = (script: string): SlurmConfig => {
-  const get = (pattern: RegExp) => script.match(pattern)?.[1];
+  const get = (pattern: RegExp) => script.match(pattern)?.[1]
 
   // GPU: "--gres=gpu:4" or "--gpus-per-node=A100fat:3"
-  const gresMatch = script.match(/#SBATCH\s+--gres=gpu:(\d+)/);
-  const gpuPerNodeMatch = script.match(/#SBATCH\s+--gpus-per-node=([^:\s]+):(\d+)/);
+  const gresMatch = script.match(/#SBATCH\s+--gres=gpu:(\d+)/)
+  const gpuPerNodeMatch = script.match(/#SBATCH\s+--gpus-per-node=([^:\s]+):(\d+)/)
 
   return {
     jobName: get(/#SBATCH\s+(?:-J|--job-name)[=\s]+(\S+)/),
@@ -205,47 +206,43 @@ const parseSlurmConfig = (script: string): SlurmConfig => {
     partition: get(/#SBATCH\s+(?:-p|--partition)[=\s]+(\S+)/),
     qos: get(/#SBATCH\s+--qos[=\s]+(\S+)/),
     nodes: Number(get(/#SBATCH\s+--nodes[=\s]+(\d+)/)) || 1,
-    gpusPerNode: gresMatch ? Number(gresMatch[1]) :
-                 gpuPerNodeMatch ? Number(gpuPerNodeMatch[2]) : 1,
+    gpusPerNode: gresMatch ? Number(gresMatch[1]) : gpuPerNodeMatch ? Number(gpuPerNodeMatch[2]) : 1,
     gpuType: gpuPerNodeMatch?.[1],
     time: get(/#SBATCH\s+--time[=\s]+(\S+)/),
-  };
-};
+  }
+}
 ```
 
 **Combined parser**:
 
 ```typescript
-const parseSbatchScript = (script: string) => ({
-  forska: parseForskaConfig(script),
-  slurm: parseSlurmConfig(script),
-});
+const parseSbatchScript = (script: string) => ({forska: parseForskaConfig(script), slurm: parseSlurmConfig(script)})
 ```
 
 #### HPC-specific differences (handled in each sbatch)
 
-| Setting | MN5 | Alvis | DIS |
-|---------|-----|-------|-----|
-| Account | `-A ehpc482` | `-A NAISS2025-22-715` | `--account=...` |
-| Partition | `acc` | `alvis` | `common` |
-| QOS | `acc_debug` | *(none)* | `ehpc-aif-...` |
-| GPU gres | `--gres=gpu:4` | `--gpus-per-node=A100fat:3` | `--gres=gpu:2` |
-| Container | `singularity` | `apptainer` | `apptainer` |
-| Script type | sglang-only | full-stack | full-stack |
+| Setting     | MN5            | Alvis                       | DIS             |
+| ----------- | -------------- | --------------------------- | --------------- |
+| Account     | `-A ehpc482`   | `-A NAISS2025-22-715`       | `--account=...` |
+| Partition   | `acc`          | `alvis`                     | `common`        |
+| QOS         | `acc_debug`    | _(none)_                    | `ehpc-aif-...`  |
+| GPU gres    | `--gres=gpu:4` | `--gpus-per-node=A100fat:3` | `--gres=gpu:2`  |
+| Container   | `singularity`  | `apptainer`                 | `apptainer`     |
+| Script type | sglang-only    | full-stack                  | full-stack      |
 
 #### Standard FORSKA variables
 
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `FORSKA_HPC` | HPC identifier | `mn5`, `alvis`, `dis` |
-| `FORSKA_MODEL` | HuggingFace model ID | `XiaomiMiMo/MiMo-V2-Flash` |
-| `FORSKA_PORT` | SGLang server port | `30000` |
-| `FORSKA_TP_SIZE` | Tensor parallel size | `8` |
-| `FORSKA_DP_SIZE` | Data parallel size | `1` |
-| `FORSKA_MAX_RUNNING` | Max concurrent requests | `128` |
-| `FORSKA_MEM_FRACTION` | GPU memory fraction | `0.75` |
-| `FORSKA_CONTAINER` | Container runtime | `singularity`, `apptainer` |
-| `FORSKA_SCRIPT_TYPE` | Script type | `sglang-only`, `full-stack` |
+| Variable              | Description             | Example                     |
+| --------------------- | ----------------------- | --------------------------- |
+| `FORSKA_HPC`          | HPC identifier          | `mn5`, `alvis`, `dis`       |
+| `FORSKA_MODEL`        | HuggingFace model ID    | `XiaomiMiMo/MiMo-V2-Flash`  |
+| `FORSKA_PORT`         | SGLang server port      | `30000`                     |
+| `FORSKA_TP_SIZE`      | Tensor parallel size    | `8`                         |
+| `FORSKA_DP_SIZE`      | Data parallel size      | `1`                         |
+| `FORSKA_MAX_RUNNING`  | Max concurrent requests | `128`                       |
+| `FORSKA_MEM_FRACTION` | GPU memory fraction     | `0.75`                      |
+| `FORSKA_CONTAINER`    | Container runtime       | `singularity`, `apptainer`  |
+| `FORSKA_SCRIPT_TYPE`  | Script type             | `sglang-only`, `full-stack` |
 
 #### Benefits
 
@@ -350,6 +347,7 @@ Response per model:
 ```
 
 **Log parsing requirements**: The sbatch script must produce parseable log output. Validate that logs contain:
+
 - Model loading progress indicators
 - Clear "server ready" message (e.g. SGLang's `"The server is fired up"`)
 - Error messages with identifiable patterns
@@ -361,6 +359,7 @@ Response per model:
 ### Auto-restart
 
 After a model reaches `completed` state (sbatch finished normally), llm-runner can automatically restart it:
+
 - Transition: `completed` → `idle` → `submitting` → ...
 - Configurable via `autoRestart: boolean` in model config
 - Useful for long-running inference workloads that exceed Slurm time limits
@@ -370,16 +369,19 @@ After a model reaches `completed` state (sbatch finished normally), llm-runner c
 llm-runner can optionally poll the API server to optimize HPC resource usage:
 
 **Idle cancellation** (`--poll-api-server` flag):
+
 - Periodically check API server for active jobs / pending requests
 - If a model has been `available` with no requests for N minutes → `scancel` and free the allocation
 - Prevents wasting HPC credits when there's no work
 
 **Demand-driven launching** (`--demand-driven` flag):
+
 - Poll API server: "which models are needed to finish active jobs?"
 - Automatically start models that are `idle` but have pending work
 - Automatically stop models that have no pending work
 
 API server must expose:
+
 - `GET /api/llm-runner/demand` → `{ modelsNeeded: string[], pendingRequestsByModel: Record<string, number> }`
 
 ## Slurm integration approach
@@ -649,115 +651,115 @@ In practice, many people skip the footer and rely on:
 ### TypeScript (Bun) — Writer
 
 ```ts
-import { openSync, closeSync, writeSync, fsyncSync, renameSync } from "fs";
+import {openSync, closeSync, writeSync, fsyncSync, renameSync} from 'fs'
 
 function u32le(n: number) {
-  const b = Buffer.alloc(4);
-  b.writeUInt32LE(n >>> 0, 0);
-  return b;
+  const b = Buffer.alloc(4)
+  b.writeUInt32LE(n >>> 0, 0)
+  return b
 }
 function u16le(n: number) {
-  const b = Buffer.alloc(2);
-  b.writeUInt16LE(n & 0xffff, 0);
-  return b;
+  const b = Buffer.alloc(2)
+  b.writeUInt16LE(n & 0xffff, 0)
+  return b
 }
 function u64le(nBig: bigint) {
-  const b = Buffer.alloc(8);
-  b.writeBigUInt64LE(nBig, 0);
-  return b;
+  const b = Buffer.alloc(8)
+  b.writeBigUInt64LE(nBig, 0)
+  return b
 }
 
 // Convert UUID string -> 16 bytes canonical
 function uuidToBytes(uuid: string): Buffer {
-  const hex = uuid.replace(/-/g, "");
-  return Buffer.from(hex, "hex");
+  const hex = uuid.replace(/-/g, '')
+  return Buffer.from(hex, 'hex')
 }
 
-type Rec = { id: string; payloadJsonUtf8: Uint8Array; type: 1 | 2 };
+type Rec = {id: string; payloadJsonUtf8: Uint8Array; type: 1 | 2}
 
 export function writeJbnd(pathTmp: string, pathFinal: string, recs: Rec[]) {
-  const fd = openSync(pathTmp, "w");
+  const fd = openSync(pathTmp, 'w')
 
   // Header (32 bytes)
-  const magic = Buffer.from("JBND");
-  const version = u16le(1);
-  const headerLen = u16le(0);
-  const flags = u32le(0); // set bit0 if you add CRC32C, bit1 if footer
-  const createdNs = u64le(BigInt(Date.now()) * 1_000_000n);
-  const reserved = Buffer.alloc(12, 0);
+  const magic = Buffer.from('JBND')
+  const version = u16le(1)
+  const headerLen = u16le(0)
+  const flags = u32le(0) // set bit0 if you add CRC32C, bit1 if footer
+  const createdNs = u64le(BigInt(Date.now()) * 1_000_000n)
+  const reserved = Buffer.alloc(12, 0)
 
-  writeSync(fd, Buffer.concat([magic, version, headerLen, flags, createdNs, reserved]));
+  writeSync(fd, Buffer.concat([magic, version, headerLen, flags, createdNs, reserved]))
 
   for (const r of recs) {
-    const uuidBytes = uuidToBytes(r.id);
-    if (uuidBytes.length !== 16) throw new Error("bad uuid");
+    const uuidBytes = uuidToBytes(r.id)
+    if (uuidBytes.length !== 16) throw new Error('bad uuid')
 
-    const payload = Buffer.from(r.payloadJsonUtf8);
-    const payloadLen = payload.length;
+    const payload = Buffer.from(r.payloadJsonUtf8)
+    const payloadLen = payload.length
 
     // record body
     const body = Buffer.concat([
-      Buffer.from([r.type, 0]),    // record_type, record_flags
-      Buffer.alloc(2, 0),          // reserved u16
-      uuidBytes,                   // 16 bytes
+      Buffer.from([r.type, 0]), // record_type, record_flags
+      Buffer.alloc(2, 0), // reserved u16
+      uuidBytes, // 16 bytes
       u32le(payloadLen),
-      payload
-    ]);
+      payload,
+    ])
 
     // record_len excludes the u32 record_len field itself
-    writeSync(fd, u32le(body.length));
-    writeSync(fd, body);
+    writeSync(fd, u32le(body.length))
+    writeSync(fd, body)
   }
 
-  fsyncSync(fd);
-  closeSync(fd);
-  renameSync(pathTmp, pathFinal);
+  fsyncSync(fd)
+  closeSync(fd)
+  renameSync(pathTmp, pathFinal)
 }
 ```
 
 ### TypeScript (Bun) — Reader (streaming)
 
 ```ts
-import { openSync, closeSync, readSync } from "fs";
+import {openSync, closeSync, readSync} from 'fs'
 
 function readExact(fd: number, n: number): Buffer | null {
-  const b = Buffer.alloc(n);
-  const got = readSync(fd, b, 0, n, null);
-  if (got === 0) return null;
-  if (got !== n) throw new Error("truncated");
-  return b;
+  const b = Buffer.alloc(n)
+  const got = readSync(fd, b, 0, n, null)
+  if (got === 0) return null
+  if (got !== n) throw new Error('truncated')
+  return b
 }
 
-export function readJbnd(path: string, onRecord: (r: { type: number; idHex: string; payload: Buffer }) => void) {
-  const fd = openSync(path, "r");
+export function readJbnd(path: string, onRecord: (r: {type: number; idHex: string; payload: Buffer}) => void) {
+  const fd = openSync(path, 'r')
 
   try {
-    const hdr = readExact(fd, 32);
-    if (!hdr) throw new Error("empty");
-    if (hdr.subarray(0, 4).toString("ascii") !== "JBND") throw new Error("bad magic");
+    const hdr = readExact(fd, 32)
+    if (!hdr) throw new Error('empty')
+    if (hdr.subarray(0, 4).toString('ascii') !== 'JBND') throw new Error('bad magic')
 
     while (true) {
-      const lenBuf = readExact(fd, 4);
-      if (!lenBuf) break; // clean EOF
-      const recordLen = lenBuf.readUInt32LE(0);
+      const lenBuf = readExact(fd, 4)
+      if (!lenBuf) break // clean EOF
+      const recordLen = lenBuf.readUInt32LE(0)
 
-      const rec = readExact(fd, recordLen); // throws if truncated tail
-      if (!rec) throw new Error("truncated");
-      const type = rec.readUInt8(0);
+      const rec = readExact(fd, recordLen) // throws if truncated tail
+      if (!rec) throw new Error('truncated')
+      const type = rec.readUInt8(0)
 
-      const uuidBytes = rec.subarray(4, 20);
-      const idHex = uuidBytes.toString("hex"); // format as you like
+      const uuidBytes = rec.subarray(4, 20)
+      const idHex = uuidBytes.toString('hex') // format as you like
 
-      const payloadLen = rec.readUInt32LE(20);
-      const payload = rec.subarray(24, 24 + payloadLen);
+      const payloadLen = rec.readUInt32LE(20)
+      const payload = rec.subarray(24, 24 + payloadLen)
 
-      onRecord({ type, idHex, payload });
+      onRecord({type, idHex, payload})
     }
   } catch (e) {
     // If you want "ignore truncated last record", catch "truncated" and treat as partial file.
-    throw e;
+    throw e
   } finally {
-    closeSync(fd);
+    closeSync(fd)
   }
 }
 ```

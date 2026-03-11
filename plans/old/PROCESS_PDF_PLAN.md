@@ -15,6 +15,7 @@ PDF fetch (existing) → Docling Serve (Docker) → fullText, fullTextHtml → j
 ## When to convert
 
 Convert at **prompt preparation time** (`processPromptWithLLM.ts`), not at fetch time:
+
 - Only for projects/jobs with `useFulltext=true`
 - Only converts PDFs for articles actually being judged
 - Avoids wasted conversions for irrelevant articles
@@ -29,11 +30,12 @@ docker run -d --name docling-serve -p 5001:5001 ghcr.io/docling-project/docling-
 ```
 
 Add to `docker-compose.yml`:
+
 ```yaml
 docling:
   image: ghcr.io/docling-project/docling-serve
   ports:
-    - "5001:5001"
+    - '5001:5001'
 ```
 
 ### 2. Conversion Function
@@ -44,13 +46,20 @@ Just a fetch call — no library needed:
 
 ```ts
 export class ConversionError extends Error {
-  constructor(message: string, public status?: number, public isPermanent: boolean = false) {
+  constructor(
+    message: string,
+    public status?: number,
+    public isPermanent: boolean = false,
+  ) {
     super(message)
     this.name = 'ConversionError'
   }
 }
 
-export const convertPdfToText = async (localPath: string, timeoutMs: number = 60_000): Promise<{md: string, html: string}> => {
+export const convertPdfToText = async (
+  localPath: string,
+  timeoutMs: number = 60_000,
+): Promise<{md: string; html: string}> => {
   // Use absolute path for safety
   const absPath = path.resolve(process.cwd(), localPath)
   const pdfBytes = await Bun.file(absPath).arrayBuffer()
@@ -59,30 +68,22 @@ export const convertPdfToText = async (localPath: string, timeoutMs: number = 60
   const res = await fetch(`${env.DOCLING_SERVE_URL}/v1/convert/source`, {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({
-      sources: [{kind: 'base64', data: base64}],
-      options: {to_formats: ['md', 'html']}
-    })
+    body: JSON.stringify({sources: [{kind: 'base64', data: base64}], options: {to_formats: ['md', 'html']}}),
   })
 
   if (!res.ok) {
     // Permanent errors: client-side issues that won't be fixed by retrying
     const isPermanent = [400, 401, 403, 404, 422].includes(res.status)
-    throw new ConversionError(
-      `Docling conversion failed: ${res.status} ${res.statusText}`,
-      res.status,
-      isPermanent
-    )
+    throw new ConversionError(`Docling conversion failed: ${res.status} ${res.statusText}`, res.status, isPermanent)
   }
 
   const json = await res.json()
   // docling-serve returns keys for each format, e.g. md_content, html_content (check actual key in response)
   return {
     md: json.documents[0].md_content,
-    html: json.documents[0].html_content ?? '' // Fallback if key differs
+    html: json.documents[0].html_content ?? '', // Fallback if key differs
   }
 }
-
 ```
 
 ### 3. Prompt Structure
@@ -90,6 +91,7 @@ export const convertPdfToText = async (localPath: string, timeoutMs: number = 60
 Modify: `src/agent/judge/judgeGetPrompt.ts` (function: `judgeGetSinglePrompt`)
 
 Current prompt:
+
 ```ts
 ## article_title
 ${article.articleTitle}
@@ -102,6 +104,7 @@ ${prompt.originalText}
 ```
 
 With fulltext:
+
 ```ts
 ## article_title
 ${article.articleTitle}
@@ -146,25 +149,25 @@ Modify: `processPromptWithLLM.ts`
 **Solution**: Per-article lock + check-after-acquire.
 
 ```ts
-import { ConversionError } from './convertPdfToText'
+import {ConversionError} from './convertPdfToText'
 
 // In-memory lock map (or use Redis for multi-process)
 const conversionLocks = new Map<string, Promise<void>>()
 
 type EnsureFullTextResult =
-  | {text: string; shouldSkip: false}      // Success
-  | {text: null; shouldSkip: true}          // Permanently failed or no PDF
-  | {text: null; shouldSkip: false}         // Transient failure, should requeue
+  | {text: string; shouldSkip: false} // Success
+  | {text: null; shouldSkip: true} // Permanently failed or no PDF
+  | {text: null; shouldSkip: false} // Transient failure, should requeue
 
 const ensureFullText = async (db, article, articleId: string): Promise<EnsureFullTextResult> => {
   // Fast path: already converted (check both MD and HTML if possible, but MD is critical for prompt)
   if (article.fullText) return {text: article.fullText, shouldSkip: false}
-  if (!article.fullTextPDF) return {text: null, shouldSkip: true}  // No PDF → permanent skip
+  if (!article.fullTextPDF) return {text: null, shouldSkip: true} // No PDF → permanent skip
 
   // Check if another prompt is already converting this article
   const existingLock = conversionLocks.get(articleId)
   if (existingLock) {
-    await existingLock  // Wait for other conversion to finish
+    await existingLock // Wait for other conversion to finish
     // Re-fetch article to get result — must check status to determine skip behavior
     const [updated] = await db.select().from(articles).where(eq(articles.id, articleId))
     if (updated?.fullText) return {text: updated.fullText, shouldSkip: false}
@@ -174,7 +177,9 @@ const ensureFullText = async (db, article, articleId: string): Promise<EnsureFul
 
   // Acquire lock and convert
   let resolve: () => void
-  const lock = new Promise<void>(r => { resolve = r })
+  const lock = new Promise<void>((r) => {
+    resolve = r
+  })
   conversionLocks.set(articleId, lock)
 
   try {
@@ -184,16 +189,14 @@ const ensureFullText = async (db, article, articleId: string): Promise<EnsureFul
 
     // Check for prior permanent failure
     if (fresh?.fullTextConversionStatus === 'failed') {
-       return {text: null, shouldSkip: true}
+      return {text: null, shouldSkip: true}
     }
 
-    const { md, html } = await convertPdfToText(fresh.fullTextPDF)
-    await db.update(articles).set({
-      fullText: md,
-      fullTextHtml: html,
-      fullTextConversionStatus: 'success',
-      fullTextCharCount: md.length
-    }).where(eq(articles.id, articleId))
+    const {md, html} = await convertPdfToText(fresh.fullTextPDF)
+    await db
+      .update(articles)
+      .set({fullText: md, fullTextHtml: html, fullTextConversionStatus: 'success', fullTextCharCount: md.length})
+      .where(eq(articles.id, articleId))
 
     return {text: md, shouldSkip: false}
   } catch (error) {
@@ -203,27 +206,32 @@ const ensureFullText = async (db, article, articleId: string): Promise<EnsureFul
 
     // Permanent errors: ConversionError with isPermanent flag, or known unrecoverable patterns
     const isPerm =
-      (error instanceof ConversionError && error.isPermanent) ||
-      msg.includes('encrypted') ||
-      msg.includes('password') ||
-      msg.includes('invalid pdf') ||
-      msg.includes('file not found')
+      (error instanceof ConversionError && error.isPermanent)
+      || msg.includes('encrypted')
+      || msg.includes('password')
+      || msg.includes('invalid pdf')
+      || msg.includes('file not found')
 
     // 2. Check retry counts
     // We must fetch current attempts because we might be in a race or it might have incremented
-    const [current] = await db.select({attempts: articles.fullTextConversionAttempts})
-                              .from(articles).where(eq(articles.id, articleId))
+    const [current] = await db
+      .select({attempts: articles.fullTextConversionAttempts})
+      .from(articles)
+      .where(eq(articles.id, articleId))
     const attempts = (current?.attempts ?? 0) + 1
-    const maxRetries = 3  // After 3 transient failures, mark as permanently failed
+    const maxRetries = 3 // After 3 transient failures, mark as permanently failed
 
     // If permanent OR max retries exceeded → 'failed'
-    const finalStatus = (isPerm || attempts >= maxRetries) ? 'failed' : 'pending'
+    const finalStatus = isPerm || attempts >= maxRetries ? 'failed' : 'pending'
 
-    await db.update(articles).set({
-      fullTextConversionStatus: finalStatus,
-      fullTextConversionError: errorMessage,  // Store as string, not Response object
-      fullTextConversionAttempts: attempts
-    }).where(eq(articles.id, articleId))
+    await db
+      .update(articles)
+      .set({
+        fullTextConversionStatus: finalStatus,
+        fullTextConversionError: errorMessage, // Store as string, not Response object
+        fullTextConversionAttempts: attempts,
+      })
+      .where(eq(articles.id, articleId))
 
     // Return status to indicate whether caller should skip or requeue
     return {text: null, shouldSkip: finalStatus === 'failed'}
@@ -247,16 +255,16 @@ if (project.useFulltext) {
       // Transient failure → requeue for later retry
       // The prompt was marked 'sent' when picked up, so we must reset to 'ready'
       // Use composite key (jobId, articleId, promptId) like markAsJudged does
-      await db.update(judgmentsJobsPrompts).set({
-        status: 'ready',
-        updatedAt: new Date()
-      }).where(
-        and(
-          eq(judgmentsJobsPrompts.jobId, jobId),
-          eq(judgmentsJobsPrompts.articleId, articleId),
-          eq(judgmentsJobsPrompts.promptId, promptId)
+      await db
+        .update(judgmentsJobsPrompts)
+        .set({status: 'ready', updatedAt: new Date()})
+        .where(
+          and(
+            eq(judgmentsJobsPrompts.jobId, jobId),
+            eq(judgmentsJobsPrompts.articleId, articleId),
+            eq(judgmentsJobsPrompts.promptId, promptId),
+          ),
         )
-      )
       console.log(`[fulltext] transient failure for article ${article.id}, requeued prompt ${promptId}`)
       return
     }
@@ -276,34 +284,32 @@ This is a **separate cron job** that converts PDFs to text independently from th
 Controlled by `RUN_SERVER_FULL_TEXT_CONVERSION_CRON=true`.
 
 **Why separate?**
+
 - Pre-convert PDFs before judgment time → faster prompt processing
 - Can run on separate schedule from judgments
 - Uses same prioritization logic as PDF fetching (projects with running jobs first)
 
 **Prioritization** (same as PDF fetching):
+
 1. Articles from projects with running jobs + `useFulltext=true`
 2. Articles from projects with running jobs + `useFulltext=false`
 3. Fallback: any articles ordered by `created_at DESC`
 
 ```ts
-import { cron } from '@elysiajs/cron'
-import { Elysia } from 'elysia'
-import { and, desc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm'
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js'
+import {cron} from '@elysiajs/cron'
+import {Elysia} from 'elysia'
+import {and, desc, eq, inArray, isNotNull, isNull, sql} from 'drizzle-orm'
+import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../db/schema.ts'
-import { env } from '../utils/env.ts'
-import { getDatabase } from '../utils/getDatabase.ts'
-import { convertPdfToText, ConversionError } from '../utils/convertPdfToText.ts'
+import {env} from '../utils/env.ts'
+import {getDatabase} from '../utils/getDatabase.ts'
+import {convertPdfToText, ConversionError} from '../utils/convertPdfToText.ts'
 
 const CONVERSION_INTERVAL = '*/10 * * * * *' // Every 10 seconds
 const DOCLING_CONVERSION_TIMEOUT_MS = 60_000 // 60 seconds - a const, not an env var
 
-type ArticleForConversion = {
-  id: string
-  fullTextPDF: string
-  fullTextConversionAttempts: number | null
-}
+type ArticleForConversion = {id: string; fullTextPDF: string; fullTextConversionAttempts: number | null}
 
 /**
  * Get articles with PDFs that need conversion, prioritizing:
@@ -350,7 +356,7 @@ const getArticlesNeedingConversion = async (
   console.log(`[fullTextConversion] Found ${runningJobsWithProjects.length} running jobs`)
 
   // Step 2: For each project, find articles needing conversion
-  for (const { projectId, useFulltext, dateFrom, dateTo } of runningJobsWithProjects) {
+  for (const {projectId, useFulltext, dateFrom, dateTo} of runningJobsWithProjects) {
     if (collectedArticles.length >= batchSize) break
 
     const remaining = batchSize - collectedArticles.length
@@ -367,7 +373,7 @@ const getArticlesNeedingConversion = async (
 
     // Try importRoute path first
     const projectRoutes = await db
-      .select({ importRouteId: schema.projectRouteLink.importRouteId })
+      .select({importRouteId: schema.projectRouteLink.importRouteId})
       .from(schema.projectRouteLink)
       .where(eq(schema.projectRouteLink.projectId, projectId))
 
@@ -381,13 +387,7 @@ const getArticlesNeedingConversion = async (
         })
         .from(schema.articles)
         .innerJoin(schema.articleRouteLink, eq(schema.articleRouteLink.articleId, schema.articles.id))
-        .where(
-          and(
-            inArray(schema.articleRouteLink.importRouteId, routeIds),
-            ...baseConditions,
-            ...dateConditions,
-          ),
-        )
+        .where(and(inArray(schema.articleRouteLink.importRouteId, routeIds), ...baseConditions, ...dateConditions))
         .orderBy(desc(schema.articles.articleCreatedAt))
         .limit(remaining)
 
@@ -409,13 +409,7 @@ const getArticlesNeedingConversion = async (
       })
       .from(schema.articles)
       .innerJoin(schema.projectArticles, eq(schema.projectArticles.articleId, schema.articles.id))
-      .where(
-        and(
-          eq(schema.projectArticles.projectId, projectId),
-          ...baseConditions,
-          ...dateConditions,
-        ),
-      )
+      .where(and(eq(schema.projectArticles.projectId, projectId), ...baseConditions, ...dateConditions))
       .orderBy(desc(schema.articles.articleCreatedAt))
       .limit(remaining)
 
@@ -457,15 +451,12 @@ const getArticlesNeedingConversion = async (
   return collectedArticles
 }
 
-const convertArticle = async (
-  db: PostgresJsDatabase<typeof schema>,
-  article: ArticleForConversion,
-): Promise<void> => {
+const convertArticle = async (db: PostgresJsDatabase<typeof schema>, article: ArticleForConversion): Promise<void> => {
   const startTime = Date.now()
   console.log(`[fullTextConversion] Converting article ${article.id}`)
 
   try {
-    const { md, html } = await convertPdfToText(article.fullTextPDF, DOCLING_CONVERSION_TIMEOUT_MS)
+    const {md, html} = await convertPdfToText(article.fullTextPDF, DOCLING_CONVERSION_TIMEOUT_MS)
 
     await db
       .update(schema.articles)
@@ -485,11 +476,11 @@ const convertArticle = async (
 
     // Permanent errors
     const isPerm =
-      (error instanceof ConversionError && error.isPermanent) ||
-      msg.includes('encrypted') ||
-      msg.includes('password') ||
-      msg.includes('invalid pdf') ||
-      msg.includes('file not found')
+      (error instanceof ConversionError && error.isPermanent)
+      || msg.includes('encrypted')
+      || msg.includes('password')
+      || msg.includes('invalid pdf')
+      || msg.includes('file not found')
 
     const attempts = (article.fullTextConversionAttempts ?? 0) + 1
     const maxRetries = 3
@@ -504,7 +495,9 @@ const convertArticle = async (
       })
       .where(eq(schema.articles.id, article.id))
 
-    console.log(`[fullTextConversion] ${finalStatus === 'failed' ? 'Failed' : 'Retry'}: article ${article.id} - ${errorMessage}`)
+    console.log(
+      `[fullTextConversion] ${finalStatus === 'failed' ? 'Failed' : 'Retry'}: article ${article.id} - ${errorMessage}`,
+    )
   }
 }
 
@@ -528,11 +521,7 @@ const runConversionBatch = async () => {
 }
 
 export const fullTextConversionJobsCron = new Elysia().use(
-  cron({
-    name: 'full-text-jobs-convert-pdfs',
-    pattern: CONVERSION_INTERVAL,
-    run: runConversionBatch,
-  }),
+  cron({name: 'full-text-jobs-convert-pdfs', pattern: CONVERSION_INTERVAL, run: runConversionBatch}),
 )
 ```
 
@@ -542,7 +531,7 @@ export const fullTextConversionJobsCron = new Elysia().use(
 const truncateFullText = (
   fullText: string,
   maxTokens: number,
-  encoder: Tiktoken
+  encoder: Tiktoken,
 ): {text: string; truncated: boolean} => {
   const tokens = encoder.encode(fullText)
   if (tokens.length <= maxTokens) {
@@ -550,15 +539,12 @@ const truncateFullText = (
   }
   // Keep beginning, truncate end
   const truncatedTokens = tokens.slice(0, maxTokens)
-  return {
-    text: encoder.decode(truncatedTokens) + '\n\n[...truncated...]',
-    truncated: true
-  }
+  return {text: encoder.decode(truncatedTokens) + '\n\n[...truncated...]', truncated: true}
 }
 
 // Budget calculation
 const MODEL_CONTEXT = 32768
-const RESERVED_FOR_PROMPT = 2000  // title, summary, question
+const RESERVED_FOR_PROMPT = 2000 // title, summary, question
 const RESERVED_FOR_RESPONSE = 2000
 const MAX_FULLTEXT_TOKENS = MODEL_CONTEXT - RESERVED_FOR_PROMPT - RESERVED_FOR_RESPONSE
 ```
@@ -580,6 +566,7 @@ const markAsSkipped = async (
 ```
 
 This prevents:
+
 - Stuck prompts (marked as skipped, not pending)
 - Infinite retry loops (skipped is terminal)
 - False positives (not marked as judged)
@@ -587,6 +574,7 @@ This prevents:
 ## DB Schema
 
 ### Existing columns (in `articles` table):
+
 - `fullTextPDF: text` — **local asset path** (e.g., `assets/article_pdfs/10.1234_xxx.pdf`)
 - `fullText: text` — converted Markdown (cached)
 - `fullTextHtml: text` — converted HTML (cached, for UI display)
@@ -627,14 +615,14 @@ Note: PDF is stored locally by `fullTextArticleFetchFromUnpaywall.ts` / `fullTex
 
 ### How Docling can fail
 
-| Failure | Cause | Frequency |
-|---------|-------|-----------|
-| **Service unavailable** | Container not running, crashed | Rare |
-| **Timeout** | Large PDF, complex layout, OCR | Occasional |
-| **PDF fetch fail** | URL expired, 403/404, network | Common |
-| **Corrupt/encrypted PDF** | Bad file, password-protected | Rare |
-| **Empty output** | Scanned image w/o OCR, blank pages | Occasional |
-| **Partial output** | Truncated due to memory/timeout | Rare |
+| Failure                   | Cause                              | Frequency  |
+| ------------------------- | ---------------------------------- | ---------- |
+| **Service unavailable**   | Container not running, crashed     | Rare       |
+| **Timeout**               | Large PDF, complex layout, OCR     | Occasional |
+| **PDF fetch fail**        | URL expired, 403/404, network      | Common     |
+| **Corrupt/encrypted PDF** | Bad file, password-protected       | Rare       |
+| **Empty output**          | Scanned image w/o OCR, blank pages | Occasional |
+| **Partial output**        | Truncated due to memory/timeout    | Rare       |
 
 ### Strategy
 
@@ -648,6 +636,7 @@ See "DB Schema" section above for column definitions.
 ### Conversion flow
 
 See "### 4. Conversion Logic" above for the `ensureFullText()` implementation which handles:
+
 - Per-article locking to prevent thundering herd
 - Retry counting via `fullTextConversionAttempts`
 - Permanent vs transient error classification
@@ -655,11 +644,13 @@ See "### 4. Conversion Logic" above for the `ensureFullText()` implementation wh
 ### Permanent vs Transient errors
 
 **Permanent** (don't retry):
+
 - HTTP 404/403/410 (PDF gone)
 - "Encrypted PDF" / "Password required"
 - "Unsupported format"
 
 **Transient** (retry):
+
 - HTTP 5xx from Docling
 - ECONNREFUSED / ETIMEDOUT
 - "Service unavailable"
@@ -746,11 +737,13 @@ article: {
 ## Checklist
 
 ### Setup
+
 - [x] Add `docling` service to `docker-compose.yml`
 - [x] Add `DOCLING_SERVE_URL` to env (default: `http://localhost:5001`)
 - [x] Add `RUN_SERVER_FULL_TEXT_CONVERSION_CRON` to env and `env.ts`
 
 ### DB Schema
+
 - [x] Add `'skipped'` to `judgmentsJobsPromptsStatusEnum` (requires migration)
 - [x] Add `fullTextConversionStatus` column
 - [x] Add `fullTextConversionError` column
@@ -762,6 +755,7 @@ article: {
 - [x] Run migration: `bun run db:mig`
 
 ### Conversion Function
+
 - [x] Create `src/server/utils/convertPdfToText.ts`
 - [x] `convertPdfToText(localPath: string, timeoutMs?: number): Promise<string>` — reads local file, sends base64 to Docling
 - [x] Handle errors (timeout, service down, permanent vs transient)
@@ -769,6 +763,7 @@ article: {
 - [x] Define `DOCLING_CONVERSION_TIMEOUT_MS` as a const (60000ms)
 
 ### Full Text Conversion Cron Job (implement first!) ✅ DONE
+
 - [x] Create `src/server/cron/fullTextConversionJobs.ts`
 - [x] Add `RUN_SERVER_FULL_TEXT_CONVERSION_CRON` env var to `env.ts` (default: false)
 - [x] Implement `getArticlesNeedingConversion()` with same prioritization as PDF fetching
@@ -779,6 +774,7 @@ article: {
 - [x] Tune Docling timeouts (300s) and add cache volume
 
 ### Integration (after cron job is working)
+
 - [x] Create `ensureFullText()` with per-article locking (see Conversion Logic section)
 - [x] Modify `processPromptWithLLM.ts`: call `ensureFullText()` when `useFulltext=true`
 - [x] Skip article if useFulltext && no fullText available → `markAsSkipped()`
@@ -790,6 +786,7 @@ article: {
 - [ ] `ensureFullText` lock is in-memory only; add cross-process lock if multi-server
 
 ### Frontend
+
 - [x] Update Job Status UI to handle `'skipped'` prompts (don't count as pending)
 - [x] Add `useFulltextNoImages` checkbox to create/edit project pages (mutually exclusive with `useFulltext`)
 - [ ] Skipped UI text: cover `conversion_failed` and `fulltext_too_large` too (not only "no fulltext")
@@ -801,6 +798,7 @@ article: {
 - [x] Click quote → scroll to location in fulltext
 
 ### Optional/Future
+
 - [ ] Add health check for Docling service
 - [ ] Rate limit conversions
 - [ ] GraniteDocling VLM for complex PDFs (--pipeline vlm)
