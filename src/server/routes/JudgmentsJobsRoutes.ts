@@ -8,6 +8,13 @@ import {getDatabase} from '../utils/getDatabase'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
 type Database = ReturnType<typeof getDatabase>
+type TokenUsageDaySummary = {
+  date: string
+  dailyTokens: number
+  dailyPromptTokens: number
+  dailyCompletionTokens: number
+  requests: number
+}
 
 type UnassessedCountCacheValue = {value: number; expiresAt: number}
 const unassessedCountTTLms = 10_000
@@ -28,6 +35,49 @@ const getUnassessedCountCacheKey = (
   const routes = importRouteIds.slice().sort().join(',')
   const content = `${useTitle}|${useAbstract}|${useFulltext}|${useFulltextNoImages}`
   return `${projectId}|${projectModelId}|${from}|${to}|${routes}|${content}`
+}
+
+const getUtcDayKey = (value: Date) => {
+  return value.toISOString().slice(0, 10)
+}
+
+const aggregateTokenUsagePerDay = (
+  rows: Array<{
+    createdAt: Date
+    dailyTokens: number | string | null
+    dailyPromptTokens: number | string | null
+    dailyCompletionTokens: number | string | null
+    requests: number | string | null
+  }>,
+): TokenUsageDaySummary[] => {
+  const dailyMap = rows.reduce<Map<string, TokenUsageDaySummary>>((map, row) => {
+    const dayKey = getUtcDayKey(row.createdAt)
+    const current = map.get(dayKey) ?? {
+      date: `${dayKey}T00:00:00.000Z`,
+      dailyTokens: 0,
+      dailyPromptTokens: 0,
+      dailyCompletionTokens: 0,
+      requests: 0,
+    }
+
+    map.set(dayKey, {
+      ...current,
+      dailyTokens: current.dailyTokens + Number(row.dailyTokens ?? 0),
+      dailyPromptTokens: current.dailyPromptTokens + Number(row.dailyPromptTokens ?? 0),
+      dailyCompletionTokens: current.dailyCompletionTokens + Number(row.dailyCompletionTokens ?? 0),
+      requests: current.requests + Number(row.requests ?? 0),
+    })
+
+    return map
+  }, new Map<string, TokenUsageDaySummary>())
+
+  return Array.from(dailyMap.entries())
+    .sort((left, right) => {
+      return left[0].localeCompare(right[0])
+    })
+    .map(([, value]) => {
+      return value
+    })
 }
 
 const getJobContext = async ({
@@ -160,9 +210,9 @@ export const judgmentsJobsRoutes = new Elysia()
 
       const {job} = await getJobContext({db, jobId: params.id})
 
-      const [promptStats, totalTokenUsage, tokenUsagePerDay] = await Promise.all([
+      const [promptStats, totalTokenUsage, tokenUsageRows] = await Promise.all([
         db
-          .select({status: judgmentsJobsPrompts.status, count: sql<number>`count(*)::int`})
+          .select({status: judgmentsJobsPrompts.status, count: sql<number>`count(*)`})
           .from(judgmentsJobsPrompts)
           .where(eq(judgmentsJobsPrompts.jobId, job.id))
           .groupBy(judgmentsJobsPrompts.status),
@@ -177,7 +227,7 @@ export const judgmentsJobsRoutes = new Elysia()
           .where(eq(tokenUse.judgmentsJobId, job.id)),
         db
           .select({
-            date: sql<string>`DATE(created_at AT TIME ZONE 'UTC')`,
+            createdAt: tokenUse.createdAt,
             dailyTokens: sum(tokenUse.totalTokens),
             dailyPromptTokens: sum(tokenUse.totalPromptTokens),
             dailyCompletionTokens: sum(tokenUse.totalCompletionTokens),
@@ -185,9 +235,9 @@ export const judgmentsJobsRoutes = new Elysia()
           })
           .from(tokenUse)
           .where(eq(tokenUse.judgmentsJobId, job.id))
-          .groupBy(sql`DATE(created_at AT TIME ZONE 'UTC')`)
-          .orderBy(sql`DATE(created_at AT TIME ZONE 'UTC')`),
+          .orderBy(tokenUse.createdAt),
       ])
+      const tokenUsagePerDay = aggregateTokenUsagePerDay(tokenUsageRows)
 
       const stats = {ready: 0, sent: 0, judged: 0, skipped: 0}
       const requestRuntimeStats = getJudgmentRequestStats(job.id)
@@ -369,7 +419,7 @@ export const judgmentsJobsRoutes = new Elysia()
 
         await db
           .update(judgmentsJobs)
-          .set({chCursorLastDate: null, chCursorLastArticleId: null})
+          .set({cursorLastCreatedAt: null, cursorLastArticleId: null})
           .where(eq(judgmentsJobs.id, updatedJob.id))
       }
 

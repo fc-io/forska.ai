@@ -1,7 +1,7 @@
 import {and, eq, inArray, isNull, sql} from 'drizzle-orm'
-import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../../db/schema.ts'
+import type {AppDatabase} from '../../../utils/getDatabase.ts'
 
 export type PromptToProcess = {
   jobId: string
@@ -36,7 +36,7 @@ const getCodexPlaceholderBaseUrl = (): string => {
 }
 
 const processReadyRows = async (
-  db: PostgresJsDatabase<typeof schema>,
+  db: AppDatabase,
   serverJobId: string,
   readyRows: {id: string; articleId: string; promptId: string; jobId: string}[],
 ): Promise<PromptToProcess[]> => {
@@ -145,7 +145,7 @@ const processReadyRows = async (
 }
 
 export const getAndUpdateReadyPrompts = async (
-  db: PostgresJsDatabase<typeof schema>,
+  db: AppDatabase,
   serverJobId: string,
   jobId: string,
   limit: number,

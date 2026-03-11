@@ -1,19 +1,16 @@
 import {and, eq, isNull} from 'drizzle-orm'
-import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import {judgeSinglePrompt} from '../../../../agent/judge.ts'
 import * as schema from '../../../../db/schema.ts'
 import {ensureFullText} from '../../../utils/ensureFullText.ts'
 import {env} from '../../../utils/env.ts'
 import {processFulltextForLLM} from '../../../utils/fulltextProcessing.ts'
+import type {AppDatabase} from '../../../utils/getDatabase.ts'
 import {createRateLimitedLogger, rateLimitedLogger} from '../../../utils/rateLimitedLogger.ts'
 import {ConnectionError} from '../connectionHealth.ts'
 import type {PromptToProcess} from './getAndUpdateReadyPrompts.ts'
 
-const checkJudgmentExistsInPostgres = async (
-  db: PostgresJsDatabase<typeof schema>,
-  promptToProcess: PromptToProcess,
-): Promise<boolean> => {
+const checkJudgmentExistsInPostgres = async (db: AppDatabase, promptToProcess: PromptToProcess): Promise<boolean> => {
   const [existing] = await db
     .select({id: schema.judgments.id})
     .from(schema.judgments)
@@ -88,12 +85,7 @@ const processSinglePrompt = async (
   })
 }
 
-const markAsJudged = async (
-  db: PostgresJsDatabase<typeof schema>,
-  jobId: string,
-  articleId: string,
-  promptId: string,
-): Promise<void> => {
+const markAsJudged = async (db: AppDatabase, jobId: string, articleId: string, promptId: string): Promise<void> => {
   await db
     .update(schema.judgmentsJobsPrompts)
     .set({status: 'judged', judgedAt: new Date(), updatedAt: new Date()})
@@ -110,12 +102,7 @@ const markAsJudged = async (
  * Reset a prompt back to 'pending' so it can be retried on the next cron cycle.
  * Used when connection errors occur - the prompt is not permanently failed.
  */
-const markAsRetry = async (
-  db: PostgresJsDatabase<typeof schema>,
-  jobId: string,
-  articleId: string,
-  promptId: string,
-): Promise<void> => {
+const markAsRetry = async (db: AppDatabase, jobId: string, articleId: string, promptId: string): Promise<void> => {
   await db
     .update(schema.judgmentsJobsPrompts)
     .set({status: 'ready', updatedAt: new Date()})
@@ -133,7 +120,7 @@ const markAsRetry = async (
  * This is a terminal state - the prompt will not be retried.
  */
 const markAsSkipped = async (
-  db: PostgresJsDatabase<typeof schema>,
+  db: AppDatabase,
   jobId: string,
   articleId: string,
   promptId: string,
@@ -151,10 +138,7 @@ const markAsSkipped = async (
     )
 }
 
-export const processPromptWithLLM = async (
-  db: PostgresJsDatabase<typeof schema>,
-  promptToProcess: PromptToProcess,
-): Promise<void> => {
+export const processPromptWithLLM = async (db: AppDatabase, promptToProcess: PromptToProcess): Promise<void> => {
   const startTime = Date.now()
   const modelContext = getModelContextForProvider(promptToProcess.modelProvider)
   const judgmentExists = await checkJudgmentExistsInPostgres(db, promptToProcess)

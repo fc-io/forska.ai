@@ -1,9 +1,10 @@
-import {and, eq, inArray, or, sql} from 'drizzle-orm'
+import {and, countDistinct, eq, inArray, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {articles, importRoute, projectArticles, projectPrompts, projectRouteLink} from '../../../db/schema.ts'
 import {getClickhouseClient} from '../../../services/clickhouse/clickhouseClient.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
+import {getArticleInScopeCondition} from '../../utils/sqlitePredicates.ts'
 
 const CURATED_ARTICLES_TEMP_TABLE_THRESHOLD = 1000
 const TEMP_TABLE_INSERT_BATCH_SIZE = 10000
@@ -16,7 +17,7 @@ const getEnabledPromptCount = async (projectId: string): Promise<number> => {
   const db = getDatabase()
 
   const rows = await db
-    .select({count: sql<number>`COUNT(*)::int`.as('count')})
+    .select({count: sql<number>`COUNT(*)`.as('count')})
     .from(projectPrompts)
     .where(and(eq(projectPrompts.projectId, projectId), eq(projectPrompts.enabled, true)))
 
@@ -27,7 +28,7 @@ const getCuratedArticleCount = async (projectId: string): Promise<number> => {
   const db = getDatabase()
 
   const rows = await db
-    .select({count: sql<number>`COUNT(DISTINCT ${projectArticles.articleId})::int`.as('count')})
+    .select({count: countDistinct(projectArticles.articleId).as('count')})
     .from(projectArticles)
     .where(eq(projectArticles.projectId, projectId))
 
@@ -60,7 +61,7 @@ const getImportRouteArticlesCount = async (routes: string[]): Promise<number> =>
   }
 
   const rows = await db
-    .select({count: sql<number>`COUNT(*)::int`.as('count')})
+    .select({count: sql<number>`COUNT(*)`.as('count')})
     .from(articles)
     .where(inArray(articles.importRoute, routes))
 
@@ -78,7 +79,7 @@ const getPostgresArticlesInScope = async (projectId: string, curatedCount: numbe
 
   if (hasCurated && !hasRoutes) {
     const rows = await db
-      .select({count: sql<number>`COUNT(DISTINCT ${projectArticles.articleId})::int`.as('count')})
+      .select({count: countDistinct(projectArticles.articleId).as('count')})
       .from(projectArticles)
       .where(eq(projectArticles.projectId, projectId))
 
@@ -87,23 +88,23 @@ const getPostgresArticlesInScope = async (projectId: string, curatedCount: numbe
 
   if (!hasCurated && hasRoutes) {
     const rows = await db
-      .select({count: sql<number>`COUNT(*)::int`.as('count')})
+      .select({count: sql<number>`COUNT(*)`.as('count')})
       .from(articles)
       .where(inArray(articles.importRoute, routes))
 
     return rows[0]?.count ?? 0
   }
 
-  const hasProjectArticle = sql`EXISTS (
-    SELECT 1 FROM ${projectArticles} pa
-    WHERE pa."article_id" = ${articles.id}
-      AND pa."project_id" = ${projectId}::uuid
-  )`
+  const scopeCondition = getArticleInScopeCondition(articles.id, [], projectId)
 
   const rows = await db
-    .select({count: sql<number>`COUNT(DISTINCT ${articles.id})::int`.as('count')})
+    .select({count: countDistinct(articles.id).as('count')})
     .from(articles)
-    .where(or(hasProjectArticle, inArray(articles.importRoute, routes)))
+    .where(
+      scopeCondition
+        ? sql`(${scopeCondition}) OR ${inArray(articles.importRoute, routes)}`
+        : inArray(articles.importRoute, routes),
+    )
 
   return rows[0]?.count ?? 0
 }

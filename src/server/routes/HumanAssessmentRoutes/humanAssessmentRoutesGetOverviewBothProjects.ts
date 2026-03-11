@@ -16,7 +16,7 @@ export const humanAssessmentRoutesGetOverviewBothProjects = async ({
     .select({
       projectId: judgmentsHuman.projectId,
       projectName: projects.name,
-      count: sql<number>`COUNT(DISTINCT ${judgmentsHuman.articleId})::int`,
+      count: sql<number>`COUNT(DISTINCT ${judgmentsHuman.articleId})`,
     })
     .from(judgmentsHuman)
     .innerJoin(projects, eq(projects.id, judgmentsHuman.projectId))

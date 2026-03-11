@@ -1,8 +1,8 @@
 import {eq, sql} from 'drizzle-orm'
-import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../db/schema.ts'
 import {ConversionError, convertPdfToText} from './convertPdfToText.ts'
+import type {AppDatabase} from './getDatabase.ts'
 import {rateLimitedLogger} from './rateLimitedLogger.ts'
 
 const DOCLING_CONVERSION_TIMEOUT_MS = 600_000 // 10 minutes - same as cron job
@@ -21,7 +21,7 @@ export type EnsureFullTextResult =
  * Uses per-article locking to prevent thundering herd.
  */
 export const ensureFullText = async (
-  db: PostgresJsDatabase<typeof schema>,
+  db: AppDatabase,
   article: typeof schema.articles.$inferSelect,
   articleId: string,
 ): Promise<EnsureFullTextResult> => {

@@ -1,17 +1,9 @@
-import {and, eq, gte, inArray, isNotNull, lte, or, sql} from 'drizzle-orm'
+import {and, eq, gte, inArray, isNotNull, lte} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {
-  articleRouteLink,
-  articles,
-  judgmentsHuman,
-  projectArticles,
-  projectPrompts,
-  projectRouteLink,
-  projects,
-  prompts,
-} from '../../../db/schema.ts'
+import {articles, judgmentsHuman, projectPrompts, projectRouteLink, projects, prompts} from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
+import {getArticleInScopeCondition, getCaseInsensitiveContains} from '../../utils/sqlitePredicates.ts'
 
 export const projectsRoutesGetArticlesReviewsHumanFilters = new Elysia().get(
   '/api/articlesreviewshumanfilters',
@@ -50,29 +42,13 @@ export const projectsRoutesGetArticlesReviewsHumanFilters = new Elysia().get(
         .from(projectRouteLink)
         .where(eq(projectRouteLink.projectId, query.projectId))
 
-      const routeIdArray =
-        projectImportRoutes.length > 0
-          ? sql.join(
-              projectImportRoutes.map((r) => {
-                return sql`${r.importRouteId}::uuid`
-              }),
-              sql`,`,
-            )
-          : null
-
-      const hasMatchingImportRoute =
-        routeIdArray !== null
-          ? sql`EXISTS (
-              SELECT 1 FROM ${articleRouteLink} arl
-              WHERE arl."article_id" = ${articles.id}
-                AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
-            )`
-          : null
-      const hasProjectArticle = sql`EXISTS (
-        SELECT 1 FROM ${projectArticles} pa
-        WHERE pa."article_id" = ${articles.id}
-          AND pa."project_id" = ${query.projectId}::uuid
-      )`
+      const scopeCondition = getArticleInScopeCondition(
+        articles.id,
+        projectImportRoutes.map((row) => {
+          return row.importRouteId
+        }),
+        query.projectId,
+      )
 
       // Single grouped query across prompts for human answers
       const promptIds = projectPromptRows.map((p) => {
@@ -83,7 +59,7 @@ export const projectsRoutesGetArticlesReviewsHumanFilters = new Elysia().get(
         inArray(judgmentsHuman.promptId, promptIds),
         eq(judgmentsHuman.isAnswered, true),
         isNotNull(judgmentsHuman.answer),
-        hasMatchingImportRoute ? or(hasMatchingImportRoute, hasProjectArticle) : hasProjectArticle,
+        scopeCondition,
       ].filter((part): part is NonNullable<typeof part> => {
         return part != null
       })
@@ -91,7 +67,7 @@ export const projectsRoutesGetArticlesReviewsHumanFilters = new Elysia().get(
       if (projectBounds?.dateTo) whereParts.push(lte(articles.articleCreatedAt, projectBounds.dateTo))
       if (fromDate) whereParts.push(gte(articles.articleCreatedAt, fromDate))
       if (toDate) whereParts.push(lte(articles.articleCreatedAt, toDate))
-      if (searchTitle) whereParts.push(sql`${articles.articleTitle} ILIKE ${'%' + searchTitle + '%'}`)
+      if (searchTitle) whereParts.push(getCaseInsensitiveContains(articles.articleTitle, searchTitle))
 
       const grouped = await db
         .select({promptId: judgmentsHuman.promptId, answer: judgmentsHuman.answer})

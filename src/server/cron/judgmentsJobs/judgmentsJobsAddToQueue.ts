@@ -1,7 +1,7 @@
 import {and, count, eq, isNull, or} from 'drizzle-orm'
-import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../db/schema.ts'
+import type {AppDatabase} from '../../utils/getDatabase.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
 import {clearJobCursor, setJobCursor} from './jobCursorStore.ts'
@@ -47,7 +47,7 @@ const isCodexJob = (job: Job): boolean => {
 }
 
 /** Counts the number of prompts in 'ready' status for a given job */
-const getCountOfReadyPrompts = async (db: PostgresJsDatabase<typeof schema>, jobId: string): Promise<number> => {
+const getCountOfReadyPrompts = async (db: AppDatabase, jobId: string): Promise<number> => {
   const result = await db
     .select({count: count()})
     .from(schema.judgmentsJobsPrompts)
@@ -73,7 +73,7 @@ const BATCH_INSERT_SIZE = 10000
 
 /** Filter out prompt entries that already have judgments in PostgreSQL */
 const filterAlreadyJudged = async (
-  db: PostgresJsDatabase<typeof schema>,
+  db: AppDatabase,
   promptEntries: PromptQueueEntry[],
   jobConfig: JobConfig,
 ): Promise<PromptQueueEntry[]> => {
@@ -128,7 +128,7 @@ const filterAlreadyJudged = async (
 }
 
 const addPromptsToQueue = async (
-  db: PostgresJsDatabase<typeof schema>,
+  db: AppDatabase,
   jobId: string,
   promptEntries: PromptQueueEntry[],
   serverJobId: string,
@@ -163,7 +163,7 @@ const fetchPromptsForJob = async (job: Job, numberOfPromptsToGet: number) => {
 }
 
 const updateJobCursorAfterFetch = async (
-  db: PostgresJsDatabase<typeof schema>,
+  db: AppDatabase,
   jobId: string,
   nextCursor: Awaited<ReturnType<typeof judgmentsJobsCronGetPrompts>>['nextCursor'],
 ): Promise<void> => {
@@ -171,7 +171,7 @@ const updateJobCursorAfterFetch = async (
 }
 
 const getNewPromptsForJob = async (
-  db: PostgresJsDatabase<typeof schema>,
+  db: AppDatabase,
   job: Job,
   readyTargetPerJob: number,
   addToQueueMaxBatchSize: number,
@@ -190,7 +190,7 @@ const getNewPromptsForJob = async (
   }
 }
 
-const getJobConfig = async (db: PostgresJsDatabase<typeof schema>, jobId: string): Promise<JobConfig | null> => {
+const getJobConfig = async (db: AppDatabase, jobId: string): Promise<JobConfig | null> => {
   const [config] = await db
     .select({
       modelId: schema.projects.modelId,
@@ -209,7 +209,7 @@ const getJobConfig = async (db: PostgresJsDatabase<typeof schema>, jobId: string
 }
 
 type AddToQueueJobParams = {
-  db: PostgresJsDatabase<typeof schema>
+  db: AppDatabase
   job: Job
   readyTargetPerJob: number
   addToQueueMaxBatchSize: number
@@ -298,10 +298,7 @@ const addToQueueForJob = async (params: AddToQueueJobParams): Promise<void> => {
   }
 }
 
-export const judgmentsJobsAddToQueue = async (
-  db: PostgresJsDatabase<typeof schema>,
-  serverJobId: string,
-): Promise<void> => {
+export const judgmentsJobsAddToQueue = async (db: AppDatabase, serverJobId: string): Promise<void> => {
   const runningJobs = await judgmentsJobsGetRunningJobs(db)
   const codexJobs = runningJobs.filter(isCodexJob)
   const nonCodexJobs = runningJobs.filter((job) => {

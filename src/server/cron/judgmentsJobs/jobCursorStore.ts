@@ -1,9 +1,9 @@
 import {eq} from 'drizzle-orm'
-import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../db/schema.ts'
+import type {AppDatabase} from '../../utils/getDatabase.ts'
 
-type CursorDb = PostgresJsDatabase<typeof schema>
+type CursorDb = AppDatabase
 
 export type JobCursor = {lastDate: Date; lastArticleId: string}
 
@@ -16,8 +16,8 @@ const getCursorFromRow = (row: {lastDate: Date | null; lastArticleId: string | n
 export const getJobCursor = async (db: CursorDb, jobId: string): Promise<JobCursor | null> => {
   const rows = await db
     .select({
-      lastDate: schema.judgmentsJobs.chCursorLastDate,
-      lastArticleId: schema.judgmentsJobs.chCursorLastArticleId,
+      lastDate: schema.judgmentsJobs.cursorLastCreatedAt,
+      lastArticleId: schema.judgmentsJobs.cursorLastArticleId,
     })
     .from(schema.judgmentsJobs)
     .where(eq(schema.judgmentsJobs.id, jobId))
@@ -29,17 +29,17 @@ export const getJobCursor = async (db: CursorDb, jobId: string): Promise<JobCurs
 export const setJobCursor = async (db: CursorDb, jobId: string, cursor: JobCursor): Promise<void> => {
   await db
     .update(schema.judgmentsJobs)
-    .set({chCursorLastDate: cursor.lastDate, chCursorLastArticleId: cursor.lastArticleId})
+    .set({cursorLastCreatedAt: cursor.lastDate, cursorLastArticleId: cursor.lastArticleId})
     .where(eq(schema.judgmentsJobs.id, jobId))
 }
 
 export const clearJobCursor = async (db: CursorDb, jobId: string): Promise<void> => {
   await db
     .update(schema.judgmentsJobs)
-    .set({chCursorLastDate: null, chCursorLastArticleId: null})
+    .set({cursorLastCreatedAt: null, cursorLastArticleId: null})
     .where(eq(schema.judgmentsJobs.id, jobId))
 }
 
 export const clearAllJobCursors = async (db: CursorDb): Promise<void> => {
-  await db.update(schema.judgmentsJobs).set({chCursorLastDate: null, chCursorLastArticleId: null})
+  await db.update(schema.judgmentsJobs).set({cursorLastCreatedAt: null, cursorLastArticleId: null})
 }

@@ -1,8 +1,7 @@
-import {and, asc, desc, eq, gte, ilike, inArray, lte, or, SQL, sql} from 'drizzle-orm'
+import {and, asc, desc, eq, gte, inArray, lte, or, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {
-  articleRouteLink,
   articles,
   comparisonProject,
   comparisonProjectPrompt,
@@ -11,14 +10,24 @@ import {
   judgments,
   judgmentsHuman,
   models,
-  projectArticles,
   projectPrompts,
   projectRouteLink,
   projects,
   prompts,
 } from '../../db/schema.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
+import {
+  getJudgmentDisplayAnswer,
+  getNormalizedJudgmentAnswerKey,
+  hasAnyJudgmentAnswer,
+} from '../utils/judgmentAnswers.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
+import {
+  getAnswerExistsCondition,
+  getArticleInScopeCondition,
+  getCaseInsensitiveContains,
+  getTrimmedTextExistsCondition,
+} from '../utils/sqlitePredicates.ts'
 
 type PromptSelection = {promptId: string; order: number}
 type Database = ReturnType<typeof getDatabase>
@@ -280,25 +289,6 @@ const getComparisonProjectContentCondition = (contentVariants: ComparisonProject
   return conditions.length > 0 ? or(...conditions) : null
 }
 
-const getComparisonProjectContentConditionSql = (
-  tableAlias: string,
-  contentVariants: ComparisonProjectContentVariant[],
-) => {
-  const getColumn = (columnName: string) => {
-    return sql.raw(`${tableAlias}."${columnName}"`)
-  }
-  const conditions = contentVariants.map((contentVariant) => {
-    return sql`(
-      ${getColumn('use_title')} = ${contentVariant.useTitle}
-      AND ${getColumn('use_abstract')} = ${contentVariant.useAbstract}
-      AND ${getColumn('use_fulltext')} = ${contentVariant.useFulltext}
-      AND ${getColumn('use_fulltext_no_images')} = ${contentVariant.useFulltextNoImages}
-    )`
-  })
-
-  return conditions.length > 1 ? sql`(${sql.join(conditions, sql` OR `)})` : (conditions[0] ?? null)
-}
-
 const getColumnId = (kind: 'llm' | 'human', promptId: string, modelId?: string | null, contentKey?: string | null) => {
   return kind === 'human' ? `human:${promptId}` : `llm:${modelId}:${contentKey ?? 'default'}:${promptId}`
 }
@@ -320,24 +310,11 @@ const getModelSelectionId = (modelRow: {
     : modelRow.id
 }
 
-const getUuidArraySql = (values: string[]) => {
-  if (values.length === 0) {
-    return null
-  }
-
-  return sql.join(
-    values.map((value) => {
-      return sql`${value}::uuid`
-    }),
-    sql`,`,
-  )
-}
-
 const getComparisonProjectPromptCounts = (db: Database) => {
   return db
     .select({
       comparisonProjectId: comparisonProjectPrompt.comparisonProjectId,
-      promptCount: sql<number>`count(*)::int`.as('prompt_count'),
+      promptCount: sql<number>`count(*)`.as('prompt_count'),
     })
     .from(comparisonProjectPrompt)
     .groupBy(comparisonProjectPrompt.comparisonProjectId)
@@ -348,7 +325,7 @@ const getComparisonProjectRouteCounts = (db: Database) => {
   return db
     .select({
       comparisonProjectId: comparisonProjectRouteLink.comparisonProjectId,
-      routeCount: sql<number>`count(*)::int`.as('route_count'),
+      routeCount: sql<number>`count(*)`.as('route_count'),
     })
     .from(comparisonProjectRouteLink)
     .groupBy(comparisonProjectRouteLink.comparisonProjectId)
@@ -593,32 +570,14 @@ const getArticleScopeConditions = (
   sourceProjectId: string | null,
   searchTitle?: string | null,
 ) => {
-  const routeIdArray = getUuidArraySql(routeIds)
   const trimmedSearchTitle = searchTitle?.trim() ?? ''
-  const scopeConditions = [
-    routeIdArray
-      ? sql`EXISTS (
-          SELECT 1 FROM ${articleRouteLink} arl
-          WHERE arl."article_id" = ${articles.id}
-            AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
-        )`
-      : null,
-    sourceProjectId
-      ? sql`EXISTS (
-          SELECT 1 FROM ${projectArticles} pa
-          WHERE pa."article_id" = ${articles.id}
-            AND pa."project_id" = ${sourceProjectId}::uuid
-        )`
-      : null,
-  ].filter(isDefined)
-  const scopeCondition =
-    scopeConditions.length > 1 ? or(...scopeConditions) : scopeConditions.length === 1 ? scopeConditions[0] : null
+  const scopeCondition = getArticleInScopeCondition(articles.id, routeIds, sourceProjectId)
 
   return [
     scopeCondition,
     dateFrom ? gte(articles.articleCreatedAt, dateFrom) : null,
     dateTo ? lte(articles.articleCreatedAt, dateTo) : null,
-    trimmedSearchTitle ? ilike(articles.articleTitle, `%${trimmedSearchTitle}%`) : null,
+    trimmedSearchTitle ? getCaseInsensitiveContains(articles.articleTitle, trimmedSearchTitle) : null,
   ].filter(isDefined)
 }
 
@@ -914,228 +873,80 @@ const getComparisonProjectEditFormData = async (comparisonProjectId: string) => 
   }
 }
 
-const getComparisonProjectLlmExistsCondition = (scope: ComparisonProjectScope) => {
-  const promptIdArray = getUuidArraySql(
-    scope.prompts.map((prompt) => {
-      return prompt.id
-    }),
-  )
-  const modelIdArray = getUuidArraySql(
-    scope.models.map((model) => {
-      return model.id
-    }),
-  )
-  const contentCondition = getComparisonProjectContentConditionSql('j', scope.contentVariants)
-
-  if (!promptIdArray || !modelIdArray || !contentCondition) {
-    return null
-  }
-
-  return sql`EXISTS (
-    SELECT 1 FROM ${judgments} j
-    WHERE j."article_id" = ${articles.id}
-      AND j."deleted_at" IS NULL
-      AND j."prompt_id" = ANY(ARRAY[${promptIdArray}])
-      AND j."model_id" = ANY(ARRAY[${modelIdArray}])
-      AND ${contentCondition}
-      AND (
-        NULLIF(BTRIM(j."answered_original"), '') IS NOT NULL
-        OR COALESCE(array_length(j."answered_original_as_array", 1), 0) > 0
-      )
-  )`
+const getRowsByArticleId = <T extends {articleId: string}>(rows: T[]) => {
+  return rows.reduce<Map<string, T[]>>((rowMap, row) => {
+    const currentRows = rowMap.get(row.articleId) ?? []
+    currentRows.push(row)
+    rowMap.set(row.articleId, currentRows)
+    return rowMap
+  }, new Map<string, T[]>())
 }
 
-const getComparisonProjectHumanExistsCondition = (scope: ComparisonProjectScope) => {
-  const promptIdArray = getUuidArraySql(
-    scope.prompts.map((prompt) => {
-      return prompt.id
-    }),
-  )
-
-  if (!promptIdArray || !scope.compareWithHumans) {
-    return null
-  }
-
-  return sql`EXISTS (
-    SELECT 1 FROM ${judgmentsHuman} jh
-    WHERE jh."article_id" = ${articles.id}
-      AND jh."prompt_id" = ANY(ARRAY[${promptIdArray}])
-      AND jh."is_answered" = true
-      AND NULLIF(BTRIM(jh."answer"), '') IS NOT NULL
-  )`
-}
-
-const getComparisonProjectMinimumAnsweredPromptsCondition = (
-  scope: ComparisonProjectScope,
-  minimumAnsweredPrompts: number,
+const getComparisonProjectAnsweredPromptIds = (
+  llmRows: ComparisonProjectLlmRow[],
+  humanRows: ComparisonProjectHumanRow[],
 ) => {
-  const promptIdArray = getUuidArraySql(
-    scope.prompts.map((prompt) => {
-      return prompt.id
-    }),
-  )
-  const modelIdArray = getUuidArraySql(
-    scope.models.map((model) => {
-      return model.id
-    }),
-  )
-  const llmContentCondition = getComparisonProjectContentConditionSql('j', scope.contentVariants)
-  const llmAnsweredPromptsQuery =
-    modelIdArray && llmContentCondition
-      ? sql`
-        SELECT j."prompt_id" AS prompt_id
-        FROM ${judgments} j
-        WHERE j."article_id" = ${articles.id}
-          AND j."deleted_at" IS NULL
-          AND j."prompt_id" = ANY(ARRAY[${promptIdArray}])
-          AND j."model_id" = ANY(ARRAY[${modelIdArray}])
-          AND ${llmContentCondition}
-          AND (
-            NULLIF(BTRIM(j."answered_original"), '') IS NOT NULL
-            OR COALESCE(array_length(j."answered_original_as_array", 1), 0) > 0
-          )
-      `
-      : null
-  const humanAnsweredPromptsQuery = scope.compareWithHumans
-    ? sql`
-        SELECT jh."prompt_id" AS prompt_id
-        FROM ${judgmentsHuman} jh
-        WHERE jh."article_id" = ${articles.id}
-          AND jh."prompt_id" = ANY(ARRAY[${promptIdArray}])
-          AND jh."is_answered" = true
-          AND NULLIF(BTRIM(jh."answer"), '') IS NOT NULL
-      `
-    : null
-  const answeredPromptsQueries = [llmAnsweredPromptsQuery, humanAnsweredPromptsQuery].filter(isDefined)
+  const answeredPromptIds = new Set<string>()
 
-  if (!promptIdArray || answeredPromptsQueries.length === 0) {
-    return null
-  }
-
-  return sql`(
-    SELECT COUNT(DISTINCT answered_prompts.prompt_id)::int
-    FROM (${sql.join(answeredPromptsQueries, sql` UNION `)}) AS answered_prompts
-  ) >= ${minimumAnsweredPrompts}`
-}
-
-const getComparisonProjectAllShownColumnsAnsweredCondition = (scope: ComparisonProjectScope) => {
-  const promptIdArray = getUuidArraySql(
-    scope.prompts.map((prompt) => {
-      return prompt.id
-    }),
-  )
-  const modelIdArray = getUuidArraySql(
-    scope.models.map((model) => {
-      return model.id
-    }),
-  )
-  const llmContentCondition = getComparisonProjectContentConditionSql('j', scope.contentVariants)
-
-  if (!promptIdArray || !modelIdArray || !llmContentCondition || scope.contentVariants.length === 0) {
-    return null
-  }
-
-  const requiredLlmColumnCount = scope.prompts.length * scope.models.length * scope.contentVariants.length
-  const llmColumnsCondition = sql`(
-    SELECT COUNT(DISTINCT (j."prompt_id", j."model_id", j."use_title", j."use_abstract", j."use_fulltext", j."use_fulltext_no_images"))::int
-    FROM ${judgments} j
-    WHERE j."article_id" = ${articles.id}
-      AND j."deleted_at" IS NULL
-      AND j."prompt_id" = ANY(ARRAY[${promptIdArray}])
-      AND j."model_id" = ANY(ARRAY[${modelIdArray}])
-      AND ${llmContentCondition}
-      AND (
-        NULLIF(BTRIM(j."answered_original"), '') IS NOT NULL
-        OR COALESCE(array_length(j."answered_original_as_array", 1), 0) > 0
-      )
-  ) = ${requiredLlmColumnCount}`
-  const humanColumnsCondition = scope.compareWithHumans
-    ? sql`(
-        SELECT COUNT(DISTINCT jh."prompt_id")::int
-        FROM ${judgmentsHuman} jh
-        WHERE jh."article_id" = ${articles.id}
-          AND jh."prompt_id" = ANY(ARRAY[${promptIdArray}])
-          AND jh."is_answered" = true
-          AND NULLIF(BTRIM(jh."answer"), '') IS NOT NULL
-      ) = ${scope.prompts.length}`
-    : null
-
-  return humanColumnsCondition ? and(llmColumnsCondition, humanColumnsCondition) : llmColumnsCondition
-}
-
-const getComparisonProjectModelDifferenceCondition = (scope: ComparisonProjectScope) => {
-  const promptIdArray = getUuidArraySql(
-    scope.prompts.map((prompt) => {
-      return prompt.id
-    }),
-  )
-  const modelIdArray = getUuidArraySql(
-    scope.models.map((model) => {
-      return model.id
-    }),
-  )
-  const contentCondition = getComparisonProjectContentConditionSql('j', scope.contentVariants)
-
-  if (!promptIdArray || !modelIdArray || !contentCondition || scope.models.length * scope.contentVariants.length < 2) {
-    return sql`false`
-  }
-
-  return sql`EXISTS (
-    SELECT 1
-    FROM ${judgments} j
-    WHERE j."article_id" = ${articles.id}
-      AND j."deleted_at" IS NULL
-      AND j."prompt_id" = ANY(ARRAY[${promptIdArray}])
-      AND j."model_id" = ANY(ARRAY[${modelIdArray}])
-      AND ${contentCondition}
-      AND (
-        NULLIF(BTRIM(j."answered_original"), '') IS NOT NULL
-        OR COALESCE(array_length(j."answered_original_as_array", 1), 0) > 0
-      )
-    GROUP BY j."prompt_id"
-    HAVING COUNT(
-      DISTINCT LOWER(
-        BTRIM(
-          CASE
-            WHEN COALESCE(array_length(j."answered_original_as_array", 1), 0) > 0
-              THEN array_to_string(j."answered_original_as_array", E'\n')
-            ELSE j."answered_original"
-          END
-        )
-      )
-    ) > 1
-  )`
-}
-
-const parseAnswerArrayFromString = (value: string | null) => {
-  const trimmedValue = value?.trim() ?? ''
-
-  if (!trimmedValue.startsWith('[')) {
-    return null
-  }
-
-  try {
-    const parsedValue = JSON.parse(trimmedValue) as unknown
-
-    return Array.isArray(parsedValue)
-      ? parsedValue.filter((item): item is string => {
-          return typeof item === 'string' && item.trim() !== ''
-        })
-      : null
-  } catch {
-    return null
-  }
-}
-
-const getDisplayAnswer = (answeredOriginal: string | null, answeredOriginalAsArray?: string[] | null) => {
-  const arrayValues = (answeredOriginalAsArray ?? []).filter((value) => {
-    return value.trim() !== ''
+  llmRows.forEach((row) => {
+    if (hasAnyJudgmentAnswer(row)) {
+      answeredPromptIds.add(row.promptId)
+    }
   })
-  const parsedArrayValues = parseAnswerArrayFromString(answeredOriginal) ?? []
-  const values = arrayValues.length > 0 ? arrayValues : parsedArrayValues
-  const trimmedValue = answeredOriginal?.trim() ?? ''
+  humanRows.forEach((row) => {
+    if ((row.answer?.trim() ?? '') !== '') {
+      answeredPromptIds.add(row.promptId)
+    }
+  })
 
-  return values.length > 0 ? values.join('\n') : trimmedValue || null
+  return answeredPromptIds
+}
+
+const hasValue = (value: string | null | undefined) => {
+  return (value?.trim() ?? '') !== ''
+}
+
+const getComparisonProjectRequiredColumnIds = (
+  scope: ComparisonProjectScope,
+  kind: ComparisonProjectJudgmentsColumn['kind'],
+) => {
+  return new Set(
+    scope.columns
+      .filter((column) => {
+        return column.kind === kind
+      })
+      .map((column) => {
+        return column.id
+      }),
+  )
+}
+
+const getHasAllRequiredColumns = (
+  cellMap: Record<string, string | null> | undefined,
+  requiredColumnIds: Set<string>,
+) => {
+  return Array.from(requiredColumnIds).every((columnId) => {
+    return hasValue(cellMap?.[columnId])
+  })
+}
+
+const getComparisonProjectHasModelDifference = (rows: ComparisonProjectLlmRow[]) => {
+  const answersByPromptId = rows.reduce<Map<string, Set<string>>>((rowMap, row) => {
+    const normalizedAnswer = getNormalizedJudgmentAnswerKey(row)
+
+    if (!normalizedAnswer) {
+      return rowMap
+    }
+
+    const currentAnswers = rowMap.get(row.promptId) ?? new Set<string>()
+    currentAnswers.add(normalizedAnswer)
+    rowMap.set(row.promptId, currentAnswers)
+    return rowMap
+  }, new Map<string, Set<string>>())
+
+  return Array.from(answersByPromptId.values()).some((answers) => {
+    return answers.size > 1
+  })
 }
 
 const getComparisonProjectLlmRows = async (scope: ComparisonProjectScope, articleIds: string[]) => {
@@ -1177,10 +988,7 @@ const getComparisonProjectLlmRows = async (scope: ComparisonProjectScope, articl
         inArray(judgments.modelId, modelIds),
         contentCondition,
         sql`${judgments.deletedAt} IS NULL`,
-        sql`(
-          NULLIF(BTRIM(${judgments.answeredOriginal}), '') IS NOT NULL
-          OR COALESCE(array_length(${judgments.answeredOriginalAsArray}, 1), 0) > 0
-        )`,
+        getAnswerExistsCondition(judgments.answeredOriginal, judgments.answeredOriginalAsArray),
       ),
     )
 }
@@ -1209,7 +1017,7 @@ const getComparisonProjectHumanRows = async (scope: ComparisonProjectScope, arti
         inArray(judgmentsHuman.articleId, articleIds),
         inArray(judgmentsHuman.promptId, promptIds),
         eq(judgmentsHuman.isAnswered, true),
-        sql`NULLIF(BTRIM(${judgmentsHuman.answer}), '') IS NOT NULL`,
+        getTrimmedTextExistsCondition(judgmentsHuman.answer),
       ),
     )
 }
@@ -1219,13 +1027,7 @@ const getComparisonProjectLlmCells = (rows: ComparisonProjectLlmRow[]) => {
     const articleCells = articleMap[row.articleId] ?? {}
     const columnId = getColumnId('llm', row.promptId, row.modelId, getComparisonProjectContentKey(row))
 
-    return {
-      ...articleMap,
-      [row.articleId]: {
-        ...articleCells,
-        [columnId]: getDisplayAnswer(row.answeredOriginal, row.answeredOriginalAsArray),
-      },
-    }
+    return {...articleMap, [row.articleId]: {...articleCells, [columnId]: getJudgmentDisplayAnswer(row)}}
   }, {})
 }
 
@@ -1278,51 +1080,6 @@ const getComparisonProjectHumanCells = (rows: ComparisonProjectHumanRow[]) => {
   )
 }
 
-const getComparisonProjectDefaultLlmJudgmentsPage = async (
-  scope: ComparisonProjectScope,
-  page: number,
-  limit: number,
-  articleScopeConditions: SQL<unknown>[],
-) => {
-  const llmExistsCondition = getComparisonProjectLlmExistsCondition(scope)
-
-  if (!llmExistsCondition) {
-    return {data: [], totalCount: 0, page: 1, limit, totalPages: 0}
-  }
-
-  const db = getDatabase()
-  const whereConditions = [...articleScopeConditions, llmExistsCondition]
-  const whereCondition = whereConditions.length > 1 ? and(...whereConditions) : whereConditions[0]
-  const safePage = Math.max(page, 1)
-  const offset = (safePage - 1) * limit
-  const pageArticlesWithExtra = await db
-    .select({id: articles.id, articleTitle: articles.articleTitle, articleCreatedAt: articles.articleCreatedAt})
-    .from(articles)
-    .where(whereCondition)
-    .orderBy(desc(articles.articleCreatedAt), asc(articles.articleTitle), asc(articles.id))
-    .limit(limit + 1)
-    .offset(offset)
-  const hasMore = pageArticlesWithExtra.length > limit
-  const pageArticles = hasMore ? pageArticlesWithExtra.slice(0, limit) : pageArticlesWithExtra
-  const articleIds = pageArticles.map((article) => {
-    return article.id
-  })
-  const llmRows = await getComparisonProjectLlmRows(scope, articleIds)
-  const llmCellsByArticle = getComparisonProjectLlmCells(llmRows)
-  const data = pageArticles.map((article) => {
-    return {
-      id: article.id,
-      articleTitle: article.articleTitle,
-      articleCreatedAt: article.articleCreatedAt,
-      cells: llmCellsByArticle[article.id] ?? {},
-    }
-  })
-  const totalCount = offset + pageArticles.length + (hasMore ? 1 : 0)
-  const totalPages = hasMore ? safePage + 1 : safePage
-
-  return {data, totalCount, page: safePage, limit, totalPages}
-}
-
 const getComparisonProjectJudgmentsPage = async (
   scope: ComparisonProjectScope,
   page: number,
@@ -1341,64 +1098,48 @@ const getComparisonProjectJudgmentsPage = async (
     scope.dateTo,
     scope.sourceProjectId,
   )
-  const useDefaultLlmPath =
-    !scope.compareWithHumans && !hideSparseRows && !showOnlyFullyAnsweredPrompts && !showOnlyModelDifferences
-
-  if (useDefaultLlmPath) {
-    return getComparisonProjectDefaultLlmJudgmentsPage(scope, page, limit, articleScopeConditions)
-  }
 
   const db = getDatabase()
-  const llmExistsCondition = getComparisonProjectLlmExistsCondition(scope)
-  const humanExistsCondition = getComparisonProjectHumanExistsCondition(scope)
-  const minimumAnsweredPromptsCondition = hideSparseRows
-    ? getComparisonProjectMinimumAnsweredPromptsCondition(scope, 2)
-    : null
-  const fullyAnsweredPromptsCondition = showOnlyFullyAnsweredPrompts
-    ? getComparisonProjectAllShownColumnsAnsweredCondition(scope)
-    : null
-  const modelDifferenceCondition = showOnlyModelDifferences ? getComparisonProjectModelDifferenceCondition(scope) : null
-  const articleDataCondition =
-    llmExistsCondition && humanExistsCondition
-      ? or(llmExistsCondition, humanExistsCondition)
-      : (llmExistsCondition ?? humanExistsCondition)
-
-  if (!articleDataCondition) {
-    return {data: [], totalCount: 0, page: 1, limit, totalPages: 0}
-  }
-
-  const whereConditions = [
-    ...articleScopeConditions,
-    articleDataCondition,
-    minimumAnsweredPromptsCondition,
-    fullyAnsweredPromptsCondition,
-    modelDifferenceCondition,
-  ].filter(isDefined)
-  const whereCondition = whereConditions.length > 1 ? and(...whereConditions) : whereConditions[0]
-  const [countRow] = await db
-    .select({count: sql<number>`count(*)::int`.as('count')})
-    .from(articles)
-    .where(whereCondition)
-  const totalCount = countRow?.count ?? 0
-  const totalPages = totalCount > 0 ? Math.ceil(totalCount / limit) : 0
-  const safePage = totalPages > 0 ? Math.min(Math.max(page, 1), totalPages) : 1
-  const offset = (safePage - 1) * limit
-  const pageArticles = await db
+  const baseQuery = db
     .select({id: articles.id, articleTitle: articles.articleTitle, articleCreatedAt: articles.articleCreatedAt})
     .from(articles)
-    .where(whereCondition)
-    .orderBy(desc(articles.articleCreatedAt), asc(articles.articleTitle), asc(articles.id))
-    .limit(limit)
-    .offset(offset)
-  const articleIds = pageArticles.map((article) => {
+  const scopedArticles = await (
+    articleScopeConditions.length > 0 ? baseQuery.where(and(...articleScopeConditions)) : baseQuery
+  ).orderBy(desc(articles.articleCreatedAt), asc(articles.articleTitle), asc(articles.id))
+  const articleIds = scopedArticles.map((article) => {
     return article.id
   })
   const [llmRows, humanRows] = await Promise.all([
     getComparisonProjectLlmRows(scope, articleIds),
     getComparisonProjectHumanRows(scope, articleIds),
   ])
+  const llmRowsByArticle = getRowsByArticleId(llmRows)
+  const humanRowsByArticle = getRowsByArticleId(humanRows)
   const llmCellsByArticle = getComparisonProjectLlmCells(llmRows)
   const humanCellsByArticle = getComparisonProjectHumanCells(humanRows)
+  const requiredLlmColumnIds = getComparisonProjectRequiredColumnIds(scope, 'llm')
+  const requiredHumanColumnIds = getComparisonProjectRequiredColumnIds(scope, 'human')
+  const filteredArticles = scopedArticles.filter((article) => {
+    const articleLlmRows = llmRowsByArticle.get(article.id) ?? []
+    const articleHumanRows = humanRowsByArticle.get(article.id) ?? []
+    const hasArticleData = articleLlmRows.length > 0 || articleHumanRows.length > 0
+    const answeredPromptIds = getComparisonProjectAnsweredPromptIds(articleLlmRows, articleHumanRows)
+    const hasAllLlmColumns = getHasAllRequiredColumns(llmCellsByArticle[article.id], requiredLlmColumnIds)
+    const hasAllHumanColumns = getHasAllRequiredColumns(humanCellsByArticle[article.id], requiredHumanColumnIds)
+    const hasModelDifference = getComparisonProjectHasModelDifference(articleLlmRows)
+
+    return (
+      hasArticleData
+      && (!hideSparseRows || answeredPromptIds.size >= 2)
+      && (!showOnlyFullyAnsweredPrompts || (hasAllLlmColumns && hasAllHumanColumns))
+      && (!showOnlyModelDifferences || hasModelDifference)
+    )
+  })
+  const totalCount = filteredArticles.length
+  const totalPages = totalCount > 0 ? Math.ceil(totalCount / limit) : 0
+  const safePage = totalPages > 0 ? Math.min(Math.max(page, 1), totalPages) : 1
+  const offset = (safePage - 1) * limit
+  const pageArticles = filteredArticles.slice(offset, offset + limit)
   const data = pageArticles.map((article) => {
     return {
       id: article.id,

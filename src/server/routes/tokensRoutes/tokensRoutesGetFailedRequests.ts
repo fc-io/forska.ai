@@ -118,7 +118,7 @@ export const tokensRoutesGetFailedRequests = async ({limit = 50, offset = 0}: Ge
 
   // Get total count for pagination
   const [countResult] = await db
-    .select({count: sql<number>`count(*)::int`})
+    .select({count: sql<number>`count(*)`})
     .from(tokenUse)
     .where(eq(tokenUse.hasFailedRequests, true))
 

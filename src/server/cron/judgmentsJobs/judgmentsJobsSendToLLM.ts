@@ -1,7 +1,7 @@
 import {and, count, eq, inArray} from 'drizzle-orm'
-import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../db/schema.ts'
+import type {AppDatabase} from '../../utils/getDatabase.ts'
 import {rateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {ConnectionError} from './connectionHealth.ts'
 import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
@@ -39,10 +39,7 @@ const getCodexMaxInflight = (): number => {
   return n > 0 ? n : 1
 }
 
-const getReadyCountsByJob = async (
-  db: PostgresJsDatabase<typeof schema>,
-  jobIds: string[],
-): Promise<Map<string, number>> => {
+const getReadyCountsByJob = async (db: AppDatabase, jobIds: string[]): Promise<Map<string, number>> => {
   const hasJobs = jobIds.length > 0
   if (!hasJobs) return new Map()
 
@@ -123,10 +120,7 @@ const getRequestsToSendByJob = <T extends {id: string}>(
   })
 }
 
-const processPrompts = async (
-  db: PostgresJsDatabase<typeof schema>,
-  prompts: PromptToProcess[],
-): Promise<{connectionErrors: number}> => {
+const processPrompts = async (db: AppDatabase, prompts: PromptToProcess[]): Promise<{connectionErrors: number}> => {
   const results = await Promise.allSettled(
     prompts.map(async (prompt) => {
       // Add random jitter (0-1000ms) to desynchronize requests and effectively smooth out
@@ -169,7 +163,7 @@ const processPrompts = async (
   return {connectionErrors}
 }
 
-const getNumberOfPromptsInFlight = async (db: PostgresJsDatabase<typeof schema>, jobIds: string[]): Promise<number> => {
+const getNumberOfPromptsInFlight = async (db: AppDatabase, jobIds: string[]): Promise<number> => {
   if (jobIds.length === 0) return 0
   const result = await db
     .select({count: count()})
@@ -182,7 +176,7 @@ const getNumberOfPromptsInFlight = async (db: PostgresJsDatabase<typeof schema>,
 let isRunningJudgmentsJobsSendToLLM = false
 
 const sendToLLMForJobs = async (
-  db: PostgresJsDatabase<typeof schema>,
+  db: AppDatabase,
   jobs: Awaited<ReturnType<typeof judgmentsJobsGetRunningJobs>>,
   serverJobId: string,
   capacity: {maxInflight: number; maxBurst: number; workerCount: number},
@@ -259,7 +253,7 @@ const sendToLLMForJobs = async (
 }
 
 export const judgmentsJobsSendToLLM = async (
-  db: PostgresJsDatabase<typeof schema>,
+  db: AppDatabase,
   allJobs: Awaited<ReturnType<typeof judgmentsJobsGetRunningJobs>>,
   serverJobId: string,
 ): Promise<void> => {

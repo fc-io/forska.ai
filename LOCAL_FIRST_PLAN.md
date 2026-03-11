@@ -71,10 +71,10 @@
 
 ## Step 2A - App DB port (`src/server/**`, `src/db/**`)
 
-- [ ] Port all routes/services to SQLite Drizzle types and SQLite timestamp/json semantics.
-- [ ] Replace raw PG array logic, casts, `ILIKE`, `ANY`, `date_bin`, `date_trunc`, trigger assumptions, view assumptions.
-- [ ] Rewrite judgment-job cursor/storage away from ClickHouse-shaped cursor fields.
-- [ ] Verify prompt hash/immutability behavior in app code or SQLite-safe DB logic.
+- [x] Port all routes/services to SQLite Drizzle types and SQLite timestamp/json semantics.
+- [x] Replace raw PG array logic, casts, `ILIKE`, `ANY`, `date_bin`, `date_trunc`, trigger assumptions, view assumptions.
+- [x] Rewrite judgment-job cursor/storage away from ClickHouse-shaped cursor fields.
+- [x] Verify prompt hash/immutability behavior in app code or SQLite-safe DB logic.
 
 ## Step 2B - DuckDB cutover (`src/services/olap/**`)
 

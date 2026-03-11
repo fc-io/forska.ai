@@ -1,8 +1,8 @@
 import {and, eq, or, sql} from 'drizzle-orm'
-import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../db/schema.ts'
 import {env} from '../../utils/env.ts'
+import type {AppDatabase} from '../../utils/getDatabase.ts'
 
 // Track if we've already logged the SGLANG_MODEL message
 let hasLoggedSglangModel = false
@@ -14,7 +14,7 @@ let hasLoggedSglangModel = false
  * This prevents sending requests for projects that use a different model
  * than what's configured in SGLANG_MODEL, avoiding unnecessary errors.
  */
-export const judgmentsJobsGetRunningJobs = (db: PostgresJsDatabase<typeof schema>) => {
+export const judgmentsJobsGetRunningJobs = (db: AppDatabase) => {
   const sglangModel = env.SGLANG_MODEL
 
   const hasSglang = Boolean(sglangModel && sglangModel !== 'not set')

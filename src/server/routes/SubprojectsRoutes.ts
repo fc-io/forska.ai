@@ -2,7 +2,6 @@ import {and, eq, gte, inArray, isNull, lte, or, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {
-  articleRouteLink,
   articles,
   importRoute,
   judgments,
@@ -18,7 +17,9 @@ import {getOlapDb} from '../../services/olap/olapDb.ts'
 import {rejectDuckdbNotImplemented} from '../../services/olap/rejectDuckdbNotImplemented.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
+import {hasMatchingJudgmentAnswer} from '../utils/judgmentAnswers.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
+import {getArticleInScopeCondition} from '../utils/sqlitePredicates.ts'
 
 type ProjectWithPrompts = {
   id: string
@@ -185,21 +186,6 @@ const queryArticlesWithPromptFilters = async (
   projectBounds: ProjectBound[],
   combinedWhereCondition: ReturnType<typeof and> | ReturnType<typeof sql> | undefined,
 ) => {
-  const normalized = sql`COALESCE(${judgments.answeredOriginalAsArray}, CASE WHEN ${judgments.answeredOriginal} IS NOT NULL THEN ARRAY[${judgments.answeredOriginal}] ELSE ARRAY[]::text[] END)`
-
-  const havingParts: Array<ReturnType<typeof sql>> = []
-  for (const filter of promptFilters) {
-    const answeredValsArray = sql.join(
-      filter.types.map((v) => {
-        return sql`${v}`
-      }),
-      sql`,`,
-    )
-    havingParts.push(
-      sql`SUM(CASE WHEN ${judgments.promptId} = ${filter.promptId}::uuid AND (${normalized}) && ARRAY[${answeredValsArray}]::text[] THEN 1 ELSE 0 END) > 0`,
-    )
-  }
-
   const judgmentConfigParts = projectBounds.map((proj) => {
     return and(
       eq(judgments.modelId, proj.modelId),
@@ -210,9 +196,13 @@ const queryArticlesWithPromptFilters = async (
     )
   })
   const judgmentConfigCondition = judgmentConfigParts.length > 1 ? or(...judgmentConfigParts) : judgmentConfigParts[0]
-
-  return db
-    .select({id: articles.id})
+  const baseQuery = db
+    .select({
+      id: articles.id,
+      promptId: judgments.promptId,
+      answeredOriginal: judgments.answeredOriginal,
+      answeredOriginalAsArray: judgments.answeredOriginalAsArray,
+    })
     .from(articles)
     .innerJoin(
       judgments,
@@ -223,9 +213,25 @@ const queryArticlesWithPromptFilters = async (
         judgmentConfigCondition,
       ),
     )
-    .where(combinedWhereCondition)
-    .groupBy(articles.id)
-    .having(and(...havingParts))
+  const judgmentRows = await (combinedWhereCondition ? baseQuery.where(combinedWhereCondition) : baseQuery)
+  const rowsByArticleId = judgmentRows.reduce<Map<string, typeof judgmentRows>>((rowMap, row) => {
+    const currentRows = rowMap.get(row.id) ?? []
+    currentRows.push(row)
+    rowMap.set(row.id, currentRows)
+    return rowMap
+  }, new Map<string, typeof judgmentRows>())
+
+  return Array.from(rowsByArticleId.entries())
+    .filter(([, rows]) => {
+      return promptFilters.every((filter) => {
+        return rows.some((row) => {
+          return row.promptId === filter.promptId && hasMatchingJudgmentAnswer(row, filter.types)
+        })
+      })
+    })
+    .map(([articleId]) => {
+      return {id: articleId}
+    })
 }
 
 const queryAllArticlesInScope = async (
@@ -471,36 +477,10 @@ export const subprojectsRoutes = new Elysia()
               return f.promptId
             })
 
-            const projectScopeParts: Array<ReturnType<typeof sql>> = []
-
             const routeIds = importRouteIdsByProjectId.get(sourceProject.id) ?? []
             const routeTexts = importRouteTextsByProjectId.get(sourceProject.id) ?? []
-            if (routeIds.length > 0) {
-              const routeIdArray = sql.join(
-                routeIds.map((r) => {
-                  return sql`${r}::uuid`
-                }),
-                sql`,`,
-              )
-              projectScopeParts.push(
-                sql`EXISTS (
-                  SELECT 1 FROM ${articleRouteLink} arl
-                  WHERE arl."article_id" = ${articles.id}
-                    AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
-                )`,
-              )
-            }
-
-            projectScopeParts.push(
-              sql`EXISTS (
-                SELECT 1 FROM ${projectArticles} pa
-                WHERE pa."article_id" = ${articles.id}
-                  AND pa."project_id" = ${sourceProject.id}::uuid
-              )`,
-            )
-
             const projectScopeCondition =
-              (projectScopeParts.length > 1 ? or(...projectScopeParts) : projectScopeParts[0]) ?? sql`FALSE`
+              getArticleInScopeCondition(articles.id, routeIds, sourceProject.id) ?? sql`FALSE`
 
             const projectWhereParts: Array<ReturnType<typeof sql>> = []
             if (sourceProject.dateFrom) {

@@ -13,6 +13,8 @@ sqlite.exec('PRAGMA busy_timeout = 5000;')
 
 const db = drizzle({client: sqlite, schema, logger: false})
 
+export type AppDatabase = typeof db
+
 export const getDatabase = () => {
   return db
 }

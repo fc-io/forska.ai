@@ -1,11 +1,10 @@
 import {cron} from '@elysiajs/cron'
 import {and, desc, eq, inArray, isNull, sql} from 'drizzle-orm'
-import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 import {Elysia} from 'elysia'
 
 import * as schema from '../../db/schema.ts'
 import {env} from '../utils/env.ts'
-import {getDatabase} from '../utils/getDatabase.ts'
+import {type AppDatabase, getDatabase} from '../utils/getDatabase.ts'
 import {fullTextArticleFetchFromArxiv} from './fullTextJobs/fullTextArticleFetchFromArxiv.ts'
 import {fullTextArticleFetchFromOriginalUrls} from './fullTextJobs/fullTextArticleFetchFromOriginalUrls.ts'
 import {fullTextArticleFetchFromUnpaywall} from './fullTextJobs/fullTextArticleFetchFromUnpaywall.ts'
@@ -22,7 +21,7 @@ type ArticleResult = {id: string; arxivId: string | null; originalData: unknown}
  * 3. Fallback: any articles by created_at DESC
  */
 const getArticlesWithoutFullText = async (
-  db: PostgresJsDatabase<typeof schema>,
+  db: AppDatabase,
   numberOfArticlesToFetch: number,
 ): Promise<ArticleResult[]> => {
   const collectedArticles: ArticleResult[] = []
@@ -182,7 +181,7 @@ const getFullTextForArticle = async (
 }
 
 const storeFullText = async (
-  db: PostgresJsDatabase<typeof schema>,
+  db: AppDatabase,
   id: (typeof schema.articles.$inferSelect)['id'],
   fullText: NonNullable<Awaited<ReturnType<typeof getFullTextForArticle>>>,
 ) => {

@@ -356,8 +356,8 @@ export const judgmentsJobs = sqliteTable(
     error: jsonColumn<string[] | null>('error'),
     sendToLLMBatchSize: integer('send_to_llm_batch_size').default(5).notNull(),
     sendToLLMInterval: integer('send_to_llm_interval').default(15).notNull(),
-    chCursorLastDate: integer('ch_cursor_last_date', {mode: 'timestamp_ms'}),
-    chCursorLastArticleId: text('ch_cursor_last_article_id'),
+    cursorLastCreatedAt: integer('ch_cursor_last_date', {mode: 'timestamp_ms'}),
+    cursorLastArticleId: text('ch_cursor_last_article_id'),
   },
   (table) => {
     return [index('judgments_jobs_project_idx').on(table.projectId)]

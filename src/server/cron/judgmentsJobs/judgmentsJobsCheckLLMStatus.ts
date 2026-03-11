@@ -1,8 +1,8 @@
 import {and, desc, eq} from 'drizzle-orm'
-import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 
 import * as schema from '../../../db/schema.ts'
 import {env} from '../../utils/env.ts'
+import type {AppDatabase} from '../../utils/getDatabase.ts'
 import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
 import {getSGLangMetrics} from './judgmentsJobsAdjustBatchSize/getSGLangMetrics.ts'
 
@@ -10,12 +10,7 @@ const ema = (prev: number | null | undefined, cur: number, alpha: number): numbe
   return prev == null ? cur : alpha * cur + (1 - alpha) * prev
 }
 
-const getLatestStatus = async (
-  db: PostgresJsDatabase<typeof schema>,
-  engine: 'vllm' | 'sglang',
-  instanceId: string,
-  modelName: string,
-) => {
+const getLatestStatus = async (db: AppDatabase, engine: 'vllm' | 'sglang', instanceId: string, modelName: string) => {
   const rows = await db
     .select()
     .from(schema.llmStatus)
@@ -75,7 +70,7 @@ const fallbackWorkerUrls = normalizeWorkerUrls(env.WORKER_URLS)
 
 // Generic LLM status ingestion targeting the new llm_status table.
 // Initially feeds engine='vllm' using the existing vLLM metrics adapter.
-export const judgmentsJobsCheckLLMStatus = async (db: PostgresJsDatabase<typeof schema>) => {
+export const judgmentsJobsCheckLLMStatus = async (db: AppDatabase) => {
   const runningJobConfigs = await db
     .select({modelName: schema.models.modelName, baseURL: schema.models.baseURL, workerUrls: schema.models.workerUrls})
     .from(schema.judgmentsJobs)

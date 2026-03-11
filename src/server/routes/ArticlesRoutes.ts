@@ -1,4 +1,4 @@
-import {and, count, desc, eq, inArray, isNull, or, sql} from 'drizzle-orm'
+import {and, count, desc, eq, inArray, isNull, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {
@@ -7,7 +7,6 @@ import {
   importRoute as importRouteTable,
   judgments,
   models,
-  projectArticles,
   projectRouteLink,
   projects,
   prompts,
@@ -16,6 +15,7 @@ import {selectArticleIdsByFilterOlap} from '../../services/olap/selectArticleIds
 import {getPdfFetchJob, startPdfFetchJob} from '../services/pdfFetchJobs.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
+import {getArticleInScopeCondition, getCaseInsensitiveContains} from '../utils/sqlitePredicates.ts'
 
 export const articlesRoutes = new Elysia()
   .use(withErrorHandler())
@@ -197,34 +197,7 @@ export const articlesRoutes = new Elysia()
         return r.importRouteId
       })
 
-      const scopeParts: Array<ReturnType<typeof sql>> = []
-
-      if (importRouteIds.length > 0) {
-        const routeIdArray = sql.join(
-          importRouteIds.map((r) => {
-            return sql`${r}::uuid`
-          }),
-          sql`,`,
-        )
-
-        scopeParts.push(
-          sql`EXISTS (
-            SELECT 1 FROM ${articleRouteLink} arl
-            WHERE arl."article_id" = ${articles.id}
-              AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
-          )`,
-        )
-      }
-
-      scopeParts.push(
-        sql`EXISTS (
-          SELECT 1 FROM ${projectArticles} pa
-          WHERE pa."article_id" = ${articles.id}
-            AND pa."project_id" = ${body.projectId}::uuid
-        )`,
-      )
-
-      const scopeCondition = scopeParts.length > 1 ? or(...scopeParts) : scopeParts[0]
+      const scopeCondition = getArticleInScopeCondition(articles.id, importRouteIds, body.projectId)
 
       const dateParts: Array<ReturnType<typeof sql>> = []
       if (effectiveFromDate) {
@@ -234,8 +207,12 @@ export const articlesRoutes = new Elysia()
         dateParts.push(sql`${articles.articleCreatedAt} <= ${effectiveToDate}`)
       }
 
-      const searchPart = searchTitle ? sql`${articles.articleTitle} ILIKE ${'%' + searchTitle + '%'}` : null
-      const whereParts = [scopeCondition, ...dateParts, ...(searchPart ? [searchPart] : [])]
+      const searchPart = searchTitle ? getCaseInsensitiveContains(articles.articleTitle, searchTitle) : null
+      const whereParts = [scopeCondition, ...dateParts, ...(searchPart ? [searchPart] : [])].filter(
+        (part): part is NonNullable<typeof part> => {
+          return part != null
+        },
+      )
 
       const idRows = await db
         .select({id: articles.id})
@@ -332,7 +309,7 @@ export const articlesRoutes = new Elysia()
             pubmedId: sql`EXCLUDED.pubmed_id`,
             importRoute: sql`EXCLUDED.import_route`,
             originalData: sql`EXCLUDED.original_data`,
-            updatedAt: sql`CURRENT_TIMESTAMP`,
+            updatedAt: new Date(),
           },
         })
         .returning({id: articles.id, articleId: articles.articleId})
@@ -420,9 +397,10 @@ export const articlesRoutes = new Elysia()
       const searchTerm = q.trim()
       const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(searchTerm)
 
+      const searchCondition = getCaseInsensitiveContains(articles.articleTitle, searchTerm)
       const whereClause = isUuid
-        ? sql`${articles.id} = ${searchTerm} OR ${articles.articleId} = ${searchTerm} OR ${articles.articleTitle} ILIKE ${'%' + searchTerm + '%'}`
-        : sql`${articles.articleId} = ${searchTerm} OR ${articles.articleTitle} ILIKE ${'%' + searchTerm + '%'}`
+        ? sql`${articles.id} = ${searchTerm} OR ${articles.articleId} = ${searchTerm} OR ${searchCondition}`
+        : sql`${articles.articleId} = ${searchTerm} OR ${searchCondition}`
 
       const searchResults = await db
         .select()

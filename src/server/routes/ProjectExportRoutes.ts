@@ -1,18 +1,12 @@
 import {and, eq, inArray, isNull, or, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {
-  articleRouteLink,
-  articles,
-  judgments,
-  projectArticles,
-  projectRouteLink,
-  projects,
-  prompts,
-} from '../../db/schema.ts'
+import {articles, judgments, projectRouteLink, projects, prompts} from '../../db/schema.ts'
 import {getJournalTitleFromOriginalData} from '../../utils/getJournalTitleFromOriginalData.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
+import {hasMatchingJudgmentAnswer} from '../utils/judgmentAnswers.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
+import {getArticleMatchesImportRouteCondition, getArticleMatchesProjectCondition} from '../utils/sqlitePredicates.ts'
 
 const BATCH_SIZE = 500
 
@@ -40,6 +34,10 @@ type PromptDetails = {id: string; promptHeading: string | null; originalText: st
 type PromptInfoRow = {title: string; type: string; prompt: string}
 
 type ArticleUrlStrategy = {isMatch: (articleId: string) => boolean; buildUrl: (articleId: string) => string}
+
+const isDefined = <T>(value: T | null | undefined): value is T => {
+  return value !== null && value !== undefined
+}
 
 const articleUrlStrategies: ArticleUrlStrategy[] = [
   {
@@ -228,42 +226,18 @@ export const projectExportRoutes = new Elysia()
         return r.importRouteId
       })
 
-      const scopeParts: Array<ReturnType<typeof sql>> = []
+      const scopeParts = [
+        getArticleMatchesImportRouteCondition(articles.id, allImportRouteIds),
+        ...sourceProjectIds.map((sourceProjectId) => {
+          return getArticleMatchesProjectCondition(articles.id, sourceProjectId)
+        }),
+      ].filter(isDefined)
 
-      if (allImportRouteIds.length > 0) {
-        const routeIdArray = sql.join(
-          allImportRouteIds.map((r) => {
-            return sql`${r}::uuid`
-          }),
-          sql`,`,
-        )
-        scopeParts.push(
-          sql`EXISTS (
-            SELECT 1 FROM ${articleRouteLink} arl
-            WHERE arl."article_id" = ${articles.id}
-              AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
-          )`,
-        )
-      }
-
-      for (const sourceProjectId of sourceProjectIds) {
-        scopeParts.push(
-          sql`EXISTS (
-            SELECT 1 FROM ${projectArticles} pa
-            WHERE pa."article_id" = ${articles.id}
-              AND pa."project_id" = ${sourceProjectId}::uuid
-          )`,
-        )
-      }
-
-      const scopeCondition = scopeParts.length > 1 ? or(...scopeParts) : scopeParts[0]
+      const scopeCondition = (scopeParts.length > 1 ? or(...scopeParts) : scopeParts[0]) ?? sql`FALSE`
 
       // If prompt filters are provided, query article IDs that match all filters
       let filteredArticleIds: string[] | null = null
       if (hasPromptFilters && hasPrompts && judgmentConfigCondition) {
-        const normalized = sql`COALESCE(${judgments.answeredOriginalAsArray}, CASE WHEN ${judgments.answeredOriginal} IS NOT NULL THEN ARRAY[${judgments.answeredOriginal}] ELSE ARRAY[]::text[] END)`
-
-        // Filter out prompts where ALL options are selected (treat as no filter)
         const effectivePromptSelections = promptSelections.filter((filter) => {
           const promptType = promptTypeMap.get(filter.promptId)
           const allOptions = parseArktypeOptions(promptType ?? null)
@@ -281,40 +255,47 @@ export const projectExportRoutes = new Elysia()
 
         // Only apply filtering if there are effective prompt selections
         if (effectivePromptSelections.length > 0) {
-          const havingParts: Array<ReturnType<typeof sql>> = []
           const allFilterPromptIds: string[] = []
           for (const filter of effectivePromptSelections) {
             allFilterPromptIds.push(filter.promptId)
-            const answeredValsArray = sql.join(
-              filter.types.map((v) => {
-                return sql`${v}`
-              }),
-              sql`,`,
-            )
-            havingParts.push(
-              sql`SUM(CASE WHEN ${judgments.promptId} = ${filter.promptId}::uuid AND (${normalized}) && ARRAY[${answeredValsArray}]::text[] THEN 1 ELSE 0 END) > 0`,
-            )
           }
 
-          const filteredQuery = await db
-            .select({id: articles.id})
-            .from(articles)
-            .innerJoin(
-              judgments,
+          const judgmentRows = await db
+            .select({
+              articleId: judgments.articleId,
+              promptId: judgments.promptId,
+              answeredOriginal: judgments.answeredOriginal,
+              answeredOriginalAsArray: judgments.answeredOriginalAsArray,
+            })
+            .from(judgments)
+            .innerJoin(articles, eq(articles.id, judgments.articleId))
+            .where(
               and(
-                eq(judgments.articleId, articles.id),
                 inArray(judgments.promptId, allFilterPromptIds),
                 isNull(judgments.deletedAt),
                 judgmentConfigCondition,
+                scopeCondition,
               ),
             )
-            .where(scopeCondition)
-            .groupBy(articles.id)
-            .having(and(...havingParts))
 
-          filteredArticleIds = filteredQuery.map((r) => {
-            return r.id
-          })
+          const rowsByArticleId = judgmentRows.reduce<Map<string, typeof judgmentRows>>((rowMap, row) => {
+            const currentRows = rowMap.get(row.articleId) ?? []
+            currentRows.push(row)
+            rowMap.set(row.articleId, currentRows)
+            return rowMap
+          }, new Map<string, typeof judgmentRows>())
+
+          filteredArticleIds = Array.from(rowsByArticleId.entries())
+            .filter(([, rows]) => {
+              return effectivePromptSelections.every((selection) => {
+                return rows.some((row) => {
+                  return row.promptId === selection.promptId && hasMatchingJudgmentAnswer(row, selection.types)
+                })
+              })
+            })
+            .map(([articleId]) => {
+              return articleId
+            })
           console.log(`[export] Filtered to ${filteredArticleIds.length} articles based on prompt answer filters`)
         } else {
           console.log(`[export] All prompt filters had all options selected - treating as no filter`)
