@@ -14,7 +14,6 @@ import {
 } from '../../db/schema.ts'
 import {getClickhouseClient} from '../../services/clickhouse/clickhouseClient.ts'
 import {getOlapDb} from '../../services/olap/olapDb.ts'
-import {rejectDuckdbNotImplemented} from '../../services/olap/rejectDuckdbNotImplemented.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {hasMatchingJudgmentAnswer} from '../utils/judgmentAnswers.ts'
@@ -80,10 +79,6 @@ const queryArticleIdsWithPromptFiltersFromClickHouse = async (params: {
   userDateTo: Date | null
   routeTexts: string[]
 }) => {
-  if (getOlapDb() === 'duckdb') {
-    return rejectDuckdbNotImplemented('subprojects:queryArticleIdsWithPromptFilters')
-  }
-
   const client = getClickhouseClient()
 
   const promptFilters = params.promptFilters.filter((f) => {
@@ -500,7 +495,8 @@ export const subprojectsRoutes = new Elysia()
             const projectWhereCondition =
               projectWhereParts.length > 1 ? and(...projectWhereParts) : projectWhereParts[0]
 
-            const shouldUseClickHouse = applicablePromptFilters.length > 0 && routeTexts.length > 0
+            const shouldUseClickHouse =
+              getOlapDb() !== 'duckdb' && applicablePromptFilters.length > 0 && routeTexts.length > 0
 
             return shouldUseClickHouse
               ? queryArticleIdsWithPromptFiltersFromClickHouse({

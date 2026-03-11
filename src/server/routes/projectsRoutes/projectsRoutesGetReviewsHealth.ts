@@ -3,6 +3,7 @@ import {Elysia, t} from 'elysia'
 
 import {articles, importRoute, projectArticles, projectPrompts, projectRouteLink} from '../../../db/schema.ts'
 import {getClickhouseClient} from '../../../services/clickhouse/clickhouseClient.ts'
+import {getOlapDb} from '../../../services/olap/olapDb.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 import {getArticleInScopeCondition} from '../../utils/sqlitePredicates.ts'
 
@@ -227,6 +228,7 @@ export const projectsRoutesGetReviewsHealth = new Elysia().post(
   '/api/projectsreviewshealth',
   async ({body}) => {
     const projectId = body.projectId
+    const olapDb = getOlapDb()
 
     const [enabledPromptCount, curatedArticleCount, importRoutes] = await Promise.all([
       getEnabledPromptCount(projectId),
@@ -236,12 +238,17 @@ export const projectsRoutesGetReviewsHealth = new Elysia().post(
 
     const importRouteArticlesCount = await getImportRouteArticlesCount(importRoutes)
     const postgresArticlesInScope = await getPostgresArticlesInScope(projectId, curatedArticleCount, importRoutes)
-
-    const shouldSkipClickhouse = enabledPromptCount === 0 || postgresArticlesInScope === 0
+    const shouldSkipClickhouse = olapDb === 'duckdb' || enabledPromptCount === 0 || postgresArticlesInScope === 0
 
     const clickhouse = await (async () => {
       if (shouldSkipClickhouse) {
-        return {ok: true as const, skipped: true as const, routeArticlesInScope: 0, curatedArticlesInScope: null}
+        return {
+          ok: true as const,
+          skipped: true as const,
+          routeArticlesInScope: 0,
+          curatedArticlesInScope: null,
+          reason: olapDb === 'duckdb' ? 'duckdb' : 'empty_scope',
+        }
       }
 
       try {
@@ -262,6 +269,7 @@ export const projectsRoutesGetReviewsHealth = new Elysia().post(
           error: error instanceof Error ? error.message : 'ClickHouse query failed',
           routeArticlesInScope: 0,
           curatedArticlesInScope: null,
+          reason: 'error',
         }
       }
     })()

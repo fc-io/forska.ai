@@ -5,18 +5,16 @@ import {
   getNumericFiltersFromClickHouse,
 } from '../clickhouse/articlesReviewsFiltersClickHouse.ts'
 import {getOlapDb} from './olapDb.ts'
-import {rejectDuckdbNotImplemented} from './rejectDuckdbNotImplemented.ts'
+import {getDatabaseBasedFiltersFromSqlite, getNumericFiltersFromSqlite} from './sqliteOlap.ts'
 
 export type {ClickHouseFilterParams, ClickHouseFilterResult}
 
 export const getDatabaseBasedFiltersFromOlap = (params: ClickHouseFilterParams): Promise<ClickHouseFilterResult[]> => {
   return getOlapDb() === 'duckdb'
-    ? rejectDuckdbNotImplemented('getDatabaseBasedFilters')
+    ? getDatabaseBasedFiltersFromSqlite(params)
     : getDatabaseBasedFiltersFromClickHouse(params)
 }
 
 export const getNumericFiltersFromOlap = (params: ClickHouseFilterParams): Promise<NumericFilterResult[]> => {
-  return getOlapDb() === 'duckdb'
-    ? rejectDuckdbNotImplemented('getNumericFilters')
-    : getNumericFiltersFromClickHouse(params)
+  return getOlapDb() === 'duckdb' ? getNumericFiltersFromSqlite(params) : getNumericFiltersFromClickHouse(params)
 }

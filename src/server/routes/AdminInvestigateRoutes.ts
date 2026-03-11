@@ -671,7 +671,7 @@ export const adminInvestigateRoutes = new Elysia()
 
         if (isArray) {
           const arrayAnswersQuery = await db
-            .select({answeredOriginalAsArray: judgments.answeredOriginalAsArray, count: sql<number>`COUNT(*)::int`})
+            .select({answeredOriginalAsArray: judgments.answeredOriginalAsArray, count: sql<number>`COUNT(*)`})
             .from(judgments)
             .where(and(...baseConditions))
             .groupBy(judgments.answeredOriginalAsArray)
@@ -699,7 +699,7 @@ export const adminInvestigateRoutes = new Elysia()
             })
         } else {
           const stringAnswersQuery = await db
-            .select({answeredOriginal: judgments.answeredOriginal, count: sql<number>`COUNT(*)::int`})
+            .select({answeredOriginal: judgments.answeredOriginal, count: sql<number>`COUNT(*)`})
             .from(judgments)
             .where(and(...baseConditions))
             .groupBy(judgments.answeredOriginal)
@@ -809,13 +809,13 @@ export const adminInvestigateRoutes = new Elysia()
       let pgArticleCount = 0
       if (curatedIds.length > 0) {
         const result = await db
-          .select({count: sql<number>`COUNT(DISTINCT ${articles.id})::int`})
+          .select({count: sql<number>`COUNT(DISTINCT ${articles.id})`})
           .from(articles)
           .where(inArray(articles.id, curatedIds))
         pgArticleCount = result[0]?.count ?? 0
       } else if (routes.length > 0) {
         const result = await db
-          .select({count: sql<number>`COUNT(*)::int`})
+          .select({count: sql<number>`COUNT(*)`})
           .from(articles)
           .where(inArray(articles.importRoute, routes))
         pgArticleCount = result[0]?.count ?? 0
@@ -847,7 +847,7 @@ export const adminInvestigateRoutes = new Elysia()
         }
 
         const pgScopedResult = await db
-          .select({count: sql<number>`COUNT(*)::int`})
+          .select({count: sql<number>`COUNT(*)`})
           .from(judgments)
           .where(
             and(
@@ -866,7 +866,7 @@ export const adminInvestigateRoutes = new Elysia()
 
       // Total count (all judgments matching settings, for comparison)
       const pgTotalResult = await db
-        .select({count: sql<number>`COUNT(*)::int`})
+        .select({count: sql<number>`COUNT(*)`})
         .from(judgments)
         .where(
           and(

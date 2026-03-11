@@ -1,4 +1,4 @@
-import {and, count, gt, isNull, sql} from 'drizzle-orm'
+import {and, count, gt, inArray, isNull, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 import {Client} from 'pg'
 
@@ -6,6 +6,7 @@ import {articles, judgments} from '../../db/schema.ts'
 import {getClickhouseClient, pingClickhouse} from '../../services/clickhouse/clickhouseClient.ts'
 import {ensureClickhouseSchema} from '../../services/clickhouse/ensureClickhouseSchema.ts'
 import {rebuildClickhouseJudgmentsDerivedTable} from '../../services/clickhouse/rebuildClickhouseJudgmentsDerivedTable.ts'
+import {getOlapDb} from '../../services/olap/olapDb.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 
@@ -26,7 +27,6 @@ const toMsOrNull = (value: unknown): number | null => {
   return value instanceof Date ? value.getTime() : null
 }
 
-const STATS_STATEMENT_TIMEOUT_MS = 10 * 60 * 1000
 const MAX_REASONABLE_FUTURE_MS = 1000 * 60 * 60 * 24 * 365 * 20
 
 const normalizeEpochMsWithin = (value: number, maxReasonableMs: number): number => {
@@ -133,18 +133,33 @@ const getPostgresSlotHealth = async (): Promise<{
   retainedBytes: string | null
 }> => {
   const slotName = getPeerdbSlotName()
-  const db = getDatabase()
+
+  if (getOlapDb() === 'duckdb') {
+    return {slotName, exists: false, active: null, retainedBytes: null}
+  }
+
+  const databaseUrl = String(process.env['DATABASE_URL'] ?? '').trim()
+
+  if (!databaseUrl) {
+    return {slotName, exists: false, active: null, retainedBytes: null}
+  }
+
+  const client = new Client({connectionString: databaseUrl})
 
   try {
-    const result = await db.execute<PostgresSlotRow>(sql`
+    await client.connect()
+    const result = await client.query<PostgresSlotRow>(
+      `
       SELECT
         slot_name,
         active,
         pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)::text as retained_bytes
       FROM pg_replication_slots
-      WHERE slot_type = 'logical' AND slot_name = ${slotName}
+      WHERE slot_type = 'logical' AND slot_name = $1
       LIMIT 1
-    `)
+    `,
+      [slotName],
+    )
 
     const row = result.rows[0]
     return row
@@ -153,6 +168,10 @@ const getPostgresSlotHealth = async (): Promise<{
   } catch (error) {
     console.error('[PG] Slot health query failed:', error)
     return {slotName, exists: false, active: null, retainedBytes: null}
+  } finally {
+    await client.end().catch(() => {
+      return
+    })
   }
 }
 
@@ -160,22 +179,16 @@ const getPgTableStats = async (
   table: 'articles' | 'judgments',
 ): Promise<{count: number; maxUpdatedAtMs: number | null}> => {
   const db = getDatabase()
+  const rows =
+    table === 'articles'
+      ? await db.select({updatedAt: articles.updatedAt}).from(articles)
+      : await db.select({updatedAt: judgments.updatedAt}).from(judgments).where(isNull(judgments.deletedAt))
+  const maxUpdatedAtMs = rows.reduce<number | null>((maxValue, row) => {
+    const updatedAtMs = row.updatedAt?.getTime() ?? null
+    return updatedAtMs === null ? maxValue : maxValue === null || updatedAtMs > maxValue ? updatedAtMs : maxValue
+  }, null)
 
-  const where = table === 'judgments' ? sql`WHERE deleted_at IS NULL` : sql``
-  const result = await db.transaction(async (tx) => {
-    await tx.execute(sql.raw(`SET LOCAL statement_timeout = ${STATS_STATEMENT_TIMEOUT_MS}`))
-    return tx.execute<{count: string | number; max_updated_at_ms: string | number | null}>(sql`
-      SELECT
-        COUNT(*)::text AS count,
-        (EXTRACT(EPOCH FROM MAX(updated_at)) * 1000)::bigint::text AS max_updated_at_ms
-      FROM ${sql.identifier(table)} ${where}
-    `)
-  })
-
-  const row = result.rows[0]
-  return row
-    ? {count: toNumber(row.count), maxUpdatedAtMs: toMsOrNull(row.max_updated_at_ms)}
-    : {count: 0, maxUpdatedAtMs: null}
+  return {count: rows.length, maxUpdatedAtMs}
 }
 
 const getPgArticlesFastStats = async (): Promise<{
@@ -183,32 +196,9 @@ const getPgArticlesFastStats = async (): Promise<{
   countType: CountType
   maxUpdatedAtMs: number | null
 }> => {
-  const db = getDatabase()
+  const stats = await getPgTableStats('articles')
 
-  const {countRow, maxRow} = await db.transaction(async (tx) => {
-    await tx.execute(sql.raw(`SET LOCAL statement_timeout = ${STATS_STATEMENT_TIMEOUT_MS}`))
-
-    const [countResult, maxResult] = await Promise.all([
-      tx.execute<{count: string | number}>(sql`
-        SELECT reltuples::bigint::text AS count
-        FROM pg_class
-        WHERE oid = 'public.articles'::regclass
-      `),
-      tx.execute<{max_updated_at_ms: string | number | null}>(sql`
-        SELECT (EXTRACT(EPOCH FROM updated_at) * 1000)::bigint::text AS max_updated_at_ms
-        FROM articles
-        ORDER BY updated_at DESC
-        LIMIT 1
-      `),
-    ])
-
-    return {countRow: countResult.rows[0], maxRow: maxResult.rows[0]}
-  })
-
-  const count = toNumber(countRow?.count)
-  const maxUpdatedAtMs = toMsOrNull(maxRow?.max_updated_at_ms ?? null)
-
-  return {count, countType: 'estimated', maxUpdatedAtMs}
+  return {count: stats.count, countType: 'exact', maxUpdatedAtMs: stats.maxUpdatedAtMs}
 }
 
 type ClickhouseTableStats = {
@@ -545,10 +535,7 @@ const getClickhouseIngestionStats = async (table: 'articles' | 'judgments'): Pro
 const getPgArticlesUpdatedAfter = async (afterMs: number): Promise<number> => {
   const db = getDatabase()
   const afterDate = new Date(afterMs)
-  const result = await db.transaction(async (tx) => {
-    await tx.execute(sql.raw(`SET LOCAL statement_timeout = ${STATS_STATEMENT_TIMEOUT_MS}`))
-    return tx.select({count: count()}).from(articles).where(gt(articles.updatedAt, afterDate))
-  })
+  const result = await db.select({count: count()}).from(articles).where(gt(articles.updatedAt, afterDate))
 
   return result[0]?.count ?? 0
 }
@@ -556,13 +543,10 @@ const getPgArticlesUpdatedAfter = async (afterMs: number): Promise<number> => {
 const getPgJudgmentsUpdatedAfter = async (afterMs: number): Promise<number> => {
   const db = getDatabase()
   const afterDate = new Date(afterMs)
-  const result = await db.transaction(async (tx) => {
-    await tx.execute(sql.raw(`SET LOCAL statement_timeout = ${STATS_STATEMENT_TIMEOUT_MS}`))
-    return tx
-      .select({count: count()})
-      .from(judgments)
-      .where(and(isNull(judgments.deletedAt), gt(judgments.updatedAt, afterDate)))
-  })
+  const result = await db
+    .select({count: count()})
+    .from(judgments)
+    .where(and(isNull(judgments.deletedAt), gt(judgments.updatedAt, afterDate)))
 
   return result[0]?.count ?? 0
 }
@@ -680,27 +664,43 @@ const getClickhouseMergePartsSummary = async (): Promise<{
   }
 }
 
-const getSampleIdsQuery = (input: {
+const getSampleIds = async (input: {
   table: 'articles' | 'judgments'
   sampleType: 'recent' | 'random' | 'deleted'
   sampleSize: number
 }) => {
-  const tableRef = input.table === 'articles' ? articles : judgments
-  const tableSample = input.sampleType === 'random' ? sql`TABLESAMPLE SYSTEM (1)` : sql``
-  const whereClause =
-    input.table === 'judgments' && input.sampleType === 'deleted'
-      ? sql`WHERE deleted_at IS NOT NULL`
-      : input.table === 'judgments'
-        ? sql`WHERE deleted_at IS NULL`
-        : sql``
-  const orderClause =
-    input.sampleType === 'deleted' && input.table === 'judgments'
-      ? sql`ORDER BY deleted_at DESC, id DESC`
-      : input.sampleType === 'random'
-        ? sql``
-        : sql`ORDER BY updated_at DESC, id DESC`
+  const db = getDatabase()
 
-  return sql`SELECT id::text AS id FROM ${tableRef} ${tableSample} ${whereClause} ${orderClause} LIMIT ${input.sampleSize}`
+  if (input.table === 'articles') {
+    const rows = await db
+      .select({id: articles.id})
+      .from(articles)
+      .orderBy(input.sampleType === 'random' ? sql`RANDOM()` : sql`${articles.updatedAt} DESC, ${articles.id} DESC`)
+      .limit(input.sampleSize)
+
+    return rows.map((row) => {
+      return row.id
+    })
+  }
+
+  const query = db.select({id: judgments.id}).from(judgments)
+  const judgmentRows = await (
+    input.sampleType === 'deleted'
+      ? query.where(sql`${judgments.deletedAt} IS NOT NULL`)
+      : query.where(isNull(judgments.deletedAt))
+  )
+    .orderBy(
+      input.sampleType === 'deleted'
+        ? sql`${judgments.deletedAt} DESC, ${judgments.id} DESC`
+        : input.sampleType === 'random'
+          ? sql`RANDOM()`
+          : sql`${judgments.updatedAt} DESC, ${judgments.id} DESC`,
+    )
+    .limit(input.sampleSize)
+
+  return judgmentRows.map((row) => {
+    return row.id
+  })
 }
 
 const getFieldMismatches = (
@@ -761,10 +761,7 @@ const getSampleVerifyResult = async (input: {
 }) => {
   const db = getDatabase()
   await ensureClickhouseSchema()
-  const idsResult = await db.execute<{id: string}>(getSampleIdsQuery(input))
-  const sampleIds = idsResult.rows.map((r) => {
-    return r.id
-  })
+  const sampleIds = await getSampleIds(input)
 
   if (sampleIds.length === 0) {
     return {
@@ -788,14 +785,7 @@ const getSampleVerifyResult = async (input: {
             articleTitle: articles.articleTitle,
           })
           .from(articles)
-          .where(
-            sql`${articles.id} IN (${sql.join(
-              sampleIds.map((id) => {
-                return sql`${id}::uuid`
-              }),
-              sql`, `,
-            )})`,
-          )
+          .where(inArray(articles.id, sampleIds))
       : await db
           .select({
             id: judgments.id,
@@ -813,14 +803,7 @@ const getSampleVerifyResult = async (input: {
             explanation: judgments.explanation,
           })
           .from(judgments)
-          .where(
-            sql`${judgments.id} IN (${sql.join(
-              sampleIds.map((id) => {
-                return sql`${id}::uuid`
-              }),
-              sql`, `,
-            )})`,
-          )
+          .where(inArray(judgments.id, sampleIds))
 
   const pgById = pgRows.reduce(
     (acc, row) => {
@@ -917,19 +900,20 @@ const getSampleVerifyResult = async (input: {
 const getPartitionCoverage = async (input: {table: 'articles' | 'judgments'; months: number}) => {
   const db = getDatabase()
   await ensureClickhouseSchema()
-  const pgTable = input.table === 'articles' ? sql.identifier('articles') : sql.identifier('judgments')
-  const pgFilter = input.table === 'judgments' ? sql`AND deleted_at IS NULL` : sql``
-
-  const pgCounts = await db.execute<{month: string; count: number}>(sql`
-    SELECT
-      to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM') as month,
-      COUNT(*)::int as count
-    FROM ${pgTable}
-    WHERE created_at >= NOW() - make_interval(months => ${input.months})
-    ${pgFilter}
-    GROUP BY 1
-    ORDER BY 1 DESC
-  `)
+  const now = new Date()
+  const startDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - (input.months - 1), 1, 0, 0, 0, 0))
+  const pgRows =
+    input.table === 'articles'
+      ? await db.select({createdAt: articles.createdAt}).from(articles).where(gt(articles.createdAt, startDate))
+      : await db
+          .select({createdAt: judgments.createdAt})
+          .from(judgments)
+          .where(and(gt(judgments.createdAt, startDate), isNull(judgments.deletedAt)))
+  const pgByMonth = pgRows.reduce<Record<string, number>>((monthMap, row) => {
+    const month = row.createdAt.toISOString().slice(0, 7)
+    const count = monthMap[month] ?? 0
+    return {...monthMap, [month]: count + 1}
+  }, {})
 
   const client = getClickhouseClient()
   const chTable = input.table === 'articles' ? 'articles' : 'judgments_raw'
@@ -952,12 +936,6 @@ const getPartitionCoverage = async (input: {table: 'articles' | 'judgments'; mon
   })
   const chCountsRows = await chCountsResult.json<{month: string; count: string | number}>()
 
-  const pgByMonth = pgCounts.rows.reduce(
-    (acc, row) => {
-      return {...acc, [row.month]: row.count}
-    },
-    {} as Record<string, number>,
-  )
   const chByMonth = chCountsRows.reduce(
     (acc, row) => {
       return {...acc, [row.month]: toNumber(row.count)}

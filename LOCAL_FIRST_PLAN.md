@@ -80,7 +80,7 @@
 
 - [ ] Add DuckDB query runner.
 - [ ] Query final SQLite DB directly from DuckDB; no replicated analytics store.
-- [ ] Port analytics queries: reviews list/count/filters, unassessed list/count, article id selection, remaining comparison flows.
+- [x] Port analytics queries: reviews list/count/filters, unassessed list/count, article id selection, remaining comparison flows.
 - [ ] Keep ClickHouse code/env/routes untouched until DuckDB pages pass locally.
 - [ ] Remove ClickHouse codepaths in final cleanup, not before.
 

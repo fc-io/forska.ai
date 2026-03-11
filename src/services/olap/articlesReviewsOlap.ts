@@ -9,18 +9,14 @@ import {
   queryArticlesReviewsFromClickHouse,
 } from '../clickhouse/articlesReviewsClickHouse.ts'
 import {getOlapDb} from './olapDb.ts'
-import {rejectDuckdbNotImplemented} from './rejectDuckdbNotImplemented.ts'
+import {countArticlesReviewsFromSqlite, queryArticlesReviewsFromSqlite} from './sqliteOlap.ts'
 
 export const queryArticlesReviewsFromOlap = (params: ArticlesReviewsParams): Promise<ArticlesReviewsResponse> => {
-  return getOlapDb() === 'duckdb'
-    ? rejectDuckdbNotImplemented('queryArticlesReviews')
-    : queryArticlesReviewsFromClickHouse(params)
+  return getOlapDb() === 'duckdb' ? queryArticlesReviewsFromSqlite(params) : queryArticlesReviewsFromClickHouse(params)
 }
 
 export const countArticlesReviewsFromOlap = (
   params: ArticlesReviewsCountParams,
 ): Promise<ArticlesReviewsCountResponse> => {
-  return getOlapDb() === 'duckdb'
-    ? rejectDuckdbNotImplemented('countArticlesReviews')
-    : countArticlesReviewsFromClickHouse(params)
+  return getOlapDb() === 'duckdb' ? countArticlesReviewsFromSqlite(params) : countArticlesReviewsFromClickHouse(params)
 }
