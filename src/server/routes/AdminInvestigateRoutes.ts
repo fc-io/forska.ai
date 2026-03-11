@@ -14,7 +14,6 @@ import {
   projects,
   prompts,
 } from '../../db/schema.ts'
-import {requireUserAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 
@@ -478,7 +477,6 @@ const runAutoSyncAllAsync = async (projectId: string | null) => {
 
 export const adminInvestigateRoutes = new Elysia()
   .use(withErrorHandler())
-  .use(requireUserAuth())
   .get('/api/admin/list-prompts-with-types', async () => {
     const db = getDatabase()
     const promptsList = await db
@@ -488,7 +486,6 @@ export const adminInvestigateRoutes = new Elysia()
         type: prompts.type,
         originalText: prompts.originalText,
         createdAt: prompts.createdAt,
-        ownerId: prompts.ownerId,
         archived: prompts.archived,
       })
       .from(prompts)
@@ -507,7 +504,6 @@ export const adminInvestigateRoutes = new Elysia()
           type: p.type,
           originalText: p.originalText,
           createdAt: p.createdAt,
-          ownerId: p.ownerId,
           archived: p.archived,
         }
       }),

@@ -11,7 +11,6 @@ import {
   projects,
   prompts,
 } from '../../../db/schema.ts'
-import {localUserId} from '../../../utils/localUser.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
 type InitResponse = {
@@ -29,7 +28,6 @@ type InitResponse = {
 
 export const humanAssessmentRoutesPostInit = async ({body, set}: {body: {projectId: string}; set: Context['set']}) => {
   const db = getDatabase()
-  const sessionUserId = localUserId
 
   const [project] = await db.select().from(projects).where(eq(projects.id, body.projectId)).limit(1)
   if (!project) {
@@ -61,13 +59,7 @@ export const humanAssessmentRoutesPostInit = async ({body, set}: {body: {project
     .select({id: judgmentsHuman.id, articleId: judgmentsHuman.articleId})
     .from(judgmentsHuman)
     .innerJoin(prompts, eq(prompts.id, judgmentsHuman.promptId))
-    .where(
-      and(
-        eq(judgmentsHuman.projectId, body.projectId),
-        eq(judgmentsHuman.user, sessionUserId),
-        eq(judgmentsHuman.isAnswered, false),
-      ),
-    )
+    .where(and(eq(judgmentsHuman.projectId, body.projectId), eq(judgmentsHuman.isAnswered, false)))
     .orderBy(desc(judgmentsHuman.createdAt))
     .limit(50)
   console.log('existingUnanswered', existingUnanswered.length)
@@ -111,14 +103,10 @@ export const humanAssessmentRoutesPostInit = async ({body, set}: {body: {project
     }
 
     if (hasCuratedArticles) {
-      // For large curated article sets, use raw SQL with array literal to avoid parameter explosion
-      // Drizzle's inArray would still expand each ID as a parameter
       const curatedIds = curatedArticleRows.map((r) => {
         return r.articleId
       })
-      // Format as PostgreSQL array literal: '{uuid1,uuid2,...}'
-      const arrayLiteral = `{${curatedIds.join(',')}}`
-      articleScopeConditions.push(sql`${articles.id} = ANY(${sql.raw(`'${arrayLiteral}'`)}::uuid[])`)
+      articleScopeConditions.push(inArray(articles.id, curatedIds))
     }
 
     // If no import routes and no curated articles, return no articles
@@ -150,13 +138,7 @@ export const humanAssessmentRoutesPostInit = async ({body, set}: {body: {project
           ${db
             .select({x: sql`1`})
             .from(judgmentsHuman)
-            .where(
-              and(
-                eq(judgmentsHuman.user, sessionUserId),
-                eq(judgmentsHuman.projectId, body.projectId),
-                eq(judgmentsHuman.articleId, articles.id),
-              ),
-            )
+            .where(and(eq(judgmentsHuman.projectId, body.projectId), eq(judgmentsHuman.articleId, articles.id)))
             .limit(1)}
         )`
     whereParts.push(noExistingHumanJudgmentForUser)
@@ -180,15 +162,7 @@ export const humanAssessmentRoutesPostInit = async ({body, set}: {body: {project
     articleRow = randomArticle
 
     const insertValues = projectPromptRows.map((p) => {
-      return {
-        articleId,
-        user: sessionUserId,
-        promptId: p.id,
-        isAnswered: false,
-        answer: null,
-        comment: null,
-        projectId: body.projectId,
-      }
+      return {articleId, promptId: p.id, isAnswered: false, answer: null, comment: null, projectId: body.projectId}
     })
 
     const inserted = await db
@@ -230,7 +204,6 @@ export const humanAssessmentRoutesPostInit = async ({body, set}: {body: {project
     .where(
       and(
         eq(judgmentsHuman.projectId, body.projectId),
-        eq(judgmentsHuman.user, sessionUserId),
         eq(judgmentsHuman.articleId, targetId),
         eq(judgmentsHuman.isAnswered, false),
       ),

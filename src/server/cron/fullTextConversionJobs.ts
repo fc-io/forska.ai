@@ -1,6 +1,5 @@
 import {cron} from '@elysiajs/cron'
 import {and, desc, eq, inArray, isNotNull, sql} from 'drizzle-orm'
-import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
 import {Elysia} from 'elysia'
 
 import * as schema from '../../db/schema.ts'
@@ -40,7 +39,7 @@ type ArticleForConversion = {id: string; fullTextPDF: string; fullTextConversion
  * 3. Fallback: any articles by created_at DESC
  */
 const getArticlesNeedingConversion = async (
-  db: PostgresJsDatabase<typeof schema>,
+  db: ReturnType<typeof getDatabase>,
   batchSize: number,
 ): Promise<ArticleForConversion[]> => {
   const collectedArticles: ArticleForConversion[] = []
@@ -173,7 +172,7 @@ const getArticlesNeedingConversion = async (
 }
 
 const runConversionWorker = async (
-  db: PostgresJsDatabase<typeof schema>,
+  db: ReturnType<typeof getDatabase>,
   queue: ArticleForConversion[],
 ): Promise<void> => {
   const article = queue.pop()
@@ -183,7 +182,7 @@ const runConversionWorker = async (
 }
 
 const convertArticles = async (
-  db: PostgresJsDatabase<typeof schema>,
+  db: ReturnType<typeof getDatabase>,
   articles: ArticleForConversion[],
   concurrency: number,
 ): Promise<void> => {
@@ -205,7 +204,7 @@ const convertArticles = async (
   }
 }
 
-const convertArticle = async (db: PostgresJsDatabase<typeof schema>, article: ArticleForConversion): Promise<void> => {
+const convertArticle = async (db: ReturnType<typeof getDatabase>, article: ArticleForConversion): Promise<void> => {
   const startTime = Date.now()
   console.log(`[fullTextConversion] Converting article ${article.id}`)
 

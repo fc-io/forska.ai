@@ -17,7 +17,6 @@ import {
   projects,
   prompts,
 } from '../../db/schema.ts'
-import {localUserId} from '../../utils/localUser.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 
@@ -76,13 +75,7 @@ type ComparisonProjectLlmRow = {
   useFulltext: boolean
   useFulltextNoImages: boolean
 }
-type ComparisonProjectHumanRow = {
-  articleId: string
-  promptId: string
-  userId: string
-  answer: string | null
-  updatedAt: Date | null
-}
+type ComparisonProjectHumanRow = {articleId: string; promptId: string; answer: string | null; updatedAt: Date | null}
 type ComparisonProjectSourcePrompt = {id: string; promptHeading: string | null; order: number}
 type ComparisonProjectSourceImportRoute = {route: string; name: string | null}
 type ComparisonProjectSource = {
@@ -1207,7 +1200,6 @@ const getComparisonProjectHumanRows = async (scope: ComparisonProjectScope, arti
     .select({
       articleId: judgmentsHuman.articleId,
       promptId: judgmentsHuman.promptId,
-      userId: judgmentsHuman.user,
       answer: judgmentsHuman.answer,
       updatedAt: judgmentsHuman.updatedAt,
     })
@@ -1239,7 +1231,7 @@ const getComparisonProjectLlmCells = (rows: ComparisonProjectLlmRow[]) => {
 
 const getComparisonProjectHumanCells = (rows: ComparisonProjectHumanRow[]) => {
   const latestRows = rows.reduce<Map<string, ComparisonProjectHumanRow>>((rowMap, row) => {
-    const key = `${row.articleId}:${row.userId}:${row.promptId}`
+    const key = `${row.articleId}:${row.promptId}`
     const existingRow = rowMap.get(key)
 
     if (!existingRow || (row.updatedAt?.getTime() ?? 0) > (existingRow.updatedAt?.getTime() ?? 0)) {
@@ -1524,7 +1516,6 @@ const createComparisonProjectRecord = async (
     .values({
       name: body.name,
       description: body.description?.trim() || null,
-      ownerId: localUserId,
       modelIds: validatedModelIds,
       compareWithHumans: body.compareWithHumans ?? false,
       useTitle,

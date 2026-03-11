@@ -21,8 +21,7 @@ const getStatusColor = (status: string | null) => {
       return 'bg-blue-100 text-blue-800 border-blue-200'
     case 'failed':
       return 'bg-red-100 text-red-800 border-red-200'
-    case 'paused_by_user':
-    case 'paused_by_admin':
+    case 'paused':
       return 'bg-yellow-100 text-yellow-800 border-yellow-200'
     case 'not_started':
       return 'bg-gray-100 text-gray-800 border-gray-200'
@@ -38,7 +37,7 @@ const getStatusColor = (status: string | null) => {
 
 const formatStatus = (status: string | null) => {
   if (!status) return 'Unknown'
-  if (status === 'paused_by_admin' || status === 'paused_by_user') return 'Paused'
+  if (status === 'paused') return 'Paused'
   return status
     .split('_')
     .map((word) => {
@@ -366,7 +365,7 @@ const AdminJudgmentJobDetail = () => {
                         Pause Job
                       </button>
                     </Show>
-                    <Show when={data()?.status === 'paused_by_admin' || data()?.status === 'paused_by_user'}>
+                    <Show when={data()?.status === 'paused'}>
                       <button
                         class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
                         onClick={() => {

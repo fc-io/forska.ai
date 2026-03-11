@@ -216,7 +216,6 @@ export const queryArticlesReviewsBothFromClickHouse = async (
   })
 
   // Step 2: Find articles fully assessed by humans (from PostgreSQL)
-  // "Fully assessed" = a single user has answered ALL project prompts for that article
   console.time('ch:both:human_articles')
   const fullyAssessedByHumanQuery = await db
     .select({articleId: judgmentsHuman.articleId})
@@ -228,7 +227,7 @@ export const queryArticlesReviewsBothFromClickHouse = async (
         sql`${judgmentsHuman.answer} IS NOT NULL`,
       ),
     )
-    .groupBy(judgmentsHuman.articleId, judgmentsHuman.user)
+    .groupBy(judgmentsHuman.articleId)
     .having(sql`COUNT(DISTINCT ${judgmentsHuman.promptId}) = ${promptIds.length}`)
 
   const humanAssessedArticleIds = [
@@ -473,12 +472,11 @@ export const queryArticlesReviewsBothFromClickHouse = async (
 
   // Fetch human answers for these articles from PostgreSQL
   console.time('ch:both:human_answers')
-  type HumanRow = {articleId: string; userId: string; promptId: string; answer: string | null; updatedAt: Date | null}
+  type HumanRow = {articleId: string; promptId: string; answer: string | null; updatedAt: Date | null}
 
   const humanRows: HumanRow[] = await db
     .select({
       articleId: judgmentsHuman.articleId,
-      userId: judgmentsHuman.user,
       promptId: judgmentsHuman.promptId,
       answer: judgmentsHuman.answer,
       updatedAt: judgmentsHuman.updatedAt,
@@ -493,9 +491,9 @@ export const queryArticlesReviewsBothFromClickHouse = async (
       ),
     )
 
-  // Deduplicate by latest updatedAt for (articleId, userId, promptId)
-  const latestByArticleUserPrompt = humanRows.reduce((acc, row) => {
-    const key = `${row.articleId}::${row.userId}::${row.promptId}`
+  // Deduplicate by latest updatedAt for (articleId, promptId)
+  const latestByArticlePrompt = humanRows.reduce((acc, row) => {
+    const key = `${row.articleId}::${row.promptId}`
     const existing = acc.get(key)
     if (!existing || (row.updatedAt?.getTime() || 0) > (existing.updatedAt?.getTime() || 0)) {
       acc.set(key, row)
@@ -503,46 +501,27 @@ export const queryArticlesReviewsBothFromClickHouse = async (
     return acc
   }, new Map<string, HumanRow>())
 
-  // Group rows by (articleId, userId) and retain only users who covered ALL prompts
-  const rowsByArticleUser = new Map<string, Map<string, HumanRow[]>>()
-  for (const row of latestByArticleUserPrompt.values()) {
-    const byUser = rowsByArticleUser.get(row.articleId) || new Map<string, HumanRow[]>()
-    const arr = byUser.get(row.userId) || []
-    arr.push(row)
-    byUser.set(row.userId, arr)
-    rowsByArticleUser.set(row.articleId, byUser)
-  }
-
-  // For each article, collect human answers per prompt from qualifying users
+  // For each article, collect human answers per prompt from the local single-user assessments.
   const humanAnswersByArticlePrompt: Record<string, HumanAnswersByPrompt> = {}
   for (const articleId of articleIds) {
-    const byUser = rowsByArticleUser.get(articleId)
-    if (!byUser) continue
+    const rows = Array.from(latestByArticlePrompt.values()).filter((row) => {
+      return row.articleId === articleId
+    })
+    const covered = new Set(
+      rows.map((row) => {
+        return row.promptId
+      }),
+    )
 
-    const qualifyingUsers: string[] = []
-    for (const [userId, rows] of byUser.entries()) {
-      const covered = new Set(
-        rows.map((r) => {
-          return r.promptId
-        }),
-      )
-      if (covered.size === promptIds.length) {
-        qualifyingUsers.push(userId)
-      }
-    }
-
-    if (qualifyingUsers.length === 0) continue
+    if (covered.size !== promptIds.length) continue
 
     const promptMap: HumanAnswersByPrompt = {}
     for (const pid of promptIds) promptMap[pid] = []
 
-    for (const userId of qualifyingUsers) {
-      const rows = byUser.get(userId) || []
-      for (const r of rows) {
-        if (r.answer !== null && r.answer !== undefined) {
-          const bucket = promptMap[r.promptId]
-          if (bucket) bucket.push(r.answer)
-        }
+    for (const row of rows) {
+      if (row.answer !== null && row.answer !== undefined) {
+        const bucket = promptMap[row.promptId]
+        if (bucket) bucket.push(row.answer)
       }
     }
 

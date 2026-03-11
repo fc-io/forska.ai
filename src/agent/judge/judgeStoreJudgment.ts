@@ -40,7 +40,6 @@ export const judgeStoreJudgment = async (
         ? await db
             .select({
               id: projects.id,
-              ownerId: projects.ownerId,
               useTitle: projects.useTitle,
               useAbstract: projects.useAbstract,
               useFulltext: projects.useFulltext,
@@ -91,10 +90,10 @@ export const judgeStoreJudgment = async (
           .set({
             isAnswered: true,
             answeredOriginal,
-            answeredOriginalAsArray,
+            answeredOriginalAsArray: answeredOriginalAsArray ?? undefined,
             confidenceOriginal: 50,
             explanation: answeredExplanation || null,
-            quotes: answeredQuotes || null,
+            quotes: answeredQuotes ?? undefined,
             chunkingStrategy,
             updatedAt: new Date(),
           })
@@ -111,10 +110,10 @@ export const judgeStoreJudgment = async (
           promptId,
           isAnswered: true,
           answeredOriginal,
-          answeredOriginalAsArray,
+          answeredOriginalAsArray: answeredOriginalAsArray ?? undefined,
           confidenceOriginal: 50,
           explanation: answeredExplanation || null,
-          quotes: answeredQuotes || null,
+          quotes: answeredQuotes ?? undefined,
           chunkingStrategy,
           // Snapshots (kept for cross-project display)
           snapshotProjectId: snapshotValues.snapshotProjectId,

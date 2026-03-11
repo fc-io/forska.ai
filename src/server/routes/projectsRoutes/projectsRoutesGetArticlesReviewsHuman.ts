@@ -43,8 +43,7 @@ export const projectsRoutesGetArticlesReviewsHuman = new Elysia().post(
       })
 
       // OPTIMIZATION: Start from the small judgmentsHuman table instead of the large articles table.
-      // Step 1: Find all article IDs that are fully assessed by at least one human user.
-      //         "Fully assessed" = a single user has answered ALL project prompts for that article.
+      // Step 1: Find all article IDs that are fully assessed.
       const fullyAssessedArticleIdsQuery = await db
         .select({articleId: judgmentsHuman.articleId})
         .from(judgmentsHuman)
@@ -55,7 +54,7 @@ export const projectsRoutesGetArticlesReviewsHuman = new Elysia().post(
             inArray(judgmentsHuman.promptId, promptIds),
           ),
         )
-        .groupBy(judgmentsHuman.articleId, judgmentsHuman.user)
+        .groupBy(judgmentsHuman.articleId)
         .having(sql`COUNT(DISTINCT ${judgmentsHuman.promptId}) = ${promptIds.length}`)
 
       const fullyAssessedArticleIds = [
@@ -114,28 +113,22 @@ export const projectsRoutesGetArticlesReviewsHuman = new Elysia().post(
         .from(projectRouteLink)
         .where(eq(projectRouteLink.projectId, body.projectId))
 
-      const routeIdArray =
-        projectImportRoutes.length > 0
-          ? sql.join(
-              projectImportRoutes.map((r) => {
-                return sql`${r.importRouteId}::uuid`
-              }),
-              sql`,`,
-            )
-          : null
+      const routeIds = projectImportRoutes.map((row) => {
+        return row.importRouteId
+      })
 
       const hasMatchingImportRoute =
-        routeIdArray !== null
+        routeIds.length > 0
           ? sql`EXISTS (
-              SELECT 1 FROM ${articleRouteLink} arl
-              WHERE arl."article_id" = ${articles.id}
-                AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
-            )`
+            SELECT 1 FROM ${articleRouteLink} arl
+            WHERE arl."article_id" = ${articles.id}
+              AND ${inArray(articleRouteLink.importRouteId, routeIds)}
+          )`
           : null
       const hasProjectArticle = sql`EXISTS (
         SELECT 1 FROM ${projectArticles} pa
         WHERE pa."article_id" = ${articles.id}
-          AND pa."project_id" = ${body.projectId}::uuid
+          AND pa."project_id" = ${body.projectId}
       )`
 
       // Step 4: Build final WHERE conditions for articles (using the pre-filtered candidate IDs)
@@ -163,7 +156,7 @@ export const projectsRoutesGetArticlesReviewsHuman = new Elysia().post(
         whereParts.push(lte(articles.articleCreatedAt, toDate))
       }
       if (searchTitle) {
-        whereParts.push(sql`${articles.articleTitle} ILIKE ${'%' + searchTitle + '%'}`)
+        whereParts.push(sql`LOWER(${articles.articleTitle}) LIKE ${'%' + searchTitle.toLowerCase() + '%'}`)
       }
 
       const combinedWhereCondition = whereParts.length > 1 ? and(...whereParts) : whereParts[0]

@@ -103,7 +103,7 @@ export const PromptsPage = () => {
                           </Show>
                         </div>
                         <div class="mt-1 text-xs text-muted-foreground">
-                          Created {formatPromptTimestamp(prompt.createdAt)} • Owner {prompt.ownerId.slice(0, 8)}
+                          Created {formatPromptTimestamp(prompt.createdAt)}
                         </div>
                       </div>
                       <Button

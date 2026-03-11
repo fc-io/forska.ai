@@ -13,8 +13,6 @@ import {
   projects,
   prompts,
 } from '../../db/schema.ts'
-import {localUserId} from '../../utils/localUser.ts'
-import {requireUserAuth} from '../utils/authGuard.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
@@ -80,7 +78,6 @@ const _getOrphanPromptIds = async (tx: ReturnType<typeof getDatabase>, promptIds
 
 export const projectsRoutes = new Elysia()
   .use(withErrorHandler())
-  .use(requireUserAuth())
   .use(projectsRoutesGetArticlesReviews)
   .use(projectsRoutesGetArticlesReviewsCount)
   .use(projectsRoutesGetArticlesReviewsBoth)
@@ -92,7 +89,7 @@ export const projectsRoutes = new Elysia()
   .use(projectsRoutesGetArticlesReviewsClickHouse)
   .use(projectsRoutesGetReviewsHealth)
   .use(
-    new Elysia().use(requireUserAuth()).get('/api/projects-without-jobs', async () => {
+    new Elysia().get('/api/projects-without-jobs', async () => {
       const db = getDatabase()
       const rows = await db
         .select({id: projects.id, name: projects.name, description: projects.description})
@@ -263,7 +260,6 @@ export const projectsRoutes = new Elysia()
         .values({
           name: body.name,
           description: body.description || null,
-          ownerId: body.ownerId,
           modelId: body.modelId,
           useTitle: body.useTitle ?? true,
           useAbstract: body.useAbstract ?? true,
@@ -309,7 +305,6 @@ export const projectsRoutes = new Elysia()
                 promptHeading: heading,
                 type: typeVal,
                 contentHash,
-                ownerId: body.ownerId,
               })
               .onConflictDoNothing({target: prompts.contentHash})
               .returning({id: prompts.id})
@@ -343,7 +338,7 @@ export const projectsRoutes = new Elysia()
                 order: sql`EXCLUDED."order"`,
                 archived: sql`EXCLUDED.archived`,
                 enabled: sql`EXCLUDED.enabled`,
-                updatedAt: sql`CURRENT_TIMESTAMP`,
+                updatedAt: new Date(),
               },
             })
         }
@@ -378,7 +373,7 @@ export const projectsRoutes = new Elysia()
                 order: sql`EXCLUDED."order"`,
                 archived: sql`EXCLUDED.archived`,
                 enabled: sql`EXCLUDED.enabled`,
-                updatedAt: sql`CURRENT_TIMESTAMP`,
+                updatedAt: new Date(),
               },
             })
         }
@@ -420,7 +415,6 @@ export const projectsRoutes = new Elysia()
       body: t.Object({
         name: t.String(),
         description: t.Optional(t.String()),
-        ownerId: t.String(),
         modelId: t.String(),
         dateFrom: t.Optional(t.String()),
         dateTo: t.Optional(t.String()),
@@ -477,8 +471,6 @@ export const projectsRoutes = new Elysia()
   .patch(
     '/api/projects/:id/edit',
     async ({params, body}) => {
-      const sessionUserId = localUserId
-
       const db = getDatabase()
       // Disallow edits when a judgments job exists for this project
       const [job] = await db
@@ -572,12 +564,15 @@ export const projectsRoutes = new Elysia()
           })
           if (toDeleteAssoc.length > 0) {
             await tx.delete(projectPrompts).where(
-              sql`${projectPrompts.projectId} = ${params.id} AND ${projectPrompts.promptId} = ANY(ARRAY[${sql.join(
-                toDeleteAssoc.map((e) => {
-                  return sql`${e.promptId}::uuid`
-                }),
-                sql`,`,
-              )}] )`,
+              and(
+                eq(projectPrompts.projectId, params.id),
+                inArray(
+                  projectPrompts.promptId,
+                  toDeleteAssoc.map((entry) => {
+                    return entry.promptId
+                  }),
+                ),
+              ),
             )
           }
 
@@ -629,7 +624,6 @@ export const projectsRoutes = new Elysia()
                       promptHeading: headingVal,
                       type: typeVal,
                       contentHash: h4b,
-                      ownerId: sessionUserId,
                     })
                     .onConflictDoNothing({target: prompts.contentHash})
                     .returning({id: prompts.id})
@@ -685,7 +679,7 @@ export const projectsRoutes = new Elysia()
 
               const setValues = {
                 order: sql`EXCLUDED."order"`,
-                updatedAt: sql`CURRENT_TIMESTAMP`,
+                updatedAt: new Date(),
                 ...(archivedVal !== undefined ? {archived: sql`EXCLUDED.archived`} : {}),
                 ...(enabledVal !== undefined ? {enabled: sql`EXCLUDED.enabled`} : {}),
               }
@@ -711,7 +705,6 @@ export const projectsRoutes = new Elysia()
                     promptHeading: headingVal,
                     type: typeVal,
                     contentHash: h4b,
-                    ownerId: sessionUserId,
                   })
                   .onConflictDoNothing({target: prompts.contentHash})
                   .returning({id: prompts.id})
@@ -740,7 +733,7 @@ export const projectsRoutes = new Elysia()
 
               const setValues = {
                 order: sql`EXCLUDED."order"`,
-                updatedAt: sql`CURRENT_TIMESTAMP`,
+                updatedAt: new Date(),
                 ...(archivedVal !== undefined ? {archived: sql`EXCLUDED.archived`} : {}),
                 ...(enabledVal !== undefined ? {enabled: sql`EXCLUDED.enabled`} : {}),
               }
@@ -885,7 +878,6 @@ export const projectsRoutes = new Elysia()
         .values({
           name: `${sourceProject.name} - Copy`,
           description: sourceProject.description,
-          ownerId: sourceProject.ownerId,
           engine: sourceProject.engine,
           modelId: sourceProject.modelId,
           useTitle: sourceProject.useTitle,

@@ -3,11 +3,8 @@ import {Elysia, t} from 'elysia'
 import {mkdir, writeFile} from 'fs/promises'
 import path from 'path'
 
-import {user} from '../../../auth-schema.ts'
 import {articles} from '../../db/schema.ts'
-import {localUserId} from '../../utils/localUser.ts'
 import {fetchPdfForArticle} from '../cron/fullTextJobs/fetchPdfForArticle.ts'
-import {requireUserAuth} from '../utils/authGuard.ts'
 import {ConversionError, convertPdfToText} from '../utils/convertPdfToText.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
@@ -56,11 +53,11 @@ const getOriginalFullTextUrls = (originalData: unknown): OriginalFullTextUrl[] =
 }
 
 /**
- * Store an uploaded PDF to the user-specific assets folder.
+ * Store an uploaded PDF to the local assets folder.
  * Returns the relative path to the stored file, or null on failure.
  */
-const storeUploadedPdf = async (userId: string, articleId: string, pdfBuffer: Buffer): Promise<string | null> => {
-  const relDir = `assets/user_uploaded_article_pdfs/${userId}`
+const storeUploadedPdf = async (articleId: string, pdfBuffer: Buffer): Promise<string | null> => {
+  const relDir = 'assets/user_uploaded_article_pdfs'
   const fileName = `${articleId}.pdf`
   const relPath = `${relDir}/${fileName}`
   const absDir = path.join(process.cwd(), relDir)
@@ -78,7 +75,6 @@ const storeUploadedPdf = async (userId: string, articleId: string, pdfBuffer: Bu
 
 export const articleAdminRoutes = new Elysia()
   .use(withErrorHandler())
-  .use(requireUserAuth())
   // Extra article info (lightweight, for suspense boundary)
   .get(
     '/api/articles/:id/admin-info',
@@ -91,10 +87,10 @@ export const articleAdminRoutes = new Elysia()
           id: articles.id,
           fullTextFetchedAt: articles.fullTextFetchedAt,
           fullTextPDF: articles.fullTextPDF,
+          fullTextSource: articles.fullTextSource,
           fullTextConversionStatus: articles.fullTextConversionStatus,
           fullTextConversionError: articles.fullTextConversionError,
           fullTextConversionAttempts: articles.fullTextConversionAttempts,
-          fullTextPdfUploadedBy: articles.fullTextPdfUploadedBy,
           fullTextCharCount: articles.fullTextCharCount,
         })
         .from(articles)
@@ -105,18 +101,7 @@ export const articleAdminRoutes = new Elysia()
         throw new Error('Article not found')
       }
 
-      // If there's an uploader, fetch their name
-      let uploaderName: string | null = null
-      if (article.fullTextPdfUploadedBy) {
-        const [uploader] = await db
-          .select({name: user.name})
-          .from(user)
-          .where(eq(user.id, article.fullTextPdfUploadedBy))
-          .limit(1)
-        uploaderName = uploader?.name ?? null
-      }
-
-      return {article: {...article, uploaderName}}
+      return {article}
     },
     {params: t.Object({id: t.String()})},
   )
@@ -156,8 +141,6 @@ export const articleAdminRoutes = new Elysia()
         // Clear existing fullText so conversion will re-run
         updateData.fullText = null
         updateData.fullTextHtml = null
-        // Clear uploaded by since this is an auto-fetched PDF
-        updateData.fullTextPdfUploadedBy = null
       }
 
       await db.update(articles).set(updateData).where(eq(articles.id, id))
@@ -178,8 +161,6 @@ export const articleAdminRoutes = new Elysia()
     async ({params, body}) => {
       const db = getDatabase()
       const {id} = params
-
-      const userId = localUserId
 
       // Check if article exists
       const [article] = await db.select({id: articles.id}).from(articles).where(eq(articles.id, id)).limit(1)
@@ -204,7 +185,7 @@ export const articleAdminRoutes = new Elysia()
       const arrayBuffer = await pdfFile.arrayBuffer()
       const pdfBuffer = Buffer.from(arrayBuffer)
 
-      const fullTextPDF = await storeUploadedPdf(userId, id, pdfBuffer)
+      const fullTextPDF = await storeUploadedPdf(id, pdfBuffer)
 
       if (!fullTextPDF) {
         throw new Error('Failed to store PDF file')
@@ -218,7 +199,6 @@ export const articleAdminRoutes = new Elysia()
           fullTextSource: 'user_upload',
           fullTextOriginalFormat: 'pdf',
           fullTextFetchedAt: new Date(),
-          fullTextPdfUploadedBy: userId,
           // Reset conversion status so it can be processed
           fullTextConversionStatus: null,
           fullTextConversionAttempts: 0,

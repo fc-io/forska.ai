@@ -4,7 +4,6 @@ export const localUserName = 'Local User'
 
 export const localUserEmail = `local-${localUserId}@forska.local`
 
-export const localSession = {
-  user: {id: localUserId, name: localUserName, email: localUserEmail, role: null},
-  session: {userId: localUserId},
-}
+export const localUserRole = null
+
+export const localUserDefaults = {id: localUserId, name: localUserName, email: localUserEmail, role: localUserRole}

@@ -3,7 +3,6 @@ import {Elysia, t} from 'elysia'
 import {importRoute as importRouteTable} from '../../db/schema.ts'
 import {getClickhouseClient} from '../../services/clickhouse/clickhouseClient.ts'
 import {ensureClickhouseSchema} from '../../services/clickhouse/ensureClickhouseSchema.ts'
-import {requireUserAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 
@@ -211,7 +210,6 @@ const buildYearArticlesFromClickhouse = async (year: number): Promise<ImportRout
 
 export const adminImportRouteStatsRoutes = new Elysia()
   .use(withErrorHandler())
-  .use(requireUserAuth())
   .get('/api/admin/import-route-stats', async () => {
     const data = await buildImportRouteStatsFromClickhouse()
     return {data}

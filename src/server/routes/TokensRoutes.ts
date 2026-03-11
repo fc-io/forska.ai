@@ -1,9 +1,7 @@
 import {and, desc, eq, gte, lte, sum} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {session} from '../../../auth-schema.ts'
 import {tokenUse} from '../../db/schema.ts'
-import {requireUserAuth} from '../utils/authGuard.ts'
 import {env} from '../utils/env.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {tokensRoutesGetFailedRequestById} from './tokensRoutes/tokensRoutesGetFailedRequestById.ts'
@@ -14,25 +12,16 @@ import {tokensRoutesGetTimelineAllJobsStats} from './tokensRoutes/tokensRoutesGe
 import {tokensRoutesGetTimelineStats} from './tokensRoutes/tokensRoutesGetTimelineStats.ts'
 
 export const tokensRoutes = new Elysia()
-  .use(requireUserAuth())
   .post(
     '/api/tokens/usage',
     async ({body}) => {
       try {
         const db = getDatabase()
 
-        // Get userId from sessionId
-        const [sessionData] = await db
-          .select({userId: session.userId})
-          .from(session)
-          .where(eq(session.id, body.sessionId))
-          .limit(1)
-
         const [result] = await db
           .insert(tokenUse)
           .values({
-            userId: sessionData?.userId ?? null,
-            sessionId: body.sessionId,
+            judgmentsJobId: body.judgmentsJobId ?? null,
             // GPU + parallelism metadata
             gpuNnodes: env.GPU_NNODES,
             gpuGpusPerNode: env.GPU_GPUS_PER_NODE,
@@ -70,7 +59,7 @@ export const tokensRoutes = new Elysia()
     },
     {
       body: t.Object({
-        sessionId: t.String(),
+        judgmentsJobId: t.Optional(t.String()),
         requests: t.Number(),
         totalPromptTokens: t.Number(),
         totalCompletionTokens: t.Number(),

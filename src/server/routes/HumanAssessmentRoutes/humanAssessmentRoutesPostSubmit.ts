@@ -3,7 +3,6 @@ import {and, eq, inArray} from 'drizzle-orm'
 import type {Context} from 'elysia'
 
 import {judgmentsHuman, projectPrompts, prompts} from '../../../db/schema.ts'
-import {localUserId} from '../../../utils/localUser.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
 export const humanAssessmentRoutesPostSubmit = async ({
@@ -14,7 +13,6 @@ export const humanAssessmentRoutesPostSubmit = async ({
   set: Context['set']
 }) => {
   const db = getDatabase()
-  const sessionUserId = localUserId
 
   const pending = await db
     .select({
@@ -29,13 +27,7 @@ export const humanAssessmentRoutesPostSubmit = async ({
       projectPrompts,
       and(eq(projectPrompts.promptId, prompts.id), eq(projectPrompts.projectId, body.projectId)),
     )
-    .where(
-      and(
-        eq(judgmentsHuman.projectId, body.projectId),
-        eq(judgmentsHuman.user, sessionUserId),
-        eq(judgmentsHuman.isAnswered, false),
-      ),
-    )
+    .where(and(eq(judgmentsHuman.projectId, body.projectId), eq(judgmentsHuman.isAnswered, false)))
 
   if (pending.length === 0) {
     set.status = 400
@@ -135,7 +127,6 @@ export const humanAssessmentRoutesPostSubmit = async ({
       .where(
         and(
           inArray(judgmentsHuman.id, idsToUpdate),
-          eq(judgmentsHuman.user, sessionUserId),
           eq(judgmentsHuman.projectId, body.projectId),
           eq(judgmentsHuman.isAnswered, false),
         ),
@@ -154,13 +145,7 @@ export const humanAssessmentRoutesPostSubmit = async ({
       await tx
         .update(judgmentsHuman)
         .set({answer: preparedAnswer, isAnswered: true, comment, updatedAt: new Date()})
-        .where(
-          and(
-            eq(judgmentsHuman.id, id),
-            eq(judgmentsHuman.user, sessionUserId),
-            eq(judgmentsHuman.projectId, body.projectId),
-          ),
-        )
+        .where(and(eq(judgmentsHuman.id, id), eq(judgmentsHuman.projectId, body.projectId)))
     }
   })
 

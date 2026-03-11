@@ -16,7 +16,6 @@ import {
 import {getClickhouseClient} from '../../services/clickhouse/clickhouseClient.ts'
 import {getOlapDb} from '../../services/olap/olapDb.ts'
 import {rejectDuckdbNotImplemented} from '../../services/olap/rejectDuckdbNotImplemented.ts'
-import {requireUserAuth} from '../utils/authGuard.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
@@ -238,7 +237,6 @@ const queryAllArticlesInScope = async (
 
 export const subprojectsRoutes = new Elysia()
   .use(withErrorHandler())
-  .use(requireUserAuth())
   // Get all projects with their prompts
   .get('/api/subprojects/sources', async () => {
     const db = getDatabase()
@@ -317,7 +315,6 @@ export const subprojectsRoutes = new Elysia()
         .values({
           name: body.name,
           description: body.description || null,
-          ownerId: body.ownerId,
           modelId: body.modelId,
           useTitle: true,
           useAbstract: true,
@@ -598,7 +595,6 @@ export const subprojectsRoutes = new Elysia()
       body: t.Object({
         name: t.String(),
         description: t.Optional(t.String()),
-        ownerId: t.String(),
         modelId: t.String(),
         dateFrom: t.Optional(t.String()),
         dateTo: t.Optional(t.String()),

@@ -11,7 +11,6 @@ import {
   prompts,
 } from '../../db/schema.ts'
 import {getJournalTitleFromOriginalData} from '../../utils/getJournalTitleFromOriginalData.ts'
-import {requireUserAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 
@@ -138,7 +137,6 @@ const buildPromptHeaderLabel = (
 
 export const projectExportRoutes = new Elysia()
   .use(withErrorHandler())
-  .use(requireUserAuth())
   .post(
     '/api/projects/:id/export',
     async ({params, body, set}) => {

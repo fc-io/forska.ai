@@ -1,8 +1,7 @@
-import {and, desc, eq, sql} from 'drizzle-orm'
+import {and, desc, eq, inArray, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {judgments, judgmentsHuman, projectPrompts, prompts} from '../../db/schema'
-import {requireUserAuth} from '../utils/authGuard.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash'
 import {getDatabase} from '../utils/getDatabase'
 import {withErrorHandler} from '../utils/routeErrorHandler'
@@ -57,24 +56,13 @@ const applyHashUpdates = async (db: ReturnType<typeof getDatabase>, updates: Pro
     return 0
   }
 
-  const values = sql.join(
+  await Promise.all(
     updates.map((update) => {
-      return sql`(${update.id}::uuid, ${update.hash})`
+      return db.update(prompts).set({contentHash: update.hash, updatedAt: new Date()}).where(eq(prompts.id, update.id))
     }),
-    sql`,`,
   )
 
-  const result = await db.execute(
-    sql<{id: string}>`
-      UPDATE "prompts" AS p
-      SET "content_hash" = v.content_hash
-      FROM (VALUES ${values}) AS v(id, content_hash)
-      WHERE p.id = v.id
-      RETURNING p.id
-    `,
-  )
-
-  return result.rows.length
+  return updates.length
 }
 
 const promptsListSelection = {
@@ -84,13 +72,11 @@ const promptsListSelection = {
   type: prompts.type,
   createdAt: prompts.createdAt,
   updatedAt: prompts.updatedAt,
-  ownerId: prompts.ownerId,
   archived: prompts.archived,
 }
 
 const promptsUserRoutes = new Elysia()
   .use(withErrorHandler())
-  .use(requireUserAuth())
   .get('/api/prompts', async () => {
     const db = getDatabase()
     const list = await db
@@ -115,11 +101,7 @@ const promptsUserRoutes = new Elysia()
     '/api/prompts/:id',
     async ({params, body, set}) => {
       const db = getDatabase()
-      const [existingPrompt] = await db
-        .select({id: prompts.id, ownerId: prompts.ownerId})
-        .from(prompts)
-        .where(eq(prompts.id, params.id))
-        .limit(1)
+      const [existingPrompt] = await db.select({id: prompts.id}).from(prompts).where(eq(prompts.id, params.id)).limit(1)
 
       if (!existingPrompt) {
         set.status = 404
@@ -138,7 +120,6 @@ const promptsUserRoutes = new Elysia()
   )
 
 const promptsAdminRoutes = new Elysia()
-  .use(requireUserAuth())
   .get('/api/prompts/duplicates', async () => {
     const db = getDatabase()
     const allPrompts = await db.select().from(prompts)
@@ -475,17 +456,7 @@ const promptsAdminRoutes = new Elysia()
 
       const now = new Date()
 
-      await db
-        .update(judgments)
-        .set({deletedAt: now, updatedAt: now})
-        .where(
-          sql`${judgments.id} = ANY(ARRAY[${sql.join(
-            judgmentIds.map((id) => {
-              return sql`${id}::uuid`
-            }),
-            sql`,`,
-          )}])`,
-        )
+      await db.update(judgments).set({deletedAt: now, updatedAt: now}).where(inArray(judgments.id, judgmentIds))
 
       return {success: true, data: {deletedCount: judgmentIds.length}}
     },

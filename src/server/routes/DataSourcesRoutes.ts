@@ -1,9 +1,7 @@
-import {desc, eq, sql} from 'drizzle-orm'
+import {desc, eq} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {user} from '../../../auth-schema'
-import {dataSource, dataSourceAccess} from '../../db/schema.ts'
-import {requireUserAuth} from '../utils/authGuard.ts'
+import {dataSource} from '../../db/schema.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
@@ -36,66 +34,29 @@ const dataSourceListSelection = {
   lastImportAt: dataSource.lastImportAt,
   itemsAfterLastImport: dataSource.itemsAfterLastImport,
   importRoute: dataSource.importRoute,
-  ownerId: dataSource.ownerId,
-  ownerName: user.name,
-  ownerEmail: user.email,
-  accessCount: sql<number>`COUNT(DISTINCT ${dataSourceAccess.userId})`.as('access_count'),
 }
-
-const dataSourceListGroupBy = [
-  dataSource.id,
-  dataSource.title,
-  dataSource.description,
-  dataSource.createdAt,
-  dataSource.updatedAt,
-  dataSource.dateFrom,
-  dataSource.dateTo,
-  dataSource.lastImportAt,
-  dataSource.itemsAfterLastImport,
-  dataSource.importRoute,
-  dataSource.ownerId,
-  user.name,
-  user.email,
-]
 
 export const dataSourcesRoutes = new Elysia()
   .use(withErrorHandler())
-  .use(requireUserAuth())
   .get('/api/datasources', async () => {
     const db = getDatabase()
 
-    const dataSources = await db
+    const rows = await db
       .select(dataSourceListSelection)
       .from(dataSource)
-      .leftJoin(user, eq(dataSource.ownerId, user.id))
-      .leftJoin(dataSourceAccess, eq(dataSource.id, dataSourceAccess.dataSourceId))
       .where(eq(dataSource.archived, false))
-      .groupBy(...dataSourceListGroupBy)
       .orderBy(desc(dataSource.createdAt))
-
-    return {
-      data: dataSources.map((entry) => {
-        return {...entry, accessCount: entry.accessCount ?? 0}
-      }),
-    }
+    return {data: rows}
   })
   .get('/api/datasources/archived', async () => {
     const db = getDatabase()
 
-    const dataSources = await db
+    const rows = await db
       .select(dataSourceListSelection)
       .from(dataSource)
-      .leftJoin(user, eq(dataSource.ownerId, user.id))
-      .leftJoin(dataSourceAccess, eq(dataSource.id, dataSourceAccess.dataSourceId))
       .where(eq(dataSource.archived, true))
-      .groupBy(...dataSourceListGroupBy)
       .orderBy(desc(dataSource.createdAt))
-
-    return {
-      data: dataSources.map((entry) => {
-        return {...entry, accessCount: entry.accessCount ?? 0}
-      }),
-    }
+    return {data: rows}
   })
   .get('/api/datasources/:id', async ({params}) => {
     const db = getDatabase()
@@ -142,7 +103,6 @@ export const dataSourcesRoutes = new Elysia()
           importRoute: body.importRoute ?? null,
           dateFrom,
           dateTo,
-          ownerId: body.ownerId,
         })
         .returning()
 
@@ -155,7 +115,6 @@ export const dataSourcesRoutes = new Elysia()
         importRoute: t.Optional(t.String()),
         dateFrom: t.Optional(t.String()),
         dateTo: t.Optional(t.String()),
-        ownerId: t.String(),
       }),
     },
   )

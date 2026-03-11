@@ -1,12 +1,8 @@
-import {Menu} from '@ark-ui/solid'
 import {useQuery} from '@tanstack/solid-query'
 import {Link, useLocation} from '@tanstack/solid-router'
 import {createMemo, createSignal, onCleanup, onMount, Show} from 'solid-js'
 
 import {apiClient} from '../services/apiClient'
-import type {User} from '../types/user'
-
-type NavigationProps = {user: User | undefined; onSignOut: () => void}
 
 const isEventTargetWithinElement = (target: EventTarget | null, element: HTMLElement | undefined) => {
   return target instanceof Node && !!element && element.contains(target)
@@ -23,32 +19,6 @@ const isEditableTarget = (target: EventTarget | null) => {
 
 const isF13KeyDownEvent = (event: KeyboardEvent) => {
   return event.code === 'F13' || event.key === 'F13'
-}
-
-const getAvatarLabel = (user: User | undefined) => {
-  const defaultLabel = 'U'
-  if (!user) {
-    return defaultLabel
-  }
-  const trimmedName = user.name?.trim()
-  if (trimmedName) {
-    return trimmedName
-      .split(/\s+/)
-      .filter((part) => {
-        return part.length > 0
-      })
-      .map((part) => {
-        return part[0] ?? ''
-      })
-      .join('')
-      .slice(0, 2)
-      .toUpperCase()
-  }
-  const trimmedEmail = user.email?.trim()
-  if (trimmedEmail) {
-    return trimmedEmail.slice(0, 2).toUpperCase()
-  }
-  return defaultLabel
 }
 
 type LlmMetricsSummary = {waiting: number; running: number; lastUpdate: Date | null}
@@ -136,7 +106,7 @@ const formatLastUpdate = (date: Date | null): string => {
   return `Updated ${dateStr} ${time}`
 }
 
-export const Navigation = (props: NavigationProps) => {
+export const Navigation = () => {
   const [isAdminMenuOpen, setIsAdminMenuOpen] = createSignal(false)
   let adminMenuTriggerElement: HTMLDivElement | undefined
   let adminMenuElement: HTMLDivElement | undefined
@@ -147,7 +117,7 @@ export const Navigation = (props: NavigationProps) => {
       queryKey: ['llm-metrics-summary'],
       queryFn: fetchLlmMetricsSummary,
       refetchInterval: getLlmMetricsRefetchInterval(location().pathname),
-      enabled: Boolean(props.user),
+      enabled: true,
       suspense: false,
     }
   })
@@ -211,10 +181,6 @@ export const Navigation = (props: NavigationProps) => {
       return
     }
 
-    if (!props.user) {
-      return
-    }
-
     event.preventDefault()
     toggleAdminMenu()
   }
@@ -256,77 +222,50 @@ export const Navigation = (props: NavigationProps) => {
             >
               Article Search
             </Link>
+            <Link
+              to="/settings"
+              class="text-gray-900 hover:text-blue-600 px-3 py-2 text-sm font-medium [&.active]:text-blue-600 [&.active]:font-semibold"
+            >
+              Settings
+            </Link>
           </div>
           <div class="flex items-center space-x-4">
-            <Show when={props.user}>
-              <div
-                class="flex flex-col items-end px-2 py-1"
-                title={getLlmMetricsIndicatorTitle(llmMetricsIndicator().isFresh)}
-              >
-                <div class={`text-sm font-medium ${llmMetricsIndicator().isFresh ? 'text-gray-700' : 'text-red-600'}`}>
-                  {llmMetricsIndicator().waiting}/{llmMetricsIndicator().running}
-                </div>
-                <div class={`text-xs ${llmMetricsIndicator().isFresh ? 'text-gray-400' : 'text-red-400'}`}>
-                  {formatLastUpdate(llmMetricsIndicator().lastUpdate)}
-                </div>
+            <div
+              class="flex flex-col items-end px-2 py-1"
+              title={getLlmMetricsIndicatorTitle(llmMetricsIndicator().isFresh)}
+            >
+              <div class={`text-sm font-medium ${llmMetricsIndicator().isFresh ? 'text-gray-700' : 'text-red-600'}`}>
+                {llmMetricsIndicator().waiting}/{llmMetricsIndicator().running}
               </div>
-              <div
-                ref={(element) => {
-                  adminMenuTriggerElement = element
-                }}
-                class="group -mx-2 mr-4 flex h-full cursor-pointer select-none items-center px-2"
-                role="button"
-                tabIndex={0}
-                aria-haspopup="true"
-                aria-expanded={isAdminMenuOpen()}
-                onPointerEnter={handleAdminMenuTriggerPointerEnter}
-                onPointerLeave={handleAdminMenuTriggerPointerLeave}
-                onClick={toggleAdminMenu}
-              >
-                <div
-                  class={`rounded-md px-3 py-2 text-sm font-medium text-gray-700 group-hover:bg-stone-100 group-hover:text-gray-900 ${
-                    isAdminMenuOpen() ? 'bg-stone-100 text-gray-900' : ''
-                  }`}
-                >
-                  Admin
-                </div>
+              <div class={`text-xs ${llmMetricsIndicator().isFresh ? 'text-gray-400' : 'text-red-400'}`}>
+                {formatLastUpdate(llmMetricsIndicator().lastUpdate)}
               </div>
-            </Show>
-            <Show when={props.user}>
-              <Menu.Root lazyMount unmountOnExit positioning={{placement: 'bottom-end'}}>
-                <Menu.Trigger class="inline-flex items-center justify-center w-9 h-9 rounded-full bg-gray-200 text-sm font-semibold text-gray-700 hover:bg-gray-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">
-                  <span aria-hidden="true">{getAvatarLabel(props.user)}</span>
-                  <span class="sr-only">Open user menu</span>
-                </Menu.Trigger>
-                <Menu.Positioner>
-                  <Menu.Content class="mt-2 w-40 rounded-md bg-white py-2 shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none">
-                    <Menu.Item id="settings" value="settings" class="p-0">
-                      <Link
-                        to="/settings"
-                        class="block w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"
-                      >
-                        Settings
-                      </Link>
-                    </Menu.Item>
-                    <Menu.Item id="sign-out" value="sign-out" class="p-0">
-                      <Link
-                        to="/login"
-                        class="block w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"
-                        onClick={() => {
-                          props.onSignOut()
-                        }}
-                      >
-                        Sign Out
-                      </Link>
-                    </Menu.Item>
-                  </Menu.Content>
-                </Menu.Positioner>
-              </Menu.Root>
-            </Show>
+            </div>
+            <div
+              ref={(element) => {
+                adminMenuTriggerElement = element
+              }}
+              class="group -mx-2 mr-4 flex h-full cursor-pointer select-none items-center px-2"
+              role="button"
+              tabIndex={0}
+              aria-haspopup="true"
+              aria-expanded={isAdminMenuOpen()}
+              onPointerEnter={handleAdminMenuTriggerPointerEnter}
+              onPointerLeave={handleAdminMenuTriggerPointerLeave}
+              onClick={toggleAdminMenu}
+            >
+              <div
+                class={`rounded-md px-3 py-2 text-sm font-medium text-gray-700 group-hover:bg-stone-100 group-hover:text-gray-900 ${
+                  isAdminMenuOpen() ? 'bg-stone-100 text-gray-900' : ''
+                }`}
+              >
+                Admin
+              </div>
+            </div>
           </div>
         </div>
       </div>
-      <Show when={props.user && isAdminMenuOpen()}>
+      <Show when={isAdminMenuOpen()}>
         <div
           ref={(element) => {
             adminMenuElement = element

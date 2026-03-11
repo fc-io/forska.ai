@@ -48,7 +48,6 @@ export const unarchiveProject = async (projectId: string): Promise<void> => {
 export const createProject = async (
   name: string,
   description: string | null,
-  ownerId: string,
   modelId: string,
   promptTexts: string[],
 ) => {
@@ -56,7 +55,6 @@ export const createProject = async (
     const response = await apiClient.api.projects.post({
       name,
       description: description || undefined,
-      ownerId,
       modelId,
       prompts: promptTexts.length > 0 ? promptTexts : undefined,
     })

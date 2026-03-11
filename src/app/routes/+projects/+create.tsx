@@ -5,7 +5,6 @@ import {createStore} from 'solid-js/store'
 
 import {Button} from '../../../components/ui/button'
 import {apiClient} from '../../../services/apiClient'
-import {fetchSession} from '../../../services/fetchSession'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse'
 
 type PromptItem = {id: string; content: string; promptHeading: string; type: string}
@@ -59,13 +58,6 @@ const parseDateInput = (value: string): ParsedDateResult => {
 }
 
 const CreateProject = () => {
-  const sessionQuery = useQuery(() => {
-    return {
-      queryKey: ['session'],
-      queryFn: fetchSession,
-      staleTime: 1000 * 60 * 5, // Consider data fresh for 5 minutes
-    }
-  })
   const importRoutesQuery = useQuery(() => {
     return {
       queryKey: ['importroutes'],
@@ -262,14 +254,9 @@ const CreateProject = () => {
         return {originalId: p.id, order: validPrompts.length + index}
       })
 
-    if (!sessionQuery.data?.user.id) {
-      throw new Error('User must be authenticated to create a project')
-    }
-
     const response = await apiClient.api.projects.post({
       name,
       description: description.trim() || undefined,
-      ownerId: sessionQuery.data.user.id,
       modelId,
       prompts: validPrompts,
       existingPromptIds: enabledExistingPrompts,

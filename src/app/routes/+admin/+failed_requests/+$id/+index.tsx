@@ -37,8 +37,6 @@ type FailedRequest = {
   failedRequests: number | null
   failedRequestsDetails: FailedRequestDetailItem[] | null
   totalTokens: number
-  userId: string | null
-  sessionId: string | null
   requests: number
   successfulRequests: number | null
 }

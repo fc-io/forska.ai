@@ -4,7 +4,6 @@ import {formatDate} from 'date-fns'
 import {createSignal, For, Show} from 'solid-js'
 
 import {apiClient} from '../../../../services/apiClient.ts'
-import {fetchSession} from '../../../../services/fetchSession.ts'
 
 type PromptUsage = {projects: number; judgments: number; humanJudgments: number}
 type PromptSummary = {
@@ -119,16 +118,8 @@ const fetchInvalidJudgments = async (): Promise<InvalidJudgment[]> => {
 }
 
 const DeduplicatePrompts = () => {
-  const sessionQuery = useQuery(() => {
-    return {queryKey: ['session'], queryFn: fetchSession}
-  })
-
-  const isSignedIn = () => {
-    return Boolean(sessionQuery.data?.user)
-  }
-
   const duplicatesQuery = useQuery(() => {
-    return {queryKey: ['prompts', 'duplicates'], queryFn: fetchDuplicates, enabled: isSignedIn()}
+    return {queryKey: ['prompts', 'duplicates'], queryFn: fetchDuplicates}
   })
 
   const hasDuplicateGroups = () => {
@@ -136,11 +127,11 @@ const DeduplicatePrompts = () => {
   }
 
   const orphansQuery = useQuery(() => {
-    return {queryKey: ['prompts', 'orphans'], queryFn: fetchOrphans, enabled: isSignedIn()}
+    return {queryKey: ['prompts', 'orphans'], queryFn: fetchOrphans}
   })
 
   const invalidJudgmentsQuery = useQuery(() => {
-    return {queryKey: ['prompts', 'invalid-judgments'], queryFn: fetchInvalidJudgments, enabled: isSignedIn()}
+    return {queryKey: ['prompts', 'invalid-judgments'], queryFn: fetchInvalidJudgments}
   })
 
   const [selectedKeepIds, setSelectedKeepIds] = createSignal<Record<string, string>>({})
@@ -309,645 +300,607 @@ const DeduplicatePrompts = () => {
 
   return (
     <div class="min-h-screen bg-gray-50 p-6 mx-auto">
-      <Show when={sessionQuery.isLoading}>
-        <div class="flex items-center justify-center h-64">
-          <span class="text-gray-600">Checking permissions...</span>
-        </div>
-      </Show>
-
-      <Show when={sessionQuery.isError}>
-        <div class="p-4 rounded-md bg-red-50 border border-red-200 mb-6">
-          <p class="text-red-600">
-            Failed to load session: {sessionQuery.error instanceof Error ? sessionQuery.error.message : 'Unknown error'}
-          </p>
-        </div>
-      </Show>
-
-      <Show when={!sessionQuery.isLoading && !sessionQuery.isError}>
-        <Show
-          when={isSignedIn()}
-          fallback={
-            <div class="bg-white border border-gray-200 rounded-lg shadow-sm max-w-xl mx-auto p-10 text-center">
-              <h1 class="text-2xl font-semibold text-gray-900 mb-2">Sign in required</h1>
-              <p class="text-gray-500 mb-6">You need to be signed in to view this page.</p>
-            </div>
-          }
+      <div class="flex justify-between items-center mb-6">
+        <h1 class="text-2xl font-bold">Prompts</h1>
+        <button
+          onClick={() => {
+            return void regenerateHashes()
+          }}
+          disabled={hasDuplicateGroups() || duplicatesQuery.isLoading || regeneratingHashes()}
+          class={`inline-flex items-center px-4 py-2 rounded-md text-sm font-medium focus:outline-none focus:ring-2 focus:ring-offset-1 ${
+            hasDuplicateGroups() || duplicatesQuery.isLoading || regeneratingHashes()
+              ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
+              : 'bg-blue-600 text-white hover:bg-blue-700 focus:ring-blue-500'
+          }`}
         >
-          <div class="flex justify-between items-center mb-6">
-            <h1 class="text-2xl font-bold">Prompts</h1>
+          {regeneratingHashes() ? 'Regenerating...' : 'Regenerate Prompt Hashes'}
+        </button>
+      </div>
+
+      <div class="space-y-8">
+        <Show when={duplicatesQuery.isLoading}>
+          <p class="text-muted-foreground">Loading duplicates...</p>
+        </Show>
+
+        <Show when={duplicatesQuery.isError}>
+          <div class="p-4 rounded-md bg-red-50 border border-red-200">
+            <p class="text-red-600">Failed to load duplicates</p>
             <button
               onClick={() => {
-                return void regenerateHashes()
+                return void duplicatesQuery.refetch()
               }}
-              disabled={hasDuplicateGroups() || duplicatesQuery.isLoading || regeneratingHashes()}
-              class={`inline-flex items-center px-4 py-2 rounded-md text-sm font-medium focus:outline-none focus:ring-2 focus:ring-offset-1 ${
-                hasDuplicateGroups() || duplicatesQuery.isLoading || regeneratingHashes()
-                  ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
-                  : 'bg-blue-600 text-white hover:bg-blue-700 focus:ring-blue-500'
-              }`}
+              class="mt-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
             >
-              {regeneratingHashes() ? 'Regenerating...' : 'Regenerate Prompt Hashes'}
+              Retry
             </button>
           </div>
+        </Show>
 
-          <div class="space-y-8">
-            <Show when={duplicatesQuery.isLoading}>
-              <p class="text-muted-foreground">Loading duplicates...</p>
-            </Show>
-
-            <Show when={duplicatesQuery.isError}>
-              <div class="p-4 rounded-md bg-red-50 border border-red-200">
-                <p class="text-red-600">Failed to load duplicates</p>
-                <button
-                  onClick={() => {
-                    return void duplicatesQuery.refetch()
-                  }}
-                  class="mt-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
-                >
-                  Retry
-                </button>
-              </div>
-            </Show>
-
-            <Show when={!duplicatesQuery.isLoading && !duplicatesQuery.isError && duplicatesQuery.data?.length === 0}>
-              <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-12 text-center">
-                <h3 class="text-lg font-medium text-gray-900 mb-2">No duplicate prompts found</h3>
-                <p class="text-sm text-gray-500">All prompts seem to be unique based on their content.</p>
-              </div>
-            </Show>
-
-            <For each={duplicatesQuery.data ?? []}>
-              {(group, index) => {
-                return (
-                  <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-                    <div class="mb-4">
-                      <h3 class="text-lg font-semibold text-gray-900">Duplicate Group #{index() + 1}</h3>
-                      <div class="text-sm text-gray-500 mt-1">
-                        <span class="font-medium">Heading:</span> {group[0]?.promptHeading || 'N/A'} |{' '}
-                        <span class="font-medium">Type:</span> {group[0]?.type || 'N/A'}
-                      </div>
-                      <div class="mt-2 p-3 bg-gray-50 rounded text-sm font-mono whitespace-pre-wrap max-h-32 overflow-y-auto border border-gray-200">
-                        {group[0]?.originalText}
-                      </div>
-                    </div>
-
-                    <div class="overflow-x-auto">
-                      <table class="min-w-full divide-y divide-gray-200 table-fixed w-full">
-                        <thead class="bg-gray-50">
-                          <tr>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                              Keep
-                            </th>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                              ID
-                            </th>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                              Created At
-                            </th>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                              Projects
-                            </th>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                              Judgments
-                            </th>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                              Human Judgments
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody class="bg-white divide-y divide-gray-200">
-                          <For each={group}>
-                            {(prompt) => {
-                              return (
-                                <tr
-                                  class={selectedKeepIds()[index()] === prompt.id ? 'bg-blue-50' : 'hover:bg-gray-50'}
-                                >
-                                  <td class="px-6 py-4 whitespace-nowrap">
-                                    <input
-                                      type="radio"
-                                      name={`group-${index()}`}
-                                      value={prompt.id}
-                                      checked={selectedKeepIds()[index()] === prompt.id}
-                                      onChange={() => {
-                                        return setSelectedKeepIds((prev) => {
-                                          return {...prev, [index()]: prompt.id}
-                                        })
-                                      }}
-                                      class="focus:ring-blue-500 h-4 w-4 text-blue-600 border-gray-300"
-                                    />
-                                  </td>
-                                  <td class="px-6 py-4 text-sm text-gray-500 font-mono break-all w-32">{prompt.id}</td>
-                                  <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                    {formatDate(new Date(prompt.createdAt), 'yyyy-MM-dd HH:mm')}
-                                  </td>
-                                  <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                    {prompt.usage.projects}
-                                  </td>
-                                  <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                    {prompt.usage.judgments}
-                                  </td>
-                                  <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                    {prompt.usage.humanJudgments}
-                                  </td>
-                                </tr>
-                              )
-                            }}
-                          </For>
-                        </tbody>
-                      </table>
-                    </div>
-
-                    <div class="mt-4 flex justify-end">
-                      <button
-                        onClick={() => {
-                          void handleMerge(index(), group)
-                        }}
-                        disabled={!selectedKeepIds()[index()] || processingGroups()[index()]}
-                        class={`px-4 py-2 rounded-md text-white text-sm font-medium focus:outline-none focus:ring-2 focus:ring-offset-1 ${
-                          !selectedKeepIds()[index()] || processingGroups()[index()]
-                            ? 'bg-gray-400 cursor-not-allowed'
-                            : 'bg-blue-600 hover:bg-blue-700 focus:ring-blue-500'
-                        }`}
-                      >
-                        {processingGroups()[index()] ? 'Merging...' : 'Merge Duplicates'}
-                      </button>
-                    </div>
-                  </div>
-                )
-              }}
-            </For>
-
-            <div class="mt-12 space-y-8">
-              <h2 class="text-xl font-bold text-gray-900">Invalid Judgments</h2>
-              <p class="text-sm text-gray-500">
-                Judgments where the answer doesn't match the expected prompt type (e.g., 'maybe' when the type is 'yes'
-                | 'no' | 'unsure').
-              </p>
-
-              <div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-                <div
-                  class="px-6 py-4 border-b border-gray-200 bg-gray-50 flex justify-between items-center cursor-pointer"
-                  onClick={() => {
-                    return toggleSection('invalidJudgments')
-                  }}
-                >
-                  <h3 class="text-lg font-semibold text-gray-900">
-                    Judgments with Mismatched Answer Types ({invalidJudgmentsQuery.data?.length ?? 0})
-                  </h3>
-                  <button class="text-gray-500 hover:text-gray-700">
-                    {expandedSections().invalidJudgments ? (
-                      <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                        <path
-                          fill-rule="evenodd"
-                          d="M14.707 12.707a1 1 0 01-1.414 0L10 9.414l-3.293 3.293a1 1 0 01-1.414-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 010 1.414z"
-                          clip-rule="evenodd"
-                        />
-                      </svg>
-                    ) : (
-                      <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                        <path
-                          fill-rule="evenodd"
-                          d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
-                          clip-rule="evenodd"
-                        />
-                      </svg>
-                    )}
-                  </button>
-                </div>
-                <Show when={expandedSections().invalidJudgments}>
-                  <div class="p-4 border-b border-gray-200 bg-gray-50">
-                    <button
-                      onClick={() => {
-                        return void handleDeleteInvalidJudgments()
-                      }}
-                      disabled={
-                        deletingInvalidJudgments()
-                        || invalidJudgmentsQuery.isLoading
-                        || (invalidJudgmentsQuery.data?.length ?? 0) === 0
-                      }
-                      class={`px-4 py-2 rounded-md text-white text-sm font-medium focus:outline-none focus:ring-2 focus:ring-offset-1 ${
-                        deletingInvalidJudgments()
-                        || invalidJudgmentsQuery.isLoading
-                        || (invalidJudgmentsQuery.data?.length ?? 0) === 0
-                          ? 'bg-gray-400 cursor-not-allowed'
-                          : 'bg-red-600 hover:bg-red-700 focus:ring-red-500'
-                      }`}
-                    >
-                      {deletingInvalidJudgments()
-                        ? 'Deleting...'
-                        : `Delete All ${invalidJudgmentsQuery.data?.length ?? 0} Invalid Judgments`}
-                    </button>
-                  </div>
-                  <div class="overflow-x-auto">
-                    <table class="min-w-full divide-y divide-gray-200 table-fixed w-full">
-                      <thead class="bg-gray-50">
-                        <tr>
-                          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Judgment ID
-                          </th>
-                          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Prompt
-                          </th>
-                          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Expected Type
-                          </th>
-                          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            answeredOriginal
-                          </th>
-                          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            answeredOriginalAsArray
-                          </th>
-                          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Created At
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody class="bg-white divide-y divide-gray-200">
-                        <Show
-                          when={invalidJudgmentsQuery.data && invalidJudgmentsQuery.data.length > 0}
-                          fallback={
-                            <tr>
-                              <td colspan="6" class="px-6 py-4 text-center text-sm text-gray-500">
-                                {invalidJudgmentsQuery.isLoading
-                                  ? 'Loading...'
-                                  : 'No invalid judgments found. All judgment answers match their prompt types.'}
-                              </td>
-                            </tr>
-                          }
-                        >
-                          <For each={invalidJudgmentsQuery.data ?? []}>
-                            {(judgment) => {
-                              return (
-                                <tr class="hover:bg-gray-50">
-                                  <td class="px-6 py-4 text-sm text-gray-500 font-mono break-all">{judgment.id}</td>
-                                  <td class="px-6 py-4 text-sm text-gray-900 break-words">
-                                    <div class="max-h-[60px] overflow-y-auto">
-                                      {judgment.promptHeading || judgment.promptId.slice(0, 8)}
-                                    </div>
-                                  </td>
-                                  <td class="px-6 py-4 text-sm text-gray-500 break-words">
-                                    <div class="max-h-[60px] overflow-y-auto font-mono text-xs">
-                                      {judgment.promptType || 'N/A'}
-                                    </div>
-                                  </td>
-                                  <td class="px-6 py-4 text-sm text-red-600 font-medium break-words">
-                                    <div class="max-h-[60px] overflow-y-auto">
-                                      {judgment.answeredOriginal || <span class="text-gray-400 italic">null</span>}
-                                    </div>
-                                  </td>
-                                  <td class="px-6 py-4 text-sm text-red-600 font-medium break-words">
-                                    <div class="max-h-[60px] overflow-y-auto">
-                                      {judgment.answeredOriginalAsArray !== null ? (
-                                        `[${judgment.answeredOriginalAsArray.join(', ')}]`
-                                      ) : (
-                                        <span class="text-gray-400 italic">null</span>
-                                      )}
-                                    </div>
-                                  </td>
-                                  <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                    {formatDate(new Date(judgment.createdAt), 'yyyy-MM-dd HH:mm')}
-                                  </td>
-                                </tr>
-                              )
-                            }}
-                          </For>
-                        </Show>
-                      </tbody>
-                    </table>
-                  </div>
-                </Show>
-              </div>
-            </div>
-
-            <div class="mt-12 space-y-8">
-              <h2 class="text-xl font-bold text-gray-900">Orphaned Prompts</h2>
-
-              <div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-                <div
-                  class="px-6 py-4 border-b border-gray-200 bg-gray-50 flex justify-between items-center cursor-pointer"
-                  onClick={() => {
-                    return toggleSection('noProjects')
-                  }}
-                >
-                  <h3 class="text-lg font-semibold text-gray-900">Prompts with No Project Connection</h3>
-                  <button class="text-gray-500 hover:text-gray-700">
-                    {expandedSections().noProjects ? (
-                      <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                        <path
-                          fill-rule="evenodd"
-                          d="M14.707 12.707a1 1 0 01-1.414 0L10 9.414l-3.293 3.293a1 1 0 01-1.414-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 010 1.414z"
-                          clip-rule="evenodd"
-                        />
-                      </svg>
-                    ) : (
-                      <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                        <path
-                          fill-rule="evenodd"
-                          d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
-                          clip-rule="evenodd"
-                        />
-                      </svg>
-                    )}
-                  </button>
-                </div>
-                <Show when={expandedSections().noProjects}>
-                  <div class="overflow-x-auto">
-                    <table class="min-w-full divide-y divide-gray-200 table-fixed w-full">
-                      <thead class="bg-gray-50">
-                        <tr>
-                          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            ID
-                          </th>
-                          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Heading
-                          </th>
-                          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Type
-                          </th>
-                          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Created At
-                          </th>
-                          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Content Preview
-                          </th>
-                          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Actions
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody class="bg-white divide-y divide-gray-200">
-                        <Show
-                          when={(orphansQuery.data?.noProjects?.length ?? 0) > 0}
-                          fallback={
-                            <tr>
-                              <td colspan="6" class="px-6 py-4 text-center text-sm text-gray-500">
-                                No prompts found without project connections.
-                              </td>
-                            </tr>
-                          }
-                        >
-                          <For each={orphansQuery.data?.noProjects ?? []}>
-                            {(prompt) => {
-                              const fullyOrphaned = isFullyOrphaned(prompt.id)
-                              return (
-                                <tr class="hover:bg-gray-50">
-                                  <td class="px-6 py-4 text-sm text-gray-500 font-mono break-all w-32">{prompt.id}</td>
-                                  <td class="px-6 py-4 text-sm text-gray-900 break-words">
-                                    <div class="max-h-[100px] overflow-y-auto">{prompt.promptHeading || 'N/A'}</div>
-                                  </td>
-                                  <td class="px-6 py-4 text-sm text-gray-900 break-words">
-                                    <div class="max-h-[100px] overflow-y-auto">{prompt.type || 'N/A'}</div>
-                                  </td>
-                                  <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                    {formatDate(new Date(prompt.createdAt), 'yyyy-MM-dd HH:mm')}
-                                  </td>
-                                  <td class="px-6 py-4 text-sm text-gray-500 max-w-xs break-words">
-                                    <div class="max-h-[100px] overflow-y-auto" title={prompt.originalText ?? undefined}>
-                                      {prompt.originalText}
-                                    </div>
-                                  </td>
-                                  <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                    <Show when={fullyOrphaned}>
-                                      <button
-                                        onClick={() => {
-                                          void handleDelete(prompt.id)
-                                        }}
-                                        disabled={deletingPrompts()[prompt.id]}
-                                        class="text-red-600 hover:text-red-900 font-medium disabled:opacity-50"
-                                      >
-                                        {deletingPrompts()[prompt.id] ? 'Deleting...' : 'Delete'}
-                                      </button>
-                                    </Show>
-                                  </td>
-                                </tr>
-                              )
-                            }}
-                          </For>
-                        </Show>
-                      </tbody>
-                    </table>
-                  </div>
-                </Show>
-              </div>
-
-              <div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-                <div
-                  class="px-6 py-4 border-b border-gray-200 bg-gray-50 flex justify-between items-center cursor-pointer"
-                  onClick={() => {
-                    return toggleSection('noJudgments')
-                  }}
-                >
-                  <h3 class="text-lg font-semibold text-gray-900">Prompts with No Judgment Connection</h3>
-                  <button class="text-gray-500 hover:text-gray-700">
-                    {expandedSections().noJudgments ? (
-                      <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                        <path
-                          fill-rule="evenodd"
-                          d="M14.707 12.707a1 1 0 01-1.414 0L10 9.414l-3.293 3.293a1 1 0 01-1.414-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 010 1.414z"
-                          clip-rule="evenodd"
-                        />
-                      </svg>
-                    ) : (
-                      <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                        <path
-                          fill-rule="evenodd"
-                          d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
-                          clip-rule="evenodd"
-                        />
-                      </svg>
-                    )}
-                  </button>
-                </div>
-                <Show when={expandedSections().noJudgments}>
-                  <div class="overflow-x-auto">
-                    <table class="min-w-full divide-y divide-gray-200 table-fixed w-full">
-                      <thead class="bg-gray-50">
-                        <tr>
-                          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            ID
-                          </th>
-                          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Heading
-                          </th>
-                          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Type
-                          </th>
-                          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Created At
-                          </th>
-                          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Content Preview
-                          </th>
-                          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Actions
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody class="bg-white divide-y divide-gray-200">
-                        <Show
-                          when={(orphansQuery.data?.noJudgments?.length ?? 0) > 0}
-                          fallback={
-                            <tr>
-                              <td colspan="6" class="px-6 py-4 text-center text-sm text-gray-500">
-                                No prompts found without judgment connections.
-                              </td>
-                            </tr>
-                          }
-                        >
-                          <For each={orphansQuery.data?.noJudgments ?? []}>
-                            {(prompt) => {
-                              const fullyOrphaned = isFullyOrphaned(prompt.id)
-                              return (
-                                <tr class="hover:bg-gray-50">
-                                  <td class="px-6 py-4 text-sm text-gray-500 font-mono break-all w-32">{prompt.id}</td>
-                                  <td class="px-6 py-4 text-sm text-gray-900 break-words">
-                                    <div class="max-h-[100px] overflow-y-auto">{prompt.promptHeading || 'N/A'}</div>
-                                  </td>
-                                  <td class="px-6 py-4 text-sm text-gray-900 break-words">
-                                    <div class="max-h-[100px] overflow-y-auto">{prompt.type || 'N/A'}</div>
-                                  </td>
-                                  <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                    {formatDate(new Date(prompt.createdAt), 'yyyy-MM-dd HH:mm')}
-                                  </td>
-                                  <td class="px-6 py-4 text-sm text-gray-500 max-w-xs break-words">
-                                    <div class="max-h-[100px] overflow-y-auto" title={prompt.originalText ?? undefined}>
-                                      {prompt.originalText}
-                                    </div>
-                                  </td>
-                                  <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                    <Show when={fullyOrphaned}>
-                                      <button
-                                        onClick={() => {
-                                          void handleDelete(prompt.id)
-                                        }}
-                                        disabled={deletingPrompts()[prompt.id]}
-                                        class="text-red-600 hover:text-red-900 font-medium disabled:opacity-50"
-                                      >
-                                        {deletingPrompts()[prompt.id] ? 'Deleting...' : 'Delete'}
-                                      </button>
-                                    </Show>
-                                  </td>
-                                </tr>
-                              )
-                            }}
-                          </For>
-                        </Show>
-                      </tbody>
-                    </table>
-                  </div>
-                </Show>
-              </div>
-
-              <div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-                <div
-                  class="px-6 py-4 border-b border-gray-200 bg-gray-50 flex justify-between items-center cursor-pointer"
-                  onClick={() => {
-                    return toggleSection('noProjectsAndJudgments')
-                  }}
-                >
-                  <h3 class="text-lg font-semibold text-gray-900">
-                    Prompts with No Project Connection and No Judgments
-                  </h3>
-                  <button class="text-gray-500 hover:text-gray-700">
-                    {expandedSections().noProjectsAndJudgments ? (
-                      <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                        <path
-                          fill-rule="evenodd"
-                          d="M14.707 12.707a1 1 0 01-1.414 0L10 9.414l-3.293 3.293a1 1 0 01-1.414-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 010 1.414z"
-                          clip-rule="evenodd"
-                        />
-                      </svg>
-                    ) : (
-                      <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                        <path
-                          fill-rule="evenodd"
-                          d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
-                          clip-rule="evenodd"
-                        />
-                      </svg>
-                    )}
-                  </button>
-                </div>
-                <Show when={expandedSections().noProjectsAndJudgments}>
-                  <div class="overflow-x-auto">
-                    <table class="min-w-full divide-y divide-gray-200 table-fixed w-full">
-                      <thead class="bg-gray-50">
-                        <tr>
-                          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            ID
-                          </th>
-                          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Heading
-                          </th>
-                          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Type
-                          </th>
-                          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Created At
-                          </th>
-                          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Content Preview
-                          </th>
-                          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Actions
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody class="bg-white divide-y divide-gray-200">
-                        <Show
-                          when={(orphansQuery.data?.noProjectsAndJudgments?.length ?? 0) > 0}
-                          fallback={
-                            <tr>
-                              <td colspan="6" class="px-6 py-4 text-center text-sm text-gray-500">
-                                No fully orphaned prompts found.
-                              </td>
-                            </tr>
-                          }
-                        >
-                          <For each={orphansQuery.data?.noProjectsAndJudgments ?? []}>
-                            {(prompt) => {
-                              return (
-                                <tr class="hover:bg-gray-50">
-                                  <td class="px-6 py-4 text-sm text-gray-500 font-mono break-all w-32">{prompt.id}</td>
-                                  <td class="px-6 py-4 text-sm text-gray-900 break-words">
-                                    <div class="max-h-[100px] overflow-y-auto">{prompt.promptHeading || 'N/A'}</div>
-                                  </td>
-                                  <td class="px-6 py-4 text-sm text-gray-900 break-words">
-                                    <div class="max-h-[100px] overflow-y-auto">{prompt.type || 'N/A'}</div>
-                                  </td>
-                                  <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                    {formatDate(new Date(prompt.createdAt), 'yyyy-MM-dd HH:mm')}
-                                  </td>
-                                  <td class="px-6 py-4 text-sm text-gray-500 max-w-xs break-words">
-                                    <div class="max-h-[100px] overflow-y-auto" title={prompt.originalText ?? undefined}>
-                                      {prompt.originalText}
-                                    </div>
-                                  </td>
-                                  <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                    <button
-                                      onClick={() => {
-                                        void handleDelete(prompt.id)
-                                      }}
-                                      disabled={deletingPrompts()[prompt.id]}
-                                      class="text-red-600 hover:text-red-900 font-medium disabled:opacity-50"
-                                    >
-                                      {deletingPrompts()[prompt.id] ? 'Deleting...' : 'Delete'}
-                                    </button>
-                                  </td>
-                                </tr>
-                              )
-                            }}
-                          </For>
-                        </Show>
-                      </tbody>
-                    </table>
-                  </div>
-                </Show>
-              </div>
-            </div>
+        <Show when={!duplicatesQuery.isLoading && !duplicatesQuery.isError && duplicatesQuery.data?.length === 0}>
+          <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-12 text-center">
+            <h3 class="text-lg font-medium text-gray-900 mb-2">No duplicate prompts found</h3>
+            <p class="text-sm text-gray-500">All prompts seem to be unique based on their content.</p>
           </div>
         </Show>
-      </Show>
+
+        <For each={duplicatesQuery.data ?? []}>
+          {(group, index) => {
+            return (
+              <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+                <div class="mb-4">
+                  <h3 class="text-lg font-semibold text-gray-900">Duplicate Group #{index() + 1}</h3>
+                  <div class="text-sm text-gray-500 mt-1">
+                    <span class="font-medium">Heading:</span> {group[0]?.promptHeading || 'N/A'} |{' '}
+                    <span class="font-medium">Type:</span> {group[0]?.type || 'N/A'}
+                  </div>
+                  <div class="mt-2 p-3 bg-gray-50 rounded text-sm font-mono whitespace-pre-wrap max-h-32 overflow-y-auto border border-gray-200">
+                    {group[0]?.originalText}
+                  </div>
+                </div>
+
+                <div class="overflow-x-auto">
+                  <table class="min-w-full divide-y divide-gray-200 table-fixed w-full">
+                    <thead class="bg-gray-50">
+                      <tr>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Keep
+                        </th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          ID
+                        </th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Created At
+                        </th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Projects
+                        </th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Judgments
+                        </th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Human Judgments
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody class="bg-white divide-y divide-gray-200">
+                      <For each={group}>
+                        {(prompt) => {
+                          return (
+                            <tr class={selectedKeepIds()[index()] === prompt.id ? 'bg-blue-50' : 'hover:bg-gray-50'}>
+                              <td class="px-6 py-4 whitespace-nowrap">
+                                <input
+                                  type="radio"
+                                  name={`group-${index()}`}
+                                  value={prompt.id}
+                                  checked={selectedKeepIds()[index()] === prompt.id}
+                                  onChange={() => {
+                                    return setSelectedKeepIds((prev) => {
+                                      return {...prev, [index()]: prompt.id}
+                                    })
+                                  }}
+                                  class="focus:ring-blue-500 h-4 w-4 text-blue-600 border-gray-300"
+                                />
+                              </td>
+                              <td class="px-6 py-4 text-sm text-gray-500 font-mono break-all w-32">{prompt.id}</td>
+                              <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                {formatDate(new Date(prompt.createdAt), 'yyyy-MM-dd HH:mm')}
+                              </td>
+                              <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{prompt.usage.projects}</td>
+                              <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                {prompt.usage.judgments}
+                              </td>
+                              <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                {prompt.usage.humanJudgments}
+                              </td>
+                            </tr>
+                          )
+                        }}
+                      </For>
+                    </tbody>
+                  </table>
+                </div>
+
+                <div class="mt-4 flex justify-end">
+                  <button
+                    onClick={() => {
+                      void handleMerge(index(), group)
+                    }}
+                    disabled={!selectedKeepIds()[index()] || processingGroups()[index()]}
+                    class={`px-4 py-2 rounded-md text-white text-sm font-medium focus:outline-none focus:ring-2 focus:ring-offset-1 ${
+                      !selectedKeepIds()[index()] || processingGroups()[index()]
+                        ? 'bg-gray-400 cursor-not-allowed'
+                        : 'bg-blue-600 hover:bg-blue-700 focus:ring-blue-500'
+                    }`}
+                  >
+                    {processingGroups()[index()] ? 'Merging...' : 'Merge Duplicates'}
+                  </button>
+                </div>
+              </div>
+            )
+          }}
+        </For>
+
+        <div class="mt-12 space-y-8">
+          <h2 class="text-xl font-bold text-gray-900">Invalid Judgments</h2>
+          <p class="text-sm text-gray-500">
+            Judgments where the answer doesn't match the expected prompt type (e.g., 'maybe' when the type is 'yes' |
+            'no' | 'unsure').
+          </p>
+
+          <div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+            <div
+              class="px-6 py-4 border-b border-gray-200 bg-gray-50 flex justify-between items-center cursor-pointer"
+              onClick={() => {
+                return toggleSection('invalidJudgments')
+              }}
+            >
+              <h3 class="text-lg font-semibold text-gray-900">
+                Judgments with Mismatched Answer Types ({invalidJudgmentsQuery.data?.length ?? 0})
+              </h3>
+              <button class="text-gray-500 hover:text-gray-700">
+                {expandedSections().invalidJudgments ? (
+                  <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <path
+                      fill-rule="evenodd"
+                      d="M14.707 12.707a1 1 0 01-1.414 0L10 9.414l-3.293 3.293a1 1 0 01-1.414-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 010 1.414z"
+                      clip-rule="evenodd"
+                    />
+                  </svg>
+                ) : (
+                  <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <path
+                      fill-rule="evenodd"
+                      d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
+                      clip-rule="evenodd"
+                    />
+                  </svg>
+                )}
+              </button>
+            </div>
+            <Show when={expandedSections().invalidJudgments}>
+              <div class="p-4 border-b border-gray-200 bg-gray-50">
+                <button
+                  onClick={() => {
+                    return void handleDeleteInvalidJudgments()
+                  }}
+                  disabled={
+                    deletingInvalidJudgments()
+                    || invalidJudgmentsQuery.isLoading
+                    || (invalidJudgmentsQuery.data?.length ?? 0) === 0
+                  }
+                  class={`px-4 py-2 rounded-md text-white text-sm font-medium focus:outline-none focus:ring-2 focus:ring-offset-1 ${
+                    deletingInvalidJudgments()
+                    || invalidJudgmentsQuery.isLoading
+                    || (invalidJudgmentsQuery.data?.length ?? 0) === 0
+                      ? 'bg-gray-400 cursor-not-allowed'
+                      : 'bg-red-600 hover:bg-red-700 focus:ring-red-500'
+                  }`}
+                >
+                  {deletingInvalidJudgments()
+                    ? 'Deleting...'
+                    : `Delete All ${invalidJudgmentsQuery.data?.length ?? 0} Invalid Judgments`}
+                </button>
+              </div>
+              <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-gray-200 table-fixed w-full">
+                  <thead class="bg-gray-50">
+                    <tr>
+                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Judgment ID
+                      </th>
+                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Prompt
+                      </th>
+                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Expected Type
+                      </th>
+                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        answeredOriginal
+                      </th>
+                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        answeredOriginalAsArray
+                      </th>
+                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Created At
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody class="bg-white divide-y divide-gray-200">
+                    <Show
+                      when={invalidJudgmentsQuery.data && invalidJudgmentsQuery.data.length > 0}
+                      fallback={
+                        <tr>
+                          <td colspan="6" class="px-6 py-4 text-center text-sm text-gray-500">
+                            {invalidJudgmentsQuery.isLoading
+                              ? 'Loading...'
+                              : 'No invalid judgments found. All judgment answers match their prompt types.'}
+                          </td>
+                        </tr>
+                      }
+                    >
+                      <For each={invalidJudgmentsQuery.data ?? []}>
+                        {(judgment) => {
+                          return (
+                            <tr class="hover:bg-gray-50">
+                              <td class="px-6 py-4 text-sm text-gray-500 font-mono break-all">{judgment.id}</td>
+                              <td class="px-6 py-4 text-sm text-gray-900 break-words">
+                                <div class="max-h-[60px] overflow-y-auto">
+                                  {judgment.promptHeading || judgment.promptId.slice(0, 8)}
+                                </div>
+                              </td>
+                              <td class="px-6 py-4 text-sm text-gray-500 break-words">
+                                <div class="max-h-[60px] overflow-y-auto font-mono text-xs">
+                                  {judgment.promptType || 'N/A'}
+                                </div>
+                              </td>
+                              <td class="px-6 py-4 text-sm text-red-600 font-medium break-words">
+                                <div class="max-h-[60px] overflow-y-auto">
+                                  {judgment.answeredOriginal || <span class="text-gray-400 italic">null</span>}
+                                </div>
+                              </td>
+                              <td class="px-6 py-4 text-sm text-red-600 font-medium break-words">
+                                <div class="max-h-[60px] overflow-y-auto">
+                                  {judgment.answeredOriginalAsArray !== null ? (
+                                    `[${judgment.answeredOriginalAsArray.join(', ')}]`
+                                  ) : (
+                                    <span class="text-gray-400 italic">null</span>
+                                  )}
+                                </div>
+                              </td>
+                              <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                {formatDate(new Date(judgment.createdAt), 'yyyy-MM-dd HH:mm')}
+                              </td>
+                            </tr>
+                          )
+                        }}
+                      </For>
+                    </Show>
+                  </tbody>
+                </table>
+              </div>
+            </Show>
+          </div>
+        </div>
+
+        <div class="mt-12 space-y-8">
+          <h2 class="text-xl font-bold text-gray-900">Orphaned Prompts</h2>
+
+          <div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+            <div
+              class="px-6 py-4 border-b border-gray-200 bg-gray-50 flex justify-between items-center cursor-pointer"
+              onClick={() => {
+                return toggleSection('noProjects')
+              }}
+            >
+              <h3 class="text-lg font-semibold text-gray-900">Prompts with No Project Connection</h3>
+              <button class="text-gray-500 hover:text-gray-700">
+                {expandedSections().noProjects ? (
+                  <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <path
+                      fill-rule="evenodd"
+                      d="M14.707 12.707a1 1 0 01-1.414 0L10 9.414l-3.293 3.293a1 1 0 01-1.414-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 010 1.414z"
+                      clip-rule="evenodd"
+                    />
+                  </svg>
+                ) : (
+                  <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <path
+                      fill-rule="evenodd"
+                      d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
+                      clip-rule="evenodd"
+                    />
+                  </svg>
+                )}
+              </button>
+            </div>
+            <Show when={expandedSections().noProjects}>
+              <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-gray-200 table-fixed w-full">
+                  <thead class="bg-gray-50">
+                    <tr>
+                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID</th>
+                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Heading
+                      </th>
+                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Type
+                      </th>
+                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Created At
+                      </th>
+                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Content Preview
+                      </th>
+                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Actions
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody class="bg-white divide-y divide-gray-200">
+                    <Show
+                      when={(orphansQuery.data?.noProjects?.length ?? 0) > 0}
+                      fallback={
+                        <tr>
+                          <td colspan="6" class="px-6 py-4 text-center text-sm text-gray-500">
+                            No prompts found without project connections.
+                          </td>
+                        </tr>
+                      }
+                    >
+                      <For each={orphansQuery.data?.noProjects ?? []}>
+                        {(prompt) => {
+                          const fullyOrphaned = isFullyOrphaned(prompt.id)
+                          return (
+                            <tr class="hover:bg-gray-50">
+                              <td class="px-6 py-4 text-sm text-gray-500 font-mono break-all w-32">{prompt.id}</td>
+                              <td class="px-6 py-4 text-sm text-gray-900 break-words">
+                                <div class="max-h-[100px] overflow-y-auto">{prompt.promptHeading || 'N/A'}</div>
+                              </td>
+                              <td class="px-6 py-4 text-sm text-gray-900 break-words">
+                                <div class="max-h-[100px] overflow-y-auto">{prompt.type || 'N/A'}</div>
+                              </td>
+                              <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                {formatDate(new Date(prompt.createdAt), 'yyyy-MM-dd HH:mm')}
+                              </td>
+                              <td class="px-6 py-4 text-sm text-gray-500 max-w-xs break-words">
+                                <div class="max-h-[100px] overflow-y-auto" title={prompt.originalText ?? undefined}>
+                                  {prompt.originalText}
+                                </div>
+                              </td>
+                              <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                <Show when={fullyOrphaned}>
+                                  <button
+                                    onClick={() => {
+                                      void handleDelete(prompt.id)
+                                    }}
+                                    disabled={deletingPrompts()[prompt.id]}
+                                    class="text-red-600 hover:text-red-900 font-medium disabled:opacity-50"
+                                  >
+                                    {deletingPrompts()[prompt.id] ? 'Deleting...' : 'Delete'}
+                                  </button>
+                                </Show>
+                              </td>
+                            </tr>
+                          )
+                        }}
+                      </For>
+                    </Show>
+                  </tbody>
+                </table>
+              </div>
+            </Show>
+          </div>
+
+          <div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+            <div
+              class="px-6 py-4 border-b border-gray-200 bg-gray-50 flex justify-between items-center cursor-pointer"
+              onClick={() => {
+                return toggleSection('noJudgments')
+              }}
+            >
+              <h3 class="text-lg font-semibold text-gray-900">Prompts with No Judgment Connection</h3>
+              <button class="text-gray-500 hover:text-gray-700">
+                {expandedSections().noJudgments ? (
+                  <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <path
+                      fill-rule="evenodd"
+                      d="M14.707 12.707a1 1 0 01-1.414 0L10 9.414l-3.293 3.293a1 1 0 01-1.414-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 010 1.414z"
+                      clip-rule="evenodd"
+                    />
+                  </svg>
+                ) : (
+                  <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <path
+                      fill-rule="evenodd"
+                      d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
+                      clip-rule="evenodd"
+                    />
+                  </svg>
+                )}
+              </button>
+            </div>
+            <Show when={expandedSections().noJudgments}>
+              <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-gray-200 table-fixed w-full">
+                  <thead class="bg-gray-50">
+                    <tr>
+                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID</th>
+                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Heading
+                      </th>
+                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Type
+                      </th>
+                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Created At
+                      </th>
+                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Content Preview
+                      </th>
+                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Actions
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody class="bg-white divide-y divide-gray-200">
+                    <Show
+                      when={(orphansQuery.data?.noJudgments?.length ?? 0) > 0}
+                      fallback={
+                        <tr>
+                          <td colspan="6" class="px-6 py-4 text-center text-sm text-gray-500">
+                            No prompts found without judgment connections.
+                          </td>
+                        </tr>
+                      }
+                    >
+                      <For each={orphansQuery.data?.noJudgments ?? []}>
+                        {(prompt) => {
+                          const fullyOrphaned = isFullyOrphaned(prompt.id)
+                          return (
+                            <tr class="hover:bg-gray-50">
+                              <td class="px-6 py-4 text-sm text-gray-500 font-mono break-all w-32">{prompt.id}</td>
+                              <td class="px-6 py-4 text-sm text-gray-900 break-words">
+                                <div class="max-h-[100px] overflow-y-auto">{prompt.promptHeading || 'N/A'}</div>
+                              </td>
+                              <td class="px-6 py-4 text-sm text-gray-900 break-words">
+                                <div class="max-h-[100px] overflow-y-auto">{prompt.type || 'N/A'}</div>
+                              </td>
+                              <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                {formatDate(new Date(prompt.createdAt), 'yyyy-MM-dd HH:mm')}
+                              </td>
+                              <td class="px-6 py-4 text-sm text-gray-500 max-w-xs break-words">
+                                <div class="max-h-[100px] overflow-y-auto" title={prompt.originalText ?? undefined}>
+                                  {prompt.originalText}
+                                </div>
+                              </td>
+                              <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                <Show when={fullyOrphaned}>
+                                  <button
+                                    onClick={() => {
+                                      void handleDelete(prompt.id)
+                                    }}
+                                    disabled={deletingPrompts()[prompt.id]}
+                                    class="text-red-600 hover:text-red-900 font-medium disabled:opacity-50"
+                                  >
+                                    {deletingPrompts()[prompt.id] ? 'Deleting...' : 'Delete'}
+                                  </button>
+                                </Show>
+                              </td>
+                            </tr>
+                          )
+                        }}
+                      </For>
+                    </Show>
+                  </tbody>
+                </table>
+              </div>
+            </Show>
+          </div>
+
+          <div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+            <div
+              class="px-6 py-4 border-b border-gray-200 bg-gray-50 flex justify-between items-center cursor-pointer"
+              onClick={() => {
+                return toggleSection('noProjectsAndJudgments')
+              }}
+            >
+              <h3 class="text-lg font-semibold text-gray-900">Prompts with No Project Connection and No Judgments</h3>
+              <button class="text-gray-500 hover:text-gray-700">
+                {expandedSections().noProjectsAndJudgments ? (
+                  <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <path
+                      fill-rule="evenodd"
+                      d="M14.707 12.707a1 1 0 01-1.414 0L10 9.414l-3.293 3.293a1 1 0 01-1.414-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 010 1.414z"
+                      clip-rule="evenodd"
+                    />
+                  </svg>
+                ) : (
+                  <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <path
+                      fill-rule="evenodd"
+                      d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
+                      clip-rule="evenodd"
+                    />
+                  </svg>
+                )}
+              </button>
+            </div>
+            <Show when={expandedSections().noProjectsAndJudgments}>
+              <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-gray-200 table-fixed w-full">
+                  <thead class="bg-gray-50">
+                    <tr>
+                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID</th>
+                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Heading
+                      </th>
+                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Type
+                      </th>
+                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Created At
+                      </th>
+                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Content Preview
+                      </th>
+                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Actions
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody class="bg-white divide-y divide-gray-200">
+                    <Show
+                      when={(orphansQuery.data?.noProjectsAndJudgments?.length ?? 0) > 0}
+                      fallback={
+                        <tr>
+                          <td colspan="6" class="px-6 py-4 text-center text-sm text-gray-500">
+                            No fully orphaned prompts found.
+                          </td>
+                        </tr>
+                      }
+                    >
+                      <For each={orphansQuery.data?.noProjectsAndJudgments ?? []}>
+                        {(prompt) => {
+                          return (
+                            <tr class="hover:bg-gray-50">
+                              <td class="px-6 py-4 text-sm text-gray-500 font-mono break-all w-32">{prompt.id}</td>
+                              <td class="px-6 py-4 text-sm text-gray-900 break-words">
+                                <div class="max-h-[100px] overflow-y-auto">{prompt.promptHeading || 'N/A'}</div>
+                              </td>
+                              <td class="px-6 py-4 text-sm text-gray-900 break-words">
+                                <div class="max-h-[100px] overflow-y-auto">{prompt.type || 'N/A'}</div>
+                              </td>
+                              <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                {formatDate(new Date(prompt.createdAt), 'yyyy-MM-dd HH:mm')}
+                              </td>
+                              <td class="px-6 py-4 text-sm text-gray-500 max-w-xs break-words">
+                                <div class="max-h-[100px] overflow-y-auto" title={prompt.originalText ?? undefined}>
+                                  {prompt.originalText}
+                                </div>
+                              </td>
+                              <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                <button
+                                  onClick={() => {
+                                    void handleDelete(prompt.id)
+                                  }}
+                                  disabled={deletingPrompts()[prompt.id]}
+                                  class="text-red-600 hover:text-red-900 font-medium disabled:opacity-50"
+                                >
+                                  {deletingPrompts()[prompt.id] ? 'Deleting...' : 'Delete'}
+                                </button>
+                              </td>
+                            </tr>
+                          )
+                        }}
+                      </For>
+                    </Show>
+                  </tbody>
+                </table>
+              </div>
+            </Show>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }

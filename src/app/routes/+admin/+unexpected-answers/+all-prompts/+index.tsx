@@ -10,7 +10,6 @@ type Prompt = {
   type: string | null
   originalText: string
   createdAt: string | Date
-  ownerId: string
   archived: boolean
 }
 
@@ -166,8 +165,7 @@ const AdminUnexpectedAnswersAllPrompts = () => {
                                     </Show>
                                   </div>
                                   <div class="mt-1 text-xs text-gray-500">
-                                    Created {formatPromptTimestamp(prompt.createdAt)} • Owner{' '}
-                                    {prompt.ownerId.slice(0, 8)}
+                                    Created {formatPromptTimestamp(prompt.createdAt)}
                                   </div>
                                 </div>
                                 <div class="text-sm text-blue-600 font-medium whitespace-nowrap">Investigate →</div>

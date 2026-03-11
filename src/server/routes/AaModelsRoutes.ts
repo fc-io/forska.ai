@@ -7,7 +7,6 @@
 
 import {Elysia} from 'elysia'
 
-import {requireUserAuth} from '../utils/authGuard'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -523,140 +522,137 @@ const processOneModel = async (m: AAModel, hfToken: string | null, skipHf: boole
 // Routes
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const aaModelsRoutes = new Elysia()
-  .use(withErrorHandler())
-  .use(requireUserAuth())
-  .get('/api/aa-models', async ({request, set}) => {
-    const aaKey = process.env.AA_API_KEY
-    const hfToken = process.env.HF_TOKEN ?? null
-    const skipHf = !hfToken // Skip HF enrichment if no token
+export const aaModelsRoutes = new Elysia().use(withErrorHandler()).get('/api/aa-models', async ({request, set}) => {
+  const aaKey = process.env.AA_API_KEY
+  const hfToken = process.env.HF_TOKEN ?? null
+  const skipHf = !hfToken // Skip HF enrichment if no token
 
-    if (!aaKey) {
-      set.status = 500
-      return {data: null, error: 'AA_API_KEY environment variable not set'}
-    }
+  if (!aaKey) {
+    set.status = 500
+    return {data: null, error: 'AA_API_KEY environment variable not set'}
+  }
 
-    // Helper to build response from model rows
-    const buildResponse = (rows: ModelRow[]) => {
-      return {
-        data: {
-          models: rows,
-          meta: {
-            totalModels: rows.length,
-            hfEnriched: !skipHf,
-            openWeightsCount: rows.filter((r) => {
-              return r.open_source_or_proprietary === 'Open weights'
-            }).length,
-            proprietaryCount: rows.filter((r) => {
-              return r.open_source_or_proprietary === 'Proprietary'
-            }).length,
-            unknownCount: rows.filter((r) => {
-              return r.open_source_or_proprietary === 'Unknown'
-            }).length,
-          },
+  // Helper to build response from model rows
+  const buildResponse = (rows: ModelRow[]) => {
+    return {
+      data: {
+        models: rows,
+        meta: {
+          totalModels: rows.length,
+          hfEnriched: !skipHf,
+          openWeightsCount: rows.filter((r) => {
+            return r.open_source_or_proprietary === 'Open weights'
+          }).length,
+          proprietaryCount: rows.filter((r) => {
+            return r.open_source_or_proprietary === 'Proprietary'
+          }).length,
+          unknownCount: rows.filter((r) => {
+            return r.open_source_or_proprietary === 'Unknown'
+          }).length,
         },
-      }
+      },
     }
+  }
 
-    try {
-      // Support ?refresh=true to force cache refresh
-      const url = new URL(request.url)
-      const forceRefresh = url.searchParams.get('refresh') === 'true'
+  try {
+    // Support ?refresh=true to force cache refresh
+    const url = new URL(request.url)
+    const forceRefresh = url.searchParams.get('refresh') === 'true'
 
-      if (forceRefresh) {
-        console.log('[AA Models] Force refresh requested, clearing cache')
-        cachedResult = null
-        inFlightRequest = null
-      }
-
-      // Log HF token status prominently
-      if (skipHf) {
-        console.warn('[AA Models] ⚠️ HF_TOKEN not set - HuggingFace enrichment DISABLED')
-      } else {
-        console.log(`[AA Models] ✓ HF_TOKEN found (${hfToken?.length} chars) - HuggingFace enrichment ENABLED`)
-      }
-
-      // Check if we have a fresh cached result
-      if (cachedResult && Date.now() - cachedResult.timestamp < CACHE_TTL_MS) {
-        console.log('[AA Models] Returning cached result')
-        return buildResponse(cachedResult.models)
-      }
-
-      // If there's already a request in flight, wait for it
-      if (inFlightRequest) {
-        console.log('[AA Models] Request already in flight, waiting...')
-        try {
-          const rows = await inFlightRequest
-          return buildResponse(rows)
-        } catch (e) {
-          // The in-flight request failed, clear it and let caller get fresh error
-          console.error('[AA Models] In-flight request failed:', e)
-          inFlightRequest = null
-          throw e
-        }
-      }
-
-      // Start new processing
-      console.log('[AA Models] Starting new request...')
-      inFlightRequest = (async (): Promise<ModelRow[]> => {
-        console.log('[AA Models] Fetching from Artificial Analysis API...')
-        console.log(
-          `[AA Models] HF_TOKEN present: ${!!hfToken}, length: ${hfToken?.length ?? 0}, starts with hf_: ${hfToken?.startsWith('hf_') ?? false}`,
-        )
-        const aaResp = await fetchJson<AAResponse>(AA_ENDPOINT, {headers: {'x-api-key': aaKey}})
-
-        const aaModels = aaResp.data ?? []
-        console.log(`[AA Models] Got ${aaModels.length} models from AA API`)
-
-        // Process models with limited concurrency and rate limiting
-        const concurrency = 3 // Reduced to avoid HF rate limits
-        const rows: ModelRow[] = []
-        const queue = aaModels.slice()
-        let processed = 0
-
-        const workers = Array.from({length: concurrency}, async () => {
-          while (queue.length) {
-            const m = queue.shift()
-            if (!m) break
-            processed++
-            if (processed % 20 === 0) {
-              console.log(`[AA Models] Processed ${processed}/${aaModels.length}`)
-            }
-            const row = await processOneModel(m, hfToken, skipHf)
-            rows.push(row)
-            // Rate limiting delay between models
-            if (!skipHf) await delay(HF_DELAY_MS)
-          }
-        })
-
-        await Promise.all(workers)
-
-        // Sort by intelligence index descending
-        rows.sort((a, b) => {
-          return (b.aa_intelligence_index ?? -1) - (a.aa_intelligence_index ?? -1)
-        })
-
-        console.log(`[AA Models] Complete. Returning ${rows.length} models.`)
-        return rows
-      })()
-
-      let rows: ModelRow[]
-      try {
-        rows = await inFlightRequest
-      } finally {
-        // Always clear in-flight request when done (success or failure)
-        inFlightRequest = null
-      }
-
-      // Cache the result
-      cachedResult = {models: rows, timestamp: Date.now()}
-
-      return buildResponse(rows)
-    } catch (error) {
-      // Ensure in-flight request is cleared on any error
+    if (forceRefresh) {
+      console.log('[AA Models] Force refresh requested, clearing cache')
+      cachedResult = null
       inFlightRequest = null
-      console.error('[AA Models] Failed to fetch models:', error)
-      set.status = 500
-      return {data: null, error: error instanceof Error ? error.message : 'Failed to fetch AI models'}
     }
-  })
+
+    // Log HF token status prominently
+    if (skipHf) {
+      console.warn('[AA Models] ⚠️ HF_TOKEN not set - HuggingFace enrichment DISABLED')
+    } else {
+      console.log(`[AA Models] ✓ HF_TOKEN found (${hfToken?.length} chars) - HuggingFace enrichment ENABLED`)
+    }
+
+    // Check if we have a fresh cached result
+    if (cachedResult && Date.now() - cachedResult.timestamp < CACHE_TTL_MS) {
+      console.log('[AA Models] Returning cached result')
+      return buildResponse(cachedResult.models)
+    }
+
+    // If there's already a request in flight, wait for it
+    if (inFlightRequest) {
+      console.log('[AA Models] Request already in flight, waiting...')
+      try {
+        const rows = await inFlightRequest
+        return buildResponse(rows)
+      } catch (e) {
+        // The in-flight request failed, clear it and let caller get fresh error
+        console.error('[AA Models] In-flight request failed:', e)
+        inFlightRequest = null
+        throw e
+      }
+    }
+
+    // Start new processing
+    console.log('[AA Models] Starting new request...')
+    inFlightRequest = (async (): Promise<ModelRow[]> => {
+      console.log('[AA Models] Fetching from Artificial Analysis API...')
+      console.log(
+        `[AA Models] HF_TOKEN present: ${!!hfToken}, length: ${hfToken?.length ?? 0}, starts with hf_: ${hfToken?.startsWith('hf_') ?? false}`,
+      )
+      const aaResp = await fetchJson<AAResponse>(AA_ENDPOINT, {headers: {'x-api-key': aaKey}})
+
+      const aaModels = aaResp.data ?? []
+      console.log(`[AA Models] Got ${aaModels.length} models from AA API`)
+
+      // Process models with limited concurrency and rate limiting
+      const concurrency = 3 // Reduced to avoid HF rate limits
+      const rows: ModelRow[] = []
+      const queue = aaModels.slice()
+      let processed = 0
+
+      const workers = Array.from({length: concurrency}, async () => {
+        while (queue.length) {
+          const m = queue.shift()
+          if (!m) break
+          processed++
+          if (processed % 20 === 0) {
+            console.log(`[AA Models] Processed ${processed}/${aaModels.length}`)
+          }
+          const row = await processOneModel(m, hfToken, skipHf)
+          rows.push(row)
+          // Rate limiting delay between models
+          if (!skipHf) await delay(HF_DELAY_MS)
+        }
+      })
+
+      await Promise.all(workers)
+
+      // Sort by intelligence index descending
+      rows.sort((a, b) => {
+        return (b.aa_intelligence_index ?? -1) - (a.aa_intelligence_index ?? -1)
+      })
+
+      console.log(`[AA Models] Complete. Returning ${rows.length} models.`)
+      return rows
+    })()
+
+    let rows: ModelRow[]
+    try {
+      rows = await inFlightRequest
+    } finally {
+      // Always clear in-flight request when done (success or failure)
+      inFlightRequest = null
+    }
+
+    // Cache the result
+    cachedResult = {models: rows, timestamp: Date.now()}
+
+    return buildResponse(rows)
+  } catch (error) {
+    // Ensure in-flight request is cleared on any error
+    inFlightRequest = null
+    console.error('[AA Models] Failed to fetch models:', error)
+    set.status = 500
+    return {data: null, error: error instanceof Error ? error.message : 'Failed to fetch AI models'}
+  }
+})

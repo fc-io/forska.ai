@@ -1,7 +1,6 @@
 import {and, eq, inArray, isNull, or, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {user} from '../../../../auth-schema.ts'
 import {
   articles,
   judgmentAssessments,
@@ -14,6 +13,7 @@ import {
   reviews,
 } from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
+import {getLocalUser} from '../../utils/getLocalUser.ts'
 
 type JudgmentWithPromptAndAssessments = typeof judgments.$inferSelect & {
   prompt: typeof prompts.$inferSelect
@@ -237,11 +237,11 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         return acc
       }, {})
 
-      // Fetch human judgments for this article within this project, grouped by user
+      const localUser = await getLocalUser()
+
+      // Fetch human judgments for this article within this project.
       const humanRows = await db
         .select({
-          userId: judgmentsHuman.user,
-          userName: user.name,
           judgmentId: judgmentsHuman.id,
           promptId: judgmentsHuman.promptId,
           answer: judgmentsHuman.answer,
@@ -250,7 +250,6 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
           promptOrder: projectPrompts.order,
         })
         .from(judgmentsHuman)
-        .innerJoin(user, eq(user.id, judgmentsHuman.user))
         .innerJoin(prompts, eq(prompts.id, judgmentsHuman.promptId))
         .innerJoin(
           projectPrompts,
@@ -263,74 +262,42 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
             eq(judgmentsHuman.isAnswered, true),
           ),
         )
-        .orderBy(user.name, projectPrompts.order)
+        .orderBy(projectPrompts.order)
 
-      const humanByUser = humanRows.reduce(
-        (acc, row) => {
-          const current = acc[row.userId] ?? {
-            userId: row.userId,
-            userName: row.userName,
-            judgments: [] as Array<{
-              id: string
-              prompt: {originalText: string}
-              answer: string | null
-              comment: string | null
-            }>,
-          }
-          const next = {
-            id: row.judgmentId,
-            prompt: {originalText: row.promptOriginalText},
-            answer: row.answer,
-            comment: row.comment,
-          }
-          return {...acc, [row.userId]: {...current, judgments: [...current.judgments, next]}}
-        },
-        {} as Record<
-          string,
-          {
-            userId: string
-            userName: string
-            judgments: Array<{
-              id: string
-              prompt: {originalText: string}
-              answer: string | null
-              comment: string | null
-            }>
-          }
-        >,
-      )
+      const humanAssessmentsByUser =
+        humanRows.length === 0
+          ? []
+          : [
+              {
+                userId: localUser.id,
+                userName: localUser.name,
+                judgments: humanRows.map((row) => {
+                  return {
+                    id: row.judgmentId,
+                    prompt: {originalText: row.promptOriginalText},
+                    answer: row.answer,
+                    comment: row.comment,
+                  }
+                }),
+              },
+            ]
 
-      const humanAssessmentsByUser = Object.values(humanByUser)
-
-      // Cross-project human answers aggregated by prompt for users who answered all prompts for this project
-      // Replicates the logic used in articlesreviewsboth but scoped to a single article
-      // Now includes user display names so UI can show "UserName: Answer"
       let humanAnswersByPrompt: Record<string, Array<{userName: string; answer: string}>> | undefined = undefined
       if (promptIds.length > 0) {
-        type HumanRow = {
-          articleId: string
-          userId: string
-          promptId: string
-          answer: string | null
-          updatedAt: Date | null
-          userName: string
-        }
+        type HumanRow = {articleId: string; promptId: string; answer: string | null; updatedAt: Date | null}
         const rows: HumanRow[] = await db
           .select({
             articleId: judgmentsHuman.articleId,
-            userId: judgmentsHuman.user,
             promptId: judgmentsHuman.promptId,
             answer: judgmentsHuman.answer,
             updatedAt: judgmentsHuman.updatedAt,
-            userName: user.name,
           })
           .from(judgmentsHuman)
-          .innerJoin(user, eq(user.id, judgmentsHuman.user))
           .where(and(eq(judgmentsHuman.articleId, articleId), sql`${judgmentsHuman.answer} IS NOT NULL`))
 
-        // Deduplicate by latest updatedAt for (articleId, userId, promptId)
+        // Deduplicate by latest updatedAt for (articleId, promptId)
         const latest = rows.reduce((acc, row) => {
-          const key = `${row.articleId}::${row.userId}::${row.promptId}`
+          const key = `${row.articleId}::${row.promptId}`
           const existing = acc.get(key)
           if (!existing || (row.updatedAt?.getTime() || 0) > (existing.updatedAt?.getTime() || 0)) {
             acc.set(key, row)
@@ -338,36 +305,20 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
           return acc
         }, new Map<string, HumanRow>())
 
-        // Group rows by user and check coverage
-        const byUser = new Map<string, HumanRow[]>()
-        for (const r of latest.values()) {
-          const arr = byUser.get(r.userId) || []
-          arr.push(r)
-          byUser.set(r.userId, arr)
-        }
+        const latestRows = Array.from(latest.values())
+        const covered = new Set(
+          latestRows.map((row) => {
+            return row.promptId
+          }),
+        )
 
-        const qualifyingUsers: string[] = []
-        for (const [uid, rowsArr] of byUser.entries()) {
-          const covered = new Set(
-            rowsArr.map((r) => {
-              return r.promptId
-            }),
-          )
-          if (covered.size === promptIds.length) {
-            qualifyingUsers.push(uid)
-          }
-        }
-
-        if (qualifyingUsers.length > 0) {
+        if (covered.size === promptIds.length) {
           const map: Record<string, Array<{userName: string; answer: string}>> = {}
           for (const pid of promptIds) map[pid] = []
-          for (const uid of qualifyingUsers) {
-            const rowsArr = byUser.get(uid) || []
-            for (const r of rowsArr) {
-              const arr = map[r.promptId]
-              if (r.answer !== null && r.answer !== undefined && arr) {
-                arr.push({userName: r.userName, answer: r.answer})
-              }
+          for (const row of latestRows) {
+            const arr = map[row.promptId]
+            if (row.answer !== null && row.answer !== undefined && arr) {
+              arr.push({userName: localUser.name, answer: row.answer})
             }
           }
           humanAnswersByPrompt = map

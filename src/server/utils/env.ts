@@ -36,8 +36,9 @@ const CsvStringArray = arktype('string | null | undefined').pipe((value): string
 })
 
 const envShape = arktype({
-  DATABASE_URL: 'string',
-  BETTER_AUTH_SECRET: 'string',
+  DATABASE_URL: 'string | null | undefined',
+  SQLITE_PATH: 'string',
+  BETTER_AUTH_SECRET: 'string | null | undefined',
   BETTER_AUTH_URL: 'string | null | undefined',
   OPENALEX_MAILTO: 'string',
   OLAP_DB: '"clickhouse" | "duckdb" | null | undefined',
@@ -92,6 +93,7 @@ const getEnvWithFileFallback = (): Record<string, string | undefined> => {
     }
   }
   withFile('DATABASE_URL')
+  withFile('SQLITE_PATH')
   withFile('BETTER_AUTH_SECRET')
   withFile('BETTER_AUTH_URL')
   return source
@@ -123,6 +125,9 @@ const loadEnv = (): typeof envShape.infer => {
   }
   if (merged.OLAP_DB == null || String(merged.OLAP_DB).trim() === '') {
     ;(merged as Record<string, string>).OLAP_DB = 'clickhouse'
+  }
+  if (merged.SQLITE_PATH == null || String(merged.SQLITE_PATH).trim() === '') {
+    ;(merged as Record<string, string>).SQLITE_PATH = './data/forska.local.sqlite'
   }
   // Default to false when not provided (prevents accidental background fetching)
   if (merged.RUN_SERVER_FULL_TEXT_FETCHING == null || merged.RUN_SERVER_FULL_TEXT_FETCHING === '') {
@@ -180,6 +185,12 @@ const loadEnv = (): typeof envShape.infer => {
   // Ensure optional BETTER_AUTH_URL key exists even when not provided
   if (!('BETTER_AUTH_URL' in merged)) {
     ;(merged as Record<string, undefined>).BETTER_AUTH_URL = undefined
+  }
+  if (!('BETTER_AUTH_SECRET' in merged)) {
+    ;(merged as Record<string, undefined>).BETTER_AUTH_SECRET = undefined
+  }
+  if (!('DATABASE_URL' in merged)) {
+    ;(merged as Record<string, undefined>).DATABASE_URL = undefined
   }
   // Provide a stable default when GPU_SHAPE is not provided
   if (merged.GPU_SHAPE == null || String(merged.GPU_SHAPE).trim() === '') {

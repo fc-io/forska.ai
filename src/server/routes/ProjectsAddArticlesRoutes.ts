@@ -2,7 +2,6 @@ import {Elysia, t} from 'elysia'
 
 import {selectArticleIdsByFilterOlap} from '../../services/olap/selectArticleIdsOlap.ts'
 import {insertArticlesIntoProject} from '../services/insertArticlesIntoProject.ts'
-import {requireUserAuth} from '../utils/authGuard.ts'
 
 /**
  * Routes for adding articles to a project by various filter criteria.
@@ -11,7 +10,6 @@ import {requireUserAuth} from '../utils/authGuard.ts'
  * and PostgreSQL for human judgment queries (human list type).
  */
 export const projectsAddArticlesRoutes = new Elysia()
-  .use(requireUserAuth())
   .post(
     '/api/projects/add_articles_by_filter',
     async ({body}) => {

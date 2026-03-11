@@ -14,13 +14,11 @@ import {
 } from '../../db/schema.ts'
 import {selectArticleIdsByFilterOlap} from '../../services/olap/selectArticleIdsOlap.ts'
 import {getPdfFetchJob, startPdfFetchJob} from '../services/pdfFetchJobs.ts'
-import {requireUserAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
 export const articlesRoutes = new Elysia()
   .use(withErrorHandler())
-  .use(requireUserAuth())
   .get('/api/unassessed-count', async () => {
     const db = getDatabase()
     const result = await db
@@ -98,9 +96,11 @@ export const articlesRoutes = new Elysia()
     void db
       .update(articles)
       .set({fullTextFetchedAt: null, fullTextPDF: null, fullTextSource: null, fullTextOriginalFormat: null})
-      .where(sql`${articles.fullTextPDF} LIKE 'assets/article_pdfs/%' AND ${articles.fullTextPdfUploadedBy} IS NULL`)
-      .then((result) => {
-        console.log(`[pdf-fetch-reset] Reset ${result.rowCount ?? 0} articles`)
+      .where(
+        sql`${articles.fullTextPDF} LIKE 'assets/article_pdfs/%' AND ${articles.fullTextSource} IS NOT NULL AND ${articles.fullTextSource} != 'user_upload'`,
+      )
+      .then(() => {
+        console.log('[pdf-fetch-reset] Reset fetched article PDFs')
       })
 
     return {success: true, message: 'Reset started in background'}

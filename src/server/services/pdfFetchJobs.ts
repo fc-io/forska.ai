@@ -52,10 +52,10 @@ const mutateJob = (jobId: string, update: (job: PdfFetchJob) => void) => {
 }
 
 const shouldSkipRow = (
-  row: Pick<typeof schema.articles.$inferSelect, 'fullTextPDF' | 'fullTextPdfUploadedBy'>,
+  row: Pick<typeof schema.articles.$inferSelect, 'fullTextPDF' | 'fullTextSource'>,
   forceRefetch: boolean,
 ): boolean => {
-  const hasUploadedPdf = Boolean(row.fullTextPdfUploadedBy)
+  const hasUploadedPdf = row.fullTextSource === 'user_upload'
   const hasPdf = Boolean(row.fullTextPDF)
   return !forceRefetch && (hasUploadedPdf || hasPdf)
 }
@@ -73,7 +73,6 @@ const buildUpdateForAttempt = (result: Awaited<ReturnType<typeof fetchPdfForArti
         fullTextConversionError: null,
         fullText: null,
         fullTextHtml: null,
-        fullTextPdfUploadedBy: null,
       }
     : base
 }
@@ -157,7 +156,7 @@ const processChunk = async (jobId: string, ids: string[], forceRefetch: boolean)
       arxivId: schema.articles.arxivId,
       originalData: schema.articles.originalData,
       fullTextPDF: schema.articles.fullTextPDF,
-      fullTextPdfUploadedBy: schema.articles.fullTextPdfUploadedBy,
+      fullTextSource: schema.articles.fullTextSource,
     })
     .from(schema.articles)
     .where(inArray(schema.articles.id, ids))

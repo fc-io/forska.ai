@@ -2,8 +2,6 @@ import {and, asc, eq, isNull, ne, or} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
 import {models} from '../../db/schema.ts'
-import {localUserId} from '../../utils/localUser.ts'
-import {requireUserAuth} from '../utils/authGuard.ts'
 import {getCodexCliLoginStatus, getCodexDeviceAuthLoginJob, startCodexDeviceAuthLogin} from '../utils/codexCliAuth.ts'
 import {env} from '../utils/env.ts'
 import {getCodexAppServerClient, getCodexBinPath} from '../utils/getCodexAppServerClient.ts'
@@ -43,9 +41,7 @@ export const modelsRoutes = new Elysia()
   .use(withErrorHandler())
   .use(
     new Elysia()
-      .use(requireUserAuth())
       .get('/api/models', async () => {
-        const sessionUserId = localUserId
         const db = getDatabase()
         const hpcModels = await db
           .select()
@@ -56,7 +52,7 @@ export const modelsRoutes = new Elysia()
         const codexModelsFromDb = await db
           .select()
           .from(models)
-          .where(and(eq(models.provider, 'codex'), eq(models.ownerId, sessionUserId)))
+          .where(eq(models.provider, 'codex'))
           .orderBy(asc(models.createdAt))
 
         const codexVirtualFromDb = codexModelsFromDb
@@ -110,7 +106,6 @@ export const modelsRoutes = new Elysia()
                   modelName,
                   version: null,
                   apiKeyVariable: null,
-                  ownerId: sessionUserId,
                   workerUrls: null,
                 }
 
@@ -128,7 +123,6 @@ export const modelsRoutes = new Elysia()
                       modelName,
                       version: effort,
                       apiKeyVariable: null,
-                      ownerId: sessionUserId,
                       workerUrls: null,
                     }
                   })
@@ -197,7 +191,6 @@ export const modelsRoutes = new Elysia()
       .post(
         '/api/models/ensure',
         async ({body, set}) => {
-          const sessionUserId = localUserId
           if (body.provider !== 'codex') {
             set.status = 400
             return {data: null, error: 'Unsupported provider'}
@@ -220,7 +213,6 @@ export const modelsRoutes = new Elysia()
             .from(models)
             .where(
               and(
-                eq(models.ownerId, sessionUserId),
                 eq(models.provider, 'codex'),
                 eq(models.modelName, modelName),
                 version ? eq(models.version, version) : isNull(models.version),
@@ -234,7 +226,7 @@ export const modelsRoutes = new Elysia()
 
           const [inserted] = await db
             .insert(models)
-            .values({name, provider: 'codex', modelName, version, baseURL: null, ownerId: sessionUserId})
+            .values({name, provider: 'codex', modelName, version, baseURL: null})
             .returning({id: models.id})
 
           if (!inserted) {
@@ -254,7 +246,7 @@ export const modelsRoutes = new Elysia()
       ),
   )
   .use(
-    new Elysia().use(requireUserAuth()).get('/api/models/gpu-info', async () => {
+    new Elysia().get('/api/models/gpu-info', async () => {
       return {
         data: {
           GPU_NNODES: env.GPU_NNODES,

@@ -4,7 +4,6 @@ import {format, fromUnixTime, isValid, parseISO} from 'date-fns'
 import {For, Show} from 'solid-js'
 
 import {apiClient} from '../../../../services/apiClient.ts'
-import {fetchSession} from '../../../../services/fetchSession.ts'
 
 const normalizeTimestamp = (value: unknown): Date | null => {
   if (value instanceof Date) return isValid(value) ? new Date(value.getTime()) : null
@@ -62,19 +61,10 @@ const fetchNvidiaSmi = async (): Promise<NvidiaSmiRow[]> => {
 }
 
 const AdminGpu = () => {
-  const sessionQuery = useQuery(() => {
-    return {queryKey: ['session'], queryFn: fetchSession}
-  })
-
-  const isSignedIn = () => {
-    return Boolean(sessionQuery.data?.user)
-  }
-
   const nvidiaSmiQuery = useQuery(() => {
     return {
       queryKey: ['nvidiasmi', 'latest30'],
       queryFn: fetchNvidiaSmi,
-      enabled: isSignedIn(),
       refetchInterval: 10 * 1000,
       refetchOnWindowFocus: true,
       refetchOnReconnect: true,
@@ -163,183 +153,130 @@ const AdminGpu = () => {
 
   return (
     <div class="min-h-screen bg-gray-50 p-6 mx-auto">
-      <Show when={sessionQuery.isLoading}>
-        <div class="flex items-center justify-center h-64">
-          <div class="flex items-center space-x-2">
-            <svg class="animate-spin h-6 w-6 text-blue-600" viewBox="0 0 24 24">
-              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none" />
-              <path
-                class="opacity-75"
-                fill="currentColor"
-                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-              />
-            </svg>
-            <span class="text-gray-600">Checking permissions...</span>
-          </div>
+      <div class="flex justify-between items-center mb-6">
+        <h1 class="text-2xl font-bold">GPU Metrics (latest 30)</h1>
+      </div>
+
+      <Show when={nvidiaSmiQuery.isLoading}>
+        <p class="text-gray-500">Loading GPU Metrics…</p>
+      </Show>
+      <Show when={nvidiaSmiQuery.isError}>
+        <div class="p-4 rounded-md bg-red-50 border border-red-200">
+          <p class="text-red-600">Failed to load GPU Metrics</p>
+          <button
+            onClick={() => {
+              return void nvidiaSmiQuery.refetch()
+            }}
+            class="mt-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+          >
+            Retry
+          </button>
         </div>
       </Show>
 
-      <Show when={sessionQuery.isError}>
-        <div class="p-4 rounded-md bg-red-50 border border-red-200 mb-6">
-          <p class="text-red-600">
-            Failed to load session: {sessionQuery.error instanceof Error ? sessionQuery.error.message : 'Unknown error'}
-          </p>
-        </div>
-      </Show>
-
-      <Show when={!sessionQuery.isLoading && !sessionQuery.isError}>
-        <Show
-          when={isSignedIn()}
-          fallback={
-            <div class="bg-white border border-gray-200 rounded-lg shadow-sm max-w-xl mx-auto p-10 text-center">
-              <h1 class="text-2xl font-semibold text-gray-900 mb-2">Sign in required</h1>
-              <p class="text-gray-500 mb-6">You need to be signed in to view GPU Metrics.</p>
-            </div>
-          }
-        >
-          <div class="flex justify-between items-center mb-6">
-            <h1 class="text-2xl font-bold">GPU Metrics (latest 30)</h1>
-          </div>
-
-          <Show when={nvidiaSmiQuery.isLoading}>
-            <p class="text-gray-500">Loading GPU Metrics…</p>
-          </Show>
-          <Show when={nvidiaSmiQuery.isError}>
-            <div class="p-4 rounded-md bg-red-50 border border-red-200">
-              <p class="text-red-600">Failed to load GPU Metrics</p>
-              <button
-                onClick={() => {
-                  return void nvidiaSmiQuery.refetch()
+      <Show when={!nvidiaSmiQuery.isLoading && !nvidiaSmiQuery.isError}>
+        <div class="overflow-x-auto bg-white rounded-lg shadow">
+          <table class="min-w-full">
+            <thead class="bg-gray-100 sticky top-0">
+              <tr>
+                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                  Instance
+                </th>
+                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">GPU</th>
+                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Name</th>
+                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Temp</th>
+                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Util</th>
+                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                  Mem Util
+                </th>
+                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                  VRAM (MiB)
+                </th>
+                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                  Power (W)
+                </th>
+                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Fan</th>
+                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">PState</th>
+              </tr>
+            </thead>
+            <tbody>
+              <For each={groupedData()}>
+                {(timeGroup) => {
+                  return (
+                    <>
+                      {/* Time group header */}
+                      <tr class="bg-gray-200 border-t-2 border-gray-300">
+                        <td colspan="10" class="px-4 py-2">
+                          <span class="font-semibold text-gray-700 text-sm">🕐 {timeGroup.time}</span>
+                        </td>
+                      </tr>
+                      {/* Instance groups within this time */}
+                      <For each={timeGroup.instances}>
+                        {(instance, instanceIndex) => {
+                          return (
+                            <For each={instance.rows}>
+                              {(row, rowIndex) => {
+                                return (
+                                  <tr
+                                    class={`${instanceColors[instanceIndex() % 2]} ${
+                                      rowIndex() === 0 ? 'border-t border-gray-200' : ''
+                                    } hover:bg-gray-100 transition-colors`}
+                                  >
+                                    {/* Show instance ID only on first row of each instance group */}
+                                    <td class="px-4 py-2 whitespace-nowrap text-xs">
+                                      <Show when={rowIndex() === 0}>
+                                        <span class="font-medium text-gray-700">{instance.instanceId}</span>
+                                      </Show>
+                                    </td>
+                                    <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
+                                      {formatInt(row.gpuIndex)}
+                                    </td>
+                                    <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-600">
+                                      {row.gpuName ?? '—'}
+                                    </td>
+                                    <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
+                                      {row.temperatureGpu === null || row.temperatureGpu === undefined
+                                        ? '—'
+                                        : `${row.temperatureGpu}°C`}
+                                    </td>
+                                    <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
+                                      {row.utilizationGpu === null || row.utilizationGpu === undefined
+                                        ? '—'
+                                        : `${row.utilizationGpu}%`}
+                                    </td>
+                                    <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
+                                      {row.utilizationMemory === null || row.utilizationMemory === undefined
+                                        ? '—'
+                                        : `${row.utilizationMemory}%`}
+                                    </td>
+                                    <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
+                                      {formatMemory(row.memoryUsedMiB ?? undefined, row.memoryTotalMiB ?? undefined)}
+                                    </td>
+                                    <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
+                                      {row.powerLimitWatts === null || row.powerLimitWatts === undefined
+                                        ? formatPower(row.powerDrawWatts ?? undefined)
+                                        : `${formatPower(row.powerDrawWatts ?? undefined)} / ${formatPower(row.powerLimitWatts ?? undefined)}`}
+                                    </td>
+                                    <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
+                                      {row.fanSpeed === null || row.fanSpeed === undefined ? '—' : `${row.fanSpeed}%`}
+                                    </td>
+                                    <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
+                                      {row.pstate ?? '—'}
+                                    </td>
+                                  </tr>
+                                )
+                              }}
+                            </For>
+                          )
+                        }}
+                      </For>
+                    </>
+                  )
                 }}
-                class="mt-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
-              >
-                Retry
-              </button>
-            </div>
-          </Show>
-
-          <Show when={!nvidiaSmiQuery.isLoading && !nvidiaSmiQuery.isError}>
-            <div class="overflow-x-auto bg-white rounded-lg shadow">
-              <table class="min-w-full">
-                <thead class="bg-gray-100 sticky top-0">
-                  <tr>
-                    <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                      Instance
-                    </th>
-                    <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                      GPU
-                    </th>
-                    <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                      Name
-                    </th>
-                    <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                      Temp
-                    </th>
-                    <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                      Util
-                    </th>
-                    <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                      Mem Util
-                    </th>
-                    <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                      VRAM (MiB)
-                    </th>
-                    <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                      Power (W)
-                    </th>
-                    <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                      Fan
-                    </th>
-                    <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                      PState
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <For each={groupedData()}>
-                    {(timeGroup) => {
-                      return (
-                        <>
-                          {/* Time group header */}
-                          <tr class="bg-gray-200 border-t-2 border-gray-300">
-                            <td colspan="10" class="px-4 py-2">
-                              <span class="font-semibold text-gray-700 text-sm">🕐 {timeGroup.time}</span>
-                            </td>
-                          </tr>
-                          {/* Instance groups within this time */}
-                          <For each={timeGroup.instances}>
-                            {(instance, instanceIndex) => {
-                              return (
-                                <For each={instance.rows}>
-                                  {(row, rowIndex) => {
-                                    return (
-                                      <tr
-                                        class={`${instanceColors[instanceIndex() % 2]} ${
-                                          rowIndex() === 0 ? 'border-t border-gray-200' : ''
-                                        } hover:bg-gray-100 transition-colors`}
-                                      >
-                                        {/* Show instance ID only on first row of each instance group */}
-                                        <td class="px-4 py-2 whitespace-nowrap text-xs">
-                                          <Show when={rowIndex() === 0}>
-                                            <span class="font-medium text-gray-700">{instance.instanceId}</span>
-                                          </Show>
-                                        </td>
-                                        <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
-                                          {formatInt(row.gpuIndex)}
-                                        </td>
-                                        <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-600">
-                                          {row.gpuName ?? '—'}
-                                        </td>
-                                        <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
-                                          {row.temperatureGpu === null || row.temperatureGpu === undefined
-                                            ? '—'
-                                            : `${row.temperatureGpu}°C`}
-                                        </td>
-                                        <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
-                                          {row.utilizationGpu === null || row.utilizationGpu === undefined
-                                            ? '—'
-                                            : `${row.utilizationGpu}%`}
-                                        </td>
-                                        <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
-                                          {row.utilizationMemory === null || row.utilizationMemory === undefined
-                                            ? '—'
-                                            : `${row.utilizationMemory}%`}
-                                        </td>
-                                        <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
-                                          {formatMemory(
-                                            row.memoryUsedMiB ?? undefined,
-                                            row.memoryTotalMiB ?? undefined,
-                                          )}
-                                        </td>
-                                        <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
-                                          {row.powerLimitWatts === null || row.powerLimitWatts === undefined
-                                            ? formatPower(row.powerDrawWatts ?? undefined)
-                                            : `${formatPower(row.powerDrawWatts ?? undefined)} / ${formatPower(row.powerLimitWatts ?? undefined)}`}
-                                        </td>
-                                        <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
-                                          {row.fanSpeed === null || row.fanSpeed === undefined
-                                            ? '—'
-                                            : `${row.fanSpeed}%`}
-                                        </td>
-                                        <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
-                                          {row.pstate ?? '—'}
-                                        </td>
-                                      </tr>
-                                    )
-                                  }}
-                                </For>
-                              )
-                            }}
-                          </For>
-                        </>
-                      )
-                    }}
-                  </For>
-                </tbody>
-              </table>
-            </div>
-          </Show>
-        </Show>
+              </For>
+            </tbody>
+          </table>
+        </div>
       </Show>
     </div>
   )

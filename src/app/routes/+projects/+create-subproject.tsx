@@ -4,7 +4,6 @@ import {createEffect, createSignal, For, Show, Suspense} from 'solid-js'
 
 import {Button} from '../../../components/ui/button'
 import {apiClient} from '../../../services/apiClient'
-import {fetchSession} from '../../../services/fetchSession'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse'
 
 type PromptInfo = {id: string; promptHeading: string | null; originalText: string; type: string | null}
@@ -52,10 +51,6 @@ const formatContentSettings = (project: ProjectSource): string => {
 }
 
 const CreateSubproject = () => {
-  const sessionQuery = useQuery(() => {
-    return {queryKey: ['session'], queryFn: fetchSession, staleTime: 1000 * 60 * 5}
-  })
-
   const sourcesQuery = useQuery(() => {
     return {
       queryKey: ['subproject-sources'],
@@ -209,11 +204,6 @@ const CreateSubproject = () => {
     e.preventDefault()
     setError(null)
 
-    if (!sessionQuery.data?.user.id) {
-      setError('User must be authenticated to create a project')
-      return
-    }
-
     const selectedModel = availableModels().find((m) => {
       return m.id === selectedModelId()
     })
@@ -263,7 +253,6 @@ const CreateSubproject = () => {
       const response = await apiClient.api.subprojects.post({
         name: projectName(),
         description: description().trim() || undefined,
-        ownerId: sessionQuery.data.user.id,
         modelId: ensuredModelId,
         dateFrom: dateFrom() || undefined,
         dateTo: dateTo() || undefined,

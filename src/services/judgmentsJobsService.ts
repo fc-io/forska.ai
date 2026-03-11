@@ -44,7 +44,7 @@ export const updateJudgmentsJobStatus = async (
     | 'waiting_on_llm_connection'
     | 'waiting_on_db_connection'
     | 'running'
-    | 'paused_by_user'
+    | 'paused'
     | 'failed'
     | 'completed'
     | 'project_removed',
@@ -54,7 +54,7 @@ export const updateJudgmentsJobStatus = async (
 }
 
 export const pauseJudgmentsJob = (jobId: string) => {
-  return updateJudgmentsJobStatus(jobId, 'paused_by_user')
+  return updateJudgmentsJobStatus(jobId, 'paused')
 }
 
 export const startJudgmentsJob = (jobId: string) => {

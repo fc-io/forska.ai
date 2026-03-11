@@ -224,14 +224,16 @@ export const ArticleAdminSection = (props: ArticleAdminSectionProps) => {
                   </Show>
                 </div>
 
-                <Show when={article().uploaderName}>
-                  <div class="text-xs">
-                    <span class="font-medium text-amber-800">Uploaded By:</span>
-                    <span class="ml-2 text-amber-700 bg-purple-100 px-1.5 py-0.5 rounded">
-                      {article().uploaderName}
-                    </span>
-                  </div>
-                </Show>
+                <div class="text-xs">
+                  <span class="font-medium text-amber-800">PDF Source:</span>
+                  <span class="ml-2 text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded">
+                    {article().fullTextSource === 'user_upload'
+                      ? 'Manual upload'
+                      : article().fullTextSource
+                        ? `Fetched (${article().fullTextSource})`
+                        : 'Not available'}
+                  </span>
+                </div>
 
                 <Show when={article().fullTextConversionStatus}>
                   <div class="text-xs">

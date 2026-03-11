@@ -1,6 +1,3 @@
-import {eq} from 'drizzle-orm'
-
-import {session} from '../../../auth-schema.ts'
 import {tokenUse} from '../../db/schema.ts'
 import {markJudgmentRequestsPersisted} from '../../server/cron/judgmentsJobs/judgmentsRequestRuntime.ts'
 import {env} from '../../server/utils/env.ts'
@@ -101,22 +98,16 @@ const isServerEnvironment = (): boolean => {
 
 const storeTokenUseDirectly = async (
   totalTokenUse: TokenUseTotals,
-  sessionId: string | null,
+  _sessionId: string | null,
   {startedAt, finishedAt, duration}: {startedAt: string; finishedAt: string; duration: number},
   judgmentsJobId?: string,
 ): Promise<void> => {
   const {getDatabase} = await import('../../server/utils/getDatabase.ts')
   const db = getDatabase()
 
-  const [sessionData] = sessionId
-    ? await db.select({userId: session.userId}).from(session).where(eq(session.id, sessionId)).limit(1)
-    : [null]
-
   const [result] = await db
     .insert(tokenUse)
     .values({
-      userId: sessionData?.userId ?? null,
-      sessionId,
       judgmentsJobId: judgmentsJobId ?? null,
       gpuNnodes: env.GPU_NNODES,
       gpuGpusPerNode: env.GPU_GPUS_PER_NODE,
@@ -154,11 +145,11 @@ const storeTokenUseDirectly = async (
 
 const storeTokenUseViaAPI = async (
   totalTokenUse: TokenUseTotals,
-  sessionId: string,
+  judgmentsJobId: string,
   {startedAt, finishedAt, duration}: {startedAt: string; finishedAt: string; duration: number},
 ): Promise<void> => {
   const response = await apiClient.api.tokens.usage.post({
-    sessionId,
+    judgmentsJobId,
     requests: totalTokenUse.totalRequests,
     totalPromptTokens: totalTokenUse.totalPromptTokens,
     totalCompletionTokens: totalTokenUse.totalCompletionTokens,
@@ -375,7 +366,7 @@ export const buildTokenUseTotals = (tokenUseEntries: JudgeTokenUsageEntry[]): To
 
 export const judgeStoreTokenUse = async (
   tokenUseEntries: JudgeTokenUsageEntry[],
-  sessionId: string | null,
+  _sessionId: string | null,
   {startedAt, finishedAt, duration}: {startedAt: string; finishedAt: string; duration: number},
   judgmentsJobId: string,
 ): Promise<void> => {
@@ -384,10 +375,7 @@ export const judgeStoreTokenUse = async (
   if (isServerEnvironment()) {
     await storeTokenUseDirectly(totalTokenUse, null, {startedAt, finishedAt, duration}, judgmentsJobId)
   } else {
-    if (!sessionId) {
-      throw new Error('sessionId is required when running in client environment')
-    }
-    await storeTokenUseViaAPI(totalTokenUse, sessionId, {startedAt, finishedAt, duration})
+    await storeTokenUseViaAPI(totalTokenUse, judgmentsJobId, {startedAt, finishedAt, duration})
   }
 
   markJudgmentRequestsPersisted(judgmentsJobId, totalTokenUse.totalRequests)

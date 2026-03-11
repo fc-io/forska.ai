@@ -435,7 +435,7 @@ const selectBothArticleIds = async (params: SelectArticleIdsParams): Promise<str
         sql`${judgmentsHuman.answer} IS NOT NULL`,
       ),
     )
-    .groupBy(judgmentsHuman.articleId, judgmentsHuman.user)
+    .groupBy(judgmentsHuman.articleId)
     .having(sql`COUNT(DISTINCT ${judgmentsHuman.promptId}) = ${metadata.promptIds.length}`)
 
   const humanAssessedArticleIds = [
@@ -605,9 +605,9 @@ const selectHumanArticleIds = async (params: SelectArticleIdsParams): Promise<st
     SELECT 1
     FROM ${judgmentsHuman} jh
     WHERE jh."article_id" = ${judgmentsHuman}.article_id
-      AND jh."project_id" = ${params.sourceProjectId}::uuid
+      AND jh."project_id" = ${params.sourceProjectId}
       AND jh."is_answered" = true
-    GROUP BY jh."article_id", jh."user"
+    GROUP BY jh."article_id"
     HAVING COUNT(DISTINCT jh."prompt_id") = ${metadata.promptIds.length}
   )`
 
@@ -631,7 +631,7 @@ const selectHumanArticleIds = async (params: SelectArticleIdsParams): Promise<st
     }
   }
 
-  // Simple query: find articles where at least one user has answered all prompts
+  // Simple query: find articles where the local single-user assessment has answered all prompts.
   const result = await db
     .select({articleId: judgmentsHuman.articleId})
     .from(judgmentsHuman)
@@ -642,7 +642,7 @@ const selectHumanArticleIds = async (params: SelectArticleIdsParams): Promise<st
         sql`${judgmentsHuman.answer} IS NOT NULL`,
       ),
     )
-    .groupBy(judgmentsHuman.articleId, judgmentsHuman.user)
+    .groupBy(judgmentsHuman.articleId)
     .having(sql`COUNT(DISTINCT ${judgmentsHuman.promptId}) = ${metadata.promptIds.length}`)
 
   const articleIds = [

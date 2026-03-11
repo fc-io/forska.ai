@@ -1,74 +1,80 @@
 import {sql} from 'drizzle-orm'
-import {
-  bigint,
-  boolean,
-  doublePrecision,
-  integer,
-  jsonb,
-  pgEnum,
-  pgTable,
-  pgView,
-  text,
-  timestamp,
-  uuid,
-} from 'drizzle-orm/pg-core'
-import {primaryKey} from 'drizzle-orm/pg-core'
-import {index, uniqueIndex} from 'drizzle-orm/pg-core/indexes'
+import {index, integer, primaryKey, real, sqliteTable, text, uniqueIndex} from 'drizzle-orm/sqlite-core'
 
-import {session, user} from '../../auth-schema.ts'
+const createId = () => {
+  return crypto.randomUUID()
+}
 
-export const publicationStatusEnum = pgEnum('publication_status_enum', [
-  'preprint',
-  'submitted',
-  'accepted',
-  'published',
-  'retracted',
-])
+const idColumn = () => {
+  return text('id').primaryKey().$defaultFn(createId)
+}
 
-export const judgmentsJobStatusEnum = pgEnum('judgments_job_status_enum', [
+const createdAtColumn = () => {
+  return integer('created_at', {mode: 'timestamp_ms'}).defaultNow().notNull()
+}
+
+const updatedAtColumn = () => {
+  return integer('updated_at', {mode: 'timestamp_ms'})
+    .defaultNow()
+    .$onUpdate(() => {
+      return new Date()
+    })
+    .notNull()
+}
+
+const booleanColumn = (name: string, defaultValue = false) => {
+  return integer(name, {mode: 'boolean'}).default(defaultValue).notNull()
+}
+
+const jsonColumn = <T>(name: string) => {
+  return text(name, {mode: 'json'}).$type<T>()
+}
+
+const publicationStatusValues = ['preprint', 'submitted', 'accepted', 'published', 'retracted'] as const
+const judgmentsJobStatusValues = [
   'not_started',
   'waiting_on_llm_connection',
   'waiting_on_db_connection',
   'running',
-  'paused_by_user',
-  'paused_by_admin',
+  'paused',
   'failed',
-  'completed', // only for projects with a fixed end date
+  'completed',
   'project_removed',
-])
-
-export const judgmentsJobsPromptsStatusEnum = pgEnum('judgments_jobs_prompts_status_enum', [
+] as const
+const judgmentsJobsPromptsStatusValues = [
   'ready',
   'sent',
   'judged',
   'judged_and_ready_to_remove_from_queue',
   'skipped',
-])
-
-export const judgmentsJobsPromptsSkipReasonEnum = pgEnum('judgments_jobs_prompts_skip_reason_enum', [
-  'no_fulltext',
-  'conversion_failed',
-  'fulltext_too_large',
-])
-
-export const judgmentChunkingStrategyEnum = pgEnum('judgment_chunking_strategy_enum', [
+] as const
+const judgmentsJobsPromptsSkipReasonValues = ['no_fulltext', 'conversion_failed', 'fulltext_too_large'] as const
+const judgmentChunkingStrategyValues = [
   'patient_h3_greedy',
   'article_heading_greedy',
   'article_paragraph_greedy',
-])
+] as const
+const engineValues = ['sglang', 'vllm'] as const
 
-export const engineEnum = pgEnum('engine_enum', ['sglang', 'vllm'])
+export const user = sqliteTable('user', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  email: text('email').notNull(),
+  role: text('role'),
+  createdAt: createdAtColumn(),
+  updatedAt: updatedAtColumn(),
+})
 
-export const articles = pgTable(
+export const articles = sqliteTable(
   'articles',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
-    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
+    id: idColumn(),
+    createdAt: createdAtColumn(),
+    updatedAt: updatedAtColumn(),
     articleTitle: text('article_title').notNull(),
-    articleAuthors: text('article_authors').array(),
-    articleCreatedAt: timestamp('article_created_at', {withTimezone: true}),
-    articleUpdatedAt: timestamp('article_updated_at', {withTimezone: true}),
+    articleAuthors: jsonColumn<string[] | null>('article_authors'),
+    articleCreatedAt: integer('article_created_at', {mode: 'timestamp_ms'}),
+    articleUpdatedAt: integer('article_updated_at', {mode: 'timestamp_ms'}),
     articleId: text('article_id').unique(),
     articleSummary: text('article_summary'),
     articleVersion: integer('article_version'),
@@ -79,35 +85,21 @@ export const articles = pgTable(
     doi: text('doi'),
     pubmedId: text('pubmed_id'),
     url: text('url'),
-    fullTextFetchedAt: timestamp('full_text_fetched_at', {withTimezone: true}),
+    fullTextFetchedAt: integer('full_text_fetched_at', {mode: 'timestamp_ms'}),
     fullText: text('full_text'),
     fullTextHtml: text('full_text_html'),
     fullTextSource: text('full_text_source'),
     fullTextOriginalFormat: text('full_text_original_format'),
     fullTextPDF: text('full_text_pdf'),
-    fullTextAssets: jsonb('full_text_assets'),
-    // Conversion tracking columns
-    fullTextConversionStatus: text('full_text_conversion_status'), // 'pending' | 'success' | 'failed'
+    fullTextAssets: jsonColumn<unknown>('full_text_assets'),
+    fullTextConversionStatus: text('full_text_conversion_status'),
     fullTextConversionError: text('full_text_conversion_error'),
     fullTextConversionAttempts: integer('full_text_conversion_attempts').default(0),
     fullTextCharCount: integer('full_text_char_count'),
     contentHash: text('content_hash'),
     importRoute: text('import_route'),
-    originalData: jsonb('original_data'),
-    importedBy: text('imported_by').references(
-      () => {
-        return user.id
-      },
-      {onDelete: 'set null'},
-    ),
-    // Who uploaded the PDF manually (null if fetched automatically)
-    fullTextPdfUploadedBy: text('full_text_pdf_uploaded_by').references(
-      () => {
-        return user.id
-      },
-      {onDelete: 'set null'},
-    ),
-    publicationStatus: publicationStatusEnum('publication_status'),
+    originalData: jsonColumn<unknown>('original_data'),
+    publicationStatus: text('publication_status', {enum: publicationStatusValues}),
   },
   (table) => {
     return [
@@ -123,87 +115,57 @@ export const articles = pgTable(
   },
 )
 
-export const models = pgTable(
-  'models',
-  {
-    id: uuid('id').primaryKey().defaultRandom(),
-    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
-    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
-    name: text('name').notNull(),
-    provider: text('provider'),
-    baseURL: text('base_url'),
-    modelName: text('model_name'),
-    version: text('version'),
-    apiKeyVariable: text('api_key_variable'),
-    ownerId: text('owner_id')
-      .default('uv2Idd2BF6VNSNjwY5IKmIeoYMKq6zXw')
-      .notNull()
-      .references(
-        () => {
-          return user.id
-        },
-        {onDelete: 'cascade'},
-      ),
-    workerUrls: text('worker_urls').array(),
-  },
-  (table) => {
-    return [index('models_owner_idx').on(table.ownerId)]
-  },
-)
+export const models = sqliteTable('models', {
+  id: idColumn(),
+  createdAt: createdAtColumn(),
+  updatedAt: updatedAtColumn(),
+  name: text('name').notNull(),
+  provider: text('provider'),
+  baseURL: text('base_url'),
+  modelName: text('model_name'),
+  version: text('version'),
+  apiKeyVariable: text('api_key_variable'),
+  workerUrls: jsonColumn<string[] | null>('worker_urls'),
+})
 
-export const dataSource = pgTable(
-  'datasource',
-  {
-    id: uuid('id').primaryKey().defaultRandom(),
-    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
-    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
-    title: text('title').notNull(),
-    description: text('description'),
-    lastImportAt: timestamp('last_import_at', {withTimezone: true}),
-    itemsAfterLastImport: integer('items_after_last_import').default(0),
-    importRoute: text('import_route'),
-    cursor: text('cursor'),
-    dateFrom: timestamp('date_from', {withTimezone: true}),
-    dateTo: timestamp('date_to', {withTimezone: true}),
-    ownerId: text('owner_id')
-      .default('uv2Idd2BF6VNSNjwY5IKmIeoYMKq6zXw')
-      .notNull()
-      .references(
-        () => {
-          return user.id
-        },
-        {onDelete: 'cascade'},
-      ),
-    archived: boolean('archived').default(false).notNull(),
-  },
-  (table) => {
-    return [index('datasource_owner_idx').on(table.ownerId)]
-  },
-)
+export const dataSource = sqliteTable('datasource', {
+  id: idColumn(),
+  createdAt: createdAtColumn(),
+  updatedAt: updatedAtColumn(),
+  title: text('title').notNull(),
+  description: text('description'),
+  lastImportAt: integer('last_import_at', {mode: 'timestamp_ms'}),
+  itemsAfterLastImport: integer('items_after_last_import').default(0),
+  importRoute: text('import_route'),
+  cursor: text('cursor'),
+  dateFrom: integer('date_from', {mode: 'timestamp_ms'}),
+  dateTo: integer('date_to', {mode: 'timestamp_ms'}),
+  archived: booleanColumn('archived'),
+})
 
-export const importRoute = pgTable(
+export const importRoute = sqliteTable(
   'import_route',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
-    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
+    id: idColumn(),
+    createdAt: createdAtColumn(),
+    updatedAt: updatedAtColumn(),
     route: text('route').notNull(),
     name: text('name'),
     description: text('description'),
-    active: boolean('active').default(true).notNull(),
+    active: booleanColumn('active', true),
   },
   (table) => {
     return [uniqueIndex('import_route_route_unique').on(table.route), index('import_route_active_idx').on(table.active)]
   },
 )
 
-export const dataSourceRouteLink = pgTable(
+export const dataSourceRouteLink = sqliteTable(
   'datasource_route_link',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
-    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
-    dataSourceId: uuid('datasource_id')
+    id: idColumn(),
+    createdAt: createdAtColumn(),
+    updatedAt: updatedAtColumn(),
+    dataSourceId: text('datasource_id')
       .notNull()
       .references(
         () => {
@@ -211,7 +173,7 @@ export const dataSourceRouteLink = pgTable(
         },
         {onDelete: 'cascade'},
       ),
-    importRouteId: uuid('import_route_id')
+    importRouteId: text('import_route_id')
       .notNull()
       .references(
         () => {
@@ -229,13 +191,37 @@ export const dataSourceRouteLink = pgTable(
   },
 )
 
-export const projectRouteLink = pgTable(
+export const projects = sqliteTable('projects', {
+  id: idColumn(),
+  name: text('name').notNull(),
+  description: text('description'),
+  engine: text('engine', {enum: engineValues}),
+  modelId: text('model_id')
+    .notNull()
+    .references(
+      () => {
+        return models.id
+      },
+      {onDelete: 'restrict'},
+    ),
+  useTitle: booleanColumn('use_title', true),
+  useAbstract: booleanColumn('use_abstract', true),
+  useFulltext: booleanColumn('use_fulltext'),
+  useFulltextNoImages: booleanColumn('use_fulltext_no_images'),
+  dateFrom: integer('date_from', {mode: 'timestamp_ms'}),
+  dateTo: integer('date_to', {mode: 'timestamp_ms'}),
+  archived: booleanColumn('archived'),
+  createdAt: createdAtColumn(),
+  updatedAt: updatedAtColumn(),
+})
+
+export const projectRouteLink = sqliteTable(
   'project_route_link',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
-    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
-    projectId: uuid('project_id')
+    id: idColumn(),
+    createdAt: createdAtColumn(),
+    updatedAt: updatedAtColumn(),
+    projectId: text('project_id')
       .notNull()
       .references(
         () => {
@@ -243,7 +229,7 @@ export const projectRouteLink = pgTable(
         },
         {onDelete: 'cascade'},
       ),
-    importRouteId: uuid('import_route_id')
+    importRouteId: text('import_route_id')
       .notNull()
       .references(
         () => {
@@ -261,13 +247,13 @@ export const projectRouteLink = pgTable(
   },
 )
 
-export const articleRouteLink = pgTable(
+export const articleRouteLink = sqliteTable(
   'article_route_link',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
-    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
-    articleId: uuid('article_id')
+    id: idColumn(),
+    createdAt: createdAtColumn(),
+    updatedAt: updatedAtColumn(),
+    articleId: text('article_id')
       .notNull()
       .references(
         () => {
@@ -275,7 +261,7 @@ export const articleRouteLink = pgTable(
         },
         {onDelete: 'cascade'},
       ),
-    importRouteId: uuid('import_route_id')
+    importRouteId: text('import_route_id')
       .notNull()
       .references(
         () => {
@@ -294,142 +280,39 @@ export const articleRouteLink = pgTable(
   },
 )
 
-export const dataSourceAccess = pgTable(
-  'datasource_access',
-  {
-    id: uuid('id').primaryKey().defaultRandom(),
-    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
-    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
-    dataSourceId: uuid('datasource_id')
-      .notNull()
-      .references(
-        () => {
-          return dataSource.id
-        },
-        {onDelete: 'cascade'},
-      ),
-    userId: text('user_id')
-      .notNull()
-      .references(
-        () => {
-          return user.id
-        },
-        {onDelete: 'cascade'},
-      ),
-  },
-  (table) => {
-    return [
-      index('datasource_access_datasource_idx').on(table.dataSourceId),
-      index('datasource_access_user_idx').on(table.userId),
-    ]
-  },
-)
-
-// project_datasource_link removed — no longer linking datasources to projects
-
-export const modelAccess = pgTable(
-  'model_access',
-  {
-    id: uuid('id').primaryKey().defaultRandom(),
-    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
-    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
-    modelId: uuid('model_id')
-      .notNull()
-      .references(
-        () => {
-          return models.id
-        },
-        {onDelete: 'cascade'},
-      ),
-    userId: text('user_id')
-      .notNull()
-      .references(
-        () => {
-          return user.id
-        },
-        {onDelete: 'cascade'},
-      ),
-  },
-  (table) => {
-    return [index('model_access_model_idx').on(table.modelId), index('model_access_user_idx').on(table.userId)]
-  },
-)
-
-export const projects = pgTable('projects', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  name: text('name').notNull(),
-  description: text('description'),
-  ownerId: text('owner_id')
-    .notNull()
-    .references(
-      () => {
-        return user.id
-      },
-      {onDelete: 'cascade'},
-    ),
-  // Engine used for this project (e.g., 'sglang' | 'vllm')
-  engine: engineEnum('engine'),
-  modelId: uuid('model_id')
-    .notNull()
-    .references(
-      () => {
-        return models.id
-      },
-      {onDelete: 'restrict'},
-    ),
-  useTitle: boolean('use_title').default(true).notNull(),
-  useAbstract: boolean('use_abstract').default(true).notNull(),
-  useFulltext: boolean('use_fulltext').default(false).notNull(),
-  useFulltextNoImages: boolean('use_fulltext_no_images').default(false).notNull(),
-  dateFrom: timestamp('date_from', {withTimezone: true}),
-  dateTo: timestamp('date_to', {withTimezone: true}),
-  archived: boolean('archived').default(false).notNull(),
-  createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
-  updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
-})
-
-export const comparisonProject = pgTable(
+export const comparisonProject = sqliteTable(
   'comparison_project',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
+    id: idColumn(),
     name: text('name').notNull(),
     description: text('description'),
-    ownerId: text('owner_id')
-      .notNull()
-      .references(
-        () => {
-          return user.id
-        },
-        {onDelete: 'cascade'},
-      ),
-    modelIds: uuid('model_ids').array(),
-    compareWithHumans: boolean('compare_with_humans').default(false).notNull(),
-    useTitle: boolean('use_title').default(true).notNull(),
-    useAbstract: boolean('use_abstract').default(true).notNull(),
-    useFulltext: boolean('use_fulltext').default(false).notNull(),
-    useFulltextNoImages: boolean('use_fulltext_no_images').default(false).notNull(),
-    dateFrom: timestamp('date_from', {withTimezone: true}),
-    dateTo: timestamp('date_to', {withTimezone: true}),
-    archived: boolean('archived').default(false).notNull(),
-    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
-    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
+    modelIds: jsonColumn<string[] | null>('model_ids'),
+    compareWithHumans: booleanColumn('compare_with_humans'),
+    useTitle: booleanColumn('use_title', true),
+    useAbstract: booleanColumn('use_abstract', true),
+    useFulltext: booleanColumn('use_fulltext'),
+    useFulltextNoImages: booleanColumn('use_fulltext_no_images'),
+    dateFrom: integer('date_from', {mode: 'timestamp_ms'}),
+    dateTo: integer('date_to', {mode: 'timestamp_ms'}),
+    archived: booleanColumn('archived'),
+    createdAt: createdAtColumn(),
+    updatedAt: updatedAtColumn(),
   },
   (table) => {
     return [
-      index('comparison_project_owner_idx').on(table.ownerId),
       index('comparison_project_archived_idx').on(table.archived),
       index('comparison_project_created_idx').on(table.createdAt),
     ]
   },
 )
 
-export const comparisonProjectRouteLink = pgTable(
+export const comparisonProjectRouteLink = sqliteTable(
   'comparison_project_route_link',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
-    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
-    comparisonProjectId: uuid('comparison_project_id')
+    id: idColumn(),
+    createdAt: createdAtColumn(),
+    updatedAt: updatedAtColumn(),
+    comparisonProjectId: text('comparison_project_id')
       .notNull()
       .references(
         () => {
@@ -437,7 +320,7 @@ export const comparisonProjectRouteLink = pgTable(
         },
         {onDelete: 'cascade'},
       ),
-    importRouteId: uuid('import_route_id')
+    importRouteId: text('import_route_id')
       .notNull()
       .references(
         () => {
@@ -455,13 +338,13 @@ export const comparisonProjectRouteLink = pgTable(
   },
 )
 
-export const judgmentsJobs = pgTable(
+export const judgmentsJobs = sqliteTable(
   'judgments_jobs',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
-    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
-    projectId: uuid('project_id')
+    id: idColumn(),
+    createdAt: createdAtColumn(),
+    updatedAt: updatedAtColumn(),
+    projectId: text('project_id')
       .notNull()
       .references(
         () => {
@@ -469,25 +352,46 @@ export const judgmentsJobs = pgTable(
         },
         {onDelete: 'cascade'},
       ),
-    status: judgmentsJobStatusEnum('status').default('not_started').notNull(),
-    error: text('error').array(),
+    status: text('status', {enum: judgmentsJobStatusValues}).default('not_started').notNull(),
+    error: jsonColumn<string[] | null>('error'),
     sendToLLMBatchSize: integer('send_to_llm_batch_size').default(5).notNull(),
     sendToLLMInterval: integer('send_to_llm_interval').default(15).notNull(),
-    chCursorLastDate: timestamp('ch_cursor_last_date', {withTimezone: true}),
-    chCursorLastArticleId: uuid('ch_cursor_last_article_id'),
+    chCursorLastDate: integer('ch_cursor_last_date', {mode: 'timestamp_ms'}),
+    chCursorLastArticleId: text('ch_cursor_last_article_id'),
   },
   (table) => {
     return [index('judgments_jobs_project_idx').on(table.projectId)]
   },
 )
 
-export const judgmentsJobsPrompts = pgTable(
+export const prompts = sqliteTable(
+  'prompts',
+  {
+    id: idColumn(),
+    createdAt: createdAtColumn(),
+    updatedAt: updatedAtColumn(),
+    originalText: text('original_text').notNull(),
+    transformedText: text('transformed_text'),
+    archived: booleanColumn('archived'),
+    promptHeading: text('prompt_heading'),
+    type: text('type'),
+    contentHash: text('content_hash'),
+  },
+  (table) => {
+    return [
+      uniqueIndex('prompts_content_hash_unique').on(table.contentHash),
+      index('prompts_archived_idx').on(table.archived),
+    ]
+  },
+)
+
+export const judgmentsJobsPrompts = sqliteTable(
   'judgments_jobs_prompts',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
-    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
-    jobId: uuid('job_id')
+    id: idColumn(),
+    createdAt: createdAtColumn(),
+    updatedAt: updatedAtColumn(),
+    jobId: text('job_id')
       .notNull()
       .references(
         () => {
@@ -495,7 +399,7 @@ export const judgmentsJobsPrompts = pgTable(
         },
         {onDelete: 'cascade'},
       ),
-    articleId: uuid('article_id')
+    articleId: text('article_id')
       .notNull()
       .references(
         () => {
@@ -503,7 +407,7 @@ export const judgmentsJobsPrompts = pgTable(
         },
         {onDelete: 'cascade'},
       ),
-    promptId: uuid('prompt_id')
+    promptId: text('prompt_id')
       .notNull()
       .references(
         () => {
@@ -512,10 +416,10 @@ export const judgmentsJobsPrompts = pgTable(
         {onDelete: 'cascade'},
       ),
     serverId: text('server_id'),
-    sentAt: timestamp('sent_at', {withTimezone: true}),
-    judgedAt: timestamp('judged_at', {withTimezone: true}),
-    status: judgmentsJobsPromptsStatusEnum('status').default('ready').notNull(),
-    skipReason: judgmentsJobsPromptsSkipReasonEnum('skip_reason'),
+    sentAt: integer('sent_at', {mode: 'timestamp_ms'}),
+    judgedAt: integer('judged_at', {mode: 'timestamp_ms'}),
+    status: text('status', {enum: judgmentsJobsPromptsStatusValues}).default('ready').notNull(),
+    skipReason: text('skip_reason', {enum: judgmentsJobsPromptsSkipReasonValues}),
   },
   (table) => {
     return [
@@ -526,45 +430,13 @@ export const judgmentsJobsPrompts = pgTable(
   },
 )
 
-export const prompts = pgTable(
-  'prompts',
-  {
-    id: uuid('id').primaryKey().defaultRandom(),
-    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
-    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
-    originalText: text('original_text').notNull(),
-    transformedText: text('transformed_text'),
-    ownerId: text('owner_id')
-      .default('uv2Idd2BF6VNSNjwY5IKmIeoYMKq6zXw')
-      .notNull()
-      .references(
-        () => {
-          return user.id
-        },
-        {onDelete: 'cascade'},
-      ),
-    archived: boolean('archived').default(false).notNull(),
-    // Global, immutable metadata
-    promptHeading: text('prompt_heading'),
-    type: text('type'),
-    contentHash: text('content_hash'),
-  },
-  (table) => {
-    return [
-      uniqueIndex('prompts_content_hash_unique').on(table.contentHash),
-      index('prompts_owner_idx').on(table.ownerId),
-      index('prompts_archived_idx').on(table.archived),
-    ]
-  },
-)
-
-export const projectPrompts = pgTable(
+export const projectPrompts = sqliteTable(
   'project_prompts',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
-    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
-    projectId: uuid('project_id')
+    id: idColumn(),
+    createdAt: createdAtColumn(),
+    updatedAt: updatedAtColumn(),
+    projectId: text('project_id')
       .notNull()
       .references(
         () => {
@@ -572,7 +444,7 @@ export const projectPrompts = pgTable(
         },
         {onDelete: 'cascade'},
       ),
-    promptId: uuid('prompt_id')
+    promptId: text('prompt_id')
       .notNull()
       .references(
         () => {
@@ -581,17 +453,14 @@ export const projectPrompts = pgTable(
         {onDelete: 'cascade'},
       ),
     order: integer('order'),
-    archived: boolean('archived').default(false).notNull(),
-    // Provenance of this association: which project originally created this prompt link.
-    // null indicates auto-linked from external judgments (no single source project).
-    originProjectId: uuid('origin_project_id').references(
+    archived: booleanColumn('archived'),
+    originProjectId: text('origin_project_id').references(
       () => {
         return projects.id
       },
       {onDelete: 'set null'},
     ),
-    // Whether this prompt association is enabled for LLM judging.
-    enabled: boolean('enabled').default(true).notNull(),
+    enabled: booleanColumn('enabled', true),
   },
   (table) => {
     return [
@@ -603,13 +472,13 @@ export const projectPrompts = pgTable(
   },
 )
 
-export const comparisonProjectPrompt = pgTable(
+export const comparisonProjectPrompt = sqliteTable(
   'comparison_project_prompt',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
-    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
-    comparisonProjectId: uuid('comparison_project_id')
+    id: idColumn(),
+    createdAt: createdAtColumn(),
+    updatedAt: updatedAtColumn(),
+    comparisonProjectId: text('comparison_project_id')
       .notNull()
       .references(
         () => {
@@ -617,7 +486,7 @@ export const comparisonProjectPrompt = pgTable(
         },
         {onDelete: 'cascade'},
       ),
-    promptId: uuid('prompt_id')
+    promptId: text('prompt_id')
       .notNull()
       .references(
         () => {
@@ -637,41 +506,14 @@ export const comparisonProjectPrompt = pgTable(
   },
 )
 
-// export const projectMembers = pgTable(
-//   'project_members',
-//   {
-//     projectId: uuid('project_id')
-//       .notNull()
-//       .references(
-//         () => {
-//           return projects.id
-//         },
-//         {onDelete: 'cascade'},
-//       ),
-//     userId: uuid('user_id')
-//       .notNull()
-//       .references(
-//         () => {
-//           return user.id
-//         },
-//         {onDelete: 'cascade'},
-//       ),
-//     role: text('role'),
-//   },
-//   (table) => {
-//     return {pk: primaryKey({columns: [table.projectId, table.userId]})}
-//   },
-// )
-
-export const judgments = pgTable(
+export const judgments = sqliteTable(
   'judgments',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
-    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
-    // Soft delete support (for Parquet/ClickHouse compatibility)
-    deletedAt: timestamp('deleted_at', {withTimezone: true}),
-    articleId: uuid('article_id')
+    id: idColumn(),
+    createdAt: createdAtColumn(),
+    updatedAt: updatedAtColumn(),
+    deletedAt: integer('deleted_at', {mode: 'timestamp_ms'}),
+    articleId: text('article_id')
       .notNull()
       .references(
         () => {
@@ -679,7 +521,7 @@ export const judgments = pgTable(
         },
         {onDelete: 'restrict'},
       ),
-    modelId: uuid('model_id')
+    modelId: text('model_id')
       .notNull()
       .references(
         () => {
@@ -687,7 +529,7 @@ export const judgments = pgTable(
         },
         {onDelete: 'cascade'},
       ),
-    promptId: uuid('prompt_id')
+    promptId: text('prompt_id')
       .notNull()
       .references(
         () => {
@@ -695,48 +537,31 @@ export const judgments = pgTable(
         },
         {onDelete: 'restrict'},
       ),
-    // Project that *created* this judgment (denormalized for Parquet/ClickHouse).
-    // NOTE: This is the originating project only. Judgments can be shared/reused across
-    // multiple projects via import routes (articleImportRoute) and curated articles
-    // (project_articles). Do NOT use projectId for scoping queries to a project's articles.
-    projectId: uuid('project_id').references(
+    projectId: text('project_id').references(
       () => {
         return projects.id
       },
       {onDelete: 'set null'},
     ),
-
-    // Content flags: which article content was used for this judgment.
-    // Legacy/backfilled rows default to title+abstract (useTitle=true, useAbstract=true).
-    useTitle: boolean('use_title').default(true).notNull(),
-    useAbstract: boolean('use_abstract').default(true).notNull(),
-    useFulltext: boolean('use_fulltext').default(false).notNull(),
-    useFulltextNoImages: boolean('use_fulltext_no_images').default(false).notNull(),
-
-    chunkingStrategy: judgmentChunkingStrategyEnum('chunking_strategy'),
-
-    // Whether this LLM judgment has been answered (may have null answer fields in some cases)
-    isAnswered: boolean('is_answered').default(false),
+    useTitle: booleanColumn('use_title', true),
+    useAbstract: booleanColumn('use_abstract', true),
+    useFulltext: booleanColumn('use_fulltext'),
+    useFulltextNoImages: booleanColumn('use_fulltext_no_images'),
+    chunkingStrategy: text('chunking_strategy', {enum: judgmentChunkingStrategyValues}),
+    isAnswered: integer('is_answered', {mode: 'boolean'}).default(false),
     answeredOriginal: text('answered_original'),
-    answeredOriginalAsArray: text('answered_original_as_array').array(),
-
+    answeredOriginalAsArray: jsonColumn<string[] | null>('answered_original_as_array'),
     confidenceOriginal: integer('confidence_original').default(50),
     explanation: text('explanation'),
-    quotes: jsonb('quotes').default([]),
-    // Snapshots
-    snapshotProjectId: uuid('snapshot_project_id'),
+    quotes: jsonColumn<unknown[]>('quotes').default([]).notNull(),
+    snapshotProjectId: text('snapshot_project_id'),
     snapshotProjectModelName: text('snapshot_project_model_name'),
   },
   (table) => {
     return [
       index('judgments_article_prompt_idx').on(table.articleId, table.promptId),
-      // Note: judgments_article_prompt_answered_idx is managed via raw SQL migration
-      // (0041_fix_judgments_answered_index_size.sql) as an expression index using
-      // LEFT(answered_original, 100) to avoid B-tree size limit issues
       index('judgments_prompt_article_idx').on(table.promptId, table.articleId),
-      // Cover common NOT EXISTS lookups by (article_id, prompt_id, model_id)
       index('judgments_article_prompt_model_idx').on(table.articleId, table.promptId, table.modelId),
-      // Cover content-aware NOT EXISTS lookups (model + content settings)
       index('judgments_article_prompt_model_content_idx').on(
         table.articleId,
         table.promptId,
@@ -746,20 +571,14 @@ export const judgments = pgTable(
         table.useFulltext,
         table.useFulltextNoImages,
       ),
-      // Note: judgments_prompt_article_answered_idx is also managed via raw SQL migration
       index('judgments_updated_idx').on(table.updatedAt),
       index('judgments_updated_id_deleted_idx').on(table.updatedAt, table.id, table.deletedAt),
-      // For sync status checks (ORDER BY created_at DESC LIMIT 1)
       index('judgments_created_idx').on(table.createdAt),
-      // Denormalized project lookups (for Parquet/ClickHouse compatibility)
       index('judgments_project_idx').on(table.projectId),
-      // Soft delete queries (for Parquet/ClickHouse compatibility)
       index('judgments_deleted_at_idx').on(table.deletedAt),
       index('judgments_deleted_updated_idx')
         .on(table.deletedAt, table.updatedAt)
         .where(sql`${table.deletedAt} IS NOT NULL`),
-      // Unique constraint for content-aware judgment deduplication (excludes soft-deleted rows).
-      // This enables rejudge: deleted rows don't block new inserts for the same combo.
       uniqueIndex('judgments_article_prompt_model_content_unique')
         .on(
           table.articleId,
@@ -775,13 +594,13 @@ export const judgments = pgTable(
   },
 )
 
-export const judgmentsHuman = pgTable(
+export const judgmentsHuman = sqliteTable(
   'judgments_human',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
-    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
-    articleId: uuid('article_id')
+    id: idColumn(),
+    createdAt: createdAtColumn(),
+    updatedAt: updatedAtColumn(),
+    articleId: text('article_id')
       .notNull()
       .references(
         () => {
@@ -789,15 +608,7 @@ export const judgmentsHuman = pgTable(
         },
         {onDelete: 'restrict'},
       ),
-    user: text('user')
-      .notNull()
-      .references(
-        () => {
-          return user.id
-        },
-        {onDelete: 'cascade'},
-      ),
-    promptId: uuid('prompt_id')
+    promptId: text('prompt_id')
       .notNull()
       .references(
         () => {
@@ -805,11 +616,10 @@ export const judgmentsHuman = pgTable(
         },
         {onDelete: 'restrict'},
       ),
-    // Whether this human judgment has been answered (allows null answer for optional prompts)
-    isAnswered: boolean('is_answered').default(false).notNull(),
+    isAnswered: booleanColumn('is_answered'),
     answer: text('answer'),
     comment: text('comment'),
-    projectId: uuid('project_id')
+    projectId: text('project_id')
       .notNull()
       .references(
         () => {
@@ -820,23 +630,23 @@ export const judgmentsHuman = pgTable(
   },
   (table) => {
     return [
+      uniqueIndex('judgments_human_project_article_prompt_unique').on(table.projectId, table.articleId, table.promptId),
       index('judgments_human_article_prompt_idx').on(table.articleId, table.promptId),
       index('judgments_human_prompt_article_idx').on(table.promptId, table.articleId),
       index('judgments_human_project_idx').on(table.projectId),
-      // Speed DISTINCT answer lists per prompt under article constraints
       index('judgments_human_prompt_article_answer_idx').on(table.promptId, table.articleId, table.answer),
       index('judgments_human_updated_idx').on(table.updatedAt),
     ]
   },
 )
 
-export const projectArticles = pgTable(
+export const projectArticles = sqliteTable(
   'project_articles',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
-    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
-    projectId: uuid('project_id')
+    id: idColumn(),
+    createdAt: createdAtColumn(),
+    updatedAt: updatedAtColumn(),
+    projectId: text('project_id')
       .notNull()
       .references(
         () => {
@@ -844,13 +654,13 @@ export const projectArticles = pgTable(
         },
         {onDelete: 'cascade'},
       ),
-    importedFromProjectId: uuid('imported_from_project_id').references(
+    importedFromProjectId: text('imported_from_project_id').references(
       () => {
         return projects.id
       },
       {onDelete: 'set null'},
     ),
-    articleId: uuid('article_id')
+    articleId: text('article_id')
       .notNull()
       .references(
         () => {
@@ -869,26 +679,13 @@ export const projectArticles = pgTable(
   },
 )
 
-// Time-series token usage
-export const tokenUse = pgTable(
+export const tokenUse = sqliteTable(
   'token_use',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
-    updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
-    userId: text('user_id').references(
-      () => {
-        return user.id
-      },
-      {onDelete: 'set null'},
-    ),
-    sessionId: text('session_id').references(
-      () => {
-        return session.id
-      },
-      {onDelete: 'set null'},
-    ),
-    judgmentsJobId: uuid('judgments_job_id').references(
+    id: idColumn(),
+    createdAt: createdAtColumn(),
+    updatedAt: updatedAtColumn(),
+    judgmentsJobId: text('judgments_job_id').references(
       () => {
         return judgmentsJobs.id
       },
@@ -898,10 +695,9 @@ export const tokenUse = pgTable(
     totalPromptTokens: integer('total_prompt_tokens').notNull(),
     totalCompletionTokens: integer('total_completion_tokens').notNull(),
     totalTokens: integer('total_tokens').notNull(),
-    startedAt: timestamp('started_at', {withTimezone: true}),
-    finishedAt: timestamp('finished_at', {withTimezone: true}),
+    startedAt: integer('started_at', {mode: 'timestamp_ms'}),
+    finishedAt: integer('finished_at', {mode: 'timestamp_ms'}),
     duration: integer('duration'),
-    // GPU / parallelism metadata captured at insert time
     gpuNnodes: integer('gpu_nnodes'),
     gpuGpusPerNode: integer('gpu_gpus_per_node'),
     gpuTotalGpus: integer('gpu_total_gpus'),
@@ -912,8 +708,8 @@ export const tokenUse = pgTable(
     sglangModel: text('sglang_model'),
     successfulRequests: integer('successful_requests'),
     failedRequests: integer('failed_requests'),
-    hasFailedRequests: boolean('has_failed_requests').default(false).notNull(),
-    failedRequestsDetails: jsonb('failed_requests_details'),
+    hasFailedRequests: booleanColumn('has_failed_requests'),
+    failedRequestsDetails: jsonColumn<unknown[] | null>('failed_requests_details'),
     totalSuccessPromptTokens: integer('total_success_prompt_tokens'),
     totalSuccessCompletionTokens: integer('total_success_completion_tokens'),
     totalSuccessTokens: integer('total_success_tokens'),
@@ -929,117 +725,92 @@ export const tokenUse = pgTable(
   },
 )
 
-// Reviews table
-export const reviews = pgTable('reviews', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  articleId: uuid('article_id')
-    .notNull()
-    .references(
-      () => {
-        return articles.id
-      },
-      {onDelete: 'cascade'},
-    ),
-  projectId: uuid('project_id')
-    .notNull()
-    .references(
-      () => {
-        return projects.id
-      },
-      {onDelete: 'cascade'},
-    ),
-  reviewerId: text('reviewer_id')
-    .notNull()
-    .references(
-      () => {
-        return user.id
-      },
-      {onDelete: 'cascade'},
-    ),
-  opened: boolean('opened').default(false).notNull(),
-  reviewedTitle: boolean('reviewed_title').default(false).notNull(),
-  reviewedTitleComment: text('reviewed_title_comment'),
-  reviewedAbstract: boolean('reviewed_abstract').default(false).notNull(),
-  reviewedAbstractComment: text('reviewed_abstract_comment'),
-  reviewedIntro: boolean('reviewed_intro').default(false).notNull(),
-  reviewedIntroComment: text('reviewed_intro_comment'),
-  reviewedMethod: boolean('reviewed_method').default(false).notNull(),
-  reviewedMethodComment: text('reviewed_method_comment'),
-  reviewedResults: boolean('reviewed_results').default(false).notNull(),
-  reviewedResultsComment: text('reviewed_results_comment'),
-  reviewedDiscussion: boolean('reviewed_discussion').default(false).notNull(),
-  reviewedDiscussionComment: text('reviewed_discussion_comment'),
-  reviewedConclusion: boolean('reviewed_conclusion').default(false).notNull(),
-  reviewedConclusionComment: text('reviewed_conclusion_comment'),
-  reviewedAppendix: boolean('reviewed_appendix').default(false).notNull(),
-  reviewedAppendixComment: text('reviewed_appendix_comment'),
-  reviewedOther: boolean('reviewed_other').default(false).notNull(),
-  reviewedOtherComment: text('reviewed_other_comment'),
-  createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
-  updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
-})
+export const reviews = sqliteTable(
+  'reviews',
+  {
+    id: idColumn(),
+    articleId: text('article_id')
+      .notNull()
+      .references(
+        () => {
+          return articles.id
+        },
+        {onDelete: 'cascade'},
+      ),
+    projectId: text('project_id')
+      .notNull()
+      .references(
+        () => {
+          return projects.id
+        },
+        {onDelete: 'cascade'},
+      ),
+    opened: booleanColumn('opened'),
+    reviewedTitle: booleanColumn('reviewed_title'),
+    reviewedTitleComment: text('reviewed_title_comment'),
+    reviewedAbstract: booleanColumn('reviewed_abstract'),
+    reviewedAbstractComment: text('reviewed_abstract_comment'),
+    reviewedIntro: booleanColumn('reviewed_intro'),
+    reviewedIntroComment: text('reviewed_intro_comment'),
+    reviewedMethod: booleanColumn('reviewed_method'),
+    reviewedMethodComment: text('reviewed_method_comment'),
+    reviewedResults: booleanColumn('reviewed_results'),
+    reviewedResultsComment: text('reviewed_results_comment'),
+    reviewedDiscussion: booleanColumn('reviewed_discussion'),
+    reviewedDiscussionComment: text('reviewed_discussion_comment'),
+    reviewedConclusion: booleanColumn('reviewed_conclusion'),
+    reviewedConclusionComment: text('reviewed_conclusion_comment'),
+    reviewedAppendix: booleanColumn('reviewed_appendix'),
+    reviewedAppendixComment: text('reviewed_appendix_comment'),
+    reviewedOther: booleanColumn('reviewed_other'),
+    reviewedOtherComment: text('reviewed_other_comment'),
+    createdAt: createdAtColumn(),
+    updatedAt: updatedAtColumn(),
+  },
+  (table) => {
+    return [uniqueIndex('reviews_project_article_unique').on(table.projectId, table.articleId)]
+  },
+)
 
-// Judgment assessments table
-export const judgmentAssessments = pgTable('judgment_assessments', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  judgmentId: uuid('judgment_id')
-    .notNull()
-    .references(
-      () => {
-        return judgments.id
-      },
-      {onDelete: 'cascade'},
-    ),
-  assessedBy: text('assessed_by')
-    .notNull()
-    .references(
-      () => {
-        return user.id
-      },
-      {onDelete: 'cascade'},
-    ),
-  assessmentIsCorrect: boolean('assessment_is_correct').notNull(),
-  assessmentComment: text('assessment_comment'),
-  createdAt: timestamp('created_at', {withTimezone: true}).defaultNow().notNull(),
-  updatedAt: timestamp('updated_at', {withTimezone: true}).defaultNow().notNull(),
-})
+export const judgmentAssessments = sqliteTable(
+  'judgment_assessments',
+  {
+    id: idColumn(),
+    judgmentId: text('judgment_id')
+      .notNull()
+      .references(
+        () => {
+          return judgments.id
+        },
+        {onDelete: 'cascade'},
+      ),
+    assessmentIsCorrect: integer('assessment_is_correct', {mode: 'boolean'}).notNull(),
+    assessmentComment: text('assessment_comment'),
+    createdAt: createdAtColumn(),
+    updatedAt: updatedAtColumn(),
+  },
+  (table) => {
+    return [uniqueIndex('judgment_assessments_judgment_unique').on(table.judgmentId)]
+  },
+)
 
-// Views
-export const projectStats = pgView('project_stats', {
-  projectId: uuid('project_id'),
-  lastJudgmentAt: timestamp('last_judgment_at', {withTimezone: true}),
-  totalJudgments: integer('total_judgments'),
-  originalYes: integer('original_yes'),
-  originalNo: integer('original_no'),
-  originalUnsure: integer('original_unsure'),
-}).existing()
-
-// vLLM status snapshots
-// Removed vLLM-specific status table in favor of unified llm_status
-
-export const llmStatus = pgTable(
+export const llmStatus = sqliteTable(
   'llm_status',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-
-    ts: timestamp('ts', {withTimezone: true}).defaultNow().notNull(),
-
-    engine: engineEnum('engine').notNull(),
+    id: idColumn(),
+    ts: integer('ts', {mode: 'timestamp_ms'}).defaultNow().notNull(),
+    engine: text('engine', {enum: engineValues}).notNull(),
     instanceId: text('instance_id').notNull(),
     modelName: text('model_name').notNull(),
     engineVersion: text('engine_version'),
     gpuType: text('gpu_type'),
     gpuCount: integer('gpu_count'),
-    pollMs: bigint('poll_ms', {mode: 'number'}).notNull().default(2000),
-
-    // SGLang-aligned counters
-    promptTokensTotal: bigint('prompt_tokens_total', {mode: 'number'}).notNull().default(0),
-    generationTokensTotal: bigint('generation_tokens_total', {mode: 'number'}).notNull().default(0),
-    numRequestsTotal: bigint('num_requests_total', {mode: 'number'}),
-    cachedTokensTotal: bigint('cached_tokens_total', {mode: 'number'}),
-    numRetractionsCount: bigint('num_retractions_count', {mode: 'number'}),
-
-    // SGLang-aligned gauges
+    pollMs: integer('poll_ms').notNull().default(2000),
+    promptTokensTotal: integer('prompt_tokens_total').notNull().default(0),
+    generationTokensTotal: integer('generation_tokens_total').notNull().default(0),
+    numRequestsTotal: integer('num_requests_total'),
+    cachedTokensTotal: integer('cached_tokens_total'),
+    numRetractionsCount: integer('num_retractions_count'),
     numQueueReqs: integer('num_queue_reqs').notNull().default(0),
     numRunningReqs: integer('num_running_reqs').notNull().default(0),
     numGrammarQueueReqs: integer('num_grammar_queue_reqs'),
@@ -1048,43 +819,33 @@ export const llmStatus = pgTable(
     numPrefillInflightQueueReqs: integer('num_prefill_inflight_queue_reqs'),
     numDecodePreallocQueueReqs: integer('num_decode_prealloc_queue_reqs'),
     numDecodeTransferQueueReqs: integer('num_decode_transfer_queue_reqs'),
-
-    // Throughput and utilization
-    genThroughput: doublePrecision('gen_throughput'),
-    tokenUsage: doublePrecision('token_usage'),
-    utilization: doublePrecision('utilization'),
-    cacheHitRate: doublePrecision('cache_hit_rate'),
-    specAcceptRate: doublePrecision('spec_accept_rate'),
-    specAcceptLength: doublePrecision('spec_accept_length'),
-    isCudaGraph: boolean('is_cuda_graph'),
-    swaTokenUsage: doublePrecision('swa_token_usage'),
-    mambaUsage: doublePrecision('mamba_usage'),
-    pendingPreallocTokenUsage: doublePrecision('pending_prealloc_token_usage'),
-
-    // KV transfer
-    kvTransferSpeedGbS: doublePrecision('kv_transfer_speed_gb_s'),
-    kvTransferLatencyMs: doublePrecision('kv_transfer_latency_ms'),
-    kvTransferBootstrapMs: doublePrecision('kv_transfer_bootstrap_ms'),
-    kvTransferAllocMs: doublePrecision('kv_transfer_alloc_ms'),
-
-    // Derived rates (kept for controller logic)
-    prefillTps: doublePrecision('prefill_tps'),
-    genTps: doublePrecision('gen_tps'),
-    rps: doublePrecision('rps'),
-
-    // Controller state
-    targetGenTps: doublePrecision('target_gen_tps'),
-    targetPrefillTps: doublePrecision('target_prefill_tps'),
+    genThroughput: real('gen_throughput'),
+    tokenUsage: real('token_usage'),
+    utilization: real('utilization'),
+    cacheHitRate: real('cache_hit_rate'),
+    specAcceptRate: real('spec_accept_rate'),
+    specAcceptLength: real('spec_accept_length'),
+    isCudaGraph: integer('is_cuda_graph', {mode: 'boolean'}),
+    swaTokenUsage: real('swa_token_usage'),
+    mambaUsage: real('mamba_usage'),
+    pendingPreallocTokenUsage: real('pending_prealloc_token_usage'),
+    kvTransferSpeedGbS: real('kv_transfer_speed_gb_s'),
+    kvTransferLatencyMs: real('kv_transfer_latency_ms'),
+    kvTransferBootstrapMs: real('kv_transfer_bootstrap_ms'),
+    kvTransferAllocMs: real('kv_transfer_alloc_ms'),
+    prefillTps: real('prefill_tps'),
+    genTps: real('gen_tps'),
+    rps: real('rps'),
+    targetGenTps: real('target_gen_tps'),
+    targetPrefillTps: real('target_prefill_tps'),
     inFlight: integer('in_flight'),
     maxInFlight: integer('max_in_flight'),
     lastAction: text('last_action'),
-
-    // Histograms (store raw buckets)
-    timeToFirstTokenSeconds: jsonb('time_to_first_token_seconds'),
-    e2eRequestLatencySeconds: jsonb('e2e_request_latency_seconds'),
-    interTokenLatencySeconds: jsonb('inter_token_latency_seconds'),
-    perStageReqLatencySeconds: jsonb('per_stage_req_latency_seconds'),
-    queueTimeSeconds: jsonb('queue_time_seconds'),
+    timeToFirstTokenSeconds: jsonColumn<unknown>('time_to_first_token_seconds'),
+    e2eRequestLatencySeconds: jsonColumn<unknown>('e2e_request_latency_seconds'),
+    interTokenLatencySeconds: jsonColumn<unknown>('inter_token_latency_seconds'),
+    perStageReqLatencySeconds: jsonColumn<unknown>('per_stage_req_latency_seconds'),
+    queueTimeSeconds: jsonColumn<unknown>('queue_time_seconds'),
   },
   (table) => {
     return [
@@ -1095,29 +856,22 @@ export const llmStatus = pgTable(
   },
 )
 
-export const nvidiaSmi = pgTable(
+export const nvidiaSmi = sqliteTable(
   'nvidia_smi',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-
-    ts: timestamp('ts', {withTimezone: true}).defaultNow().notNull(),
-
+    id: idColumn(),
+    ts: integer('ts', {mode: 'timestamp_ms'}).defaultNow().notNull(),
     instanceId: text('instance_id').notNull(),
     gpuIndex: integer('gpu_index').notNull(),
-
     gpuUuid: text('gpu_uuid'),
     gpuName: text('gpu_name'),
-
     temperatureGpu: integer('temperature_gpu'),
     utilizationGpu: integer('utilization_gpu'),
     utilizationMemory: integer('utilization_memory'),
-
     memoryTotalMiB: integer('memory_total_mib'),
     memoryUsedMiB: integer('memory_used_mib'),
-
-    powerDrawWatts: doublePrecision('power_draw_watts'),
-    powerLimitWatts: doublePrecision('power_limit_watts'),
-
+    powerDrawWatts: real('power_draw_watts'),
+    powerLimitWatts: real('power_limit_watts'),
     fanSpeed: integer('fan_speed'),
     pstate: text('pstate'),
   },
@@ -1130,14 +884,12 @@ export const nvidiaSmi = pgTable(
   },
 )
 
-export const syncState = pgTable(
+export const syncState = sqliteTable(
   'sync_state',
   {
     remoteId: text('remote_id').notNull(),
     tableName: text('table_name').notNull(),
-    lastSyncedAt: timestamp('last_synced_at', {withTimezone: true})
-      .notNull()
-      .default(sql`to_timestamp(0)`),
+    lastSyncedAt: integer('last_synced_at', {mode: 'timestamp_ms'}).notNull().default(new Date(0)),
   },
   (table) => {
     return {pk: primaryKey({columns: [table.remoteId, table.tableName]})}

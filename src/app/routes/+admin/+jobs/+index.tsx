@@ -19,8 +19,7 @@ const getStatusColor = (status: string | null) => {
       return 'bg-blue-100 text-blue-800'
     case 'failed':
       return 'bg-red-100 text-red-800'
-    case 'paused_by_user':
-    case 'paused_by_admin':
+    case 'paused':
       return 'bg-yellow-100 text-yellow-800'
     case 'not_started':
       return 'bg-gray-100 text-gray-800'
@@ -36,7 +35,7 @@ const getStatusColor = (status: string | null) => {
 
 const formatStatus = (status: string | null) => {
   if (!status) return 'Unknown'
-  if (status === 'paused_by_admin' || status === 'paused_by_user') return 'Paused'
+  if (status === 'paused') return 'Paused'
   return status
     .split('_')
     .map((word) => {
@@ -313,7 +312,7 @@ const JudgmentsJobsTable = () => {
                                 Pause
                               </button>
                             </Show>
-                            <Show when={job.status === 'paused_by_admin' || job.status === 'paused_by_user'}>
+                            <Show when={job.status === 'paused'}>
                               <button
                                 class="text-sm text-green-600 hover:text-green-800"
                                 onClick={() => {

@@ -6,7 +6,6 @@ import {articles, judgments} from '../../db/schema.ts'
 import {getClickhouseClient, pingClickhouse} from '../../services/clickhouse/clickhouseClient.ts'
 import {ensureClickhouseSchema} from '../../services/clickhouse/ensureClickhouseSchema.ts'
 import {rebuildClickhouseJudgmentsDerivedTable} from '../../services/clickhouse/rebuildClickhouseJudgmentsDerivedTable.ts'
-import {requireUserAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 
@@ -1008,7 +1007,6 @@ const getPartitionCoverage = async (input: {table: 'articles' | 'judgments'; mon
 
 export const adminSyncStatsRoutes = new Elysia()
   .use(withErrorHandler())
-  .use(requireUserAuth())
   .get('/api/admin/sync-stats', async () => {
     const data = await buildSyncStatsData()
     return {data}

@@ -29,8 +29,6 @@ export const tokensRoutesGetFailedRequestById = async (id: string) => {
       failedRequests: tokenUse.failedRequests,
       failedRequestsDetails: tokenUse.failedRequestsDetails,
       totalTokens: tokenUse.totalTokens,
-      userId: tokenUse.userId,
-      sessionId: tokenUse.sessionId,
       requests: tokenUse.requests,
       successfulRequests: tokenUse.successfulRequests,
     })

@@ -4,7 +4,6 @@ import {Elysia, t} from 'elysia'
 import {judgmentsJobs, judgmentsJobsPrompts, projectRouteLink, projects, tokenUse} from '../../db/schema'
 import {getUnassessedArticlesFromOlap, getUnassessedCountFromOlap} from '../../services/olap/unassessedArticlesOlap.ts'
 import {getJudgmentRequestStats} from '../cron/judgmentsJobs/judgmentsRequestRuntime.ts'
-import {requireUserAuth} from '../utils/authGuard.ts'
 import {getDatabase} from '../utils/getDatabase'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
@@ -123,7 +122,6 @@ const getJobContext = async ({
 
 export const judgmentsJobsRoutes = new Elysia()
   .use(withErrorHandler())
-  .use(requireUserAuth())
   .post(
     '/api/judgmentsjobs',
     async ({body}) => {
@@ -364,7 +362,7 @@ export const judgmentsJobsRoutes = new Elysia()
         throw new Error('Job not found')
       }
 
-      const shouldClearQueue = body.status === 'paused_by_user'
+      const shouldClearQueue = body.status === 'paused'
 
       if (shouldClearQueue) {
         await db.delete(judgmentsJobsPrompts).where(eq(judgmentsJobsPrompts.jobId, updatedJob.id))
@@ -394,7 +392,7 @@ export const judgmentsJobsRoutes = new Elysia()
             t.Literal('waiting_on_llm_connection'),
             t.Literal('waiting_on_db_connection'),
             t.Literal('running'),
-            t.Literal('paused_by_user'),
+            t.Literal('paused'),
             t.Literal('failed'),
             t.Literal('completed'),
             t.Literal('project_removed'),

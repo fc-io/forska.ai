@@ -22,20 +22,17 @@ export const humanAssessmentRoutesGetOverviewBothProjects = async ({
     .innerJoin(projects, eq(projects.id, judgmentsHuman.projectId))
     .where(
       and(
-        // Human: user has answered all prompts linked to the project for the article
         sql`EXISTS (
             SELECT 1
             FROM ${judgmentsHuman} jh2
             WHERE jh2."project_id" = ${judgmentsHuman.projectId}
               AND jh2."article_id" = ${judgmentsHuman.articleId}
-              AND jh2."user" = ${judgmentsHuman.user}
               AND jh2."is_answered" = true
-            GROUP BY jh2."project_id", jh2."article_id", jh2."user"
+            GROUP BY jh2."project_id", jh2."article_id"
             HAVING COUNT(DISTINCT jh2."prompt_id") = (
               SELECT COUNT(*) FROM ${projectPrompts} pp WHERE pp."project_id" = jh2."project_id"
             )
           )`,
-        // LLM: article has judgments for all prompts linked to the project
         sql`EXISTS (
             SELECT 1
             FROM ${judgments} j
