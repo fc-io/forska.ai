@@ -6,4 +6,12 @@ export const localUserEmail = `local-${localUserId}@forska.local`
 
 export const localUserRole = null
 
-export const localUserDefaults = {id: localUserId, name: localUserName, email: localUserEmail, role: localUserRole}
+export const localUserOpenalexMailto = null
+
+export const localUserDefaults = {
+  id: localUserId,
+  name: localUserName,
+  email: localUserEmail,
+  role: localUserRole,
+  openalexMailto: localUserOpenalexMailto,
+}

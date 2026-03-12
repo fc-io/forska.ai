@@ -35,6 +35,7 @@ type ImportReport = {
     name: string
     email: string
     role: string | null
+    openalexMailto: string | null
     sourceUserCount: number
     envKeysUsed: string[]
   } | null
@@ -352,6 +353,7 @@ const getBootstrapLocalUser = () => {
     ['LOCAL_USER_NAME', process.env['LOCAL_USER_NAME']],
     ['LOCAL_USER_EMAIL', process.env['LOCAL_USER_EMAIL']],
     ['LOCAL_USER_ROLE', process.env['LOCAL_USER_ROLE']],
+    ['OPENALEX_MAILTO', process.env['OPENALEX_MAILTO']],
   ].filter((entry): entry is [string, string] => {
     return typeof entry[1] === 'string' && entry[1].trim() !== ''
   })
@@ -362,6 +364,7 @@ const getBootstrapLocalUser = () => {
     name: values['LOCAL_USER_NAME']?.trim() || localUserDefaults.name,
     email: values['LOCAL_USER_EMAIL']?.trim() || localUserDefaults.email,
     role: values['LOCAL_USER_ROLE']?.trim() || localUserDefaults.role,
+    openalexMailto: values['OPENALEX_MAILTO']?.trim() || localUserDefaults.openalexMailto,
     envKeysUsed: keys.map(([key]) => {
       return key
     }),
@@ -381,16 +384,17 @@ const bootstrapLocalUser = async (client: Client) => {
   sqlite
     .prepare(
       `
-        INSERT INTO ${quoteIdentifier('user')} (${quoteIdentifier('id')}, ${quoteIdentifier('name')}, ${quoteIdentifier('email')}, ${quoteIdentifier('role')}, ${quoteIdentifier('created_at')}, ${quoteIdentifier('updated_at')})
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO ${quoteIdentifier('user')} (${quoteIdentifier('id')}, ${quoteIdentifier('name')}, ${quoteIdentifier('email')}, ${quoteIdentifier('role')}, ${quoteIdentifier('openalex_mailto')}, ${quoteIdentifier('created_at')}, ${quoteIdentifier('updated_at')})
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(${quoteIdentifier('id')}) DO UPDATE SET
           ${quoteIdentifier('name')} = excluded.${quoteIdentifier('name')},
           ${quoteIdentifier('email')} = excluded.${quoteIdentifier('email')},
           ${quoteIdentifier('role')} = excluded.${quoteIdentifier('role')},
+          ${quoteIdentifier('openalex_mailto')} = excluded.${quoteIdentifier('openalex_mailto')},
           ${quoteIdentifier('updated_at')} = excluded.${quoteIdentifier('updated_at')}
       `,
     )
-    .run(localUser.id, localUser.name, localUser.email, localUser.role, now, now)
+    .run(localUser.id, localUser.name, localUser.email, localUser.role, localUser.openalexMailto, now, now)
 
   return {...localUser, sourceUserCount: await getSourceUserCount(client)}
 }

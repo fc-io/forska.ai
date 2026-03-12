@@ -26,7 +26,7 @@ export const usersRoutes = new Elysia()
         const db = getDatabase()
         const [updatedUser] = await db
           .update(user)
-          .set({name: body.name, updatedAt: new Date()})
+          .set({name: body.name, openalexMailto: body.openalexMailto, updatedAt: new Date()})
           .where(eq(user.id, localUserId))
           .returning()
 
@@ -37,6 +37,6 @@ export const usersRoutes = new Elysia()
 
         return {data: updatedUser}
       },
-      {body: t.Object({name: t.String()})},
+      {body: t.Object({name: t.String(), openalexMailto: t.Optional(t.Union([t.String(), t.Null()]))})},
     ),
   )

@@ -4,6 +4,7 @@ import {and, count, eq, gte, lte, sql} from 'drizzle-orm'
 import {openalexHarvest} from '../../../agent/openalexHarvest.ts'
 import {articleRouteLink, articles, dataSource, importRoute as importRouteTable} from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
+import {getLocalUser} from '../../utils/getLocalUser.ts'
 
 type Database = ReturnType<typeof getDatabase>
 type DataSourceRecord = typeof dataSource.$inferSelect
@@ -76,7 +77,14 @@ export const dataSourcesImportRoutesPostOpenalex = async (body: {id: string}) =>
   if (!record.dateTo) {
     console.warn('dataSourcesImportRoutesPostOpenalex – To date is good to have')
   }
-  await openalexHarvest({fromDate, toDate, importRoute})
+  const localUser = await getLocalUser()
+  const openalexMailto = localUser.openalexMailto?.trim() ?? ''
+
+  if (!openalexMailto) {
+    throw new Error('OpenAlex mailto is missing. Update it in Settings before importing.')
+  }
+
+  await openalexHarvest({fromDate, toDate, importRoute, mailto: openalexMailto})
   const importedCount = await countArticlesInRange(db, importRoute, record)
   const updatedDataSource = await updateDataSourceAfterImport(db, record.id, importedCount)
 

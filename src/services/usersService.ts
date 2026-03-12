@@ -20,9 +20,9 @@ export const fetchUsers = async () => {
   }
 }
 
-export const updateUserProfile = async (userId: string, name: string) => {
+export const updateUserProfile = async (userId: string, input: {name: string; openalexMailto: string | null}) => {
   try {
-    const response = await apiClient.api.users({id: userId}).patch({name})
+    const response = await apiClient.api.users({id: userId}).patch(input)
 
     if (response.error || !response.data?.data) {
       console.error('Error updating user:', response.error)

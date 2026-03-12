@@ -1,9 +1,10 @@
 import {type} from 'arktype'
 
-import {env} from '../server/utils/env.ts'
 import {sleep} from '../utils/sleep.ts'
 import type {InputData} from './arxivWorkflow/arxivWorkflowHarvest.ts'
 import {openalexWorkflowStoreEntries} from './openalexWorkflowStoreEntries.ts'
+
+type OpenalexInput = InputData & {mailto: string}
 
 const OpenAlexMeta = type({
   'count?': 'number',
@@ -226,10 +227,10 @@ const buildOpenAlexUrl = (
   return url
 }
 
-export const openalexHarvest = async (input: InputData): Promise<void> => {
-  const mailto = env.OPENALEX_MAILTO
-  if (!mailto || String(mailto).trim() === '') {
-    throw new Error('OPENALEX_MAILTO is required in environment')
+export const openalexHarvest = async (input: OpenalexInput): Promise<void> => {
+  const mailto = input.mailto.trim()
+  if (!mailto) {
+    throw new Error('OpenAlex mailto is required in the local user config')
   }
 
   const timeoutMs = 20_000

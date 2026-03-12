@@ -15,6 +15,13 @@
       "when": 1773258549670,
       "tag": "0001_fair_daredevil",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1773298976135,
+      "tag": "0002_fine_crusher_hogan",
+      "breakpoints": true
     }
   ]
 }

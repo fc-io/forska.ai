@@ -61,6 +61,7 @@ export const user = sqliteTable('user', {
   name: text('name').notNull(),
   email: text('email').notNull(),
   role: text('role'),
+  openalexMailto: text('openalex_mailto'),
   createdAt: createdAtColumn(),
   updatedAt: updatedAtColumn(),
 })

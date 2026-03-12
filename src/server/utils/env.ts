@@ -40,7 +40,7 @@ const envShape = arktype({
   SQLITE_PATH: 'string',
   BETTER_AUTH_SECRET: 'string | null | undefined',
   BETTER_AUTH_URL: 'string | null | undefined',
-  OPENALEX_MAILTO: 'string',
+  OPENALEX_MAILTO: 'string | null | undefined',
   OLAP_DB: '"clickhouse" | "duckdb" | null | undefined',
   VITE_PORT: 'number | string.integer.parse',
   API_SERVER_PORT: 'number | string.integer.parse',
@@ -191,6 +191,9 @@ const loadEnv = (): typeof envShape.infer => {
   }
   if (!('DATABASE_URL' in merged)) {
     ;(merged as Record<string, undefined>).DATABASE_URL = undefined
+  }
+  if (!('OPENALEX_MAILTO' in merged)) {
+    ;(merged as Record<string, undefined>).OPENALEX_MAILTO = undefined
   }
   // Provide a stable default when GPU_SHAPE is not provided
   if (merged.GPU_SHAPE == null || String(merged.GPU_SHAPE).trim() === '') {

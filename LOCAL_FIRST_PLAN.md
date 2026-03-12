@@ -32,7 +32,7 @@
 ## Step 1B - Schema rewrite (`src/db/schema.ts`, `auth-schema.ts`, migrations)
 
 - [x] Rewrite `pgTable`/`pgEnum`/`pgView` to SQLite schema.
-- [ ] Rewrite `user` into single-user config table; move `.env.local` user/app config into columns here.
+- [x] Rewrite `user` into single-user config table; move `.env.local` user/app config into columns here.
 - [x] Drop tables: `session`, `account`, `verification`, `datasource_access`, `model_access`.
 - [x] Drop columns: `models.ownerId`, `dataSource.ownerId`, `projects.ownerId`, `comparisonProject.ownerId`, `prompts.ownerId`.
 - [x] Drop columns: `articles.importedBy`, `articles.fullTextPdfUploadedBy`, `tokenUse.userId`, `tokenUse.sessionId`, `reviews.reviewerId`, `judgmentAssessments.assessedBy`.
@@ -89,7 +89,7 @@
 - [x] Add one-shot importer: current Postgres -> final SQLite schema.
 - [x] Import current Postgres app data into SQLite final shape: `articles`, `judgments`, `projects`, `projectArticles`, `projectPrompts`, `prompts`, `models`, `dataSource`, `comparisonProject`, related link tables, reviews/human-assessment data, and job/token tables that still matter locally.
 - [x] Preserve ids and foreign-key relationships during import so existing project/article/judgment references still work after cutover.
-- [ ] Add one-shot config bootstrap: current `.env.local` user/app config -> SQLite `user` row.
+- [x] Add one-shot config bootstrap: current `.env.local` user/app config -> SQLite `user` row.
 - [x] Import into final shape only; no compatibility columns, no runtime bridge.
 - [x] Importer resolves single-user collisions deterministically and emits a report.
 - [ ] Validate: empty SQLite boot, import snapshot, import articles, upload PDF, run job, review judgments, analytics pages.

@@ -6,7 +6,7 @@ import {apiClient} from '../../../services/apiClient'
 import {updateUserProfile} from '../../../services/usersService'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse'
 
-type LocalUser = {id: string; name: string; email: string; role?: string | null}
+type LocalUser = {id: string; name: string; email: string; role?: string | null; openalexMailto?: string | null}
 type UsersResponse = {data: LocalUser[]}
 type CodexCliStatus = {ok: boolean; loggedIn: boolean; method: 'chatgpt' | 'api-key' | null; raw: string}
 type CodexStatus = {codexBin: string; cli: CodexCliStatus; appServerReady: boolean; message: string}
@@ -34,6 +34,7 @@ const fetchLocalUser = async (): Promise<LocalUser | null> => {
 
 const Settings = () => {
   const [displayName, setDisplayName] = createSignal('')
+  const [openalexMailto, setOpenalexMailto] = createSignal('')
   const [isSavingProfile, setIsSavingProfile] = createSignal(false)
   const [saveError, setSaveError] = createSignal('')
   const [saveSuccess, setSaveSuccess] = createSignal('')
@@ -97,7 +98,9 @@ const Settings = () => {
 
   createEffect(() => {
     const name = localUserQuery.data?.name ?? ''
+    const mailto = localUserQuery.data?.openalexMailto ?? ''
     setDisplayName(name)
+    setOpenalexMailto(mailto)
   })
 
   const startCodexLogin = async () => {
@@ -128,6 +131,7 @@ const Settings = () => {
   const handleSaveProfile = async () => {
     const user = localUserQuery.data
     const trimmedDisplayName = displayName().trim()
+    const trimmedOpenalexMailto = openalexMailto().trim()
 
     if (!user?.id) {
       setSaveError('Unable to update the local profile right now.')
@@ -141,7 +145,7 @@ const Settings = () => {
       return
     }
 
-    if (trimmedDisplayName === (user.name ?? '')) {
+    if (trimmedDisplayName === (user.name ?? '') && trimmedOpenalexMailto === (user.openalexMailto ?? '')) {
       setSaveError('')
       setSaveSuccess('No changes to save.')
       return
@@ -151,7 +155,10 @@ const Settings = () => {
     setSaveError('')
     setSaveSuccess('')
 
-    await updateUserProfile(user.id, trimmedDisplayName)
+    await updateUserProfile(user.id, {
+      name: trimmedDisplayName,
+      openalexMailto: trimmedOpenalexMailto === '' ? null : trimmedOpenalexMailto,
+    })
       .then(() => {
         setSaveSuccess('Profile updated successfully.')
         return localUserQuery.refetch()
@@ -165,7 +172,12 @@ const Settings = () => {
 
   const isSaveDisabled = () => {
     const currentName = localUserQuery.data?.name ?? ''
-    return isSavingProfile() || !displayName().trim() || displayName().trim() === currentName
+    const currentOpenalexMailto = localUserQuery.data?.openalexMailto ?? ''
+    return (
+      isSavingProfile()
+      || !displayName().trim()
+      || (displayName().trim() === currentName && openalexMailto().trim() === currentOpenalexMailto)
+    )
   }
 
   return (
@@ -204,6 +216,20 @@ const Settings = () => {
                   }}
                   class="w-full px-3 py-3 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
                 />
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">OpenAlex Mailto</label>
+                <input
+                  type="email"
+                  value={openalexMailto()}
+                  onInput={(event) => {
+                    return setOpenalexMailto(event.currentTarget.value)
+                  }}
+                  class="w-full px-3 py-3 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                />
+                <p class="mt-2 text-xs text-gray-500">
+                  Used for OpenAlex imports so your requests include a contact address.
+                </p>
                 {saveError() && <p class="mt-2 text-sm text-red-600">{saveError()}</p>}
                 {saveSuccess() && !saveError() && <p class="mt-2 text-sm text-green-600">{saveSuccess()}</p>}
               </div>
