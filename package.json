@@ -36,6 +36,7 @@
     "db:reindex-all": "bun scripts/dbReindexAll.ts",
     "db:repair-all-indexes": "bun scripts/dbRepairAllIndexes.ts",
     "db:backfill-prompt-hash": "bun --env-file=.env.local scripts/dbBackfillPromptHash.ts",
+    "db:import:postgres-to-sqlite": "bun scripts/importPostgresToSqlite.ts",
     "db:r:p": "bun scripts/dbPush.ts --force --no-restore",
     "db:r:pull": "bun scripts/dbRemotePull.ts",
     "db:reset": "bun scripts/dbClear.ts --drop --force",

@@ -37,6 +37,8 @@ import type {
   getUnassessedCountFromClickHouse,
   getUnassessedPairsFromClickHouse,
 } from '../clickhouse/unassessedArticlesClickHouse.ts'
+import {getDuckdbSqlBoolean, getDuckdbSqlString, getDuckdbSqlStringList, runDuckdbJsonQuery} from './duckdbRunner.ts'
+import {getOlapDb} from './olapDb.ts'
 
 type ProjectOlapScope = {
   projectId: string
@@ -114,6 +116,85 @@ const getEffectiveFromDate = (projectDateFrom: Date | null, fromDate: Date | nul
 
 const getEffectiveToDate = (projectDateTo: Date | null, toDate: Date | null) => {
   return projectDateTo && toDate ? (projectDateTo < toDate ? projectDateTo : toDate) : (projectDateTo ?? toDate)
+}
+
+const getDuckdbDateValue = (value: unknown): Date | null => {
+  if (value === null || value === undefined || value === '') {
+    return null
+  }
+
+  if (value instanceof Date) {
+    return value
+  }
+
+  if (typeof value === 'number' || typeof value === 'bigint') {
+    return new Date(Number(value))
+  }
+
+  const trimmedValue = typeof value === 'string' ? value.trim() : ''
+
+  if (!trimmedValue) {
+    return null
+  }
+
+  const numericValue = Number(trimmedValue)
+  if (Number.isFinite(numericValue) && /^-?\d+(\.\d+)?$/.exec(trimmedValue) !== null) {
+    return new Date(numericValue)
+  }
+
+  const parsedDate = new Date(trimmedValue)
+  return Number.isNaN(parsedDate.getTime()) ? null : parsedDate
+}
+
+const getDuckdbBooleanValue = (value: unknown, fallback: boolean) => {
+  if (typeof value === 'boolean') {
+    return value
+  }
+
+  if (typeof value === 'number' || typeof value === 'bigint') {
+    return Number(value) !== 0
+  }
+
+  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : ''
+  return normalized === 'true' || normalized === '1'
+    ? true
+    : normalized === 'false' || normalized === '0'
+      ? false
+      : fallback
+}
+
+const getDuckdbJsonValue = (value: unknown) => {
+  if (typeof value !== 'string') {
+    return value
+  }
+
+  const trimmedValue = value.trim()
+  if (!trimmedValue.startsWith('{') && !trimmedValue.startsWith('[')) {
+    return value
+  }
+
+  try {
+    return JSON.parse(trimmedValue) as unknown
+  } catch {
+    return value
+  }
+}
+
+const getDuckdbScopeClause = (params: {articleAlias: string; routeIds: string[]; projectId: string}) => {
+  const routeClause =
+    params.routeIds.length > 0
+      ? `EXISTS (
+          SELECT 1 FROM app.article_route_link arl
+          WHERE arl.article_id = ${params.articleAlias}.id
+            AND arl.import_route_id IN (${getDuckdbSqlStringList(params.routeIds).join(', ')})
+        )`
+      : null
+  const projectClause = `EXISTS (
+    SELECT 1 FROM app.project_articles pa
+    WHERE pa.article_id = ${params.articleAlias}.id
+      AND pa.project_id = ${getDuckdbSqlString(params.projectId)}
+  )`
+  return routeClause ? `(${routeClause} OR ${projectClause})` : projectClause
 }
 
 const getActivitySortMs = (article: ScopedArticleRow) => {
@@ -285,6 +366,81 @@ const toClickHouseJudgmentRow = (row: {
 }
 
 const getProjectOlapScope = async (projectId: string): Promise<ProjectOlapScope | null> => {
+  if (getOlapDb() === 'duckdb') {
+    const [promptRows, projectRows, routeRows] = await Promise.all([
+      runDuckdbJsonQuery<{
+        id: string
+        order: number | null
+        promptHeading: string | null
+        originalText: string
+        type: string | null
+      }>(`
+        SELECT
+          p.id AS id,
+          pp."order" AS "order",
+          p.prompt_heading AS promptHeading,
+          p.original_text AS originalText,
+          p.type AS type
+        FROM app.project_prompts pp
+        INNER JOIN app.prompts p ON p.id = pp.prompt_id
+        WHERE pp.project_id = ${getDuckdbSqlString(projectId)}
+          AND pp.enabled = TRUE
+        ORDER BY pp."order" ASC NULLS LAST, p.created_at ASC
+      `),
+      runDuckdbJsonQuery<{
+        id: string
+        dateFrom: unknown
+        dateTo: unknown
+        modelId: string | null
+        useTitle: unknown
+        useAbstract: unknown
+        useFulltext: unknown
+        useFulltextNoImages: unknown
+      }>(`
+        SELECT
+          id,
+          date_from AS dateFrom,
+          date_to AS dateTo,
+          model_id AS modelId,
+          use_title AS useTitle,
+          use_abstract AS useAbstract,
+          use_fulltext AS useFulltext,
+          use_fulltext_no_images AS useFulltextNoImages
+        FROM app.projects
+        WHERE id = ${getDuckdbSqlString(projectId)}
+        LIMIT 1
+      `),
+      runDuckdbJsonQuery<{importRouteId: string}>(`
+        SELECT import_route_id AS importRouteId
+        FROM app.project_route_link
+        WHERE project_id = ${getDuckdbSqlString(projectId)}
+      `),
+    ])
+    const projectRow = projectRows[0]
+
+    return projectRow
+      ? {
+          projectId,
+          promptRows,
+          promptIds: promptRows.map((row) => {
+            return row.id
+          }),
+          promptOrderMap: getPromptOrderMap(promptRows),
+          promptNameById: getPromptNameById(promptRows),
+          routeIds: routeRows.map((row) => {
+            return row.importRouteId
+          }),
+          dateFrom: getDuckdbDateValue(projectRow.dateFrom),
+          dateTo: getDuckdbDateValue(projectRow.dateTo),
+          modelId: projectRow.modelId,
+          useTitle: getDuckdbBooleanValue(projectRow.useTitle, true),
+          useAbstract: getDuckdbBooleanValue(projectRow.useAbstract, true),
+          useFulltext: getDuckdbBooleanValue(projectRow.useFulltext, false),
+          useFulltextNoImages: getDuckdbBooleanValue(projectRow.useFulltextNoImages, false),
+        }
+      : null
+  }
+
   const db = getDatabase()
   const [promptRows, projectRows, routeRows] = await Promise.all([
     db
@@ -350,6 +506,82 @@ const getScopedArticles = async (params: {
   search?: string | null
   orderBy: 'created' | 'activity'
 }) => {
+  if (getOlapDb() === 'duckdb') {
+    const requestFromDate = parseDateFromInput(params.from, 'T00:00:00.000Z')
+    const requestToDate = parseDateFromInput(params.to, 'T23:59:59.999Z')
+    const effectiveFromDate = getEffectiveFromDate(params.scope.dateFrom, requestFromDate)
+    const effectiveToDate = getEffectiveToDate(params.scope.dateTo, requestToDate)
+    const trimmedSearch = params.search?.trim() ?? ''
+    const whereParts = [
+      getDuckdbScopeClause({articleAlias: 'a', routeIds: params.scope.routeIds, projectId: params.scope.projectId}),
+    ]
+
+    if (effectiveFromDate) {
+      whereParts.push(`a.article_created_at >= ${effectiveFromDate.getTime()}`)
+    }
+    if (effectiveToDate) {
+      whereParts.push(`a.article_created_at <= ${effectiveToDate.getTime()}`)
+    }
+    if (trimmedSearch) {
+      whereParts.push(`LOWER(COALESCE(a.article_title, '')) LIKE LOWER(${getDuckdbSqlString(`%${trimmedSearch}%`)})`)
+    }
+
+    const rows = await runDuckdbJsonQuery<{
+      id: string
+      createdAt: unknown
+      updatedAt: unknown
+      articleId: string | null
+      articleTitle: string
+      articleCreatedAt: unknown
+      articleUpdatedAt: unknown
+      importRoute: string | null
+      url: string | null
+      fullTextPDF: string | null
+      fullTextFetchedAt: unknown
+      fullTextConversionStatus: string | null
+      originalData: unknown
+    }>(`
+      SELECT
+        a.id AS id,
+        a.created_at AS createdAt,
+        a.updated_at AS updatedAt,
+        a.article_id AS articleId,
+        a.article_title AS articleTitle,
+        a.article_created_at AS articleCreatedAt,
+        a.article_updated_at AS articleUpdatedAt,
+        a.import_route AS importRoute,
+        a.url AS url,
+        a.full_text_pdf AS fullTextPDF,
+        a.full_text_fetched_at AS fullTextFetchedAt,
+        a.full_text_conversion_status AS fullTextConversionStatus,
+        a.original_data AS originalData
+      FROM app.articles a
+      WHERE ${whereParts.join(' AND ')}
+    `)
+
+    const normalizedRows = rows.map<ScopedArticleRow>((row) => {
+      return {
+        id: row.id,
+        createdAt: getDuckdbDateValue(row.createdAt) ?? new Date(0),
+        updatedAt: getDuckdbDateValue(row.updatedAt) ?? new Date(0),
+        articleId: row.articleId,
+        articleTitle: row.articleTitle,
+        articleCreatedAt: getDuckdbDateValue(row.articleCreatedAt),
+        articleUpdatedAt: getDuckdbDateValue(row.articleUpdatedAt),
+        importRoute: row.importRoute,
+        url: row.url,
+        fullTextPDF: row.fullTextPDF,
+        fullTextFetchedAt: getDuckdbDateValue(row.fullTextFetchedAt),
+        fullTextConversionStatus: row.fullTextConversionStatus,
+        originalData: getDuckdbJsonValue(row.originalData),
+      }
+    })
+
+    return params.orderBy === 'activity'
+      ? sortArticlesByActivity(normalizedRows)
+      : sortArticlesByCreated(normalizedRows)
+  }
+
   const db = getDatabase()
   const requestFromDate = parseDateFromInput(params.from, 'T00:00:00.000Z')
   const requestToDate = parseDateFromInput(params.to, 'T23:59:59.999Z')
@@ -389,6 +621,65 @@ const getScopedArticles = async (params: {
 const getLlmJudgmentRows = async (scope: ProjectOlapScope, articleIds: string[]): Promise<ClickHouseJudgmentRow[]> => {
   if (articleIds.length === 0 || scope.promptIds.length === 0 || !scope.modelId) {
     return []
+  }
+
+  if (getOlapDb() === 'duckdb') {
+    const rows = await runDuckdbJsonQuery<{
+      id: string
+      createdAt: unknown
+      articleId: string
+      articleTitle: string
+      articleCreatedAt: unknown
+      articleUpdatedAt: unknown
+      articleImportRoute: string | null
+      promptId: string
+      modelId: string
+      answeredOriginal: string | null
+      answeredOriginalAsArray: unknown
+      explanation: string | null
+      quotes: unknown
+    }>(`
+      SELECT
+        j.id AS id,
+        j.created_at AS createdAt,
+        j.article_id AS articleId,
+        a.article_title AS articleTitle,
+        a.article_created_at AS articleCreatedAt,
+        a.article_updated_at AS articleUpdatedAt,
+        a.import_route AS articleImportRoute,
+        j.prompt_id AS promptId,
+        j.model_id AS modelId,
+        j.answered_original AS answeredOriginal,
+        j.answered_original_as_array AS answeredOriginalAsArray,
+        j.explanation AS explanation,
+        j.quotes AS quotes
+      FROM app.judgments j
+      INNER JOIN app.articles a ON a.id = j.article_id
+      WHERE j.article_id IN (${getDuckdbSqlStringList(articleIds).join(', ')})
+        AND j.prompt_id IN (${getDuckdbSqlStringList(scope.promptIds).join(', ')})
+        AND j.model_id = ${getDuckdbSqlString(scope.modelId)}
+        AND j.use_title = ${getDuckdbSqlBoolean(scope.useTitle)}
+        AND j.use_abstract = ${getDuckdbSqlBoolean(scope.useAbstract)}
+        AND j.use_fulltext = ${getDuckdbSqlBoolean(scope.useFulltext)}
+        AND j.use_fulltext_no_images = ${getDuckdbSqlBoolean(scope.useFulltextNoImages)}
+        AND j.deleted_at IS NULL
+    `)
+
+    return rows.map((row) => {
+      const answerArray = getDuckdbJsonValue(row.answeredOriginalAsArray)
+      return toClickHouseJudgmentRow({
+        ...row,
+        createdAt: getDuckdbDateValue(row.createdAt) ?? new Date(0),
+        articleCreatedAt: getDuckdbDateValue(row.articleCreatedAt),
+        articleUpdatedAt: getDuckdbDateValue(row.articleUpdatedAt),
+        answeredOriginalAsArray: Array.isArray(answerArray)
+          ? answerArray.filter((value): value is string => {
+              return typeof value === 'string'
+            })
+          : null,
+        quotes: getDuckdbJsonValue(row.quotes),
+      })
+    })
   }
 
   const db = getDatabase()
@@ -431,6 +722,30 @@ const getLlmJudgmentRows = async (scope: ProjectOlapScope, articleIds: string[])
 const getHumanAnswerRows = async (scope: ProjectOlapScope, articleIds: string[]): Promise<HumanAnswerRow[]> => {
   if (articleIds.length === 0 || scope.promptIds.length === 0) {
     return []
+  }
+
+  if (getOlapDb() === 'duckdb') {
+    const rows = await runDuckdbJsonQuery<{
+      articleId: string
+      promptId: string
+      answer: string | null
+      updatedAt: unknown
+    }>(`
+      SELECT
+        article_id AS articleId,
+        prompt_id AS promptId,
+        answer,
+        updated_at AS updatedAt
+      FROM app.judgments_human
+      WHERE project_id = ${getDuckdbSqlString(scope.projectId)}
+        AND is_answered = TRUE
+        AND article_id IN (${getDuckdbSqlStringList(articleIds).join(', ')})
+        AND prompt_id IN (${getDuckdbSqlStringList(scope.promptIds).join(', ')})
+    `)
+
+    return rows.map((row) => {
+      return {...row, updatedAt: getDuckdbDateValue(row.updatedAt)}
+    })
   }
 
   const db = getDatabase()

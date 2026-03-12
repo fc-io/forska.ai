@@ -78,22 +78,22 @@
 
 ## Step 2B - DuckDB cutover (`src/services/olap/**`)
 
-- [ ] Add DuckDB query runner.
-- [ ] Query final SQLite DB directly from DuckDB; no replicated analytics store.
+- [x] Add DuckDB query runner.
+- [x] Query final SQLite DB directly from DuckDB; no replicated analytics store.
 - [x] Port analytics queries: reviews list/count/filters, unassessed list/count, article id selection, remaining comparison flows.
 - [ ] Keep ClickHouse code/env/routes untouched until DuckDB pages pass locally.
 - [ ] Remove ClickHouse codepaths in final cleanup, not before.
 
 ## Step 2C - One-shot migration + local-first validation (`scripts/**`, docs)
 
-- [ ] Add one-shot importer: current Postgres -> final SQLite schema.
-- [ ] Import current Postgres app data into SQLite final shape: `articles`, `judgments`, `projects`, `projectArticles`, `projectPrompts`, `prompts`, `models`, `dataSource`, `comparisonProject`, related link tables, reviews/human-assessment data, and job/token tables that still matter locally.
-- [ ] Preserve ids and foreign-key relationships during import so existing project/article/judgment references still work after cutover.
+- [x] Add one-shot importer: current Postgres -> final SQLite schema.
+- [x] Import current Postgres app data into SQLite final shape: `articles`, `judgments`, `projects`, `projectArticles`, `projectPrompts`, `prompts`, `models`, `dataSource`, `comparisonProject`, related link tables, reviews/human-assessment data, and job/token tables that still matter locally.
+- [x] Preserve ids and foreign-key relationships during import so existing project/article/judgment references still work after cutover.
 - [ ] Add one-shot config bootstrap: current `.env.local` user/app config -> SQLite `user` row.
-- [ ] Import into final shape only; no compatibility columns, no runtime bridge.
-- [ ] Importer resolves single-user collisions deterministically and emits a report.
+- [x] Import into final shape only; no compatibility columns, no runtime bridge.
+- [x] Importer resolves single-user collisions deterministically and emits a report.
 - [ ] Validate: empty SQLite boot, import snapshot, import articles, upload PDF, run job, review judgments, analytics pages.
-- [ ] Run `bun run lint`, `bun test`, `bun run build`.
+- [x] Run `bun run lint`, `bun test`, `bun run build`.
 
 ## Step 2D - Script port (`scripts/**`, legacy DB tooling)
 
