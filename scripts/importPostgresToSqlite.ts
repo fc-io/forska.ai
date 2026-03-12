@@ -77,11 +77,9 @@ const importTables: TableConfig[] = [
   },
   {tableName: 'project_articles', pagination: 'id', batchSize: 10000},
   {tableName: 'token_use', pagination: 'id', batchSize: 20000},
-  {tableName: 'reviews', pagination: 'all', collisionKey: ['project_id', 'article_id'], batchSize: 5000},
   {tableName: 'judgment_assessments', pagination: 'all', collisionKey: ['judgment_id'], batchSize: 5000},
   {tableName: 'llm_status', pagination: 'id', batchSize: 20000},
   {tableName: 'nvidia_smi', pagination: 'id', batchSize: 20000},
-  {tableName: 'sync_state', pagination: 'all', batchSize: 5000},
 ]
 
 const getArgs = (): ImportOptions => {

@@ -49,7 +49,3 @@ The openalex dataset is about 1.6 TB uncompressed. To store and index naively in
 ## For running with SLURM/SBATCH
 
 [SBATCH.md](./docs/README_SBATCH.md)
-
-## For syncing the dbs of the remote with our local db
-
-[SYNC DB FROM REMOTE.md](./docs/README_DB_SYNC_FROM_REMOTE.md)

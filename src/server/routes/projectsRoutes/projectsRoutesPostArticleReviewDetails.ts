@@ -10,7 +10,6 @@ import {
   projectPrompts,
   projects,
   prompts,
-  reviews,
 } from '../../../db/schema.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 import {getLocalUser} from '../../utils/getLocalUser.ts'
@@ -53,13 +52,6 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
       if (!article) {
         throw new Error('Article not found')
       }
-
-      // Get the review for this article in this project
-      const [review] = await db
-        .select()
-        .from(reviews)
-        .where(and(eq(reviews.articleId, articleId), eq(reviews.projectId, projectId)))
-        .limit(1)
 
       // Get all prompts for this project (association)
       const projectPromptRows = await db
@@ -327,7 +319,6 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
 
       return {
         article,
-        review,
         prompts: projectPromptRows,
         judgments: judgmentsWithPlaceholders,
         // Cross-project extras

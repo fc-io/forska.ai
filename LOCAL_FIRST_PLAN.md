@@ -41,7 +41,9 @@
 - [x] `judgmentAssessments`: if table stays, single-user shape only.
 - [x] Collapse job pause status: `paused_by_admin` + `paused_by_user` -> `paused`.
 - [x] Store arrays/json as JSON text: `articles.articleAuthors`, `articles.fullTextAssets`, `articles.originalData`, `models.workerUrls`, `comparisonProject.modelIds`, `judgmentsJobs.error`, `judgments.answeredOriginalAsArray`, `judgments.quotes`, `tokenUse.failedRequestsDetails`, `llmStatus.*Seconds`.
-- [x] Rebuild SQLite indexes; keep judgment dedupe on `(articleId, promptId, modelId, useTitle, useAbstract, useFulltext, useFulltextNoImages)` for non-deleted rows.
+- [x] Day 1 SQLite indexes: no optional secondary indexes. Keep only PKs + required uniques: `articles.articleId`, `importRoute.route`, `datasourceRouteLink(dataSourceId, importRouteId)`, `projectRouteLink(projectId, importRouteId)`, `articleRouteLink(articleId, importRouteId)`, `comparisonProjectRouteLink(comparisonProjectId, importRouteId)`, `projectPrompts(projectId, promptId)`, `comparisonProjectPrompt(comparisonProjectId, promptId)`, `projectArticles(projectId, articleId)`, `prompts.contentHash`, `judgmentsJobsPrompts(articleId, promptId, jobId)`, judgment dedupe unique on `(articleId, promptId, modelId, useTitle, useAbstract, useFulltext, useFulltextNoImages)` for non-deleted rows, `judgmentsHuman(projectId, articleId, promptId)`, `reviews(projectId, articleId)`, `judgmentAssessments(judgmentId)`.
+- [ ] Deferred SQLite parity indexes: current PG `articles_*`, `import_route.active`, non-unique `datasource_route_link_*`, non-unique `project_route_link_*`, non-unique `article_route_link_*`, `comparison_project_*`, non-unique `comparison_project_route_link_*`, non-unique `project_prompts_*`, non-unique `comparison_project_prompt_*`, non-unique `judgments_*`, non-unique `judgments_human_*`, non-unique `project_articles_*`, `token_use_*`, `llm_status_*`, `nvidia_smi_*`.
+- [ ] Never port PG-only auth/owner/access indexes: `*_owner_idx`, `datasource_access_*`, `model_access_*`, `session_token_unique`, `user_email_unique`.
 - [ ] Replace/drop Postgres-only views, triggers, hash functions, GIN/partial indexes.
 
 ## Step 1C - Auth removal (`src/auth.ts`, `src/app/lib/**`, `src/services/**`, `src/server/routes/**`)
@@ -92,6 +94,7 @@
 - [x] Add one-shot config bootstrap: current `.env.local` user/app config -> SQLite `user` row.
 - [x] Import into final shape only; no compatibility columns, no runtime bridge.
 - [x] Importer resolves single-user collisions deterministically and emits a report.
+- [x] Import lean by default: no optional secondary indexes during import; add deferred parity indexes only after real need/profiling.
 - [ ] Validate: empty SQLite boot, import snapshot, import articles, upload PDF, run job, review judgments, analytics pages.
 - [x] Run `bun run lint`, `bun test`, `bun run build`.
 

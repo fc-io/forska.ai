@@ -9,7 +9,6 @@ import {ReviewArticleDetails} from '../../../../../../components/main/projects/r
 import {ReviewAvailableJudgments} from '../../../../../../components/main/projects/reviews/review/reviewAvailableJudgments.tsx'
 import {ReviewHumanAssessments} from '../../../../../../components/main/projects/reviews/review/reviewHumanAssessments.tsx'
 import {ReviewJudgments} from '../../../../../../components/main/projects/reviews/review/reviewJudgments.tsx'
-import {ReviewStatus} from '../../../../../../components/main/projects/reviews/review/reviewStatus.tsx'
 import {apiClient} from '../../../../../../services/apiClient.ts'
 import {getArticleDocumentTitle} from '../../../../../utils/getArticleDocumentTitle'
 
@@ -106,10 +105,6 @@ export const ReviewDetail = () => {
                       viewMode="summary"
                       hidePdfButton={true}
                     />
-
-                    <Show when={data().review}>
-                      <ReviewStatus review={data().review} />
-                    </Show>
                   </div>
                   <StickyColumn class="w-96">
                     <Suspense
