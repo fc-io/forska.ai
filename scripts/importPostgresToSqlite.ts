@@ -336,38 +336,48 @@ const getStatementChanges = (result: unknown) => {
     : 0
 }
 
-const getNormalizedValue = (columnName: string, value: unknown): unknown => {
-  if (value === null || value === undefined) {
+const getNormalizedJudgmentsJobStatus = (tableName: string, columnName: string, value: unknown) => {
+  return tableName === 'judgments_jobs'
+    && columnName === 'status'
+    && (value === 'paused_by_admin' || value === 'paused_by_user')
+    ? 'paused'
+    : value
+}
+
+const getNormalizedValue = (tableName: string, columnName: string, value: unknown): unknown => {
+  const normalizedValue = getNormalizedJudgmentsJobStatus(tableName, columnName, value)
+
+  if (normalizedValue === null || normalizedValue === undefined) {
     return null
   }
 
-  if (value instanceof Date) {
-    return value.getTime()
+  if (normalizedValue instanceof Date) {
+    return normalizedValue.getTime()
   }
 
-  if (typeof value === 'boolean') {
-    return value ? 1 : 0
+  if (typeof normalizedValue === 'boolean') {
+    return normalizedValue ? 1 : 0
   }
 
-  if (Array.isArray(value)) {
-    return JSON.stringify(value)
+  if (Array.isArray(normalizedValue)) {
+    return JSON.stringify(normalizedValue)
   }
 
-  if (typeof value === 'object') {
-    return JSON.stringify(value)
+  if (typeof normalizedValue === 'object') {
+    return JSON.stringify(normalizedValue)
   }
 
   if (
-    typeof value === 'string'
+    typeof normalizedValue === 'string'
     && /(^|_)(created_at|updated_at|deleted_at|last_import_at|date_from|date_to|sent_at|judged_at|started_at|finished_at|last_synced_at|ts)$/.exec(
       columnName,
     ) !== null
   ) {
-    const parsedDate = new Date(value)
-    return Number.isNaN(parsedDate.getTime()) ? value : parsedDate.getTime()
+    const parsedDate = new Date(normalizedValue)
+    return Number.isNaN(parsedDate.getTime()) ? normalizedValue : parsedDate.getTime()
   }
 
-  return value
+  return normalizedValue
 }
 
 const insertRows = (tableName: string, rows: Record<string, unknown>[], ignoreConflicts: boolean) => {
@@ -389,7 +399,7 @@ const insertRows = (tableName: string, rows: Record<string, unknown>[], ignoreCo
   try {
     const insertedRows = rows.reduce((count, row) => {
       const values = columnNames.map((columnName) => {
-        return getNormalizedValue(columnName, row[columnName])
+        return getNormalizedValue(tableName, columnName, row[columnName])
       })
       const result = (statement as {run: (...bindings: unknown[]) => unknown}).run(...values)
       return count + getStatementChanges(result)
