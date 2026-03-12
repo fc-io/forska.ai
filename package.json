@@ -17,7 +17,7 @@
     "dev:app": "bunx --env-file=.env.local --bun vite",
     "dev:server": "BUN_CONFIG_MAX_HTTP_REQUESTS=2048 bun --env-file=.env.local run --watch src/server/index.ts",
     "db:gen": "bunx --bun drizzle-kit generate",
-    "db:mig": "bunx --bun drizzle-kit migrate",
+    "db:mig": "bun src/db/migrateSqlite.ts",
     "db:push": "bunx --bun drizzle-kit push",
     "db:ba-mig": "bunx --bun @better-auth/cli migrate",
     "db:ba-gen": "bunx --bun @better-auth/cli generate",

@@ -4,7 +4,7 @@ import {env} from '../src/server/utils/env.ts'
 import {getSqliteClient} from '../src/server/utils/getDatabase.ts'
 import {localUserDefaults} from '../src/utils/localUser.ts'
 
-type ImportOptions = {clear: boolean; batchSize: number; reportPath: string}
+type ImportOptions = {clear: boolean; batchSize: number; reportPath: string; fromTable: string | null; resume: boolean}
 
 type TableConfig = {
   tableName: string
@@ -12,11 +12,15 @@ type TableConfig = {
   pagination: 'id' | 'all'
   rename?: Record<string, string>
   collisionKey?: string[]
+  batchSize?: number
 }
+
+type ImportProgress = {startedAtMs: number; lastLoggedAtMs: number}
 
 type TableReport = {
   sourceRows: number
   importedRows: number
+  finalRows?: number
   skippedRows: number
   missing: boolean
   collisions: Array<{key: string; keptId: string | null; droppedIds: string[]}>
@@ -29,6 +33,8 @@ type ImportReport = {
   batchSize: number
   startedAt: string
   finishedAt: string | null
+  status?: 'running' | 'completed'
+  currentTable?: string | null
   tables: Record<string, TableReport>
   userBootstrap: {
     id: string
@@ -42,34 +48,40 @@ type ImportReport = {
 }
 
 const importTables: TableConfig[] = [
-  {tableName: 'models', pagination: 'id'},
-  {tableName: 'datasource', pagination: 'id'},
-  {tableName: 'import_route', pagination: 'id'},
-  {tableName: 'datasource_route_link', pagination: 'id'},
-  {tableName: 'articles', pagination: 'id'},
-  {tableName: 'article_route_link', pagination: 'id'},
-  {tableName: 'projects', pagination: 'id'},
-  {tableName: 'project_route_link', pagination: 'id'},
-  {tableName: 'comparison_project', pagination: 'id'},
-  {tableName: 'comparison_project_route_link', pagination: 'id'},
+  {tableName: 'models', pagination: 'id', batchSize: 5000},
+  {tableName: 'datasource', pagination: 'id', batchSize: 5000},
+  {tableName: 'import_route', pagination: 'id', batchSize: 5000},
+  {tableName: 'datasource_route_link', pagination: 'id', batchSize: 10000},
+  {tableName: 'articles', pagination: 'id', batchSize: 1000},
+  {tableName: 'article_route_link', pagination: 'id', batchSize: 10000},
+  {tableName: 'projects', pagination: 'id', batchSize: 5000},
+  {tableName: 'project_route_link', pagination: 'id', batchSize: 10000},
+  {tableName: 'comparison_project', pagination: 'id', batchSize: 5000},
+  {tableName: 'comparison_project_route_link', pagination: 'id', batchSize: 10000},
   {
     tableName: 'judgments_jobs',
     pagination: 'id',
     rename: {cursor_last_created_at: 'ch_cursor_last_date', cursor_last_article_id: 'ch_cursor_last_article_id'},
+    batchSize: 5000,
   },
-  {tableName: 'prompts', pagination: 'id'},
-  {tableName: 'judgments_jobs_prompts', pagination: 'id'},
-  {tableName: 'project_prompts', pagination: 'id'},
-  {tableName: 'comparison_project_prompt', pagination: 'id'},
-  {tableName: 'judgments', pagination: 'id'},
-  {tableName: 'judgments_human', pagination: 'all', collisionKey: ['project_id', 'article_id', 'prompt_id']},
-  {tableName: 'project_articles', pagination: 'id'},
-  {tableName: 'token_use', pagination: 'id'},
-  {tableName: 'reviews', pagination: 'all', collisionKey: ['project_id', 'article_id']},
-  {tableName: 'judgment_assessments', pagination: 'all', collisionKey: ['judgment_id']},
-  {tableName: 'llm_status', pagination: 'id'},
-  {tableName: 'nvidia_smi', pagination: 'id'},
-  {tableName: 'sync_state', pagination: 'all'},
+  {tableName: 'prompts', pagination: 'id', batchSize: 5000},
+  {tableName: 'judgments_jobs_prompts', pagination: 'id', batchSize: 5000},
+  {tableName: 'project_prompts', pagination: 'id', batchSize: 5000},
+  {tableName: 'comparison_project_prompt', pagination: 'id', batchSize: 5000},
+  {tableName: 'judgments', pagination: 'id', batchSize: 5000},
+  {
+    tableName: 'judgments_human',
+    pagination: 'all',
+    collisionKey: ['project_id', 'article_id', 'prompt_id'],
+    batchSize: 5000,
+  },
+  {tableName: 'project_articles', pagination: 'id', batchSize: 10000},
+  {tableName: 'token_use', pagination: 'id', batchSize: 20000},
+  {tableName: 'reviews', pagination: 'all', collisionKey: ['project_id', 'article_id'], batchSize: 5000},
+  {tableName: 'judgment_assessments', pagination: 'all', collisionKey: ['judgment_id'], batchSize: 5000},
+  {tableName: 'llm_status', pagination: 'id', batchSize: 20000},
+  {tableName: 'nvidia_smi', pagination: 'id', batchSize: 20000},
+  {tableName: 'sync_state', pagination: 'all', batchSize: 5000},
 ]
 
 const getArgs = (): ImportOptions => {
@@ -80,13 +92,89 @@ const getArgs = (): ImportOptions => {
   const reportArg = args.find((arg) => {
     return arg.startsWith('--report=')
   })
+  const fromTableArg = args.find((arg) => {
+    return arg.startsWith('--from-table=')
+  })
   const batchSize = Number.parseInt(batchArg?.split('=')[1] ?? '1000', 10)
 
   return {
     clear: args.includes('--clear'),
     batchSize: Number.isFinite(batchSize) && batchSize > 0 ? batchSize : 1000,
     reportPath: reportArg?.split('=')[1] ?? './data/local-first-import-report.json',
+    fromTable: fromTableArg?.split('=')[1] ?? null,
+    resume: args.includes('--resume'),
   }
+}
+
+const getImportTablesFromTable = (fromTable: string | null) => {
+  if (!fromTable) {
+    return importTables
+  }
+
+  const startIndex = importTables.findIndex((config) => {
+    return config.tableName === fromTable
+  })
+
+  if (startIndex === -1) {
+    throw new Error(
+      `Unknown table '${fromTable}'. Expected one of: ${importTables
+        .map((config) => {
+          return config.tableName
+        })
+        .join(', ')}`,
+    )
+  }
+
+  return importTables.slice(startIndex)
+}
+
+const validateOptions = (options: ImportOptions) => {
+  if (options.clear && options.resume) {
+    throw new Error('Use either --clear or --resume, not both in the same run.')
+  }
+
+  if (options.fromTable && options.resume) {
+    throw new Error('Use either --from-table or --resume, not both in the same run.')
+  }
+}
+
+const getCursorName = (tableName: string) => {
+  const sanitizedTableName = tableName.replaceAll(/[^a-zA-Z0-9_]/g, '_')
+  return `f1_import_${sanitizedTableName}_${Date.now()}`
+}
+
+const logImportProgress = (tableName: string, processedRows: number, progress: ImportProgress) => {
+  const now = Date.now()
+
+  if (processedRows === 0 || now - progress.lastLoggedAtMs < 2000) {
+    return progress
+  }
+
+  const elapsedSeconds = Math.max(1, Math.round((now - progress.startedAtMs) / 1000))
+  const rowsPerSecond = Math.round(processedRows / elapsedSeconds)
+  console.log(`[import] ${tableName}: scanned ${processedRows} rows (${rowsPerSecond}/s)`)
+  return {...progress, lastLoggedAtMs: now}
+}
+
+const getResumeTableName = (report: ImportReport) => {
+  if (report.currentTable) {
+    return report.currentTable
+  }
+
+  return (
+    importTables.find((config) => {
+      return report.tables[config.tableName] == null
+    })?.tableName ?? null
+  )
+}
+
+const getSelectedImportTables = (options: ImportOptions, report: ImportReport) => {
+  if (!options.resume) {
+    return getImportTablesFromTable(options.fromTable)
+  }
+
+  const resumeTableName = getResumeTableName(report)
+  return resumeTableName ? getImportTablesFromTable(resumeTableName) : []
 }
 
 const quoteIdentifier = (value: string) => {
@@ -169,45 +257,40 @@ const getTableCount = async (client: Client, tableName: string) => {
   return Number.parseInt(result.rows[0]?.count ?? '0', 10)
 }
 
-const getIdBatchRows = async (
-  client: Client,
-  config: TableConfig,
-  selectList: string,
-  batchSize: number,
-  lastId: string | null,
-) => {
-  const sourceTableName = config.sourceTableName ?? config.tableName
-  const whereClause = lastId ? `WHERE id > $1` : ''
-  const params = lastId ? [lastId, batchSize] : [batchSize]
-  const limitRef = lastId ? '$2' : '$1'
+const getCursorBatchRows = async (client: Client, batchSize: number, cursorName: string) => {
   const result = await client.query<Record<string, unknown>>(
     `
-      SELECT ${selectList}
-      FROM ${quoteIdentifier(sourceTableName)}
-      ${whereClause}
-      ORDER BY id ASC
-      LIMIT ${limitRef}
+      FETCH FORWARD ${Math.max(1, Math.trunc(batchSize))} FROM ${quoteIdentifier(cursorName)}
     `,
-    params,
   )
 
   return result.rows
 }
 
-const getAllRows = async (client: Client, config: TableConfig, selectList: string) => {
+const declareCursor = async (client: Client, config: TableConfig, selectList: string, cursorName: string) => {
   const sourceTableName = config.sourceTableName ?? config.tableName
-  const orderByClause = config.collisionKey
-    ? `${config.collisionKey.map(quoteIdentifier).join(', ')}, updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC`
-    : '1'
-  const result = await client.query<Record<string, unknown>>(
+  const orderByClause =
+    config.pagination === 'all' && config.collisionKey
+      ? ` ORDER BY ${config.collisionKey.map(quoteIdentifier).join(', ')}, updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC`
+      : ''
+
+  await client.query('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
+  await client.query('SET LOCAL statement_timeout TO 0')
+  await client.query(
     `
+      DECLARE ${quoteIdentifier(cursorName)} NO SCROLL CURSOR FOR
       SELECT ${selectList}
-      FROM ${quoteIdentifier(sourceTableName)}
-      ORDER BY ${orderByClause}
+      FROM ${quoteIdentifier(sourceTableName)}${orderByClause}
     `,
   )
+}
 
-  return result.rows
+const closeCursor = async (client: Client, cursorName: string) => {
+  try {
+    await client.query(`CLOSE ${quoteIdentifier(cursorName)}`)
+  } finally {
+    await client.query('COMMIT')
+  }
 }
 
 const getCollisionKey = (row: Record<string, unknown>, columns: string[]) => {
@@ -249,6 +332,12 @@ const getCollisionRows = (rows: Record<string, unknown>[], columns: string[]) =>
   )
 }
 
+const getStatementChanges = (result: unknown) => {
+  return typeof result === 'object' && result !== null && 'changes' in result && typeof result.changes === 'number'
+    ? result.changes
+    : 0
+}
+
 const getNormalizedValue = (columnName: string, value: unknown): unknown => {
   if (value === null || value === undefined) {
     return null
@@ -283,7 +372,7 @@ const getNormalizedValue = (columnName: string, value: unknown): unknown => {
   return value
 }
 
-const insertRows = (tableName: string, rows: Record<string, unknown>[]) => {
+const insertRows = (tableName: string, rows: Record<string, unknown>[], ignoreConflicts: boolean) => {
   if (rows.length === 0) {
     return 0
   }
@@ -294,25 +383,25 @@ const insertRows = (tableName: string, rows: Record<string, unknown>[]) => {
     return '?'
   })
   const statement = sqlite.prepare(
-    `INSERT OR IGNORE INTO ${quoteIdentifier(tableName)} (${columnNames.map(quoteIdentifier).join(', ')}) VALUES (${placeholders.join(', ')})`,
+    `${ignoreConflicts ? 'INSERT OR IGNORE' : 'INSERT'} INTO ${quoteIdentifier(tableName)} (${columnNames.map(quoteIdentifier).join(', ')}) VALUES (${placeholders.join(', ')})`,
   )
 
   sqlite.exec('BEGIN')
 
   try {
-    rows.forEach((row) => {
+    const insertedRows = rows.reduce((count, row) => {
       const values = columnNames.map((columnName) => {
         return getNormalizedValue(columnName, row[columnName])
       })
-      ;(statement as {run: (...bindings: unknown[]) => unknown}).run(...values)
-    })
+      const result = (statement as {run: (...bindings: unknown[]) => unknown}).run(...values)
+      return count + getStatementChanges(result)
+    }, 0)
     sqlite.exec('COMMIT')
+    return insertedRows
   } catch (error) {
     sqlite.exec('ROLLBACK')
     throw error
   }
-
-  return rows.length
 }
 
 const getTargetRowCount = (tableName: string) => {
@@ -323,28 +412,127 @@ const getTargetRowCount = (tableName: string) => {
   return row?.count ?? 0
 }
 
-const getHasExistingImportData = () => {
-  return importTables.some((config) => {
+const getHasExistingImportData = (tables: TableConfig[]) => {
+  return tables.some((config) => {
     return getTargetRowCount(config.tableName) > 0
   })
 }
 
-const clearTargetTables = () => {
+const clearTargetTables = (tables: TableConfig[], clearUser: boolean) => {
   const sqlite = getSqliteClient()
   sqlite.exec('PRAGMA foreign_keys = OFF;')
   sqlite.exec('BEGIN')
 
   try {
-    ;[...importTables].reverse().forEach((config) => {
+    ;[...tables].reverse().forEach((config) => {
       sqlite.exec(`DELETE FROM ${quoteIdentifier(config.tableName)}`)
     })
-    sqlite.exec(`DELETE FROM ${quoteIdentifier('user')}`)
+    if (clearUser) {
+      sqlite.exec(`DELETE FROM ${quoteIdentifier('user')}`)
+    }
     sqlite.exec('COMMIT')
   } catch (error) {
     sqlite.exec('ROLLBACK')
     throw error
   } finally {
     sqlite.exec('PRAGMA foreign_keys = ON;')
+  }
+}
+
+const withFastImportPragmas = async <T>(run: () => Promise<T>) => {
+  const sqlite = getSqliteClient()
+
+  sqlite.exec('PRAGMA foreign_keys = OFF;')
+  sqlite.exec('PRAGMA synchronous = OFF;')
+  sqlite.exec('PRAGMA temp_store = MEMORY;')
+  sqlite.exec('PRAGMA cache_size = -200000;')
+  sqlite.exec('PRAGMA wal_autocheckpoint = 0;')
+
+  try {
+    return await run()
+  } finally {
+    sqlite.exec('PRAGMA foreign_keys = ON;')
+    sqlite.exec('PRAGMA synchronous = NORMAL;')
+    sqlite.exec('PRAGMA temp_store = DEFAULT;')
+    sqlite.exec('PRAGMA wal_autocheckpoint = 1000;')
+    sqlite.exec('PRAGMA optimize;')
+  }
+}
+
+const loadReport = async (reportPath: string) => {
+  const reportFile = globalThis.Bun.file(reportPath)
+  return (await reportFile.exists()) ? ((await reportFile.json()) as ImportReport) : null
+}
+
+const createReport = (options: ImportOptions, sourceDatabaseUrl: string): ImportReport => {
+  return {
+    sourceDatabaseUrl,
+    sqlitePath: env.SQLITE_PATH,
+    clearRequested: options.clear,
+    batchSize: options.batchSize,
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    status: 'running',
+    currentTable: null,
+    tables: {},
+    userBootstrap: null,
+  }
+}
+
+const getReport = async (options: ImportOptions, sourceDatabaseUrl: string): Promise<ImportReport> => {
+  if (!options.resume) {
+    return createReport(options, sourceDatabaseUrl)
+  }
+
+  const report = await loadReport(options.reportPath)
+
+  if (!report) {
+    throw new Error(`Cannot resume without an import report at ${options.reportPath}`)
+  }
+
+  if (report.sourceDatabaseUrl !== sourceDatabaseUrl) {
+    throw new Error('Cannot resume import because DATABASE_URL does not match the saved report.')
+  }
+
+  if (report.sqlitePath !== env.SQLITE_PATH) {
+    throw new Error('Cannot resume import because SQLITE_PATH does not match the saved report.')
+  }
+
+  if (report.status === 'completed') {
+    throw new Error('Import report is already completed. Use --clear to start from an empty SQLite database.')
+  }
+
+  return {...report, clearRequested: false, batchSize: options.batchSize, finishedAt: null, status: 'running' as const}
+}
+
+const getReportedFinalRows = (tableReport: TableReport | undefined) => {
+  return tableReport?.finalRows ?? tableReport?.importedRows ?? 0
+}
+
+const validateResumeState = (report: ImportReport, selectedTables: TableConfig[]) => {
+  const resumeTableName = getResumeTableName(report)
+  const resumeTableIndex = resumeTableName
+    ? importTables.findIndex((config) => {
+        return config.tableName === resumeTableName
+      })
+    : importTables.length
+  const completedTables = importTables.slice(0, resumeTableIndex)
+
+  completedTables.forEach((config) => {
+    const expectedRows = getReportedFinalRows(report.tables[config.tableName])
+    const actualRows = getTargetRowCount(config.tableName)
+
+    if (expectedRows > actualRows) {
+      throw new Error(
+        `Cannot resume import because ${config.tableName} has ${actualRows} rows in SQLite but the report expects ${expectedRows}. Use --clear to restart from scratch.`,
+      )
+    }
+  })
+
+  if (report.currentTable && selectedTables[0]?.tableName !== report.currentTable) {
+    throw new Error(
+      `Cannot resume import because the saved current table '${report.currentTable}' does not match the selected resume point.`,
+    )
   }
 }
 
@@ -403,103 +591,133 @@ const writeReport = async (reportPath: string, report: ImportReport) => {
   await globalThis.Bun.write(reportPath, JSON.stringify(report, null, 2))
 }
 
-const importTable = async (client: Client, config: TableConfig, options: ImportOptions, report: ImportReport) => {
+const importTable = async (client: Client, config: TableConfig, options: ImportOptions) => {
   const sourceTableName = config.sourceTableName ?? config.tableName
   const exists = await getSourceTableExists(client, sourceTableName)
 
   if (!exists) {
-    report.tables[config.tableName] = {sourceRows: 0, importedRows: 0, skippedRows: 0, missing: true, collisions: []}
-    return
+    const finalRows = getTargetRowCount(config.tableName)
+    return {sourceRows: 0, importedRows: 0, finalRows, skippedRows: 0, missing: true, collisions: []}
   }
 
   const mappings = await getColumnMappings(client, config)
   const selectList = getSelectList(mappings)
 
   if (!selectList) {
-    report.tables[config.tableName] = {sourceRows: 0, importedRows: 0, skippedRows: 0, missing: false, collisions: []}
-    return
+    const finalRows = getTargetRowCount(config.tableName)
+    return {sourceRows: 0, importedRows: 0, finalRows, skippedRows: 0, missing: false, collisions: []}
   }
 
-  if (config.pagination === 'all') {
-    const sourceRows = await getAllRows(client, config, selectList)
-    const deduped = config.collisionKey
-      ? getCollisionRows(sourceRows, config.collisionKey)
-      : {dedupedRows: sourceRows, collisions: []}
-    const importedRows = insertRows(config.tableName, deduped.dedupedRows)
-    report.tables[config.tableName] = {
-      sourceRows: sourceRows.length,
-      importedRows,
-      skippedRows: sourceRows.length - deduped.dedupedRows.length,
-      missing: false,
-      collisions: deduped.collisions,
-    }
-    return
-  }
-
-  let lastId: string | null = null
+  const cursorName = getCursorName(config.tableName)
+  const batchSize = config.batchSize ?? options.batchSize
+  const ignoreConflicts = getTargetRowCount(config.tableName) > 0
   let sourceRows = 0
   let importedRows = 0
+  let collisions: TableReport['collisions'] = []
+  let pendingCollisionRows: Record<string, unknown>[] = []
+  let progress: ImportProgress = {startedAtMs: Date.now(), lastLoggedAtMs: 0}
 
-  while (true) {
-    const batchRows = await getIdBatchRows(client, config, selectList, options.batchSize, lastId)
+  await declareCursor(client, config, selectList, cursorName)
 
-    if (batchRows.length === 0) {
-      break
+  try {
+    while (true) {
+      const batchRows = await getCursorBatchRows(client, batchSize, cursorName)
+
+      if (batchRows.length === 0) {
+        break
+      }
+
+      sourceRows += batchRows.length
+
+      if (config.pagination === 'all' && config.collisionKey) {
+        const collisionKey = config.collisionKey
+        const combinedRows = [...pendingCollisionRows, ...batchRows]
+        const lastRow = combinedRows[combinedRows.length - 1] ?? null
+        const boundaryKey = lastRow ? getCollisionKey(lastRow, collisionKey) : null
+        const committedRows = boundaryKey
+          ? combinedRows.filter((row) => {
+              return getCollisionKey(row, collisionKey) !== boundaryKey
+            })
+          : combinedRows
+        pendingCollisionRows = boundaryKey
+          ? combinedRows.filter((row) => {
+              return getCollisionKey(row, collisionKey) === boundaryKey
+            })
+          : []
+
+        const deduped = getCollisionRows(committedRows, collisionKey)
+        importedRows += insertRows(config.tableName, deduped.dedupedRows, ignoreConflicts)
+        collisions = [...collisions, ...deduped.collisions]
+      } else {
+        importedRows += insertRows(config.tableName, batchRows, ignoreConflicts)
+      }
+
+      progress = logImportProgress(config.tableName, sourceRows, progress)
     }
 
-    sourceRows += batchRows.length
-    importedRows += insertRows(config.tableName, batchRows)
-
-    const nextLastId = batchRows[batchRows.length - 1]?.id
-    lastId = typeof nextLastId === 'string' ? nextLastId : null
-
-    if (!lastId) {
-      break
+    if (config.pagination === 'all' && config.collisionKey && pendingCollisionRows.length > 0) {
+      const deduped = getCollisionRows(pendingCollisionRows, config.collisionKey)
+      importedRows += insertRows(config.tableName, deduped.dedupedRows, ignoreConflicts)
+      collisions = [...collisions, ...deduped.collisions]
     }
+  } finally {
+    await closeCursor(client, cursorName)
   }
 
-  report.tables[config.tableName] = {
+  const finalRows = getTargetRowCount(config.tableName)
+
+  console.log(`[import] ${config.tableName}: done (applied ${importedRows}/${sourceRows}, final ${finalRows})`)
+
+  return {
     sourceRows,
     importedRows,
-    skippedRows: sourceRows - importedRows,
+    finalRows,
+    skippedRows: Math.max(0, sourceRows - finalRows),
     missing: false,
-    collisions: [],
+    collisions,
   }
 }
 
 const importPostgresToSqlite = async () => {
   const options = getArgs()
+  validateOptions(options)
   const sourceDatabaseUrl = getSourceDatabaseUrl()
-  const report: ImportReport = {
-    sourceDatabaseUrl,
-    sqlitePath: env.SQLITE_PATH,
-    clearRequested: options.clear,
-    batchSize: options.batchSize,
-    startedAt: new Date().toISOString(),
-    finishedAt: null,
-    tables: {},
-    userBootstrap: null,
-  }
+  const report = await getReport(options, sourceDatabaseUrl)
+  const selectedTables = getSelectedImportTables(options, report)
   const client = new Client({connectionString: sourceDatabaseUrl})
 
   await client.connect()
 
   try {
-    if (getHasExistingImportData() && !options.clear) {
+    if (options.resume) {
+      validateResumeState(report, selectedTables)
+    }
+
+    if (getHasExistingImportData(selectedTables) && !options.clear && !options.fromTable && !options.resume) {
       throw new Error('SQLite already contains imported data. Re-run with --clear to replace the current contents.')
     }
 
-    if (options.clear) {
-      clearTargetTables()
+    if (options.clear || options.fromTable) {
+      clearTargetTables(selectedTables, options.clear && !options.fromTable)
     }
 
-    for (const config of importTables) {
-      console.log(`[import] ${config.tableName}`)
-      await importTable(client, config, options, report)
-    }
+    await writeReport(options.reportPath, report)
+
+    await withFastImportPragmas(async () => {
+      for (const config of selectedTables) {
+        report.currentTable = config.tableName
+        await writeReport(options.reportPath, report)
+        console.log(`[import] ${config.tableName}`)
+        report.tables[config.tableName] = await importTable(client, config, options)
+        report.currentTable = null
+        await writeReport(options.reportPath, report)
+      }
+    })
 
     report.userBootstrap = await bootstrapLocalUser(client)
     report.finishedAt = new Date().toISOString()
+    report.status = 'completed'
+    report.currentTable = null
 
     await writeReport(options.reportPath, report)
     console.log(`[import] wrote report to ${options.reportPath}`)
