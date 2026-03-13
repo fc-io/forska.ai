@@ -349,13 +349,6 @@ export const Navigation = () => {
                       Failed Requests
                     </Link>
                     <Link
-                      to="/admin/sync-stats"
-                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
-                      onClick={closeAdminMenu}
-                    >
-                      Sync Stats
-                    </Link>
-                    <Link
                       to="/admin/diagnose-unassessed"
                       class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
                       onClick={closeAdminMenu}

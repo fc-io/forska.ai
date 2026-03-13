@@ -305,8 +305,8 @@ const AdminDiagnoseUnassessed = () => {
                         Missing {r().analysis.missingInClickhouse.toLocaleString()} judgments in ClickHouse
                       </p>
                       <p class="text-sm text-yellow-600 mt-1">
-                        These judgments exist in PostgreSQL but not in ClickHouse. PeerDB is responsible for syncing;
-                        check `/admin/sync-stats` for lag and health.
+                        These judgments exist in the app database but not in ClickHouse. PeerDB is responsible for
+                        syncing, so this points to replication lag or ingestion issues.
                       </p>
                     </div>
                   </Show>
@@ -318,9 +318,8 @@ const AdminDiagnoseUnassessed = () => {
                         articles in ClickHouse
                       </p>
                       <p class="text-sm text-red-600 mt-1 mb-3">
-                        Articles exist in PostgreSQL but not in ClickHouse. The job uses ClickHouse to find unassessed
-                        articles, so these won't be picked up. PeerDB is responsible for syncing; check
-                        `/admin/sync-stats`.
+                        Articles exist in the app database but not in ClickHouse. The job uses ClickHouse to find
+                        unassessed articles, so these will not be picked up until replication catches up.
                       </p>
                     </div>
                   </Show>

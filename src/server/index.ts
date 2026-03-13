@@ -9,7 +9,6 @@ import {aaModelsRoutes} from './routes/AaModelsRoutes'
 import {adminClickhouseHealthRoutes} from './routes/AdminClickhouseHealthRoutes.ts'
 import {adminImportRouteStatsRoutes} from './routes/AdminImportRouteStatsRoutes.ts'
 import {adminInvestigateRoutes} from './routes/AdminInvestigateRoutes.ts'
-import {adminSyncStatsRoutes} from './routes/AdminSyncStatsRoutes.ts'
 import {articleAdminRoutes} from './routes/ArticleAdminRoutes.ts'
 import {articlesRoutes} from './routes/ArticlesRoutes.ts'
 import {comparisonProjectsRoutes} from './routes/ComparisonProjectsRoutes.ts'
@@ -52,7 +51,6 @@ const _app = new Elysia()
   .use(adminClickhouseHealthRoutes)
   .use(adminInvestigateRoutes)
   .use(adminImportRouteStatsRoutes)
-  .use(adminSyncStatsRoutes)
   .use(comparisonProjectsRoutes)
   .use(judgmentsJobsRoutes)
   .use(articlesRoutes)

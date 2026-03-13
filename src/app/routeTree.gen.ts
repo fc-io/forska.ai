@@ -35,7 +35,6 @@ import { Route as CompareJudgmentsIdIndexRouteImport } from './routes/+compare-j
 import { Route as ArticlesIdIndexRouteImport } from './routes/+articles/+$id/+index'
 import { Route as AdminUsersIndexRouteImport } from './routes/+admin/+users/+index'
 import { Route as AdminUnexpectedAnswersIndexRouteImport } from './routes/+admin/+unexpected-answers/+index'
-import { Route as AdminSyncStatsIndexRouteImport } from './routes/+admin/+sync-stats/+index'
 import { Route as AdminSetup_statsIndexRouteImport } from './routes/+admin/+setup_stats/+index'
 import { Route as AdminPdfResetIndexRouteImport } from './routes/+admin/+pdf-reset/+index'
 import { Route as AdminPdfConversionsIndexRouteImport } from './routes/+admin/+pdf-conversions/+index'
@@ -207,11 +206,6 @@ const AdminUnexpectedAnswersIndexRoute =
     path: '/admin/unexpected-answers/',
     getParentRoute: () => rootRouteImport,
   } as any)
-const AdminSyncStatsIndexRoute = AdminSyncStatsIndexRouteImport.update({
-  id: '/admin/sync-stats/',
-  path: '/admin/sync-stats/',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const AdminSetup_statsIndexRoute = AdminSetup_statsIndexRouteImport.update({
   id: '/admin/setup_stats/',
   path: '/admin/setup_stats/',
@@ -438,7 +432,6 @@ export interface FileRoutesByFullPath {
   '/admin/pdf-conversions/': typeof AdminPdfConversionsIndexRoute
   '/admin/pdf-reset/': typeof AdminPdfResetIndexRoute
   '/admin/setup_stats/': typeof AdminSetup_statsIndexRoute
-  '/admin/sync-stats/': typeof AdminSyncStatsIndexRoute
   '/admin/unexpected-answers/': typeof AdminUnexpectedAnswersIndexRoute
   '/admin/users/': typeof AdminUsersIndexRoute
   '/articles/$id/': typeof ArticlesIdIndexRoute
@@ -502,7 +495,6 @@ export interface FileRoutesByTo {
   '/admin/pdf-conversions': typeof AdminPdfConversionsIndexRoute
   '/admin/pdf-reset': typeof AdminPdfResetIndexRoute
   '/admin/setup_stats': typeof AdminSetup_statsIndexRoute
-  '/admin/sync-stats': typeof AdminSyncStatsIndexRoute
   '/admin/unexpected-answers': typeof AdminUnexpectedAnswersIndexRoute
   '/admin/users': typeof AdminUsersIndexRoute
   '/articles/$id': typeof ArticlesIdIndexRoute
@@ -567,7 +559,6 @@ export interface FileRoutesById {
   '/admin/pdf-conversions/': typeof AdminPdfConversionsIndexRoute
   '/admin/pdf-reset/': typeof AdminPdfResetIndexRoute
   '/admin/setup_stats/': typeof AdminSetup_statsIndexRoute
-  '/admin/sync-stats/': typeof AdminSyncStatsIndexRoute
   '/admin/unexpected-answers/': typeof AdminUnexpectedAnswersIndexRoute
   '/admin/users/': typeof AdminUsersIndexRoute
   '/articles/$id/': typeof ArticlesIdIndexRoute
@@ -633,7 +624,6 @@ export interface FileRouteTypes {
     | '/admin/pdf-conversions/'
     | '/admin/pdf-reset/'
     | '/admin/setup_stats/'
-    | '/admin/sync-stats/'
     | '/admin/unexpected-answers/'
     | '/admin/users/'
     | '/articles/$id/'
@@ -697,7 +687,6 @@ export interface FileRouteTypes {
     | '/admin/pdf-conversions'
     | '/admin/pdf-reset'
     | '/admin/setup_stats'
-    | '/admin/sync-stats'
     | '/admin/unexpected-answers'
     | '/admin/users'
     | '/articles/$id'
@@ -761,7 +750,6 @@ export interface FileRouteTypes {
     | '/admin/pdf-conversions/'
     | '/admin/pdf-reset/'
     | '/admin/setup_stats/'
-    | '/admin/sync-stats/'
     | '/admin/unexpected-answers/'
     | '/admin/users/'
     | '/articles/$id/'
@@ -826,7 +814,6 @@ export interface RootRouteChildren {
   AdminPdfConversionsIndexRoute: typeof AdminPdfConversionsIndexRoute
   AdminPdfResetIndexRoute: typeof AdminPdfResetIndexRoute
   AdminSetup_statsIndexRoute: typeof AdminSetup_statsIndexRoute
-  AdminSyncStatsIndexRoute: typeof AdminSyncStatsIndexRoute
   AdminUnexpectedAnswersIndexRoute: typeof AdminUnexpectedAnswersIndexRoute
   AdminUsersIndexRoute: typeof AdminUsersIndexRoute
   ArticlesIdIndexRoute: typeof ArticlesIdIndexRoute
@@ -1047,13 +1034,6 @@ declare module '@tanstack/solid-router' {
       path: '/admin/unexpected-answers'
       fullPath: '/admin/unexpected-answers/'
       preLoaderRoute: typeof AdminUnexpectedAnswersIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/admin/sync-stats/': {
-      id: '/admin/sync-stats/'
-      path: '/admin/sync-stats'
-      fullPath: '/admin/sync-stats/'
-      preLoaderRoute: typeof AdminSyncStatsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/setup_stats/': {
@@ -1331,7 +1311,6 @@ const rootRouteChildren: RootRouteChildren = {
   AdminPdfConversionsIndexRoute: AdminPdfConversionsIndexRoute,
   AdminPdfResetIndexRoute: AdminPdfResetIndexRoute,
   AdminSetup_statsIndexRoute: AdminSetup_statsIndexRoute,
-  AdminSyncStatsIndexRoute: AdminSyncStatsIndexRoute,
   AdminUnexpectedAnswersIndexRoute: AdminUnexpectedAnswersIndexRoute,
   AdminUsersIndexRoute: AdminUsersIndexRoute,
   ArticlesIdIndexRoute: ArticlesIdIndexRoute,
