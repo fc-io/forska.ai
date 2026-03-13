@@ -414,39 +414,39 @@ const AdminImportRouteStatsYearIdIndexRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/articles': typeof ArticlesIndexRoute
-  '/compare-judgments': typeof CompareJudgmentsIndexRoute
-  '/login': typeof LoginIndexRoute
-  '/projects': typeof ProjectsIndexRoute
-  '/prompts': typeof PromptsIndexRoute
-  '/settings': typeof SettingsIndexRoute
+  '/articles/': typeof ArticlesIndexRoute
+  '/compare-judgments/': typeof CompareJudgmentsIndexRoute
+  '/login/': typeof LoginIndexRoute
+  '/projects/': typeof ProjectsIndexRoute
+  '/prompts/': typeof PromptsIndexRoute
+  '/settings/': typeof SettingsIndexRoute
   '/compare-judgments/create': typeof CompareJudgmentsCreateRoute
   '/compare-judgments/create-from-project': typeof CompareJudgmentsCreateFromProjectRoute
   '/projects/create': typeof ProjectsCreateRoute
   '/projects/create-subproject': typeof ProjectsCreateSubprojectRoute
-  '/admin/aa-models': typeof AdminAaModelsIndexRoute
-  '/admin/assessments': typeof AdminAssessmentsIndexRoute
-  '/admin/clickhouse-sync': typeof AdminClickhouseSyncIndexRoute
-  '/admin/datasources': typeof AdminDatasourcesIndexRoute
-  '/admin/diagnose-unassessed': typeof AdminDiagnoseUnassessedIndexRoute
-  '/admin/failed_requests': typeof AdminFailed_requestsIndexRoute
-  '/admin/gpu': typeof AdminGpuIndexRoute
-  '/admin/import-route-stats': typeof AdminImportRouteStatsIndexRoute
-  '/admin/jobs': typeof AdminJobsIndexRoute
-  '/admin/latest-articles': typeof AdminLatestArticlesIndexRoute
-  '/admin/llm': typeof AdminLlmIndexRoute
-  '/admin/pdf-conversions': typeof AdminPdfConversionsIndexRoute
-  '/admin/pdf-reset': typeof AdminPdfResetIndexRoute
-  '/admin/setup_stats': typeof AdminSetup_statsIndexRoute
-  '/admin/sync-stats': typeof AdminSyncStatsIndexRoute
-  '/admin/unexpected-answers': typeof AdminUnexpectedAnswersIndexRoute
-  '/admin/users': typeof AdminUsersIndexRoute
-  '/articles/$id': typeof ArticlesIdIndexRoute
-  '/compare-judgments/$id': typeof CompareJudgmentsIdIndexRoute
-  '/compare-judgments/archived': typeof CompareJudgmentsArchivedIndexRoute
-  '/projects/$id': typeof ProjectsIdIndexRoute
-  '/projects/archived': typeof ProjectsArchivedIndexRoute
-  '/prompts/archived': typeof PromptsArchivedIndexRoute
+  '/admin/aa-models/': typeof AdminAaModelsIndexRoute
+  '/admin/assessments/': typeof AdminAssessmentsIndexRoute
+  '/admin/clickhouse-sync/': typeof AdminClickhouseSyncIndexRoute
+  '/admin/datasources/': typeof AdminDatasourcesIndexRoute
+  '/admin/diagnose-unassessed/': typeof AdminDiagnoseUnassessedIndexRoute
+  '/admin/failed_requests/': typeof AdminFailed_requestsIndexRoute
+  '/admin/gpu/': typeof AdminGpuIndexRoute
+  '/admin/import-route-stats/': typeof AdminImportRouteStatsIndexRoute
+  '/admin/jobs/': typeof AdminJobsIndexRoute
+  '/admin/latest-articles/': typeof AdminLatestArticlesIndexRoute
+  '/admin/llm/': typeof AdminLlmIndexRoute
+  '/admin/pdf-conversions/': typeof AdminPdfConversionsIndexRoute
+  '/admin/pdf-reset/': typeof AdminPdfResetIndexRoute
+  '/admin/setup_stats/': typeof AdminSetup_statsIndexRoute
+  '/admin/sync-stats/': typeof AdminSyncStatsIndexRoute
+  '/admin/unexpected-answers/': typeof AdminUnexpectedAnswersIndexRoute
+  '/admin/users/': typeof AdminUsersIndexRoute
+  '/articles/$id/': typeof ArticlesIdIndexRoute
+  '/compare-judgments/$id/': typeof CompareJudgmentsIdIndexRoute
+  '/compare-judgments/archived/': typeof CompareJudgmentsArchivedIndexRoute
+  '/projects/$id/': typeof ProjectsIdIndexRoute
+  '/projects/archived/': typeof ProjectsArchivedIndexRoute
+  '/prompts/archived/': typeof PromptsArchivedIndexRoute
   '/admin/datasources/create': typeof AdminDatasourcesCreateRoute
   '/admin/prompts/deduplicate': typeof AdminPromptsDeduplicateRoute
   '/articles/$id/fulltext': typeof ArticlesIdFulltextRoute
@@ -454,25 +454,25 @@ export interface FileRoutesByFullPath {
   '/projects/$id/edit': typeof ProjectsIdEditRoute
   '/projects/$id/export': typeof ProjectsIdExportRoute
   '/projects/$id/humanAssessment': typeof ProjectsIdHumanAssessmentRoute
-  '/admin/clickhouse-sync/articles': typeof AdminClickhouseSyncArticlesIndexRoute
-  '/admin/datasources/archived': typeof AdminDatasourcesArchivedIndexRoute
-  '/admin/failed_requests/$id': typeof AdminFailed_requestsIdIndexRoute
-  '/admin/import-route-stats/$year': typeof AdminImportRouteStatsYearIndexRoute
-  '/admin/jobs/$id': typeof AdminJobsIdIndexRoute
-  '/admin/unexpected-answers/$projectId': typeof AdminUnexpectedAnswersProjectIdIndexRoute
-  '/admin/unexpected-answers/all-prompts': typeof AdminUnexpectedAnswersAllPromptsIndexRoute
-  '/projects/$id/reviews-both': typeof ProjectsIdReviewsBothIndexRoute
-  '/projects/$id/reviews-human': typeof ProjectsIdReviewsHumanIndexRoute
-  '/projects/$id/reviews-llm': typeof ProjectsIdReviewsLlmIndexRoute
-  '/projects/$id/reviews-unassessed': typeof ProjectsIdReviewsUnassessedIndexRoute
-  '/projects/$id/reviews': typeof ProjectsIdReviewsIndexRoute
+  '/admin/clickhouse-sync/articles/': typeof AdminClickhouseSyncArticlesIndexRoute
+  '/admin/datasources/archived/': typeof AdminDatasourcesArchivedIndexRoute
+  '/admin/failed_requests/$id/': typeof AdminFailed_requestsIdIndexRoute
+  '/admin/import-route-stats/$year/': typeof AdminImportRouteStatsYearIndexRoute
+  '/admin/jobs/$id/': typeof AdminJobsIdIndexRoute
+  '/admin/unexpected-answers/$projectId/': typeof AdminUnexpectedAnswersProjectIdIndexRoute
+  '/admin/unexpected-answers/all-prompts/': typeof AdminUnexpectedAnswersAllPromptsIndexRoute
+  '/projects/$id/reviews-both/': typeof ProjectsIdReviewsBothIndexRoute
+  '/projects/$id/reviews-human/': typeof ProjectsIdReviewsHumanIndexRoute
+  '/projects/$id/reviews-llm/': typeof ProjectsIdReviewsLlmIndexRoute
+  '/projects/$id/reviews-unassessed/': typeof ProjectsIdReviewsUnassessedIndexRoute
+  '/projects/$id/reviews/': typeof ProjectsIdReviewsIndexRoute
   '/admin/datasources/$id/edit': typeof AdminDatasourcesIdEditRoute
   '/admin/jobs/$id/unassessed_articles': typeof AdminJobsIdUnassessed_articlesRoute
-  '/admin/import-route-stats/$year/$id': typeof AdminImportRouteStatsYearIdIndexRoute
-  '/admin/unexpected-answers/$projectId/$promptId': typeof AdminUnexpectedAnswersProjectIdPromptIdIndexRoute
-  '/admin/unexpected-answers/all-prompts/$promptId': typeof AdminUnexpectedAnswersAllPromptsPromptIdIndexRoute
-  '/projects/$id/reviews-llm/$articleId': typeof ProjectsIdReviewsLlmArticleIdIndexRoute
-  '/projects/$id/reviews/$articleId': typeof ProjectsIdReviewsArticleIdIndexRoute
+  '/admin/import-route-stats/$year/$id/': typeof AdminImportRouteStatsYearIdIndexRoute
+  '/admin/unexpected-answers/$projectId/$promptId/': typeof AdminUnexpectedAnswersProjectIdPromptIdIndexRoute
+  '/admin/unexpected-answers/all-prompts/$promptId/': typeof AdminUnexpectedAnswersAllPromptsPromptIdIndexRoute
+  '/projects/$id/reviews-llm/$articleId/': typeof ProjectsIdReviewsLlmArticleIdIndexRoute
+  '/projects/$id/reviews/$articleId/': typeof ProjectsIdReviewsArticleIdIndexRoute
   '/admin/import-route-stats/$year/$id/fulltext': typeof AdminImportRouteStatsYearIdFulltextRoute
   '/projects/$id/reviews-llm/$articleId/fulltext': typeof ProjectsIdReviewsLlmArticleIdFulltextRoute
 }
@@ -609,39 +609,39 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
-    | '/articles'
-    | '/compare-judgments'
-    | '/login'
-    | '/projects'
-    | '/prompts'
-    | '/settings'
+    | '/articles/'
+    | '/compare-judgments/'
+    | '/login/'
+    | '/projects/'
+    | '/prompts/'
+    | '/settings/'
     | '/compare-judgments/create'
     | '/compare-judgments/create-from-project'
     | '/projects/create'
     | '/projects/create-subproject'
-    | '/admin/aa-models'
-    | '/admin/assessments'
-    | '/admin/clickhouse-sync'
-    | '/admin/datasources'
-    | '/admin/diagnose-unassessed'
-    | '/admin/failed_requests'
-    | '/admin/gpu'
-    | '/admin/import-route-stats'
-    | '/admin/jobs'
-    | '/admin/latest-articles'
-    | '/admin/llm'
-    | '/admin/pdf-conversions'
-    | '/admin/pdf-reset'
-    | '/admin/setup_stats'
-    | '/admin/sync-stats'
-    | '/admin/unexpected-answers'
-    | '/admin/users'
-    | '/articles/$id'
-    | '/compare-judgments/$id'
-    | '/compare-judgments/archived'
-    | '/projects/$id'
-    | '/projects/archived'
-    | '/prompts/archived'
+    | '/admin/aa-models/'
+    | '/admin/assessments/'
+    | '/admin/clickhouse-sync/'
+    | '/admin/datasources/'
+    | '/admin/diagnose-unassessed/'
+    | '/admin/failed_requests/'
+    | '/admin/gpu/'
+    | '/admin/import-route-stats/'
+    | '/admin/jobs/'
+    | '/admin/latest-articles/'
+    | '/admin/llm/'
+    | '/admin/pdf-conversions/'
+    | '/admin/pdf-reset/'
+    | '/admin/setup_stats/'
+    | '/admin/sync-stats/'
+    | '/admin/unexpected-answers/'
+    | '/admin/users/'
+    | '/articles/$id/'
+    | '/compare-judgments/$id/'
+    | '/compare-judgments/archived/'
+    | '/projects/$id/'
+    | '/projects/archived/'
+    | '/prompts/archived/'
     | '/admin/datasources/create'
     | '/admin/prompts/deduplicate'
     | '/articles/$id/fulltext'
@@ -649,25 +649,25 @@ export interface FileRouteTypes {
     | '/projects/$id/edit'
     | '/projects/$id/export'
     | '/projects/$id/humanAssessment'
-    | '/admin/clickhouse-sync/articles'
-    | '/admin/datasources/archived'
-    | '/admin/failed_requests/$id'
-    | '/admin/import-route-stats/$year'
-    | '/admin/jobs/$id'
-    | '/admin/unexpected-answers/$projectId'
-    | '/admin/unexpected-answers/all-prompts'
-    | '/projects/$id/reviews-both'
-    | '/projects/$id/reviews-human'
-    | '/projects/$id/reviews-llm'
-    | '/projects/$id/reviews-unassessed'
-    | '/projects/$id/reviews'
+    | '/admin/clickhouse-sync/articles/'
+    | '/admin/datasources/archived/'
+    | '/admin/failed_requests/$id/'
+    | '/admin/import-route-stats/$year/'
+    | '/admin/jobs/$id/'
+    | '/admin/unexpected-answers/$projectId/'
+    | '/admin/unexpected-answers/all-prompts/'
+    | '/projects/$id/reviews-both/'
+    | '/projects/$id/reviews-human/'
+    | '/projects/$id/reviews-llm/'
+    | '/projects/$id/reviews-unassessed/'
+    | '/projects/$id/reviews/'
     | '/admin/datasources/$id/edit'
     | '/admin/jobs/$id/unassessed_articles'
-    | '/admin/import-route-stats/$year/$id'
-    | '/admin/unexpected-answers/$projectId/$promptId'
-    | '/admin/unexpected-answers/all-prompts/$promptId'
-    | '/projects/$id/reviews-llm/$articleId'
-    | '/projects/$id/reviews/$articleId'
+    | '/admin/import-route-stats/$year/$id/'
+    | '/admin/unexpected-answers/$projectId/$promptId/'
+    | '/admin/unexpected-answers/all-prompts/$promptId/'
+    | '/projects/$id/reviews-llm/$articleId/'
+    | '/projects/$id/reviews/$articleId/'
     | '/admin/import-route-stats/$year/$id/fulltext'
     | '/projects/$id/reviews-llm/$articleId/fulltext'
   fileRoutesByTo: FileRoutesByTo
@@ -905,42 +905,42 @@ declare module '@tanstack/solid-router' {
     '/settings/': {
       id: '/settings/'
       path: '/settings'
-      fullPath: '/settings'
+      fullPath: '/settings/'
       preLoaderRoute: typeof SettingsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/prompts/': {
       id: '/prompts/'
       path: '/prompts'
-      fullPath: '/prompts'
+      fullPath: '/prompts/'
       preLoaderRoute: typeof PromptsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/projects/': {
       id: '/projects/'
       path: '/projects'
-      fullPath: '/projects'
+      fullPath: '/projects/'
       preLoaderRoute: typeof ProjectsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/login/': {
       id: '/login/'
       path: '/login'
-      fullPath: '/login'
+      fullPath: '/login/'
       preLoaderRoute: typeof LoginIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/compare-judgments/': {
       id: '/compare-judgments/'
       path: '/compare-judgments'
-      fullPath: '/compare-judgments'
+      fullPath: '/compare-judgments/'
       preLoaderRoute: typeof CompareJudgmentsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/articles/': {
       id: '/articles/'
       path: '/articles'
-      fullPath: '/articles'
+      fullPath: '/articles/'
       preLoaderRoute: typeof ArticlesIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
@@ -996,161 +996,161 @@ declare module '@tanstack/solid-router' {
     '/prompts/archived/': {
       id: '/prompts/archived/'
       path: '/prompts/archived'
-      fullPath: '/prompts/archived'
+      fullPath: '/prompts/archived/'
       preLoaderRoute: typeof PromptsArchivedIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/projects/archived/': {
       id: '/projects/archived/'
       path: '/projects/archived'
-      fullPath: '/projects/archived'
+      fullPath: '/projects/archived/'
       preLoaderRoute: typeof ProjectsArchivedIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/projects/$id/': {
       id: '/projects/$id/'
       path: '/projects/$id'
-      fullPath: '/projects/$id'
+      fullPath: '/projects/$id/'
       preLoaderRoute: typeof ProjectsIdIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/compare-judgments/archived/': {
       id: '/compare-judgments/archived/'
       path: '/compare-judgments/archived'
-      fullPath: '/compare-judgments/archived'
+      fullPath: '/compare-judgments/archived/'
       preLoaderRoute: typeof CompareJudgmentsArchivedIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/compare-judgments/$id/': {
       id: '/compare-judgments/$id/'
       path: '/compare-judgments/$id'
-      fullPath: '/compare-judgments/$id'
+      fullPath: '/compare-judgments/$id/'
       preLoaderRoute: typeof CompareJudgmentsIdIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/articles/$id/': {
       id: '/articles/$id/'
       path: '/articles/$id'
-      fullPath: '/articles/$id'
+      fullPath: '/articles/$id/'
       preLoaderRoute: typeof ArticlesIdIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/users/': {
       id: '/admin/users/'
       path: '/admin/users'
-      fullPath: '/admin/users'
+      fullPath: '/admin/users/'
       preLoaderRoute: typeof AdminUsersIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/unexpected-answers/': {
       id: '/admin/unexpected-answers/'
       path: '/admin/unexpected-answers'
-      fullPath: '/admin/unexpected-answers'
+      fullPath: '/admin/unexpected-answers/'
       preLoaderRoute: typeof AdminUnexpectedAnswersIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/sync-stats/': {
       id: '/admin/sync-stats/'
       path: '/admin/sync-stats'
-      fullPath: '/admin/sync-stats'
+      fullPath: '/admin/sync-stats/'
       preLoaderRoute: typeof AdminSyncStatsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/setup_stats/': {
       id: '/admin/setup_stats/'
       path: '/admin/setup_stats'
-      fullPath: '/admin/setup_stats'
+      fullPath: '/admin/setup_stats/'
       preLoaderRoute: typeof AdminSetup_statsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/pdf-reset/': {
       id: '/admin/pdf-reset/'
       path: '/admin/pdf-reset'
-      fullPath: '/admin/pdf-reset'
+      fullPath: '/admin/pdf-reset/'
       preLoaderRoute: typeof AdminPdfResetIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/pdf-conversions/': {
       id: '/admin/pdf-conversions/'
       path: '/admin/pdf-conversions'
-      fullPath: '/admin/pdf-conversions'
+      fullPath: '/admin/pdf-conversions/'
       preLoaderRoute: typeof AdminPdfConversionsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/llm/': {
       id: '/admin/llm/'
       path: '/admin/llm'
-      fullPath: '/admin/llm'
+      fullPath: '/admin/llm/'
       preLoaderRoute: typeof AdminLlmIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/latest-articles/': {
       id: '/admin/latest-articles/'
       path: '/admin/latest-articles'
-      fullPath: '/admin/latest-articles'
+      fullPath: '/admin/latest-articles/'
       preLoaderRoute: typeof AdminLatestArticlesIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/jobs/': {
       id: '/admin/jobs/'
       path: '/admin/jobs'
-      fullPath: '/admin/jobs'
+      fullPath: '/admin/jobs/'
       preLoaderRoute: typeof AdminJobsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/import-route-stats/': {
       id: '/admin/import-route-stats/'
       path: '/admin/import-route-stats'
-      fullPath: '/admin/import-route-stats'
+      fullPath: '/admin/import-route-stats/'
       preLoaderRoute: typeof AdminImportRouteStatsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/gpu/': {
       id: '/admin/gpu/'
       path: '/admin/gpu'
-      fullPath: '/admin/gpu'
+      fullPath: '/admin/gpu/'
       preLoaderRoute: typeof AdminGpuIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/failed_requests/': {
       id: '/admin/failed_requests/'
       path: '/admin/failed_requests'
-      fullPath: '/admin/failed_requests'
+      fullPath: '/admin/failed_requests/'
       preLoaderRoute: typeof AdminFailed_requestsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/diagnose-unassessed/': {
       id: '/admin/diagnose-unassessed/'
       path: '/admin/diagnose-unassessed'
-      fullPath: '/admin/diagnose-unassessed'
+      fullPath: '/admin/diagnose-unassessed/'
       preLoaderRoute: typeof AdminDiagnoseUnassessedIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/datasources/': {
       id: '/admin/datasources/'
       path: '/admin/datasources'
-      fullPath: '/admin/datasources'
+      fullPath: '/admin/datasources/'
       preLoaderRoute: typeof AdminDatasourcesIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/clickhouse-sync/': {
       id: '/admin/clickhouse-sync/'
       path: '/admin/clickhouse-sync'
-      fullPath: '/admin/clickhouse-sync'
+      fullPath: '/admin/clickhouse-sync/'
       preLoaderRoute: typeof AdminClickhouseSyncIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/assessments/': {
       id: '/admin/assessments/'
       path: '/admin/assessments'
-      fullPath: '/admin/assessments'
+      fullPath: '/admin/assessments/'
       preLoaderRoute: typeof AdminAssessmentsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/aa-models/': {
       id: '/admin/aa-models/'
       path: '/admin/aa-models'
-      fullPath: '/admin/aa-models'
+      fullPath: '/admin/aa-models/'
       preLoaderRoute: typeof AdminAaModelsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
@@ -1171,84 +1171,84 @@ declare module '@tanstack/solid-router' {
     '/projects/$id/reviews/': {
       id: '/projects/$id/reviews/'
       path: '/projects/$id/reviews'
-      fullPath: '/projects/$id/reviews'
+      fullPath: '/projects/$id/reviews/'
       preLoaderRoute: typeof ProjectsIdReviewsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/projects/$id/reviews-unassessed/': {
       id: '/projects/$id/reviews-unassessed/'
       path: '/projects/$id/reviews-unassessed'
-      fullPath: '/projects/$id/reviews-unassessed'
+      fullPath: '/projects/$id/reviews-unassessed/'
       preLoaderRoute: typeof ProjectsIdReviewsUnassessedIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/projects/$id/reviews-llm/': {
       id: '/projects/$id/reviews-llm/'
       path: '/projects/$id/reviews-llm'
-      fullPath: '/projects/$id/reviews-llm'
+      fullPath: '/projects/$id/reviews-llm/'
       preLoaderRoute: typeof ProjectsIdReviewsLlmIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/projects/$id/reviews-human/': {
       id: '/projects/$id/reviews-human/'
       path: '/projects/$id/reviews-human'
-      fullPath: '/projects/$id/reviews-human'
+      fullPath: '/projects/$id/reviews-human/'
       preLoaderRoute: typeof ProjectsIdReviewsHumanIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/projects/$id/reviews-both/': {
       id: '/projects/$id/reviews-both/'
       path: '/projects/$id/reviews-both'
-      fullPath: '/projects/$id/reviews-both'
+      fullPath: '/projects/$id/reviews-both/'
       preLoaderRoute: typeof ProjectsIdReviewsBothIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/unexpected-answers/all-prompts/': {
       id: '/admin/unexpected-answers/all-prompts/'
       path: '/admin/unexpected-answers/all-prompts'
-      fullPath: '/admin/unexpected-answers/all-prompts'
+      fullPath: '/admin/unexpected-answers/all-prompts/'
       preLoaderRoute: typeof AdminUnexpectedAnswersAllPromptsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/unexpected-answers/$projectId/': {
       id: '/admin/unexpected-answers/$projectId/'
       path: '/admin/unexpected-answers/$projectId'
-      fullPath: '/admin/unexpected-answers/$projectId'
+      fullPath: '/admin/unexpected-answers/$projectId/'
       preLoaderRoute: typeof AdminUnexpectedAnswersProjectIdIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/jobs/$id/': {
       id: '/admin/jobs/$id/'
       path: '/admin/jobs/$id'
-      fullPath: '/admin/jobs/$id'
+      fullPath: '/admin/jobs/$id/'
       preLoaderRoute: typeof AdminJobsIdIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/import-route-stats/$year/': {
       id: '/admin/import-route-stats/$year/'
       path: '/admin/import-route-stats/$year'
-      fullPath: '/admin/import-route-stats/$year'
+      fullPath: '/admin/import-route-stats/$year/'
       preLoaderRoute: typeof AdminImportRouteStatsYearIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/failed_requests/$id/': {
       id: '/admin/failed_requests/$id/'
       path: '/admin/failed_requests/$id'
-      fullPath: '/admin/failed_requests/$id'
+      fullPath: '/admin/failed_requests/$id/'
       preLoaderRoute: typeof AdminFailed_requestsIdIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/datasources/archived/': {
       id: '/admin/datasources/archived/'
       path: '/admin/datasources/archived'
-      fullPath: '/admin/datasources/archived'
+      fullPath: '/admin/datasources/archived/'
       preLoaderRoute: typeof AdminDatasourcesArchivedIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/clickhouse-sync/articles/': {
       id: '/admin/clickhouse-sync/articles/'
       path: '/admin/clickhouse-sync/articles'
-      fullPath: '/admin/clickhouse-sync/articles'
+      fullPath: '/admin/clickhouse-sync/articles/'
       preLoaderRoute: typeof AdminClickhouseSyncArticlesIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
@@ -1269,35 +1269,35 @@ declare module '@tanstack/solid-router' {
     '/projects/$id/reviews/$articleId/': {
       id: '/projects/$id/reviews/$articleId/'
       path: '/projects/$id/reviews/$articleId'
-      fullPath: '/projects/$id/reviews/$articleId'
+      fullPath: '/projects/$id/reviews/$articleId/'
       preLoaderRoute: typeof ProjectsIdReviewsArticleIdIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/projects/$id/reviews-llm/$articleId/': {
       id: '/projects/$id/reviews-llm/$articleId/'
       path: '/projects/$id/reviews-llm/$articleId'
-      fullPath: '/projects/$id/reviews-llm/$articleId'
+      fullPath: '/projects/$id/reviews-llm/$articleId/'
       preLoaderRoute: typeof ProjectsIdReviewsLlmArticleIdIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/unexpected-answers/all-prompts/$promptId/': {
       id: '/admin/unexpected-answers/all-prompts/$promptId/'
       path: '/admin/unexpected-answers/all-prompts/$promptId'
-      fullPath: '/admin/unexpected-answers/all-prompts/$promptId'
+      fullPath: '/admin/unexpected-answers/all-prompts/$promptId/'
       preLoaderRoute: typeof AdminUnexpectedAnswersAllPromptsPromptIdIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/unexpected-answers/$projectId/$promptId/': {
       id: '/admin/unexpected-answers/$projectId/$promptId/'
       path: '/admin/unexpected-answers/$projectId/$promptId'
-      fullPath: '/admin/unexpected-answers/$projectId/$promptId'
+      fullPath: '/admin/unexpected-answers/$projectId/$promptId/'
       preLoaderRoute: typeof AdminUnexpectedAnswersProjectIdPromptIdIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/import-route-stats/$year/$id/': {
       id: '/admin/import-route-stats/$year/$id/'
       path: '/admin/import-route-stats/$year/$id'
-      fullPath: '/admin/import-route-stats/$year/$id'
+      fullPath: '/admin/import-route-stats/$year/$id/'
       preLoaderRoute: typeof AdminImportRouteStatsYearIdIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
