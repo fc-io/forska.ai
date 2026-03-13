@@ -85,7 +85,7 @@ const Reviews = () => {
       </div>
       <ReviewsTabs projectId={params().id} active="assessed" />
 
-      <ReviewsProjectWarnings projectId={params().id} showClickhouse={true} />
+      <ReviewsProjectWarnings projectId={params().id} />
 
       <ReviewsFilterControls
         projectId={params().id}

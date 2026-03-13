@@ -82,7 +82,7 @@ const ReviewsBoth = () => {
         </div>
         <ReviewsTabs projectId={params().id} active="assessedBoth" />
 
-        <ReviewsProjectWarnings projectId={params().id} showClickhouse={true} />
+        <ReviewsProjectWarnings projectId={params().id} />
 
         <ReviewsFilterControls
           projectId={params().id}

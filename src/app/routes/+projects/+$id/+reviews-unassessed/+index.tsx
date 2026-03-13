@@ -85,7 +85,7 @@ const ReviewsUnassessed = () => {
         </div>
         <ReviewsTabs projectId={projectId} active="unassessed" />
 
-        <ReviewsProjectWarnings projectId={projectId} showClickhouse={true} />
+        <ReviewsProjectWarnings projectId={projectId} />
 
         <ReviewsFilterControls
           projectId={projectId}

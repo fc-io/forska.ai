@@ -5,28 +5,16 @@ import {createMemo, Show} from 'solid-js'
 import {apiClient} from '../../../services/apiClient.ts'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse.ts'
 
-type ReviewsHealthData = {
-  projectId: string
-  enabledPromptCount: number
-  scope: {
-    curatedArticleCount: number
-    importRoutes: string[]
-    importRouteArticlesCount: number
-    postgresArticlesInScope: number
-  }
-  clickhouse:
-    | {ok: true; skipped: boolean; routeArticlesInScope: number; curatedArticlesInScope: number | null}
-    | {ok: false; error: string; routeArticlesInScope: number; curatedArticlesInScope: number | null}
-}
+type ReviewsWarningsData = {projectId: string; enabledPromptCount: number; scope: {hasAnyArticlesInScope: boolean}}
 
-export const ReviewsProjectWarnings = (props: {projectId: string; showClickhouse?: boolean}) => {
+export const ReviewsProjectWarnings = (props: {projectId: string}) => {
   const query = useQuery(() => {
     return {
-      queryKey: ['project-reviews-health', props.projectId],
+      queryKey: ['project-reviews-warnings', props.projectId],
       queryFn: async () => {
-        const response = await apiClient.api.projectsreviewshealth.post({projectId: props.projectId})
-        const data = handleApiResponse(response, 'Failed to check project health')
-        return data.data as unknown as ReviewsHealthData
+        const response = await apiClient.api.projectsreviewswarnings.post({projectId: props.projectId})
+        const data = handleApiResponse(response, 'Failed to load project warnings')
+        return data.data as unknown as ReviewsWarningsData
       },
       refetchOnWindowFocus: false,
       staleTime: 1000 * 60,
@@ -46,45 +34,8 @@ export const ReviewsProjectWarnings = (props: {projectId: string; showClickhouse
     if (!data) return false
 
     const hasEnabledPrompts = data.enabledPromptCount > 0
-    const hasAnyArticlesInScope = data.scope.postgresArticlesInScope > 0
+    const hasAnyArticlesInScope = data.scope.hasAnyArticlesInScope
     return hasEnabledPrompts && !hasAnyArticlesInScope
-  })
-
-  const clickhouseUnavailable = createMemo(() => {
-    if (!props.showClickhouse) {
-      return false
-    }
-    const data = healthData()
-    return data ? data.clickhouse.ok === false : false
-  })
-
-  const clickhouseMissingArticles = createMemo(() => {
-    if (!props.showClickhouse) {
-      return false
-    }
-    const data = healthData()
-    if (!data || data.clickhouse.ok === false) return false
-
-    if (data.clickhouse.skipped) {
-      return false
-    }
-
-    const hasEnabledPrompts = data.enabledPromptCount > 0
-    const hasAnyArticlesInScope = data.scope.postgresArticlesInScope > 0
-    if (!hasEnabledPrompts || !hasAnyArticlesInScope) {
-      return false
-    }
-
-    const routeMissing =
-      data.scope.importRouteArticlesCount > 0
-      && data.clickhouse.routeArticlesInScope < data.scope.importRouteArticlesCount
-
-    const curatedMissing =
-      data.scope.curatedArticleCount > 0
-      && data.clickhouse.curatedArticlesInScope !== null
-      && data.clickhouse.curatedArticlesInScope < data.scope.curatedArticleCount
-
-    return routeMissing || curatedMissing
   })
 
   return (
@@ -117,34 +68,6 @@ export const ReviewsProjectWarnings = (props: {projectId: string; showClickhouse
               This project has no scoped articles (no individually imported articles, and no import routes with any
               matching articles).
             </p>
-          </div>
-        </Show>
-
-        <Show when={clickhouseUnavailable()}>
-          <div class="p-4 bg-red-50 border border-red-200 rounded-lg">
-            <p class="font-medium text-red-800">ClickHouse unavailable</p>
-            <p class="text-sm text-red-700 mt-1">The reviews lists use ClickHouse. It failed to respond.</p>
-            <p class="text-xs text-red-700 mt-2 font-mono break-all">
-              {(healthData()?.clickhouse as {error?: string}).error}
-            </p>
-          </div>
-        </Show>
-
-        <Show when={clickhouseMissingArticles()}>
-          <div class="p-4 bg-red-50 border border-red-200 rounded-lg">
-            <p class="font-medium text-red-800">ClickHouse missing articles</p>
-            <p class="text-sm text-red-700 mt-1">
-              Articles exist in Postgres for this project, but ClickHouse appears to be missing them, so "Assessed by
-              LLM" and "Unassessed" can show empty.
-            </p>
-            <div class="text-xs text-red-700 mt-2">
-              <span class="font-mono">PG scoped:</span> {healthData()?.scope.postgresArticlesInScope.toLocaleString()}{' '}
-              <span class="font-mono">CH routes:</span> {healthData()?.clickhouse.routeArticlesInScope.toLocaleString()}{' '}
-              <Show when={healthData()?.clickhouse.curatedArticlesInScope !== null}>
-                <span class="font-mono">CH curated:</span>{' '}
-                {healthData()?.clickhouse.curatedArticlesInScope?.toLocaleString()}
-              </Show>
-            </div>
           </div>
         </Show>
       </div>

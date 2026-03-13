@@ -82,7 +82,7 @@ const ReviewsHuman = () => {
         </div>
         <ReviewsTabs projectId={params().id} active="assessedHuman" />
 
-        <ReviewsProjectWarnings projectId={params().id} showClickhouse={false} />
+        <ReviewsProjectWarnings projectId={params().id} />
 
         <ReviewsHumanFilterControls
           projectId={params().id}
