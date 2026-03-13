@@ -82,6 +82,7 @@ void mock.module('../../../services/clickhouse/clickhouseClient.ts', () => {
 })
 
 const postCount = async (body: unknown) => {
+  process.env.OLAP_DB = 'clickhouse'
   const {projectsRoutesGetArticlesReviewsCount} = await import('./projectsRoutesGetArticlesReviewsCount.ts')
 
   const app = new Elysia().use(projectsRoutesGetArticlesReviewsCount)

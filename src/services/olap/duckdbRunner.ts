@@ -1,6 +1,5 @@
-import {resolve} from 'path'
-
 import {env} from '../../server/utils/env.ts'
+import {getSqlitePath} from '../../server/utils/getSqlitePath.ts'
 
 const getDuckdbBin = () => {
   const configured = String(process.env['DUCKDB_BIN'] ?? '').trim()
@@ -22,11 +21,11 @@ export const getDuckdbSqlStringList = (values: string[]) => {
 }
 
 const getDuckdbSqlitePath = (sqlitePath?: string) => {
-  return resolve(process.cwd(), sqlitePath ?? env.SQLITE_PATH)
+  return getSqlitePath({sqlitePath: sqlitePath ?? env.SQLITE_PATH})
 }
 
 const getDuckdbPrelude = (sqlitePath?: string) => {
-  return `INSTALL sqlite; LOAD sqlite; ATTACH ${getDuckdbSqlString(getDuckdbSqlitePath(sqlitePath))} AS app (TYPE sqlite);`
+  return `INSTALL sqlite; LOAD sqlite; SET memory_limit = '20GB'; ATTACH ${getDuckdbSqlString(getDuckdbSqlitePath(sqlitePath))} AS app (TYPE sqlite);`
 }
 
 export const runDuckdbJsonQuery = async <T>(query: string, sqlitePath?: string): Promise<T[]> => {

@@ -59,7 +59,7 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
       return r.importRouteId
     })
 
-    const {articles: unassessedFromCH, totalCount} = await getUnassessedArticlesFromOlap({
+    const {articles: unassessedArticles, totalCount} = await getUnassessedArticlesFromOlap({
       projectId: body.projectId,
       projectModelId: projectBounds.modelId,
       projectDateFrom: effectiveFromDate,
@@ -74,11 +74,11 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
       search: searchTitle || undefined,
     })
 
-    if (unassessedFromCH.length === 0) {
+    if (unassessedArticles.length === 0) {
       return {data: [], totalCount, page, limit, totalPages: Math.ceil(totalCount / limit)}
     }
 
-    const articleIds = unassessedFromCH.map((a) => {
+    const articleIds = unassessedArticles.map((a) => {
       return a.id
     })
 

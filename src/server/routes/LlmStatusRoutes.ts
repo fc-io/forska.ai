@@ -3,9 +3,14 @@ import {Elysia} from 'elysia'
 
 import {llmStatus} from '../../db/schema.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
+import {hasSqliteTable} from '../utils/hasSqliteTable.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
 export const llmStatusRoutes = new Elysia().use(withErrorHandler()).get('/api/llmstatus', async () => {
+  if (!hasSqliteTable('llm_status')) {
+    return {data: []}
+  }
+
   const db = getDatabase()
   const data = await db
     .select({

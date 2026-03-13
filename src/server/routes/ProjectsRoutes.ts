@@ -18,7 +18,6 @@ import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {projectsRoutesGetArticlesReviews} from './projectsRoutes/projectsRoutesGetArticlesReviews.ts'
 import {projectsRoutesGetArticlesReviewsBoth} from './projectsRoutes/projectsRoutesGetArticlesReviewsBoth.ts'
-import {projectsRoutesGetArticlesReviewsClickHouse} from './projectsRoutes/projectsRoutesGetArticlesReviewsClickHouse.ts'
 import {projectsRoutesGetArticlesReviewsCount} from './projectsRoutes/projectsRoutesGetArticlesReviewsCount.ts'
 import {projectsRoutesGetArticlesReviewsFilters} from './projectsRoutes/projectsRoutesGetArticlesReviewsFilters.ts'
 import {projectsRoutesGetArticlesReviewsHuman} from './projectsRoutes/projectsRoutesGetArticlesReviewsHuman.ts'
@@ -86,7 +85,6 @@ export const projectsRoutes = new Elysia()
   .use(projectsRoutesGetArticlesReviewsFilters)
   .use(projectsRoutesGetArticlesReviewsHumanFilters)
   .use(projectsRoutesPostArticleReviewDetails)
-  .use(projectsRoutesGetArticlesReviewsClickHouse)
   .use(projectsRoutesGetReviewsWarnings)
   .use(
     new Elysia().get('/api/projects-without-jobs', async () => {

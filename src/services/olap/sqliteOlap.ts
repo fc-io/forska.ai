@@ -14,6 +14,7 @@ import {
   buildNumericFilterResultFromValues,
   type NumericFilterResult,
 } from '../../server/routes/projectsRoutes/articlesReviewsFiltersNumeric.ts'
+import {isNumericType} from '../../server/routes/projectsRoutes/articlesReviewsFiltersUtils.ts'
 import {getDatabase} from '../../server/utils/getDatabase.ts'
 import {getJudgmentAnswerValues, hasMatchingJudgmentAnswer} from '../../server/utils/judgmentAnswers.ts'
 import {getArticleInScopeCondition, getCaseInsensitiveContains} from '../../server/utils/sqlitePredicates.ts'
@@ -195,6 +196,247 @@ const getDuckdbScopeClause = (params: {articleAlias: string; routeIds: string[];
       AND pa.project_id = ${getDuckdbSqlString(params.projectId)}
   )`
   return routeClause ? `(${routeClause} OR ${projectClause})` : projectClause
+}
+
+const getDuckdbSqlArrayLiteral = (values: string[]) => {
+  return `[${getDuckdbSqlStringList(values).join(', ')}]`
+}
+
+const getDuckdbPromptTypeById = (scope: ProjectOlapScope) => {
+  return scope.promptRows.reduce<Record<string, string | null>>((rowMap, row) => {
+    return {...rowMap, [row.id]: row.type}
+  }, {})
+}
+
+const getDuckdbAnswerArrayExpression = (rowAlias: string) => {
+  return `CASE
+    WHEN json_valid(${rowAlias}.answered_original_as_array)
+      AND TRIM(COALESCE(${rowAlias}.answered_original_as_array, '')) LIKE '[%'
+      THEN json_extract_string(${rowAlias}.answered_original_as_array, '$[*]')
+    WHEN json_valid(${rowAlias}.answered_original)
+      AND TRIM(COALESCE(${rowAlias}.answered_original, '')) LIKE '[%'
+      THEN json_extract_string(${rowAlias}.answered_original, '$[*]')
+    ELSE []::VARCHAR[]
+  END`
+}
+
+const getDuckdbReviewedPromptHavingParts = (scope: ProjectOlapScope, prompts?: Record<string, string[]>) => {
+  const promptTypeById = getDuckdbPromptTypeById(scope)
+  const promptFilters = getPromptFilters(prompts)
+
+  return promptFilters.reduce<string[]>((havingParts, [promptId, answeredValues]) => {
+    const promptType = promptTypeById[promptId]
+    const isNumericPrompt = promptType ? isNumericType(promptType) : false
+
+    if (isNumericPrompt) {
+      const parsedFilters = answeredValues.reduce<{
+        binRanges: Array<{min: number; max: number}>
+        specialValues: string[]
+      }>(
+        (filters, value) => {
+          if (!value.startsWith('bin:')) {
+            return {...filters, specialValues: [...filters.specialValues, value]}
+          }
+
+          const [, minRaw = '', maxRaw = ''] = value.split(':')
+          const min = Number.parseInt(minRaw, 10)
+          const max = Number.parseInt(maxRaw, 10)
+
+          return Number.isNaN(min) || Number.isNaN(max)
+            ? filters
+            : {...filters, binRanges: [...filters.binRanges, {min, max}]}
+        },
+        {binRanges: [], specialValues: []},
+      )
+      const numericValueExpression = `TRY_CAST(TRIM(COALESCE(j.answered_original, '')) AS BIGINT)`
+      const rangeCondition =
+        parsedFilters.binRanges.length > 0
+          ? `(${parsedFilters.binRanges
+              .map((range) => {
+                return `(${numericValueExpression} >= ${range.min} AND ${numericValueExpression} <= ${range.max})`
+              })
+              .join(' OR ')})`
+          : null
+      const specialCondition =
+        parsedFilters.specialValues.length > 0
+          ? `TRIM(COALESCE(j.answered_original, '')) IN (${getDuckdbSqlStringList(parsedFilters.specialValues).join(', ')})`
+          : null
+      const conditions = [rangeCondition, specialCondition].filter((condition): condition is string => {
+        return condition !== null
+      })
+
+      return conditions.length === 0
+        ? havingParts
+        : [
+            ...havingParts,
+            `COUNT(*) FILTER (WHERE j.prompt_id = ${getDuckdbSqlString(promptId)} AND (${conditions.join(' OR ')})) > 0`,
+          ]
+    }
+
+    const answerArrayExpression = getDuckdbAnswerArrayExpression('j')
+    const quotedValues = getDuckdbSqlStringList(answeredValues).join(', ')
+    return [
+      ...havingParts,
+      `COUNT(*) FILTER (
+        WHERE j.prompt_id = ${getDuckdbSqlString(promptId)}
+          AND (
+            (array_length(${answerArrayExpression}) > 0 AND list_has_any(${answerArrayExpression}, ${getDuckdbSqlArrayLiteral(answeredValues)}))
+            OR (array_length(${answerArrayExpression}) = 0 AND TRIM(COALESCE(j.answered_original, '')) IN (${quotedValues}))
+          )
+      ) > 0`,
+    ]
+  }, [])
+}
+
+const getDuckdbReviewedArticlesQuerySections = (params: {
+  scope: ProjectOlapScope
+  from?: string | null
+  to?: string | null
+  search?: string | null
+  prompts?: Record<string, string[]>
+}) => {
+  const requestFromDate = parseDateFromInput(params.from, 'T00:00:00.000Z')
+  const requestToDate = parseDateFromInput(params.to, 'T23:59:59.999Z')
+  const effectiveFromDate = getEffectiveFromDate(params.scope.dateFrom, requestFromDate)
+  const effectiveToDate = getEffectiveToDate(params.scope.dateTo, requestToDate)
+  const trimmedSearch = params.search?.trim() ?? ''
+  const scopeRouteQuery =
+    params.scope.routeIds.length > 0
+      ? `SELECT article_id AS articleId
+         FROM app.article_route_link
+         WHERE import_route_id IN (${getDuckdbSqlStringList(params.scope.routeIds).join(', ')})`
+      : null
+  const filteredScopeWhereParts = [
+    effectiveFromDate ? `a.article_created_at >= ${effectiveFromDate.getTime()}` : null,
+    effectiveToDate ? `a.article_created_at <= ${effectiveToDate.getTime()}` : null,
+    trimmedSearch
+      ? `LOWER(COALESCE(a.article_title, '')) LIKE LOWER(${getDuckdbSqlString(`%${trimmedSearch}%`)})`
+      : null,
+  ].filter((part): part is string => {
+    return part !== null
+  })
+  const judgmentsWhereParts = [
+    `j.prompt_id IN (${getDuckdbSqlStringList(params.scope.promptIds).join(', ')})`,
+    `j.model_id = ${getDuckdbSqlString(params.scope.modelId ?? '')}`,
+    `j.use_title = ${getDuckdbSqlBoolean(params.scope.useTitle)}`,
+    `j.use_abstract = ${getDuckdbSqlBoolean(params.scope.useAbstract)}`,
+    `j.use_fulltext = ${getDuckdbSqlBoolean(params.scope.useFulltext)}`,
+    `j.use_fulltext_no_images = ${getDuckdbSqlBoolean(params.scope.useFulltextNoImages)}`,
+    'j.deleted_at IS NULL',
+  ]
+  const havingParts = [
+    `COUNT(DISTINCT j.prompt_id) = ${params.scope.promptIds.length}`,
+    ...getDuckdbReviewedPromptHavingParts(params.scope, params.prompts),
+  ]
+
+  return {
+    filteredScopeWhereClause:
+      filteredScopeWhereParts.length > 0 ? `WHERE ${filteredScopeWhereParts.join(' AND ')}` : '',
+    judgmentsWhereClause: judgmentsWhereParts.join(' AND '),
+    havingClause: havingParts.join(' AND '),
+    scopeArticleIdsQuery: [
+      scopeRouteQuery,
+      `SELECT article_id AS articleId
+       FROM app.project_articles
+       WHERE project_id = ${getDuckdbSqlString(params.scope.projectId)}`,
+    ]
+      .filter((query): query is string => {
+        return query !== null
+      })
+      .join('\nUNION\n'),
+  }
+}
+
+const getDuckdbReviewedArticleRows = async (params: {
+  scope: ProjectOlapScope
+  page: number
+  limit: number
+  from?: string | null
+  to?: string | null
+  search?: string | null
+  prompts?: Record<string, string[]>
+}) => {
+  const offset = Math.max(params.page - 1, 0) * params.limit
+  const sections = getDuckdbReviewedArticlesQuerySections(params)
+  const rows = await runDuckdbJsonQuery<{
+    id: string
+    articleTitle: string
+    articleCreatedAt: unknown
+    articleUpdatedAt: unknown
+    originalData: unknown
+  }>(`
+    WITH scope_article_ids AS (
+      ${sections.scopeArticleIdsQuery}
+    ),
+    filtered_scope_article_ids AS (
+      SELECT a.id AS articleId
+      FROM app.articles a
+      INNER JOIN scope_article_ids s ON s.articleId = a.id
+      ${sections.filteredScopeWhereClause}
+    ),
+    reviewed_article_ids AS (
+      SELECT j.article_id AS articleId
+      FROM app.judgments j
+      INNER JOIN filtered_scope_article_ids s ON s.articleId = j.article_id
+      WHERE ${sections.judgmentsWhereClause}
+      GROUP BY j.article_id
+      HAVING ${sections.havingClause}
+    )
+    SELECT
+      a.id AS id,
+      a.article_title AS articleTitle,
+      a.article_created_at AS articleCreatedAt,
+      a.article_updated_at AS articleUpdatedAt,
+      a.original_data AS originalData
+    FROM reviewed_article_ids r
+    INNER JOIN app.articles a ON a.id = r.articleId
+    ORDER BY a.article_created_at DESC NULLS LAST, a.id ASC
+    LIMIT ${params.limit}
+    OFFSET ${offset}
+  `)
+
+  return rows.map((row) => {
+    return {
+      id: row.id,
+      articleTitle: row.articleTitle,
+      articleCreatedAt: getDuckdbDateValue(row.articleCreatedAt),
+      articleUpdatedAt: getDuckdbDateValue(row.articleUpdatedAt),
+      originalData: getDuckdbJsonValue(row.originalData),
+    }
+  })
+}
+
+const countDuckdbReviewedArticles = async (params: {
+  scope: ProjectOlapScope
+  from?: string | null
+  to?: string | null
+  search?: string | null
+  prompts?: Record<string, string[]>
+}) => {
+  const sections = getDuckdbReviewedArticlesQuerySections(params)
+  const rows = await runDuckdbJsonQuery<{totalCount: number}>(`
+    WITH scope_article_ids AS (
+      ${sections.scopeArticleIdsQuery}
+    ),
+    filtered_scope_article_ids AS (
+      SELECT a.id AS articleId
+      FROM app.articles a
+      INNER JOIN scope_article_ids s ON s.articleId = a.id
+      ${sections.filteredScopeWhereClause}
+    ),
+    reviewed_article_ids AS (
+      SELECT j.article_id AS articleId
+      FROM app.judgments j
+      INNER JOIN filtered_scope_article_ids s ON s.articleId = j.article_id
+      WHERE ${sections.judgmentsWhereClause}
+      GROUP BY j.article_id
+      HAVING ${sections.havingClause}
+    )
+    SELECT COUNT(*) AS totalCount
+    FROM reviewed_article_ids
+  `)
+
+  return Number(rows[0]?.totalCount ?? 0)
 }
 
 const getActivitySortMs = (article: ScopedArticleRow) => {
@@ -821,8 +1063,37 @@ export const queryArticlesReviewsFromSqlite = async (
 ): Promise<ArticlesReviewsResponse> => {
   const scope = await getProjectOlapScope(params.projectId)
 
-  if (!scope || scope.promptIds.length === 0) {
+  if (!scope || scope.promptIds.length === 0 || !scope.modelId) {
     return {data: [], totalCount: 0, page: params.page, limit: params.limit, totalPages: 0}
+  }
+
+  if (getOlapDb() === 'duckdb') {
+    const pageArticles = await getDuckdbReviewedArticleRows({...params, scope})
+    const llmJudgmentRows = await getLlmJudgmentRows(
+      scope,
+      pageArticles.map((article) => {
+        return article.id
+      }),
+    )
+    const llmJudgmentsByArticle = groupByArticleId(llmJudgmentRows)
+    const data = pageArticles.map((article) => {
+      const judgmentsForArticle = getJudgmentRowsSorted(
+        llmJudgmentsByArticle.get(article.id) ?? [],
+        scope.promptOrderMap,
+      )
+      return {
+        id: article.id,
+        articleTitle: article.articleTitle,
+        articleCreatedAt: article.articleCreatedAt,
+        articleUpdatedAt: article.articleUpdatedAt,
+        judgments: judgmentsForArticle,
+        judgedPromptIds: getJudgedPromptIds(judgmentsForArticle, scope.promptOrderMap),
+        isFullyJudged: true,
+        journalTitle: getJournalTitleFromOriginalData(article.originalData),
+      }
+    })
+
+    return {data, totalCount: null, page: params.page, limit: params.limit, totalPages: null}
   }
 
   const {scopedArticles, llmJudgmentsByArticle} = await getLlmReviewedArticleRows({...params, scope})
@@ -853,8 +1124,13 @@ export const countArticlesReviewsFromSqlite = async (
 ): Promise<ArticlesReviewsCountResponse> => {
   const scope = await getProjectOlapScope(params.projectId)
 
-  if (!scope || scope.promptIds.length === 0) {
+  if (!scope || scope.promptIds.length === 0 || !scope.modelId) {
     return {totalCount: 0, totalPages: 0}
+  }
+
+  if (getOlapDb() === 'duckdb') {
+    const totalCount = await countDuckdbReviewedArticles({...params, scope})
+    return {totalCount, totalPages: Math.ceil(totalCount / params.limit)}
   }
 
   const {scopedArticles} = await getLlmReviewedArticleRows({...params, scope})

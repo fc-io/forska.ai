@@ -3,9 +3,14 @@ import {Elysia} from 'elysia'
 
 import {nvidiaSmi} from '../../db/schema.ts'
 import {getDatabase} from '../utils/getDatabase.ts'
+import {hasSqliteTable} from '../utils/hasSqliteTable.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
 export const nvidiaSmiRoutes = new Elysia().use(withErrorHandler()).get('/api/nvidiasmi', async () => {
+  if (!hasSqliteTable('nvidia_smi')) {
+    return {data: []}
+  }
+
   const db = getDatabase()
   const data = await db
     .select({

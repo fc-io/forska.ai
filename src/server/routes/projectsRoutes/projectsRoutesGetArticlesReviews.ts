@@ -81,7 +81,7 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
       return {...result, data}
     } catch (error) {
       console.error('[Articles Reviews API] Error:', error)
-      throw new Error(error instanceof Error ? error.message : 'Failed to fetch articles reviews')
+      throw new Error(error instanceof Error ? error.message : 'Failed to fetch articles reviews', {cause: error})
     }
   },
   {
