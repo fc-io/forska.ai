@@ -1,15 +1,15 @@
 /**
  * ClickHouse-based articles reviews API endpoint.
  *
- * This is the Phase 6 replacement for the PostgreSQL-based projectsRoutesGetArticlesReviews.
+ * This is the Phase 6 replacement for the app-database-based projectsRoutesGetArticlesReviews.
  * Uses ClickHouse for dramatically faster GROUP BY + ORDER BY + HAVING queries.
  *
- * Expected performance improvement: ~50s (PostgreSQL) -> ~2s (ClickHouse)
+ * Expected performance improvement: ~50s (app database) -> ~2s (ClickHouse)
  *
  * This implementation:
- * 1. Keeps the same API contract as the PostgreSQL version
+ * 1. Keeps the same API contract as the earlier app-database version
  * 2. Queries ClickHouse for judgment data
- * 3. Still uses PostgreSQL for project metadata (prompts, routes, curated articles)
+ * 3. Still uses the app database for project metadata (prompts, routes, curated articles)
  *
  * Feature flag: Set USE_CLICKHOUSE=true to enable this implementation
  */

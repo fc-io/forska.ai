@@ -1,14 +1,3 @@
-/**
- * Articles reviews API endpoint - ClickHouse implementation.
- *
- * This is the Phase 6 implementation using ClickHouse for dramatically faster
- * GROUP BY + ORDER BY + HAVING queries on judgment data.
- *
- * Performance improvement: ~50s (PostgreSQL) -> ~2s (ClickHouse)
- *
- * Uses PostgreSQL only for project metadata (prompts, routes, curated articles).
- * All judgment data is queried from ClickHouse.
- */
 import {inArray} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 

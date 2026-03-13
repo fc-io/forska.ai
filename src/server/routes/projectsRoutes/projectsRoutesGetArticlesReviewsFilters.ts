@@ -7,7 +7,7 @@
  * 2. Database-based: Query ClickHouse for distinct answer values (open-ended prompts)
  * 3. Numeric-based: Query ClickHouse for min/max values and generate bins (string.integer prompts)
  *
- * Phase 6 migration: Database queries moved from PostgreSQL to ClickHouse.
+ * Phase 6 migration: main filter queries moved from the app database to ClickHouse.
  */
 import {and, eq} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'

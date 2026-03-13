@@ -2,10 +2,10 @@
  * ClickHouse-based articles reviews both query service.
  *
  * Queries articles that have BOTH LLM assessments (in ClickHouse) AND human assessments
- * (in PostgreSQL judgmentsHuman table) for all project prompts.
+ * (in the app database `judgmentsHuman` table) for all project prompts.
  *
  * Strategy:
- * 1. Query PostgreSQL for articles fully assessed by humans (judgmentsHuman)
+ * 1. Query the app database for articles fully assessed by humans (`judgmentsHuman`)
  * 2. Query ClickHouse for LLM judgments on those articles
  * 3. Apply answer filters and pagination
  */
@@ -132,10 +132,10 @@ const formatDateForClickHouse = (date: Date): string => {
 }
 
 /**
- * Queries articles reviews both from ClickHouse + PostgreSQL.
+ * Queries articles reviews both from ClickHouse + the app database.
  *
  * This is a hybrid query:
- * 1. First finds articles fully assessed by humans (from PostgreSQL judgmentsHuman)
+ * 1. First finds articles fully assessed by humans (from the app database `judgmentsHuman` table)
  * 2. Then queries ClickHouse for LLM judgments on those articles
  * 3. Applies answer filters, pagination, and returns combined data
  */
@@ -146,7 +146,7 @@ export const queryArticlesReviewsBothFromClickHouse = async (
   const db = getDatabase()
   const client = getClickhouseClient()
 
-  // Step 1: Fetch project metadata from PostgreSQL
+  // Step 1: Fetch project metadata from the app database
   console.time('ch:both:metadata')
   const [projectPromptRows, projectBoundsResult, projectImportRouteTexts, curatedArticleRows] = await Promise.all([
     // Get enabled prompts for project
@@ -215,7 +215,7 @@ export const queryArticlesReviewsBothFromClickHouse = async (
     return r.articleId
   })
 
-  // Step 2: Find articles fully assessed by humans (from PostgreSQL)
+  // Step 2: Find articles fully assessed by humans (from the app database)
   console.time('ch:both:human_articles')
   const fullyAssessedByHumanQuery = await db
     .select({articleId: judgmentsHuman.articleId})
@@ -470,7 +470,7 @@ export const queryArticlesReviewsBothFromClickHouse = async (
     judgmentsByArticle.set(j.articleId, existing)
   }
 
-  // Fetch human answers for these articles from PostgreSQL
+  // Fetch human answers for these articles from the app database
   console.time('ch:both:human_answers')
   type HumanRow = {articleId: string; promptId: string; answer: string | null; updatedAt: Date | null}
 
@@ -579,17 +579,17 @@ export const queryArticlesReviewsBothFromClickHouse = async (
       return ao - bo
     })
 
-    const pgTitle = articleTitlesByArticleId[article.articleId]
-    const pgCreatedAt = articleCreatedAtByArticleId[article.articleId]
-    const pgUpdatedAt = articleUpdatedAtByArticleId[article.articleId]
+    const sqliteTitle = articleTitlesByArticleId[article.articleId]
+    const sqliteCreatedAt = articleCreatedAtByArticleId[article.articleId]
+    const sqliteUpdatedAt = articleUpdatedAtByArticleId[article.articleId]
     const chCreatedAt = parseClickhouseDateTimeUtc(article.created_)
     const chUpdatedAt = parseClickhouseDateTimeUtc(article.updated_)
 
     return {
       id: article.articleId,
-      articleTitle: pgTitle && pgTitle.trim() ? pgTitle : article.title_,
-      articleCreatedAt: pgCreatedAt === undefined ? chCreatedAt : pgCreatedAt,
-      articleUpdatedAt: pgUpdatedAt === undefined ? chUpdatedAt : pgUpdatedAt,
+      articleTitle: sqliteTitle && sqliteTitle.trim() ? sqliteTitle : article.title_,
+      articleCreatedAt: sqliteCreatedAt === undefined ? chCreatedAt : sqliteCreatedAt,
+      articleUpdatedAt: sqliteUpdatedAt === undefined ? chUpdatedAt : sqliteUpdatedAt,
       judgments: sortedJudgments,
       humanAnswersByPrompt: humanAnswersByArticlePrompt[article.articleId],
       journalTitle: journalTitlesByArticleId[article.articleId] ?? null,

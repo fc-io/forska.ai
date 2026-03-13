@@ -8,7 +8,7 @@
  * Also handles numeric prompts (string.integer) by querying min/max values
  * and generating bins.
  *
- * Performance: Expected ~1-2 seconds for ~25M rows (vs potentially slower in PostgreSQL)
+ * Performance: Expected ~1-2 seconds for ~25M rows (vs potentially slower in the app database)
  */
 import {eq} from 'drizzle-orm'
 
@@ -56,7 +56,7 @@ const formatDateForClickHouse = (date: Date): string => {
 }
 
 /**
- * Fetches project metadata from PostgreSQL needed for filter queries.
+ * Fetches project metadata from the app database needed for filter queries.
  * This includes project bounds, import routes, and curated articles.
  */
 const fetchProjectMetadataForFilters = async (projectId: string) => {
@@ -132,7 +132,7 @@ export const getDatabaseBasedFiltersFromClickHouse = async (
     return []
   }
 
-  // Fetch project metadata from PostgreSQL
+  // Fetch project metadata from the app database
   console.time('ch:filters:metadata')
   const metadata = await fetchProjectMetadataForFilters(params.projectId)
   console.timeEnd('ch:filters:metadata')

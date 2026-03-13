@@ -1,10 +1,10 @@
 /**
  * ClickHouse-based articles reviews query service.
  *
- * This is the ClickHouse equivalent of the PostgreSQL articlesReviewsQueryBuilder.ts
- * Queries the `judgments` table in ClickHouse which is populated via sync from PostgreSQL.
+ * This is the ClickHouse equivalent of the old app-database articlesReviewsQueryBuilder.ts.
+ * Queries the `judgments` table in ClickHouse which is populated via sync from the app database.
  *
- * Key differences from PostgreSQL:
+ * Key differences from the app database:
  * - Uses ClickHouse SQL dialect (hasAny for array intersections, etc.)
  * - GROUP BY and ORDER BY are fast due to columnar storage
  * - No need for progressive fetch - ClickHouse handles aggregation efficiently
@@ -100,7 +100,7 @@ export interface ArticlesReviewsResponse {
 }
 
 /**
- * Fetches project metadata from PostgreSQL (prompts, bounds, routes, curated articles)
+ * Fetches project metadata from the app database (prompts, bounds, routes, curated articles)
  * This is needed because ClickHouse doesn't have these tables.
  */
 const fetchProjectMetadataForClickHouse = async (projectId: string) => {
@@ -275,7 +275,7 @@ const createCuratedArticlesTempTable = async (
  *
  * For large curated article sets (>1000), uses a temp table with JOIN instead of IN clause.
  *
- * Expected performance: 1-5 seconds (vs ~50s in PostgreSQL)
+ * Expected performance: 1-5 seconds (vs ~50s in the app database)
  */
 export const queryArticlesReviewsFromClickHouse = async (
   params: ArticlesReviewsParams,
@@ -283,7 +283,7 @@ export const queryArticlesReviewsFromClickHouse = async (
   const startTime = performance.now()
   const client = getClickhouseClient()
 
-  // Fetch metadata from PostgreSQL
+  // Fetch metadata from the app database
   console.time('ch:metadata')
   const metadata = await fetchProjectMetadataForClickHouse(params.projectId)
   console.timeEnd('ch:metadata')
@@ -494,7 +494,7 @@ export const queryArticlesReviewsFromClickHouse = async (
           // IMPORTANT: answeredOriginalAsArray is empty for most rows (~98%), so we need to:
           // 1. Check answeredOriginalAsArray if it's not empty (using hasAny)
           // 2. OR check answeredOriginal directly (the single-value fallback)
-          // This mirrors the PostgreSQL COALESCE logic in articlesReviewsQueryBuilder.ts
+          // This mirrors the legacy app-database COALESCE logic in articlesReviewsQueryBuilder.ts
           havingParts.push(
             `sumIf(1, promptId = '${promptId}' AND (
               (length(answeredOriginalAsArray) > 0 AND hasAny(arrayMap(x -> assumeNotNull(x), arrayFilter(x -> x IS NOT NULL, answeredOriginalAsArray)), [${valuesQuoted}]))
@@ -666,9 +666,9 @@ export const queryArticlesReviewsFromClickHouse = async (
     const results: ArticleReviewResult[] = articlesData.map((article) => {
       const judgments = judgmentsByArticle.get(article.articleId) ?? []
 
-      const pgTitle = articleTitlesByArticleId[article.articleId]
-      const pgCreatedAt = articleCreatedAtByArticleId[article.articleId]
-      const pgUpdatedAt = articleUpdatedAtByArticleId[article.articleId]
+      const sqliteTitle = articleTitlesByArticleId[article.articleId]
+      const sqliteCreatedAt = articleCreatedAtByArticleId[article.articleId]
+      const sqliteUpdatedAt = articleUpdatedAtByArticleId[article.articleId]
       const chCreatedAt = parseClickhouseDateTimeUtc(article.created_)
       const chUpdatedAt = parseClickhouseDateTimeUtc(article.updated_)
 
@@ -690,9 +690,9 @@ export const queryArticlesReviewsFromClickHouse = async (
 
       return {
         id: article.articleId,
-        articleTitle: pgTitle && pgTitle.trim() ? pgTitle : article.title_,
-        articleCreatedAt: pgCreatedAt === undefined ? chCreatedAt : pgCreatedAt,
-        articleUpdatedAt: pgUpdatedAt === undefined ? chUpdatedAt : pgUpdatedAt,
+        articleTitle: sqliteTitle && sqliteTitle.trim() ? sqliteTitle : article.title_,
+        articleCreatedAt: sqliteCreatedAt === undefined ? chCreatedAt : sqliteCreatedAt,
+        articleUpdatedAt: sqliteUpdatedAt === undefined ? chUpdatedAt : sqliteUpdatedAt,
         judgments: sortedJudgments,
         judgedPromptIds,
         isFullyJudged,
@@ -755,7 +755,7 @@ export const countArticlesReviewsFromClickHouse = async (
   const client = getClickhouseClient()
 
   try {
-    // Fetch metadata from PostgreSQL
+    // Fetch metadata from the app database
     console.time('ch:count:metadata')
     const metadata = await fetchProjectMetadataForClickHouse(params.projectId)
     console.timeEnd('ch:count:metadata')
@@ -944,7 +944,7 @@ export const countArticlesReviewsFromClickHouse = async (
             // IMPORTANT: answeredOriginalAsArray is empty for most rows (~98%), so we need to:
             // 1. Check answeredOriginalAsArray if it's not empty (using hasAny)
             // 2. OR check answeredOriginal directly (the single-value fallback)
-            // This mirrors the PostgreSQL COALESCE logic in articlesReviewsQueryBuilder.ts
+            // This mirrors the legacy app-database COALESCE logic in articlesReviewsQueryBuilder.ts
             havingParts.push(
               `sumIf(1, promptId = '${promptId}' AND (
                 (length(answeredOriginalAsArray) > 0 AND hasAny(arrayMap(x -> assumeNotNull(x), arrayFilter(x -> x IS NOT NULL, answeredOriginalAsArray)), [${valuesQuoted}]))

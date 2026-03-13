@@ -67,11 +67,10 @@ const getPromptsToFetchCount = (
 
 type PromptQueueEntry = {articleId: string; promptId: string}
 
-// PostgreSQL has a limit of ~65535 parameters per query.
-// With 5 columns per row, we can safely insert up to 10000 rows per batch.
+// Keep insert batches bounded to avoid oversized statements and parameter lists.
 const BATCH_INSERT_SIZE = 10000
 
-/** Filter out prompt entries that already have judgments in PostgreSQL */
+/** Filter out prompt entries that already have judgments in the app database */
 const filterAlreadyJudged = async (
   db: AppDatabase,
   promptEntries: PromptQueueEntry[],
@@ -135,7 +134,7 @@ const addPromptsToQueue = async (
 ): Promise<void> => {
   if (promptEntries.length === 0) return
 
-  // Chunk the entries to avoid exceeding PostgreSQL's parameter limit
+  // Chunk the entries to keep insert statements bounded
   // Use onConflictDoNothing because ClickHouse query cannot check queue table
   // (judgments_jobs_prompts is not replicated to CH)
   for (let i = 0; i < promptEntries.length; i += BATCH_INSERT_SIZE) {

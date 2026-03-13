@@ -5,12 +5,6 @@ import {articles} from '../../../db/schema.ts'
 import {queryArticlesReviewsBothFromOlap} from '../../../services/olap/articlesReviewsBothOlap.ts'
 import {getDatabase} from '../../utils/getDatabase.ts'
 
-/**
- * GET articles that have BOTH LLM and human assessments for all project prompts.
- *
- * Uses ClickHouse for LLM judgment queries (fast aggregation)
- * and PostgreSQL for human judgment queries (smaller dataset).
- */
 export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
   '/api/articlesreviewsboth',
   async ({body}) => {

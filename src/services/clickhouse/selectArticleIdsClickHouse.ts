@@ -2,7 +2,7 @@
  * ClickHouse-based article selection for add_articles_by_filter endpoint.
  *
  * Selects article IDs based on list type (llm, human, both, unassessed) using ClickHouse
- * for LLM judgment queries and PostgreSQL for human judgment queries.
+ * for LLM judgment queries and the app database for human judgment queries.
  */
 import {and, eq, inArray, sql} from 'drizzle-orm'
 
@@ -54,7 +54,7 @@ const formatDateForClickHouse = (date: Date): string => {
 }
 
 /**
- * Fetches project metadata from PostgreSQL
+ * Fetches project metadata from the app database.
  */
 const fetchProjectMetadata = async (projectId: string) => {
   const db = getDatabase()
@@ -406,14 +406,14 @@ const selectUnassessedArticleIds = async (params: SelectArticleIdsParams): Promi
   console.log(`[ClickHouse SelectIds Unassessed] Found ${partiallyAssessedIds.length} partially assessed articles`)
 
   // Note: This doesn't include articles with ZERO judgments. For those, we'd need to query
-  // PostgreSQL articles table. For now, we return partially assessed only.
-  // The original PostgreSQL implementation also had this limitation in practice.
+  // the app database articles table. For now, we return partially assessed only.
+  // The original app-database implementation also had this limitation in practice.
 
   return partiallyAssessedIds
 }
 
 /**
- * Selects article IDs for 'both' list type using ClickHouse + PostgreSQL.
+ * Selects article IDs for 'both' list type using ClickHouse + the app database.
  * Finds articles that have BOTH LLM and human assessments for ALL prompts.
  */
 const selectBothArticleIds = async (params: SelectArticleIdsParams): Promise<string[]> => {
@@ -423,7 +423,7 @@ const selectBothArticleIds = async (params: SelectArticleIdsParams): Promise<str
 
   if (metadata.promptIds.length === 0) return []
 
-  // Step 1: Find articles fully assessed by humans (from PostgreSQL)
+  // Step 1: Find articles fully assessed by humans (from the app database)
   console.time('ch:select_both_human')
   const fullyAssessedByHumanQuery = await db
     .select({articleId: judgmentsHuman.articleId})
@@ -588,8 +588,8 @@ const selectBothArticleIds = async (params: SelectArticleIdsParams): Promise<str
 }
 
 /**
- * Selects article IDs for 'human' list type using PostgreSQL only.
- * This doesn't use ClickHouse since human judgments are in PostgreSQL.
+ * Selects article IDs for 'human' list type using the app database only.
+ * This doesn't use ClickHouse since human judgments are stored in the app database.
  */
 const selectHumanArticleIds = async (params: SelectArticleIdsParams): Promise<string[]> => {
   const db = getDatabase()

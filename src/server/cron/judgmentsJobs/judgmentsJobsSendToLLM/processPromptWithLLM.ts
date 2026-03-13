@@ -10,7 +10,7 @@ import {createRateLimitedLogger, rateLimitedLogger} from '../../../utils/rateLim
 import {ConnectionError} from '../connectionHealth.ts'
 import type {PromptToProcess} from './getAndUpdateReadyPrompts.ts'
 
-const checkJudgmentExistsInPostgres = async (db: AppDatabase, promptToProcess: PromptToProcess): Promise<boolean> => {
+const checkJudgmentExistsInDatabase = async (db: AppDatabase, promptToProcess: PromptToProcess): Promise<boolean> => {
   const [existing] = await db
     .select({id: schema.judgments.id})
     .from(schema.judgments)
@@ -141,7 +141,7 @@ const markAsSkipped = async (
 export const processPromptWithLLM = async (db: AppDatabase, promptToProcess: PromptToProcess): Promise<void> => {
   const startTime = Date.now()
   const modelContext = getModelContextForProvider(promptToProcess.modelProvider)
-  const judgmentExists = await checkJudgmentExistsInPostgres(db, promptToProcess)
+  const judgmentExists = await checkJudgmentExistsInDatabase(db, promptToProcess)
   if (judgmentExists) {
     await markAsJudged(db, promptToProcess.jobId, promptToProcess.articleId, promptToProcess.promptId)
     console.log('[llm] Skipped - judgment already exists for:', promptToProcess.articleId.slice(0, 8))

@@ -805,29 +805,28 @@ export const adminInvestigateRoutes = new Elysia()
         return r.articleId
       })
 
-      // Count articles in scope from PostgreSQL
-      let pgArticleCount = 0
+      // Count articles in scope from SQLite
+      let sqliteArticleCount = 0
       if (curatedIds.length > 0) {
         const result = await db
           .select({count: sql<number>`COUNT(DISTINCT ${articles.id})`})
           .from(articles)
           .where(inArray(articles.id, curatedIds))
-        pgArticleCount = result[0]?.count ?? 0
+        sqliteArticleCount = result[0]?.count ?? 0
       } else if (routes.length > 0) {
         const result = await db
           .select({count: sql<number>`COUNT(*)`})
           .from(articles)
           .where(inArray(articles.importRoute, routes))
-        pgArticleCount = result[0]?.count ?? 0
+        sqliteArticleCount = result[0]?.count ?? 0
       }
 
-      // Build article scope condition for PostgreSQL
+      // Build article scope condition for SQLite
       const articleIds = curatedIds.length > 0 ? curatedIds : []
       const hasArticleScope = articleIds.length > 0 || routes.length > 0
 
-      // Count judgments in PostgreSQL matching project settings AND scoped to project articles
-      let pgJudgmentCount = 0
-      let pgScopedJudgmentCount = 0
+      // Count judgments in SQLite matching project settings AND scoped to project articles
+      let sqliteScopedJudgmentCount = 0
 
       if (hasArticleScope) {
         // Scoped count (only articles in this project)
@@ -846,7 +845,7 @@ export const adminInvestigateRoutes = new Elysia()
           )
         }
 
-        const pgScopedResult = await db
+        const sqliteScopedResult = await db
           .select({count: sql<number>`COUNT(*)`})
           .from(judgments)
           .where(
@@ -861,11 +860,11 @@ export const adminInvestigateRoutes = new Elysia()
               sql`${judgments.deletedAt} IS NULL`,
             ),
           )
-        pgScopedJudgmentCount = pgScopedResult[0]?.count ?? 0
+        sqliteScopedJudgmentCount = sqliteScopedResult[0]?.count ?? 0
       }
 
       // Total count (all judgments matching settings, for comparison)
-      const pgTotalResult = await db
+      const sqliteTotalResult = await db
         .select({count: sql<number>`COUNT(*)`})
         .from(judgments)
         .where(
@@ -879,7 +878,7 @@ export const adminInvestigateRoutes = new Elysia()
             sql`${judgments.deletedAt} IS NULL`,
           ),
         )
-      pgJudgmentCount = pgTotalResult[0]?.count ?? 0
+      const sqliteJudgmentCount = sqliteTotalResult[0]?.count ?? 0
 
       // Count judgments in ClickHouse matching project settings AND scoped
       const promptIdsQuoted = enabledPromptIds
@@ -955,8 +954,8 @@ export const adminInvestigateRoutes = new Elysia()
         chArticleCount = row?.count ?? 0
       }
 
-      const expectedJudgments = pgArticleCount * enabledPromptIds.length
-      const missingInPostgres = expectedJudgments - pgScopedJudgmentCount
+      const expectedJudgments = sqliteArticleCount * enabledPromptIds.length
+      const remainingInSqlite = expectedJudgments - sqliteScopedJudgmentCount
 
       return {
         project: {
@@ -975,18 +974,18 @@ export const adminInvestigateRoutes = new Elysia()
           importRouteNamesByRoute,
           curatedArticleCount: curatedIds.length,
         },
-        postgres: {
-          articlesInScope: pgArticleCount,
-          judgmentsInScope: pgScopedJudgmentCount,
-          judgmentsTotalMatchingSettings: pgJudgmentCount,
+        sqlite: {
+          articlesInScope: sqliteArticleCount,
+          judgmentsInScope: sqliteScopedJudgmentCount,
+          judgmentsTotalMatchingSettings: sqliteJudgmentCount,
         },
         clickhouse: {articlesInScope: chArticleCount, judgmentsInScope: chJudgmentCount},
         analysis: {
           expectedJudgments,
-          remainingToRun: missingInPostgres,
-          missingInClickhouse: pgScopedJudgmentCount - chJudgmentCount,
-          articlesFullyCovered: Math.floor(pgScopedJudgmentCount / enabledPromptIds.length),
-          articlesRemaining: pgArticleCount - Math.floor(pgScopedJudgmentCount / enabledPromptIds.length),
+          remainingToRun: remainingInSqlite,
+          missingInClickhouse: sqliteScopedJudgmentCount - chJudgmentCount,
+          articlesFullyCovered: Math.floor(sqliteScopedJudgmentCount / enabledPromptIds.length),
+          articlesRemaining: sqliteArticleCount - Math.floor(sqliteScopedJudgmentCount / enabledPromptIds.length),
         },
       }
     },

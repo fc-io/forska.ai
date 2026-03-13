@@ -23,7 +23,7 @@ type DiagnoseResult = {
     importRouteNamesByRoute?: Record<string, string | null>
     curatedArticleCount: number
   }
-  postgres: {articlesInScope: number; judgmentsInScope: number; judgmentsTotalMatchingSettings: number}
+  sqlite: {articlesInScope: number; judgmentsInScope: number; judgmentsTotalMatchingSettings: number}
   clickhouse: {articlesInScope: number; judgmentsInScope: number}
   analysis: {
     expectedJudgments: number
@@ -118,7 +118,7 @@ const AdminDiagnoseUnassessed = () => {
       <div class="mb-6">
         <h1 class="text-2xl font-bold">Diagnose Unassessed Articles</h1>
         <p class="text-sm text-gray-600 mt-1">
-          Compare PostgreSQL and ClickHouse data to identify why articles show as unassessed
+          Compare SQLite and ClickHouse data to identify why articles show as unassessed
         </p>
       </div>
 
@@ -258,22 +258,22 @@ const AdminDiagnoseUnassessed = () => {
                     <p class="text-sm text-blue-600 mb-1">Expected (full coverage)</p>
                     <p class="text-2xl font-bold text-blue-700">{r().analysis.expectedJudgments.toLocaleString()}</p>
                     <p class="text-xs text-blue-500 mt-1">
-                      {r().postgres.articlesInScope.toLocaleString()} articles x {r().scope.enabledPromptCount} prompts
+                      {r().sqlite.articlesInScope.toLocaleString()} articles x {r().scope.enabledPromptCount} prompts
                     </p>
                   </div>
                   <div class="p-4 bg-green-50 rounded-lg">
-                    <p class="text-sm text-green-600 mb-1">Actual (PostgreSQL, in scope)</p>
-                    <p class="text-2xl font-bold text-green-700">{r().postgres.judgmentsInScope.toLocaleString()}</p>
+                    <p class="text-sm text-green-600 mb-1">Actual (SQLite, in scope)</p>
+                    <p class="text-2xl font-bold text-green-700">{r().sqlite.judgmentsInScope.toLocaleString()}</p>
                     <p class="text-xs text-green-500 mt-1">
-                      {((r().postgres.judgmentsInScope / r().analysis.expectedJudgments) * 100).toFixed(1)}% coverage
+                      {((r().sqlite.judgmentsInScope / r().analysis.expectedJudgments) * 100).toFixed(1)}% coverage
                     </p>
                   </div>
                 </div>
 
                 <div class="grid grid-cols-3 gap-4 mb-6">
                   <div class="p-4 bg-gray-50 rounded-lg text-center">
-                    <p class="text-sm text-gray-500">Articles in PG</p>
-                    <p class="text-xl font-semibold">{r().postgres.articlesInScope.toLocaleString()}</p>
+                    <p class="text-sm text-gray-500">Articles in SQLite</p>
+                    <p class="text-xl font-semibold">{r().sqlite.articlesInScope.toLocaleString()}</p>
                   </div>
                   <div class="p-4 bg-gray-50 rounded-lg text-center">
                     <p class="text-sm text-gray-500">Articles in CH</p>
@@ -311,10 +311,10 @@ const AdminDiagnoseUnassessed = () => {
                     </div>
                   </Show>
 
-                  <Show when={r().clickhouse.articlesInScope < r().postgres.articlesInScope}>
+                  <Show when={r().clickhouse.articlesInScope < r().sqlite.articlesInScope}>
                     <div class="p-4 bg-red-50 border border-red-200 rounded-lg">
                       <p class="text-red-700 font-medium">
-                        Missing {(r().postgres.articlesInScope - r().clickhouse.articlesInScope).toLocaleString()}{' '}
+                        Missing {(r().sqlite.articlesInScope - r().clickhouse.articlesInScope).toLocaleString()}{' '}
                         articles in ClickHouse
                       </p>
                       <p class="text-sm text-red-600 mt-1 mb-3">
@@ -328,7 +328,7 @@ const AdminDiagnoseUnassessed = () => {
                     when={
                       r().analysis.remainingToRun === 0
                       && r().analysis.missingInClickhouse === 0
-                      && r().clickhouse.articlesInScope >= r().postgres.articlesInScope
+                      && r().clickhouse.articlesInScope >= r().sqlite.articlesInScope
                     }
                   >
                     <div class="p-4 bg-green-50 border border-green-200 rounded-lg">

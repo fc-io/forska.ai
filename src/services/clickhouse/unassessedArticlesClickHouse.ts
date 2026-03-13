@@ -2,7 +2,7 @@
  * ClickHouse-based unassessed articles queries.
  *
  * Uses `forska.judgments` for consistency with articlesReviewsClickHouse.ts.
- * Scope is determined via PostgreSQL metadata (project_articles, import routes).
+ * Scope is determined via app-database metadata (project_articles, import routes).
  * Uses temp tables for large curated article sets to avoid query size limits.
  */
 import {and, eq} from 'drizzle-orm'

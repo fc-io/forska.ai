@@ -51,7 +51,7 @@ export const insertArticlesIntoProject = async (
   }
 
   // Filter to IDs that exist in articles to avoid FK errors.
-  // Chunk queries to avoid exceeding PostgreSQL's parameter limit (~32k).
+  // Chunk queries to avoid oversized SQLite statements.
   const existingArticleSet = new Set<string>()
   const lookupBatchSize = 10000
   for (const idsChunk of chunk(uniqueIds, lookupBatchSize)) {
@@ -81,7 +81,7 @@ export const insertArticlesIntoProject = async (
   }
 
   // Count existing associations to compute inserted count deterministically.
-  // Chunk queries to avoid exceeding PostgreSQL's parameter limit.
+  // Chunk queries to avoid oversized SQLite statements.
   const existingAssocSet = new Set<string>()
   for (const idsChunk of chunk(validIds, lookupBatchSize)) {
     if (idsChunk.length === 0) continue
