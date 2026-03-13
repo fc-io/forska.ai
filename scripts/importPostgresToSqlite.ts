@@ -4,7 +4,14 @@ import {env} from '../src/server/utils/env.ts'
 import {getSqliteClient} from '../src/server/utils/getDatabase.ts'
 import {localUserDefaults} from '../src/utils/localUser.ts'
 
-type ImportOptions = {clear: boolean; batchSize: number; reportPath: string; fromTable: string | null; resume: boolean}
+type ImportOptions = {
+  clear: boolean
+  batchSize: number
+  reportPath: string
+  fromTable: string | null
+  resume: boolean
+  skipTables: string[]
+}
 
 type TableConfig = {
   tableName: string
@@ -31,6 +38,7 @@ type ImportReport = {
   sqlitePath: string
   clearRequested: boolean
   batchSize: number
+  selectedTables: string[]
   startedAt: string
   finishedAt: string | null
   status?: 'running' | 'completed'
@@ -82,6 +90,21 @@ const importTables: TableConfig[] = [
   {tableName: 'nvidia_smi', pagination: 'id', batchSize: 20000},
 ]
 
+const importTableNames = importTables.map((config) => {
+  return config.tableName
+})
+
+const getTableNamesFromArg = (value: string | undefined) => {
+  return (value ?? '')
+    .split(',')
+    .map((entry) => {
+      return entry.trim()
+    })
+    .filter((entry) => {
+      return entry !== ''
+    })
+}
+
 const getArgs = (): ImportOptions => {
   const args = process.argv.slice(2)
   const batchArg = args.find((arg) => {
@@ -93,7 +116,17 @@ const getArgs = (): ImportOptions => {
   const fromTableArg = args.find((arg) => {
     return arg.startsWith('--from-table=')
   })
+  const skipTableArgs = args.filter((arg) => {
+    return arg.startsWith('--skip-table=')
+  })
   const batchSize = Number.parseInt(batchArg?.split('=')[1] ?? '1000', 10)
+  const skipTables = [
+    ...new Set(
+      skipTableArgs.flatMap((arg) => {
+        return getTableNamesFromArg(arg.split('=')[1])
+      }),
+    ),
+  ]
 
   return {
     clear: args.includes('--clear'),
@@ -101,6 +134,7 @@ const getArgs = (): ImportOptions => {
     reportPath: reportArg?.split('=')[1] ?? './data/local-first-import-report.json',
     fromTable: fromTableArg?.split('=')[1] ?? null,
     resume: args.includes('--resume'),
+    skipTables,
   }
 }
 
@@ -134,6 +168,31 @@ const validateOptions = (options: ImportOptions) => {
   if (options.fromTable && options.resume) {
     throw new Error('Use either --from-table or --resume, not both in the same run.')
   }
+
+  if (options.skipTables.length > 0 && options.resume) {
+    throw new Error('Use either --skip-table on a fresh run or --resume to continue the saved table selection.')
+  }
+
+  const unknownTables = options.skipTables.filter((tableName) => {
+    return !importTableNames.includes(tableName)
+  })
+
+  if (unknownTables.length > 0) {
+    throw new Error(`Unknown table(s) in --skip-table: ${unknownTables.join(', ')}`)
+  }
+}
+
+const getConfiguredImportTables = (options: ImportOptions) => {
+  const skipTableSet = new Set(options.skipTables)
+  const selectedTables = getImportTablesFromTable(options.fromTable).filter((config) => {
+    return !skipTableSet.has(config.tableName)
+  })
+
+  if (selectedTables.length === 0) {
+    throw new Error('No tables selected for import after applying --skip-table filters.')
+  }
+
+  return selectedTables
 }
 
 const getCursorName = (tableName: string) => {
@@ -154,25 +213,37 @@ const logImportProgress = (tableName: string, processedRows: number, progress: I
   return {...progress, lastLoggedAtMs: now}
 }
 
-const getResumeTableName = (report: ImportReport) => {
+const getResumeTableName = (report: ImportReport, selectedTables: TableConfig[]) => {
   if (report.currentTable) {
     return report.currentTable
   }
 
   return (
-    importTables.find((config) => {
+    selectedTables.find((config) => {
       return report.tables[config.tableName] == null
     })?.tableName ?? null
   )
 }
 
-const getSelectedImportTables = (options: ImportOptions, report: ImportReport) => {
+const getReportSelectedImportTables = (report: ImportReport) => {
+  const selectedTableSet = new Set(report.selectedTables)
+  return importTables.filter((config) => {
+    return selectedTableSet.has(config.tableName)
+  })
+}
+
+const getSelectedImportTables = (options: ImportOptions, report: ImportReport, configuredTables: TableConfig[]) => {
   if (!options.resume) {
-    return getImportTablesFromTable(options.fromTable)
+    return configuredTables
   }
 
-  const resumeTableName = getResumeTableName(report)
-  return resumeTableName ? getImportTablesFromTable(resumeTableName) : []
+  const reportTables = getReportSelectedImportTables(report)
+  const resumeTableName = getResumeTableName(report, reportTables)
+  const resumeTableIndex = reportTables.findIndex((config) => {
+    return config.tableName === resumeTableName
+  })
+
+  return resumeTableIndex === -1 ? [] : reportTables.slice(resumeTableIndex)
 }
 
 const quoteIdentifier = (value: string) => {
@@ -450,11 +521,12 @@ const clearTargetTables = (tables: TableConfig[], clearUser: boolean) => {
 const withFastImportPragmas = async <T>(run: () => Promise<T>) => {
   const sqlite = getSqliteClient()
 
+  sqlite.exec('PRAGMA wal_checkpoint(TRUNCATE);')
+  sqlite.exec('PRAGMA journal_mode = DELETE;')
   sqlite.exec('PRAGMA foreign_keys = OFF;')
   sqlite.exec('PRAGMA synchronous = OFF;')
   sqlite.exec('PRAGMA temp_store = MEMORY;')
   sqlite.exec('PRAGMA cache_size = -200000;')
-  sqlite.exec('PRAGMA wal_autocheckpoint = 0;')
 
   try {
     return await run()
@@ -462,7 +534,7 @@ const withFastImportPragmas = async <T>(run: () => Promise<T>) => {
     sqlite.exec('PRAGMA foreign_keys = ON;')
     sqlite.exec('PRAGMA synchronous = NORMAL;')
     sqlite.exec('PRAGMA temp_store = DEFAULT;')
-    sqlite.exec('PRAGMA wal_autocheckpoint = 1000;')
+    sqlite.exec('PRAGMA journal_mode = WAL;')
     sqlite.exec('PRAGMA optimize;')
   }
 }
@@ -472,12 +544,19 @@ const loadReport = async (reportPath: string) => {
   return (await reportFile.exists()) ? ((await reportFile.json()) as ImportReport) : null
 }
 
-const createReport = (options: ImportOptions, sourceDatabaseUrl: string): ImportReport => {
+const createReport = (
+  options: ImportOptions,
+  sourceDatabaseUrl: string,
+  selectedTables: TableConfig[],
+): ImportReport => {
   return {
     sourceDatabaseUrl,
     sqlitePath: env.SQLITE_PATH,
     clearRequested: options.clear,
     batchSize: options.batchSize,
+    selectedTables: selectedTables.map((config) => {
+      return config.tableName
+    }),
     startedAt: new Date().toISOString(),
     finishedAt: null,
     status: 'running',
@@ -487,9 +566,13 @@ const createReport = (options: ImportOptions, sourceDatabaseUrl: string): Import
   }
 }
 
-const getReport = async (options: ImportOptions, sourceDatabaseUrl: string): Promise<ImportReport> => {
+const getReport = async (
+  options: ImportOptions,
+  sourceDatabaseUrl: string,
+  selectedTables: TableConfig[],
+): Promise<ImportReport> => {
   if (!options.resume) {
-    return createReport(options, sourceDatabaseUrl)
+    return createReport(options, sourceDatabaseUrl, selectedTables)
   }
 
   const report = await loadReport(options.reportPath)
@@ -518,13 +601,13 @@ const getReportedFinalRows = (tableReport: TableReport | undefined) => {
 }
 
 const validateResumeState = (report: ImportReport, selectedTables: TableConfig[]) => {
-  const resumeTableName = getResumeTableName(report)
+  const resumeTableName = getResumeTableName(report, selectedTables)
   const resumeTableIndex = resumeTableName
-    ? importTables.findIndex((config) => {
+    ? selectedTables.findIndex((config) => {
         return config.tableName === resumeTableName
       })
-    : importTables.length
-  const completedTables = importTables.slice(0, resumeTableIndex)
+    : selectedTables.length
+  const completedTables = selectedTables.slice(0, resumeTableIndex)
 
   completedTables.forEach((config) => {
     const expectedRows = getReportedFinalRows(report.tables[config.tableName])
@@ -689,9 +772,10 @@ const importTable = async (client: Client, config: TableConfig, options: ImportO
 const importPostgresToSqlite = async () => {
   const options = getArgs()
   validateOptions(options)
+  const configuredTables = getConfiguredImportTables(options)
   const sourceDatabaseUrl = getSourceDatabaseUrl()
-  const report = await getReport(options, sourceDatabaseUrl)
-  const selectedTables = getSelectedImportTables(options, report)
+  const report = await getReport(options, sourceDatabaseUrl, configuredTables)
+  const selectedTables = getSelectedImportTables(options, report, configuredTables)
   const client = new Client({connectionString: sourceDatabaseUrl})
 
   await client.connect()
