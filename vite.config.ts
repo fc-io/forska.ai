@@ -9,7 +9,6 @@ import {env} from './src/server/utils/env.ts'
 // eslint-disable-next-line import/no-default-export
 export default defineConfig({
   plugins: [
-    solid(),
     tanstackRouter({
       target: 'solid',
       autoCodeSplitting: true,
@@ -17,6 +16,7 @@ export default defineConfig({
       routeFilePrefix: '+',
       generatedRouteTree: './src/app/routeTree.gen.ts',
     }),
+    solid(),
     tailwindcss(),
   ],
   resolve: {alias: {'~': path.resolve(__dirname, './src')}},
