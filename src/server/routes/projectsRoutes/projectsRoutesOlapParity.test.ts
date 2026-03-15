@@ -33,6 +33,7 @@ const queryReviewsRef = {
     return {data: [], totalCount: null, page: 1, limit: 100, totalPages: null}
   },
 }
+const queryReviewsParamsRef = {current: [] as unknown[]}
 const queryBothRef = {
   current: async (_params?: unknown): Promise<unknown> => {
     return {data: [], totalCount: 0, page: 1, limit: 100, totalPages: 0}
@@ -71,6 +72,7 @@ void mock.module(articlesReviewsOlapModulePath, () => {
       return countReviewsRef.current(params)
     },
     queryArticlesReviewsFromOlap: (params: unknown) => {
+      queryReviewsParamsRef.current = [...queryReviewsParamsRef.current, params]
       return queryReviewsRef.current(params)
     },
   }
@@ -90,6 +92,72 @@ void mock.module(unassessedArticlesOlapModulePath, () => {
       return queryUnassessedRef.current(params)
     },
   }
+})
+
+test('articles reviews route forwards unfiltered request params to olap', async () => {
+  queryReviewsParamsRef.current = []
+  reviewHydrationRowsRef.current = async () => {
+    return []
+  }
+  queryReviewsRef.current = async (_params?: unknown): Promise<unknown> => {
+    return {data: [], totalCount: null, page: 1, limit: 10, totalPages: null}
+  }
+
+  const {projectsRoutesGetArticlesReviews} = await import('./projectsRoutesGetArticlesReviews.ts')
+  const app = new Elysia().use(projectsRoutesGetArticlesReviews)
+  const response = await app.handle(
+    new Request('http://localhost/api/articlesreviews', {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({projectId: 'project-1', page: '1', limit: '10', prompts: {}}),
+    }),
+  )
+
+  expect(response.status).toBe(200)
+  expect(queryReviewsParamsRef.current).toEqual([
+    {projectId: 'project-1', page: 1, limit: 10, from: undefined, to: undefined, search: undefined, prompts: {}},
+  ])
+})
+
+test('articles reviews route forwards filtered request params to olap', async () => {
+  queryReviewsParamsRef.current = []
+  reviewHydrationRowsRef.current = async () => {
+    return []
+  }
+  queryReviewsRef.current = async (_params?: unknown): Promise<unknown> => {
+    return {data: [], totalCount: null, page: 3, limit: 25, totalPages: null}
+  }
+
+  const {projectsRoutesGetArticlesReviews} = await import('./projectsRoutesGetArticlesReviews.ts')
+  const app = new Elysia().use(projectsRoutesGetArticlesReviews)
+  const response = await app.handle(
+    new Request('http://localhost/api/articlesreviews', {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({
+        projectId: 'project-1',
+        page: '3',
+        limit: '25',
+        from: '2024-01-01',
+        to: '2024-02-01',
+        search: 'covid',
+        prompts: {'prompt-1': ['yes', 'no']},
+      }),
+    }),
+  )
+
+  expect(response.status).toBe(200)
+  expect(queryReviewsParamsRef.current).toEqual([
+    {
+      projectId: 'project-1',
+      page: 3,
+      limit: 25,
+      from: '2024-01-01',
+      to: '2024-02-01',
+      search: 'covid',
+      prompts: {'prompt-1': ['yes', 'no']},
+    },
+  ])
 })
 
 test('articles reviews route falls back to olap article fields when sqlite row is missing', async () => {
