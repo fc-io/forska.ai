@@ -1,10 +1,5 @@
-type TableContract<Select, Insert = Select> = {$inferSelect: Select; $inferInsert: Insert}
-
-const createTableContract = <Select, Insert = Select>() => {
-  return {} as TableContract<Select, Insert>
-}
-
 export type PublicationStatus = 'preprint' | 'submitted' | 'accepted' | 'published' | 'retracted'
+
 export type JudgmentsJobStatus =
   | 'not_started'
   | 'waiting_on_llm_connection'
@@ -14,6 +9,7 @@ export type JudgmentsJobStatus =
   | 'failed'
   | 'completed'
   | 'project_removed'
+
 export type JudgmentsJobsPromptsStatus =
   | 'ready'
   | 'sent'
@@ -388,27 +384,3 @@ export type NvidiaSmiRecord = {
   fanSpeed: number | null
   pstate: string | null
 }
-
-export const user = createTableContract<UserRecord>()
-export const articles = createTableContract<ArticleRecord>()
-export const models = createTableContract<ModelRecord>()
-export const dataSource = createTableContract<DataSourceRecord>()
-export const importRoute = createTableContract<ImportRouteRecord>()
-export const dataSourceRouteLink = createTableContract<DataSourceRouteLinkRecord>()
-export const projects = createTableContract<ProjectRecord>()
-export const projectRouteLink = createTableContract<ProjectRouteLinkRecord>()
-export const articleRouteLink = createTableContract<ArticleRouteLinkRecord>()
-export const comparisonProject = createTableContract<ComparisonProjectRecord>()
-export const comparisonProjectRouteLink = createTableContract<ComparisonProjectRouteLinkRecord>()
-export const judgmentsJobs = createTableContract<JudgmentsJobRecord>()
-export const prompts = createTableContract<PromptRecord>()
-export const judgmentsJobsPrompts = createTableContract<JudgmentsJobsPromptRecord>()
-export const projectPrompts = createTableContract<ProjectPromptRecord>()
-export const comparisonProjectPrompt = createTableContract<ComparisonProjectPromptRecord>()
-export const judgments = createTableContract<JudgmentRecord>()
-export const judgmentsHuman = createTableContract<JudgmentHumanRecord>()
-export const projectArticles = createTableContract<ProjectArticleRecord>()
-export const tokenUse = createTableContract<TokenUseRecord>()
-export const judgmentAssessments = createTableContract<JudgmentAssessmentRecord>()
-export const llmStatus = createTableContract<LlmStatusRecord>()
-export const nvidiaSmi = createTableContract<NvidiaSmiRecord>()

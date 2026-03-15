@@ -1,6 +1,6 @@
 import {randomUUID} from 'node:crypto'
 
-import * as schema from '../../db/schema.ts'
+import type {ArticleRecord} from '../../db/schemaTypes.ts'
 import {fetchPdfForArticle} from '../cron/fullTextJobs/fetchPdfForArticle.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {
@@ -56,10 +56,7 @@ const mutateJob = (jobId: string, update: (job: PdfFetchJob) => void) => {
   if (job) update(job)
 }
 
-const shouldSkipRow = (
-  row: Pick<typeof schema.articles.$inferSelect, 'fullTextPDF' | 'fullTextSource'>,
-  forceRefetch: boolean,
-): boolean => {
+const shouldSkipRow = (row: Pick<ArticleRecord, 'fullTextPDF' | 'fullTextSource'>, forceRefetch: boolean): boolean => {
   const hasUploadedPdf = row.fullTextSource === 'user_upload'
   const hasPdf = Boolean(row.fullTextPDF)
   return !forceRefetch && (hasUploadedPdf || hasPdf)
@@ -125,7 +122,7 @@ const processAttemptError = (jobId: string, error: unknown) => {
 
 const fetchAndStoreForRow = async (
   jobId: string,
-  row: Pick<typeof schema.articles.$inferSelect, 'id' | 'arxivId' | 'originalData'>,
+  row: Pick<ArticleRecord, 'id' | 'arxivId' | 'originalData'>,
 ): Promise<void> => {
   const result = await fetchPdfForArticle({arxivId: row.arxivId, originalData: row.originalData}).catch((error) => {
     return Promise.reject(error)
@@ -157,7 +154,7 @@ const fetchAndStoreForRow = async (
 
 const fetchAndStoreForRowSafe = async (
   jobId: string,
-  row: Pick<typeof schema.articles.$inferSelect, 'id' | 'arxivId' | 'originalData'>,
+  row: Pick<ArticleRecord, 'id' | 'arxivId' | 'originalData'>,
 ): Promise<void> => {
   const run = async () => {
     await fetchAndStoreForRow(jobId, row)

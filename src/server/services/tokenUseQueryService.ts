@@ -1,4 +1,4 @@
-import {tokenUse} from '../../db/schema.ts'
+import type {TokenUseRecord} from '../../db/schemaTypes.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {
   escapeSqlString,
@@ -55,7 +55,7 @@ type TokenUseProjection = {
 
 type ModelInfo = {provider: string | null; modelName: string | null; version: string | null}
 
-const getTokenUseValue = (row: TokenUseRow): typeof tokenUse.$inferSelect => {
+const getTokenUseValue = (row: TokenUseRow): TokenUseRecord => {
   return {
     id: row.id,
     createdAt: getDateValue(row.createdAt) ?? new Date(0),
@@ -79,9 +79,7 @@ const getTokenUseValue = (row: TokenUseRow): typeof tokenUse.$inferSelect => {
     successfulRequests: row.successfulRequests,
     failedRequests: row.failedRequests,
     hasFailedRequests: row.hasFailedRequests ?? false,
-    failedRequestsDetails: getJsonValue(
-      row.failedRequestsDetails,
-    ) as (typeof tokenUse.$inferSelect)['failedRequestsDetails'],
+    failedRequestsDetails: getJsonValue(row.failedRequestsDetails) as TokenUseRecord['failedRequestsDetails'],
     totalSuccessPromptTokens: row.totalSuccessPromptTokens,
     totalSuccessCompletionTokens: row.totalSuccessCompletionTokens,
     totalSuccessTokens: row.totalSuccessTokens,

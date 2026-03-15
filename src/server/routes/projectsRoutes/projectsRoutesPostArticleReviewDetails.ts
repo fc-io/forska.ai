@@ -1,14 +1,19 @@
 import {Elysia, t} from 'elysia'
 
-import {judgmentAssessments, judgments, prompts} from '../../../db/schema.ts'
+import type {
+  JudgmentAssessmentRecord,
+  JudgmentChunkingStrategy,
+  JudgmentRecord,
+  PromptRecord,
+} from '../../../db/schemaTypes.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getDateValue, getJsonValue, getQuotedStringList} from '../../services/appQueryHelpers.ts'
 import {getAppQueryService} from '../../services/getAppQueryService.ts'
 import {getSystemActor} from '../../utils/getSystemActor.ts'
 
-type JudgmentWithPromptAndAssessments = typeof judgments.$inferSelect & {
-  prompt: Pick<typeof prompts.$inferSelect, 'originalText' | 'promptHeading'>
-  assessments: Array<typeof judgmentAssessments.$inferSelect>
+type JudgmentWithPromptAndAssessments = JudgmentRecord & {
+  prompt: Pick<PromptRecord, 'originalText' | 'promptHeading'>
+  assessments: Array<JudgmentAssessmentRecord>
   modelName?: string | null
   modelProvider?: string | null
   modelVersion?: string | null
@@ -20,9 +25,9 @@ type PlaceholderJudgment = {
   answeredOriginal: 'not answered'
   confidenceOriginal: null
   explanation: null
-  quotes: (typeof judgments.$inferSelect)['quotes']
-  prompt: Pick<typeof prompts.$inferSelect, 'originalText' | 'promptHeading'>
-  assessments: Array<typeof judgmentAssessments.$inferSelect>
+  quotes: JudgmentRecord['quotes']
+  prompt: Pick<PromptRecord, 'originalText' | 'promptHeading'>
+  assessments: Array<JudgmentAssessmentRecord>
   createdAt: null
   modelName?: string | null
   modelProvider?: string | null
@@ -57,7 +62,7 @@ const getJudgmentValue = (row: {
   judgmentQuotes: unknown
   judgmentSnapshotProjectId: string | null
   judgmentSnapshotProjectModelName: string | null
-}): typeof judgments.$inferSelect => {
+}): JudgmentRecord => {
   const answeredOriginalAsArray = getJsonValue(row.judgmentAnsweredOriginalAsArray)
   const quotes = getJsonValue(row.judgmentQuotes)
   return {
@@ -73,14 +78,14 @@ const getJudgmentValue = (row: {
     useAbstract: row.judgmentUseAbstract ?? true,
     useFulltext: row.judgmentUseFulltext ?? false,
     useFulltextNoImages: row.judgmentUseFulltextNoImages ?? false,
-    chunkingStrategy: row.judgmentChunkingStrategy as (typeof judgments.$inferSelect)['chunkingStrategy'],
+    chunkingStrategy: row.judgmentChunkingStrategy as JudgmentChunkingStrategy,
     isAnswered: row.judgmentIsAnswered ?? false,
     answeredOriginal: row.judgmentAnsweredOriginal,
     answeredOriginalAsArray: Array.isArray(answeredOriginalAsArray)
       ? answeredOriginalAsArray.filter((value): value is string => {
           return typeof value === 'string'
         })
-      : (null as (typeof judgments.$inferSelect)['answeredOriginalAsArray']),
+      : (null as JudgmentRecord['answeredOriginalAsArray']),
     confidenceOriginal: row.judgmentConfidenceOriginal ?? 50,
     explanation: row.judgmentExplanation,
     quotes: Array.isArray(quotes) ? quotes : [],
@@ -96,7 +101,7 @@ const getAssessmentValue = (row: {
   assessmentComment: string | null
   createdAt: unknown
   updatedAt: unknown
-}): typeof judgmentAssessments.$inferSelect => {
+}): JudgmentAssessmentRecord => {
   return {
     id: row.id,
     judgmentId: row.judgmentId,
@@ -243,12 +248,13 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
       })
 
       // Group assessments by judgment ID
-      const assessmentsByJudgment = normalizedAssessments.reduce<
-        Record<string, Array<typeof judgmentAssessments.$inferSelect>>
-      >((acc, assessment) => {
-        const judgmentAssessments = acc[assessment.judgmentId] ?? []
-        return {...acc, [assessment.judgmentId]: [...judgmentAssessments, assessment]}
-      }, {})
+      const assessmentsByJudgment = normalizedAssessments.reduce<Record<string, Array<JudgmentAssessmentRecord>>>(
+        (acc, assessment) => {
+          const judgmentAssessments = acc[assessment.judgmentId] ?? []
+          return {...acc, [assessment.judgmentId]: [...judgmentAssessments, assessment]}
+        },
+        {},
+      )
 
       // Combine judgments with their assessments and prompts (limited to this project's ENABLED prompts)
       const judgmentsWithDetails: ReviewJudgment[] = articleJudgments.map((row) => {
@@ -294,9 +300,9 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
             answeredOriginal: 'not answered',
             confidenceOriginal: null,
             explanation: null,
-            quotes: [] as (typeof judgments.$inferSelect)['quotes'],
+            quotes: [] as JudgmentRecord['quotes'],
             prompt: {originalText: p.originalText, promptHeading: p.promptHeading},
-            assessments: [] as Array<typeof judgmentAssessments.$inferSelect>,
+            assessments: [] as Array<JudgmentAssessmentRecord>,
             createdAt: null,
           }
         })

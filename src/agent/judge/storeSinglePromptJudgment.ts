@@ -1,6 +1,6 @@
 import {randomUUID} from 'crypto'
 
-import {articles, judgments} from '../../db/schema.ts'
+import type {ArticleRecord, JudgmentChunkingStrategy} from '../../db/schemaTypes.ts'
 import {getAppDatabaseService} from '../../server/services/appDatabaseService.ts'
 import {escapeSqlString, getSqlLiteral} from '../../server/services/appQueryHelpers.ts'
 import {getDuckdbMartRefreshService} from '../../server/services/getDuckdbMartRefreshService.ts'
@@ -19,12 +19,12 @@ export const storeSinglePromptJudgment = async ({
   judgment,
   chunkingStrategy,
 }: {
-  article: typeof articles.$inferSelect
+  article: ArticleRecord
   promptId: string
   modelId: string
   projectId: string
   judgment: SinglePromptJudgmentResult
-  chunkingStrategy: (typeof judgments.$inferInsert)['chunkingStrategy']
+  chunkingStrategy: JudgmentChunkingStrategy
 }): Promise<void> => {
   try {
     // Prepare snapshot context (best-effort, only fetching fields we still store)

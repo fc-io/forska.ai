@@ -1,5 +1,5 @@
 import {judgeSinglePrompt} from '../../../../agent/judge.ts'
-import * as schema from '../../../../db/schema.ts'
+import type {ArticleRecord, PublicationStatus} from '../../../../db/schemaTypes.ts'
 import {getAppDatabaseService} from '../../../services/appDatabaseService.ts'
 import {escapeSqlString, getSqlLiteral} from '../../../services/appQueryHelpers.ts'
 import {getAppQueryService} from '../../../services/getAppQueryService.ts'
@@ -54,7 +54,7 @@ const getModelContextForProvider = (provider: string | null | undefined): number
 
 const processSinglePrompt = async (
   promptToProcess: PromptToProcess,
-  article: typeof schema.articles.$inferSelect,
+  article: ArticleRecord,
   prompt: PromptDefinition,
   modelContext: number,
 ): Promise<void> => {
@@ -151,11 +151,11 @@ export const processPromptWithLLM = async (promptToProcess: PromptToProcess): Pr
 
   // Handle fulltext requirement for projects with useFulltext=true or useFulltextNoImages=true
   // Create a mutable article object that we can update with fulltext if needed
-  let articleWithFulltext: typeof schema.articles.$inferSelect = {
+  let articleWithFulltext: ArticleRecord = {
     ...article,
     createdAt: article.createdAt ?? new Date(0),
     updatedAt: article.updatedAt ?? new Date(0),
-    publicationStatus: article.publicationStatus as (typeof schema.articles.$inferSelect)['publicationStatus'],
+    publicationStatus: article.publicationStatus as PublicationStatus | null,
   }
   const needsFulltext = promptToProcess.useFulltext || promptToProcess.useFulltextNoImages
   if (needsFulltext) {

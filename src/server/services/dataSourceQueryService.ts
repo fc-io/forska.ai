@@ -1,4 +1,4 @@
-import {dataSource} from '../../db/schema.ts'
+import type {DataSourceRecord} from '../../db/schemaTypes.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {escapeSqlString, getDateValue, getTimestampLiteral} from './appQueryHelpers.ts'
 
@@ -17,7 +17,7 @@ type DataSourceRow = {
   updatedAt: unknown
 }
 
-const getDataSourceValue = (row: DataSourceRow): typeof dataSource.$inferSelect => {
+const getDataSourceValue = (row: DataSourceRow): DataSourceRecord => {
   return {
     id: row.id,
     title: row.title,
@@ -34,7 +34,7 @@ const getDataSourceValue = (row: DataSourceRow): typeof dataSource.$inferSelect 
   }
 }
 
-const getDataSourceById = async (id: string): Promise<typeof dataSource.$inferSelect | null> => {
+const getDataSourceById = async (id: string): Promise<DataSourceRecord | null> => {
   const [row] = await getAppDatabaseService().queryJson<DataSourceRow>(`
     SELECT
       id,

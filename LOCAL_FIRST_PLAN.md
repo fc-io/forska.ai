@@ -37,7 +37,7 @@
 - [x] Use standalone DuckDB SQL migrations; do not reuse old Postgres/SQLite migration lineage.
 - [x] Stop merging `auth-schema.ts` into DB bootstrap.
 
-## Step 1B - Schema rewrite (`src/db/schema.ts`, `auth-schema.ts`, migrations)
+## Step 1B - Schema rewrite (`src/db/schemaTypes.ts`, old auth schema, migrations)
 
 - [x] Rewrite `pgTable`/`pgEnum`/`pgView` to SQLite schema.
 - [x] Rewrite `user` into single-user config table; move `.env.local` user/app config into columns here.

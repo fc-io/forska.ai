@@ -1,7 +1,7 @@
 import {mkdir, writeFile} from 'fs/promises'
 import path from 'path'
 
-import * as schema from '../../../db/schema.ts'
+import type {ArticleRecord} from '../../../db/schemaTypes.ts'
 import type {PdfFetchAttemptResult} from './pdfFetchTypes.ts'
 
 const SOURCE_NAME = 'OriginalUrls'
@@ -96,7 +96,7 @@ const sortByPriority = (a: OriginalFullTextUrl, b: OriginalFullTextUrl) => {
 
 export const fullTextArticleFetchFromOriginalUrls = async ({
   originalData,
-}: Pick<typeof schema.articles.$inferSelect, 'arxivId' | 'originalData'>): Promise<PdfFetchAttemptResult> => {
+}: Pick<ArticleRecord, 'arxivId' | 'originalData'>): Promise<PdfFetchAttemptResult> => {
   const urls = getOriginalFullTextUrls(originalData)
 
   if (urls.length === 0) {

@@ -1,4 +1,4 @@
-import * as schema from '../../db/schema.ts'
+import type {ArticleRecord} from '../../db/schemaTypes.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {escapeSqlString, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {ConversionError, convertPdfToText} from './convertPdfToText.ts'
@@ -19,10 +19,7 @@ export type EnsureFullTextResult =
  * If not available, attempt on-the-fly conversion.
  * Uses per-article locking to prevent thundering herd.
  */
-export const ensureFullText = async (
-  article: typeof schema.articles.$inferSelect,
-  articleId: string,
-): Promise<EnsureFullTextResult> => {
+export const ensureFullText = async (article: ArticleRecord, articleId: string): Promise<EnsureFullTextResult> => {
   // Fast path: already converted
   if (article.fullText) {
     return {text: article.fullText, shouldSkip: false}

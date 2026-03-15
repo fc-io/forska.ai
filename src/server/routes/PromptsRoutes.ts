@@ -1,6 +1,6 @@
 import {Elysia, t} from 'elysia'
 
-import {prompts} from '../../db/schema'
+import type {PromptRecord} from '../../db/schemaTypes.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService'
 import {
   escapeSqlString,
@@ -13,7 +13,7 @@ import {getDuckdbMartRefreshService} from '../services/getDuckdbMartRefreshServi
 import {computePromptContentHash} from '../utils/computePromptContentHash'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
-type PromptRow = Pick<typeof prompts.$inferSelect, 'id' | 'originalText' | 'transformedText' | 'promptHeading' | 'type'>
+type PromptRow = Pick<PromptRecord, 'id' | 'originalText' | 'transformedText' | 'promptHeading' | 'type'>
 
 type PromptCollision = {hash: string; promptIds: string[]}
 type PromptHashUpdate = {id: string; hash: string}

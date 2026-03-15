@@ -1,7 +1,7 @@
 import {mkdir, writeFile} from 'fs/promises'
 import path from 'path'
 
-import * as schema from '../../../db/schema.ts'
+import type {ArticleRecord} from '../../../db/schemaTypes.ts'
 import type {PdfFetchAttemptResult} from './pdfFetchTypes.ts'
 
 const SOURCE_NAME = 'Unpaywall'
@@ -33,7 +33,7 @@ const storePdfToAssets = async (key: string, response: Response): Promise<string
 
 export const fullTextArticleFetchFromUnpaywall = async ({
   originalData,
-}: Pick<typeof schema.articles.$inferSelect, 'arxivId' | 'originalData'>): Promise<PdfFetchAttemptResult> => {
+}: Pick<ArticleRecord, 'arxivId' | 'originalData'>): Promise<PdfFetchAttemptResult> => {
   // Check if DOI is available
   if (
     !originalData

@@ -1,7 +1,7 @@
 import OpenAI from 'openai'
 import type {ChatCompletionMessage} from 'openai/resources/chat/completions'
 
-import * as schema from '../db/schema.ts'
+import type {ArticleRecord} from '../db/schemaTypes.ts'
 import {
   ConnectionError,
   isConnectionError,
@@ -355,7 +355,7 @@ const storeTokenUseAndThrowConnectionError = async ({
   throw new ConnectionError(`Failed to connect to inference server: ${errorMessage}`, baseURL)
 }
 
-type ArticlesType = (typeof schema.articles.$inferSelect)[]
+type ArticlesType = ArticleRecord[]
 
 const isFhirEhrPatientArticle = (article: ArticlesType[number]): boolean => {
   const articleId = article.articleId ?? ''
