@@ -1,9 +1,7 @@
-import {inArray} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {articles} from '../../../db/schema.ts'
 import {queryArticlesReviewsBothFromOlap} from '../../../services/olap/articlesReviewsBothOlap.ts'
-import {getDatabase} from '../../utils/getDatabase.ts'
+import {getAppQueryService} from '../../services/getAppQueryService.ts'
 
 export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
   '/api/articlesreviewsboth',
@@ -21,28 +19,10 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
       prompts: body.prompts,
     })
 
-    const db = getDatabase()
     const articleIds = result.data.map((a) => {
       return a.id
     })
-    const fullTextRows =
-      articleIds.length > 0
-        ? await db
-            .select({
-              id: articles.id,
-              articleTitle: articles.articleTitle,
-              articleCreatedAt: articles.articleCreatedAt,
-              articleUpdatedAt: articles.articleUpdatedAt,
-              articleId: articles.articleId,
-              url: articles.url,
-              fullTextPDF: articles.fullTextPDF,
-              fullTextFetchedAt: articles.fullTextFetchedAt,
-              fullTextConversionStatus: articles.fullTextConversionStatus,
-              originalData: articles.originalData,
-            })
-            .from(articles)
-            .where(inArray(articles.id, articleIds))
-        : []
+    const fullTextRows = await getAppQueryService().getReviewHydrationRows(articleIds)
     const fullTextById = fullTextRows.reduce(
       (acc, row) => {
         return {...acc, [row.id]: row}

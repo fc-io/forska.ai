@@ -1,6 +1,6 @@
 # Slurm sbatch example (Apptainer)
 
-Goal: single-user local app; this is for HPC. Better Auth is legacy (planned removal).
+Goal: single-user local app; this is for HPC.
 
 Single sbatch script to run the database (Postgres), the API + app servers, and the GPU-backed vLLM service together on one Slurm node using Apptainer. It follows the host-network Apptainer guidance from README.md so all services listen on localhost.
 
@@ -8,7 +8,7 @@ Read first (from README.md)
 
 - Set `STACK_ROOT` and create shared dirs: `pgdata`, `models`, `hf_cache`, `logs`, `.cache`.
 - Pre-pull SIFs into `$STACK_ROOT`: `postgres_18.sif`, `vllm_openai_latest.sif`, `api_server.sif`, `app_server.sif`.
-- Create secrets under `$STACK_ROOT/.secrets`: `db_password.txt` and `database_url.txt`. Optional (legacy): `better_auth_secret.txt`, `better_auth_url.txt`.
+- Create secrets under `$STACK_ROOT/.secrets`: `db_password.txt` and `database_url.txt`.
 - Ensure env has `VLLM_API_KEY` (temporary; see README.md).
 
 Assumptions

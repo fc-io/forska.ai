@@ -1,31 +1,23 @@
 import {
-  getUnassessedArticlesFromClickHouse,
-  getUnassessedCountFromClickHouse,
-  getUnassessedPairsFromClickHouse,
-} from '../clickhouse/unassessedArticlesClickHouse.ts'
-import {getOlapDb} from './olapDb.ts'
-import {
-  getUnassessedArticlesFromSqlite,
-  getUnassessedCountFromSqlite,
-  getUnassessedPairsFromSqlite,
-} from './sqliteOlap.ts'
+  getUnassessedArticlesFromDuckdb,
+  getUnassessedCountFromDuckdb,
+  getUnassessedPairsFromDuckdb,
+} from './duckdbOlap.ts'
+import type {UnassessedArticlesParams, UnassessedPairsParams, UnassessedPairsResult} from './olapTypes.ts'
+import type {UnassessedCountParams} from './olapTypes.ts'
 
 export const getUnassessedCountFromOlap = (
-  params: Parameters<typeof getUnassessedCountFromClickHouse>[0],
-): ReturnType<typeof getUnassessedCountFromClickHouse> => {
-  return getOlapDb() === 'duckdb' ? getUnassessedCountFromSqlite(params) : getUnassessedCountFromClickHouse(params)
+  params: UnassessedCountParams,
+): ReturnType<typeof getUnassessedCountFromDuckdb> => {
+  return getUnassessedCountFromDuckdb(params)
 }
 
 export const getUnassessedArticlesFromOlap = (
-  params: Parameters<typeof getUnassessedArticlesFromClickHouse>[0],
-): ReturnType<typeof getUnassessedArticlesFromClickHouse> => {
-  return getOlapDb() === 'duckdb'
-    ? getUnassessedArticlesFromSqlite(params)
-    : getUnassessedArticlesFromClickHouse(params)
+  params: UnassessedArticlesParams,
+): ReturnType<typeof getUnassessedArticlesFromDuckdb> => {
+  return getUnassessedArticlesFromDuckdb(params)
 }
 
-export const getUnassessedPairsFromOlap = (
-  params: Parameters<typeof getUnassessedPairsFromClickHouse>[0],
-): ReturnType<typeof getUnassessedPairsFromClickHouse> => {
-  return getOlapDb() === 'duckdb' ? getUnassessedPairsFromSqlite(params) : getUnassessedPairsFromClickHouse(params)
+export const getUnassessedPairsFromOlap = (params: UnassessedPairsParams): Promise<UnassessedPairsResult> => {
+  return getUnassessedPairsFromDuckdb(params)
 }

@@ -5,10 +5,9 @@ import {join, resolve} from 'node:path'
 import {createInterface} from 'node:readline'
 import {createGunzip} from 'node:zlib'
 
-import {inArray, sql} from 'drizzle-orm'
-
-import {articleRouteLink, articles, importRoute as importRouteTable} from '../../db/schema.ts'
-import {getDatabase} from '../../server/utils/getDatabase.ts'
+import {getAppDatabaseService} from '../../server/services/appDatabaseService.ts'
+import {escapeSqlString, getQuotedStringList} from '../../server/services/appQueryHelpers.ts'
+import {storeImportedArticles} from '../../server/services/articleImportStoreService.ts'
 import {HttpError} from '../../server/utils/httpError.ts'
 import {buildFhirPatientMarkdown} from './buildFhirPatientMarkdown.ts'
 import {
@@ -78,9 +77,9 @@ const tryJsonParse = (raw: string): {ok: true; value: unknown} | {ok: false; err
 const hasResourceType = (value: unknown): value is {resourceType: string} => {
   return Boolean(
     value
-      && typeof value === 'object'
-      && 'resourceType' in value
-      && typeof (value as {resourceType?: unknown}).resourceType === 'string',
+    && typeof value === 'object'
+    && 'resourceType' in value
+    && typeof (value as {resourceType?: unknown}).resourceType === 'string',
   )
 }
 
@@ -414,14 +413,11 @@ const buildPatientOriginalData = ({
 
 const upsertArticlesBatch = async ({
   importRoute,
-  importRouteId,
   batch,
 }: {
   importRoute: string
-  importRouteId: string
   batch: {articleId: string; articleTitle: string; articleSummary: string; fullText: string; originalData: unknown}[]
 }): Promise<{inserted: number; updated: number}> => {
-  const db = getDatabase()
   const articleIds = batch.map((b) => {
     return b.articleId
   })
@@ -429,7 +425,11 @@ const upsertArticlesBatch = async ({
   const existing =
     articleIds.length === 0
       ? []
-      : await db.select({articleId: articles.articleId}).from(articles).where(inArray(articles.articleId, articleIds))
+      : await getAppDatabaseService().queryJson<{articleId: string}>(`
+          SELECT article_id AS articleId
+          FROM app.article
+          WHERE article_id IN (${getQuotedStringList(articleIds).join(', ')})
+        `)
 
   const existingSet = new Set(
     existing
@@ -441,48 +441,21 @@ const upsertArticlesBatch = async ({
       }),
   )
 
-  const rows = batch.map((b) => {
-    return {
-      articleId: b.articleId,
-      articleTitle: b.articleTitle,
-      articleSummary: b.articleSummary,
-      fullText: b.fullText,
-      importRoute,
-      originalData: b.originalData,
-      fullTextConversionStatus: 'success',
-      fullTextCharCount: b.fullText.length,
-    }
-  })
-
-  const upserted = await db
-    .insert(articles)
-    .values(rows)
-    .onConflictDoUpdate({
-      target: articles.articleId,
-      set: {
-        articleTitle: sql`EXCLUDED.article_title`,
-        articleSummary: sql`EXCLUDED.article_summary`,
-        fullText: sql`EXCLUDED.full_text`,
-        importRoute: sql`EXCLUDED.import_route`,
-        originalData: sql`EXCLUDED.original_data`,
-        fullTextConversionStatus: sql`EXCLUDED.full_text_conversion_status`,
-        fullTextCharCount: sql`EXCLUDED.full_text_char_count`,
-        updatedAt: sql`CURRENT_TIMESTAMP`,
-      },
-    })
-    .returning({id: articles.id, articleId: articles.articleId})
-
-  const links = upserted
-    .map((a) => {
-      return {articleId: a.id, importRouteId}
-    })
-    .filter((v): v is {articleId: string; importRouteId: string} => {
-      return Boolean(v.articleId && v.importRouteId)
-    })
-
-  if (links.length > 0) {
-    await db.insert(articleRouteLink).values(links).onConflictDoNothing()
-  }
+  await storeImportedArticles(
+    batch.map((b) => {
+      return {
+        articleId: b.articleId,
+        articleTitle: b.articleTitle,
+        articleSummary: b.articleSummary,
+        articleAuthors: null,
+        fullText: b.fullText,
+        importRoute,
+        originalData: b.originalData,
+        fullTextConversionStatus: 'success',
+        fullTextCharCount: b.fullText.length,
+      }
+    }),
+  )
 
   const updated = batch.filter((b) => {
     return existingSet.has(b.articleId)
@@ -494,14 +467,18 @@ const upsertArticlesBatch = async ({
 }
 
 const ensureImportRouteRow = async (route: string): Promise<string> => {
-  const db = getDatabase()
-  await db.insert(importRouteTable).values({route, name: route, active: true}).onConflictDoNothing()
+  await getAppDatabaseService().run(`
+    INSERT INTO app.import_route (id, route, name, active)
+    VALUES (${getQuotedStringList([crypto.randomUUID(), route, route]).join(', ')}, TRUE)
+    ON CONFLICT(route) DO NOTHING
+  `)
 
-  const [row] = await db
-    .select({id: importRouteTable.id})
-    .from(importRouteTable)
-    .where(sql`${importRouteTable.route} = ${route}`)
-    .limit(1)
+  const [row] = await getAppDatabaseService().queryJson<{id: string}>(`
+    SELECT id
+    FROM app.import_route
+    WHERE route = '${escapeSqlString(route)}'
+    LIMIT 1
+  `)
 
   if (!row) {
     throw new Error('Failed to ensure import route')
@@ -512,7 +489,6 @@ const ensureImportRouteRow = async (route: string): Promise<string> => {
 const processPatientShard = async ({
   shardPath,
   importRoute,
-  importRouteId,
   assetsFolder,
   stats,
   errorSamples,
@@ -520,7 +496,6 @@ const processPatientShard = async ({
 }: {
   shardPath: string
   importRoute: string
-  importRouteId: string
   assetsFolder: string
   stats: ImportStats
   errorSamples: string[]
@@ -612,7 +587,7 @@ const processPatientShard = async ({
       return await processPatients(idx + 1, nextBatch)
     }
 
-    const result = await upsertArticlesBatch({importRoute, importRouteId, batch: nextBatch})
+    const result = await upsertArticlesBatch({importRoute, batch: nextBatch})
     stats.inserted += result.inserted
     stats.updated += result.updated
     return await processPatients(idx + 1, [])
@@ -621,7 +596,7 @@ const processPatientShard = async ({
   const remainingBatch = await processPatients(0, [])
 
   if (!dryRun && remainingBatch.length > 0) {
-    const result = await upsertArticlesBatch({importRoute, importRouteId, batch: remainingBatch})
+    const result = await upsertArticlesBatch({importRoute, batch: remainingBatch})
     stats.inserted += result.inserted
     stats.updated += result.updated
   }
@@ -922,7 +897,9 @@ export const fhirEhrPatientsWorkflowStoreEntries = async (
     await pass3()
     await joinByEncounter()
 
-    const importRouteId = dryRun ? 'dry_run' : await ensureImportRouteRow(importRoute)
+    if (!dryRun) {
+      await ensureImportRouteRow(importRoute)
+    }
 
     const processShardIndex = async (idx: number): Promise<void> => {
       if (idx >= SHARD_COUNT) {
@@ -941,7 +918,7 @@ export const fhirEhrPatientsWorkflowStoreEntries = async (
         return await processShardIndex(idx + 1)
       }
 
-      await processPatientShard({shardPath, importRoute, importRouteId, assetsFolder, stats, errorSamples, dryRun})
+      await processPatientShard({shardPath, importRoute, assetsFolder, stats, errorSamples, dryRun})
       return await processShardIndex(idx + 1)
     }
 

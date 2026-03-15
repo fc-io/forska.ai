@@ -41,12 +41,9 @@ import { Route as AdminPdfConversionsIndexRouteImport } from './routes/+admin/+p
 import { Route as AdminLlmIndexRouteImport } from './routes/+admin/+llm/+index'
 import { Route as AdminLatestArticlesIndexRouteImport } from './routes/+admin/+latest-articles/+index'
 import { Route as AdminJobsIndexRouteImport } from './routes/+admin/+jobs/+index'
-import { Route as AdminImportRouteStatsIndexRouteImport } from './routes/+admin/+import-route-stats/+index'
 import { Route as AdminGpuIndexRouteImport } from './routes/+admin/+gpu/+index'
 import { Route as AdminFailed_requestsIndexRouteImport } from './routes/+admin/+failed_requests/+index'
-import { Route as AdminDiagnoseUnassessedIndexRouteImport } from './routes/+admin/+diagnose-unassessed/+index'
 import { Route as AdminDatasourcesIndexRouteImport } from './routes/+admin/+datasources/+index'
-import { Route as AdminClickhouseSyncIndexRouteImport } from './routes/+admin/+clickhouse-sync/+index'
 import { Route as AdminAssessmentsIndexRouteImport } from './routes/+admin/+assessments/+index'
 import { Route as AdminAaModelsIndexRouteImport } from './routes/+admin/+aa-models/+index'
 import { Route as AdminJobsIdUnassessed_articlesRouteImport } from './routes/+admin/+jobs/+$id/+unassessed_articles'
@@ -59,17 +56,13 @@ import { Route as ProjectsIdReviewsBothIndexRouteImport } from './routes/+projec
 import { Route as AdminUnexpectedAnswersAllPromptsIndexRouteImport } from './routes/+admin/+unexpected-answers/+all-prompts/+index'
 import { Route as AdminUnexpectedAnswersProjectIdIndexRouteImport } from './routes/+admin/+unexpected-answers/+$projectId/+index'
 import { Route as AdminJobsIdIndexRouteImport } from './routes/+admin/+jobs/+$id/+index'
-import { Route as AdminImportRouteStatsYearIndexRouteImport } from './routes/+admin/+import-route-stats/+$year/+index'
 import { Route as AdminFailed_requestsIdIndexRouteImport } from './routes/+admin/+failed_requests/+$id/+index'
 import { Route as AdminDatasourcesArchivedIndexRouteImport } from './routes/+admin/+datasources/+archived/+index'
-import { Route as AdminClickhouseSyncArticlesIndexRouteImport } from './routes/+admin/+clickhouse-sync/+articles/+index'
 import { Route as ProjectsIdReviewsLlmArticleIdFulltextRouteImport } from './routes/+projects/+$id/+reviews-llm/+$articleId/+fulltext'
-import { Route as AdminImportRouteStatsYearIdFulltextRouteImport } from './routes/+admin/+import-route-stats/+$year/+$id/+fulltext'
 import { Route as ProjectsIdReviewsArticleIdIndexRouteImport } from './routes/+projects/+$id/+reviews/+$articleId/+index'
 import { Route as ProjectsIdReviewsLlmArticleIdIndexRouteImport } from './routes/+projects/+$id/+reviews-llm/+$articleId/+index'
 import { Route as AdminUnexpectedAnswersAllPromptsPromptIdIndexRouteImport } from './routes/+admin/+unexpected-answers/+all-prompts/+$promptId/+index'
 import { Route as AdminUnexpectedAnswersProjectIdPromptIdIndexRouteImport } from './routes/+admin/+unexpected-answers/+$projectId/+$promptId/+index'
-import { Route as AdminImportRouteStatsYearIdIndexRouteImport } from './routes/+admin/+import-route-stats/+$year/+$id/+index'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -238,12 +231,6 @@ const AdminJobsIndexRoute = AdminJobsIndexRouteImport.update({
   path: '/admin/jobs/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AdminImportRouteStatsIndexRoute =
-  AdminImportRouteStatsIndexRouteImport.update({
-    id: '/admin/import-route-stats/',
-    path: '/admin/import-route-stats/',
-    getParentRoute: () => rootRouteImport,
-  } as any)
 const AdminGpuIndexRoute = AdminGpuIndexRouteImport.update({
   id: '/admin/gpu/',
   path: '/admin/gpu/',
@@ -255,23 +242,11 @@ const AdminFailed_requestsIndexRoute =
     path: '/admin/failed_requests/',
     getParentRoute: () => rootRouteImport,
   } as any)
-const AdminDiagnoseUnassessedIndexRoute =
-  AdminDiagnoseUnassessedIndexRouteImport.update({
-    id: '/admin/diagnose-unassessed/',
-    path: '/admin/diagnose-unassessed/',
-    getParentRoute: () => rootRouteImport,
-  } as any)
 const AdminDatasourcesIndexRoute = AdminDatasourcesIndexRouteImport.update({
   id: '/admin/datasources/',
   path: '/admin/datasources/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AdminClickhouseSyncIndexRoute =
-  AdminClickhouseSyncIndexRouteImport.update({
-    id: '/admin/clickhouse-sync/',
-    path: '/admin/clickhouse-sync/',
-    getParentRoute: () => rootRouteImport,
-  } as any)
 const AdminAssessmentsIndexRoute = AdminAssessmentsIndexRouteImport.update({
   id: '/admin/assessments/',
   path: '/admin/assessments/',
@@ -339,12 +314,6 @@ const AdminJobsIdIndexRoute = AdminJobsIdIndexRouteImport.update({
   path: '/admin/jobs/$id/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AdminImportRouteStatsYearIndexRoute =
-  AdminImportRouteStatsYearIndexRouteImport.update({
-    id: '/admin/import-route-stats/$year/',
-    path: '/admin/import-route-stats/$year/',
-    getParentRoute: () => rootRouteImport,
-  } as any)
 const AdminFailed_requestsIdIndexRoute =
   AdminFailed_requestsIdIndexRouteImport.update({
     id: '/admin/failed_requests/$id/',
@@ -357,22 +326,10 @@ const AdminDatasourcesArchivedIndexRoute =
     path: '/admin/datasources/archived/',
     getParentRoute: () => rootRouteImport,
   } as any)
-const AdminClickhouseSyncArticlesIndexRoute =
-  AdminClickhouseSyncArticlesIndexRouteImport.update({
-    id: '/admin/clickhouse-sync/articles/',
-    path: '/admin/clickhouse-sync/articles/',
-    getParentRoute: () => rootRouteImport,
-  } as any)
 const ProjectsIdReviewsLlmArticleIdFulltextRoute =
   ProjectsIdReviewsLlmArticleIdFulltextRouteImport.update({
     id: '/projects/$id/reviews-llm/$articleId/fulltext',
     path: '/projects/$id/reviews-llm/$articleId/fulltext',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const AdminImportRouteStatsYearIdFulltextRoute =
-  AdminImportRouteStatsYearIdFulltextRouteImport.update({
-    id: '/admin/import-route-stats/$year/$id/fulltext',
-    path: '/admin/import-route-stats/$year/$id/fulltext',
     getParentRoute: () => rootRouteImport,
   } as any)
 const ProjectsIdReviewsArticleIdIndexRoute =
@@ -399,12 +356,6 @@ const AdminUnexpectedAnswersProjectIdPromptIdIndexRoute =
     path: '/admin/unexpected-answers/$projectId/$promptId/',
     getParentRoute: () => rootRouteImport,
   } as any)
-const AdminImportRouteStatsYearIdIndexRoute =
-  AdminImportRouteStatsYearIdIndexRouteImport.update({
-    id: '/admin/import-route-stats/$year/$id/',
-    path: '/admin/import-route-stats/$year/$id/',
-    getParentRoute: () => rootRouteImport,
-  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -420,12 +371,9 @@ export interface FileRoutesByFullPath {
   '/projects/create-subproject': typeof ProjectsCreateSubprojectRoute
   '/admin/aa-models/': typeof AdminAaModelsIndexRoute
   '/admin/assessments/': typeof AdminAssessmentsIndexRoute
-  '/admin/clickhouse-sync/': typeof AdminClickhouseSyncIndexRoute
   '/admin/datasources/': typeof AdminDatasourcesIndexRoute
-  '/admin/diagnose-unassessed/': typeof AdminDiagnoseUnassessedIndexRoute
   '/admin/failed_requests/': typeof AdminFailed_requestsIndexRoute
   '/admin/gpu/': typeof AdminGpuIndexRoute
-  '/admin/import-route-stats/': typeof AdminImportRouteStatsIndexRoute
   '/admin/jobs/': typeof AdminJobsIndexRoute
   '/admin/latest-articles/': typeof AdminLatestArticlesIndexRoute
   '/admin/llm/': typeof AdminLlmIndexRoute
@@ -447,10 +395,8 @@ export interface FileRoutesByFullPath {
   '/projects/$id/edit': typeof ProjectsIdEditRoute
   '/projects/$id/export': typeof ProjectsIdExportRoute
   '/projects/$id/humanAssessment': typeof ProjectsIdHumanAssessmentRoute
-  '/admin/clickhouse-sync/articles/': typeof AdminClickhouseSyncArticlesIndexRoute
   '/admin/datasources/archived/': typeof AdminDatasourcesArchivedIndexRoute
   '/admin/failed_requests/$id/': typeof AdminFailed_requestsIdIndexRoute
-  '/admin/import-route-stats/$year/': typeof AdminImportRouteStatsYearIndexRoute
   '/admin/jobs/$id/': typeof AdminJobsIdIndexRoute
   '/admin/unexpected-answers/$projectId/': typeof AdminUnexpectedAnswersProjectIdIndexRoute
   '/admin/unexpected-answers/all-prompts/': typeof AdminUnexpectedAnswersAllPromptsIndexRoute
@@ -461,12 +407,10 @@ export interface FileRoutesByFullPath {
   '/projects/$id/reviews/': typeof ProjectsIdReviewsIndexRoute
   '/admin/datasources/$id/edit': typeof AdminDatasourcesIdEditRoute
   '/admin/jobs/$id/unassessed_articles': typeof AdminJobsIdUnassessed_articlesRoute
-  '/admin/import-route-stats/$year/$id/': typeof AdminImportRouteStatsYearIdIndexRoute
   '/admin/unexpected-answers/$projectId/$promptId/': typeof AdminUnexpectedAnswersProjectIdPromptIdIndexRoute
   '/admin/unexpected-answers/all-prompts/$promptId/': typeof AdminUnexpectedAnswersAllPromptsPromptIdIndexRoute
   '/projects/$id/reviews-llm/$articleId/': typeof ProjectsIdReviewsLlmArticleIdIndexRoute
   '/projects/$id/reviews/$articleId/': typeof ProjectsIdReviewsArticleIdIndexRoute
-  '/admin/import-route-stats/$year/$id/fulltext': typeof AdminImportRouteStatsYearIdFulltextRoute
   '/projects/$id/reviews-llm/$articleId/fulltext': typeof ProjectsIdReviewsLlmArticleIdFulltextRoute
 }
 export interface FileRoutesByTo {
@@ -483,12 +427,9 @@ export interface FileRoutesByTo {
   '/projects/create-subproject': typeof ProjectsCreateSubprojectRoute
   '/admin/aa-models': typeof AdminAaModelsIndexRoute
   '/admin/assessments': typeof AdminAssessmentsIndexRoute
-  '/admin/clickhouse-sync': typeof AdminClickhouseSyncIndexRoute
   '/admin/datasources': typeof AdminDatasourcesIndexRoute
-  '/admin/diagnose-unassessed': typeof AdminDiagnoseUnassessedIndexRoute
   '/admin/failed_requests': typeof AdminFailed_requestsIndexRoute
   '/admin/gpu': typeof AdminGpuIndexRoute
-  '/admin/import-route-stats': typeof AdminImportRouteStatsIndexRoute
   '/admin/jobs': typeof AdminJobsIndexRoute
   '/admin/latest-articles': typeof AdminLatestArticlesIndexRoute
   '/admin/llm': typeof AdminLlmIndexRoute
@@ -510,10 +451,8 @@ export interface FileRoutesByTo {
   '/projects/$id/edit': typeof ProjectsIdEditRoute
   '/projects/$id/export': typeof ProjectsIdExportRoute
   '/projects/$id/humanAssessment': typeof ProjectsIdHumanAssessmentRoute
-  '/admin/clickhouse-sync/articles': typeof AdminClickhouseSyncArticlesIndexRoute
   '/admin/datasources/archived': typeof AdminDatasourcesArchivedIndexRoute
   '/admin/failed_requests/$id': typeof AdminFailed_requestsIdIndexRoute
-  '/admin/import-route-stats/$year': typeof AdminImportRouteStatsYearIndexRoute
   '/admin/jobs/$id': typeof AdminJobsIdIndexRoute
   '/admin/unexpected-answers/$projectId': typeof AdminUnexpectedAnswersProjectIdIndexRoute
   '/admin/unexpected-answers/all-prompts': typeof AdminUnexpectedAnswersAllPromptsIndexRoute
@@ -524,12 +463,10 @@ export interface FileRoutesByTo {
   '/projects/$id/reviews': typeof ProjectsIdReviewsIndexRoute
   '/admin/datasources/$id/edit': typeof AdminDatasourcesIdEditRoute
   '/admin/jobs/$id/unassessed_articles': typeof AdminJobsIdUnassessed_articlesRoute
-  '/admin/import-route-stats/$year/$id': typeof AdminImportRouteStatsYearIdIndexRoute
   '/admin/unexpected-answers/$projectId/$promptId': typeof AdminUnexpectedAnswersProjectIdPromptIdIndexRoute
   '/admin/unexpected-answers/all-prompts/$promptId': typeof AdminUnexpectedAnswersAllPromptsPromptIdIndexRoute
   '/projects/$id/reviews-llm/$articleId': typeof ProjectsIdReviewsLlmArticleIdIndexRoute
   '/projects/$id/reviews/$articleId': typeof ProjectsIdReviewsArticleIdIndexRoute
-  '/admin/import-route-stats/$year/$id/fulltext': typeof AdminImportRouteStatsYearIdFulltextRoute
   '/projects/$id/reviews-llm/$articleId/fulltext': typeof ProjectsIdReviewsLlmArticleIdFulltextRoute
 }
 export interface FileRoutesById {
@@ -547,12 +484,9 @@ export interface FileRoutesById {
   '/projects/create-subproject': typeof ProjectsCreateSubprojectRoute
   '/admin/aa-models/': typeof AdminAaModelsIndexRoute
   '/admin/assessments/': typeof AdminAssessmentsIndexRoute
-  '/admin/clickhouse-sync/': typeof AdminClickhouseSyncIndexRoute
   '/admin/datasources/': typeof AdminDatasourcesIndexRoute
-  '/admin/diagnose-unassessed/': typeof AdminDiagnoseUnassessedIndexRoute
   '/admin/failed_requests/': typeof AdminFailed_requestsIndexRoute
   '/admin/gpu/': typeof AdminGpuIndexRoute
-  '/admin/import-route-stats/': typeof AdminImportRouteStatsIndexRoute
   '/admin/jobs/': typeof AdminJobsIndexRoute
   '/admin/latest-articles/': typeof AdminLatestArticlesIndexRoute
   '/admin/llm/': typeof AdminLlmIndexRoute
@@ -574,10 +508,8 @@ export interface FileRoutesById {
   '/projects/$id/edit': typeof ProjectsIdEditRoute
   '/projects/$id/export': typeof ProjectsIdExportRoute
   '/projects/$id/humanAssessment': typeof ProjectsIdHumanAssessmentRoute
-  '/admin/clickhouse-sync/articles/': typeof AdminClickhouseSyncArticlesIndexRoute
   '/admin/datasources/archived/': typeof AdminDatasourcesArchivedIndexRoute
   '/admin/failed_requests/$id/': typeof AdminFailed_requestsIdIndexRoute
-  '/admin/import-route-stats/$year/': typeof AdminImportRouteStatsYearIndexRoute
   '/admin/jobs/$id/': typeof AdminJobsIdIndexRoute
   '/admin/unexpected-answers/$projectId/': typeof AdminUnexpectedAnswersProjectIdIndexRoute
   '/admin/unexpected-answers/all-prompts/': typeof AdminUnexpectedAnswersAllPromptsIndexRoute
@@ -588,12 +520,10 @@ export interface FileRoutesById {
   '/projects/$id/reviews/': typeof ProjectsIdReviewsIndexRoute
   '/admin/datasources/$id/edit': typeof AdminDatasourcesIdEditRoute
   '/admin/jobs/$id/unassessed_articles': typeof AdminJobsIdUnassessed_articlesRoute
-  '/admin/import-route-stats/$year/$id/': typeof AdminImportRouteStatsYearIdIndexRoute
   '/admin/unexpected-answers/$projectId/$promptId/': typeof AdminUnexpectedAnswersProjectIdPromptIdIndexRoute
   '/admin/unexpected-answers/all-prompts/$promptId/': typeof AdminUnexpectedAnswersAllPromptsPromptIdIndexRoute
   '/projects/$id/reviews-llm/$articleId/': typeof ProjectsIdReviewsLlmArticleIdIndexRoute
   '/projects/$id/reviews/$articleId/': typeof ProjectsIdReviewsArticleIdIndexRoute
-  '/admin/import-route-stats/$year/$id/fulltext': typeof AdminImportRouteStatsYearIdFulltextRoute
   '/projects/$id/reviews-llm/$articleId/fulltext': typeof ProjectsIdReviewsLlmArticleIdFulltextRoute
 }
 export interface FileRouteTypes {
@@ -612,12 +542,9 @@ export interface FileRouteTypes {
     | '/projects/create-subproject'
     | '/admin/aa-models/'
     | '/admin/assessments/'
-    | '/admin/clickhouse-sync/'
     | '/admin/datasources/'
-    | '/admin/diagnose-unassessed/'
     | '/admin/failed_requests/'
     | '/admin/gpu/'
-    | '/admin/import-route-stats/'
     | '/admin/jobs/'
     | '/admin/latest-articles/'
     | '/admin/llm/'
@@ -639,10 +566,8 @@ export interface FileRouteTypes {
     | '/projects/$id/edit'
     | '/projects/$id/export'
     | '/projects/$id/humanAssessment'
-    | '/admin/clickhouse-sync/articles/'
     | '/admin/datasources/archived/'
     | '/admin/failed_requests/$id/'
-    | '/admin/import-route-stats/$year/'
     | '/admin/jobs/$id/'
     | '/admin/unexpected-answers/$projectId/'
     | '/admin/unexpected-answers/all-prompts/'
@@ -653,12 +578,10 @@ export interface FileRouteTypes {
     | '/projects/$id/reviews/'
     | '/admin/datasources/$id/edit'
     | '/admin/jobs/$id/unassessed_articles'
-    | '/admin/import-route-stats/$year/$id/'
     | '/admin/unexpected-answers/$projectId/$promptId/'
     | '/admin/unexpected-answers/all-prompts/$promptId/'
     | '/projects/$id/reviews-llm/$articleId/'
     | '/projects/$id/reviews/$articleId/'
-    | '/admin/import-route-stats/$year/$id/fulltext'
     | '/projects/$id/reviews-llm/$articleId/fulltext'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -675,12 +598,9 @@ export interface FileRouteTypes {
     | '/projects/create-subproject'
     | '/admin/aa-models'
     | '/admin/assessments'
-    | '/admin/clickhouse-sync'
     | '/admin/datasources'
-    | '/admin/diagnose-unassessed'
     | '/admin/failed_requests'
     | '/admin/gpu'
-    | '/admin/import-route-stats'
     | '/admin/jobs'
     | '/admin/latest-articles'
     | '/admin/llm'
@@ -702,10 +622,8 @@ export interface FileRouteTypes {
     | '/projects/$id/edit'
     | '/projects/$id/export'
     | '/projects/$id/humanAssessment'
-    | '/admin/clickhouse-sync/articles'
     | '/admin/datasources/archived'
     | '/admin/failed_requests/$id'
-    | '/admin/import-route-stats/$year'
     | '/admin/jobs/$id'
     | '/admin/unexpected-answers/$projectId'
     | '/admin/unexpected-answers/all-prompts'
@@ -716,12 +634,10 @@ export interface FileRouteTypes {
     | '/projects/$id/reviews'
     | '/admin/datasources/$id/edit'
     | '/admin/jobs/$id/unassessed_articles'
-    | '/admin/import-route-stats/$year/$id'
     | '/admin/unexpected-answers/$projectId/$promptId'
     | '/admin/unexpected-answers/all-prompts/$promptId'
     | '/projects/$id/reviews-llm/$articleId'
     | '/projects/$id/reviews/$articleId'
-    | '/admin/import-route-stats/$year/$id/fulltext'
     | '/projects/$id/reviews-llm/$articleId/fulltext'
   id:
     | '__root__'
@@ -738,12 +654,9 @@ export interface FileRouteTypes {
     | '/projects/create-subproject'
     | '/admin/aa-models/'
     | '/admin/assessments/'
-    | '/admin/clickhouse-sync/'
     | '/admin/datasources/'
-    | '/admin/diagnose-unassessed/'
     | '/admin/failed_requests/'
     | '/admin/gpu/'
-    | '/admin/import-route-stats/'
     | '/admin/jobs/'
     | '/admin/latest-articles/'
     | '/admin/llm/'
@@ -765,10 +678,8 @@ export interface FileRouteTypes {
     | '/projects/$id/edit'
     | '/projects/$id/export'
     | '/projects/$id/humanAssessment'
-    | '/admin/clickhouse-sync/articles/'
     | '/admin/datasources/archived/'
     | '/admin/failed_requests/$id/'
-    | '/admin/import-route-stats/$year/'
     | '/admin/jobs/$id/'
     | '/admin/unexpected-answers/$projectId/'
     | '/admin/unexpected-answers/all-prompts/'
@@ -779,12 +690,10 @@ export interface FileRouteTypes {
     | '/projects/$id/reviews/'
     | '/admin/datasources/$id/edit'
     | '/admin/jobs/$id/unassessed_articles'
-    | '/admin/import-route-stats/$year/$id/'
     | '/admin/unexpected-answers/$projectId/$promptId/'
     | '/admin/unexpected-answers/all-prompts/$promptId/'
     | '/projects/$id/reviews-llm/$articleId/'
     | '/projects/$id/reviews/$articleId/'
-    | '/admin/import-route-stats/$year/$id/fulltext'
     | '/projects/$id/reviews-llm/$articleId/fulltext'
   fileRoutesById: FileRoutesById
 }
@@ -802,12 +711,9 @@ export interface RootRouteChildren {
   ProjectsCreateSubprojectRoute: typeof ProjectsCreateSubprojectRoute
   AdminAaModelsIndexRoute: typeof AdminAaModelsIndexRoute
   AdminAssessmentsIndexRoute: typeof AdminAssessmentsIndexRoute
-  AdminClickhouseSyncIndexRoute: typeof AdminClickhouseSyncIndexRoute
   AdminDatasourcesIndexRoute: typeof AdminDatasourcesIndexRoute
-  AdminDiagnoseUnassessedIndexRoute: typeof AdminDiagnoseUnassessedIndexRoute
   AdminFailed_requestsIndexRoute: typeof AdminFailed_requestsIndexRoute
   AdminGpuIndexRoute: typeof AdminGpuIndexRoute
-  AdminImportRouteStatsIndexRoute: typeof AdminImportRouteStatsIndexRoute
   AdminJobsIndexRoute: typeof AdminJobsIndexRoute
   AdminLatestArticlesIndexRoute: typeof AdminLatestArticlesIndexRoute
   AdminLlmIndexRoute: typeof AdminLlmIndexRoute
@@ -829,10 +735,8 @@ export interface RootRouteChildren {
   ProjectsIdEditRoute: typeof ProjectsIdEditRoute
   ProjectsIdExportRoute: typeof ProjectsIdExportRoute
   ProjectsIdHumanAssessmentRoute: typeof ProjectsIdHumanAssessmentRoute
-  AdminClickhouseSyncArticlesIndexRoute: typeof AdminClickhouseSyncArticlesIndexRoute
   AdminDatasourcesArchivedIndexRoute: typeof AdminDatasourcesArchivedIndexRoute
   AdminFailed_requestsIdIndexRoute: typeof AdminFailed_requestsIdIndexRoute
-  AdminImportRouteStatsYearIndexRoute: typeof AdminImportRouteStatsYearIndexRoute
   AdminJobsIdIndexRoute: typeof AdminJobsIdIndexRoute
   AdminUnexpectedAnswersProjectIdIndexRoute: typeof AdminUnexpectedAnswersProjectIdIndexRoute
   AdminUnexpectedAnswersAllPromptsIndexRoute: typeof AdminUnexpectedAnswersAllPromptsIndexRoute
@@ -843,12 +747,10 @@ export interface RootRouteChildren {
   ProjectsIdReviewsIndexRoute: typeof ProjectsIdReviewsIndexRoute
   AdminDatasourcesIdEditRoute: typeof AdminDatasourcesIdEditRoute
   AdminJobsIdUnassessed_articlesRoute: typeof AdminJobsIdUnassessed_articlesRoute
-  AdminImportRouteStatsYearIdIndexRoute: typeof AdminImportRouteStatsYearIdIndexRoute
   AdminUnexpectedAnswersProjectIdPromptIdIndexRoute: typeof AdminUnexpectedAnswersProjectIdPromptIdIndexRoute
   AdminUnexpectedAnswersAllPromptsPromptIdIndexRoute: typeof AdminUnexpectedAnswersAllPromptsPromptIdIndexRoute
   ProjectsIdReviewsLlmArticleIdIndexRoute: typeof ProjectsIdReviewsLlmArticleIdIndexRoute
   ProjectsIdReviewsArticleIdIndexRoute: typeof ProjectsIdReviewsArticleIdIndexRoute
-  AdminImportRouteStatsYearIdFulltextRoute: typeof AdminImportRouteStatsYearIdFulltextRoute
   ProjectsIdReviewsLlmArticleIdFulltextRoute: typeof ProjectsIdReviewsLlmArticleIdFulltextRoute
 }
 
@@ -1078,13 +980,6 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof AdminJobsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/admin/import-route-stats/': {
-      id: '/admin/import-route-stats/'
-      path: '/admin/import-route-stats'
-      fullPath: '/admin/import-route-stats/'
-      preLoaderRoute: typeof AdminImportRouteStatsIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/admin/gpu/': {
       id: '/admin/gpu/'
       path: '/admin/gpu'
@@ -1099,25 +994,11 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof AdminFailed_requestsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/admin/diagnose-unassessed/': {
-      id: '/admin/diagnose-unassessed/'
-      path: '/admin/diagnose-unassessed'
-      fullPath: '/admin/diagnose-unassessed/'
-      preLoaderRoute: typeof AdminDiagnoseUnassessedIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/admin/datasources/': {
       id: '/admin/datasources/'
       path: '/admin/datasources'
       fullPath: '/admin/datasources/'
       preLoaderRoute: typeof AdminDatasourcesIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/admin/clickhouse-sync/': {
-      id: '/admin/clickhouse-sync/'
-      path: '/admin/clickhouse-sync'
-      fullPath: '/admin/clickhouse-sync/'
-      preLoaderRoute: typeof AdminClickhouseSyncIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/assessments/': {
@@ -1204,13 +1085,6 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof AdminJobsIdIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/admin/import-route-stats/$year/': {
-      id: '/admin/import-route-stats/$year/'
-      path: '/admin/import-route-stats/$year'
-      fullPath: '/admin/import-route-stats/$year/'
-      preLoaderRoute: typeof AdminImportRouteStatsYearIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/admin/failed_requests/$id/': {
       id: '/admin/failed_requests/$id/'
       path: '/admin/failed_requests/$id'
@@ -1225,25 +1099,11 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof AdminDatasourcesArchivedIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/admin/clickhouse-sync/articles/': {
-      id: '/admin/clickhouse-sync/articles/'
-      path: '/admin/clickhouse-sync/articles'
-      fullPath: '/admin/clickhouse-sync/articles/'
-      preLoaderRoute: typeof AdminClickhouseSyncArticlesIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/projects/$id/reviews-llm/$articleId/fulltext': {
       id: '/projects/$id/reviews-llm/$articleId/fulltext'
       path: '/projects/$id/reviews-llm/$articleId/fulltext'
       fullPath: '/projects/$id/reviews-llm/$articleId/fulltext'
       preLoaderRoute: typeof ProjectsIdReviewsLlmArticleIdFulltextRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/admin/import-route-stats/$year/$id/fulltext': {
-      id: '/admin/import-route-stats/$year/$id/fulltext'
-      path: '/admin/import-route-stats/$year/$id/fulltext'
-      fullPath: '/admin/import-route-stats/$year/$id/fulltext'
-      preLoaderRoute: typeof AdminImportRouteStatsYearIdFulltextRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/projects/$id/reviews/$articleId/': {
@@ -1274,13 +1134,6 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof AdminUnexpectedAnswersProjectIdPromptIdIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/admin/import-route-stats/$year/$id/': {
-      id: '/admin/import-route-stats/$year/$id/'
-      path: '/admin/import-route-stats/$year/$id'
-      fullPath: '/admin/import-route-stats/$year/$id/'
-      preLoaderRoute: typeof AdminImportRouteStatsYearIdIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
   }
 }
 
@@ -1299,12 +1152,9 @@ const rootRouteChildren: RootRouteChildren = {
   ProjectsCreateSubprojectRoute: ProjectsCreateSubprojectRoute,
   AdminAaModelsIndexRoute: AdminAaModelsIndexRoute,
   AdminAssessmentsIndexRoute: AdminAssessmentsIndexRoute,
-  AdminClickhouseSyncIndexRoute: AdminClickhouseSyncIndexRoute,
   AdminDatasourcesIndexRoute: AdminDatasourcesIndexRoute,
-  AdminDiagnoseUnassessedIndexRoute: AdminDiagnoseUnassessedIndexRoute,
   AdminFailed_requestsIndexRoute: AdminFailed_requestsIndexRoute,
   AdminGpuIndexRoute: AdminGpuIndexRoute,
-  AdminImportRouteStatsIndexRoute: AdminImportRouteStatsIndexRoute,
   AdminJobsIndexRoute: AdminJobsIndexRoute,
   AdminLatestArticlesIndexRoute: AdminLatestArticlesIndexRoute,
   AdminLlmIndexRoute: AdminLlmIndexRoute,
@@ -1326,10 +1176,8 @@ const rootRouteChildren: RootRouteChildren = {
   ProjectsIdEditRoute: ProjectsIdEditRoute,
   ProjectsIdExportRoute: ProjectsIdExportRoute,
   ProjectsIdHumanAssessmentRoute: ProjectsIdHumanAssessmentRoute,
-  AdminClickhouseSyncArticlesIndexRoute: AdminClickhouseSyncArticlesIndexRoute,
   AdminDatasourcesArchivedIndexRoute: AdminDatasourcesArchivedIndexRoute,
   AdminFailed_requestsIdIndexRoute: AdminFailed_requestsIdIndexRoute,
-  AdminImportRouteStatsYearIndexRoute: AdminImportRouteStatsYearIndexRoute,
   AdminJobsIdIndexRoute: AdminJobsIdIndexRoute,
   AdminUnexpectedAnswersProjectIdIndexRoute:
     AdminUnexpectedAnswersProjectIdIndexRoute,
@@ -1342,7 +1190,6 @@ const rootRouteChildren: RootRouteChildren = {
   ProjectsIdReviewsIndexRoute: ProjectsIdReviewsIndexRoute,
   AdminDatasourcesIdEditRoute: AdminDatasourcesIdEditRoute,
   AdminJobsIdUnassessed_articlesRoute: AdminJobsIdUnassessed_articlesRoute,
-  AdminImportRouteStatsYearIdIndexRoute: AdminImportRouteStatsYearIdIndexRoute,
   AdminUnexpectedAnswersProjectIdPromptIdIndexRoute:
     AdminUnexpectedAnswersProjectIdPromptIdIndexRoute,
   AdminUnexpectedAnswersAllPromptsPromptIdIndexRoute:
@@ -1350,8 +1197,6 @@ const rootRouteChildren: RootRouteChildren = {
   ProjectsIdReviewsLlmArticleIdIndexRoute:
     ProjectsIdReviewsLlmArticleIdIndexRoute,
   ProjectsIdReviewsArticleIdIndexRoute: ProjectsIdReviewsArticleIdIndexRoute,
-  AdminImportRouteStatsYearIdFulltextRoute:
-    AdminImportRouteStatsYearIdFulltextRoute,
   ProjectsIdReviewsLlmArticleIdFulltextRoute:
     ProjectsIdReviewsLlmArticleIdFulltextRoute,
 }

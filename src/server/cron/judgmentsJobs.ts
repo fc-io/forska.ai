@@ -2,7 +2,6 @@ import {cron} from '@elysiajs/cron'
 import {Elysia} from 'elysia'
 
 import {env} from '../utils/env.ts'
-import {getDatabase} from '../utils/getDatabase.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 import {judgmentsJobsAddToQueue} from './judgmentsJobs/judgmentsJobsAddToQueue.ts'
 import {judgmentsJobsCheckLLMStatus} from './judgmentsJobs/judgmentsJobsCheckLLMStatus.ts'
@@ -48,8 +47,7 @@ const runAddToQueue = async (): Promise<void> => {
   isAddingToQueue = true
   addToQueueStartedAtMs = Date.now()
   try {
-    const db = getDatabase()
-    await judgmentsJobsAddToQueue(db, serverJobId)
+    await judgmentsJobsAddToQueue(serverJobId)
   } catch (err) {
     console.error('[cron] runAddToQueue error:', err instanceof Error ? err.message : err)
   } finally {
@@ -61,9 +59,8 @@ const runAddToQueue = async (): Promise<void> => {
 const sendToLLM = async (): Promise<void> => {
   if (!shouldRunJudgingCron()) return
   try {
-    const db = getDatabase()
-    const runningJobs = await judgmentsJobsGetRunningJobs(db)
-    await judgmentsJobsSendToLLM(db, runningJobs, serverJobId)
+    const runningJobs = await judgmentsJobsGetRunningJobs()
+    await judgmentsJobsSendToLLM(runningJobs, serverJobId)
   } catch (err) {
     console.error('[cron] sendToLLM error:', err instanceof Error ? err.message : err)
   }
@@ -72,8 +69,7 @@ const sendToLLM = async (): Promise<void> => {
 const checkLLMStatusCron = async (): Promise<void> => {
   if (!shouldRunJudgingCron()) return
   try {
-    const db = getDatabase()
-    await judgmentsJobsCheckLLMStatus(db)
+    await judgmentsJobsCheckLLMStatus()
   } catch (err) {
     console.error('[cron] checkLLMStatusCron error:', err instanceof Error ? err.message : err)
   }
@@ -81,8 +77,7 @@ const checkLLMStatusCron = async (): Promise<void> => {
 
 const cleanupStaleQueueCron = async (): Promise<void> => {
   try {
-    const db = getDatabase()
-    await judgmentsJobsCleanupStale(db)
+    await judgmentsJobsCleanupStale()
   } catch (err) {
     console.error('[cron] cleanupStaleQueueCron error:', err instanceof Error ? err.message : err)
   }

@@ -56,10 +56,10 @@ const fetchLlmMetricsSummary = async (): Promise<LlmMetricsSummary | null> => {
   for (const row of entries) {
     const instanceId = typeof row.instanceId === 'string' ? row.instanceId : ''
     if (!latestByInstance.has(instanceId)) {
-      const ts = row.ts ? new Date(row.ts as string | number | Date) : null
+      const ts = typeof row.ts === 'string' || typeof row.ts === 'number' ? new Date(row.ts) : null
       latestByInstance.set(instanceId, {
-        waiting: (row.numQueueReqs as number | null) ?? 0,
-        running: (row.numRunningReqs as number | null) ?? 0,
+        waiting: typeof row.numQueueReqs === 'number' ? row.numQueueReqs : 0,
+        running: typeof row.numRunningReqs === 'number' ? row.numRunningReqs : 0,
         ts: ts && !isNaN(ts.getTime()) ? ts : null,
       })
     }
@@ -302,13 +302,6 @@ export const Navigation = () => {
                       Latest Articles
                     </Link>
                     <Link
-                      to="/admin/import-route-stats"
-                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
-                      onClick={closeAdminMenu}
-                    >
-                      Import Route Stats
-                    </Link>
-                    <Link
                       to="/admin/pdf-conversions"
                       class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
                       onClick={closeAdminMenu}
@@ -347,13 +340,6 @@ export const Navigation = () => {
                       onClick={closeAdminMenu}
                     >
                       Failed Requests
-                    </Link>
-                    <Link
-                      to="/admin/diagnose-unassessed"
-                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
-                      onClick={closeAdminMenu}
-                    >
-                      Diagnose Unassessed
                     </Link>
                     <Link
                       to="/admin/setup_stats"

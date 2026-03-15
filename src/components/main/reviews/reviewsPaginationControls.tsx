@@ -129,7 +129,9 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
           <Show when={props.currentPageRowIds && props.rowSelection && props.setRowSelection}>
             <div class="flex items-center gap-2">
               <input
-                ref={selectAllEl}
+                ref={(element) => {
+                  selectAllEl = element
+                }}
                 type="checkbox"
                 class="w-[15px] h-[15px]"
                 checked={allSelected()}

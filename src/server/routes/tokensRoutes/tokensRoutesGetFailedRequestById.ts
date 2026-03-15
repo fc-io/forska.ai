@@ -1,7 +1,4 @@
-import {eq} from 'drizzle-orm'
-
-import {judgmentsJobs, models, tokenUse} from '../../../db/schema.ts'
-import {getDatabase} from '../../utils/getDatabase.ts'
+import {getTokenUseQueryService} from '../../services/tokenUseQueryService.ts'
 
 type FailedRequestDetailItem = {modelId?: string; [key: string]: unknown}
 
@@ -17,37 +14,15 @@ const getFirstModelId = (details: unknown): string | null => {
 }
 
 export const tokensRoutesGetFailedRequestById = async (id: string) => {
-  const db = getDatabase()
-
-  const [result] = await db
-    .select({
-      id: tokenUse.id,
-      createdAt: tokenUse.createdAt,
-      judgmentsJobId: tokenUse.judgmentsJobId,
-      projectId: judgmentsJobs.projectId,
-      modelName: tokenUse.sglangModel,
-      failedRequests: tokenUse.failedRequests,
-      failedRequestsDetails: tokenUse.failedRequestsDetails,
-      totalTokens: tokenUse.totalTokens,
-      requests: tokenUse.requests,
-      successfulRequests: tokenUse.successfulRequests,
-    })
-    .from(tokenUse)
-    .leftJoin(judgmentsJobs, eq(tokenUse.judgmentsJobId, judgmentsJobs.id))
-    .where(eq(tokenUse.id, id))
+  const tokenUseQueryService = getTokenUseQueryService()
+  const result = await tokenUseQueryService.getFailedRequestById(id)
 
   if (!result) {
     return {success: false, error: 'Failed request not found'}
   }
 
   const modelId = getFirstModelId(result.failedRequestsDetails)
-  const [modelRow] = modelId
-    ? await db
-        .select({provider: models.provider, modelName: models.modelName, version: models.version})
-        .from(models)
-        .where(eq(models.id, modelId))
-        .limit(1)
-    : [null]
+  const modelRow = modelId ? ((await tokenUseQueryService.getModelInfoMap([modelId])).get(modelId) ?? null) : null
 
   const modelInfo: ModelInfo | null = modelRow
     ? {provider: modelRow.provider ?? null, modelName: modelRow.modelName ?? null, version: modelRow.version ?? null}

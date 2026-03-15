@@ -1,10 +1,15 @@
 import {randomUUID} from 'node:crypto'
 
-import {eq, inArray} from 'drizzle-orm'
-
 import * as schema from '../../db/schema.ts'
 import {fetchPdfForArticle} from '../cron/fullTextJobs/fetchPdfForArticle.ts'
-import {getDatabase} from '../utils/getDatabase.ts'
+import {getAppDatabaseService} from '../services/appDatabaseService.ts'
+import {
+  escapeSqlString,
+  getJsonValue,
+  getQuotedStringList,
+  getSqlLiteral,
+  getTimestampLiteral,
+} from '../services/appQueryHelpers.ts'
 
 type PdfFetchJobStatus = 'queued' | 'running' | 'completed' | 'failed'
 
@@ -122,13 +127,31 @@ const fetchAndStoreForRow = async (
   jobId: string,
   row: Pick<typeof schema.articles.$inferSelect, 'id' | 'arxivId' | 'originalData'>,
 ): Promise<void> => {
-  const db = getDatabase()
   const result = await fetchPdfForArticle({arxivId: row.arxivId, originalData: row.originalData}).catch((error) => {
     return Promise.reject(error)
   })
 
   const update = buildUpdateForAttempt(result)
-  await db.update(schema.articles).set(update).where(eq(schema.articles.id, row.id))
+  const updateParts = Object.entries(update).map(([key, value]) => {
+    const columnNameMap: Record<string, string> = {
+      fullTextFetchedAt: 'full_text_fetched_at',
+      fullTextPDF: 'full_text_pdf',
+      fullTextSource: 'full_text_source',
+      fullTextOriginalFormat: 'full_text_original_format',
+      fullTextConversionStatus: 'full_text_conversion_status',
+      fullTextConversionAttempts: 'full_text_conversion_attempts',
+      fullTextConversionError: 'full_text_conversion_error',
+      fullText: 'full_text',
+      fullTextHtml: 'full_text_html',
+    }
+    return `${columnNameMap[key] ?? key} = ${getSqlLiteral(value)}`
+  })
+  await getAppDatabaseService().run(`
+    UPDATE app.article
+    SET ${updateParts.join(', ')},
+        updated_at = ${getTimestampLiteral(new Date())}
+    WHERE id = '${escapeSqlString(row.id)}'
+  `)
   processAttemptResult(jobId, result)
 }
 
@@ -141,28 +164,49 @@ const fetchAndStoreForRowSafe = async (
   }
 
   return run().catch(async (error) => {
-    const db = getDatabase()
     const update = buildUpdateForAttempt(null)
-    await db.update(schema.articles).set(update).where(eq(schema.articles.id, row.id))
+    const updateParts = Object.entries(update).map(([key, value]) => {
+      const columnNameMap: Record<string, string> = {
+        fullTextFetchedAt: 'full_text_fetched_at',
+        fullTextPDF: 'full_text_pdf',
+        fullTextSource: 'full_text_source',
+        fullTextOriginalFormat: 'full_text_original_format',
+      }
+      return `${columnNameMap[key] ?? key} = ${getSqlLiteral(value)}`
+    })
+    await getAppDatabaseService().run(`
+      UPDATE app.article
+      SET ${updateParts.join(', ')},
+          updated_at = ${getTimestampLiteral(new Date())}
+      WHERE id = '${escapeSqlString(row.id)}'
+    `)
     processAttemptError(jobId, error)
   })
 }
 
 const processChunk = async (jobId: string, ids: string[], forceRefetch: boolean): Promise<void> => {
-  const db = getDatabase()
-  const rows = await db
-    .select({
-      id: schema.articles.id,
-      arxivId: schema.articles.arxivId,
-      originalData: schema.articles.originalData,
-      fullTextPDF: schema.articles.fullTextPDF,
-      fullTextSource: schema.articles.fullTextSource,
-    })
-    .from(schema.articles)
-    .where(inArray(schema.articles.id, ids))
+  const rows = await getAppDatabaseService().queryJson<{
+    id: string
+    arxivId: string | null
+    originalData: unknown
+    fullTextPDF: string | null
+    fullTextSource: string | null
+  }>(`
+    SELECT
+      id,
+      arxiv_id AS arxivId,
+      TO_JSON(original_data) AS originalData,
+      full_text_pdf AS fullTextPDF,
+      full_text_source AS fullTextSource
+    FROM app.article
+    WHERE id IN (${getQuotedStringList(ids).join(', ')})
+  `)
+  const normalizedRows = rows.map((row) => {
+    return {...row, originalData: getJsonValue(row.originalData)}
+  })
 
   const foundIds = new Set(
-    rows.map((r) => {
+    normalizedRows.map((r) => {
       return r.id
     }),
   )
@@ -171,7 +215,7 @@ const processChunk = async (jobId: string, ids: string[], forceRefetch: boolean)
     return acc + (foundIds.has(id) ? 0 : 1)
   }, 0)
 
-  const rowsToAttempt = rows.filter((r) => {
+  const rowsToAttempt = normalizedRows.filter((r) => {
     return !shouldSkipRow(r, forceRefetch)
   })
 

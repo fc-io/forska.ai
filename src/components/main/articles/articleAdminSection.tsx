@@ -53,7 +53,6 @@ export const ArticleAdminSection = (props: ArticleAdminSectionProps) => {
     if (prev === 'pending' && conversionStatus === 'success') {
       setConversionJustCompleted(true)
       void queryClient.invalidateQueries({queryKey: ['article-details', props.articleId]})
-      void queryClient.invalidateQueries({queryKey: ['import-route-stats-article-details', props.articleId]})
       void queryClient.invalidateQueries({queryKey: ['article-review-details']})
     }
 
@@ -80,7 +79,6 @@ export const ArticleAdminSection = (props: ArticleAdminSectionProps) => {
         void queryClient.invalidateQueries({queryKey: ['article-admin-info', props.articleId]})
         // Also invalidate the main article query in case it's being used
         void queryClient.invalidateQueries({queryKey: ['article-details', props.articleId]})
-        void queryClient.invalidateQueries({queryKey: ['import-route-stats-article-details', props.articleId]})
         void queryClient.invalidateQueries({queryKey: ['article-review-details']})
       },
     }
@@ -98,7 +96,6 @@ export const ArticleAdminSection = (props: ArticleAdminSectionProps) => {
         void queryClient.invalidateQueries({queryKey: ['article-admin-info', props.articleId]})
         // Also invalidate the main article query in case it's being used
         void queryClient.invalidateQueries({queryKey: ['article-details', props.articleId]})
-        void queryClient.invalidateQueries({queryKey: ['import-route-stats-article-details', props.articleId]})
         void queryClient.invalidateQueries({queryKey: ['article-review-details']})
       },
     }
@@ -113,7 +110,6 @@ export const ArticleAdminSection = (props: ArticleAdminSectionProps) => {
       onSuccess: () => {
         void queryClient.invalidateQueries({queryKey: ['article-admin-info', props.articleId]})
         void queryClient.invalidateQueries({queryKey: ['article-details', props.articleId]})
-        void queryClient.invalidateQueries({queryKey: ['import-route-stats-article-details', props.articleId]})
         void queryClient.invalidateQueries({queryKey: ['article-review-details']})
       },
     }

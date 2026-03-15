@@ -1,12 +1,17 @@
-import {eq, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 import {mkdir, writeFile} from 'fs/promises'
 import path from 'path'
 
-import {articles} from '../../db/schema.ts'
 import {fetchPdfForArticle} from '../cron/fullTextJobs/fetchPdfForArticle.ts'
+import {getAppDatabaseService} from '../services/appDatabaseService.ts'
+import {
+  escapeSqlString,
+  getDateValue,
+  getJsonValue,
+  getSqlLiteral,
+  getTimestampLiteral,
+} from '../services/appQueryHelpers.ts'
 import {ConversionError, convertPdfToText} from '../utils/convertPdfToText.ts'
-import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
 type OriginalFullTextUrl = {
@@ -79,29 +84,37 @@ export const articleAdminRoutes = new Elysia()
   .get(
     '/api/articles/:id/admin-info',
     async ({params}) => {
-      const db = getDatabase()
       const {id} = params
 
-      const [article] = await db
-        .select({
-          id: articles.id,
-          fullTextFetchedAt: articles.fullTextFetchedAt,
-          fullTextPDF: articles.fullTextPDF,
-          fullTextSource: articles.fullTextSource,
-          fullTextConversionStatus: articles.fullTextConversionStatus,
-          fullTextConversionError: articles.fullTextConversionError,
-          fullTextConversionAttempts: articles.fullTextConversionAttempts,
-          fullTextCharCount: articles.fullTextCharCount,
-        })
-        .from(articles)
-        .where(eq(articles.id, id))
-        .limit(1)
+      const [article] = await getAppDatabaseService().queryJson<{
+        id: string
+        fullTextFetchedAt: unknown
+        fullTextPDF: string | null
+        fullTextSource: string | null
+        fullTextConversionStatus: string | null
+        fullTextConversionError: string | null
+        fullTextConversionAttempts: number | null
+        fullTextCharCount: number | null
+      }>(`
+        SELECT
+          id,
+          full_text_fetched_at AS fullTextFetchedAt,
+          full_text_pdf AS fullTextPDF,
+          full_text_source AS fullTextSource,
+          full_text_conversion_status AS fullTextConversionStatus,
+          full_text_conversion_error AS fullTextConversionError,
+          full_text_conversion_attempts AS fullTextConversionAttempts,
+          full_text_char_count AS fullTextCharCount
+        FROM app.article
+        WHERE id = '${escapeSqlString(id)}'
+        LIMIT 1
+      `)
 
       if (!article) {
         throw new Error('Article not found')
       }
 
-      return {article}
+      return {article: {...article, fullTextFetchedAt: getDateValue(article.fullTextFetchedAt)}}
     },
     {params: t.Object({id: t.String()})},
   )
@@ -109,23 +122,28 @@ export const articleAdminRoutes = new Elysia()
   .post(
     '/api/articles/:id/fetch-pdf',
     async ({params}) => {
-      const db = getDatabase()
       const {id} = params
 
       // Get the article to access arxivId and originalData
-      const [article] = await db
-        .select({id: articles.id, arxivId: articles.arxivId, originalData: articles.originalData})
-        .from(articles)
-        .where(eq(articles.id, id))
-        .limit(1)
+      const [article] = await getAppDatabaseService().queryJson<{
+        id: string
+        arxivId: string | null
+        originalData: unknown
+      }>(`
+        SELECT id, arxiv_id AS arxivId, TO_JSON(original_data) AS originalData
+        FROM app.article
+        WHERE id = '${escapeSqlString(id)}'
+        LIMIT 1
+      `)
 
       if (!article) {
         throw new Error('Article not found')
       }
 
       // Fetch the PDF using the same logic as the cron job
-      const result = await fetchPdfForArticle({arxivId: article.arxivId, originalData: article.originalData})
-      const originalFullTextUrls = getOriginalFullTextUrls(article.originalData)
+      const originalData = getJsonValue(article.originalData)
+      const result = await fetchPdfForArticle({arxivId: article.arxivId, originalData})
+      const originalFullTextUrls = getOriginalFullTextUrls(originalData)
 
       // Update the article with the fetched PDF info
       const updateData: Record<string, unknown> = {fullTextFetchedAt: new Date()}
@@ -143,7 +161,26 @@ export const articleAdminRoutes = new Elysia()
         updateData.fullTextHtml = null
       }
 
-      await db.update(articles).set(updateData).where(eq(articles.id, id))
+      const updateParts = Object.entries(updateData).map(([key, value]) => {
+        const columnMap: Record<string, string> = {
+          fullTextFetchedAt: 'full_text_fetched_at',
+          fullTextPDF: 'full_text_pdf',
+          fullTextSource: 'full_text_source',
+          fullTextOriginalFormat: 'full_text_original_format',
+          fullTextConversionStatus: 'full_text_conversion_status',
+          fullTextConversionAttempts: 'full_text_conversion_attempts',
+          fullTextConversionError: 'full_text_conversion_error',
+          fullText: 'full_text',
+          fullTextHtml: 'full_text_html',
+        }
+        return `${columnMap[key] ?? key} = ${getSqlLiteral(value)}`
+      })
+      await getAppDatabaseService().run(`
+        UPDATE app.article
+        SET ${updateParts.join(', ')},
+            updated_at = current_timestamp
+        WHERE id = '${escapeSqlString(id)}'
+      `)
 
       return {
         success: true,
@@ -159,11 +196,15 @@ export const articleAdminRoutes = new Elysia()
   .post(
     '/api/articles/:id/upload-pdf',
     async ({params, body}) => {
-      const db = getDatabase()
       const {id} = params
 
       // Check if article exists
-      const [article] = await db.select({id: articles.id}).from(articles).where(eq(articles.id, id)).limit(1)
+      const [article] = await getAppDatabaseService().queryJson<{id: string}>(`
+        SELECT id
+        FROM app.article
+        WHERE id = '${escapeSqlString(id)}'
+        LIMIT 1
+      `)
 
       if (!article) {
         throw new Error('Article not found')
@@ -192,22 +233,20 @@ export const articleAdminRoutes = new Elysia()
       }
 
       // Update the article with the uploaded PDF info
-      await db
-        .update(articles)
-        .set({
-          fullTextPDF,
-          fullTextSource: 'user_upload',
-          fullTextOriginalFormat: 'pdf',
-          fullTextFetchedAt: new Date(),
-          // Reset conversion status so it can be processed
-          fullTextConversionStatus: null,
-          fullTextConversionAttempts: 0,
-          fullTextConversionError: null,
-          // Clear existing fullText so conversion will re-run
-          fullText: null,
-          fullTextHtml: null,
-        })
-        .where(eq(articles.id, id))
+      await getAppDatabaseService().run(`
+        UPDATE app.article
+        SET full_text_pdf = ${getSqlLiteral(fullTextPDF)},
+            full_text_source = 'user_upload',
+            full_text_original_format = 'pdf',
+            full_text_fetched_at = ${getTimestampLiteral(new Date())},
+            full_text_conversion_status = NULL,
+            full_text_conversion_attempts = 0,
+            full_text_conversion_error = NULL,
+            full_text = NULL,
+            full_text_html = NULL,
+            updated_at = current_timestamp
+        WHERE id = '${escapeSqlString(id)}'
+      `)
 
       return {success: true, fullTextPDF, message: 'PDF uploaded successfully'}
     },
@@ -217,20 +256,23 @@ export const articleAdminRoutes = new Elysia()
   .post(
     '/api/articles/:id/convert-pdf',
     async ({params}) => {
-      const db = getDatabase()
       const {id} = params
       const DOCLING_CONVERSION_TIMEOUT_MS = 600_000
       const MAX_CONVERSION_ATTEMPTS = 3
 
-      const [article] = await db
-        .select({
-          id: articles.id,
-          fullTextPDF: articles.fullTextPDF,
-          fullTextConversionAttempts: articles.fullTextConversionAttempts,
-        })
-        .from(articles)
-        .where(eq(articles.id, id))
-        .limit(1)
+      const [article] = await getAppDatabaseService().queryJson<{
+        id: string
+        fullTextPDF: string | null
+        fullTextConversionAttempts: number | null
+      }>(`
+        SELECT
+          id,
+          full_text_pdf AS fullTextPDF,
+          full_text_conversion_attempts AS fullTextConversionAttempts
+        FROM app.article
+        WHERE id = '${escapeSqlString(id)}'
+        LIMIT 1
+      `)
 
       if (!article) {
         throw new Error('Article not found')
@@ -242,10 +284,13 @@ export const articleAdminRoutes = new Elysia()
 
       const fullTextPDF = article.fullTextPDF
 
-      await db
-        .update(articles)
-        .set({fullTextConversionStatus: 'pending', fullTextConversionError: null})
-        .where(eq(articles.id, article.id))
+      await getAppDatabaseService().run(`
+        UPDATE app.article
+        SET full_text_conversion_status = 'pending',
+            full_text_conversion_error = NULL,
+            updated_at = current_timestamp
+        WHERE id = '${escapeSqlString(article.id)}'
+      `)
 
       const runConversion = async () => {
         const startTime = Date.now()
@@ -254,17 +299,17 @@ export const articleAdminRoutes = new Elysia()
         try {
           const {md, html} = await convertPdfToText(fullTextPDF, DOCLING_CONVERSION_TIMEOUT_MS)
 
-          await db
-            .update(articles)
-            .set({
-              fullText: md,
-              fullTextHtml: html,
-              fullTextConversionStatus: 'success',
-              fullTextConversionError: null,
-              fullTextCharCount: md.length,
-              fullTextConversionAttempts: (article.fullTextConversionAttempts ?? 0) + 1,
-            })
-            .where(eq(articles.id, article.id))
+          await getAppDatabaseService().run(`
+            UPDATE app.article
+            SET full_text = ${getSqlLiteral(md)},
+                full_text_html = ${getSqlLiteral(html)},
+                full_text_conversion_status = 'success',
+                full_text_conversion_error = NULL,
+                full_text_char_count = ${md.length},
+                full_text_conversion_attempts = ${(article.fullTextConversionAttempts ?? 0) + 1},
+                updated_at = current_timestamp
+            WHERE id = '${escapeSqlString(article.id)}'
+          `)
 
           const duration = Date.now() - startTime
           console.log(`[convertPdf] Success: article ${article.id} (${duration}ms, ${md.length} chars)`)
@@ -282,14 +327,14 @@ export const articleAdminRoutes = new Elysia()
           const attempts = (article.fullTextConversionAttempts ?? 0) + 1
           const isFinalFailure = isPerm || attempts >= MAX_CONVERSION_ATTEMPTS
 
-          await db
-            .update(articles)
-            .set({
-              fullTextConversionStatus: isFinalFailure ? 'failed' : sql`NULL`,
-              fullTextConversionError: errorMessage,
-              fullTextConversionAttempts: attempts,
-            })
-            .where(eq(articles.id, article.id))
+          await getAppDatabaseService().run(`
+            UPDATE app.article
+            SET full_text_conversion_status = ${isFinalFailure ? `'failed'` : 'NULL'},
+                full_text_conversion_error = ${getSqlLiteral(errorMessage)},
+                full_text_conversion_attempts = ${attempts},
+                updated_at = current_timestamp
+            WHERE id = '${escapeSqlString(article.id)}'
+          `)
 
           console.log(`[convertPdf] ${isFinalFailure ? 'Failed' : 'Retry'}: article ${article.id} - ${errorMessage}`)
         }

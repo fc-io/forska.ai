@@ -1,32 +1,29 @@
-import {and, eq, isNull} from 'drizzle-orm'
-
 import {judgeSinglePrompt} from '../../../../agent/judge.ts'
 import * as schema from '../../../../db/schema.ts'
+import {getAppDatabaseService} from '../../../services/appDatabaseService.ts'
+import {escapeSqlString, getSqlLiteral} from '../../../services/appQueryHelpers.ts'
+import {getAppQueryService} from '../../../services/getAppQueryService.ts'
 import {ensureFullText} from '../../../utils/ensureFullText.ts'
 import {env} from '../../../utils/env.ts'
 import {processFulltextForLLM} from '../../../utils/fulltextProcessing.ts'
-import type {AppDatabase} from '../../../utils/getDatabase.ts'
 import {createRateLimitedLogger, rateLimitedLogger} from '../../../utils/rateLimitedLogger.ts'
 import {ConnectionError} from '../connectionHealth.ts'
 import type {PromptToProcess} from './getAndUpdateReadyPrompts.ts'
 
-const checkJudgmentExistsInDatabase = async (db: AppDatabase, promptToProcess: PromptToProcess): Promise<boolean> => {
-  const [existing] = await db
-    .select({id: schema.judgments.id})
-    .from(schema.judgments)
-    .where(
-      and(
-        eq(schema.judgments.articleId, promptToProcess.articleId),
-        eq(schema.judgments.promptId, promptToProcess.promptId),
-        eq(schema.judgments.modelId, promptToProcess.modelId),
-        eq(schema.judgments.useTitle, promptToProcess.useTitle),
-        eq(schema.judgments.useAbstract, promptToProcess.useAbstract),
-        eq(schema.judgments.useFulltext, promptToProcess.useFulltext),
-        eq(schema.judgments.useFulltextNoImages, promptToProcess.useFulltextNoImages),
-        isNull(schema.judgments.deletedAt),
-      ),
-    )
-    .limit(1)
+const checkJudgmentExistsInDatabase = async (promptToProcess: PromptToProcess): Promise<boolean> => {
+  const [existing] = await getAppDatabaseService().queryJson<{id: string}>(`
+    SELECT id
+    FROM app.judgment
+    WHERE article_id = '${escapeSqlString(promptToProcess.articleId)}'
+      AND prompt_id = '${escapeSqlString(promptToProcess.promptId)}'
+      AND model_id = '${escapeSqlString(promptToProcess.modelId)}'
+      AND use_title = ${promptToProcess.useTitle ? 'TRUE' : 'FALSE'}
+      AND use_abstract = ${promptToProcess.useAbstract ? 'TRUE' : 'FALSE'}
+      AND use_fulltext = ${promptToProcess.useFulltext ? 'TRUE' : 'FALSE'}
+      AND use_fulltext_no_images = ${promptToProcess.useFulltextNoImages ? 'TRUE' : 'FALSE'}
+      AND deleted_at IS NULL
+    LIMIT 1
+  `)
   return Boolean(existing)
 }
 
@@ -85,34 +82,31 @@ const processSinglePrompt = async (
   })
 }
 
-const markAsJudged = async (db: AppDatabase, jobId: string, articleId: string, promptId: string): Promise<void> => {
-  await db
-    .update(schema.judgmentsJobsPrompts)
-    .set({status: 'judged', judgedAt: new Date(), updatedAt: new Date()})
-    .where(
-      and(
-        eq(schema.judgmentsJobsPrompts.jobId, jobId),
-        eq(schema.judgmentsJobsPrompts.articleId, articleId),
-        eq(schema.judgmentsJobsPrompts.promptId, promptId),
-      ),
-    )
+const markAsJudged = async (jobId: string, articleId: string, promptId: string): Promise<void> => {
+  await getAppDatabaseService().run(`
+    UPDATE app.judgment_job_prompt
+    SET status = 'judged',
+        judged_at = current_timestamp,
+        updated_at = current_timestamp
+    WHERE job_id = '${escapeSqlString(jobId)}'
+      AND article_id = '${escapeSqlString(articleId)}'
+      AND prompt_id = '${escapeSqlString(promptId)}'
+  `)
 }
 
 /**
  * Reset a prompt back to 'pending' so it can be retried on the next cron cycle.
  * Used when connection errors occur - the prompt is not permanently failed.
  */
-const markAsRetry = async (db: AppDatabase, jobId: string, articleId: string, promptId: string): Promise<void> => {
-  await db
-    .update(schema.judgmentsJobsPrompts)
-    .set({status: 'ready', updatedAt: new Date()})
-    .where(
-      and(
-        eq(schema.judgmentsJobsPrompts.jobId, jobId),
-        eq(schema.judgmentsJobsPrompts.articleId, articleId),
-        eq(schema.judgmentsJobsPrompts.promptId, promptId),
-      ),
-    )
+const markAsRetry = async (jobId: string, articleId: string, promptId: string): Promise<void> => {
+  await getAppDatabaseService().run(`
+    UPDATE app.judgment_job_prompt
+    SET status = 'ready',
+        updated_at = current_timestamp
+    WHERE job_id = '${escapeSqlString(jobId)}'
+      AND article_id = '${escapeSqlString(articleId)}'
+      AND prompt_id = '${escapeSqlString(promptId)}'
+  `)
 }
 
 /**
@@ -120,53 +114,52 @@ const markAsRetry = async (db: AppDatabase, jobId: string, articleId: string, pr
  * This is a terminal state - the prompt will not be retried.
  */
 const markAsSkipped = async (
-  db: AppDatabase,
   jobId: string,
   articleId: string,
   promptId: string,
   skipReason: 'no_fulltext' | 'conversion_failed' | 'fulltext_too_large',
 ): Promise<void> => {
-  await db
-    .update(schema.judgmentsJobsPrompts)
-    .set({status: 'skipped', skipReason, updatedAt: new Date()})
-    .where(
-      and(
-        eq(schema.judgmentsJobsPrompts.jobId, jobId),
-        eq(schema.judgmentsJobsPrompts.articleId, articleId),
-        eq(schema.judgmentsJobsPrompts.promptId, promptId),
-      ),
-    )
+  await getAppDatabaseService().run(`
+    UPDATE app.judgment_job_prompt
+    SET status = 'skipped',
+        skip_reason = ${getSqlLiteral(skipReason)},
+        updated_at = current_timestamp
+    WHERE job_id = '${escapeSqlString(jobId)}'
+      AND article_id = '${escapeSqlString(articleId)}'
+      AND prompt_id = '${escapeSqlString(promptId)}'
+  `)
 }
 
-export const processPromptWithLLM = async (db: AppDatabase, promptToProcess: PromptToProcess): Promise<void> => {
+export const processPromptWithLLM = async (promptToProcess: PromptToProcess): Promise<void> => {
   const startTime = Date.now()
   const modelContext = getModelContextForProvider(promptToProcess.modelProvider)
-  const judgmentExists = await checkJudgmentExistsInDatabase(db, promptToProcess)
+  const judgmentExists = await checkJudgmentExistsInDatabase(promptToProcess)
   if (judgmentExists) {
-    await markAsJudged(db, promptToProcess.jobId, promptToProcess.articleId, promptToProcess.promptId)
+    await markAsJudged(promptToProcess.jobId, promptToProcess.articleId, promptToProcess.promptId)
     console.log('[llm] Skipped - judgment already exists for:', promptToProcess.articleId.slice(0, 8))
     return
   }
 
-  const [article] = await db
-    .select()
-    .from(schema.articles)
-    .where(eq(schema.articles.id, promptToProcess.articleId))
-    .limit(1)
+  const [article] = await getAppQueryService().getFullArticlesByIds([promptToProcess.articleId])
 
   if (!article) {
     console.error('Article not found:', promptToProcess.articleId)
     // Mark as judged to prevent getting stuck in 'sent' status
-    await markAsJudged(db, promptToProcess.jobId, promptToProcess.articleId, promptToProcess.promptId)
+    await markAsJudged(promptToProcess.jobId, promptToProcess.articleId, promptToProcess.promptId)
     return
   }
 
   // Handle fulltext requirement for projects with useFulltext=true or useFulltextNoImages=true
   // Create a mutable article object that we can update with fulltext if needed
-  let articleWithFulltext = article
+  let articleWithFulltext: typeof schema.articles.$inferSelect = {
+    ...article,
+    createdAt: article.createdAt ?? new Date(0),
+    updatedAt: article.updatedAt ?? new Date(0),
+    publicationStatus: article.publicationStatus as (typeof schema.articles.$inferSelect)['publicationStatus'],
+  }
   const needsFulltext = promptToProcess.useFulltext || promptToProcess.useFulltextNoImages
   if (needsFulltext) {
-    const result = await ensureFullText(db, article, article.id)
+    const result = await ensureFullText(articleWithFulltext, article.id)
 
     if (!result.text) {
       if (result.shouldSkip) {
@@ -175,20 +168,14 @@ export const processPromptWithLLM = async (db: AppDatabase, promptToProcess: Pro
           `fulltext:skip:${result.reason}`,
           `[fulltext] Skipping article ${article.id}: ${result.reason}`,
         )
-        await markAsSkipped(
-          db,
-          promptToProcess.jobId,
-          promptToProcess.articleId,
-          promptToProcess.promptId,
-          result.reason,
-        )
+        await markAsSkipped(promptToProcess.jobId, promptToProcess.articleId, promptToProcess.promptId, result.reason)
         return
       } else {
         // Transient failure → requeue for later retry
         console.log(
           `[fulltext] Transient failure for article ${article.id}, requeuing prompt ${promptToProcess.promptId}`,
         )
-        await markAsRetry(db, promptToProcess.jobId, promptToProcess.articleId, promptToProcess.promptId)
+        await markAsRetry(promptToProcess.jobId, promptToProcess.articleId, promptToProcess.promptId)
         return
       }
     }
@@ -207,34 +194,30 @@ export const processPromptWithLLM = async (db: AppDatabase, promptToProcess: Pro
     }
 
     // Update the article object with the processed fulltext for use in prompt generation
-    articleWithFulltext = {...article, fullText: processResult.processedText}
+    articleWithFulltext = {...articleWithFulltext, fullText: processResult.processedText}
   }
 
-  const articleForJudging = needsFulltext ? articleWithFulltext : {...article, fullText: null}
+  const articleForJudging = needsFulltext ? articleWithFulltext : {...articleWithFulltext, fullText: null}
 
   // Get the specific prompt to judge
-  const [prompt] = await db
-    .select({
-      id: schema.prompts.id,
-      originalText: schema.prompts.originalText,
-      promptHeading: schema.prompts.promptHeading,
-      order: schema.projectPrompts.order,
-      type: schema.prompts.type,
-    })
-    .from(schema.prompts)
-    .innerJoin(schema.projectPrompts, eq(schema.projectPrompts.promptId, schema.prompts.id))
-    .where(
-      and(
-        eq(schema.prompts.id, promptToProcess.promptId),
-        eq(schema.projectPrompts.projectId, promptToProcess.projectId),
-        eq(schema.projectPrompts.enabled, true),
-      ),
-    )
-    .limit(1)
+  const [prompt] = await getAppDatabaseService().queryJson<PromptDefinition>(`
+    SELECT
+      p.id AS id,
+      p.original_text AS originalText,
+      p.prompt_heading AS promptHeading,
+      pp.prompt_order AS "order",
+      p.type AS type
+    FROM app.prompt p
+    INNER JOIN app.project_prompt pp ON pp.prompt_id = p.id
+    WHERE p.id = '${escapeSqlString(promptToProcess.promptId)}'
+      AND pp.project_id = '${escapeSqlString(promptToProcess.projectId)}'
+      AND pp.enabled = TRUE
+    LIMIT 1
+  `)
 
   if (!prompt) {
     console.log('Prompt not found or not enabled:', promptToProcess.promptId)
-    await markAsJudged(db, promptToProcess.jobId, promptToProcess.articleId, promptToProcess.promptId)
+    await markAsJudged(promptToProcess.jobId, promptToProcess.articleId, promptToProcess.promptId)
     return
   }
   // Process the single prompt
@@ -248,7 +231,7 @@ export const processPromptWithLLM = async (db: AppDatabase, promptToProcess: Pro
     )
     await processSinglePrompt(promptToProcess, articleForJudging, prompt, modelContext)
     // Success - mark as judged
-    await markAsJudged(db, promptToProcess.jobId, promptToProcess.articleId, promptToProcess.promptId)
+    await markAsJudged(promptToProcess.jobId, promptToProcess.articleId, promptToProcess.promptId)
     const duration = Date.now() - startTime
     processPromptLogger.log(`llm:success:${promptToProcess.modelBaseUrl}`, `[llm] Success - processed in ${duration}ms`)
   } catch (error) {
@@ -259,7 +242,7 @@ export const processPromptWithLLM = async (db: AppDatabase, promptToProcess: Pro
         `prompt:retry:${promptToProcess.modelBaseUrl}`,
         `Connection error - marking prompts for retry (${promptToProcess.modelBaseUrl})`,
       )
-      await markAsRetry(db, promptToProcess.jobId, promptToProcess.articleId, promptToProcess.promptId)
+      await markAsRetry(promptToProcess.jobId, promptToProcess.articleId, promptToProcess.promptId)
       // Re-throw to let the caller know there was a connection issue
       throw error
     }
@@ -271,6 +254,6 @@ export const processPromptWithLLM = async (db: AppDatabase, promptToProcess: Pro
       promptId: promptToProcess.promptId,
       error: errorMessage,
     })
-    await markAsJudged(db, promptToProcess.jobId, promptToProcess.articleId, promptToProcess.promptId)
+    await markAsJudged(promptToProcess.jobId, promptToProcess.articleId, promptToProcess.promptId)
   }
 }

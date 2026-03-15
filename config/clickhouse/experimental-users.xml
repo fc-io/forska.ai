@@ -1,9 +1,0 @@
-<?xml version="1.0"?>
-<clickhouse>
-    <!-- Enable experimental MaterializedPostgreSQL engine for default user profile -->
-    <profiles>
-        <default>
-            <allow_experimental_database_materialized_postgresql>1</allow_experimental_database_materialized_postgresql>
-        </default>
-    </profiles>
-</clickhouse>

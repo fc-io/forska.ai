@@ -1,34 +1,30 @@
-import {asc, eq} from 'drizzle-orm'
 import {Elysia} from 'elysia'
 
-import {importRoute as importRouteTable} from '../../db/schema.ts'
-import {getDatabase} from '../utils/getDatabase.ts'
+import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
 export const importRoutes = new Elysia()
   .use(withErrorHandler())
   .use(
     new Elysia().get('/api/import-routes', async () => {
-      const db = getDatabase()
-
-      const rows = await db
-        .select({route: importRouteTable.route, name: importRouteTable.name})
-        .from(importRouteTable)
-        .where(eq(importRouteTable.active, true))
-        .orderBy(asc(importRouteTable.route))
+      const rows = await getAppDatabaseService().queryJson<{route: string; name: string | null}>(`
+        SELECT route, name
+        FROM app.import_route
+        WHERE active = TRUE
+        ORDER BY route ASC
+      `)
 
       return {data: rows}
     }),
   )
   .use(
     new Elysia().get('/api/importroutes', async () => {
-      const db = getDatabase()
-
-      const rows = await db
-        .select({route: importRouteTable.route})
-        .from(importRouteTable)
-        .where(eq(importRouteTable.active, true))
-        .orderBy(asc(importRouteTable.route))
+      const rows = await getAppDatabaseService().queryJson<{route: string}>(`
+        SELECT route
+        FROM app.import_route
+        WHERE active = TRUE
+        ORDER BY route ASC
+      `)
 
       return {
         data: rows.map((r) => {

@@ -433,7 +433,7 @@ const generateSinglePromptResponse = async ({
         }
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error)
-        throw new Error(`Connection error: codex app-server: ${msg}`)
+        throw new Error(`Connection error: codex app-server: ${msg}`, {cause: error})
       }
     }
 
@@ -706,7 +706,6 @@ export const judgeSinglePrompt = async ({
 
     let userPrompt = basePrompt
     let attempts = 0
-    let lastError: string | null = null
     let lastResponse = ''
 
     while (attempts <= MAX_RETRIES) {
@@ -824,14 +823,13 @@ export const judgeSinglePrompt = async ({
         })
         errorCount += 1
 
-        lastError = errorMessage
         lastResponse = responseText
 
         if (attempts < MAX_RETRIES) {
-          userPrompt = buildRetryPrompt(basePrompt, lastError, lastResponse)
+          userPrompt = buildRetryPrompt(basePrompt, errorMessage, lastResponse)
         } else {
           abortCount += 1
-          console.error(`${article.id} | Prompt ${prompt.id} | Aborting: ${lastError}`)
+          console.error(`${article.id} | Prompt ${prompt.id} | Aborting: ${errorMessage}`)
         }
       }
     }
@@ -921,7 +919,6 @@ export const judgeSinglePrompt = async ({
 
           let attempts = 0
           let userPrompt = baseEvidencePrompt
-          let lastError: string | null = null
           let lastResponse = ''
           let evidence: {facts: string[]; quotes: string[]} | null = null
 
@@ -1027,14 +1024,13 @@ export const judgeSinglePrompt = async ({
               })
               errorCount += 1
 
-              lastError = errorMessage
               lastResponse = responseText
 
               if (attempts < MAX_RETRIES) {
-                userPrompt = buildRetryPrompt(baseEvidencePrompt, lastError, lastResponse)
+                userPrompt = buildRetryPrompt(baseEvidencePrompt, errorMessage, lastResponse)
               } else {
                 abortCount += 1
-                console.error(`${article.id} | Prompt ${prompt.id} | Aborting evidence chunk: ${lastError}`)
+                console.error(`${article.id} | Prompt ${prompt.id} | Aborting evidence chunk: ${errorMessage}`)
               }
 
               if (connectionFailure) {

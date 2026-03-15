@@ -1,11 +1,16 @@
 import {cron} from '@elysiajs/cron'
-import {and, desc, eq, inArray, isNotNull, sql} from 'drizzle-orm'
 import {Elysia} from 'elysia'
 
-import * as schema from '../../db/schema.ts'
+import {getAppDatabaseService} from '../services/appDatabaseService.ts'
+import {
+  escapeSqlString,
+  getDateValue,
+  getQuotedStringList,
+  getSqlLiteral,
+  getTimestampLiteral,
+} from '../services/appQueryHelpers.ts'
 import {ConversionError, convertPdfToText} from '../utils/convertPdfToText.ts'
 import {env} from '../utils/env.ts'
-import {getDatabase} from '../utils/getDatabase.ts'
 
 const CONVERSION_INTERVAL = '0 */2 * * * *' // Every 2 minutes
 const DOCLING_CONVERSION_TIMEOUT_MS = 600_000 // 10 minutes
@@ -38,10 +43,7 @@ type ArticleForConversion = {id: string; fullTextPDF: string; fullTextConversion
  * 2. Articles from projects with running jobs + useFulltext=false
  * 3. Fallback: any articles by created_at DESC
  */
-const getArticlesNeedingConversion = async (
-  db: ReturnType<typeof getDatabase>,
-  batchSize: number,
-): Promise<ArticleForConversion[]> => {
+const getArticlesNeedingConversion = async (batchSize: number): Promise<ArticleForConversion[]> => {
   const collectedArticles: ArticleForConversion[] = []
   const seenIds = new Set<string>()
 
@@ -49,26 +51,32 @@ const getArticlesNeedingConversion = async (
 
   // Base conditions: has PDF, no fullText, not failed, not exceeded retry limit
   const baseConditions = [
-    isNotNull(schema.articles.fullTextPDF),
-    sql`(${schema.articles.fullText} IS NULL OR ${schema.articles.fullTextHtml} IS NULL)`,
-    sql`(${schema.articles.fullTextConversionStatus} IS NULL OR ${schema.articles.fullTextConversionStatus} != 'failed')`,
-    sql`(${schema.articles.fullTextConversionAttempts} IS NULL OR ${schema.articles.fullTextConversionAttempts} < ${MAX_CONVERSION_ATTEMPTS})`,
+    `a.full_text_pdf IS NOT NULL`,
+    `(a.full_text IS NULL OR a.full_text_html IS NULL)`,
+    `(a.full_text_conversion_status IS NULL OR a.full_text_conversion_status != 'failed')`,
+    `(a.full_text_conversion_attempts IS NULL OR a.full_text_conversion_attempts < ${MAX_CONVERSION_ATTEMPTS})`,
   ]
 
   // Step 1: Get running jobs with their projects
   console.time('[fullTextConversion] query running jobs')
-  const runningJobsWithProjects = await db
-    .select({
-      jobId: schema.judgmentsJobs.id,
-      projectId: schema.projects.id,
-      useFulltext: schema.projects.useFulltext,
-      dateFrom: schema.projects.dateFrom,
-      dateTo: schema.projects.dateTo,
-    })
-    .from(schema.judgmentsJobs)
-    .innerJoin(schema.projects, eq(schema.judgmentsJobs.projectId, schema.projects.id))
-    .where(eq(schema.judgmentsJobs.status, 'running'))
-    .orderBy(desc(schema.projects.useFulltext))
+  const runningJobsWithProjects = await getAppDatabaseService().queryJson<{
+    jobId: string
+    projectId: string
+    useFulltext: boolean
+    dateFrom: unknown
+    dateTo: unknown
+  }>(`
+    SELECT
+      jj.id AS jobId,
+      p.id AS projectId,
+      p.use_fulltext AS useFulltext,
+      p.date_from AS dateFrom,
+      p.date_to AS dateTo
+    FROM app.judgment_job jj
+    INNER JOIN app.project p ON jj.project_id = p.id
+    WHERE jj.status = 'running'
+    ORDER BY p.use_fulltext DESC
+  `)
   console.timeEnd('[fullTextConversion] query running jobs')
 
   console.log(`[fullTextConversion] Found ${runningJobsWithProjects.length} running jobs`)
@@ -81,62 +89,64 @@ const getArticlesNeedingConversion = async (
     console.log(`[fullTextConversion] Project ${projectId} (useFulltext=${useFulltext}), need ${remaining} more`)
 
     // Build date conditions
-    const dateConditions = []
-    if (dateFrom) {
-      dateConditions.push(sql`${schema.articles.articleCreatedAt} >= ${dateFrom}`)
-    }
-    if (dateTo) {
-      dateConditions.push(sql`${schema.articles.articleCreatedAt} <= ${dateTo}`)
-    }
+    const dateConditions = [
+      dateFrom ? `a.article_created_at >= ${getTimestampLiteral(getDateValue(dateFrom) ?? new Date(0))}` : null,
+      dateTo ? `a.article_created_at <= ${getTimestampLiteral(getDateValue(dateTo) ?? new Date(0))}` : null,
+    ].filter((part): part is string => {
+      return part !== null
+    })
 
     // Try importRoute path first
-    const projectRoutes = await db
-      .select({importRouteId: schema.projectRouteLink.importRouteId})
-      .from(schema.projectRouteLink)
-      .where(eq(schema.projectRouteLink.projectId, projectId))
+    const projectRoutes = await getAppDatabaseService().queryJson<{importRouteId: string}>(`
+      SELECT import_route_id AS importRouteId
+      FROM app.project_import_route
+      WHERE project_id = '${escapeSqlString(projectId)}'
+    `)
 
     if (projectRoutes.length > 0) {
       const routeIds = projectRoutes.map((r) => {
         return r.importRouteId
       })
-      const articlesViaRoute = await db
-        .select({
-          id: schema.articles.id,
-          fullTextPDF: schema.articles.fullTextPDF,
-          fullTextConversionAttempts: schema.articles.fullTextConversionAttempts,
-        })
-        .from(schema.articles)
-        .innerJoin(schema.articleRouteLink, eq(schema.articleRouteLink.articleId, schema.articles.id))
-        .where(and(inArray(schema.articleRouteLink.importRouteId, routeIds), ...baseConditions, ...dateConditions))
-        .orderBy(desc(schema.articles.articleCreatedAt))
-        .limit(remaining)
+      const articlesViaRoute = await getAppDatabaseService().queryJson<ArticleForConversion>(`
+        SELECT
+          a.id AS id,
+          a.full_text_pdf AS fullTextPDF,
+          a.full_text_conversion_attempts AS fullTextConversionAttempts
+        FROM app.article a
+        INNER JOIN app.article_import_route air ON air.article_id = a.id
+        WHERE air.import_route_id IN (${getQuotedStringList(routeIds).join(', ')})
+          AND ${[...baseConditions, ...dateConditions].join(' AND ')}
+        ORDER BY a.article_created_at DESC NULLS LAST
+        LIMIT ${remaining}
+      `)
 
       for (const article of articlesViaRoute) {
         if (!seenIds.has(article.id) && article.fullTextPDF) {
           seenIds.add(article.id)
-          collectedArticles.push(article as ArticleForConversion)
+          collectedArticles.push(article)
         }
       }
       continue
     }
 
     // Try project_articles path
-    const articlesViaDirect = await db
-      .select({
-        id: schema.articles.id,
-        fullTextPDF: schema.articles.fullTextPDF,
-        fullTextConversionAttempts: schema.articles.fullTextConversionAttempts,
-      })
-      .from(schema.articles)
-      .innerJoin(schema.projectArticles, eq(schema.projectArticles.articleId, schema.articles.id))
-      .where(and(eq(schema.projectArticles.projectId, projectId), ...baseConditions, ...dateConditions))
-      .orderBy(desc(schema.articles.articleCreatedAt))
-      .limit(remaining)
+    const articlesViaDirect = await getAppDatabaseService().queryJson<ArticleForConversion>(`
+      SELECT
+        a.id AS id,
+        a.full_text_pdf AS fullTextPDF,
+        a.full_text_conversion_attempts AS fullTextConversionAttempts
+      FROM app.article a
+      INNER JOIN app.project_article pa ON pa.article_id = a.id
+      WHERE pa.project_id = '${escapeSqlString(projectId)}'
+        AND ${[...baseConditions, ...dateConditions].join(' AND ')}
+      ORDER BY a.article_created_at DESC NULLS LAST
+      LIMIT ${remaining}
+    `)
 
     for (const article of articlesViaDirect) {
       if (!seenIds.has(article.id) && article.fullTextPDF) {
         seenIds.add(article.id)
-        collectedArticles.push(article as ArticleForConversion)
+        collectedArticles.push(article)
       }
     }
   }
@@ -145,22 +155,22 @@ const getArticlesNeedingConversion = async (
   if (collectedArticles.length < batchSize) {
     const remaining = batchSize - collectedArticles.length
     console.log(`[fullTextConversion] Fallback: fetching ${remaining} more articles`)
-    const fallbackArticles = await db
-      .select({
-        id: schema.articles.id,
-        fullTextPDF: schema.articles.fullTextPDF,
-        fullTextConversionAttempts: schema.articles.fullTextConversionAttempts,
-      })
-      .from(schema.articles)
-      .where(and(...baseConditions))
-      .orderBy(desc(schema.articles.createdAt))
-      .limit(remaining + seenIds.size)
+    const fallbackArticles = await getAppDatabaseService().queryJson<ArticleForConversion>(`
+      SELECT
+        id,
+        full_text_pdf AS fullTextPDF,
+        full_text_conversion_attempts AS fullTextConversionAttempts
+      FROM app.article a
+      WHERE ${baseConditions.join(' AND ')}
+      ORDER BY a.created_at DESC
+      LIMIT ${remaining + seenIds.size}
+    `)
 
     for (const article of fallbackArticles) {
       if (collectedArticles.length >= batchSize) break
       if (!seenIds.has(article.id) && article.fullTextPDF) {
         seenIds.add(article.id)
-        collectedArticles.push(article as ArticleForConversion)
+        collectedArticles.push(article)
       }
     }
   }
@@ -171,27 +181,20 @@ const getArticlesNeedingConversion = async (
   return collectedArticles
 }
 
-const runConversionWorker = async (
-  db: ReturnType<typeof getDatabase>,
-  queue: ArticleForConversion[],
-): Promise<void> => {
+const runConversionWorker = async (queue: ArticleForConversion[]): Promise<void> => {
   const article = queue.pop()
   if (!article) return
-  await convertArticle(db, article)
-  return runConversionWorker(db, queue)
+  await convertArticle(article)
+  return runConversionWorker(queue)
 }
 
-const convertArticles = async (
-  db: ReturnType<typeof getDatabase>,
-  articles: ArticleForConversion[],
-  concurrency: number,
-): Promise<void> => {
+const convertArticles = async (articles: ArticleForConversion[], concurrency: number): Promise<void> => {
   const workerCount = Math.min(concurrency, articles.length)
   const queue = articles.slice()
 
   const results = await Promise.allSettled(
     Array.from({length: workerCount}, () => {
-      return runConversionWorker(db, queue)
+      return runConversionWorker(queue)
     }),
   )
 
@@ -204,24 +207,24 @@ const convertArticles = async (
   }
 }
 
-const convertArticle = async (db: ReturnType<typeof getDatabase>, article: ArticleForConversion): Promise<void> => {
+const convertArticle = async (article: ArticleForConversion): Promise<void> => {
   const startTime = Date.now()
   console.log(`[fullTextConversion] Converting article ${article.id}`)
 
   try {
     const {md, html} = await convertPdfToText(article.fullTextPDF, DOCLING_CONVERSION_TIMEOUT_MS)
 
-    await db
-      .update(schema.articles)
-      .set({
-        fullText: md,
-        fullTextHtml: html,
-        fullTextConversionStatus: 'success',
-        fullTextConversionError: null,
-        fullTextCharCount: md.length,
-        fullTextConversionAttempts: (article.fullTextConversionAttempts ?? 0) + 1,
-      })
-      .where(eq(schema.articles.id, article.id))
+    await getAppDatabaseService().run(`
+      UPDATE app.article
+      SET full_text = ${getSqlLiteral(md)},
+          full_text_html = ${getSqlLiteral(html)},
+          full_text_conversion_status = 'success',
+          full_text_conversion_error = NULL,
+          full_text_char_count = ${md.length},
+          full_text_conversion_attempts = ${(article.fullTextConversionAttempts ?? 0) + 1},
+          updated_at = current_timestamp
+      WHERE id = '${escapeSqlString(article.id)}'
+    `)
 
     console.log(`[fullTextConversion] Success: article ${article.id} (${Date.now() - startTime}ms, ${md.length} chars)`)
   } catch (error) {
@@ -239,14 +242,14 @@ const convertArticle = async (db: ReturnType<typeof getDatabase>, article: Artic
     const attempts = (article.fullTextConversionAttempts ?? 0) + 1
     const isFinalFailure = isPerm || attempts >= MAX_CONVERSION_ATTEMPTS
 
-    await db
-      .update(schema.articles)
-      .set({
-        fullTextConversionStatus: isFinalFailure ? 'failed' : sql`NULL`,
-        fullTextConversionError: errorMessage,
-        fullTextConversionAttempts: attempts,
-      })
-      .where(eq(schema.articles.id, article.id))
+    await getAppDatabaseService().run(`
+      UPDATE app.article
+      SET full_text_conversion_status = ${isFinalFailure ? `'failed'` : 'NULL'},
+          full_text_conversion_error = ${getSqlLiteral(errorMessage)},
+          full_text_conversion_attempts = ${attempts},
+          updated_at = current_timestamp
+      WHERE id = '${escapeSqlString(article.id)}'
+    `)
 
     console.log(`[fullTextConversion] ${isFinalFailure ? 'Failed' : 'Retry'}: article ${article.id} - ${errorMessage}`)
   }
@@ -268,8 +271,6 @@ const runConversionBatch = async () => {
   runningBatches++
   const batchNumber = runningBatches
   try {
-    const db = getDatabase()
-
     const batchSize = getConversionBatchSize()
     const concurrency = getConversionConcurrency(batchSize)
 
@@ -277,14 +278,14 @@ const runConversionBatch = async () => {
       `[fullTextConversion] Starting batch #${batchNumber} (size=${batchSize}, concurrency=${concurrency}, running=${runningBatches}/${MAX_CONCURRENT_BATCHES})`,
     )
 
-    const articles = await getArticlesNeedingConversion(db, batchSize)
+    const articles = await getArticlesNeedingConversion(batchSize)
 
     if (articles.length === 0) {
       console.log(`[fullTextConversion] Batch #${batchNumber}: No articles to convert`)
       return
     }
 
-    await convertArticles(db, articles, concurrency)
+    await convertArticles(articles, concurrency)
   } finally {
     runningBatches--
   }

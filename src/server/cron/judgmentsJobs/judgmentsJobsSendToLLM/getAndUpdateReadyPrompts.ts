@@ -1,7 +1,5 @@
-import {and, eq, inArray, isNull, sql} from 'drizzle-orm'
-
-import * as schema from '../../../../db/schema.ts'
-import type {AppDatabase} from '../../../utils/getDatabase.ts'
+import {getAppDatabaseService} from '../../../services/appDatabaseService.ts'
+import {escapeSqlString, getQuotedStringList, getSqlLiteral} from '../../../services/appQueryHelpers.ts'
 
 export type PromptToProcess = {
   jobId: string
@@ -36,7 +34,6 @@ const getCodexPlaceholderBaseUrl = (): string => {
 }
 
 const processReadyRows = async (
-  db: AppDatabase,
   serverJobId: string,
   readyRows: {id: string; articleId: string; promptId: string; jobId: string}[],
 ): Promise<PromptToProcess[]> => {
@@ -45,16 +42,21 @@ const processReadyRows = async (
   })
 
   const now = new Date()
-  const promptsWithJobs = await db
-    .update(schema.judgmentsJobsPrompts)
-    .set({status: 'sent', sentAt: now, updatedAt: now, serverId: serverJobId})
-    .where(and(eq(schema.judgmentsJobsPrompts.status, 'ready'), inArray(schema.judgmentsJobsPrompts.id, readyIds)))
-    .returning({
-      recordId: schema.judgmentsJobsPrompts.id,
-      articleId: schema.judgmentsJobsPrompts.articleId,
-      promptId: schema.judgmentsJobsPrompts.promptId,
-      jobId: schema.judgmentsJobsPrompts.jobId,
-    })
+  const promptsWithJobs = await getAppDatabaseService().queryJson<{
+    recordId: string
+    articleId: string
+    promptId: string
+    jobId: string
+  }>(`
+    UPDATE app.judgment_job_prompt
+    SET status = 'sent',
+        sent_at = ${getSqlLiteral(now)},
+        updated_at = ${getSqlLiteral(now)},
+        server_id = ${getSqlLiteral(serverJobId)}
+    WHERE status = 'ready'
+      AND id IN (${getQuotedStringList(readyIds).join(', ')})
+    RETURNING id AS recordId, article_id AS articleId, prompt_id AS promptId, job_id AS jobId
+  `)
 
   const uniqueJobIds = [
     ...new Set(
@@ -67,24 +69,36 @@ const processReadyRows = async (
   const jobConfigs =
     uniqueJobIds.length === 0
       ? []
-      : await db
-          .select({
-            jobId: schema.judgmentsJobs.id,
-            projectId: schema.judgmentsJobs.projectId,
-            modelId: schema.projects.modelId,
-            modelProvider: schema.models.provider,
-            modelName: schema.models.modelName,
-            modelVersion: schema.models.version,
-            modelBaseUrl: schema.models.baseURL,
-            useTitle: schema.projects.useTitle,
-            useAbstract: schema.projects.useAbstract,
-            useFulltext: schema.projects.useFulltext,
-            useFulltextNoImages: schema.projects.useFulltextNoImages,
-          })
-          .from(schema.judgmentsJobs)
-          .leftJoin(schema.projects, eq(schema.projects.id, schema.judgmentsJobs.projectId))
-          .leftJoin(schema.models, eq(schema.models.id, schema.projects.modelId))
-          .where(inArray(schema.judgmentsJobs.id, uniqueJobIds))
+      : await getAppDatabaseService().queryJson<{
+          jobId: string
+          projectId: string | null
+          modelId: string | null
+          modelProvider: string | null
+          modelName: string | null
+          modelVersion: string | null
+          modelBaseUrl: string | null
+          useTitle: boolean | null
+          useAbstract: boolean | null
+          useFulltext: boolean | null
+          useFulltextNoImages: boolean | null
+        }>(`
+          SELECT
+            jj.id AS jobId,
+            jj.project_id AS projectId,
+            p.model_id AS modelId,
+            m.provider AS modelProvider,
+            m.model_name AS modelName,
+            m.version AS modelVersion,
+            m.base_url AS modelBaseUrl,
+            p.use_title AS useTitle,
+            p.use_abstract AS useAbstract,
+            p.use_fulltext AS useFulltext,
+            p.use_fulltext_no_images AS useFulltextNoImages
+          FROM app.judgment_job jj
+          LEFT JOIN app.project p ON p.id = jj.project_id
+          LEFT JOIN app.model m ON m.id = p.model_id
+          WHERE jj.id IN (${getQuotedStringList(uniqueJobIds).join(', ')})
+        `)
 
   const jobConfigPairs = jobConfigs.map((config) => {
     return [config.jobId, config] as const
@@ -145,102 +159,100 @@ const processReadyRows = async (
 }
 
 export const getAndUpdateReadyPrompts = async (
-  db: AppDatabase,
   serverJobId: string,
   jobId: string,
   limit: number,
 ): Promise<PromptToProcess[]> => {
   // Get job config to know content settings for judgment matching
-  const [jobConfig] = await db
-    .select({
-      modelId: schema.projects.modelId,
-      useTitle: schema.projects.useTitle,
-      useAbstract: schema.projects.useAbstract,
-      useFulltext: schema.projects.useFulltext,
-      useFulltextNoImages: schema.projects.useFulltextNoImages,
-    })
-    .from(schema.judgmentsJobs)
-    .innerJoin(schema.projects, eq(schema.projects.id, schema.judgmentsJobs.projectId))
-    .where(eq(schema.judgmentsJobs.id, jobId))
-    .limit(1)
+  const [jobConfig] = await getAppDatabaseService().queryJson<{
+    modelId: string | null
+    useTitle: boolean
+    useAbstract: boolean
+    useFulltext: boolean
+    useFulltextNoImages: boolean
+  }>(`
+    SELECT
+      p.model_id AS modelId,
+      p.use_title AS useTitle,
+      p.use_abstract AS useAbstract,
+      p.use_fulltext AS useFulltext,
+      p.use_fulltext_no_images AS useFulltextNoImages
+    FROM app.judgment_job jj
+    INNER JOIN app.project p ON p.id = jj.project_id
+    WHERE jj.id = '${escapeSqlString(jobId)}'
+    LIMIT 1
+  `)
 
   if (!jobConfig?.modelId) {
     console.error('[getAndUpdateReadyPrompts] Job config not found for jobId:', jobId)
     return []
   }
 
-  // Fetch ready prompts, excluding those that already have judgments
-  // This prevents wasting capacity on stale queue entries from ClickHouse replication lag
-  const readyRows = await db
-    .select({
-      id: schema.judgmentsJobsPrompts.id,
-      articleId: schema.judgmentsJobsPrompts.articleId,
-      promptId: schema.judgmentsJobsPrompts.promptId,
-      jobId: schema.judgmentsJobsPrompts.jobId,
-    })
-    .from(schema.judgmentsJobsPrompts)
-    .innerJoin(schema.articles, eq(schema.articles.id, schema.judgmentsJobsPrompts.articleId))
-    .leftJoin(
-      schema.judgments,
-      and(
-        eq(schema.judgments.articleId, schema.judgmentsJobsPrompts.articleId),
-        eq(schema.judgments.promptId, schema.judgmentsJobsPrompts.promptId),
-        eq(schema.judgments.modelId, jobConfig.modelId),
-        eq(schema.judgments.useTitle, jobConfig.useTitle),
-        eq(schema.judgments.useAbstract, jobConfig.useAbstract),
-        eq(schema.judgments.useFulltext, jobConfig.useFulltext),
-        eq(schema.judgments.useFulltextNoImages, jobConfig.useFulltextNoImages),
-        isNull(schema.judgments.deletedAt),
-      ),
-    )
-    .where(
-      and(
-        eq(schema.judgmentsJobsPrompts.jobId, jobId),
-        eq(schema.judgmentsJobsPrompts.status, 'ready'),
-        isNull(schema.judgments.id), // No existing judgment
-      ),
-    )
-    // Order by: articles with fullText first (DESC puts non-null first), then by createdAt
-    .orderBy(
-      sql`CASE WHEN ${schema.articles.fullText} IS NOT NULL THEN 0 ELSE 1 END`,
-      schema.judgmentsJobsPrompts.createdAt,
-    )
-    .limit(limit)
+  // Fetch ready prompts, excluding those that already have judgments.
+  // This prevents wasting capacity on stale queue entries.
+  const readyRows = await getAppDatabaseService().queryJson<{
+    id: string
+    articleId: string
+    promptId: string
+    jobId: string
+  }>(`
+    SELECT
+      jjp.id AS id,
+      jjp.article_id AS articleId,
+      jjp.prompt_id AS promptId,
+      jjp.job_id AS jobId
+    FROM app.judgment_job_prompt jjp
+    INNER JOIN app.article a ON a.id = jjp.article_id
+    LEFT JOIN app.judgment j ON
+      j.article_id = jjp.article_id
+      AND j.prompt_id = jjp.prompt_id
+      AND j.model_id = ${getSqlLiteral(jobConfig.modelId)}
+      AND j.use_title = ${getSqlLiteral(jobConfig.useTitle)}
+      AND j.use_abstract = ${getSqlLiteral(jobConfig.useAbstract)}
+      AND j.use_fulltext = ${getSqlLiteral(jobConfig.useFulltext)}
+      AND j.use_fulltext_no_images = ${getSqlLiteral(jobConfig.useFulltextNoImages)}
+      AND j.deleted_at IS NULL
+    WHERE jjp.job_id = '${escapeSqlString(jobId)}'
+      AND jjp.status = 'ready'
+      AND j.id IS NULL
+    ORDER BY CASE WHEN a.full_text IS NOT NULL THEN 0 ELSE 1 END, jjp.created_at ASC
+    LIMIT ${limit}
+  `)
 
-  // If we found fewer than requested, clean up stale entries that already have judgments
-  // This happens due to ClickHouse replication lag - prompts get queued but are already judged
+  // If we found fewer than requested, clean up stale entries that already have judgments.
   if (readyRows.length < limit) {
     const staleCleanupLimit = Math.min(500, limit * 2) // Clean up more aggressively
-    const staleRows = await db
-      .select({id: schema.judgmentsJobsPrompts.id})
-      .from(schema.judgmentsJobsPrompts)
-      .innerJoin(
-        schema.judgments,
-        and(
-          eq(schema.judgments.articleId, schema.judgmentsJobsPrompts.articleId),
-          eq(schema.judgments.promptId, schema.judgmentsJobsPrompts.promptId),
-          eq(schema.judgments.modelId, jobConfig.modelId),
-          eq(schema.judgments.useTitle, jobConfig.useTitle),
-          eq(schema.judgments.useAbstract, jobConfig.useAbstract),
-          eq(schema.judgments.useFulltext, jobConfig.useFulltext),
-          eq(schema.judgments.useFulltextNoImages, jobConfig.useFulltextNoImages),
-          isNull(schema.judgments.deletedAt),
-        ),
-      )
-      .where(and(eq(schema.judgmentsJobsPrompts.jobId, jobId), eq(schema.judgmentsJobsPrompts.status, 'ready')))
-      .limit(staleCleanupLimit)
+    const staleRows = await getAppDatabaseService().queryJson<{id: string}>(`
+      SELECT jjp.id AS id
+      FROM app.judgment_job_prompt jjp
+      INNER JOIN app.judgment j ON
+        j.article_id = jjp.article_id
+        AND j.prompt_id = jjp.prompt_id
+        AND j.model_id = ${getSqlLiteral(jobConfig.modelId)}
+        AND j.use_title = ${getSqlLiteral(jobConfig.useTitle)}
+        AND j.use_abstract = ${getSqlLiteral(jobConfig.useAbstract)}
+        AND j.use_fulltext = ${getSqlLiteral(jobConfig.useFulltext)}
+        AND j.use_fulltext_no_images = ${getSqlLiteral(jobConfig.useFulltextNoImages)}
+        AND j.deleted_at IS NULL
+      WHERE jjp.job_id = '${escapeSqlString(jobId)}'
+        AND jjp.status = 'ready'
+      LIMIT ${staleCleanupLimit}
+    `)
 
     if (staleRows.length > 0) {
       const staleIds = staleRows.map((r) => {
         return r.id
       })
-      await db
-        .update(schema.judgmentsJobsPrompts)
-        .set({status: 'judged', judgedAt: new Date(), updatedAt: new Date()})
-        .where(inArray(schema.judgmentsJobsPrompts.id, staleIds))
+      await getAppDatabaseService().run(`
+        UPDATE app.judgment_job_prompt
+        SET status = 'judged',
+            judged_at = current_timestamp,
+            updated_at = current_timestamp
+        WHERE id IN (${getQuotedStringList(staleIds).join(', ')})
+      `)
       console.log(`[cleanup] Marked ${staleRows.length} stale queue entries as judged`)
     }
   }
 
-  return readyRows.length === 0 ? [] : processReadyRows(db, serverJobId, readyRows)
+  return readyRows.length === 0 ? [] : processReadyRows(serverJobId, readyRows)
 }

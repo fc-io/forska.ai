@@ -6,7 +6,7 @@ import {insertArticlesIntoProject} from '../services/insertArticlesIntoProject.t
 /**
  * Routes for adding articles to a project by various filter criteria.
  *
- * Uses ClickHouse for LLM judgment queries (llm, unassessed, both list types)
+ * Uses the OLAP layer for LLM judgment queries (llm, unassessed, both list types)
  * and the app database for human judgment queries (human list type).
  */
 export const projectsAddArticlesRoutes = new Elysia()

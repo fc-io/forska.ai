@@ -1,13 +1,17 @@
-import {eq, sql, sum} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {judgmentsJobs, judgmentsJobsPrompts, projectRouteLink, projects, tokenUse} from '../../db/schema'
 import {getUnassessedArticlesFromOlap, getUnassessedCountFromOlap} from '../../services/olap/unassessedArticlesOlap.ts'
 import {getJudgmentRequestStats} from '../cron/judgmentsJobs/judgmentsRequestRuntime.ts'
-import {getDatabase} from '../utils/getDatabase'
+import {getAppDatabaseService} from '../services/appDatabaseService.ts'
+import {
+  escapeSqlString,
+  getDateValue,
+  getJsonValue,
+  getQuotedStringList,
+  getSqlLiteral,
+} from '../services/appQueryHelpers.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
-type Database = ReturnType<typeof getDatabase>
 type TokenUsageDaySummary = {
   date: string
   dailyTokens: number
@@ -81,10 +85,8 @@ const aggregateTokenUsagePerDay = (
 }
 
 const getJobContext = async ({
-  db,
   jobId,
 }: {
-  db: Database
   jobId: string
 }): Promise<{
   job: {
@@ -105,27 +107,52 @@ const getJobContext = async ({
   projectDateTo: Date | null
   importRouteIds: string[]
 }> => {
-  const [jobWithProject] = await db
-    .select({
-      id: judgmentsJobs.id,
-      createdAt: judgmentsJobs.createdAt,
-      updatedAt: judgmentsJobs.updatedAt,
-      projectId: judgmentsJobs.projectId,
-      status: judgmentsJobs.status,
-      error: judgmentsJobs.error,
-      projectName: projects.name,
-      projectModelId: projects.modelId,
-      projectDateFrom: projects.dateFrom,
-      projectDateTo: projects.dateTo,
-      projectUseTitle: projects.useTitle,
-      projectUseAbstract: projects.useAbstract,
-      projectUseFulltext: projects.useFulltext,
-      projectUseFulltextNoImages: projects.useFulltextNoImages,
-    })
-    .from(judgmentsJobs)
-    .leftJoin(projects, eq(judgmentsJobs.projectId, projects.id))
-    .where(eq(judgmentsJobs.id, jobId))
-    .limit(1)
+  const [jobWithProject, projectImportRoutes] = await Promise.all([
+    getAppDatabaseService().queryJson<{
+      id: string
+      createdAt: unknown
+      updatedAt: unknown
+      projectId: string
+      status: string
+      error: unknown
+      projectName: string | null
+      projectModelId: string | null
+      projectDateFrom: unknown
+      projectDateTo: unknown
+      projectUseTitle: boolean | null
+      projectUseAbstract: boolean | null
+      projectUseFulltext: boolean | null
+      projectUseFulltextNoImages: boolean | null
+    }>(`
+      SELECT
+        jj.id AS id,
+        jj.created_at AS createdAt,
+        jj.updated_at AS updatedAt,
+        jj.project_id AS projectId,
+        jj.status AS status,
+        TO_JSON(jj.error) AS error,
+        p.name AS projectName,
+        p.model_id AS projectModelId,
+        p.date_from AS projectDateFrom,
+        p.date_to AS projectDateTo,
+        p.use_title AS projectUseTitle,
+        p.use_abstract AS projectUseAbstract,
+        p.use_fulltext AS projectUseFulltext,
+        p.use_fulltext_no_images AS projectUseFulltextNoImages
+      FROM app.judgment_job jj
+      LEFT JOIN app.project p ON jj.project_id = p.id
+      WHERE jj.id = '${escapeSqlString(jobId)}'
+      LIMIT 1
+    `),
+    getAppDatabaseService().queryJson<{importRouteId: string}>(`
+      SELECT pir.import_route_id AS importRouteId
+      FROM app.project_import_route pir
+      INNER JOIN app.judgment_job jj ON jj.project_id = pir.project_id
+      WHERE jj.id = '${escapeSqlString(jobId)}'
+    `),
+  ]).then(([jobRows, routeRows]) => {
+    return [jobRows[0], routeRows] as const
+  })
 
   if (!jobWithProject) {
     throw new Error('Job not found')
@@ -144,6 +171,9 @@ const getJobContext = async ({
 
   const job = {
     ...rest,
+    createdAt: getDateValue(rest.createdAt) ?? new Date(0),
+    updatedAt: getDateValue(rest.updatedAt) ?? new Date(0),
+    error: getJsonValue(rest.error) as string[] | null,
     useTitle: projectUseTitle ?? true,
     useAbstract: projectUseAbstract ?? true,
     useFulltext: projectUseFulltext ?? false,
@@ -154,16 +184,11 @@ const getJobContext = async ({
     throw new Error('Project model ID not found')
   }
 
-  const projectImportRoutes = await db
-    .select({importRouteId: projectRouteLink.importRouteId})
-    .from(projectRouteLink)
-    .where(eq(projectRouteLink.projectId, job.projectId))
-
   return {
     job,
     projectModelId,
-    projectDateFrom,
-    projectDateTo,
+    projectDateFrom: getDateValue(projectDateFrom),
+    projectDateTo: getDateValue(projectDateTo),
     importRouteIds: projectImportRoutes.map((r) => {
       return r.importRouteId
     }),
@@ -177,20 +202,28 @@ export const judgmentsJobsRoutes = new Elysia()
     async ({body}) => {
       console.log('Fetching judgmentsjobs')
 
-      const db = getDatabase()
-
       // Check if a job already exists for this project
-      const existingJob = await db
-        .select()
-        .from(judgmentsJobs)
-        .where(eq(judgmentsJobs.projectId, body.projectId))
-        .limit(1)
+      const existingJob = await getAppDatabaseService().queryJson<{id: string}>(`
+        SELECT id
+        FROM app.judgment_job
+        WHERE project_id = '${escapeSqlString(body.projectId)}'
+        LIMIT 1
+      `)
 
       if (existingJob.length > 0) {
         return {error: 'A job already exists for this project', data: null}
       }
 
-      const [job] = await db.insert(judgmentsJobs).values({projectId: body.projectId, status: 'running'}).returning()
+      const [job] = await getAppDatabaseService().queryJson<{
+        id: string
+        status: string
+        createdAt: unknown
+        projectId: string
+      }>(`
+        INSERT INTO app.judgment_job (id, project_id, status)
+        VALUES (${getQuotedStringList([crypto.randomUUID(), body.projectId, 'running']).join(', ')})
+        RETURNING id, status, created_at AS createdAt, project_id AS projectId
+      `)
 
       if (!job) {
         throw new Error('Failed to create judgments job')
@@ -206,38 +239,60 @@ export const judgmentsJobsRoutes = new Elysia()
   .get(
     '/api/judgmentsjobs/:id',
     async ({params}) => {
-      const db = getDatabase()
-
-      const {job} = await getJobContext({db, jobId: params.id})
+      const {job} = await getJobContext({jobId: params.id})
 
       const [promptStats, totalTokenUsage, tokenUsageRows] = await Promise.all([
-        db
-          .select({status: judgmentsJobsPrompts.status, count: sql<number>`count(*)`})
-          .from(judgmentsJobsPrompts)
-          .where(eq(judgmentsJobsPrompts.jobId, job.id))
-          .groupBy(judgmentsJobsPrompts.status),
-        db
-          .select({
-            totalTokens: sum(tokenUse.totalTokens),
-            totalPromptTokens: sum(tokenUse.totalPromptTokens),
-            totalCompletionTokens: sum(tokenUse.totalCompletionTokens),
-            totalRequests: sum(tokenUse.requests),
-          })
-          .from(tokenUse)
-          .where(eq(tokenUse.judgmentsJobId, job.id)),
-        db
-          .select({
-            createdAt: tokenUse.createdAt,
-            dailyTokens: sum(tokenUse.totalTokens),
-            dailyPromptTokens: sum(tokenUse.totalPromptTokens),
-            dailyCompletionTokens: sum(tokenUse.totalCompletionTokens),
-            requests: sum(tokenUse.requests),
-          })
-          .from(tokenUse)
-          .where(eq(tokenUse.judgmentsJobId, job.id))
-          .orderBy(tokenUse.createdAt),
+        getAppDatabaseService().queryJson<{status: string; count: number}>(`
+          SELECT status, COUNT(*) AS count
+          FROM app.judgment_job_prompt
+          WHERE job_id = '${escapeSqlString(job.id)}'
+          GROUP BY status
+        `),
+        getAppDatabaseService().queryJson<{
+          totalTokens: number | null
+          totalPromptTokens: number | null
+          totalCompletionTokens: number | null
+          totalRequests: number | null
+        }>(`
+          SELECT
+            SUM(total_tokens) AS totalTokens,
+            SUM(total_prompt_tokens) AS totalPromptTokens,
+            SUM(total_completion_tokens) AS totalCompletionTokens,
+            SUM(requests) AS totalRequests
+          FROM app.token_use
+          WHERE judgments_job_id = '${escapeSqlString(job.id)}'
+        `),
+        getAppDatabaseService().queryJson<{
+          createdAt: unknown
+          dailyTokens: number | null
+          dailyPromptTokens: number | null
+          dailyCompletionTokens: number | null
+          requests: number | null
+        }>(`
+          SELECT
+            created_at AS createdAt,
+            total_tokens AS dailyTokens,
+            total_prompt_tokens AS dailyPromptTokens,
+            total_completion_tokens AS dailyCompletionTokens,
+            requests
+          FROM app.token_use
+          WHERE judgments_job_id = '${escapeSqlString(job.id)}'
+          ORDER BY created_at ASC
+        `),
       ])
-      const tokenUsagePerDay = aggregateTokenUsagePerDay(tokenUsageRows)
+      const normalizedTokenUsageRows = tokenUsageRows.reduce<
+        Array<{
+          createdAt: Date
+          dailyTokens: number | string | null
+          dailyPromptTokens: number | string | null
+          dailyCompletionTokens: number | string | null
+          requests: number | string | null
+        }>
+      >((acc, row) => {
+        const createdAt = getDateValue(row.createdAt)
+        return createdAt ? [...acc, {...row, createdAt}] : acc
+      }, [])
+      const tokenUsagePerDay = aggregateTokenUsagePerDay(normalizedTokenUsageRows)
 
       const stats = {ready: 0, sent: 0, judged: 0, skipped: 0}
       const requestRuntimeStats = getJudgmentRequestStats(job.id)
@@ -275,10 +330,7 @@ export const judgmentsJobsRoutes = new Elysia()
   .get(
     '/api/judgmentsjobs-unassessed-count',
     async ({query}) => {
-      const db = getDatabase()
-
       const {projectDateFrom, projectDateTo, importRouteIds, projectModelId, job} = await getJobContext({
-        db,
         jobId: query.jobId,
       })
 
@@ -320,10 +372,7 @@ export const judgmentsJobsRoutes = new Elysia()
   .get(
     '/api/judgmentsjobs-unassessed-articles',
     async ({query}) => {
-      const db = getDatabase()
-
       const {projectDateFrom, projectDateTo, importRouteIds, projectModelId, job} = await getJobContext({
-        db,
         jobId: query.jobId,
       })
 
@@ -357,36 +406,53 @@ export const judgmentsJobsRoutes = new Elysia()
     {query: t.Object({jobId: t.String()})},
   )
   .get('/api/judgmentsjobs', async () => {
-    const db = getDatabase()
+    const jobs = await getAppDatabaseService().queryJson<{
+      id: string
+      createdAt: unknown
+      updatedAt: unknown
+      projectId: string
+      status: string
+      error: unknown
+      projectName: string | null
+    }>(`
+      SELECT
+        jj.id AS id,
+        jj.created_at AS createdAt,
+        jj.updated_at AS updatedAt,
+        jj.project_id AS projectId,
+        jj.status AS status,
+        TO_JSON(jj.error) AS error,
+        p.name AS projectName
+      FROM app.judgment_job jj
+      INNER JOIN app.project p ON jj.project_id = p.id
+      WHERE p.archived = FALSE
+      ORDER BY jj.created_at ASC
+    `)
 
-    // Filter out jobs from archived projects
-    const jobs = await db
-      .select({
-        id: judgmentsJobs.id,
-        createdAt: judgmentsJobs.createdAt,
-        updatedAt: judgmentsJobs.updatedAt,
-        projectId: judgmentsJobs.projectId,
-        status: judgmentsJobs.status,
-        error: judgmentsJobs.error,
-        projectName: projects.name,
-      })
-      .from(judgmentsJobs)
-      .innerJoin(projects, eq(judgmentsJobs.projectId, projects.id))
-      .where(eq(projects.archived, false))
-      .orderBy(judgmentsJobs.createdAt)
-
-    return {data: jobs, error: null}
+    return {
+      data: jobs.map((job) => {
+        return {
+          ...job,
+          createdAt: getDateValue(job.createdAt),
+          updatedAt: getDateValue(job.updatedAt),
+          error: getJsonValue(job.error) as string[] | null,
+        }
+      }),
+      error: null,
+    }
   })
   .get('/api/judgmentsjobs-total-token-usage', async () => {
-    const db = getDatabase()
-
-    const [totalUsage] = await db
-      .select({
-        totalTokens: sum(tokenUse.totalTokens),
-        totalPromptTokens: sum(tokenUse.totalPromptTokens),
-        totalCompletionTokens: sum(tokenUse.totalCompletionTokens),
-      })
-      .from(tokenUse)
+    const [totalUsage] = await getAppDatabaseService().queryJson<{
+      totalTokens: number | null
+      totalPromptTokens: number | null
+      totalCompletionTokens: number | null
+    }>(`
+      SELECT
+        SUM(total_tokens) AS totalTokens,
+        SUM(total_prompt_tokens) AS totalPromptTokens,
+        SUM(total_completion_tokens) AS totalCompletionTokens
+      FROM app.token_use
+    `)
 
     return {
       data: {
@@ -400,13 +466,19 @@ export const judgmentsJobsRoutes = new Elysia()
   .patch(
     '/api/judgmentsjobs/:id',
     async ({params, body}) => {
-      const db = getDatabase()
-
-      const [updatedJob] = await db
-        .update(judgmentsJobs)
-        .set({status: body.status, error: body.error, updatedAt: new Date()})
-        .where(eq(judgmentsJobs.id, params.id))
-        .returning()
+      const [updatedJob] = await getAppDatabaseService().queryJson<{
+        id: string
+        status: string
+        updatedAt: unknown
+        error: unknown
+      }>(`
+        UPDATE app.judgment_job
+        SET status = ${getSqlLiteral(body.status)},
+            error = ${getSqlLiteral(body.error ?? null)},
+            updated_at = current_timestamp
+        WHERE id = '${escapeSqlString(params.id)}'
+        RETURNING id, status, updated_at AS updatedAt, TO_JSON(error) AS error
+      `)
 
       if (!updatedJob) {
         throw new Error('Job not found')
@@ -415,20 +487,26 @@ export const judgmentsJobsRoutes = new Elysia()
       const shouldClearQueue = body.status === 'paused'
 
       if (shouldClearQueue) {
-        await db.delete(judgmentsJobsPrompts).where(eq(judgmentsJobsPrompts.jobId, updatedJob.id))
+        await getAppDatabaseService().run(`
+          DELETE FROM app.judgment_job_prompt
+          WHERE job_id = '${escapeSqlString(updatedJob.id)}'
+        `)
 
-        await db
-          .update(judgmentsJobs)
-          .set({cursorLastCreatedAt: null, cursorLastArticleId: null})
-          .where(eq(judgmentsJobs.id, updatedJob.id))
+        await getAppDatabaseService().run(`
+          UPDATE app.judgment_job
+          SET cursor_last_created_at = NULL,
+              cursor_last_article_id = NULL,
+              updated_at = current_timestamp
+          WHERE id = '${escapeSqlString(updatedJob.id)}'
+        `)
       }
 
       return {
         data: {
           jobId: updatedJob.id,
           status: updatedJob.status,
-          updatedAt: updatedJob.updatedAt,
-          error: updatedJob.error,
+          updatedAt: getDateValue(updatedJob.updatedAt),
+          error: getJsonValue(updatedJob.error) as string[] | null,
         },
         error: null,
       }
@@ -455,12 +533,11 @@ export const judgmentsJobsRoutes = new Elysia()
   .delete(
     '/api/judgmentsjobs/:id',
     async ({params}) => {
-      const db = getDatabase()
-
-      const [deletedJob] = await db
-        .delete(judgmentsJobs)
-        .where(eq(judgmentsJobs.id, params.id))
-        .returning({id: judgmentsJobs.id})
+      const [deletedJob] = await getAppDatabaseService().queryJson<{id: string}>(`
+        DELETE FROM app.judgment_job
+        WHERE id = '${escapeSqlString(params.id)}'
+        RETURNING id
+      `)
 
       if (!deletedJob) {
         throw new Error('Job not found')

@@ -16,11 +16,7 @@ const tablesWithUpdatedAt = [
   'judgments_human',
   'token_use',
   'judgment_assessments',
-  // Auth tables
   'user',
-  'session',
-  'account',
-  'verification',
 ]
 
 const createOrReplaceFunctionSQL = `

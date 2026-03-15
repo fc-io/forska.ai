@@ -1,7 +1,5 @@
-import {and, count, eq, isNull, or} from 'drizzle-orm'
-
-import * as schema from '../../../db/schema.ts'
-import type {AppDatabase} from '../../utils/getDatabase.ts'
+import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
+import {escapeSqlString, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
 import {clearJobCursor, setJobCursor} from './jobCursorStore.ts'
@@ -47,11 +45,13 @@ const isCodexJob = (job: Job): boolean => {
 }
 
 /** Counts the number of prompts in 'ready' status for a given job */
-const getCountOfReadyPrompts = async (db: AppDatabase, jobId: string): Promise<number> => {
-  const result = await db
-    .select({count: count()})
-    .from(schema.judgmentsJobsPrompts)
-    .where(and(eq(schema.judgmentsJobsPrompts.status, 'ready'), eq(schema.judgmentsJobsPrompts.jobId, jobId)))
+const getCountOfReadyPrompts = async (jobId: string): Promise<number> => {
+  const result = await getAppDatabaseService().queryJson<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.judgment_job_prompt
+    WHERE status = 'ready'
+      AND job_id = '${escapeSqlString(jobId)}'
+  `)
 
   return result[0]?.count ?? 0
 }
@@ -72,7 +72,6 @@ const BATCH_INSERT_SIZE = 10000
 
 /** Filter out prompt entries that already have judgments in the app database */
 const filterAlreadyJudged = async (
-  db: AppDatabase,
   promptEntries: PromptQueueEntry[],
   jobConfig: JobConfig,
 ): Promise<PromptQueueEntry[]> => {
@@ -85,26 +84,25 @@ const filterAlreadyJudged = async (
   for (let i = 0; i < promptEntries.length; i += BATCH_SIZE) {
     const batch = promptEntries.slice(i, i + BATCH_SIZE)
 
-    // Build conditions for each article/prompt pair
-    const pairConditions = batch.map((entry) => {
-      return and(eq(schema.judgments.articleId, entry.articleId), eq(schema.judgments.promptId, entry.promptId))
-    })
-
     // Find which pairs already have judgments
-    const existingJudgments = await db
-      .select({articleId: schema.judgments.articleId, promptId: schema.judgments.promptId})
-      .from(schema.judgments)
-      .where(
-        and(
-          or(...pairConditions),
-          eq(schema.judgments.modelId, jobConfig.modelId),
-          eq(schema.judgments.useTitle, jobConfig.useTitle),
-          eq(schema.judgments.useAbstract, jobConfig.useAbstract),
-          eq(schema.judgments.useFulltext, jobConfig.useFulltext),
-          eq(schema.judgments.useFulltextNoImages, jobConfig.useFulltextNoImages),
-          isNull(schema.judgments.deletedAt),
-        ),
+    const existingJudgments = await getAppDatabaseService().queryJson<{articleId: string; promptId: string}>(`
+      WITH pairs(article_id, prompt_id) AS (
+        VALUES ${batch
+          .map((entry) => {
+            return `(${getQuotedStringList([entry.articleId, entry.promptId]).join(', ')})`
+          })
+          .join(', ')}
       )
+      SELECT j.article_id AS articleId, j.prompt_id AS promptId
+      FROM app.judgment j
+      INNER JOIN pairs p ON p.article_id = j.article_id AND p.prompt_id = j.prompt_id
+      WHERE j.model_id = ${getSqlLiteral(jobConfig.modelId)}
+        AND j.use_title = ${getSqlLiteral(jobConfig.useTitle)}
+        AND j.use_abstract = ${getSqlLiteral(jobConfig.useAbstract)}
+        AND j.use_fulltext = ${getSqlLiteral(jobConfig.useFulltext)}
+        AND j.use_fulltext_no_images = ${getSqlLiteral(jobConfig.useFulltextNoImages)}
+        AND j.deleted_at IS NULL
+    `)
 
     const existingSet = new Set(
       existingJudgments.map((j) => {
@@ -120,14 +118,13 @@ const filterAlreadyJudged = async (
 
   const skipped = promptEntries.length - filtered.length
   if (skipped > 0) {
-    console.log(`[addToQueue] Filtered out ${skipped} already-judged entries (ClickHouse replication lag)`)
+    console.log(`[addToQueue] Filtered out ${skipped} already-judged entries after queue refresh`)
   }
 
   return filtered
 }
 
 const addPromptsToQueue = async (
-  db: AppDatabase,
   jobId: string,
   promptEntries: PromptQueueEntry[],
   serverJobId: string,
@@ -135,24 +132,18 @@ const addPromptsToQueue = async (
   if (promptEntries.length === 0) return
 
   // Chunk the entries to keep insert statements bounded
-  // Use onConflictDoNothing because ClickHouse query cannot check queue table
-  // (judgments_jobs_prompts is not replicated to CH)
+  // Use onConflictDoNothing because queued entries may race with newly written judgments.
   for (let i = 0; i < promptEntries.length; i += BATCH_INSERT_SIZE) {
     const chunk = promptEntries.slice(i, i + BATCH_INSERT_SIZE)
-    await db
-      .insert(schema.judgmentsJobsPrompts)
-      .values(
-        chunk.map((entry) => {
-          return {
-            jobId,
-            articleId: entry.articleId,
-            promptId: entry.promptId,
-            status: 'ready' as const,
-            serverId: serverJobId,
-          }
-        }),
-      )
-      .onConflictDoNothing()
+    await getAppDatabaseService().run(`
+      INSERT INTO app.judgment_job_prompt (id, job_id, article_id, prompt_id, status, server_id)
+      VALUES ${chunk
+        .map((entry) => {
+          return `(${getQuotedStringList([crypto.randomUUID(), jobId, entry.articleId, entry.promptId, 'ready', serverJobId]).join(', ')})`
+        })
+        .join(', ')}
+      ON CONFLICT(article_id, prompt_id, job_id) DO NOTHING
+    `)
   }
 }
 
@@ -162,20 +153,14 @@ const fetchPromptsForJob = async (job: Job, numberOfPromptsToGet: number) => {
 }
 
 const updateJobCursorAfterFetch = async (
-  db: AppDatabase,
   jobId: string,
   nextCursor: Awaited<ReturnType<typeof judgmentsJobsCronGetPrompts>>['nextCursor'],
 ): Promise<void> => {
-  return nextCursor ? setJobCursor(db, jobId, nextCursor) : clearJobCursor(db, jobId)
+  return nextCursor ? setJobCursor(jobId, nextCursor) : clearJobCursor(jobId)
 }
 
-const getNewPromptsForJob = async (
-  db: AppDatabase,
-  job: Job,
-  readyTargetPerJob: number,
-  addToQueueMaxBatchSize: number,
-) => {
-  const countOfReadyPrompts = await getCountOfReadyPrompts(db, job.id)
+const getNewPromptsForJob = async (job: Job, readyTargetPerJob: number, addToQueueMaxBatchSize: number) => {
+  const countOfReadyPrompts = await getCountOfReadyPrompts(job.id)
   const promptsToFetchCount = getPromptsToFetchCount(countOfReadyPrompts, readyTargetPerJob, addToQueueMaxBatchSize)
   const didFetch = promptsToFetchCount > 0
   const result = didFetch ? await fetchPromptsForJob(job, promptsToFetchCount) : {promptEntries: [], nextCursor: null}
@@ -189,37 +174,30 @@ const getNewPromptsForJob = async (
   }
 }
 
-const getJobConfig = async (db: AppDatabase, jobId: string): Promise<JobConfig | null> => {
-  const [config] = await db
-    .select({
-      modelId: schema.projects.modelId,
-      useTitle: schema.projects.useTitle,
-      useAbstract: schema.projects.useAbstract,
-      useFulltext: schema.projects.useFulltext,
-      useFulltextNoImages: schema.projects.useFulltextNoImages,
-    })
-    .from(schema.judgmentsJobs)
-    .innerJoin(schema.projects, eq(schema.projects.id, schema.judgmentsJobs.projectId))
-    .where(eq(schema.judgmentsJobs.id, jobId))
-    .limit(1)
+const getJobConfig = async (jobId: string): Promise<JobConfig | null> => {
+  const [config] = await getAppDatabaseService().queryJson<JobConfig>(`
+    SELECT
+      p.model_id AS modelId,
+      p.use_title AS useTitle,
+      p.use_abstract AS useAbstract,
+      p.use_fulltext AS useFulltext,
+      p.use_fulltext_no_images AS useFulltextNoImages
+    FROM app.judgment_job jj
+    INNER JOIN app.project p ON p.id = jj.project_id
+    WHERE jj.id = '${escapeSqlString(jobId)}'
+    LIMIT 1
+  `)
 
   if (!config?.modelId) return null
-  return config as JobConfig
+  return config
 }
 
-type AddToQueueJobParams = {
-  db: AppDatabase
-  job: Job
-  readyTargetPerJob: number
-  addToQueueMaxBatchSize: number
-  serverJobId: string
-}
+type AddToQueueJobParams = {job: Job; readyTargetPerJob: number; addToQueueMaxBatchSize: number; serverJobId: string}
 
 const addToQueueForJob = async (params: AddToQueueJobParams): Promise<void> => {
-  const {db, job, readyTargetPerJob, addToQueueMaxBatchSize, serverJobId} = params
+  const {job, readyTargetPerJob, addToQueueMaxBatchSize, serverJobId} = params
   const getNewStartMs = Date.now()
   const {countOfReadyPrompts, didFetch, nextCursor, promptEntries, promptsToFetchCount} = await getNewPromptsForJob(
-    db,
     job,
     readyTargetPerJob,
     addToQueueMaxBatchSize,
@@ -227,7 +205,7 @@ const addToQueueForJob = async (params: AddToQueueJobParams): Promise<void> => {
   const getNewMs = Date.now() - getNewStartMs
 
   if (promptsToFetchCount > 0 && promptEntries.length === 0) {
-    addToQueueLogger.warn(`addToQueue:job:${job.id}:empty`, '[addToQueue] got 0 pairs from ClickHouse', {
+    addToQueueLogger.warn(`addToQueue:job:${job.id}:empty`, '[addToQueue] got 0 pairs from olap', {
       jobId: job.id,
       projectId: job.projectId,
       ready: countOfReadyPrompts,
@@ -249,14 +227,14 @@ const addToQueueForJob = async (params: AddToQueueJobParams): Promise<void> => {
     })
   }
 
-  const jobConfig = await getJobConfig(db, job.id)
+  const jobConfig = await getJobConfig(job.id)
   if (!jobConfig) {
     console.error('[addToQueue] Job config not found for jobId:', job.id)
     return
   }
 
   const filterStartMs = Date.now()
-  const filteredEntries = await filterAlreadyJudged(db, promptEntries, jobConfig)
+  const filteredEntries = await filterAlreadyJudged(promptEntries, jobConfig)
   const filterMs = Date.now() - filterStartMs
 
   if (promptEntries.length > 0 && (filteredEntries.length === 0 || filterMs > 5_000)) {
@@ -270,12 +248,12 @@ const addToQueueForJob = async (params: AddToQueueJobParams): Promise<void> => {
   }
 
   const insertStartMs = Date.now()
-  await addPromptsToQueue(db, job.id, filteredEntries, serverJobId)
+  await addPromptsToQueue(job.id, filteredEntries, serverJobId)
   const insertMs = Date.now() - insertStartMs
 
   if (didFetch) {
     const cursorUpdateStartMs = Date.now()
-    await updateJobCursorAfterFetch(db, job.id, nextCursor)
+    await updateJobCursorAfterFetch(job.id, nextCursor)
     const cursorUpdateMs = Date.now() - cursorUpdateStartMs
 
     if (cursorUpdateMs > 5_000) {
@@ -297,8 +275,8 @@ const addToQueueForJob = async (params: AddToQueueJobParams): Promise<void> => {
   }
 }
 
-export const judgmentsJobsAddToQueue = async (db: AppDatabase, serverJobId: string): Promise<void> => {
-  const runningJobs = await judgmentsJobsGetRunningJobs(db)
+export const judgmentsJobsAddToQueue = async (serverJobId: string): Promise<void> => {
+  const runningJobs = await judgmentsJobsGetRunningJobs()
   const codexJobs = runningJobs.filter(isCodexJob)
   const nonCodexJobs = runningJobs.filter((job) => {
     return !isCodexJob(job)
@@ -319,7 +297,7 @@ export const judgmentsJobsAddToQueue = async (db: AppDatabase, serverJobId: stri
   const addForJobs = async (jobs: Job[], readyTargetPerJob: number, addToQueueMaxBatchSize: number) => {
     await jobs.reduce(async (prev, job) => {
       await prev
-      await addToQueueForJob({db, job, readyTargetPerJob, addToQueueMaxBatchSize, serverJobId})
+      await addToQueueForJob({job, readyTargetPerJob, addToQueueMaxBatchSize, serverJobId})
     }, Promise.resolve())
   }
   await addForJobs(nonCodexJobs, nonCodexCapacity.readyTargetPerJob, nonCodexCapacity.addToQueueMaxBatchSize)

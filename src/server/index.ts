@@ -6,8 +6,6 @@ import {fullTextJobsCron} from './cron/fullTextJobs.ts'
 import {judgmentsJobsCron} from './cron/judgmentsJobs.ts'
 import {nvidiaSmiCron} from './cron/nvidiaSmi.ts'
 import {aaModelsRoutes} from './routes/AaModelsRoutes'
-import {adminClickhouseHealthRoutes} from './routes/AdminClickhouseHealthRoutes.ts'
-import {adminImportRouteStatsRoutes} from './routes/AdminImportRouteStatsRoutes.ts'
 import {adminInvestigateRoutes} from './routes/AdminInvestigateRoutes.ts'
 import {articleAdminRoutes} from './routes/ArticleAdminRoutes.ts'
 import {articlesRoutes} from './routes/ArticlesRoutes.ts'
@@ -48,9 +46,7 @@ const _app = new Elysia()
   .use(fullTextConversionJobsCron)
   .use(judgmentsJobsCron)
   .use(nvidiaSmiCron)
-  .use(adminClickhouseHealthRoutes)
   .use(adminInvestigateRoutes)
-  .use(adminImportRouteStatsRoutes)
   .use(comparisonProjectsRoutes)
   .use(judgmentsJobsRoutes)
   .use(articlesRoutes)

@@ -3,7 +3,6 @@ import {createFileRoute} from '@tanstack/solid-router'
 import {createEffect, createSignal, onCleanup, Show} from 'solid-js'
 
 import {apiClient} from '../../../services/apiClient'
-import {updateUserProfile} from '../../../services/usersService'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse'
 
 type LocalUser = {id: string; name: string; email: string; role?: string | null; openalexMailto?: string | null}
@@ -35,9 +34,6 @@ const fetchLocalUser = async (): Promise<LocalUser | null> => {
 const Settings = () => {
   const [displayName, setDisplayName] = createSignal('')
   const [openalexMailto, setOpenalexMailto] = createSignal('')
-  const [isSavingProfile, setIsSavingProfile] = createSignal(false)
-  const [saveError, setSaveError] = createSignal('')
-  const [saveSuccess, setSaveSuccess] = createSignal('')
   const localUserQuery = useQuery(() => {
     return {queryKey: ['local-user'], queryFn: fetchLocalUser}
   })
@@ -128,58 +124,6 @@ const Settings = () => {
     }
   }
 
-  const handleSaveProfile = async () => {
-    const user = localUserQuery.data
-    const trimmedDisplayName = displayName().trim()
-    const trimmedOpenalexMailto = openalexMailto().trim()
-
-    if (!user?.id) {
-      setSaveError('Unable to update the local profile right now.')
-      setSaveSuccess('')
-      return
-    }
-
-    if (!trimmedDisplayName) {
-      setSaveError('Display name cannot be empty.')
-      setSaveSuccess('')
-      return
-    }
-
-    if (trimmedDisplayName === (user.name ?? '') && trimmedOpenalexMailto === (user.openalexMailto ?? '')) {
-      setSaveError('')
-      setSaveSuccess('No changes to save.')
-      return
-    }
-
-    setIsSavingProfile(true)
-    setSaveError('')
-    setSaveSuccess('')
-
-    await updateUserProfile(user.id, {
-      name: trimmedDisplayName,
-      openalexMailto: trimmedOpenalexMailto === '' ? null : trimmedOpenalexMailto,
-    })
-      .then(() => {
-        setSaveSuccess('Profile updated successfully.')
-        return localUserQuery.refetch()
-      })
-      .catch((error) => {
-        setSaveError(error instanceof Error ? error.message : 'Failed to update profile.')
-      })
-
-    setIsSavingProfile(false)
-  }
-
-  const isSaveDisabled = () => {
-    const currentName = localUserQuery.data?.name ?? ''
-    const currentOpenalexMailto = localUserQuery.data?.openalexMailto ?? ''
-    return (
-      isSavingProfile()
-      || !displayName().trim()
-      || (displayName().trim() === currentName && openalexMailto().trim() === currentOpenalexMailto)
-    )
-  }
-
   return (
     <div class="p-6 max-w-4xl mx-auto">
       <h1 class="text-3xl font-bold mb-6">Settings</h1>
@@ -211,10 +155,8 @@ const Settings = () => {
                 <input
                   type="text"
                   value={displayName()}
-                  onInput={(event) => {
-                    return setDisplayName(event.currentTarget.value)
-                  }}
-                  class="w-full px-3 py-3 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                  readonly
+                  class="w-full px-3 py-3 border border-gray-300 rounded-md bg-gray-50 text-gray-500 sm:text-sm"
                 />
               </div>
               <div>
@@ -222,27 +164,12 @@ const Settings = () => {
                 <input
                   type="email"
                   value={openalexMailto()}
-                  onInput={(event) => {
-                    return setOpenalexMailto(event.currentTarget.value)
-                  }}
-                  class="w-full px-3 py-3 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                  readonly
+                  class="w-full px-3 py-3 border border-gray-300 rounded-md bg-gray-50 text-gray-500 sm:text-sm"
                 />
                 <p class="mt-2 text-xs text-gray-500">
-                  Used for OpenAlex imports so your requests include a contact address.
+                  Used for OpenAlex imports. In no-auth mode this comes from `OPENALEX_MAILTO`.
                 </p>
-                {saveError() && <p class="mt-2 text-sm text-red-600">{saveError()}</p>}
-                {saveSuccess() && !saveError() && <p class="mt-2 text-sm text-green-600">{saveSuccess()}</p>}
-              </div>
-              <div class="flex gap-4">
-                <button
-                  class="px-4 py-3 bg-blue-600 text-white rounded-md shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed"
-                  disabled={isSaveDisabled()}
-                  onClick={() => {
-                    void handleSaveProfile()
-                  }}
-                >
-                  {isSavingProfile() ? 'Saving...' : 'Save Changes'}
-                </button>
               </div>
             </div>
           </Show>

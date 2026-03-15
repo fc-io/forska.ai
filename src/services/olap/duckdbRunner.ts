@@ -1,5 +1,5 @@
 import {env} from '../../server/utils/env.ts'
-import {getSqlitePath} from '../../server/utils/getSqlitePath.ts'
+import {getDuckdbPath} from '../../server/utils/getDuckdbPath.ts'
 
 const getDuckdbBin = () => {
   const configured = String(process.env['DUCKDB_BIN'] ?? '').trim()
@@ -20,17 +20,24 @@ export const getDuckdbSqlStringList = (values: string[]) => {
   })
 }
 
-const getDuckdbSqlitePath = (sqlitePath?: string) => {
-  return getSqlitePath({sqlitePath: sqlitePath ?? env.SQLITE_PATH})
+const getDuckdbDatabasePath = (duckdbPath?: string) => {
+  return getDuckdbPath({duckdbPath: duckdbPath ?? env.DUCKDB_PATH})
 }
 
-const getDuckdbPrelude = (sqlitePath?: string) => {
-  return `INSTALL sqlite; LOAD sqlite; SET memory_limit = '20GB'; ATTACH ${getDuckdbSqlString(getDuckdbSqlitePath(sqlitePath))} AS app (TYPE sqlite);`
+const getTrimmedValue = (value: string | null | undefined) => {
+  const normalized = String(value ?? '').trim()
+  return normalized === '' ? null : normalized
 }
 
-export const runDuckdbJsonQuery = async <T>(query: string, sqlitePath?: string): Promise<T[]> => {
+const getDuckdbPrelude = () => {
+  const tempDirectory = getTrimmedValue(env.DUCKDB_TEMP_DIRECTORY)
+  const tempDirectoryStatement = tempDirectory ? `SET temp_directory = ${getDuckdbSqlString(tempDirectory)}; ` : ''
+  return `SET memory_limit = ${getDuckdbSqlString(env.DUCKDB_MEMORY_LIMIT)}; ${tempDirectoryStatement}`
+}
+
+export const runDuckdbJsonQuery = async <T>(query: string, duckdbPath?: string): Promise<T[]> => {
   const process = globalThis.Bun.spawn(
-    [getDuckdbBin(), '-json', ':memory:', `${getDuckdbPrelude(sqlitePath)} ${query}`],
+    [getDuckdbBin(), '-json', getDuckdbDatabasePath(duckdbPath), `${getDuckdbPrelude()} ${query}`],
     {stdout: 'pipe', stderr: 'pipe'},
   )
   const [stdout, stderr, exitCode] = await Promise.all([

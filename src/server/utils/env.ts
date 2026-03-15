@@ -1,7 +1,8 @@
 import {type as arktype} from 'arktype'
 import {existsSync, readFileSync} from 'fs'
+import {dirname, resolve} from 'path'
 
-import {getSqlitePath} from './getSqlitePath.ts'
+import {getDuckdbPath} from './getDuckdbPath.ts'
 
 const CsvStringArray = arktype('string | null | undefined').pipe((value): string[] => {
   if (value == null) return []
@@ -20,11 +21,10 @@ const CsvStringArray = arktype('string | null | undefined').pipe((value): string
 })
 
 const envShape = arktype({
-  SQLITE_PATH: 'string',
-  BETTER_AUTH_SECRET: 'string | null | undefined',
-  BETTER_AUTH_URL: 'string | null | undefined',
+  DUCKDB_PATH: 'string',
+  DUCKDB_MEMORY_LIMIT: 'string',
+  DUCKDB_TEMP_DIRECTORY: 'string | null | undefined',
   OPENALEX_MAILTO: 'string | null | undefined',
-  OLAP_DB: '"clickhouse" | "duckdb" | null | undefined',
   VITE_PORT: 'number | string.integer.parse',
   API_SERVER_PORT: 'number | string.integer.parse',
   RUN_SERVER_FULL_TEXT_FETCHING: arktype('"true" | "false" | boolean').pipe((v) => {
@@ -75,9 +75,7 @@ const getEnvWithFileFallback = (): Record<string, string | undefined> => {
       if (v) source[k] = v
     }
   }
-  withFile('SQLITE_PATH')
-  withFile('BETTER_AUTH_SECRET')
-  withFile('BETTER_AUTH_URL')
+  withFile('DUCKDB_PATH')
   return source
 }
 
@@ -88,10 +86,15 @@ const loadEnv = (): typeof envShape.infer => {
     // string form to satisfy shape before parsing to boolean via pipe
     ;(merged as Record<string, string>).RUN_SERVER_JUDGING = 'true'
   }
-  if (merged.OLAP_DB == null || String(merged.OLAP_DB).trim() === '') {
-    ;(merged as Record<string, string>).OLAP_DB = 'duckdb'
+  ;(merged as Record<string, string>).DUCKDB_PATH = getDuckdbPath({duckdbPath: merged.DUCKDB_PATH})
+  if (merged.DUCKDB_MEMORY_LIMIT == null || String(merged.DUCKDB_MEMORY_LIMIT).trim() === '') {
+    ;(merged as Record<string, string>).DUCKDB_MEMORY_LIMIT = '25GB'
   }
-  ;(merged as Record<string, string>).SQLITE_PATH = getSqlitePath({sqlitePath: merged.SQLITE_PATH})
+  if (merged.DUCKDB_TEMP_DIRECTORY == null || String(merged.DUCKDB_TEMP_DIRECTORY).trim() === '') {
+    const duckdbPath = String(merged.DUCKDB_PATH ?? '')
+    const defaultTempDirectory = duckdbPath === ':memory:' ? undefined : resolve(dirname(duckdbPath), 'duckdb-temp')
+    merged.DUCKDB_TEMP_DIRECTORY = defaultTempDirectory
+  }
   // Default to false when not provided (prevents accidental background fetching)
   if (merged.RUN_SERVER_FULL_TEXT_FETCHING == null || merged.RUN_SERVER_FULL_TEXT_FETCHING === '') {
     ;(merged as Record<string, string>).RUN_SERVER_FULL_TEXT_FETCHING = 'false'
@@ -144,13 +147,6 @@ const loadEnv = (): typeof envShape.infer => {
   }
   if (!('WORKER_URLS' in merged)) {
     ;(merged as Record<string, undefined>).WORKER_URLS = undefined
-  }
-  // Ensure optional BETTER_AUTH_URL key exists even when not provided
-  if (!('BETTER_AUTH_URL' in merged)) {
-    ;(merged as Record<string, undefined>).BETTER_AUTH_URL = undefined
-  }
-  if (!('BETTER_AUTH_SECRET' in merged)) {
-    ;(merged as Record<string, undefined>).BETTER_AUTH_SECRET = undefined
   }
   if (!('OPENALEX_MAILTO' in merged)) {
     ;(merged as Record<string, undefined>).OPENALEX_MAILTO = undefined

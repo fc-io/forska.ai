@@ -1,7 +1,4 @@
-import {and, gte, isNotNull, lt} from 'drizzle-orm'
-
-import {tokenUse} from '../../../db/schema.ts'
-import {getDatabase} from '../../utils/getDatabase.ts'
+import {getTokenUseQueryService} from '../../services/tokenUseQueryService.ts'
 import {
   aggregateTokenTimelineRows,
   calculateUsageStats,
@@ -32,13 +29,9 @@ export const tokensRoutesGetTimelineAllJobsStats = async ({interval}: TimelineAl
     return {success: true, highestUsage: cached.highestUsage, p90Usage: cached.p90Usage}
   }
 
-  const db = getDatabase()
   const startDate = getHighestUsagePeriod(interval)
   const endDate = new Date()
-  const usageRows = await db
-    .select({createdAt: tokenUse.createdAt, totalTokens: tokenUse.totalTokens})
-    .from(tokenUse)
-    .where(and(isNotNull(tokenUse.judgmentsJobId), gte(tokenUse.createdAt, startDate), lt(tokenUse.createdAt, endDate)))
+  const usageRows = await getTokenUseQueryService().getTimelineRowsAllJobs({startDate, endDate})
   const {usedData} = aggregateTokenTimelineRows({
     rows: usageRows,
     interval,

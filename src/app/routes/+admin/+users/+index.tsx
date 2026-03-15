@@ -1,6 +1,5 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute} from '@tanstack/solid-router'
-import {formatDate} from 'date-fns'
 import {createSignal, For, Show} from 'solid-js'
 
 import {fetchUsers} from '../../../../services/usersService.ts'
@@ -98,9 +97,7 @@ const AdminUsers = () => {
                         </div>
                       </td>
                       <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{user.email}</td>
-                      <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {user.createdAt ? formatDate(new Date(user.createdAt), 'yyyy-MM-dd') : 'Unknown'}
-                      </td>
+                      <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">Unknown</td>
                     </tr>
                   )
                 }}

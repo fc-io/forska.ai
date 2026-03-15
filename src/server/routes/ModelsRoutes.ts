@@ -1,11 +1,10 @@
-import {and, asc, eq, isNull, ne, or} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {models} from '../../db/schema.ts'
+import {getAppDatabaseService} from '../services/appDatabaseService.ts'
+import {getJsonValue, getQuotedStringList, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getCodexCliLoginStatus, getCodexDeviceAuthLoginJob, startCodexDeviceAuthLogin} from '../utils/codexCliAuth.ts'
 import {env} from '../utils/env.ts'
 import {getCodexAppServerClient, getCodexBinPath} from '../utils/getCodexAppServerClient.ts'
-import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
 const normalizeDisplayName = (value: string): string => {
@@ -42,18 +41,69 @@ export const modelsRoutes = new Elysia()
   .use(
     new Elysia()
       .get('/api/models', async () => {
-        const db = getDatabase()
-        const hpcModels = await db
-          .select()
-          .from(models)
-          .where(or(isNull(models.provider), ne(models.provider, 'codex')))
-          .orderBy(asc(models.createdAt))
-
-        const codexModelsFromDb = await db
-          .select()
-          .from(models)
-          .where(eq(models.provider, 'codex'))
-          .orderBy(asc(models.createdAt))
+        const [hpcModelsRows, codexModelsFromDbRows] = await Promise.all([
+          getAppDatabaseService().queryJson<{
+            id: string
+            createdAt: unknown
+            updatedAt: unknown
+            name: string
+            provider: string | null
+            baseURL: string | null
+            modelName: string | null
+            version: string | null
+            apiKeyVariable: string | null
+            workerUrls: unknown
+          }>(`
+            SELECT
+              id,
+              created_at AS createdAt,
+              updated_at AS updatedAt,
+              name,
+              provider,
+              base_url AS baseURL,
+              model_name AS modelName,
+              version,
+              api_key_variable AS apiKeyVariable,
+              TO_JSON(worker_urls) AS workerUrls
+            FROM app.model
+            WHERE provider IS NULL OR provider != 'codex'
+            ORDER BY created_at ASC
+          `),
+          getAppDatabaseService().queryJson<{
+            id: string
+            createdAt: unknown
+            updatedAt: unknown
+            name: string
+            provider: string | null
+            baseURL: string | null
+            modelName: string | null
+            version: string | null
+            apiKeyVariable: string | null
+            workerUrls: unknown
+          }>(`
+            SELECT
+              id,
+              created_at AS createdAt,
+              updated_at AS updatedAt,
+              name,
+              provider,
+              base_url AS baseURL,
+              model_name AS modelName,
+              version,
+              api_key_variable AS apiKeyVariable,
+              TO_JSON(worker_urls) AS workerUrls
+            FROM app.model
+            WHERE provider = 'codex'
+            ORDER BY created_at ASC
+          `),
+        ])
+        const normalizeRows = (rows: typeof hpcModelsRows) => {
+          return rows.map((row) => {
+            return {...row, workerUrls: getJsonValue(row.workerUrls) as string[] | null}
+          })
+        }
+        const hpcModels = normalizeRows(hpcModelsRows)
+        const codexModelsFromDb = normalizeRows(codexModelsFromDbRows)
 
         const codexVirtualFromDb = codexModelsFromDb
           .filter((m) => {
@@ -206,28 +256,24 @@ export const modelsRoutes = new Elysia()
           const version = rawVersion.length > 0 ? rawVersion : null
 
           const name = normalizeDisplayName(body.name)
-          const db = getDatabase()
-
-          const [existing] = await db
-            .select({id: models.id})
-            .from(models)
-            .where(
-              and(
-                eq(models.provider, 'codex'),
-                eq(models.modelName, modelName),
-                version ? eq(models.version, version) : isNull(models.version),
-              ),
-            )
-            .limit(1)
+          const [existing] = await getAppDatabaseService().queryJson<{id: string}>(`
+            SELECT id
+            FROM app.model
+            WHERE provider = 'codex'
+              AND model_name = ${getSqlLiteral(modelName)}
+              AND ${version ? `version = ${getSqlLiteral(version)}` : 'version IS NULL'}
+            LIMIT 1
+          `)
 
           if (existing) {
             return {data: {modelId: existing.id}, error: null}
           }
 
-          const [inserted] = await db
-            .insert(models)
-            .values({name, provider: 'codex', modelName, version, baseURL: null})
-            .returning({id: models.id})
+          const [inserted] = await getAppDatabaseService().queryJson<{id: string}>(`
+            INSERT INTO app.model (id, name, provider, model_name, version, base_url)
+            VALUES (${getQuotedStringList([crypto.randomUUID(), name, 'codex', modelName]).join(', ')}, ${getSqlLiteral(version)}, NULL)
+            RETURNING id
+          `)
 
           if (!inserted) {
             throw new Error('Failed to create Codex model')

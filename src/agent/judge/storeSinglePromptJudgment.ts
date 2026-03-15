@@ -1,7 +1,8 @@
 import {randomUUID} from 'crypto'
-import {and, eq, isNull} from 'drizzle-orm'
 
-import {articles, judgments, models, projects} from '../../db/schema.ts'
+import {articles, judgments} from '../../db/schema.ts'
+import {getAppDatabaseService} from '../../server/services/appDatabaseService.ts'
+import {escapeSqlString, getSqlLiteral} from '../../server/services/appQueryHelpers.ts'
 import {judgeStoreJudgmentGetStringAsArrayOfStrings} from './judgeStoreJudgment/judgeStoreJudgmentGetStringAsArrayOfStrings.ts'
 import type {SinglePromptJudgmentResult} from './parseSinglePromptJudgment.ts'
 
@@ -25,27 +26,31 @@ export const storeSinglePromptJudgment = async ({
   chunkingStrategy: (typeof judgments.$inferInsert)['chunkingStrategy']
 }): Promise<void> => {
   try {
-    const {getDatabase} = await import('../../server/utils/getDatabase.ts')
-    const db = getDatabase()
-
     // Prepare snapshot context (best-effort, only fetching fields we still store)
-    const [projectRow] = await db
-      .select({
-        id: projects.id,
-        useTitle: projects.useTitle,
-        useAbstract: projects.useAbstract,
-        useFulltext: projects.useFulltext,
-        useFulltextNoImages: projects.useFulltextNoImages,
-      })
-      .from(projects)
-      .where(eq(projects.id, projectId))
-      .limit(1)
+    const [projectRow] = await getAppDatabaseService().queryJson<{
+      id: string
+      useTitle: boolean
+      useAbstract: boolean
+      useFulltext: boolean
+      useFulltextNoImages: boolean
+    }>(`
+      SELECT
+        id,
+        use_title AS useTitle,
+        use_abstract AS useAbstract,
+        use_fulltext AS useFulltext,
+        use_fulltext_no_images AS useFulltextNoImages
+      FROM app.project
+      WHERE id = '${escapeSqlString(projectId)}'
+      LIMIT 1
+    `)
 
-    const [modelRow] = await db
-      .select({modelName: models.modelName, provider: models.provider})
-      .from(models)
-      .where(eq(models.id, modelId))
-      .limit(1)
+    const [modelRow] = await getAppDatabaseService().queryJson<{modelName: string | null; provider: string | null}>(`
+      SELECT model_name AS modelName, provider
+      FROM app.model
+      WHERE id = '${escapeSqlString(modelId)}'
+      LIMIT 1
+    `)
 
     const useTitle = projectRow?.useTitle ?? true
     const useAbstract = projectRow?.useAbstract ?? true
@@ -65,22 +70,19 @@ export const storeSinglePromptJudgment = async ({
     const answeredQuotes = judgment.quotes
 
     // Check if judgment already exists (must match full unique constraint including content config)
-    const existing = await db
-      .select({id: judgments.id, createdAt: judgments.createdAt})
-      .from(judgments)
-      .where(
-        and(
-          eq(judgments.articleId, article.id),
-          eq(judgments.modelId, modelId),
-          eq(judgments.promptId, promptId),
-          eq(judgments.useTitle, useTitle),
-          eq(judgments.useAbstract, useAbstract),
-          eq(judgments.useFulltext, useFulltext),
-          eq(judgments.useFulltextNoImages, useFulltextNoImages),
-          isNull(judgments.deletedAt),
-        ),
-      )
-      .limit(1)
+    const existing = await getAppDatabaseService().queryJson<{id: string; createdAt: string}>(`
+      SELECT id, created_at AS createdAt
+      FROM app.judgment
+      WHERE article_id = '${escapeSqlString(article.id)}'
+        AND model_id = '${escapeSqlString(modelId)}'
+        AND prompt_id = '${escapeSqlString(promptId)}'
+        AND use_title = ${useTitle ? 'TRUE' : 'FALSE'}
+        AND use_abstract = ${useAbstract ? 'TRUE' : 'FALSE'}
+        AND use_fulltext = ${useFulltext ? 'TRUE' : 'FALSE'}
+        AND use_fulltext_no_images = ${useFulltextNoImages ? 'TRUE' : 'FALSE'}
+        AND deleted_at IS NULL
+      LIMIT 1
+    `)
 
     const existingId = existing[0]?.id ?? null
     const existingCreatedAt = existing[0]?.createdAt ?? null
@@ -91,7 +93,7 @@ export const storeSinglePromptJudgment = async ({
       console.error(
         `${article.id} | Judgment already exists: promptId=${promptId}, modelId=${modelId}, `
           + `content=[T:${useTitle},A:${useAbstract},F:${useFulltext},FNI:${useFulltextNoImages}], `
-          + `projectId=${projectId}, existingId=${existingId}, createdAt=${existingCreatedAt?.toISOString()}`,
+          + `projectId=${projectId}, existingId=${existingId}, createdAt=${existingCreatedAt ?? 'unknown'}`,
       )
       return
     }
@@ -99,29 +101,52 @@ export const storeSinglePromptJudgment = async ({
     const id = randomUUID()
     const createdAt = new Date()
 
-    await db.insert(judgments).values({
-      id,
-      createdAt,
-      updatedAt: createdAt,
-      articleId: article.id,
-      modelId,
-      promptId,
-      projectId,
-      isAnswered: true,
-      answeredOriginal,
-      answeredOriginalAsArray: answeredOriginalAsArray ?? undefined,
-      confidenceOriginal: 50,
-      explanation: answeredExplanation || null,
-      quotes: answeredQuotes ?? undefined,
-      useTitle,
-      useAbstract,
-      useFulltext,
-      useFulltextNoImages,
-      chunkingStrategy,
-      // Snapshots (kept for cross-project display)
-      snapshotProjectId: snapshotValues.snapshotProjectId,
-      snapshotProjectModelName: snapshotValues.snapshotProjectModelName,
-    })
+    await getAppDatabaseService().run(`
+      INSERT INTO app.judgment (
+        id,
+        created_at,
+        updated_at,
+        article_id,
+        model_id,
+        prompt_id,
+        project_id,
+        is_answered,
+        answered_original,
+        answered_original_as_array,
+        confidence_original,
+        explanation,
+        quotes,
+        use_title,
+        use_abstract,
+        use_fulltext,
+        use_fulltext_no_images,
+        chunking_strategy,
+        snapshot_project_id,
+        snapshot_project_model_name
+      )
+      VALUES (
+        '${escapeSqlString(id)}',
+        ${getSqlLiteral(createdAt)},
+        ${getSqlLiteral(createdAt)},
+        '${escapeSqlString(article.id)}',
+        '${escapeSqlString(modelId)}',
+        '${escapeSqlString(promptId)}',
+        '${escapeSqlString(projectId)}',
+        TRUE,
+        ${getSqlLiteral(answeredOriginal)},
+        ${getSqlLiteral(answeredOriginalAsArray)},
+        50,
+        ${getSqlLiteral(answeredExplanation || null)},
+        ${getSqlLiteral(answeredQuotes)},
+        ${useTitle ? 'TRUE' : 'FALSE'},
+        ${useAbstract ? 'TRUE' : 'FALSE'},
+        ${useFulltext ? 'TRUE' : 'FALSE'},
+        ${useFulltextNoImages ? 'TRUE' : 'FALSE'},
+        ${getSqlLiteral(chunkingStrategy)},
+        ${getSqlLiteral(snapshotValues.snapshotProjectId)},
+        ${getSqlLiteral(snapshotValues.snapshotProjectModelName)}
+      )
+    `)
   } catch (error) {
     console.error(
       `${article.id} | Failed to store judgment for prompt ${promptId}`,

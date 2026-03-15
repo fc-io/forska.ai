@@ -1,5 +1,5 @@
-import {tokenUse} from '../../db/schema.ts'
 import {markJudgmentRequestsPersisted} from '../../server/cron/judgmentsJobs/judgmentsRequestRuntime.ts'
+import {getTokenUseQueryService} from '../../server/services/tokenUseQueryService.ts'
 import {env} from '../../server/utils/env.ts'
 import {apiClient} from '../../services/apiClient.ts'
 
@@ -102,41 +102,35 @@ const storeTokenUseDirectly = async (
   {startedAt, finishedAt, duration}: {startedAt: string; finishedAt: string; duration: number},
   judgmentsJobId?: string,
 ): Promise<void> => {
-  const {getDatabase} = await import('../../server/utils/getDatabase.ts')
-  const db = getDatabase()
-
-  const [result] = await db
-    .insert(tokenUse)
-    .values({
-      judgmentsJobId: judgmentsJobId ?? null,
-      gpuNnodes: env.GPU_NNODES,
-      gpuGpusPerNode: env.GPU_GPUS_PER_NODE,
-      gpuTotalGpus: env.GPU_TOTAL_GPUS,
-      tpSize: env.TP_SIZE,
-      dpSize: env.DP_SIZE,
-      gpuShape: env.GPU_SHAPE ?? null,
-      sglangMaxRunningRequests: env.SGLANG_MAX_RUNNING_REQUESTS,
-      sglangModel: env.SGLANG_MODEL ?? null,
-      requests: totalTokenUse.totalRequests,
-      totalPromptTokens: totalTokenUse.totalPromptTokens,
-      totalCompletionTokens: totalTokenUse.totalCompletionTokens,
-      totalTokens: totalTokenUse.totalTokens,
-      successfulRequests: totalTokenUse.successfulRequests,
-      failedRequests: totalTokenUse.failedRequests,
-      hasFailedRequests: totalTokenUse.hasFailedRequests,
-      failedRequestsDetails:
-        totalTokenUse.failedRequestsDetails.length > 0 ? totalTokenUse.failedRequestsDetails : null,
-      totalSuccessPromptTokens: totalTokenUse.totalSuccessPromptTokens,
-      totalSuccessCompletionTokens: totalTokenUse.totalSuccessCompletionTokens,
-      totalSuccessTokens: totalTokenUse.totalSuccessTokens,
-      totalFailedPromptTokens: totalTokenUse.totalFailedPromptTokens,
-      totalFailedCompletionTokens: totalTokenUse.totalFailedCompletionTokens,
-      totalFailedTokens: totalTokenUse.totalFailedTokens,
-      startedAt: new Date(startedAt),
-      finishedAt: new Date(finishedAt),
-      duration: Math.round(duration),
-    })
-    .returning()
+  const result = await getTokenUseQueryService().insertTokenUse({
+    judgments_job_id: judgmentsJobId ?? null,
+    gpu_nnodes: env.GPU_NNODES,
+    gpu_gpus_per_node: env.GPU_GPUS_PER_NODE,
+    gpu_total_gpus: env.GPU_TOTAL_GPUS,
+    tp_size: env.TP_SIZE,
+    dp_size: env.DP_SIZE,
+    gpu_shape: env.GPU_SHAPE ?? null,
+    sglang_max_running_requests: env.SGLANG_MAX_RUNNING_REQUESTS,
+    sglang_model: env.SGLANG_MODEL ?? null,
+    requests: totalTokenUse.totalRequests,
+    total_prompt_tokens: totalTokenUse.totalPromptTokens,
+    total_completion_tokens: totalTokenUse.totalCompletionTokens,
+    total_tokens: totalTokenUse.totalTokens,
+    successful_requests: totalTokenUse.successfulRequests,
+    failed_requests: totalTokenUse.failedRequests,
+    has_failed_requests: totalTokenUse.hasFailedRequests,
+    failed_requests_details:
+      totalTokenUse.failedRequestsDetails.length > 0 ? totalTokenUse.failedRequestsDetails : null,
+    total_success_prompt_tokens: totalTokenUse.totalSuccessPromptTokens,
+    total_success_completion_tokens: totalTokenUse.totalSuccessCompletionTokens,
+    total_success_tokens: totalTokenUse.totalSuccessTokens,
+    total_failed_prompt_tokens: totalTokenUse.totalFailedPromptTokens,
+    total_failed_completion_tokens: totalTokenUse.totalFailedCompletionTokens,
+    total_failed_tokens: totalTokenUse.totalFailedTokens,
+    started_at: new Date(startedAt),
+    finished_at: new Date(finishedAt),
+    duration: Math.round(duration),
+  })
 
   if (!result) {
     throw new Error('Failed to store token usage in database')

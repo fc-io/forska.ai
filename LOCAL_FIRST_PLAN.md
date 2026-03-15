@@ -5,13 +5,13 @@
 - [ ] App DB: SQLite via `bun:sqlite` + `drizzle-orm/bun-sqlite`.
 - [x] Default SQLite path lives outside repo/worktree/Dropbox in shared OS app-data dir.
 - [x] Default shared SQLite path: macOS `~/Library/Application Support/Forska/forska.sqlite`; Linux `${XDG_DATA_HOME:-~/.local/share}/forska/forska.sqlite`; Windows `%LOCALAPPDATA%\\Forska\\forska.sqlite`.
-- [ ] Analytics: DuckDB only; query final SQLite shape; no ClickHouse at runtime.
+- [ ] Analytics: DuckDB only; query final SQLite shape; no legacy analytics runtime.
 - [ ] No Better Auth. Single local `user` row only; no sessions, no roles, no owner/ownerId.
 - [ ] Move user/app config now in `.env.local` into SQLite `user`; keep env for secrets + external/runtime values only.
 - [x] Keep `SQLITE_PATH` override for bootstrap/runtime; no hardcoded repo-relative DB path.
 - [ ] Store user-chosen non-bootstrap custom filesystem paths on SQLite `user` config.
-- [ ] No bridge. No dual-write. No shadow Postgres. No shadow ClickHouse.
-- [ ] Keep old Docker/Postgres/ClickHouse stack runnable on same machine until final step; Docker/deploy breakage last.
+- [ ] No bridge. No dual-write. No shadow Postgres. No shadow legacy analytics store.
+- [ ] Keep old Docker/Postgres stack runnable on same machine until final step; Docker/deploy breakage last.
 
 ## Step 0 - Freeze contract
 
@@ -77,13 +77,13 @@
 - [x] Remove owner/user fields from forms, mutations, filters, tables.
 - [x] Remove uploader-name UI; show manual/fetched state from `fullTextSource`.
 - [x] Remove admin-vs-user wording that no longer means anything.
-- [ ] Remove ClickHouse/admin sync UI only after local-first replacement exists or page is intentionally dropped.
+- [x] Remove legacy analytics/admin sync UI once the replacement exists or the page is intentionally dropped.
 
 ## Step 2A - App DB port (`src/server/**`, `src/db/**`)
 
 - [x] Port all routes/services to SQLite Drizzle types and SQLite timestamp/json semantics.
 - [x] Replace raw PG array logic, casts, `ILIKE`, `ANY`, `date_bin`, `date_trunc`, trigger assumptions, view assumptions.
-- [x] Rewrite judgment-job cursor/storage away from ClickHouse-shaped cursor fields.
+- [x] Rewrite judgment-job cursor/storage away from legacy analytics-shaped cursor fields.
 - [x] Verify prompt hash/immutability behavior in app code or SQLite-safe DB logic.
 
 ## Step 2B - DuckDB cutover (`src/services/olap/**`)
@@ -91,10 +91,9 @@
 - [x] Add DuckDB query runner.
 - [x] Query final SQLite DB directly from DuckDB; no replicated analytics store.
 - [x] Port analytics queries: reviews list/count/filters, unassessed list/count, article id selection, remaining comparison flows.
-- [ ] DuckDB query ports should first preserve the ClickHouse pushdown shape: keep scope/filter/group/having/order/pagination inside SQL and avoid loading whole scopes into JS memory.
-- [ ] If a materially different DuckDB-native approach looks better than the old ClickHouse shape, stop and review that plan with the user before implementing it.
-- [ ] Keep ClickHouse code/env/routes untouched until DuckDB pages pass locally.
-- [ ] Remove ClickHouse codepaths in final cleanup, not before.
+- [ ] DuckDB query ports should first preserve the old pushdown shape: keep scope/filter/group/having/order/pagination inside SQL and avoid loading whole scopes into JS memory.
+- [ ] If a materially different DuckDB-native approach looks better than the old pushdown shape, stop and review that plan with the user before implementing it.
+- [x] Remove legacy analytics code/env/routes after DuckDB pages pass locally.
 
 ## Step 2C - One-shot migration + local-first validation (`scripts/**`, docs)
 
@@ -125,7 +124,7 @@
 ## Step 3 - Local-first cutover
 
 - [ ] Start app locally on SQLite + DuckDB only.
-- [ ] Keep old Docker/Postgres/ClickHouse stack runnable on same machine during this step.
+- [ ] Keep old Docker/Postgres stack runnable on same machine during this step.
 - [ ] Validate shared-path workflow: two compatible worktrees on one machine, one shared SQLite file.
 - [ ] Validate override workflow: custom `SQLITE_PATH` still works.
 - [ ] Validate path bootstrap/docs for macOS, Linux, Windows.
@@ -133,8 +132,8 @@
 
 ## Step 4 - Old stack cleanup (last; Docker/deploy breakage allowed)
 
-- [ ] Remove old deps/codepaths: Postgres, ClickHouse, Better Auth.
+- [ ] Remove old deps/codepaths: Postgres and any remaining legacy auth/bootstrap pieces.
 - [ ] Update `docker-compose.yml`, `Dockerfile*`, docker build scripts, GHCR/apptainer docs, env examples.
-- [ ] Remove old server routes/admin pages/scripts/docs for ClickHouse/Postgres/Better Auth.
+- [ ] Remove old server routes/admin pages/scripts/docs for legacy Postgres/bootstrap flows.
 - [ ] Update docs to local-first setup only, incl. per-OS default SQLite path + override instructions.
 - [ ] Final verify after cleanup: local-first app still boots and old-stack-specific files are gone.

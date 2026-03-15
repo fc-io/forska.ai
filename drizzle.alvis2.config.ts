@@ -1,11 +1,11 @@
-import { defineConfig } from 'drizzle-kit';
+import {defineConfig} from 'drizzle-kit'
 
-console.log(process.env.REMOTE_DATABASE_URL);
+console.log(process.env.REMOTE_DATABASE_URL)
 export default defineConfig({
   dialect: 'postgresql',
-//   schema: './src/schema/**/*.ts',
-  schema: ['./src/db/schema.ts', './auth-schema.ts'],
+  //   schema: './src/schema/**/*.ts',
+  schema: ['./src/db/schema.ts'],
   out: './src/db/migrations',
   strict: false,
-  dbCredentials: { url: `${process.env.REMOTE_DATABASE_URL}` },
-});
+  dbCredentials: {url: `${process.env.REMOTE_DATABASE_URL}`},
+})

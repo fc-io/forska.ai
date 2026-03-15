@@ -1,7 +1,5 @@
-import {and, count, eq, inArray} from 'drizzle-orm'
-
-import * as schema from '../../../db/schema.ts'
-import type {AppDatabase} from '../../utils/getDatabase.ts'
+import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
+import {getQuotedStringList} from '../../services/appQueryHelpers.ts'
 import {rateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {ConnectionError} from './connectionHealth.ts'
 import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
@@ -39,15 +37,17 @@ const getCodexMaxInflight = (): number => {
   return n > 0 ? n : 1
 }
 
-const getReadyCountsByJob = async (db: AppDatabase, jobIds: string[]): Promise<Map<string, number>> => {
+const getReadyCountsByJob = async (jobIds: string[]): Promise<Map<string, number>> => {
   const hasJobs = jobIds.length > 0
   if (!hasJobs) return new Map()
 
-  const readyCounts = await db
-    .select({jobId: schema.judgmentsJobsPrompts.jobId, ready: count()})
-    .from(schema.judgmentsJobsPrompts)
-    .where(and(eq(schema.judgmentsJobsPrompts.status, 'ready'), inArray(schema.judgmentsJobsPrompts.jobId, jobIds)))
-    .groupBy(schema.judgmentsJobsPrompts.jobId)
+  const readyCounts = await getAppDatabaseService().queryJson<{jobId: string; ready: number}>(`
+    SELECT job_id AS jobId, COUNT(*) AS ready
+    FROM app.judgment_job_prompt
+    WHERE status = 'ready'
+      AND job_id IN (${getQuotedStringList(jobIds).join(', ')})
+    GROUP BY job_id
+  `)
 
   const pairs = readyCounts.map((row) => {
     return [row.jobId, Number(row.ready)] as const
@@ -120,7 +120,7 @@ const getRequestsToSendByJob = <T extends {id: string}>(
   })
 }
 
-const processPrompts = async (db: AppDatabase, prompts: PromptToProcess[]): Promise<{connectionErrors: number}> => {
+const processPrompts = async (prompts: PromptToProcess[]): Promise<{connectionErrors: number}> => {
   const results = await Promise.allSettled(
     prompts.map(async (prompt) => {
       // Add random jitter (0-1000ms) to desynchronize requests and effectively smooth out
@@ -129,7 +129,7 @@ const processPrompts = async (db: AppDatabase, prompts: PromptToProcess[]): Prom
       await new Promise((resolve) => {
         setTimeout(resolve, jitterMs)
       })
-      return processPromptWithLLM(db, prompt)
+      return processPromptWithLLM(prompt)
     }),
   )
 
@@ -163,12 +163,14 @@ const processPrompts = async (db: AppDatabase, prompts: PromptToProcess[]): Prom
   return {connectionErrors}
 }
 
-const getNumberOfPromptsInFlight = async (db: AppDatabase, jobIds: string[]): Promise<number> => {
+const getNumberOfPromptsInFlight = async (jobIds: string[]): Promise<number> => {
   if (jobIds.length === 0) return 0
-  const result = await db
-    .select({count: count()})
-    .from(schema.judgmentsJobsPrompts)
-    .where(and(eq(schema.judgmentsJobsPrompts.status, 'sent'), inArray(schema.judgmentsJobsPrompts.jobId, jobIds)))
+  const result = await getAppDatabaseService().queryJson<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.judgment_job_prompt
+    WHERE status = 'sent'
+      AND job_id IN (${getQuotedStringList(jobIds).join(', ')})
+  `)
 
   return result[0]?.count || 0
 }
@@ -176,7 +178,6 @@ const getNumberOfPromptsInFlight = async (db: AppDatabase, jobIds: string[]): Pr
 let isRunningJudgmentsJobsSendToLLM = false
 
 const sendToLLMForJobs = async (
-  db: AppDatabase,
   jobs: Awaited<ReturnType<typeof judgmentsJobsGetRunningJobs>>,
   serverJobId: string,
   capacity: {maxInflight: number; maxBurst: number; workerCount: number},
@@ -187,10 +188,10 @@ const sendToLLMForJobs = async (
   const jobIds = jobs.map((job) => {
     return job.id
   })
-  const promptsInFlight = await getNumberOfPromptsInFlight(db, jobIds)
+  const promptsInFlight = await getNumberOfPromptsInFlight(jobIds)
   const deficit = Math.max(0, capacity.maxInflight - promptsInFlight)
   const requestsToSend = Math.min(deficit, capacity.maxBurst)
-  const readyCounts = await getReadyCountsByJob(db, jobIds)
+  const readyCounts = await getReadyCountsByJob(jobIds)
 
   if (requestsToSend > 0 || promptsInFlight > capacity.maxInflight * 0.9) {
     const readyCountsObj = Object.fromEntries(readyCounts)
@@ -218,7 +219,7 @@ const sendToLLMForJobs = async (
 
   const promptsToProcess = await Promise.allSettled(
     requestsToSendByJob.map(({job, limit}) => {
-      return getAndUpdateReadyPrompts(db, serverJobId, job.id, limit)
+      return getAndUpdateReadyPrompts(serverJobId, job.id, limit)
     }),
   ).then((results) => {
     return results
@@ -240,7 +241,7 @@ const sendToLLMForJobs = async (
   promptsToProcess.map((prompts) => {
     void (async () => {
       if (prompts.length > 0) {
-        await processPrompts(db, prompts)
+        await processPrompts(prompts)
       }
     })().catch((error) => {
       const safeError =
@@ -253,7 +254,6 @@ const sendToLLMForJobs = async (
 }
 
 export const judgmentsJobsSendToLLM = async (
-  db: AppDatabase,
   allJobs: Awaited<ReturnType<typeof judgmentsJobsGetRunningJobs>>,
   serverJobId: string,
 ): Promise<void> => {
@@ -270,8 +270,8 @@ export const judgmentsJobsSendToLLM = async (
     const codexMaxInflight = getCodexMaxInflight()
     const codexCapacity = {maxInflight: codexMaxInflight, maxBurst: codexMaxInflight, workerCount: codexMaxInflight}
 
-    await sendToLLMForJobs(db, nonCodexJobs, serverJobId, nonCodexCapacity, 'non-codex')
-    await sendToLLMForJobs(db, codexJobs, serverJobId, codexCapacity, 'codex')
+    await sendToLLMForJobs(nonCodexJobs, serverJobId, nonCodexCapacity, 'non-codex')
+    await sendToLLMForJobs(codexJobs, serverJobId, codexCapacity, 'codex')
   } finally {
     isRunningJudgmentsJobsSendToLLM = false
   }

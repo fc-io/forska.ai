@@ -1,11 +1,8 @@
-import {and, eq, sql} from 'drizzle-orm'
-
-import * as schema from '../../../db/schema.ts'
-import {getOlapDb} from '../../../services/olap/olapDb.ts'
 import {getUnassessedPairsFromOlap} from '../../../services/olap/unassessedArticlesOlap.ts'
-import {getDatabase} from '../../utils/getDatabase.ts'
+import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
+import {escapeSqlString, getDateValue} from '../../services/appQueryHelpers.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
-import {getJobCursor, type JobCursor} from './jobCursorStore.ts'
+import type {JobCursor} from './jobCursorStore.ts'
 
 export type PromptQueueEntry = {articleId: string; promptId: string}
 
@@ -13,10 +10,22 @@ export type QueuePromptsResult = {promptEntries: PromptQueueEntry[]; nextCursor:
 
 const getPromptsLogger = createRateLimitedLogger({windowMs: 30_000})
 
+const getStoredJobCursor = async (jobId: string): Promise<JobCursor | null> => {
+  const [row] = await getAppDatabaseService().queryJson<{lastDate: unknown; lastArticleId: string | null}>(`
+    SELECT cursor_last_created_at AS lastDate, cursor_last_article_id AS lastArticleId
+    FROM app.judgment_job
+    WHERE id = '${escapeSqlString(jobId)}'
+    LIMIT 1
+  `)
+  const lastDate = getDateValue(row?.lastDate)
+  const lastArticleId = row?.lastArticleId ?? null
+  return lastDate && lastArticleId ? {lastDate, lastArticleId} : null
+}
+
 /**
  * Gets prompts (article × prompt pairs) that need to be judged for a project.
  *
- * Uses ClickHouse to find unassessed pairs (articles without judgments for all prompts).
+ * Uses the OLAP layer to find unassessed pairs (articles without judgments for all prompts).
  * Uses cursor-based pagination to avoid re-fetching already-queued pairs.
  */
 export const judgmentsJobsCronGetPrompts = async (
@@ -24,14 +33,19 @@ export const judgmentsJobsCronGetPrompts = async (
   jobId: string,
   numberOfPromptsToGet: number,
 ): Promise<QueuePromptsResult> => {
-  const db = getDatabase()
-
   const [projectResult, enabledPromptCount] = await Promise.all([
-    db.select().from(schema.projects).where(eq(schema.projects.id, projectId)).limit(1),
-    db
-      .select({count: sql<number>`count(*)`})
-      .from(schema.projectPrompts)
-      .where(and(eq(schema.projectPrompts.projectId, projectId), eq(schema.projectPrompts.enabled, true))),
+    getAppDatabaseService().queryJson<{id: string; archived: boolean}>(`
+      SELECT id, archived
+      FROM app.project
+      WHERE id = '${escapeSqlString(projectId)}'
+      LIMIT 1
+    `),
+    getAppDatabaseService().queryJson<{count: number}>(`
+      SELECT COUNT(*) AS count
+      FROM app.project_prompt
+      WHERE project_id = '${escapeSqlString(projectId)}'
+        AND enabled = TRUE
+    `),
   ])
 
   const [project] = projectResult
@@ -69,7 +83,7 @@ export const judgmentsJobsCronGetPrompts = async (
     return {promptEntries: [], nextCursor: null}
   }
 
-  const cursor = await getJobCursor(db, jobId)
+  const cursor = await getStoredJobCursor(jobId)
   const cursorSummary = cursor
     ? {lastDate: cursor.lastDate.toISOString(), lastArticleId: cursor.lastArticleId.slice(0, 8)}
     : null
@@ -82,7 +96,7 @@ export const judgmentsJobsCronGetPrompts = async (
       jobId,
       requested: numberOfPromptsToGet,
       cursor: cursorSummary,
-      olapDb: getOlapDb(),
+      olapDb: 'duckdb',
       runningForMs: Date.now() - startedAtMs,
     })
   }, slowLogMs)
@@ -107,7 +121,7 @@ export const judgmentsJobsCronGetPrompts = async (
       nextCursor: nextCursorSummary,
       cursorAction,
       durationMs,
-      olapDb: getOlapDb(),
+      olapDb: 'duckdb',
     })
   } else if (durationMs > 5_000) {
     getPromptsLogger.warn(`getPrompts:${jobId}:slow`, '[getPrompts] slow OLAP query', {
@@ -119,7 +133,7 @@ export const judgmentsJobsCronGetPrompts = async (
       nextCursor: nextCursorSummary,
       cursorAction,
       durationMs,
-      olapDb: getOlapDb(),
+      olapDb: 'duckdb',
     })
   }
 

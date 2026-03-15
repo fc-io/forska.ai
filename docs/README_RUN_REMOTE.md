@@ -52,8 +52,6 @@ read -s -p 'DB password: ' PW; echo; umask 077; printf '%s' "$PW" > "${STACK_ROO
 read -s -p 'Database URL (postgresql://...): ' URL; echo; umask 077; printf '%s' "$URL" > "${STACK_ROOT:-.}/.secrets/database_url.txt"; chmod 600 "${STACK_ROOT:-.}/.secrets/database_url.txt"; unset URL
 ```
 
-- Optional (legacy): `BETTER_AUTH_SECRET_FILE` and `BETTER_AUTH_URL_FILE` are supported.
-
 ### Setup container use on HPC
 
 #### 1) Build api and app docker images locally and push to GHCR
@@ -106,16 +104,6 @@ mkdir -p "${STACK_ROOT:-.}/.secrets"; read -s -p 'DB password: ' PW; echo; umask
 
 ```bash
 mkdir -p "${STACK_ROOT:-.}/.secrets"; read -s -p "Database URL (postgresql://user:pass@localhost:${POSTGRES_PORT:-5432}/${DB_NAME:-postgres}): " URL; echo; umask 077; printf '%s' "$URL" > "${STACK_ROOT:-.}/.secrets/database_url.txt"; chmod 600 "${STACK_ROOT:-.}/.secrets/database_url.txt"; unset URL
-```
-
-##### Legacy Better Auth secrets (`*_FILE` fallbacks):
-
-```bash
-read -s -p 'Better Auth secret: ' S; echo; umask 077; printf '%s' "$S" > "${STACK_ROOT:-.}/.secrets/better_auth_secret.txt"; chmod 600 "${STACK_ROOT:-.}/.secrets/better_auth_secret.txt"; unset S
-```
-
-```bash
-read -s -p 'Better Auth URL (https://...): ' U; echo; umask 077; printf '%s' "$U" > "${STACK_ROOT:-.}/.secrets/better_auth_url.txt"; chmod 600 "${STACK_ROOT:-.}/.secrets/better_auth_url.txt"; unset U
 ```
 
 Notes
@@ -269,7 +257,7 @@ After submission
 ### API
 
 ```bash
-apptainer run --cleanenv   --bind ${STACK_ROOT:-.}/.secrets/database_url.txt:/run/secrets/database_url:ro   --bind ${STACK_ROOT:-.}/.secrets/better_auth_secret.txt:/run/secrets/better_auth_secret:ro   --bind ${STACK_ROOT:-.}/.secrets/better_auth_url.txt:/run/secrets/better_auth_url:ro   --env DATABASE_URL_FILE=/run/secrets/database_url   --env BETTER_AUTH_SECRET_FILE=/run/secrets/better_auth_secret   --env BETTER_AUTH_URL_FILE=/run/secrets/better_auth_url   --env VITE_LLM_SERVER_URL=http://localhost:8000/v1   --env VITE_PORT=8181   --env VITE_SERVER_API=http://localhost:3001   --env API_SERVER_PORT=3001   $STACK_ROOT/api_server.sif
+apptainer run --cleanenv   --bind ${STACK_ROOT:-.}/.secrets/database_url.txt:/run/secrets/database_url:ro   --env DATABASE_URL_FILE=/run/secrets/database_url   --env VITE_LLM_SERVER_URL=http://localhost:8000/v1   --env VITE_PORT=8181   --env VITE_SERVER_API=http://localhost:3001   --env API_SERVER_PORT=3001   $STACK_ROOT/api_server.sif
 ```
 
 Replace 5432 in your `${STACK_ROOT:-.}/.secrets/database_url.txt` if you changed `POSTGRES_PORT`.

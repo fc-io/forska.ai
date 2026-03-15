@@ -1,9 +1,15 @@
-import {and, desc, eq, inArray, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {judgments, judgmentsHuman, projectPrompts, prompts} from '../../db/schema'
+import {prompts} from '../../db/schema'
+import {getAppDatabaseService} from '../services/appDatabaseService'
+import {
+  escapeSqlString,
+  getDateValue,
+  getJsonValue,
+  getQuotedStringList,
+  getSqlLiteral,
+} from '../services/appQueryHelpers'
 import {computePromptContentHash} from '../utils/computePromptContentHash'
-import {getDatabase} from '../utils/getDatabase'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
 type PromptRow = Pick<typeof prompts.$inferSelect, 'id' | 'originalText' | 'transformedText' | 'promptHeading' | 'type'>
@@ -51,78 +57,140 @@ const safeUpdates = (rows: Array<PromptRow & {hash: string}>, collisions: Prompt
     })
 }
 
-const applyHashUpdates = async (db: ReturnType<typeof getDatabase>, updates: PromptHashUpdate[]) => {
+const applyHashUpdates = async (updates: PromptHashUpdate[]) => {
   if (updates.length === 0) {
     return 0
   }
 
   await Promise.all(
     updates.map((update) => {
-      return db.update(prompts).set({contentHash: update.hash, updatedAt: new Date()}).where(eq(prompts.id, update.id))
+      return getAppDatabaseService().run(`
+        UPDATE app.prompt
+        SET content_hash = ${getSqlLiteral(update.hash)},
+            updated_at = current_timestamp
+        WHERE id = '${escapeSqlString(update.id)}'
+      `)
     }),
   )
 
   return updates.length
 }
 
-const promptsListSelection = {
-  id: prompts.id,
-  originalText: prompts.originalText,
-  promptHeading: prompts.promptHeading,
-  type: prompts.type,
-  createdAt: prompts.createdAt,
-  updatedAt: prompts.updatedAt,
-  archived: prompts.archived,
+const normalizePromptListRow = <TRow extends Record<string, unknown>>(row: TRow) => {
+  return {...row, createdAt: getDateValue(row['createdAt']), updatedAt: getDateValue(row['updatedAt'])}
 }
 
 const promptsUserRoutes = new Elysia()
   .use(withErrorHandler())
   .get('/api/prompts', async () => {
-    const db = getDatabase()
-    const list = await db
-      .select(promptsListSelection)
-      .from(prompts)
-      .where(eq(prompts.archived, false))
-      .orderBy(desc(prompts.createdAt))
+    const list = await getAppDatabaseService().queryJson<{
+      id: string
+      originalText: string
+      promptHeading: string | null
+      type: string | null
+      createdAt: unknown
+      updatedAt: unknown
+      archived: boolean
+    }>(`
+      SELECT
+        id,
+        original_text AS originalText,
+        prompt_heading AS promptHeading,
+        type,
+        created_at AS createdAt,
+        updated_at AS updatedAt,
+        archived
+      FROM app.prompt
+      WHERE archived = FALSE
+      ORDER BY created_at DESC
+    `)
 
-    return {data: list}
+    return {data: list.map(normalizePromptListRow)}
   })
   .get('/api/prompts/archived', async () => {
-    const db = getDatabase()
-    const list = await db
-      .select(promptsListSelection)
-      .from(prompts)
-      .where(eq(prompts.archived, true))
-      .orderBy(desc(prompts.createdAt))
+    const list = await getAppDatabaseService().queryJson<{
+      id: string
+      originalText: string
+      promptHeading: string | null
+      type: string | null
+      createdAt: unknown
+      updatedAt: unknown
+      archived: boolean
+    }>(`
+      SELECT
+        id,
+        original_text AS originalText,
+        prompt_heading AS promptHeading,
+        type,
+        created_at AS createdAt,
+        updated_at AS updatedAt,
+        archived
+      FROM app.prompt
+      WHERE archived = TRUE
+      ORDER BY created_at DESC
+    `)
 
-    return {data: list}
+    return {data: list.map(normalizePromptListRow)}
   })
   .patch(
     '/api/prompts/:id',
     async ({params, body, set}) => {
-      const db = getDatabase()
-      const [existingPrompt] = await db.select({id: prompts.id}).from(prompts).where(eq(prompts.id, params.id)).limit(1)
+      const [existingPrompt] = await getAppDatabaseService().queryJson<{id: string}>(`
+        SELECT id
+        FROM app.prompt
+        WHERE id = '${escapeSqlString(params.id)}'
+        LIMIT 1
+      `)
 
       if (!existingPrompt) {
         set.status = 404
         return {data: null, error: 'Prompt not found'}
       }
 
-      const [updatedPrompt] = await db
-        .update(prompts)
-        .set({archived: body.archived})
-        .where(eq(prompts.id, params.id))
-        .returning(promptsListSelection)
+      const [updatedPrompt] = await getAppDatabaseService().queryJson<{
+        id: string
+        originalText: string
+        promptHeading: string | null
+        type: string | null
+        createdAt: unknown
+        updatedAt: unknown
+        archived: boolean
+      }>(`
+        UPDATE app.prompt
+        SET archived = ${body.archived ? 'TRUE' : 'FALSE'},
+            updated_at = current_timestamp
+        WHERE id = '${escapeSqlString(params.id)}'
+        RETURNING
+          id,
+          original_text AS originalText,
+          prompt_heading AS promptHeading,
+          type,
+          created_at AS createdAt,
+          updated_at AS updatedAt,
+          archived
+      `)
 
-      return {data: updatedPrompt ?? null}
+      return {data: updatedPrompt ? normalizePromptListRow(updatedPrompt) : null}
     },
     {body: t.Object({archived: t.Boolean()})},
   )
 
 const promptsAdminRoutes = new Elysia()
   .get('/api/prompts/duplicates', async () => {
-    const db = getDatabase()
-    const allPrompts = await db.select().from(prompts)
+    const allPrompts = await getAppDatabaseService().queryJson<
+      PromptRow & {archived: boolean; createdAt: unknown; updatedAt: unknown}
+    >(`
+      SELECT
+        id,
+        original_text AS originalText,
+        transformed_text AS transformedText,
+        prompt_heading AS promptHeading,
+        type,
+        archived,
+        created_at AS createdAt,
+        updated_at AS updatedAt
+      FROM app.prompt
+    `)
 
     // Group by content
     const groups = new Map<string, typeof allPrompts>()
@@ -148,32 +216,28 @@ const promptsAdminRoutes = new Elysia()
       duplicateGroups.map(async (group) => {
         const enrichedPrompts = await Promise.all(
           group.map(async (p) => {
-            const [projectCount] = await db
-              .select({count: sql<number>`count(*)`})
-              .from(projectPrompts)
-              .where(eq(projectPrompts.promptId, p.id))
-
-            const [judgmentCount] = await db
-              .select({count: sql<number>`count(*)`})
-              .from(judgments)
-              .where(eq(judgments.promptId, p.id))
-
-            const [humanJudgmentCount] = await db
-              .select({count: sql<number>`count(*)`})
-              .from(judgmentsHuman)
-              .where(eq(judgmentsHuman.promptId, p.id))
-
-            // Fetch project names for better context
-            const projects = await db
-              .select({
-                id: projectPrompts.projectId,
-                // We would need to join with projects table to get names,
-                // but for now let's just get the IDs or count.
-                // Let's try to get project names if possible, but schema import might be needed.
-                // For simplicity, let's just return counts and maybe IDs.
-              })
-              .from(projectPrompts)
-              .where(eq(projectPrompts.promptId, p.id))
+            const [[projectCount], [judgmentCount], [humanJudgmentCount], projects] = await Promise.all([
+              getAppDatabaseService().queryJson<{count: number}>(`
+                SELECT COUNT(*) AS count
+                FROM app.project_prompt
+                WHERE prompt_id = '${escapeSqlString(p.id)}'
+              `),
+              getAppDatabaseService().queryJson<{count: number}>(`
+                SELECT COUNT(*) AS count
+                FROM app.judgment
+                WHERE prompt_id = '${escapeSqlString(p.id)}'
+              `),
+              getAppDatabaseService().queryJson<{count: number}>(`
+                SELECT COUNT(*) AS count
+                FROM app.judgment_human
+                WHERE prompt_id = '${escapeSqlString(p.id)}'
+              `),
+              getAppDatabaseService().queryJson<{id: string}>(`
+                SELECT project_id AS id
+                FROM app.project_prompt
+                WHERE prompt_id = '${escapeSqlString(p.id)}'
+              `),
+            ])
 
             return {
               ...p,
@@ -195,137 +259,176 @@ const promptsAdminRoutes = new Elysia()
     return {success: true, data: result}
   })
   .post('/api/prompts/regenerate-hashes', async () => {
-    const db = getDatabase()
-    const promptRows = await db
-      .select({
-        id: prompts.id,
-        originalText: prompts.originalText,
-        transformedText: prompts.transformedText,
-        promptHeading: prompts.promptHeading,
-        type: prompts.type,
-      })
-      .from(prompts)
+    const promptRows = await getAppDatabaseService().queryJson<PromptRow>(`
+      SELECT
+        id,
+        original_text AS originalText,
+        transformed_text AS transformedText,
+        prompt_heading AS promptHeading,
+        type
+      FROM app.prompt
+    `)
 
     const hashed = withHashes(promptRows)
     const groups = groupCollisions(hashed)
     const collisions = getCollisions(groups)
     const updates = safeUpdates(hashed, collisions)
-    const updatedCount = await applyHashUpdates(db, updates)
+    const updatedCount = await applyHashUpdates(updates)
 
     return {success: true, data: {updatedCount, skippedCollisions: collisions}}
   })
   .delete('/api/prompts/:id', async ({params}) => {
-    const db = getDatabase()
     const {id} = params
 
     // Strict verification: Ensure no connections exist
-    const [projectCount] = await db
-      .select({count: sql<number>`count(*)`})
-      .from(projectPrompts)
-      .where(eq(projectPrompts.promptId, id))
-
-    const [judgmentCount] = await db
-      .select({count: sql<number>`count(*)`})
-      .from(judgments)
-      .where(eq(judgments.promptId, id))
-
-    const [humanJudgmentCount] = await db
-      .select({count: sql<number>`count(*)`})
-      .from(judgmentsHuman)
-      .where(eq(judgmentsHuman.promptId, id))
+    const [[projectCount], [judgmentCount], [humanJudgmentCount]] = await Promise.all([
+      getAppDatabaseService().queryJson<{count: number}>(`
+        SELECT COUNT(*) AS count
+        FROM app.project_prompt
+        WHERE prompt_id = '${escapeSqlString(id)}'
+      `),
+      getAppDatabaseService().queryJson<{count: number}>(`
+        SELECT COUNT(*) AS count
+        FROM app.judgment
+        WHERE prompt_id = '${escapeSqlString(id)}'
+      `),
+      getAppDatabaseService().queryJson<{count: number}>(`
+        SELECT COUNT(*) AS count
+        FROM app.judgment_human
+        WHERE prompt_id = '${escapeSqlString(id)}'
+      `),
+    ])
 
     if ((projectCount?.count ?? 0) > 0 || (judgmentCount?.count ?? 0) > 0 || (humanJudgmentCount?.count ?? 0) > 0) {
       throw new Error('Prompt is not fully orphaned. It has existing connections.')
     }
 
-    await db.delete(prompts).where(eq(prompts.id, id))
+    await getAppDatabaseService().run(`
+      DELETE FROM app.prompt
+      WHERE id = '${escapeSqlString(id)}'
+    `)
 
     return {success: true}
   })
   .get('/api/prompts/orphans', async () => {
-    const db = getDatabase()
+    const [noProjects, noJudgments, noProjectsAndJudgments] = await Promise.all([
+      getAppDatabaseService().queryJson<{
+        id: string
+        originalText: string
+        promptHeading: string | null
+        type: string | null
+        createdAt: unknown
+      }>(`
+        SELECT id, original_text AS originalText, prompt_heading AS promptHeading, type, created_at AS createdAt
+        FROM app.prompt p
+        WHERE NOT EXISTS (
+          SELECT 1 FROM app.project_prompt pp WHERE pp.prompt_id = p.id LIMIT 1
+        )
+      `),
+      getAppDatabaseService().queryJson<{
+        id: string
+        originalText: string
+        promptHeading: string | null
+        type: string | null
+        createdAt: unknown
+      }>(`
+        SELECT id, original_text AS originalText, prompt_heading AS promptHeading, type, created_at AS createdAt
+        FROM app.prompt p
+        WHERE NOT EXISTS (SELECT 1 FROM app.judgment j WHERE j.prompt_id = p.id LIMIT 1)
+          AND NOT EXISTS (SELECT 1 FROM app.judgment_human jh WHERE jh.prompt_id = p.id LIMIT 1)
+      `),
+      getAppDatabaseService().queryJson<{
+        id: string
+        originalText: string
+        promptHeading: string | null
+        type: string | null
+        createdAt: unknown
+      }>(`
+        SELECT id, original_text AS originalText, prompt_heading AS promptHeading, type, created_at AS createdAt
+        FROM app.prompt p
+        WHERE NOT EXISTS (SELECT 1 FROM app.project_prompt pp WHERE pp.prompt_id = p.id LIMIT 1)
+          AND NOT EXISTS (SELECT 1 FROM app.judgment j WHERE j.prompt_id = p.id LIMIT 1)
+          AND NOT EXISTS (SELECT 1 FROM app.judgment_human jh WHERE jh.prompt_id = p.id LIMIT 1)
+      `),
+    ])
 
-    const noProjects = await db
-      .select({
-        id: prompts.id,
-        originalText: prompts.originalText,
-        promptHeading: prompts.promptHeading,
-        type: prompts.type,
-        createdAt: prompts.createdAt,
+    const normalizeRows = <TRow extends {createdAt: unknown}>(rows: TRow[]) => {
+      return rows.map((row) => {
+        return {...row, createdAt: getDateValue(row.createdAt)}
       })
-      .from(prompts)
-      .leftJoin(projectPrompts, eq(prompts.id, projectPrompts.promptId))
-      .where(sql`${projectPrompts.id} IS NULL`)
+    }
 
-    const noJudgments = await db
-      .select({
-        id: prompts.id,
-        originalText: prompts.originalText,
-        promptHeading: prompts.promptHeading,
-        type: prompts.type,
-        createdAt: prompts.createdAt,
-      })
-      .from(prompts)
-      .leftJoin(judgments, eq(prompts.id, judgments.promptId))
-      .leftJoin(judgmentsHuman, eq(prompts.id, judgmentsHuman.promptId))
-      .where(and(sql`${judgments.id} IS NULL`, sql`${judgmentsHuman.id} IS NULL`))
-
-    const noProjectsAndJudgments = await db
-      .select({
-        id: prompts.id,
-        originalText: prompts.originalText,
-        promptHeading: prompts.promptHeading,
-        type: prompts.type,
-        createdAt: prompts.createdAt,
-      })
-      .from(prompts)
-      .leftJoin(projectPrompts, eq(prompts.id, projectPrompts.promptId))
-      .leftJoin(judgments, eq(prompts.id, judgments.promptId))
-      .leftJoin(judgmentsHuman, eq(prompts.id, judgmentsHuman.promptId))
-      .where(and(sql`${projectPrompts.id} IS NULL`, sql`${judgments.id} IS NULL`, sql`${judgmentsHuman.id} IS NULL`))
-
-    return {success: true, data: {noProjects, noJudgments, noProjectsAndJudgments}}
+    return {
+      success: true,
+      data: {
+        noProjects: normalizeRows(noProjects),
+        noJudgments: normalizeRows(noJudgments),
+        noProjectsAndJudgments: normalizeRows(noProjectsAndJudgments),
+      },
+    }
   })
   .post(
     '/api/prompts/merge',
     async ({body}) => {
       const {keepPromptId, mergePromptIds} = body
-      const db = getDatabase()
-
-      await db.transaction(async (tx) => {
+      await getAppDatabaseService().transaction(async (tx) => {
         for (const mergeId of mergePromptIds) {
           // 1. Handle Project Prompts
-          const projectsUsingMerge = await tx.select().from(projectPrompts).where(eq(projectPrompts.promptId, mergeId))
+          const projectsUsingMerge = await tx.queryJson<{projectId: string}>(`
+            SELECT project_id AS projectId
+            FROM app.project_prompt
+            WHERE prompt_id = '${escapeSqlString(mergeId)}'
+          `)
 
           for (const p of projectsUsingMerge) {
             // Check if project already uses keepId
-            const existing = await tx
-              .select()
-              .from(projectPrompts)
-              .where(and(eq(projectPrompts.projectId, p.projectId), eq(projectPrompts.promptId, keepPromptId)))
+            const existing = await tx.queryJson<{id: string}>(`
+              SELECT id
+              FROM app.project_prompt
+              WHERE project_id = '${escapeSqlString(p.projectId)}'
+                AND prompt_id = '${escapeSqlString(keepPromptId)}'
+            `)
 
             if (existing.length > 0) {
               // Project already has the target prompt, so just remove the duplicate link
-              await tx
-                .delete(projectPrompts)
-                .where(and(eq(projectPrompts.projectId, p.projectId), eq(projectPrompts.promptId, mergeId)))
+              await tx.run(`
+                DELETE FROM app.project_prompt
+                WHERE project_id = '${escapeSqlString(p.projectId)}'
+                  AND prompt_id = '${escapeSqlString(mergeId)}'
+              `)
             } else {
               // Project doesn't have the target prompt, so update the link
-              await tx
-                .update(projectPrompts)
-                .set({promptId: keepPromptId})
-                .where(and(eq(projectPrompts.projectId, p.projectId), eq(projectPrompts.promptId, mergeId)))
+              await tx.run(`
+                UPDATE app.project_prompt
+                SET prompt_id = '${escapeSqlString(keepPromptId)}',
+                    updated_at = current_timestamp
+                WHERE project_id = '${escapeSqlString(p.projectId)}'
+                  AND prompt_id = '${escapeSqlString(mergeId)}'
+              `)
             }
           }
 
           // 2. Handle Judgments
-          await tx.update(judgments).set({promptId: keepPromptId}).where(eq(judgments.promptId, mergeId))
+          await tx.run(`
+            UPDATE app.judgment
+            SET prompt_id = '${escapeSqlString(keepPromptId)}',
+                updated_at = current_timestamp
+            WHERE prompt_id = '${escapeSqlString(mergeId)}'
+          `)
 
           // 3. Handle Human Judgments
-          await tx.update(judgmentsHuman).set({promptId: keepPromptId}).where(eq(judgmentsHuman.promptId, mergeId))
+          await tx.run(`
+            UPDATE app.judgment_human
+            SET prompt_id = '${escapeSqlString(keepPromptId)}',
+                updated_at = current_timestamp
+            WHERE prompt_id = '${escapeSqlString(mergeId)}'
+          `)
 
           // 4. Delete the merged prompt
-          await tx.delete(prompts).where(eq(prompts.id, mergeId))
+          await tx.run(`
+            DELETE FROM app.prompt
+            WHERE id = '${escapeSqlString(mergeId)}'
+          `)
         }
       })
 
@@ -334,13 +437,17 @@ const promptsAdminRoutes = new Elysia()
     {body: t.Object({keepPromptId: t.String(), mergePromptIds: t.Array(t.String())})},
   )
   .get('/api/prompts/invalid-judgments', async () => {
-    const db = getDatabase()
-
     // Get prompts with enum types (containing quotes like 'yes' | 'no' | 'unsure')
-    const promptsWithTypes = await db
-      .select({id: prompts.id, promptHeading: prompts.promptHeading, type: prompts.type})
-      .from(prompts)
-      .where(sql`${prompts.type} IS NOT NULL AND ${prompts.type} != ''`)
+    const promptsWithTypes = await getAppDatabaseService().queryJson<{
+      id: string
+      promptHeading: string | null
+      type: string | null
+    }>(`
+      SELECT id, prompt_heading AS promptHeading, type
+      FROM app.prompt
+      WHERE type IS NOT NULL
+        AND type != ''
+    `)
 
     // Parse enum options from prompt types
     const parseEnumOptions = (typeStr: string): string[] | null => {
@@ -372,25 +479,27 @@ const promptsAdminRoutes = new Elysia()
 
       // Find judgments for this prompt where the answer is not in the valid options
       // Include answeredOriginalAsArray for proper validation
-      const judgmentRows = await db
-        .select({
-          id: judgments.id,
-          articleId: judgments.articleId,
-          promptId: judgments.promptId,
-          answeredOriginal: judgments.answeredOriginal,
-          answeredOriginalAsArray: judgments.answeredOriginalAsArray,
-          createdAt: judgments.createdAt,
-        })
-        .from(judgments)
-        .where(
-          and(
-            eq(judgments.promptId, prompt.id),
-            // Check if either answeredOriginal OR answeredOriginalAsArray is present
-            sql`(${judgments.answeredOriginal} IS NOT NULL OR ${judgments.answeredOriginalAsArray} IS NOT NULL)`,
-            sql`${judgments.isAnswered} = true`,
-          ),
-        )
-        .limit(200) // Get more than 100 to account for valid ones
+      const judgmentRows = await getAppDatabaseService().queryJson<{
+        id: string
+        articleId: string
+        promptId: string
+        answeredOriginal: string | null
+        answeredOriginalAsArray: unknown
+        createdAt: unknown
+      }>(`
+        SELECT
+          id,
+          article_id AS articleId,
+          prompt_id AS promptId,
+          answered_original AS answeredOriginal,
+          TO_JSON(answered_original_as_array) AS answeredOriginalAsArray,
+          created_at AS createdAt
+        FROM app.judgment
+        WHERE prompt_id = '${escapeSqlString(prompt.id)}'
+          AND (answered_original IS NOT NULL OR answered_original_as_array IS NOT NULL)
+          AND is_answered = TRUE
+        LIMIT 200
+      `)
 
       for (const judgment of judgmentRows) {
         if (invalidJudgments.length >= 100) break
@@ -399,11 +508,14 @@ const promptsAdminRoutes = new Elysia()
 
         // If answeredOriginalAsArray is not null, validate against that array
         // (the prompt type expects array values in this case)
-        if (judgment.answeredOriginalAsArray !== null) {
+        const answeredOriginalAsArray = getJsonValue(judgment.answeredOriginalAsArray)
+        if (answeredOriginalAsArray !== null) {
           // Validate each item in the array against valid options
-          isValid = judgment.answeredOriginalAsArray.every((item) => {
-            return validOptions.includes(item)
-          })
+          isValid =
+            Array.isArray(answeredOriginalAsArray)
+            && answeredOriginalAsArray.every((item) => {
+              return typeof item === 'string' && validOptions.includes(item)
+            })
         } else if (judgment.answeredOriginal) {
           // Fall back to answeredOriginal for single-value prompts
           const answer = judgment.answeredOriginal
@@ -433,8 +545,8 @@ const promptsAdminRoutes = new Elysia()
             promptHeading: prompt.promptHeading,
             promptType: prompt.type,
             answeredOriginal: judgment.answeredOriginal,
-            answeredOriginalAsArray: judgment.answeredOriginalAsArray,
-            createdAt: judgment.createdAt,
+            answeredOriginalAsArray: Array.isArray(answeredOriginalAsArray) ? answeredOriginalAsArray : null,
+            createdAt: getDateValue(judgment.createdAt) ?? new Date(0),
           })
         }
       }
@@ -447,7 +559,6 @@ const promptsAdminRoutes = new Elysia()
   .post(
     '/api/prompts/delete-invalid-judgments',
     async ({body}) => {
-      const db = getDatabase()
       const {judgmentIds} = body
 
       if (judgmentIds.length === 0) {
@@ -456,7 +567,12 @@ const promptsAdminRoutes = new Elysia()
 
       const now = new Date()
 
-      await db.update(judgments).set({deletedAt: now, updatedAt: now}).where(inArray(judgments.id, judgmentIds))
+      await getAppDatabaseService().run(`
+        UPDATE app.judgment
+        SET deleted_at = ${getSqlLiteral(now)},
+            updated_at = ${getSqlLiteral(now)}
+        WHERE id IN (${getQuotedStringList(judgmentIds).join(', ')})
+      `)
 
       return {success: true, data: {deletedCount: judgmentIds.length}}
     },

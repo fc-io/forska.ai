@@ -1,8 +1,6 @@
-import {and, eq, or, sql} from 'drizzle-orm'
-
-import * as schema from '../../../db/schema.ts'
+import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
+import {escapeSqlString} from '../../services/appQueryHelpers.ts'
 import {env} from '../../utils/env.ts'
-import type {AppDatabase} from '../../utils/getDatabase.ts'
 
 // Track if we've already logged the SGLANG_MODEL message
 let hasLoggedSglangModel = false
@@ -14,7 +12,7 @@ let hasLoggedSglangModel = false
  * This prevents sending requests for projects that use a different model
  * than what's configured in SGLANG_MODEL, avoiding unnecessary errors.
  */
-export const judgmentsJobsGetRunningJobs = (db: AppDatabase) => {
+export const judgmentsJobsGetRunningJobs = async () => {
   const sglangModel = env.SGLANG_MODEL
 
   const hasSglang = Boolean(sglangModel && sglangModel !== 'not set')
@@ -35,28 +33,29 @@ export const judgmentsJobsGetRunningJobs = (db: AppDatabase) => {
   }
 
   const nonCodexModelCondition = hasSglang
-    ? or(
-        eq(schema.models.modelName, String(sglangModel)),
-        eq(schema.models.modelName, sglangModelLower),
-        eq(schema.models.modelName, sglangModelBaseName),
-      )
-    : sql`false`
+    ? `(
+        m.model_name = '${escapeSqlString(String(sglangModel))}'
+        OR m.model_name = '${escapeSqlString(sglangModelLower)}'
+        OR m.model_name = '${escapeSqlString(sglangModelBaseName)}'
+      )`
+    : 'FALSE'
 
-  return db
-    .select({
-      id: schema.judgmentsJobs.id,
-      projectId: schema.judgmentsJobs.projectId,
-      modelProvider: schema.models.provider,
-      modelName: schema.models.modelName,
-    })
-    .from(schema.judgmentsJobs)
-    .innerJoin(schema.projects, eq(schema.judgmentsJobs.projectId, schema.projects.id))
-    .innerJoin(schema.models, eq(schema.projects.modelId, schema.models.id))
-    .where(
-      and(
-        eq(schema.judgmentsJobs.status, 'running'),
-        eq(schema.projects.archived, false),
-        or(eq(schema.models.provider, 'codex'), nonCodexModelCondition),
-      ),
-    )
+  return getAppDatabaseService().queryJson<{
+    id: string
+    projectId: string
+    modelProvider: string | null
+    modelName: string | null
+  }>(`
+    SELECT
+      jj.id AS id,
+      jj.project_id AS projectId,
+      m.provider AS modelProvider,
+      m.model_name AS modelName
+    FROM app.judgment_job jj
+    INNER JOIN app.project p ON jj.project_id = p.id
+    INNER JOIN app.model m ON p.model_id = m.id
+    WHERE jj.status = 'running'
+      AND p.archived = FALSE
+      AND (m.provider = 'codex' OR ${nonCodexModelCondition})
+  `)
 }

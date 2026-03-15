@@ -1,2 +1,0 @@
-ALTER TABLE `judgments_jobs` RENAME COLUMN "ch_cursor_last_date" TO "cursor_last_created_at";--> statement-breakpoint
-ALTER TABLE `judgments_jobs` RENAME COLUMN "ch_cursor_last_article_id" TO "cursor_last_article_id";

@@ -1,4 +1,3 @@
-import {eq} from 'drizzle-orm'
 import type {Context} from 'elysia'
 
 import {fhirEhrPatientsWorkflowStoreEntries} from '../../../agent/fhirEhrPatientsWorkflow/fhirEhrPatientsWorkflowStoreEntries.ts'
@@ -6,16 +5,7 @@ import {
   deriveAssetsFolderFromFhirImportRoute,
   deriveFhirImportRouteFromAssetsFolder,
 } from '../../../agent/fhirEhrPatientsWorkflow/fhirEhrPatientsWorkflowTypes.ts'
-import {dataSource} from '../../../db/schema.ts'
-import {getDatabase} from '../../utils/getDatabase.ts'
-
-type DataSourceRecord = typeof dataSource.$inferSelect
-
-const fetchDataSourceById = async (id: string): Promise<DataSourceRecord | null> => {
-  const db = getDatabase()
-  const [record] = await db.select().from(dataSource).where(eq(dataSource.id, id)).limit(1)
-  return record ?? null
-}
+import {getDataSourceQueryService} from '../../services/dataSourceQueryService.ts'
 
 const isValidAssetsCursor = (cursor: string | null): cursor is string => {
   const value = String(cursor ?? '').trim()
@@ -28,24 +18,10 @@ const getAssetsFolderForDataSource = (record: DataSourceRecord): string | null =
   return fromCursor ?? fromImportRoute
 }
 
-const updateDataSourceAfterImport = async ({
-  id,
-  importRoute,
-  itemsAfterLastImport,
-}: {
-  id: string
-  importRoute: string
-  itemsAfterLastImport: number
-}): Promise<DataSourceRecord | null> => {
-  const db = getDatabase()
-  const updatedAt = new Date()
-  const [updated] = await db
-    .update(dataSource)
-    .set({lastImportAt: updatedAt, itemsAfterLastImport, importRoute, updatedAt})
-    .where(eq(dataSource.id, id))
-    .returning()
-  return updated ?? null
-}
+type DataSourceRecord =
+  Awaited<ReturnType<ReturnType<typeof getDataSourceQueryService>['getDataSourceById']>> extends infer T
+    ? Exclude<T, null>
+    : never
 
 export const dataSourcesImportRoutesPostFhirEhrPatients = async ({
   body,
@@ -54,7 +30,8 @@ export const dataSourcesImportRoutesPostFhirEhrPatients = async ({
   body: {id: string}
   set: Context['set']
 }) => {
-  const record = await fetchDataSourceById(body.id)
+  const dataSourceQueryService = getDataSourceQueryService()
+  const record = await dataSourceQueryService.getDataSourceById(body.id)
   if (!record) {
     set.status = 404
     return {data: null, error: 'Data source not found'}
@@ -78,11 +55,11 @@ export const dataSourcesImportRoutesPostFhirEhrPatients = async ({
   }
   const stats = await fhirEhrPatientsWorkflowStoreEntries({assetsFolder, importRoute})
   const itemsAfterLastImport = stats.patientsTotal
-  const updated = await updateDataSourceAfterImport({id: record.id, importRoute, itemsAfterLastImport})
-  if (!updated) {
-    set.status = 404
-    return {data: null, error: 'Data source not found'}
-  }
+  const updated = await dataSourceQueryService.updateDataSourceAfterImport({
+    id: record.id,
+    importRoute,
+    importedCount: itemsAfterLastImport,
+  })
 
   return {success: true, data: updated, stats}
 }

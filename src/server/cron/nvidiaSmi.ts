@@ -3,9 +3,8 @@ import {spawn} from 'node:child_process'
 import {cron} from '@elysiajs/cron'
 import {Elysia} from 'elysia'
 
-import * as schema from '../../db/schema.ts'
-// Unused import removed: env
-import {getDatabase} from '../utils/getDatabase.ts'
+import {getAppDatabaseService} from '../services/appDatabaseService.ts'
+import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 
 type NvidiaSmiSample = {
   ts: Date
@@ -268,10 +267,53 @@ const pollNvidiaSmi = async (): Promise<void> => {
 
   if (allSamples.length === 0) return
 
-  const db = getDatabase()
-  await db
-    .insert(schema.nvidiaSmi)
-    .values(allSamples)
+  await getAppDatabaseService()
+    .run(
+      `
+      INSERT INTO app.nvidia_smi (
+        id,
+        ts,
+        instance_id,
+        gpu_index,
+        gpu_uuid,
+        gpu_name,
+        temperature_gpu,
+        utilization_gpu,
+        utilization_memory,
+        memory_total_mib,
+        memory_used_mib,
+        power_draw_watts,
+        power_limit_watts,
+        fan_speed,
+        pstate
+      )
+      VALUES ${allSamples
+        .map((sample) => {
+          return `(${[
+            crypto.randomUUID(),
+            sample.ts,
+            sample.instanceId,
+            sample.gpuIndex,
+            sample.gpuUuid,
+            sample.gpuName,
+            sample.temperatureGpu,
+            sample.utilizationGpu,
+            sample.utilizationMemory,
+            sample.memoryTotalMiB,
+            sample.memoryUsedMiB,
+            sample.powerDrawWatts,
+            sample.powerLimitWatts,
+            sample.fanSpeed,
+            sample.pstate,
+          ]
+            .map((value) => {
+              return getSqlLiteral(value)
+            })
+            .join(', ')})`
+        })
+        .join(', ')}
+    `,
+    )
     .catch((error) => {
       console.error('[nvidia-smi] db insert failed', error)
     })

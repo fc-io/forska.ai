@@ -1,11 +1,8 @@
-import {selectArticleIdsByFilterClickHouse} from '../clickhouse/selectArticleIdsClickHouse.ts'
-import {getOlapDb} from './olapDb.ts'
-import {selectArticleIdsByFilterSqlite} from './sqliteOlap.ts'
+import {selectArticleIdsByFilterDuckdb} from './duckdbOlap.ts'
+import type {SelectArticleIdsArgs} from './olapTypes.ts'
 
 export const selectArticleIdsByFilterOlap = (
-  ...args: Parameters<typeof selectArticleIdsByFilterClickHouse>
-): ReturnType<typeof selectArticleIdsByFilterClickHouse> => {
-  return getOlapDb() === 'duckdb'
-    ? selectArticleIdsByFilterSqlite(...args)
-    : selectArticleIdsByFilterClickHouse(...args)
+  ...args: SelectArticleIdsArgs
+): ReturnType<typeof selectArticleIdsByFilterDuckdb> => {
+  return selectArticleIdsByFilterDuckdb(...args)
 }

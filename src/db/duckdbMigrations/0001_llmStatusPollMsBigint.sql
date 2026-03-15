@@ -1,0 +1,3 @@
+ALTER TABLE app.llm_status
+ALTER COLUMN poll_ms
+TYPE BIGINT;

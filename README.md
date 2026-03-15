@@ -4,10 +4,10 @@ Local-first deep research agent for systematic reviews.
 
 Goal: standalone single-user app (your own computer). No admin role. No hosted multi-tenant web app.
 
-Current: Bun/Elysia API, SolidJS/Vite client, Drizzle+Postgres+Better Auth (temporary).
-Roadmap: admin-free -> remove Better Auth/users -> SQLite app DB -> DuckDB analytics (drop ClickHouse).
+Current: Bun/Elysia API, SolidJS/Vite client, and a DuckDB-only runtime with no legacy analytics or Better Auth runtime.
+Roadmap: finish DuckDB-native cleanup, remove old Postgres/bootstrap assumptions after import, and simplify leftover legacy naming/docs.
 
-Plans: `plans/REMOVE_ADMIN_AND_USERS.md`, `plans/SQLITE_PLAN.md`, `plans/DUCK_PLAN.md`.
+Plans: `DUCKDB2_PLAN.md`, `NATIVE_DUCK_PLAN.md`.
 
 ## Abstract
 

@@ -141,7 +141,7 @@ const ensureLocalSchemaReady = async (db: string): Promise<void> => {
   )
   if (!out) {
     fail(
-      "Local DB schema missing required types (e.g., public.publication_status_enum). Run 'bun run db:mig' (and 'bun run db:ba-mig' if using auth) before merging.",
+      "Local DB schema missing required types (e.g., public.publication_status_enum). Run 'bun run db:mig' before merging.",
     )
   }
 }

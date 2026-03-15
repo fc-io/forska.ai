@@ -1,1 +1,0 @@
-ALTER TABLE `user` ADD `openalex_mailto` text;

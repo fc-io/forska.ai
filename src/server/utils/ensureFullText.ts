@@ -1,8 +1,7 @@
-import {eq, sql} from 'drizzle-orm'
-
 import * as schema from '../../db/schema.ts'
+import {getAppDatabaseService} from '../services/appDatabaseService.ts'
+import {escapeSqlString, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {ConversionError, convertPdfToText} from './convertPdfToText.ts'
-import type {AppDatabase} from './getDatabase.ts'
 import {rateLimitedLogger} from './rateLimitedLogger.ts'
 
 const DOCLING_CONVERSION_TIMEOUT_MS = 600_000 // 10 minutes - same as cron job
@@ -21,7 +20,6 @@ export type EnsureFullTextResult =
  * Uses per-article locking to prevent thundering herd.
  */
 export const ensureFullText = async (
-  db: AppDatabase,
   article: typeof schema.articles.$inferSelect,
   articleId: string,
 ): Promise<EnsureFullTextResult> => {
@@ -45,7 +43,21 @@ export const ensureFullText = async (
   if (existingLock) {
     await existingLock // Wait for other conversion to finish
     // Re-fetch article to get result
-    const [updated] = await db.select().from(schema.articles).where(eq(schema.articles.id, articleId))
+    const [updated] = await getAppDatabaseService().queryJson<{
+      fullText: string | null
+      fullTextPDF: string | null
+      fullTextConversionStatus: string | null
+      fullTextConversionAttempts: number | null
+    }>(`
+      SELECT
+        full_text AS fullText,
+        full_text_pdf AS fullTextPDF,
+        full_text_conversion_status AS fullTextConversionStatus,
+        full_text_conversion_attempts AS fullTextConversionAttempts
+      FROM app.article
+      WHERE id = '${escapeSqlString(articleId)}'
+      LIMIT 1
+    `)
     if (updated?.fullText) {
       return {text: updated.fullText, shouldSkip: false}
     }
@@ -66,7 +78,21 @@ export const ensureFullText = async (
 
   try {
     // Double-check after acquiring lock (another process may have finished)
-    const [fresh] = await db.select().from(schema.articles).where(eq(schema.articles.id, articleId))
+    const [fresh] = await getAppDatabaseService().queryJson<{
+      fullText: string | null
+      fullTextPDF: string | null
+      fullTextConversionStatus: string | null
+      fullTextConversionAttempts: number | null
+    }>(`
+      SELECT
+        full_text AS fullText,
+        full_text_pdf AS fullTextPDF,
+        full_text_conversion_status AS fullTextConversionStatus,
+        full_text_conversion_attempts AS fullTextConversionAttempts
+      FROM app.article
+      WHERE id = '${escapeSqlString(articleId)}'
+      LIMIT 1
+    `)
     if (fresh?.fullText) {
       return {text: fresh.fullText, shouldSkip: false}
     }
@@ -84,17 +110,17 @@ export const ensureFullText = async (
     const startTime = Date.now()
     const {md, html} = await convertPdfToText(fresh.fullTextPDF, DOCLING_CONVERSION_TIMEOUT_MS)
 
-    await db
-      .update(schema.articles)
-      .set({
-        fullText: md,
-        fullTextHtml: html,
-        fullTextConversionStatus: 'success',
-        fullTextConversionError: null,
-        fullTextCharCount: md.length,
-        fullTextConversionAttempts: (fresh.fullTextConversionAttempts ?? 0) + 1,
-      })
-      .where(eq(schema.articles.id, articleId))
+    await getAppDatabaseService().run(`
+      UPDATE app.article
+      SET full_text = ${getSqlLiteral(md)},
+          full_text_html = ${getSqlLiteral(html)},
+          full_text_conversion_status = 'success',
+          full_text_conversion_error = NULL,
+          full_text_char_count = ${md.length},
+          full_text_conversion_attempts = ${(fresh.fullTextConversionAttempts ?? 0) + 1},
+          updated_at = current_timestamp
+      WHERE id = '${escapeSqlString(articleId)}'
+    `)
 
     console.log(`[ensureFullText] Success: article ${articleId} (${Date.now() - startTime}ms, ${md.length} chars)`)
     return {text: md, shouldSkip: false}
@@ -112,24 +138,26 @@ export const ensureFullText = async (
       || msg.includes('file not found')
 
     // Get current attempts
-    const [current] = await db
-      .select({attempts: schema.articles.fullTextConversionAttempts})
-      .from(schema.articles)
-      .where(eq(schema.articles.id, articleId))
+    const [current] = await getAppDatabaseService().queryJson<{attempts: number | null}>(`
+      SELECT full_text_conversion_attempts AS attempts
+      FROM app.article
+      WHERE id = '${escapeSqlString(articleId)}'
+      LIMIT 1
+    `)
     const attempts = (current?.attempts ?? 0) + 1
     const maxRetries = 3
 
     // If permanent OR max retries exceeded → 'failed'
     const isFinalFailure = isPerm || attempts >= maxRetries
 
-    await db
-      .update(schema.articles)
-      .set({
-        fullTextConversionStatus: isFinalFailure ? 'failed' : sql`NULL`,
-        fullTextConversionError: errorMessage,
-        fullTextConversionAttempts: attempts,
-      })
-      .where(eq(schema.articles.id, articleId))
+    await getAppDatabaseService().run(`
+      UPDATE app.article
+      SET full_text_conversion_status = ${isFinalFailure ? `'failed'` : 'NULL'},
+          full_text_conversion_error = ${getSqlLiteral(errorMessage)},
+          full_text_conversion_attempts = ${attempts},
+          updated_at = current_timestamp
+      WHERE id = '${escapeSqlString(articleId)}'
+    `)
 
     rateLimitedLogger.log(
       `fulltext:conversion:${isFinalFailure ? 'failed' : 'retry'}`,
