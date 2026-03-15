@@ -37,7 +37,7 @@ const runPsql = async (db: string, sql: string): Promise<void> => {
 }
 
 const sqlBackfill = `
--- Ensure column and index exist (keeps script idempotent even if Drizzle migration hasn't run yet)
+-- Ensure column and index exist (keeps script idempotent even if schema setup hasn't run yet)
 ALTER TABLE "prompts" ADD COLUMN IF NOT EXISTS "content_hash" text;
 CREATE INDEX IF NOT EXISTS "prompts_content_hash_idx" ON "prompts" ("content_hash");
 

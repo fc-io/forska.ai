@@ -450,11 +450,6 @@ const config = [
   },
   // Add prettier config to disable conflicting rules
   prettierConfig,
-  // Allow default exports and non-null assertions in Drizzle config
-  {
-    files: ['drizzle.config.ts'],
-    rules: {'import/no-default-export': 'off', '@typescript-eslint/no-non-null-assertion': 'off'},
-  },
 ]
 
 export default config

@@ -1,718 +1,414 @@
-import {sql} from 'drizzle-orm'
-import {integer, real, sqliteTable, text, uniqueIndex} from 'drizzle-orm/sqlite-core'
+type TableContract<Select, Insert = Select> = {$inferSelect: Select; $inferInsert: Insert}
 
-const createId = () => {
-  return crypto.randomUUID()
+const createTableContract = <Select, Insert = Select>() => {
+  return {} as TableContract<Select, Insert>
 }
 
-const idColumn = () => {
-  return text('id').primaryKey().$defaultFn(createId)
+export type PublicationStatus = 'preprint' | 'submitted' | 'accepted' | 'published' | 'retracted'
+export type JudgmentsJobStatus =
+  | 'not_started'
+  | 'waiting_on_llm_connection'
+  | 'waiting_on_db_connection'
+  | 'running'
+  | 'paused'
+  | 'failed'
+  | 'completed'
+  | 'project_removed'
+export type JudgmentsJobsPromptsStatus =
+  | 'ready'
+  | 'sent'
+  | 'judged'
+  | 'judged_and_ready_to_remove_from_queue'
+  | 'skipped'
+export type JudgmentsJobsPromptsSkipReason = 'no_fulltext' | 'conversion_failed' | 'fulltext_too_large'
+export type JudgmentChunkingStrategy = 'patient_h3_greedy' | 'article_heading_greedy' | 'article_paragraph_greedy'
+export type Engine = 'sglang' | 'vllm'
+
+export type UserRecord = {
+  id: string
+  name: string
+  email: string
+  role: string | null
+  openalexMailto: string | null
+  createdAt: Date
+  updatedAt: Date
 }
 
-const createdAtColumn = () => {
-  return integer('created_at', {mode: 'timestamp_ms'}).defaultNow().notNull()
+export type ArticleRecord = {
+  id: string
+  createdAt: Date
+  updatedAt: Date
+  articleTitle: string
+  articleAuthors: string[] | null
+  articleCreatedAt: Date | null
+  articleUpdatedAt: Date | null
+  articleId: string | null
+  articleSummary: string | null
+  articleVersion: number | null
+  arxivId: string | null
+  openalexId: string | null
+  biorxivId: string | null
+  medrxivId: string | null
+  doi: string | null
+  pubmedId: string | null
+  url: string | null
+  fullTextFetchedAt: Date | null
+  fullText: string | null
+  fullTextHtml: string | null
+  fullTextSource: string | null
+  fullTextOriginalFormat: string | null
+  fullTextPDF: string | null
+  fullTextAssets: unknown
+  fullTextConversionStatus: string | null
+  fullTextConversionError: string | null
+  fullTextConversionAttempts: number | null
+  fullTextCharCount: number | null
+  contentHash: string | null
+  importRoute: string | null
+  originalData: unknown
+  publicationStatus: PublicationStatus | null
 }
 
-const updatedAtColumn = () => {
-  return integer('updated_at', {mode: 'timestamp_ms'})
-    .defaultNow()
-    .$onUpdate(() => {
-      return new Date()
-    })
-    .notNull()
+export type ModelRecord = {
+  id: string
+  createdAt: Date
+  updatedAt: Date
+  name: string
+  provider: string | null
+  baseURL: string | null
+  modelName: string | null
+  version: string | null
+  apiKeyVariable: string | null
+  workerUrls: string[] | null
 }
 
-const booleanColumn = (name: string, defaultValue = false) => {
-  return integer(name, {mode: 'boolean'}).default(defaultValue).notNull()
+export type DataSourceRecord = {
+  id: string
+  createdAt: Date
+  updatedAt: Date
+  title: string
+  description: string | null
+  lastImportAt: Date | null
+  itemsAfterLastImport: number
+  importRoute: string | null
+  cursor: string | null
+  dateFrom: Date | null
+  dateTo: Date | null
+  archived: boolean
 }
 
-const jsonColumn = <T>(name: string) => {
-  return text(name, {mode: 'json'}).$type<T>()
+export type ImportRouteRecord = {
+  id: string
+  createdAt: Date
+  updatedAt: Date
+  route: string
+  name: string | null
+  description: string | null
+  active: boolean
 }
 
-const publicationStatusValues = ['preprint', 'submitted', 'accepted', 'published', 'retracted'] as const
-const judgmentsJobStatusValues = [
-  'not_started',
-  'waiting_on_llm_connection',
-  'waiting_on_db_connection',
-  'running',
-  'paused',
-  'failed',
-  'completed',
-  'project_removed',
-] as const
-const judgmentsJobsPromptsStatusValues = [
-  'ready',
-  'sent',
-  'judged',
-  'judged_and_ready_to_remove_from_queue',
-  'skipped',
-] as const
-const judgmentsJobsPromptsSkipReasonValues = ['no_fulltext', 'conversion_failed', 'fulltext_too_large'] as const
-const judgmentChunkingStrategyValues = [
-  'patient_h3_greedy',
-  'article_heading_greedy',
-  'article_paragraph_greedy',
-] as const
-const engineValues = ['sglang', 'vllm'] as const
+export type DataSourceRouteLinkRecord = {
+  id: string
+  createdAt: Date
+  updatedAt: Date
+  dataSourceId: string
+  importRouteId: string
+}
 
-export const user = sqliteTable('user', {
-  id: text('id').primaryKey(),
-  name: text('name').notNull(),
-  email: text('email').notNull(),
-  role: text('role'),
-  openalexMailto: text('openalex_mailto'),
-  createdAt: createdAtColumn(),
-  updatedAt: updatedAtColumn(),
-})
+export type ProjectRecord = {
+  id: string
+  name: string
+  description: string | null
+  engine: Engine | null
+  modelId: string
+  useTitle: boolean
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  dateFrom: Date | null
+  dateTo: Date | null
+  archived: boolean
+  createdAt: Date
+  updatedAt: Date
+}
 
-export const articles = sqliteTable('articles', {
-  id: idColumn(),
-  createdAt: createdAtColumn(),
-  updatedAt: updatedAtColumn(),
-  articleTitle: text('article_title').notNull(),
-  articleAuthors: jsonColumn<string[] | null>('article_authors'),
-  articleCreatedAt: integer('article_created_at', {mode: 'timestamp_ms'}),
-  articleUpdatedAt: integer('article_updated_at', {mode: 'timestamp_ms'}),
-  articleId: text('article_id').unique(),
-  articleSummary: text('article_summary'),
-  articleVersion: integer('article_version'),
-  arxivId: text('arxiv_id'),
-  openalexId: text('openalex_id'),
-  biorxivId: text('biorxiv_id'),
-  medrxivId: text('medrxiv_id'),
-  doi: text('doi'),
-  pubmedId: text('pubmed_id'),
-  url: text('url'),
-  fullTextFetchedAt: integer('full_text_fetched_at', {mode: 'timestamp_ms'}),
-  fullText: text('full_text'),
-  fullTextHtml: text('full_text_html'),
-  fullTextSource: text('full_text_source'),
-  fullTextOriginalFormat: text('full_text_original_format'),
-  fullTextPDF: text('full_text_pdf'),
-  fullTextAssets: jsonColumn<unknown>('full_text_assets'),
-  fullTextConversionStatus: text('full_text_conversion_status'),
-  fullTextConversionError: text('full_text_conversion_error'),
-  fullTextConversionAttempts: integer('full_text_conversion_attempts').default(0),
-  fullTextCharCount: integer('full_text_char_count'),
-  contentHash: text('content_hash'),
-  importRoute: text('import_route'),
-  originalData: jsonColumn<unknown>('original_data'),
-  publicationStatus: text('publication_status', {enum: publicationStatusValues}),
-})
+export type ProjectRouteLinkRecord = {
+  id: string
+  createdAt: Date
+  updatedAt: Date
+  projectId: string
+  importRouteId: string
+}
 
-export const models = sqliteTable('models', {
-  id: idColumn(),
-  createdAt: createdAtColumn(),
-  updatedAt: updatedAtColumn(),
-  name: text('name').notNull(),
-  provider: text('provider'),
-  baseURL: text('base_url'),
-  modelName: text('model_name'),
-  version: text('version'),
-  apiKeyVariable: text('api_key_variable'),
-  workerUrls: jsonColumn<string[] | null>('worker_urls'),
-})
+export type ArticleRouteLinkRecord = {
+  id: string
+  createdAt: Date
+  updatedAt: Date
+  articleId: string
+  importRouteId: string
+}
 
-export const dataSource = sqliteTable('datasource', {
-  id: idColumn(),
-  createdAt: createdAtColumn(),
-  updatedAt: updatedAtColumn(),
-  title: text('title').notNull(),
-  description: text('description'),
-  lastImportAt: integer('last_import_at', {mode: 'timestamp_ms'}),
-  itemsAfterLastImport: integer('items_after_last_import').default(0),
-  importRoute: text('import_route'),
-  cursor: text('cursor'),
-  dateFrom: integer('date_from', {mode: 'timestamp_ms'}),
-  dateTo: integer('date_to', {mode: 'timestamp_ms'}),
-  archived: booleanColumn('archived'),
-})
+export type ComparisonProjectRecord = {
+  id: string
+  name: string
+  description: string | null
+  modelIds: string[] | null
+  compareWithHumans: boolean
+  useTitle: boolean
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  dateFrom: Date | null
+  dateTo: Date | null
+  archived: boolean
+  createdAt: Date
+  updatedAt: Date
+}
 
-export const importRoute = sqliteTable(
-  'import_route',
-  {
-    id: idColumn(),
-    createdAt: createdAtColumn(),
-    updatedAt: updatedAtColumn(),
-    route: text('route').notNull(),
-    name: text('name'),
-    description: text('description'),
-    active: booleanColumn('active', true),
-  },
-  (table) => {
-    return [uniqueIndex('import_route_route_unique').on(table.route)]
-  },
-)
+export type ComparisonProjectRouteLinkRecord = {
+  id: string
+  createdAt: Date
+  updatedAt: Date
+  comparisonProjectId: string
+  importRouteId: string
+}
 
-export const dataSourceRouteLink = sqliteTable(
-  'datasource_route_link',
-  {
-    id: idColumn(),
-    createdAt: createdAtColumn(),
-    updatedAt: updatedAtColumn(),
-    dataSourceId: text('datasource_id')
-      .notNull()
-      .references(
-        () => {
-          return dataSource.id
-        },
-        {onDelete: 'cascade'},
-      ),
-    importRouteId: text('import_route_id')
-      .notNull()
-      .references(
-        () => {
-          return importRoute.id
-        },
-        {onDelete: 'cascade'},
-      ),
-  },
-  (table) => {
-    return [uniqueIndex('datasource_route_link_unique').on(table.dataSourceId, table.importRouteId)]
-  },
-)
+export type JudgmentsJobRecord = {
+  id: string
+  createdAt: Date
+  updatedAt: Date
+  projectId: string
+  status: JudgmentsJobStatus
+  error: string[] | null
+  sendToLLMBatchSize: number
+  sendToLLMInterval: number
+  cursorLastCreatedAt: Date | null
+  cursorLastArticleId: string | null
+}
 
-export const projects = sqliteTable('projects', {
-  id: idColumn(),
-  name: text('name').notNull(),
-  description: text('description'),
-  engine: text('engine', {enum: engineValues}),
-  modelId: text('model_id')
-    .notNull()
-    .references(
-      () => {
-        return models.id
-      },
-      {onDelete: 'restrict'},
-    ),
-  useTitle: booleanColumn('use_title', true),
-  useAbstract: booleanColumn('use_abstract', true),
-  useFulltext: booleanColumn('use_fulltext'),
-  useFulltextNoImages: booleanColumn('use_fulltext_no_images'),
-  dateFrom: integer('date_from', {mode: 'timestamp_ms'}),
-  dateTo: integer('date_to', {mode: 'timestamp_ms'}),
-  archived: booleanColumn('archived'),
-  createdAt: createdAtColumn(),
-  updatedAt: updatedAtColumn(),
-})
+export type PromptRecord = {
+  id: string
+  createdAt: Date
+  updatedAt: Date
+  originalText: string
+  transformedText: string | null
+  archived: boolean
+  promptHeading: string | null
+  type: string | null
+  contentHash: string | null
+}
 
-export const projectRouteLink = sqliteTable(
-  'project_route_link',
-  {
-    id: idColumn(),
-    createdAt: createdAtColumn(),
-    updatedAt: updatedAtColumn(),
-    projectId: text('project_id')
-      .notNull()
-      .references(
-        () => {
-          return projects.id
-        },
-        {onDelete: 'cascade'},
-      ),
-    importRouteId: text('import_route_id')
-      .notNull()
-      .references(
-        () => {
-          return importRoute.id
-        },
-        {onDelete: 'cascade'},
-      ),
-  },
-  (table) => {
-    return [uniqueIndex('project_route_link_unique').on(table.projectId, table.importRouteId)]
-  },
-)
+export type JudgmentsJobsPromptRecord = {
+  id: string
+  createdAt: Date
+  updatedAt: Date
+  jobId: string
+  articleId: string
+  promptId: string
+  serverId: string | null
+  sentAt: Date | null
+  judgedAt: Date | null
+  status: JudgmentsJobsPromptsStatus
+  skipReason: JudgmentsJobsPromptsSkipReason | null
+}
 
-export const articleRouteLink = sqliteTable(
-  'article_route_link',
-  {
-    id: idColumn(),
-    createdAt: createdAtColumn(),
-    updatedAt: updatedAtColumn(),
-    articleId: text('article_id')
-      .notNull()
-      .references(
-        () => {
-          return articles.id
-        },
-        {onDelete: 'cascade'},
-      ),
-    importRouteId: text('import_route_id')
-      .notNull()
-      .references(
-        () => {
-          return importRoute.id
-        },
-        {onDelete: 'cascade'},
-      ),
-  },
-  (table) => {
-    return [uniqueIndex('article_route_link_unique').on(table.articleId, table.importRouteId)]
-  },
-)
+export type ProjectPromptRecord = {
+  id: string
+  createdAt: Date
+  updatedAt: Date
+  projectId: string
+  promptId: string
+  order: number | null
+  archived: boolean
+  originProjectId: string | null
+  enabled: boolean
+}
 
-export const comparisonProject = sqliteTable('comparison_project', {
-  id: idColumn(),
-  name: text('name').notNull(),
-  description: text('description'),
-  modelIds: jsonColumn<string[] | null>('model_ids'),
-  compareWithHumans: booleanColumn('compare_with_humans'),
-  useTitle: booleanColumn('use_title', true),
-  useAbstract: booleanColumn('use_abstract', true),
-  useFulltext: booleanColumn('use_fulltext'),
-  useFulltextNoImages: booleanColumn('use_fulltext_no_images'),
-  dateFrom: integer('date_from', {mode: 'timestamp_ms'}),
-  dateTo: integer('date_to', {mode: 'timestamp_ms'}),
-  archived: booleanColumn('archived'),
-  createdAt: createdAtColumn(),
-  updatedAt: updatedAtColumn(),
-})
+export type ComparisonProjectPromptRecord = {
+  id: string
+  createdAt: Date
+  updatedAt: Date
+  comparisonProjectId: string
+  promptId: string
+  order: number | null
+}
 
-export const comparisonProjectRouteLink = sqliteTable(
-  'comparison_project_route_link',
-  {
-    id: idColumn(),
-    createdAt: createdAtColumn(),
-    updatedAt: updatedAtColumn(),
-    comparisonProjectId: text('comparison_project_id')
-      .notNull()
-      .references(
-        () => {
-          return comparisonProject.id
-        },
-        {onDelete: 'cascade'},
-      ),
-    importRouteId: text('import_route_id')
-      .notNull()
-      .references(
-        () => {
-          return importRoute.id
-        },
-        {onDelete: 'cascade'},
-      ),
-  },
-  (table) => {
-    return [uniqueIndex('comparison_project_route_link_unique').on(table.comparisonProjectId, table.importRouteId)]
-  },
-)
+export type JudgmentRecord = {
+  id: string
+  createdAt: Date
+  updatedAt: Date
+  deletedAt: Date | null
+  articleId: string
+  modelId: string
+  promptId: string
+  projectId: string | null
+  useTitle: boolean
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  chunkingStrategy: JudgmentChunkingStrategy | null
+  isAnswered: boolean
+  answeredOriginal: string | null
+  answeredOriginalAsArray: string[] | null
+  confidenceOriginal: number | null
+  explanation: string | null
+  quotes: unknown[]
+  snapshotProjectId: string | null
+  snapshotProjectModelName: string | null
+}
 
-export const judgmentsJobs = sqliteTable('judgments_jobs', {
-  id: idColumn(),
-  createdAt: createdAtColumn(),
-  updatedAt: updatedAtColumn(),
-  projectId: text('project_id')
-    .notNull()
-    .references(
-      () => {
-        return projects.id
-      },
-      {onDelete: 'cascade'},
-    ),
-  status: text('status', {enum: judgmentsJobStatusValues}).default('not_started').notNull(),
-  error: jsonColumn<string[] | null>('error'),
-  sendToLLMBatchSize: integer('send_to_llm_batch_size').default(5).notNull(),
-  sendToLLMInterval: integer('send_to_llm_interval').default(15).notNull(),
-  cursorLastCreatedAt: integer('cursor_last_created_at', {mode: 'timestamp_ms'}),
-  cursorLastArticleId: text('cursor_last_article_id'),
-})
+export type JudgmentHumanRecord = {
+  id: string
+  createdAt: Date
+  updatedAt: Date
+  articleId: string
+  promptId: string
+  isAnswered: boolean
+  answer: string | null
+  comment: string | null
+  projectId: string
+}
 
-export const prompts = sqliteTable(
-  'prompts',
-  {
-    id: idColumn(),
-    createdAt: createdAtColumn(),
-    updatedAt: updatedAtColumn(),
-    originalText: text('original_text').notNull(),
-    transformedText: text('transformed_text'),
-    archived: booleanColumn('archived'),
-    promptHeading: text('prompt_heading'),
-    type: text('type'),
-    contentHash: text('content_hash'),
-  },
-  (table) => {
-    return [uniqueIndex('prompts_content_hash_unique').on(table.contentHash)]
-  },
-)
+export type ProjectArticleRecord = {
+  id: string
+  createdAt: Date
+  updatedAt: Date
+  projectId: string
+  importedFromProjectId: string | null
+  articleId: string
+}
 
-export const judgmentsJobsPrompts = sqliteTable(
-  'judgments_jobs_prompts',
-  {
-    id: idColumn(),
-    createdAt: createdAtColumn(),
-    updatedAt: updatedAtColumn(),
-    jobId: text('job_id')
-      .notNull()
-      .references(
-        () => {
-          return judgmentsJobs.id
-        },
-        {onDelete: 'cascade'},
-      ),
-    articleId: text('article_id')
-      .notNull()
-      .references(
-        () => {
-          return articles.id
-        },
-        {onDelete: 'cascade'},
-      ),
-    promptId: text('prompt_id')
-      .notNull()
-      .references(
-        () => {
-          return prompts.id
-        },
-        {onDelete: 'cascade'},
-      ),
-    serverId: text('server_id'),
-    sentAt: integer('sent_at', {mode: 'timestamp_ms'}),
-    judgedAt: integer('judged_at', {mode: 'timestamp_ms'}),
-    status: text('status', {enum: judgmentsJobsPromptsStatusValues}).default('ready').notNull(),
-    skipReason: text('skip_reason', {enum: judgmentsJobsPromptsSkipReasonValues}),
-  },
-  (table) => {
-    return [
-      uniqueIndex('judgments_jobs_prompts_article_prompt_job_unique').on(table.articleId, table.promptId, table.jobId),
-    ]
-  },
-)
+export type TokenUseRecord = {
+  id: string
+  createdAt: Date
+  updatedAt: Date
+  judgmentsJobId: string | null
+  requests: number
+  totalPromptTokens: number
+  totalCompletionTokens: number
+  totalTokens: number
+  startedAt: Date | null
+  finishedAt: Date | null
+  duration: number | null
+  gpuNnodes: number | null
+  gpuGpusPerNode: number | null
+  gpuTotalGpus: number | null
+  tpSize: number | null
+  dpSize: number | null
+  gpuShape: string | null
+  sglangMaxRunningRequests: number | null
+  sglangModel: string | null
+  successfulRequests: number | null
+  failedRequests: number | null
+  hasFailedRequests: boolean
+  failedRequestsDetails: unknown[] | null
+  totalSuccessPromptTokens: number | null
+  totalSuccessCompletionTokens: number | null
+  totalSuccessTokens: number | null
+  totalFailedPromptTokens: number | null
+  totalFailedCompletionTokens: number | null
+  totalFailedTokens: number | null
+}
 
-export const projectPrompts = sqliteTable(
-  'project_prompts',
-  {
-    id: idColumn(),
-    createdAt: createdAtColumn(),
-    updatedAt: updatedAtColumn(),
-    projectId: text('project_id')
-      .notNull()
-      .references(
-        () => {
-          return projects.id
-        },
-        {onDelete: 'cascade'},
-      ),
-    promptId: text('prompt_id')
-      .notNull()
-      .references(
-        () => {
-          return prompts.id
-        },
-        {onDelete: 'cascade'},
-      ),
-    order: integer('order'),
-    archived: booleanColumn('archived'),
-    originProjectId: text('origin_project_id').references(
-      () => {
-        return projects.id
-      },
-      {onDelete: 'set null'},
-    ),
-    enabled: booleanColumn('enabled', true),
-  },
-  (table) => {
-    return [uniqueIndex('project_prompts_unique').on(table.projectId, table.promptId)]
-  },
-)
+export type JudgmentAssessmentRecord = {
+  id: string
+  judgmentId: string
+  assessmentIsCorrect: boolean
+  assessmentComment: string | null
+  createdAt: Date
+  updatedAt: Date
+}
 
-export const comparisonProjectPrompt = sqliteTable(
-  'comparison_project_prompt',
-  {
-    id: idColumn(),
-    createdAt: createdAtColumn(),
-    updatedAt: updatedAtColumn(),
-    comparisonProjectId: text('comparison_project_id')
-      .notNull()
-      .references(
-        () => {
-          return comparisonProject.id
-        },
-        {onDelete: 'cascade'},
-      ),
-    promptId: text('prompt_id')
-      .notNull()
-      .references(
-        () => {
-          return prompts.id
-        },
-        {onDelete: 'cascade'},
-      ),
-    order: integer('order'),
-  },
-  (table) => {
-    return [uniqueIndex('comparison_project_prompt_unique').on(table.comparisonProjectId, table.promptId)]
-  },
-)
+export type LlmStatusRecord = {
+  id: string
+  ts: Date
+  engine: Engine
+  instanceId: string
+  modelName: string
+  engineVersion: string | null
+  gpuType: string | null
+  gpuCount: number | null
+  pollMs: number
+  promptTokensTotal: number
+  generationTokensTotal: number
+  numRequestsTotal: number | null
+  cachedTokensTotal: number | null
+  numRetractionsCount: number | null
+  numQueueReqs: number
+  numRunningReqs: number
+  numGrammarQueueReqs: number | null
+  numRunningReqsOfflineBatch: number | null
+  numPrefillPreallocQueueReqs: number | null
+  numPrefillInflightQueueReqs: number | null
+  numDecodePreallocQueueReqs: number | null
+  numDecodeTransferQueueReqs: number | null
+  genThroughput: number | null
+  tokenUsage: number | null
+  utilization: number | null
+  cacheHitRate: number | null
+  specAcceptRate: number | null
+  specAcceptLength: number | null
+  isCudaGraph: boolean | null
+  swaTokenUsage: number | null
+  mambaUsage: number | null
+  pendingPreallocTokenUsage: number | null
+  kvTransferSpeedGbS: number | null
+  kvTransferLatencyMs: number | null
+  kvTransferBootstrapMs: number | null
+  kvTransferAllocMs: number | null
+  prefillTps: number | null
+  genTps: number | null
+  rps: number | null
+  targetGenTps: number | null
+  targetPrefillTps: number | null
+  inFlight: number | null
+  maxInFlight: number | null
+  lastAction: string | null
+  timeToFirstTokenSeconds: unknown
+  e2eRequestLatencySeconds: unknown
+  interTokenLatencySeconds: unknown
+  perStageReqLatencySeconds: unknown
+  queueTimeSeconds: unknown
+}
 
-export const judgments = sqliteTable(
-  'judgments',
-  {
-    id: idColumn(),
-    createdAt: createdAtColumn(),
-    updatedAt: updatedAtColumn(),
-    deletedAt: integer('deleted_at', {mode: 'timestamp_ms'}),
-    articleId: text('article_id')
-      .notNull()
-      .references(
-        () => {
-          return articles.id
-        },
-        {onDelete: 'restrict'},
-      ),
-    modelId: text('model_id')
-      .notNull()
-      .references(
-        () => {
-          return models.id
-        },
-        {onDelete: 'cascade'},
-      ),
-    promptId: text('prompt_id')
-      .notNull()
-      .references(
-        () => {
-          return prompts.id
-        },
-        {onDelete: 'restrict'},
-      ),
-    projectId: text('project_id').references(
-      () => {
-        return projects.id
-      },
-      {onDelete: 'set null'},
-    ),
-    useTitle: booleanColumn('use_title', true),
-    useAbstract: booleanColumn('use_abstract', true),
-    useFulltext: booleanColumn('use_fulltext'),
-    useFulltextNoImages: booleanColumn('use_fulltext_no_images'),
-    chunkingStrategy: text('chunking_strategy', {enum: judgmentChunkingStrategyValues}),
-    isAnswered: integer('is_answered', {mode: 'boolean'}).default(false),
-    answeredOriginal: text('answered_original'),
-    answeredOriginalAsArray: jsonColumn<string[] | null>('answered_original_as_array'),
-    confidenceOriginal: integer('confidence_original').default(50),
-    explanation: text('explanation'),
-    quotes: jsonColumn<unknown[]>('quotes').default([]).notNull(),
-    snapshotProjectId: text('snapshot_project_id'),
-    snapshotProjectModelName: text('snapshot_project_model_name'),
-  },
-  (table) => {
-    return [
-      uniqueIndex('judgments_article_prompt_model_content_unique')
-        .on(
-          table.articleId,
-          table.promptId,
-          table.modelId,
-          table.useTitle,
-          table.useAbstract,
-          table.useFulltext,
-          table.useFulltextNoImages,
-        )
-        .where(sql`${table.deletedAt} IS NULL`),
-    ]
-  },
-)
+export type NvidiaSmiRecord = {
+  id: string
+  ts: Date
+  instanceId: string
+  gpuIndex: number
+  gpuUuid: string | null
+  gpuName: string | null
+  temperatureGpu: number | null
+  utilizationGpu: number | null
+  utilizationMemory: number | null
+  memoryTotalMiB: number | null
+  memoryUsedMiB: number | null
+  powerDrawWatts: number | null
+  powerLimitWatts: number | null
+  fanSpeed: number | null
+  pstate: string | null
+}
 
-export const judgmentsHuman = sqliteTable(
-  'judgments_human',
-  {
-    id: idColumn(),
-    createdAt: createdAtColumn(),
-    updatedAt: updatedAtColumn(),
-    articleId: text('article_id')
-      .notNull()
-      .references(
-        () => {
-          return articles.id
-        },
-        {onDelete: 'restrict'},
-      ),
-    promptId: text('prompt_id')
-      .notNull()
-      .references(
-        () => {
-          return prompts.id
-        },
-        {onDelete: 'restrict'},
-      ),
-    isAnswered: booleanColumn('is_answered'),
-    answer: text('answer'),
-    comment: text('comment'),
-    projectId: text('project_id')
-      .notNull()
-      .references(
-        () => {
-          return projects.id
-        },
-        {onDelete: 'cascade'},
-      ),
-  },
-  (table) => {
-    return [
-      uniqueIndex('judgments_human_project_article_prompt_unique').on(table.projectId, table.articleId, table.promptId),
-    ]
-  },
-)
-
-export const projectArticles = sqliteTable(
-  'project_articles',
-  {
-    id: idColumn(),
-    createdAt: createdAtColumn(),
-    updatedAt: updatedAtColumn(),
-    projectId: text('project_id')
-      .notNull()
-      .references(
-        () => {
-          return projects.id
-        },
-        {onDelete: 'cascade'},
-      ),
-    importedFromProjectId: text('imported_from_project_id').references(
-      () => {
-        return projects.id
-      },
-      {onDelete: 'set null'},
-    ),
-    articleId: text('article_id')
-      .notNull()
-      .references(
-        () => {
-          return articles.id
-        },
-        {onDelete: 'cascade'},
-      ),
-  },
-  (table) => {
-    return [uniqueIndex('project_articles_unique').on(table.projectId, table.articleId)]
-  },
-)
-
-export const tokenUse = sqliteTable('token_use', {
-  id: idColumn(),
-  createdAt: createdAtColumn(),
-  updatedAt: updatedAtColumn(),
-  judgmentsJobId: text('judgments_job_id').references(
-    () => {
-      return judgmentsJobs.id
-    },
-    {onDelete: 'set null'},
-  ),
-  requests: integer('requests').notNull(),
-  totalPromptTokens: integer('total_prompt_tokens').notNull(),
-  totalCompletionTokens: integer('total_completion_tokens').notNull(),
-  totalTokens: integer('total_tokens').notNull(),
-  startedAt: integer('started_at', {mode: 'timestamp_ms'}),
-  finishedAt: integer('finished_at', {mode: 'timestamp_ms'}),
-  duration: integer('duration'),
-  gpuNnodes: integer('gpu_nnodes'),
-  gpuGpusPerNode: integer('gpu_gpus_per_node'),
-  gpuTotalGpus: integer('gpu_total_gpus'),
-  tpSize: integer('tp_size'),
-  dpSize: integer('dp_size'),
-  gpuShape: text('gpu_shape'),
-  sglangMaxRunningRequests: integer('sglang_max_running_requests'),
-  sglangModel: text('sglang_model'),
-  successfulRequests: integer('successful_requests'),
-  failedRequests: integer('failed_requests'),
-  hasFailedRequests: booleanColumn('has_failed_requests'),
-  failedRequestsDetails: jsonColumn<unknown[] | null>('failed_requests_details'),
-  totalSuccessPromptTokens: integer('total_success_prompt_tokens'),
-  totalSuccessCompletionTokens: integer('total_success_completion_tokens'),
-  totalSuccessTokens: integer('total_success_tokens'),
-  totalFailedPromptTokens: integer('total_failed_prompt_tokens'),
-  totalFailedCompletionTokens: integer('total_failed_completion_tokens'),
-  totalFailedTokens: integer('total_failed_tokens'),
-})
-
-export const judgmentAssessments = sqliteTable(
-  'judgment_assessments',
-  {
-    id: idColumn(),
-    judgmentId: text('judgment_id')
-      .notNull()
-      .references(
-        () => {
-          return judgments.id
-        },
-        {onDelete: 'cascade'},
-      ),
-    assessmentIsCorrect: integer('assessment_is_correct', {mode: 'boolean'}).notNull(),
-    assessmentComment: text('assessment_comment'),
-    createdAt: createdAtColumn(),
-    updatedAt: updatedAtColumn(),
-  },
-  (table) => {
-    return [uniqueIndex('judgment_assessments_judgment_unique').on(table.judgmentId)]
-  },
-)
-
-export const llmStatus = sqliteTable('llm_status', {
-  id: idColumn(),
-  ts: integer('ts', {mode: 'timestamp_ms'}).defaultNow().notNull(),
-  engine: text('engine', {enum: engineValues}).notNull(),
-  instanceId: text('instance_id').notNull(),
-  modelName: text('model_name').notNull(),
-  engineVersion: text('engine_version'),
-  gpuType: text('gpu_type'),
-  gpuCount: integer('gpu_count'),
-  pollMs: integer('poll_ms').notNull().default(2000),
-  promptTokensTotal: integer('prompt_tokens_total').notNull().default(0),
-  generationTokensTotal: integer('generation_tokens_total').notNull().default(0),
-  numRequestsTotal: integer('num_requests_total'),
-  cachedTokensTotal: integer('cached_tokens_total'),
-  numRetractionsCount: integer('num_retractions_count'),
-  numQueueReqs: integer('num_queue_reqs').notNull().default(0),
-  numRunningReqs: integer('num_running_reqs').notNull().default(0),
-  numGrammarQueueReqs: integer('num_grammar_queue_reqs'),
-  numRunningReqsOfflineBatch: integer('num_running_reqs_offline_batch'),
-  numPrefillPreallocQueueReqs: integer('num_prefill_prealloc_queue_reqs'),
-  numPrefillInflightQueueReqs: integer('num_prefill_inflight_queue_reqs'),
-  numDecodePreallocQueueReqs: integer('num_decode_prealloc_queue_reqs'),
-  numDecodeTransferQueueReqs: integer('num_decode_transfer_queue_reqs'),
-  genThroughput: real('gen_throughput'),
-  tokenUsage: real('token_usage'),
-  utilization: real('utilization'),
-  cacheHitRate: real('cache_hit_rate'),
-  specAcceptRate: real('spec_accept_rate'),
-  specAcceptLength: real('spec_accept_length'),
-  isCudaGraph: integer('is_cuda_graph', {mode: 'boolean'}),
-  swaTokenUsage: real('swa_token_usage'),
-  mambaUsage: real('mamba_usage'),
-  pendingPreallocTokenUsage: real('pending_prealloc_token_usage'),
-  kvTransferSpeedGbS: real('kv_transfer_speed_gb_s'),
-  kvTransferLatencyMs: real('kv_transfer_latency_ms'),
-  kvTransferBootstrapMs: real('kv_transfer_bootstrap_ms'),
-  kvTransferAllocMs: real('kv_transfer_alloc_ms'),
-  prefillTps: real('prefill_tps'),
-  genTps: real('gen_tps'),
-  rps: real('rps'),
-  targetGenTps: real('target_gen_tps'),
-  targetPrefillTps: real('target_prefill_tps'),
-  inFlight: integer('in_flight'),
-  maxInFlight: integer('max_in_flight'),
-  lastAction: text('last_action'),
-  timeToFirstTokenSeconds: jsonColumn<unknown>('time_to_first_token_seconds'),
-  e2eRequestLatencySeconds: jsonColumn<unknown>('e2e_request_latency_seconds'),
-  interTokenLatencySeconds: jsonColumn<unknown>('inter_token_latency_seconds'),
-  perStageReqLatencySeconds: jsonColumn<unknown>('per_stage_req_latency_seconds'),
-  queueTimeSeconds: jsonColumn<unknown>('queue_time_seconds'),
-})
-
-export const nvidiaSmi = sqliteTable('nvidia_smi', {
-  id: idColumn(),
-  ts: integer('ts', {mode: 'timestamp_ms'}).defaultNow().notNull(),
-  instanceId: text('instance_id').notNull(),
-  gpuIndex: integer('gpu_index').notNull(),
-  gpuUuid: text('gpu_uuid'),
-  gpuName: text('gpu_name'),
-  temperatureGpu: integer('temperature_gpu'),
-  utilizationGpu: integer('utilization_gpu'),
-  utilizationMemory: integer('utilization_memory'),
-  memoryTotalMiB: integer('memory_total_mib'),
-  memoryUsedMiB: integer('memory_used_mib'),
-  powerDrawWatts: real('power_draw_watts'),
-  powerLimitWatts: real('power_limit_watts'),
-  fanSpeed: integer('fan_speed'),
-  pstate: text('pstate'),
-})
+export const user = createTableContract<UserRecord>()
+export const articles = createTableContract<ArticleRecord>()
+export const models = createTableContract<ModelRecord>()
+export const dataSource = createTableContract<DataSourceRecord>()
+export const importRoute = createTableContract<ImportRouteRecord>()
+export const dataSourceRouteLink = createTableContract<DataSourceRouteLinkRecord>()
+export const projects = createTableContract<ProjectRecord>()
+export const projectRouteLink = createTableContract<ProjectRouteLinkRecord>()
+export const articleRouteLink = createTableContract<ArticleRouteLinkRecord>()
+export const comparisonProject = createTableContract<ComparisonProjectRecord>()
+export const comparisonProjectRouteLink = createTableContract<ComparisonProjectRouteLinkRecord>()
+export const judgmentsJobs = createTableContract<JudgmentsJobRecord>()
+export const prompts = createTableContract<PromptRecord>()
+export const judgmentsJobsPrompts = createTableContract<JudgmentsJobsPromptRecord>()
+export const projectPrompts = createTableContract<ProjectPromptRecord>()
+export const comparisonProjectPrompt = createTableContract<ComparisonProjectPromptRecord>()
+export const judgments = createTableContract<JudgmentRecord>()
+export const judgmentsHuman = createTableContract<JudgmentHumanRecord>()
+export const projectArticles = createTableContract<ProjectArticleRecord>()
+export const tokenUse = createTableContract<TokenUseRecord>()
+export const judgmentAssessments = createTableContract<JudgmentAssessmentRecord>()
+export const llmStatus = createTableContract<LlmStatusRecord>()
+export const nvidiaSmi = createTableContract<NvidiaSmiRecord>()

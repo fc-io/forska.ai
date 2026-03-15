@@ -5,7 +5,7 @@ alwaysApply: true
 ## Important
 
 IMPORTANT: when writing plans or md files in general; be extremely concise. Sacrifice grammar for the sake of concision.
-IMPORTANT: Please don't create postgres migration files for me. I want to create migrations using the Drizzle CLI (bun db:gen, bun db:migrate) if possible.
+IMPORTANT: Please don't create postgres migration files for me. Prefer the existing DuckDB SQL migration flow (`bun db:mig`) when schema changes are needed.
 IMPORTANT: We use Eden/RPC so derive the types from the API when possible and don't make up new types.
 IMPORTANT: I don't like try, catch, finally, throw. Only use when absolutely necessary.
 IMPORTANT: Layout-first UI (shell first; data later; no full-page spinner)
@@ -19,11 +19,11 @@ IMPORTANT: Do not add auth/session/user/admin requirements unless explicitly ask
 - No `<Suspense>` without `fallback`
 - Client network via TanStack Query + Eden; `fetch` only if streaming/upload/download forces it (inside mutationFn)
 
-See `plans/old/LAYOUT_FIRST_PLAN.md`.
+See `LOCAL_FIRST_PLAN.md`.
 
 IMPORTANT: Avoid branching. If something can be done without, please do without. For example have an type ArrayThatWillLop = array and initalize with an empty array, instead of type LopIfArray = [] | null.
 IMPORTANT: If there is only one export in a file, then the filename should match the name of the exported function
-IMPORTANT: On the server – prefer Drizzle ORM over executing pure SQL commands
+IMPORTANT: On the server – prefer the shared DuckDB service/query helpers over ad hoc DB access
 IMPORTANT: On the client/app – use import {useQuery} from '@tanstack/solid-query' over createQuery
 IMPORTANT: only have secrets and values we need to change from outside the app in the .env files.
 IMPORTANT: Keep filenames camelCase, even for TSX/JSX React components.
@@ -160,7 +160,7 @@ const transformedEntries = getEntriesInDatabaseFormat(importRoute, entries)
 ### TypeScript conventions
 
 - IMPORTANT: Prefer `type` over `interface` for type definitions
-- IMPORTANT: Prefer inferred/derived types over explicit ones – do not define a type when it can be derived. Especially try to infer types from the Drizzle src/db/schema.ts.
+- IMPORTANT: Prefer inferred/derived types over explicit ones – do not define a type when it can be derived from existing helpers or API contracts.
 - Use explicit return types for functions when the return type is not immediately obvious (but only do this for pure functions, and functions that don't call the DB)
 - Prefer type unions and intersections over complex inheritance patterns
 
@@ -186,7 +186,7 @@ const transformedEntries = getEntriesInDatabaseFormat(importRoute, entries)
 
 ## Platform and tools
 
-- IMPORTANT: Stack built on Drizzle with Postgres on the server, Bun, Vite, Solid, Tailwind, TanStack Router, @tanstack/solid-query, date-fns, Elysia (for server) with @elysiajs/cron installed.
+- IMPORTANT: Stack built on DuckDB-native server helpers, Bun, Vite, Solid, Tailwind, TanStack Router, @tanstack/solid-query, date-fns, Elysia (for server) with @elysiajs/cron installed.
 
 Default to using Bun instead of Node.js.
 
@@ -225,7 +225,7 @@ We use "eslint-plugin-prettier" so there is no need to run prettier separately.
 
 ## Database patterns
 
-- IMPORTANT: Always use Drizzle ORM query builder methods instead of raw SQL
+- IMPORTANT: Always prefer the shared DuckDB services/helpers over ad hoc SQL in route handlers
 - Use transactions for operations affecting multiple tables
 - Prefer `db.select()`, `db.insert()`, `db.update()`, `db.delete()` over `db.execute()`
 - Use prepared statements for frequently executed queries
@@ -233,8 +233,7 @@ We use "eslint-plugin-prettier" so there is no need to run prettier separately.
 
 ### Database migrations
 
-- IMPORTANT: When manually adding entries to `_journal.json`, the `when` timestamp MUST be greater than the latest existing migration's timestamp in the database (`SELECT MAX(created_at) FROM drizzle.__drizzle_migrations`). If the timestamp is in the past, Drizzle will silently skip the migration thinking it was already applied.
-- IMPORTANT: Prefer Drizzle-compatible index syntax over raw SQL. Avoid partial indexes (`WHERE` clauses) since Drizzle doesn't support them directly – use regular indexes instead. A regular index on a nullable column like `deleted_at` works fine for filtering `IS NULL`.
+- IMPORTANT: Prefer the existing SQL migration files under `src/db/duckdbMigrations/`; don't invent a second migration system.
 
 ### Judgment queries (model + content filtering)
 

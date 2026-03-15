@@ -31,11 +31,10 @@ bun test path/to/file.test.ts          # Single file
 bun test --watch            # Watch mode
 bun test --grep "pattern"   # Filter by name
 
-# Database (Drizzle ORM + PostgreSQL)
-bun run db:gen              # Generate migration from schema changes
-bun run db:mig              # Apply migrations
-bun run db:seed             # Seed database
-bun run db:studio           # Drizzle Studio UI
+# Database (DuckDB-native runtime)
+bun run db:mig              # Apply SQL migrations
+bun run db:duck:mig         # Same as db:mig
+bun run db:duck:rebuild-marts # Rebuild DuckDB marts
 ```
 
 ---
@@ -48,7 +47,7 @@ bun run db:studio           # Drizzle Studio UI
 | `src/app/`                  | SolidJS client                  |
 | `src/components/`           | Shared UI components            |
 | `src/utils/`, `src/stores/` | Helpers, state                  |
-| `src/db/`                   | Drizzle schema, migrations      |
+| `src/db/`                   | DB types, SQL migrations        |
 | `docs/`                     | Domain documentation            |
 | `scripts/`                  | CLI utilities, DB ops           |
 
@@ -83,7 +82,7 @@ return isValid ? processData(input) : handleError(input)
 ### TypeScript
 
 - **`type` over `interface`** — always prefer type aliases
-- **Infer types** — derive from Drizzle schema, Eden/RPC; avoid manual type definitions
+- **Infer types** — derive from Eden/RPC and local row builders where possible; avoid needless type duplication
 - **No shared type files** — keep types local to usage
 - **Explicit returns only for pure functions** — skip for DB-calling functions
 - **Unused vars** — prefix with `_` (e.g., `_unused`)
@@ -156,13 +155,12 @@ return <span>{props.user.name}</span>
 
 ---
 
-## Database (Drizzle + PostgreSQL)
+## Database (DuckDB)
 
-- **Drizzle ORM only** — no raw SQL, no `db.execute()`
-- Use `db.select()`, `db.insert()`, `db.update()`, `db.delete()`
+- Use the server DuckDB services/helpers for DB access
 - Transactions for multi-table ops
 - **Singular table names** (e.g., `article`, not `articles`)
-- Generate migrations: `bun run db:gen` then `bun run db:mig`
+- Apply migrations: `bun run db:mig`
 
 ### Judgment Queries
 

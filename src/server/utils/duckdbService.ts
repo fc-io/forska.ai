@@ -20,13 +20,33 @@ type PendingDuckdbQuery = {
 }
 
 type DuckdbMarkerRow = {__duckdb_done__?: string}
+type DuckdbServiceState = {
+  currentPendingDuckdbQuery: PendingDuckdbQuery | null
+  duckdbProcess: ChildProcessWithoutNullStreams | null
+  duckdbQueue: Promise<void>
+  duckdbRuntimeConfig: DuckdbRuntimeConfig | null
+  stderrBuffer: string
+  stdoutBuffer: string
+}
 
-let currentPendingDuckdbQuery: PendingDuckdbQuery | null = null
-let duckdbProcess: ChildProcessWithoutNullStreams | null = null
-let duckdbQueue = Promise.resolve()
-let duckdbRuntimeConfig: DuckdbRuntimeConfig | null = null
-let stderrBuffer = ''
-let stdoutBuffer = ''
+declare global {
+  var __forskaDuckdbServiceState: DuckdbServiceState | undefined
+}
+
+const getDuckdbServiceState = () => {
+  globalThis.__forskaDuckdbServiceState ??= {
+    currentPendingDuckdbQuery: null,
+    duckdbProcess: null,
+    duckdbQueue: Promise.resolve(),
+    duckdbRuntimeConfig: null,
+    stderrBuffer: '',
+    stdoutBuffer: '',
+  }
+
+  return globalThis.__forskaDuckdbServiceState
+}
+
+const duckdbServiceState = getDuckdbServiceState()
 
 const getDuckdbBinary = () => {
   const configuredBinary = String(process.env['DUCKDB_BIN'] ?? '').trim()
@@ -39,18 +59,18 @@ const getTrimmedValue = (value: string | null | undefined) => {
 }
 
 const getDuckdbRuntimeConfigValue = () => {
-  if (duckdbRuntimeConfig) {
-    return duckdbRuntimeConfig
+  if (duckdbServiceState.duckdbRuntimeConfig) {
+    return duckdbServiceState.duckdbRuntimeConfig
   }
 
-  duckdbRuntimeConfig = {
+  duckdbServiceState.duckdbRuntimeConfig = {
     binary: getDuckdbBinary(),
     databasePath: env.DUCKDB_PATH,
     memoryLimit: env.DUCKDB_MEMORY_LIMIT,
     tempDirectory: getTrimmedValue(env.DUCKDB_TEMP_DIRECTORY),
   }
 
-  return duckdbRuntimeConfig
+  return duckdbServiceState.duckdbRuntimeConfig
 }
 
 const ensureDuckdbRuntimeDirectories = (runtimeConfig: DuckdbRuntimeConfig) => {
@@ -111,17 +131,17 @@ const getDuckdbResultRows = (lines: string[]) => {
 }
 
 const rejectPendingDuckdbQuery = (error: Error) => {
-  if (currentPendingDuckdbQuery) {
-    currentPendingDuckdbQuery.reject(error)
-    currentPendingDuckdbQuery = null
+  if (duckdbServiceState.currentPendingDuckdbQuery) {
+    duckdbServiceState.currentPendingDuckdbQuery.reject(error)
+    duckdbServiceState.currentPendingDuckdbQuery = null
   }
 }
 
 const resolvePendingDuckdbQuery = () => {
-  if (currentPendingDuckdbQuery) {
-    const stderrOutput = currentPendingDuckdbQuery.stderrLines.join('\n').trim()
-    const pendingQuery = currentPendingDuckdbQuery
-    currentPendingDuckdbQuery = null
+  if (duckdbServiceState.currentPendingDuckdbQuery) {
+    const stderrOutput = duckdbServiceState.currentPendingDuckdbQuery.stderrLines.join('\n').trim()
+    const pendingQuery = duckdbServiceState.currentPendingDuckdbQuery
+    duckdbServiceState.currentPendingDuckdbQuery = null
     return stderrOutput === ''
       ? pendingQuery.resolve(getDuckdbResultRows(pendingQuery.stdoutLines))
       : pendingQuery.reject(new Error(stderrOutput))
@@ -129,25 +149,31 @@ const resolvePendingDuckdbQuery = () => {
 }
 
 const appendPendingDuckdbStdoutLine = (line: string) => {
-  if (currentPendingDuckdbQuery) {
-    currentPendingDuckdbQuery.stdoutLines = [...currentPendingDuckdbQuery.stdoutLines, line]
+  if (duckdbServiceState.currentPendingDuckdbQuery) {
+    duckdbServiceState.currentPendingDuckdbQuery.stdoutLines = [
+      ...duckdbServiceState.currentPendingDuckdbQuery.stdoutLines,
+      line,
+    ]
   }
 }
 
 const appendPendingDuckdbStderrLine = (line: string) => {
-  if (currentPendingDuckdbQuery) {
-    currentPendingDuckdbQuery.stderrLines = [...currentPendingDuckdbQuery.stderrLines, line]
+  if (duckdbServiceState.currentPendingDuckdbQuery) {
+    duckdbServiceState.currentPendingDuckdbQuery.stderrLines = [
+      ...duckdbServiceState.currentPendingDuckdbQuery.stderrLines,
+      line,
+    ]
   }
 }
 
 const handleDuckdbStdoutLine = (line: string) => {
   const trimmedLine = line.trim()
 
-  if (trimmedLine === '' || currentPendingDuckdbQuery === null) {
+  if (trimmedLine === '' || duckdbServiceState.currentPendingDuckdbQuery === null) {
     return
   }
 
-  return getDuckdbMarkerToken(trimmedLine) === currentPendingDuckdbQuery.token
+  return getDuckdbMarkerToken(trimmedLine) === duckdbServiceState.currentPendingDuckdbQuery.token
     ? resolvePendingDuckdbQuery()
     : appendPendingDuckdbStdoutLine(trimmedLine)
 }
@@ -161,25 +187,25 @@ const handleDuckdbStderrLine = (line: string) => {
 }
 
 const flushDuckdbStdout = (chunk: string) => {
-  const lines = `${stdoutBuffer}${chunk}`.split('\n')
-  stdoutBuffer = lines.pop() ?? ''
+  const lines = `${duckdbServiceState.stdoutBuffer}${chunk}`.split('\n')
+  duckdbServiceState.stdoutBuffer = lines.pop() ?? ''
   lines.map(handleDuckdbStdoutLine)
 }
 
 const flushDuckdbStderr = (chunk: string) => {
-  const lines = `${stderrBuffer}${chunk}`.split('\n')
-  stderrBuffer = lines.pop() ?? ''
+  const lines = `${duckdbServiceState.stderrBuffer}${chunk}`.split('\n')
+  duckdbServiceState.stderrBuffer = lines.pop() ?? ''
   lines.map(handleDuckdbStderrLine)
 }
 
 const resetDuckdbRuntimeState = () => {
-  duckdbProcess = null
-  stdoutBuffer = ''
-  stderrBuffer = ''
+  duckdbServiceState.duckdbProcess = null
+  duckdbServiceState.stdoutBuffer = ''
+  duckdbServiceState.stderrBuffer = ''
 }
 
 const getDuckdbExitError = (code: number | null, signal: string | null) => {
-  const stderrOutput = currentPendingDuckdbQuery?.stderrLines.join('\n').trim() ?? ''
+  const stderrOutput = duckdbServiceState.currentPendingDuckdbQuery?.stderrLines.join('\n').trim() ?? ''
   const exitReason = signal ? `signal ${signal}` : `code ${String(code ?? 'unknown')}`
   return new Error(stderrOutput === '' ? `DuckDB process exited with ${exitReason}` : stderrOutput)
 }
@@ -207,13 +233,13 @@ const createDuckdbProcess = (runtimeConfig: DuckdbRuntimeConfig) => {
 }
 
 const getDuckdbCommandError = (error: Error | null | undefined) => {
-  const stderrOutput = currentPendingDuckdbQuery?.stderrLines.join('\n').trim() ?? ''
+  const stderrOutput = duckdbServiceState.currentPendingDuckdbQuery?.stderrLines.join('\n').trim() ?? ''
   return error ?? new Error(stderrOutput === '' ? 'DuckDB command failed' : stderrOutput)
 }
 
 const writeDuckdbCommand = (statement: string, token: string) => {
   return new Promise<void>((resolve, reject) => {
-    const activeProcess = duckdbProcess
+    const activeProcess = duckdbServiceState.duckdbProcess
 
     if (activeProcess === null) {
       reject(new Error('DuckDB process not started'))
@@ -229,7 +255,7 @@ const writeDuckdbCommand = (statement: string, token: string) => {
 const runDuckdbCommand = async <T>(statement: string): Promise<T[]> => {
   const token = randomUUID()
   return new Promise<T[]>((resolve, reject) => {
-    currentPendingDuckdbQuery = {
+    duckdbServiceState.currentPendingDuckdbQuery = {
       token,
       stdoutLines: [],
       stderrLines: [],
@@ -255,19 +281,19 @@ const runDuckdbStartupStatements = async (statements: string[]): Promise<void> =
 }
 
 const ensureStartedDuckdbProcess = async () => {
-  if (duckdbProcess) {
-    return duckdbProcess
+  if (duckdbServiceState.duckdbProcess) {
+    return duckdbServiceState.duckdbProcess
   }
 
   const runtimeConfig = ensureDuckdbRuntimeDirectories(getDuckdbRuntimeConfigValue())
-  duckdbProcess = createDuckdbProcess(runtimeConfig)
+  duckdbServiceState.duckdbProcess = createDuckdbProcess(runtimeConfig)
   await runDuckdbStartupStatements(getDuckdbStartupStatements(runtimeConfig))
-  return duckdbProcess
+  return duckdbServiceState.duckdbProcess
 }
 
 const enqueueDuckdbWork = async <T>(work: () => Promise<T>): Promise<T> => {
-  const queuedWork = duckdbQueue.then(work)
-  duckdbQueue = queuedWork.then(
+  const queuedWork = duckdbServiceState.duckdbQueue.then(work)
+  duckdbServiceState.duckdbQueue = queuedWork.then(
     () => {
       return undefined
     },
@@ -326,11 +352,11 @@ export const runDuckdbMaintenance = async (command: 'checkpoint' | 'force_checkp
 
 export const closeDuckdbService = async () => {
   await enqueueDuckdbWork(async () => {
-    if (duckdbProcess === null) {
+    if (duckdbServiceState.duckdbProcess === null) {
       return
     }
 
-    const activeProcess = duckdbProcess
+    const activeProcess = duckdbServiceState.duckdbProcess
     await new Promise<void>((resolve) => {
       activeProcess.once('exit', () => {
         resolve()

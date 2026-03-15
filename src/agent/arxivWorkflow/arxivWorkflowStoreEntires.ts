@@ -72,7 +72,7 @@ const batchEntries = <T>(records: T[], batchSize: number): T[][] => {
   return batches
 }
 
-// Store a batch of records directly via Drizzle and link import routes
+// Store a batch of records and link import routes
 const storeBatch = async (batch: (typeof DatabaseItem.infer)[]): Promise<void> => {
   await storeImportedArticles(
     batch.map((entry) => {

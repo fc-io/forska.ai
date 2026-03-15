@@ -2,7 +2,7 @@
 
 ## Goal
 
-- [ ] App DB: SQLite via `bun:sqlite` + `drizzle-orm/bun-sqlite`.
+- [ ] App DB: native DuckDB app/runtime boundary only.
 - [x] Default SQLite path lives outside repo/worktree/Dropbox in shared OS app-data dir.
 - [x] Default shared SQLite path: macOS `~/Library/Application Support/Forska/forska.sqlite`; Linux `${XDG_DATA_HOME:-~/.local/share}/forska/forska.sqlite`; Windows `%LOCALAPPDATA%\\Forska\\forska.sqlite`.
 - [ ] Analytics: DuckDB only; query final SQLite shape; no legacy analytics runtime.
@@ -15,7 +15,7 @@
 
 ## Step 0 - Freeze contract
 
-- [x] Keep Drizzle; switch app runtime/dialect to Bun SQLite.
+- [x] Keep one typed schema source during transition; runtime no longer depends on the old ORM layer.
 - [x] SQLite types: ids=`text`; timestamps=`integer` unix ms; booleans=`integer`; enums=`text`; json/arrays=`text` JSON.
 - [x] `fullTextSource` contract: manual iff `user_upload`; fetched iff non-null and != `user_upload`.
 - [x] Server/client contract drops `ownerId`, `userId`, `sessionId`, `reviewerId`, `assessedBy`.
@@ -26,15 +26,15 @@
 - [x] Token-use contract: no session lookup; client/server writes app/job-scoped rows only.
 - [x] Keep existing Docker env/compose/build files untouched until final cleanup.
 
-## Step 1A - DB core (`src/server/utils/**`, `drizzle*.ts`, env)
+## Step 1A - DB core (`src/server/utils/**`, env)
 
 - [x] Add Bun SQLite connection helper; set `journal_mode=WAL`, `foreign_keys=ON`, `synchronous=NORMAL`, `busy_timeout`.
 - [x] Add `SQLITE_PATH`; local-first code reads it; keep `DATABASE_URL` for old stack until final cleanup.
 - [x] Replace repo-relative SQLite fallback with cross-platform OS app-data default path resolver.
 - [x] Create parent dir cross-platform; no macOS-only or slash-only path assumptions.
 - [x] Local-first path reads user config from SQLite `user`; env keeps secrets + external/runtime values only.
-- [x] Switch app DB wiring from `drizzle-orm/node-postgres` to `drizzle-orm/bun-sqlite`.
-- [x] Use separate SQLite Drizzle migration lineage/meta; do not reuse current Postgres journal.
+- [x] Switch app DB wiring from Postgres/SQLite bridges to the DuckDB-native service boundary.
+- [x] Use standalone DuckDB SQL migrations; do not reuse old Postgres/SQLite migration lineage.
 - [x] Stop merging `auth-schema.ts` into DB bootstrap.
 
 ## Step 1B - Schema rewrite (`src/db/schema.ts`, `auth-schema.ts`, migrations)
@@ -81,7 +81,7 @@
 
 ## Step 2A - App DB port (`src/server/**`, `src/db/**`)
 
-- [x] Port all routes/services to SQLite Drizzle types and SQLite timestamp/json semantics.
+- [x] Port all routes/services to DuckDB-native types and DuckDB timestamp/json semantics.
 - [x] Replace raw PG array logic, casts, `ILIKE`, `ANY`, `date_bin`, `date_trunc`, trigger assumptions, view assumptions.
 - [x] Rewrite judgment-job cursor/storage away from legacy analytics-shaped cursor fields.
 - [x] Verify prompt hash/immutability behavior in app code or SQLite-safe DB logic.
@@ -117,7 +117,7 @@
 
 - [ ] Audit old DB scripts and classify them: SQLite-ready, Postgres-only legacy, needs rewrite, or safe to delete at final cleanup.
 - [ ] Convert the scripts we still need in local-first mode to SQLite/`SQLITE_PATH` instead of Postgres/`DATABASE_URL`.
-- [ ] Update script internals to use Bun SQLite or SQLite-safe Drizzle codepaths; remove `pg` client assumptions where the script is meant to survive cutover.
+- [ ] Update surviving script internals to use DuckDB-native helpers; remove old `pg` client assumptions where the script is meant to survive cutover.
 - [ ] Keep explicitly old-stack scripts available for the old Docker/Postgres stack until final cleanup, but label them clearly as legacy.
 - [ ] Add at least one importer/support script path for moving old Postgres data into SQLite without runtime dual-write.
 
