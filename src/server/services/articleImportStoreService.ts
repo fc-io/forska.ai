@@ -1,5 +1,6 @@
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral} from './appQueryHelpers.ts'
+import {getDuckdbMartRefreshService} from './getDuckdbMartRefreshService.ts'
 
 type AppTx = {queryJson: <T>(statement: string) => Promise<T[]>; run: (statement: string) => Promise<void>}
 
@@ -196,7 +197,7 @@ export const storeImportedArticles = async (rows: ArticleImportStoreRow[]) => {
     }),
   ]
 
-  await getAppDatabaseService().transaction(async (tx) => {
+  const importRefreshState = await getAppDatabaseService().transaction(async (tx) => {
     const upsertedArticles = await tx.queryJson<{id: string; articleId: string}>(`
       INSERT INTO app.article (${columnNames.join(', ')})
       VALUES ${getArticleInsertValues(rows, includedKeys)}
@@ -229,7 +230,16 @@ export const storeImportedArticles = async (rows: ArticleImportStoreRow[]) => {
         ON CONFLICT(article_id, import_route_id) DO NOTHING
       `)
     }
+
+    return {importRouteIds: Array.from(routeIdMap.values())}
   })
+
+  if (importRefreshState.importRouteIds.length > 0) {
+    await getDuckdbMartRefreshService().queueProjectRefreshesByImportRouteIds(
+      importRefreshState.importRouteIds,
+      'articleImportStoreService',
+    )
+  }
 }
 
 export type {ArticleImportStoreRow}

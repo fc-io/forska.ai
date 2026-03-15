@@ -1,6 +1,7 @@
 import {judgments} from '../../db/schema.ts'
 import {getAppDatabaseService} from '../../server/services/appDatabaseService.ts'
 import {escapeSqlString, getSqlLiteral} from '../../server/services/appQueryHelpers.ts'
+import {getDuckdbMartRefreshService} from '../../server/services/getDuckdbMartRefreshService.ts'
 import {getShortIdForPrompt, type ShortIdMapping} from './judgeGetPrompt.ts'
 import {judgeStoreJudgmentGetStringAsArrayOfStrings} from './judgeStoreJudgment/judgeStoreJudgmentGetStringAsArrayOfStrings.ts'
 
@@ -139,10 +140,17 @@ export const judgeStoreJudgment = async (
     })
     // why is this here?
     const results = await Promise.allSettled(storePromises)
+    const successfulResults = results.filter((result): result is PromiseFulfilledResult<{id: string} | undefined> => {
+      return result.status === 'fulfilled'
+    })
 
     const failedResults = results.filter((r): r is PromiseRejectedResult => {
       return r.status === 'rejected'
     })
+
+    if (successfulResults.length > 0) {
+      await getDuckdbMartRefreshService().queueJudgmentArticleRefresh(articleId, 'judgeStoreJudgment')
+    }
 
     if (failedResults.length > 0) {
       console.error(

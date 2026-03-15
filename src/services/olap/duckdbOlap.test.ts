@@ -240,10 +240,30 @@ test('getDatabaseBasedFiltersFromDuckdb returns values when project modelId is n
     getScopeRouteRows(),
     [getDuckdbScopedArticleRow({id: 'article-1'})],
     [
-      {promptId: 'prompt-1', answerValue: 'zeta'},
-      {promptId: 'prompt-1', answerValue: 'beta'},
-      {promptId: 'prompt-1', answerValue: 'alpha'},
-      {promptId: 'prompt-1', answerValue: 'alpha'},
+      getDuckdbJudgmentRow({
+        articleId: 'article-1',
+        promptId: 'prompt-1',
+        answeredOriginal: 'zeta',
+        answeredOriginalAsArray: [],
+      }),
+      getDuckdbJudgmentRow({
+        articleId: 'article-1',
+        promptId: 'prompt-1',
+        answeredOriginal: 'beta',
+        answeredOriginalAsArray: [],
+      }),
+      getDuckdbJudgmentRow({
+        articleId: 'article-1',
+        promptId: 'prompt-1',
+        answeredOriginal: 'alpha',
+        answeredOriginalAsArray: [],
+      }),
+      getDuckdbJudgmentRow({
+        articleId: 'article-1',
+        promptId: 'prompt-1',
+        answeredOriginal: 'alpha',
+        answeredOriginalAsArray: [],
+      }),
     ],
   ])
 
@@ -266,7 +286,6 @@ test('getDatabaseBasedFiltersFromDuckdb returns empty values on query error', as
     getPromptRows(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
-    [getDuckdbScopedArticleRow({id: 'article-1'})],
     new Error('db exploded'),
   ])
 
@@ -287,7 +306,6 @@ test('getNumericFiltersFromDuckdb ignores non-integer values', async () => {
     [{id: 'prompt-1', order: 0, promptHeading: 'Prompt 1', originalText: 'Prompt 1', type: 'string.integer'}],
     getProjectRows('model-1'),
     getScopeRouteRows(),
-    [getDuckdbScopedArticleRow({id: 'article-1'})],
     [
       {promptId: 'prompt-1', answerValue: '10'},
       {promptId: 'prompt-1', answerValue: '10.5'},
@@ -317,7 +335,6 @@ test('getNumericFiltersFromDuckdb returns empty bins on query error', async () =
     [{id: 'prompt-1', order: 0, promptHeading: 'Prompt 1', originalText: 'Prompt 1', type: 'string.integer'}],
     getProjectRows('model-1'),
     getScopeRouteRows(),
-    [getDuckdbScopedArticleRow({id: 'article-1'})],
     new Error('db exploded'),
   ])
 
@@ -372,15 +389,8 @@ test('queryArticlesReviewsBothFromDuckdb echoes requested page when it is out of
     getPromptRows(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
-    [getDuckdbScopedArticleRow({id: 'article-1', articleUpdatedAt: '2024-01-02T00:00:00.000Z'})],
-    [
-      getDuckdbJudgmentRow({
-        id: 'judgment-1',
-        articleUpdatedAt: '2024-01-02T00:00:00.000Z',
-        answeredOriginalAsArray: [],
-      }),
-    ],
-    [getDuckdbHumanAnswerRow({articleId: 'article-1'})],
+    [{totalCount: 1}],
+    [],
   ])
 
   const {queryArticlesReviewsBothFromDuckdb} = await loadDuckdbOlap()
@@ -397,16 +407,8 @@ test('queryArticlesReviewsBothFromDuckdb keeps null articleCreatedAt rows last',
     getPromptRows(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
+    [{totalCount: 2}],
     [
-      getDuckdbScopedArticleRow({
-        id: 'article-null',
-        createdAt: '2024-01-03T00:00:00.000Z',
-        updatedAt: '2024-01-03T00:00:00.000Z',
-        articleId: 'external-null',
-        articleTitle: 'Null created',
-        articleCreatedAt: null,
-        articleUpdatedAt: null,
-      }),
       getDuckdbScopedArticleRow({
         id: 'article-dated',
         createdAt: '2024-01-01T00:00:00.000Z',
@@ -414,6 +416,15 @@ test('queryArticlesReviewsBothFromDuckdb keeps null articleCreatedAt rows last',
         articleId: 'external-dated',
         articleTitle: 'Dated article',
         articleCreatedAt: '2023-12-31T00:00:00.000Z',
+        articleUpdatedAt: null,
+      }),
+      getDuckdbScopedArticleRow({
+        id: 'article-null',
+        createdAt: '2024-01-03T00:00:00.000Z',
+        updatedAt: '2024-01-03T00:00:00.000Z',
+        articleId: 'external-null',
+        articleTitle: 'Null created',
+        articleCreatedAt: null,
         articleUpdatedAt: null,
       }),
     ],
@@ -468,8 +479,7 @@ test('selectArticleIdsByFilterDuckdb human ignores prompt filters like legacy ol
     getPromptRows(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
-    [getDuckdbScopedArticleRow({id: 'article-1', articleUpdatedAt: null})],
-    [getDuckdbHumanAnswerRow({articleId: 'article-1', answer: 'no', updatedAt: '2024-01-02T00:00:00.000Z'})],
+    [{articleId: 'article-1'}],
   ])
 
   const {selectArticleIdsByFilterDuckdb} = await loadDuckdbOlap()
@@ -483,17 +493,7 @@ test('selectArticleIdsByFilterDuckdb both applies prompt filters only to llm row
     getPromptRows(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
-    [getDuckdbScopedArticleRow({id: 'article-1', articleUpdatedAt: null})],
-    [
-      getDuckdbJudgmentRow({
-        id: 'judgment-1',
-        articleId: 'article-1',
-        articleUpdatedAt: null,
-        answeredOriginalAsArray: [],
-      }),
-    ],
-    [getDuckdbScopedArticleRow({id: 'article-1', articleUpdatedAt: null})],
-    [getDuckdbHumanAnswerRow({articleId: 'article-1', answer: 'no', updatedAt: '2024-01-02T00:00:00.000Z'})],
+    [{articleId: 'article-1'}],
   ])
 
   const {selectArticleIdsByFilterDuckdb} = await loadDuckdbOlap()

@@ -3,6 +3,7 @@ import type {Context} from 'elysia'
 
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
+import {getDuckdbMartRefreshService} from '../../services/getDuckdbMartRefreshService.ts'
 
 export const humanAssessmentRoutesPostSubmit = async ({
   body,
@@ -156,6 +157,7 @@ export const humanAssessmentRoutesPostSubmit = async ({
       AND project_id = '${escapeSqlString(body.projectId)}'
       AND is_answered = FALSE
   `)
+  await getDuckdbMartRefreshService().queueProjectRefresh(body.projectId, 'humanAssessmentRoutesPostSubmit')
 
   return {data: {updated: idsToUpdate.length}}
 }

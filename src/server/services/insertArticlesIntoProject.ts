@@ -1,5 +1,6 @@
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {escapeSqlString, getQuotedStringList} from './appQueryHelpers.ts'
+import {getDuckdbMartRefreshService} from './getDuckdbMartRefreshService.ts'
 
 const chunk = <T>(arr: T[], size: number): T[][] => {
   const out: T[][] = []
@@ -193,6 +194,10 @@ export const insertArticlesIntoProject = async (
         }
       }
     }
+  }
+
+  if (toInsert.length > 0 || linkedPrompts > 0) {
+    await getDuckdbMartRefreshService().queueProjectRefresh(projectId, 'insertArticlesIntoProject')
   }
 
   return {

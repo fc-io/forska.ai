@@ -3,6 +3,7 @@ import {randomUUID} from 'crypto'
 import {articles, judgments} from '../../db/schema.ts'
 import {getAppDatabaseService} from '../../server/services/appDatabaseService.ts'
 import {escapeSqlString, getSqlLiteral} from '../../server/services/appQueryHelpers.ts'
+import {getDuckdbMartRefreshService} from '../../server/services/getDuckdbMartRefreshService.ts'
 import {judgeStoreJudgmentGetStringAsArrayOfStrings} from './judgeStoreJudgment/judgeStoreJudgmentGetStringAsArrayOfStrings.ts'
 import type {SinglePromptJudgmentResult} from './parseSinglePromptJudgment.ts'
 
@@ -147,6 +148,7 @@ export const storeSinglePromptJudgment = async ({
         ${getSqlLiteral(snapshotValues.snapshotProjectModelName)}
       )
     `)
+    await getDuckdbMartRefreshService().queueJudgmentArticleRefresh(article.id, 'storeSinglePromptJudgment')
   } catch (error) {
     console.error(
       `${article.id} | Failed to store judgment for prompt ${promptId}`,

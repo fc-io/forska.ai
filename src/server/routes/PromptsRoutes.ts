@@ -9,6 +9,7 @@ import {
   getQuotedStringList,
   getSqlLiteral,
 } from '../services/appQueryHelpers'
+import {getDuckdbMartRefreshService} from '../services/getDuckdbMartRefreshService.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
@@ -432,6 +433,15 @@ const promptsAdminRoutes = new Elysia()
         }
       })
 
+      await getDuckdbMartRefreshService().queueProjectRefreshesByPromptIds(
+        [keepPromptId, ...mergePromptIds],
+        'PromptsRoutes.merge',
+      )
+      await getDuckdbMartRefreshService().queueJudgmentArticleRefreshesByPromptIds(
+        [keepPromptId, ...mergePromptIds],
+        'PromptsRoutes.merge',
+      )
+
       return {success: true}
     },
     {body: t.Object({keepPromptId: t.String(), mergePromptIds: t.Array(t.String())})},
@@ -573,6 +583,11 @@ const promptsAdminRoutes = new Elysia()
             updated_at = ${getSqlLiteral(now)}
         WHERE id IN (${getQuotedStringList(judgmentIds).join(', ')})
       `)
+
+      await getDuckdbMartRefreshService().queueJudgmentArticleRefreshesByJudgmentIds(
+        judgmentIds,
+        'PromptsRoutes.deleteInvalidJudgments',
+      )
 
       return {success: true, data: {deletedCount: judgmentIds.length}}
     },

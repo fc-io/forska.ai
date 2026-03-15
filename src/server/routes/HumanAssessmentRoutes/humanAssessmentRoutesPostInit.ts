@@ -8,6 +8,7 @@ import {
   getTimestampLiteral,
 } from '../../services/appQueryHelpers.ts'
 import {getAppQueryService} from '../../services/getAppQueryService.ts'
+import {getDuckdbMartRefreshService} from '../../services/getDuckdbMartRefreshService.ts'
 
 type InitResponse = {
   project: {id: string; name: string}
@@ -130,6 +131,7 @@ export const humanAssessmentRoutesPostInit = async ({body, set}: {body: {project
         .join(', ')}
       RETURNING id, prompt_id AS promptId
     `)
+    await getDuckdbMartRefreshService().queueProjectRefresh(body.projectId, 'humanAssessmentRoutesPostInit')
 
     const response: InitResponse = {
       project: {id: project.id, name: project.name},

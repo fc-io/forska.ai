@@ -2,6 +2,7 @@ import {Elysia, t} from 'elysia'
 
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import * as appQueryHelpers from '../services/appQueryHelpers.ts'
+import {getDuckdbMartRefreshService} from '../services/getDuckdbMartRefreshService.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
 import {hasMatchingJudgmentAnswer} from '../utils/judgmentAnswers.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
@@ -354,6 +355,7 @@ export const subprojectsRoutes = new Elysia()
 
       if (body.sourceProjectIds.length === 0) {
         console.log('[subprojects] No source projects selected, no articles added')
+        await getDuckdbMartRefreshService().queueProjectRefresh(newProject.id, 'SubprojectsRoutes.post')
         return {
           data: {
             project: {
@@ -521,6 +523,8 @@ export const subprojectsRoutes = new Elysia()
       })
 
       console.log(`[subprojects] Inserted ${insertedCount} articles into project ${newProject.id}`)
+
+      await getDuckdbMartRefreshService().queueProjectRefresh(newProject.id, 'SubprojectsRoutes.post')
 
       return {
         data: {

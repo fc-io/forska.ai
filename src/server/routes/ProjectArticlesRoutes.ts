@@ -2,6 +2,7 @@ import {Elysia, t} from 'elysia'
 
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {escapeSqlString} from '../services/appQueryHelpers.ts'
+import {getDuckdbMartRefreshService} from '../services/getDuckdbMartRefreshService.ts'
 import {insertArticlesIntoProject} from '../services/insertArticlesIntoProject.ts'
 
 export const projectArticlesRoutes = new Elysia()
@@ -74,6 +75,7 @@ export const projectArticlesRoutes = new Elysia()
       WHERE project_id = '${escapeSqlString(projectId)}'
         AND article_id = '${escapeSqlString(articleId)}'
     `)
+    await getDuckdbMartRefreshService().queueProjectRefresh(projectId, 'ProjectArticlesRoutes.delete')
 
     return {success: true}
   })

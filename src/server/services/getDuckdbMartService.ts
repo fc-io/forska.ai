@@ -180,7 +180,7 @@ WITH eligible_project_judgment AS (
    AND judgment_fact.use_fulltext = project.use_fulltext
    AND judgment_fact.use_fulltext_no_images = project.use_fulltext_no_images
 )
-SELECT
+SELECT DISTINCT
   eligible_project_judgment.project_id,
   eligible_project_judgment.article_id,
   eligible_project_judgment.prompt_id,

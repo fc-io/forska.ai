@@ -8,6 +8,7 @@ import {
   getSqlLiteral,
   getTimestampLiteral,
 } from '../services/appQueryHelpers.ts'
+import {getDuckdbMartRefreshService} from '../services/getDuckdbMartRefreshService.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {projectsRoutesGetArticlesReviews} from './projectsRoutes/projectsRoutesGetArticlesReviews.ts'
@@ -633,6 +634,8 @@ export const projectsRoutes = new Elysia()
         return getProjectValue(createdProject)
       })
 
+      await getDuckdbMartRefreshService().queueProjectRefresh(newProject.id, 'ProjectsRoutes.post')
+
       return {data: newProject}
     },
     {
@@ -1094,6 +1097,8 @@ export const projectsRoutes = new Elysia()
         return {project: getProjectValue(updatedProject), prompts: updatedPrompts}
       })
 
+      await getDuckdbMartRefreshService().queueProjectRefresh(params.id, 'ProjectsRoutes.edit')
+
       return {data: result}
     },
     {
@@ -1333,6 +1338,8 @@ export const projectsRoutes = new Elysia()
 
       return getProjectValue(clonedProject)
     })
+
+    await getDuckdbMartRefreshService().queueProjectRefresh(result.id, 'ProjectsRoutes.clone')
 
     return {data: result}
   })
