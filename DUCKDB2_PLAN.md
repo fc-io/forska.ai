@@ -26,6 +26,7 @@ Goal: remove the legacy analytics path only after DuckDB matches the old contrac
 
 ## Active Legacy Runtime Blockers
 
+- [x] Do not spend time optimizing admin-only paths beyond correctness; keep performance work focused on review/import/runtime paths users hit often.
 - [x] `src/server/routes/SubprojectsRoutes.ts`: remove direct legacy fast-path after OLAP parity covers prompt-filter selection.
 - [x] `src/server/routes/AdminImportRouteStatsRoutes.ts`: rewrite from SQLite/DuckDB or delete with `src/app/routes/+admin/+import-route-stats/**`.
 - [x] `src/server/routes/AdminInvestigateRoutes.ts`: delete or redesign with `src/app/routes/+admin/+diagnose-unassessed/+index.tsx`; stop old diff payload.

@@ -1,3 +1,4 @@
+import {getAppDatabaseService} from '../../server/services/appDatabaseService.ts'
 import {env} from '../../server/utils/env.ts'
 import {getDuckdbPath} from '../../server/utils/getDuckdbPath.ts'
 
@@ -35,11 +36,11 @@ const getDuckdbPrelude = () => {
   return `SET memory_limit = ${getDuckdbSqlString(env.DUCKDB_MEMORY_LIMIT)}; ${tempDirectoryStatement}`
 }
 
-export const runDuckdbJsonQuery = async <T>(query: string, duckdbPath?: string): Promise<T[]> => {
-  const process = globalThis.Bun.spawn(
-    [getDuckdbBin(), '-json', getDuckdbDatabasePath(duckdbPath), `${getDuckdbPrelude()} ${query}`],
-    {stdout: 'pipe', stderr: 'pipe'},
-  )
+const runDuckdbJsonQueryFromSpawn = async <T>(query: string, duckdbPath: string): Promise<T[]> => {
+  const process = globalThis.Bun.spawn([getDuckdbBin(), '-json', duckdbPath, `${getDuckdbPrelude()} ${query}`], {
+    stdout: 'pipe',
+    stderr: 'pipe',
+  })
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(process.stdout).text(),
     new Response(process.stderr).text(),
@@ -58,4 +59,11 @@ export const runDuckdbJsonQuery = async <T>(query: string, duckdbPath?: string):
 
   const parsed = JSON.parse(trimmedStdout) as T[] | T
   return Array.isArray(parsed) ? parsed : [parsed]
+}
+
+export const runDuckdbJsonQuery = async <T>(query: string, duckdbPath?: string): Promise<T[]> => {
+  const resolvedDuckdbPath = getDuckdbDatabasePath(duckdbPath)
+  return resolvedDuckdbPath === env.DUCKDB_PATH
+    ? getAppDatabaseService().queryJson<T>(query)
+    : runDuckdbJsonQueryFromSpawn<T>(query, resolvedDuckdbPath)
 }
