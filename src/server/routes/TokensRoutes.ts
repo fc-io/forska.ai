@@ -16,7 +16,7 @@ export const tokensRoutes = new Elysia()
     async ({body}) => {
       try {
         const result = await getTokenUseQueryService().insertTokenUse({
-          judgments_job_id: body.judgmentsJobId ?? null,
+          judgment_job_id: body.judgmentsJobId ?? null,
           gpu_nnodes: env.GPU_NNODES,
           gpu_gpus_per_node: env.GPU_GPUS_PER_NODE,
           gpu_total_gpus: env.GPU_TOTAL_GPUS,

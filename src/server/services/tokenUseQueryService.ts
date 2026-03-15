@@ -95,7 +95,7 @@ const tokenUseSelectClause = `
   id,
   created_at AS createdAt,
   updated_at AS updatedAt,
-  judgments_job_id AS judgmentsJobId,
+  judgment_job_id AS judgmentsJobId,
   requests,
   total_prompt_tokens AS totalPromptTokens,
   total_completion_tokens AS totalCompletionTokens,
@@ -203,7 +203,7 @@ const getTimelineRowsForProject = async (params: {projectId: string; startDate: 
       tu.total_success_tokens AS totalSuccessTokens,
       tu.total_failed_tokens AS totalFailedTokens
     FROM app.token_use tu
-    INNER JOIN app.judgment_job jj ON jj.id = tu.judgments_job_id
+    INNER JOIN app.judgment_job jj ON jj.id = tu.judgment_job_id
     WHERE jj.project_id = '${escapeSqlString(params.projectId)}'
       AND tu.created_at >= ${getTimestampLiteral(params.startDate)}
       AND tu.created_at < ${getTimestampLiteral(params.endDate)}
@@ -238,7 +238,7 @@ const getTimelineRowsAllJobs = async (params: {startDate: Date; endDate: Date}) 
       total_success_tokens AS totalSuccessTokens,
       total_failed_tokens AS totalFailedTokens
     FROM app.token_use
-    WHERE judgments_job_id IS NOT NULL
+    WHERE judgment_job_id IS NOT NULL
       AND created_at >= ${getTimestampLiteral(params.startDate)}
       AND created_at < ${getTimestampLiteral(params.endDate)}
   `)
@@ -264,7 +264,7 @@ const getFailedRequestsRows = async (params: {limit: number; offset: number}) =>
     SELECT
       tu.id AS id,
       tu.created_at AS createdAt,
-      tu.judgments_job_id AS judgmentsJobId,
+      tu.judgment_job_id AS judgmentsJobId,
       p.id AS projectId,
       p.name AS projectName,
       tu.sglang_model AS modelName,
@@ -272,7 +272,7 @@ const getFailedRequestsRows = async (params: {limit: number; offset: number}) =>
       TO_JSON(tu.failed_requests_details) AS failedRequestsDetails,
       tu.total_tokens AS totalTokens
     FROM app.token_use tu
-    LEFT JOIN app.judgment_job jj ON tu.judgments_job_id = jj.id
+    LEFT JOIN app.judgment_job jj ON tu.judgment_job_id = jj.id
     LEFT JOIN app.project p ON jj.project_id = p.id
     WHERE tu.has_failed_requests = TRUE
     ORDER BY tu.created_at DESC
@@ -356,7 +356,7 @@ const getFailedRequestById = async (id: string) => {
     SELECT
       tu.id AS id,
       tu.created_at AS createdAt,
-      tu.judgments_job_id AS judgmentsJobId,
+      tu.judgment_job_id AS judgmentsJobId,
       jj.project_id AS projectId,
       tu.sglang_model AS modelName,
       tu.failed_requests AS failedRequests,
@@ -365,7 +365,7 @@ const getFailedRequestById = async (id: string) => {
       tu.requests AS requests,
       tu.successful_requests AS successfulRequests
     FROM app.token_use tu
-    LEFT JOIN app.judgment_job jj ON tu.judgments_job_id = jj.id
+    LEFT JOIN app.judgment_job jj ON tu.judgment_job_id = jj.id
     WHERE tu.id = '${escapeSqlString(id)}'
     LIMIT 1
   `)

@@ -260,7 +260,7 @@ export const judgmentsJobsRoutes = new Elysia()
             SUM(total_completion_tokens) AS totalCompletionTokens,
             SUM(requests) AS totalRequests
           FROM app.token_use
-          WHERE judgments_job_id = '${escapeSqlString(job.id)}'
+          WHERE judgment_job_id = '${escapeSqlString(job.id)}'
         `),
         getAppDatabaseService().queryJson<{
           createdAt: unknown
@@ -276,7 +276,7 @@ export const judgmentsJobsRoutes = new Elysia()
             total_completion_tokens AS dailyCompletionTokens,
             requests
           FROM app.token_use
-          WHERE judgments_job_id = '${escapeSqlString(job.id)}'
+          WHERE judgment_job_id = '${escapeSqlString(job.id)}'
           ORDER BY created_at ASC
         `),
       ])
