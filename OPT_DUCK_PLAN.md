@@ -276,11 +276,30 @@ bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --filter-prompt-id
 - Suggested columns:
   - `project_id`
   - `prompt_id`
+  - `answer_id`
   - `answer_value`
   - `article_count`
   - `numeric_min`
   - `numeric_max`
-- This is not the main page-serving mart, but it removes adjacent pressure from the filter UI.
+- Suggested architecture:
+  - use `app.review_answer_dictionary` as the stable answer-id layer
+  - use the facet mart for unconstrained `/api/articlesreviewsfilters`
+  - when `from` / `to` / `search` are present, derive facets from the narrower serving-v2 candidate/filter structures instead of the old broad marts
+- This is not the main page-serving mart, but it is the next best user-visible filter optimization.
+
+### 4b. `mart.review_article_filter_numeric_facet` (optional companion)
+
+- One row per `(project_id, prompt_id)`.
+- Purpose: precomputed numeric facet summaries for `/api/articlesreviewsfilters`.
+- Candidate columns:
+  - `project_id`
+  - `prompt_id`
+  - `numeric_min`
+  - `numeric_max`
+  - optional precomputed bins/histogram payload
+  - optional special-value counts
+- Goal:
+  - avoid rescanning numeric answers just to build filter bins
 
 ### 5. `mart.review_article_page_cache` (optional)
 
@@ -333,6 +352,8 @@ bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --filter-prompt-id
 - [x] Finish the cursor cutover in callers so normal review browsing stops depending on direct page-number `OFFSET` jumps.
 - [x] Switch the hot reviews-list UI to `Load more` instead of `Previous` / `Next` and page jumps.
 - [x] If `mart.review_article_filter_row` is still too large, add a second-level precomputed posting-list/bucket structure per `(project_id, prompt_id, answer_value)`.
+- [ ] Build `mart.review_article_filter_facet` as the next dedicated serving mart for `/api/articlesreviewsfilters`.
+- [ ] Optionally add `mart.review_article_filter_numeric_facet` if numeric prompts still need expensive per-request bin building.
 - [ ] Add a project-local filtered-result cache keyed by normalized prompt-filter payload plus date/search window if the UI repeats the same requests often.
 - [ ] Split `mart.review_article_page` into a narrower `candidate` mart and a separate `display` mart if candidate selection is still reading too much data.
 - [x] Move large judgment payload fields (`explanation`, `quotes`) into a lazy-loaded `mart.review_article_judgment_payload` if page rendering still reads more than it needs.
@@ -539,6 +560,13 @@ bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --mode=unfiltered 
 - Interpretation:
   - the serving-v2 path is now effectively available across the active project set, not just the benchmark project
   - benchmark performance stayed in the same sub-second band after rollout
+
+## Next likely filter-focused step
+
+- Build `mart.review_article_filter_facet` next.
+- Use it to make the default `/api/articlesreviewsfilters` path cheap when there is no date/search constraint.
+- Keep constrained facet requests correct by deriving them from the narrower serving-v2 structures rather than the old broad marts.
+- Only add a separate numeric facet mart if profiling shows numeric bin building is still expensive after the basic facet mart exists.
 
 ### Change 6 - cursor + `Load more` UI for the reviews list
 
