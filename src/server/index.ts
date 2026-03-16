@@ -5,7 +5,6 @@ import {fullTextConversionJobsCron} from './cron/fullTextConversionJobs.ts'
 import {fullTextJobsCron} from './cron/fullTextJobs.ts'
 import {judgmentsJobsCron} from './cron/judgmentsJobs.ts'
 import {nvidiaSmiCron} from './cron/nvidiaSmi.ts'
-import {aaModelsRoutes} from './routes/AaModelsRoutes'
 import {adminInvestigateRoutes} from './routes/AdminInvestigateRoutes.ts'
 import {articleAdminRoutes} from './routes/ArticleAdminRoutes.ts'
 import {articlesRoutes} from './routes/ArticlesRoutes.ts'
@@ -67,7 +66,6 @@ const _app = new Elysia()
   .use(llmStatusRoutes)
   .use(nvidiaSmiRoutes)
   .use(subprojectsRoutes)
-  .use(aaModelsRoutes)
   .listen({port: env.API_SERVER_PORT, idleTimeout: 255})
 
 console.log(

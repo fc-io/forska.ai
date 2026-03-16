@@ -45,7 +45,6 @@ import { Route as AdminGpuIndexRouteImport } from './routes/+admin/+gpu/+index'
 import { Route as AdminFailed_requestsIndexRouteImport } from './routes/+admin/+failed_requests/+index'
 import { Route as AdminDatasourcesIndexRouteImport } from './routes/+admin/+datasources/+index'
 import { Route as AdminAssessmentsIndexRouteImport } from './routes/+admin/+assessments/+index'
-import { Route as AdminAaModelsIndexRouteImport } from './routes/+admin/+aa-models/+index'
 import { Route as AdminJobsIdUnassessed_articlesRouteImport } from './routes/+admin/+jobs/+$id/+unassessed_articles'
 import { Route as AdminDatasourcesIdEditRouteImport } from './routes/+admin/+datasources/+$id/+edit'
 import { Route as ProjectsIdReviewsIndexRouteImport } from './routes/+projects/+$id/+reviews/+index'
@@ -252,11 +251,6 @@ const AdminAssessmentsIndexRoute = AdminAssessmentsIndexRouteImport.update({
   path: '/admin/assessments/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AdminAaModelsIndexRoute = AdminAaModelsIndexRouteImport.update({
-  id: '/admin/aa-models/',
-  path: '/admin/aa-models/',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const AdminJobsIdUnassessed_articlesRoute =
   AdminJobsIdUnassessed_articlesRouteImport.update({
     id: '/admin/jobs/$id/unassessed_articles',
@@ -369,7 +363,6 @@ export interface FileRoutesByFullPath {
   '/compare-judgments/create-from-project': typeof CompareJudgmentsCreateFromProjectRoute
   '/projects/create': typeof ProjectsCreateRoute
   '/projects/create-subproject': typeof ProjectsCreateSubprojectRoute
-  '/admin/aa-models/': typeof AdminAaModelsIndexRoute
   '/admin/assessments/': typeof AdminAssessmentsIndexRoute
   '/admin/datasources/': typeof AdminDatasourcesIndexRoute
   '/admin/failed_requests/': typeof AdminFailed_requestsIndexRoute
@@ -425,7 +418,6 @@ export interface FileRoutesByTo {
   '/compare-judgments/create-from-project': typeof CompareJudgmentsCreateFromProjectRoute
   '/projects/create': typeof ProjectsCreateRoute
   '/projects/create-subproject': typeof ProjectsCreateSubprojectRoute
-  '/admin/aa-models': typeof AdminAaModelsIndexRoute
   '/admin/assessments': typeof AdminAssessmentsIndexRoute
   '/admin/datasources': typeof AdminDatasourcesIndexRoute
   '/admin/failed_requests': typeof AdminFailed_requestsIndexRoute
@@ -482,7 +474,6 @@ export interface FileRoutesById {
   '/compare-judgments/create-from-project': typeof CompareJudgmentsCreateFromProjectRoute
   '/projects/create': typeof ProjectsCreateRoute
   '/projects/create-subproject': typeof ProjectsCreateSubprojectRoute
-  '/admin/aa-models/': typeof AdminAaModelsIndexRoute
   '/admin/assessments/': typeof AdminAssessmentsIndexRoute
   '/admin/datasources/': typeof AdminDatasourcesIndexRoute
   '/admin/failed_requests/': typeof AdminFailed_requestsIndexRoute
@@ -540,7 +531,6 @@ export interface FileRouteTypes {
     | '/compare-judgments/create-from-project'
     | '/projects/create'
     | '/projects/create-subproject'
-    | '/admin/aa-models/'
     | '/admin/assessments/'
     | '/admin/datasources/'
     | '/admin/failed_requests/'
@@ -596,7 +586,6 @@ export interface FileRouteTypes {
     | '/compare-judgments/create-from-project'
     | '/projects/create'
     | '/projects/create-subproject'
-    | '/admin/aa-models'
     | '/admin/assessments'
     | '/admin/datasources'
     | '/admin/failed_requests'
@@ -652,7 +641,6 @@ export interface FileRouteTypes {
     | '/compare-judgments/create-from-project'
     | '/projects/create'
     | '/projects/create-subproject'
-    | '/admin/aa-models/'
     | '/admin/assessments/'
     | '/admin/datasources/'
     | '/admin/failed_requests/'
@@ -709,7 +697,6 @@ export interface RootRouteChildren {
   CompareJudgmentsCreateFromProjectRoute: typeof CompareJudgmentsCreateFromProjectRoute
   ProjectsCreateRoute: typeof ProjectsCreateRoute
   ProjectsCreateSubprojectRoute: typeof ProjectsCreateSubprojectRoute
-  AdminAaModelsIndexRoute: typeof AdminAaModelsIndexRoute
   AdminAssessmentsIndexRoute: typeof AdminAssessmentsIndexRoute
   AdminDatasourcesIndexRoute: typeof AdminDatasourcesIndexRoute
   AdminFailed_requestsIndexRoute: typeof AdminFailed_requestsIndexRoute
@@ -1008,13 +995,6 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof AdminAssessmentsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/admin/aa-models/': {
-      id: '/admin/aa-models/'
-      path: '/admin/aa-models'
-      fullPath: '/admin/aa-models/'
-      preLoaderRoute: typeof AdminAaModelsIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/admin/jobs/$id/unassessed_articles': {
       id: '/admin/jobs/$id/unassessed_articles'
       path: '/admin/jobs/$id/unassessed_articles'
@@ -1150,7 +1130,6 @@ const rootRouteChildren: RootRouteChildren = {
     CompareJudgmentsCreateFromProjectRoute,
   ProjectsCreateRoute: ProjectsCreateRoute,
   ProjectsCreateSubprojectRoute: ProjectsCreateSubprojectRoute,
-  AdminAaModelsIndexRoute: AdminAaModelsIndexRoute,
   AdminAssessmentsIndexRoute: AdminAssessmentsIndexRoute,
   AdminDatasourcesIndexRoute: AdminDatasourcesIndexRoute,
   AdminFailed_requestsIndexRoute: AdminFailed_requestsIndexRoute,
