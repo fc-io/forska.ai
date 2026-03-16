@@ -35,7 +35,7 @@ const Settings = () => {
   const [displayName, setDisplayName] = createSignal('')
   const [openalexMailto, setOpenalexMailto] = createSignal('')
   const localUserQuery = useQuery(() => {
-    return {queryKey: ['local-user'], queryFn: fetchLocalUser}
+    return {queryKey: ['local-user'], queryFn: fetchLocalUser, staleTime: 5 * 60 * 1000}
   })
 
   const codexStatusQuery = useQuery(() => {
@@ -49,8 +49,8 @@ const Settings = () => {
         )
         return result.data
       },
-      staleTime: 1000 * 10,
-      refetchOnWindowFocus: true,
+      staleTime: 60 * 1000,
+      refetchOnWindowFocus: false,
     }
   })
 

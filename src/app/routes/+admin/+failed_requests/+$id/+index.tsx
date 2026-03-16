@@ -125,6 +125,7 @@ const FailedRequestDetail = () => {
       },
       enabled: Boolean(id()),
       retry: false,
+      staleTime: 5 * 60 * 1000,
     }
   })
 

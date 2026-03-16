@@ -46,7 +46,7 @@ const updatePromptArchivedState = (
 export const ArchivedPromptsPage = () => {
   const queryClient = useQueryClient()
   const promptsQuery = useQuery(() => {
-    return {queryKey: ['prompts', 'archived'], queryFn: fetchArchivedPrompts}
+    return {queryKey: ['prompts', 'archived'], queryFn: fetchArchivedPrompts, staleTime: 5 * 60 * 1000}
   })
   const [pendingPromptId, setPendingPromptId] = createSignal<string | null>(null)
   const [errorMessage, setErrorMessage] = createSignal<string | null>(null)

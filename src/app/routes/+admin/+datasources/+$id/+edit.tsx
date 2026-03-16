@@ -107,6 +107,7 @@ const AdminEditDataSource = () => {
       // Disable auto-refetch on window focus since this is a form with user-editable state.
       // Otherwise, refetches would overwrite the user's local changes.
       refetchOnWindowFocus: false,
+      staleTime: 5 * 60 * 1000,
     }
   })
 
