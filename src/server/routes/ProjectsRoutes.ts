@@ -39,9 +39,10 @@ const parseOptionalDate = (value?: string | null) => {
   return parsedDate
 }
 
-type AppTx = {queryJson: <T>(statement: string) => Promise<T[]>; run: (statement: string) => Promise<void>}
+type AppQueryRunner = {queryJson: <T>(statement: string) => Promise<T[]>}
+type AppTx = AppQueryRunner & {run: (statement: string) => Promise<void>}
 
-const getProjectValue = (row: {
+type ProjectRow = {
   id: string
   name: string
   description: string | null
@@ -56,7 +57,9 @@ const getProjectValue = (row: {
   archived: boolean
   createdAt: unknown
   updatedAt: unknown
-}) => {
+}
+
+const getProjectValue = (row: ProjectRow) => {
   return {
     ...row,
     dateFrom: getDateValue(row.dateFrom),
@@ -64,6 +67,44 @@ const getProjectValue = (row: {
     createdAt: getDateValue(row.createdAt),
     updatedAt: getDateValue(row.updatedAt),
   }
+}
+
+const getProjectRowSql = (projectId: string) => {
+  return `
+    SELECT
+      id,
+      name,
+      description,
+      engine,
+      model_id AS modelId,
+      use_title AS useTitle,
+      use_abstract AS useAbstract,
+      use_fulltext AS useFulltext,
+      use_fulltext_no_images AS useFulltextNoImages,
+      date_from AS dateFrom,
+      date_to AS dateTo,
+      archived,
+      created_at AS createdAt,
+      updated_at AS updatedAt
+    FROM app.project
+    WHERE id = '${escapeSqlString(projectId)}'
+    LIMIT 1
+  `
+}
+
+const getProjectRow = async (db: AppQueryRunner, projectId: string) => {
+  const [project] = await db.queryJson<ProjectRow>(getProjectRowSql(projectId))
+  return project ?? null
+}
+
+const updateProjectTx = async (tx: AppTx, params: {projectId: string; updateParts: string[]}) => {
+  await tx.run(`
+    UPDATE app.project
+    SET ${params.updateParts.join(', ')}
+    WHERE id = '${escapeSqlString(params.projectId)}'
+  `)
+
+  return getProjectRow(tx, params.projectId)
 }
 
 const getPromptIdByHashTx = async (tx: AppTx, contentHash: string) => {
@@ -688,61 +729,15 @@ export const projectsRoutes = new Elysia()
         return part !== null
       })
 
-      const [updatedProject] = await getAppDatabaseService()
-        .queryJson<{
-          id: string
-          name: string
-          description: string | null
-          engine: string | null
-          modelId: string
-          useTitle: boolean
-          useAbstract: boolean
-          useFulltext: boolean
-          useFulltextNoImages: boolean
-          dateFrom: unknown
-          dateTo: unknown
-          archived: boolean
-          createdAt: unknown
-          updatedAt: unknown
-        }>(
-          `
-        UPDATE app.project
-        SET ${updateParts.join(', ')}
-        WHERE id = '${escapeSqlString(params.id)}'
-        RETURNING
-          id,
-          name,
-          description,
-          engine,
-          model_id AS modelId,
-          use_title AS useTitle,
-          use_abstract AS useAbstract,
-          use_fulltext AS useFulltext,
-          use_fulltext_no_images AS useFulltextNoImages,
-          date_from AS dateFrom,
-          date_to AS dateTo,
-          archived,
-          created_at AS createdAt,
-          updated_at AS updatedAt
-      `,
-        )
-        .then((rows) => {
-          return rows.map((row) => {
-            return {
-              ...row,
-              dateFrom: getDateValue(row.dateFrom),
-              dateTo: getDateValue(row.dateTo),
-              createdAt: getDateValue(row.createdAt),
-              updatedAt: getDateValue(row.updatedAt),
-            }
-          })
-        })
+      const updatedProject = await getAppDatabaseService().transaction(async (tx) => {
+        return updateProjectTx(tx, {projectId: params.id, updateParts})
+      })
 
       if (!updatedProject) {
         throw new Error('Project not found')
       }
 
-      return {data: updatedProject}
+      return {data: getProjectValue(updatedProject)}
     },
     {body: t.Object({name: t.Optional(t.String()), description: t.Optional(t.Union([t.String(), t.Null()]))})},
   )
@@ -824,41 +819,7 @@ export const projectsRoutes = new Elysia()
           return part !== null
         })
 
-        const [updatedProject] = await tx.queryJson<{
-          id: string
-          name: string
-          description: string | null
-          engine: string | null
-          modelId: string
-          useTitle: boolean
-          useAbstract: boolean
-          useFulltext: boolean
-          useFulltextNoImages: boolean
-          dateFrom: unknown
-          dateTo: unknown
-          archived: boolean
-          createdAt: unknown
-          updatedAt: unknown
-        }>(`
-          UPDATE app.project
-          SET ${updateParts.join(', ')}
-          WHERE id = '${escapeSqlString(params.id)}'
-          RETURNING
-            id,
-            name,
-            description,
-            engine,
-            model_id AS modelId,
-            use_title AS useTitle,
-            use_abstract AS useAbstract,
-            use_fulltext AS useFulltext,
-            use_fulltext_no_images AS useFulltextNoImages,
-            date_from AS dateFrom,
-            date_to AS dateTo,
-            archived,
-            created_at AS createdAt,
-            updated_at AS updatedAt
-        `)
+        const updatedProject = await updateProjectTx(tx, {projectId: params.id, updateParts})
 
         if (!updatedProject) {
           throw new Error('Project not found')
@@ -1130,13 +1091,12 @@ export const projectsRoutes = new Elysia()
     },
   )
   .delete('/api/projects/:id', async ({params}) => {
-    const [archivedProject] = await getAppDatabaseService().queryJson<{id: string}>(`
-      UPDATE app.project
-      SET archived = TRUE,
-          updated_at = current_timestamp
-      WHERE id = '${escapeSqlString(params.id)}'
-      RETURNING id
-    `)
+    const archivedProject = await getAppDatabaseService().transaction(async (tx) => {
+      return updateProjectTx(tx, {
+        projectId: params.id,
+        updateParts: ['archived = TRUE', 'updated_at = current_timestamp'],
+      })
+    })
 
     if (!archivedProject) {
       throw new Error('Project not found')
@@ -1145,13 +1105,12 @@ export const projectsRoutes = new Elysia()
     return {success: true}
   })
   .post('/api/projects/:id/unarchive', async ({params}) => {
-    const [unarchivedProject] = await getAppDatabaseService().queryJson<{id: string}>(`
-      UPDATE app.project
-      SET archived = FALSE,
-          updated_at = current_timestamp
-      WHERE id = '${escapeSqlString(params.id)}'
-      RETURNING id
-    `)
+    const unarchivedProject = await getAppDatabaseService().transaction(async (tx) => {
+      return updateProjectTx(tx, {
+        projectId: params.id,
+        updateParts: ['archived = FALSE', 'updated_at = current_timestamp'],
+      })
+    })
 
     if (!unarchivedProject) {
       throw new Error('Project not found')

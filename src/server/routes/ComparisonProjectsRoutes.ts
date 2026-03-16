@@ -12,6 +12,7 @@ import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 type PromptSelection = {promptId: string; order: number}
 type AppDatabaseService = ReturnType<typeof getAppDatabaseService>
 type AppTx = Parameters<AppDatabaseService['transaction']>[0] extends (runner: infer T) => Promise<unknown> ? T : never
+type AppQueryRunner = Pick<AppTx, 'queryJson'>
 type ComparisonProjectContentVariant = {
   key: string
   label: string
@@ -86,6 +87,22 @@ type ComparisonProjectEditPrompt = {
   type: string | null
   createdAt: Date
   archived: boolean
+}
+type ComparisonProjectRecordRow = {
+  id: string
+  name: string
+  description: string | null
+  modelIds: unknown
+  compareWithHumans: boolean
+  useTitle: boolean
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  dateFrom: unknown
+  dateTo: unknown
+  archived: boolean
+  createdAt: unknown
+  updatedAt: unknown
 }
 
 const comparisonProjectTable = 'app.comparison_project'
@@ -191,22 +208,7 @@ const getComparisonProjectContentClause = (tableAlias: string, contentVariants: 
         .join(' OR ')})`
 }
 
-const getComparisonProjectRecordValue = (row: {
-  id: string
-  name: string
-  description: string | null
-  modelIds: unknown
-  compareWithHumans: boolean
-  useTitle: boolean
-  useAbstract: boolean
-  useFulltext: boolean
-  useFulltextNoImages: boolean
-  dateFrom: unknown
-  dateTo: unknown
-  archived: boolean
-  createdAt: unknown
-  updatedAt: unknown
-}) => {
+const getComparisonProjectRecordValue = (row: ComparisonProjectRecordRow) => {
   return {
     ...row,
     modelIds: getStringArrayRowValue(row, 'modelIds'),
@@ -215,6 +217,46 @@ const getComparisonProjectRecordValue = (row: {
     createdAt: getRequiredDateValue(row.createdAt),
     updatedAt: getRequiredDateValue(row.updatedAt),
   }
+}
+
+const getComparisonProjectRecordSql = (comparisonProjectId: string) => {
+  return `
+    SELECT
+      id,
+      name,
+      description,
+      model_ids AS modelIds,
+      compare_with_humans AS compareWithHumans,
+      use_title AS useTitle,
+      use_abstract AS useAbstract,
+      use_fulltext AS useFulltext,
+      use_fulltext_no_images AS useFulltextNoImages,
+      date_from AS dateFrom,
+      date_to AS dateTo,
+      archived,
+      created_at AS createdAt,
+      updated_at AS updatedAt
+    FROM ${comparisonProjectTable}
+    WHERE id = ${getSqlLiteral(comparisonProjectId)}
+    LIMIT 1
+  `
+}
+
+const getComparisonProjectRecord = async (db: AppQueryRunner, comparisonProjectId: string) => {
+  const [comparisonProjectRow] = await db.queryJson<ComparisonProjectRecordRow>(
+    getComparisonProjectRecordSql(comparisonProjectId),
+  )
+  return comparisonProjectRow ?? null
+}
+
+const updateComparisonProjectTx = async (tx: AppTx, params: {comparisonProjectId: string; setParts: string[]}) => {
+  await tx.run(`
+    UPDATE ${comparisonProjectTable}
+    SET ${params.setParts.join(', ')}
+    WHERE id = ${getSqlLiteral(params.comparisonProjectId)}
+  `)
+
+  return getComparisonProjectRecord(tx, params.comparisonProjectId)
 }
 
 const isDefined = <T>(value: T | null | undefined): value is T => {
@@ -1390,19 +1432,23 @@ const insertComparisonProjectPromptLinks = async (
     throw new Error('One or more selected prompts are invalid')
   }
 
-  await Promise.all(
-    promptSelections.map((selection) => {
-      return tx.run(`
-        INSERT INTO ${comparisonProjectPromptTable} (id, comparison_project_id, prompt_id, prompt_order)
-        VALUES (
-          ${getSqlLiteral(crypto.randomUUID())},
-          ${getSqlLiteral(comparisonProjectId)},
-          ${getSqlLiteral(selection.promptId)},
-          ${selection.order}
-        )
-      `)
-    }),
-  )
+  const [currentPromptSelection] = promptSelections
+
+  if (!currentPromptSelection) {
+    return
+  }
+
+  await tx.run(`
+    INSERT INTO ${comparisonProjectPromptTable} (id, comparison_project_id, prompt_id, prompt_order)
+    VALUES (
+      ${getSqlLiteral(crypto.randomUUID())},
+      ${getSqlLiteral(comparisonProjectId)},
+      ${getSqlLiteral(currentPromptSelection.promptId)},
+      ${currentPromptSelection.order}
+    )
+  `)
+
+  return insertComparisonProjectPromptLinks(tx, comparisonProjectId, promptSelections.slice(1))
 }
 
 const insertComparisonProjectRouteLinks = async (tx: AppTx, comparisonProjectId: string, importRoutes: string[]) => {
@@ -1420,26 +1466,36 @@ const insertComparisonProjectRouteLinks = async (tx: AppTx, comparisonProjectId:
     throw new Error('One or more selected import routes are invalid')
   }
 
-  await Promise.all(
-    routeRows.map((routeRow) => {
-      return tx.run(`
-        INSERT INTO ${comparisonProjectImportRouteTable} (id, comparison_project_id, import_route_id)
-        VALUES (
-          ${getSqlLiteral(crypto.randomUUID())},
-          ${getSqlLiteral(comparisonProjectId)},
-          ${getSqlLiteral(routeRow.id)}
-        )
-      `)
+  const [currentRouteRow] = routeRows
+
+  if (!currentRouteRow) {
+    return
+  }
+
+  await tx.run(`
+    INSERT INTO ${comparisonProjectImportRouteTable} (id, comparison_project_id, import_route_id)
+    VALUES (
+      ${getSqlLiteral(crypto.randomUUID())},
+      ${getSqlLiteral(comparisonProjectId)},
+      ${getSqlLiteral(currentRouteRow.id)}
+    )
+  `)
+
+  return insertComparisonProjectRouteLinks(
+    tx,
+    comparisonProjectId,
+    routeRows.slice(1).map((routeRow) => {
+      return routeRow.route
     }),
   )
 }
 
-const getValidatedModelIds = async (tx: AppTx, modelIds: string[]) => {
+const getValidatedModelIds = async (db: AppQueryRunner, modelIds: string[]) => {
   if (modelIds.length === 0) {
     return null
   }
 
-  const modelRows = await tx.queryJson<{id: string}>(`
+  const modelRows = await db.queryJson<{id: string}>(`
     SELECT id
     FROM ${modelTable}
     WHERE id IN (${getInClause(modelIds)})
@@ -1450,6 +1506,111 @@ const getValidatedModelIds = async (tx: AppTx, modelIds: string[]) => {
   }
 
   return modelIds
+}
+
+const getValidatedPromptSelections = async (db: AppQueryRunner, promptSelections: PromptSelection[]) => {
+  const uniquePromptSelections = getUniquePromptSelections(promptSelections)
+
+  if (uniquePromptSelections.length === 0) {
+    return uniquePromptSelections
+  }
+
+  const promptRows = await db.queryJson<{id: string}>(`
+    SELECT id
+    FROM ${promptTable}
+    WHERE id IN (${getInClause(
+      uniquePromptSelections.map((promptSelection) => {
+        return promptSelection.promptId
+      }),
+    )})
+  `)
+
+  if (promptRows.length !== uniquePromptSelections.length) {
+    throw new Error('One or more selected prompts are invalid')
+  }
+
+  return uniquePromptSelections
+}
+
+const hasSameStringArrayValue = (left: string[] | null, right: string[] | null) => {
+  return JSON.stringify(left ?? []) === JSON.stringify(right ?? [])
+}
+
+const getDuckdbStringArrayValue = (value: unknown) => {
+  if (Array.isArray(value)) {
+    return value.filter((entry): entry is string => {
+      return typeof entry === 'string'
+    })
+  }
+
+  if (typeof value !== 'string') {
+    return null
+  }
+
+  const trimmedValue = value.trim()
+
+  if (trimmedValue === '[]') {
+    return []
+  }
+
+  if (!trimmedValue.startsWith('[') || !trimmedValue.endsWith(']')) {
+    return null
+  }
+
+  return trimmedValue
+    .slice(1, -1)
+    .split(',')
+    .map((part) => {
+      return part.trim()
+    })
+    .filter((part) => {
+      return part !== ''
+    })
+}
+
+const updateComparisonProjectWithModelIdsChange = async (params: {
+  comparisonProjectId: string
+  setParts: string[]
+  promptSelections: PromptSelection[]
+}) => {
+  const tempRouteTable = `temp_comparison_project_import_route_${crypto.randomUUID().replaceAll('-', '_')}`
+  await appDatabaseService.run(`
+    CREATE TEMP TABLE ${tempRouteTable} AS
+    SELECT id, import_route_id AS importRouteId
+    FROM ${comparisonProjectImportRouteTable}
+    WHERE comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
+  `)
+
+  await appDatabaseService.transaction(async (tx) => {
+    await tx.run(`
+      DELETE FROM ${comparisonProjectPromptTable}
+      WHERE comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
+    `)
+    await tx.run(`
+      DELETE FROM ${comparisonProjectImportRouteTable}
+      WHERE comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
+    `)
+  })
+
+  await appDatabaseService.transaction(async (tx) => {
+    await updateComparisonProjectTx(tx, {comparisonProjectId: params.comparisonProjectId, setParts: params.setParts})
+  })
+
+  await appDatabaseService.transaction(async (tx) => {
+    await tx.run(`
+      INSERT INTO ${comparisonProjectImportRouteTable} (id, comparison_project_id, import_route_id)
+      SELECT
+        id,
+        ${getSqlLiteral(params.comparisonProjectId)},
+        importRouteId
+      FROM ${tempRouteTable}
+    `)
+    await insertComparisonProjectPromptLinks(tx, params.comparisonProjectId, params.promptSelections)
+  })
+
+  await appDatabaseService.run(`DROP TABLE ${tempRouteTable}`)
+
+  return getComparisonProjectRecord(appDatabaseService, params.comparisonProjectId)
 }
 
 const createComparisonProjectRecord = async (
@@ -1716,76 +1877,72 @@ export const comparisonProjectsRoutes = new Elysia()
         return {data: null, error: 'Comparison project not found'}
       }
 
-      const updatedComparisonProject = await appDatabaseService.transaction(async (tx) => {
-        const useTitle = body.useTitle
-        const useAbstract = body.useAbstract
-        const useFulltext = body.useFulltext
-        const useFulltextNoImages = body.useFulltextNoImages
+      const useTitle = body.useTitle
+      const useAbstract = body.useAbstract
+      const useFulltext = body.useFulltext
+      const useFulltextNoImages = body.useFulltextNoImages
 
-        if (!useTitle && !useAbstract && !useFulltext && !useFulltextNoImages) {
-          throw new Error('Select at least one article content option to compare')
-        }
+      if (!useTitle && !useAbstract && !useFulltext && !useFulltextNoImages) {
+        throw new Error('Select at least one article content option to compare')
+      }
 
-        const validatedModelIds = await getValidatedModelIds(tx, getUniqueStringValues(body.modelIds ?? []))
-        const [updatedComparisonProjectRow] = await tx.queryJson<{
-          id: string
-          name: string
-          description: string | null
-          modelIds: unknown
-          compareWithHumans: boolean
-          useTitle: boolean
-          useAbstract: boolean
-          useFulltext: boolean
-          useFulltextNoImages: boolean
-          dateFrom: unknown
-          dateTo: unknown
-          archived: boolean
-          createdAt: unknown
-          updatedAt: unknown
-        }>(`
-          UPDATE ${comparisonProjectTable}
-          SET
-            name = ${getSqlLiteral(body.name)},
-            description = ${getSqlLiteral(body.description?.trim() || null)},
-            compare_with_humans = ${getBooleanLiteral(body.compareWithHumans)},
-            model_ids = ${getSqlLiteral(validatedModelIds)},
-            use_title = ${getBooleanLiteral(useTitle)},
-            use_abstract = ${getBooleanLiteral(useAbstract)},
-            use_fulltext = ${getBooleanLiteral(useFulltext)},
-            use_fulltext_no_images = ${getBooleanLiteral(useFulltextNoImages)},
-            updated_at = current_timestamp
-          WHERE id = ${getSqlLiteral(params.id)}
-          RETURNING
-            id,
-            name,
-            description,
-            model_ids AS modelIds,
-            compare_with_humans AS compareWithHumans,
-            use_title AS useTitle,
-            use_abstract AS useAbstract,
-            use_fulltext AS useFulltext,
-            use_fulltext_no_images AS useFulltextNoImages,
-            date_from AS dateFrom,
-            date_to AS dateTo,
-            archived,
-            created_at AS createdAt,
-            updated_at AS updatedAt
-        `)
+      const validatedModelIds = await getValidatedModelIds(
+        appDatabaseService,
+        getUniqueStringValues(body.modelIds ?? []),
+      )
+      const [existingModelIdsRow] = await appDatabaseService.queryJson<{modelIds: unknown}>(`
+        SELECT model_ids AS modelIds
+        FROM ${comparisonProjectTable}
+        WHERE id = ${getSqlLiteral(params.id)}
+        LIMIT 1
+      `)
+      const existingModelIds = getDuckdbStringArrayValue(existingModelIdsRow?.modelIds)
+      const validatedPromptSelections = await getValidatedPromptSelections(appDatabaseService, body.promptSelections)
+      const baseSetParts = [
+        `name = ${getSqlLiteral(body.name)}`,
+        `description = ${getSqlLiteral(body.description?.trim() || null)}`,
+        `compare_with_humans = ${getBooleanLiteral(body.compareWithHumans)}`,
+        `use_title = ${getBooleanLiteral(useTitle)}`,
+        `use_abstract = ${getBooleanLiteral(useAbstract)}`,
+        `use_fulltext = ${getBooleanLiteral(useFulltext)}`,
+        `use_fulltext_no_images = ${getBooleanLiteral(useFulltextNoImages)}`,
+        `updated_at = current_timestamp`,
+      ]
+      const hasModelIdsChange = !hasSameStringArrayValue(validatedModelIds, existingModelIds)
+      const setParts = hasModelIdsChange
+        ? [...baseSetParts, `model_ids = ${getSqlLiteral(validatedModelIds)}`]
+        : baseSetParts
 
-        if (!updatedComparisonProjectRow) {
-          throw new Error('Comparison project not found')
-        }
+      const updatedComparisonProjectRow = hasModelIdsChange
+        ? await updateComparisonProjectWithModelIdsChange({
+            comparisonProjectId: params.id,
+            setParts,
+            promptSelections: validatedPromptSelections,
+          })
+        : await appDatabaseService.transaction(async (tx) => {
+            const updatedComparisonProjectRecord = await updateComparisonProjectTx(tx, {
+              comparisonProjectId: params.id,
+              setParts,
+            })
 
-        await tx.run(`
-          DELETE FROM ${comparisonProjectPromptTable}
-          WHERE comparison_project_id = ${getSqlLiteral(params.id)}
-        `)
-        await insertComparisonProjectPromptLinks(tx, params.id, getUniquePromptSelections(body.promptSelections))
+            if (!updatedComparisonProjectRecord) {
+              throw new Error('Comparison project not found')
+            }
 
-        return getComparisonProjectRecordValue(updatedComparisonProjectRow)
-      })
+            await tx.run(`
+              DELETE FROM ${comparisonProjectPromptTable}
+              WHERE comparison_project_id = ${getSqlLiteral(params.id)}
+            `)
+            await insertComparisonProjectPromptLinks(tx, params.id, validatedPromptSelections)
 
-      return {data: updatedComparisonProject}
+            return updatedComparisonProjectRecord
+          })
+
+      if (!updatedComparisonProjectRow) {
+        throw new Error('Comparison project not found')
+      }
+
+      return {data: getComparisonProjectRecordValue(updatedComparisonProjectRow)}
     },
     {
       body: t.Object({
@@ -1803,12 +1960,12 @@ export const comparisonProjectsRoutes = new Elysia()
   )
   .delete('/api/comparison-projects/:id', async (context) => {
     const {params, set} = context
-    const [archivedComparisonProject] = await appDatabaseService.queryJson<{id: string}>(`
-      UPDATE ${comparisonProjectTable}
-      SET archived = TRUE, updated_at = current_timestamp
-      WHERE id = ${getSqlLiteral(params.id)}
-      RETURNING id
-    `)
+    const archivedComparisonProject = await appDatabaseService.transaction(async (tx) => {
+      return updateComparisonProjectTx(tx, {
+        comparisonProjectId: params.id,
+        setParts: ['archived = TRUE', 'updated_at = current_timestamp'],
+      })
+    })
 
     if (!archivedComparisonProject) {
       set.status = 404
@@ -1819,12 +1976,12 @@ export const comparisonProjectsRoutes = new Elysia()
   })
   .post('/api/comparison-projects/:id/unarchive', async (context) => {
     const {params, set} = context
-    const [unarchivedComparisonProject] = await appDatabaseService.queryJson<{id: string}>(`
-      UPDATE ${comparisonProjectTable}
-      SET archived = FALSE, updated_at = current_timestamp
-      WHERE id = ${getSqlLiteral(params.id)}
-      RETURNING id
-    `)
+    const unarchivedComparisonProject = await appDatabaseService.transaction(async (tx) => {
+      return updateComparisonProjectTx(tx, {
+        comparisonProjectId: params.id,
+        setParts: ['archived = FALSE', 'updated_at = current_timestamp'],
+      })
+    })
 
     if (!unarchivedComparisonProject) {
       set.status = 404

@@ -4,6 +4,23 @@ import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {escapeSqlString, getDateValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
+type AppDatabaseService = ReturnType<typeof getAppDatabaseService>
+type AppTx = Parameters<AppDatabaseService['transaction']>[0] extends (runner: infer T) => Promise<unknown> ? T : never
+type AppQueryRunner = Pick<AppTx, 'queryJson'>
+type DataSourceRow = {
+  id: string
+  title: string
+  description: string | null
+  importRoute: string | null
+  lastImportAt: unknown
+  itemsAfterLastImport: number | null
+  createdAt: unknown
+  updatedAt: unknown
+  dateFrom: unknown
+  dateTo: unknown
+  archived: boolean
+}
+
 const parseOptionalDate = (value?: string | null) => {
   if (!value) {
     return null
@@ -31,6 +48,41 @@ const normalizeDataSourceRow = <TRow extends Record<string, unknown>>(row: TRow)
     dateTo: getDateValue(row['dateTo']),
     lastImportAt: getDateValue(row['lastImportAt']),
   }
+}
+
+const getDataSourceRowSql = (dataSourceId: string) => {
+  return `
+    SELECT
+      id,
+      title,
+      description,
+      import_route AS importRoute,
+      last_import_at AS lastImportAt,
+      items_after_last_import AS itemsAfterLastImport,
+      created_at AS createdAt,
+      updated_at AS updatedAt,
+      date_from AS dateFrom,
+      date_to AS dateTo,
+      archived
+    FROM app.data_source
+    WHERE id = '${escapeSqlString(dataSourceId)}'
+    LIMIT 1
+  `
+}
+
+const getDataSourceRow = async (db: AppQueryRunner, dataSourceId: string) => {
+  const [row] = await db.queryJson<DataSourceRow>(getDataSourceRowSql(dataSourceId))
+  return row ?? null
+}
+
+const updateDataSourceTx = async (tx: AppTx, params: {dataSourceId: string; updateParts: string[]}) => {
+  await tx.run(`
+    UPDATE app.data_source
+    SET ${params.updateParts.join(', ')}
+    WHERE id = '${escapeSqlString(params.dataSourceId)}'
+  `)
+
+  return getDataSourceRow(tx, params.dataSourceId)
 }
 
 export const dataSourcesRoutes = new Elysia()
@@ -207,35 +259,9 @@ export const dataSourcesRoutes = new Elysia()
         return part !== null
       })
 
-      const [updated] = await getAppDatabaseService().queryJson<{
-        id: string
-        title: string
-        description: string | null
-        importRoute: string | null
-        lastImportAt: unknown
-        itemsAfterLastImport: number | null
-        createdAt: unknown
-        updatedAt: unknown
-        dateFrom: unknown
-        dateTo: unknown
-        archived: boolean
-      }>(`
-        UPDATE app.data_source
-        SET ${updateParts.join(', ')}
-        WHERE id = '${escapeSqlString(params.id)}'
-        RETURNING
-          id,
-          title,
-          description,
-          import_route AS importRoute,
-          last_import_at AS lastImportAt,
-          items_after_last_import AS itemsAfterLastImport,
-          created_at AS createdAt,
-          updated_at AS updatedAt,
-          date_from AS dateFrom,
-          date_to AS dateTo,
-          archived
-      `)
+      const updated = await getAppDatabaseService().transaction(async (tx) => {
+        return updateDataSourceTx(tx, {dataSourceId: params.id, updateParts})
+      })
 
       if (!updated) {
         throw new Error('Data source not found')
@@ -255,13 +281,12 @@ export const dataSourcesRoutes = new Elysia()
     },
   )
   .delete('/api/datasources/:id', async ({params}) => {
-    const [archived] = await getAppDatabaseService().queryJson<{id: string}>(`
-      UPDATE app.data_source
-      SET archived = TRUE,
-          updated_at = current_timestamp
-      WHERE id = '${escapeSqlString(params.id)}'
-      RETURNING id
-    `)
+    const archived = await getAppDatabaseService().transaction(async (tx) => {
+      return updateDataSourceTx(tx, {
+        dataSourceId: params.id,
+        updateParts: ['archived = TRUE', 'updated_at = current_timestamp'],
+      })
+    })
 
     if (!archived) {
       throw new Error('Data source not found')
