@@ -18,7 +18,7 @@ const martStageOrder = [
 ] as const
 
 type MartStage = (typeof martStageOrder)[number]
-type RebuildOptions = {projectId: string | null; startAt: MartStage}
+type RebuildOptions = {includeArchived: boolean; projectId: string | null; startAt: MartStage}
 
 const getRebuildOptions = (): RebuildOptions => {
   const startAtArg = process.argv.slice(2).find((argument) => {
@@ -27,11 +27,12 @@ const getRebuildOptions = (): RebuildOptions => {
   const projectIdArg = process.argv.slice(2).find((argument) => {
     return argument.startsWith('--project-id=')
   })
+  const includeArchived = process.argv.slice(2).includes('--include-archived')
   const startAtValue = (startAtArg?.split('=')[1] ?? 'project_scope_article') as MartStage
 
   return martStageOrder.includes(startAtValue)
-    ? {projectId: projectIdArg?.split('=')[1] ?? null, startAt: startAtValue}
-    : {projectId: projectIdArg?.split('=')[1] ?? null, startAt: 'project_scope_article'}
+    ? {includeArchived, projectId: projectIdArg?.split('=')[1] ?? null, startAt: startAtValue}
+    : {includeArchived, projectId: projectIdArg?.split('=')[1] ?? null, startAt: 'project_scope_article'}
 }
 
 const shouldRunStage = (options: RebuildOptions, stage: MartStage) => {
@@ -46,11 +47,11 @@ const runSql = async (sql: string) => {
   await getAppDatabaseService().run(sql)
 }
 
-const getProjectIds = async (projectId: string | null) => {
+const getProjectIds = async (projectId: string | null, includeArchived: boolean) => {
   const rows = await getAppDatabaseService().queryJson<{id: string}>(`
     SELECT id
     FROM app.project
-    ${projectId ? `WHERE id = ${quoteSqlString(projectId)}` : ''}
+    ${projectId ? `WHERE id = ${quoteSqlString(projectId)}` : includeArchived ? '' : 'WHERE archived = FALSE'}
     ORDER BY id ASC
   `)
 
@@ -1021,7 +1022,7 @@ const rebuildReviewArticlePageProjects = async (projectIds: string[], index = 0)
 }
 
 const rebuildDuckdbMarts = async (options: RebuildOptions) => {
-  const projectIds = await getProjectIds(options.projectId)
+  const projectIds = await getProjectIds(options.projectId, options.includeArchived)
 
   await runSql('SET threads = 1')
   await runSql('SET preserve_insertion_order = false')

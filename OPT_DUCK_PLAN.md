@@ -513,6 +513,33 @@ bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --mode=unfiltered 
   - the posting-list approach is now clearly better than the row-per-answer filtered mart for the benchmark project
   - the remaining likely gains are now more incremental unless we add first-page caches or a filtered-result cache
 
+### Change 5b - roll out serving-v2 marts to all active projects
+
+- Scope:
+  - updated `scripts/rebuildDuckdbMarts.ts` to rebuild active projects by default unless `--include-archived` is passed
+  - rebuilt serving-v2 marts across all active projects starting at `review_article_judgment_payload`
+- Coverage check after rollout:
+  - active projects: `29`
+  - projects with `mart.review_article_candidate` rows: `30`
+  - projects with `mart.review_article_display` rows: `30`
+  - projects with `mart.review_article_judgment_detail` rows: `30`
+  - projects with `mart.review_article_filter_posting` rows: `30`
+  - projects with `mart.review_article_page` rows: `30`
+- Benchmark command:
+
+```bash
+bun run bench:articlesreviews
+bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --mode=unfiltered --cursor-steps=5 --iterations=1 --warmup-runs=0
+```
+
+- Results after rollout:
+  - unfiltered page 1 average: `337ms`
+  - filtered page 1 average: `489ms`
+  - sequential unfiltered cursor navigation over 5 requests: `430ms` average per request
+- Interpretation:
+  - the serving-v2 path is now effectively available across the active project set, not just the benchmark project
+  - benchmark performance stayed in the same sub-second band after rollout
+
 ### Change 6 - cursor + `Load more` UI for the reviews list
 
 - Scope:
