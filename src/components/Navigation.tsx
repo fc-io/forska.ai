@@ -315,13 +315,6 @@ export const Navigation = () => {
                   <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">Admin</div>
                   <div class="flex flex-col gap-1">
                     <Link
-                      to="/admin/users"
-                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
-                      onClick={closeAdminMenu}
-                    >
-                      Users
-                    </Link>
-                    <Link
                       to="/admin/prompts/deduplicate"
                       class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
                       onClick={closeAdminMenu}
