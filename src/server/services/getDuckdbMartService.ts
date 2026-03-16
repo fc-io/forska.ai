@@ -200,6 +200,58 @@ WHERE eligible_project_judgment.normalized_answers IS NOT NULL
 COMMIT;
 `
 
+const rebuildReviewArticleJudgmentDetailSql = `
+BEGIN TRANSACTION;
+DELETE FROM mart.review_article_judgment_detail;
+INSERT INTO mart.review_article_judgment_detail (
+  project_id,
+  article_id,
+  prompt_id,
+  prompt_order,
+  judgment_id,
+  created_at,
+  article_title,
+  article_created_at,
+  article_updated_at,
+  article_import_route,
+  model_id,
+  answered_original,
+  answered_original_as_array,
+  explanation,
+  quotes
+)
+SELECT
+  scope_article.project_id,
+  judgment_fact.article_id,
+  judgment_fact.prompt_id,
+  project_prompt.prompt_order,
+  judgment_fact.judgment_id,
+  judgment_fact.created_at,
+  judgment_fact.article_title,
+  judgment_fact.article_created_at,
+  judgment_fact.article_updated_at,
+  judgment_fact.article_import_route,
+  judgment_fact.model_id,
+  judgment_fact.answered_original,
+  judgment_fact.answered_original_as_array,
+  judgment_fact.explanation,
+  judgment_fact.quotes
+FROM mart.project_scope_article scope_article
+INNER JOIN app.project project ON project.id = scope_article.project_id
+INNER JOIN app.project_prompt project_prompt
+  ON project_prompt.project_id = scope_article.project_id
+ AND project_prompt.enabled = TRUE
+INNER JOIN mart.judgment_fact judgment_fact
+  ON judgment_fact.article_id = scope_article.article_id
+ AND judgment_fact.prompt_id = project_prompt.prompt_id
+ AND judgment_fact.model_id = project.model_id
+ AND judgment_fact.use_title = project.use_title
+ AND judgment_fact.use_abstract = project.use_abstract
+ AND judgment_fact.use_fulltext = project.use_fulltext
+ AND judgment_fact.use_fulltext_no_images = project.use_fulltext_no_images;
+COMMIT;
+`
+
 const rebuildReviewArticleFilterRowSql = `
 BEGIN TRANSACTION;
 DELETE FROM mart.review_article_filter_row;
@@ -412,6 +464,7 @@ const runRebuildSql = async (sql: string) => {
 const rebuildAllDuckdbMarts = async (): Promise<void> => {
   await runRebuildSql(rebuildProjectScopeArticleSql)
   await runRebuildSql(rebuildJudgmentFactSql)
+  await runRebuildSql(rebuildReviewArticleJudgmentDetailSql)
   await runRebuildSql(rebuildPromptAnswerFactSql)
   await runRebuildSql(rebuildReviewArticleFilterRowSql)
   await runRebuildSql(rebuildReviewArticleRollupSql)
@@ -428,6 +481,9 @@ const duckdbMartService = {
   },
   rebuildPromptAnswerFact: async () => {
     await runRebuildSql(rebuildPromptAnswerFactSql)
+  },
+  rebuildReviewArticleJudgmentDetail: async () => {
+    await runRebuildSql(rebuildReviewArticleJudgmentDetailSql)
   },
   rebuildReviewArticleFilterRow: async () => {
     await runRebuildSql(rebuildReviewArticleFilterRowSql)

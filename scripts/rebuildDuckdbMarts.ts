@@ -4,6 +4,7 @@ const judgmentFactBucketCount = 128
 const martStageOrder = [
   'project_scope_article',
   'judgment_fact',
+  'review_article_judgment_detail',
   'prompt_answer_fact',
   'review_article_filter_row',
   'review_article_rollup',
@@ -57,6 +58,8 @@ const getMartCounts = async () => {
     SELECT 'mart.project_scope_article' AS table_name, COUNT(*) AS count FROM mart.project_scope_article
     UNION ALL
     SELECT 'mart.judgment_fact' AS table_name, COUNT(*) AS count FROM mart.judgment_fact
+    UNION ALL
+    SELECT 'mart.review_article_judgment_detail' AS table_name, COUNT(*) AS count FROM mart.review_article_judgment_detail
     UNION ALL
     SELECT 'mart.prompt_answer_fact' AS table_name, COUNT(*) AS count FROM mart.prompt_answer_fact
     UNION ALL
@@ -280,6 +283,63 @@ const getPromptAnswerFactSql = (projectId: string) => {
     WHERE eligible_project_judgment.normalized_answers IS NOT NULL
       AND ARRAY_LENGTH(eligible_project_judgment.normalized_answers) > 0
       AND NULLIF(TRIM(answer.answer_value), '') IS NOT NULL;
+    COMMIT;
+  `
+}
+
+const getReviewArticleJudgmentDetailSql = (projectId: string) => {
+  const projectLiteral = quoteSqlString(projectId)
+
+  return `
+    BEGIN TRANSACTION;
+    DELETE FROM mart.review_article_judgment_detail WHERE project_id = ${projectLiteral};
+    INSERT INTO mart.review_article_judgment_detail (
+      project_id,
+      article_id,
+      prompt_id,
+      prompt_order,
+      judgment_id,
+      created_at,
+      article_title,
+      article_created_at,
+      article_updated_at,
+      article_import_route,
+      model_id,
+      answered_original,
+      answered_original_as_array,
+      explanation,
+      quotes
+    )
+    SELECT
+      scope_article.project_id,
+      judgment_fact.article_id,
+      judgment_fact.prompt_id,
+      project_prompt.prompt_order,
+      judgment_fact.judgment_id,
+      judgment_fact.created_at,
+      judgment_fact.article_title,
+      judgment_fact.article_created_at,
+      judgment_fact.article_updated_at,
+      judgment_fact.article_import_route,
+      judgment_fact.model_id,
+      judgment_fact.answered_original,
+      judgment_fact.answered_original_as_array,
+      judgment_fact.explanation,
+      judgment_fact.quotes
+    FROM mart.project_scope_article scope_article
+    INNER JOIN app.project project ON project.id = scope_article.project_id
+    INNER JOIN app.project_prompt project_prompt
+      ON project_prompt.project_id = scope_article.project_id
+     AND project_prompt.enabled = TRUE
+    INNER JOIN mart.judgment_fact judgment_fact
+      ON judgment_fact.article_id = scope_article.article_id
+     AND judgment_fact.prompt_id = project_prompt.prompt_id
+     AND judgment_fact.model_id = project.model_id
+     AND judgment_fact.use_title = project.use_title
+     AND judgment_fact.use_abstract = project.use_abstract
+     AND judgment_fact.use_fulltext = project.use_fulltext
+     AND judgment_fact.use_fulltext_no_images = project.use_fulltext_no_images
+    WHERE scope_article.project_id = ${projectLiteral};
     COMMIT;
   `
 }
@@ -557,6 +617,25 @@ const rebuildPromptAnswerFactProjects = async (projectIds: string[], index = 0):
   return rebuildPromptAnswerFactProjects(projectIds, index + 1)
 }
 
+const rebuildReviewArticleJudgmentDetailProjects = async (projectIds: string[], index = 0): Promise<void> => {
+  if (index >= projectIds.length) {
+    return
+  }
+
+  const projectId = projectIds[index]
+
+  if (!projectId) {
+    return rebuildReviewArticleJudgmentDetailProjects(projectIds, index + 1)
+  }
+
+  if (index % 10 === 0) {
+    console.log(`rebuilding mart.review_article_judgment_detail project ${index + 1}/${projectIds.length}`)
+  }
+
+  await runSql(getReviewArticleJudgmentDetailSql(projectId))
+  return rebuildReviewArticleJudgmentDetailProjects(projectIds, index + 1)
+}
+
 const rebuildReviewArticleFilterRowProjects = async (projectIds: string[], index = 0): Promise<void> => {
   if (index >= projectIds.length) {
     return
@@ -629,6 +708,12 @@ const rebuildDuckdbMarts = async (options: RebuildOptions) => {
   if (shouldRunStage(options, 'judgment_fact')) {
     console.log('starting mart.judgment_fact rebuild')
     await rebuildJudgmentFactBuckets()
+    console.log(JSON.stringify(await getMartCounts()))
+  }
+
+  if (shouldRunStage(options, 'review_article_judgment_detail')) {
+    console.log('starting mart.review_article_judgment_detail rebuild')
+    await rebuildReviewArticleJudgmentDetailProjects(projectIds)
     console.log(JSON.stringify(await getMartCounts()))
   }
 

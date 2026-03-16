@@ -226,7 +226,7 @@ bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --filter-prompt-id
 
 - [x] Build `mart.review_article_page` as the dedicated unfiltered serving mart.
 - [x] Build `mart.review_article_filter_row` as the dedicated filtered serving mart.
-- [ ] Build `mart.review_article_judgment_detail` so judgment rendering happens only after page selection.
+- [x] Build `mart.review_article_judgment_detail` so judgment rendering happens only after page selection.
 - [ ] Move all route hydration fields needed by `/api/articlesreviews` into `mart.review_article_page` so the route stops doing the second hydration query.
 - [ ] Change `/api/articlesreviews` to a strict two-stage plan:
   - stage 1: candidate article ids from serving marts
@@ -317,14 +317,42 @@ bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --mode=unfiltered 
   - cursor navigation gives the intended deep-page behavior for unfiltered browsing without relying on large `OFFSET` scans
   - direct page-number deep jumps are still a compatibility fallback and remain expensive until fully removed from callers
 
+### Change 3 - project-scoped judgment detail mart for page rendering
+
+- Scope:
+  - added `mart.review_article_judgment_detail`
+  - switched serving-mart-backed `/api/articlesreviews` requests to fetch page judgment detail from the project-scoped detail mart instead of the broader global judgment fact mart
+- Benchmark command:
+
+```bash
+bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --mode=unfiltered --iterations=3 --warmup-runs=2
+bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --mode=filtered --iterations=2 --warmup-runs=1
+bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --mode=unfiltered --cursor-steps=5 --iterations=1 --warmup-runs=0
+```
+
+- Results after change:
+  - unfiltered page 1 average: `752ms`
+  - unfiltered page 1 min/max: `515ms` / `983ms`
+  - filtered page 1 average: `1011ms`
+  - filtered page 1 min/max: `996ms` / `1027ms`
+  - sequential unfiltered cursor navigation over 5 requests: `560ms` average per request
+- Comparison to earlier measurements:
+  - unfiltered page 1 is still far faster than baseline, but this run was slower than Change 2's warmed page-1 run
+  - filtered page 1 is still far faster than baseline, but this run was slower than Change 2's filtered run
+  - sequential cursor navigation improved from `880ms` to `560ms` average per request
+- Interpretation:
+  - the judgment-detail mart helps the repeated cursor-navigation path more than the single page-1 path
+  - there is visible benchmark variance between runs, so the next changes should be measured multiple times before drawing hard conclusions
+  - the remaining largest structural gap is still the heavy fallback/compatibility behavior around page-number paging and route hydration
+
 ## Suggested order
 
 - [ ] Build the dedicated unfiltered hot-path mart first.
 - [ ] Re-run `bun run bench:articlesreviews` and log results here.
 - [x] Finish the cursor-only client flow for the unfiltered path and benchmark sequential cursor navigation.
 - [x] Build the dedicated filtered-answer mart second.
-- [ ] Re-run the same benchmark and log results here.
-- [ ] Build the dedicated judgment-detail mart third.
-- [ ] Re-run the same benchmark and log results here.
+- [x] Re-run the same benchmark and log results here.
+- [x] Build the dedicated judgment-detail mart third.
+- [x] Re-run the same benchmark and log results here.
 - [ ] Remove the extra hydration query if still meaningful.
 - [ ] Re-run the same benchmark and log results here.

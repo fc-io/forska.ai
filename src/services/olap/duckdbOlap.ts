@@ -688,6 +688,23 @@ const getHasReviewArticleFilterRows = async (projectId: string) => {
   return rows.length > 0
 }
 
+const getHasReviewArticleJudgmentDetailRows = async (projectId: string) => {
+  const rows = await runDuckdbJsonQuery<{projectId: string}>(`
+    SELECT project_id AS projectId
+    FROM mart.review_article_judgment_detail
+    WHERE project_id = ${getDuckdbSqlString(projectId)}
+    LIMIT 1
+  `)
+
+  return rows.length > 0
+}
+
+const getJudgmentRowsForReviews = async (scope: ProjectOlapScope, articleIds: string[]) => {
+  return (await getHasReviewArticleJudgmentDetailRows(scope.projectId))
+    ? getLlmJudgmentRowsFromReviewDetailMart(scope, articleIds)
+    : getLlmJudgmentRowsFromMart(scope, articleIds)
+}
+
 const countReviewedPageRowsFromPageMart = async (params: {
   scope: ProjectOlapScope
   from?: string | null
@@ -821,6 +838,62 @@ const getLlmJudgmentRowsFromMart = async (
       TO_JSON(j.quotes) AS quotes
     FROM mart.judgment_fact j
     WHERE ${whereParts.join('\n      AND ')}
+  `)
+
+  return rows.map((row) => {
+    return toOlapJudgmentRow({
+      ...row,
+      createdAt: getDuckdbDateValue(row.createdAt) ?? new Date(0),
+      articleCreatedAt: getDuckdbDateValue(row.articleCreatedAt),
+      articleUpdatedAt: getDuckdbDateValue(row.articleUpdatedAt),
+      answeredOriginalAsArray: getDuckdbStringArrayValue(row.answeredOriginalAsArray),
+      quotes: getDuckdbJsonValue(row.quotes),
+    })
+  })
+}
+
+const getLlmJudgmentRowsFromReviewDetailMart = async (
+  scope: ProjectOlapScope,
+  articleIds: string[],
+): Promise<OlapJudgmentRow[]> => {
+  if (articleIds.length === 0 || scope.promptIds.length === 0) {
+    return []
+  }
+
+  const rows = await runDuckdbJsonQuery<{
+    id: string
+    createdAt: unknown
+    articleId: string
+    articleTitle: string
+    articleCreatedAt: unknown
+    articleUpdatedAt: unknown
+    articleImportRoute: string | null
+    promptId: string
+    modelId: string
+    answeredOriginal: string | null
+    answeredOriginalAsArray: unknown
+    explanation: string | null
+    quotes: unknown
+  }>(`
+    SELECT
+      j.judgment_id AS id,
+      j.created_at AS createdAt,
+      j.article_id AS articleId,
+      j.article_title AS articleTitle,
+      j.article_created_at AS articleCreatedAt,
+      j.article_updated_at AS articleUpdatedAt,
+      j.article_import_route AS articleImportRoute,
+      j.prompt_id AS promptId,
+      j.model_id AS modelId,
+      j.answered_original AS answeredOriginal,
+      TO_JSON(j.answered_original_as_array) AS answeredOriginalAsArray,
+      j.explanation AS explanation,
+      TO_JSON(j.quotes) AS quotes
+    FROM mart.review_article_judgment_detail j
+    WHERE j.project_id = ${getDuckdbSqlString(scope.projectId)}
+      AND j.article_id IN (${getDuckdbSqlStringList(articleIds).join(', ')})
+      AND j.prompt_id IN (${getDuckdbSqlStringList(scope.promptIds).join(', ')})
+    ORDER BY j.article_id ASC, j.prompt_order ASC NULLS LAST, j.created_at DESC
   `)
 
   return rows.map((row) => {
@@ -1674,7 +1747,7 @@ export const queryArticlesReviewsFromDuckdb = async (
 
   if (canUsePageMart) {
     const pageResult = await getReviewedPageRowsFromPageMart({...params, scope})
-    const llmJudgmentRows = await getLlmJudgmentRowsFromMart(
+    const llmJudgmentRows = await getJudgmentRowsForReviews(
       scope,
       pageResult.rows.map((article) => {
         return article.id

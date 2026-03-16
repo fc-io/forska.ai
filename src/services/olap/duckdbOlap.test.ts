@@ -246,12 +246,14 @@ test('queryArticlesReviewsFromDuckdb uses review page mart cursor for unfiltered
       getDuckdbReviewPageRow({articleId: 'article-1', articleCreatedAt: '2024-01-02T00:00:00.000Z'}),
       getDuckdbReviewPageRow({articleId: 'article-2', articleCreatedAt: '2024-01-01T00:00:00.000Z'}),
     ],
+    [{projectId: 'project-1'}],
     [getDuckdbJudgmentRow({articleId: 'article-1', promptId: 'prompt-1'})],
     getPromptRows(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
     [{projectId: 'project-1'}],
     [getDuckdbReviewPageRow({articleId: 'article-2', articleCreatedAt: '2024-01-01T00:00:00.000Z'})],
+    [{projectId: 'project-1'}],
     [getDuckdbJudgmentRow({articleId: 'article-2', promptId: 'prompt-1'})],
   ])
 
@@ -276,7 +278,9 @@ test('queryArticlesReviewsFromDuckdb uses review page mart cursor for unfiltered
     }),
   ).toEqual(['article-2'])
   expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM mart.review_article_page p')
-  expect(duckdbRunnerMockRef.current.queries[10]).toContain('FROM mart.review_article_page p')
+  expect(duckdbRunnerMockRef.current.queries[6]).toContain('FROM mart.review_article_judgment_detail j')
+  expect(duckdbRunnerMockRef.current.queries[11]).toContain('FROM mart.review_article_page p')
+  expect(duckdbRunnerMockRef.current.queries[13]).toContain('FROM mart.review_article_judgment_detail j')
 })
 
 test('queryArticlesReviewsFromDuckdb uses review page mart for filtered model-backed pages when filter rows exist', async () => {
@@ -287,6 +291,7 @@ test('queryArticlesReviewsFromDuckdb uses review page mart for filtered model-ba
     [{projectId: 'project-1'}],
     [{projectId: 'project-1'}],
     [getDuckdbReviewPageRow({articleId: 'article-1'})],
+    [{projectId: 'project-1'}],
     [getDuckdbJudgmentRow({articleId: 'article-1', promptId: 'prompt-1'})],
   ])
 
@@ -305,6 +310,7 @@ test('queryArticlesReviewsFromDuckdb uses review page mart for filtered model-ba
   ).toEqual(['article-1'])
   expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM mart.review_article_page p')
   expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM mart.review_article_filter_row f')
+  expect(duckdbRunnerMockRef.current.queries[7]).toContain('FROM mart.review_article_judgment_detail j')
 })
 
 test('countArticlesReviewsFromDuckdb counts rows when project modelId is null', async () => {
