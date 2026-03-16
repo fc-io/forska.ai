@@ -16,11 +16,11 @@ Prereqs:
 Recommended shared paths and caches (for running on Alvis HPC, adapt to your setup)
 
 ```bash
-mkdir -p $STACK_ROOT/{pgdata,models,hf_cache,logs,.cache} && echo $STACK_ROOT
+mkdir -p $STACK_ROOT/{pgdata,hf_cache,logs,.cache} && echo $STACK_ROOT
 ```
 
 ```bash
-export STACK_ROOT=/valhalla/projects/ehpc-aif-2025pg01-233/dev
+export STACK_ROOT=/mimer/NOBACKUP/groups/clin-agent-bench/dev
 mkdir -p "$STACK_ROOT"/{hf_cache,logs,.cache,.apptainer/cache,tmp}
 
 export XDG_CACHE_HOME=$STACK_ROOT/.cache
@@ -72,9 +72,11 @@ Notes
 - The app build reads `VITE_*` environment variables from `process.env` at build time (Vite). Docker Compose reads `.env` to populate build args, which become ENV vars in the Docker build. Ensure the values in `.env` match the runtime endpoints you intend to use.
 - If you prefer, you can source your `.env` and pass values directly via `--build-arg` when building.
 
-#### 3) Pre-pull images (offline-friendly)
+#### 3) Pre-pull container images
 
 Place the `.sif` files under `$STACK_ROOT`.
+
+On Alvis, model weights do not need a separate transfer step. SGLang downloads them from Hugging Face into `$HF_HOME` on first use.
 
 ```bash
 # Public registries (explicit amd64)
@@ -139,7 +141,7 @@ curl -i http://127.0.0.1:5432/
 SGLang Server (GPU, HTTP on :30000)
 **Note:** SGLang v0.5.4+ uses unified `launch_server` (no separate Gateway/Worker processes).
 
-**For A100-80G (a100fat) or H200 — use tensor-parallel-size 1:**
+**For the default Alvis shape (1 node, 2x A100fat, one SGLang instance) — use tensor-parallel-size 2:**
 
 ```bash
 apptainer exec --cleanenv --nv \
@@ -149,9 +151,9 @@ apptainer exec --cleanenv --nv \
   --bind $SGLANG_CACHE_DIR:/sg_cache:rw \
   $STACK_ROOT/sglang_latest.sif \
   python -m sglang.launch_server \
-    --model-path Qwen/Qwen3-30B-A3B-Instruct-2507 \
+    --model-path Qwen/Qwen3.5-35B-A3B \
     --host 0.0.0.0 --port 30000 \
-    --tensor-parallel-size 1 \
+    --tensor-parallel-size 2 \
     --max-running-requests 196 \
     --mem-fraction-static 0.92 \
     --schedule-policy lpm \
@@ -169,7 +171,7 @@ apptainer exec --cleanenv --nv \
   --bind $SGLANG_CACHE_DIR:/sg_cache:rw \
   $STACK_ROOT/sglang_latest.sif \
   python -m sglang.launch_server \
-    --model-path Qwen/Qwen3-30B-A3B-Instruct-2507 \
+    --model-path Qwen/Qwen3.5-35B-A3B \
     --host 0.0.0.0 --port 30000 \
     --tensor-parallel-size 2 \
     --max-running-requests 128 \
@@ -181,15 +183,49 @@ apptainer exec --cleanenv --nv \
 
 Notes
 
-- For A100 40GB: allocate 2 GPUs and use `--tensor-parallel-size 2`
-- For A100-80G/H200: allocate 1 GPU and use `--tensor-parallel-size 1`
+- The default Alvis setup uses 2x A100fat on one node with `--tensor-parallel-size 2`
+- For a 1-GPU A100-80G/H200 run, override to `--tensor-parallel-size 1`
 - To constrain GPU visibility, export `CUDA_VISIBLE_DEVICES` before the `apptainer exec` call (e.g., `export CUDA_VISIBLE_DEVICES=0,1`)
 - For multi-node setups, use `--data-parallel-size N`, `--nnodes`, `--node-rank`, `--dist-init-addr`
 - Health check: `curl -sf http://localhost:30000/v1/models`
 
 ## SGLang via sbatch (forska-alvis.sbatch)
 
-Use the provided `forska-alvis.sbatch` to launch the full stack (Postgres + SGLang + API + App) on Alvis using Apptainer.
+Use `forska-alvis.sbatch` to launch the full stack (Postgres + SGLang + API + App) on Alvis using Apptainer.
+
+Alvis has outbound internet access, so model weights can be fetched from Hugging Face on demand into `$HF_HOME`. Only the `.sif` images need to exist in `$STACK_ROOT`.
+
+Recommended helper flow
+
+```bash
+# Upload, submit or reuse an Alvis job, wait for startup, open local worker tunnels
+bun run alvis:launch
+
+# Start local API dev server against those worker tunnels
+bun run alvis:dev:server
+```
+
+Alternative launch shape
+
+```bash
+# 1 node, 4x non-fat A100, one shared model instance
+bun run alvis:launch -- --a100-4
+```
+
+Useful helpers
+
+```bash
+# Push the sbatch file without launching
+bun run alvis:sbatch:push
+
+# See queue state
+bun run alvis:status
+
+# Query GPU status on the worker nodes
+bun run alvis:smi
+```
+
+`bun run alvis:launch` reuses an existing pending/running `forska-alvis` job unless you pass `--force`. With the default 2xA100fat single-instance setup, the model worker is tunneled to `http://localhost:30001`.
 
 Prereqs
 
@@ -197,6 +233,7 @@ Prereqs
   - `postgres_18.sif`, `sglang_latest.sif`, `api_server.sif`, `app_server.sif`
 - Provide secrets in `$STACK_ROOT/.secrets`:
   - `db_password.txt` and `database_url.txt` (optionally legacy Better Auth secrets)
+- First launch for a new model can take longer because Alvis may populate `$HF_HOME` from Hugging Face.
 
 Defaults and ports
 
@@ -207,22 +244,47 @@ Defaults and ports
 
 GPU scaling and TP logic
 
-- A100-40GB → TP=2 (requires 2 GPUs per node)
-- A100-80GB/H200 → TP=1 (1 GPU per node)
+- Default launch shape: 1 node x 2 A100fat GPUs, one SGLang instance, `TP_SIZE=2`, `DP_SIZE=1`
+- `SGLANG_ONE_WORKER_PER_GPU=0` by default, so the stack starts one model server instead of one worker per GPU
+- For other allocations, if `TP_SIZE` is unset, the script falls back to GPU-memory-based TP sizing and derives `DP_SIZE` to fill the node
 - Multi-node: uses `--nnodes`, `--node-rank`, `--dist-init-addr`; DP is computed as `(nodes × gpus_per_node) / TP`
 
-Submit examples
+Manual sbatch examples
 
-- Single-node A100-80G (TP=1):
+- Default: 1 node, 2x A100fat, one instance (TP=2):
 
 ```bash
-sbatch --nodes=1 --gpus-per-node=A100fat:1 forska-alvis.sbatch
+sbatch forska-alvis.sbatch
 ```
 
-- Single-node A100-40G (TP=2):
+- Fresh job with the current defaults, even if an older Alvis job is already running:
 
 ```bash
-sbatch --nodes=1 --gpus-per-node=A100:2 forska-alvis.sbatch
+bun run alvis:launch -- --force
+```
+
+- Launch on 1 node with `A100:4` and keep one shared model instance (`TP_SIZE=4`, `DP_SIZE=1`):
+
+```bash
+bun run alvis:launch -- --a100-4
+```
+
+- Single-node A100fat with one GPU:
+
+```bash
+sbatch --nodes=1 --gpus-per-node=A100fat:1 --export=ALL,TP_SIZE=1,DP_SIZE=1 forska-alvis.sbatch
+```
+
+- Two A100fat GPUs but one worker per GPU instead of one shared instance:
+
+```bash
+sbatch --export=ALL,SGLANG_ONE_WORKER_PER_GPU=1 forska-alvis.sbatch
+```
+
+- Four non-fat A100 GPUs with one shared instance:
+
+```bash
+sbatch --nodes=1 --gpus-per-node=A100:4 forska-alvis.sbatch
 ```
 
 - Multi-node A100-40G (2 nodes × 2 GPUs; TP=2, DP=2):
@@ -231,15 +293,17 @@ sbatch --nodes=1 --gpus-per-node=A100:2 forska-alvis.sbatch
 sbatch --nodes=2 --gpus-per-node=A100:2 forska-alvis.sbatch
 ```
 
-The script auto-detects GPU memory with `nvidia-smi` to decide TP=1 vs TP=2. You can override with `--export=ALL,TP_SIZE=<n>,DP_SIZE=<m>` if needed.
+The default sbatch directives already request 1 node with 2x A100fat. Override with `sbatch` flags or `--export=ALL,TP_SIZE=<n>,DP_SIZE=<m>,SGLANG_ONE_WORKER_PER_GPU=<0|1>` if needed.
 
 Environment variables
 
 - `STACK_ROOT` path for caches and images.
-- `SGLANG_MODEL` (default: `Qwen/Qwen3-30B-A3B-Instruct-2507`)
+- `SGLANG_MODEL` (default: `Qwen/Qwen3.5-35B-A3B`)
+- `SGLANG_ONE_WORKER_PER_GPU` (default: `0`)
+- `TP_SIZE` (default: `2` for the default 1-node 2-GPU launch shape)
 - `SGLANG_PORT` (default: `30000`)
-- `SGLANG_MAX_RUNNING_REQUESTS` (default: `64`)
-- `SGLANG_CHUNKED_PREFILL_SIZE` (default: `4096`) – passed to `--chunked-prefill-size`
+- `SGLANG_MAX_RUNNING_REQUESTS` (default: `400`)
+- `SGLANG_CHUNKED_PREFILL_SIZE` (default: `16384`) - passed to `--chunked-prefill-size`
 - `SGLANG_MEM_FRACTION` (default: `0.92`)
 - `SGLANG_SCHEDULE_POLICY` (default: `lpm`)
 - `GPUS_PER_NODE` (auto from Slurm; override if needed)
