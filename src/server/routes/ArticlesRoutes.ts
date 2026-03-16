@@ -83,44 +83,6 @@ const getArticleJudgmentValue = (row: ArticleJudgmentRow) => {
 
 export const articlesRoutes = new Elysia()
   .use(withErrorHandler())
-  .get('/api/unassessed-count', async () => {
-    const [result] = await getAppDatabaseService().queryJson<{count: number}>(`
-      SELECT COUNT(*) AS count
-      FROM app.article a
-      LEFT JOIN app.judgment j ON a.id = j.article_id
-      WHERE j.id IS NULL
-    `)
-
-    return {count: result?.count ?? 0}
-  })
-  .get('/api/articles/stats', async () => {
-    const [[totalRow], linkedCounts, [withoutImportRouteRow]] = await Promise.all([
-      getAppDatabaseService().queryJson<{count: number}>(`SELECT COUNT(*) AS count FROM app.article`),
-      getAppDatabaseService().queryJson<{importRoute: string; importRouteName: string | null; count: number}>(`
-        SELECT ir.route AS importRoute, ir.name AS importRouteName, COUNT(*) AS count
-        FROM app.article a
-        INNER JOIN app.article_import_route air ON air.article_id = a.id
-        INNER JOIN app.import_route ir ON ir.id = air.import_route_id
-        GROUP BY ir.route, ir.name
-      `),
-      getAppDatabaseService().queryJson<{count: number}>(`
-        SELECT COUNT(*) AS count
-        FROM app.article a
-        WHERE NOT EXISTS (
-          SELECT 1
-          FROM app.article_import_route air
-          WHERE air.article_id = a.id
-          LIMIT 1
-        )
-      `),
-    ])
-
-    return {
-      total: totalRow?.count ?? 0,
-      byImportRoute: linkedCounts,
-      withoutImportRoute: withoutImportRouteRow?.count ?? 0,
-    }
-  })
   .get('/api/articles/conversion-stats', async () => {
     const [[totalFailedRow], lastFailedRows] = await Promise.all([
       getAppDatabaseService().queryJson<{count: number}>(`

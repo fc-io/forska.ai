@@ -246,21 +246,7 @@ export const Navigation = () => {
                       class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
                       onClick={closeAdminMenu}
                     >
-                      Assessments
-                    </Link>
-                    <Link
-                      to="/admin/datasources"
-                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
-                      onClick={closeAdminMenu}
-                    >
-                      Data Sources
-                    </Link>
-                    <Link
-                      to="/admin/latest-articles"
-                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
-                      onClick={closeAdminMenu}
-                    >
-                      Latest Articles
+                      Human Assessments
                     </Link>
                     <Link
                       to="/admin/pdf-conversions"
@@ -315,11 +301,18 @@ export const Navigation = () => {
                   <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">Admin</div>
                   <div class="flex flex-col gap-1">
                     <Link
+                      to="/admin/datasources"
+                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
+                      onClick={closeAdminMenu}
+                    >
+                      Data Sources
+                    </Link>
+                    <Link
                       to="/admin/prompts/deduplicate"
                       class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
                       onClick={closeAdminMenu}
                     >
-                      Prompts
+                      Conflicting prompts and judgments
                     </Link>
                   </div>
                 </div>
