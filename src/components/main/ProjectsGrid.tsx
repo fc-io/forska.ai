@@ -1,3 +1,4 @@
+import {useQueryClient} from '@tanstack/solid-query'
 import {Link} from '@tanstack/solid-router'
 import {format} from 'date-fns'
 import {createMemo, createSignal, For, Show} from 'solid-js'
@@ -12,7 +13,6 @@ type Project = Awaited<ReturnType<typeof fetchProjects>>[number]
 interface IndexProjectsGridProps {
   projects: Project[]
   isArchived?: boolean
-  onUnarchive?: () => void
 }
 
 const getProjectModelLabel = (project: Project) => {
@@ -29,6 +29,7 @@ const getProjectContentUsedLabel = (project: Project) => {
 }
 
 export const ProjectsGrid = (props: IndexProjectsGridProps) => {
+  const queryClient = useQueryClient()
   const sortedProjects = createMemo(() => {
     return [...props.projects].sort((a, b) => {
       return a.name.localeCompare(b.name)
@@ -81,9 +82,8 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
       return new Set([...prev, projectId])
     })
     try {
-      await unarchiveProject(projectId)
+      await unarchiveProject(queryClient, projectId)
       console.log('Project unarchived:', projectId)
-      props.onUnarchive?.()
     } catch (error) {
       console.error('Failed to unarchive project:', error)
     } finally {
@@ -124,7 +124,7 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
                       </span>
                     </Show>
                     <span class="text-sm text-muted-foreground">
-                      Created: {format(project.createdAt, 'yyyy-MM-dd HH:mm')}
+                      Created: {project.createdAt ? format(project.createdAt, 'yyyy-MM-dd HH:mm') : 'Unknown'}
                     </span>
                   </div>
                 </div>

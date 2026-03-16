@@ -1,4 +1,4 @@
-import {useQuery} from '@tanstack/solid-query'
+import {useQuery, useQueryClient} from '@tanstack/solid-query'
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
 import {createSignal, Suspense} from 'solid-js'
 
@@ -14,6 +14,7 @@ const ReviewsUnassessed = () => {
   const params = Route.useParams()
   const navigate = useNavigate()
   const projectId = (params() as {id: string}).id
+  const queryClient = useQueryClient()
   const [archivingProject, setArchivingProject] = createSignal(false)
 
   const filters = useUrlFilters({routePath: '/projects/$id/reviews-unassessed/', routeParams: {id: projectId}})
@@ -41,7 +42,7 @@ const ReviewsUnassessed = () => {
 
     setArchivingProject(true)
     try {
-      await archiveProject(params().id)
+      await archiveProject(queryClient, params().id)
       void navigate({to: '/projects'})
     } catch (error) {
       console.error('Failed to archive project:', error)

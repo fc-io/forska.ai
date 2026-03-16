@@ -1,4 +1,4 @@
-import {useQuery} from '@tanstack/solid-query'
+import {useQuery, useQueryClient} from '@tanstack/solid-query'
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
 import {format} from 'date-fns'
 import {createSignal, Match, Suspense, Switch} from 'solid-js'
@@ -12,6 +12,7 @@ const ProjectDetail = () => {
   const params = Route.useParams()
   const projectId = (params() as {id: string}).id
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const [archivingProject, setArchivingProject] = createSignal(false)
   const projectData = useQuery(() => {
     return {
@@ -41,7 +42,7 @@ const ProjectDetail = () => {
 
     setArchivingProject(true)
     try {
-      await archiveProject(projectId)
+      await archiveProject(queryClient, projectId)
       void navigate({to: '/projects'})
     } catch (error) {
       console.error('Failed to archive project:', error)

@@ -1,3 +1,5 @@
+import type {QueryClient} from '@tanstack/solid-query'
+
 import {apiClient} from './apiClient.ts'
 
 export const fetchProjects = async () => {
@@ -22,27 +24,33 @@ export const fetchArchivedProjects = async () => {
   return response.data?.data ?? []
 }
 
-export const archiveProject = async (projectId: string): Promise<void> => {
-  try {
-    const response = await apiClient.api.projects({id: projectId}).delete()
-
-    if (response.error || !response.data?.success) {
-      console.error('Error archiving project:', response.error)
-      throw new Error('Failed to archive project')
-    }
-  } catch (err) {
-    console.error('Error archiving project:', err)
-    throw err
-  }
+const invalidateProjectsQueries = async (queryClient: QueryClient): Promise<void> => {
+  await Promise.all([
+    queryClient.invalidateQueries({queryKey: ['projects']}),
+    queryClient.invalidateQueries({queryKey: ['projects', 'archived']}),
+  ])
 }
 
-export const unarchiveProject = async (projectId: string): Promise<void> => {
+export const archiveProject = async (queryClient: QueryClient, projectId: string): Promise<void> => {
+  const response = await apiClient.api.projects({id: projectId}).delete()
+
+  if (response.error || !response.data?.success) {
+    console.error('Error archiving project:', response.error)
+    throw new Error('Failed to archive project')
+  }
+
+  await invalidateProjectsQueries(queryClient)
+}
+
+export const unarchiveProject = async (queryClient: QueryClient, projectId: string): Promise<void> => {
   const response = await apiClient.api.projects({id: projectId}).unarchive.post()
 
   if (response.error || !response.data?.success) {
     console.error('Error unarchiving project:', response.error)
     throw new Error('Failed to unarchive project')
   }
+
+  await invalidateProjectsQueries(queryClient)
 }
 
 export const createProject = async (
