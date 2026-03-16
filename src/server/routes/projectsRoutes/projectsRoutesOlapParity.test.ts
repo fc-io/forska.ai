@@ -13,6 +13,7 @@ const reviewHydrationRowsRef = {
     return []
   },
 }
+const reviewHydrationCallCountRef = {current: 0}
 const fullArticleRowsRef = {
   current: async (_articleIds: string[]): Promise<unknown[]> => {
     return []
@@ -59,6 +60,7 @@ void mock.module(appQueryServiceModulePath, () => {
           return projectReviewConfigRef.current(projectId)
         },
         getReviewHydrationRows: (articleIds: string[]) => {
+          reviewHydrationCallCountRef.current += 1
           return reviewHydrationRowsRef.current(articleIds)
         },
       }
@@ -96,6 +98,7 @@ void mock.module(unassessedArticlesOlapModulePath, () => {
 
 test('articles reviews route forwards unfiltered request params to olap', async () => {
   queryReviewsParamsRef.current = []
+  reviewHydrationCallCountRef.current = 0
   reviewHydrationRowsRef.current = async () => {
     return []
   }
@@ -121,6 +124,7 @@ test('articles reviews route forwards unfiltered request params to olap', async 
 
 test('articles reviews route forwards filtered request params to olap', async () => {
   queryReviewsParamsRef.current = []
+  reviewHydrationCallCountRef.current = 0
   reviewHydrationRowsRef.current = async () => {
     return []
   }
@@ -158,6 +162,52 @@ test('articles reviews route forwards filtered request params to olap', async ()
       prompts: {'prompt-1': ['yes', 'no']},
     },
   ])
+})
+
+test('articles reviews route skips hydration query when olap already returns hydrated article fields', async () => {
+  reviewHydrationCallCountRef.current = 0
+  queryReviewsRef.current = async (_params?: unknown): Promise<unknown> => {
+    return {
+      data: [
+        {
+          id: 'article-1',
+          articleId: 'external-1',
+          articleTitle: 'Article 1',
+          articleCreatedAt: '2024-01-01T00:00:00.000Z',
+          articleUpdatedAt: '2024-01-02T00:00:00.000Z',
+          url: 'https://example.com/article-1',
+          fullTextPDF: null,
+          fullTextFetchedAt: null,
+          fullTextConversionStatus: null,
+          journalTitle: 'Journal 1',
+          judgments: [],
+          judgedPromptIds: [],
+          isFullyJudged: true,
+        },
+      ],
+      totalCount: null,
+      page: 1,
+      limit: 10,
+      totalPages: null,
+      nextCursor: 'cursor-1',
+    }
+  }
+
+  const {projectsRoutesGetArticlesReviews} = await import('./projectsRoutesGetArticlesReviews.ts')
+  const app = new Elysia().use(projectsRoutesGetArticlesReviews)
+  const response = await app.handle(
+    new Request('http://localhost/api/articlesreviews', {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({projectId: 'project-1', page: '1', limit: '10', prompts: {}}),
+    }),
+  )
+  const rawBody: unknown = await response.json()
+  const body = rawBody as {data: Array<{articleId: string}>}
+
+  expect(response.status).toBe(200)
+  expect(reviewHydrationCallCountRef.current).toBe(0)
+  expect(body.data[0]?.articleId).toBe('external-1')
 })
 
 test('articles reviews route falls back to olap article fields when sqlite row is missing', async () => {

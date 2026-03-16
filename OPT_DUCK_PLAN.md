@@ -345,6 +345,31 @@ bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --mode=unfiltered 
   - there is visible benchmark variance between runs, so the next changes should be measured multiple times before drawing hard conclusions
   - the remaining largest structural gap is still the heavy fallback/compatibility behavior around page-number paging and route hydration
 
+### Change 4 - remove the extra route hydration query for serving-mart-backed reviews
+
+- Scope:
+  - changed the serving-mart page query to join `app.article` only for the already paged rows
+  - `/api/articlesreviews` now skips `getReviewHydrationRows(...)` when the OLAP layer already returns the needed article fields
+  - added a route test that verifies the hydration query is skipped when article fields are already present
+- Benchmark command:
+
+```bash
+bun run bench:articlesreviews
+bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --mode=unfiltered --cursor-steps=5 --iterations=1 --warmup-runs=0
+```
+
+- Results after change:
+  - unfiltered page 1 average: `542ms`
+  - filtered page 1 average: `951ms`
+  - sequential unfiltered cursor navigation over 5 requests: `689ms` average per request
+- Comparison to earlier measurements:
+  - unfiltered page 1 stayed comfortably sub-second
+  - filtered page 1 stayed around the 1-second mark
+  - sequential cursor navigation remained sub-second but did not improve versus the prior run
+- Interpretation:
+  - removing the extra hydration query simplifies the serving path and removes one round-trip/query step
+  - the remaining performance ceiling is now much more about serving-mart shape and request-pattern variance than about route hydration
+
 ## Suggested order
 
 - [ ] Build the dedicated unfiltered hot-path mart first.
@@ -354,5 +379,5 @@ bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --mode=unfiltered 
 - [x] Re-run the same benchmark and log results here.
 - [x] Build the dedicated judgment-detail mart third.
 - [x] Re-run the same benchmark and log results here.
-- [ ] Remove the extra hydration query if still meaningful.
-- [ ] Re-run the same benchmark and log results here.
+- [x] Remove the extra hydration query if still meaningful.
+- [x] Re-run the same benchmark and log results here.

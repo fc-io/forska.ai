@@ -294,11 +294,10 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
 
             <span class="mx-2 text-xs text-gray-700">
               <Show
-                when={props.totalPages !== null}
+                when={!props.useCursorPagination && props.totalPages !== null}
                 fallback={
                   <span class="inline-flex items-center gap-2">
-                    <span class="text-gray-600">Page {props.page} of</span>
-                    <span class="h-4 w-8 animate-pulse rounded bg-gray-200" />
+                    <span class="text-gray-600">Page {props.page}</span>
                   </span>
                 }
               >

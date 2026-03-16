@@ -624,22 +624,43 @@ const getReviewedPageRowsFromPageMart = async (params: {
   const offset = params.cursor ? 0 : Math.max(params.page - 1, 0) * params.limit
   const rows = await runDuckdbJsonQuery<{
     articleCreatedAt: unknown
+    articleExternalId: string | null
     articleId: string
     articleTitle: string
     articleUpdatedAt: unknown
+    fullTextConversionStatus: string | null
+    fullTextFetchedAt: unknown
+    fullTextPDF: string | null
     journalTitle: string | null
+    url: string | null
   }>(`
+    WITH page_rows AS (
+      SELECT
+        p.article_id AS articleId,
+        p.article_title AS articleTitle,
+        p.article_created_at AS articleCreatedAt,
+        p.article_updated_at AS articleUpdatedAt,
+        p.journal_title AS journalTitle
+      FROM mart.review_article_page p
+      WHERE ${whereParts.join(' AND ')}
+      ORDER BY ${getDuckdbReviewPageOrderClause()}
+      LIMIT ${params.limit + 1}
+      OFFSET ${offset}
+    )
     SELECT
-      p.article_id AS articleId,
-      p.article_title AS articleTitle,
-      p.article_created_at AS articleCreatedAt,
-      p.article_updated_at AS articleUpdatedAt,
-      p.journal_title AS journalTitle
-    FROM mart.review_article_page p
-    WHERE ${whereParts.join(' AND ')}
-    ORDER BY ${getDuckdbReviewPageOrderClause()}
-    LIMIT ${params.limit + 1}
-    OFFSET ${offset}
+      page_rows.articleId AS articleId,
+      page_rows.articleTitle AS articleTitle,
+      page_rows.articleCreatedAt AS articleCreatedAt,
+      page_rows.articleUpdatedAt AS articleUpdatedAt,
+      page_rows.journalTitle AS journalTitle,
+      article.article_id AS articleExternalId,
+      article.url AS url,
+      article.full_text_pdf AS fullTextPDF,
+      article.full_text_fetched_at AS fullTextFetchedAt,
+      article.full_text_conversion_status AS fullTextConversionStatus
+    FROM page_rows
+    INNER JOIN app.article article ON article.id = page_rows.articleId
+    ORDER BY COALESCE(page_rows.articleCreatedAt, TIMESTAMPTZ '0001-01-01T00:00:00.000Z') DESC, page_rows.articleId ASC
   `)
   const hasMore = rows.length > params.limit
   const pageRows = rows.slice(0, params.limit)
@@ -656,11 +677,15 @@ const getReviewedPageRowsFromPageMart = async (params: {
     rows: pageRows.map((row) => {
       return {
         articleCreatedAt: getDuckdbDateValue(row.articleCreatedAt),
-        articleId: row.articleId,
+        articleId: row.articleExternalId,
         articleTitle: row.articleTitle,
         articleUpdatedAt: getDuckdbDateValue(row.articleUpdatedAt),
+        fullTextConversionStatus: row.fullTextConversionStatus,
+        fullTextFetchedAt: getDuckdbDateValue(row.fullTextFetchedAt),
+        fullTextPDF: row.fullTextPDF,
         id: row.articleId,
         journalTitle: row.journalTitle,
+        url: row.url,
       }
     }),
   }
