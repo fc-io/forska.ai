@@ -19,7 +19,8 @@ const ProjectDetail = () => {
       queryFn: () => {
         return fetchProjectWithPrompts(projectId)
       },
-      refetchOnWindowFocus: true,
+      refetchOnWindowFocus: false,
+      staleTime: 5 * 60 * 1000,
     }
   })
 
@@ -112,8 +113,8 @@ const ProjectDetail = () => {
 
             type RawPrompt = {
               id: string
-              createdAt?: Date
-              updatedAt?: Date
+              createdAt?: Date | null
+              updatedAt?: Date | null
               originalText: string
               transformedText: string | null
               promptHeading: string | null

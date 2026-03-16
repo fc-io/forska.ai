@@ -6,7 +6,7 @@ import {fetchUsers} from '../../../../services/usersService.ts'
 
 const AdminUsers = () => {
   const users = useQuery(() => {
-    return {queryKey: ['users'], queryFn: fetchUsers}
+    return {queryKey: ['users'], queryFn: fetchUsers, staleTime: 5 * 60 * 1000}
   })
 
   const [searchTerm, setSearchTerm] = createSignal('')

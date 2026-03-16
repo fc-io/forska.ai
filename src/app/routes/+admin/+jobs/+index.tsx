@@ -65,12 +65,41 @@ const TokenUsageTimelineCardFallback = () => {
 const judgmentsJobsQueryKey = ['judgments-jobs'] as const
 const tokenUsageQueryKey = ['total-token-usage'] as const
 
+const activeJudgmentsJobStatuses = new Set([
+  'not_started',
+  'running',
+  'waiting_on_db_connection',
+  'waiting_on_llm_connection',
+])
+
+const isActiveJudgmentsJobStatus = (status: string | null | undefined) => {
+  return activeJudgmentsJobStatuses.has(status ?? '')
+}
+
+const getJudgmentsJobsRefetchInterval = (jobs: Awaited<ReturnType<typeof fetchJudgmentsJobs>> | undefined) => {
+  return jobs?.some((job) => {
+    return isActiveJudgmentsJobStatus(job.status)
+  })
+    ? 30 * 1000
+    : 60 * 1000
+}
+
 const getJudgmentsJobsQuery = () => {
-  return {queryKey: judgmentsJobsQueryKey, queryFn: fetchJudgmentsJobs, refetchInterval: 30000}
+  return {
+    queryKey: judgmentsJobsQueryKey,
+    queryFn: fetchJudgmentsJobs,
+    refetchInterval: (query: {state: {data?: unknown}}) => {
+      const jobs = Array.isArray(query.state.data)
+        ? (query.state.data as Awaited<ReturnType<typeof fetchJudgmentsJobs>>)
+        : undefined
+      return getJudgmentsJobsRefetchInterval(jobs)
+    },
+    refetchOnWindowFocus: true,
+  }
 }
 
 const getTokenUsageQuery = () => {
-  return {queryKey: tokenUsageQueryKey, queryFn: getTotalTokenUsage, refetchInterval: 30000}
+  return {queryKey: tokenUsageQueryKey, queryFn: getTotalTokenUsage, refetchInterval: 30000, refetchOnWindowFocus: true}
 }
 
 const TokenUsageSummaryFallback = () => {

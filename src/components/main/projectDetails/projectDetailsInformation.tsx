@@ -1,11 +1,11 @@
 import {format} from 'date-fns'
 import {createMemo, For, Show} from 'solid-js'
 
-interface ProjectDetailsInformationProject {
+type ProjectDetailsInformationProject = {
   id: string
   name: string
-  createdAt: Date | string
-  updatedAt: Date | string
+  createdAt: Date | string | null
+  updatedAt: Date | string | null
   description: string | null
   dateFrom: Date | string | null
   dateTo: Date | string | null

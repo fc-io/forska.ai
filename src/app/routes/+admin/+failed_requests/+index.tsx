@@ -71,7 +71,12 @@ const formatModelVersionLabel = (row: FailedRequestRow): string => {
 
 const AdminFailedRequests = () => {
   const failedRequestsQuery = useQuery(() => {
-    return {queryKey: ['failedRequests'], queryFn: fetchFailedRequests, refetchOnWindowFocus: true}
+    return {
+      queryKey: ['failedRequests'],
+      queryFn: fetchFailedRequests,
+      staleTime: 30 * 1000,
+      refetchOnWindowFocus: false,
+    }
   })
 
   return (

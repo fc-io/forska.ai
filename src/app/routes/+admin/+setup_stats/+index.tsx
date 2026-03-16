@@ -60,7 +60,7 @@ const AdminConfiguration = () => {
         return result.data ?? []
       },
       staleTime: 1000 * 60 * 5,
-      refetchOnWindowFocus: true,
+      refetchOnWindowFocus: false,
     }
   })
 
@@ -76,7 +76,7 @@ const AdminConfiguration = () => {
         return result.data
       },
       staleTime: 1000 * 30,
-      refetchOnWindowFocus: true,
+      refetchOnWindowFocus: false,
     }
   })
 
@@ -92,7 +92,7 @@ const AdminConfiguration = () => {
         return result.data ?? []
       },
       staleTime: 1000 * 60 * 5,
-      refetchOnWindowFocus: true,
+      refetchOnWindowFocus: false,
     }
   })
 
@@ -108,7 +108,7 @@ const AdminConfiguration = () => {
         return result.data ?? []
       },
       staleTime: 1000 * 60 * 5,
-      refetchOnWindowFocus: true,
+      refetchOnWindowFocus: false,
     }
   })
 

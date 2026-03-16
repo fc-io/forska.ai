@@ -69,6 +69,17 @@ const shouldShowFulltextSkippedFromJob = (job: unknown) => {
   return isRecord(job) ? Boolean(job.useFulltext || job.useFulltextNoImages) : false
 }
 
+const activeJudgmentsJobStatuses = new Set([
+  'not_started',
+  'running',
+  'waiting_on_db_connection',
+  'waiting_on_llm_connection',
+])
+
+const getJudgmentsJobRefetchInterval = (status: string | null | undefined) => {
+  return activeJudgmentsJobStatuses.has(status ?? '') ? 1000 * 30 : false
+}
+
 const TokenUsageTimelinePanelFallback = () => {
   return (
     <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
@@ -96,7 +107,12 @@ const AdminJudgmentJobDetail = () => {
 
         return response
       },
-      refetchInterval: 1000 * 30, // Refresh every 30 seconds
+      refetchInterval: (query: {state: {data?: unknown}}) => {
+        const status =
+          isRecord(query.state.data) && typeof query.state.data.status === 'string' ? query.state.data.status : null
+        return getJudgmentsJobRefetchInterval(status)
+      },
+      refetchOnWindowFocus: true,
       suspense: false,
     }
   })
@@ -104,7 +120,8 @@ const AdminJudgmentJobDetail = () => {
     return {
       queryKey: ['judgments-job-unassessed-count', id()],
       enabled: Boolean(id()),
-      refetchInterval: 1000 * 30,
+      refetchInterval: getJudgmentsJobRefetchInterval(job.data?.status ?? null),
+      refetchOnWindowFocus: true,
       suspense: false,
       queryFn: async () => {
         const response = await apiClient.api['judgmentsjobs-unassessed-count'].get({query: {jobId: id()}})

@@ -289,6 +289,7 @@ const EditProject = (): JSX.Element => {
       // Disable auto-refetch on window focus since this is a form with user-editable state.
       // Otherwise, refetches would overwrite the user's local changes (e.g., enabled checkbox).
       refetchOnWindowFocus: false,
+      staleTime: 5 * 60 * 1000,
     }
   })
 

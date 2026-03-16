@@ -17,7 +17,6 @@ export const ArticlesTable = (): JSX.Element => {
       queryKey: ['articles', 'latest'],
       queryFn: fetchLatestArticles,
       refetchInterval: 30 * 1000, // Refetch every minute
-      refetchIntervalInBackground: true,
     }
   })
 

@@ -27,7 +27,8 @@ const Reviews = () => {
       queryFn: () => {
         return fetchProjectWithPrompts(params().id)
       },
-      refetchOnWindowFocus: true,
+      refetchOnWindowFocus: false,
+      staleTime: 5 * 60 * 1000,
     }
   })
 

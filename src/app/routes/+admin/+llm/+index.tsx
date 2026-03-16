@@ -1,45 +1,15 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute} from '@tanstack/solid-router'
-import {format, fromUnixTime, isValid, parseISO} from 'date-fns'
+import {format, isValid} from 'date-fns'
 import {For, Show} from 'solid-js'
 
-import {apiClient} from '../../../../services/apiClient.ts'
-
-const normalizeTimestamp = (value: unknown): Date | null => {
-  if (value instanceof Date) return isValid(value) ? new Date(value.getTime()) : null
-  if (typeof value === 'string') {
-    const parsed = parseISO(value)
-    return isValid(parsed) ? parsed : null
-  }
-  if (typeof value === 'number') {
-    if (!Number.isFinite(value)) return null
-    const parsed = value > 1_000_000_000_000 ? new Date(value) : fromUnixTime(value)
-    return isValid(parsed) ? parsed : null
-  }
-  return null
-}
-
-type LlmStatusRow = {
-  ts: Date | null
-  instanceId: string
-  modelName: string
-  engineVersion: string | null
-  prefillTps: number | null
-  genTps: number | null
-  rps: number | null
-  numQueueReqs: number | null
-  numRunningReqs: number | null
-  numGrammarQueueReqs: number | null
-  numRunningReqsOfflineBatch: number | null
-  numPrefillPreallocQueueReqs: number | null
-  numPrefillInflightQueueReqs: number | null
-  numDecodePreallocQueueReqs: number | null
-  numDecodeTransferQueueReqs: number | null
-  utilization: number | null
-  cacheHitRate: number | null
-  inFlight: number | null
-  maxInFlight: number | null
-}
+import {
+  fetchLlmStatus,
+  getLatestLlmStatusRowsByInstance,
+  getLlmStatusRefetchInterval,
+  llmStatusQueryKey,
+  type LlmStatusRow,
+} from '../../../../utils/llmStatusQuery'
 
 const formatPercent = (value: number | null | undefined, fractionDigits = 0) => {
   const normalized = value === null || value === undefined ? null : value
@@ -68,48 +38,15 @@ const formatQueueBreakdown = (row: LlmStatusRow) => {
     .join(' ')
 }
 
-const getLatestRowsByInstance = (data: LlmStatusRow[]): LlmStatusRow[] => {
-  const map = data.reduce((acc, row) => {
-    return acc.has(row.instanceId) ? acc : acc.set(row.instanceId, row)
-  }, new Map<string, LlmStatusRow>())
-  return [...map.values()]
-}
-
-const fetchLlmStatus = async (): Promise<LlmStatusRow[]> => {
-  const response = await apiClient.api.llmstatus.get()
-  if (response.error) throw new Error('Failed to fetch LLM status')
-  const entries = response.data?.data ?? []
-  return entries.map((row: Record<string, unknown>) => {
-    return {
-      ts: normalizeTimestamp(row.ts),
-      instanceId: typeof row.instanceId === 'string' ? row.instanceId : '',
-      modelName: typeof row.modelName === 'string' ? row.modelName : '',
-      engineVersion: (row.engineVersion as string | null) ?? null,
-      prefillTps: (row.prefillTps as number | null) ?? null,
-      genTps: (row.genTps as number | null) ?? null,
-      rps: (row.rps as number | null) ?? null,
-      numQueueReqs: (row.numQueueReqs as number | null) ?? null,
-      numRunningReqs: (row.numRunningReqs as number | null) ?? null,
-      numGrammarQueueReqs: (row.numGrammarQueueReqs as number | null) ?? null,
-      numRunningReqsOfflineBatch: (row.numRunningReqsOfflineBatch as number | null) ?? null,
-      numPrefillPreallocQueueReqs: (row.numPrefillPreallocQueueReqs as number | null) ?? null,
-      numPrefillInflightQueueReqs: (row.numPrefillInflightQueueReqs as number | null) ?? null,
-      numDecodePreallocQueueReqs: (row.numDecodePreallocQueueReqs as number | null) ?? null,
-      numDecodeTransferQueueReqs: (row.numDecodeTransferQueueReqs as number | null) ?? null,
-      utilization: (row.utilization as number | null) ?? null,
-      cacheHitRate: (row.cacheHitRate as number | null) ?? null,
-      inFlight: (row.inFlight as number | null) ?? null,
-      maxInFlight: (row.maxInFlight as number | null) ?? null,
-    }
-  })
-}
-
 const AdminLlm = () => {
   const statusQuery = useQuery(() => {
     return {
-      queryKey: ['llmstatus', 'latest50'],
+      queryKey: llmStatusQueryKey,
       queryFn: fetchLlmStatus,
-      refetchInterval: 30 * 1000,
+      refetchInterval: (query) => {
+        const rows = Array.isArray(query.state.data) ? query.state.data : []
+        return getLlmStatusRefetchInterval(rows)
+      },
       refetchOnWindowFocus: true,
       refetchOnReconnect: true,
     }
@@ -120,7 +57,7 @@ const AdminLlm = () => {
   }
 
   const latestRows = () => {
-    return getLatestRowsByInstance(rows())
+    return getLatestLlmStatusRowsByInstance(rows())
   }
 
   const formatTs = (value: Date | null | undefined) => {

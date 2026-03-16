@@ -27,7 +27,6 @@ export const UnassessedArticles = (): JSX.Element => {
       queryKey: ['info'],
       queryFn: fetchInfo,
       refetchInterval: 60 * 1000, // Refetch every minute
-      refetchIntervalInBackground: true,
     }
   })
 
@@ -36,17 +35,11 @@ export const UnassessedArticles = (): JSX.Element => {
       queryKey: ['articles', 'latest'],
       queryFn: fetchLatestArticles,
       refetchInterval: 30 * 1000, // Refetch every minute
-      refetchIntervalInBackground: true,
     }
   })
 
   const articlesStatsQuery = useQuery(() => {
-    return {
-      queryKey: ['articles', 'stats'],
-      queryFn: fetchArticlesStats,
-      refetchInterval: 60 * 1000,
-      refetchIntervalInBackground: true,
-    }
+    return {queryKey: ['articles', 'stats'], queryFn: fetchArticlesStats, refetchInterval: 60 * 1000}
   })
 
   const formatTimestamp = (date: Date | null) => {

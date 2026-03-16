@@ -2,7 +2,13 @@ import {useQuery} from '@tanstack/solid-query'
 import {Link, useLocation} from '@tanstack/solid-router'
 import {createMemo, createSignal, onCleanup, onMount, Show} from 'solid-js'
 
-import {apiClient} from '../services/apiClient'
+import type {LlmMetricsSummary, LlmStatusRow} from '../utils/llmStatusQuery'
+import {
+  fetchLlmStatus,
+  getLlmMetricsSummary,
+  getLlmStatusRefetchInterval,
+  llmStatusQueryKey,
+} from '../utils/llmStatusQuery'
 
 const isEventTargetWithinElement = (target: EventTarget | null, element: HTMLElement | undefined) => {
   return target instanceof Node && !!element && element.contains(target)
@@ -20,8 +26,6 @@ const isEditableTarget = (target: EventTarget | null) => {
 const isF13KeyDownEvent = (event: KeyboardEvent) => {
   return event.code === 'F13' || event.key === 'F13'
 }
-
-type LlmMetricsSummary = {waiting: number; running: number; lastUpdate: Date | null}
 
 type LlmMetricsIndicator = {waiting: number; running: number; lastUpdate: Date | null; isFresh: boolean}
 
@@ -42,53 +46,8 @@ const getLlmMetricsIndicatorTitle = (isFresh: boolean) => {
     : 'Waiting / Running requests across all workers (no metrics update in last 3m)'
 }
 
-const getLlmMetricsRefetchInterval = (_pathname: string) => {
-  return 30 * 1000
-}
-
-const fetchLlmMetricsSummary = async (): Promise<LlmMetricsSummary | null> => {
-  const response = await apiClient.api.llmstatus.get()
-  if (response.error) {
-    return null
-  }
-  const entries = response.data?.data ?? []
-  const latestByInstance = new Map<string, {waiting: number; running: number; ts: Date | null}>()
-  for (const row of entries) {
-    const instanceId = typeof row.instanceId === 'string' ? row.instanceId : ''
-    if (!latestByInstance.has(instanceId)) {
-      const ts = typeof row.ts === 'string' || typeof row.ts === 'number' ? new Date(row.ts) : null
-      latestByInstance.set(instanceId, {
-        waiting: typeof row.numQueueReqs === 'number' ? row.numQueueReqs : 0,
-        running: typeof row.numRunningReqs === 'number' ? row.numRunningReqs : 0,
-        ts: ts && !isNaN(ts.getTime()) ? ts : null,
-      })
-    }
-  }
-  const values = [...latestByInstance.values()]
-  const totalWaiting = values.reduce((sum, v) => {
-    return sum + v.waiting
-  }, 0)
-  const totalRunning = values.reduce((sum, v) => {
-    return sum + v.running
-  }, 0)
-  const timestamps = values
-    .map((v) => {
-      return v.ts
-    })
-    .filter((t): t is Date => {
-      return t !== null
-    })
-  const lastUpdate =
-    timestamps.length > 0
-      ? new Date(
-          Math.max(
-            ...timestamps.map((t) => {
-              return t.getTime()
-            }),
-          ),
-        )
-      : null
-  return {waiting: totalWaiting, running: totalRunning, lastUpdate}
+const getLlmMetricsRefetchInterval = (pathname: string, rows: LlmStatusRow[]) => {
+  return pathname.startsWith('/admin/llm') ? false : getLlmStatusRefetchInterval(rows)
 }
 
 const formatLastUpdate = (date: Date | null): string => {
@@ -114,16 +73,18 @@ export const Navigation = () => {
 
   const llmMetricsQuery = useQuery(() => {
     return {
-      queryKey: ['llm-metrics-summary'],
-      queryFn: fetchLlmMetricsSummary,
-      refetchInterval: getLlmMetricsRefetchInterval(location().pathname),
-      enabled: true,
+      queryKey: llmStatusQueryKey,
+      queryFn: fetchLlmStatus,
+      refetchInterval: (query) => {
+        const rows = Array.isArray(query.state.data) ? query.state.data : []
+        return getLlmMetricsRefetchInterval(location().pathname, rows)
+      },
       suspense: false,
     }
   })
 
   const llmMetrics = () => {
-    return llmMetricsQuery.data ?? null
+    return getLlmMetricsSummary(llmMetricsQuery.data ?? [])
   }
 
   const llmMetricsIndicator = createMemo(() => {

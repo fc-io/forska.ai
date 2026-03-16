@@ -140,7 +140,8 @@ const CompareProjectJudgmentsPage = () => {
       queryFn: () => {
         return fetchComparisonProjectJudgmentsMetadata(comparisonProjectId())
       },
-      refetchOnWindowFocus: true,
+      refetchOnWindowFocus: false,
+      staleTime: 5 * 60 * 1000,
     }
   })
   const judgmentsPageQuery = useQuery(() => {

@@ -270,8 +270,7 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
       },
       // Disable built-in polling; we schedule boundary-aligned refetches below
       refetchInterval: false,
-      // Avoid extra refetch on focus when data is fresh; still refetch if stale
-      refetchOnWindowFocus: true,
+      refetchOnWindowFocus: false,
       staleTime: 10_000,
       // TanStack Query v5 replacement for keepPreviousData
       placeholderData: (prev) => {

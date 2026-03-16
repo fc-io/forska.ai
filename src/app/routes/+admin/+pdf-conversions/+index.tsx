@@ -30,7 +30,7 @@ const AdminPdfConversions = () => {
       queryKey: ['articles', 'conversion-stats'],
       queryFn: fetchConversionStats,
       staleTime: 1000 * 30,
-      refetchOnWindowFocus: true,
+      refetchOnWindowFocus: false,
     }
   })
 
@@ -101,7 +101,7 @@ const AdminPdfConversions = () => {
                       </p>
                     </div>
                     <div class="mt-2 text-xs text-gray-400">
-                      Last updated: {new Date(article.updatedAt).toLocaleString()}
+                      Last updated: {article.updatedAt ? new Date(article.updatedAt).toLocaleString() : 'Unknown'}
                     </div>
                   </li>
                 )

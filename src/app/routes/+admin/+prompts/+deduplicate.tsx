@@ -119,7 +119,7 @@ const fetchInvalidJudgments = async (): Promise<InvalidJudgment[]> => {
 
 const DeduplicatePrompts = () => {
   const duplicatesQuery = useQuery(() => {
-    return {queryKey: ['prompts', 'duplicates'], queryFn: fetchDuplicates}
+    return {queryKey: ['prompts', 'duplicates'], queryFn: fetchDuplicates, staleTime: 5 * 60 * 1000}
   })
 
   const hasDuplicateGroups = () => {
@@ -127,11 +127,11 @@ const DeduplicatePrompts = () => {
   }
 
   const orphansQuery = useQuery(() => {
-    return {queryKey: ['prompts', 'orphans'], queryFn: fetchOrphans}
+    return {queryKey: ['prompts', 'orphans'], queryFn: fetchOrphans, staleTime: 5 * 60 * 1000}
   })
 
   const invalidJudgmentsQuery = useQuery(() => {
-    return {queryKey: ['prompts', 'invalid-judgments'], queryFn: fetchInvalidJudgments}
+    return {queryKey: ['prompts', 'invalid-judgments'], queryFn: fetchInvalidJudgments, staleTime: 5 * 60 * 1000}
   })
 
   const [selectedKeepIds, setSelectedKeepIds] = createSignal<Record<string, string>>({})
