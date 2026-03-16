@@ -34,6 +34,7 @@
     "db:import:postgres-to-duckdb:resume": "bun --env-file=.env.local scripts/importPostgresToDuckdb.ts --resume",
     "db:duck:checkpoint": "bun --env-file=.env.local -e \"import {getAppDatabaseService} from './src/server/services/appDatabaseService.ts'; const service = getAppDatabaseService(); await service.maintenance('checkpoint'); await service.close(); console.log('DuckDB checkpoint complete')\"",
     "db:duck:rebuild-marts": "bun --env-file=.env.local scripts/rebuildDuckdbMarts.ts",
+    "db:studio": "bun scripts/dbStudio.ts",
     "db:r:p": "bun scripts/dbPush.ts --force --no-restore",
     "db:r:pull": "bun scripts/dbRemotePull.ts",
     "db:reset": "bun scripts/dbClear.ts --drop --force",
