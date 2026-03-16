@@ -4,6 +4,8 @@ type BenchmarkArgs = {
   filterPromptId: string | null
   iterations: number
   limit: number
+  mode: 'both' | 'filtered' | 'unfiltered'
+  page: number
   projectId: string
   warmupRuns: number
 }
@@ -36,12 +38,15 @@ const getNumberArg = (flag: string, defaultValue: number) => {
 }
 
 const getArgs = (): BenchmarkArgs => {
+  const mode = getArgValue('--mode')
   return {
     baseUrl: getArgValue('--base-url') ?? 'http://localhost:3004',
     filterAnswer: getArgValue('--filter-answer'),
     filterPromptId: getArgValue('--filter-prompt-id'),
     iterations: getNumberArg('--iterations', 2),
     limit: getNumberArg('--limit', 10),
+    mode: mode === 'unfiltered' || mode === 'filtered' ? mode : 'both',
+    page: getNumberArg('--page', 1),
     projectId: getArgValue('--project-id') ?? '1f234646-34d6-458f-b455-1f6a1dca68e1',
     warmupRuns: getNumberArg('--warmup-runs', 1),
   }
@@ -99,7 +104,7 @@ const getFilterConfig = async (args: BenchmarkArgs) => {
 const postArticlesReviews = async (args: BenchmarkArgs, prompts: Record<string, string[]>) => {
   const startedAt = performance.now()
   const response = await fetch(`${args.baseUrl}/api/articlesreviews`, {
-    body: JSON.stringify({limit: String(args.limit), page: '1', projectId: args.projectId, prompts}),
+    body: JSON.stringify({limit: String(args.limit), page: String(args.page), projectId: args.projectId, prompts}),
     headers: {'content-type': 'application/json'},
     method: 'POST',
   })
@@ -169,30 +174,37 @@ const roundSummary = (summary: BenchmarkSummary) => {
 
 const main = async () => {
   const args = getArgs()
-  const filterConfig = await getFilterConfig(args)
   const totalRuns = args.warmupRuns + args.iterations
-  const unfilteredMeasurements = await runBenchmarkRecursively(args, {}, totalRuns, [])
-  const filteredMeasurements = await runBenchmarkRecursively(
-    args,
-    {[filterConfig.promptId]: [filterConfig.answer]},
-    totalRuns,
-    [],
-  )
+  const filterConfig = args.mode === 'unfiltered' ? null : await getFilterConfig(args)
+  const unfilteredMeasurements =
+    args.mode === 'filtered' ? null : await runBenchmarkRecursively(args, {}, totalRuns, [])
+  const filteredMeasurements =
+    filterConfig === null
+      ? null
+      : await runBenchmarkRecursively(args, {[filterConfig.promptId]: [filterConfig.answer]}, totalRuns, [])
 
   console.log(
     JSON.stringify(
       {
         baseUrl: args.baseUrl,
-        filtered: {
-          filterAnswer: filterConfig.answer,
-          filterPromptId: filterConfig.promptId,
-          filterPromptName: filterConfig.promptName,
-          summary: roundSummary(getSummary(filteredMeasurements, args.warmupRuns)),
-        },
         iterations: args.iterations,
         limit: args.limit,
+        mode: args.mode,
+        page: args.page,
         projectId: args.projectId,
-        unfiltered: {summary: roundSummary(getSummary(unfilteredMeasurements, args.warmupRuns))},
+        unfiltered:
+          unfilteredMeasurements === null
+            ? null
+            : {summary: roundSummary(getSummary(unfilteredMeasurements, args.warmupRuns))},
+        filtered:
+          filteredMeasurements === null || filterConfig === null
+            ? null
+            : {
+                filterAnswer: filterConfig.answer,
+                filterPromptId: filterConfig.promptId,
+                filterPromptName: filterConfig.promptName,
+                summary: roundSummary(getSummary(filteredMeasurements, args.warmupRuns)),
+              },
         warmupRuns: args.warmupRuns,
       },
       null,

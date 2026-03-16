@@ -1,6 +1,7 @@
 import {Elysia, t} from 'elysia'
 
 import {queryArticlesReviewsFromOlap} from '../../../services/olap/articlesReviewsOlap.ts'
+import {getJournalTitleFromOriginalData} from '../../../utils/getJournalTitleFromOriginalData.ts'
 import {getAppQueryService} from '../../services/getAppQueryService.ts'
 
 export const projectsRoutesGetArticlesReviews = new Elysia().post(
@@ -21,6 +22,7 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
       const limit = parseInt(body?.limit ?? '100', 10)
 
       const result = await queryArticlesReviewsFromOlap({
+        cursor: body.cursor,
         projectId: body.projectId,
         page,
         limit,
@@ -29,6 +31,15 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
         search: body.search,
         prompts: body.prompts,
       })
+
+      const hasInlineHydration = result.data.every((article) => {
+        return Object.hasOwn(article, 'articleId')
+      })
+
+      if (hasInlineHydration) {
+        console.log(`[Articles Reviews API] Returning ${result.data.length} articles`)
+        return result
+      }
 
       const articleIds = result.data.map((a) => {
         return a.id
@@ -47,6 +58,9 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
           articleTitle: fullText ? fullText.articleTitle : article.articleTitle,
           articleCreatedAt: fullText ? fullText.articleCreatedAt : article.articleCreatedAt,
           articleUpdatedAt: fullText ? fullText.articleUpdatedAt : article.articleUpdatedAt,
+          journalTitle: fullText?.originalData
+            ? getJournalTitleFromOriginalData(fullText.originalData)
+            : article.journalTitle,
           articleId: fullText?.articleId ?? null,
           url: fullText?.url ?? null,
           fullTextPDF: fullText?.fullTextPDF ?? null,
@@ -66,6 +80,7 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
   },
   {
     body: t.Object({
+      cursor: t.Optional(t.String()),
       from: t.Optional(t.String()),
       limit: t.String(),
       page: t.String(),

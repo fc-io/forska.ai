@@ -4,6 +4,7 @@ export type ArticlesReviewsParams = {
   projectId: string
   page: number
   limit: number
+  cursor?: string | null
   from?: string | null
   to?: string | null
   search?: string | null
@@ -34,6 +35,12 @@ export type ArticleReviewResult = {
   articleTitle: string | null
   articleCreatedAt: Date | null
   articleUpdatedAt: Date | null
+  articleId?: string | null
+  url?: string | null
+  fullTextPDF?: string | null
+  fullTextFetchedAt?: Date | null
+  fullTextConversionStatus?: string | null
+  originalData?: unknown
   judgments: OlapJudgmentRow[]
   judgedPromptIds: string[]
   isFullyJudged: boolean
@@ -46,6 +53,7 @@ export type ArticlesReviewsResponse = {
   page: number
   limit: number
   totalPages: number | null
+  nextCursor?: string | null
 }
 
 export type ArticlesReviewsCountParams = {

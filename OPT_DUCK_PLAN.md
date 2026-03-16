@@ -58,6 +58,10 @@ bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --filter-prompt-id
   - unfiltered min/max: `17488ms` / `20775ms`
   - filtered average: `39016ms`
   - filtered min/max: `38555ms` / `39477ms`
+- Deep-page baseline before cursor/serving-mart changes:
+  - benchmark command: `bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --page=1000 --iterations=1 --warmup-runs=0`
+  - unfiltered page 1000: `16215ms`
+  - filtered page 1000: `38331ms`
 
 ## Current request path
 
@@ -68,12 +72,18 @@ bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --filter-prompt-id
   - project review config
   - import-route links
 - If `modelId` exists, the hot path is:
-  - `getDuckdbReviewedPageRowsFromRollup(...)`
-  - query `mart.review_article_rollup` joined to `app.article`
-  - apply project/date/search predicates
-  - apply optional prompt filters through `EXISTS` against `mart.prompt_answer_fact`
-  - `ORDER BY article_created_at DESC NULLS LAST, article_id ASC`
-  - `LIMIT/OFFSET`
+  - unfiltered path when `mart.review_article_page` rows exist for the project:
+    - `getReviewedPageRowsFromPageMart(...)`
+    - query `mart.review_article_page`
+    - apply project/date/search predicates
+    - use cursor if present; otherwise use the compatibility `LIMIT/OFFSET` fallback
+  - filtered path, or projects without page-mart rows:
+    - `getDuckdbReviewedPageRowsFromRollup(...)`
+    - query `mart.review_article_rollup` joined to `app.article`
+    - apply project/date/search predicates
+    - apply optional prompt filters through `EXISTS` against `mart.prompt_answer_fact`
+    - `ORDER BY article_created_at DESC NULLS LAST, article_id ASC`
+    - `LIMIT/OFFSET`
 - After page article ids are fixed:
   - `getLlmJudgmentRowsFromMart(...)` fetches judgment detail from `mart.judgment_fact`
   - route runs `getReviewHydrationRows(articleIds)` for article hydration fields
@@ -86,7 +96,7 @@ bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --filter-prompt-id
   - correctness marts used as rebuild/intermediate sources
   - serving marts shaped specifically for this endpoint
 - In other words: stop trying to make one giant shared rollup solve page selection, filtering, counting, hydration, and judgment rendering at once.
-- Long-term, true cursor paging is likely required for the hot path; `OFFSET` paging is acceptable for parity but scales poorly once users move past the first pages.
+- Long-term, true cursor paging is required for the hot path; the unfiltered path now supports cursors, but direct page jumps still use the compatibility `OFFSET` fallback.
 
 ## Recommended serving-schema direction
 
@@ -103,6 +113,7 @@ bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --filter-prompt-id
 - One row per `(project_id, article_id)`.
 - Purpose: unfiltered page selection and unfiltered count.
 - This should become the main source for unfiltered `/api/articlesreviews`.
+- Current implementation is a slim prototype: title + sort/completeness fields only.
 - Suggested columns:
   - `project_id`
   - `article_id`
@@ -207,7 +218,7 @@ bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --filter-prompt-id
 
 ### Highest priority
 
-- [ ] Build `mart.review_article_page` as the dedicated unfiltered serving mart.
+- [x] Build `mart.review_article_page` as the dedicated unfiltered serving mart.
 - [ ] Build `mart.review_article_filter_row` as the dedicated filtered serving mart.
 - [ ] Build `mart.review_article_judgment_detail` so judgment rendering happens only after page selection.
 - [ ] Move all route hydration fields needed by `/api/articlesreviews` into `mart.review_article_page` so the route stops doing the second hydration query.
@@ -218,7 +229,7 @@ bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --filter-prompt-id
 ### Strong candidates after that
 
 - [ ] Add a project-local first-page mart or cache for the common unfiltered page-1 case.
-- [ ] Replace `OFFSET` paging with a stable cursor for the hottest views; if external parity blocks immediate contract change, use the serving marts first and keep cursor paging as the target end-state.
+- [ ] Finish the cursor cutover in callers so unfiltered deep-page requests stop using the page-number `OFFSET` fallback.
 - [ ] If `mart.review_article_filter_row` is still too large, add a second-level precomputed posting-list/bucket structure per `(project_id, prompt_id, answer_value)`.
 - [ ] Add a project-local filtered-result cache keyed by normalized prompt-filter payload plus date/search window if the UI repeats the same requests often.
 
@@ -240,10 +251,44 @@ bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --filter-prompt-id
   - filtered avg/min/max
   - quick interpretation
 
+### Change 1 - slim `mart.review_article_page` for unfiltered candidate selection
+
+- Scope:
+  - added a slim unfiltered serving mart
+  - switched unfiltered `/api/articlesreviews` and unfiltered count to use it when rows exist
+  - added optional cursor support for the unfiltered path
+  - kept filtered `/api/articlesreviews` on the old shared-mart path for now
+- Notes:
+  - because disk space is extremely tight, the slim serving mart was only rebuilt for the benchmark project so far
+  - the code falls back to the older path if a project has no rows in `mart.review_article_page`
+  - the slim mart only stores ordering/completeness/title data; hydration still comes from the existing article query
+- Benchmark command:
+
+```bash
+bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --mode=unfiltered --iterations=3 --warmup-runs=2
+bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --mode=unfiltered --page=1000 --iterations=1 --warmup-runs=0
+```
+
+- Results after change:
+  - unfiltered page 1 average after warmup: `384ms`
+  - unfiltered page 1 min/max after warmup: `381ms` / `386ms`
+  - unfiltered page 1000 via page-number fallback: `22354ms`
+  - filtered page 1 benchmark currently returns `500` on this machine because the old filtered path spills to temp storage and the disk is nearly full
+- Comparison to baseline:
+  - unfiltered page 1 improved from `19132ms` to `384ms`
+  - direct page-number deep paging is still slow because it still falls back to `OFFSET`
+- Interpretation:
+  - the unfiltered hot path was dominated by the shared rollup scan, not by judgment-detail fetches
+  - a slim serving mart gives an immediate order-of-magnitude improvement even before filtered-path work
+  - filtered `/api/articlesreviews` is still the next bottleneck and still needs its own serving mart
+  - the next real win for unfiltered deep pages is to finish the cursor cutover in callers so they stop using page-number fallback
+  - filtered benchmarks currently run into DuckDB temp spill limits on this machine because disk free space is extremely low
+
 ## Suggested order
 
 - [ ] Build the dedicated unfiltered hot-path mart first.
 - [ ] Re-run `bun run bench:articlesreviews` and log results here.
+- [ ] Finish the cursor-only client flow for the unfiltered path and benchmark sequential cursor navigation.
 - [ ] Build the dedicated filtered-answer mart second.
 - [ ] Re-run the same benchmark and log results here.
 - [ ] Build the dedicated judgment-detail mart third.

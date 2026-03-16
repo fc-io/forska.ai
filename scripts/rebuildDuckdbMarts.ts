@@ -6,18 +6,24 @@ const martStageOrder = [
   'judgment_fact',
   'prompt_answer_fact',
   'review_article_rollup',
+  'review_article_page',
 ] as const
 
 type MartStage = (typeof martStageOrder)[number]
-type RebuildOptions = {startAt: MartStage}
+type RebuildOptions = {projectId: string | null; startAt: MartStage}
 
 const getRebuildOptions = (): RebuildOptions => {
   const startAtArg = process.argv.slice(2).find((argument) => {
     return argument.startsWith('--start-at=')
   })
+  const projectIdArg = process.argv.slice(2).find((argument) => {
+    return argument.startsWith('--project-id=')
+  })
   const startAtValue = (startAtArg?.split('=')[1] ?? 'project_scope_article') as MartStage
 
-  return martStageOrder.includes(startAtValue) ? {startAt: startAtValue} : {startAt: 'project_scope_article'}
+  return martStageOrder.includes(startAtValue)
+    ? {projectId: projectIdArg?.split('=')[1] ?? null, startAt: startAtValue}
+    : {projectId: projectIdArg?.split('=')[1] ?? null, startAt: 'project_scope_article'}
 }
 
 const shouldRunStage = (options: RebuildOptions, stage: MartStage) => {
@@ -32,10 +38,11 @@ const runSql = async (sql: string) => {
   await getAppDatabaseService().run(sql)
 }
 
-const getProjectIds = async () => {
+const getProjectIds = async (projectId: string | null) => {
   const rows = await getAppDatabaseService().queryJson<{id: string}>(`
     SELECT id
     FROM app.project
+    ${projectId ? `WHERE id = ${quoteSqlString(projectId)}` : ''}
     ORDER BY id ASC
   `)
 
@@ -53,6 +60,8 @@ const getMartCounts = async () => {
     SELECT 'mart.prompt_answer_fact' AS table_name, COUNT(*) AS count FROM mart.prompt_answer_fact
     UNION ALL
     SELECT 'mart.review_article_rollup' AS table_name, COUNT(*) AS count FROM mart.review_article_rollup
+    UNION ALL
+    SELECT 'mart.review_article_page' AS table_name, COUNT(*) AS count FROM mart.review_article_page
   `)
 
   return rows
@@ -432,6 +441,41 @@ const getReviewArticleRollupSql = (projectId: string) => {
   `
 }
 
+const getReviewArticlePageSql = (projectId: string) => {
+  const projectLiteral = quoteSqlString(projectId)
+
+  return `
+    BEGIN TRANSACTION;
+    DELETE FROM mart.review_article_page WHERE project_id = ${projectLiteral};
+    INSERT INTO mart.review_article_page (
+      project_id,
+      article_id,
+      article_created_at,
+      article_updated_at,
+      article_title,
+      journal_title,
+      has_all_llm_judgments,
+      llm_judged_prompt_count,
+      enabled_prompt_count,
+      page_updated_at
+    )
+    SELECT
+      rollup.project_id,
+      rollup.article_id,
+      rollup.article_created_at,
+      rollup.article_updated_at,
+      rollup.article_title,
+      NULL,
+      rollup.has_all_llm_judgments,
+      rollup.llm_judged_prompt_count,
+      rollup.enabled_prompt_count,
+      current_timestamp
+    FROM mart.review_article_rollup rollup
+    WHERE rollup.project_id = ${projectLiteral};
+    COMMIT;
+  `
+}
+
 const rebuildProjectScopeArticleProjects = async (projectIds: string[], index = 0): Promise<void> => {
   if (index >= projectIds.length) {
     return
@@ -502,8 +546,27 @@ const rebuildReviewArticleRollupProjects = async (projectIds: string[], index = 
   return rebuildReviewArticleRollupProjects(projectIds, index + 1)
 }
 
+const rebuildReviewArticlePageProjects = async (projectIds: string[], index = 0): Promise<void> => {
+  if (index >= projectIds.length) {
+    return
+  }
+
+  const projectId = projectIds[index]
+
+  if (!projectId) {
+    return rebuildReviewArticlePageProjects(projectIds, index + 1)
+  }
+
+  if (index % 10 === 0) {
+    console.log(`rebuilding mart.review_article_page project ${index + 1}/${projectIds.length}`)
+  }
+
+  await runSql(getReviewArticlePageSql(projectId))
+  return rebuildReviewArticlePageProjects(projectIds, index + 1)
+}
+
 const rebuildDuckdbMarts = async (options: RebuildOptions) => {
-  const projectIds = await getProjectIds()
+  const projectIds = await getProjectIds(options.projectId)
 
   await runSql('SET threads = 1')
   await runSql('SET preserve_insertion_order = false')
@@ -529,6 +592,12 @@ const rebuildDuckdbMarts = async (options: RebuildOptions) => {
   if (shouldRunStage(options, 'review_article_rollup')) {
     console.log('starting mart.review_article_rollup rebuild')
     await rebuildReviewArticleRollupProjects(projectIds)
+    console.log(JSON.stringify(await getMartCounts()))
+  }
+
+  if (shouldRunStage(options, 'review_article_page')) {
+    console.log('starting mart.review_article_page rebuild')
+    await rebuildReviewArticlePageProjects(projectIds)
     console.log(JSON.stringify(await getMartCounts()))
   }
 }

@@ -27,6 +27,7 @@ interface ReviewsArticlesTableContainerProps {
 export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContainerProps) => {
   const [rowSelection, setRowSelection] = createSignal<Record<string, boolean>>({})
   const [selectAllMatching, setSelectAllMatching] = createSignal<boolean>(false)
+  const [pageCursors, setPageCursors] = createSignal<Record<number, string | null>>({1: null})
   // Reset selection when filters/date/search/page size change
   createEffect(() => {
     // Access to track dependencies
@@ -35,9 +36,9 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
     props.toDate()
     props.searchTitle()
     props.pageLimit()
-    props.currentPage()
     setRowSelection({})
     setSelectAllMatching(false)
+    setPageCursors({1: null})
   })
 
   // Main data query - returns data immediately without waiting for count
@@ -47,6 +48,9 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
         props.projectId,
         props.promptFilters,
         props.currentPage,
+        () => {
+          return pageCursors()[props.currentPage()]
+        },
         props.pageLimit,
         props.fromDate,
         props.toDate,
@@ -55,6 +59,25 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
       // Wait until URL filters are initialized to avoid duplicate calls
       enabled: props.initialized(),
     }
+  })
+
+  createEffect(() => {
+    const response = articlesQuery.data
+
+    if (!response || typeof response !== 'object' || !('nextCursor' in response)) {
+      return
+    }
+
+    const nextCursor = response.nextCursor
+
+    if (typeof nextCursor !== 'string' || nextCursor === '') {
+      return
+    }
+
+    const nextPage = props.currentPage() + 1
+    setPageCursors((prev) => {
+      return prev[nextPage] === nextCursor ? prev : {...prev, [nextPage]: nextCursor}
+    })
   })
 
   // Separate count query - loads asynchronously
@@ -138,7 +161,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
                 page={props.currentPage()}
                 totalPages={totalPages()}
                 setCurrentPage={props.setCurrentPage}
-                currentPageRowIds={response().data.map((a) => {
+                currentPageRowIds={response().data.map((a: {id: string}) => {
                   return a.id
                 })}
                 rowSelection={rowSelection}
@@ -192,7 +215,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
                 page={props.currentPage()}
                 totalPages={totalPages()}
                 setCurrentPage={props.setCurrentPage}
-                currentPageRowIds={response().data.map((a) => {
+                currentPageRowIds={response().data.map((a: {id: string}) => {
                   return a.id
                 })}
                 rowSelection={rowSelection}

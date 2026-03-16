@@ -316,6 +316,36 @@ const getProjectRefreshSql = (projectId: string) => {
       WHERE scope_article.project_id = ${projectLiteral};
       COMMIT;
     `,
+    `
+      BEGIN TRANSACTION;
+      DELETE FROM mart.review_article_page WHERE project_id = ${projectLiteral};
+      INSERT INTO mart.review_article_page (
+        project_id,
+        article_id,
+        article_created_at,
+        article_updated_at,
+        article_title,
+        journal_title,
+        has_all_llm_judgments,
+        llm_judged_prompt_count,
+        enabled_prompt_count,
+        page_updated_at
+      )
+      SELECT
+        rollup.project_id,
+        rollup.article_id,
+        rollup.article_created_at,
+        rollup.article_updated_at,
+        rollup.article_title,
+        NULL,
+        rollup.has_all_llm_judgments,
+        rollup.llm_judged_prompt_count,
+        rollup.enabled_prompt_count,
+        current_timestamp
+      FROM mart.review_article_rollup rollup
+      WHERE rollup.project_id = ${projectLiteral};
+      COMMIT;
+    `,
   ]
 }
 

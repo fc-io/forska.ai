@@ -352,6 +352,47 @@ LEFT JOIN review_state
 COMMIT;
 `
 
+const rebuildReviewArticlePageSql = `
+BEGIN TRANSACTION;
+DELETE FROM mart.review_article_page;
+INSERT INTO mart.review_article_page (
+  project_id,
+  article_id,
+  article_created_at,
+  article_updated_at,
+  article_title,
+  article_external_id,
+  url,
+  full_text_pdf,
+  full_text_fetched_at,
+  full_text_conversion_status,
+  original_data,
+  has_all_llm_judgments,
+  llm_judged_prompt_count,
+  enabled_prompt_count,
+  page_updated_at
+)
+SELECT
+  rollup.project_id,
+  rollup.article_id,
+  rollup.article_created_at,
+  rollup.article_updated_at,
+  rollup.article_title,
+  article.article_id,
+  article.url,
+  article.full_text_pdf,
+  article.full_text_fetched_at,
+  article.full_text_conversion_status,
+  article.original_data,
+  rollup.has_all_llm_judgments,
+  rollup.llm_judged_prompt_count,
+  rollup.enabled_prompt_count,
+  current_timestamp
+FROM mart.review_article_rollup rollup
+INNER JOIN app.article article ON article.id = rollup.article_id;
+COMMIT;
+`
+
 const runRebuildSql = async (sql: string) => {
   await getAppDatabaseService().run(sql)
 }
@@ -361,6 +402,7 @@ const rebuildAllDuckdbMarts = async (): Promise<void> => {
   await runRebuildSql(rebuildJudgmentFactSql)
   await runRebuildSql(rebuildPromptAnswerFactSql)
   await runRebuildSql(rebuildReviewArticleRollupSql)
+  await runRebuildSql(rebuildReviewArticlePageSql)
 }
 
 const duckdbMartService = {
@@ -373,6 +415,9 @@ const duckdbMartService = {
   },
   rebuildPromptAnswerFact: async () => {
     await runRebuildSql(rebuildPromptAnswerFactSql)
+  },
+  rebuildReviewArticlePage: async () => {
+    await runRebuildSql(rebuildReviewArticlePageSql)
   },
   rebuildReviewArticleRollup: async () => {
     await runRebuildSql(rebuildReviewArticleRollupSql)

@@ -8,6 +8,7 @@ export const createArticlesReviewsQueryOptions = (
   projectId: string,
   promptFilters: Accessor<Record<string, string[] | null>>,
   currentPage: Accessor<number>,
+  currentCursor: Accessor<string | null | undefined>,
   pageLimit: Accessor<number>,
   fromDateStr: Accessor<string>,
   toDateStr: Accessor<string>,
@@ -34,6 +35,7 @@ export const createArticlesReviewsQueryOptions = (
       projectId,
       promptFilters(),
       currentPage(),
+      currentCursor() ?? null,
       pageLimit(),
       validFrom(),
       validTo(),
@@ -52,12 +54,14 @@ export const createArticlesReviewsQueryOptions = (
       const from = validFrom()
       const to = validTo()
       const search = (searchTitleApplied() || '').trim()
+      const cursor = currentCursor()
 
       const response = await apiClient.api.articlesreviews.post({
         page: String(currentPage()),
         limit: String(pageLimit()),
         projectId,
         prompts,
+        cursor: cursor ?? undefined,
         from: from ?? undefined,
         to: to ?? undefined,
         search: search || undefined,
