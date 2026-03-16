@@ -8,6 +8,13 @@ Goal: make `/api/articlesreviews` fast enough for large projects, both unfiltere
 - Optimize `/api/articlesreviews` first; other endpoints matter only if they block this path.
 - Record benchmark results in this file before and after every optimization attempt.
 
+## UI direction
+
+- Replace page-number pagination for `/api/articlesreviews` with cursor-first browsing.
+- Remove `Go to page N` from the reviews list UX.
+- Prefer `Load more` as the primary interaction instead of numbered paging.
+- `Previous` / `Next` can remain only as a compatibility bridge while the UI moves to `Load more`, but the target end-state is cursor + append, not random page jumps.
+
 ## Existing test coverage
 
 - Route-level coverage exists in `src/server/routes/projectsRoutes/projectsRoutesOlapParity.test.ts`.
