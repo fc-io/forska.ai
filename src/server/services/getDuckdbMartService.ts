@@ -216,9 +216,7 @@ INSERT INTO mart.review_article_judgment_detail (
   article_import_route,
   model_id,
   answered_original,
-  answered_original_as_array,
-  explanation,
-  quotes
+  answered_original_as_array
 )
 SELECT
   scope_article.project_id,
@@ -233,9 +231,7 @@ SELECT
   judgment_fact.article_import_route,
   judgment_fact.model_id,
   judgment_fact.answered_original,
-  judgment_fact.answered_original_as_array,
-  judgment_fact.explanation,
-  judgment_fact.quotes
+  judgment_fact.answered_original_as_array
 FROM mart.project_scope_article scope_article
 INNER JOIN app.project project ON project.id = scope_article.project_id
 INNER JOIN app.project_prompt project_prompt
@@ -249,6 +245,145 @@ INNER JOIN mart.judgment_fact judgment_fact
  AND judgment_fact.use_abstract = project.use_abstract
  AND judgment_fact.use_fulltext = project.use_fulltext
  AND judgment_fact.use_fulltext_no_images = project.use_fulltext_no_images;
+COMMIT;
+`
+
+const rebuildReviewArticleJudgmentPayloadSql = `
+BEGIN TRANSACTION;
+DELETE FROM mart.review_article_judgment_payload;
+INSERT INTO mart.review_article_judgment_payload (
+  project_id,
+  judgment_id,
+  explanation,
+  quotes,
+  payload_updated_at
+)
+SELECT
+  scope_article.project_id,
+  judgment_fact.judgment_id,
+  judgment_fact.explanation,
+  judgment_fact.quotes,
+  current_timestamp
+FROM mart.project_scope_article scope_article
+INNER JOIN app.project project ON project.id = scope_article.project_id
+INNER JOIN app.project_prompt project_prompt
+  ON project_prompt.project_id = scope_article.project_id
+ AND project_prompt.enabled = TRUE
+INNER JOIN mart.judgment_fact judgment_fact
+  ON judgment_fact.article_id = scope_article.article_id
+ AND judgment_fact.prompt_id = project_prompt.prompt_id
+ AND judgment_fact.model_id = project.model_id
+ AND judgment_fact.use_title = project.use_title
+ AND judgment_fact.use_abstract = project.use_abstract
+ AND judgment_fact.use_fulltext = project.use_fulltext
+ AND judgment_fact.use_fulltext_no_images = project.use_fulltext_no_images;
+COMMIT;
+`
+
+const rebuildProjectArticleOrdinalSql = `
+BEGIN TRANSACTION;
+DELETE FROM app.project_article_ordinal;
+INSERT INTO app.project_article_ordinal (
+  project_id,
+  article_id,
+  article_seq,
+  ordinal_updated_at
+)
+SELECT
+  project_id,
+  article_id,
+  ROW_NUMBER() OVER (PARTITION BY project_id ORDER BY article_created_at DESC NULLS LAST, article_id ASC) AS article_seq,
+  current_timestamp
+FROM mart.review_article_rollup;
+COMMIT;
+`
+
+const rebuildReviewArticleCandidateSql = `
+BEGIN TRANSACTION;
+DELETE FROM mart.review_article_candidate;
+INSERT INTO mart.review_article_candidate (
+  project_id,
+  article_id,
+  article_seq,
+  article_created_at,
+  article_updated_at,
+  article_title,
+  has_all_llm_judgments,
+  llm_judged_prompt_count,
+  enabled_prompt_count,
+  candidate_updated_at
+)
+SELECT
+  rollup.project_id,
+  rollup.article_id,
+  ordinal.article_seq,
+  rollup.article_created_at,
+  rollup.article_updated_at,
+  rollup.article_title,
+  rollup.has_all_llm_judgments,
+  rollup.llm_judged_prompt_count,
+  rollup.enabled_prompt_count,
+  current_timestamp
+FROM mart.review_article_rollup rollup
+INNER JOIN app.project_article_ordinal ordinal
+  ON ordinal.project_id = rollup.project_id
+ AND ordinal.article_id = rollup.article_id;
+COMMIT;
+`
+
+const rebuildReviewArticleDisplaySql = `
+BEGIN TRANSACTION;
+DELETE FROM mart.review_article_display;
+INSERT INTO mart.review_article_display (
+  project_id,
+  article_id,
+  article_external_id,
+  article_title,
+  journal_title,
+  url,
+  full_text_pdf,
+  full_text_fetched_at,
+  full_text_conversion_status,
+  display_updated_at
+)
+SELECT
+  rollup.project_id,
+  rollup.article_id,
+  article.article_id,
+  rollup.article_title,
+  NULL,
+  article.url,
+  article.full_text_pdf,
+  article.full_text_fetched_at,
+  article.full_text_conversion_status,
+  current_timestamp
+FROM mart.review_article_rollup rollup
+INNER JOIN app.article article ON article.id = rollup.article_id;
+COMMIT;
+`
+
+const rebuildReviewAnswerDictionarySql = `
+BEGIN TRANSACTION;
+DELETE FROM app.review_answer_dictionary;
+INSERT INTO app.review_answer_dictionary (
+  project_id,
+  prompt_id,
+  answer_id,
+  answer_value,
+  numeric_answer_value,
+  dictionary_updated_at
+)
+SELECT
+  project_id,
+  prompt_id,
+  DENSE_RANK() OVER (PARTITION BY project_id, prompt_id ORDER BY answer_value ASC) AS answer_id,
+  answer_value,
+  TRY_CAST(answer_value AS BIGINT),
+  current_timestamp
+FROM (
+  SELECT DISTINCT project_id, prompt_id, answer_value
+  FROM mart.prompt_answer_fact
+) answer_values;
 COMMIT;
 `
 
@@ -271,6 +406,36 @@ SELECT
   TRY_CAST(answer_value AS BIGINT),
   current_timestamp
 FROM mart.prompt_answer_fact;
+COMMIT;
+`
+
+const rebuildReviewArticleFilterPostingSql = `
+BEGIN TRANSACTION;
+DELETE FROM mart.review_article_filter_posting;
+INSERT INTO mart.review_article_filter_posting (
+  project_id,
+  prompt_id,
+  answer_id,
+  article_seq_list,
+  article_count,
+  posting_updated_at
+)
+SELECT
+  fact.project_id,
+  fact.prompt_id,
+  dict.answer_id,
+  LIST(ordinal.article_seq ORDER BY ordinal.article_seq ASC) AS article_seq_list,
+  COUNT(*) AS article_count,
+  current_timestamp
+FROM mart.prompt_answer_fact fact
+INNER JOIN app.review_answer_dictionary dict
+  ON dict.project_id = fact.project_id
+ AND dict.prompt_id = fact.prompt_id
+ AND dict.answer_value = fact.answer_value
+INNER JOIN app.project_article_ordinal ordinal
+  ON ordinal.project_id = fact.project_id
+ AND ordinal.article_id = fact.article_id
+GROUP BY fact.project_id, fact.prompt_id, dict.answer_id;
 COMMIT;
 `
 
@@ -464,11 +629,17 @@ const runRebuildSql = async (sql: string) => {
 const rebuildAllDuckdbMarts = async (): Promise<void> => {
   await runRebuildSql(rebuildProjectScopeArticleSql)
   await runRebuildSql(rebuildJudgmentFactSql)
+  await runRebuildSql(rebuildReviewArticleJudgmentPayloadSql)
   await runRebuildSql(rebuildReviewArticleJudgmentDetailSql)
-  await runRebuildSql(rebuildPromptAnswerFactSql)
-  await runRebuildSql(rebuildReviewArticleFilterRowSql)
   await runRebuildSql(rebuildReviewArticleRollupSql)
+  await runRebuildSql(rebuildProjectArticleOrdinalSql)
+  await runRebuildSql(rebuildReviewArticleCandidateSql)
+  await runRebuildSql(rebuildReviewArticleDisplaySql)
   await runRebuildSql(rebuildReviewArticlePageSql)
+  await runRebuildSql(rebuildPromptAnswerFactSql)
+  await runRebuildSql(rebuildReviewAnswerDictionarySql)
+  await runRebuildSql(rebuildReviewArticleFilterRowSql)
+  await runRebuildSql(rebuildReviewArticleFilterPostingSql)
 }
 
 const duckdbMartService = {
@@ -485,8 +656,26 @@ const duckdbMartService = {
   rebuildReviewArticleJudgmentDetail: async () => {
     await runRebuildSql(rebuildReviewArticleJudgmentDetailSql)
   },
+  rebuildReviewArticleJudgmentPayload: async () => {
+    await runRebuildSql(rebuildReviewArticleJudgmentPayloadSql)
+  },
   rebuildReviewArticleFilterRow: async () => {
     await runRebuildSql(rebuildReviewArticleFilterRowSql)
+  },
+  rebuildReviewArticleFilterPosting: async () => {
+    await runRebuildSql(rebuildReviewArticleFilterPostingSql)
+  },
+  rebuildProjectArticleOrdinal: async () => {
+    await runRebuildSql(rebuildProjectArticleOrdinalSql)
+  },
+  rebuildReviewAnswerDictionary: async () => {
+    await runRebuildSql(rebuildReviewAnswerDictionarySql)
+  },
+  rebuildReviewArticleCandidate: async () => {
+    await runRebuildSql(rebuildReviewArticleCandidateSql)
+  },
+  rebuildReviewArticleDisplay: async () => {
+    await runRebuildSql(rebuildReviewArticleDisplaySql)
   },
   rebuildReviewArticlePage: async () => {
     await runRebuildSql(rebuildReviewArticlePageSql)

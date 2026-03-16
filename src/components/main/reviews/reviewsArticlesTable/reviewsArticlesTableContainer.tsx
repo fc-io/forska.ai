@@ -104,10 +104,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
     return countQuery.isSuccess ? (countQuery.data?.totalPages ?? 0) : null
   }
   const useCursorPagination = () => {
-    return !Object.keys(props.promptFilters()).some((key) => {
-      const value = props.promptFilters()[key]
-      return Array.isArray(value) && value.length > 0
-    })
+    return true
   }
 
   createEffect(() => {

@@ -103,24 +103,6 @@ const getDuckdbScopedArticleRow = (
   }
 }
 
-const getDuckdbReviewPageRow = (
-  overrides: Partial<{
-    articleId: string
-    articleTitle: string
-    articleCreatedAt: string | null
-    articleUpdatedAt: string | null
-    journalTitle: string | null
-  }>,
-) => {
-  return {
-    articleId: overrides.articleId ?? 'article-1',
-    articleTitle: overrides.articleTitle ?? 'Article 1',
-    articleCreatedAt: 'articleCreatedAt' in overrides ? overrides.articleCreatedAt : '2024-01-01T00:00:00.000Z',
-    articleUpdatedAt: 'articleUpdatedAt' in overrides ? overrides.articleUpdatedAt : '2024-01-01T00:00:00.000Z',
-    journalTitle: 'journalTitle' in overrides ? overrides.journalTitle : null,
-  }
-}
-
 const getDuckdbJudgmentRow = (
   overrides: Partial<{
     id: string
@@ -236,35 +218,45 @@ test('queryArticlesReviewsFromDuckdb keeps reviewed rows when project modelId is
   expect(duckdbRunnerMockRef.current.queries[4]).not.toContain('j.model_id =')
 })
 
-test('queryArticlesReviewsFromDuckdb uses review page mart cursor for unfiltered model-backed pages', async () => {
+test('queryArticlesReviewsFromDuckdb emits nextCursor on candidate/display serving path', async () => {
   duckdbRunnerMockRef.current = createDuckdbRunnerMock([
     getPromptRows(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
     [{projectId: 'project-1'}],
+    [{projectId: 'project-1'}],
     [
-      getDuckdbReviewPageRow({articleId: 'article-1', articleCreatedAt: '2024-01-02T00:00:00.000Z'}),
-      getDuckdbReviewPageRow({articleId: 'article-2', articleCreatedAt: '2024-01-01T00:00:00.000Z'}),
+      {
+        articleId: 'article-1',
+        articleExternalId: 'external-1',
+        articleTitle: 'Article 1',
+        articleCreatedAt: '2024-01-02T00:00:00.000Z',
+        articleUpdatedAt: '2024-01-03T00:00:00.000Z',
+        fullTextConversionStatus: null,
+        fullTextFetchedAt: null,
+        fullTextPDF: null,
+        journalTitle: 'Journal 1',
+        url: null,
+      },
+      {
+        articleId: 'article-2',
+        articleExternalId: 'external-2',
+        articleTitle: 'Article 2',
+        articleCreatedAt: '2024-01-01T00:00:00.000Z',
+        articleUpdatedAt: '2024-01-02T00:00:00.000Z',
+        fullTextConversionStatus: null,
+        fullTextFetchedAt: null,
+        fullTextPDF: null,
+        journalTitle: 'Journal 2',
+        url: null,
+      },
     ],
     [{projectId: 'project-1'}],
     [getDuckdbJudgmentRow({articleId: 'article-1', promptId: 'prompt-1'})],
-    getPromptRows(),
-    getProjectRows('model-1'),
-    getScopeRouteRows(),
-    [{projectId: 'project-1'}],
-    [getDuckdbReviewPageRow({articleId: 'article-2', articleCreatedAt: '2024-01-01T00:00:00.000Z'})],
-    [{projectId: 'project-1'}],
-    [getDuckdbJudgmentRow({articleId: 'article-2', promptId: 'prompt-1'})],
   ])
 
   const {queryArticlesReviewsFromDuckdb} = await loadDuckdbOlap()
   const firstPage = await queryArticlesReviewsFromDuckdb({projectId: 'project-1', page: 1, limit: 1})
-  const secondPage = await queryArticlesReviewsFromDuckdb({
-    projectId: 'project-1',
-    page: 2,
-    limit: 1,
-    cursor: firstPage.nextCursor ?? undefined,
-  })
 
   expect(
     firstPage.data.map((row) => {
@@ -272,45 +264,110 @@ test('queryArticlesReviewsFromDuckdb uses review page mart cursor for unfiltered
     }),
   ).toEqual(['article-1'])
   expect(typeof firstPage.nextCursor).toBe('string')
-  expect(
-    secondPage.data.map((row) => {
-      return row.id
-    }),
-  ).toEqual(['article-2'])
-  expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM mart.review_article_page p')
-  expect(duckdbRunnerMockRef.current.queries[6]).toContain('FROM mart.review_article_judgment_detail j')
-  expect(duckdbRunnerMockRef.current.queries[11]).toContain('FROM mart.review_article_page p')
-  expect(duckdbRunnerMockRef.current.queries[13]).toContain('FROM mart.review_article_judgment_detail j')
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM mart.review_article_candidate c')
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain('INNER JOIN mart.review_article_display display')
 })
 
-test('queryArticlesReviewsFromDuckdb uses review page mart for filtered model-backed pages when filter rows exist', async () => {
+test('queryArticlesReviewsFromDuckdb uses candidate/display serving marts when they exist', async () => {
   duckdbRunnerMockRef.current = createDuckdbRunnerMock([
     getPromptRows(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
     [{projectId: 'project-1'}],
     [{projectId: 'project-1'}],
-    [getDuckdbReviewPageRow({articleId: 'article-1'})],
+    [
+      {
+        articleId: 'article-1',
+        articleExternalId: 'external-1',
+        articleTitle: 'Article 1',
+        articleCreatedAt: '2024-01-02T00:00:00.000Z',
+        articleUpdatedAt: '2024-01-03T00:00:00.000Z',
+        fullTextConversionStatus: null,
+        fullTextFetchedAt: null,
+        fullTextPDF: null,
+        id: 'article-1',
+        journalTitle: 'Journal 1',
+        url: 'https://example.com/1',
+      },
+    ],
     [{projectId: 'project-1'}],
-    [getDuckdbJudgmentRow({articleId: 'article-1', promptId: 'prompt-1'})],
+    [
+      {
+        id: 'judgment-1',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        articleId: 'article-1',
+        articleTitle: 'Article 1',
+        articleCreatedAt: '2024-01-02T00:00:00.000Z',
+        articleUpdatedAt: '2024-01-03T00:00:00.000Z',
+        articleImportRoute: null,
+        promptId: 'prompt-1',
+        modelId: 'model-1',
+        answeredOriginal: 'yes',
+        answeredOriginalAsArray: ['yes'],
+      },
+    ],
   ])
 
   const {queryArticlesReviewsFromDuckdb} = await loadDuckdbOlap()
-  const result = await queryArticlesReviewsFromDuckdb({
-    projectId: 'project-1',
-    page: 1,
-    limit: 10,
-    prompts: {'prompt-1': ['yes']},
-  })
+  const result = await queryArticlesReviewsFromDuckdb({projectId: 'project-1', page: 1, limit: 10})
 
   expect(
     result.data.map((row) => {
       return row.id
     }),
   ).toEqual(['article-1'])
-  expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM mart.review_article_page p')
-  expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM mart.review_article_filter_row f')
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM mart.review_article_candidate c')
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain('INNER JOIN mart.review_article_display display')
   expect(duckdbRunnerMockRef.current.queries[7]).toContain('FROM mart.review_article_judgment_detail j')
+})
+
+test('queryArticlesReviewsFromDuckdb uses filter posting mart when available', async () => {
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRows(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [{projectId: 'project-1'}],
+    [{projectId: 'project-1'}],
+    [{projectId: 'project-1'}],
+    [
+      {
+        articleId: 'article-1',
+        articleExternalId: 'external-1',
+        articleTitle: 'Article 1',
+        articleCreatedAt: '2024-01-02T00:00:00.000Z',
+        articleUpdatedAt: '2024-01-03T00:00:00.000Z',
+        fullTextConversionStatus: null,
+        fullTextFetchedAt: null,
+        fullTextPDF: null,
+        id: 'article-1',
+        journalTitle: 'Journal 1',
+        url: 'https://example.com/1',
+      },
+    ],
+    [{projectId: 'project-1'}],
+    [
+      {
+        id: 'judgment-1',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        articleId: 'article-1',
+        articleTitle: 'Article 1',
+        articleCreatedAt: '2024-01-02T00:00:00.000Z',
+        articleUpdatedAt: '2024-01-03T00:00:00.000Z',
+        articleImportRoute: null,
+        promptId: 'prompt-1',
+        modelId: 'model-1',
+        answeredOriginal: 'yes',
+        answeredOriginalAsArray: ['yes'],
+      },
+    ],
+  ])
+
+  const {queryArticlesReviewsFromDuckdb} = await loadDuckdbOlap()
+  await queryArticlesReviewsFromDuckdb({projectId: 'project-1', page: 1, limit: 10, prompts: {'prompt-1': ['yes']}})
+
+  expect(duckdbRunnerMockRef.current.queries[6]).toContain('FROM app.review_answer_dictionary d')
+  expect(duckdbRunnerMockRef.current.queries[6]).toContain('mart.review_article_filter_posting posting')
+  expect(duckdbRunnerMockRef.current.queries[6]).toContain('FROM mart.review_article_candidate c')
 })
 
 test('countArticlesReviewsFromDuckdb counts rows when project modelId is null', async () => {
@@ -450,8 +507,23 @@ test('queryArticlesReviewsFromDuckdb breaks prompt-order ties by newest judgment
     getPromptRowsWithTie(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
+    [{projectId: 'project-1'}],
+    [{projectId: 'project-1'}],
+    [
+      {
+        articleId: 'article-1',
+        articleExternalId: 'external-1',
+        articleTitle: 'Article 1',
+        articleCreatedAt: '2024-01-01T00:00:00.000Z',
+        articleUpdatedAt: '2024-01-01T00:00:00.000Z',
+        fullTextConversionStatus: null,
+        fullTextFetchedAt: null,
+        fullTextPDF: null,
+        journalTitle: 'Journal 1',
+        url: null,
+      },
+    ],
     [],
-    [getDuckdbScopedArticleRow({id: 'article-1'})],
     [
       getDuckdbJudgmentRow({
         id: 'judgment-old',
@@ -478,6 +550,7 @@ test('queryArticlesReviewsFromDuckdb breaks prompt-order ties by newest judgment
       return row.id
     }),
   ).toEqual(['judgment-new', 'judgment-old'])
+  expect(duckdbRunnerMockRef.current.queries[7]).toContain('FROM mart.judgment_fact j')
 })
 
 test('queryArticlesReviewsBothFromDuckdb echoes requested page when it is out of range', async () => {

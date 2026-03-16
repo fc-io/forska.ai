@@ -72,16 +72,12 @@ bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --filter-prompt-id
   - project review config
   - import-route links
 - If `modelId` exists, the hot path is:
-  - unfiltered path when `mart.review_article_page` rows exist for the project:
-    - `getReviewedPageRowsFromPageMart(...)`
-    - query `mart.review_article_page`
-    - apply project/date/search predicates
-    - use cursor if present; otherwise use the compatibility `LIMIT/OFFSET` fallback
-  - filtered path when both `mart.review_article_page` and `mart.review_article_filter_row` rows exist for the project:
-    - query `mart.review_article_page`
-    - apply project/date/search predicates
-    - apply prompt filters through `EXISTS` against `mart.review_article_filter_row`
-    - use cursor if present; otherwise use the compatibility `LIMIT/OFFSET` fallback
+  - serving-v2 path when the project has the newer serving marts:
+    - candidate selection from `mart.review_article_candidate`
+    - display hydration from `mart.review_article_display`
+    - filtered candidate intersection through `app.review_answer_dictionary` + `mart.review_article_filter_posting`
+    - cursor navigation for normal browsing; compatibility `LIMIT/OFFSET` fallback still exists if callers insist on direct page-number jumps
+    - page judgment rows from `mart.review_article_judgment_detail`
   - fallback path for projects without serving-mart rows:
     - `getDuckdbReviewedPageRowsFromRollup(...)`
     - query `mart.review_article_rollup` joined to `app.article`
@@ -90,8 +86,8 @@ bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --filter-prompt-id
     - `ORDER BY article_created_at DESC NULLS LAST, article_id ASC`
     - `LIMIT/OFFSET`
 - After page article ids are fixed:
-  - `getLlmJudgmentRowsFromMart(...)` fetches judgment detail from `mart.judgment_fact`
-  - route runs `getReviewHydrationRows(articleIds)` for article hydration fields
+  - serving-v2 path fetches judgment detail from `mart.review_article_judgment_detail`
+  - route no longer runs `getReviewHydrationRows(articleIds)` for serving-mart-backed responses
 
 ## Schema architecture verdict
 
@@ -118,7 +114,7 @@ bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --filter-prompt-id
 - One row per `(project_id, article_id)`.
 - Purpose: unfiltered page selection and unfiltered count.
 - This should become the main source for unfiltered `/api/articlesreviews`.
-- Current implementation is a slim prototype: title + sort/completeness fields only.
+- Current implementation is a compatibility shim. The newer serving-v2 path mostly supersedes it with `candidate` + `display` marts.
 - Suggested columns:
   - `project_id`
   - `article_id`
@@ -173,6 +169,96 @@ bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --filter-prompt-id
   - `quotes`
   - `created_at`
   - `model_id`
+- Current implementation is active for `/api/articlesreviews`.
+
+### 3b. `mart.review_article_judgment_payload`
+
+- One row per `(project_id, judgment_id)`.
+- Purpose: hold large/rarely-needed payload columns separately when the UI can lazy-load them.
+- Candidate columns:
+  - `project_id`
+  - `judgment_id`
+  - `explanation`
+  - `quotes`
+  - optional future large payload fields
+- Goal:
+  - keep the hot page-render path narrow
+  - fetch the heavy payload only when the user expands/details a row
+- Current implementation exists and is populated; the list path no longer needs explanation/quotes.
+
+### 6. `mart.review_article_candidate`
+
+- One row per `(project_id, article_id)`.
+- Purpose: the narrowest possible article-id candidate set for page selection.
+- Candidate columns:
+  - `project_id`
+  - `article_id`
+  - `article_created_at`
+  - `article_updated_at`
+  - `has_all_llm_judgments`
+  - `enabled_prompt_count`
+  - `llm_judged_prompt_count`
+- Goal:
+  - let page selection touch the smallest possible serving table
+- Current implementation is active for `/api/articlesreviews` when serving-v2 rows exist.
+
+### 7. `mart.review_article_display`
+
+- One row per `(project_id, article_id)`.
+- Purpose: display-only fields for the chosen page ids.
+- Candidate columns:
+  - `project_id`
+  - `article_id`
+  - `article_title`
+  - `journal_title`
+  - `article_external_id`
+  - `url`
+  - `full_text_pdf`
+  - `full_text_fetched_at`
+  - `full_text_conversion_status`
+- Goal:
+  - split display fields away from candidate selection fields
+- Current implementation is active for `/api/articlesreviews` when serving-v2 rows exist.
+
+### 8. `mart.review_article_filter_posting`
+
+- One row per `(project_id, prompt_id, answer_key)`.
+- Purpose: compressed posting-list or bitset structure for filtered candidate intersection.
+- Candidate columns:
+  - `project_id`
+  - `prompt_id`
+  - `answer_key`
+  - `article_seq_list` or compressed bitmap payload
+  - `article_count`
+- Goal:
+  - intersect small precomputed sets instead of scanning row-per-answer structures
+- Current implementation stores project-local posting lists keyed by `(project_id, prompt_id, answer_id)` and is active for serving-v2 filtered queries.
+
+### 9. `app.project_article_ordinal`
+
+- One row per `(project_id, article_id)` with a dense `article_seq`.
+- Purpose: stable per-project integer ordinals so serving marts and posting lists do not rely on UUID strings.
+- Candidate columns:
+  - `project_id`
+  - `article_id`
+  - `article_seq`
+- Goal:
+  - make bitset/posting-list structures practical and compact
+- Current implementation is active and feeds the filtered posting lists.
+
+### 10. `app.review_answer_dictionary`
+
+- One row per `(project_id, prompt_id, answer_id)`.
+- Purpose: replace repeated answer strings in serving/filter marts with compact ids.
+- Candidate columns:
+  - `project_id`
+  - `prompt_id`
+  - `answer_id`
+  - `answer_value`
+- Goal:
+  - reduce width in filtered serving structures
+  - make posting-list keys compact
+- Current implementation is active and feeds the filtered posting lists.
 
 ### 4. `mart.review_article_filter_facet`
 
@@ -225,9 +311,9 @@ bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --filter-prompt-id
 ### Highest priority
 
 - [x] Build `mart.review_article_page` as the dedicated unfiltered serving mart.
-- [x] Build `mart.review_article_filter_row` as the dedicated filtered serving mart.
+- [x] Build `mart.review_article_filter_row` as the first filtered serving mart.
 - [x] Build `mart.review_article_judgment_detail` so judgment rendering happens only after page selection.
-- [ ] Move all route hydration fields needed by `/api/articlesreviews` into `mart.review_article_page` so the route stops doing the second hydration query.
+- [x] Move all route hydration fields needed by `/api/articlesreviews` into serving-mart-backed queries so the route stops doing the second hydration query.
 - [ ] Change `/api/articlesreviews` to a strict two-stage plan:
   - stage 1: candidate article ids from serving marts
   - stage 2: fetch only judgment detail for those page ids
@@ -235,9 +321,23 @@ bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --filter-prompt-id
 ### Strong candidates after that
 
 - [ ] Add a project-local first-page mart or cache for the common unfiltered page-1 case.
-- [ ] Finish the cursor cutover in callers so unfiltered deep-page requests stop using the page-number `OFFSET` fallback.
-- [ ] If `mart.review_article_filter_row` is still too large, add a second-level precomputed posting-list/bucket structure per `(project_id, prompt_id, answer_value)`.
+- [x] Finish the cursor cutover in callers so normal review browsing stops depending on direct page-number `OFFSET` jumps.
+- [x] If `mart.review_article_filter_row` is still too large, add a second-level precomputed posting-list/bucket structure per `(project_id, prompt_id, answer_value)`.
 - [ ] Add a project-local filtered-result cache keyed by normalized prompt-filter payload plus date/search window if the UI repeats the same requests often.
+- [ ] Split `mart.review_article_page` into a narrower `candidate` mart and a separate `display` mart if candidate selection is still reading too much data.
+- [x] Move large judgment payload fields (`explanation`, `quotes`) into a lazy-loaded `mart.review_article_judgment_payload` if page rendering still reads more than it needs.
+- [x] Introduce per-project article ordinals and answer dictionaries if UUID/string-heavy marts remain too wide.
+- [x] Replace row-per-answer filter marts with project-local posting-list/bitset structures when filtered query cost stops being dominated by simple row scans.
+
+## Obvious cons / tradeoffs
+
+- [ ] More marts means more write amplification and more refresh orchestration.
+- [ ] Narrower marts plus payload splitting reduce hot-path cost, but add more codepaths and more opportunities for stale/partial refresh bugs.
+- [ ] Lazy-loading judgment payloads improves list performance, but adds extra UI/API round-trips and slightly more complex row-expansion behavior.
+- [ ] Project-local ordinals are powerful, but they add another mapping table that must stay stable across rebuilds and refreshes.
+- [ ] Answer dictionaries save space, but introduce translation layers and migration complexity.
+- [ ] Posting lists / bitsets can be extremely fast for filtered queries, but are substantially harder to build, debug, and refresh incrementally than row-based marts.
+- [ ] Full cursor-only UX is faster, but loses easy direct page-number jumps unless the UI is redesigned around sequential navigation.
 
 ### Physical layout ideas
 
@@ -370,6 +470,39 @@ bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --mode=unfiltered 
   - removing the extra hydration query simplifies the serving path and removes one round-trip/query step
   - the remaining performance ceiling is now much more about serving-mart shape and request-pattern variance than about route hydration
 
+### Change 5 - serving-v2 split marts plus posting-list filter path
+
+- Scope:
+  - added `app.project_article_ordinal`
+  - added `app.review_answer_dictionary`
+  - added `mart.review_article_candidate`
+  - added `mart.review_article_display`
+  - added `mart.review_article_filter_posting`
+  - added `mart.review_article_judgment_payload`
+  - switched `/api/articlesreviews` to use the new serving-v2 path when those rows exist
+  - serving-v2 filtered queries now resolve answer ids from the dictionary and intersect posting lists instead of scanning row-per-answer filter rows
+- Benchmark command:
+
+```bash
+bun run bench:articlesreviews
+bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --mode=unfiltered --cursor-steps=5 --iterations=1 --warmup-runs=0
+```
+
+- Results after change:
+  - unfiltered page 1 average: `315ms`
+  - unfiltered page 1 min/max: `313ms` / `316ms`
+  - filtered page 1 average: `520ms`
+  - filtered page 1 min/max: `497ms` / `543ms`
+  - sequential unfiltered cursor navigation over 5 requests: `421ms` average per request
+- Comparison to earlier measurements:
+  - unfiltered page 1 improved from `542ms` to `315ms`
+  - filtered page 1 improved from `951ms` to `520ms`
+  - sequential cursor navigation improved from `689ms` to `421ms`
+- Interpretation:
+  - splitting candidate/display concerns and using project-local posting lists gave another strong step down in latency
+  - the posting-list approach is now clearly better than the row-per-answer filtered mart for the benchmark project
+  - the remaining likely gains are now more incremental unless we add first-page caches or a filtered-result cache
+
 ## Suggested order
 
 - [ ] Build the dedicated unfiltered hot-path mart first.
@@ -380,4 +513,6 @@ bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --mode=unfiltered 
 - [x] Build the dedicated judgment-detail mart third.
 - [x] Re-run the same benchmark and log results here.
 - [x] Remove the extra hydration query if still meaningful.
+- [x] Re-run the same benchmark and log results here.
+- [x] Build project-local ordinals, answer dictionaries, candidate/display marts, posting lists, and payload mart.
 - [x] Re-run the same benchmark and log results here.

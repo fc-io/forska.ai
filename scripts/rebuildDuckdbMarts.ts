@@ -4,10 +4,16 @@ const judgmentFactBucketCount = 128
 const martStageOrder = [
   'project_scope_article',
   'judgment_fact',
+  'review_article_judgment_payload',
   'review_article_judgment_detail',
-  'prompt_answer_fact',
-  'review_article_filter_row',
   'review_article_rollup',
+  'project_article_ordinal',
+  'review_article_candidate',
+  'review_article_display',
+  'prompt_answer_fact',
+  'review_answer_dictionary',
+  'review_article_filter_row',
+  'review_article_filter_posting',
   'review_article_page',
 ] as const
 
@@ -59,11 +65,23 @@ const getMartCounts = async () => {
     UNION ALL
     SELECT 'mart.judgment_fact' AS table_name, COUNT(*) AS count FROM mart.judgment_fact
     UNION ALL
+    SELECT 'mart.review_article_judgment_payload' AS table_name, COUNT(*) AS count FROM mart.review_article_judgment_payload
+    UNION ALL
     SELECT 'mart.review_article_judgment_detail' AS table_name, COUNT(*) AS count FROM mart.review_article_judgment_detail
+    UNION ALL
+    SELECT 'app.project_article_ordinal' AS table_name, COUNT(*) AS count FROM app.project_article_ordinal
+    UNION ALL
+    SELECT 'mart.review_article_candidate' AS table_name, COUNT(*) AS count FROM mart.review_article_candidate
+    UNION ALL
+    SELECT 'mart.review_article_display' AS table_name, COUNT(*) AS count FROM mart.review_article_display
     UNION ALL
     SELECT 'mart.prompt_answer_fact' AS table_name, COUNT(*) AS count FROM mart.prompt_answer_fact
     UNION ALL
+    SELECT 'app.review_answer_dictionary' AS table_name, COUNT(*) AS count FROM app.review_answer_dictionary
+    UNION ALL
     SELECT 'mart.review_article_filter_row' AS table_name, COUNT(*) AS count FROM mart.review_article_filter_row
+    UNION ALL
+    SELECT 'mart.review_article_filter_posting' AS table_name, COUNT(*) AS count FROM mart.review_article_filter_posting
     UNION ALL
     SELECT 'mart.review_article_rollup' AS table_name, COUNT(*) AS count FROM mart.review_article_rollup
     UNION ALL
@@ -306,9 +324,7 @@ const getReviewArticleJudgmentDetailSql = (projectId: string) => {
       article_import_route,
       model_id,
       answered_original,
-      answered_original_as_array,
-      explanation,
-      quotes
+      answered_original_as_array
     )
     SELECT
       scope_article.project_id,
@@ -323,9 +339,7 @@ const getReviewArticleJudgmentDetailSql = (projectId: string) => {
       judgment_fact.article_import_route,
       judgment_fact.model_id,
       judgment_fact.answered_original,
-      judgment_fact.answered_original_as_array,
-      judgment_fact.explanation,
-      judgment_fact.quotes
+      judgment_fact.answered_original_as_array
     FROM mart.project_scope_article scope_article
     INNER JOIN app.project project ON project.id = scope_article.project_id
     INNER JOIN app.project_prompt project_prompt
@@ -340,6 +354,205 @@ const getReviewArticleJudgmentDetailSql = (projectId: string) => {
      AND judgment_fact.use_fulltext = project.use_fulltext
      AND judgment_fact.use_fulltext_no_images = project.use_fulltext_no_images
     WHERE scope_article.project_id = ${projectLiteral};
+    COMMIT;
+  `
+}
+
+const getReviewArticleJudgmentPayloadSql = (projectId: string) => {
+  const projectLiteral = quoteSqlString(projectId)
+
+  return `
+    BEGIN TRANSACTION;
+    DELETE FROM mart.review_article_judgment_payload WHERE project_id = ${projectLiteral};
+    INSERT INTO mart.review_article_judgment_payload (
+      project_id,
+      judgment_id,
+      explanation,
+      quotes,
+      payload_updated_at
+    )
+    SELECT
+      scope_article.project_id,
+      judgment_fact.judgment_id,
+      judgment_fact.explanation,
+      judgment_fact.quotes,
+      current_timestamp
+    FROM mart.project_scope_article scope_article
+    INNER JOIN app.project project ON project.id = scope_article.project_id
+    INNER JOIN app.project_prompt project_prompt
+      ON project_prompt.project_id = scope_article.project_id
+     AND project_prompt.enabled = TRUE
+    INNER JOIN mart.judgment_fact judgment_fact
+      ON judgment_fact.article_id = scope_article.article_id
+     AND judgment_fact.prompt_id = project_prompt.prompt_id
+     AND judgment_fact.model_id = project.model_id
+     AND judgment_fact.use_title = project.use_title
+     AND judgment_fact.use_abstract = project.use_abstract
+     AND judgment_fact.use_fulltext = project.use_fulltext
+     AND judgment_fact.use_fulltext_no_images = project.use_fulltext_no_images
+    WHERE scope_article.project_id = ${projectLiteral};
+    COMMIT;
+  `
+}
+
+const getProjectArticleOrdinalSql = (projectId: string) => {
+  const projectLiteral = quoteSqlString(projectId)
+
+  return `
+    BEGIN TRANSACTION;
+    DELETE FROM app.project_article_ordinal WHERE project_id = ${projectLiteral};
+    INSERT INTO app.project_article_ordinal (
+      project_id,
+      article_id,
+      article_seq,
+      ordinal_updated_at
+    )
+    SELECT
+      project_id,
+      article_id,
+      ROW_NUMBER() OVER (ORDER BY article_created_at DESC NULLS LAST, article_id ASC) AS article_seq,
+      current_timestamp
+    FROM mart.review_article_rollup
+    WHERE project_id = ${projectLiteral};
+    COMMIT;
+  `
+}
+
+const getReviewArticleCandidateSql = (projectId: string) => {
+  const projectLiteral = quoteSqlString(projectId)
+
+  return `
+    BEGIN TRANSACTION;
+    DELETE FROM mart.review_article_candidate WHERE project_id = ${projectLiteral};
+    INSERT INTO mart.review_article_candidate (
+      project_id,
+      article_id,
+      article_seq,
+      article_created_at,
+      article_updated_at,
+      article_title,
+      has_all_llm_judgments,
+      llm_judged_prompt_count,
+      enabled_prompt_count,
+      candidate_updated_at
+    )
+    SELECT
+      rollup.project_id,
+      rollup.article_id,
+      ordinal.article_seq,
+      rollup.article_created_at,
+      rollup.article_updated_at,
+      rollup.article_title,
+      rollup.has_all_llm_judgments,
+      rollup.llm_judged_prompt_count,
+      rollup.enabled_prompt_count,
+      current_timestamp
+    FROM mart.review_article_rollup rollup
+    INNER JOIN app.project_article_ordinal ordinal
+      ON ordinal.project_id = rollup.project_id
+     AND ordinal.article_id = rollup.article_id
+    WHERE rollup.project_id = ${projectLiteral};
+    COMMIT;
+  `
+}
+
+const getReviewArticleDisplaySql = (projectId: string) => {
+  const projectLiteral = quoteSqlString(projectId)
+
+  return `
+    BEGIN TRANSACTION;
+    DELETE FROM mart.review_article_display WHERE project_id = ${projectLiteral};
+    INSERT INTO mart.review_article_display (
+      project_id,
+      article_id,
+      article_external_id,
+      article_title,
+      journal_title,
+      url,
+      full_text_pdf,
+      full_text_fetched_at,
+      full_text_conversion_status,
+      display_updated_at
+    )
+    SELECT
+      rollup.project_id,
+      rollup.article_id,
+      article.article_id,
+      rollup.article_title,
+      NULL,
+      article.url,
+      article.full_text_pdf,
+      article.full_text_fetched_at,
+      article.full_text_conversion_status,
+      current_timestamp
+    FROM mart.review_article_rollup rollup
+    INNER JOIN app.article article ON article.id = rollup.article_id
+    WHERE rollup.project_id = ${projectLiteral};
+    COMMIT;
+  `
+}
+
+const getReviewAnswerDictionarySql = (projectId: string) => {
+  const projectLiteral = quoteSqlString(projectId)
+
+  return `
+    BEGIN TRANSACTION;
+    DELETE FROM app.review_answer_dictionary WHERE project_id = ${projectLiteral};
+    INSERT INTO app.review_answer_dictionary (
+      project_id,
+      prompt_id,
+      answer_id,
+      answer_value,
+      numeric_answer_value,
+      dictionary_updated_at
+    )
+    SELECT
+      project_id,
+      prompt_id,
+      DENSE_RANK() OVER (PARTITION BY project_id, prompt_id ORDER BY answer_value ASC) AS answer_id,
+      answer_value,
+      TRY_CAST(answer_value AS BIGINT),
+      current_timestamp
+    FROM (
+      SELECT DISTINCT project_id, prompt_id, answer_value
+      FROM mart.prompt_answer_fact
+      WHERE project_id = ${projectLiteral}
+    ) answer_values;
+    COMMIT;
+  `
+}
+
+const getReviewArticleFilterPostingSql = (projectId: string) => {
+  const projectLiteral = quoteSqlString(projectId)
+
+  return `
+    BEGIN TRANSACTION;
+    DELETE FROM mart.review_article_filter_posting WHERE project_id = ${projectLiteral};
+    INSERT INTO mart.review_article_filter_posting (
+      project_id,
+      prompt_id,
+      answer_id,
+      article_seq_list,
+      article_count,
+      posting_updated_at
+    )
+    SELECT
+      fact.project_id,
+      fact.prompt_id,
+      dict.answer_id,
+      LIST(ordinal.article_seq ORDER BY ordinal.article_seq ASC) AS article_seq_list,
+      COUNT(*) AS article_count,
+      current_timestamp
+    FROM mart.prompt_answer_fact fact
+    INNER JOIN app.review_answer_dictionary dict
+      ON dict.project_id = fact.project_id
+     AND dict.prompt_id = fact.prompt_id
+     AND dict.answer_value = fact.answer_value
+    INNER JOIN app.project_article_ordinal ordinal
+      ON ordinal.project_id = fact.project_id
+     AND ordinal.article_id = fact.article_id
+    WHERE fact.project_id = ${projectLiteral}
+    GROUP BY fact.project_id, fact.prompt_id, dict.answer_id;
     COMMIT;
   `
 }
@@ -617,6 +830,120 @@ const rebuildPromptAnswerFactProjects = async (projectIds: string[], index = 0):
   return rebuildPromptAnswerFactProjects(projectIds, index + 1)
 }
 
+const rebuildReviewArticleJudgmentPayloadProjects = async (projectIds: string[], index = 0): Promise<void> => {
+  if (index >= projectIds.length) {
+    return
+  }
+
+  const projectId = projectIds[index]
+
+  if (!projectId) {
+    return rebuildReviewArticleJudgmentPayloadProjects(projectIds, index + 1)
+  }
+
+  if (index % 10 === 0) {
+    console.log(`rebuilding mart.review_article_judgment_payload project ${index + 1}/${projectIds.length}`)
+  }
+
+  await runSql(getReviewArticleJudgmentPayloadSql(projectId))
+  return rebuildReviewArticleJudgmentPayloadProjects(projectIds, index + 1)
+}
+
+const rebuildProjectArticleOrdinalProjects = async (projectIds: string[], index = 0): Promise<void> => {
+  if (index >= projectIds.length) {
+    return
+  }
+
+  const projectId = projectIds[index]
+
+  if (!projectId) {
+    return rebuildProjectArticleOrdinalProjects(projectIds, index + 1)
+  }
+
+  if (index % 10 === 0) {
+    console.log(`rebuilding app.project_article_ordinal project ${index + 1}/${projectIds.length}`)
+  }
+
+  await runSql(getProjectArticleOrdinalSql(projectId))
+  return rebuildProjectArticleOrdinalProjects(projectIds, index + 1)
+}
+
+const rebuildReviewArticleCandidateProjects = async (projectIds: string[], index = 0): Promise<void> => {
+  if (index >= projectIds.length) {
+    return
+  }
+
+  const projectId = projectIds[index]
+
+  if (!projectId) {
+    return rebuildReviewArticleCandidateProjects(projectIds, index + 1)
+  }
+
+  if (index % 10 === 0) {
+    console.log(`rebuilding mart.review_article_candidate project ${index + 1}/${projectIds.length}`)
+  }
+
+  await runSql(getReviewArticleCandidateSql(projectId))
+  return rebuildReviewArticleCandidateProjects(projectIds, index + 1)
+}
+
+const rebuildReviewArticleDisplayProjects = async (projectIds: string[], index = 0): Promise<void> => {
+  if (index >= projectIds.length) {
+    return
+  }
+
+  const projectId = projectIds[index]
+
+  if (!projectId) {
+    return rebuildReviewArticleDisplayProjects(projectIds, index + 1)
+  }
+
+  if (index % 10 === 0) {
+    console.log(`rebuilding mart.review_article_display project ${index + 1}/${projectIds.length}`)
+  }
+
+  await runSql(getReviewArticleDisplaySql(projectId))
+  return rebuildReviewArticleDisplayProjects(projectIds, index + 1)
+}
+
+const rebuildReviewAnswerDictionaryProjects = async (projectIds: string[], index = 0): Promise<void> => {
+  if (index >= projectIds.length) {
+    return
+  }
+
+  const projectId = projectIds[index]
+
+  if (!projectId) {
+    return rebuildReviewAnswerDictionaryProjects(projectIds, index + 1)
+  }
+
+  if (index % 10 === 0) {
+    console.log(`rebuilding app.review_answer_dictionary project ${index + 1}/${projectIds.length}`)
+  }
+
+  await runSql(getReviewAnswerDictionarySql(projectId))
+  return rebuildReviewAnswerDictionaryProjects(projectIds, index + 1)
+}
+
+const rebuildReviewArticleFilterPostingProjects = async (projectIds: string[], index = 0): Promise<void> => {
+  if (index >= projectIds.length) {
+    return
+  }
+
+  const projectId = projectIds[index]
+
+  if (!projectId) {
+    return rebuildReviewArticleFilterPostingProjects(projectIds, index + 1)
+  }
+
+  if (index % 10 === 0) {
+    console.log(`rebuilding mart.review_article_filter_posting project ${index + 1}/${projectIds.length}`)
+  }
+
+  await runSql(getReviewArticleFilterPostingSql(projectId))
+  return rebuildReviewArticleFilterPostingProjects(projectIds, index + 1)
+}
+
 const rebuildReviewArticleJudgmentDetailProjects = async (projectIds: string[], index = 0): Promise<void> => {
   if (index >= projectIds.length) {
     return
@@ -711,9 +1038,39 @@ const rebuildDuckdbMarts = async (options: RebuildOptions) => {
     console.log(JSON.stringify(await getMartCounts()))
   }
 
+  if (shouldRunStage(options, 'review_article_judgment_payload')) {
+    console.log('starting mart.review_article_judgment_payload rebuild')
+    await rebuildReviewArticleJudgmentPayloadProjects(projectIds)
+    console.log(JSON.stringify(await getMartCounts()))
+  }
+
   if (shouldRunStage(options, 'review_article_judgment_detail')) {
     console.log('starting mart.review_article_judgment_detail rebuild')
     await rebuildReviewArticleJudgmentDetailProjects(projectIds)
+    console.log(JSON.stringify(await getMartCounts()))
+  }
+
+  if (shouldRunStage(options, 'review_article_rollup')) {
+    console.log('starting mart.review_article_rollup rebuild')
+    await rebuildReviewArticleRollupProjects(projectIds)
+    console.log(JSON.stringify(await getMartCounts()))
+  }
+
+  if (shouldRunStage(options, 'project_article_ordinal')) {
+    console.log('starting app.project_article_ordinal rebuild')
+    await rebuildProjectArticleOrdinalProjects(projectIds)
+    console.log(JSON.stringify(await getMartCounts()))
+  }
+
+  if (shouldRunStage(options, 'review_article_candidate')) {
+    console.log('starting mart.review_article_candidate rebuild')
+    await rebuildReviewArticleCandidateProjects(projectIds)
+    console.log(JSON.stringify(await getMartCounts()))
+  }
+
+  if (shouldRunStage(options, 'review_article_display')) {
+    console.log('starting mart.review_article_display rebuild')
+    await rebuildReviewArticleDisplayProjects(projectIds)
     console.log(JSON.stringify(await getMartCounts()))
   }
 
@@ -723,15 +1080,21 @@ const rebuildDuckdbMarts = async (options: RebuildOptions) => {
     console.log(JSON.stringify(await getMartCounts()))
   }
 
+  if (shouldRunStage(options, 'review_answer_dictionary')) {
+    console.log('starting app.review_answer_dictionary rebuild')
+    await rebuildReviewAnswerDictionaryProjects(projectIds)
+    console.log(JSON.stringify(await getMartCounts()))
+  }
+
   if (shouldRunStage(options, 'review_article_filter_row')) {
     console.log('starting mart.review_article_filter_row rebuild')
     await rebuildReviewArticleFilterRowProjects(projectIds)
     console.log(JSON.stringify(await getMartCounts()))
   }
 
-  if (shouldRunStage(options, 'review_article_rollup')) {
-    console.log('starting mart.review_article_rollup rebuild')
-    await rebuildReviewArticleRollupProjects(projectIds)
+  if (shouldRunStage(options, 'review_article_filter_posting')) {
+    console.log('starting mart.review_article_filter_posting rebuild')
+    await rebuildReviewArticleFilterPostingProjects(projectIds)
     console.log(JSON.stringify(await getMartCounts()))
   }
 
