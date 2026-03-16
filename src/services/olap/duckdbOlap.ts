@@ -520,6 +520,96 @@ const getDuckdbReviewPageWhereParts = (params: {
   })
 }
 
+const getDuckdbReviewPagePromptFilterExistsParts = (
+  scope: ProjectOlapScope,
+  prompts: Record<string, string[]> | undefined,
+) => {
+  const promptTypeById = getDuckdbPromptTypeById(scope)
+  const promptFilters = getPromptFilters(prompts)
+
+  return promptFilters.reduce<string[]>((whereParts, [promptId, answeredValues]) => {
+    const promptType = promptTypeById[promptId]
+    const isNumericPrompt = promptType ? isNumericType(promptType) : false
+
+    if (isNumericPrompt) {
+      const parsedFilters = answeredValues.reduce<{
+        binRanges: Array<{min: number; max: number}>
+        specialValues: string[]
+      }>(
+        (filters, value) => {
+          if (!value.startsWith('bin:')) {
+            return {...filters, specialValues: [...filters.specialValues, value]}
+          }
+
+          const [, minRaw = '', maxRaw = ''] = value.split(':')
+          const min = Number.parseInt(minRaw, 10)
+          const max = Number.parseInt(maxRaw, 10)
+
+          return Number.isNaN(min) || Number.isNaN(max)
+            ? filters
+            : {...filters, binRanges: [...filters.binRanges, {min, max}]}
+        },
+        {binRanges: [], specialValues: []},
+      )
+      const numericCondition =
+        parsedFilters.binRanges.length === 0
+          ? null
+          : `(${parsedFilters.binRanges
+              .map((range) => {
+                return `(f.numeric_answer_value >= ${range.min} AND f.numeric_answer_value <= ${range.max})`
+              })
+              .join(' OR ')})`
+      const specialCondition =
+        parsedFilters.specialValues.length === 0
+          ? null
+          : `f.answer_value IN (${getDuckdbSqlStringList(parsedFilters.specialValues).join(', ')})`
+      const answerCondition = [numericCondition, specialCondition].filter((part): part is string => {
+        return part !== null
+      })
+
+      return answerCondition.length === 0
+        ? whereParts
+        : [
+            ...whereParts,
+            `EXISTS (
+              SELECT 1
+              FROM mart.review_article_filter_row f
+              WHERE f.project_id = p.project_id
+                AND f.article_id = p.article_id
+                AND f.prompt_id = ${getDuckdbSqlString(promptId)}
+                AND (${answerCondition.join(' OR ')})
+            )`,
+          ]
+    }
+
+    return [
+      ...whereParts,
+      `EXISTS (
+        SELECT 1
+        FROM mart.review_article_filter_row f
+        WHERE f.project_id = p.project_id
+          AND f.article_id = p.article_id
+          AND f.prompt_id = ${getDuckdbSqlString(promptId)}
+          AND f.answer_value IN (${getDuckdbSqlStringList(answeredValues).join(', ')})
+      )`,
+    ]
+  }, [])
+}
+
+const getDuckdbReviewPageReviewedWhereParts = (params: {
+  scope: ProjectOlapScope
+  from?: string | null
+  to?: string | null
+  search?: string | null
+  cursor?: string | null
+  prompts?: Record<string, string[]>
+}) => {
+  return [
+    ...getDuckdbReviewPageWhereParts(params),
+    ...getDuckdbReviewPagePromptFilterExistsParts(params.scope, params.prompts),
+  ]
+}
+
 const getReviewedPageRowsFromPageMart = async (params: {
   scope: ProjectOlapScope
   page: number
@@ -528,8 +618,9 @@ const getReviewedPageRowsFromPageMart = async (params: {
   to?: string | null
   search?: string | null
   cursor?: string | null
+  prompts?: Record<string, string[]>
 }) => {
-  const whereParts = getDuckdbReviewPageWhereParts(params)
+  const whereParts = getDuckdbReviewPageReviewedWhereParts(params)
   const offset = params.cursor ? 0 : Math.max(params.page - 1, 0) * params.limit
   const rows = await runDuckdbJsonQuery<{
     articleCreatedAt: unknown
@@ -586,13 +677,25 @@ const getHasReviewArticlePageRows = async (projectId: string) => {
   return rows.length > 0
 }
 
+const getHasReviewArticleFilterRows = async (projectId: string) => {
+  const rows = await runDuckdbJsonQuery<{projectId: string}>(`
+    SELECT project_id AS projectId
+    FROM mart.review_article_filter_row
+    WHERE project_id = ${getDuckdbSqlString(projectId)}
+    LIMIT 1
+  `)
+
+  return rows.length > 0
+}
+
 const countReviewedPageRowsFromPageMart = async (params: {
   scope: ProjectOlapScope
   from?: string | null
   to?: string | null
   search?: string | null
+  prompts?: Record<string, string[]>
 }) => {
-  const whereParts = getDuckdbReviewPageWhereParts({...params, cursor: null})
+  const whereParts = getDuckdbReviewPageReviewedWhereParts({...params, cursor: null})
   const rows = await runDuckdbJsonQuery<{totalCount: number}>(`
     SELECT COUNT(*) AS totalCount
     FROM mart.review_article_page p
@@ -1563,7 +1666,13 @@ export const queryArticlesReviewsFromDuckdb = async (
     return {data: [], totalCount: 0, page: params.page, limit: params.limit, totalPages: 0}
   }
 
-  if (scope.modelId && !getHasPromptFilters(params.prompts) && (await getHasReviewArticlePageRows(scope.projectId))) {
+  const hasPromptFilters = getHasPromptFilters(params.prompts)
+  const canUsePageMart =
+    scope.modelId
+    && (await getHasReviewArticlePageRows(scope.projectId))
+    && (!hasPromptFilters || (await getHasReviewArticleFilterRows(scope.projectId)))
+
+  if (canUsePageMart) {
     const pageResult = await getReviewedPageRowsFromPageMart({...params, scope})
     const llmJudgmentRows = await getLlmJudgmentRowsFromMart(
       scope,
@@ -1662,7 +1771,13 @@ export const countArticlesReviewsFromDuckdb = async (
     return {totalCount: 0, totalPages: 0}
   }
 
-  if (scope.modelId && !getHasPromptFilters(params.prompts) && (await getHasReviewArticlePageRows(scope.projectId))) {
+  const hasPromptFilters = getHasPromptFilters(params.prompts)
+  const canUsePageMart =
+    scope.modelId
+    && (await getHasReviewArticlePageRows(scope.projectId))
+    && (!hasPromptFilters || (await getHasReviewArticleFilterRows(scope.projectId)))
+
+  if (canUsePageMart) {
     const totalCount = await countReviewedPageRowsFromPageMart({...params, scope})
     return {totalCount, totalPages: Math.ceil(totalCount / params.limit)}
   }

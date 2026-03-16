@@ -279,6 +279,34 @@ test('queryArticlesReviewsFromDuckdb uses review page mart cursor for unfiltered
   expect(duckdbRunnerMockRef.current.queries[10]).toContain('FROM mart.review_article_page p')
 })
 
+test('queryArticlesReviewsFromDuckdb uses review page mart for filtered model-backed pages when filter rows exist', async () => {
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRows(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [{projectId: 'project-1'}],
+    [{projectId: 'project-1'}],
+    [getDuckdbReviewPageRow({articleId: 'article-1'})],
+    [getDuckdbJudgmentRow({articleId: 'article-1', promptId: 'prompt-1'})],
+  ])
+
+  const {queryArticlesReviewsFromDuckdb} = await loadDuckdbOlap()
+  const result = await queryArticlesReviewsFromDuckdb({
+    projectId: 'project-1',
+    page: 1,
+    limit: 10,
+    prompts: {'prompt-1': ['yes']},
+  })
+
+  expect(
+    result.data.map((row) => {
+      return row.id
+    }),
+  ).toEqual(['article-1'])
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM mart.review_article_page p')
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM mart.review_article_filter_row f')
+})
+
 test('countArticlesReviewsFromDuckdb counts rows when project modelId is null', async () => {
   duckdbRunnerMockRef.current = createDuckdbRunnerMock([
     getPromptRows(),

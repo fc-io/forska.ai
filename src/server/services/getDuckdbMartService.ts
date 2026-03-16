@@ -200,6 +200,28 @@ WHERE eligible_project_judgment.normalized_answers IS NOT NULL
 COMMIT;
 `
 
+const rebuildReviewArticleFilterRowSql = `
+BEGIN TRANSACTION;
+DELETE FROM mart.review_article_filter_row;
+INSERT INTO mart.review_article_filter_row (
+  project_id,
+  article_id,
+  prompt_id,
+  answer_value,
+  numeric_answer_value,
+  filter_updated_at
+)
+SELECT
+  project_id,
+  article_id,
+  prompt_id,
+  answer_value,
+  TRY_CAST(answer_value AS BIGINT),
+  current_timestamp
+FROM mart.prompt_answer_fact;
+COMMIT;
+`
+
 const rebuildReviewArticleRollupSql = `
 BEGIN TRANSACTION;
 DELETE FROM mart.review_article_rollup;
@@ -361,12 +383,7 @@ INSERT INTO mart.review_article_page (
   article_created_at,
   article_updated_at,
   article_title,
-  article_external_id,
-  url,
-  full_text_pdf,
-  full_text_fetched_at,
-  full_text_conversion_status,
-  original_data,
+  journal_title,
   has_all_llm_judgments,
   llm_judged_prompt_count,
   enabled_prompt_count,
@@ -378,18 +395,13 @@ SELECT
   rollup.article_created_at,
   rollup.article_updated_at,
   rollup.article_title,
-  article.article_id,
-  article.url,
-  article.full_text_pdf,
-  article.full_text_fetched_at,
-  article.full_text_conversion_status,
-  article.original_data,
+  NULL,
   rollup.has_all_llm_judgments,
   rollup.llm_judged_prompt_count,
   rollup.enabled_prompt_count,
   current_timestamp
 FROM mart.review_article_rollup rollup
-INNER JOIN app.article article ON article.id = rollup.article_id;
+;
 COMMIT;
 `
 
@@ -401,6 +413,7 @@ const rebuildAllDuckdbMarts = async (): Promise<void> => {
   await runRebuildSql(rebuildProjectScopeArticleSql)
   await runRebuildSql(rebuildJudgmentFactSql)
   await runRebuildSql(rebuildPromptAnswerFactSql)
+  await runRebuildSql(rebuildReviewArticleFilterRowSql)
   await runRebuildSql(rebuildReviewArticleRollupSql)
   await runRebuildSql(rebuildReviewArticlePageSql)
 }
@@ -415,6 +428,9 @@ const duckdbMartService = {
   },
   rebuildPromptAnswerFact: async () => {
     await runRebuildSql(rebuildPromptAnswerFactSql)
+  },
+  rebuildReviewArticleFilterRow: async () => {
+    await runRebuildSql(rebuildReviewArticleFilterRowSql)
   },
   rebuildReviewArticlePage: async () => {
     await runRebuildSql(rebuildReviewArticlePageSql)

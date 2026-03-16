@@ -10,8 +10,10 @@ type ListType = 'llm' | 'human' | 'both' | 'unassessed'
 
 interface ReviewsPaginationControlsProps {
   page: number
+  hasNextPage?: boolean
   totalPages: number | null // null when count is still loading
   setCurrentPage: Setter<number>
+  useCursorPagination?: boolean
   currentPageRowIds?: string[]
   rowSelection?: Accessor<Record<string, boolean>>
   setRowSelection?: Setter<Record<string, boolean>>
@@ -306,7 +308,11 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
 
             <button
               class="px-2 py-1 text-xs font-medium text-gray-700 bg-gray-100 border border-gray-300 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
-              disabled={props.totalPages !== null && props.page >= props.totalPages}
+              disabled={
+                props.useCursorPagination
+                  ? props.hasNextPage === false
+                  : props.totalPages !== null && props.page >= props.totalPages
+              }
               onClick={() => {
                 return handlePageChange(props.page + 1)
               }}
@@ -316,7 +322,7 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
           </div>
         </Show>
 
-        <Show when={props.totalPages !== null && props.totalPages > 1}>
+        <Show when={!props.useCursorPagination && props.totalPages !== null && props.totalPages > 1}>
           <div class="flex items-center gap-1">
             <label class="text-xs text-gray-700">Go to page:</label>
             <input

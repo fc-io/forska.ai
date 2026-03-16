@@ -1,5 +1,6 @@
 type BenchmarkArgs = {
   baseUrl: string
+  cursorSteps: number
   filterAnswer: string | null
   filterPromptId: string | null
   iterations: number
@@ -41,6 +42,7 @@ const getArgs = (): BenchmarkArgs => {
   const mode = getArgValue('--mode')
   return {
     baseUrl: getArgValue('--base-url') ?? 'http://localhost:3004',
+    cursorSteps: getNumberArg('--cursor-steps', 1),
     filterAnswer: getArgValue('--filter-answer'),
     filterPromptId: getArgValue('--filter-prompt-id'),
     iterations: getNumberArg('--iterations', 2),
@@ -114,6 +116,25 @@ const postArticlesReviews = async (args: BenchmarkArgs, prompts: Record<string, 
   return {bytes: Buffer.byteLength(text, 'utf8'), durationMs: endedAt - startedAt, status: response.status}
 }
 
+const postArticlesReviewsWithBody = async (args: BenchmarkArgs, body: Record<string, unknown>) => {
+  const startedAt = performance.now()
+  const response = await fetch(`${args.baseUrl}/api/articlesreviews`, {
+    body: JSON.stringify(body),
+    headers: {'content-type': 'application/json'},
+    method: 'POST',
+  })
+  const text = await response.text()
+  const endedAt = performance.now()
+  const parsed = JSON.parse(text) as {nextCursor?: string | null}
+
+  return {
+    bytes: Buffer.byteLength(text, 'utf8'),
+    durationMs: endedAt - startedAt,
+    nextCursor: typeof parsed.nextCursor === 'string' ? parsed.nextCursor : null,
+    status: response.status,
+  }
+}
+
 const runBenchmarkRecursively = async (
   args: BenchmarkArgs,
   prompts: Record<string, string[]>,
@@ -126,6 +147,30 @@ const runBenchmarkRecursively = async (
 
   const measurement = await postArticlesReviews(args, prompts)
   return runBenchmarkRecursively(args, prompts, remainingRuns - 1, [...measurements, measurement])
+}
+
+const runCursorBenchmarkRecursively = async (
+  args: BenchmarkArgs,
+  prompts: Record<string, string[]>,
+  remainingSteps: number,
+  cursor: string | null,
+  measurements: BenchmarkMeasurement[],
+): Promise<BenchmarkMeasurement[]> => {
+  if (remainingSteps === 0) {
+    return measurements
+  }
+
+  const result = await postArticlesReviewsWithBody(args, {
+    cursor: cursor ?? undefined,
+    limit: String(args.limit),
+    page: '1',
+    projectId: args.projectId,
+    prompts,
+  })
+
+  return result.nextCursor === null && remainingSteps > 1
+    ? [...measurements, result]
+    : runCursorBenchmarkRecursively(args, prompts, remainingSteps - 1, result.nextCursor, [...measurements, result])
 }
 
 const getMeasuredRuns = (measurements: BenchmarkMeasurement[], warmupRuns: number) => {
@@ -182,6 +227,10 @@ const main = async () => {
     filterConfig === null
       ? null
       : await runBenchmarkRecursively(args, {[filterConfig.promptId]: [filterConfig.answer]}, totalRuns, [])
+  const unfilteredCursorMeasurements =
+    args.mode !== 'unfiltered' || args.cursorSteps <= 1
+      ? null
+      : await runCursorBenchmarkRecursively(args, {}, args.cursorSteps, null, [])
 
   console.log(
     JSON.stringify(
@@ -189,6 +238,7 @@ const main = async () => {
         baseUrl: args.baseUrl,
         iterations: args.iterations,
         limit: args.limit,
+        cursorSteps: args.cursorSteps,
         mode: args.mode,
         page: args.page,
         projectId: args.projectId,
@@ -196,6 +246,10 @@ const main = async () => {
           unfilteredMeasurements === null
             ? null
             : {summary: roundSummary(getSummary(unfilteredMeasurements, args.warmupRuns))},
+        unfilteredCursor:
+          unfilteredCursorMeasurements === null
+            ? null
+            : {summary: roundSummary(getSummary(unfilteredCursorMeasurements, 0))},
         filtered:
           filteredMeasurements === null || filterConfig === null
             ? null

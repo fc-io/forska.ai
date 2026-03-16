@@ -5,6 +5,7 @@ const martStageOrder = [
   'project_scope_article',
   'judgment_fact',
   'prompt_answer_fact',
+  'review_article_filter_row',
   'review_article_rollup',
   'review_article_page',
 ] as const
@@ -58,6 +59,8 @@ const getMartCounts = async () => {
     SELECT 'mart.judgment_fact' AS table_name, COUNT(*) AS count FROM mart.judgment_fact
     UNION ALL
     SELECT 'mart.prompt_answer_fact' AS table_name, COUNT(*) AS count FROM mart.prompt_answer_fact
+    UNION ALL
+    SELECT 'mart.review_article_filter_row' AS table_name, COUNT(*) AS count FROM mart.review_article_filter_row
     UNION ALL
     SELECT 'mart.review_article_rollup' AS table_name, COUNT(*) AS count FROM mart.review_article_rollup
     UNION ALL
@@ -277,6 +280,33 @@ const getPromptAnswerFactSql = (projectId: string) => {
     WHERE eligible_project_judgment.normalized_answers IS NOT NULL
       AND ARRAY_LENGTH(eligible_project_judgment.normalized_answers) > 0
       AND NULLIF(TRIM(answer.answer_value), '') IS NOT NULL;
+    COMMIT;
+  `
+}
+
+const getReviewArticleFilterRowSql = (projectId: string) => {
+  const projectLiteral = quoteSqlString(projectId)
+
+  return `
+    BEGIN TRANSACTION;
+    DELETE FROM mart.review_article_filter_row WHERE project_id = ${projectLiteral};
+    INSERT INTO mart.review_article_filter_row (
+      project_id,
+      article_id,
+      prompt_id,
+      answer_value,
+      numeric_answer_value,
+      filter_updated_at
+    )
+    SELECT
+      project_id,
+      article_id,
+      prompt_id,
+      answer_value,
+      TRY_CAST(answer_value AS BIGINT),
+      current_timestamp
+    FROM mart.prompt_answer_fact
+    WHERE project_id = ${projectLiteral};
     COMMIT;
   `
 }
@@ -527,6 +557,25 @@ const rebuildPromptAnswerFactProjects = async (projectIds: string[], index = 0):
   return rebuildPromptAnswerFactProjects(projectIds, index + 1)
 }
 
+const rebuildReviewArticleFilterRowProjects = async (projectIds: string[], index = 0): Promise<void> => {
+  if (index >= projectIds.length) {
+    return
+  }
+
+  const projectId = projectIds[index]
+
+  if (!projectId) {
+    return rebuildReviewArticleFilterRowProjects(projectIds, index + 1)
+  }
+
+  if (index % 10 === 0) {
+    console.log(`rebuilding mart.review_article_filter_row project ${index + 1}/${projectIds.length}`)
+  }
+
+  await runSql(getReviewArticleFilterRowSql(projectId))
+  return rebuildReviewArticleFilterRowProjects(projectIds, index + 1)
+}
+
 const rebuildReviewArticleRollupProjects = async (projectIds: string[], index = 0): Promise<void> => {
   if (index >= projectIds.length) {
     return
@@ -586,6 +635,12 @@ const rebuildDuckdbMarts = async (options: RebuildOptions) => {
   if (shouldRunStage(options, 'prompt_answer_fact')) {
     console.log('starting mart.prompt_answer_fact rebuild')
     await rebuildPromptAnswerFactProjects(projectIds)
+    console.log(JSON.stringify(await getMartCounts()))
+  }
+
+  if (shouldRunStage(options, 'review_article_filter_row')) {
+    console.log('starting mart.review_article_filter_row rebuild')
+    await rebuildReviewArticleFilterRowProjects(projectIds)
     console.log(JSON.stringify(await getMartCounts()))
   }
 

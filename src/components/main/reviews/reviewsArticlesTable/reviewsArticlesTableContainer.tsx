@@ -103,6 +103,18 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
   const totalPages = () => {
     return countQuery.isSuccess ? (countQuery.data?.totalPages ?? 0) : null
   }
+  const useCursorPagination = () => {
+    return !Object.keys(props.promptFilters()).some((key) => {
+      const value = props.promptFilters()[key]
+      return Array.isArray(value) && value.length > 0
+    })
+  }
+
+  createEffect(() => {
+    if (useCursorPagination() && props.currentPage() > 1 && pageCursors()[props.currentPage()] == null) {
+      props.setCurrentPage(1)
+    }
+  })
 
   return (
     <div class="space-y-4">
@@ -159,8 +171,10 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
 
               <ReviewsPaginationControls
                 page={props.currentPage()}
+                hasNextPage={typeof response().nextCursor === 'string' && response().nextCursor !== ''}
                 totalPages={totalPages()}
                 setCurrentPage={props.setCurrentPage}
+                useCursorPagination={useCursorPagination()}
                 currentPageRowIds={response().data.map((a: {id: string}) => {
                   return a.id
                 })}
@@ -213,8 +227,10 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
 
               <ReviewsPaginationControls
                 page={props.currentPage()}
+                hasNextPage={typeof response().nextCursor === 'string' && response().nextCursor !== ''}
                 totalPages={totalPages()}
                 setCurrentPage={props.setCurrentPage}
+                useCursorPagination={useCursorPagination()}
                 currentPageRowIds={response().data.map((a: {id: string}) => {
                   return a.id
                 })}

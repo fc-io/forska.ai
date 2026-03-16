@@ -77,7 +77,12 @@ bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --filter-prompt-id
     - query `mart.review_article_page`
     - apply project/date/search predicates
     - use cursor if present; otherwise use the compatibility `LIMIT/OFFSET` fallback
-  - filtered path, or projects without page-mart rows:
+  - filtered path when both `mart.review_article_page` and `mart.review_article_filter_row` rows exist for the project:
+    - query `mart.review_article_page`
+    - apply project/date/search predicates
+    - apply prompt filters through `EXISTS` against `mart.review_article_filter_row`
+    - use cursor if present; otherwise use the compatibility `LIMIT/OFFSET` fallback
+  - fallback path for projects without serving-mart rows:
     - `getDuckdbReviewedPageRowsFromRollup(...)`
     - query `mart.review_article_rollup` joined to `app.article`
     - apply project/date/search predicates
@@ -149,6 +154,7 @@ bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --filter-prompt-id
   - maybe `sort_created_key`
 - Ordering target:
   - physically rebuild ordered by `project_id, prompt_id, answer_value, article_id`
+- Current implementation is a slim project/article/prompt/answer serving mart with numeric cast support.
 
 ### 3. `mart.review_article_judgment_detail`
 
@@ -219,7 +225,7 @@ bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --filter-prompt-id
 ### Highest priority
 
 - [x] Build `mart.review_article_page` as the dedicated unfiltered serving mart.
-- [ ] Build `mart.review_article_filter_row` as the dedicated filtered serving mart.
+- [x] Build `mart.review_article_filter_row` as the dedicated filtered serving mart.
 - [ ] Build `mart.review_article_judgment_detail` so judgment rendering happens only after page selection.
 - [ ] Move all route hydration fields needed by `/api/articlesreviews` into `mart.review_article_page` so the route stops doing the second hydration query.
 - [ ] Change `/api/articlesreviews` to a strict two-stage plan:
@@ -273,7 +279,6 @@ bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --mode=unfiltered 
   - unfiltered page 1 average after warmup: `384ms`
   - unfiltered page 1 min/max after warmup: `381ms` / `386ms`
   - unfiltered page 1000 via page-number fallback: `22354ms`
-  - filtered page 1 benchmark currently returns `500` on this machine because the old filtered path spills to temp storage and the disk is nearly full
 - Comparison to baseline:
   - unfiltered page 1 improved from `19132ms` to `384ms`
   - direct page-number deep paging is still slow because it still falls back to `OFFSET`
@@ -282,14 +287,42 @@ bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --mode=unfiltered 
   - a slim serving mart gives an immediate order-of-magnitude improvement even before filtered-path work
   - filtered `/api/articlesreviews` is still the next bottleneck and still needs its own serving mart
   - the next real win for unfiltered deep pages is to finish the cursor cutover in callers so they stop using page-number fallback
-  - filtered benchmarks currently run into DuckDB temp spill limits on this machine because disk free space is extremely low
+
+### Change 2 - filtered serving mart plus cursor-driven caller flow for unfiltered navigation
+
+- Scope:
+  - added `mart.review_article_filter_row`
+  - switched filtered `/api/articlesreviews` to use `mart.review_article_page` + `mart.review_article_filter_row` when rows exist
+  - updated the reviews table caller flow to use cursor-driven next/previous navigation for unfiltered pages and hide direct page jumps there
+  - added benchmark support for sequential cursor navigation via `--cursor-steps`
+- Benchmark command:
+
+```bash
+bun run bench:articlesreviews
+bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --mode=unfiltered --cursor-steps=5 --iterations=1 --warmup-runs=0
+```
+
+- Results after change:
+  - unfiltered page 1 average: `399ms`
+  - unfiltered page 1 min/max: `387ms` / `410ms`
+  - filtered page 1 average: `590ms`
+  - filtered page 1 min/max: `577ms` / `604ms`
+  - sequential unfiltered cursor navigation over 5 requests: `880ms` average per request
+- Comparison to earlier measurements:
+  - unfiltered page 1 stayed in the sub-second range after the filtered-mart work
+  - filtered page 1 improved from `39016ms` to `590ms`
+  - sequential cursor navigation is now consistently sub-second per request, unlike deep page-number fallback
+- Interpretation:
+  - filtered prompt-answer intersection was the second major bottleneck, and the slim filter-row mart removes most of that cost
+  - cursor navigation gives the intended deep-page behavior for unfiltered browsing without relying on large `OFFSET` scans
+  - direct page-number deep jumps are still a compatibility fallback and remain expensive until fully removed from callers
 
 ## Suggested order
 
 - [ ] Build the dedicated unfiltered hot-path mart first.
 - [ ] Re-run `bun run bench:articlesreviews` and log results here.
-- [ ] Finish the cursor-only client flow for the unfiltered path and benchmark sequential cursor navigation.
-- [ ] Build the dedicated filtered-answer mart second.
+- [x] Finish the cursor-only client flow for the unfiltered path and benchmark sequential cursor navigation.
+- [x] Build the dedicated filtered-answer mart second.
 - [ ] Re-run the same benchmark and log results here.
 - [ ] Build the dedicated judgment-detail mart third.
 - [ ] Re-run the same benchmark and log results here.

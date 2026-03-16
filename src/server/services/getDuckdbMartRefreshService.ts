@@ -163,6 +163,28 @@ const getProjectRefreshSql = (projectId: string) => {
     `,
     `
       BEGIN TRANSACTION;
+      DELETE FROM mart.review_article_filter_row WHERE project_id = ${projectLiteral};
+      INSERT INTO mart.review_article_filter_row (
+        project_id,
+        article_id,
+        prompt_id,
+        answer_value,
+        numeric_answer_value,
+        filter_updated_at
+      )
+      SELECT
+        project_id,
+        article_id,
+        prompt_id,
+        answer_value,
+        TRY_CAST(answer_value AS BIGINT),
+        current_timestamp
+      FROM mart.prompt_answer_fact
+      WHERE project_id = ${projectLiteral};
+      COMMIT;
+    `,
+    `
+      BEGIN TRANSACTION;
       DELETE FROM mart.review_article_rollup WHERE project_id = ${projectLiteral};
       INSERT INTO mart.review_article_rollup (
         project_id,
