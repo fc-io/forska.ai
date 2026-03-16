@@ -11,6 +11,7 @@ type ListType = 'llm' | 'human' | 'both' | 'unassessed'
 interface ReviewsPaginationControlsProps {
   page: number
   hasNextPage?: boolean
+  isLoadingMore?: boolean
   totalPages: number | null // null when count is still loading
   setCurrentPage: Setter<number>
   useCursorPagination?: boolean
@@ -280,44 +281,53 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
           </Show>
         </div>
 
-        <Show when={props.totalPages === null || props.totalPages > 1}>
+        <Show when={props.useCursorPagination || props.totalPages === null || props.totalPages > 1}>
           <div class="flex items-center justify-center gap-1">
-            <button
-              class="px-2 py-1 text-xs font-medium text-gray-700 bg-gray-100 border border-gray-300 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
-              disabled={props.page <= 1}
-              onClick={() => {
-                return handlePageChange(props.page - 1)
-              }}
-            >
-              Previous
-            </button>
+            <Show
+              when={props.useCursorPagination}
+              fallback={
+                <>
+                  <button
+                    class="px-2 py-1 text-xs font-medium text-gray-700 bg-gray-100 border border-gray-300 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={props.page <= 1}
+                    onClick={() => {
+                      return handlePageChange(props.page - 1)
+                    }}
+                  >
+                    Previous
+                  </button>
 
-            <span class="mx-2 text-xs text-gray-700">
-              <Show
-                when={!props.useCursorPagination && props.totalPages !== null}
-                fallback={
-                  <span class="inline-flex items-center gap-2">
-                    <span class="text-gray-600">Page {props.page}</span>
+                  <span class="mx-2 text-xs text-gray-700">
+                    <Show
+                      when={props.totalPages !== null}
+                      fallback={<span class="text-gray-600">Page {props.page}</span>}
+                    >
+                      Page {props.page} of {props.totalPages}
+                    </Show>
                   </span>
-                }
-              >
-                Page {props.page} of {props.totalPages}
-              </Show>
-            </span>
 
-            <button
-              class="px-2 py-1 text-xs font-medium text-gray-700 bg-gray-100 border border-gray-300 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
-              disabled={
-                props.useCursorPagination
-                  ? props.hasNextPage === false
-                  : props.totalPages !== null && props.page >= props.totalPages
+                  <button
+                    class="px-2 py-1 text-xs font-medium text-gray-700 bg-gray-100 border border-gray-300 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={props.totalPages !== null && props.page >= props.totalPages}
+                    onClick={() => {
+                      return handlePageChange(props.page + 1)
+                    }}
+                  >
+                    Next
+                  </button>
+                </>
               }
-              onClick={() => {
-                return handlePageChange(props.page + 1)
-              }}
             >
-              Next
-            </button>
+              <button
+                class="px-3 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 border border-gray-300 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={props.hasNextPage === false || props.isLoadingMore}
+                onClick={() => {
+                  return handlePageChange(props.page + 1)
+                }}
+              >
+                {props.isLoadingMore ? 'Loading...' : props.hasNextPage === false ? 'All Loaded' : 'Load More'}
+              </button>
+            </Show>
           </div>
         </Show>
 

@@ -12,8 +12,10 @@ Goal: make `/api/articlesreviews` fast enough for large projects, both unfiltere
 
 - Replace page-number pagination for `/api/articlesreviews` with cursor-first browsing.
 - Remove `Go to page N` from the reviews list UX.
-- Prefer `Load more` as the primary interaction instead of numbered paging.
-- `Previous` / `Next` can remain only as a compatibility bridge while the UI moves to `Load more`, but the target end-state is cursor + append, not random page jumps.
+- Replace `Previous` / `Next` with `Load more` for the hot reviews list path.
+- Prefer cursor + append as the primary interaction instead of numbered paging.
+- The target end-state is cursor + append (`Load more`), not random page jumps and not classic page-by-page navigation.
+- Current state: the reviews list UI now uses `Load more` for the hot path, while the request contract still carries compatibility page fields internally.
 
 ## Existing test coverage
 
@@ -329,6 +331,7 @@ bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --filter-prompt-id
 
 - [ ] Add a project-local first-page mart or cache for the common unfiltered page-1 case.
 - [x] Finish the cursor cutover in callers so normal review browsing stops depending on direct page-number `OFFSET` jumps.
+- [x] Switch the hot reviews-list UI to `Load more` instead of `Previous` / `Next` and page jumps.
 - [x] If `mart.review_article_filter_row` is still too large, add a second-level precomputed posting-list/bucket structure per `(project_id, prompt_id, answer_value)`.
 - [ ] Add a project-local filtered-result cache keyed by normalized prompt-filter payload plus date/search window if the UI repeats the same requests often.
 - [ ] Split `mart.review_article_page` into a narrower `candidate` mart and a separate `display` mart if candidate selection is still reading too much data.
@@ -509,6 +512,30 @@ bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --mode=unfiltered 
   - splitting candidate/display concerns and using project-local posting lists gave another strong step down in latency
   - the posting-list approach is now clearly better than the row-per-answer filtered mart for the benchmark project
   - the remaining likely gains are now more incremental unless we add first-page caches or a filtered-result cache
+
+### Change 6 - cursor + `Load more` UI for the reviews list
+
+- Scope:
+  - replaced the hot reviews-list pagination controls with a cursor-driven `Load more` interaction
+  - the table now appends loaded pages instead of replacing the visible rows on each next-page fetch
+  - `Go to page` and classic `Previous` / `Next` are removed from the hot path UI
+- Benchmark command:
+
+```bash
+bun run bench:articlesreviews
+```
+
+- Results after change:
+  - unfiltered page 1 average: `159ms`
+  - unfiltered page 1 min/max: `158ms` / `161ms`
+  - filtered page 1 average: `322ms`
+  - filtered page 1 min/max: `310ms` / `334ms`
+- Comparison to earlier measurements:
+  - no regression from switching the UI to cursor + append
+  - the hot path remains comfortably sub-second for both unfiltered and filtered page 1
+- Interpretation:
+  - this change is mostly a UX/interaction cleanup that aligns the frontend with the fast cursor-based serving path
+  - the lower times here likely reflect a warmer runtime state, so these numbers should be treated as a confirmation of no regression rather than a pure apples-to-apples architectural gain
 
 ## Suggested order
 

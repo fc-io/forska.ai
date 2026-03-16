@@ -26,7 +26,7 @@ type JudgmentData = {
 
 // Minimal article data required for the reviews table
 // This supports both the full article schema and the denormalized API response
-type ArticleWithJudgments = {
+export type ArticleWithJudgments = {
   id: string
   articleTitle: string | null
   articleCreatedAt: Date | null
