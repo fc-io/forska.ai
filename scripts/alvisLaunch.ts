@@ -6,6 +6,8 @@ import {
   ALVIS_ROOT,
   ALVIS_SBATCH_FILE,
   type AlvisConfig,
+  type AlvisJobRequest,
+  getAlvisJobRequest,
   getJobStatus,
   getLatestAlvisJob,
   getWorkerTunnels,
@@ -25,6 +27,7 @@ type LaunchPreset = {
   sbatchArgs: string[]
   exportVars: string[]
   matchesConfig: (config: AlvisConfig) => boolean
+  matchesRequest: (request: AlvisJobRequest) => boolean
 }
 
 let activeJobId: string | null = null
@@ -48,6 +51,9 @@ const a100FatLaunchPreset: LaunchPreset = {
       && getWorkerCount(config) === 1
     )
   },
+  matchesRequest: (request) => {
+    return request.gresPerNode === 'gres/gpu:A100fat:2' && request.numNodes === '1'
+  },
 }
 
 const defaultLaunchPreset = a100FatLaunchPreset
@@ -64,6 +70,9 @@ const a1004LaunchPreset: LaunchPreset = {
       && config.SGLANG_ONE_WORKER_PER_GPU === '0'
       && getWorkerCount(config) === 1
     )
+  },
+  matchesRequest: (request) => {
+    return request.gresPerNode === 'gres/gpu:A100:4' && request.numNodes === '1'
   },
 }
 
@@ -376,6 +385,15 @@ const waitForPendingJobToBeReusable = async (jobId: string): Promise<boolean> =>
   return true
 }
 
+const waitForRequestedPendingJob = async (jobId: string, preset: LaunchPreset): Promise<boolean> => {
+  const jobRequest = await getAlvisJobRequest(jobId)
+
+  if (!jobRequest || !preset.matchesRequest(jobRequest)) return false
+
+  log(`Found matching pending job: ${jobId} (${preset.label})`)
+  return waitForPendingJobToBeReusable(jobId)
+}
+
 const main = async () => {
   setupSignalHandler()
 
@@ -421,6 +439,7 @@ const main = async () => {
   }
 
   if (existingPendingJob && !force && requestedPreset) {
+    if (await waitForRequestedPendingJob(existingPendingJob.jobId, requestedPreset)) return
     log(`Skipping pending job ${existingPendingJob.jobId}; requested preset needs a fresh submission`)
   }
 
@@ -443,7 +462,9 @@ const main = async () => {
 
   const config = await waitForAlvisConfig(jobId, log)
   if (!config) {
-    console.error(`[alvis] Timed out waiting for ${ALVIS_JOB_NAME} startup config`)
+    console.error(
+      `[alvis] Timed out waiting for ${ALVIS_JOB_NAME} startup config (set ALVIS_CONFIG_WAIT_SECONDS to override)`,
+    )
     process.exit(1)
   }
 

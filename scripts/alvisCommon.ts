@@ -7,6 +7,12 @@ export const ALVIS_SBATCH_FILE = 'forska-alvis.sbatch'
 
 const CONFIG_START = '[alvis:config:start]'
 const CONFIG_END = '[alvis:config:end]'
+const ALVIS_CONFIG_POLL_INTERVAL_SECONDS = 5
+const ALVIS_CONFIG_WAIT_SECONDS = Number(process.env.ALVIS_CONFIG_WAIT_SECONDS ?? '21600')
+const ALVIS_CONFIG_WAIT_ATTEMPTS = Math.max(
+  1,
+  Math.ceil(ALVIS_CONFIG_WAIT_SECONDS / ALVIS_CONFIG_POLL_INTERVAL_SECONDS),
+)
 
 export type AlvisConfig = {
   SGLANG_HOST: string
@@ -32,6 +38,7 @@ export type AlvisConfig = {
 }
 
 export type SqueueJob = {jobId: string; jobName: string; state: string; nodeList: string}
+export type AlvisJobRequest = {gresPerNode: string; numNodes: string}
 
 export type WorkerTunnel = {
   remoteUrl: string
@@ -100,6 +107,20 @@ export const getJobStatus = async (jobId: string): Promise<{state: string; nodeL
   const nodeList = parts[1]
 
   return {state: state || 'UNKNOWN', nodeList: nodeList || ''}
+}
+
+export const getAlvisJobRequest = async (jobId: string): Promise<AlvisJobRequest | undefined> => {
+  const result = await $`ssh ${ALVIS_HOST} "squeue -j ${jobId} -h -o '%b|%D' 2>/dev/null || echo '|'"`.text()
+  const parts = result
+    .trim()
+    .split('|')
+    .map((part) => {
+      return part.trim()
+    })
+  const gresPerNode = parts[0]
+  const numNodes = parts[1]
+
+  return gresPerNode && numNodes ? {gresPerNode, numNodes} : undefined
 }
 
 export const findAlvisJobs = async (): Promise<SqueueJob[]> => {
@@ -203,14 +224,16 @@ export const waitForAlvisConfig = async (
   log: (message: string) => void,
   jobName = ALVIS_JOB_NAME,
 ): Promise<AlvisConfig | undefined> => {
-  for (let attempt = 0; attempt < 720; attempt++) {
+  for (let attempt = 0; attempt < ALVIS_CONFIG_WAIT_ATTEMPTS; attempt++) {
     const config = await readAlvisConfigFromLog(jobId, jobName)
     if (config) return config
 
     const status = await getJobStatus(jobId)
     if (status.state === 'FAILED' || status.state === 'CANCELLED' || status.state === 'UNKNOWN') return undefined
-    if (attempt % 12 === 0) log(`Waiting for startup config... (${attempt * 5}s)`)
-    await sleep(5000)
+    if (attempt % 12 === 0) {
+      log(`Waiting for startup config... (${attempt * ALVIS_CONFIG_POLL_INTERVAL_SECONDS}s)`)
+    }
+    await sleep(ALVIS_CONFIG_POLL_INTERVAL_SECONDS * 1000)
   }
 
   return undefined
