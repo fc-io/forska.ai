@@ -7,6 +7,7 @@ import {
   ALVIS_SBATCH_FILE,
   type AlvisConfig,
   type AlvisJobRequest,
+  getAlvisJobLifecycleState,
   getAlvisJobRequest,
   getJobStatus,
   getLatestAlvisJob,
@@ -29,6 +30,7 @@ type LaunchPreset = {
   matchesConfig: (config: AlvisConfig) => boolean
   matchesRequest: (request: AlvisJobRequest) => boolean
 }
+type WorkerTunnelStatus = {worker: WorkerTunnel; tunnelReady: boolean; apiReady: boolean}
 
 let activeJobId: string | null = null
 const activeTunnelProcs: ReturnType<typeof spawn>[] = []
@@ -155,6 +157,18 @@ const getLocalListenersOnPort = async (port: number): Promise<LocalPortListener[
         })
 }
 
+const isSshListener = (listener: LocalPortListener): boolean => {
+  return listener.command === 'ssh' || listener.command === 'autossh'
+}
+
+const isLocalTunnelListening = async (localPort: number): Promise<boolean> => {
+  const listeners = await getLocalListenersOnPort(localPort)
+
+  return listeners.some((listener) => {
+    return isSshListener(listener)
+  })
+}
+
 const isLocalSGLangResponding = async (localPort: number): Promise<boolean> => {
   const result =
     await $`curl -sf --connect-timeout 2 --max-time 3 http://localhost:${localPort}/v1/models 2>/dev/null || echo ''`.text()
@@ -170,7 +184,7 @@ const killSshListenersOnPort = async (port: number): Promise<boolean> => {
       ...new Set(
         listeners
           .filter((listener) => {
-            return listener.command === 'ssh' || listener.command === 'autossh'
+            return isSshListener(listener)
           })
           .map((listener) => {
             return String(listener.pid)
@@ -186,7 +200,7 @@ const killSshListenersOnPort = async (port: number): Promise<boolean> => {
 
   const remaining = await getLocalListenersOnPort(port)
   return remaining.every((listener) => {
-    return listener.command !== 'ssh' && listener.command !== 'autossh'
+    return !isSshListener(listener)
   })
 }
 
@@ -197,7 +211,7 @@ const ensureLocalPortReadyForTunnel = async (localPort: number): Promise<'ready'
   if (listeners.length === 0) return 'ready'
 
   const onlySsh = listeners.every((listener) => {
-    return listener.command === 'ssh' || listener.command === 'autossh'
+    return isSshListener(listener)
   })
 
   if (!onlySsh) {
@@ -252,6 +266,17 @@ const spawnTunnelProcess = (worker: WorkerTunnel): ReturnType<typeof spawn> => {
   )
 }
 
+const getWorkerTunnelStatuses = async (workers: WorkerTunnel[]): Promise<WorkerTunnelStatus[]> => {
+  return Promise.all(
+    workers.map(async (worker) => {
+      const tunnelReady = await isLocalTunnelListening(worker.localPort)
+      const apiReady = tunnelReady ? await isLocalSGLangResponding(worker.localPort) : false
+
+      return {worker, tunnelReady, apiReady}
+    }),
+  )
+}
+
 const monitorTunnelHealth = async (jobId: string): Promise<void> => {
   if (isShuttingDown) return
 
@@ -267,25 +292,20 @@ const monitorTunnelHealth = async (jobId: string): Promise<void> => {
   }
 
   const workers = getWorkerTunnels(config)
-  const healthResults = await Promise.all(
-    workers.map(async (worker) => {
-      const isOk = await isLocalSGLangResponding(worker.localPort)
-      return {worker, isOk}
-    }),
-  )
-  const failedWorkers = healthResults.filter((result) => {
-    return !result.isOk
+  const tunnelStatuses = await getWorkerTunnelStatuses(workers)
+  const disconnectedWorkers = tunnelStatuses.filter((status) => {
+    return !status.tunnelReady
   })
 
-  if (failedWorkers.length === 0) {
+  if (disconnectedWorkers.length === 0) {
     await sleep(10_000)
     return monitorTunnelHealth(jobId)
   }
 
   log(
-    `Restarting tunnel set after health check failure on: ${failedWorkers
-      .map((result) => {
-        return result.worker.localUrl
+    `Restarting tunnel set after tunnel disconnect on: ${disconnectedWorkers
+      .map((status) => {
+        return status.worker.localUrl
       })
       .join(', ')}`,
   )
@@ -349,20 +369,24 @@ const startWorkerTunnels = async (config: AlvisConfig, jobId: string, restartCou
 
   await sleep(2000)
 
-  const readyCount = (
-    await Promise.all(
-      workers.map(async (worker) => {
-        return isLocalSGLangResponding(worker.localPort)
-      }),
-    )
-  ).filter(Boolean).length
+  const tunnelStatuses = await getWorkerTunnelStatuses(workers)
+  const connectedCount = tunnelStatuses.filter((status) => {
+    return status.tunnelReady
+  }).length
+  const readyCount = tunnelStatuses.filter((status) => {
+    return status.apiReady
+  }).length
 
-  if (readyCount === workers.length) {
+  if (connectedCount === workers.length && readyCount === workers.length) {
     log(`All ${workers.length} tunnel(s) connected and SGLang is responding`)
-  } else if (readyCount > 0) {
-    log(`${readyCount}/${workers.length} tunnel(s) are responding; the rest may still be starting`)
+  } else if (connectedCount === workers.length && readyCount > 0) {
+    log(`All tunnels connected; ${readyCount}/${workers.length} SGLang endpoint(s) are responding`)
+  } else if (connectedCount === workers.length) {
+    log('All tunnels connected; SGLang may still be loading')
+  } else if (connectedCount > 0) {
+    log(`${connectedCount}/${workers.length} tunnel(s) connected; SGLang may still be loading`)
   } else {
-    log('Tunnels started but no SGLang health checks passed yet')
+    log('No tunnel listeners are up yet')
   }
 
   log(
@@ -462,8 +486,12 @@ const main = async () => {
 
   const config = await waitForAlvisConfig(jobId, log)
   if (!config) {
+    const finalState = await getAlvisJobLifecycleState(jobId)
+
     console.error(
-      `[alvis] Timed out waiting for ${ALVIS_JOB_NAME} startup config (set ALVIS_CONFIG_WAIT_SECONDS to override)`,
+      finalState === 'FAILED' || finalState === 'CANCELLED' || finalState === 'TIMEOUT'
+        ? `[alvis] Job ${jobId} ended with state ${finalState} before exposing startup config; check /mimer/NOBACKUP/groups/clin-agent-bench/dev/forska-alvis-${jobId}.log`
+        : `[alvis] Timed out waiting for ${ALVIS_JOB_NAME} startup config (set ALVIS_CONFIG_WAIT_SECONDS to override)`,
     )
     process.exit(1)
   }

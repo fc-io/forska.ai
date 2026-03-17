@@ -25,7 +25,11 @@ services:
 
   sglang:
     profiles: ['gpu']
-    image: lmsysorg/sglang:latest
+    image: ghcr.io/${GHCR_OWNER:-local}/sglang-server:${TAG:-dev}
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: Dockerfile.sglang
     entrypoint: ['python', '-m', 'sglang.launch_server']
     environment:
       HF_HOME: /cache/hf
@@ -43,6 +47,7 @@ services:
       --host 0.0.0.0
       --port 30000
       --tensor-parallel-size ${TP_SIZE:-1}
+      --trust-remote-code
       --max-running-requests ${MAX_RUNNING_REQUESTS:-32}
       --enable-metrics
       --download-dir /cache/hf

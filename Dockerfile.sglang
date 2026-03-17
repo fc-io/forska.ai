@@ -1,0 +1,12 @@
+FROM lmsysorg/sglang:latest
+
+ARG TRANSFORMERS_ARCHIVE_URL=https://github.com/huggingface/transformers/archive/refs/heads/main.zip
+
+RUN python -m pip install --no-cache-dir --upgrade --upgrade-strategy eager "$TRANSFORMERS_ARCHIVE_URL"
+
+RUN python - <<'PY'
+from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES
+
+assert 'qwen3_5_moe' in CONFIG_MAPPING_NAMES
+print(CONFIG_MAPPING_NAMES['qwen3_5_moe'])
+PY

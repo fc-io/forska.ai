@@ -109,6 +109,26 @@ export const getJobStatus = async (jobId: string): Promise<{state: string; nodeL
   return {state: state || 'UNKNOWN', nodeList: nodeList || ''}
 }
 
+export const getAlvisJobLifecycleState = async (jobId: string): Promise<string> => {
+  const liveStatus = await getJobStatus(jobId)
+
+  if (liveStatus.state !== 'UNKNOWN') return liveStatus.state
+
+  const result =
+    await $`ssh ${ALVIS_HOST} "sacct -j ${jobId} --format=State -n -P 2>/dev/null | head -1 || echo UNKNOWN"`.text()
+  const state = result
+    .trim()
+    .split('\n')
+    .map((line) => {
+      return line.trim()
+    })
+    .find((line) => {
+      return line.length > 0
+    })
+
+  return state || 'UNKNOWN'
+}
+
 export const getAlvisJobRequest = async (jobId: string): Promise<AlvisJobRequest | undefined> => {
   const result = await $`ssh ${ALVIS_HOST} "squeue -j ${jobId} -h -o '%b|%D' 2>/dev/null || echo '|'"`.text()
   const parts = result
@@ -228,8 +248,8 @@ export const waitForAlvisConfig = async (
     const config = await readAlvisConfigFromLog(jobId, jobName)
     if (config) return config
 
-    const status = await getJobStatus(jobId)
-    if (status.state === 'FAILED' || status.state === 'CANCELLED' || status.state === 'UNKNOWN') return undefined
+    const status = await getAlvisJobLifecycleState(jobId)
+    if (status === 'FAILED' || status === 'CANCELLED' || status === 'TIMEOUT') return undefined
     if (attempt % 12 === 0) {
       log(`Waiting for startup config... (${attempt * ALVIS_CONFIG_POLL_INTERVAL_SECONDS}s)`)
     }

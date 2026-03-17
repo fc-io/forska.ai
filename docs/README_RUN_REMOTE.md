@@ -54,7 +54,7 @@ read -s -p 'Database URL (postgresql://...): ' URL; echo; umask 077; printf '%s'
 
 ### Setup container use on HPC
 
-#### 1) Build api and app docker images locally and push to GHCR
+#### 1) Build api, app, and sglang docker images locally and push to GHCR
 
 Prereqs
 
@@ -67,6 +67,8 @@ Prereqs
 bun run build:docker
 ```
 
+If you only need the updated SGLang image for Alvis model support, use `bun run build:docker:sglang`.
+
 Notes
 
 - The app build reads `VITE_*` environment variables from `process.env` at build time (Vite). Docker Compose reads `.env` to populate build args, which become ENV vars in the Docker build. Ensure the values in `.env` match the runtime endpoints you intend to use.
@@ -76,16 +78,16 @@ Notes
 
 Place the `.sif` files under `$STACK_ROOT`.
 
-On Alvis, model weights do not need a separate transfer step. SGLang downloads them from Hugging Face into `$HF_HOME` on first use.
+On Alvis, model weights do not need a separate transfer step. SGLang downloads them from Hugging Face into `$HF_HOME` on first use. The custom `sglang-server` image from GHCR includes a newer Transformers build that supports `Qwen/Qwen3.5-35B-A3B`.
 
 ```bash
 # Public registries (explicit amd64)
 apptainer pull --arch amd64 "$STACK_ROOT/postgres_18.sif" docker://docker.io/library/postgres:18
-apptainer pull --arch amd64 "$STACK_ROOT/sglang_latest.sif" docker://docker.io/lmsysorg/sglang:latest
 
 # GHCR (login first on remote)
 apptainer registry login --username "$GHCR_USER" oras://ghcr.io
 # the bun build:docker command will generate a pull like with the proper tag so that you don't have to figure it out
+apptainer pull --arch amd64 "$STACK_ROOT/sglang_latest.sif" docker://ghcr.io/$GHCR_OWNER/sglang-server:$TAG
 apptainer pull --arch amd64 "$STACK_ROOT/api_server.sif" docker://ghcr.io/$GHCR_OWNER/api-server:$TAG
 apptainer pull --arch amd64 "$STACK_ROOT/app_server.sif" docker://ghcr.io/$GHCR_OWNER/app-server:$TAG
 ```
@@ -154,6 +156,7 @@ apptainer exec --cleanenv --nv \
     --model-path Qwen/Qwen3.5-35B-A3B \
     --host 0.0.0.0 --port 30000 \
     --tensor-parallel-size 2 \
+    --trust-remote-code \
     --max-running-requests 196 \
     --mem-fraction-static 0.92 \
     --schedule-policy lpm \
@@ -174,6 +177,7 @@ apptainer exec --cleanenv --nv \
     --model-path Qwen/Qwen3.5-35B-A3B \
     --host 0.0.0.0 --port 30000 \
     --tensor-parallel-size 2 \
+    --trust-remote-code \
     --max-running-requests 128 \
     --mem-fraction-static 0.92 \
     --schedule-policy lpm \

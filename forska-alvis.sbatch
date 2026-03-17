@@ -15,9 +15,9 @@ echo "[forska] starting on host $(hostname) at $(date)"
 export STACK_ROOT=${STACK_ROOT:-/mimer/NOBACKUP/groups/clin-agent-bench/dev}
 mkdir -p "$STACK_ROOT"/{pgdata,hf_cache,logs,.cache,.secrets}
 
-export XDG_CACHE_HOME=${XDG_CACHE_HOME:-$STACK_ROOT/.cache}
-export HF_HOME=${HF_HOME:-$STACK_ROOT/hf_cache}
-export SGLANG_CACHE_DIR=${SGLANG_CACHE_DIR:-$XDG_CACHE_HOME/sglang}
+export XDG_CACHE_HOME=${ALVIS_XDG_CACHE_HOME:-$STACK_ROOT/.cache}
+export HF_HOME=${ALVIS_HF_HOME:-$STACK_ROOT/hf_cache}
+export SGLANG_CACHE_DIR=${ALVIS_SGLANG_CACHE_DIR:-$XDG_CACHE_HOME/sglang}
 export VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT:-$XDG_CACHE_HOME/vllm}
 export TORCHINDUCTOR_CACHE_DIR=${TORCHINDUCTOR_CACHE_DIR:-$VLLM_CACHE_ROOT/torchinductor}
 export TRITON_CACHE_DIR=${TRITON_CACHE_DIR:-$VLLM_CACHE_ROOT/triton}
@@ -507,6 +507,7 @@ exec apptainer exec --cleanenv --nv \
     --host 0.0.0.0 --port "$WORKER_PORT" \
     --tensor-parallel-size 1 \
     --data-parallel-size 1 \
+    --trust-remote-code \
     --max-running-requests "$SGLANG_MAX_RUNNING_REQUESTS" \
     --chunked-prefill-size "$SGLANG_CHUNKED_PREFILL_SIZE" \
     --mem-fraction-static "$SGLANG_MEM_FRACTION" \
@@ -564,6 +565,7 @@ exec apptainer exec --cleanenv --nv \
     --host 0.0.0.0 --port "$SGLANG_WORKER_PORT" \
     --tensor-parallel-size "$TP_SIZE" \
     --data-parallel-size "$DP_SIZE" \
+    --trust-remote-code \
     --max-running-requests "$SGLANG_MAX_RUNNING_REQUESTS" \
     --chunked-prefill-size "$SGLANG_CHUNKED_PREFILL_SIZE" \
     --mem-fraction-static "$SGLANG_MEM_FRACTION" \
@@ -599,6 +601,7 @@ SGLANG_WORKER
         --host 0.0.0.0 --port "$SGLANG_WORKER_PORT" \
         --tensor-parallel-size "$TP_SIZE" \
         --data-parallel-size "$DP_SIZE" \
+        --trust-remote-code \
         --max-running-requests "$SGLANG_MAX_RUNNING_REQUESTS" \
         --chunked-prefill-size "$SGLANG_CHUNKED_PREFILL_SIZE" \
         --mem-fraction-static "$SGLANG_MEM_FRACTION" \

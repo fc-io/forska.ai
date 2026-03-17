@@ -34,8 +34,11 @@ export HUGGINGFACE_HUB_TOKEN=xxxxxxxx
 
 Stores a local `.sif` under `$STACK_ROOT`. Model weights download into `$STACK_ROOT/hf_cache` on first use.
 
+Build and push the custom image first with `bun run build:docker:sglang` if you do not already have a `TAG`.
+
 ```bash
-apptainer pull --arch amd64 "$STACK_ROOT/sglang_latest.sif" docker://docker.io/lmsysorg/sglang:latest
+apptainer registry login --username "$GHCR_USER" oras://ghcr.io
+apptainer pull --arch amd64 "$STACK_ROOT/sglang_latest.sif" docker://ghcr.io/$GHCR_OWNER/sglang-server:$TAG
 ```
 
 ## 3) Allocate an interactive session
@@ -75,6 +78,7 @@ apptainer exec --cleanenv --nv \
     --model-path Qwen/Qwen3.5-35B-A3B \
     --host 0.0.0.0 --port 30000 \
     --tensor-parallel-size 2 \
+    --trust-remote-code \
     --max-running-requests 64 \
     --mem-fraction-static 0.92 \
     --schedule-policy lpm \
@@ -95,6 +99,7 @@ apptainer exec --cleanenv --nv \
     --model-path Qwen/Qwen3.5-35B-A3B \
     --host 0.0.0.0 --port 30000 \
     --tensor-parallel-size 2 \
+    --trust-remote-code \
     --max-running-requests 64 \
     --mem-fraction-static 0.92 \
     --schedule-policy lpm \

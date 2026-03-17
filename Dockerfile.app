@@ -27,7 +27,6 @@ WORKDIR /app
 COPY tsconfig.json ./
 COPY vite.config.ts ./
 COPY index.html ./
-COPY auth-schema.ts ./
 COPY src ./src
 
 # Make Vite and the plugin visible to the project without installing all devDeps

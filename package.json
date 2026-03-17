@@ -10,6 +10,7 @@
     "app": "bun --env-file=.env.local run build && bun --env-file=.env.local run preview",
     "build": "bunx --bun vite build",
     "build:docker": "bun scripts/buildDockerHostnet.ts",
+    "build:docker:sglang": "bun scripts/buildDockerSglang.ts",
     "bench:articlesreviews": "bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts",
     "preview": "bunx --bun vite preview",
     "test": "bun test",
