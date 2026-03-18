@@ -2,6 +2,7 @@ import {mkdir, writeFile} from 'fs/promises'
 import path from 'path'
 
 import type {ArticleRecord} from '../../../db/schemaTypes.ts'
+import {getUserConfigQueryService} from '../../services/userConfigQueryService.ts'
 import type {PdfFetchAttemptResult} from './pdfFetchTypes.ts'
 
 const SOURCE_NAME = 'Unpaywall'
@@ -45,14 +46,27 @@ export const fullTextArticleFetchFromUnpaywall = async ({
   }
 
   const doi = originalData.doi
+  const unpaywallEmail = await getUserConfigQueryService().getUnpaywallEmail()
   console.log('Unpaywall doi: ', doi)
   const fullTextSource = 'http://unpaywall.org'
   const fullTextOriginalFormat = 'pdf'
 
+  if (!unpaywallEmail) {
+    return {
+      source: SOURCE_NAME,
+      tried: false,
+      success: false,
+      reason: 'Unpaywall email missing',
+      details: 'Set a Unpaywall email in Settings before fetching PDFs from Unpaywall',
+    }
+  }
+
   // Call Unpaywall API
   let apiResponse: Response
   try {
-    apiResponse = await fetch(`https://api.unpaywall.org/v2/${encodeURIComponent(doi)}?email=fredrik.carlsson@ki.se`)
+    apiResponse = await fetch(
+      `https://api.unpaywall.org/v2/${encodeURIComponent(doi)}?email=${encodeURIComponent(unpaywallEmail)}`,
+    )
   } catch (error) {
     return {
       source: SOURCE_NAME,

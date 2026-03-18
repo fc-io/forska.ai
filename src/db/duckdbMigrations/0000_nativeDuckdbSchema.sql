@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS app.user_config (
   email VARCHAR NOT NULL,
   role VARCHAR,
   openalex_mailto VARCHAR,
+  unpaywall_email VARCHAR,
   created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
 );

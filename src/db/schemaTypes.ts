@@ -26,6 +26,7 @@ export type UserRecord = {
   email: string
   role: string | null
   openalexMailto: string | null
+  unpaywallEmail: string | null
   createdAt: Date
   updatedAt: Date
 }

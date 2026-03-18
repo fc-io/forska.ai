@@ -1,12 +1,20 @@
-import {useQuery} from '@tanstack/solid-query'
+import {createMutation, useQuery} from '@tanstack/solid-query'
 import {createFileRoute} from '@tanstack/solid-router'
 import {createEffect, createSignal, onCleanup, Show} from 'solid-js'
 
 import {apiClient} from '../../../services/apiClient'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse'
 
-type LocalUser = {id: string; name: string; email: string; role?: string | null; openalexMailto?: string | null}
+type LocalUser = {
+  id: string
+  name: string
+  email: string
+  role?: string | null
+  openalexMailto?: string | null
+  unpaywallEmail?: string | null
+}
 type UsersResponse = {data: LocalUser[]}
+type UpdateUserResponse = {data: LocalUser}
 type CodexCliStatus = {ok: boolean; loggedIn: boolean; method: 'chatgpt' | 'api-key' | null; raw: string}
 type CodexStatus = {codexBin: string; cli: CodexCliStatus; appServerReady: boolean; message: string}
 type CodexStatusResponse = {data: CodexStatus; error: null}
@@ -31,11 +39,32 @@ const fetchLocalUser = async (): Promise<LocalUser | null> => {
   return result.data?.[0] ?? null
 }
 
+const getNullableEmail = (value: string): string | null => {
+  const normalized = value.trim()
+
+  return normalized === '' ? null : normalized
+}
+
+const updateLocalUser = async (unpaywallEmail: string): Promise<LocalUser> => {
+  const response = await apiClient.api.users.patch({unpaywallEmail: getNullableEmail(unpaywallEmail)})
+  const result = handleApiResponse<UpdateUserResponse>(response, 'Failed to save settings')
+
+  return result.data
+}
+
 const Settings = () => {
-  const [displayName, setDisplayName] = createSignal('')
-  const [openalexMailto, setOpenalexMailto] = createSignal('')
+  const [unpaywallEmail, setUnpaywallEmail] = createSignal('')
   const localUserQuery = useQuery(() => {
-    return {queryKey: ['local-user'], queryFn: fetchLocalUser, staleTime: 5 * 60 * 1000}
+    return {queryKey: ['local-user'], queryFn: fetchLocalUser, staleTime: 5 * 60 * 1000, refetchOnWindowFocus: false}
+  })
+  const updateLocalUserMutation = createMutation(() => {
+    return {
+      mutationFn: updateLocalUser,
+      onSuccess: (user: LocalUser) => {
+        setUnpaywallEmail(user.unpaywallEmail ?? '')
+        void localUserQuery.refetch()
+      },
+    }
   })
 
   const codexStatusQuery = useQuery(() => {
@@ -93,11 +122,12 @@ const Settings = () => {
   })
 
   createEffect(() => {
-    const name = localUserQuery.data?.name ?? ''
-    const mailto = localUserQuery.data?.openalexMailto ?? ''
-    setDisplayName(name)
-    setOpenalexMailto(mailto)
+    setUnpaywallEmail(localUserQuery.data?.unpaywallEmail ?? '')
   })
+
+  const isUnpaywallEmailDirty = () => {
+    return unpaywallEmail().trim() !== (localUserQuery.data?.unpaywallEmail ?? '').trim()
+  }
 
   const startCodexLogin = async () => {
     setIsStartingCodexLogin(true)
@@ -154,23 +184,44 @@ const Settings = () => {
                 <label class="block text-sm font-medium text-gray-700 mb-2">Display Name</label>
                 <input
                   type="text"
-                  value={displayName()}
+                  value={localUserQuery.data?.name || ''}
                   readonly
                   class="w-full px-3 py-3 border border-gray-300 rounded-md bg-gray-50 text-gray-500 sm:text-sm"
                 />
               </div>
               <div>
-                <label class="block text-sm font-medium text-gray-700 mb-2">OpenAlex Mailto</label>
+                <label class="block text-sm font-medium text-gray-700 mb-2">Unpaywall Email</label>
                 <input
                   type="email"
-                  value={openalexMailto()}
-                  readonly
-                  class="w-full px-3 py-3 border border-gray-300 rounded-md bg-gray-50 text-gray-500 sm:text-sm"
+                  value={unpaywallEmail()}
+                  onInput={(event) => {
+                    setUnpaywallEmail(event.currentTarget.value)
+                  }}
+                  class="w-full px-3 py-3 border border-gray-300 rounded-md bg-white text-gray-900 sm:text-sm"
                 />
                 <p class="mt-2 text-xs text-gray-500">
-                  Used for OpenAlex imports. In no-auth mode this comes from `OPENALEX_MAILTO`.
+                  Used when fetching PDFs from Unpaywall. Stored in local app config.
                 </p>
               </div>
+              <Show when={updateLocalUserMutation.isError}>
+                <p class="text-sm text-red-600">
+                  {updateLocalUserMutation.error instanceof Error
+                    ? updateLocalUserMutation.error.message
+                    : 'Failed to save Unpaywall email'}
+                </p>
+              </Show>
+              <Show when={updateLocalUserMutation.isSuccess && !isUnpaywallEmailDirty()}>
+                <p class="text-sm text-green-700">Saved.</p>
+              </Show>
+              <button
+                class="w-full sm:w-auto px-4 py-3 bg-blue-600 text-white rounded-md shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed"
+                disabled={updateLocalUserMutation.isPending || !isUnpaywallEmailDirty()}
+                onClick={() => {
+                  updateLocalUserMutation.mutate(unpaywallEmail())
+                }}
+              >
+                {updateLocalUserMutation.isPending ? 'Saving...' : 'Save Unpaywall Email'}
+              </button>
             </div>
           </Show>
         </div>

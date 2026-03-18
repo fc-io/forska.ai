@@ -74,6 +74,7 @@ type ImportReport = {
     id: string
     name: string
     openalexMailto: string | null
+    unpaywallEmail: string | null
     role: string | null
     sourceUserCount: number
   } | null
@@ -1123,6 +1124,7 @@ const getBootstrapLocalUser = () => {
     id: localUserDefaults.id,
     name: envValues['LOCAL_USER_NAME']?.trim() || localUserDefaults.name,
     openalexMailto: envValues['OPENALEX_MAILTO']?.trim() || localUserDefaults.openalexMailto,
+    unpaywallEmail: envValues['LOCAL_USER_EMAIL']?.trim() || localUserDefaults.unpaywallEmail,
     role: envValues['LOCAL_USER_ROLE']?.trim() || localUserDefaults.role,
   }
 }
@@ -1154,6 +1156,7 @@ const bootstrapLocalUser = async (client: Client) => {
       email,
       role,
       openalex_mailto,
+      unpaywall_email,
       created_at,
       updated_at
     )
@@ -1163,6 +1166,7 @@ const bootstrapLocalUser = async (client: Client) => {
       ${getSqlLiteral(localUser.email)},
       ${getSqlLiteral(localUser.role)},
       ${getSqlLiteral(localUser.openalexMailto)},
+      ${getSqlLiteral(localUser.unpaywallEmail)},
       current_timestamp,
       current_timestamp
     )
