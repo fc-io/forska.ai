@@ -8,7 +8,9 @@ await $`docker compose --profile gpu push sglang`
 
 console.log(`\n`)
 console.log(`Built and pushed SGLang image to GHCR with tag ${tag} ----------------`)
-console.log('Now pull image on remote:')
+console.log('Now sync it to Alvis:')
+console.log(`TAG=${tag} bun run alvis:sglang:pull`)
+console.log('Fallback manual pull on remote:')
 console.log(
   `apptainer pull --arch amd64 "$STACK_ROOT/sglang_latest.sif" docker://ghcr.io/$GHCR_OWNER/sglang-server:${tag}`,
 )

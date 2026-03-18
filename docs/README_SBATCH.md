@@ -30,7 +30,7 @@ Do not treat the HPC job as a full remote app stack. We no longer run Postgres, 
 - Alvis: `sglang_latest.sif`
 - MN5: the maintained MN5 SGLang image/model transfer flow
 
-Use `bun run build:docker:sglang` when the Alvis SGLang image needs to be refreshed from GHCR.
+Use `bun run build:docker:sglang` followed by `bun run alvis:sglang:pull` when the Alvis SGLang image needs to be refreshed from GHCR.
 
 ## Read Next
 

@@ -8,7 +8,8 @@ Goal: use HPC only for SGLang inference. Do not run Postgres, API, or app on Alv
 # Local machine: build and push the SGLang image when needed
 bun run build:docker:sglang
 
-# Alvis: pull the printed sglang_latest.sif command
+# Local machine: sync that image to Alvis
+bun run alvis:sglang:pull
 
 # Local machine: launch one of the presets and keep the terminal open
 bun run alvis:launch:a100:fat
@@ -69,9 +70,14 @@ Use GHCR for clusters that can pull from registries.
 ```bash
 # Local machine
 bun run build:docker:sglang
+
+# Local machine
+bun run alvis:sglang:pull
 ```
 
-That prints the exact pull command. On Alvis:
+The pull helper sshes to `alvis2`, stores a versioned `sglang_<tag>.sif`, and repoints `sglang_latest.sif` to it.
+
+Fallback manual pull on Alvis:
 
 ```bash
 apptainer registry login --username "$GHCR_USER" oras://ghcr.io

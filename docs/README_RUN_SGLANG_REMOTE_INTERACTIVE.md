@@ -34,11 +34,10 @@ export HUGGINGFACE_HUB_TOKEN=xxxxxxxx
 
 Stores a local `.sif` under `$STACK_ROOT`. Model weights download into `$STACK_ROOT/hf_cache` on first use.
 
-Build and push the custom image first with `bun run build:docker:sglang` if you do not already have a `TAG`.
+Build and push the custom image first with `bun run build:docker:sglang`, then sync it with `bun run alvis:sglang:pull`.
 
 ```bash
-apptainer registry login --username "$GHCR_USER" oras://ghcr.io
-apptainer pull --arch amd64 "$STACK_ROOT/sglang_latest.sif" docker://ghcr.io/$GHCR_OWNER/sglang-server:$TAG
+bun run alvis:sglang:pull
 ```
 
 ## 3) Allocate an interactive session

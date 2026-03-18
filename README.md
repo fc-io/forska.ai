@@ -49,7 +49,7 @@ The imported article datasets can be very large. For our use case we will dynami
 ## Alvis Quick Start
 
 - Build or refresh the SGLang image for Alvis: `bun run build:docker:sglang`
-- Pull the printed `sglang_latest.sif` command on Alvis
+- Sync the image to Alvis: `bun run alvis:sglang:pull`
 - Launch the default Alvis shape: `bun run alvis:launch:a100:fat`
 - Or launch the 4x non-fat A100 shape: `bun run alvis:launch:a100:4`
 - Test the tunnel directly: `curl http://localhost:30001/v1/models`
