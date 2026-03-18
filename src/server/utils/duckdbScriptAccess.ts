@@ -18,8 +18,31 @@ const getWriterHealthUrl = (writerUrl: string) => {
   return `${writerUrl}/api/writer_connections`
 }
 
-const getDuckdbStudioUrl = () => {
-  return `http://127.0.0.1:${env.API_SERVER_PORT}${duckdbStudioSnapshotPath}`
+const getNormalizedWriterUrl = (value: string | null | undefined) => {
+  const raw = String(value ?? '').trim()
+  return raw === '' ? null : raw.endsWith('/') ? raw.slice(0, -1) : raw
+}
+
+const getDuckdbStudioUrl = (writerUrl: string) => {
+  return `${writerUrl}${duckdbStudioSnapshotPath}`
+}
+
+const getDuckdbStudioUrls = async () => {
+  const currentLease = await Effect.runPromise(readDuckdbOwnerLease(env.DUCKDB_PATH))
+  const leaseWriterUrl = currentLease === null ? null : getDuckdbOwnerLeaseWriterUrl(currentLease)
+  const configuredWriterUrl = getNormalizedWriterUrl(env.SERVER_WRITER_URL)
+  const localWriterUrl = getNormalizedWriterUrl(`http://127.0.0.1:${env.API_SERVER_PORT}`)
+  const writerUrls = [leaseWriterUrl, configuredWriterUrl, localWriterUrl]
+    .filter((writerUrl): writerUrl is string => {
+      return writerUrl !== null
+    })
+    .filter((writerUrl, index, values) => {
+      return values.indexOf(writerUrl) === index
+    })
+
+  return writerUrls.map((writerUrl) => {
+    return getDuckdbStudioUrl(writerUrl)
+  })
 }
 
 const getErrorText = (error: unknown) => {
@@ -93,9 +116,27 @@ const getSnapshotFromResponse = async (response: Response): Promise<AppDatabaseS
   return body.data
 }
 
-const createRemoteSnapshot = async () => {
-  const response = await fetch(getDuckdbStudioUrl(), {method: 'POST'})
+const createRemoteSnapshot = async (url: string) => {
+  const response = await fetch(url, {method: 'POST'})
   return getSnapshotFromResponse(response)
+}
+
+const createRemoteSnapshotFromUrls = async (urls: string[]): Promise<AppDatabaseSnapshot> => {
+  const [currentUrl, ...remainingUrls] = urls
+
+  if (currentUrl === undefined) {
+    throw new Error('DuckDB snapshot route is unavailable')
+  }
+
+  try {
+    return await createRemoteSnapshot(currentUrl)
+  } catch (error) {
+    if (!isStudioServerUnavailable(error) || remainingUrls.length === 0) {
+      throw error
+    }
+
+    return createRemoteSnapshotFromUrls(remainingUrls)
+  }
 }
 
 export const withDuckdbMaintenanceAccess = async <_T>(taskName: string, work: () => Promise<_T>) => {
@@ -113,7 +154,7 @@ export const withDuckdbMaintenanceAccess = async <_T>(taskName: string, work: ()
 
 export const createDuckdbSnapshotForCli = async () => {
   try {
-    return await createRemoteSnapshot()
+    return await createRemoteSnapshotFromUrls(await getDuckdbStudioUrls())
   } catch (error) {
     if (!isStudioServerUnavailable(error)) {
       throw error

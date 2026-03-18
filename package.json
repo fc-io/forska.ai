@@ -23,7 +23,6 @@
     "db:duck:mig": "bun src/db/migrateDuckdb.ts",
     "db:triggers": "bun src/db/addUpdatedAtTriggers.ts",
     "db:backup": "bun scripts/dbBackup.ts",
-    "backup": "bun scripts/fullBackup.ts",
     "db:backup-from-remote": "bun scripts/dbRemoteBackup.ts",
     "db:merge-from-remote-dump": "bun scripts/dbMergeRemoteDump.ts",
     "db:merge-from-remote-dump-safe": "bun scripts/dbMergeRemoteDumpSafe.ts",

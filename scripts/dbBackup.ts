@@ -1,46 +1,85 @@
-import {$} from 'bun'
-import {mkdirSync} from 'fs'
+import {access, copyFile, mkdir} from 'node:fs/promises'
+import {basename, join} from 'node:path'
 
-import {env} from './env.ts'
+import {type AppDatabaseSnapshot, getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
+import {createDuckdbSnapshotForCli} from '../src/server/utils/duckdbScriptAccess.ts'
 
-const log = (s: string): void => {
-  console.log(`[dbBackup] ${s}`)
+type BackupArtifact = {backupPath: string; backupWalPath: string | null}
+
+const backupDirectory = 'backups'
+
+const log = (message: string) => {
+  console.log(`[dbBackup] ${message}`)
 }
 
-const fail = (s: string): never => {
-  console.error(`[dbBackup] ${s}`)
-  process.exit(1)
+const getBackupBaseName = (databasePath: string) => {
+  const fileName = basename(databasePath === ':memory:' ? 'duckdb' : databasePath)
+  return fileName.endsWith('.duckdb') ? fileName.slice(0, -'.duckdb'.length) : fileName
 }
 
-const nowStamp = (): string => {
-  const d = new Date()
-  const pad = (n: number): string => {
-    return n < 10 ? `0${n}` : `${n}`
+const getBackupStamp = (createdAt: string) => {
+  return createdAt.replaceAll(':', '-').replaceAll(' ', '_')
+}
+
+const getFileExists = async (filePath: string) => {
+  try {
+    await access(filePath)
+    return true
+  } catch {
+    return false
   }
-  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
 }
 
-const ensureDir = (p: string): void => {
-  mkdirSync(p, {recursive: true})
+const getBackupArtifactPaths = (databasePath: string, snapshot: AppDatabaseSnapshot) => {
+  const backupName = `${getBackupBaseName(databasePath)}_${getBackupStamp(snapshot.createdAt)}.duckdb`
+  const backupPath = join(backupDirectory, backupName)
+  return {backupPath, backupWalPath: `${backupPath}.wal`}
 }
 
-const getDbVars = (): {user: string; pass: string; db: string} => {
-  const user = env.DB_USER || 'postgres'
-  const pass = env.DB_PASS || ''
-  const db = env.DB_NAME || 'postgres'
-  return {user, pass, db}
+const copySnapshotToBackup = async (databasePath: string, snapshot: AppDatabaseSnapshot): Promise<BackupArtifact> => {
+  const {backupPath, backupWalPath} = getBackupArtifactPaths(databasePath, snapshot)
+  const snapshotWalPath = `${snapshot.snapshotPath}.wal`
+  const hasWal = await getFileExists(snapshotWalPath)
+
+  await copyFile(snapshot.snapshotPath, backupPath)
+
+  if (!hasWal) {
+    return {backupPath, backupWalPath: null}
+  }
+
+  await copyFile(snapshotWalPath, backupWalPath)
+  return {backupPath, backupWalPath}
 }
 
-const main = async (): Promise<void> => {
-  const {user, pass, db} = getDbVars()
-  ensureDir('backups')
-  const out = `backups/dump_local_${db}_${nowStamp()}.dump`
-  log(`Creating dump via docker compose exec -> ${out}`)
-  const redir = `> ${out}`
-  const cmd = `docker compose exec -e PGPASSWORD='${pass.replace(/'/g, "'\\''")}' -T db pg_dump -U ${user} -d ${db} -Fc -Z 9 ${redir}`
-  const res = await $.nothrow()`bash -lc ${cmd}`
-  if (res.exitCode !== 0) fail('pg_dump failed')
-  log('Done')
+const deleteSnapshot = async (snapshot: AppDatabaseSnapshot) => {
+  try {
+    await getAppDatabaseService().deleteSnapshot(snapshot.snapshotPath)
+  } catch (error) {
+    console.error('[dbBackup] failed to delete snapshot', {error, snapshotPath: snapshot.snapshotPath})
+  }
 }
 
-void main()
+const runDuckdbBackup = async () => {
+  const runtimeConfig = getAppDatabaseService().getRuntimeConfig()
+
+  log(`Resolved DuckDB path: ${runtimeConfig.databasePath}`)
+  await mkdir(backupDirectory, {recursive: true})
+
+  const snapshot = await createDuckdbSnapshotForCli()
+
+  try {
+    const artifact = await copySnapshotToBackup(runtimeConfig.databasePath, snapshot)
+
+    log(`Backup created: ${artifact.backupPath}`)
+
+    if (artifact.backupWalPath !== null) {
+      log(`Backup WAL created: ${artifact.backupWalPath}`)
+    }
+  } finally {
+    await deleteSnapshot(snapshot)
+  }
+}
+
+if (import.meta.main) {
+  await runDuckdbBackup()
+}
