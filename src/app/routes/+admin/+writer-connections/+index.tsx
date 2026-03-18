@@ -7,6 +7,7 @@ import {
   fetchWriterConnections,
   type WriterConnectionRow,
   writerConnectionsQueryKey,
+  type WriterWarningRow,
 } from '../../../../utils/writerConnectionsQuery.ts'
 
 const formatTs = (value: Date | null) => {
@@ -39,6 +40,16 @@ const getWriterTakeoverEventLabel = (event: 'acquired' | 'released') => {
 
 const getWriterTakeoverEventClass = (event: 'acquired' | 'released') => {
   return event === 'acquired' ? 'bg-emerald-100 text-emerald-700' : 'bg-stone-200 text-stone-700'
+}
+
+const getWriterWarningClass = (warning: WriterWarningRow) => {
+  return warning.severity === 'error'
+    ? 'border-red-200 bg-red-50 text-red-800'
+    : 'border-amber-200 bg-amber-50 text-amber-800'
+}
+
+const getWriterWarningLabel = (warning: WriterWarningRow) => {
+  return warning.kind === 'write-failure' ? 'Write failure' : 'Writer unavailable'
 }
 
 const WriterConnectionSummaryCard = (props: {label: string; value: string}) => {
@@ -74,6 +85,10 @@ const AdminWriterConnections = () => {
     return writerConnectionsQuery.data?.history ?? []
   }
 
+  const warnings = () => {
+    return writerConnectionsQuery.data?.warnings ?? []
+  }
+
   return (
     <div class="min-h-screen bg-stone-50 p-6 mx-auto">
       <div class="mb-6 flex items-center justify-between gap-4">
@@ -90,6 +105,9 @@ const AdminWriterConnections = () => {
       <Show when={writerConnectionsQuery.isError}>
         <div class="rounded-xl border border-red-200 bg-red-50 p-4 text-red-700">
           <div class="font-medium">Failed to load writer connections</div>
+          <div class="mt-2 text-sm">
+            The current writer may be unavailable. {writerConnectionsQuery.error?.message ?? ''}
+          </div>
           <button
             class="mt-3 rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700"
             onClick={() => {
@@ -105,6 +123,26 @@ const AdminWriterConnections = () => {
         {(writerRow) => {
           return (
             <div class="space-y-6">
+              <Show when={warnings().length > 0}>
+                <div class="space-y-3">
+                  <For each={warnings()}>
+                    {(warning) => {
+                      return (
+                        <div class={`rounded-xl border px-4 py-4 shadow-sm ${getWriterWarningClass(warning)}`}>
+                          <div class="text-xs font-semibold uppercase tracking-wide">
+                            {getWriterWarningLabel(warning)}
+                          </div>
+                          <div class="mt-2 text-sm font-medium">{warning.message}</div>
+                          <div class="mt-2 text-xs opacity-80">
+                            {formatTs(warning.at)} ({formatAgo(warning.at)})
+                          </div>
+                        </div>
+                      )
+                    }}
+                  </For>
+                </div>
+              </Show>
+
               <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm">
                 <div class="flex flex-wrap items-start justify-between gap-4">
                   <div>

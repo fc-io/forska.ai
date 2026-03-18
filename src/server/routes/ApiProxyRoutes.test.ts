@@ -1,4 +1,4 @@
-import {existsSync, rmSync} from 'node:fs'
+import {existsSync, readFileSync, rmSync, writeFileSync} from 'node:fs'
 
 import {expect, test} from 'bun:test'
 
@@ -254,6 +254,76 @@ test('auto role elects one writer and follower takes over after writer exit', as
 
     removeFileIfExists(duckdbPath)
     removeFileIfExists(`${duckdbPath}.writer.lock`)
+    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+  }
+})
+
+test('auto follower does not take over from a responsive writer with a stale heartbeat', async () => {
+  const writerPort = 34997
+  const followerPort = 34998
+  const duckdbPath = `/tmp/f1-auto-stale-heartbeat-${Date.now()}.duckdb`
+  const leasePath = `${duckdbPath}.writer.lock`
+  const writerServer = startServer({
+    API_SERVER_PORT: String(writerPort),
+    DUCKDB_PATH: duckdbPath,
+    RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+    RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+    RUN_SERVER_JUDGING: 'false',
+    SERVER_ROLE: 'writer',
+    VITE_PORT: '4317',
+  })
+
+  try {
+    await waitForServer(writerPort, 10_000)
+
+    const snapshotResponse = await fetch(`http://127.0.0.1:${writerPort}/api/duckdbStudioSnapshots`, {method: 'POST'})
+    const snapshotBody = (await snapshotResponse.json()) as {data: {snapshotPath: string}; error?: string}
+
+    expect(snapshotResponse.ok).toBe(true)
+    removeFileIfExists(snapshotBody.data.snapshotPath)
+    removeFileIfExists(`${snapshotBody.data.snapshotPath}.wal`)
+
+    const followerServer = startServer({
+      API_SERVER_PORT: String(followerPort),
+      DUCKDB_PATH: duckdbPath,
+      RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+      RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+      RUN_SERVER_JUDGING: 'false',
+      SERVER_ROLE: 'auto',
+      VITE_PORT: '4318',
+    })
+
+    try {
+      await waitForServer(followerPort, 10_000)
+
+      const lease = JSON.parse(readFileSync(leasePath, 'utf8')) as {heartbeatAt: string}
+
+      lease.heartbeatAt = new Date(Date.now() - 120_000).toISOString()
+      writeFileSync(leasePath, JSON.stringify(lease, null, 2))
+
+      await new Promise((resolve) => {
+        setTimeout(resolve, 300)
+      })
+
+      const response = await fetch(`http://127.0.0.1:${followerPort}/api/writer_connections`)
+      const body = (await response.json()) as {
+        data: {history: Array<{apiServerPort: number; event: 'acquired' | 'released'}>; writer: {apiServerPort: number}}
+      }
+
+      expect(response.ok).toBe(true)
+      expect(body.data.writer.apiServerPort).toBe(writerPort)
+      expect(
+        body.data.history.some((event) => {
+          return event.apiServerPort === followerPort && event.event === 'acquired'
+        }),
+      ).toBe(false)
+    } finally {
+      await stopServer(followerServer)
+    }
+  } finally {
+    await stopServer(writerServer)
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(leasePath)
     removeFileIfExists(`${duckdbPath}.writer.history.json`)
   }
 })

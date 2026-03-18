@@ -18,6 +18,7 @@ import {
   getEffectiveServerRole,
   isAutoServerRole,
 } from './serverRole.ts'
+import {recordUnresponsiveWriterWarning} from './writerWarnings.ts'
 
 type ServerRuntimeState = {
   autoMonitorStarted: boolean
@@ -71,8 +72,8 @@ const setLastKnownWriterUrl = (writerUrl: string | null) => {
 
 const isWriterUrlResponsive = async (writerUrl: string) => {
   try {
-    const response = await fetch(`${writerUrl}/__healthcheck__`, {signal: AbortSignal.timeout(1_000)})
-    return response.ok || response.status >= 400
+    const response = await fetch(`${writerUrl}/api/writer_connections`, {signal: AbortSignal.timeout(1_000)})
+    return response.ok
   } catch {
     return false
   }
@@ -101,6 +102,18 @@ const shouldPromoteForStaleWriterLease = async (currentLease: DuckdbOwnerLease['
   }
 
   return !isResponsive
+}
+
+const recordWriterUnavailableWarning = (params: {
+  reason: 'writer-heartbeat-stale' | 'writer-process-dead'
+  writerUrl: string
+}) => {
+  return recordUnresponsiveWriterWarning({
+    message:
+      params.reason === 'writer-process-dead'
+        ? `Writer process at ${params.writerUrl} stopped responding and a follower takeover started.`
+        : `Writer at ${params.writerUrl} had a stale heartbeat and did not answer HTTP health checks.`,
+  })
 }
 
 const readWriterUrlFromLease = async () => {
@@ -169,6 +182,11 @@ const refreshAutoFollowerRole = async () => {
         : shouldPromoteForDeadWriter
           ? 'writer-process-dead'
           : 'writer-heartbeat-stale'
+
+    if (currentLease !== null && reason !== 'lease-missing') {
+      recordWriterUnavailableWarning({reason, writerUrl: getDuckdbOwnerLeaseWriterUrl(currentLease)})
+    }
+
     await promoteAutoServerToWriter(reason)
     return
   }

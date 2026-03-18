@@ -6,6 +6,7 @@ import {type DuckdbOwnerLeaseHistoryEntry, readDuckdbOwnerLeaseHistory} from './
 import {env} from './env.ts'
 import type {ServerRole} from './serverRole.ts'
 import {getCurrentServerRole, getKnownWriterUrl} from './serverRuntimeRole.ts'
+import {getWriterWarnings, type WriterWarning} from './writerWarnings.ts'
 
 const writerConnectionHeartbeatWindowMs = 45_000
 const writerConnectionRetentionMs = 10 * 60_000
@@ -50,6 +51,7 @@ export type WriterConnectionRecord = WriterConnectionStoredRecord & {
 export type WriterConnectionsOverview = {
   followers: WriterConnectionRecord[]
   history: DuckdbOwnerLeaseHistoryEntry[]
+  warnings: WriterWarning[]
   writer: WriterConnectionRecord
 }
 
@@ -232,6 +234,7 @@ export const getWriterConnectionsOverview = async (): Promise<WriterConnectionsO
   const writerRecord = getUpdatedWriterConnectionRecord(writerIdentity, undefined, {
     lastHeartbeatAt: new Date(nowMs).toISOString(),
   })
+  const warnings = getWriterWarnings()
   const followers = [...writerConnectionState.recordsByConnectionId.values()]
     .map((record) => {
       return toWriterConnectionRecord(record, nowMs)
@@ -242,7 +245,7 @@ export const getWriterConnectionsOverview = async (): Promise<WriterConnectionsO
 
   pruneWriterConnections(nowMs)
 
-  return {followers, history, writer: toWriterConnectionRecord(writerRecord, nowMs)}
+  return {followers, history, warnings, writer: toWriterConnectionRecord(writerRecord, nowMs)}
 }
 
 export const getWriterConnectionHeartbeatPayload = () => {

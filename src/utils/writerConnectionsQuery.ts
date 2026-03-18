@@ -31,9 +31,17 @@ export type WriterTakeoverHistoryRow = {
   writerUrl: string
 }
 
+export type WriterWarningRow = {
+  at: Date | null
+  kind: 'unresponsive-writer' | 'write-failure'
+  message: string
+  severity: 'warning' | 'error'
+}
+
 export type WriterConnectionsOverview = {
   followers: WriterConnectionRow[]
   history: WriterTakeoverHistoryRow[]
+  warnings: WriterWarningRow[]
   writer: WriterConnectionRow | null
 }
 
@@ -77,6 +85,15 @@ const normalizeWriterTakeoverHistoryRow = (row: Record<string, unknown>): Writer
   }
 }
 
+const normalizeWriterWarningRow = (row: Record<string, unknown>): WriterWarningRow => {
+  return {
+    at: normalizeWriterConnectionDate(row.at),
+    kind: row.kind === 'write-failure' ? 'write-failure' : 'unresponsive-writer',
+    message: typeof row.message === 'string' ? row.message : '',
+    severity: row.severity === 'error' ? 'error' : 'warning',
+  }
+}
+
 export const fetchWriterConnections = async (): Promise<WriterConnectionsOverview> => {
   const response = await apiClient.api.writer_connections.get()
   const responseData = response.data as
@@ -84,6 +101,7 @@ export const fetchWriterConnections = async (): Promise<WriterConnectionsOvervie
         data?: {
           followers?: Record<string, unknown>[]
           history?: Record<string, unknown>[]
+          warnings?: Record<string, unknown>[]
           writer?: Record<string, unknown>
         }
       }
@@ -96,7 +114,8 @@ export const fetchWriterConnections = async (): Promise<WriterConnectionsOvervie
   const data = responseData?.data
   const followers = Array.isArray(data?.followers) ? data.followers.map(normalizeWriterConnectionRow) : []
   const history = Array.isArray(data?.history) ? data.history.map(normalizeWriterTakeoverHistoryRow) : []
+  const warnings = Array.isArray(data?.warnings) ? data.warnings.map(normalizeWriterWarningRow) : []
   const writer = data?.writer ? normalizeWriterConnectionRow(data.writer) : null
 
-  return {followers, history, writer}
+  return {followers, history, warnings, writer}
 }
