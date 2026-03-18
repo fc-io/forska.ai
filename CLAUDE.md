@@ -8,6 +8,7 @@ IMPORTANT: when writing plans or md files in general; be extremely concise. Sacr
 IMPORTANT: Please don't create postgres migration files for me. Prefer the existing DuckDB SQL migration flow (`bun db:mig`) when schema changes are needed.
 IMPORTANT: We use Eden/RPC so derive the types from the API when possible and don't make up new types.
 IMPORTANT: I don't like try, catch, finally, throw. Only use when absolutely necessary.
+IMPORTANT: Prefer `effect` for new non-trivial async/server flow so control flow, resources, retries, and failures stay explicit.
 IMPORTANT: Layout-first UI (shell first; data later; no full-page spinner)
 IMPORTANT: Do not add auth/session/user/admin requirements unless explicitly asked. Default to no-auth single-user behavior.
 
@@ -61,6 +62,11 @@ src
 - IMPORTANT: Prefer to not declare functions inside components unless you have to.
 - IMPORTANT: Prefer to only have one return statement per function. Often, a good way to achieve this is by using a return at the end of the function with a ternary and calling a different function for each path of the ternary.
 - IMPORTANT: Avoid nested if/else in a function. Instead, separate code into more functions.
+- IMPORTANT: For multi-step async server code, prefer `Effect.gen` over long promise chains.
+- IMPORTANT: Prefer `Effect.acquireRelease`/`Scope` for resource lifetime and cleanup.
+- IMPORTANT: Prefer `Layer`/`Context` for wiring services like DB access, leases, clients, and runtimes.
+- IMPORTANT: Prefer `Schedule` for retries, polling, and backoff over hand-rolled timers.
+- Keep pure transforms and very small local handlers as plain functions; don't force Effect everywhere.
 - Prefer to handle all errors and throws gracefully if it is easily possible.
 - Try to keep code succinct and DRY – simplify code if possible.
 - IMPORTANT: Use singular table names when creating new database tables.
