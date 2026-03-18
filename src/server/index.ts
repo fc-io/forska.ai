@@ -11,6 +11,7 @@ import {articlesRoutes} from './routes/ArticlesRoutes.ts'
 import {comparisonProjectsRoutes} from './routes/ComparisonProjectsRoutes.ts'
 import {dataSourcesImportRoutes} from './routes/DataSourcesImportRoutes.ts'
 import {dataSourcesRoutes} from './routes/DataSourcesRoutes.ts'
+import {duckdbStudioRoutes} from './routes/DuckdbStudioRoutes.ts'
 import {humanAssessmentRoutes} from './routes/HumanAssessmentRoutes.ts'
 import {importRoutes} from './routes/ImportRoutes.ts'
 import {judgmentsJobsRoutes} from './routes/JudgmentsJobsRoutes.ts'
@@ -29,8 +30,13 @@ import {usersRoutes} from './routes/UsersRoutes'
 import {getCodexCliLoginStatus} from './utils/codexCliAuth.ts'
 import {env} from './utils/env'
 import {warmCodexAppServer} from './utils/getCodexAppServerClient.ts'
+import {shouldServerRoleMountWriterCrons} from './utils/serverRole.ts'
 
 const allowedOrigins = [`http://localhost:${env.VITE_PORT}`, `http://localhost:${process.env.PROD_SERVER ?? 8080}`]
+const shouldMountWriterCrons = shouldServerRoleMountWriterCrons(env.SERVER_ROLE)
+const writerCronRoutes = shouldMountWriterCrons
+  ? new Elysia().use(fullTextJobsCron).use(fullTextConversionJobsCron).use(judgmentsJobsCron).use(nvidiaSmiCron)
+  : new Elysia()
 
 const _app = new Elysia()
   .use(
@@ -41,10 +47,7 @@ const _app = new Elysia()
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     }),
   )
-  .use(fullTextJobsCron)
-  .use(fullTextConversionJobsCron)
-  .use(judgmentsJobsCron)
-  .use(nvidiaSmiCron)
+  .use(writerCronRoutes)
   .use(adminInvestigateRoutes)
   .use(comparisonProjectsRoutes)
   .use(judgmentsJobsRoutes)
@@ -61,6 +64,7 @@ const _app = new Elysia()
   .use(importRoutes)
   .use(dataSourcesRoutes)
   .use(dataSourcesImportRoutes)
+  .use(duckdbStudioRoutes)
   .use(tokensRoutes)
   .use(usersRoutes)
   .use(llmStatusRoutes)
@@ -71,6 +75,7 @@ const _app = new Elysia()
 console.log(
   `🦊 Elysia is running on :${env.API_SERVER_PORT} (nodes=${env.GPU_NNODES}, gpus/node=${env.GPU_GPUS_PER_NODE}, total_gpus=${env.GPU_TOTAL_GPUS}, shape=${env.GPU_SHAPE}, tp=${env.TP_SIZE}, pp=${env.PP_SIZE}, dp=${env.DP_SIZE}, SGLANG_MAX_RUNNING_REQUESTS=${env.SGLANG_MAX_RUNNING_REQUESTS}, SGLANG_API_MAX_INFLIGHT_REQUESTS=${env.SGLANG_API_MAX_INFLIGHT_REQUESTS}, SGLANG_CONTEXT_LENGTH=${env.SGLANG_CONTEXT_LENGTH}, BUN_CONFIG_MAX_HTTP_REQUESTS=${process.env.BUN_CONFIG_MAX_HTTP_REQUESTS})`,
 )
+console.log(`[server] role=${env.SERVER_ROLE} duckdb_writer=${shouldMountWriterCrons}`)
 
 void warmCodexAppServer()
 
