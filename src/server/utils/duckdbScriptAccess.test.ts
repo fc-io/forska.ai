@@ -1,0 +1,99 @@
+import {existsSync, rmSync} from 'node:fs'
+
+import {expect, test} from 'bun:test'
+
+const removeFileIfExists = (filePath: string) => {
+  if (existsSync(filePath)) {
+    rmSync(filePath, {force: true})
+  }
+}
+
+const waitForFile = async (filePath: string, timeoutMs: number): Promise<void> => {
+  const startedAt = Date.now()
+
+  await new Promise<void>((resolve, reject) => {
+    const check = () => {
+      if (existsSync(filePath)) {
+        resolve()
+        return
+      }
+
+      if (Date.now() - startedAt >= timeoutMs) {
+        reject(new Error(`Timed out waiting for ${filePath}`))
+        return
+      }
+
+      setTimeout(check, 50)
+    }
+
+    check()
+  })
+}
+
+test('maintenance scripts fail while a live writer holds DuckDB', async () => {
+  const duckdbPath = `/tmp/f1-duckdb-maintenance-guard-${Date.now()}.duckdb`
+  const leasePath = `${duckdbPath}.writer.lock`
+  const holder = globalThis.Bun.spawn(
+    [
+      'bun',
+      '-e',
+      `
+        const {runDuckdbJsonQuery} = await import('./src/server/utils/duckdbService.ts')
+        await runDuckdbJsonQuery('SELECT 1 AS value')
+        setInterval(() => {}, 1000)
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {...process.env, API_SERVER_PORT: '36101', DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'writer'},
+      stdout: 'pipe',
+      stderr: 'pipe',
+    },
+  )
+
+  try {
+    await waitForFile(leasePath, 5_000)
+
+    const contender = globalThis.Bun.spawnSync(
+      [
+        'bun',
+        '-e',
+        `
+          const {withDuckdbMaintenanceAccess} = await import('./src/server/utils/duckdbScriptAccess.ts')
+          await withDuckdbMaintenanceAccess('maintenance test', async () => {
+            return Promise.resolve()
+          })
+        `,
+      ],
+      {cwd: process.cwd(), env: {...process.env, API_SERVER_PORT: '36102', DUCKDB_PATH: duckdbPath}},
+    )
+
+    const stderr = contender.stderr.toString() || contender.stdout.toString()
+
+    expect(contender.exitCode).not.toBe(0)
+    expect(stderr).toContain('requires exclusive DuckDB maintenance access')
+  } finally {
+    holder.kill('SIGTERM')
+    await holder.exited
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(leasePath)
+    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+  }
+})
+
+test('snapshot query script reads from a safe DuckDB snapshot', () => {
+  const duckdbPath = `/tmp/f1-duckdb-query-snapshot-${Date.now()}.duckdb`
+  const result = globalThis.Bun.spawnSync(['bun', 'scripts/dbQuerySnapshot.ts', '--sql=SELECT 1 AS value'], {
+    cwd: process.cwd(),
+    env: {...process.env, API_SERVER_PORT: '36103', DUCKDB_PATH: duckdbPath},
+  })
+
+  try {
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout.toString()).toContain('"value":1')
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.writer.lock`)
+    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+  }
+})

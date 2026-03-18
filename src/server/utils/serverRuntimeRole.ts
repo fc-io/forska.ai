@@ -310,3 +310,18 @@ export const releaseCurrentDuckdbOwnerLease = async () => {
 export const registerWriterDemotionHandler = (handler: (reason: string) => Promise<void> | void) => {
   serverRuntimeState.writerDemotionHandlers = [...serverRuntimeState.writerDemotionHandlers, handler]
 }
+
+export const withCurrentServerRoleOverride = async <_T>(nextRole: EffectiveServerRole, work: () => Promise<_T>) => {
+  const previousRole = serverRuntimeState.currentRole
+  const previousWriterUrl = serverRuntimeState.lastKnownWriterUrl
+
+  setCurrentServerRole(nextRole)
+  setLastKnownWriterUrl(canServerRoleOwnDuckdb(nextRole) ? getCurrentServerUrl() : previousWriterUrl)
+
+  try {
+    return await work()
+  } finally {
+    setCurrentServerRole(previousRole)
+    setLastKnownWriterUrl(previousWriterUrl)
+  }
+}

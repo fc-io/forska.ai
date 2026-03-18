@@ -1,4 +1,5 @@
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
+import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
 
 const judgmentFactBucketCount = 128
 const martStageOrder = [
@@ -1107,11 +1108,10 @@ const rebuildDuckdbMarts = async (options: RebuildOptions) => {
 }
 
 const main = async () => {
-  try {
+  await withDuckdbMaintenanceAccess('duckdb mart rebuild', async () => {
     await rebuildDuckdbMarts(getRebuildOptions())
-  } finally {
     await getAppDatabaseService().close()
-  }
+  })
 }
 
 void main()

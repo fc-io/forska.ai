@@ -2,6 +2,7 @@ import {readdirSync, readFileSync} from 'fs'
 import {resolve} from 'path'
 
 import {getAppDatabaseService} from '../server/services/appDatabaseService.ts'
+import {withDuckdbMaintenanceAccess} from '../server/utils/duckdbScriptAccess.ts'
 import {env} from '../server/utils/env.ts'
 
 const migrationsFolder = resolve(import.meta.dir, 'duckdbMigrations')
@@ -97,8 +98,10 @@ const closeAppDatabaseService = async () => {
 }
 
 const runDuckdbMigrationScript = async () => {
-  await migrateDuckdb()
-  await closeAppDatabaseService()
+  await withDuckdbMaintenanceAccess('duckdb migration', async () => {
+    await migrateDuckdb()
+    await closeAppDatabaseService()
+  })
 }
 
 if (import.meta.main) {

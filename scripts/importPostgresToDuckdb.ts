@@ -7,6 +7,7 @@ import {Client} from 'pg'
 import {migrateDuckdb} from '../src/db/migrateDuckdb.ts'
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {getDuckdbMartService} from '../src/server/services/getDuckdbMartService.ts'
+import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
 import {env} from '../src/server/utils/env.ts'
 import {localUserDefaults} from '../src/utils/localUser.ts'
 
@@ -1225,7 +1226,6 @@ const closeImporterServices = async () => {
 
 const ensureDuckdbSchemaIsCurrent = async () => {
   await migrateDuckdb()
-  await closeImporterServices()
 }
 
 const importPostgresToDuckdb = async () => {
@@ -1303,7 +1303,9 @@ const importPostgresToDuckdb = async () => {
   }
 }
 
-void importPostgresToDuckdb().catch(async (error) => {
+void withDuckdbMaintenanceAccess('postgres to duckdb import', async () => {
+  await importPostgresToDuckdb()
+}).catch(async (error) => {
   await closeImporterServices()
   throw error
 })

@@ -25,6 +25,7 @@ See `LOCAL_FIRST_PLAN.md`.
 IMPORTANT: Avoid branching. If something can be done without, please do without. For example have an type ArrayThatWillLop = array and initalize with an empty array, instead of type LopIfArray = [] | null.
 IMPORTANT: If there is only one export in a file, then the filename should match the name of the exported function
 IMPORTANT: On the server – prefer the shared DuckDB service/query helpers over ad hoc DB access
+IMPORTANT: For local DuckDB work, never open the live DB file directly. Use `bun run db:studio`, `bun run db:query:snapshot -- --sql "..."`, or maintenance scripts with no running writer.
 IMPORTANT: On the client/app – use import {useQuery} from '@tanstack/solid-query' over createQuery
 IMPORTANT: only have secrets and values we need to change from outside the app in the .env files.
 IMPORTANT: Keep filenames camelCase, even for TSX/JSX React components.
