@@ -14,6 +14,7 @@ type LocalUser = {
   unpaywallEmail?: string | null
 }
 type UsersResponse = {data: LocalUser[]}
+type UpdateLocalUserInput = {email: string; name: string; unpaywallEmail: string}
 type UpdateUserResponse = {data: LocalUser}
 type CodexCliStatus = {ok: boolean; loggedIn: boolean; method: 'chatgpt' | 'api-key' | null; raw: string}
 type CodexStatus = {codexBin: string; cli: CodexCliStatus; appServerReady: boolean; message: string}
@@ -45,14 +46,20 @@ const getNullableEmail = (value: string): string | null => {
   return normalized === '' ? null : normalized
 }
 
-const updateLocalUser = async (unpaywallEmail: string): Promise<LocalUser> => {
-  const response = await apiClient.api.users.patch({unpaywallEmail: getNullableEmail(unpaywallEmail)})
+const updateLocalUser = async (input: UpdateLocalUserInput): Promise<LocalUser> => {
+  const response = await apiClient.api.users.patch({
+    email: input.email,
+    name: input.name,
+    unpaywallEmail: getNullableEmail(input.unpaywallEmail),
+  })
   const result = handleApiResponse<UpdateUserResponse>(response, 'Failed to save settings')
 
   return result.data
 }
 
 const Settings = () => {
+  const [displayName, setDisplayName] = createSignal('')
+  const [profileEmail, setProfileEmail] = createSignal('')
   const [unpaywallEmail, setUnpaywallEmail] = createSignal('')
   const localUserQuery = useQuery(() => {
     return {queryKey: ['local-user'], queryFn: fetchLocalUser, staleTime: 5 * 60 * 1000, refetchOnWindowFocus: false}
@@ -61,6 +68,8 @@ const Settings = () => {
     return {
       mutationFn: updateLocalUser,
       onSuccess: (user: LocalUser) => {
+        setDisplayName(user.name)
+        setProfileEmail(user.email)
         setUnpaywallEmail(user.unpaywallEmail ?? '')
         void localUserQuery.refetch()
       },
@@ -122,11 +131,17 @@ const Settings = () => {
   })
 
   createEffect(() => {
+    setDisplayName(localUserQuery.data?.name ?? '')
+    setProfileEmail(localUserQuery.data?.email ?? '')
     setUnpaywallEmail(localUserQuery.data?.unpaywallEmail ?? '')
   })
 
-  const isUnpaywallEmailDirty = () => {
-    return unpaywallEmail().trim() !== (localUserQuery.data?.unpaywallEmail ?? '').trim()
+  const isProfileDirty = () => {
+    return (
+      displayName().trim() !== (localUserQuery.data?.name ?? '').trim()
+      || profileEmail().trim() !== (localUserQuery.data?.email ?? '').trim()
+      || unpaywallEmail().trim() !== (localUserQuery.data?.unpaywallEmail ?? '').trim()
+    )
   }
 
   const startCodexLogin = async () => {
@@ -175,18 +190,22 @@ const Settings = () => {
                 <label class="block text-sm font-medium text-gray-700 mb-2">Email</label>
                 <input
                   type="email"
-                  value={localUserQuery.data?.email || ''}
-                  readonly
-                  class="w-full px-3 py-3 border border-gray-300 rounded-md bg-gray-50 text-gray-500"
+                  value={profileEmail()}
+                  onInput={(event) => {
+                    setProfileEmail(event.currentTarget.value)
+                  }}
+                  class="w-full px-3 py-3 border border-gray-300 rounded-md bg-white text-gray-900"
                 />
               </div>
               <div>
                 <label class="block text-sm font-medium text-gray-700 mb-2">Display Name</label>
                 <input
                   type="text"
-                  value={localUserQuery.data?.name || ''}
-                  readonly
-                  class="w-full px-3 py-3 border border-gray-300 rounded-md bg-gray-50 text-gray-500 sm:text-sm"
+                  value={displayName()}
+                  onInput={(event) => {
+                    setDisplayName(event.currentTarget.value)
+                  }}
+                  class="w-full px-3 py-3 border border-gray-300 rounded-md bg-white text-gray-900 sm:text-sm"
                 />
               </div>
               <div>
@@ -207,20 +226,24 @@ const Settings = () => {
                 <p class="text-sm text-red-600">
                   {updateLocalUserMutation.error instanceof Error
                     ? updateLocalUserMutation.error.message
-                    : 'Failed to save Unpaywall email'}
+                    : 'Failed to save profile'}
                 </p>
               </Show>
-              <Show when={updateLocalUserMutation.isSuccess && !isUnpaywallEmailDirty()}>
+              <Show when={updateLocalUserMutation.isSuccess && !isProfileDirty()}>
                 <p class="text-sm text-green-700">Saved.</p>
               </Show>
               <button
                 class="w-full sm:w-auto px-4 py-3 bg-blue-600 text-white rounded-md shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed"
-                disabled={updateLocalUserMutation.isPending || !isUnpaywallEmailDirty()}
+                disabled={updateLocalUserMutation.isPending || !isProfileDirty()}
                 onClick={() => {
-                  updateLocalUserMutation.mutate(unpaywallEmail())
+                  updateLocalUserMutation.mutate({
+                    email: profileEmail(),
+                    name: displayName(),
+                    unpaywallEmail: unpaywallEmail(),
+                  })
                 }}
               >
-                {updateLocalUserMutation.isPending ? 'Saving...' : 'Save Unpaywall Email'}
+                {updateLocalUserMutation.isPending ? 'Saving...' : 'Save Profile'}
               </button>
             </div>
           </Show>

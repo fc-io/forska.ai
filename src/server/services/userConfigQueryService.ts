@@ -25,6 +25,16 @@ const userConfigSelectClause = `
   updated_at AS updatedAt
 `
 
+const getNullableTrimmedValue = (value: string | null | undefined): string | null => {
+  const normalized = String(value ?? '').trim()
+
+  return normalized === '' ? null : normalized
+}
+
+const getValueOrFallback = (value: string | null | undefined, fallback: string): string => {
+  return getNullableTrimmedValue(value) ?? fallback
+}
+
 const getDefaultUserRecord = (): UserRecord => {
   const now = new Date()
 
@@ -98,12 +108,22 @@ const getOrCreateUserConfig = async (): Promise<UserRecord> => {
   return loaded ?? getDefaultUserRecord()
 }
 
-const updateUserConfig = async ({unpaywallEmail}: {unpaywallEmail: string | null}): Promise<UserRecord> => {
-  await getOrCreateUserConfig()
+const updateUserConfig = async ({
+  email,
+  name,
+  unpaywallEmail,
+}: {
+  email: string
+  name: string
+  unpaywallEmail: string | null
+}): Promise<UserRecord> => {
+  const current = await getOrCreateUserConfig()
 
   const [row] = await getAppDatabaseService().queryJson<UserConfigRow>(`
     UPDATE app.user_config
-    SET unpaywall_email = ${getSqlLiteral(unpaywallEmail)},
+    SET name = ${getSqlLiteral(getValueOrFallback(name, current.name))},
+        email = ${getSqlLiteral(getValueOrFallback(email, current.email))},
+        unpaywall_email = ${getSqlLiteral(getNullableTrimmedValue(unpaywallEmail))},
         updated_at = current_timestamp
     WHERE id = ${getSqlLiteral(localUserDefaults.id)}
     RETURNING ${userConfigSelectClause}

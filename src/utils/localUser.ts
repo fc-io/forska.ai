@@ -8,7 +8,7 @@ export const localUserRole = null
 
 export const localUserOpenalexMailto = null
 
-export const localUserUnpaywallEmail = localUserEmail
+export const localUserUnpaywallEmail = null
 
 export const localUserDefaults = {
   id: localUserId,

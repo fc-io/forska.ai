@@ -19,9 +19,11 @@ export const usersRoutes = new Elysia()
     async ({body}) => {
       return {
         data: await getUserConfigQueryService().updateUserConfig({
+          email: body.email,
+          name: body.name,
           unpaywallEmail: getNullableString(body.unpaywallEmail),
         }),
       }
     },
-    {body: t.Object({unpaywallEmail: t.Union([t.String(), t.Null()])})},
+    {body: t.Object({email: t.String(), name: t.String(), unpaywallEmail: t.Union([t.String(), t.Null()])})},
   )

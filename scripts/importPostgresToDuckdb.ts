@@ -1124,7 +1124,7 @@ const getBootstrapLocalUser = () => {
     id: localUserDefaults.id,
     name: envValues['LOCAL_USER_NAME']?.trim() || localUserDefaults.name,
     openalexMailto: envValues['OPENALEX_MAILTO']?.trim() || localUserDefaults.openalexMailto,
-    unpaywallEmail: envValues['LOCAL_USER_EMAIL']?.trim() || localUserDefaults.unpaywallEmail,
+    unpaywallEmail: localUserDefaults.unpaywallEmail,
     role: envValues['LOCAL_USER_ROLE']?.trim() || localUserDefaults.role,
   }
 }
