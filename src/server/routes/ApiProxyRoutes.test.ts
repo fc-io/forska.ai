@@ -184,6 +184,43 @@ test('writer connections endpoint lists follower api processes', async () => {
   }
 })
 
+test('api server without writer reports writer disabled warning', async () => {
+  const apiPort = 34999
+  const duckdbPath = `/tmp/f1-writer-disabled-${Date.now()}.duckdb`
+  const apiServer = startServer({
+    API_SERVER_PORT: String(apiPort),
+    DUCKDB_PATH: duckdbPath,
+    RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+    RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+    RUN_SERVER_JUDGING: 'false',
+    SERVER_ROLE: 'api',
+    SERVER_WRITER_URL: '',
+    VITE_PORT: '4319',
+  })
+
+  try {
+    await waitForServer(apiPort, 10_000)
+
+    const response = await fetch(`http://127.0.0.1:${apiPort}/api/writer_connections`)
+    const body = (await response.json()) as {
+      data: {warnings: Array<{kind: string; message: string}>; writer: null | {apiServerPort: number}}
+    }
+
+    expect(response.ok).toBe(true)
+    expect(body.data.writer).toBe(null)
+    expect(
+      body.data.warnings.some((warning) => {
+        return warning.kind === 'writer-disabled' && warning.message.includes('Writer is disabled')
+      }),
+    ).toBe(true)
+  } finally {
+    await stopServer(apiServer)
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.writer.lock`)
+    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+  }
+})
+
 test('auto role elects one writer and follower takes over after writer exit', async () => {
   const firstPort = 34995
   const secondPort = 34996

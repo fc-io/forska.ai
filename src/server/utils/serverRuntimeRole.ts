@@ -62,6 +62,10 @@ const getManualWriterUrl = () => {
   return getNormalizedWriterUrl(env.SERVER_WRITER_URL)
 }
 
+const isWriterDisabledByConfig = () => {
+  return !isAutoServerRole(env.SERVER_ROLE) && getCurrentServerRole() === 'api' && getManualWriterUrl() === null
+}
+
 const setCurrentServerRole = (nextRole: EffectiveServerRole) => {
   serverRuntimeState.currentRole = nextRole
 }
@@ -248,6 +252,10 @@ export const shouldCurrentServerRunWriterWork = () => {
 
 export const shouldCurrentServerProxyApiToWriter = () => {
   return getCurrentServerRole() === 'api'
+}
+
+export const isCurrentServerWriterDisabled = () => {
+  return isWriterDisabledByConfig()
 }
 
 export const getCurrentServerWriterUrl = async () => {

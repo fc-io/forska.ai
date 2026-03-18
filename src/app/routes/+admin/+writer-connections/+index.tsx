@@ -49,7 +49,11 @@ const getWriterWarningClass = (warning: WriterWarningRow) => {
 }
 
 const getWriterWarningLabel = (warning: WriterWarningRow) => {
-  return warning.kind === 'write-failure' ? 'Write failure' : 'Writer unavailable'
+  return warning.kind === 'write-failure'
+    ? 'Write failure'
+    : warning.kind === 'writer-disabled'
+      ? 'Writer disabled'
+      : 'Writer unavailable'
 }
 
 const WriterConnectionSummaryCard = (props: {label: string; value: string}) => {
@@ -119,30 +123,28 @@ const AdminWriterConnections = () => {
         </div>
       </Show>
 
+      <Show when={!writerConnectionsQuery.isLoading && !writerConnectionsQuery.isError && warnings().length > 0}>
+        <div class="space-y-3 mb-6">
+          <For each={warnings()}>
+            {(warning) => {
+              return (
+                <div class={`rounded-xl border px-4 py-4 shadow-sm ${getWriterWarningClass(warning)}`}>
+                  <div class="text-xs font-semibold uppercase tracking-wide">{getWriterWarningLabel(warning)}</div>
+                  <div class="mt-2 text-sm font-medium">{warning.message}</div>
+                  <div class="mt-2 text-xs opacity-80">
+                    {formatTs(warning.at)} ({formatAgo(warning.at)})
+                  </div>
+                </div>
+              )
+            }}
+          </For>
+        </div>
+      </Show>
+
       <Show when={!writerConnectionsQuery.isLoading && !writerConnectionsQuery.isError && writer()}>
         {(writerRow) => {
           return (
             <div class="space-y-6">
-              <Show when={warnings().length > 0}>
-                <div class="space-y-3">
-                  <For each={warnings()}>
-                    {(warning) => {
-                      return (
-                        <div class={`rounded-xl border px-4 py-4 shadow-sm ${getWriterWarningClass(warning)}`}>
-                          <div class="text-xs font-semibold uppercase tracking-wide">
-                            {getWriterWarningLabel(warning)}
-                          </div>
-                          <div class="mt-2 text-sm font-medium">{warning.message}</div>
-                          <div class="mt-2 text-xs opacity-80">
-                            {formatTs(warning.at)} ({formatAgo(warning.at)})
-                          </div>
-                        </div>
-                      )
-                    }}
-                  </For>
-                </div>
-              </Show>
-
               <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm">
                 <div class="flex flex-wrap items-start justify-between gap-4">
                   <div>
@@ -322,6 +324,16 @@ const AdminWriterConnections = () => {
             </div>
           )
         }}
+      </Show>
+
+      <Show
+        when={
+          !writerConnectionsQuery.isLoading && !writerConnectionsQuery.isError && !writer() && warnings().length > 0
+        }
+      >
+        <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm text-sm text-stone-600">
+          No active writer is attached to this server.
+        </div>
       </Show>
     </div>
   )

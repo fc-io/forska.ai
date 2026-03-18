@@ -33,7 +33,7 @@ export type WriterTakeoverHistoryRow = {
 
 export type WriterWarningRow = {
   at: Date | null
-  kind: 'unresponsive-writer' | 'write-failure'
+  kind: 'unresponsive-writer' | 'write-failure' | 'writer-disabled'
   message: string
   severity: 'warning' | 'error'
 }
@@ -88,7 +88,12 @@ const normalizeWriterTakeoverHistoryRow = (row: Record<string, unknown>): Writer
 const normalizeWriterWarningRow = (row: Record<string, unknown>): WriterWarningRow => {
   return {
     at: normalizeWriterConnectionDate(row.at),
-    kind: row.kind === 'write-failure' ? 'write-failure' : 'unresponsive-writer',
+    kind:
+      row.kind === 'write-failure'
+        ? 'write-failure'
+        : row.kind === 'writer-disabled'
+          ? 'writer-disabled'
+          : 'unresponsive-writer',
     message: typeof row.message === 'string' ? row.message : '',
     severity: row.severity === 'error' ? 'error' : 'warning',
   }

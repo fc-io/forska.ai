@@ -19,6 +19,7 @@
     "lint:fix": "bunx eslint src --fix",
     "dev:app": "bunx --env-file=.env.local --bun vite",
     "dev:server": "BUN_CONFIG_MAX_HTTP_REQUESTS=2048 bun --env-file=.env.local run --watch src/server/index.ts",
+    "dev:server:no-writer": "SERVER_ROLE=api SERVER_WRITER_URL= BUN_CONFIG_MAX_HTTP_REQUESTS=2048 bun --env-file=.env.local run --watch src/server/index.ts",
     "db:mig": "bun src/db/migrateDuckdb.ts",
     "db:duck:mig": "bun src/db/migrateDuckdb.ts",
     "db:triggers": "bun src/db/addUpdatedAtTriggers.ts",

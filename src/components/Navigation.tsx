@@ -9,6 +9,7 @@ import {
   getLlmStatusRefetchInterval,
   llmStatusQueryKey,
 } from '../utils/llmStatusQuery'
+import {fetchWriterConnections, writerConnectionsQueryKey} from '../utils/writerConnectionsQuery'
 
 const isEventTargetWithinElement = (target: EventTarget | null, element: HTMLElement | undefined) => {
   return target instanceof Node && !!element && element.contains(target)
@@ -87,8 +88,29 @@ export const Navigation = () => {
     return getLlmMetricsSummary(llmMetricsQuery.data ?? [])
   }
 
+  const writerConnectionsQuery = useQuery(() => {
+    return {
+      queryKey: writerConnectionsQueryKey,
+      queryFn: fetchWriterConnections,
+      refetchInterval: 15_000,
+      refetchOnReconnect: true,
+      refetchOnWindowFocus: true,
+      suspense: false,
+    }
+  })
+
   const llmMetricsIndicator = createMemo(() => {
     return getLlmMetricsIndicator(llmMetrics(), Date.now())
+  })
+
+  const writerWarning = createMemo(() => {
+    return writerConnectionsQuery.data?.warnings[0] ?? null
+  })
+
+  const writerWarningClass = createMemo(() => {
+    return writerWarning()?.severity === 'error'
+      ? 'border-red-200 bg-red-50 text-red-800'
+      : 'border-amber-200 bg-amber-50 text-amber-800'
   })
 
   const closeAdminMenu = () => {
@@ -156,6 +178,20 @@ export const Navigation = () => {
 
   return (
     <nav class="relative bg-white shadow-sm border-b border-gray-200">
+      <Show when={writerWarning()}>
+        {(warning) => {
+          return (
+            <div class={`border-b px-4 py-2 text-sm ${writerWarningClass()}`}>
+              <div class="mx-auto flex max-w-7xl items-center justify-between gap-4 sm:px-2 lg:px-4">
+                <div>{warning().message}</div>
+                <Link to="/admin/writer-connections" class="shrink-0 font-semibold underline underline-offset-2">
+                  Writer status
+                </Link>
+              </div>
+            </div>
+          )
+        }}
+      </Show>
       <div class="px-4 sm:px-6 lg:px-8">
         <div class="flex justify-between h-16">
           <div class="flex items-center space-x-8">

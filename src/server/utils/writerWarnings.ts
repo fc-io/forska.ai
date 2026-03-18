@@ -1,4 +1,4 @@
-type WriterWarningKind = 'unresponsive-writer' | 'write-failure'
+type WriterWarningKind = 'unresponsive-writer' | 'write-failure' | 'writer-disabled'
 type WriterWarningSeverity = 'warning' | 'error'
 
 type WriterWarningsState = {currentWriteFailure: WriterWarning | null; recentWarnings: WriterWarning[]}

@@ -5,7 +5,12 @@ import {Effect} from 'effect'
 import {type DuckdbOwnerLeaseHistoryEntry, readDuckdbOwnerLeaseHistory} from './duckdbOwnerLease.ts'
 import {env} from './env.ts'
 import type {ServerRole} from './serverRole.ts'
-import {getCurrentServerRole, getKnownWriterUrl} from './serverRuntimeRole.ts'
+import {
+  canCurrentServerOwnDuckdb,
+  getCurrentServerRole,
+  getKnownWriterUrl,
+  isCurrentServerWriterDisabled,
+} from './serverRuntimeRole.ts'
 import {getWriterWarnings, type WriterWarning} from './writerWarnings.ts'
 
 const writerConnectionHeartbeatWindowMs = 45_000
@@ -52,7 +57,7 @@ export type WriterConnectionsOverview = {
   followers: WriterConnectionRecord[]
   history: DuckdbOwnerLeaseHistoryEntry[]
   warnings: WriterWarning[]
-  writer: WriterConnectionRecord
+  writer: WriterConnectionRecord | null
 }
 
 export type WriterConnectionHeartbeatInput = {
@@ -95,7 +100,17 @@ const getCurrentWriterConnectionIdentity = (): WriterConnectionIdentity => {
     pid: process.pid,
     serverRole: getCurrentServerRole(),
     startedAt: writerConnectionState.processStartedAt,
-    writerUrl: getKnownWriterUrl() ?? getCurrentWriterUrl(),
+    writerUrl: getKnownWriterUrl() ?? (canCurrentServerOwnDuckdb() ? getCurrentWriterUrl() : null),
+  }
+}
+
+const getWriterDisabledWarning = (): WriterWarning => {
+  return {
+    at: new Date().toISOString(),
+    kind: 'writer-disabled',
+    message:
+      'Writer is disabled for this server. Start `bun run dev:server:no-writer` only when you explicitly want a read-less API shell without DuckDB writes.',
+    severity: 'warning',
   }
 }
 
@@ -231,10 +246,9 @@ export const getWriterConnectionsOverview = async (): Promise<WriterConnectionsO
   const nowMs = Date.now()
   const writerIdentity = getCurrentWriterConnectionIdentity()
   const history = await Effect.runPromise(readDuckdbOwnerLeaseHistory(env.DUCKDB_PATH))
-  const writerRecord = getUpdatedWriterConnectionRecord(writerIdentity, undefined, {
-    lastHeartbeatAt: new Date(nowMs).toISOString(),
-  })
-  const warnings = getWriterWarnings()
+  const warnings = isCurrentServerWriterDisabled()
+    ? [getWriterDisabledWarning(), ...getWriterWarnings()]
+    : getWriterWarnings()
   const followers = [...writerConnectionState.recordsByConnectionId.values()]
     .map((record) => {
       return toWriterConnectionRecord(record, nowMs)
@@ -245,7 +259,17 @@ export const getWriterConnectionsOverview = async (): Promise<WriterConnectionsO
 
   pruneWriterConnections(nowMs)
 
-  return {followers, history, warnings, writer: toWriterConnectionRecord(writerRecord, nowMs)}
+  return {
+    followers,
+    history,
+    warnings,
+    writer: isCurrentServerWriterDisabled()
+      ? null
+      : toWriterConnectionRecord(
+          getUpdatedWriterConnectionRecord(writerIdentity, undefined, {lastHeartbeatAt: new Date(nowMs).toISOString()}),
+          nowMs,
+        ),
+  }
 }
 
 export const getWriterConnectionHeartbeatPayload = () => {
