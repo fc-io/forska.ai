@@ -13,7 +13,7 @@ set -euo pipefail
 echo "[forska] starting on host $(hostname) at $(date)"
 
 export STACK_ROOT=${STACK_ROOT:-/mimer/NOBACKUP/groups/clin-agent-bench/dev}
-mkdir -p "$STACK_ROOT"/{pgdata,hf_cache,logs,.cache,.secrets}
+mkdir -p "$STACK_ROOT"/{hf_cache,logs,.cache,.secrets}
 
 export XDG_CACHE_HOME=${ALVIS_XDG_CACHE_HOME:-$STACK_ROOT/.cache}
 export HF_HOME=${ALVIS_HF_HOME:-$STACK_ROOT/hf_cache}
@@ -21,7 +21,7 @@ export SGLANG_CACHE_DIR=${ALVIS_SGLANG_CACHE_DIR:-$XDG_CACHE_HOME/sglang}
 export VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT:-$XDG_CACHE_HOME/vllm}
 export TORCHINDUCTOR_CACHE_DIR=${TORCHINDUCTOR_CACHE_DIR:-$VLLM_CACHE_ROOT/torchinductor}
 export TRITON_CACHE_DIR=${TRITON_CACHE_DIR:-$VLLM_CACHE_ROOT/triton}
-mkdir -p "$VLLM_CACHE_ROOT" "$TORCHINDUCTOR_CACHE_DIR" "$TRITON_CACHE_DIR"
+mkdir -p "$HF_HOME" "$SGLANG_CACHE_DIR" "$VLLM_CACHE_ROOT" "$TORCHINDUCTOR_CACHE_DIR" "$TRITON_CACHE_DIR"
 
 export APPTAINER_TMPDIR=${APPTAINER_TMPDIR:-/tmp}
 export TMPDIR=${TMPDIR:-$APPTAINER_TMPDIR}
@@ -30,30 +30,13 @@ export SINGULARITY_TMPDIR=${SINGULARITY_TMPDIR:-$APPTAINER_TMPDIR}
 export SINGULARITY_CACHEDIR=${SINGULARITY_CACHEDIR:-$APPTAINER_CACHEDIR}
 mkdir -p "$APPTAINER_TMPDIR" "$APPTAINER_CACHEDIR"
 
-export GHCR_OWNER=${GHCR_OWNER:-fc-io}
-export GHCR_USER=${GHCR_USER:-fc-io}
-export POSTGRES_PORT=${POSTGRES_PORT:-5432}
-export API_SERVER_PORT=${API_SERVER_PORT:-3001}
-export PROD_SERVER=${PROD_SERVER:-8181}
 export SGLANG_PORT=${SGLANG_PORT:-30000}
 export SGLANG_LOCAL_PORT_BASE=${SGLANG_LOCAL_PORT_BASE:-30001}
 export GPUS_PER_NODE=${GPUS_PER_NODE:-${SLURM_GPUS_ON_NODE:-1}}
 export NCCL_DEBUG=${NCCL_DEBUG:-WARN}
 export NCCL_ASYNC_ERROR_HANDLING=${NCCL_ASYNC_ERROR_HANDLING:-1}
-export VITE_LLM_SERVER_URL=${VITE_LLM_SERVER_URL:-http://localhost:${SGLANG_PORT}/v1}
-export VITE_SERVER_API=${VITE_SERVER_API:-http://localhost:${API_SERVER_PORT}}
-export VITE_PORT=${VITE_PORT:-8181}
 
-SIF_DB="$STACK_ROOT/postgres_18.sif"
 SIF_SGLANG="$STACK_ROOT/sglang_latest.sif"
-SIF_API="$STACK_ROOT/api_server.sif"
-SIF_APP="$STACK_ROOT/app_server.sif"
-export SIF_DB SIF_SGLANG SIF_API SIF_APP
-
-DB_PW_FILE="$STACK_ROOT/.secrets/db_password.txt"
-DB_URL_FILE="$STACK_ROOT/.secrets/database_url.txt"
-BA_SECRET_FILE="$STACK_ROOT/.secrets/better_auth_secret.txt"
-BA_URL_FILE="$STACK_ROOT/.secrets/better_auth_url.txt"
 HF_TOKEN_FILE=${HF_TOKEN_FILE:-$STACK_ROOT/.secrets/hf_token.txt}
 
 if [[ -z "${HF_TOKEN:-}" && -f "$HF_TOKEN_FILE" ]]; then
@@ -69,12 +52,7 @@ need() {
   [[ -f "$1" ]] || { echo "[forska] missing: $1" >&2; exit 2; }
 }
 
-need "$SIF_DB"
 need "$SIF_SGLANG"
-need "$SIF_API"
-need "$SIF_APP"
-need "$DB_PW_FILE"
-need "$DB_URL_FILE"
 
 LOG_DIR="$STACK_ROOT/logs/${SLURM_JOB_ID:-manual}"
 mkdir -p "$LOG_DIR"
@@ -82,52 +60,6 @@ mkdir -p "$LOG_DIR"
 NODELIST_SRC=${SLURM_JOB_NODELIST:-${SLURM_NODELIST:-${SLURM_STEP_NODELIST:-$(hostname -s)}}}
 readarray -t HOSTS < <(scontrol show hostnames "$NODELIST_SRC")
 NNODES=${NNODES:-${SLURM_JOB_NUM_NODES:-${SLURM_NNODES:-${#HOSTS[@]}}}}
-HEAD_NODE=${HOSTS[0]:-$(hostname -s)}
-
-postgres_ping() {
-  if apptainer exec --cleanenv "$SIF_DB" pg_isready \
-    -h 127.0.0.1 \
-    -p "$POSTGRES_PORT" \
-    -d "${DB_NAME:-postgres}" \
-    -U "${DB_USER:-postgres}" >/dev/null 2>&1; then
-    return 0
-  fi
-
-  if command -v nc >/dev/null 2>&1 && nc -z 127.0.0.1 "$POSTGRES_PORT" >/dev/null 2>&1; then
-    return 0
-  fi
-
-  if (exec 3<>"/dev/tcp/127.0.0.1/$POSTGRES_PORT") 2>/dev/null; then
-    exec 3>&- 2>/dev/null || true
-    return 0
-  fi
-
-  return 1
-}
-
-wait_for_postgres() {
-  local pid="$1"
-  local log_file="$2"
-  local attempts=${POSTGRES_READY_ATTEMPTS:-60}
-  local delay=${POSTGRES_READY_DELAY:-2}
-
-  for ((i=1; i<=attempts; i++)); do
-    if postgres_ping; then
-      echo "[forska] postgres is accepting connections"
-      return 0
-    fi
-
-    if ! kill -0 "$pid" 2>/dev/null; then
-      echo "[forska] postgres process ($pid) exited early; see $log_file" >&2
-      return 1
-    fi
-
-    sleep "$delay"
-  done
-
-  echo "[forska] postgres failed to become ready; see $log_file" >&2
-  return 1
-}
 
 wait_for_http() {
   local label="$1"
@@ -236,6 +168,69 @@ log_gpu_inventory() {
   nvidia-smi --query-gpu=name,memory.total,uuid --format=csv
 }
 
+build_worker_urls() {
+  WORKER_URLS_ARRAY=()
+  WORKER_URLS_LOCAL_ARRAY=()
+  local local_index=0
+
+  if [[ "${SGLANG_ONE_WORKER_PER_GPU}" == "1" ]]; then
+    for node_host in "${HOSTS[@]}"; do
+      for ((gpu_index=0; gpu_index<GPUS_PER_NODE; gpu_index++)); do
+        WORKER_URLS_ARRAY+=("http://${node_host}:$((SGLANG_WORKER_PORT_BASE + gpu_index))")
+        WORKER_URLS_LOCAL_ARRAY+=("http://localhost:$((SGLANG_LOCAL_PORT_BASE + local_index))")
+        local_index=$((local_index + 1))
+      done
+    done
+  else
+    for node_host in "${HOSTS[@]}"; do
+      WORKER_URLS_ARRAY+=("http://${node_host}:${SGLANG_WORKER_PORT}")
+      WORKER_URLS_LOCAL_ARRAY+=("http://localhost:$((SGLANG_LOCAL_PORT_BASE + local_index))")
+      local_index=$((local_index + 1))
+    done
+  fi
+
+  WORKER_URLS_CSV=$(IFS=,; echo "${WORKER_URLS_ARRAY[*]}")
+  WORKER_URLS_LOCAL_CSV=$(IFS=,; echo "${WORKER_URLS_LOCAL_ARRAY[*]}")
+}
+
+graceful_shutdown() {
+  local reason="${1:-cleanup}"
+  echo "[forska] shutting down (${reason})..."
+
+  if [[ -n "${SGLANG_ROUTER_PID:-}" ]] && kill -0 "$SGLANG_ROUTER_PID" 2>/dev/null; then
+    kill -TERM "$SGLANG_ROUTER_PID" 2>/dev/null || true
+    sleep 2 || true
+    kill -KILL "$SGLANG_ROUTER_PID" 2>/dev/null || true
+  fi
+
+  if [[ -n "${SGLANG_PID:-}" ]] && kill -0 "$SGLANG_PID" 2>/dev/null; then
+    kill -TERM "$SGLANG_PID" 2>/dev/null || true
+    sleep 2 || true
+    kill -KILL "$SGLANG_PID" 2>/dev/null || true
+  fi
+
+  if [[ -n "${SGLANG_SRUN_PID:-}" ]] && kill -0 "$SGLANG_SRUN_PID" 2>/dev/null; then
+    kill -TERM "$SGLANG_SRUN_PID" 2>/dev/null || true
+    sleep 2 || true
+    kill -KILL "$SGLANG_SRUN_PID" 2>/dev/null || true
+  fi
+
+  if [[ -n "$(jobs -pr)" ]]; then
+    jobs -pr | xargs -r kill -TERM || true
+    sleep 2 || true
+    jobs -pr | xargs -r kill -KILL || true
+  fi
+
+  if [[ -n "${SGLANG_WORKER_DIR:-}" && -d "${SGLANG_WORKER_DIR}" ]]; then
+    rm -f "${SGLANG_WORKER_DIR}/sglang-worker.sh" 2>/dev/null || true
+    rmdir "${SGLANG_WORKER_DIR}" 2>/dev/null || true
+  fi
+}
+
+trap 'graceful_shutdown EXIT' EXIT
+trap 'graceful_shutdown SIGNAL' INT TERM
+trap 'graceful_shutdown TIME_LIMIT' USR1
+
 log_gpu_inventory
 
 TOTAL_GPUS=$((NNODES * GPUS_PER_NODE))
@@ -292,7 +287,7 @@ else
   GPUS_PER_ENGINE=$((TP_SIZE * DP_SIZE))
 
   if (( GPUS_PER_ENGINE > GPUS_PER_NODE )); then
-    echo "[forska] error: TP×DP=${GPUS_PER_ENGINE} exceeds GPUs per node (${GPUS_PER_NODE})" >&2
+    echo "[forska] error: TPxDP=${GPUS_PER_ENGINE} exceeds GPUs per node (${GPUS_PER_NODE})" >&2
     exit 2
   fi
 fi
@@ -320,7 +315,6 @@ GPU_SHAPE="${GPU_MODEL}:${GPUS_PER_NODE}"
 export GPU_SHAPE TP_SIZE DP_SIZE TOTAL_GPUS NNODES GPUS_PER_NODE GPUS_PER_ENGINE SGLANG_ONE_WORKER_PER_GPU
 
 GPU_GRES_TYPE=${GPU_GRES_TYPE:-${REQUESTED_GPU_GRES_TYPE:-}}
-
 if [[ -z "${GPU_GRES_TYPE:-}" ]]; then
   if grep -qi 'A100' <<<"$GPU_MODEL_RAW"; then
     if grep -qi 'fat' <<<"$GPU_MODEL_RAW" || grep -qi '80' <<<"$GPU_MODEL_RAW"; then
@@ -370,106 +364,7 @@ else
   export SGLANG_WORKER_PORT=${SGLANG_WORKER_PORT:-$SGLANG_PORT}
 fi
 
-build_worker_urls() {
-  WORKER_URLS_ARRAY=()
-  WORKER_URLS_LOCAL_ARRAY=()
-  local local_index=0
-
-  if [[ "${SGLANG_ONE_WORKER_PER_GPU}" == "1" ]]; then
-    for node_host in "${HOSTS[@]}"; do
-      for ((gpu_index=0; gpu_index<GPUS_PER_NODE; gpu_index++)); do
-        WORKER_URLS_ARRAY+=("http://${node_host}:$((SGLANG_WORKER_PORT_BASE + gpu_index))")
-        WORKER_URLS_LOCAL_ARRAY+=("http://localhost:$((SGLANG_LOCAL_PORT_BASE + local_index))")
-        local_index=$((local_index + 1))
-      done
-    done
-  else
-    for node_host in "${HOSTS[@]}"; do
-      WORKER_URLS_ARRAY+=("http://${node_host}:${SGLANG_WORKER_PORT}")
-      WORKER_URLS_LOCAL_ARRAY+=("http://localhost:$((SGLANG_LOCAL_PORT_BASE + local_index))")
-      local_index=$((local_index + 1))
-    done
-  fi
-
-  WORKER_URLS_CSV=$(IFS=,; echo "${WORKER_URLS_ARRAY[*]}")
-  WORKER_URLS_LOCAL_CSV=$(IFS=,; echo "${WORKER_URLS_LOCAL_ARRAY[*]}")
-}
-
-graceful_shutdown() {
-  local reason="${1:-cleanup}"
-  echo "[forska] shutting down (${reason})..."
-
-  if [[ -n "${API_PID:-}" ]] && kill -0 "$API_PID" 2>/dev/null; then
-    kill -TERM "$API_PID" 2>/dev/null || true
-    sleep 2 || true
-    kill -KILL "$API_PID" 2>/dev/null || true
-  fi
-
-  if [[ -n "${APP_PID:-}" ]] && kill -0 "$APP_PID" 2>/dev/null; then
-    kill -TERM "$APP_PID" 2>/dev/null || true
-    sleep 2 || true
-    kill -KILL "$APP_PID" 2>/dev/null || true
-  fi
-
-  if [[ -n "${DB_PID:-}" ]] && kill -0 "$DB_PID" 2>/dev/null; then
-    kill -TERM "$DB_PID" 2>/dev/null || true
-    sleep 2 || true
-    kill -KILL "$DB_PID" 2>/dev/null || true
-  fi
-
-  if [[ -n "${SGLANG_ROUTER_PID:-}" ]] && kill -0 "$SGLANG_ROUTER_PID" 2>/dev/null; then
-    kill -TERM "$SGLANG_ROUTER_PID" 2>/dev/null || true
-    sleep 2 || true
-    kill -KILL "$SGLANG_ROUTER_PID" 2>/dev/null || true
-  fi
-
-  if [[ -n "${SGLANG_PID:-}" ]] && kill -0 "$SGLANG_PID" 2>/dev/null; then
-    kill -TERM "$SGLANG_PID" 2>/dev/null || true
-    sleep 2 || true
-    kill -KILL "$SGLANG_PID" 2>/dev/null || true
-  fi
-
-  if [[ -n "${SGLANG_SRUN_PID:-}" ]] && kill -0 "$SGLANG_SRUN_PID" 2>/dev/null; then
-    kill -TERM "$SGLANG_SRUN_PID" 2>/dev/null || true
-    sleep 2 || true
-    kill -KILL "$SGLANG_SRUN_PID" 2>/dev/null || true
-  fi
-
-  if [[ -n "$(jobs -pr)" ]]; then
-    jobs -pr | xargs -r kill -TERM || true
-    sleep 2 || true
-    jobs -pr | xargs -r kill -KILL || true
-  fi
-
-  if [[ -n "${SGLANG_WORKER_DIR:-}" && -d "${SGLANG_WORKER_DIR}" ]]; then
-    rm -f "${SGLANG_WORKER_DIR}/sglang-worker.sh" 2>/dev/null || true
-    rmdir "${SGLANG_WORKER_DIR}" 2>/dev/null || true
-  fi
-}
-
-trap 'graceful_shutdown EXIT' EXIT
-trap 'graceful_shutdown SIGNAL' INT TERM
-trap 'graceful_shutdown TIME_LIMIT' USR1
-
 echo "[forska] logs -> $LOG_DIR"
-echo "[forska] starting postgres on :$POSTGRES_PORT"
-
-apptainer run --cleanenv --writable-tmpfs \
-  --env POSTGRES_USER=${DB_USER:-postgres} \
-  --env POSTGRES_PASSWORD_FILE=/run/secrets/db_password \
-  --env POSTGRES_DB=${DB_NAME:-postgres} \
-  --bind "$STACK_ROOT/pgdata:/var/lib/postgresql" \
-  --bind "$DB_PW_FILE:/run/secrets/db_password:ro" \
-  "$SIF_DB" \
-  >"$LOG_DIR/db.log" 2>&1 &
-DB_PID=$!
-
-if ! wait_for_postgres "$DB_PID" "$LOG_DIR/db.log"; then
-  echo "[forska] postgres failed to accept connections; aborting startup" >&2
-  exit 2
-fi
-
-mkdir -p "$HF_HOME" "$SGLANG_CACHE_DIR"
 build_worker_urls
 
 echo "[forska] model=$SGLANG_MODEL"
@@ -627,7 +522,6 @@ if [[ "${SGLANG_ENABLE_ROUTER}" == "1" ]]; then
   fi
 
   read -r -a ROUTER_WORKERS <<<"${SGLANG_ROUTER_WORKER_URLS}"
-
   if (( ${#ROUTER_WORKERS[@]} == 0 )); then
     echo "[forska] error: router enabled but no worker URLs found" >&2
     exit 2
@@ -650,72 +544,14 @@ fi
 
 log_sglang_endpoints
 
-API_BINDS=(--bind "$DB_URL_FILE:/run/secrets/database_url:ro")
-[[ -f "$BA_SECRET_FILE" ]] && API_BINDS+=(--bind "$BA_SECRET_FILE:/run/secrets/better_auth_secret:ro")
-[[ -f "$BA_URL_FILE" ]] && API_BINDS+=(--bind "$BA_URL_FILE:/run/secrets/better_auth_url:ro")
-
-API_ENVS=(--env DATABASE_URL_FILE=/run/secrets/database_url)
-[[ -f "$BA_SECRET_FILE" ]] && API_ENVS+=(--env BETTER_AUTH_SECRET_FILE=/run/secrets/better_auth_secret)
-[[ -f "$BA_URL_FILE" ]] && API_ENVS+=(--env BETTER_AUTH_URL_FILE=/run/secrets/better_auth_url)
-
-echo "[forska] starting API on :$API_SERVER_PORT"
-
-apptainer run --cleanenv \
-  "${API_BINDS[@]}" \
-  "${API_ENVS[@]}" \
-  --env BUN_CONFIG_MAX_HTTP_REQUESTS="${BUN_CONFIG_MAX_HTTP_REQUESTS:-1024}" \
-  --env VITE_LLM_SERVER_URL="$VITE_LLM_SERVER_URL" \
-  --env VITE_SERVER_API="http://localhost:${API_SERVER_PORT}" \
-  --env API_SERVER_PORT="$API_SERVER_PORT" \
-  --env VITE_PORT="$VITE_PORT" \
-  --env GPU_NNODES="$NNODES" \
-  --env GPU_GPUS_PER_NODE="$GPUS_PER_NODE" \
-  --env GPU_SHAPE="$GPU_SHAPE" \
-  --env GPU_TOTAL_GPUS="$TOTAL_GPUS" \
-  --env TP_SIZE="$TP_SIZE" \
-  --env DP_SIZE="$DP_SIZE" \
-  --env SGLANG_MAX_RUNNING_REQUESTS="$SGLANG_MAX_RUNNING_REQUESTS" \
-  --env SGLANG_API_MAX_INFLIGHT_REQUESTS="$SGLANG_API_MAX_INFLIGHT_REQUESTS" \
-  --env SGLANG_API_MAX_BURST_REQUESTS="$SGLANG_API_MAX_BURST_REQUESTS" \
-  --env SGLANG_CHUNKED_PREFILL_SIZE="$SGLANG_CHUNKED_PREFILL_SIZE" \
-  --env SGLANG_CONTEXT_LENGTH="$SGLANG_CONTEXT_LENGTH" \
-  --env SGLANG_MODEL="$SGLANG_MODEL" \
-  --env WORKER_URLS="$WORKER_URLS_CSV" \
-  --env OPENALEX_MAILTO="fredrik.carlsson@gu.se" \
-  "$SIF_API" \
-  >"$LOG_DIR/api.log" 2>&1 &
-API_PID=$!
-
-echo "[forska] starting app on :$PROD_SERVER (proxies to API :$API_SERVER_PORT)"
-
-apptainer run --cleanenv \
-  --env SERVER_HOST=localhost \
-  --env API_SERVER_PORT="$API_SERVER_PORT" \
-  --env PROD_SERVER="$PROD_SERVER" \
-  --env GPU_NNODES="$NNODES" \
-  --env GPU_GPUS_PER_NODE="$GPUS_PER_NODE" \
-  --env GPU_TOTAL_GPUS="$TOTAL_GPUS" \
-  --env TP_SIZE="$TP_SIZE" \
-  --env DP_SIZE="$DP_SIZE" \
-  "$SIF_APP" \
-  >"$LOG_DIR/app.log" 2>&1 &
-APP_PID=$!
-
-echo "[forska] services launched"
+echo "[forska] sglang ready"
 echo "  host:        $(hostname)"
-echo "  postgres:    127.0.0.1:$POSTGRES_PORT"
 echo "  sglang:      http://127.0.0.1:${SGLANG_PORT}/v1"
 echo "  dist:        ${NNODES} node(s) x ${GPUS_PER_NODE} GPU(s) = $((NNODES * GPUS_PER_NODE)) (tp=${TP_SIZE}, dp=${DP_SIZE})"
-echo "  api:         http://127.0.0.1:$API_SERVER_PORT"
-echo "  app:         http://127.0.0.1:$PROD_SERVER"
 echo "  workers:     $WORKER_URLS_CSV"
 echo "  local ports: $WORKER_URLS_LOCAL_CSV"
 echo "[forska] tail logs in: $LOG_DIR"
-echo "[forska] for ssh tunnel to postgres"
-echo "  ssh -N -L 8432:$(hostname):$POSTGRES_PORT alvis2"
-echo "[forska] for ssh tunnel to the api"
-echo "  ssh -N -L 3001:$(hostname):$API_SERVER_PORT alvis2"
-echo "[forska] for ssh tunnel to the sglang router"
+echo "[forska] for a direct ssh tunnel to the main endpoint"
 echo "  ssh -N -L ${SGLANG_PORT}:$(hostname):${SGLANG_PORT} alvis2"
 
 echo ""

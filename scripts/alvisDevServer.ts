@@ -53,7 +53,8 @@ const main = async () => {
 
   if (!job) {
     console.error('[alvis:dev] No running SGLang job found on Alvis')
-    console.error('             Submit a job first: bun run alvis:launch')
+    console.error('             Submit a job first: bun run alvis:launch:a100:fat')
+    console.error('             Or use the 4x A100 preset: bun run alvis:launch:a100:4')
     console.error('             Or check status: bun run alvis:status')
     process.exit(1)
   }

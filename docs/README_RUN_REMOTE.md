@@ -1,46 +1,46 @@
-# Run production builds
+# Run Remote Inference
 
-Goal: single-user local app; this is for HPC/remote deploy. Better Auth is legacy (planned removal).
-
-Prereqs:
-
-- A working local build
-- On the HPC
-  - Apptainer
-  - Policy: SGLang must run via Apptainer using the official Docker Hub image (`lmsysorg/sglang`). Do not run Docker directly on the cluster.
+Goal: use HPC only for SGLang inference. Do not run Postgres, API, or app on Alvis/MN5.
 
 ## Alvis Quick Start
 
 ```bash
-# Build and push only the SGLang image needed for Alvis
+# Local machine: build and push the SGLang image when needed
 bun run build:docker:sglang
 
-# On Alvis, pull the printed sglang_latest.sif command, then launch one of:
+# Alvis: pull the printed sglang_latest.sif command
+
+# Local machine: launch one of the presets and keep the terminal open
 bun run alvis:launch:a100:fat
 bun run alvis:launch:a100:4
 
-# In a second terminal
+# Test the tunnel from another terminal
+curl http://localhost:30001/v1/models
+```
+
+Optional local app flow
+
+```bash
+# Local API server that points WORKER_URLS at the Alvis tunnel
 bun run alvis:dev:server
 
-# In a third terminal
+# Local app
 bun run dev:app
 ```
 
-Use `bun run alvis:launch:a100:fat -- --force` or `bun run alvis:launch:a100:4 -- --force` if you want a fresh job instead of reusing an existing one.
+Use `--force` if you want a fresh Slurm job instead of reusing an existing one.
 
-## Setup
+## What Runs Where
 
-### Set shared path
+- HPC: `sglang_latest.sif` and the model weights only
+- Local machine: the SSH tunnel, optional local API dev server, optional local app
+- Not used on HPC for this flow: `postgres_18.sif`, `api_server.sif`, `app_server.sif`, `db_password.txt`, `database_url.txt`
 
-Recommended shared paths and caches (for running on Alvis HPC, adapt to your setup)
-
-```bash
-mkdir -p $STACK_ROOT/{pgdata,hf_cache,logs,.cache} && echo $STACK_ROOT
-```
+## Alvis Setup
 
 ```bash
 export STACK_ROOT=/mimer/NOBACKUP/groups/clin-agent-bench/dev
-mkdir -p "$STACK_ROOT"/{hf_cache,logs,.cache,.apptainer/cache,tmp}
+mkdir -p "$STACK_ROOT"/{hf_cache,logs,.cache,.apptainer/cache,tmp,.secrets}
 
 export XDG_CACHE_HOME=$STACK_ROOT/.cache
 export HF_HOME=$STACK_ROOT/hf_cache
@@ -50,460 +50,125 @@ export TMPDIR=$APPTAINER_TMPDIR
 export APPTAINER_CACHEDIR=$STACK_ROOT/.apptainer/cache
 export GHCR_OWNER=fc-io
 export GHCR_USER=fc-io
+```
 
-# Optional for gated models
+Only `sglang_latest.sif` is required for the Alvis launch flow.
+
+Optional for gated Hugging Face models:
+
+```bash
 export HUGGINGFACE_HUB_TOKEN=xxxxxxxx
+printf '%s' "$HUGGINGFACE_HUB_TOKEN" > "$STACK_ROOT/.secrets/hf_token.txt"
+chmod 600 "$STACK_ROOT/.secrets/hf_token.txt"
 ```
 
-### Secrets
+## Build + Pull the SGLang Image
 
-We use secrets files (not env) for database credentials on the HPC.
+Use GHCR for clusters that can pull from registries.
 
 ```bash
-mkdir -p "${STACK_ROOT:-.}/.secrets"
+# Local machine
+bun run build:docker:sglang
 ```
+
+That prints the exact pull command. On Alvis:
 
 ```bash
-read -s -p 'DB password: ' PW; echo; umask 077; printf '%s' "$PW" > "${STACK_ROOT:-.}/.secrets/db_password.txt"; chmod 600 "${STACK_ROOT:-.}/.secrets/db_password.txt"; unset PW
-```
-
-```bash
-read -s -p 'Database URL (postgresql://...): ' URL; echo; umask 077; printf '%s' "$URL" > "${STACK_ROOT:-.}/.secrets/database_url.txt"; chmod 600 "${STACK_ROOT:-.}/.secrets/database_url.txt"; unset URL
-```
-
-### Setup container use on HPC
-
-#### 1) Build api, app, and sglang docker images locally and push to GHCR
-
-Prereqs
-
-- Create a GitHub Personal Access Token with `write:packages` (and `read:packages` to pull) (it's a bit of a hidden thing – https://github.com/settings/tokens)
-- Login `docker login ghcr.io -u "$GHCR_USER"` locally
-
-#### 2) set the required
-
-```
-bun run build:docker
-```
-
-If you only need the updated SGLang image for Alvis model support, use `bun run build:docker:sglang`.
-
-Notes
-
-- The app build reads `VITE_*` environment variables from `process.env` at build time (Vite). Docker Compose reads `.env` to populate build args, which become ENV vars in the Docker build. Ensure the values in `.env` match the runtime endpoints you intend to use.
-- If you prefer, you can source your `.env` and pass values directly via `--build-arg` when building.
-
-#### 3) Pre-pull container images
-
-Place the `.sif` files under `$STACK_ROOT`.
-
-On Alvis, model weights do not need a separate transfer step. SGLang downloads them from Hugging Face into `$HF_HOME` on first use. The custom `sglang-server` image from GHCR includes a newer Transformers build that supports `Qwen/Qwen3.5-35B-A3B`.
-
-```bash
-# Public registries (explicit amd64)
-apptainer pull --arch amd64 "$STACK_ROOT/postgres_18.sif" docker://docker.io/library/postgres:18
-
-# GHCR (login first on remote)
 apptainer registry login --username "$GHCR_USER" oras://ghcr.io
-# the bun build:docker command will generate a pull like with the proper tag so that you don't have to figure it out
 apptainer pull --arch amd64 "$STACK_ROOT/sglang_latest.sif" docker://ghcr.io/$GHCR_OWNER/sglang-server:$TAG
-apptainer pull --arch amd64 "$STACK_ROOT/api_server.sif" docker://ghcr.io/$GHCR_OWNER/api-server:$TAG
-apptainer pull --arch amd64 "$STACK_ROOT/app_server.sif" docker://ghcr.io/$GHCR_OWNER/app-server:$TAG
 ```
 
-Tip: the `--profile hostnet` compose setup on Linux behaves like Apptainer’s host networking, so you can validate localhost-based URLs locally before deploying.
+The custom `sglang-server` image is needed because upstream `lmsysorg/sglang:*` still does not recognize `Qwen/Qwen3.5-35B-A3B`.
 
-#### 4) Provide secrets
+## Alvis Launch Commands
 
-Create the secrets files used by the host‑network/Apptainer flow. These are one‑line files with strict perms.
-
-##### Postgres password (`POSTGRES_PASSWORD_FILE`):
+Recommended presets:
 
 ```bash
-mkdir -p "${STACK_ROOT:-.}/.secrets"; read -s -p 'DB password: ' PW; echo; umask 077; printf '%s' "$PW" > "${STACK_ROOT:-.}/.secrets/db_password.txt"; chmod 600 "${STACK_ROOT:-.}/.secrets/db_password.txt"; unset PW
+# 1 node, 2x A100fat, one shared SGLang instance
+bun run alvis:launch:a100:fat
+
+# 1 node, 4x non-fat A100, one shared SGLang instance
+bun run alvis:launch:a100:4
 ```
 
-##### Database URL for the API (`DATABASE_URL_FILE`):
+Useful helpers:
 
 ```bash
-mkdir -p "${STACK_ROOT:-.}/.secrets"; read -s -p "Database URL (postgresql://user:pass@localhost:${POSTGRES_PORT:-5432}/${DB_NAME:-postgres}): " URL; echo; umask 077; printf '%s' "$URL" > "${STACK_ROOT:-.}/.secrets/database_url.txt"; chmod 600 "${STACK_ROOT:-.}/.secrets/database_url.txt"; unset URL
-```
-
-Notes
-
-- If the model is gated on Hugging Face, ensure `HUGGINGFACE_HUB_TOKEN` is set in the environment used by Apptainer.
-
-## 3) Run the SIFs (no registry access required)
-
-All services communicate over HTTP/TCP so the ports needs to be available.
-
-### DB (Postgres over TCP)
-
-```bash
-apptainer run --cleanenv --writable-tmpfs \
-  --env POSTGRES_USER=postgres \
-  --env POSTGRES_PASSWORD_FILE=/run/secrets/db_password \
-  --env POSTGRES_DB=postgres \
-  --bind ${STACK_ROOT:-.}/pgdata:/var/lib/postgresql \
-  --bind ${STACK_ROOT:-.}/.secrets/db_password.txt:/run/secrets/db_password:ro \
-  $STACK_ROOT/postgres_18.sif
-```
-
-```
-# Optional: verify HF cache is writable (and populated after first run)
-ls -al "$HF_HOME" || true
-```
-
-```
-# Optional: ping postgres
-curl -i http://127.0.0.1:5432/
-```
-
-SGLang Server (GPU, HTTP on :30000)
-**Note:** SGLang v0.5.4+ uses unified `launch_server` (no separate Gateway/Worker processes).
-
-**For the default Alvis shape (1 node, 2x A100fat, one SGLang instance) — use tensor-parallel-size 2:**
-
-```bash
-apptainer exec --cleanenv --nv \
-  --env HF_HOME=/hf_cache \
-  --bind $HF_HOME:/hf_cache:rw \
-  --env SGLANG_CACHE_DIR=/sg_cache \
-  --bind $SGLANG_CACHE_DIR:/sg_cache:rw \
-  $STACK_ROOT/sglang_latest.sif \
-  python -m sglang.launch_server \
-    --model-path Qwen/Qwen3.5-35B-A3B \
-    --host 0.0.0.0 --port 30000 \
-    --tensor-parallel-size 2 \
-    --trust-remote-code \
-    --max-running-requests 196 \
-    --mem-fraction-static 0.92 \
-    --schedule-policy lpm \
-    --enable-metrics \
-    --download-dir /hf_cache
-```
-
-**For A100-40G — use tensor-parallel-size 2:**
-
-```bash
-apptainer exec --cleanenv --nv \
-  --env HF_HOME=/hf_cache \
-  --bind $HF_HOME:/hf_cache:rw \
-  --env SGLANG_CACHE_DIR=/sg_cache \
-  --bind $SGLANG_CACHE_DIR:/sg_cache:rw \
-  $STACK_ROOT/sglang_latest.sif \
-  python -m sglang.launch_server \
-    --model-path Qwen/Qwen3.5-35B-A3B \
-    --host 0.0.0.0 --port 30000 \
-    --tensor-parallel-size 2 \
-    --trust-remote-code \
-    --max-running-requests 128 \
-    --mem-fraction-static 0.92 \
-    --schedule-policy lpm \
-    --enable-metrics \
-    --download-dir /hf_cache
-```
-
-Notes
-
-- The default Alvis setup uses 2x A100fat on one node with `--tensor-parallel-size 2`
-- For a 1-GPU A100-80G/H200 run, override to `--tensor-parallel-size 1`
-- To constrain GPU visibility, export `CUDA_VISIBLE_DEVICES` before the `apptainer exec` call (e.g., `export CUDA_VISIBLE_DEVICES=0,1`)
-- For multi-node setups, use `--data-parallel-size N`, `--nnodes`, `--node-rank`, `--dist-init-addr`
-- Health check: `curl -sf http://localhost:30000/v1/models`
-
-## SGLang via sbatch (forska-alvis.sbatch)
-
-Use `forska-alvis.sbatch` to launch the full stack (Postgres + SGLang + API + App) on Alvis using Apptainer.
-
-Alvis has outbound internet access, so model weights can be fetched from Hugging Face on demand into `$HF_HOME`. Only the `.sif` images need to exist in `$STACK_ROOT`.
-
-Recommended helper flow
-
-```bash
-# Upload, submit or reuse an Alvis job, wait for startup, open local worker tunnels
-bun run alvis:launch
-
-# Start local API dev server against those worker tunnels
-bun run alvis:dev:server
-```
-
-Alternative launch shape
-
-```bash
-# 1 node, 4x non-fat A100, one shared model instance
-bun run alvis:launch -- --a100-4
-```
-
-Useful helpers
-
-```bash
-# Push the sbatch file without launching
-bun run alvis:sbatch:push
-
-# See queue state
 bun run alvis:status
-
-# Query GPU status on the worker nodes
 bun run alvis:smi
+bun run alvis:sbatch:push
 ```
 
-`bun run alvis:launch` reuses an existing pending/running `forska-alvis` job unless you pass `--force`. With the default 2xA100fat single-instance setup, the model worker is tunneled to `http://localhost:30001`.
+The launch script:
 
-Prereqs
+- uploads `forska-alvis.sbatch`
+- reuses a matching pending/running job when possible
+- waits for the startup config block in the job log
+- opens local SSH tunnels to the remote worker URLs
+- keeps the tunnel alive until you press `Ctrl+C`
 
-- Place images in `$STACK_ROOT` (see pre-pull steps above):
-  - `postgres_18.sif`, `sglang_latest.sif`, `api_server.sif`, `app_server.sif`
-- Provide secrets in `$STACK_ROOT/.secrets`:
-  - `db_password.txt` and `database_url.txt` (optionally legacy Better Auth secrets)
-- First launch for a new model can take longer because Alvis may populate `$HF_HOME` from Hugging Face.
+`Ctrl+C` in the launch terminal closes the tunnels and cancels the Slurm job.
 
-Defaults and ports
-
-- Postgres: `:5432`
-- SGLang: `:30000` (OpenAI-compatible at `/v1`)
-- API: `:3001`
-- App: `:8181`
-
-GPU scaling and TP logic
-
-- Default launch shape: 1 node x 2 A100fat GPUs, one SGLang instance, `TP_SIZE=2`, `DP_SIZE=1`
-- `SGLANG_ONE_WORKER_PER_GPU=0` by default, so the stack starts one model server instead of one worker per GPU
-- For other allocations, if `TP_SIZE` is unset, the script falls back to GPU-memory-based TP sizing and derives `DP_SIZE` to fill the node
-- Multi-node: uses `--nnodes`, `--node-rank`, `--dist-init-addr`; DP is computed as `(nodes × gpus_per_node) / TP`
-
-Manual sbatch examples
-
-- Default: 1 node, 2x A100fat, one instance (TP=2):
+## Manual sbatch Examples
 
 ```bash
+# Default preset from the sbatch file
 sbatch forska-alvis.sbatch
-```
 
-- Fresh job with the current defaults, even if an older Alvis job is already running:
+# Fresh launcher submission without reuse
+bun run alvis:launch:a100:fat -- --force
 
-```bash
-bun run alvis:launch -- --force
-```
+# 1 node, 4x A100
+bun run alvis:launch:a100:4 -- --force
 
-- Launch on 1 node with `A100:4` and keep one shared model instance (`TP_SIZE=4`, `DP_SIZE=1`):
-
-```bash
-bun run alvis:launch -- --a100-4
-```
-
-- Single-node A100fat with one GPU:
-
-```bash
+# 1 node, 1x A100fat
 sbatch --nodes=1 --gpus-per-node=A100fat:1 --export=ALL,TP_SIZE=1,DP_SIZE=1 forska-alvis.sbatch
-```
 
-- Two A100fat GPUs but one worker per GPU instead of one shared instance:
-
-```bash
+# One worker per GPU instead of one shared instance
 sbatch --export=ALL,SGLANG_ONE_WORKER_PER_GPU=1 forska-alvis.sbatch
 ```
 
-- Four non-fat A100 GPUs with one shared instance:
+Default Alvis shape:
+
+- `#SBATCH --nodes=1`
+- `#SBATCH --gpus-per-node=A100fat:2`
+- `SGLANG_MODEL=Qwen/Qwen3.5-35B-A3B`
+- `SGLANG_ONE_WORKER_PER_GPU=0`
+- `TP_SIZE=2`
+- `DP_SIZE=1`
+
+Models download directly from Hugging Face into `$HF_HOME` on first use.
+
+## After Launch
+
+The launcher exposes local worker URLs like `http://localhost:30001`.
+
+Basic checks:
 
 ```bash
-sbatch --nodes=1 --gpus-per-node=A100:4 forska-alvis.sbatch
+curl http://localhost:30001/v1/models
+curl http://localhost:30001/get_model_info
 ```
 
-- Multi-node A100-40G (2 nodes × 2 GPUs; TP=2, DP=2):
+OpenAI-compatible example:
 
 ```bash
-sbatch --nodes=2 --gpus-per-node=A100:2 forska-alvis.sbatch
+curl http://localhost:30001/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "Qwen/Qwen3.5-35B-A3B",
+    "messages": [{"role": "user", "content": "Say hello in one sentence."}]
+  }'
 ```
 
-The default sbatch directives already request 1 node with 2x A100fat. Override with `sbatch` flags or `--export=ALL,TP_SIZE=<n>,DP_SIZE=<m>,SGLANG_ONE_WORKER_PER_GPU=<0|1>` if needed.
+Optional local app flow:
 
-Environment variables
+- `bun run alvis:dev:server` starts the local API server with `WORKER_URLS` pointing at the Alvis tunnel
+- `bun run dev:app` starts the local app against that local API server
 
-- `STACK_ROOT` path for caches and images.
-- `SGLANG_MODEL` (default: `Qwen/Qwen3.5-35B-A3B`)
-- `SGLANG_ONE_WORKER_PER_GPU` (default: `0`)
-- `TP_SIZE` (default: `2` for the default 1-node 2-GPU launch shape)
-- `SGLANG_PORT` (default: `30000`)
-- `SGLANG_MAX_RUNNING_REQUESTS` (default: `400`)
-- `SGLANG_CHUNKED_PREFILL_SIZE` (default: `16384`) - passed to `--chunked-prefill-size`
-- `SGLANG_MEM_FRACTION` (default: `0.92`)
-- `SGLANG_SCHEDULE_POLICY` (default: `lpm`)
-- `GPUS_PER_NODE` (auto from Slurm; override if needed)
-- `VITE_LLM_SERVER_URL` (defaults to `http://localhost:30000/v1` for the API)
+## Related Docs
 
-After submission
-
-- Logs: `$STACK_ROOT/logs/<jobid>`
-- Health: `curl -sf http://localhost:30000/v1/models` (when ready prints models)
-- Optional SSH tunnels from your laptop:
-  - SGLang: `ssh -N -L 30000:$(hostname):30000 alvis2`
-  - API: `ssh -N -L 3001:$(hostname):3001 alvis2`
-  - Postgres: `ssh -N -L 8432:$(hostname):5432 alvis2`
-
-### API
-
-```bash
-apptainer run --cleanenv   --bind ${STACK_ROOT:-.}/.secrets/database_url.txt:/run/secrets/database_url:ro   --env DATABASE_URL_FILE=/run/secrets/database_url   --env VITE_LLM_SERVER_URL=http://localhost:8000/v1   --env VITE_PORT=8181   --env VITE_SERVER_API=http://localhost:3001   --env API_SERVER_PORT=3001   $STACK_ROOT/api_server.sif
-```
-
-Replace 5432 in your `${STACK_ROOT:-.}/.secrets/database_url.txt` if you changed `POSTGRES_PORT`.
-
-App (HTTP on :8080; talks to API over HTTP)
-Note: The app image now uses an absolute CMD (`/app/app-server`), so Apptainer runs correctly regardless of your host working directory.
-
-```bash
-apptainer -d run --cleanenv --env SERVER_HOST=localhost --env API_SERVER_PORT=3001 --env PROD_SERVER=8181 "$STACK_ROOT/app_server.sif"
-```
-
-Verification helpers
-
-```
-# Check env inside the SIF
-apptainer exec --cleanenv $STACK_ROOT/postgres_18.sif env | grep POSTGRES_PASSWORD_FILE
-
-# Check the secret is mounted
-apptainer exec --cleanenv \
-  --bind ${STACK_ROOT:-.}/.secrets/db_password.txt:/run/secrets/db_password:ro \
-  $STACK_ROOT/postgres_18.sif \
-  sh -lc 'ls -l /run/secrets && head -c 5 /run/secrets/db_password && echo'
-```
-
-## Clean reset and restore (PG18, Apptainer)
-
-Use this flow to start fresh on the remote (remove old PG17 layout) and validate the full dump → push → restore path.
-
-Prereqs
-
-- Remote: `${STACK_ROOT}/.secrets/db_password.txt` exists with strict perms (0600)
-- Local: Docker Postgres running for dumps (`docker compose --env-file .env.local up -d db`)
-- Env: `SSH_ALIAS`, `STACK_ROOT`, `DB_NAME`, `DB_USER`, `DB_PASS`, `POSTGRES_PORT`
-
-1. Reset on remote (remove legacy data layout)
-
-```bash
-# Remote: close any running instance of postgres
-apptainer instance stop pg18 || true
-# Remote: Safe backup then recreate clean dir
-mv -f ${STACK_ROOT}/pgdata ${STACK_ROOT}/pgdata_pg18_bak_$(date +%Y%m%d_%H%M%S) || true; install -d -m 700 ${STACK_ROOT}/pgdata
-# If perms block removal, force delete then recreate
-# ssh $SSH_ALIAS 'chmod -R u+w ${STACK_ROOT}/pgdata || true; rm -rf ${STACK_ROOT}/pgdata || true; install -d -m 700 ${STACK_ROOT}/pgdata'
-```
-
-2. Start Postgres 18 (fresh cluster)
-
-```bash
-# Remote: start postgres in container
-apptainer run --cleanenv --writable-tmpfs \
-  --env POSTGRES_USER=postgres \
-  --env POSTGRES_PASSWORD_FILE=/run/secrets/db_password \
-  --env POSTGRES_DB=${DB_NAME:-postgres} \
-  --bind ${STACK_ROOT:-.}/pgdata:/var/lib/postgresql \
-  --bind ${STACK_ROOT:-.}/.secrets/db_password.txt:/run/secrets/db_password:ro \
-  ${STACK_ROOT}/postgres_18.sif
-# Remote: check that is working
-apptainer exec --cleanenv ${STACK_ROOT}/postgres_18.sif pg_isready -h 127.0.0.1 -p 5432 -U postgres
-```
-
-3. Push dump to remote (no restore, validates end-to-end copy)
-
-```bash
-# Local: ensure DB container is up for dump
-docker compose --env-file .env.local up -d db
-# Local: creates dump and uploads to ${STACK_ROOT}/backups on remote
-bun run db:remote:push
-# Remote: verify file arrived
-ls -l ${STACK_ROOT}/backups
-```
-
-4. Restore into the fresh PG18 (scripted)
-
-```bash
-export REMOTE_DATABASE_URL="postgresql://postgres:$(cat ${STACK_ROOT}/.secrets/db_password.txt)@localhost:5432/${DB_NAME:-postgres}"
-bun scripts/dbPush.ts --force --restore
-```
-
-or
-
-Manual restore alternative (this is what I used last)
-
-```bash
-# start the local database to copy from
-docker compose up db
-# the push
-bun db:r:p
-# set ssh alias
-# Pick the uploaded dump name from backups/
-ls -1 ${STACK_ROOT}/backups
-# start postgres in one session
-apptainer run --cleanenv --writable-tmpfs \
-  --env POSTGRES_USER=postgres \
-  --env POSTGRES_PASSWORD_FILE=/run/secrets/db_password \
-  --env POSTGRES_DB=postgres \
-  --bind ${STACK_ROOT:-.}/pgdata:/var/lib/postgresql \
-  --bind ${STACK_ROOT:-.}/.secrets/db_password.txt:/run/secrets/db_password:ro \
-  ${STACK_ROOT}/postgres_18.sif
-# then restore
-apptainer exec --cleanenv --writable-tmpfs \
-  --env POSTGRES_USER=postgres \
-  --env POSTGRES_PASSWORD_FILE=/run/secrets/db_password \
-  --env POSTGRES_DB=postgres \
-  --bind ${STACK_ROOT:-.}/pgdata:/var/lib/postgresql \
-  --bind ${STACK_ROOT:-.}/.secrets/db_password.txt:/run/secrets/db_password:ro \
-  --bind ${STACK_ROOT:-.}/backups:/backups:ro \
-  ${STACK_ROOT}/postgres_18.sif \
-  pg_restore -h localhost -p 5432 -U postgres -d postgres \
-  --clean --if-exists --no-owner --no-privileges --single-transaction /backups/dump_local_postgres_20251106_145355.dump
-```
-
-Why this works
-
-- Postgres 18 expects a major-version layout under `/var/lib/postgresql`; a fresh, empty `${STACK_ROOT}/pgdata` avoids the legacy `/data` structure that triggers the safety check.
-- `db:r:p` verifies the local dump and remote upload path; the `--restore` run completes the cycle by loading into the fresh cluster.
-
-## About UNIX sockets (only for DB seeding)
-
-Some HPC clusters disallow container networking entirely. We no longer support running the app or API against Postgres over UNIX sockets. The only remaining socket-based flow is for database population/restore via the `dbPush` helper, which still supports remote UNIX sockets when needed.
-
-Database push/restore helpers (dbPush)
-
-```bash
-# Common env
-export SSH_ALIAS=<user@hpc-host>
-export STACK_ROOT=/mimer/NOBACKUP/groups/clin-agent-bench/dev
-
-# TCP remote (db listens on 5432); restore to remote after pushing dump
-export REMOTE_DATABASE_URL='postgresql://postgres:***@localhost:5432/postgres'
-bun scripts/dbPush.ts --force --restore
-
-# Optional UNIX socket remote (only if your HPC forbids networking for Postgres). Instance name and socket dir are configurable.
-export REMOTE_DATABASE_URL='postgresql://postgres:***@/postgres?host=/srv/pgsocket'
-export REMOTE_PG_INSTANCE=pg18
-# optional override if your socket path differs
-# export REMOTE_SOCKET_DIR=/srv/pgsocket
-bun scripts/dbPush.ts --force --restore --remote-socket
-
-# If the HPC bind policy blocks /backups, stream the dump into the instance
-bun scripts/dbPush.ts --force --restore --remote-socket --stream
-```
-
-Database URL forms (for runtime)
-
-- TCP: `postgresql://user:pass@host:port/db` (e.g., `postgresql://postgres:pw@localhost:5432/postgres`)
-- For dbPush only, a UNIX socket DSN is supported: `postgresql://user:pass@/db?host=/path/to/socketdir`
-  - The `dbPush` script reads `REMOTE_DATABASE_URL` and accepts `--remote-socket` to force socket mode. It honors `REMOTE_PG_INSTANCE` and `REMOTE_SOCKET_DIR`.
-
-Notes
-
-- Prefer HTTP/TCP everywhere (Postgres over TCP; API/App/vLLM over HTTP). Browsers cannot use sockets, and HTTP simplifies Apptainer/HPC setups.
-- If the HPC bind policy blocks `/backups`, use the `--stream` option with `dbPush` to stream the dump into the instance.
-
-For Slurm batch job examples using Apptainer, see [README_SBATCH.md](./README_SBATCH.md).
-
-## Troubleshooting
-
-- Recreate database volume
-  - Stop and remove containers and the named volume: `docker compose down -v`
-  - Start again with your env: `docker compose --env-file .env.local up db`
-- Create the DB manually (alternative): `docker exec -it $(docker ps --filter name=db --format '{{.ID}}') psql -U ${DB_USER:-postgres} -c "CREATE DATABASE ${DB_NAME:-appdb};"`
-- Local: Get the postgres db password from the secret in the running container: `PW=$(ssh alvis2 'ssh alvis3-41 "tr -d \"\\r\\n\" < \"${STACK_ROOT:-.}/.secrets/db_password.txt\""' | python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.stdin.read().strip(), safe=""))')`
+- `README.md`
+- `docs/README_RUN_SGLANG_REMOTE_INTERACTIVE.md`
+- `docs/README_MN5_INFERENCE.md`
