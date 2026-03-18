@@ -1,6 +1,7 @@
 # Native DuckDB plan
 
-this plan is old. see @DUCKDB2_PLAN.md instead
+this plan is old. see @plans/old/DUCKDB2_PLAN.md instead
+
 ## Goal
 
 - [ ] Run the app on one native DuckDB database only.

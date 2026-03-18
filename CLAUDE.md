@@ -20,7 +20,7 @@ IMPORTANT: Do not add auth/session/user/admin requirements unless explicitly ask
 - No `<Suspense>` without `fallback`
 - Client network via TanStack Query + Eden; `fetch` only if streaming/upload/download forces it (inside mutationFn)
 
-See `LOCAL_FIRST_PLAN.md`.
+See `plans/old/LOCAL_FIRST_PLAN.md`.
 
 IMPORTANT: Avoid branching. If something can be done without, please do without. For example have an type ArrayThatWillLop = array and initalize with an empty array, instead of type LopIfArray = [] | null.
 IMPORTANT: If there is only one export in a file, then the filename should match the name of the exported function
