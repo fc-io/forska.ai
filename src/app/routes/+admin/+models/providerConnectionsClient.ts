@@ -277,3 +277,20 @@ export const getProviderSecretStatus = (connection: ProviderConnection | null | 
         : 'Key missing'
       : 'No secret required'
 }
+
+export const getProviderCatalogLabel = (
+  catalog: ProviderCatalogEntry[],
+  providerKind: string | null | undefined,
+): string => {
+  const normalizedProviderKind = String(providerKind ?? '')
+    .trim()
+    .toLowerCase()
+
+  return (
+    catalog.find((entry) => {
+      return entry.kind === normalizedProviderKind
+    })?.label
+    ?? providerKind
+    ?? 'Unknown'
+  )
+}

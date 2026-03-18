@@ -14,6 +14,7 @@ import {
   formatTimestamp,
   getFormDataString,
   getNullableTrimmedValue,
+  getProviderCatalogLabel,
   getProviderSecretStatus,
   getTrimmedValue,
   getWorkerUrlsFromInputValue,
@@ -163,6 +164,10 @@ const AdminModels = () => {
         return entry.kind === connection?.providerKind
       }) ?? null
     )
+  }
+
+  const getConnectionProviderLabel = (providerKind: string) => {
+    return getProviderCatalogLabel(catalog(), providerKind)
   }
 
   const codexStatusQuery = useQuery(() => {
@@ -785,7 +790,7 @@ const AdminModels = () => {
                                 <div class="flex flex-wrap items-center gap-2">
                                   <h3 class="text-base font-semibold text-gray-900">{connection.label}</h3>
                                   <span class="rounded-full bg-white px-2 py-1 text-[11px] font-medium uppercase tracking-wide text-gray-500">
-                                    {connection.providerKind}
+                                    {getConnectionProviderLabel(connection.providerKind)}
                                   </span>
                                   <Show when={isSelectedConnection(connection.id)}>
                                     <span class="rounded-full bg-blue-600 px-2 py-1 text-[11px] font-medium uppercase tracking-wide text-white">
