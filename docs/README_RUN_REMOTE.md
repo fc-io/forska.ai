@@ -9,6 +9,25 @@ Prereqs:
   - Apptainer
   - Policy: SGLang must run via Apptainer using the official Docker Hub image (`lmsysorg/sglang`). Do not run Docker directly on the cluster.
 
+## Alvis Quick Start
+
+```bash
+# Build and push only the SGLang image needed for Alvis
+bun run build:docker:sglang
+
+# On Alvis, pull the printed sglang_latest.sif command, then launch one of:
+bun run alvis:launch:a100:fat
+bun run alvis:launch:a100:4
+
+# In a second terminal
+bun run alvis:dev:server
+
+# In a third terminal
+bun run dev:app
+```
+
+Use `bun run alvis:launch:a100:fat -- --force` or `bun run alvis:launch:a100:4 -- --force` if you want a fresh job instead of reusing an existing one.
+
 ## Setup
 
 ### Set shared path

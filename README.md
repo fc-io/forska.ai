@@ -7,7 +7,7 @@ Goal: standalone single-user app (your own computer). No admin role. No hosted m
 Current: Bun/Elysia API, SolidJS/Vite client, and a DuckDB-only runtime with no legacy analytics or Better Auth runtime.
 Roadmap: finish DuckDB-native cleanup, remove old Postgres/bootstrap assumptions after import, and simplify leftover legacy naming/docs.
 
-Plans: `DUCKDB2_PLAN.md`, `NATIVE_DUCK_PLAN.md`.
+Plans: `plans/old/DUCKDB2_PLAN.md`, `plans/old/NATIVE_DUCK_PLAN.md`.
 
 ## Abstract
 
@@ -45,6 +45,16 @@ The openalex dataset is about 1.6 TB uncompressed. To store and index naively in
 ## Run remotely on HPC:
 
 [RUN REMOTE](./docs/README_RUN_REMOTE.md)
+
+## Alvis Quick Start
+
+- Build or refresh the SGLang image for Alvis: `bun run build:docker:sglang`
+- Pull the printed `sglang_latest.sif` command on Alvis and make sure the other `.sif` files and secrets exist under `$STACK_ROOT`
+- Launch the default Alvis shape: `bun run alvis:launch:a100:fat`
+- Or launch the 4x non-fat A100 shape: `bun run alvis:launch:a100:4`
+- Start the local API against the Alvis tunnel: `bun run alvis:dev:server`
+- Start the local app: `bun run dev:app`
+- Full setup and sbatch details: `docs/README_RUN_REMOTE.md`
 
 ## For running with SLURM/SBATCH
 
