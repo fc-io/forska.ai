@@ -95,7 +95,7 @@ const loadEnv = (): typeof envShape.infer => {
   }
   ;(merged as Record<string, string>).DUCKDB_PATH = getDuckdbPath({duckdbPath: merged.DUCKDB_PATH})
   if (merged.DUCKDB_MEMORY_LIMIT == null || String(merged.DUCKDB_MEMORY_LIMIT).trim() === '') {
-    ;(merged as Record<string, string>).DUCKDB_MEMORY_LIMIT = '25GB'
+    ;(merged as Record<string, string>).DUCKDB_MEMORY_LIMIT = '20GB'
   }
   if (merged.DUCKDB_TEMP_DIRECTORY == null || String(merged.DUCKDB_TEMP_DIRECTORY).trim() === '') {
     const duckdbPath = String(merged.DUCKDB_PATH ?? '')

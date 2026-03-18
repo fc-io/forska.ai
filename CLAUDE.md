@@ -29,6 +29,7 @@ IMPORTANT: For local DuckDB work, never open the live DB file directly. Use `bun
 IMPORTANT: On the client/app – use import {useQuery} from '@tanstack/solid-query' over createQuery
 IMPORTANT: only have secrets and values we need to change from outside the app in the .env files.
 IMPORTANT: Keep filenames camelCase, even for TSX/JSX React components.
+IMPORTANT: Never run DuckDB without an explicit memory cap. Use `SET memory_limit = '20GB'` as the default for direct DuckDB CLI/manual work unless a smaller limit is needed.
 There is an .env.local file in the project; you just can't read it because of security concerns. Always assume the .env files are correct unless the env.ts file throws an error. Use process.env instead of Bun's env functionality to stay compatible with ordinary Node.
 
 ## File structure

@@ -7,6 +7,8 @@ import {env} from '../server/utils/env.ts'
 
 const migrationsFolder = resolve(import.meta.dir, 'duckdbMigrations')
 
+const nonTransactionalDuckdbMigrationFiles = new Set(['0013_rebuildArticleWithoutOpenalexId.sql'])
+
 const getDuckdbMigrationFiles = (folder: string) => {
   return readdirSync(folder)
     .filter((fileName) => {
@@ -19,6 +21,13 @@ const getDuckdbMigrationFiles = (folder: string) => {
 
 const escapeSqlString = (value: string) => {
   return value.replaceAll("'", "''")
+}
+
+const insertDuckdbMigrationName = async (fileName: string) => {
+  await getAppDatabaseService().run(`
+    INSERT INTO app_schema_migration (name)
+    VALUES ('${escapeSqlString(fileName)}')
+  `)
 }
 
 const ensureDuckdbMigrationsTable = async () => {
@@ -52,13 +61,15 @@ const applyDuckdbMigrationFile = async (fileName: string) => {
     return
   }
 
+  if (nonTransactionalDuckdbMigrationFiles.has(fileName)) {
+    await getAppDatabaseService().run(sqlText)
+    return insertDuckdbMigrationName(fileName)
+  }
+
   try {
     await getAppDatabaseService().run('BEGIN TRANSACTION')
     await getAppDatabaseService().run(sqlText)
-    await getAppDatabaseService().run(`
-      INSERT INTO app_schema_migration (name)
-      VALUES ('${escapeSqlString(fileName)}')
-    `)
+    await insertDuckdbMigrationName(fileName)
     await getAppDatabaseService().run('COMMIT')
   } catch (error) {
     await getAppDatabaseService().run('ROLLBACK')
