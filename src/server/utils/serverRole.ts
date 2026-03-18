@@ -9,3 +9,7 @@ export const canServerRoleOwnDuckdb = (serverRole: ServerRole) => {
 export const shouldServerRoleMountWriterCrons = (serverRole: ServerRole) => {
   return canServerRoleOwnDuckdb(serverRole)
 }
+
+export const shouldServerRoleProxyApiToWriter = (serverRole: ServerRole) => {
+  return serverRole === 'api'
+}

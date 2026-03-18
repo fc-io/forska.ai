@@ -25,6 +25,7 @@ const envShape = arktype({
   DUCKDB_MEMORY_LIMIT: 'string',
   DUCKDB_TEMP_DIRECTORY: 'string | null | undefined',
   SERVER_ROLE: arktype('"writer" | "api" | "worker" | "dev-single"'),
+  SERVER_WRITER_URL: 'string | null | undefined',
   VITE_PORT: 'number | string.integer.parse',
   API_SERVER_PORT: 'number | string.integer.parse',
   RUN_SERVER_FULL_TEXT_FETCHING: arktype('"true" | "false" | boolean').pipe((v) => {
@@ -88,6 +89,9 @@ const loadEnv = (): typeof envShape.infer => {
   }
   if (merged.SERVER_ROLE == null || String(merged.SERVER_ROLE).trim() === '') {
     ;(merged as Record<string, string>).SERVER_ROLE = 'dev-single'
+  }
+  if (merged.SERVER_WRITER_URL == null || String(merged.SERVER_WRITER_URL).trim() === '') {
+    ;(merged as Record<string, string>).SERVER_WRITER_URL = ''
   }
   ;(merged as Record<string, string>).DUCKDB_PATH = getDuckdbPath({duckdbPath: merged.DUCKDB_PATH})
   if (merged.DUCKDB_MEMORY_LIMIT == null || String(merged.DUCKDB_MEMORY_LIMIT).trim() === '') {

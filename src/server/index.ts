@@ -6,6 +6,7 @@ import {fullTextJobsCron} from './cron/fullTextJobs.ts'
 import {judgmentsJobsCron} from './cron/judgmentsJobs.ts'
 import {nvidiaSmiCron} from './cron/nvidiaSmi.ts'
 import {adminInvestigateRoutes} from './routes/AdminInvestigateRoutes.ts'
+import {apiProxyRoutes} from './routes/ApiProxyRoutes.ts'
 import {articleAdminRoutes} from './routes/ArticleAdminRoutes.ts'
 import {articlesRoutes} from './routes/ArticlesRoutes.ts'
 import {comparisonProjectsRoutes} from './routes/ComparisonProjectsRoutes.ts'
@@ -47,6 +48,7 @@ const _app = new Elysia()
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     }),
   )
+  .use(apiProxyRoutes)
   .use(writerCronRoutes)
   .use(adminInvestigateRoutes)
   .use(comparisonProjectsRoutes)
