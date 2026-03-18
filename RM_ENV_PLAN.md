@@ -28,11 +28,11 @@
 
 ## Remove OpenAlex Env And Import
 
-- [ ] Remove `OPENALEX_MAILTO` from `src/server/utils/env.ts` and all runtime callers.
-- [ ] Remove the OpenAlex article import flow entirely.
-- [ ] Remove OpenAlex import routes, helpers, and UI entry points that only exist for that flow.
-- [ ] Remove OpenAlex-specific wording from settings and other user-facing screens.
-- [ ] Decide whether `app.user_config.openalex_mailto` should be renamed or dropped after the OpenAlex import removal is complete.
+- [x] Remove `OPENALEX_MAILTO` from `src/server/utils/env.ts` and all runtime callers.
+- [x] Remove the OpenAlex article import flow entirely.
+- [x] Remove OpenAlex import routes, helpers, and UI entry points that only exist for that flow.
+- [x] Remove OpenAlex-specific wording from settings and other user-facing screens.
+- [x] Drop `app.user_config.openalex_mailto` after the OpenAlex import removal.
 
 ## Inference Config Move
 
@@ -70,5 +70,5 @@
 
 - [ ] A normal user can install and run Forska without editing env vars for core product features.
 - [ ] Unpaywall contact email, worker/model config, and other app behavior live in DuckDB and the UI/API.
-- [ ] `OPENALEX_MAILTO` and the OpenAlex article import flow are gone.
+- [x] `OPENALEX_MAILTO` and the OpenAlex article import flow are gone.
 - [ ] The remaining env surface is small, explicit, and operational rather than product-facing.

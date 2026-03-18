@@ -73,7 +73,6 @@ type ImportReport = {
     envKeysUsed: string[]
     id: string
     name: string
-    openalexMailto: string | null
     unpaywallEmail: string | null
     role: string | null
     sourceUserCount: number
@@ -1110,7 +1109,6 @@ const getBootstrapLocalUser = () => {
     ['LOCAL_USER_NAME', process.env['LOCAL_USER_NAME']],
     ['LOCAL_USER_EMAIL', process.env['LOCAL_USER_EMAIL']],
     ['LOCAL_USER_ROLE', process.env['LOCAL_USER_ROLE']],
-    ['OPENALEX_MAILTO', process.env['OPENALEX_MAILTO']],
   ].filter((entry): entry is [string, string] => {
     return typeof entry[1] === 'string' && entry[1].trim() !== ''
   })
@@ -1123,7 +1121,6 @@ const getBootstrapLocalUser = () => {
     }),
     id: localUserDefaults.id,
     name: envValues['LOCAL_USER_NAME']?.trim() || localUserDefaults.name,
-    openalexMailto: envValues['OPENALEX_MAILTO']?.trim() || localUserDefaults.openalexMailto,
     unpaywallEmail: localUserDefaults.unpaywallEmail,
     role: envValues['LOCAL_USER_ROLE']?.trim() || localUserDefaults.role,
   }
@@ -1155,7 +1152,6 @@ const bootstrapLocalUser = async (client: Client) => {
       name,
       email,
       role,
-      openalex_mailto,
       unpaywall_email,
       created_at,
       updated_at
@@ -1165,7 +1161,6 @@ const bootstrapLocalUser = async (client: Client) => {
       ${getSqlLiteral(localUser.name)},
       ${getSqlLiteral(localUser.email)},
       ${getSqlLiteral(localUser.role)},
-      ${getSqlLiteral(localUser.openalexMailto)},
       ${getSqlLiteral(localUser.unpaywallEmail)},
       current_timestamp,
       current_timestamp

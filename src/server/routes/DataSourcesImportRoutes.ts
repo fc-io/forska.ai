@@ -6,7 +6,6 @@ import {dataSourcesImportRoutesPostBiorxiv} from './DataSourcesImportRoutes/data
 import {dataSourcesImportRoutesPostEuropePmcPpr} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostEuropePmcPpr.ts'
 import {dataSourcesImportRoutesPostFhirEhrPatients} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostFhirEhrPatients.ts'
 import {dataSourcesImportRoutesPostMedrxiv} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostMedrxiv.ts'
-import {dataSourcesImportRoutesPostOpenalex} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostOpenalex.ts'
 import {dataSourcesImportRoutesPostPubmed} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostPubmed.ts'
 
 export const dataSourcesImportRoutes = new Elysia()
@@ -43,13 +42,6 @@ export const dataSourcesImportRoutes = new Elysia()
     '/api/datasources/import/europe-pmc-ppr',
     async ({body}) => {
       return await dataSourcesImportRoutesPostEuropePmcPpr(body)
-    },
-    {body: t.Object({id: t.String()})},
-  )
-  .post(
-    '/api/datasources/import/openalex',
-    async ({body}) => {
-      return await dataSourcesImportRoutesPostOpenalex(body)
     },
     {body: t.Object({id: t.String()})},
   )

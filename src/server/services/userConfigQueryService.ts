@@ -8,7 +8,6 @@ type UserConfigRow = {
   name: string
   email: string
   role: string | null
-  openalexMailto: string | null
   unpaywallEmail: string | null
   createdAt: unknown
   updatedAt: unknown
@@ -19,7 +18,6 @@ const userConfigSelectClause = `
   name,
   email,
   role,
-  openalex_mailto AS openalexMailto,
   unpaywall_email AS unpaywallEmail,
   created_at AS createdAt,
   updated_at AS updatedAt
@@ -43,7 +41,6 @@ const getDefaultUserRecord = (): UserRecord => {
     name: localUserDefaults.name,
     email: localUserDefaults.email,
     role: localUserDefaults.role,
-    openalexMailto: localUserDefaults.openalexMailto,
     unpaywallEmail: localUserDefaults.unpaywallEmail,
     createdAt: now,
     updatedAt: now,
@@ -56,7 +53,6 @@ const getUserConfigValue = (row: UserConfigRow): UserRecord => {
     name: row.name,
     email: row.email,
     role: row.role,
-    openalexMailto: row.openalexMailto,
     unpaywallEmail: row.unpaywallEmail,
     createdAt: getDateValue(row.createdAt) ?? new Date(0),
     updatedAt: getDateValue(row.updatedAt) ?? new Date(0),
@@ -80,7 +76,6 @@ const insertDefaultUserConfig = async (): Promise<UserRecord | null> => {
       name,
       email,
       role,
-      openalex_mailto,
       unpaywall_email
     )
     SELECT
@@ -88,7 +83,6 @@ const insertDefaultUserConfig = async (): Promise<UserRecord | null> => {
       ${getSqlLiteral(localUserDefaults.name)},
       ${getSqlLiteral(localUserDefaults.email)},
       ${getSqlLiteral(localUserDefaults.role)},
-      ${getSqlLiteral(localUserDefaults.openalexMailto)},
       ${getSqlLiteral(localUserDefaults.unpaywallEmail)}
     WHERE NOT EXISTS (
       SELECT 1

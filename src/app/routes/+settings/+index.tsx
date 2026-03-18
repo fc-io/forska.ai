@@ -5,14 +5,7 @@ import {createEffect, createSignal, onCleanup, Show} from 'solid-js'
 import {apiClient} from '../../../services/apiClient'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse'
 
-type LocalUser = {
-  id: string
-  name: string
-  email: string
-  role?: string | null
-  openalexMailto?: string | null
-  unpaywallEmail?: string | null
-}
+type LocalUser = {id: string; name: string; email: string; role?: string | null; unpaywallEmail?: string | null}
 type UsersResponse = {data: LocalUser[]}
 type UpdateLocalUserInput = {email: string; name: string; unpaywallEmail: string}
 type UpdateUserResponse = {data: LocalUser}

@@ -25,7 +25,6 @@ export type UserRecord = {
   name: string
   email: string
   role: string | null
-  openalexMailto: string | null
   unpaywallEmail: string | null
   createdAt: Date
   updatedAt: Date
@@ -43,7 +42,6 @@ export type ArticleRecord = {
   articleSummary: string | null
   articleVersion: number | null
   arxivId: string | null
-  openalexId: string | null
   biorxivId: string | null
   medrxivId: string | null
   doi: string | null

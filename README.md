@@ -29,14 +29,14 @@ We also plan to release all the code for the system as open source.
 
 ## Resource Usage
 
-The system will store article "meta data" from openalex and a large amount of open access pdfs. These articles will then be connected to a client facing api and a app server on the same server. These will in turn be connected to our hpc resources where we do inference.
+The system will store article metadata from supported import sources and a large amount of open access pdfs. These articles will then be connected to a client facing api and a app server on the same server. These will in turn be connected to our hpc resources where we do inference.
 
 The system used docker with postgres, aws cli and bun.
 
 Out plan is that the system will be efficiently run on a:
 ssc.large.highmem, 4 vCPU, 16 GB RAM with 4-8 TB of additional storage
 
-The openalex dataset is about 1.6 TB uncompressed. To store and index naively in postgres would be about 3 TB more. Though for our use case we will dynamically store only what is needed which would be less. We don't have an exact number, but rough guess based on our current test set would indicate about ~30-60GB. Then above this we would like to cache a large number of pdfs (~1m), which could add a few additional terabytes.
+The imported article datasets can be very large. For our use case we will dynamically store only what is needed. We don't have an exact number, but rough guess based on our current test set would indicate about ~30-60GB. Then above this we would like to cache a large number of pdfs (~1m), which could add a few additional terabytes.
 
 ## Run locally
 

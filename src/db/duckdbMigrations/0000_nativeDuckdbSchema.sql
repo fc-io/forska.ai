@@ -6,7 +6,6 @@ CREATE TABLE IF NOT EXISTS app.user_config (
   name VARCHAR NOT NULL,
   email VARCHAR NOT NULL,
   role VARCHAR,
-  openalex_mailto VARCHAR,
   unpaywall_email VARCHAR,
   created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
@@ -122,7 +121,6 @@ CREATE TABLE IF NOT EXISTS app.article (
   article_created_at TIMESTAMPTZ,
   article_updated_at TIMESTAMPTZ,
   arxiv_id VARCHAR,
-  openalex_id VARCHAR,
   biorxiv_id VARCHAR,
   medrxiv_id VARCHAR,
   doi VARCHAR,

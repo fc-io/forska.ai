@@ -14,7 +14,6 @@ type ArticleImportStoreRow = {
   articleCreatedAt?: Date | null
   articleVersion?: number | null
   arxivId?: string | null
-  openalexId?: string | null
   biorxivId?: string | null
   medrxivId?: string | null
   doi?: string | null
@@ -43,7 +42,6 @@ const articleColumnMap = {
   articleCreatedAt: 'article_created_at',
   articleVersion: 'article_version',
   arxivId: 'arxiv_id',
-  openalexId: 'openalex_id',
   biorxivId: 'biorxiv_id',
   medrxivId: 'medrxiv_id',
   doi: 'doi',
@@ -69,7 +67,6 @@ const optionalArticleKeys = [
   'articleCreatedAt',
   'articleVersion',
   'arxivId',
-  'openalexId',
   'biorxivId',
   'medrxivId',
   'doi',

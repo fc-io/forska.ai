@@ -24,7 +24,7 @@ const envShape = arktype({
   DUCKDB_PATH: 'string',
   DUCKDB_MEMORY_LIMIT: 'string',
   DUCKDB_TEMP_DIRECTORY: 'string | null | undefined',
-  OPENALEX_MAILTO: 'string | null | undefined',
+  SERVER_ROLE: arktype('"writer" | "api" | "worker" | "dev-single"'),
   VITE_PORT: 'number | string.integer.parse',
   API_SERVER_PORT: 'number | string.integer.parse',
   RUN_SERVER_FULL_TEXT_FETCHING: arktype('"true" | "false" | boolean').pipe((v) => {
@@ -85,6 +85,9 @@ const loadEnv = (): typeof envShape.infer => {
   if (merged.RUN_SERVER_JUDGING == null || merged.RUN_SERVER_JUDGING === '') {
     // string form to satisfy shape before parsing to boolean via pipe
     ;(merged as Record<string, string>).RUN_SERVER_JUDGING = 'true'
+  }
+  if (merged.SERVER_ROLE == null || String(merged.SERVER_ROLE).trim() === '') {
+    ;(merged as Record<string, string>).SERVER_ROLE = 'dev-single'
   }
   ;(merged as Record<string, string>).DUCKDB_PATH = getDuckdbPath({duckdbPath: merged.DUCKDB_PATH})
   if (merged.DUCKDB_MEMORY_LIMIT == null || String(merged.DUCKDB_MEMORY_LIMIT).trim() === '') {
@@ -147,9 +150,6 @@ const loadEnv = (): typeof envShape.infer => {
   }
   if (!('WORKER_URLS' in merged)) {
     ;(merged as Record<string, undefined>).WORKER_URLS = undefined
-  }
-  if (!('OPENALEX_MAILTO' in merged)) {
-    ;(merged as Record<string, undefined>).OPENALEX_MAILTO = undefined
   }
   // Provide a stable default when GPU_SHAPE is not provided
   if (merged.GPU_SHAPE == null || String(merged.GPU_SHAPE).trim() === '') {

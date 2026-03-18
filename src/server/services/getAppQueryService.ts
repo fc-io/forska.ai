@@ -25,7 +25,6 @@ type FullArticleRow = {
   articleSummary: string | null
   articleVersion: number | null
   arxivId: string | null
-  openalexId: string | null
   biorxivId: string | null
   medrxivId: string | null
   doi: string | null
@@ -158,7 +157,6 @@ const getFullArticlesByIds = async (articleIds: string[]): Promise<FullArticleRo
     articleSummary: string | null
     articleVersion: number | null
     arxivId: string | null
-    openalexId: string | null
     biorxivId: string | null
     medrxivId: string | null
     doi: string | null
@@ -192,7 +190,6 @@ const getFullArticlesByIds = async (articleIds: string[]): Promise<FullArticleRo
       article_summary AS articleSummary,
       article_version AS articleVersion,
       arxiv_id AS arxivId,
-      openalex_id AS openalexId,
       biorxiv_id AS biorxivId,
       medrxiv_id AS medrxivId,
       doi,
@@ -235,7 +232,6 @@ const getFullArticlesByIds = async (articleIds: string[]): Promise<FullArticleRo
       articleSummary: row.articleSummary,
       articleVersion: row.articleVersion,
       arxivId: row.arxivId,
-      openalexId: row.openalexId,
       biorxivId: row.biorxivId,
       medrxivId: row.medrxivId,
       doi: row.doi,

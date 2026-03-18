@@ -31,7 +31,6 @@ test('getAppQueryService reads native DuckDB app tables', async () => {
         article_summary VARCHAR,
         article_version INTEGER,
         arxiv_id VARCHAR,
-        openalex_id VARCHAR,
         biorxiv_id VARCHAR,
         medrxiv_id VARCHAR,
         doi VARCHAR,
