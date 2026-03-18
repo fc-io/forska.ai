@@ -28,16 +28,26 @@ import {promptsRoutes} from './routes/PromptsRoutes.ts'
 import {subprojectsRoutes} from './routes/SubprojectsRoutes.ts'
 import {tokensRoutes} from './routes/TokensRoutes'
 import {usersRoutes} from './routes/UsersRoutes'
+import {writerConnectionsRoutes} from './routes/WriterConnectionsRoutes.ts'
 import {getCodexCliLoginStatus} from './utils/codexCliAuth.ts'
 import {env} from './utils/env'
 import {warmCodexAppServer} from './utils/getCodexAppServerClient.ts'
 import {shouldServerRoleMountWriterCrons} from './utils/serverRole.ts'
+import {
+  getCurrentServerRole,
+  initializeServerRuntimeRole,
+  shouldCurrentServerRunWriterWork,
+  startServerRuntimeRoleMonitor,
+} from './utils/serverRuntimeRole.ts'
+import {startWriterConnectionHeartbeat} from './utils/writerConnectionHeartbeat.ts'
 
 const allowedOrigins = [`http://localhost:${env.VITE_PORT}`, `http://localhost:${process.env.PROD_SERVER ?? 8080}`]
 const shouldMountWriterCrons = shouldServerRoleMountWriterCrons(env.SERVER_ROLE)
 const writerCronRoutes = shouldMountWriterCrons
   ? new Elysia().use(fullTextJobsCron).use(fullTextConversionJobsCron).use(judgmentsJobsCron).use(nvidiaSmiCron)
   : new Elysia()
+
+await initializeServerRuntimeRole()
 
 const _app = new Elysia()
   .use(
@@ -49,6 +59,7 @@ const _app = new Elysia()
     }),
   )
   .use(apiProxyRoutes)
+  .use(writerConnectionsRoutes)
   .use(writerCronRoutes)
   .use(adminInvestigateRoutes)
   .use(comparisonProjectsRoutes)
@@ -77,7 +88,11 @@ const _app = new Elysia()
 console.log(
   `🦊 Elysia is running on :${env.API_SERVER_PORT} (nodes=${env.GPU_NNODES}, gpus/node=${env.GPU_GPUS_PER_NODE}, total_gpus=${env.GPU_TOTAL_GPUS}, shape=${env.GPU_SHAPE}, tp=${env.TP_SIZE}, pp=${env.PP_SIZE}, dp=${env.DP_SIZE}, SGLANG_MAX_RUNNING_REQUESTS=${env.SGLANG_MAX_RUNNING_REQUESTS}, SGLANG_API_MAX_INFLIGHT_REQUESTS=${env.SGLANG_API_MAX_INFLIGHT_REQUESTS}, SGLANG_CONTEXT_LENGTH=${env.SGLANG_CONTEXT_LENGTH}, BUN_CONFIG_MAX_HTTP_REQUESTS=${process.env.BUN_CONFIG_MAX_HTTP_REQUESTS})`,
 )
-console.log(`[server] role=${env.SERVER_ROLE} duckdb_writer=${shouldMountWriterCrons}`)
+console.log(
+  `[server] configured_role=${env.SERVER_ROLE} role=${getCurrentServerRole()} duckdb_writer=${shouldCurrentServerRunWriterWork()}`,
+)
+startServerRuntimeRoleMonitor()
+startWriterConnectionHeartbeat()
 
 void warmCodexAppServer()
 

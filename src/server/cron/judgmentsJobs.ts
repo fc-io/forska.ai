@@ -3,6 +3,7 @@ import {Elysia} from 'elysia'
 
 import {env} from '../utils/env.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
+import {shouldCurrentServerRunWriterWork} from '../utils/serverRuntimeRole.ts'
 import {judgmentsJobsAddToQueue} from './judgmentsJobs/judgmentsJobsAddToQueue.ts'
 import {judgmentsJobsCheckLLMStatus} from './judgmentsJobs/judgmentsJobsCheckLLMStatus.ts'
 import {judgmentsJobsCleanupStale} from './judgmentsJobs/judgmentsJobsCleanupStale.ts'
@@ -20,7 +21,7 @@ const serverJobId = String(process.env.SERVER_JOB_ID ?? '').trim() || buildDefau
 const cronLogger = createRateLimitedLogger({windowMs: 30_000})
 
 const shouldRunJudgingCron = (): boolean => {
-  return env.RUN_SERVER_JUDGING
+  return env.RUN_SERVER_JUDGING && shouldCurrentServerRunWriterWork()
 }
 
 const NEW_ARTICLES_INTERVAL = '*/1 * * * * *'
@@ -76,6 +77,7 @@ const checkLLMStatusCron = async (): Promise<void> => {
 }
 
 const cleanupStaleQueueCron = async (): Promise<void> => {
+  if (!shouldCurrentServerRunWriterWork()) return
   try {
     await judgmentsJobsCleanupStale()
   } catch (err) {

@@ -11,6 +11,7 @@ import {
 } from '../services/appQueryHelpers.ts'
 import {ConversionError, convertPdfToText} from '../utils/convertPdfToText.ts'
 import {env} from '../utils/env.ts'
+import {shouldCurrentServerRunWriterWork} from '../utils/serverRuntimeRole.ts'
 
 const CONVERSION_INTERVAL = '0 */2 * * * *' // Every 2 minutes
 const DOCLING_CONVERSION_TIMEOUT_MS = 600_000 // 10 minutes
@@ -259,7 +260,7 @@ const convertArticle = async (article: ArticleForConversion): Promise<void> => {
 let runningBatches = 0
 
 const runConversionBatch = async () => {
-  if (!env.RUN_SERVER_FULL_TEXT_CONVERSION_CRON) return
+  if (!env.RUN_SERVER_FULL_TEXT_CONVERSION_CRON || !shouldCurrentServerRunWriterWork()) return
 
   if (runningBatches >= MAX_CONCURRENT_BATCHES) {
     console.log(

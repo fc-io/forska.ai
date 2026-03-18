@@ -5,6 +5,7 @@ import {Elysia} from 'elysia'
 
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {shouldCurrentServerRunWriterWork} from '../utils/serverRuntimeRole.ts'
 
 type NvidiaSmiSample = {
   ts: Date
@@ -240,6 +241,10 @@ const buildRemoteToLocalMapping = (): Map<string, string> => {
 }
 
 const pollNvidiaSmi = async (): Promise<void> => {
+  if (!shouldCurrentServerRunWriterWork()) {
+    return
+  }
+
   const workerUrls = getNvidiaSmiWorkerUrls()
 
   // If no worker URLs configured, skip polling

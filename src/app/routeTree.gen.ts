@@ -33,6 +33,7 @@ import { Route as ProjectsIdIndexRouteImport } from './routes/+projects/+$id/+in
 import { Route as CompareJudgmentsArchivedIndexRouteImport } from './routes/+compare-judgments/+archived/+index'
 import { Route as CompareJudgmentsIdIndexRouteImport } from './routes/+compare-judgments/+$id/+index'
 import { Route as ArticlesIdIndexRouteImport } from './routes/+articles/+$id/+index'
+import { Route as AdminWriterConnectionsIndexRouteImport } from './routes/+admin/+writer-connections/+index'
 import { Route as AdminUnexpectedAnswersIndexRouteImport } from './routes/+admin/+unexpected-answers/+index'
 import { Route as AdminSetup_statsIndexRouteImport } from './routes/+admin/+setup_stats/+index'
 import { Route as AdminPdfResetIndexRouteImport } from './routes/+admin/+pdf-reset/+index'
@@ -186,6 +187,12 @@ const ArticlesIdIndexRoute = ArticlesIdIndexRouteImport.update({
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminUnexpectedAnswersIndexRoute =
+const AdminWriterConnectionsIndexRoute =
+  AdminWriterConnectionsIndexRouteImport.update({
+    id: '/admin/writer-connections/',
+    path: '/admin/writer-connections/',
+    getParentRoute: () => rootRouteImport,
+  } as any)
   AdminUnexpectedAnswersIndexRouteImport.update({
     id: '/admin/unexpected-answers/',
     path: '/admin/unexpected-answers/',
@@ -367,6 +374,7 @@ export interface FileRoutesByFullPath {
   '/projects/archived/': typeof ProjectsArchivedIndexRoute
   '/prompts/archived/': typeof PromptsArchivedIndexRoute
   '/admin/datasources/create': typeof AdminDatasourcesCreateRoute
+  '/admin/writer-connections/': typeof AdminWriterConnectionsIndexRoute
   '/admin/prompts/deduplicate': typeof AdminPromptsDeduplicateRoute
   '/articles/$id/fulltext': typeof ArticlesIdFulltextRoute
   '/compare-judgments/$id/edit': typeof CompareJudgmentsIdEditRoute
@@ -421,6 +429,7 @@ export interface FileRoutesByTo {
   '/prompts/archived': typeof PromptsArchivedIndexRoute
   '/admin/datasources/create': typeof AdminDatasourcesCreateRoute
   '/admin/prompts/deduplicate': typeof AdminPromptsDeduplicateRoute
+  '/admin/writer-connections': typeof AdminWriterConnectionsIndexRoute
   '/articles/$id/fulltext': typeof ArticlesIdFulltextRoute
   '/compare-judgments/$id/edit': typeof CompareJudgmentsIdEditRoute
   '/projects/$id/edit': typeof ProjectsIdEditRoute
@@ -476,6 +485,7 @@ export interface FileRoutesById {
   '/admin/datasources/create': typeof AdminDatasourcesCreateRoute
   '/admin/prompts/deduplicate': typeof AdminPromptsDeduplicateRoute
   '/articles/$id/fulltext': typeof ArticlesIdFulltextRoute
+  '/admin/writer-connections/': typeof AdminWriterConnectionsIndexRoute
   '/compare-judgments/$id/edit': typeof CompareJudgmentsIdEditRoute
   '/projects/$id/edit': typeof ProjectsIdEditRoute
   '/projects/$id/export': typeof ProjectsIdExportRoute
@@ -532,6 +542,7 @@ export interface FileRouteTypes {
     | '/admin/prompts/deduplicate'
     | '/articles/$id/fulltext'
     | '/compare-judgments/$id/edit'
+    | '/admin/writer-connections/'
     | '/projects/$id/edit'
     | '/projects/$id/export'
     | '/projects/$id/humanAssessment'
@@ -586,6 +597,7 @@ export interface FileRouteTypes {
     | '/articles/$id/fulltext'
     | '/compare-judgments/$id/edit'
     | '/projects/$id/edit'
+    | '/admin/writer-connections'
     | '/projects/$id/export'
     | '/projects/$id/humanAssessment'
     | '/admin/datasources/archived'
@@ -640,6 +652,7 @@ export interface FileRouteTypes {
     | '/compare-judgments/$id/edit'
     | '/projects/$id/edit'
     | '/projects/$id/export'
+    | '/admin/writer-connections/'
     | '/projects/$id/humanAssessment'
     | '/admin/datasources/archived/'
     | '/admin/failed_requests/$id/'
@@ -695,6 +708,7 @@ export interface RootRouteChildren {
   ProjectsIdEditRoute: typeof ProjectsIdEditRoute
   ProjectsIdExportRoute: typeof ProjectsIdExportRoute
   ProjectsIdHumanAssessmentRoute: typeof ProjectsIdHumanAssessmentRoute
+  AdminWriterConnectionsIndexRoute: typeof AdminWriterConnectionsIndexRoute
   AdminDatasourcesArchivedIndexRoute: typeof AdminDatasourcesArchivedIndexRoute
   AdminFailed_requestsIdIndexRoute: typeof AdminFailed_requestsIdIndexRoute
   AdminJobsIdIndexRoute: typeof AdminJobsIdIndexRoute
@@ -897,6 +911,13 @@ declare module '@tanstack/solid-router' {
       fullPath: '/admin/setup_stats/'
       preLoaderRoute: typeof AdminSetup_statsIndexRouteImport
       parentRoute: typeof rootRouteImport
+    '/admin/writer-connections/': {
+      id: '/admin/writer-connections/'
+      path: '/admin/writer-connections'
+      fullPath: '/admin/writer-connections/'
+      preLoaderRoute: typeof AdminWriterConnectionsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     }
     '/admin/pdf-reset/': {
       id: '/admin/pdf-reset/'
@@ -1120,6 +1141,7 @@ const rootRouteChildren: RootRouteChildren = {
   AdminUnexpectedAnswersAllPromptsIndexRoute:
     AdminUnexpectedAnswersAllPromptsIndexRoute,
   ProjectsIdReviewsBothIndexRoute: ProjectsIdReviewsBothIndexRoute,
+  AdminWriterConnectionsIndexRoute: AdminWriterConnectionsIndexRoute,
   ProjectsIdReviewsHumanIndexRoute: ProjectsIdReviewsHumanIndexRoute,
   ProjectsIdReviewsLlmIndexRoute: ProjectsIdReviewsLlmIndexRoute,
   ProjectsIdReviewsUnassessedIndexRoute: ProjectsIdReviewsUnassessedIndexRoute,

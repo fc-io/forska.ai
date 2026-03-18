@@ -314,6 +314,13 @@ export const Navigation = () => {
                     >
                       Conflicting prompts and judgments
                     </Link>
+                    <Link
+                      to="/admin/writer-connections"
+                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
+                      onClick={closeAdminMenu}
+                    >
+                      Writer Connections
+                    </Link>
                   </div>
                 </div>
               </div>

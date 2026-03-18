@@ -7,9 +7,9 @@ import {basename, join} from 'node:path'
 
 import {Effect} from 'effect'
 
-import {acquireDuckdbOwnerLease, type DuckdbOwnerLease, releaseDuckdbOwnerLease} from './duckdbOwnerLease.ts'
 import {env} from './env.ts'
 import {ensureDuckdbPathDirectory} from './getDuckdbPath.ts'
+import {ensureCurrentDuckdbOwnerLease, releaseCurrentDuckdbOwnerLease} from './serverRuntimeRole.ts'
 
 type DuckdbRuntimeConfig = {binary: string; databasePath: string; memoryLimit: string; tempDirectory: string | null}
 export type DuckdbSnapshot = {createdAt: string; snapshotPath: string}
@@ -29,7 +29,6 @@ type PendingDuckdbQuery = {
 type DuckdbMarkerRow = {__duckdb_done__?: string}
 type DuckdbServiceState = {
   currentPendingDuckdbQuery: PendingDuckdbQuery | null
-  duckdbOwnerLease: DuckdbOwnerLease | null
   duckdbProcess: ChildProcessWithoutNullStreams | null
   duckdbQueue: Promise<void>
   duckdbRuntimeConfig: DuckdbRuntimeConfig | null
@@ -45,7 +44,6 @@ declare global {
 const getDuckdbServiceState = () => {
   globalThis.__forskaDuckdbServiceState ??= {
     currentPendingDuckdbQuery: null,
-    duckdbOwnerLease: null,
     duckdbProcess: null,
     duckdbQueue: Promise.resolve(),
     duckdbRuntimeConfig: null,
@@ -216,23 +214,12 @@ const resetDuckdbRuntimeState = () => {
   duckdbServiceState.stderrBuffer = ''
 }
 
-const releaseCurrentDuckdbOwnerLease = async () => {
-  const currentLease = duckdbServiceState.duckdbOwnerLease
-  duckdbServiceState.duckdbOwnerLease = null
-
-  if (currentLease === null) {
-    return
+const safeReleaseCurrentDuckdbOwnerLease = async () => {
+  try {
+    await releaseCurrentDuckdbOwnerLease()
+  } catch (error) {
+    console.error('[duckdb] failed to release writer lease', error)
   }
-
-  await Effect.runPromise(
-    releaseDuckdbOwnerLease(currentLease).pipe(
-      Effect.catchAll((error) => {
-        return Effect.sync(() => {
-          console.error('[duckdb] failed to release writer lease', error)
-        })
-      }),
-    ),
-  )
 }
 
 const waitForDuckdbProcessExit = (activeProcess: ChildProcessWithoutNullStreams) => {
@@ -283,13 +270,13 @@ const getDuckdbExitError = (code: number | null, signal: string | null) => {
 const handleDuckdbProcessExit = (code: number | null, signal: string | null) => {
   rejectPendingDuckdbQuery(getDuckdbExitError(code, signal))
   resetDuckdbRuntimeState()
-  void releaseCurrentDuckdbOwnerLease()
+  void safeReleaseCurrentDuckdbOwnerLease()
 }
 
 const handleDuckdbProcessError = (error: Error) => {
   rejectPendingDuckdbQuery(error)
   resetDuckdbRuntimeState()
-  void releaseCurrentDuckdbOwnerLease()
+  void safeReleaseCurrentDuckdbOwnerLease()
 }
 
 const createDuckdbProcess = (runtimeConfig: DuckdbRuntimeConfig) => {
@@ -352,10 +339,7 @@ const runDuckdbStartupStatements = async (statements: string[]): Promise<void> =
   return runDuckdbStartupStatements(statements.slice(1))
 }
 
-const cleanupFailedDuckdbStart = (
-  activeProcess: ChildProcessWithoutNullStreams,
-  ownerLease: DuckdbOwnerLease | null,
-) => {
+const cleanupFailedDuckdbStart = (activeProcess: ChildProcessWithoutNullStreams) => {
   return Effect.gen(function* () {
     yield* Effect.tryPromise(() => {
       return closeDuckdbProcessDirect(activeProcess)
@@ -365,7 +349,9 @@ const cleanupFailedDuckdbStart = (
       }),
     )
 
-    yield* releaseDuckdbOwnerLease(ownerLease).pipe(
+    yield* Effect.tryPromise(() => {
+      return safeReleaseCurrentDuckdbOwnerLease()
+    }).pipe(
       Effect.catchAll(() => {
         return Effect.void
       }),
@@ -375,8 +361,6 @@ const cleanupFailedDuckdbStart = (
       if (duckdbServiceState.duckdbProcess === activeProcess) {
         resetDuckdbRuntimeState()
       }
-
-      duckdbServiceState.duckdbOwnerLease = null
     })
   })
 }
@@ -390,17 +374,14 @@ const ensureStartedDuckdbProcessEffect = () => {
     const runtimeConfig = yield* Effect.sync(() => {
       return ensureDuckdbRuntimeDirectories(getDuckdbRuntimeConfigValue())
     })
-    const ownerLease = yield* acquireDuckdbOwnerLease({
-      apiServerPort: env.API_SERVER_PORT,
-      databasePath: runtimeConfig.databasePath,
-      serverRole: env.SERVER_ROLE,
+    yield* Effect.tryPromise(() => {
+      return ensureCurrentDuckdbOwnerLease()
     })
     const nextProcess = yield* Effect.sync(() => {
       return createDuckdbProcess(runtimeConfig)
     })
 
     yield* Effect.sync(() => {
-      duckdbServiceState.duckdbOwnerLease = ownerLease
       duckdbServiceState.duckdbProcess = nextProcess
     })
 
@@ -408,7 +389,7 @@ const ensureStartedDuckdbProcessEffect = () => {
       return runDuckdbStartupStatements(getDuckdbStartupStatements(runtimeConfig))
     }).pipe(
       Effect.catchAll((error) => {
-        return Effect.zipRight(cleanupFailedDuckdbStart(nextProcess, ownerLease), Effect.fail(error))
+        return Effect.zipRight(cleanupFailedDuckdbStart(nextProcess), Effect.fail(error))
       }),
     )
 

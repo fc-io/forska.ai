@@ -1,15 +1,14 @@
 import {Elysia} from 'elysia'
 
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
-import {env} from '../utils/env.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
-import {canServerRoleOwnDuckdb} from '../utils/serverRole.ts'
+import {canCurrentServerOwnDuckdb, getCurrentServerRole} from '../utils/serverRuntimeRole.ts'
 
 export const duckdbStudioSnapshotPath = '/api/duckdbStudioSnapshots'
 
 const ensureDuckdbStudioWriterRole = () => {
-  if (!canServerRoleOwnDuckdb(env.SERVER_ROLE)) {
-    throw new Error(`DuckDB studio snapshots require SERVER_ROLE=writer or dev-single; got ${env.SERVER_ROLE}`)
+  if (!canCurrentServerOwnDuckdb()) {
+    throw new Error(`DuckDB studio snapshots require writer role; got ${getCurrentServerRole()}`)
   }
 }
 

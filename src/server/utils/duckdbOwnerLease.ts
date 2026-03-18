@@ -1,3 +1,4 @@
+import {randomUUID} from 'node:crypto'
 import {mkdir, readFile, unlink, writeFile} from 'node:fs/promises'
 import {hostname} from 'node:os'
 import {dirname} from 'node:path'
@@ -7,23 +8,48 @@ import {Effect} from 'effect'
 import type {ServerRole} from './serverRole.ts'
 import {canServerRoleOwnDuckdb} from './serverRole.ts'
 
+export const duckdbOwnerLeaseHeartbeatStaleMs = 30_000
+
 export type DuckdbOwnerLeaseMetadata = {
   acquiredAt: string
   apiServerPort: number
   databasePath: string
+  heartbeatAt: string
   hostname: string
+  leaseId: string
   pid: number
   serverRole: ServerRole
 }
 
 export type DuckdbOwnerLease = {leasePath: string; metadata: DuckdbOwnerLeaseMetadata}
 
-const getLeaseOwnerText = (metadata: DuckdbOwnerLeaseMetadata) => {
-  return `${metadata.serverRole}@${metadata.hostname}:${metadata.apiServerPort} pid=${metadata.pid}`
+export type DuckdbOwnerLeaseHistoryEntry = {
+  apiServerPort: number
+  at: string
+  event: 'acquired' | 'released'
+  hostname: string
+  leaseId: string
+  pid: number
+  serverRole: ServerRole
+  writerUrl: string
 }
+
+const duckdbOwnerLeaseHistoryLimit = 50
 
 const getDuckdbOwnerLeasePath = (databasePath: string) => {
   return databasePath === ':memory:' ? null : `${databasePath}.writer.lock`
+}
+
+const getDuckdbOwnerLeaseHistoryPath = (databasePath: string) => {
+  return databasePath === ':memory:' ? null : `${databasePath}.writer.history.json`
+}
+
+const getDuckdbOwnerLeaseWriterUrl = (metadata: DuckdbOwnerLeaseMetadata) => {
+  return `http://127.0.0.1:${metadata.apiServerPort}`
+}
+
+const getLeaseOwnerText = (metadata: DuckdbOwnerLeaseMetadata) => {
+  return `${metadata.serverRole}@${metadata.hostname}:${metadata.apiServerPort} pid=${metadata.pid}`
 }
 
 const isMissingFileError = (error: unknown) => {
@@ -43,35 +69,126 @@ const isProcessAlive = (pid: number) => {
   }
 }
 
+const normalizeDuckdbOwnerLeaseMetadata = (
+  databasePath: string,
+  value: Partial<DuckdbOwnerLeaseMetadata>,
+): DuckdbOwnerLeaseMetadata => {
+  const acquiredAt = typeof value.acquiredAt === 'string' ? value.acquiredAt : new Date().toISOString()
+  const hostnameValue = typeof value.hostname === 'string' ? value.hostname : hostname()
+  const pidValue = typeof value.pid === 'number' ? value.pid : 0
+
+  return {
+    acquiredAt,
+    apiServerPort: typeof value.apiServerPort === 'number' ? value.apiServerPort : 0,
+    databasePath,
+    heartbeatAt: typeof value.heartbeatAt === 'string' ? value.heartbeatAt : acquiredAt,
+    hostname: hostnameValue,
+    leaseId:
+      typeof value.leaseId === 'string' && value.leaseId.length > 0
+        ? value.leaseId
+        : `${hostnameValue}:${pidValue}:${acquiredAt}`,
+    pid: pidValue,
+    serverRole: value.serverRole ?? 'writer',
+  }
+}
+
+const normalizeDuckdbOwnerLeaseHistoryEntry = (value: Partial<DuckdbOwnerLeaseHistoryEntry>) => {
+  const at = typeof value.at === 'string' ? value.at : new Date().toISOString()
+  const hostnameValue = typeof value.hostname === 'string' ? value.hostname : hostname()
+  const portValue = typeof value.apiServerPort === 'number' ? value.apiServerPort : 0
+
+  return {
+    apiServerPort: portValue,
+    at,
+    event: value.event === 'released' ? 'released' : 'acquired',
+    hostname: hostnameValue,
+    leaseId:
+      typeof value.leaseId === 'string' && value.leaseId.length > 0
+        ? value.leaseId
+        : `${hostnameValue}:${portValue}:${at}`,
+    pid: typeof value.pid === 'number' ? value.pid : 0,
+    serverRole: value.serverRole ?? 'writer',
+    writerUrl: typeof value.writerUrl === 'string' ? value.writerUrl : `http://127.0.0.1:${portValue}`,
+  } satisfies DuckdbOwnerLeaseHistoryEntry
+}
+
+const writeDuckdbOwnerLeaseMetadata = (leasePath: string, metadata: DuckdbOwnerLeaseMetadata) => {
+  return Effect.tryPromise(() => {
+    return writeFile(leasePath, JSON.stringify(metadata, null, 2))
+  })
+}
+
 const getCurrentLeaseMetadata = (databasePath: string): Effect.Effect<DuckdbOwnerLeaseMetadata | null, unknown> => {
   const leasePath = getDuckdbOwnerLeasePath(databasePath)
 
   return leasePath === null
     ? Effect.succeed(null)
-    : Effect.tryPromise({
-        try: async () => {
+    : Effect.tryPromise(async () => {
+        try {
           const raw = await readFile(leasePath, 'utf8')
-          return JSON.parse(raw) as DuckdbOwnerLeaseMetadata
-        },
-        catch: (error) => {
-          return isMissingFileError(error) ? null : error
-        },
-      }).pipe(
-        Effect.flatMap((value) => {
-          return value === null ? Effect.succeed(null) : Effect.succeed(value)
-        }),
-      )
+          const parsed = JSON.parse(raw) as Partial<DuckdbOwnerLeaseMetadata>
+          return normalizeDuckdbOwnerLeaseMetadata(databasePath, parsed)
+        } catch (error) {
+          if (isMissingFileError(error)) {
+            return null
+          }
+
+          throw error
+        }
+      })
+}
+
+const getCurrentLeaseHistory = (databasePath: string): Effect.Effect<DuckdbOwnerLeaseHistoryEntry[], unknown> => {
+  const historyPath = getDuckdbOwnerLeaseHistoryPath(databasePath)
+
+  return historyPath === null
+    ? Effect.succeed([])
+    : Effect.tryPromise(async () => {
+        try {
+          const raw = await readFile(historyPath, 'utf8')
+          const parsed = JSON.parse(raw) as Partial<DuckdbOwnerLeaseHistoryEntry>[]
+          return Array.isArray(parsed) ? parsed.map(normalizeDuckdbOwnerLeaseHistoryEntry) : []
+        } catch (error) {
+          if (isMissingFileError(error)) {
+            return []
+          }
+
+          throw error
+        }
+      })
+}
+
+const writeDuckdbOwnerLeaseHistory = (databasePath: string, entries: DuckdbOwnerLeaseHistoryEntry[]) => {
+  const historyPath = getDuckdbOwnerLeaseHistoryPath(databasePath)
+
+  return historyPath === null
+    ? Effect.void
+    : Effect.tryPromise(async () => {
+        await mkdir(dirname(historyPath), {recursive: true})
+        await writeFile(historyPath, JSON.stringify(entries.slice(0, duckdbOwnerLeaseHistoryLimit), null, 2))
+      }).pipe(Effect.asVoid)
+}
+
+const appendDuckdbOwnerLeaseHistory = (databasePath: string, entry: DuckdbOwnerLeaseHistoryEntry) => {
+  return getCurrentLeaseHistory(databasePath).pipe(
+    Effect.flatMap((entries) => {
+      return writeDuckdbOwnerLeaseHistory(databasePath, [entry, ...entries])
+    }),
+  )
 }
 
 const removeLeasePath = (leasePath: string) => {
-  return Effect.tryPromise({
-    try: () => {
-      return unlink(leasePath)
-    },
-    catch: (error) => {
-      return isMissingFileError(error) ? null : error
-    },
+  return Effect.tryPromise(() => {
+    return unlink(leasePath).catch((error) => {
+      if (!isMissingFileError(error)) {
+        throw error
+      }
+    })
   }).pipe(Effect.asVoid)
+}
+
+const isDuckdbOwnerLeaseOwnedByCurrentProcess = (metadata: DuckdbOwnerLeaseMetadata) => {
+  return metadata.hostname === hostname() && metadata.pid === process.pid
 }
 
 const canRemoveStaleLease = (metadata: DuckdbOwnerLeaseMetadata) => {
@@ -103,6 +220,14 @@ const failForActiveLease = (metadata: DuckdbOwnerLeaseMetadata) => {
   )
 }
 
+export const isDuckdbOwnerLeaseProcessAlive = (metadata: DuckdbOwnerLeaseMetadata) => {
+  return metadata.hostname === hostname() ? isProcessAlive(metadata.pid) : true
+}
+
+export const isDuckdbOwnerLeaseStale = (metadata: DuckdbOwnerLeaseMetadata, nowMs = Date.now()) => {
+  return nowMs - new Date(metadata.heartbeatAt).getTime() > duckdbOwnerLeaseHeartbeatStaleMs
+}
+
 export const acquireDuckdbOwnerLease = (params: {
   apiServerPort: number
   databasePath: string
@@ -118,32 +243,74 @@ export const acquireDuckdbOwnerLease = (params: {
     return failForNonOwnerRole(params.serverRole)
   }
 
+  const acquiredAt = new Date().toISOString()
   const metadata: DuckdbOwnerLeaseMetadata = {
-    acquiredAt: new Date().toISOString(),
+    acquiredAt,
     apiServerPort: params.apiServerPort,
     databasePath: params.databasePath,
+    heartbeatAt: acquiredAt,
     hostname: hostname(),
+    leaseId: randomUUID(),
     pid: process.pid,
     serverRole: params.serverRole,
   }
 
   return acquireLeaseFile(leasePath, metadata).pipe(
+    Effect.flatMap((lease) => {
+      return appendDuckdbOwnerLeaseHistory(params.databasePath, {
+        apiServerPort: metadata.apiServerPort,
+        at: metadata.acquiredAt,
+        event: 'acquired',
+        hostname: metadata.hostname,
+        leaseId: metadata.leaseId,
+        pid: metadata.pid,
+        serverRole: metadata.serverRole,
+        writerUrl: getDuckdbOwnerLeaseWriterUrl(metadata),
+      }).pipe(Effect.as(lease))
+    }),
     Effect.catchAll((error) => {
       return isExistingFileError(error)
         ? getCurrentLeaseMetadata(params.databasePath).pipe(
             Effect.flatMap((currentLease) => {
               return currentLease === null
                 ? acquireDuckdbOwnerLease(params)
-                : canRemoveStaleLease(currentLease)
-                  ? removeLeasePath(leasePath).pipe(
-                      Effect.flatMap(() => {
-                        return acquireDuckdbOwnerLease(params)
-                      }),
-                    )
-                  : failForActiveLease(currentLease)
+                : isDuckdbOwnerLeaseOwnedByCurrentProcess(currentLease)
+                  ? Effect.succeed({leasePath, metadata: currentLease})
+                  : canRemoveStaleLease(currentLease)
+                    ? removeLeasePath(leasePath).pipe(
+                        Effect.flatMap(() => {
+                          return acquireDuckdbOwnerLease(params)
+                        }),
+                      )
+                    : failForActiveLease(currentLease)
             }),
           )
         : Effect.fail(error)
+    }),
+  )
+}
+
+export const updateDuckdbOwnerLeaseHeartbeat = (
+  lease: DuckdbOwnerLease | null,
+): Effect.Effect<DuckdbOwnerLease | null, unknown> => {
+  if (lease === null) {
+    return Effect.succeed(null)
+  }
+
+  return getCurrentLeaseMetadata(lease.metadata.databasePath).pipe(
+    Effect.flatMap((currentLease) => {
+      return currentLease === null || currentLease.leaseId !== lease.metadata.leaseId
+        ? Effect.fail(new Error('DuckDB writer lease is no longer owned by this process'))
+        : Effect.sync(() => {
+            return {
+              ...lease,
+              metadata: {...lease.metadata, heartbeatAt: new Date().toISOString()},
+            } satisfies DuckdbOwnerLease
+          }).pipe(
+            Effect.flatMap((nextLease) => {
+              return writeDuckdbOwnerLeaseMetadata(lease.leasePath, nextLease.metadata).pipe(Effect.as(nextLease))
+            }),
+          )
     }),
   )
 }
@@ -155,11 +322,21 @@ export const releaseDuckdbOwnerLease = (lease: DuckdbOwnerLease | null): Effect.
 
   return getCurrentLeaseMetadata(lease.metadata.databasePath).pipe(
     Effect.flatMap((currentLease) => {
-      return currentLease
-        && currentLease.pid === lease.metadata.pid
-        && currentLease.hostname === lease.metadata.hostname
-        && currentLease.acquiredAt === lease.metadata.acquiredAt
-        ? removeLeasePath(lease.leasePath)
+      return currentLease !== null && currentLease.leaseId === lease.metadata.leaseId
+        ? appendDuckdbOwnerLeaseHistory(lease.metadata.databasePath, {
+            apiServerPort: lease.metadata.apiServerPort,
+            at: new Date().toISOString(),
+            event: 'released',
+            hostname: lease.metadata.hostname,
+            leaseId: lease.metadata.leaseId,
+            pid: lease.metadata.pid,
+            serverRole: lease.metadata.serverRole,
+            writerUrl: getDuckdbOwnerLeaseWriterUrl(lease.metadata),
+          }).pipe(
+            Effect.flatMap(() => {
+              return removeLeasePath(lease.leasePath)
+            }),
+          )
         : Effect.void
     }),
   )
@@ -168,3 +345,11 @@ export const releaseDuckdbOwnerLease = (lease: DuckdbOwnerLease | null): Effect.
 export const readDuckdbOwnerLease = (databasePath: string): Effect.Effect<DuckdbOwnerLeaseMetadata | null, unknown> => {
   return getCurrentLeaseMetadata(databasePath)
 }
+
+export const readDuckdbOwnerLeaseHistory = (
+  databasePath: string,
+): Effect.Effect<DuckdbOwnerLeaseHistoryEntry[], unknown> => {
+  return getCurrentLeaseHistory(databasePath)
+}
+
+export {getDuckdbOwnerLeaseWriterUrl}
