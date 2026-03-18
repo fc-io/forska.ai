@@ -1,7 +1,31 @@
 import {Elysia, t} from 'elysia'
 
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
-import {getJsonValue, getQuotedStringList, getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {
+  getProviderCatalog,
+  getProviderCatalogEntry,
+  isCodexProvider,
+  normalizeProviderKind,
+} from '../services/providerCatalog.ts'
+import {listProviderModels, testProviderConnection} from '../services/providerClientService.ts'
+import {
+  createProviderConnectionRecord,
+  createProviderModelRecord,
+  deleteProviderConnectionRecord,
+  getFirstEnabledProviderConnectionByKind,
+  getProviderConnectionAuthMode,
+  getProviderConnectionById,
+  getResolvedProviderBaseURL,
+  hasEnabledProviderConnection,
+  listProviderConnectionsForAdmin,
+  listSelectableModels,
+  setProviderConnectionCheckResult,
+  updateProviderConnectionRecord,
+  updateProviderModelRecord,
+  upsertDiscoveredProviderModels,
+} from '../services/providerConnectionQueryService.ts'
+import {deleteProviderSecretValue, storeProviderSecretValue} from '../services/providerSecretStore.ts'
 import {getCodexCliLoginStatus, getCodexDeviceAuthLoginJob, startCodexDeviceAuthLogin} from '../utils/codexCliAuth.ts'
 import {env} from '../utils/env.ts'
 import {getCodexAppServerClient, getCodexBinPath} from '../utils/getCodexAppServerClient.ts'
@@ -12,28 +36,151 @@ const normalizeDisplayName = (value: string): string => {
   return trimmed.length > 0 ? trimmed : 'Codex model'
 }
 
+const getTrimmedValue = (value: string | null | undefined): string | null => {
+  const normalized = String(value ?? '').trim()
+
+  return normalized === '' ? null : normalized
+}
+
 const toCodexVirtualId = (modelName: string, effort?: string | null): string => {
   const trimmedEffort = String(effort ?? '').trim()
   return trimmedEffort.length > 0 ? `codex:${modelName}:${trimmedEffort}` : `codex:${modelName}`
 }
 
-const effortSortKey = (effort: string): number => {
-  switch (effort) {
-    case 'none':
-      return 0
-    case 'minimal':
-      return 1
-    case 'low':
-      return 2
-    case 'medium':
-      return 3
-    case 'high':
-      return 4
-    case 'xhigh':
-      return 5
-    default:
-      return 99
+const getProviderConnectionLabel = ({
+  label,
+  providerKind,
+}: {
+  label: string | null | undefined
+  providerKind: string
+}) => {
+  return getTrimmedValue(label) ?? getProviderCatalogEntry(providerKind)?.label ?? 'Provider connection'
+}
+
+const getProviderConnectionConfig = (workerUrls: string[] | null | undefined) => {
+  return {
+    workerUrls: (workerUrls ?? [])
+      .map((url) => {
+        return String(url).trim()
+      })
+      .filter((url) => {
+        return url.length > 0
+      }),
   }
+}
+
+const getPublicProviderConnection = <T extends {secretRef: string | null}>(connection: T) => {
+  const {secretRef: _secretRef, ...rest} = connection
+  return rest
+}
+
+const getProviderConnectionsPayload = async () => {
+  const connections = await listProviderConnectionsForAdmin()
+
+  return {
+    catalog: getProviderCatalog(),
+    connections: connections.map((connection) => {
+      return getPublicProviderConnection(connection)
+    }),
+  }
+}
+
+const getCodexVirtualModelsFromStoredModels = async () => {
+  const storedModels = await listSelectableModels()
+
+  return storedModels
+    .filter((model) => {
+      return model.provider === 'codex' && typeof model.modelName === 'string' && model.modelName.trim().length > 0
+    })
+    .map((model) => {
+      const modelName = String(model.modelName).trim()
+      const effort = getTrimmedValue(model.variant ?? model.version)
+
+      return {
+        apiKeyVariable: null,
+        baseURL: null,
+        createdAt: model.createdAt,
+        id: toCodexVirtualId(modelName, effort),
+        modelName,
+        name: model.displayName ?? model.name,
+        provider: 'codex',
+        updatedAt: model.updatedAt,
+        version: effort,
+        workerUrls: null,
+      }
+    })
+}
+
+const getCodexVirtualModelsFromServer = async () => {
+  const hasCodexConnection = await hasEnabledProviderConnection('codex')
+
+  if (!hasCodexConnection) {
+    return []
+  }
+
+  try {
+    const discoveredModels = await listProviderModels({baseURL: null, providerKind: 'codex', secretRef: null})
+
+    return discoveredModels.map((model) => {
+      return {
+        apiKeyVariable: null,
+        baseURL: null,
+        createdAt: null,
+        id: toCodexVirtualId(model.modelName, model.variant ?? model.version),
+        modelName: model.modelName,
+        name: model.displayName,
+        provider: 'codex',
+        updatedAt: null,
+        version: model.variant ?? model.version,
+        workerUrls: null,
+      }
+    })
+  } catch (error) {
+    console.warn('[models] Failed to load Codex models:', error instanceof Error ? error.message : error)
+    return []
+  }
+}
+
+const getSelectableModelsPayload = async () => {
+  const storedModels = await listSelectableModels()
+  const nonCodexModels = storedModels
+    .filter((model) => {
+      return model.provider !== 'codex'
+    })
+    .map((model) => {
+      return {
+        apiKeyVariable: null,
+        baseURL: model.baseURL,
+        createdAt: model.createdAt,
+        id: model.id,
+        modelName: model.modelName,
+        name: model.displayName ?? model.name,
+        provider: model.provider,
+        updatedAt: model.updatedAt,
+        version: model.variant ?? model.version,
+        workerUrls: null,
+      }
+    })
+  const codexVirtualFromServer = await getCodexVirtualModelsFromServer()
+  const codexVirtualFromDb = await getCodexVirtualModelsFromStoredModels()
+  const codexModels = codexVirtualFromServer.length > 0 ? codexVirtualFromServer : codexVirtualFromDb
+
+  return [...nonCodexModels, ...codexModels]
+}
+
+const getCodexConnectionForEnsure = async () => {
+  const existing = await getFirstEnabledProviderConnectionByKind('codex')
+
+  return existing
+    ? existing
+    : createProviderConnectionRecord({
+        authMode: 'codex-cli',
+        baseURL: null,
+        config: {workerUrls: []},
+        label: 'Codex',
+        providerKind: 'codex',
+        secretRef: null,
+      })
 }
 
 export const modelsRoutes = new Elysia()
@@ -41,157 +188,290 @@ export const modelsRoutes = new Elysia()
   .use(
     new Elysia()
       .get('/api/models', async () => {
-        const [hpcModelsRows, codexModelsFromDbRows] = await Promise.all([
-          getAppDatabaseService().queryJson<{
-            id: string
-            createdAt: unknown
-            updatedAt: unknown
-            name: string
-            provider: string | null
-            baseURL: string | null
-            modelName: string | null
-            version: string | null
-            apiKeyVariable: string | null
-            workerUrls: unknown
-          }>(`
-            SELECT
-              id,
-              created_at AS createdAt,
-              updated_at AS updatedAt,
-              name,
-              provider,
-              base_url AS baseURL,
-              model_name AS modelName,
-              version,
-              api_key_variable AS apiKeyVariable,
-              TO_JSON(worker_urls) AS workerUrls
-            FROM app.model
-            WHERE provider IS NULL OR provider != 'codex'
-            ORDER BY created_at ASC
-          `),
-          getAppDatabaseService().queryJson<{
-            id: string
-            createdAt: unknown
-            updatedAt: unknown
-            name: string
-            provider: string | null
-            baseURL: string | null
-            modelName: string | null
-            version: string | null
-            apiKeyVariable: string | null
-            workerUrls: unknown
-          }>(`
-            SELECT
-              id,
-              created_at AS createdAt,
-              updated_at AS updatedAt,
-              name,
-              provider,
-              base_url AS baseURL,
-              model_name AS modelName,
-              version,
-              api_key_variable AS apiKeyVariable,
-              TO_JSON(worker_urls) AS workerUrls
-            FROM app.model
-            WHERE provider = 'codex'
-            ORDER BY created_at ASC
-          `),
-        ])
-        const normalizeRows = (rows: typeof hpcModelsRows) => {
-          return rows.map((row) => {
-            return {...row, workerUrls: getJsonValue(row.workerUrls) as string[] | null}
-          })
-        }
-        const hpcModels = normalizeRows(hpcModelsRows)
-        const codexModelsFromDb = normalizeRows(codexModelsFromDbRows)
-
-        const codexVirtualFromDb = codexModelsFromDb
-          .filter((m) => {
-            return typeof m.modelName === 'string' && m.modelName.trim().length > 0
-          })
-          .map((m) => {
-            const modelName = String(m.modelName).trim()
-            const effort = typeof m.version === 'string' ? m.version.trim() : null
-            return {
-              ...m,
-              id: toCodexVirtualId(modelName, effort),
-              provider: 'codex',
-              modelName,
-              baseURL: null,
-              workerUrls: null,
-              apiKeyVariable: null,
-            }
-          })
-
-        const codexVirtualFromServer = await (async () => {
-          try {
-            const client = getCodexAppServerClient()
-            const {data} = await client.modelList({limit: 200, includeHidden: false, cursor: null})
-            return data
-              .filter((m) => {
-                return !m.hidden
-              })
-              .flatMap((m) => {
-                const modelName = String(m.id).trim()
-                const baseName = normalizeDisplayName(m.displayName ?? m.id)
-                const supported = Array.isArray(m.supportedReasoningEfforts) ? m.supportedReasoningEfforts : []
-                const defaultEffort = typeof m.defaultReasoningEffort === 'string' ? m.defaultReasoningEffort : null
-                const sortedEfforts = [...supported].sort((a, b) => {
-                  const aEffort = String(a.reasoningEffort)
-                  const bEffort = String(b.reasoningEffort)
-                  const aIsDefault = Boolean(defaultEffort && aEffort === defaultEffort)
-                  const bIsDefault = Boolean(defaultEffort && bEffort === defaultEffort)
-                  if (aIsDefault && !bIsDefault) return -1
-                  if (!aIsDefault && bIsDefault) return 1
-                  return effortSortKey(aEffort) - effortSortKey(bEffort)
-                })
-
-                const auto = {
-                  id: toCodexVirtualId(modelName),
-                  createdAt: null,
-                  updatedAt: null,
-                  name: `${baseName} (thinking: auto)`,
-                  provider: 'codex',
-                  baseURL: null,
-                  modelName,
-                  version: null,
-                  apiKeyVariable: null,
-                  workerUrls: null,
-                }
-
-                const variants = sortedEfforts
-                  .map((eff) => {
-                    const effort = String(eff.reasoningEffort).trim()
-                    if (!effort) return null
-                    return {
-                      id: toCodexVirtualId(modelName, effort),
-                      createdAt: null,
-                      updatedAt: null,
-                      name: `${baseName} (thinking: ${effort})`,
-                      provider: 'codex',
-                      baseURL: null,
-                      modelName,
-                      version: effort,
-                      apiKeyVariable: null,
-                      workerUrls: null,
-                    }
-                  })
-                  .filter((v): v is NonNullable<typeof v> => {
-                    return Boolean(v)
-                  })
-
-                return [auto, ...variants]
-              })
-          } catch (error) {
-            console.warn('[models] Failed to load Codex models:', error instanceof Error ? error.message : error)
-            return []
-          }
-        })()
-
-        const codexModels = codexVirtualFromServer.length > 0 ? codexVirtualFromServer : codexVirtualFromDb
-        const combined = [...hpcModels, ...codexModels]
-        return {data: combined}
+        return {data: await getSelectableModelsPayload()}
       })
+      .get('/api/models/stored', async () => {
+        const payload = await getProviderConnectionsPayload()
+        return {
+          data: payload.connections.flatMap((connection) => {
+            return connection.models
+          }),
+        }
+      })
+      .get('/api/provider-connections', async () => {
+        return {data: await getProviderConnectionsPayload(), error: null}
+      })
+      .post(
+        '/api/provider-connections',
+        async ({body, set}) => {
+          const providerKind = normalizeProviderKind(body.providerKind)
+          const catalogEntry = getProviderCatalogEntry(providerKind)
+          const apiKey = getTrimmedValue(body.apiKey)
+
+          if (providerKind === 'unknown' || !catalogEntry) {
+            set.status = 400
+            return {data: null, error: 'Unsupported provider'}
+          }
+
+          if (catalogEntry.requiresApiKey && !apiKey) {
+            set.status = 400
+            return {data: null, error: `${catalogEntry.label} API key is required`}
+          }
+
+          const baseURL = isCodexProvider(providerKind)
+            ? null
+            : getResolvedProviderBaseURL({baseURL: getTrimmedValue(body.baseURL), providerKind})
+          const label = getProviderConnectionLabel({label: body.label, providerKind})
+          const connection = await createProviderConnectionRecord({
+            authMode: getProviderConnectionAuthMode({baseURL, providerKind, secretRef: null}),
+            baseURL,
+            config: getProviderConnectionConfig(body.workerUrls),
+            label,
+            providerKind,
+            secretRef: null,
+          })
+          const secretRef = apiKey
+            ? await storeProviderSecretValue({connectionId: connection.id, secret: apiKey})
+            : null
+          const savedConnection = secretRef
+            ? await updateProviderConnectionRecord({
+                authMode: getProviderConnectionAuthMode({baseURL, providerKind, secretRef}),
+                baseURL,
+                config: getProviderConnectionConfig(body.workerUrls),
+                enabled: connection.enabled,
+                id: connection.id,
+                label,
+                secretRef,
+              })
+            : connection
+
+          return {data: {connection: getPublicProviderConnection({...savedConnection, models: []})}, error: null}
+        },
+        {
+          body: t.Object({
+            apiKey: t.Optional(t.String()),
+            baseURL: t.Optional(t.Union([t.String(), t.Null()])),
+            label: t.Optional(t.String()),
+            providerKind: t.String(),
+            workerUrls: t.Optional(t.Array(t.String())),
+          }),
+        },
+      )
+      .patch(
+        '/api/provider-connections/:id',
+        async ({body, params, set}) => {
+          const existing = await getProviderConnectionById(params.id)
+
+          if (!existing) {
+            set.status = 404
+            return {data: null, error: 'Provider connection not found'}
+          }
+
+          const nextBaseURL = isCodexProvider(existing.providerKind)
+            ? null
+            : getResolvedProviderBaseURL({
+                baseURL: body.baseURL !== undefined ? getTrimmedValue(body.baseURL) : existing.baseURL,
+                providerKind: existing.providerKind,
+              })
+          const nextLabel = getProviderConnectionLabel({
+            label: body.label !== undefined ? body.label : existing.label,
+            providerKind: existing.providerKind,
+          })
+          const nextConfig = getProviderConnectionConfig(body.workerUrls ?? existing.config.workerUrls)
+          const clearedSecretRef = body.clearSecret ? null : existing.secretRef
+
+          if (body.clearSecret && existing.secretRef) {
+            await deleteProviderSecretValue(existing.secretRef)
+          }
+
+          const secretRef = getTrimmedValue(body.apiKey)
+            ? await storeProviderSecretValue({connectionId: existing.id, secret: body.apiKey as string})
+            : clearedSecretRef
+          const updated = await updateProviderConnectionRecord({
+            authMode: getProviderConnectionAuthMode({
+              baseURL: nextBaseURL,
+              providerKind: existing.providerKind,
+              secretRef,
+            }),
+            baseURL: nextBaseURL,
+            config: nextConfig,
+            enabled: body.enabled ?? existing.enabled,
+            id: existing.id,
+            label: nextLabel,
+            secretRef,
+          })
+
+          return {data: {connection: getPublicProviderConnection(updated)}, error: null}
+        },
+        {
+          body: t.Object({
+            apiKey: t.Optional(t.String()),
+            baseURL: t.Optional(t.Union([t.String(), t.Null()])),
+            clearSecret: t.Optional(t.Boolean()),
+            enabled: t.Optional(t.Boolean()),
+            label: t.Optional(t.String()),
+            workerUrls: t.Optional(t.Array(t.String())),
+          }),
+          params: t.Object({id: t.String()}),
+        },
+      )
+      .delete(
+        '/api/provider-connections/:id',
+        async ({params, set}) => {
+          const connection = await getProviderConnectionById(params.id)
+
+          if (!connection) {
+            set.status = 404
+            return {data: null, error: 'Provider connection not found'}
+          }
+
+          const result = await deleteProviderConnectionRecord(connection.id)
+
+          if (connection.secretRef) {
+            await deleteProviderSecretValue(connection.secretRef).catch((error) => {
+              console.warn(
+                '[provider-connections] Failed to delete provider secret:',
+                error instanceof Error ? error.message : error,
+              )
+            })
+          }
+
+          return {data: {deleted: true, ...result}, error: null}
+        },
+        {params: t.Object({id: t.String()})},
+      )
+      .post(
+        '/api/provider-connections/:id/test',
+        async ({params, set}) => {
+          const connection = await getProviderConnectionById(params.id)
+
+          if (!connection) {
+            set.status = 404
+            return {data: null, error: 'Provider connection not found'}
+          }
+
+          try {
+            const result = await testProviderConnection({
+              baseURL: connection.baseURL,
+              providerKind: connection.providerKind,
+              secretRef: connection.secretRef,
+            })
+            await setProviderConnectionCheckResult({id: connection.id, lastError: null})
+            return {data: result, error: null}
+          } catch (error) {
+            const message = error instanceof Error ? error.message : 'Provider connection test failed'
+            await setProviderConnectionCheckResult({id: connection.id, lastError: message})
+            set.status = 400
+            return {data: null, error: message}
+          }
+        },
+        {params: t.Object({id: t.String()})},
+      )
+      .post(
+        '/api/provider-connections/:id/sync-models',
+        async ({params, set}) => {
+          const connection = await getProviderConnectionById(params.id)
+
+          if (!connection) {
+            set.status = 404
+            return {data: null, error: 'Provider connection not found'}
+          }
+
+          try {
+            const discoveredModels = await listProviderModels({
+              baseURL: connection.baseURL,
+              providerKind: connection.providerKind,
+              secretRef: connection.secretRef,
+            })
+            const savedModels = await upsertDiscoveredProviderModels({connection, discoveredModels})
+            await setProviderConnectionCheckResult({id: connection.id, lastError: null})
+            return {data: {count: savedModels.length, models: savedModels}, error: null}
+          } catch (error) {
+            const message = error instanceof Error ? error.message : 'Provider model sync failed'
+            await setProviderConnectionCheckResult({id: connection.id, lastError: message})
+            set.status = 400
+            return {data: null, error: message}
+          }
+        },
+        {params: t.Object({id: t.String()})},
+      )
+      .post(
+        '/api/provider-connections/:id/models',
+        async ({body, params, set}) => {
+          const connection = await getProviderConnectionById(params.id)
+
+          if (!connection) {
+            set.status = 404
+            return {data: null, error: 'Provider connection not found'}
+          }
+
+          const remoteModelId = getTrimmedValue(body.remoteModelId)
+
+          if (!remoteModelId) {
+            set.status = 400
+            return {data: null, error: 'remoteModelId is required'}
+          }
+
+          const variant = getTrimmedValue(body.variant)
+          const [existing] = await getAppDatabaseService().queryJson<{id: string}>(`
+            SELECT id
+            FROM app.model
+            WHERE provider_connection_id = ${getSqlLiteral(connection.id)}
+              AND remote_model_id = ${getSqlLiteral(remoteModelId)}
+              AND ${variant ? `variant = ${getSqlLiteral(variant)}` : 'variant IS NULL'}
+            LIMIT 1
+          `)
+
+          if (existing) {
+            return {data: {model: null, modelId: existing.id}, error: null}
+          }
+
+          const model = await createProviderModelRecord({
+            connection,
+            displayName: getTrimmedValue(body.displayName) ?? remoteModelId,
+            metadataJson: null,
+            modelName: remoteModelId,
+            remoteModelId,
+            source: 'manual',
+            variant,
+            version: variant,
+          })
+
+          return {data: {model, modelId: model.id}, error: null}
+        },
+        {
+          body: t.Object({
+            displayName: t.Optional(t.String()),
+            remoteModelId: t.String(),
+            variant: t.Optional(t.String()),
+          }),
+          params: t.Object({id: t.String()}),
+        },
+      )
+      .patch(
+        '/api/models/:id',
+        async ({body, params, set}) => {
+          const displayName = getTrimmedValue(body.displayName)
+
+          if (!displayName) {
+            set.status = 400
+            return {data: null, error: 'displayName is required'}
+          }
+
+          const model = await updateProviderModelRecord({
+            displayName,
+            enabled: body.enabled,
+            id: params.id,
+            variant: getTrimmedValue(body.variant),
+          })
+
+          return {data: {model}, error: null}
+        },
+        {
+          body: t.Object({displayName: t.String(), enabled: t.Boolean(), variant: t.Optional(t.String())}),
+          params: t.Object({id: t.String()}),
+        },
+      )
       .get('/api/models/codex/status', async () => {
         const codexBin = getCodexBinPath()
         const cli = await getCodexCliLoginStatus()
@@ -241,7 +521,7 @@ export const modelsRoutes = new Elysia()
       .post(
         '/api/models/ensure',
         async ({body, set}) => {
-          if (body.provider !== 'codex') {
+          if (normalizeProviderKind(body.provider) !== 'codex') {
             set.status = 400
             return {data: null, error: 'Unsupported provider'}
           }
@@ -252,16 +532,14 @@ export const modelsRoutes = new Elysia()
             return {data: null, error: 'modelName is required'}
           }
 
-          const rawVersion = typeof body.version === 'string' ? body.version.trim() : ''
-          const version = rawVersion.length > 0 ? rawVersion : null
-
-          const name = normalizeDisplayName(body.name)
+          const version = getTrimmedValue(body.version)
+          const connection = await getCodexConnectionForEnsure()
           const [existing] = await getAppDatabaseService().queryJson<{id: string}>(`
             SELECT id
             FROM app.model
-            WHERE provider = 'codex'
-              AND model_name = ${getSqlLiteral(modelName)}
-              AND ${version ? `version = ${getSqlLiteral(version)}` : 'version IS NULL'}
+            WHERE provider_connection_id = ${getSqlLiteral(connection.id)}
+              AND remote_model_id = ${getSqlLiteral(modelName)}
+              AND ${version ? `variant = ${getSqlLiteral(version)}` : 'variant IS NULL'}
             LIMIT 1
           `)
 
@@ -269,23 +547,24 @@ export const modelsRoutes = new Elysia()
             return {data: {modelId: existing.id}, error: null}
           }
 
-          const [inserted] = await getAppDatabaseService().queryJson<{id: string}>(`
-            INSERT INTO app.model (id, name, provider, model_name, version, base_url)
-            VALUES (${getQuotedStringList([crypto.randomUUID(), name, 'codex', modelName]).join(', ')}, ${getSqlLiteral(version)}, NULL)
-            RETURNING id
-          `)
+          const model = await createProviderModelRecord({
+            connection,
+            displayName: normalizeDisplayName(body.name),
+            metadataJson: null,
+            modelName,
+            remoteModelId: modelName,
+            source: 'manual',
+            variant: version,
+            version,
+          })
 
-          if (!inserted) {
-            throw new Error('Failed to create Codex model')
-          }
-
-          return {data: {modelId: inserted.id}, error: null}
+          return {data: {modelId: model.id}, error: null}
         },
         {
           body: t.Object({
-            provider: t.String(),
             modelName: t.String(),
             name: t.String(),
+            provider: t.String(),
             version: t.Optional(t.String()),
           }),
         },
@@ -295,15 +574,15 @@ export const modelsRoutes = new Elysia()
     new Elysia().get('/api/models/gpu-info', async () => {
       return {
         data: {
-          GPU_NNODES: env.GPU_NNODES,
+          DP_SIZE: env.DP_SIZE,
           GPU_GPUS_PER_NODE: env.GPU_GPUS_PER_NODE,
+          GPU_NNODES: env.GPU_NNODES,
           GPU_SHAPE: env.GPU_SHAPE,
           GPU_TOTAL_GPUS: env.GPU_TOTAL_GPUS,
-          TP_SIZE: env.TP_SIZE,
-          DP_SIZE: env.DP_SIZE,
           SGLANG_MAX_RUNNING_REQUESTS: env.SGLANG_MAX_RUNNING_REQUESTS,
-          WORKER_URLS: env.WORKER_URLS,
           SGLANG_MODEL: env.SGLANG_MODEL,
+          TP_SIZE: env.TP_SIZE,
+          WORKER_URLS: env.WORKER_URLS,
         },
       }
     }),

@@ -205,13 +205,14 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
                 j.snapshot_project_model_name AS judgmentSnapshotProjectModelName,
                 p.original_text AS promptOriginalText,
                 p.prompt_heading AS promptHeading,
-                m.model_name AS modelName,
-                m.provider AS modelProvider,
-                m.version AS modelVersion
+                COALESCE(m.display_name, m.name, m.remote_model_id, m.model_name) AS modelName,
+                COALESCE(pc.provider_kind, m.provider) AS modelProvider,
+                COALESCE(m.variant, m.version) AS modelVersion
               FROM app.judgment j
               INNER JOIN app.prompt p ON j.prompt_id = p.id
               INNER JOIN app.project_prompt pp ON pp.prompt_id = p.id
               LEFT JOIN app.model m ON j.model_id = m.id
+              LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
               WHERE j.article_id = '${escapeSqlString(articleId)}'
                 AND pp.project_id = '${escapeSqlString(projectId)}'
                 AND pp.enabled = TRUE
@@ -372,15 +373,16 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
           j.snapshot_project_model_name AS judgmentSnapshotProjectModelName,
           p.original_text AS promptOriginalText,
           p.prompt_heading AS promptHeading,
-          m.model_name AS modelName,
-          m.provider AS modelProvider,
-          m.version AS modelVersion
+          COALESCE(m.display_name, m.name, m.remote_model_id, m.model_name) AS modelName,
+          COALESCE(pc.provider_kind, m.provider) AS modelProvider,
+          COALESCE(m.variant, m.version) AS modelVersion
         FROM app.judgment j
         INNER JOIN app.prompt p ON j.prompt_id = p.id
         LEFT JOIN app.project_prompt pp
           ON pp.prompt_id = p.id
          AND pp.project_id = '${escapeSqlString(projectId)}'
         LEFT JOIN app.model m ON j.model_id = m.id
+        LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
         WHERE j.article_id = '${escapeSqlString(articleId)}'
           AND (
             pp.id IS NULL

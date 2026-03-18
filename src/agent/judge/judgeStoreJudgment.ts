@@ -26,7 +26,7 @@ export const judgeStoreJudgment = async (
   promptIds: string[] | undefined,
   projectId: string | undefined,
   shortIdMapping: ShortIdMapping,
-  chunkingStrategy: JudgmentChunkingStrategy = null,
+  chunkingStrategy: JudgmentChunkingStrategy | null = null,
 ): Promise<void> => {
   try {
     if (!modelId || !promptIds || promptIds.length === 0) {
@@ -49,9 +49,12 @@ export const judgeStoreJudgment = async (
           `)
         : [null]
     const [modelRow] = await getAppDatabaseService().queryJson<{modelName: string | null; provider: string | null}>(`
-      SELECT model_name AS modelName, provider
-      FROM app.model
-      WHERE id = '${escapeSqlString(modelId)}'
+      SELECT
+        COALESCE(m.display_name, m.name, m.remote_model_id, m.model_name) AS modelName,
+        COALESCE(pc.provider_kind, m.provider) AS provider
+      FROM app.model m
+      LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
+      WHERE m.id = '${escapeSqlString(modelId)}'
       LIMIT 1
     `)
     const snapshotValues = {

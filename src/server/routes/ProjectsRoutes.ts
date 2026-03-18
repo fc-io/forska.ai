@@ -9,6 +9,7 @@ import {
   getTimestampLiteral,
 } from '../services/appQueryHelpers.ts'
 import {getDuckdbMartRefreshService} from '../services/getDuckdbMartRefreshService.ts'
+import {assertSelectableModelId} from '../services/providerConnectionQueryService.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {projectsRoutesGetArticlesReviews} from './projectsRoutes/projectsRoutesGetArticlesReviews.ts'
@@ -234,7 +235,7 @@ export const projectsRoutes = new Elysia()
         p.archived AS archived,
         p.created_at AS createdAt,
         p.updated_at AS updatedAt,
-        m.model_name AS modelName
+        COALESCE(m.display_name, m.name, m.remote_model_id, m.model_name) AS modelName
       FROM app.project p
       LEFT JOIN app.model m ON p.model_id = m.id
       WHERE p.archived = FALSE
@@ -290,7 +291,7 @@ export const projectsRoutes = new Elysia()
         p.archived AS archived,
         p.created_at AS createdAt,
         p.updated_at AS updatedAt,
-        m.model_name AS modelName
+        COALESCE(m.display_name, m.name, m.remote_model_id, m.model_name) AS modelName
       FROM app.project p
       LEFT JOIN app.model m ON p.model_id = m.id
       WHERE p.archived = TRUE
@@ -447,14 +448,15 @@ export const projectsRoutes = new Elysia()
           version: string | null
         }>(`
         SELECT
-          id,
-          name,
-          provider,
-          model_name AS modelName,
-          base_url AS baseURL,
-          version
-        FROM app.model
-        WHERE id = '${escapeSqlString(project.modelId)}'
+          m.id AS id,
+          COALESCE(m.display_name, m.name, m.remote_model_id, m.model_name) AS name,
+          COALESCE(pc.provider_kind, m.provider) AS provider,
+          COALESCE(m.remote_model_id, m.model_name) AS modelName,
+          COALESCE(pc.base_url, m.base_url) AS baseURL,
+          COALESCE(m.variant, m.version) AS version
+        FROM app.model m
+        LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
+        WHERE m.id = '${escapeSqlString(project.modelId)}'
         LIMIT 1
       `),
         getAppDatabaseService().queryJson<{route: string; name: string | null}>(`
@@ -501,23 +503,17 @@ export const projectsRoutes = new Elysia()
         throw new Error('date_from must be on or before date_to')
       }
 
-      const [validModel] = await getAppDatabaseService().queryJson<{id: string}>(`
-        SELECT id
-        FROM app.model
-        WHERE id = '${escapeSqlString(body.modelId)}'
-        LIMIT 1
-      `)
-
-      if (!validModel) {
-        throw new Error('Selected model does not exist')
-      }
+      await assertSelectableModelId(getAppDatabaseService(), {
+        errorMessage: 'Selected model does not exist or is disabled',
+        modelId: body.modelId,
+      })
 
       // Validate mutual exclusivity of useFulltext and useFulltextNoImages
       if (body.useFulltext && body.useFulltextNoImages) {
         throw new Error('Cannot enable both "Use Full Text" and "Use Full Text (No Images)" at the same time')
       }
 
-      const newProject = await getAppDatabaseService().transaction(async (tx) => {
+      const newProject = (await getAppDatabaseService().transaction(async (tx) => {
         const newProjectId = crypto.randomUUID()
         const [createdProject] = await tx.queryJson<{
           id: string
@@ -673,7 +669,7 @@ export const projectsRoutes = new Elysia()
         }
 
         return getProjectValue(createdProject)
-      })
+      })) as ReturnType<typeof getProjectValue>
 
       await getDuckdbMartRefreshService().queueProjectRefresh(newProject.id, 'ProjectsRoutes.post')
 
@@ -729,9 +725,9 @@ export const projectsRoutes = new Elysia()
         return part !== null
       })
 
-      const updatedProject = await getAppDatabaseService().transaction(async (tx) => {
+      const updatedProject = (await getAppDatabaseService().transaction(async (tx) => {
         return updateProjectTx(tx, {projectId: params.id, updateParts})
-      })
+      })) as ProjectRow | null
 
       if (!updatedProject) {
         throw new Error('Project not found')
@@ -784,16 +780,10 @@ export const projectsRoutes = new Elysia()
         }
 
         if (body.modelId !== undefined) {
-          const [validModel] = await tx.queryJson<{id: string}>(`
-            SELECT id
-            FROM app.model
-            WHERE id = '${escapeSqlString(body.modelId)}'
-            LIMIT 1
-          `)
-
-          if (!validModel) {
-            throw new Error('Selected model does not exist')
-          }
+          await assertSelectableModelId(tx, {
+            errorMessage: 'Selected model does not exist or is disabled',
+            modelId: body.modelId,
+          })
         }
 
         const finalUseFulltext = body.useFulltext ?? currentProject.useFulltext
@@ -1161,7 +1151,12 @@ export const projectsRoutes = new Elysia()
       throw new Error('Project not found')
     }
 
-    const result = await getAppDatabaseService().transaction(async (tx) => {
+    await assertSelectableModelId(getAppDatabaseService(), {
+      errorMessage: 'Source project model does not exist or is disabled',
+      modelId: sourceProject.modelId,
+    })
+
+    const result = (await getAppDatabaseService().transaction(async (tx) => {
       const clonedProjectId = crypto.randomUUID()
       const [clonedProject] = await tx.queryJson<{
         id: string
@@ -1296,7 +1291,7 @@ export const projectsRoutes = new Elysia()
       }
 
       return getProjectValue(clonedProject)
-    })
+    })) as ReturnType<typeof getProjectValue>
 
     await getDuckdbMartRefreshService().queueProjectRefresh(result.id, 'ProjectsRoutes.clone')
 

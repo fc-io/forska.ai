@@ -1,5 +1,5 @@
 import {getAppDatabaseService} from '../../../services/appDatabaseService.ts'
-import {escapeSqlString, getQuotedStringList, getSqlLiteral} from '../../../services/appQueryHelpers.ts'
+import {escapeSqlString, getJsonValue, getQuotedStringList, getSqlLiteral} from '../../../services/appQueryHelpers.ts'
 
 export type PromptToProcess = {
   jobId: string
@@ -9,9 +9,11 @@ export type PromptToProcess = {
   projectId: string
   modelId: string
   modelProvider: string
+  modelSecretRef: string | null
   modelName: string
   modelVersion: string | null
   modelBaseUrl: string
+  modelWorkerUrls: string[]
   useTitle: boolean
   useAbstract: boolean
   useFulltext: boolean
@@ -31,6 +33,35 @@ const isCodexProvider = (provider: string): boolean => {
 
 const getCodexPlaceholderBaseUrl = (): string => {
   return 'codex://app-server'
+}
+
+const getModelWorkerUrls = ({
+  legacyWorkerUrls,
+  providerConfigJson,
+}: {
+  legacyWorkerUrls: unknown
+  providerConfigJson: unknown
+}): string[] => {
+  const providerConfig = getJsonValue(providerConfigJson)
+  const providerWorkerUrls =
+    typeof providerConfig === 'object' && providerConfig !== null && 'workerUrls' in providerConfig
+      ? (providerConfig as {workerUrls?: unknown}).workerUrls
+      : null
+  const candidateUrls = Array.isArray(providerWorkerUrls)
+    ? providerWorkerUrls
+    : (getJsonValue(legacyWorkerUrls) as string[] | null)
+
+  return Array.from(
+    new Set(
+      (candidateUrls ?? [])
+        .map((url) => {
+          return String(url).trim()
+        })
+        .filter((url) => {
+          return url.length > 0
+        }),
+    ),
+  )
 }
 
 const processReadyRows = async (
@@ -73,10 +104,13 @@ const processReadyRows = async (
           jobId: string
           projectId: string | null
           modelId: string | null
+          modelSecretRef: string | null
           modelProvider: string | null
           modelName: string | null
           modelVersion: string | null
           modelBaseUrl: string | null
+          legacyWorkerUrls: unknown
+          providerConfigJson: unknown
           useTitle: boolean | null
           useAbstract: boolean | null
           useFulltext: boolean | null
@@ -86,10 +120,13 @@ const processReadyRows = async (
             jj.id AS jobId,
             jj.project_id AS projectId,
             p.model_id AS modelId,
-            m.provider AS modelProvider,
-            m.model_name AS modelName,
-            m.version AS modelVersion,
-            m.base_url AS modelBaseUrl,
+            COALESCE(pc.secret_ref, CASE WHEN m.api_key_variable IS NOT NULL THEN 'env:' || m.api_key_variable ELSE NULL END) AS modelSecretRef,
+            COALESCE(pc.provider_kind, m.provider) AS modelProvider,
+            COALESCE(m.model_name, m.remote_model_id) AS modelName,
+            COALESCE(m.variant, m.version) AS modelVersion,
+            COALESCE(pc.base_url, m.base_url) AS modelBaseUrl,
+            TO_JSON(m.worker_urls) AS legacyWorkerUrls,
+            TO_JSON(pc.config_json) AS providerConfigJson,
             p.use_title AS useTitle,
             p.use_abstract AS useAbstract,
             p.use_fulltext AS useFulltext,
@@ -97,6 +134,7 @@ const processReadyRows = async (
           FROM app.judgment_job jj
           LEFT JOIN app.project p ON p.id = jj.project_id
           LEFT JOIN app.model m ON m.id = p.model_id
+          LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
           WHERE jj.id IN (${getQuotedStringList(uniqueJobIds).join(', ')})
         `)
 
@@ -124,7 +162,12 @@ const processReadyRows = async (
       }
 
       const provider = normalizeProvider(config.modelProvider)
-      if (!isCodexProvider(provider) && !config.modelBaseUrl) {
+      const workerUrls = getModelWorkerUrls({
+        legacyWorkerUrls: config.legacyWorkerUrls,
+        providerConfigJson: config.providerConfigJson,
+      })
+      const fallbackBaseUrl = workerUrls[0] ? `${String(workerUrls[0]).replace(/\/+$/, '')}/v1` : null
+      if (!isCodexProvider(provider) && !config.modelBaseUrl && !fallbackBaseUrl) {
         console.error('Prompt missing required model baseURL:', {
           articleId: prompt.articleId,
           promptId: prompt.promptId,
@@ -135,16 +178,20 @@ const processReadyRows = async (
         return null
       }
 
-      const baseUrl = isCodexProvider(provider) ? getCodexPlaceholderBaseUrl() : String(config.modelBaseUrl)
+      const baseUrl = isCodexProvider(provider)
+        ? getCodexPlaceholderBaseUrl()
+        : String(config.modelBaseUrl ?? fallbackBaseUrl)
 
       return {
         ...prompt,
         projectId: config.projectId,
         modelId: config.modelId,
         modelProvider: provider,
+        modelSecretRef: config.modelSecretRef ?? null,
         modelName: config.modelName,
         modelVersion: config.modelVersion ?? null,
         modelBaseUrl: baseUrl,
+        modelWorkerUrls: workerUrls,
         useTitle: config.useTitle ?? true,
         useAbstract: config.useAbstract ?? true,
         useFulltext: config.useFulltext ?? false,

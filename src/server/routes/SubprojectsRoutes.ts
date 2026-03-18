@@ -3,6 +3,7 @@ import {Elysia, t} from 'elysia'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import * as appQueryHelpers from '../services/appQueryHelpers.ts'
 import {getDuckdbMartRefreshService} from '../services/getDuckdbMartRefreshService.ts'
+import {assertSelectableModelId} from '../services/providerConnectionQueryService.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
 import {hasMatchingJudgmentAnswer} from '../utils/judgmentAnswers.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
@@ -165,7 +166,7 @@ export const subprojectsRoutes = new Elysia()
           p.name AS name,
           p.description AS description,
           p.model_id AS modelId,
-          m.name AS modelName,
+          COALESCE(m.display_name, m.name, m.remote_model_id, m.model_name) AS modelName,
           p.use_title AS useTitle,
           p.use_abstract AS useAbstract,
           p.use_fulltext AS useFulltext,
@@ -234,15 +235,10 @@ export const subprojectsRoutes = new Elysia()
   .post(
     '/api/subprojects',
     async ({body}) => {
-      const [validModel] = await appDatabaseService.queryJson<{id: string}>(`
-        SELECT id
-        FROM app.model
-        WHERE id = '${appQueryHelpers.escapeSqlString(body.modelId)}'
-        LIMIT 1
-      `)
-      if (!validModel) {
-        throw new Error('Selected model does not exist')
-      }
+      await assertSelectableModelId(appDatabaseService, {
+        errorMessage: 'Selected model does not exist or is disabled',
+        modelId: body.modelId,
+      })
 
       const [newProject] = await appDatabaseService.queryJson<{
         id: string

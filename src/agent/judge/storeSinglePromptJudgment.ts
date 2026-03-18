@@ -24,7 +24,7 @@ export const storeSinglePromptJudgment = async ({
   modelId: string
   projectId: string
   judgment: SinglePromptJudgmentResult
-  chunkingStrategy: JudgmentChunkingStrategy
+  chunkingStrategy: JudgmentChunkingStrategy | null
 }): Promise<void> => {
   try {
     // Prepare snapshot context (best-effort, only fetching fields we still store)
@@ -47,9 +47,12 @@ export const storeSinglePromptJudgment = async ({
     `)
 
     const [modelRow] = await getAppDatabaseService().queryJson<{modelName: string | null; provider: string | null}>(`
-      SELECT model_name AS modelName, provider
-      FROM app.model
-      WHERE id = '${escapeSqlString(modelId)}'
+      SELECT
+        COALESCE(m.display_name, m.name, m.remote_model_id, m.model_name) AS modelName,
+        COALESCE(pc.provider_kind, m.provider) AS provider
+      FROM app.model m
+      LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
+      WHERE m.id = '${escapeSqlString(modelId)}'
       LIMIT 1
     `)
 

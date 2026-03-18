@@ -1,7 +1,8 @@
 import {Elysia} from 'elysia'
 
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
-import {escapeSqlString, getJsonValue, getQuotedStringList, getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {ensureProviderConnectionSeed} from '../services/ensureProviderConnectionSeed.ts'
 import {env} from '../utils/env.ts'
 
 type ModelRow = {
@@ -33,54 +34,12 @@ const normalizeWorkerUrls = (urls: string[] | null | undefined): string[] => {
 
 const envWorkerUrls = normalizeWorkerUrls(env.WORKER_URLS)
 
-const syncWorkerUrls = async (modelRow: ModelRow | undefined | null) => {
-  if (!modelRow) return modelRow
-  if (envWorkerUrls.length === 0) return modelRow
-  const existing = normalizeWorkerUrls(modelRow.workerUrls)
-  const differs =
-    existing.length !== envWorkerUrls.length
-    || envWorkerUrls.some((url) => {
-      return !existing.includes(url)
-    })
-  if (!differs) return modelRow
-  const [updated] = await getAppDatabaseService().queryJson<{
-    id: string
-    name: string
-    provider: string | null
-    baseURL: string | null
-    modelName: string | null
-    version: string | null
-    apiKeyVariable: string | null
-    workerUrls: unknown
-    createdAt: string | null
-    updatedAt: string | null
-  }>(`
-    UPDATE app.model
-    SET worker_urls = ${getSqlLiteral(envWorkerUrls)},
-        updated_at = current_timestamp
-    WHERE id = '${escapeSqlString(modelRow.id)}'
-    RETURNING
-      id,
-      name,
-      provider,
-      base_url AS baseURL,
-      model_name AS modelName,
-      version,
-      api_key_variable AS apiKeyVariable,
-      TO_JSON(worker_urls) AS workerUrls,
-      created_at AS createdAt,
-      updated_at AS updatedAt
-  `)
-  return updated ? {...updated, workerUrls: getJsonValue(updated.workerUrls) as string[] | null} : modelRow
-}
-
 export const judgmentsRoutes = new Elysia().get('/api/judgments/model', async ({query}) => {
   try {
     const modelName = query.name || 'Qwen3-32B-FP8'
     const provider = query.provider || 'SGLang'
     const baseURL = query.baseURL || 'http://localhost:30000/v1'
 
-    // Check if model exists
     const [existingModel] = await getAppDatabaseService().queryJson<ModelRow>(`
       SELECT
         id,
@@ -103,30 +62,66 @@ export const judgmentsRoutes = new Elysia().get('/api/judgments/model', async ({
     const persistedModel =
       existingModel
       ?? (
-        await getAppDatabaseService().queryJson<ModelRow>(`
-          INSERT INTO app.model (id, name, provider, base_url, model_name, version)
-          VALUES (${getQuotedStringList([crypto.randomUUID(), modelName, provider, baseURL, '/models/Qwen3-32B-FP8', '1.0.0']).join(', ')})
-          RETURNING
-            id,
-            name,
+        await getAppDatabaseService().transaction(async (tx) => {
+          const modelId = crypto.randomUUID()
+
+          await ensureProviderConnectionSeed(tx, {
+            baseURL,
+            connectionId: modelId,
+            label: modelName,
             provider,
-            base_url AS baseURL,
-            model_name AS modelName,
-            version,
-            api_key_variable AS apiKeyVariable,
-            worker_urls AS workerUrls,
-            created_at AS createdAt,
-            updated_at AS updatedAt
-        `)
+            workerUrls: envWorkerUrls,
+          })
+
+          return tx.queryJson<ModelRow>(`
+            INSERT INTO app.model (
+              id,
+              provider_connection_id,
+              name,
+              provider,
+              base_url,
+              model_name,
+              remote_model_id,
+              display_name,
+              version,
+              variant,
+              source,
+              enabled
+            )
+            VALUES (
+              ${getSqlLiteral(modelId)},
+              ${getSqlLiteral(modelId)},
+              ${getSqlLiteral(modelName)},
+              ${getSqlLiteral(provider)},
+              ${getSqlLiteral(baseURL)},
+              '/models/Qwen3-32B-FP8',
+              '/models/Qwen3-32B-FP8',
+              ${getSqlLiteral(modelName)},
+              '1.0.0',
+              '1.0.0',
+              'manual',
+              TRUE
+            )
+            RETURNING
+              id,
+              name,
+              provider,
+              base_url AS baseURL,
+              model_name AS modelName,
+              version,
+              api_key_variable AS apiKeyVariable,
+              worker_urls AS workerUrls,
+              created_at AS createdAt,
+              updated_at AS updatedAt
+          `)
+        })
       )[0]
 
     if (!persistedModel) {
       throw new Error('Failed to ensure model record')
     }
 
-    const syncedModel = await syncWorkerUrls(persistedModel)
-
-    return {success: true, data: syncedModel}
+    return {success: true, data: persistedModel}
   } catch (error) {
     console.error('Error getting/creating model:', error)
     return {success: false, error: 'Failed to get/create model'}

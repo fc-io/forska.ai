@@ -99,14 +99,14 @@ void warmCodexAppServer()
 void getCodexCliLoginStatus().then((status) => {
   if (!status.ok) {
     console.warn(
-      '[codex] CLI not available. Install @openai/codex and/or set CODEX_BIN. Then visit /settings to connect.',
+      '[codex] CLI not available. Install @openai/codex and/or set CODEX_BIN. Then visit /admin/models to connect.',
     )
     return
   }
 
   if (!status.loggedIn) {
     console.log(
-      `[codex] Not logged in. Run \`codex login\` or open http://localhost:${env.VITE_PORT}/settings to start device login.`,
+      `[codex] Not logged in. Run \`codex login\` or open http://localhost:${env.VITE_PORT}/admin/models to start device login.`,
     )
     return
   }

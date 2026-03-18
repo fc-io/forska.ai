@@ -2,6 +2,7 @@ import {Elysia, t} from 'elysia'
 
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import * as appQueryHelpers from '../services/appQueryHelpers.ts'
+import {assertSelectableModelIds} from '../services/providerConnectionQueryService.ts'
 import {
   getJudgmentDisplayAnswer,
   getNormalizedJudgmentAnswerKey,
@@ -511,7 +512,7 @@ const getComparisonProjectSources = async (): Promise<ComparisonProjectSource[]>
       p.name AS name,
       p.description AS description,
       p.model_id AS modelId,
-      m.name AS modelName,
+      COALESCE(m.display_name, m.name, m.remote_model_id, m.model_name) AS modelName,
       p.use_title AS useTitle,
       p.use_abstract AS useAbstract,
       p.use_fulltext AS useFulltext,
@@ -997,8 +998,13 @@ const getComparisonProjectEditFormData = async (comparisonProjectId: string) => 
           modelName: string | null
           version: string | null
         }>(`
-          SELECT id, provider, model_name AS modelName, version
-          FROM ${modelTable}
+          SELECT
+            m.id AS id,
+            COALESCE(pc.provider_kind, m.provider) AS provider,
+            COALESCE(m.remote_model_id, m.model_name) AS modelName,
+            COALESCE(m.variant, m.version) AS version
+          FROM ${modelTable} m
+          LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
           WHERE id IN (${getInClause(configuredModelIds)})
         `)
       : []
@@ -1495,17 +1501,10 @@ const getValidatedModelIds = async (db: AppQueryRunner, modelIds: string[]) => {
     return null
   }
 
-  const modelRows = await db.queryJson<{id: string}>(`
-    SELECT id
-    FROM ${modelTable}
-    WHERE id IN (${getInClause(modelIds)})
-  `)
-
-  if (modelRows.length !== modelIds.length) {
-    throw new Error('One or more selected models are invalid')
-  }
-
-  return modelIds
+  return assertSelectableModelIds(db, {
+    errorMessage: 'One or more selected models do not exist or are disabled',
+    modelIds,
+  })
 }
 
 const getValidatedPromptSelections = async (db: AppQueryRunner, promptSelections: PromptSelection[]) => {
@@ -1919,7 +1918,7 @@ export const comparisonProjectsRoutes = new Elysia()
             setParts,
             promptSelections: validatedPromptSelections,
           })
-        : await appDatabaseService.transaction(async (tx) => {
+        : ((await appDatabaseService.transaction(async (tx) => {
             const updatedComparisonProjectRecord = await updateComparisonProjectTx(tx, {
               comparisonProjectId: params.id,
               setParts,
@@ -1936,7 +1935,7 @@ export const comparisonProjectsRoutes = new Elysia()
             await insertComparisonProjectPromptLinks(tx, params.id, validatedPromptSelections)
 
             return updatedComparisonProjectRecord
-          })
+          })) as ComparisonProjectRecordRow | null)
 
       if (!updatedComparisonProjectRow) {
         throw new Error('Comparison project not found')

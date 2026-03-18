@@ -1,6 +1,3 @@
-import OpenAI from 'openai'
-import type {ChatCompletionMessage} from 'openai/resources/chat/completions'
-
 import type {ArticleRecord} from '../db/schemaTypes.ts'
 import {
   ConnectionError,
@@ -9,7 +6,7 @@ import {
   recordConnectionSuccess,
 } from '../server/cron/judgmentsJobs/connectionHealth.ts'
 import {withJudgmentRequest} from '../server/cron/judgmentsJobs/judgmentsRequestRuntime.ts'
-import {getCodexAppServerClient} from '../server/utils/getCodexAppServerClient.ts'
+import {invokeProviderModel} from '../server/services/providerClientService.ts'
 import {rateLimitedLogger} from '../server/utils/rateLimitedLogger.ts'
 import {
   chunkArticleText,
@@ -33,14 +30,14 @@ import {
 } from './judge/parseSinglePromptJudgment.ts'
 import {storeSinglePromptJudgment} from './judge/storeSinglePromptJudgment.ts'
 
-const openAIClients = new Map<string, OpenAI>()
-
 type ModelConfigInput = {
   modelId: string
   modelName: string
   baseURL: string
   provider: string | null
+  secretRef: string | null
   version: string | null
+  workerUrls: string[]
 }
 
 const loggedFirstJudgeRequestByJobId = new Map<string, true>()
@@ -146,29 +143,6 @@ const logFirstJudgeRequestIfNeeded = ({
       })
 }
 
-type AssistantMessageShape = {
-  role: 'assistant'
-  content: string
-  tool_calls?: ChatCompletionMessage['tool_calls']
-  reasoning_content?: string
-}
-
-const getOpenAIClient = (baseURL: string): OpenAI => {
-  const existingClient = openAIClients.get(baseURL)
-  if (existingClient) {
-    return existingClient
-  }
-  const client = new OpenAI({
-    apiKey: 'fake_key',
-    dangerouslyAllowBrowser: true,
-    baseURL,
-    timeout: 900_000, // 15 minutes
-    maxRetries: 0, // Handle retries at application level
-  })
-  openAIClients.set(baseURL, client)
-  return client
-}
-
 /**
  * Normalize model name for the OpenAI API request.
  * - HuggingFace IDs (e.g., "XiaomiMiMo/MiMo-V2-Flash") pass through unchanged
@@ -182,19 +156,6 @@ const normalizeModelName = (name: string): string => {
     return `/${name}`
   }
   return name
-}
-
-const hasReasoningContent = (
-  message: ChatCompletionMessage,
-): message is ChatCompletionMessage & {reasoning_content: string} => {
-  return typeof (message as {reasoning_content?: unknown}).reasoning_content === 'string'
-}
-
-const normalizeProvider = (value: string | null | undefined): string => {
-  const v = String(value ?? '')
-    .trim()
-    .toLowerCase()
-  return v.length > 0 ? v : 'unknown'
 }
 
 const DANGEROUS_TEXT_START = '<DANGEROUS_TEXT_START>'
@@ -234,20 +195,6 @@ const getSinglePromptEvidenceOutputSchema = (): unknown => {
     properties: {facts: {type: 'array', items: {type: 'string'}}, quotes: {type: 'array', items: {type: 'string'}}},
     required: ['facts', 'quotes'],
     additionalProperties: false,
-  }
-}
-
-const formatAssistantMessage = (message: ChatCompletionMessage): AssistantMessageShape => {
-  const reasoningContent = hasReasoningContent(message) ? message.reasoning_content : null
-  const textContent = typeof message.content === 'string' ? message.content : ''
-  const content = textContent || reasoningContent || ''
-  const toolCalls = message.tool_calls && message.tool_calls.length > 0 ? message.tool_calls : undefined
-
-  return {
-    role: 'assistant',
-    content,
-    ...(toolCalls ? {tool_calls: toolCalls} : {}),
-    ...(reasoningContent ? {reasoning_content: reasoningContent} : {}),
   }
 }
 
@@ -401,7 +348,9 @@ const generateSinglePromptResponse = async ({
   baseURL,
   modelName,
   provider,
+  secretRef,
   version,
+  workerUrls,
   outputSchema,
 }: {
   judgmentsJobId: string
@@ -410,59 +359,35 @@ const generateSinglePromptResponse = async ({
   baseURL: string
   modelName: string
   provider: string | null
+  secretRef: string | null
   version: string | null
+  workerUrls: string[]
   outputSchema: unknown
 }): Promise<GeneratedPromptResponse> => {
-  const providerNormalized = normalizeProvider(provider)
-  return withJudgmentRequest({judgmentsJobId, provider, fallbackBaseURL: baseURL}, async (requestBaseURL) => {
-    if (providerNormalized === 'codex') {
+  return withJudgmentRequest(
+    {judgmentsJobId, provider, fallbackBaseURL: baseURL, workerUrls},
+    async (requestBaseURL) => {
       try {
-        const client = getCodexAppServerClient()
-        const combined = `${systemPrompt}\n\n${prompt}`
-        const result = await client.runJsonTurn({
-          model: modelName,
-          effort: version,
-          inputText: combined,
-          outputSchema,
-          timeoutMs: 900_000,
-        })
-        return {
-          text: result.text,
-          usage: {promptTokens: 0, completionTokens: 0, totalTokens: 0},
+        const result = await invokeProviderModel({
           baseURL: requestBaseURL,
-        }
+          maxCompletionTokens: MAX_COMPLETION_TOKENS,
+          modelName: normalizeModelName(modelName),
+          outputSchema,
+          prompt,
+          providerKind: provider,
+          secretRef,
+          systemPrompt,
+          temperature: 0.2,
+          version,
+        })
+
+        return {...result, baseURL: requestBaseURL}
       } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error)
-        throw new Error(`Connection error: codex app-server: ${msg}`, {cause: error})
+        const message = error instanceof Error ? error.message : String(error)
+        throw new ConnectionError(message, requestBaseURL)
       }
-    }
-
-    const client = getOpenAIClient(requestBaseURL)
-    const modelToUse = normalizeModelName(modelName)
-    const response = await client.chat.completions.create({
-      model: modelToUse,
-      messages: [
-        {role: 'system', content: systemPrompt},
-        {role: 'user', content: prompt},
-      ],
-      max_completion_tokens: MAX_COMPLETION_TOKENS,
-      temperature: 0.2,
-    })
-
-    const message = response.choices[0]?.message
-    if (!message) throw new Error('No message in response')
-    const assistantMessage = formatAssistantMessage(message)
-
-    return {
-      text: assistantMessage.content,
-      usage: {
-        promptTokens: response.usage?.prompt_tokens || 0,
-        completionTokens: response.usage?.completion_tokens || 0,
-        totalTokens: response.usage?.total_tokens || 0,
-      },
-      baseURL: requestBaseURL,
-    }
-  })
+    },
+  )
 }
 
 const shouldIncludeFullText = (contentSettings: ContentSettings): boolean => {
@@ -674,7 +599,7 @@ export const judgeSinglePrompt = async ({
   projectId: string
   contentSettings: ContentSettings
 }): Promise<void> => {
-  const {baseURL, modelName, modelId, provider, version} = modelConfig
+  const {baseURL, modelName, modelId, provider, secretRef, version, workerUrls} = modelConfig
 
   const tokenUse: JudgeTokenUsageEntry[] = []
   const startedAt = new Date().toISOString()
@@ -721,7 +646,9 @@ export const judgeSinglePrompt = async ({
           baseURL,
           modelName,
           provider,
+          secretRef,
           version,
+          workerUrls,
           outputSchema: getSinglePromptOutputSchema(),
         })
 
@@ -935,7 +862,9 @@ export const judgeSinglePrompt = async ({
                 baseURL,
                 modelName,
                 provider,
+                secretRef,
                 version,
+                workerUrls,
                 outputSchema: evidenceOutputSchema,
               })
 
@@ -1138,7 +1067,9 @@ export const judgeSinglePrompt = async ({
             baseURL,
             modelName,
             provider,
+            secretRef,
             version,
+            workerUrls,
             outputSchema: getSinglePromptOutputSchema(),
           })
 

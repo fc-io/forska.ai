@@ -19,6 +19,7 @@ export type JudgmentsJobsPromptsStatus =
 export type JudgmentsJobsPromptsSkipReason = 'no_fulltext' | 'conversion_failed' | 'fulltext_too_large'
 export type JudgmentChunkingStrategy = 'patient_h3_greedy' | 'article_heading_greedy' | 'article_paragraph_greedy'
 export type Engine = 'sglang' | 'vllm'
+export type ModelSource = 'discovered' | 'manual'
 
 export type UserRecord = {
   id: string
@@ -68,13 +69,35 @@ export type ModelRecord = {
   id: string
   createdAt: Date
   updatedAt: Date
+  providerConnectionId: string | null
   name: string
   provider: string | null
   baseURL: string | null
   modelName: string | null
+  remoteModelId: string | null
+  displayName: string | null
   version: string | null
+  variant: string | null
+  source: ModelSource | null
+  enabled: boolean
+  metadataJson: unknown
   apiKeyVariable: string | null
   workerUrls: string[] | null
+}
+
+export type ProviderConnectionRecord = {
+  id: string
+  createdAt: Date
+  updatedAt: Date
+  providerKind: string
+  label: string
+  enabled: boolean
+  authMode: string | null
+  baseURL: string | null
+  configJson: unknown
+  secretRef: string | null
+  lastCheckedAt: Date | null
+  lastError: string | null
 }
 
 export type DataSourceRecord = {

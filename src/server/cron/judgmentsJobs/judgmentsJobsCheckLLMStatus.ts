@@ -1,6 +1,5 @@
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getDateValue, getJsonValue, getSqlLiteral} from '../../services/appQueryHelpers.ts'
-import {env} from '../../utils/env.ts'
 import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
 import {getSGLangMetrics} from './judgmentsJobsAdjustBatchSize/getSGLangMetrics.ts'
 
@@ -80,31 +79,47 @@ const mergeWorkerLists = (existing: string[], incoming: string[]): string[] => {
   return Array.from(new Set([...existing, ...incoming]))
 }
 
-const fallbackWorkerUrls = normalizeWorkerUrls(env.WORKER_URLS)
+const getProviderWorkerUrls = (providerConfigJson: unknown): string[] => {
+  const parsed = getJsonValue(providerConfigJson)
+  const workerUrls =
+    typeof parsed === 'object' && parsed !== null && 'workerUrls' in parsed
+      ? ((parsed as {workerUrls?: unknown}).workerUrls as string[] | null | undefined)
+      : []
+
+  return normalizeWorkerUrls(workerUrls)
+}
 
 // Generic LLM status ingestion targeting the new llm_status table.
 // Initially feeds engine='vllm' using the existing vLLM metrics adapter.
 export const judgmentsJobsCheckLLMStatus = async () => {
   const runningJobConfigs = await getAppDatabaseService().queryJson<{
+    providerKind: string | null
     modelName: string | null
     baseURL: string | null
-    workerUrls: unknown
+    providerConfigJson: unknown
   }>(`
     SELECT
-      m.model_name AS modelName,
-      m.base_url AS baseURL,
-      TO_JSON(m.worker_urls) AS workerUrls
+      COALESCE(pc.provider_kind, m.provider) AS providerKind,
+      COALESCE(m.model_name, m.remote_model_id) AS modelName,
+      COALESCE(pc.base_url, m.base_url) AS baseURL,
+      COALESCE(TO_JSON(pc.config_json), TO_JSON(CASE WHEN m.worker_urls IS NULL THEN NULL ELSE json_object('workerUrls', m.worker_urls) END)) AS providerConfigJson
     FROM app.judgment_job jj
     LEFT JOIN app.project p ON jj.project_id = p.id
     LEFT JOIN app.model m ON p.model_id = m.id
+    LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
     WHERE jj.status = 'running'
   `)
   const validConfigs = runningJobConfigs.filter((r) => {
-    return !!r.baseURL
+    return (
+      String(r.providerKind ?? '')
+        .trim()
+        .toLowerCase() === 'sglang'
+      && (!!r.baseURL || getProviderWorkerUrls(r.providerConfigJson).length > 0)
+    )
   })
   const baseUrlToConfig = validConfigs.reduce((acc, cfg) => {
-    const baseURL = String(cfg.baseURL)
-    const workerUrls = normalizeWorkerUrls(getJsonValue(cfg.workerUrls) as string[] | null)
+    const workerUrls = getProviderWorkerUrls(cfg.providerConfigJson)
+    const baseURL = String(cfg.baseURL ?? (workerUrls[0] ? `${workerUrls[0].replace(/\/+$/, '')}/v1` : ''))
     const existing = acc.get(baseURL)
     const mergedWorkers = existing ? mergeWorkerLists(existing.workerUrls, workerUrls) : workerUrls
     const modelName = existing?.modelName ?? cfg.modelName ?? 'unknown'
@@ -114,8 +129,7 @@ export const judgmentsJobsCheckLLMStatus = async () => {
   if (baseUrlToConfig.size === 0) return
 
   for (const [baseURL, config] of baseUrlToConfig.entries()) {
-    const preferredWorkers = config.workerUrls.length > 0 ? config.workerUrls : fallbackWorkerUrls
-    const targetWorkers = (preferredWorkers.length > 0 ? preferredWorkers : [baseURL])
+    const targetWorkers = (config.workerUrls.length > 0 ? config.workerUrls : [baseURL])
       .map((url) => {
         return url.trim()
       })
