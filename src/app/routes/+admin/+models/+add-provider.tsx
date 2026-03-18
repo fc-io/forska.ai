@@ -60,10 +60,22 @@ const AddProviderPage = () => {
     return providerConnectionsQuery.data?.catalog ?? []
   }
 
+  const connections = () => {
+    return providerConnectionsQuery.data?.connections ?? []
+  }
+
   const activeCatalogEntry = () => {
     return (
       catalog().find((entry) => {
         return entry.kind === connectionForm.providerKind
+      }) ?? null
+    )
+  }
+
+  const existingCodexConnection = () => {
+    return (
+      connections().find((connection) => {
+        return connection.providerKind === 'codex'
       }) ?? null
     )
   }
@@ -78,6 +90,23 @@ const AddProviderPage = () => {
       suspense: false,
     }
   })
+
+  const shouldHideCodexConnectCard = () => {
+    return (
+      connectionForm.providerKind === 'codex'
+      && Boolean(
+        existingCodexConnection() || codexStatusQuery.data?.cli.loggedIn || codexStatusQuery.data?.appServerReady,
+      )
+    )
+  }
+
+  const canCreateCodexProvider = () => {
+    return (
+      connectionForm.providerKind === 'codex'
+      && !existingCodexConnection()
+      && Boolean(codexStatusQuery.data?.cli.loggedIn && codexStatusQuery.data?.appServerReady)
+    )
+  }
 
   const selectCatalogEntry = (entry: ProviderCatalogEntry) => {
     setPageError('')
@@ -249,89 +278,91 @@ const AddProviderPage = () => {
             </div>
 
             <div class="space-y-6">
-              <div class="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-                <div class="mb-4">
-                  <h2 class="text-lg font-semibold text-gray-900">
-                    Connect {activeCatalogEntry()?.label ?? 'Provider'}
-                  </h2>
-                  <p class="text-sm text-gray-500">
-                    This creates the provider connection. You will add or sync models afterward.
-                  </p>
-                </div>
-
-                <div class="space-y-4">
-                  <div>
-                    <label class="mb-2 block text-sm font-medium text-gray-700">Provider</label>
-                    <div class="rounded-md border border-gray-200 bg-gray-50 px-3 py-3 text-sm text-gray-700">
-                      {activeCatalogEntry()?.label ?? connectionForm.providerKind}
-                    </div>
+              <Show when={!shouldHideCodexConnectCard()}>
+                <div class="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+                  <div class="mb-4">
+                    <h2 class="text-lg font-semibold text-gray-900">
+                      Connect {activeCatalogEntry()?.label ?? 'Provider'}
+                    </h2>
+                    <p class="text-sm text-gray-500">
+                      This creates the provider connection. You will add or sync models afterward.
+                    </p>
                   </div>
 
-                  <div>
-                    <label class="mb-2 block text-sm font-medium text-gray-700">Connection Label</label>
-                    <input
-                      class="w-full rounded-md border border-gray-300 px-3 py-3 text-sm text-gray-900"
-                      onInput={(event) => {
-                        setConnectionForm('label', event.currentTarget.value)
+                  <div class="space-y-4">
+                    <div>
+                      <label class="mb-2 block text-sm font-medium text-gray-700">Provider</label>
+                      <div class="rounded-md border border-gray-200 bg-gray-50 px-3 py-3 text-sm text-gray-700">
+                        {activeCatalogEntry()?.label ?? connectionForm.providerKind}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label class="mb-2 block text-sm font-medium text-gray-700">Connection Label</label>
+                      <input
+                        class="w-full rounded-md border border-gray-300 px-3 py-3 text-sm text-gray-900"
+                        onInput={(event) => {
+                          setConnectionForm('label', event.currentTarget.value)
+                        }}
+                        type="text"
+                        value={connectionForm.label}
+                      />
+                    </div>
+
+                    <Show when={connectionForm.providerKind !== 'codex'}>
+                      <div>
+                        <label class="mb-2 block text-sm font-medium text-gray-700">Base URL</label>
+                        <input
+                          class="w-full rounded-md border border-gray-300 px-3 py-3 text-sm text-gray-900"
+                          onInput={(event) => {
+                            setConnectionForm('baseURL', event.currentTarget.value)
+                          }}
+                          type="text"
+                          value={connectionForm.baseURL}
+                        />
+                      </div>
+                    </Show>
+
+                    <Show when={activeCatalogEntry()?.supportsWorkerUrls}>
+                      <div>
+                        <label class="mb-2 block text-sm font-medium text-gray-700">Worker URLs</label>
+                        <input
+                          class="w-full rounded-md border border-gray-300 px-3 py-3 text-sm text-gray-900"
+                          onInput={(event) => {
+                            setConnectionForm('workerUrls', event.currentTarget.value)
+                          }}
+                          placeholder="http://127.0.0.1:30000, http://127.0.0.1:30001"
+                          type="text"
+                          value={connectionForm.workerUrls}
+                        />
+                      </div>
+                    </Show>
+
+                    <Show when={activeCatalogEntry()?.requiresApiKey}>
+                      <div>
+                        <label class="mb-2 block text-sm font-medium text-gray-700">API Key</label>
+                        <input
+                          class="w-full rounded-md border border-gray-300 px-3 py-3 text-sm text-gray-900"
+                          onInput={(event) => {
+                            setConnectionForm('apiKey', event.currentTarget.value)
+                          }}
+                          type="password"
+                          value={connectionForm.apiKey}
+                        />
+                      </div>
+                    </Show>
+
+                    <Button
+                      disabled={createConnectionMutation.isPending}
+                      onClick={() => {
+                        return void submitConnectionForm()
                       }}
-                      type="text"
-                      value={connectionForm.label}
-                    />
+                    >
+                      {createConnectionMutation.isPending ? 'Creating Provider...' : 'Create Provider'}
+                    </Button>
                   </div>
-
-                  <Show when={connectionForm.providerKind !== 'codex'}>
-                    <div>
-                      <label class="mb-2 block text-sm font-medium text-gray-700">Base URL</label>
-                      <input
-                        class="w-full rounded-md border border-gray-300 px-3 py-3 text-sm text-gray-900"
-                        onInput={(event) => {
-                          setConnectionForm('baseURL', event.currentTarget.value)
-                        }}
-                        type="text"
-                        value={connectionForm.baseURL}
-                      />
-                    </div>
-                  </Show>
-
-                  <Show when={activeCatalogEntry()?.supportsWorkerUrls}>
-                    <div>
-                      <label class="mb-2 block text-sm font-medium text-gray-700">Worker URLs</label>
-                      <input
-                        class="w-full rounded-md border border-gray-300 px-3 py-3 text-sm text-gray-900"
-                        onInput={(event) => {
-                          setConnectionForm('workerUrls', event.currentTarget.value)
-                        }}
-                        placeholder="http://127.0.0.1:30000, http://127.0.0.1:30001"
-                        type="text"
-                        value={connectionForm.workerUrls}
-                      />
-                    </div>
-                  </Show>
-
-                  <Show when={activeCatalogEntry()?.requiresApiKey}>
-                    <div>
-                      <label class="mb-2 block text-sm font-medium text-gray-700">API Key</label>
-                      <input
-                        class="w-full rounded-md border border-gray-300 px-3 py-3 text-sm text-gray-900"
-                        onInput={(event) => {
-                          setConnectionForm('apiKey', event.currentTarget.value)
-                        }}
-                        type="password"
-                        value={connectionForm.apiKey}
-                      />
-                    </div>
-                  </Show>
-
-                  <Button
-                    disabled={createConnectionMutation.isPending}
-                    onClick={() => {
-                      return void submitConnectionForm()
-                    }}
-                  >
-                    {createConnectionMutation.isPending ? 'Creating Provider...' : 'Create Provider'}
-                  </Button>
                 </div>
-              </div>
+              </Show>
 
               <Show when={connectionForm.providerKind === 'codex'}>
                 <div class="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
@@ -359,6 +390,13 @@ const AddProviderPage = () => {
                       <p class="text-xs text-gray-500">{codexStatusQuery.data?.message}</p>
                     </Show>
 
+                    <Show when={existingCodexConnection()}>
+                      <div class="rounded-md border border-green-200 bg-green-50 p-4 text-sm text-green-800">
+                        Codex App is already added as `{existingCodexConnection()?.label}`. Manage it on the Providers
+                        and Models page.
+                      </div>
+                    </Show>
+
                     <Show when={!codexStatusQuery.data?.cli.loggedIn}>
                       <Button
                         disabled={isStartingCodexLogin()}
@@ -367,6 +405,17 @@ const AddProviderPage = () => {
                         }}
                       >
                         {isStartingCodexLogin() ? 'Starting Codex Login...' : 'Sign in to Codex'}
+                      </Button>
+                    </Show>
+
+                    <Show when={canCreateCodexProvider()}>
+                      <Button
+                        disabled={createConnectionMutation.isPending}
+                        onClick={() => {
+                          return void submitConnectionForm()
+                        }}
+                      >
+                        {createConnectionMutation.isPending ? 'Creating Provider...' : 'Create Provider'}
                       </Button>
                     </Show>
 
