@@ -17,6 +17,13 @@
 - [ ] DuckDB UI never opens the live file writable while owner is up.
 - [ ] Do not store the writer lease inside the live DuckDB file.
 
+## Current Caveats
+
+- [ ] In-flight requests on a dead writer can still fail during handoff.
+- [ ] Stale-heartbeat takeover is single-machine only and depends on local PID + HTTP checks.
+- [ ] A wedged writer can still cause a short failover gap until its DuckDB child exits.
+- [ ] Queue/work-claim hardening is still needed for full cron safety.
+
 ## Why
 
 - [ ] `src/server/utils/duckdbService.ts` keeps one warm child per Bun process; second process means second lock attempt.
@@ -64,8 +71,8 @@
 - [x] Writer heartbeats lease on interval.
 - [x] Followers reread lease on proxy failure and retry once.
 - [x] If `pid` is dead, followers race to take over.
-- [ ] If heartbeat is stale but pid alive, decide whether to promote or just warn.
-- [ ] If writer loses lease, demote: stop cron, close DuckDB, become `api`.
+- [x] If heartbeat is stale and writer HTTP is unresponsive, followers race to take over.
+- [x] If writer loses lease, demote: stop cron, close DuckDB, become `api`.
 - [x] Keep manual `writer | api | dev-single` as override/debug modes.
 
 ## Phase 4 - Cron And Script Ownership

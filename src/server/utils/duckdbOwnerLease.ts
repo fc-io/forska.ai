@@ -192,7 +192,20 @@ const isDuckdbOwnerLeaseOwnedByCurrentProcess = (metadata: DuckdbOwnerLeaseMetad
 }
 
 const canRemoveStaleLease = (metadata: DuckdbOwnerLeaseMetadata) => {
-  return metadata.hostname === hostname() && !isProcessAlive(metadata.pid)
+  return metadata.hostname === hostname() && (!isProcessAlive(metadata.pid) || isDuckdbOwnerLeaseStale(metadata))
+}
+
+const appendUnexpectedLeaseReleaseHistory = (metadata: DuckdbOwnerLeaseMetadata) => {
+  return appendDuckdbOwnerLeaseHistory(metadata.databasePath, {
+    apiServerPort: metadata.apiServerPort,
+    at: new Date().toISOString(),
+    event: 'released',
+    hostname: metadata.hostname,
+    leaseId: metadata.leaseId,
+    pid: metadata.pid,
+    serverRole: metadata.serverRole,
+    writerUrl: getDuckdbOwnerLeaseWriterUrl(metadata),
+  })
 }
 
 const acquireLeaseFile = (leasePath: string, metadata: DuckdbOwnerLeaseMetadata) => {
@@ -277,7 +290,10 @@ export const acquireDuckdbOwnerLease = (params: {
                 : isDuckdbOwnerLeaseOwnedByCurrentProcess(currentLease)
                   ? Effect.succeed({leasePath, metadata: currentLease})
                   : canRemoveStaleLease(currentLease)
-                    ? removeLeasePath(leasePath).pipe(
+                    ? appendUnexpectedLeaseReleaseHistory(currentLease).pipe(
+                        Effect.flatMap(() => {
+                          return removeLeasePath(leasePath)
+                        }),
                         Effect.flatMap(() => {
                           return acquireDuckdbOwnerLease(params)
                         }),

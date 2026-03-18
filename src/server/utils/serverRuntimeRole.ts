@@ -5,6 +5,7 @@ import {
   type DuckdbOwnerLease,
   getDuckdbOwnerLeaseWriterUrl,
   isDuckdbOwnerLeaseProcessAlive,
+  isDuckdbOwnerLeaseStale,
   readDuckdbOwnerLease,
   releaseDuckdbOwnerLease,
   updateDuckdbOwnerLeaseHeartbeat,
@@ -23,6 +24,7 @@ type ServerRuntimeState = {
   currentLease: DuckdbOwnerLease | null
   currentRole: EffectiveServerRole
   lastKnownWriterUrl: string | null
+  writerDemotionHandlers: Array<(reason: string) => Promise<void> | void>
 }
 
 declare global {
@@ -38,6 +40,7 @@ const getServerRuntimeState = () => {
     currentLease: null,
     currentRole: getEffectiveServerRole(env.SERVER_ROLE),
     lastKnownWriterUrl: null,
+    writerDemotionHandlers: [],
   }
 
   return globalThis.__forskaServerRuntimeState
@@ -64,6 +67,40 @@ const setCurrentServerRole = (nextRole: EffectiveServerRole) => {
 
 const setLastKnownWriterUrl = (writerUrl: string | null) => {
   serverRuntimeState.lastKnownWriterUrl = writerUrl
+}
+
+const isWriterUrlResponsive = async (writerUrl: string) => {
+  try {
+    const response = await fetch(`${writerUrl}/__healthcheck__`, {signal: AbortSignal.timeout(1_000)})
+    return response.ok || response.status >= 400
+  } catch {
+    return false
+  }
+}
+
+const runWriterDemotionHandlers = async (reason: string) => {
+  await Promise.all(
+    serverRuntimeState.writerDemotionHandlers.map(async (handler) => {
+      return handler(reason)
+    }),
+  )
+}
+
+const shouldPromoteForStaleWriterLease = async (currentLease: DuckdbOwnerLease['metadata']) => {
+  if (!isDuckdbOwnerLeaseStale(currentLease)) {
+    return false
+  }
+
+  const writerUrl = getDuckdbOwnerLeaseWriterUrl(currentLease)
+  const isResponsive = await isWriterUrlResponsive(writerUrl)
+
+  if (isResponsive) {
+    autoServerRoleLogger.warn('server-role:stale-writer', '[server] stale writer heartbeat but HTTP still responds', {
+      writerUrl,
+    })
+  }
+
+  return !isResponsive
 }
 
 const readWriterUrlFromLease = async () => {
@@ -114,15 +151,25 @@ const refreshAutoWriterLease = async () => {
   } catch (error) {
     serverRuntimeState.currentLease = null
     setCurrentServerRole('api')
+    await runWriterDemotionHandlers('lease-lost')
+    await readWriterUrlFromLease()
     autoServerRoleLogger.warn('server-role:lost-writer', '[server] auto writer lease lost', error)
   }
 }
 
 const refreshAutoFollowerRole = async () => {
   const currentLease = await Effect.runPromise(readDuckdbOwnerLease(env.DUCKDB_PATH))
+  const shouldPromoteForDeadWriter = currentLease !== null && !isDuckdbOwnerLeaseProcessAlive(currentLease)
+  const shouldPromoteForStaleWriter = currentLease !== null && (await shouldPromoteForStaleWriterLease(currentLease))
 
-  if (currentLease === null || !isDuckdbOwnerLeaseProcessAlive(currentLease)) {
-    await promoteAutoServerToWriter(currentLease === null ? 'lease-missing' : 'writer-process-dead')
+  if (currentLease === null || shouldPromoteForDeadWriter || shouldPromoteForStaleWriter) {
+    const reason =
+      currentLease === null
+        ? 'lease-missing'
+        : shouldPromoteForDeadWriter
+          ? 'writer-process-dead'
+          : 'writer-heartbeat-stale'
+    await promoteAutoServerToWriter(reason)
     return
   }
 
@@ -240,4 +287,8 @@ export const releaseCurrentDuckdbOwnerLease = async () => {
   }
 
   await Effect.runPromise(releaseDuckdbOwnerLease(currentLease))
+}
+
+export const registerWriterDemotionHandler = (handler: (reason: string) => Promise<void> | void) => {
+  serverRuntimeState.writerDemotionHandlers = [...serverRuntimeState.writerDemotionHandlers, handler]
 }

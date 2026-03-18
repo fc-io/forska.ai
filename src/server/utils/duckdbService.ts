@@ -9,7 +9,11 @@ import {Effect} from 'effect'
 
 import {env} from './env.ts'
 import {ensureDuckdbPathDirectory} from './getDuckdbPath.ts'
-import {ensureCurrentDuckdbOwnerLease, releaseCurrentDuckdbOwnerLease} from './serverRuntimeRole.ts'
+import {
+  ensureCurrentDuckdbOwnerLease,
+  registerWriterDemotionHandler,
+  releaseCurrentDuckdbOwnerLease,
+} from './serverRuntimeRole.ts'
 
 type DuckdbRuntimeConfig = {binary: string; databasePath: string; memoryLimit: string; tempDirectory: string | null}
 export type DuckdbSnapshot = {createdAt: string; snapshotPath: string}
@@ -545,3 +549,9 @@ export const closeDuckdbService = async () => {
     await releaseCurrentDuckdbOwnerLease()
   })
 }
+
+registerWriterDemotionHandler(async () => {
+  if (duckdbServiceState.duckdbProcess !== null) {
+    await closeDuckdbService()
+  }
+})
