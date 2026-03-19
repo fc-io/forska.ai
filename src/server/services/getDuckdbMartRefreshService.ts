@@ -95,6 +95,9 @@ const getProjectRefreshSql = (projectId: string) => {
         article.publication_status,
         article.updated_at
       FROM aggregated_scope
+      INNER JOIN app.project project
+        ON project.id = aggregated_scope.project_id
+       AND project.archived = FALSE
       INNER JOIN app.article article ON article.id = aggregated_scope.article_id;
       COMMIT;
     `,
@@ -738,14 +741,18 @@ const getUniqueValues = (values: Array<string | null | undefined>) => {
 
 const getImpactedProjectIdsForArticle = async (articleId: string) => {
   const rows = await getAppDatabaseService().queryJson<{projectId: string}>(`
-    SELECT project_id AS projectId
-    FROM app.project_article
-    WHERE article_id = ${getSqlLiteral(articleId)}
+    SELECT project_article.project_id AS projectId
+    FROM app.project_article project_article
+    INNER JOIN app.project project ON project.id = project_article.project_id
+    WHERE project_article.article_id = ${getSqlLiteral(articleId)}
+      AND project.archived = FALSE
     UNION
     SELECT pir.project_id AS projectId
     FROM app.project_import_route pir
+    INNER JOIN app.project project ON project.id = pir.project_id
     INNER JOIN app.article_import_route air ON air.import_route_id = pir.import_route_id
     WHERE air.article_id = ${getSqlLiteral(articleId)}
+      AND project.archived = FALSE
   `)
 
   return rows.map((row) => {
@@ -917,8 +924,10 @@ const queueProjectRefreshesByImportRouteIds = async (importRouteIds: string[], r
 
   const rows = await getAppDatabaseService().queryJson<{projectId: string}>(`
     SELECT DISTINCT project_id AS projectId
-    FROM app.project_import_route
+    FROM app.project_import_route project_import_route
+    INNER JOIN app.project project ON project.id = project_import_route.project_id
     WHERE import_route_id IN (${getQuotedStringList(getUniqueValues(importRouteIds)).join(', ')})
+      AND project.archived = FALSE
   `)
 
   return queueProjectRefreshes(
@@ -936,8 +945,10 @@ const queueProjectRefreshesByPromptIds = async (promptIds: string[], reason: str
 
   const rows = await getAppDatabaseService().queryJson<{projectId: string}>(`
     SELECT DISTINCT project_id AS projectId
-    FROM app.project_prompt
+    FROM app.project_prompt project_prompt
+    INNER JOIN app.project project ON project.id = project_prompt.project_id
     WHERE prompt_id IN (${getQuotedStringList(getUniqueValues(promptIds)).join(', ')})
+      AND project.archived = FALSE
   `)
 
   return queueProjectRefreshes(

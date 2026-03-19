@@ -63,6 +63,9 @@ SELECT
   article.publication_status,
   article.updated_at
 FROM aggregated_scope
+INNER JOIN app.project project
+  ON project.id = aggregated_scope.project_id
+ AND project.archived = FALSE
 INNER JOIN app.article article ON article.id = aggregated_scope.article_id;
 COMMIT;
 `

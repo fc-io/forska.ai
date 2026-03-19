@@ -37,6 +37,7 @@
     "db:duck:checkpoint": "bun --env-file=.env.local scripts/duckdbCheckpoint.ts",
     "db:query:snapshot": "bun --env-file=.env.local scripts/dbQuerySnapshot.ts",
     "db:duck:rebuild-marts": "bun --env-file=.env.local scripts/rebuildDuckdbMarts.ts",
+    "db:duck:purge-archived-marts": "bun --env-file=.env.local scripts/purgeArchivedProjectMarts.ts",
     "db:studio": "bun scripts/dbStudio.ts",
     "db:r:p": "bun scripts/dbPush.ts --force --no-restore",
     "db:r:pull": "bun scripts/dbRemotePull.ts",
