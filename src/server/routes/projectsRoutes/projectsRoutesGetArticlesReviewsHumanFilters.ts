@@ -3,6 +3,7 @@ import {Elysia, t} from 'elysia'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getProjectScopeClause, getTimestampLiteral} from '../../services/appQueryHelpers.ts'
 import {getAppQueryService} from '../../services/getAppQueryService.ts'
+import {assertProjectIsActive} from './projectAccessGuard.ts'
 
 export const projectsRoutesGetArticlesReviewsHumanFilters = new Elysia().get(
   '/api/articlesreviewshumanfilters',
@@ -12,6 +13,8 @@ export const projectsRoutesGetArticlesReviewsHumanFilters = new Elysia().get(
         set.status = 400
         throw new Error('Project ID is required')
       }
+
+      await assertProjectIsActive(query.projectId)
 
       const fromDate = query?.from ? new Date(`${query.from}T00:00:00.000Z`) : null
       const toDate = query?.to ? new Date(`${query.to}T23:59:59.999Z`) : null

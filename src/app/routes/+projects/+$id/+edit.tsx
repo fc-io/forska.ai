@@ -8,6 +8,7 @@ import {Button} from '../../../../components/ui/button'
 import {apiClient} from '../../../../services/apiClient'
 import {fetchProjectWithPrompts} from '../../../../services/projectsService'
 import {handleApiResponse} from '../../../../services/utils/handleApiResponse'
+import {useArchivedProjectRedirect, useProjectAccessQuery} from '../projectAccessGuard'
 
 type PromptItem = {
   id: string
@@ -60,10 +61,18 @@ type ProjectDetailsResponse = {
   project: ProjectSummary
   prompts: ProjectPromptResponse[]
   hasJudgedArticles: boolean
-  model?: {id: string; name: string; provider?: string | null; modelName?: string | null} | null
+  model?: {
+    id: string
+    name: string
+    provider?: string | null
+    modelName?: string | null
+    version?: string | null
+  } | null
   importRoutes?: string[]
   importRouteNamesByRoute?: Record<string, string | null>
 }
+
+type ProjectUpdateResponse = {data: {project: ProjectSummary; prompts: ProjectPromptResponse[]}}
 
 type ParsedDateResult = {date: Date | null; normalized: string | null; error: string | null}
 
@@ -279,6 +288,11 @@ const EditProject = (): JSX.Element => {
   const projectId = (params() as {id: string}).id
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const projectAccessQuery = useProjectAccessQuery(() => {
+    return projectId
+  })
+
+  useArchivedProjectRedirect(projectAccessQuery)
 
   const projectData = useQuery(() => {
     return {
@@ -286,6 +300,7 @@ const EditProject = (): JSX.Element => {
       queryFn: () => {
         return fetchProjectWithPrompts(projectId)
       },
+      enabled: projectAccessQuery.data !== undefined && !projectAccessQuery.data.archived,
       // Disable auto-refetch on window focus since this is a form with user-editable state.
       // Otherwise, refetches would overwrite the user's local changes (e.g., enabled checkbox).
       refetchOnWindowFocus: false,
@@ -586,11 +601,7 @@ const EditProject = (): JSX.Element => {
         useFulltextNoImages: payload.useFulltextNoImages,
       })
 
-    if (response.error || !response.data?.data) {
-      throw new Error('Failed to update project')
-    }
-
-    const result = response.data.data
+    const result = handleApiResponse<ProjectUpdateResponse>(response, 'Failed to update project').data
     setProjectName(result.project.name)
     setDescription(result.project.description ?? '')
     setDateFrom(formatDateForInput(result.project.dateFrom))
@@ -680,524 +691,535 @@ const EditProject = (): JSX.Element => {
   }
 
   return (
-    <div class="p-6 max-w-4xl mx-auto">
-      <div class="flex items-center gap-4 mb-6">
-        <Button as={Link} to="/projects" variant="outline" size="sm">
-          ← Back to Projects
-        </Button>
-        <h1 class="text-3xl font-bold">Edit Project</h1>
-      </div>
+    <Show
+      when={!projectAccessQuery.isLoading && !projectAccessQuery.isError && !projectAccessQuery.data?.archived}
+      fallback={
+        <div class="p-6 max-w-4xl mx-auto text-center py-8 text-red-600">
+          {projectAccessQuery.isError
+            ? `Error loading project: ${projectAccessQuery.error instanceof Error ? projectAccessQuery.error.message : String(projectAccessQuery.error)}`
+            : 'Loading project data...'}
+        </div>
+      }
+    >
+      <div class="p-6 max-w-4xl mx-auto">
+        <div class="flex items-center gap-4 mb-6">
+          <Button as={Link} to="/projects" variant="outline" size="sm">
+            ← Back to Projects
+          </Button>
+          <h1 class="text-3xl font-bold">Edit Project</h1>
+        </div>
 
-      <Suspense fallback={<div class="text-center py-8">Loading project data...</div>}>
-        <Show when={projectData.isLoading}>
-          <div class="text-center py-8">Loading project data...</div>
-        </Show>
+        <Suspense fallback={<div class="text-center py-8">Loading project data...</div>}>
+          <Show when={projectData.isLoading}>
+            <div class="text-center py-8">Loading project data...</div>
+          </Show>
 
-        <Show when={Boolean(projectData.error)}>
-          <div class="text-center py-8 text-red-600">
-            Error loading project: {projectData.error instanceof Error ? projectData.error.message : 'Unknown error'}
-          </div>
-        </Show>
+          <Show when={Boolean(projectData.error)}>
+            <div class="text-center py-8 text-red-600">
+              Error loading project: {projectData.error instanceof Error ? projectData.error.message : 'Unknown error'}
+            </div>
+          </Show>
 
-        <Show when={projectDetails()}>
-          <div class="bg-card border rounded-lg p-6">
-            <Show when={isLocked()}>
-              <div class="mb-6 p-4 bg-amber-50 border-2 border-amber-300 rounded-lg">
-                <div class="flex items-start gap-3">
-                  <span class="text-amber-600 text-xl mt-0.5">⚠️</span>
-                  <div>
-                    <h3 class="font-semibold text-amber-900 mb-1">Project Locked for Editing</h3>
-                    <p class="text-amber-800 text-sm">
-                      This project cannot be modified because a judgment job exists for it. All fields and buttons have
-                      been disabled to preserve the integrity of the running/finished job.
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </Show>
-            <Show when={errorMessage()}>
-              <div id="test" class="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm">
-                {errorMessage()}
-              </div>
-            </Show>
-
-            <form onSubmit={handleSubmit} class="space-y-6">
-              <div>
-                <label for="model" class="block text-sm font-medium mb-2">
-                  Model
-                </label>
-                <Show when={modelsQuery.isLoading}>
-                  <p class="text-sm text-muted-foreground">Loading models...</p>
-                </Show>
-                <Show when={modelsQuery.isError}>
-                  <p class="text-sm text-red-600">
-                    {modelsQuery.error instanceof Error ? modelsQuery.error.message : 'Failed to load models'}
-                  </p>
-                </Show>
-                <Show when={!modelsQuery.isLoading && !modelsQuery.isError && availableModels().length > 0}>
-                  <select
-                    id="model"
-                    class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
-                    value={selectedModelId()}
-                    onChange={(event) => {
-                      return setSelectedModelId(event.currentTarget.value)
-                    }}
-                    disabled={isLocked()}
-                  >
-                    <For each={availableModels()}>
-                      {(m) => {
-                        const label = m.provider?.toLowerCase() === 'codex' ? `Codex: ${m.name}` : m.name
-                        return <option value={m.id}>{label}</option>
-                      }}
-                    </For>
-                  </select>
-                </Show>
-                <Show when={!modelsQuery.isLoading && !modelsQuery.isError && availableModels().length === 0}>
-                  <div class="flex items-center justify-between gap-3">
-                    <p class="text-sm text-muted-foreground">No models available.</p>
-                    <Button
-                      type="button"
-                      size="sm"
-                      onClick={() => {
-                        return void createDefaultModel()
-                      }}
-                      disabled={isLocked()}
-                      class={actionStateClass()}
-                    >
-                      Create default model
-                    </Button>
-                  </div>
-                </Show>
-              </div>
-
-              <div>
-                <p class="block text-sm font-medium mb-2">Import Routes</p>
-                <Show when={importRoutesQuery.isLoading}>
-                  <p class="text-sm text-muted-foreground">Loading import routes...</p>
-                </Show>
-                <Show when={importRoutesQuery.isError}>
-                  <p class="text-sm text-red-600">
-                    {importRoutesQuery.error instanceof Error
-                      ? importRoutesQuery.error.message
-                      : 'Failed to load import routes'}
-                  </p>
-                </Show>
-                <Show
-                  when={
-                    !importRoutesQuery.isLoading && !importRoutesQuery.isError && availableImportRoutes().length === 0
-                  }
-                >
-                  <p class="text-sm text-muted-foreground">No import routes available.</p>
-                </Show>
-                <Show
-                  when={
-                    !importRoutesQuery.isLoading && !importRoutesQuery.isError && availableImportRoutes().length > 0
-                  }
-                >
-                  <div class="space-y-2">
-                    <For each={availableImportRoutes()}>
-                      {(r) => {
-                        const name = r.name?.trim() ?? ''
-                        const displayName = name ? name : r.route
-                        const showRouteHint = Boolean(name) && name !== r.route
-                        return (
-                          <label
-                            class={`flex items-start gap-3 border rounded-md p-3 cursor-pointer ${isLocked() ? 'opacity-60' : 'border-input'}`}
-                          >
-                            <input
-                              type="checkbox"
-                              class="mt-1"
-                              checked={selectedImportRoutes().includes(r.route)}
-                              onChange={() => {
-                                return toggleImportRouteSelection(r.route)
-                              }}
-                              disabled={isLocked()}
-                            />
-                            <div class="flex-1">
-                              <p class="text-sm font-medium text-gray-900">{displayName}</p>
-                              <Show when={showRouteHint}>
-                                <p class="text-xs text-gray-600 font-mono break-all">{r.route}</p>
-                              </Show>
-                            </div>
-                          </label>
-                        )
-                      }}
-                    </For>
-                  </div>
-                </Show>
-              </div>
-              <div>
-                <label for="project-name" class="block text-sm font-medium mb-2">
-                  Project Name *
-                </label>
-                <input
-                  id="project-name"
-                  type="text"
-                  value={projectName()}
-                  onInput={(event) => {
-                    return setProjectName(event.currentTarget.value)
-                  }}
-                  placeholder="Enter project name"
-                  class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
-                  required
-                  disabled={isLocked()}
-                />
-              </div>
-
-              <div>
-                <label for="description" class="block text-sm font-medium mb-2">
-                  Description
-                </label>
-                <textarea
-                  id="description"
-                  value={description()}
-                  onInput={(event) => {
-                    return setDescription(event.currentTarget.value)
-                  }}
-                  placeholder="Describe your project..."
-                  rows="4"
-                  class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent resize-none ${fieldStateClass()}`}
-                  disabled={isLocked()}
-                />
-              </div>
-
-              <div>
-                <p class="block text-sm font-medium mb-2">Project Timeline</p>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <label class={`flex flex-col text-sm font-medium gap-1 ${isLocked() ? 'opacity-60' : ''}`}>
-                    <span>Start Date</span>
-                    <input
-                      type="text"
-                      value={dateFrom()}
-                      onInput={(event) => {
-                        return setDateFrom(event.currentTarget.value)
-                      }}
-                      placeholder="YYYY-MM-DD"
-                      class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
-                      disabled={isLocked()}
-                    />
-                  </label>
-                  <label class={`flex flex-col text-sm font-medium gap-1 ${isLocked() ? 'opacity-60' : ''}`}>
-                    <span>End Date</span>
-                    <input
-                      type="text"
-                      value={dateTo()}
-                      onInput={(event) => {
-                        return setDateTo(event.currentTarget.value)
-                      }}
-                      placeholder="YYYY-MM-DD"
-                      class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
-                      disabled={isLocked()}
-                    />
-                  </label>
-                </div>
-              </div>
-
-              <div>
-                <p class="block text-sm font-medium mb-2">Article Content Used</p>
-                <div class="space-y-2">
-                  <label
-                    class={`flex items-start gap-3 border rounded-md p-3 cursor-pointer ${
-                      isLocked() ? 'opacity-60' : 'border-input'
-                    }`}
-                  >
-                    <input
-                      type="checkbox"
-                      class="mt-1"
-                      checked={useTitle()}
-                      onChange={(event) => {
-                        return setUseTitle(event.currentTarget.checked)
-                      }}
-                      disabled={isLocked()}
-                    />
-                    <div class="flex-1">
-                      <p class="text-sm font-medium text-gray-900">Use Article Title</p>
-                    </div>
-                  </label>
-                  <label
-                    class={`flex items-start gap-3 border rounded-md p-3 cursor-pointer ${
-                      isLocked() ? 'opacity-60' : 'border-input'
-                    }`}
-                  >
-                    <input
-                      type="checkbox"
-                      class="mt-1"
-                      checked={useAbstract()}
-                      onChange={(event) => {
-                        return setUseAbstract(event.currentTarget.checked)
-                      }}
-                      disabled={isLocked()}
-                    />
-                    <div class="flex-1">
-                      <p class="text-sm font-medium text-gray-900">Use Article Abstract</p>
-                    </div>
-                  </label>
-                  <label
-                    class={`flex items-start gap-3 border rounded-md p-3 cursor-pointer ${
-                      isLocked() ? 'opacity-60' : 'border-input'
-                    }`}
-                  >
-                    <input
-                      type="checkbox"
-                      class="mt-1"
-                      checked={useFulltext()}
-                      onChange={(event) => {
-                        const checked = event.currentTarget.checked
-                        setUseFulltext(checked)
-                        // Mutual exclusivity: uncheck the other if this is checked
-                        if (checked) setUseFulltextNoImages(false)
-                      }}
-                      disabled={isLocked()}
-                    />
-                    <div class="flex-1">
-                      <p class="text-sm font-medium text-gray-900">Use Full Text (with images)</p>
-                      <p class="text-xs text-gray-500 mt-0.5">
-                        Include the complete article text including embedded images
+          <Show when={projectDetails()}>
+            <div class="bg-card border rounded-lg p-6">
+              <Show when={isLocked()}>
+                <div class="mb-6 p-4 bg-amber-50 border-2 border-amber-300 rounded-lg">
+                  <div class="flex items-start gap-3">
+                    <span class="text-amber-600 text-xl mt-0.5">⚠️</span>
+                    <div>
+                      <h3 class="font-semibold text-amber-900 mb-1">Project Locked for Editing</h3>
+                      <p class="text-amber-800 text-sm">
+                        This project cannot be modified because a judgment job exists for it. All fields and buttons
+                        have been disabled to preserve the integrity of the running/finished job.
                       </p>
                     </div>
-                  </label>
-                  <label
-                    class={`flex items-start gap-3 border rounded-md p-3 cursor-pointer ${
-                      isLocked() ? 'opacity-60' : 'border-input'
-                    }`}
-                  >
-                    <input
-                      type="checkbox"
-                      class="mt-1"
-                      checked={useFulltextNoImages()}
-                      onChange={(event) => {
-                        const checked = event.currentTarget.checked
-                        setUseFulltextNoImages(checked)
-                        // Mutual exclusivity: uncheck the other if this is checked
-                        if (checked) setUseFulltext(false)
-                      }}
-                      disabled={isLocked()}
-                    />
-                    <div class="flex-1">
-                      <p class="text-sm font-medium text-gray-900">Use Full Text (without images)</p>
-                      <p class="text-xs text-gray-500 mt-0.5">
-                        Include article text but strip embedded base64 images to reduce token usage
-                      </p>
-                    </div>
-                  </label>
-                </div>
-              </div>
-
-              <div>
-                <div class="flex items-center justify-between mb-2">
-                  <label class="block text-sm font-medium">Your questions about the article</label>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={addPromptInput}
-                    disabled={isLocked()}
-                    class={actionStateClass()}
-                  >
-                    + Add Prompt
-                  </Button>
-                </div>
-                <div class="space-y-3">
-                  <For each={visibleOwnedPrompts()} fallback={<div>No prompts</div>}>
-                    {(promptItem, index) => {
-                      return (
-                        <div class="flex gap-2">
-                          <div class="flex-1 space-y-2">
-                            <div class="flex items-center gap-2 text-[11px] text-gray-500">
-                              <span>
-                                {promptItem.originalId
-                                  ? `Prompt ID: ${String(promptItem.originalId).slice(0, 8)}`
-                                  : 'New prompt'}
-                              </span>
-                              <Show when={promptItem.promptArchived}>
-                                <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-200 text-gray-600">
-                                  Archived
-                                </span>
-                              </Show>
-                            </div>
-                            <input
-                              type="text"
-                              value={promptItem.promptHeading}
-                              onInput={(event) => {
-                                return updatePromptInput(promptItem.id, 'promptHeading', event.currentTarget.value)
-                              }}
-                              placeholder={`Prompt ${index() + 1} heading (optional)...`}
-                              class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
-                              disabled={isLocked()}
-                            />
-                            <input
-                              type="text"
-                              value={promptItem.type}
-                              onInput={(event) => {
-                                return updatePromptInput(promptItem.id, 'type', event.currentTarget.value)
-                              }}
-                              placeholder={`Prompt ${index() + 1} type (optional)...`}
-                              class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
-                              disabled={isLocked()}
-                            />
-                            <textarea
-                              value={promptItem.originalText}
-                              onInput={(event) => {
-                                return updatePromptInput(promptItem.id, 'originalText', event.currentTarget.value)
-                              }}
-                              placeholder={`Enter prompt ${index() + 1} content...`}
-                              rows="4"
-                              class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent resize-none ${fieldStateClass()}`}
-                              disabled={isLocked()}
-                            />
-                            <div class="flex items-center gap-4">
-                              <label class="flex items-center gap-2 text-sm">
-                                <span>Order</span>
-                                <input
-                                  type="number"
-                                  class={`w-20 px-2 py-1 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
-                                  value={promptItem.order}
-                                  onInput={(e) => {
-                                    const val = Number(e.currentTarget.value || 0)
-                                    return updatePromptInput(promptItem.id, 'order', Number.isNaN(val) ? 0 : val)
-                                  }}
-                                  disabled={isLocked()}
-                                />
-                              </label>
-                            </div>
-                          </div>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => {
-                              return removePromptInput(promptItem.id)
-                            }}
-                            class={`self-start mt-1 ${actionStateClass()}`}
-                            disabled={isLocked()}
-                          >
-                            ×
-                          </Button>
-                        </div>
-                      )
-                    }}
-                  </For>
-                </div>
-              </div>
-
-              <Show when={visibleImportedPrompts().length > 0}>
-                <div>
-                  <div class="flex items-center justify-between mb-2">
-                    <label class="block text-sm font-medium">Importable prompts</label>
-                  </div>
-                  <div class="space-y-3">
-                    <For each={visibleImportedPrompts()}>
-                      {(promptItem) => {
-                        return (
-                          <div
-                            class="border rounded-lg p-4 bg-background"
-                            classList={{'opacity-40': promptItem.enabled === false}}
-                          >
-                            <div class="flex justify-between items-start mb-3">
-                              <div class="flex items-center gap-2">
-                                <span class="inline-flex items-center justify-center w-6 h-6 rounded-full bg-primary text-primary-foreground text-xs font-medium">
-                                  {promptItem.order}
-                                </span>
-                                <Show when={promptItem.promptHeading}>
-                                  <span class="font-medium">{promptItem.promptHeading}</span>
-                                </Show>
-                                <Show when={promptItem.type}>
-                                  <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                                    {promptItem.type}
-                                  </span>
-                                </Show>
-                                <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800">
-                                  Imported
-                                </span>
-                                <Show when={promptItem.promptArchived}>
-                                  <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-200 text-gray-600">
-                                    Archived
-                                  </span>
-                                </Show>
-                                <Show when={promptItem.originalId}>
-                                  <span class="inline-flex items-center px-2 py-1 rounded-full text-[11px] font-medium bg-gray-50 text-gray-600 font-mono">
-                                    {promptItem.originalId}
-                                  </span>
-                                </Show>
-                                <Show when={promptItem.createdAt}>
-                                  <span class="inline-flex items-center px-2 py-1 rounded-full text-[11px] font-medium bg-gray-50 text-gray-600">
-                                    Created: {new Date(promptItem.createdAt as string | Date).toLocaleDateString()}
-                                  </span>
-                                </Show>
-                                <Show when={promptItem.enabled !== undefined}>
-                                  <span
-                                    class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium"
-                                    classList={{
-                                      'bg-green-100 text-green-800': promptItem.enabled,
-                                      'bg-gray-100 text-gray-800': !promptItem.enabled,
-                                    }}
-                                  >
-                                    {promptItem.enabled ? 'Enabled' : 'Disabled'}
-                                  </span>
-                                </Show>
-                              </div>
-                              <label class={`flex items-center gap-2 ${isLocked() ? 'opacity-60' : ''}`}>
-                                <input
-                                  type="checkbox"
-                                  class="mt-0.5"
-                                  checked={Boolean(promptItem.enabled)}
-                                  onChange={() => {
-                                    return toggleImportedPromptEnabled(promptItem.id)
-                                  }}
-                                  disabled={isLocked()}
-                                />
-                                <span class="text-sm">Enabled</span>
-                              </label>
-                            </div>
-
-                            <div class="space-y-3">
-                              <div>
-                                <label class="text-sm font-medium text-muted-foreground block mb-1">Heading</label>
-                                <div class="bg-gray-50 rounded p-3 text-sm whitespace-pre-wrap">
-                                  {promptItem.promptHeading || '—'}
-                                </div>
-                              </div>
-                              <div>
-                                <label class="text-sm font-medium text-muted-foreground block mb-1">Type</label>
-                                <div class="bg-gray-50 rounded p-3 text-sm whitespace-pre-wrap">
-                                  {promptItem.type || '—'}
-                                </div>
-                              </div>
-                              <div>
-                                <label class="text-sm font-medium text-muted-foreground block mb-1">
-                                  Original Text
-                                </label>
-                                <div class="bg-gray-50 rounded p-3 text-sm font-mono whitespace-pre-wrap">
-                                  {promptItem.originalText}
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        )
-                      }}
-                    </For>
                   </div>
                 </div>
               </Show>
+              <Show when={errorMessage()}>
+                <div id="test" class="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm">
+                  {errorMessage()}
+                </div>
+              </Show>
 
-              <div class="flex gap-3 pt-4">
-                <Button
-                  type="submit"
-                  disabled={!projectName().trim() || isLoading() || isLocked()}
-                  title={isLocked() ? 'Cannot update: a judgment job exists for this project' : undefined}
-                  class={actionStateClass()}
-                >
-                  {isLoading() ? 'Updating...' : 'Update Project'}
-                </Button>
-                <Button as={Link} to="/projects" variant="outline">
-                  Cancel
-                </Button>
-              </div>
-            </form>
-          </div>
-        </Show>
-      </Suspense>
-    </div>
+              <form onSubmit={handleSubmit} class="space-y-6">
+                <div>
+                  <label for="model" class="block text-sm font-medium mb-2">
+                    Model
+                  </label>
+                  <Show when={modelsQuery.isLoading}>
+                    <p class="text-sm text-muted-foreground">Loading models...</p>
+                  </Show>
+                  <Show when={modelsQuery.isError}>
+                    <p class="text-sm text-red-600">
+                      {modelsQuery.error instanceof Error ? modelsQuery.error.message : 'Failed to load models'}
+                    </p>
+                  </Show>
+                  <Show when={!modelsQuery.isLoading && !modelsQuery.isError && availableModels().length > 0}>
+                    <select
+                      id="model"
+                      class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
+                      value={selectedModelId()}
+                      onChange={(event) => {
+                        return setSelectedModelId(event.currentTarget.value)
+                      }}
+                      disabled={isLocked()}
+                    >
+                      <For each={availableModels()}>
+                        {(m) => {
+                          const label = m.provider?.toLowerCase() === 'codex' ? `Codex: ${m.name}` : m.name
+                          return <option value={m.id}>{label}</option>
+                        }}
+                      </For>
+                    </select>
+                  </Show>
+                  <Show when={!modelsQuery.isLoading && !modelsQuery.isError && availableModels().length === 0}>
+                    <div class="flex items-center justify-between gap-3">
+                      <p class="text-sm text-muted-foreground">No models available.</p>
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={() => {
+                          return void createDefaultModel()
+                        }}
+                        disabled={isLocked()}
+                        class={actionStateClass()}
+                      >
+                        Create default model
+                      </Button>
+                    </div>
+                  </Show>
+                </div>
+
+                <div>
+                  <p class="block text-sm font-medium mb-2">Import Routes</p>
+                  <Show when={importRoutesQuery.isLoading}>
+                    <p class="text-sm text-muted-foreground">Loading import routes...</p>
+                  </Show>
+                  <Show when={importRoutesQuery.isError}>
+                    <p class="text-sm text-red-600">
+                      {importRoutesQuery.error instanceof Error
+                        ? importRoutesQuery.error.message
+                        : 'Failed to load import routes'}
+                    </p>
+                  </Show>
+                  <Show
+                    when={
+                      !importRoutesQuery.isLoading && !importRoutesQuery.isError && availableImportRoutes().length === 0
+                    }
+                  >
+                    <p class="text-sm text-muted-foreground">No import routes available.</p>
+                  </Show>
+                  <Show
+                    when={
+                      !importRoutesQuery.isLoading && !importRoutesQuery.isError && availableImportRoutes().length > 0
+                    }
+                  >
+                    <div class="space-y-2">
+                      <For each={availableImportRoutes()}>
+                        {(r) => {
+                          const name = r.name?.trim() ?? ''
+                          const displayName = name ? name : r.route
+                          const showRouteHint = Boolean(name) && name !== r.route
+                          return (
+                            <label
+                              class={`flex items-start gap-3 border rounded-md p-3 cursor-pointer ${isLocked() ? 'opacity-60' : 'border-input'}`}
+                            >
+                              <input
+                                type="checkbox"
+                                class="mt-1"
+                                checked={selectedImportRoutes().includes(r.route)}
+                                onChange={() => {
+                                  return toggleImportRouteSelection(r.route)
+                                }}
+                                disabled={isLocked()}
+                              />
+                              <div class="flex-1">
+                                <p class="text-sm font-medium text-gray-900">{displayName}</p>
+                                <Show when={showRouteHint}>
+                                  <p class="text-xs text-gray-600 font-mono break-all">{r.route}</p>
+                                </Show>
+                              </div>
+                            </label>
+                          )
+                        }}
+                      </For>
+                    </div>
+                  </Show>
+                </div>
+                <div>
+                  <label for="project-name" class="block text-sm font-medium mb-2">
+                    Project Name *
+                  </label>
+                  <input
+                    id="project-name"
+                    type="text"
+                    value={projectName()}
+                    onInput={(event) => {
+                      return setProjectName(event.currentTarget.value)
+                    }}
+                    placeholder="Enter project name"
+                    class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
+                    required
+                    disabled={isLocked()}
+                  />
+                </div>
+
+                <div>
+                  <label for="description" class="block text-sm font-medium mb-2">
+                    Description
+                  </label>
+                  <textarea
+                    id="description"
+                    value={description()}
+                    onInput={(event) => {
+                      return setDescription(event.currentTarget.value)
+                    }}
+                    placeholder="Describe your project..."
+                    rows="4"
+                    class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent resize-none ${fieldStateClass()}`}
+                    disabled={isLocked()}
+                  />
+                </div>
+
+                <div>
+                  <p class="block text-sm font-medium mb-2">Project Timeline</p>
+                  <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <label class={`flex flex-col text-sm font-medium gap-1 ${isLocked() ? 'opacity-60' : ''}`}>
+                      <span>Start Date</span>
+                      <input
+                        type="text"
+                        value={dateFrom()}
+                        onInput={(event) => {
+                          return setDateFrom(event.currentTarget.value)
+                        }}
+                        placeholder="YYYY-MM-DD"
+                        class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
+                        disabled={isLocked()}
+                      />
+                    </label>
+                    <label class={`flex flex-col text-sm font-medium gap-1 ${isLocked() ? 'opacity-60' : ''}`}>
+                      <span>End Date</span>
+                      <input
+                        type="text"
+                        value={dateTo()}
+                        onInput={(event) => {
+                          return setDateTo(event.currentTarget.value)
+                        }}
+                        placeholder="YYYY-MM-DD"
+                        class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
+                        disabled={isLocked()}
+                      />
+                    </label>
+                  </div>
+                </div>
+
+                <div>
+                  <p class="block text-sm font-medium mb-2">Article Content Used</p>
+                  <div class="space-y-2">
+                    <label
+                      class={`flex items-start gap-3 border rounded-md p-3 cursor-pointer ${
+                        isLocked() ? 'opacity-60' : 'border-input'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        class="mt-1"
+                        checked={useTitle()}
+                        onChange={(event) => {
+                          return setUseTitle(event.currentTarget.checked)
+                        }}
+                        disabled={isLocked()}
+                      />
+                      <div class="flex-1">
+                        <p class="text-sm font-medium text-gray-900">Use Article Title</p>
+                      </div>
+                    </label>
+                    <label
+                      class={`flex items-start gap-3 border rounded-md p-3 cursor-pointer ${
+                        isLocked() ? 'opacity-60' : 'border-input'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        class="mt-1"
+                        checked={useAbstract()}
+                        onChange={(event) => {
+                          return setUseAbstract(event.currentTarget.checked)
+                        }}
+                        disabled={isLocked()}
+                      />
+                      <div class="flex-1">
+                        <p class="text-sm font-medium text-gray-900">Use Article Abstract</p>
+                      </div>
+                    </label>
+                    <label
+                      class={`flex items-start gap-3 border rounded-md p-3 cursor-pointer ${
+                        isLocked() ? 'opacity-60' : 'border-input'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        class="mt-1"
+                        checked={useFulltext()}
+                        onChange={(event) => {
+                          const checked = event.currentTarget.checked
+                          setUseFulltext(checked)
+                          // Mutual exclusivity: uncheck the other if this is checked
+                          if (checked) setUseFulltextNoImages(false)
+                        }}
+                        disabled={isLocked()}
+                      />
+                      <div class="flex-1">
+                        <p class="text-sm font-medium text-gray-900">Use Full Text (with images)</p>
+                        <p class="text-xs text-gray-500 mt-0.5">
+                          Include the complete article text including embedded images
+                        </p>
+                      </div>
+                    </label>
+                    <label
+                      class={`flex items-start gap-3 border rounded-md p-3 cursor-pointer ${
+                        isLocked() ? 'opacity-60' : 'border-input'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        class="mt-1"
+                        checked={useFulltextNoImages()}
+                        onChange={(event) => {
+                          const checked = event.currentTarget.checked
+                          setUseFulltextNoImages(checked)
+                          // Mutual exclusivity: uncheck the other if this is checked
+                          if (checked) setUseFulltext(false)
+                        }}
+                        disabled={isLocked()}
+                      />
+                      <div class="flex-1">
+                        <p class="text-sm font-medium text-gray-900">Use Full Text (without images)</p>
+                        <p class="text-xs text-gray-500 mt-0.5">
+                          Include article text but strip embedded base64 images to reduce token usage
+                        </p>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+
+                <div>
+                  <div class="flex items-center justify-between mb-2">
+                    <label class="block text-sm font-medium">Your questions about the article</label>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={addPromptInput}
+                      disabled={isLocked()}
+                      class={actionStateClass()}
+                    >
+                      + Add Prompt
+                    </Button>
+                  </div>
+                  <div class="space-y-3">
+                    <For each={visibleOwnedPrompts()} fallback={<div>No prompts</div>}>
+                      {(promptItem, index) => {
+                        return (
+                          <div class="flex gap-2">
+                            <div class="flex-1 space-y-2">
+                              <div class="flex items-center gap-2 text-[11px] text-gray-500">
+                                <span>
+                                  {promptItem.originalId
+                                    ? `Prompt ID: ${String(promptItem.originalId).slice(0, 8)}`
+                                    : 'New prompt'}
+                                </span>
+                                <Show when={promptItem.promptArchived}>
+                                  <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-200 text-gray-600">
+                                    Archived
+                                  </span>
+                                </Show>
+                              </div>
+                              <input
+                                type="text"
+                                value={promptItem.promptHeading}
+                                onInput={(event) => {
+                                  return updatePromptInput(promptItem.id, 'promptHeading', event.currentTarget.value)
+                                }}
+                                placeholder={`Prompt ${index() + 1} heading (optional)...`}
+                                class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
+                                disabled={isLocked()}
+                              />
+                              <input
+                                type="text"
+                                value={promptItem.type}
+                                onInput={(event) => {
+                                  return updatePromptInput(promptItem.id, 'type', event.currentTarget.value)
+                                }}
+                                placeholder={`Prompt ${index() + 1} type (optional)...`}
+                                class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
+                                disabled={isLocked()}
+                              />
+                              <textarea
+                                value={promptItem.originalText}
+                                onInput={(event) => {
+                                  return updatePromptInput(promptItem.id, 'originalText', event.currentTarget.value)
+                                }}
+                                placeholder={`Enter prompt ${index() + 1} content...`}
+                                rows="4"
+                                class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent resize-none ${fieldStateClass()}`}
+                                disabled={isLocked()}
+                              />
+                              <div class="flex items-center gap-4">
+                                <label class="flex items-center gap-2 text-sm">
+                                  <span>Order</span>
+                                  <input
+                                    type="number"
+                                    class={`w-20 px-2 py-1 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
+                                    value={promptItem.order}
+                                    onInput={(e) => {
+                                      const val = Number(e.currentTarget.value || 0)
+                                      return updatePromptInput(promptItem.id, 'order', Number.isNaN(val) ? 0 : val)
+                                    }}
+                                    disabled={isLocked()}
+                                  />
+                                </label>
+                              </div>
+                            </div>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                return removePromptInput(promptItem.id)
+                              }}
+                              class={`self-start mt-1 ${actionStateClass()}`}
+                              disabled={isLocked()}
+                            >
+                              ×
+                            </Button>
+                          </div>
+                        )
+                      }}
+                    </For>
+                  </div>
+                </div>
+
+                <Show when={visibleImportedPrompts().length > 0}>
+                  <div>
+                    <div class="flex items-center justify-between mb-2">
+                      <label class="block text-sm font-medium">Importable prompts</label>
+                    </div>
+                    <div class="space-y-3">
+                      <For each={visibleImportedPrompts()}>
+                        {(promptItem) => {
+                          return (
+                            <div
+                              class="border rounded-lg p-4 bg-background"
+                              classList={{'opacity-40': promptItem.enabled === false}}
+                            >
+                              <div class="flex justify-between items-start mb-3">
+                                <div class="flex items-center gap-2">
+                                  <span class="inline-flex items-center justify-center w-6 h-6 rounded-full bg-primary text-primary-foreground text-xs font-medium">
+                                    {promptItem.order}
+                                  </span>
+                                  <Show when={promptItem.promptHeading}>
+                                    <span class="font-medium">{promptItem.promptHeading}</span>
+                                  </Show>
+                                  <Show when={promptItem.type}>
+                                    <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                                      {promptItem.type}
+                                    </span>
+                                  </Show>
+                                  <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800">
+                                    Imported
+                                  </span>
+                                  <Show when={promptItem.promptArchived}>
+                                    <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-200 text-gray-600">
+                                      Archived
+                                    </span>
+                                  </Show>
+                                  <Show when={promptItem.originalId}>
+                                    <span class="inline-flex items-center px-2 py-1 rounded-full text-[11px] font-medium bg-gray-50 text-gray-600 font-mono">
+                                      {promptItem.originalId}
+                                    </span>
+                                  </Show>
+                                  <Show when={promptItem.createdAt}>
+                                    <span class="inline-flex items-center px-2 py-1 rounded-full text-[11px] font-medium bg-gray-50 text-gray-600">
+                                      Created: {new Date(promptItem.createdAt as string | Date).toLocaleDateString()}
+                                    </span>
+                                  </Show>
+                                  <Show when={promptItem.enabled !== undefined}>
+                                    <span
+                                      class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium"
+                                      classList={{
+                                        'bg-green-100 text-green-800': promptItem.enabled,
+                                        'bg-gray-100 text-gray-800': !promptItem.enabled,
+                                      }}
+                                    >
+                                      {promptItem.enabled ? 'Enabled' : 'Disabled'}
+                                    </span>
+                                  </Show>
+                                </div>
+                                <label class={`flex items-center gap-2 ${isLocked() ? 'opacity-60' : ''}`}>
+                                  <input
+                                    type="checkbox"
+                                    class="mt-0.5"
+                                    checked={Boolean(promptItem.enabled)}
+                                    onChange={() => {
+                                      return toggleImportedPromptEnabled(promptItem.id)
+                                    }}
+                                    disabled={isLocked()}
+                                  />
+                                  <span class="text-sm">Enabled</span>
+                                </label>
+                              </div>
+
+                              <div class="space-y-3">
+                                <div>
+                                  <label class="text-sm font-medium text-muted-foreground block mb-1">Heading</label>
+                                  <div class="bg-gray-50 rounded p-3 text-sm whitespace-pre-wrap">
+                                    {promptItem.promptHeading || '—'}
+                                  </div>
+                                </div>
+                                <div>
+                                  <label class="text-sm font-medium text-muted-foreground block mb-1">Type</label>
+                                  <div class="bg-gray-50 rounded p-3 text-sm whitespace-pre-wrap">
+                                    {promptItem.type || '—'}
+                                  </div>
+                                </div>
+                                <div>
+                                  <label class="text-sm font-medium text-muted-foreground block mb-1">
+                                    Original Text
+                                  </label>
+                                  <div class="bg-gray-50 rounded p-3 text-sm font-mono whitespace-pre-wrap">
+                                    {promptItem.originalText}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          )
+                        }}
+                      </For>
+                    </div>
+                  </div>
+                </Show>
+
+                <div class="flex gap-3 pt-4">
+                  <Button
+                    type="submit"
+                    disabled={!projectName().trim() || isLoading() || isLocked()}
+                    title={isLocked() ? 'Cannot update: a judgment job exists for this project' : undefined}
+                    class={actionStateClass()}
+                  >
+                    {isLoading() ? 'Updating...' : 'Update Project'}
+                  </Button>
+                  <Button as={Link} to="/projects" variant="outline">
+                    Cancel
+                  </Button>
+                </div>
+              </form>
+            </div>
+          </Show>
+        </Suspense>
+      </div>
+    </Show>
   )
 }
 

@@ -2,12 +2,15 @@ import {Elysia, t} from 'elysia'
 
 import {queryArticlesReviewsBothFromOlap} from '../../../services/olap/articlesReviewsBothOlap.ts'
 import {getAppQueryService} from '../../services/getAppQueryService.ts'
+import {assertProjectIsActive} from './projectAccessGuard.ts'
 
 export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
   '/api/articlesreviewsboth',
   async ({body}) => {
     const page = parseInt(body?.page || '1', 10)
     const limit = parseInt(body?.limit || '100', 10)
+
+    await assertProjectIsActive(body.projectId)
 
     const result = await queryArticlesReviewsBothFromOlap({
       projectId: body.projectId,

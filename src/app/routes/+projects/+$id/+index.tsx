@@ -8,18 +8,27 @@ import {ProjectDetailsInformation} from '../../../../components/main/projectDeta
 import {ProjectDetailsPrompts} from '../../../../components/main/projects/projectDetailsPrompts'
 import {Button} from '../../../../components/ui/button'
 import {archiveProject, fetchProjectWithPrompts} from '../../../../services/projectsService'
+import {useArchivedProjectRedirect, useProjectAccessQuery} from '../projectAccessGuard'
+
 const ProjectDetail = () => {
   const params = Route.useParams()
   const projectId = (params() as {id: string}).id
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [archivingProject, setArchivingProject] = createSignal(false)
+  const projectAccessQuery = useProjectAccessQuery(() => {
+    return projectId
+  })
+
+  useArchivedProjectRedirect(projectAccessQuery)
+
   const projectData = useQuery(() => {
     return {
       queryKey: ['project', projectId, 'with-prompts'],
       queryFn: () => {
         return fetchProjectWithPrompts(projectId)
       },
+      enabled: projectAccessQuery.data !== undefined && !projectAccessQuery.data.archived,
       refetchOnWindowFocus: false,
       staleTime: 5 * 60 * 1000,
     }
@@ -88,6 +97,17 @@ const ProjectDetail = () => {
 
       {/* Main Content */}
       <Switch>
+        <Match when={projectAccessQuery.isLoading || projectAccessQuery.data?.archived}>
+          <div class="text-center py-8">Loading project details...</div>
+        </Match>
+        <Match when={projectAccessQuery.isError}>
+          <div class="text-center py-8 text-red-600">
+            Error loading project:{' '}
+            {projectAccessQuery.error instanceof Error
+              ? projectAccessQuery.error.message
+              : String(projectAccessQuery.error)}
+          </div>
+        </Match>
         <Match when={projectData.isLoading}>
           <div class="text-center py-8">Loading project details...</div>
         </Match>

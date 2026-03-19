@@ -5,6 +5,7 @@ import {humanAssessmentRoutesGetOverview} from './HumanAssessmentRoutes/humanAss
 import {humanAssessmentRoutesGetOverviewBothProjects} from './HumanAssessmentRoutes/humanAssessmentRoutesGetOverviewBothProjects.ts'
 import {humanAssessmentRoutesPostInit} from './HumanAssessmentRoutes/humanAssessmentRoutesPostInit.ts'
 import {humanAssessmentRoutesPostSubmit} from './HumanAssessmentRoutes/humanAssessmentRoutesPostSubmit.ts'
+import {assertProjectIsActive} from './projectsRoutes/projectAccessGuard.ts'
 
 export const humanAssessmentRoutes = new Elysia()
   .use(withErrorHandler())
@@ -22,6 +23,7 @@ export const humanAssessmentRoutes = new Elysia()
       .post(
         '/api/humanassessment/init',
         async ({body, set}) => {
+          await assertProjectIsActive(body.projectId)
           return humanAssessmentRoutesPostInit({body, set})
         },
         {body: t.Object({projectId: t.String()})},
@@ -29,6 +31,7 @@ export const humanAssessmentRoutes = new Elysia()
       .post(
         '/api/humanassessment/submit',
         async ({body, set}) => {
+          await assertProjectIsActive(body.projectId)
           return humanAssessmentRoutesPostSubmit({body, set})
         },
         {

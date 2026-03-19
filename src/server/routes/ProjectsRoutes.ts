@@ -12,6 +12,7 @@ import {getDuckdbMartRefreshService} from '../services/getDuckdbMartRefreshServi
 import {assertSelectableModelId} from '../services/providerConnectionQueryService.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
+import {assertProjectIsActive, getProjectAccess} from './projectsRoutes/projectAccessGuard.ts'
 import {projectsRoutesGetArticlesReviews} from './projectsRoutes/projectsRoutesGetArticlesReviews.ts'
 import {projectsRoutesGetArticlesReviewsBoth} from './projectsRoutes/projectsRoutesGetArticlesReviewsBoth.ts'
 import {projectsRoutesGetArticlesReviewsCount} from './projectsRoutes/projectsRoutesGetArticlesReviewsCount.ts'
@@ -312,7 +313,18 @@ export const projectsRoutes = new Elysia()
 
     return {data: projectsWithModelName}
   })
+  .get('/api/projects/:id/access', async ({params}) => {
+    const project = await getProjectAccess(params.id)
+
+    if (!project) {
+      throw new Error('Project not found')
+    }
+
+    return {data: project}
+  })
   .get('/api/projects/:id', async ({params}) => {
+    await assertProjectIsActive(params.id)
+
     const [project] = await getAppDatabaseService()
       .queryJson<{
         id: string
@@ -707,6 +719,8 @@ export const projectsRoutes = new Elysia()
   .patch(
     '/api/projects/:id',
     async ({params, body}) => {
+      await assertProjectIsActive(params.id)
+
       const [job] = await getAppDatabaseService().queryJson<{id: string}>(`
         SELECT id
         FROM app.judgment_job
@@ -740,6 +754,8 @@ export const projectsRoutes = new Elysia()
   .patch(
     '/api/projects/:id/edit',
     async ({params, body}) => {
+      await assertProjectIsActive(params.id)
+
       const [job] = await getAppDatabaseService().queryJson<{id: string}>(`
         SELECT id
         FROM app.judgment_job
@@ -1081,6 +1097,8 @@ export const projectsRoutes = new Elysia()
     },
   )
   .delete('/api/projects/:id', async ({params}) => {
+    await assertProjectIsActive(params.id)
+
     const archivedProject = await getAppDatabaseService().transaction(async (tx) => {
       return updateProjectTx(tx, {
         projectId: params.id,
@@ -1109,6 +1127,8 @@ export const projectsRoutes = new Elysia()
     return {success: true}
   })
   .post('/api/projects/:id/clone', async ({params}) => {
+    await assertProjectIsActive(params.id)
+
     const [sourceProject] = await getAppDatabaseService()
       .queryJson<{
         id: string

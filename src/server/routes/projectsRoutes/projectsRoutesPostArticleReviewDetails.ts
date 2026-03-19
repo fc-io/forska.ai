@@ -10,6 +10,7 @@ import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getDateValue, getJsonValue, getQuotedStringList} from '../../services/appQueryHelpers.ts'
 import {getAppQueryService} from '../../services/getAppQueryService.ts'
 import {getSystemActor} from '../../utils/getSystemActor.ts'
+import {assertProjectIsActive} from './projectAccessGuard.ts'
 
 type JudgmentWithPromptAndAssessments = JudgmentRecord & {
   prompt: Pick<PromptRecord, 'originalText' | 'promptHeading'>
@@ -117,6 +118,8 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
   async ({body}) => {
     try {
       const {projectId, articleId} = body
+
+      await assertProjectIsActive(projectId)
 
       const [article] = await getAppQueryService().getFullArticlesByIds([articleId])
 

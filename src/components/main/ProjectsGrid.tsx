@@ -148,68 +148,68 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
                       {unarchivingProjects().has(project.id) ? 'Unarchiving...' : 'Unarchive'}
                     </Button>
                   </Show>
-                  <Button
-                    as={Link}
-                    to="/projects/$id"
-                    params={{id: project.id} as never}
-                    variant="outline"
-                    size="sm"
-                    class="px-3 py-1 text-sm"
-                  >
-                    Project Details
-                  </Button>
-                  <Button
-                    as={Link}
-                    to="/projects/$id/reviews"
-                    params={{id: project.id} as never}
-                    variant="outline"
-                    size="sm"
-                    class="px-3 py-1 text-sm"
-                  >
-                    Project Reviews
-                  </Button>
-                  <Button
-                    as={Link}
-                    to="/projects/$id/humanAssessment"
-                    params={{id: project.id} as never}
-                    variant="outline"
-                    size="sm"
-                    class="px-3 py-1 text-sm"
-                  >
-                    Human Assessment
-                  </Button>
-                  <Button
-                    as={Link}
-                    to="/projects/$id/edit"
-                    params={{id: project.id} as never}
-                    size="sm"
-                    variant="outline"
-                    class="px-3 py-1 text-sm"
-                  >
-                    Edit
-                  </Button>
-                  <Button
-                    as={Link}
-                    to="/projects/$id/export"
-                    params={{id: project.id} as never}
-                    size="sm"
-                    variant="outline"
-                    class="px-3 py-1 text-sm"
-                  >
-                    Export data
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    class="px-3 py-1 text-sm"
-                    disabled={cloningProjects().has(project.id)}
-                    onClick={() => {
-                      void handleCloneProject(project.id)
-                    }}
-                  >
-                    {cloningProjects().has(project.id) ? 'Cloning...' : 'Clone Project'}
-                  </Button>
                   <Show when={!props.isArchived}>
+                    <Button
+                      as={Link}
+                      to="/projects/$id"
+                      params={{id: project.id} as never}
+                      variant="outline"
+                      size="sm"
+                      class="px-3 py-1 text-sm"
+                    >
+                      Project Details
+                    </Button>
+                    <Button
+                      as={Link}
+                      to="/projects/$id/reviews"
+                      params={{id: project.id} as never}
+                      variant="outline"
+                      size="sm"
+                      class="px-3 py-1 text-sm"
+                    >
+                      Project Reviews
+                    </Button>
+                    <Button
+                      as={Link}
+                      to="/projects/$id/humanAssessment"
+                      params={{id: project.id} as never}
+                      variant="outline"
+                      size="sm"
+                      class="px-3 py-1 text-sm"
+                    >
+                      Human Assessment
+                    </Button>
+                    <Button
+                      as={Link}
+                      to="/projects/$id/edit"
+                      params={{id: project.id} as never}
+                      size="sm"
+                      variant="outline"
+                      class="px-3 py-1 text-sm"
+                    >
+                      Edit
+                    </Button>
+                    <Button
+                      as={Link}
+                      to="/projects/$id/export"
+                      params={{id: project.id} as never}
+                      size="sm"
+                      variant="outline"
+                      class="px-3 py-1 text-sm"
+                    >
+                      Export data
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      class="px-3 py-1 text-sm"
+                      disabled={cloningProjects().has(project.id)}
+                      onClick={() => {
+                        void handleCloneProject(project.id)
+                      }}
+                    >
+                      {cloningProjects().has(project.id) ? 'Cloning...' : 'Clone Project'}
+                    </Button>
                     <Button
                       size="sm"
                       class="px-3 py-1 text-sm"

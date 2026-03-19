@@ -6,6 +6,7 @@ import * as appQueryHelpers from '../services/appQueryHelpers.ts'
 import {getAppQueryService} from '../services/getAppQueryService.ts'
 import {hasMatchingJudgmentAnswer} from '../utils/judgmentAnswers.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
+import {assertProjectIsActive} from './projectsRoutes/projectAccessGuard.ts'
 
 const BATCH_SIZE = 500
 
@@ -239,6 +240,14 @@ export const projectExportRoutes = new Elysia()
     '/api/projects/:id/export',
     async ({params, body, set}) => {
       const projectId = params.id
+      const sourceProjectIds = body.sourceProjectIds || [projectId]
+
+      await Promise.all(
+        sourceProjectIds.map((sourceProjectId) => {
+          return assertProjectIsActive(sourceProjectId)
+        }),
+      )
+
       const includeExplanation = body.includeExplanation ?? false
       const includeQuotes = body.includeQuotes ?? false
       const includeJournal = body.includeJournal ?? false
@@ -287,7 +296,6 @@ export const projectExportRoutes = new Elysia()
         }
       }
 
-      const sourceProjectIds = body.sourceProjectIds || [projectId]
       const {projectSettings, projectImportRoutes} = await getSourceProjectScope(sourceProjectIds, hasPrompts)
       const judgmentConfigCondition = hasPrompts
         ? getJudgmentConfigClause({
@@ -716,6 +724,8 @@ export const projectExportRoutes = new Elysia()
   .post(
     '/api/projects/:id/export-prompts',
     async ({params, body, set}) => {
+      await assertProjectIsActive(params.id)
+
       const [project] = await appDatabaseService.queryJson<{id: string; name: string}>(`
         SELECT id, name
         FROM app.project

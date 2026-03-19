@@ -9,11 +9,14 @@ import {
   getTimestampLiteral,
 } from '../../services/appQueryHelpers.ts'
 import {getAppQueryService} from '../../services/getAppQueryService.ts'
+import {assertProjectIsActive} from './projectAccessGuard.ts'
 
 export const projectsRoutesGetArticlesReviewsHuman = new Elysia().post(
   '/api/articlesreviewshuman',
   async ({body}) => {
     try {
+      await assertProjectIsActive(body.projectId)
+
       const page = parseInt(body?.page || '1', 10)
       const limit = parseInt(body?.limit || '100', 10)
       const offset = (page - 1) * limit

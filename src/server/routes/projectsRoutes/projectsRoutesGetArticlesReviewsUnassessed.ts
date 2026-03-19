@@ -2,6 +2,7 @@ import {Elysia, t} from 'elysia'
 
 import {getUnassessedArticlesFromOlap} from '../../../services/olap/unassessedArticlesOlap.ts'
 import {getAppQueryService} from '../../services/getAppQueryService.ts'
+import {assertProjectIsActive} from './projectAccessGuard.ts'
 
 export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
   '/api/articlesreviewsunassessed',
@@ -12,6 +13,8 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
     const searchTitle = typeof body.search === 'string' ? body.search.trim() : ''
     const fromDate = body.from ? new Date(`${body.from}T00:00:00.000Z`) : null
     const toDate = body.to ? new Date(`${body.to}T23:59:59.999Z`) : null
+
+    await assertProjectIsActive(body.projectId)
 
     const projectBounds = await getAppQueryService().getProjectReviewConfig(body.projectId)
 

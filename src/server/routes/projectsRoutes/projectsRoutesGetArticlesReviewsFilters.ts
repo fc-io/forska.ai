@@ -9,6 +9,7 @@ import {getAppQueryService} from '../../services/getAppQueryService.ts'
 import {type EnumFilterResult, getEnumBasedFilters} from './articlesReviewsFiltersEnum.ts'
 import type {NumericFilterResult} from './articlesReviewsFiltersNumeric.ts'
 import {analyzePromptTypes} from './articlesReviewsFiltersUtils.ts'
+import {assertProjectIsActive} from './projectAccessGuard.ts'
 
 export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
   '/api/articlesreviewsfilters',
@@ -19,6 +20,8 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
         set.status = 400
         throw new Error('Project ID is required')
       }
+
+      await assertProjectIsActive(query.projectId)
 
       const fromDate = query?.from ? new Date(`${query.from}T00:00:00.000Z`) : null
       const toDate = query?.to ? new Date(`${query.to}T23:59:59.999Z`) : null

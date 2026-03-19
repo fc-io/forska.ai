@@ -1,6 +1,9 @@
 import type {QueryClient} from '@tanstack/solid-query'
 
 import {apiClient} from './apiClient.ts'
+import {handleApiResponse} from './utils/handleApiResponse.ts'
+
+export type ProjectAccess = {id: string; name: string; archived: boolean}
 
 export const fetchProjects = async () => {
   const response = await apiClient.api.projects.get()
@@ -113,6 +116,17 @@ export const fetchProjectWithPrompts = async (projectId: string) => {
     return response.data.data
   } catch (err) {
     console.error('Error fetching project with prompts:', err)
+    throw err
+  }
+}
+
+export const fetchProjectAccess = async (projectId: string): Promise<ProjectAccess> => {
+  try {
+    const response = await apiClient.api.projects({id: projectId}).access.get()
+
+    return handleApiResponse<{data: ProjectAccess}>(response, 'Failed to fetch project access').data
+  } catch (err) {
+    console.error('Error fetching project access:', err)
     throw err
   }
 }

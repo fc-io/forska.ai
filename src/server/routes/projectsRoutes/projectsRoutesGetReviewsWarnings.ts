@@ -2,6 +2,7 @@ import {Elysia, t} from 'elysia'
 
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString} from '../../services/appQueryHelpers.ts'
+import {assertProjectIsActive} from './projectAccessGuard.ts'
 
 const getEnabledPromptCount = async (projectId: string): Promise<number> => {
   const rows = await getAppDatabaseService().queryJson<{count: number}>(`
@@ -41,6 +42,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
   '/api/projectsreviewswarnings',
   async ({body}) => {
     const projectId = body.projectId
+    await assertProjectIsActive(projectId)
     const [enabledPromptCount, hasCuratedArticles] = await Promise.all([
       getEnabledPromptCount(projectId),
       getHasCuratedArticles(projectId),

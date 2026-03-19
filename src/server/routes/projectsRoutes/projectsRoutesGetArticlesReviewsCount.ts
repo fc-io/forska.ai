@@ -1,6 +1,7 @@
 import {Elysia, t} from 'elysia'
 
 import {countArticlesReviewsFromOlap} from '../../../services/olap/articlesReviewsOlap.ts'
+import {assertProjectIsActive} from './projectAccessGuard.ts'
 
 export const projectsRoutesGetArticlesReviewsCount = new Elysia().post(
   '/api/articlesreviewscount',
@@ -10,6 +11,8 @@ export const projectsRoutesGetArticlesReviewsCount = new Elysia().post(
 
     try {
       const limit = parseInt(body.limit, 10) || 100
+
+      await assertProjectIsActive(body.projectId)
 
       const result = await countArticlesReviewsFromOlap({
         projectId: body.projectId,

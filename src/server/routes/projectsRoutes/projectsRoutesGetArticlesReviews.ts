@@ -3,6 +3,7 @@ import {Elysia, t} from 'elysia'
 import {queryArticlesReviewsFromOlap} from '../../../services/olap/articlesReviewsOlap.ts'
 import {getJournalTitleFromOriginalData} from '../../../utils/getJournalTitleFromOriginalData.ts'
 import {getAppQueryService} from '../../services/getAppQueryService.ts'
+import {assertProjectIsActive} from './projectAccessGuard.ts'
 
 export const projectsRoutesGetArticlesReviews = new Elysia().post(
   '/api/articlesreviews',
@@ -20,6 +21,8 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
 
       const page = parseInt(body?.page ?? '1', 10)
       const limit = parseInt(body?.limit ?? '100', 10)
+
+      await assertProjectIsActive(body.projectId)
 
       const result = await queryArticlesReviewsFromOlap({
         cursor: body.cursor,
