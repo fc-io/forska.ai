@@ -19,12 +19,19 @@
 
 ## Phase 1 - Archived Out Of Marts
 
+- [ ] Adopt one archived-project product rule: archived projects are cold storage, not live working surfaces.
+- [ ] Archived projects should only support unarchive; no edit, no review, no detail views, no normal project actions.
+- [ ] Keep archived-project UI minimal: name, status, maybe counts, unarchive action.
+- [ ] Remove archived-project links/buttons for review, settings, prompts, exports, and detail screens.
+- [ ] Add route/page guards so archived project URLs redirect back to list or archived placeholder.
+- [ ] Add server/API guards so archived projects reject edit/review mutations even if UI is bypassed.
 - [ ] Audit every mart table keyed by `project_id`; decide if archived projects need live mart rows at all.
 - [ ] Change full rebuild SQL in `src/server/services/getDuckdbMartService.ts` to skip archived projects.
 - [ ] Change scoped refresh SQL in `src/server/services/getDuckdbMartRefreshService.ts` to delete mart rows when a project becomes archived.
 - [ ] Add one explicit path to rebuild marts for one archived project on demand if we still need archived review views.
 - [ ] Decide archived fallback: direct base-table queries vs temporary rebuild vs no mart-backed archived review UI.
 - [ ] Add one cleanup script to purge existing archived-project rows from all mart tables.
+- [ ] Add UI/server tests that archived projects can be unarchived but not otherwise used.
 - [ ] After purge, run `CHECKPOINT`, then compact by copying into a fresh DB.
 
 ## Phase 2 - `mart.review_article_judgment_payload`
@@ -93,6 +100,7 @@
 ## Done When
 
 - [ ] Archived projects no longer consume live mart space.
+- [ ] Archived projects are unarchive-only in UI/API.
 - [ ] Unused payload mart is gone.
 - [ ] `original_data` is removed from hot storage or moved cold.
 - [ ] Large marts store keys/facts, not repeated article text.
