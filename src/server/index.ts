@@ -31,6 +31,7 @@ import {usersRoutes} from './routes/UsersRoutes'
 import {writerConnectionsRoutes} from './routes/WriterConnectionsRoutes.ts'
 import {getCodexCliLoginStatus} from './utils/codexCliAuth.ts'
 import {env} from './utils/env'
+import {getAppServerRuntimeConfig} from './utils/getAppServerRuntimeConfig.ts'
 import {warmCodexAppServer} from './utils/getCodexAppServerClient.ts'
 import {shouldServerRoleMountWriterCrons} from './utils/serverRole.ts'
 import {
@@ -41,7 +42,8 @@ import {
 } from './utils/serverRuntimeRole.ts'
 import {startWriterConnectionHeartbeat} from './utils/writerConnectionHeartbeat.ts'
 
-const allowedOrigins = [`http://localhost:${env.VITE_PORT}`, `http://localhost:${process.env.PROD_SERVER ?? 8080}`]
+const appServerRuntimeConfig = getAppServerRuntimeConfig()
+const allowedOrigins = [`http://localhost:${env.VITE_PORT}`, `http://localhost:${appServerRuntimeConfig.port}`]
 const shouldMountWriterCrons = shouldServerRoleMountWriterCrons(env.SERVER_ROLE)
 const writerCronRoutes = shouldMountWriterCrons
   ? new Elysia().use(fullTextJobsCron).use(fullTextConversionJobsCron).use(judgmentsJobsCron).use(nvidiaSmiCron)
@@ -86,7 +88,7 @@ const _app = new Elysia()
   .listen({port: env.API_SERVER_PORT, idleTimeout: 255})
 
 console.log(
-  `🦊 Elysia is running on :${env.API_SERVER_PORT} (nodes=${env.GPU_NNODES}, gpus/node=${env.GPU_GPUS_PER_NODE}, total_gpus=${env.GPU_TOTAL_GPUS}, shape=${env.GPU_SHAPE}, tp=${env.TP_SIZE}, pp=${env.PP_SIZE}, dp=${env.DP_SIZE}, SGLANG_MAX_RUNNING_REQUESTS=${env.SGLANG_MAX_RUNNING_REQUESTS}, SGLANG_API_MAX_INFLIGHT_REQUESTS=${env.SGLANG_API_MAX_INFLIGHT_REQUESTS}, SGLANG_CONTEXT_LENGTH=${env.SGLANG_CONTEXT_LENGTH}, BUN_CONFIG_MAX_HTTP_REQUESTS=${process.env.BUN_CONFIG_MAX_HTTP_REQUESTS})`,
+  `🦊 Elysia is running on :${env.API_SERVER_PORT} (nodes=${env.GPU_NNODES}, gpus/node=${env.GPU_GPUS_PER_NODE}, total_gpus=${env.GPU_TOTAL_GPUS}, shape=${env.GPU_SHAPE}, tp=${env.TP_SIZE}, pp=${env.PP_SIZE}, dp=${env.DP_SIZE}, SGLANG_MAX_RUNNING_REQUESTS=${env.SGLANG_MAX_RUNNING_REQUESTS}, SGLANG_API_MAX_INFLIGHT_REQUESTS=${env.SGLANG_API_MAX_INFLIGHT_REQUESTS}, BUN_CONFIG_MAX_HTTP_REQUESTS=${process.env.BUN_CONFIG_MAX_HTTP_REQUESTS})`,
 )
 console.log(
   `[server] configured_role=${env.SERVER_ROLE} role=${getCurrentServerRole()} duckdb_writer=${shouldCurrentServerRunWriterWork()}`,
@@ -99,7 +101,7 @@ void warmCodexAppServer()
 void getCodexCliLoginStatus().then((status) => {
   if (!status.ok) {
     console.warn(
-      '[codex] CLI not available. Install @openai/codex and/or set CODEX_BIN. Then visit /admin/models to connect.',
+      '[codex] CLI not available. Install @openai/codex and/or configure the Codex binary in Settings. Then visit /admin/models to connect.',
     )
     return
   }

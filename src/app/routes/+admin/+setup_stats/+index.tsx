@@ -28,8 +28,6 @@ type GpuInfo = {
   TP_SIZE: number
   DP_SIZE: number
   SGLANG_MAX_RUNNING_REQUESTS: number
-  WORKER_URLS: string[]
-  SGLANG_MODEL: string | null | undefined
 }
 type GpuInfoResponse = {data: GpuInfo}
 
@@ -235,16 +233,6 @@ const AdminConfiguration = () => {
             <div>
               <div class="text-xs text-gray-500">SGLANG max running requests</div>
               <div class="text-sm text-gray-900">{gpuInfoQuery.data?.SGLANG_MAX_RUNNING_REQUESTS}</div>
-            </div>
-            <div class="md:col-span-2 xl:col-span-3">
-              <div class="text-xs text-gray-500">Worker URLs</div>
-              <div class="text-sm text-gray-900 whitespace-pre-wrap break-words">
-                {gpuInfoQuery.data?.WORKER_URLS?.length ? gpuInfoQuery.data?.WORKER_URLS.join(', ') : '—'}
-              </div>
-            </div>
-            <div class="xl:col-span-3">
-              <div class="text-xs text-gray-500">Running SGLANG model</div>
-              <div class="text-sm text-gray-900">{gpuInfoQuery.data?.SGLANG_MODEL ?? '—'}</div>
             </div>
           </div>
         </Show>

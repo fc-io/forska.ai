@@ -1,10 +1,6 @@
 import {env} from '../../utils/env.ts'
 
 export const getWorkerCount = (): number => {
-  // Prefer explicit worker URLs when router is enabled; otherwise
-  // estimate workers from GPU/Tensor Parallel topology.
-  const workerCountFromEnv = Array.isArray(env.WORKER_URLS) ? env.WORKER_URLS.length : 0
-
   const estimatedWorkers = Math.max(
     1,
     Math.floor(
@@ -12,5 +8,5 @@ export const getWorkerCount = (): number => {
     ),
   )
 
-  return Math.max(1, workerCountFromEnv > 0 ? workerCountFromEnv : estimatedWorkers)
+  return Math.max(1, estimatedWorkers)
 }

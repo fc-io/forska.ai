@@ -4,22 +4,6 @@ import {dirname, resolve} from 'path'
 
 import {getDuckdbPath} from './getDuckdbPath.ts'
 
-const CsvStringArray = arktype('string | null | undefined').pipe((value): string[] => {
-  if (value == null) return []
-  const normalized = String(value).trim()
-  if (normalized === '' || normalized.toLowerCase() === 'null' || normalized.toLowerCase() === 'undefined') {
-    return []
-  }
-  return normalized
-    .split(',')
-    .map((part) => {
-      return part.trim()
-    })
-    .filter((part) => {
-      return part.length > 0
-    })
-})
-
 const envShape = arktype({
   DUCKDB_PATH: 'string',
   DUCKDB_MEMORY_LIMIT: 'string',
@@ -53,10 +37,12 @@ const envShape = arktype({
   // Judgments cron policy (not SGLang server config)
   JUDGMENTS_READY_TARGET_MULTIPLIER: 'number | string.integer.parse',
   JUDGMENTS_ADD_TO_QUEUE_MAX_BATCH_SIZE: 'number | string.integer.parse',
-  SGLANG_MODEL: 'string | null | undefined',
-  SGLANG_CONTEXT_LENGTH: 'number | string.integer.parse',
-  CODEX_CONTEXT_LENGTH: 'number | string.integer.parse',
-  WORKER_URLS: CsvStringArray,
+  CODEX_MAX_INFLIGHT: 'number | string.integer.parse',
+  JUDGE_FIRST_REQUEST_PREVIEW_CHARS: 'number | string.integer.parse',
+  JUDGE_FIRST_REQUEST_LOG_FULL: arktype('"true" | "false" | boolean').pipe((v) => {
+    return typeof v === 'string' ? v.toLowerCase() === 'true' : v
+  }),
+  JUDGE_CHUNK_MAX_PARALLEL: 'number | string.integer.parse',
   DOCLING_SERVE_URL: 'string | null | undefined',
   FULL_TEXT_CONVERSION_BATCH_SIZE: 'number | string.integer.parse | null | undefined',
   FULL_TEXT_CONVERSION_CONCURRENCY: 'number | string.integer.parse | null | undefined',
@@ -120,6 +106,9 @@ const loadEnv = (): typeof envShape.infer => {
     'DP_SIZE',
     'SGLANG_API_MAX_INFLIGHT_REQUESTS',
     'SGLANG_API_MAX_BURST_REQUESTS',
+    'CODEX_MAX_INFLIGHT',
+    'JUDGE_FIRST_REQUEST_PREVIEW_CHARS',
+    'JUDGE_CHUNK_MAX_PARALLEL',
   ]
   numericKeys.forEach((k) => {
     if (merged[k] == null || (merged as Record<string, string>)[k] === '') {
@@ -133,13 +122,6 @@ const loadEnv = (): typeof envShape.infer => {
   ) {
     ;(merged as Record<string, string>).SGLANG_MAX_RUNNING_REQUESTS = '0'
   }
-  // Provide default for SGLANG_CONTEXT_LENGTH when not provided
-  if (merged.SGLANG_CONTEXT_LENGTH == null || (merged as Record<string, string>).SGLANG_CONTEXT_LENGTH === '') {
-    ;(merged as Record<string, string>).SGLANG_CONTEXT_LENGTH = '0'
-  }
-  if (merged.CODEX_CONTEXT_LENGTH == null || (merged as Record<string, string>).CODEX_CONTEXT_LENGTH === '') {
-    ;(merged as Record<string, string>).CODEX_CONTEXT_LENGTH = '0'
-  }
   if (
     merged.JUDGMENTS_READY_TARGET_MULTIPLIER == null
     || (merged as Record<string, string>).JUDGMENTS_READY_TARGET_MULTIPLIER === ''
@@ -152,16 +134,12 @@ const loadEnv = (): typeof envShape.infer => {
   ) {
     ;(merged as Record<string, string>).JUDGMENTS_ADD_TO_QUEUE_MAX_BATCH_SIZE = '10000'
   }
-  if (!('WORKER_URLS' in merged)) {
-    ;(merged as Record<string, undefined>).WORKER_URLS = undefined
+  if (merged.JUDGE_FIRST_REQUEST_LOG_FULL == null || merged.JUDGE_FIRST_REQUEST_LOG_FULL === '') {
+    ;(merged as Record<string, string>).JUDGE_FIRST_REQUEST_LOG_FULL = 'false'
   }
   // Provide a stable default when GPU_SHAPE is not provided
   if (merged.GPU_SHAPE == null || String(merged.GPU_SHAPE).trim() === '') {
     ;(merged as Record<string, string>).GPU_SHAPE = 'not set'
-  }
-  // Provide a stable default when SGLANG_MODEL is not provided
-  if (merged.SGLANG_MODEL == null || String(merged.SGLANG_MODEL).trim() === '') {
-    ;(merged as Record<string, string>).SGLANG_MODEL = 'not set'
   }
   // Provide a stable default when DOCLING_SERVE_URL is not provided
   if (merged.DOCLING_SERVE_URL == null || String(merged.DOCLING_SERVE_URL).trim() === '') {

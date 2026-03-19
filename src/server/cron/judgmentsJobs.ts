@@ -1,3 +1,5 @@
+import {hostname} from 'node:os'
+
 import {cron} from '@elysiajs/cron'
 import {Elysia} from 'elysia'
 
@@ -11,12 +13,12 @@ import {judgmentsJobsGetRunningJobs} from './judgmentsJobs/judgmentsJobsGetRunni
 import {judgmentsJobsSendToLLM} from './judgmentsJobs/judgmentsJobsSendToLLM.ts'
 
 const buildDefaultServerJobId = (): string => {
-  const hostname = String(process.env.HOSTNAME ?? '').trim() || 'unknown-host'
+  const normalizedHostname = hostname().trim() || 'unknown-host'
   const port = String(env.API_SERVER_PORT)
-  return `server-job-${hostname}-${port}`
+  return `server-job-${normalizedHostname}-${port}-${process.pid}`
 }
 
-const serverJobId = String(process.env.SERVER_JOB_ID ?? '').trim() || buildDefaultServerJobId()
+const serverJobId = buildDefaultServerJobId()
 
 const cronLogger = createRateLimitedLogger({windowMs: 30_000})
 

@@ -2,6 +2,7 @@ import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {getQuotedStringList} from '../../services/appQueryHelpers.ts'
 import {rateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {ConnectionError} from './connectionHealth.ts'
+import {getCodexMaxInflight} from './getCodexMaxInflight.ts'
 import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
 import type {judgmentsJobsGetRunningJobs} from './judgmentsJobsGetRunningJobs.ts'
 import {getAndUpdateReadyPrompts, type PromptToProcess} from './judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts'
@@ -29,12 +30,6 @@ const normalizeProvider = (value: string | null | undefined): string => {
 
 const isCodexJob = (job: {modelProvider: string | null}): boolean => {
   return normalizeProvider(job.modelProvider) === 'codex'
-}
-
-const getCodexMaxInflight = (): number => {
-  const raw = Number(process.env.CODEX_MAX_INFLIGHT)
-  const n = Number.isFinite(raw) ? Math.trunc(raw) : 0
-  return n > 0 ? n : 1
 }
 
 const getReadyCountsByJob = async (jobIds: string[]): Promise<Map<string, number>> => {

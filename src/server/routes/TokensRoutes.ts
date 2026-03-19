@@ -24,7 +24,7 @@ export const tokensRoutes = new Elysia()
           dp_size: env.DP_SIZE,
           gpu_shape: env.GPU_SHAPE ?? null,
           sglang_max_running_requests: env.SGLANG_MAX_RUNNING_REQUESTS,
-          sglang_model: env.SGLANG_MODEL ?? null,
+          sglang_model: body.sglangModel ?? null,
           requests: body.requests,
           total_prompt_tokens: body.totalPromptTokens,
           total_completion_tokens: body.totalCompletionTokens,
@@ -53,6 +53,7 @@ export const tokensRoutes = new Elysia()
     {
       body: t.Object({
         judgmentsJobId: t.Optional(t.String()),
+        sglangModel: t.Optional(t.String()),
         requests: t.Number(),
         totalPromptTokens: t.Number(),
         totalCompletionTokens: t.Number(),

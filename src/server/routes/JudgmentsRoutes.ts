@@ -3,7 +3,6 @@ import {Elysia} from 'elysia'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {ensureProviderConnectionSeed} from '../services/ensureProviderConnectionSeed.ts'
-import {env} from '../utils/env.ts'
 
 type ModelRow = {
   id: string
@@ -17,22 +16,6 @@ type ModelRow = {
   createdAt: string | null
   updatedAt: string | null
 }
-
-const normalizeWorkerUrls = (urls: string[] | null | undefined): string[] => {
-  return Array.from(
-    new Set(
-      (urls ?? [])
-        .map((url) => {
-          return url.trim()
-        })
-        .filter((url) => {
-          return url.length > 0
-        }),
-    ),
-  )
-}
-
-const envWorkerUrls = normalizeWorkerUrls(env.WORKER_URLS)
 
 export const judgmentsRoutes = new Elysia().get('/api/judgments/model', async ({query}) => {
   try {
@@ -59,19 +42,12 @@ export const judgmentsRoutes = new Elysia().get('/api/judgments/model', async ({
       LIMIT 1
     `)
 
-    const persistedModel =
-      existingModel
-      ?? (
-        await getAppDatabaseService().transaction(async (tx) => {
+    const insertedModels = existingModel
+      ? []
+      : ((await getAppDatabaseService().transaction(async (tx) => {
           const modelId = crypto.randomUUID()
 
-          await ensureProviderConnectionSeed(tx, {
-            baseURL,
-            connectionId: modelId,
-            label: modelName,
-            provider,
-            workerUrls: envWorkerUrls,
-          })
+          await ensureProviderConnectionSeed(tx, {baseURL, connectionId: modelId, label: modelName, provider})
 
           return tx.queryJson<ModelRow>(`
             INSERT INTO app.model (
@@ -114,8 +90,8 @@ export const judgmentsRoutes = new Elysia().get('/api/judgments/model', async ({
               created_at AS createdAt,
               updated_at AS updatedAt
           `)
-        })
-      )[0]
+        })) as ModelRow[])
+    const persistedModel = existingModel ?? insertedModels[0]
 
     if (!persistedModel) {
       throw new Error('Failed to ensure model record')

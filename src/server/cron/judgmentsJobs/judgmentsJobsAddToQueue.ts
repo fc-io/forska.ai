@@ -1,6 +1,8 @@
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
+import {env} from '../../utils/env.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
+import {getCodexMaxInflight} from './getCodexMaxInflight.ts'
 import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
 import {clearJobCursor, setJobCursor} from './jobCursorStore.ts'
 import {judgmentsJobsCronGetPrompts} from './judgmentsJobsCronGetPrompts.ts'
@@ -18,19 +20,13 @@ type JobConfig = {
 
 const addToQueueLogger = createRateLimitedLogger({windowMs: 30_000})
 
-const getCodexMaxInflight = (): number => {
-  const raw = Number(process.env.CODEX_MAX_INFLIGHT)
-  const n = Number.isFinite(raw) ? Math.trunc(raw) : 0
-  return n > 0 ? n : 1
-}
-
 const getCodexQueueTargets = (runningJobCount: number) => {
   const maxInflight = getCodexMaxInflight()
-  const readyTargetMultiplier = Math.max(1, Number(process.env.JUDGMENTS_READY_TARGET_MULTIPLIER ?? 10))
+  const readyTargetMultiplier = Math.max(1, env.JUDGMENTS_READY_TARGET_MULTIPLIER)
   const readyTargetTotal = maxInflight * readyTargetMultiplier
   const normalizedJobCount = Math.max(1, runningJobCount)
   const readyTargetPerJob = Math.max(1, Math.ceil(readyTargetTotal / normalizedJobCount))
-  const envMaxBatch = Math.max(1, Number(process.env.JUDGMENTS_ADD_TO_QUEUE_MAX_BATCH_SIZE ?? 10000))
+  const envMaxBatch = Math.max(1, env.JUDGMENTS_ADD_TO_QUEUE_MAX_BATCH_SIZE)
   const addToQueueMaxBatchSize = Math.min(envMaxBatch, 2000)
   return {readyTargetPerJob, addToQueueMaxBatchSize}
 }

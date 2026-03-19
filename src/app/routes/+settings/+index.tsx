@@ -5,9 +5,17 @@ import {createEffect, createSignal, Show} from 'solid-js'
 import {apiClient} from '../../../services/apiClient'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse'
 
-type LocalUser = {id: string; name: string; email: string; role?: string | null; unpaywallEmail?: string | null}
+type LocalUser = {
+  id: string
+  name: string
+  email: string
+  role?: string | null
+  unpaywallEmail?: string | null
+  duckdbBin?: string | null
+  codexBin?: string | null
+}
 type UsersResponse = {data: LocalUser[]}
-type UpdateLocalUserInput = {email: string; name: string; unpaywallEmail: string}
+type UpdateLocalUserInput = {email: string; name: string; unpaywallEmail: string; duckdbBin: string; codexBin: string}
 type UpdateUserResponse = {data: LocalUser}
 
 const fetchLocalUser = async (): Promise<LocalUser | null> => {
@@ -16,7 +24,7 @@ const fetchLocalUser = async (): Promise<LocalUser | null> => {
   return result.data?.[0] ?? null
 }
 
-const getNullableEmail = (value: string): string | null => {
+const getNullableString = (value: string): string | null => {
   const normalized = value.trim()
 
   return normalized === '' ? null : normalized
@@ -24,9 +32,11 @@ const getNullableEmail = (value: string): string | null => {
 
 const updateLocalUser = async (input: UpdateLocalUserInput): Promise<LocalUser> => {
   const response = await apiClient.api.users.patch({
+    codexBin: getNullableString(input.codexBin),
+    duckdbBin: getNullableString(input.duckdbBin),
     email: input.email,
     name: input.name,
-    unpaywallEmail: getNullableEmail(input.unpaywallEmail),
+    unpaywallEmail: getNullableString(input.unpaywallEmail),
   })
   const result = handleApiResponse<UpdateUserResponse>(response, 'Failed to save settings')
 
@@ -37,6 +47,8 @@ const Settings = () => {
   const [displayName, setDisplayName] = createSignal('')
   const [profileEmail, setProfileEmail] = createSignal('')
   const [unpaywallEmail, setUnpaywallEmail] = createSignal('')
+  const [duckdbBin, setDuckdbBin] = createSignal('')
+  const [codexBin, setCodexBin] = createSignal('')
   const localUserQuery = useQuery(() => {
     return {queryKey: ['local-user'], queryFn: fetchLocalUser, staleTime: 5 * 60 * 1000, refetchOnWindowFocus: false}
   })
@@ -47,6 +59,8 @@ const Settings = () => {
         setDisplayName(user.name)
         setProfileEmail(user.email)
         setUnpaywallEmail(user.unpaywallEmail ?? '')
+        setDuckdbBin(user.duckdbBin ?? '')
+        setCodexBin(user.codexBin ?? '')
         void localUserQuery.refetch()
       },
     }
@@ -56,6 +70,8 @@ const Settings = () => {
     setDisplayName(localUserQuery.data?.name ?? '')
     setProfileEmail(localUserQuery.data?.email ?? '')
     setUnpaywallEmail(localUserQuery.data?.unpaywallEmail ?? '')
+    setDuckdbBin(localUserQuery.data?.duckdbBin ?? '')
+    setCodexBin(localUserQuery.data?.codexBin ?? '')
   })
 
   const isProfileDirty = () => {
@@ -63,6 +79,8 @@ const Settings = () => {
       displayName().trim() !== (localUserQuery.data?.name ?? '').trim()
       || profileEmail().trim() !== (localUserQuery.data?.email ?? '').trim()
       || unpaywallEmail().trim() !== (localUserQuery.data?.unpaywallEmail ?? '').trim()
+      || duckdbBin().trim() !== (localUserQuery.data?.duckdbBin ?? '').trim()
+      || codexBin().trim() !== (localUserQuery.data?.codexBin ?? '').trim()
     )
   }
 
@@ -119,6 +137,40 @@ const Settings = () => {
                   Used when fetching PDFs from Unpaywall. Stored in local app config.
                 </p>
               </div>
+              <div class="pt-2 border-t border-gray-200">
+                <h3 class="text-sm font-semibold text-gray-900 mb-3">Advanced</h3>
+                <div class="space-y-4">
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">DuckDB Binary</label>
+                    <input
+                      type="text"
+                      value={duckdbBin()}
+                      onInput={(event) => {
+                        setDuckdbBin(event.currentTarget.value)
+                      }}
+                      class="w-full px-3 py-3 border border-gray-300 rounded-md bg-white text-gray-900 sm:text-sm"
+                    />
+                    <p class="mt-2 text-xs text-gray-500">
+                      Optional override for the DuckDB CLI binary. Leave empty to use `duckdb` on PATH.
+                    </p>
+                  </div>
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Codex Binary</label>
+                    <input
+                      type="text"
+                      value={codexBin()}
+                      onInput={(event) => {
+                        setCodexBin(event.currentTarget.value)
+                      }}
+                      class="w-full px-3 py-3 border border-gray-300 rounded-md bg-white text-gray-900 sm:text-sm"
+                    />
+                    <p class="mt-2 text-xs text-gray-500">
+                      Optional override for the Codex CLI binary. Leave empty to auto-detect it.
+                    </p>
+                  </div>
+                  <p class="text-xs text-gray-500">Binary changes apply on the next server restart.</p>
+                </div>
+              </div>
               <Show when={updateLocalUserMutation.isError}>
                 <p class="text-sm text-red-600">
                   {updateLocalUserMutation.error instanceof Error
@@ -134,13 +186,15 @@ const Settings = () => {
                 disabled={updateLocalUserMutation.isPending || !isProfileDirty()}
                 onClick={() => {
                   updateLocalUserMutation.mutate({
+                    codexBin: codexBin(),
+                    duckdbBin: duckdbBin(),
                     email: profileEmail(),
                     name: displayName(),
                     unpaywallEmail: unpaywallEmail(),
                   })
                 }}
               >
-                {updateLocalUserMutation.isPending ? 'Saving...' : 'Save Profile'}
+                {updateLocalUserMutation.isPending ? 'Saving...' : 'Save Settings'}
               </button>
             </div>
           </Show>

@@ -3,6 +3,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
+import {readLocalAppSettings} from './localAppSettings.ts'
+
 type JsonRpcId = number
 
 type JsonRpcErrorShape = {code: number; message: string; data?: unknown}
@@ -22,8 +24,8 @@ const CODEx_DEFAULT_TIMEOUT_MS = 30_000
 const MAX_DEBUG_OUTPUT_CHARS = 8_000
 
 export const getCodexBinPath = (): string => {
-  const fromEnv = String(process.env.CODEX_BIN ?? '').trim()
-  if (fromEnv.length > 0) return fromEnv
+  const configuredPath = readLocalAppSettings().codexBin
+  if (configuredPath) return configuredPath
   const bunGlobal = path.join(os.homedir(), '.bun', 'bin', 'codex')
   if (fs.existsSync(bunGlobal)) return bunGlobal
   const brewAppleSilicon = '/opt/homebrew/bin/codex'
@@ -180,7 +182,7 @@ export const getCodexAppServerClient = (): CodexAppServerClient => {
   const buildExitError = (code: number | null, signal: string | null): Error => {
     const hint =
       'Make sure OpenAI Codex is installed and supports `codex app-server`.'
-      + ' If you have another `codex` on PATH, set `CODEX_BIN`.'
+      + ' If you need a different binary, configure it in Settings.'
       + ' Also run `codex login` once.'
     const details = [
       `bin=${JSON.stringify(codexBin)}`,
@@ -207,7 +209,7 @@ export const getCodexAppServerClient = (): CodexAppServerClient => {
 
   proc.on('error', (error) => {
     const err = new Error(
-      `codex app-server failed to start (${String(error)}). Set CODEX_BIN to the OpenAI Codex binary.`,
+      `codex app-server failed to start (${String(error)}). Configure the Codex binary in Settings if needed.`,
     )
     pending.forEach((p) => {
       p.reject(err)

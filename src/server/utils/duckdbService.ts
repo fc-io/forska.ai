@@ -9,6 +9,7 @@ import {Effect} from 'effect'
 
 import {env} from './env.ts'
 import {ensureDuckdbPathDirectory} from './getDuckdbPath.ts'
+import {readLocalAppSettings} from './localAppSettings.ts'
 import {
   ensureCurrentDuckdbOwnerLease,
   registerWriterDemotionHandler,
@@ -63,8 +64,7 @@ const duckdbServiceState = getDuckdbServiceState()
 const duckdbSnapshotDirectory = join(tmpdir(), 'forska-duckdb-studio')
 
 const getDuckdbBinary = () => {
-  const configuredBinary = String(process.env['DUCKDB_BIN'] ?? '').trim()
-  return configuredBinary === '' ? 'duckdb' : configuredBinary
+  return readLocalAppSettings().duckdbBin ?? 'duckdb'
 }
 
 const getTrimmedValue = (value: string | null | undefined) => {

@@ -489,7 +489,7 @@ export const modelsRoutes = new Elysia()
             : false
 
         const message = !cli.ok
-          ? 'Codex CLI not available. Install @openai/codex and ensure CODEX_BIN points to it.'
+          ? 'Codex CLI not available. Install @openai/codex and configure the Codex binary in Settings if needed.'
           : cli.loggedIn
             ? appServerReady
               ? 'Codex connected.'
@@ -580,9 +580,7 @@ export const modelsRoutes = new Elysia()
           GPU_SHAPE: env.GPU_SHAPE,
           GPU_TOTAL_GPUS: env.GPU_TOTAL_GPUS,
           SGLANG_MAX_RUNNING_REQUESTS: env.SGLANG_MAX_RUNNING_REQUESTS,
-          SGLANG_MODEL: env.SGLANG_MODEL,
           TP_SIZE: env.TP_SIZE,
-          WORKER_URLS: env.WORKER_URLS,
         },
       }
     }),

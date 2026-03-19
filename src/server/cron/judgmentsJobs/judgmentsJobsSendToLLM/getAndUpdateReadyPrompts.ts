@@ -8,6 +8,7 @@ export type PromptToProcess = {
   recordId: string
   projectId: string
   modelId: string
+  modelMetadataJson: unknown
   modelProvider: string
   modelSecretRef: string | null
   modelName: string
@@ -108,6 +109,7 @@ const processReadyRows = async (
           modelProvider: string | null
           modelName: string | null
           modelVersion: string | null
+          modelMetadataJson: unknown
           modelBaseUrl: string | null
           legacyWorkerUrls: unknown
           providerConfigJson: unknown
@@ -124,6 +126,7 @@ const processReadyRows = async (
             COALESCE(pc.provider_kind, m.provider) AS modelProvider,
             COALESCE(m.model_name, m.remote_model_id) AS modelName,
             COALESCE(m.variant, m.version) AS modelVersion,
+            TO_JSON(m.metadata_json) AS modelMetadataJson,
             COALESCE(pc.base_url, m.base_url) AS modelBaseUrl,
             TO_JSON(m.worker_urls) AS legacyWorkerUrls,
             TO_JSON(pc.config_json) AS providerConfigJson,
@@ -186,6 +189,7 @@ const processReadyRows = async (
         ...prompt,
         projectId: config.projectId,
         modelId: config.modelId,
+        modelMetadataJson: config.modelMetadataJson,
         modelProvider: provider,
         modelSecretRef: config.modelSecretRef ?? null,
         modelName: config.modelName,

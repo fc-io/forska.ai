@@ -22,9 +22,11 @@
 ## Next Focus
 
 - [ ] Split worker-url handling by runtime: local/manual provider URLs may live in DuckDB; sbatch/Slurm worker URLs should come from launcher/runtime discovery, not persisted app config.
-- [ ] Remove global `WORKER_URLS` as product config; only keep short-lived runtime wiring if a launcher still needs to pass discovered URLs.
-- [ ] Keep model capability/config in the DB: `SGLANG_MODEL`, `SGLANG_CONTEXT_LENGTH`, `CODEX_CONTEXT_LENGTH`.
-- [ ] Remove raw `process.env` reads in judgment scheduling/runtime code.
+- [x] Remove global `WORKER_URLS` as product config; only keep short-lived runtime wiring if a launcher still needs to pass discovered URLs.
+- [x] Remove global env usage for `SGLANG_MODEL`, `SGLANG_CONTEXT_LENGTH`, and `CODEX_CONTEXT_LENGTH`.
+- [ ] Prefer deriving model identity/capabilities from provider/runtime discovery; only persist per-model/per-provider capability data when discovery is missing.
+- [x] Remove raw `process.env` reads in judgment scheduling/runtime code.
+- [x] Move `DUCKDB_BIN` and `CODEX_BIN` out of env; treat them as advanced user settings.
 - [ ] Decide which inference/runtime values are product config vs machine/operator metadata.
 - [ ] After the inference move, do docs cleanup and a minimal-env startup check.
 
@@ -46,11 +48,13 @@
 
 ## Inference Config Move
 
-- [ ] Move away from global `WORKER_URLS` env in app runtime.
+- [x] Move away from global `WORKER_URLS` env in app runtime.
 - [ ] Keep local/manual provider worker URLs in DuckDB only where they are real saved app config.
 - [ ] Keep sbatch/Slurm worker URLs out of persisted app config; derive them from launch/runtime state.
 - [ ] Decide config shape: provider/model-owned config in DuckDB vs a small `app.runtime_config` table for true persisted runtime settings.
-- [ ] Move `SGLANG_MODEL`, `SGLANG_CONTEXT_LENGTH`, and `CODEX_CONTEXT_LENGTH` into DB-backed inference config.
+- [x] Remove global env usage for `SGLANG_MODEL`, `SGLANG_CONTEXT_LENGTH`, and `CODEX_CONTEXT_LENGTH`.
+- [ ] Prefer deriving `SGLANG_MODEL` from launch/runtime/provider state rather than storing one global value.
+- [ ] Prefer deriving context lengths from runtime/provider capabilities; persist per-model/per-provider fallback values only when discovery is unavailable.
 - [ ] Decide whether `GPU_NNODES`, `GPU_GPUS_PER_NODE`, `GPU_TOTAL_GPUS`, `TP_SIZE`, `PP_SIZE`, `DP_SIZE`, `GPU_SHAPE`, and `SGLANG_MAX_RUNNING_REQUESTS` stay env/runtime metadata or move to discovered/persisted runtime state.
 - [ ] Move `CODEX_MAX_INFLIGHT` and similar judgment-scheduler knobs out of raw `process.env`.
 - [ ] Update job scheduling and token logging to read the chosen config source instead of env.
@@ -64,15 +68,16 @@
 
 ## Cleanup Direct Env Usage
 
-- [ ] Remove direct `process.env` reads in judgment scheduling/runtime code and replace them with typed config reads.
-- [ ] Remove direct `process.env` reads in `src/appServer.ts` that belong in a clearer runtime config layer.
-- [ ] Decide whether binary override envs such as `DUCKDB_BIN` and `CODEX_BIN` stay as advanced runtime envs.
-- [ ] Decide whether `HOSTNAME`, `SERVER_JOB_ID`, and related process identity values stay as operational metadata.
+- [x] Remove direct `process.env` reads in judgment scheduling/runtime code and replace them with typed config reads.
+- [x] Remove direct `process.env` reads in `src/appServer.ts` that belong in a clearer runtime config layer.
+- [x] Move binary override envs such as `DUCKDB_BIN` and `CODEX_BIN` into advanced app/user settings.
+- [x] Derive or generate `HOSTNAME`, `SERVER_JOB_ID`, and related process identity values instead of treating them as user-set env config.
 
 ## Migration And Rollout
 
 - [ ] Add migrations for any new config tables or columns.
 - [x] Add migrations for the persisted Unpaywall email field and any cleanup needed after removing OpenAlex-specific config.
+- [x] Add local persisted settings storage for advanced binary overrides without reintroducing env config.
 - [ ] Optional: add a bootstrap path for any remaining legacy env-backed contact values we still care to preserve.
 - [ ] Update docs to say that core app behavior is configured in the app, not by editing env files.
 - [ ] Remove stale env examples and old no-auth wording that still points users at env for app features.

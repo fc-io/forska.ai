@@ -76,6 +76,7 @@ const isConnectionError = (error: string | null): boolean => {
 }
 
 type TokenUseTotals = {
+  modelName: string | null
   totalRequests: number
   totalPromptTokens: number
   totalCompletionTokens: number
@@ -96,6 +97,14 @@ const isServerEnvironment = (): boolean => {
   return typeof window === 'undefined' || typeof Bun !== 'undefined'
 }
 
+const getStoredModelName = (tokenUseEntries: JudgeTokenUsageEntry[]): string | null => {
+  return tokenUseEntries.reduce<string | null>((resolved, entry) => {
+    const normalized = String(entry.modelName ?? '').trim()
+
+    return resolved ?? (normalized === '' ? null : normalized)
+  }, null)
+}
+
 const storeTokenUseDirectly = async (
   totalTokenUse: TokenUseTotals,
   _sessionId: string | null,
@@ -111,7 +120,7 @@ const storeTokenUseDirectly = async (
     dp_size: env.DP_SIZE,
     gpu_shape: env.GPU_SHAPE ?? null,
     sglang_max_running_requests: env.SGLANG_MAX_RUNNING_REQUESTS,
-    sglang_model: env.SGLANG_MODEL ?? null,
+    sglang_model: totalTokenUse.modelName,
     requests: totalTokenUse.totalRequests,
     total_prompt_tokens: totalTokenUse.totalPromptTokens,
     total_completion_tokens: totalTokenUse.totalCompletionTokens,
@@ -144,6 +153,7 @@ const storeTokenUseViaAPI = async (
 ): Promise<void> => {
   const response = await apiClient.api.tokens.usage.post({
     judgmentsJobId,
+    sglangModel: totalTokenUse.modelName,
     requests: totalTokenUse.totalRequests,
     totalPromptTokens: totalTokenUse.totalPromptTokens,
     totalCompletionTokens: totalTokenUse.totalCompletionTokens,
@@ -341,6 +351,7 @@ export const buildTokenUseTotals = (tokenUseEntries: JudgeTokenUsageEntry[]): To
   const hasFailedRequests = failedRequestsDetails.length > 0
 
   return {
+    modelName: getStoredModelName(tokenUseEntries),
     totalRequests: totals.totalRequests,
     totalPromptTokens: totals.totalPromptTokens,
     totalCompletionTokens: totals.totalCompletionTokens,

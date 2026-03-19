@@ -1,10 +1,10 @@
 import {getAppDatabaseService} from '../../server/services/appDatabaseService.ts'
 import {env} from '../../server/utils/env.ts'
 import {getDuckdbPath} from '../../server/utils/getDuckdbPath.ts'
+import {readLocalAppSettings} from '../../server/utils/localAppSettings.ts'
 
 const getDuckdbBin = () => {
-  const configured = String(process.env['DUCKDB_BIN'] ?? '').trim()
-  return configured || 'duckdb'
+  return readLocalAppSettings().duckdbBin ?? 'duckdb'
 }
 
 export const getDuckdbSqlString = (value: string) => {

@@ -1,5 +1,6 @@
 import {workerLoadBalancer} from '../../utils/workerLoadBalancer.ts'
 import {ConnectionError, isCircuitOpen} from './connectionHealth.ts'
+import {getCodexMaxInflight} from './getCodexMaxInflight.ts'
 import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
 
 type RequestSlot = {baseURL: string; release: () => void}
@@ -10,8 +11,6 @@ type FallbackWaiter = RequestWaiter<RequestSlot> & {baseURL: string}
 type WorkerWaiter = RequestWaiter<RequestSlot> & {workerUrls: string[]}
 
 type JobRequestState = {inFlight: number; pendingPersistedAttempts: number}
-
-const DEFAULT_CODEX_MAX_INFLIGHT = 1
 
 const codexWaiters: RequestWaiter<() => void>[] = []
 const workerWaiters: WorkerWaiter[] = []
@@ -26,12 +25,6 @@ const normalizeProvider = (value: string | null | undefined): string => {
     .trim()
     .toLowerCase()
   return v.length > 0 ? v : 'unknown'
-}
-
-const getCodexMaxInflight = (): number => {
-  const raw = Number(process.env.CODEX_MAX_INFLIGHT)
-  const normalized = Number.isFinite(raw) ? Math.trunc(raw) : 0
-  return normalized > 0 ? normalized : DEFAULT_CODEX_MAX_INFLIGHT
 }
 
 const getNonCodexCapacity = () => {

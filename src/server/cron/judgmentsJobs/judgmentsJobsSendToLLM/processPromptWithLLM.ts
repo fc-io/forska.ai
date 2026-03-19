@@ -1,10 +1,9 @@
 import {judgeSinglePrompt} from '../../../../agent/judge.ts'
 import type {ArticleRecord, PublicationStatus} from '../../../../db/schemaTypes.ts'
 import {getAppDatabaseService} from '../../../services/appDatabaseService.ts'
-import {escapeSqlString, getSqlLiteral} from '../../../services/appQueryHelpers.ts'
+import {escapeSqlString, getJsonValue, getSqlLiteral} from '../../../services/appQueryHelpers.ts'
 import {getAppQueryService} from '../../../services/getAppQueryService.ts'
 import {ensureFullText} from '../../../utils/ensureFullText.ts'
-import {env} from '../../../utils/env.ts'
 import {processFulltextForLLM} from '../../../utils/fulltextProcessing.ts'
 import {createRateLimitedLogger, rateLimitedLogger} from '../../../utils/rateLimitedLogger.ts'
 import {ConnectionError} from '../connectionHealth.ts'
@@ -39,17 +38,58 @@ const processPromptLogger = createRateLimitedLogger({windowMs: 30_000})
 
 const DEFAULT_MODEL_CONTEXT = 32768
 
-const normalizeProvider = (value: string | null | undefined): string => {
-  const v = String(value ?? '')
-    .trim()
-    .toLowerCase()
-  return v.length > 0 ? v : 'unknown'
+const modelContextMetadataKeys = [
+  'contextLength',
+  'context_length',
+  'contextWindow',
+  'context_window',
+  'maxInputTokens',
+  'max_input_tokens',
+  'inputTokenLimit',
+  'input_token_limit',
+  'maxSequenceLength',
+  'max_sequence_length',
+  'tokenLimit',
+  'token_limit',
+] as const
+
+const getPositiveInteger = (value: unknown): number | null => {
+  const numericValue = typeof value === 'number' ? value : Number(value)
+
+  return Number.isFinite(numericValue) && numericValue > 0 ? Math.trunc(numericValue) : null
 }
 
-const getModelContextForProvider = (provider: string | null | undefined): number => {
-  const normalized = normalizeProvider(provider)
-  const fromEnv = normalized === 'codex' ? env.CODEX_CONTEXT_LENGTH : env.SGLANG_CONTEXT_LENGTH
-  return fromEnv > 0 ? fromEnv : DEFAULT_MODEL_CONTEXT
+const getJsonRecord = (value: unknown): Record<string, unknown> | null => {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
+}
+
+const getContextLengthFromDirectMetadata = (record: Record<string, unknown>): number | null => {
+  return modelContextMetadataKeys.reduce<number | null>((resolved, key) => {
+    return resolved ?? getPositiveInteger(record[key])
+  }, null)
+}
+
+const getContextLengthFromMetadata = (value: unknown): number | null => {
+  const parsedValue = getJsonValue(value)
+  const arrayValue = Array.isArray(parsedValue) ? parsedValue : null
+  const recordValue = getJsonRecord(parsedValue)
+
+  return arrayValue
+    ? arrayValue.reduce<number | null>((resolved, entry) => {
+        return resolved ?? getContextLengthFromMetadata(entry)
+      }, null)
+    : recordValue
+      ? (getContextLengthFromDirectMetadata(recordValue)
+        ?? Object.values(recordValue).reduce<number | null>((resolved, entry) => {
+          return resolved ?? getContextLengthFromMetadata(entry)
+        }, null))
+      : getPositiveInteger(parsedValue)
+}
+
+const getModelContext = (metadataJson: unknown): number => {
+  return getContextLengthFromMetadata(metadataJson) ?? DEFAULT_MODEL_CONTEXT
 }
 
 const processSinglePrompt = async (
@@ -134,7 +174,7 @@ const markAsSkipped = async (
 
 export const processPromptWithLLM = async (promptToProcess: PromptToProcess): Promise<void> => {
   const startTime = Date.now()
-  const modelContext = getModelContextForProvider(promptToProcess.modelProvider)
+  const modelContext = getModelContext(promptToProcess.modelMetadataJson)
   const judgmentExists = await checkJudgmentExistsInDatabase(promptToProcess)
   if (judgmentExists) {
     await markAsJudged(promptToProcess.jobId, promptToProcess.articleId, promptToProcess.promptId)
