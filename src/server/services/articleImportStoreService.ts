@@ -49,7 +49,6 @@ const articleColumnMap = {
   doi: 'doi',
   pubmedId: 'pubmed_id',
   url: 'url',
-  originalData: 'original_data',
   sourceMetadata: 'source_metadata',
   fullText: 'full_text',
   fullTextHtml: 'full_text_html',
@@ -63,7 +62,15 @@ const articleColumnMap = {
   fullTextCharCount: 'full_text_char_count',
 } as const
 
-const requiredArticleKeys = ['articleId', 'articleTitle', 'articleSummary', 'articleAuthors', 'importRoute'] as const
+type PersistedArticleKey = keyof typeof articleColumnMap
+
+const requiredArticleKeys = [
+  'articleId',
+  'articleTitle',
+  'articleSummary',
+  'articleAuthors',
+  'importRoute',
+] as const satisfies readonly PersistedArticleKey[]
 
 const optionalArticleKeys = [
   'articleUpdatedAt',
@@ -75,7 +82,6 @@ const optionalArticleKeys = [
   'doi',
   'pubmedId',
   'url',
-  'originalData',
   'sourceMetadata',
   'fullText',
   'fullTextHtml',
@@ -87,7 +93,7 @@ const optionalArticleKeys = [
   'fullTextConversionError',
   'fullTextConversionAttempts',
   'fullTextCharCount',
-] as const satisfies readonly (keyof ArticleImportStoreRow)[]
+] as const satisfies readonly PersistedArticleKey[]
 
 const getIncludedArticleKeys = (rows: ArticleImportStoreRow[]) => {
   const includedOptionalKeys = optionalArticleKeys.filter((key) => {
@@ -96,7 +102,7 @@ const getIncludedArticleKeys = (rows: ArticleImportStoreRow[]) => {
     })
   })
 
-  return [...requiredArticleKeys, ...includedOptionalKeys] as Array<keyof ArticleImportStoreRow>
+  return [...requiredArticleKeys, ...includedOptionalKeys] as PersistedArticleKey[]
 }
 
 const getNormalizedArticleImportRow = (row: ArticleImportStoreRow): ArticleImportStoreRow => {
@@ -112,7 +118,7 @@ const getNormalizedArticleImportRow = (row: ArticleImportStoreRow): ArticleImpor
   return {...row, doi, sourceMetadata}
 }
 
-const getArticleInsertValues = (rows: ArticleImportStoreRow[], includedKeys: Array<keyof ArticleImportStoreRow>) => {
+const getArticleInsertValues = (rows: ArticleImportStoreRow[], includedKeys: PersistedArticleKey[]) => {
   return rows
     .map((row) => {
       const values = [
@@ -131,7 +137,7 @@ const getArticleInsertValues = (rows: ArticleImportStoreRow[], includedKeys: Arr
     .join(', ')
 }
 
-const getArticleUpdateAssignments = (includedKeys: Array<keyof ArticleImportStoreRow>) => {
+const getArticleUpdateAssignments = (includedKeys: PersistedArticleKey[]) => {
   return includedKeys
     .filter((key) => {
       return key !== 'articleId'

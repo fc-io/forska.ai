@@ -346,7 +346,6 @@ export const articlesRoutes = new Elysia()
             doi,
             pubmed_id,
             import_route,
-            original_data,
             source_metadata,
             updated_at
           )
@@ -365,7 +364,6 @@ export const articlesRoutes = new Elysia()
                 entry.doi ?? null,
                 entry.pubmed_id ?? null,
                 entry.import_route,
-                entry.original_data ?? null,
                 entry.sourceMetadata,
                 updatedAt,
               ]
@@ -385,7 +383,6 @@ export const articlesRoutes = new Elysia()
             doi = EXCLUDED.doi,
             pubmed_id = EXCLUDED.pubmed_id,
             import_route = EXCLUDED.import_route,
-            original_data = EXCLUDED.original_data,
             source_metadata = EXCLUDED.source_metadata,
             updated_at = ${getTimestampLiteral(updatedAt)}
           RETURNING id, article_id AS articleId

@@ -61,12 +61,13 @@
 - [ ] Change admin PDF tooling to use normalized `fullTextLinks` instead of raw `originalData`.
 - [ ] Change export paths to use normalized `journalTitle` instead of raw `originalData`.
 - [ ] Stop client review tables from depending on raw `originalData`; use normalized source fields only.
-- [ ] Decide target: remove fully, move to cold sidecar DuckDB, or move to external JSON/blob store keyed by article id.
+- [ ] Treat `original_data` as disposable; do not build a cold-store path.
+- [ ] Remove `original_data` from hot storage once replacement fields are fully verified.
 - [ ] Backfill any hot typed fields we still need into normal columns before removal.
 - [ ] Stop writing large raw payloads into hot `app.article` for new imports.
 - [ ] Keep writing the normalized hot source metadata when new articles import.
-- [ ] Add one migration/script to move or purge historical `original_data`.
-- [ ] Only remove or cold-store `original_data` after review/admin/export/PDF fetch paths no longer read it.
+- [ ] Add one migration/script to purge historical `original_data`.
+- [ ] Only purge `original_data` after review/admin/export/PDF fetch paths no longer read it.
 - [ ] Compact DB after removal/move.
 
 ## Phase 4 - Stop Storing Duplicated Article Metadata In Marts
