@@ -21,12 +21,14 @@
 
 ## Next Focus
 
-- [ ] Split worker-url handling by runtime: local/manual provider URLs may live in DuckDB; sbatch/Slurm worker URLs should come from launcher/runtime discovery, not persisted app config.
+- [x] Keep local/manual provider base URLs and worker URLs in DuckDB via provider connections, not env.
+- [ ] Keep sbatch/Slurm worker URLs coming from launcher/runtime discovery rather than persisted app config.
 - [x] Remove global `WORKER_URLS` as product config; only keep short-lived runtime wiring if a launcher still needs to pass discovered URLs.
 - [x] Remove global env usage for `SGLANG_MODEL`, `SGLANG_CONTEXT_LENGTH`, and `CODEX_CONTEXT_LENGTH`.
 - [ ] Prefer deriving model identity/capabilities from provider/runtime discovery; only persist per-model/per-provider capability data when discovery is missing.
 - [x] Remove raw `process.env` reads in judgment scheduling/runtime code.
 - [x] Move `DUCKDB_BIN` and `CODEX_BIN` out of env; treat them as advanced user settings.
+- [x] Treat provider base URLs/auth refs/worker URLs for local-manual providers as product config in DuckDB, not machine env.
 - [ ] Decide which inference/runtime values are product config vs machine/operator metadata.
 - [ ] After the inference move, do docs cleanup and a minimal-env startup check.
 
@@ -49,9 +51,9 @@
 ## Inference Config Move
 
 - [x] Move away from global `WORKER_URLS` env in app runtime.
-- [ ] Keep local/manual provider worker URLs in DuckDB only where they are real saved app config.
+- [x] Keep local/manual provider worker URLs in DuckDB only where they are real saved app config.
 - [ ] Keep sbatch/Slurm worker URLs out of persisted app config; derive them from launch/runtime state.
-- [ ] Decide config shape: provider/model-owned config in DuckDB vs a small `app.runtime_config` table for true persisted runtime settings.
+- [x] Decide config shape: keep provider/model-owned config in DuckDB for provider/model settings; only add `app.runtime_config` later if true cross-provider runtime state appears.
 - [x] Remove global env usage for `SGLANG_MODEL`, `SGLANG_CONTEXT_LENGTH`, and `CODEX_CONTEXT_LENGTH`.
 - [ ] Prefer deriving `SGLANG_MODEL` from launch/runtime/provider state rather than storing one global value.
 - [ ] Prefer deriving context lengths from runtime/provider capabilities; persist per-model/per-provider fallback values only when discovery is unavailable.
@@ -64,7 +66,7 @@
 - [x] Keep DuckDB bootstrap config in env: `DUCKDB_PATH`, `DUCKDB_MEMORY_LIMIT`, `DUCKDB_TEMP_DIRECTORY`.
 - [x] Keep server/process wiring in env: `API_SERVER_PORT`, `VITE_PORT`, and similar launch-only values.
 - [x] Keep background cron enable flags in env unless we intentionally build a runtime admin control surface for them.
-- [ ] Keep machine-local external endpoints in env only if they are deployment wiring rather than product settings.
+- [x] Treat local provider endpoints as product settings in DuckDB; keep only true deployment-wiring endpoints in env.
 
 ## Cleanup Direct Env Usage
 
@@ -75,7 +77,7 @@
 
 ## Migration And Rollout
 
-- [ ] Add migrations for any new config tables or columns.
+- [x] Add migrations for provider connection/model config tables used to replace env-backed provider settings.
 - [x] Add migrations for the persisted Unpaywall email field and any cleanup needed after removing OpenAlex-specific config.
 - [x] Add local persisted settings storage for advanced binary overrides without reintroducing env config.
 - [ ] Optional: add a bootstrap path for any remaining legacy env-backed contact values we still care to preserve.
@@ -86,7 +88,7 @@
 ## Done When
 
 - [ ] A normal user can install and run Forska without editing env vars for core product features.
-- [ ] Unpaywall contact email and persisted local provider/model config live in DuckDB and the UI/API.
+- [x] Unpaywall contact email and persisted local provider/model config live in DuckDB and the UI/API.
 - [ ] Remote sbatch/Slurm worker URLs are runtime-discovered rather than stored as app config.
 - [x] `OPENALEX_MAILTO` and the OpenAlex article import flow are gone.
 - [ ] The remaining env surface is small, explicit, and operational rather than product-facing.
