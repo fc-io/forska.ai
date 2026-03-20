@@ -2,7 +2,7 @@
  * MN5 Dev Server Script
  *
  * Connects to a running SGLang job on MareNostrum 5 and starts the local dev server
- * with correct WORKER_URLS.
+ * with tunnel-derived runtime metadata.
  *
  * SSH tunnels are handled by `bun run mn5:launch` (this script does not create tunnels).
  *
@@ -11,7 +11,7 @@
  * What it does:
  * 1. Finds the latest running sbatch job log on MN5
  * 2. Parses the [mn5:config:start]...[mn5:config:end] block for config
- * 3. Starts the API dev server with WORKER_URLS from the config
+ * 3. Starts the API dev server with runtime metadata from the config block
  */
 
 import {$, spawn} from 'bun'
@@ -558,12 +558,12 @@ const installTunnelCleanup = (): void => {
 }
 
 /**
- * Start the dev server with WORKER_URLS
+ * Start the dev server with tunnel/runtime metadata
  */
 const startDevServer = async (config: MN5Config): Promise<void> => {
   log('Starting dev server...')
-  log(`  WORKER_URLS: ${config.WORKER_URLS_LOCAL}`)
-  log(`  SGLANG_MODEL: ${config.SGLANG_MODEL}`)
+  log(`  Tunnel endpoints: ${config.WORKER_URLS_LOCAL}`)
+  log(`  Remote model: ${config.SGLANG_MODEL}`)
   log(`  SGLANG_MAX_RUNNING_REQUESTS: ${config.SGLANG_MAX_RUNNING_REQUESTS}`)
   log(`  SGLANG_API_MAX_INFLIGHT_REQUESTS: ${config.SGLANG_API_MAX_INFLIGHT_REQUESTS}`)
   log(`  SGLANG_API_MAX_BURST_REQUESTS: ${config.SGLANG_API_MAX_BURST_REQUESTS}`)
@@ -573,8 +573,6 @@ const startDevServer = async (config: MN5Config): Promise<void> => {
     ...process.env,
     // Enable server-side judging when running with MN5
     RUN_SERVER_JUDGING: 'true',
-    // Worker URLs for LLM requests and metrics (using local ports via tunnel)
-    WORKER_URLS: config.WORKER_URLS_LOCAL,
     // Router mode flag
     SGLANG_ENABLE_ROUTER: config.SGLANG_ENABLE_ROUTER,
     // Pass GPU/topology info for the admin UI
@@ -586,8 +584,6 @@ const startDevServer = async (config: MN5Config): Promise<void> => {
     SGLANG_MAX_RUNNING_REQUESTS: config.SGLANG_MAX_RUNNING_REQUESTS,
     SGLANG_API_MAX_INFLIGHT_REQUESTS: config.SGLANG_API_MAX_INFLIGHT_REQUESTS,
     SGLANG_API_MAX_BURST_REQUESTS: config.SGLANG_API_MAX_BURST_REQUESTS,
-    SGLANG_CONTEXT_LENGTH: config.SGLANG_CONTEXT_LENGTH,
-    SGLANG_MODEL: config.SGLANG_MODEL,
     BUN_CONFIG_MAX_HTTP_REQUESTS: '2048',
     // For nvidia-smi polling: use the remote worker URLs (actual IPs, not localhost tunnels)
     // Also pass local URLs for display purposes (mapping remote -> local)

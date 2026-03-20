@@ -10,7 +10,6 @@ const getDevServerEnv = (config: AlvisConfig) => {
   return {
     ...process.env,
     RUN_SERVER_JUDGING: 'true',
-    WORKER_URLS: config.WORKER_URLS_LOCAL,
     SGLANG_ENABLE_ROUTER: config.SGLANG_ENABLE_ROUTER,
     GPU_TOTAL_GPUS: String(Number(config.NNODES) * Number(config.GPUS_PER_NODE)),
     GPU_NNODES: config.NNODES,
@@ -21,8 +20,6 @@ const getDevServerEnv = (config: AlvisConfig) => {
     SGLANG_API_MAX_INFLIGHT_REQUESTS: config.SGLANG_API_MAX_INFLIGHT_REQUESTS,
     SGLANG_API_MAX_BURST_REQUESTS: config.SGLANG_API_MAX_BURST_REQUESTS,
     SGLANG_CHUNKED_PREFILL_SIZE: config.SGLANG_CHUNKED_PREFILL_SIZE,
-    SGLANG_CONTEXT_LENGTH: config.SGLANG_CONTEXT_LENGTH,
-    SGLANG_MODEL: config.SGLANG_MODEL,
     NVIDIA_SMI_WORKER_URLS: config.WORKER_URLS,
     NVIDIA_SMI_WORKER_URLS_LOCAL: config.WORKER_URLS_LOCAL,
     NVIDIA_SMI_SSH_JUMP_HOST: 'alvis2',
@@ -31,8 +28,8 @@ const getDevServerEnv = (config: AlvisConfig) => {
 }
 
 const startDevServer = async (config: AlvisConfig): Promise<void> => {
-  log(`WORKER_URLS: ${config.WORKER_URLS_LOCAL}`)
-  log(`SGLANG_MODEL: ${config.SGLANG_MODEL}`)
+  log(`Tunnel endpoints: ${config.WORKER_URLS_LOCAL}`)
+  log(`Remote model: ${config.SGLANG_MODEL}`)
   log(`SGLANG_MAX_RUNNING_REQUESTS: ${config.SGLANG_MAX_RUNNING_REQUESTS}`)
   log(`SGLANG_CONTEXT_LENGTH: ${config.SGLANG_CONTEXT_LENGTH}`)
 

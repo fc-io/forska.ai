@@ -22,7 +22,7 @@ curl http://localhost:30001/v1/models
 Optional local app flow
 
 ```bash
-# Local API server that points WORKER_URLS at the Alvis tunnel
+# Local API server using the Alvis tunnel/runtime metadata
 bun run alvis:dev:server
 
 # Local app
@@ -170,7 +170,7 @@ curl http://localhost:30001/v1/chat/completions \
 
 Optional local app flow:
 
-- `bun run alvis:dev:server` starts the local API server with `WORKER_URLS` pointing at the Alvis tunnel
+- `bun run alvis:dev:server` starts the local API server using the Alvis tunnel plus runtime metadata from the job log
 - `bun run dev:app` starts the local app against that local API server
 
 ## Related Docs
