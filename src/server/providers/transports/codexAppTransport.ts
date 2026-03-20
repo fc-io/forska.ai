@@ -2,6 +2,7 @@ import {
   type CodexDeviceLoginJob,
   getCodexCliLoginStatus,
   getCodexDeviceAuthLoginJob,
+  getCurrentCodexDeviceAuthLoginJob,
   startCodexDeviceAuthLogin,
 } from '../../utils/codexCliAuth.ts'
 import {getCodexAppServerClient, getCodexBinPath} from '../../utils/getCodexAppServerClient.ts'
@@ -131,4 +132,8 @@ export const startCodexAppDeviceLogin = (): CodexDeviceLoginJob => {
 
 export const getCodexAppDeviceLoginJob = (id: string): CodexDeviceLoginJob | null => {
   return getCodexDeviceAuthLoginJob(id)
+}
+
+export const getCurrentCodexAppDeviceLoginJob = (): CodexDeviceLoginJob | null => {
+  return getCurrentCodexDeviceAuthLoginJob()
 }

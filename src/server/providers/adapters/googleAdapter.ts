@@ -2,6 +2,8 @@ import {type ProviderCatalogEntry} from '../../services/providerCatalog.ts'
 import {type ProviderDefinition} from '../providerTypes.ts'
 import {invokeGeminiGenerateContentModel, listGeminiModels} from '../transports/geminiGenerateContentTransport.ts'
 import {
+  beginApiKeyProviderAuth,
+  finishApiKeyProviderAuth,
   getProviderConnectedMessage,
   getProviderHealthFailure,
   getProviderHealthSuccess,
@@ -23,12 +25,12 @@ export const createGoogleAdapter = (catalog: ProviderCatalogEntry): ProviderDefi
   }
 
   return {
-    beginAuth: async () => {
-      return {message: 'Google Gemini uses direct API-key configuration', payload: null, status: 'unsupported'}
+    beginAuth: async ({connection}) => {
+      return beginApiKeyProviderAuth({catalog, connection, optional: false})
     },
     catalog,
-    finishAuth: async () => {
-      return {message: 'Google Gemini uses direct API-key configuration', payload: null, status: 'unsupported'}
+    finishAuth: async ({connection, payload}) => {
+      return finishApiKeyProviderAuth({catalog, connection, optional: false, payload})
     },
     health: async ({runtimeCredentials}) => {
       return getHealth(runtimeCredentials)

@@ -5,19 +5,23 @@ import {createStore} from 'solid-js/store'
 
 import {Button} from '../../../../components/ui/button.tsx'
 import {
+  beginProviderAuthLifecycle,
   type CodexDeviceLoginJob,
+  type CodexStatus,
   createProviderConnection,
-  fetchCodexLoginJob,
-  fetchCodexStatus,
   fetchProviderConnections,
+  finishProviderAuthLifecycle,
   getNullableTrimmedValue,
   getTrimmedValue,
   getWorkerUrlsFromInputValue,
+  type ProviderAuthLifecyclePayload,
+  type ProviderAuthLifecycleResult,
   type ProviderCatalogEntry,
-  startCodexLogin,
 } from './providerConnectionsClient.ts'
 
 type ConnectionFormState = {apiKey: string; baseURL: string; label: string; providerKind: string; workerUrls: string}
+
+type CodexAuthProviderState = Partial<CodexStatus> & {job?: CodexDeviceLoginJob | null}
 
 const getConnectionFormState = (catalogEntry: ProviderCatalogEntry | null): ConnectionFormState => {
   return {
@@ -29,12 +33,26 @@ const getConnectionFormState = (catalogEntry: ProviderCatalogEntry | null): Conn
   }
 }
 
+const getCodexProviderState = (value: unknown): CodexAuthProviderState | null => {
+  return typeof value === 'object' && value !== null ? (value as CodexAuthProviderState) : null
+}
+
+const getAuthMessageClass = (status: ProviderAuthLifecycleResult['status'] | null | undefined) => {
+  return status === 'complete'
+    ? 'border-green-200 bg-green-50 text-green-800'
+    : status === 'pending'
+      ? 'border-amber-200 bg-amber-50 text-amber-800'
+      : status === 'unsupported'
+        ? 'border-red-200 bg-red-50 text-red-700'
+        : 'border-gray-200 bg-gray-50 text-gray-700'
+}
+
 const AddProviderPage = () => {
   const navigate = useNavigate()
   const providerConnectionsQuery = useQuery(() => {
     return {
-      queryKey: ['provider-connections'],
       queryFn: fetchProviderConnections,
+      queryKey: ['provider-connections'],
       refetchOnWindowFocus: false,
       staleTime: 1000 * 30,
       suspense: false,
@@ -42,10 +60,10 @@ const AddProviderPage = () => {
   })
   const [connectionForm, setConnectionForm] = createStore<ConnectionFormState>(getConnectionFormState(null))
   const [pageError, setPageError] = createSignal('')
-  const [codexLoginJobId, setCodexLoginJobId] = createSignal<string | null>(null)
-  const [codexLoginJob, setCodexLoginJob] = createSignal<CodexDeviceLoginJob | null>(null)
-  const [isStartingCodexLogin, setIsStartingCodexLogin] = createSignal(false)
-  const [codexLoginError, setCodexLoginError] = createSignal('')
+  const [providerAuth, setProviderAuth] = createSignal<ProviderAuthLifecycleResult | null>(null)
+  const [authError, setAuthError] = createSignal('')
+  const [isLoadingAuth, setIsLoadingAuth] = createSignal(false)
+  const [isFinishingAuth, setIsFinishingAuth] = createSignal(false)
 
   const createConnectionMutation = createMutation(() => {
     return {
@@ -80,22 +98,33 @@ const AddProviderPage = () => {
     )
   }
 
-  const codexStatusQuery = useQuery(() => {
-    return {
-      enabled: connectionForm.providerKind === 'codex',
-      queryKey: ['codex-status', connectionForm.providerKind],
-      queryFn: fetchCodexStatus,
-      refetchOnWindowFocus: false,
-      staleTime: 60 * 1000,
-      suspense: false,
-    }
-  })
+  const authFields = () => {
+    return providerAuth()?.payload?.fields ?? []
+  }
+
+  const apiKeyField = () => {
+    return authFields().find((field) => {
+      return field.name === 'apiKey'
+    })
+  }
+
+  const shouldShowApiKeyField = () => {
+    return Boolean(apiKeyField())
+  }
+
+  const codexProviderState = () => {
+    return getCodexProviderState(providerAuth()?.payload?.providerState)
+  }
+
+  const codexLoginJob = () => {
+    return codexProviderState()?.job ?? null
+  }
 
   const shouldHideCodexConnectCard = () => {
     return (
       connectionForm.providerKind === 'codex'
       && Boolean(
-        existingCodexConnection() || codexStatusQuery.data?.cli.loggedIn || codexStatusQuery.data?.appServerReady,
+        existingCodexConnection() || codexProviderState()?.cli?.loggedIn || codexProviderState()?.appServerReady,
       )
     )
   }
@@ -104,13 +133,59 @@ const AddProviderPage = () => {
     return (
       connectionForm.providerKind === 'codex'
       && !existingCodexConnection()
-      && Boolean(codexStatusQuery.data?.cli.loggedIn && codexStatusQuery.data?.appServerReady)
+      && providerAuth()?.status === 'complete'
+      && Boolean(codexProviderState()?.cli?.loggedIn && codexProviderState()?.appServerReady)
     )
   }
 
   const selectCatalogEntry = (entry: ProviderCatalogEntry) => {
     setPageError('')
+    setAuthError('')
+    setProviderAuth(null)
     setConnectionForm(getConnectionFormState(entry))
+  }
+
+  const loadProviderAuth = async () => {
+    setAuthError('')
+    setIsLoadingAuth(true)
+
+    try {
+      const result = await beginProviderAuthLifecycle({providerKind: connectionForm.providerKind})
+      setProviderAuth(result)
+    } catch (error) {
+      setProviderAuth(null)
+      setAuthError(error instanceof Error ? error.message : 'Failed to load provider auth state')
+    } finally {
+      setIsLoadingAuth(false)
+    }
+  }
+
+  const finishProviderAuthStep = async ({
+    payload,
+    silent,
+  }: {
+    payload: ProviderAuthLifecyclePayload | null
+    silent?: boolean
+  }) => {
+    if (!silent) {
+      setAuthError('')
+      setIsFinishingAuth(true)
+    }
+
+    try {
+      const result = await finishProviderAuthLifecycle({payload, providerKind: connectionForm.providerKind})
+      setProviderAuth(result)
+      return result
+    } catch (error) {
+      if (!silent) {
+        setAuthError(error instanceof Error ? error.message : 'Failed to finish provider auth')
+      }
+      throw error
+    } finally {
+      if (!silent) {
+        setIsFinishingAuth(false)
+      }
+    }
   }
 
   createEffect(() => {
@@ -130,25 +205,26 @@ const AddProviderPage = () => {
   })
 
   createEffect(() => {
-    const jobId = codexLoginJobId()
-    const job = codexLoginJob()
-    const isRunning = Boolean(jobId && job?.state === 'running')
+    if (!activeCatalogEntry()) {
+      return
+    }
 
-    if (!jobId || !isRunning) {
+    void loadProviderAuth()
+  })
+
+  createEffect(() => {
+    const job = codexLoginJob()
+    const providerKind = connectionForm.providerKind
+    const isRunning = providerKind === 'codex' && providerAuth()?.status === 'pending' && job?.state === 'running'
+
+    if (!isRunning || !job?.id) {
       return
     }
 
     const interval = setInterval(() => {
-      void fetchCodexLoginJob(jobId)
-        .then((updated) => {
-          setCodexLoginJob(updated)
-          if (updated.state !== 'running') {
-            void codexStatusQuery.refetch()
-          }
-        })
-        .catch((error) => {
-          setCodexLoginError(error instanceof Error ? error.message : 'Failed to fetch Codex login job')
-        })
+      void finishProviderAuthStep({payload: {authMode: 'codex-cli', jobId: job.id}, silent: true}).catch(() => {
+        return
+      })
     }, 1000)
 
     onCleanup(() => {
@@ -160,8 +236,19 @@ const AddProviderPage = () => {
     setPageError('')
 
     try {
+      const authPayload: ProviderAuthLifecyclePayload = {
+        authMode: providerAuth()?.payload?.authMode ?? null,
+        providerState: providerAuth()?.payload?.providerState,
+        secretValue: getTrimmedValue(connectionForm.apiKey) || null,
+      }
+      const authResult = await finishProviderAuthStep({payload: authPayload})
+
+      if (authResult.status !== 'complete') {
+        throw new Error(authResult.message)
+      }
+
       await createConnectionMutation.mutateAsync({
-        apiKey: getTrimmedValue(connectionForm.apiKey) || undefined,
+        apiKey: authResult.payload?.secretValue ?? (getTrimmedValue(connectionForm.apiKey) || undefined),
         baseURL: getNullableTrimmedValue(connectionForm.baseURL),
         label: connectionForm.label,
         providerKind: connectionForm.providerKind,
@@ -173,22 +260,16 @@ const AddProviderPage = () => {
   }
 
   const startCodexDeviceLogin = async () => {
-    setIsStartingCodexLogin(true)
-    setCodexLoginError('')
+    setAuthError('')
+    setIsLoadingAuth(true)
 
     try {
-      const result = await startCodexLogin()
-      if (!result.job) {
-        await codexStatusQuery.refetch()
-        return
-      }
-
-      setCodexLoginJobId(result.job.id)
-      setCodexLoginJob(result.job)
+      const result = await beginProviderAuthLifecycle({providerKind: connectionForm.providerKind})
+      setProviderAuth(result)
     } catch (error) {
-      setCodexLoginError(error instanceof Error ? error.message : 'Failed to start Codex login')
+      setAuthError(error instanceof Error ? error.message : 'Failed to start Codex login')
     } finally {
-      setIsStartingCodexLogin(false)
+      setIsLoadingAuth(false)
     }
   }
 
@@ -237,7 +318,7 @@ const AddProviderPage = () => {
               <div class="mb-4">
                 <h2 class="text-lg font-semibold text-gray-900">Choose a Provider</h2>
                 <p class="text-sm text-gray-500">
-                  Pick the provider you want to connect, then fill in its connection details.
+                  Pick the provider you want to connect, then finish its auth and connection details.
                 </p>
               </div>
               <div class="grid gap-3 md:grid-cols-2">
@@ -290,6 +371,20 @@ const AddProviderPage = () => {
                   </div>
 
                   <div class="space-y-4">
+                    <Show when={providerAuth() || isLoadingAuth() || authError()}>
+                      <div class={`rounded-lg border px-4 py-3 text-sm ${getAuthMessageClass(providerAuth()?.status)}`}>
+                        <Show when={isLoadingAuth()}>
+                          <p>Checking provider auth...</p>
+                        </Show>
+                        <Show when={!isLoadingAuth() && providerAuth()}>
+                          <p>{providerAuth()?.message}</p>
+                        </Show>
+                        <Show when={authError()}>
+                          <p class="text-red-700">{authError()}</p>
+                        </Show>
+                      </div>
+                    </Show>
+
                     <div>
                       <label class="mb-2 block text-sm font-medium text-gray-700">Provider</label>
                       <div class="rounded-md border border-gray-200 bg-gray-50 px-3 py-3 text-sm text-gray-700">
@@ -338,14 +433,17 @@ const AddProviderPage = () => {
                       </div>
                     </Show>
 
-                    <Show when={activeCatalogEntry()?.requiresApiKey}>
+                    <Show when={shouldShowApiKeyField()}>
                       <div>
-                        <label class="mb-2 block text-sm font-medium text-gray-700">API Key</label>
+                        <label class="mb-2 block text-sm font-medium text-gray-700">
+                          {apiKeyField()?.label ?? 'API Key'}
+                        </label>
                         <input
                           class="w-full rounded-md border border-gray-300 px-3 py-3 text-sm text-gray-900"
                           onInput={(event) => {
                             setConnectionForm('apiKey', event.currentTarget.value)
                           }}
+                          placeholder={apiKeyField()?.optional ? 'Optional' : undefined}
                           type="password"
                           value={connectionForm.apiKey}
                         />
@@ -353,12 +451,14 @@ const AddProviderPage = () => {
                     </Show>
 
                     <Button
-                      disabled={createConnectionMutation.isPending}
+                      disabled={createConnectionMutation.isPending || isFinishingAuth() || isLoadingAuth()}
                       onClick={() => {
                         return void submitConnectionForm()
                       }}
                     >
-                      {createConnectionMutation.isPending ? 'Creating Provider...' : 'Create Provider'}
+                      {createConnectionMutation.isPending || isFinishingAuth()
+                        ? 'Creating Provider...'
+                        : 'Create Provider'}
                     </Button>
                   </div>
                 </div>
@@ -368,26 +468,28 @@ const AddProviderPage = () => {
                 <div class="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
                   <h2 class="text-lg font-semibold text-gray-900">Codex Login</h2>
                   <div class="mt-4 space-y-3 text-sm text-gray-700">
-                    <Show when={codexStatusQuery.isLoading}>
+                    <Show when={isLoadingAuth()}>
                       <p class="text-gray-500">Checking Codex status...</p>
                     </Show>
-                    <Show when={codexStatusQuery.data}>
+                    <Show when={codexProviderState()}>
                       <div>
                         <span class="font-medium">Login:</span>{' '}
-                        <span class={codexStatusQuery.data?.cli.loggedIn ? 'text-green-700' : 'text-amber-700'}>
-                          {codexStatusQuery.data?.cli.loggedIn
-                            ? `Logged in${codexStatusQuery.data?.cli.method ? ` (${codexStatusQuery.data?.cli.method})` : ''}`
+                        <span class={codexProviderState()?.cli?.loggedIn ? 'text-green-700' : 'text-amber-700'}>
+                          {codexProviderState()?.cli?.loggedIn
+                            ? `Logged in${codexProviderState()?.cli?.method ? ` (${codexProviderState()?.cli?.method})` : ''}`
                             : 'Not logged in'}
                         </span>
                       </div>
                       <div>
                         <span class="font-medium">App-server:</span>{' '}
-                        <span class={codexStatusQuery.data?.appServerReady ? 'text-green-700' : 'text-amber-700'}>
-                          {codexStatusQuery.data?.appServerReady ? 'Ready' : 'Not ready'}
+                        <span class={codexProviderState()?.appServerReady ? 'text-green-700' : 'text-amber-700'}>
+                          {codexProviderState()?.appServerReady ? 'Ready' : 'Not ready'}
                         </span>
                       </div>
-                      <p class="break-all font-mono text-xs text-gray-500">{codexStatusQuery.data?.codexBin}</p>
-                      <p class="text-xs text-gray-500">{codexStatusQuery.data?.message}</p>
+                      <Show when={codexProviderState()?.codexBin}>
+                        <p class="break-all font-mono text-xs text-gray-500">{codexProviderState()?.codexBin}</p>
+                      </Show>
+                      <p class="text-xs text-gray-500">{providerAuth()?.message}</p>
                     </Show>
 
                     <Show when={existingCodexConnection()}>
@@ -397,30 +499,32 @@ const AddProviderPage = () => {
                       </div>
                     </Show>
 
-                    <Show when={!codexStatusQuery.data?.cli.loggedIn}>
+                    <Show when={!codexProviderState()?.cli?.loggedIn && !existingCodexConnection()}>
                       <Button
-                        disabled={isStartingCodexLogin()}
+                        disabled={isLoadingAuth()}
                         onClick={() => {
                           return void startCodexDeviceLogin()
                         }}
                       >
-                        {isStartingCodexLogin() ? 'Starting Codex Login...' : 'Sign in to Codex'}
+                        {isLoadingAuth() ? 'Starting Codex Login...' : 'Sign in to Codex'}
                       </Button>
+                    </Show>
+
+                    <Show when={authError()}>
+                      <p class="text-sm text-red-600">{authError()}</p>
                     </Show>
 
                     <Show when={canCreateCodexProvider()}>
                       <Button
-                        disabled={createConnectionMutation.isPending}
+                        disabled={createConnectionMutation.isPending || isFinishingAuth()}
                         onClick={() => {
                           return void submitConnectionForm()
                         }}
                       >
-                        {createConnectionMutation.isPending ? 'Creating Provider...' : 'Create Provider'}
+                        {createConnectionMutation.isPending || isFinishingAuth()
+                          ? 'Creating Provider...'
+                          : 'Create Provider'}
                       </Button>
-                    </Show>
-
-                    <Show when={codexLoginError()}>
-                      <p class="text-sm text-red-600">{codexLoginError()}</p>
                     </Show>
 
                     <Show when={codexLoginJob()}>

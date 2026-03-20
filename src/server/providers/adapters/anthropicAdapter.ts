@@ -2,6 +2,8 @@ import {type ProviderCatalogEntry} from '../../services/providerCatalog.ts'
 import {type ProviderDefinition} from '../providerTypes.ts'
 import {invokeAnthropicMessagesModel, listAnthropicMessageModels} from '../transports/anthropicMessagesTransport.ts'
 import {
+  beginApiKeyProviderAuth,
+  finishApiKeyProviderAuth,
   getProviderConnectedMessage,
   getProviderHealthFailure,
   getProviderHealthSuccess,
@@ -23,12 +25,12 @@ export const createAnthropicAdapter = (catalog: ProviderCatalogEntry): ProviderD
   }
 
   return {
-    beginAuth: async () => {
-      return {message: 'Anthropic uses direct API-key configuration', payload: null, status: 'unsupported'}
+    beginAuth: async ({connection}) => {
+      return beginApiKeyProviderAuth({catalog, connection, optional: false})
     },
     catalog,
-    finishAuth: async () => {
-      return {message: 'Anthropic uses direct API-key configuration', payload: null, status: 'unsupported'}
+    finishAuth: async ({connection, payload}) => {
+      return finishApiKeyProviderAuth({catalog, connection, optional: false, payload})
     },
     health: async ({runtimeCredentials}) => {
       return getHealth(runtimeCredentials)

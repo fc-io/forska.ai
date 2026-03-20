@@ -8,6 +8,10 @@ import {
 } from '../providerTypes.ts'
 import {invokeOpenAIChatModel, listNativeOllamaModels, listOpenAIChatModels} from '../transports/openaiChatTransport.ts'
 import {
+  beginApiKeyProviderAuth,
+  beginSecretlessProviderAuth,
+  finishApiKeyProviderAuth,
+  finishSecretlessProviderAuth,
   getProviderConnectedMessage,
   getProviderHealthFailure,
   getProviderHealthSuccess,
@@ -16,6 +20,7 @@ import {
 } from './providerAdapterUtils.ts'
 
 type OpenAICompatibleAdapterOptions = {
+  authFlow?: 'api-key' | 'optional-api-key' | 'secretless'
   transportFamily: ProviderDefinition['transportFamily']
   useNativeOllamaDiscovery?: boolean
 }
@@ -74,12 +79,20 @@ export const createOpenAICompatibleAdapter = (
   }
 
   return {
-    beginAuth: async () => {
-      return {message: `${catalog.label} auth is handled by direct configuration`, payload: null, status: 'unsupported'}
+    beginAuth: async ({connection}) => {
+      return options.authFlow === 'api-key'
+        ? beginApiKeyProviderAuth({catalog, connection, optional: false})
+        : options.authFlow === 'optional-api-key'
+          ? beginApiKeyProviderAuth({catalog, connection, optional: true})
+          : beginSecretlessProviderAuth({catalog, connection})
     },
     catalog,
-    finishAuth: async () => {
-      return {message: `${catalog.label} auth is handled by direct configuration`, payload: null, status: 'unsupported'}
+    finishAuth: async ({connection, payload}) => {
+      return options.authFlow === 'api-key'
+        ? finishApiKeyProviderAuth({catalog, connection, optional: false, payload})
+        : options.authFlow === 'optional-api-key'
+          ? finishApiKeyProviderAuth({catalog, connection, optional: true, payload})
+          : finishSecretlessProviderAuth({catalog, connection})
     },
     health: async ({runtimeCredentials}) => {
       return getHealth(runtimeCredentials)
@@ -103,7 +116,7 @@ export const createOpenAICompatibleAdapter = (
       return usage
     },
     resolveRuntimeCredentials: async ({connection}) => {
-      return catalog.requiresApiKey || connection.secretRef
+      return options.authFlow === 'api-key' || options.authFlow === 'optional-api-key' || connection.secretRef
         ? resolveApiKeyRuntimeCredentials({baseURL: connection.baseURL, secretRef: connection.secretRef})
         : resolveSecretlessRuntimeCredentials({baseURL: connection.baseURL, secretRef: connection.secretRef})
     },

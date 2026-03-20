@@ -82,6 +82,45 @@ export type CodexDeviceLoginJob = {
 }
 type StartCodexLoginResponse = {data: {started: boolean; job: CodexDeviceLoginJob | null; message: string}; error: null}
 type CodexLoginJobResponse = {data: CodexDeviceLoginJob; error: null}
+export type ProviderAuthField = {label: string; name: string; optional?: boolean; required: boolean; secret: boolean}
+export type ProviderAuthLifecyclePayload = {
+  authMode: string | null
+  fields?: ProviderAuthField[]
+  hasStoredSecret?: boolean
+  jobId?: string | null
+  providerState?: unknown
+  secretValue?: string | null
+}
+export type ProviderAuthLifecycleResult = {
+  connection?: ProviderConnection | null
+  message: string
+  payload: ProviderAuthLifecyclePayload | null
+  status: 'complete' | 'pending' | 'unsupported'
+}
+type ProviderAuthLifecycleResponse = {data: {result: ProviderAuthLifecycleResult}; error: null}
+
+const postProviderAuthLifecycle = async ({
+  body,
+  providerKind,
+  stage,
+}: {
+  body: {connectionId?: string; payload?: ProviderAuthLifecyclePayload | null}
+  providerKind: string
+  stage: 'begin' | 'finish'
+}) => {
+  const response = await fetch(`/api/provider-auth/${encodeURIComponent(providerKind)}/${stage}`, {
+    body: JSON.stringify(body),
+    headers: {'content-type': 'application/json'},
+    method: 'POST',
+  })
+  const data = (await response.json()) as ProviderAuthLifecycleResponse
+  const result = handleApiResponse<ProviderAuthLifecycleResponse>(
+    {data, error: response.ok ? undefined : data, status: response.status},
+    `Failed to ${stage} provider auth`,
+  )
+
+  return result.data.result
+}
 
 export const fetchProviderConnections = async () => {
   const response = await apiClient.api['provider-connections'].get()
@@ -219,6 +258,28 @@ export const fetchCodexLoginJob = async (jobId: string) => {
   )
 
   return result.data
+}
+
+export const beginProviderAuthLifecycle = async ({
+  connectionId,
+  providerKind,
+}: {
+  connectionId?: string
+  providerKind: string
+}): Promise<ProviderAuthLifecycleResult> => {
+  return postProviderAuthLifecycle({body: {connectionId}, providerKind, stage: 'begin'})
+}
+
+export const finishProviderAuthLifecycle = async ({
+  connectionId,
+  payload,
+  providerKind,
+}: {
+  connectionId?: string
+  payload?: ProviderAuthLifecyclePayload | null
+  providerKind: string
+}): Promise<ProviderAuthLifecycleResult> => {
+  return postProviderAuthLifecycle({body: {connectionId, payload}, providerKind, stage: 'finish'})
 }
 
 export const formatTimestamp = (value: string | Date | null) => {

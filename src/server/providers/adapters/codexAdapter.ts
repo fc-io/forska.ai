@@ -1,6 +1,14 @@
 import {type ProviderCatalogEntry} from '../../services/providerCatalog.ts'
 import {type ProviderDefinition} from '../providerTypes.ts'
-import {getCodexAppHealthResult, invokeCodexAppModel, listCodexAppModels} from '../transports/codexAppTransport.ts'
+import {
+  getCodexAppDeviceLoginJob,
+  getCodexAppHealthResult,
+  getCodexAppRuntimeStatus,
+  getCurrentCodexAppDeviceLoginJob,
+  invokeCodexAppModel,
+  listCodexAppModels,
+  startCodexAppDeviceLogin,
+} from '../transports/codexAppTransport.ts'
 import {
   getProviderConnectedMessage,
   getProviderHealthFailure,
@@ -9,6 +17,14 @@ import {
 } from './providerAdapterUtils.ts'
 
 export const createCodexAdapter = (catalog: ProviderCatalogEntry): ProviderDefinition => {
+  const getJobIdValue = (value: unknown): string | null => {
+    return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
+  }
+
+  const getCurrentJob = ({jobId}: {jobId?: string | null}) => {
+    return jobId ? getCodexAppDeviceLoginJob(jobId) : getCurrentCodexAppDeviceLoginJob()
+  }
+
   const getHealth = async () => {
     const health = await getCodexAppHealthResult()
 
@@ -29,12 +45,80 @@ export const createCodexAdapter = (catalog: ProviderCatalogEntry): ProviderDefin
   }
 
   return {
-    beginAuth: async () => {
-      return {message: 'Codex auth is handled by the Codex app/CLI flow', payload: null, status: 'unsupported'}
+    beginAuth: async ({connection}) => {
+      const status = await getCodexAppRuntimeStatus()
+
+      if (status.cli.loggedIn && status.appServerReady) {
+        return {
+          connection,
+          message: status.message,
+          payload: {authMode: 'codex-cli', providerState: status},
+          status: 'complete',
+        }
+      }
+
+      if (!status.cli.ok) {
+        return {
+          connection,
+          message: status.message,
+          payload: {authMode: 'codex-cli', providerState: status},
+          status: 'unsupported',
+        }
+      }
+
+      const currentJob = getCurrentJob({})
+      const job = currentJob && currentJob.state === 'running' ? currentJob : startCodexAppDeviceLogin()
+
+      return {
+        connection,
+        message: 'Started Codex device login',
+        payload: {authMode: 'codex-cli', providerState: {...status, job}},
+        status: 'pending',
+      }
     },
     catalog,
-    finishAuth: async () => {
-      return {message: 'Codex auth is handled by the Codex app/CLI flow', payload: null, status: 'unsupported'}
+    finishAuth: async ({connection, payload}) => {
+      const status = await getCodexAppRuntimeStatus()
+
+      if (status.cli.loggedIn && status.appServerReady) {
+        return {
+          connection,
+          message: status.message,
+          payload: {authMode: 'codex-cli', providerState: status},
+          status: 'complete',
+        }
+      }
+
+      const jobId =
+        getJobIdValue((payload as {jobId?: unknown} | null)?.jobId)
+        ?? (typeof payload?.providerState === 'object'
+        && payload.providerState !== null
+        && 'jobId' in payload.providerState
+          ? getJobIdValue((payload.providerState as {jobId?: unknown}).jobId)
+          : typeof payload?.providerState === 'object'
+              && payload.providerState !== null
+              && 'job' in payload.providerState
+            ? getJobIdValue((payload.providerState as {job?: {id?: unknown}}).job?.id)
+            : null)
+      const job = getCurrentJob({jobId})
+
+      if (job?.state === 'failed') {
+        throw new Error(job.error ?? 'Codex login failed')
+      }
+
+      return job?.state === 'running'
+        ? {
+            connection,
+            message: 'Codex device login still in progress',
+            payload: {authMode: 'codex-cli', providerState: {...status, job}},
+            status: 'pending',
+          }
+        : {
+            connection,
+            message: status.message,
+            payload: {authMode: 'codex-cli', providerState: {...status, job}},
+            status: status.cli.loggedIn ? 'pending' : 'unsupported',
+          }
     },
     health: async () => {
       return getHealth()

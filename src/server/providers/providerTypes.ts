@@ -65,9 +65,21 @@ export type ProviderRuntimeCredentials = {
   secretRef: string | null
 }
 
+export type ProviderAuthField = {label: string; name: string; optional?: boolean; required: boolean; secret: boolean}
+
+export type ProviderAuthLifecyclePayload = {
+  authMode: string | null
+  fields?: ProviderAuthField[]
+  hasStoredSecret?: boolean
+  jobId?: string | null
+  providerState?: unknown
+  secretValue?: string | null
+}
+
 export type ProviderAuthLifecycleResult = {
+  connection?: ProviderConnectionRecord | null
   message: string
-  payload: unknown
+  payload: ProviderAuthLifecyclePayload | null
   status: 'complete' | 'pending' | 'unsupported'
 }
 
@@ -79,7 +91,7 @@ export type ProviderBeginAuthInput = {connection: ProviderConnectionRecord | nul
 
 export type ProviderFinishAuthInput = {
   connection: ProviderConnectionRecord | null
-  payload: unknown
+  payload: ProviderAuthLifecyclePayload | null
   providerKind: ProviderKind
 }
 

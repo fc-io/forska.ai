@@ -65,6 +65,7 @@ const googleState = {
 }
 
 const codexState = {
+  currentJob: null as null | {id: string; state: 'completed' | 'failed' | 'running'; error: string | null},
   health: mock(async () => {
     return {lastError: null, message: 'Codex connected.', modelCount: null, ok: true}
   }),
@@ -83,6 +84,29 @@ const codexState = {
       },
     ]
   }),
+  runtimeStatus: mock(async () => {
+    return {
+      appServerReady: true,
+      cli: {loggedIn: true, method: 'chatgpt' as const, ok: true, raw: 'logged in'},
+      codexBin: '/usr/local/bin/codex',
+      message: 'Codex connected.',
+    }
+  }),
+  startLogin: mock(() => {
+    codexState.currentJob = {error: null, id: 'job-1', state: 'running'}
+    return {
+      deviceCode: 'ABCD-EFGH',
+      deviceUrl: 'https://chatgpt.com/device',
+      error: null,
+      exitCode: null,
+      finishedAt: null,
+      id: 'job-1',
+      output: [],
+      signal: null,
+      startedAt: new Date().toISOString(),
+      state: 'running' as const,
+    }
+  }),
 }
 
 void mock.module(openAIResponsesTransportModulePath, () => {
@@ -99,9 +123,17 @@ void mock.module(geminiGenerateContentTransportModulePath, () => {
 
 void mock.module(codexAppTransportModulePath, () => {
   return {
+    getCodexAppDeviceLoginJob: (id: string) => {
+      return codexState.currentJob?.id === id ? codexState.currentJob : null
+    },
     getCodexAppHealthResult: codexState.health,
+    getCodexAppRuntimeStatus: codexState.runtimeStatus,
+    getCurrentCodexAppDeviceLoginJob: () => {
+      return codexState.currentJob
+    },
     invokeCodexAppModel: codexState.invoke,
     listCodexAppModels: codexState.list,
+    startCodexAppDeviceLogin: codexState.startLogin,
   }
 })
 
@@ -228,6 +260,7 @@ test('codex adapter composes health from runtime status and model listing', asyn
   codexState.health.mockClear()
   codexState.list.mockClear()
   codexState.invoke.mockClear()
+  codexState.runtimeStatus.mockClear()
   const {createCodexAdapter} = await loadCodexAdapter()
   const adapter = createCodexAdapter(getCatalog('codex', 'Codex App'))
 
@@ -254,4 +287,39 @@ test('codex adapter composes health from runtime status and model listing', asyn
   expect(codexState.health).toHaveBeenCalledTimes(1)
   expect(codexState.list).toHaveBeenCalledTimes(1)
   expect(codexState.invoke).toHaveBeenCalledTimes(1)
+})
+
+test('openai adapter begin/finish auth lifecycle handles API key flow', async () => {
+  const {createOpenAIAdapter} = await loadOpenAIAdapter()
+  const adapter = createOpenAIAdapter(getCatalog('openai', 'OpenAI API'))
+
+  const beginResult = await adapter.beginAuth?.({connection: null, providerKind: 'openai'})
+  const finishResult = await adapter.finishAuth?.({
+    connection: null,
+    payload: {authMode: 'api-key', secretValue: 'test-key'},
+    providerKind: 'openai',
+  })
+
+  expect(beginResult?.status).toBe('pending')
+  expect(finishResult?.status).toBe('complete')
+  expect(finishResult?.payload?.secretValue).toBe('test-key')
+})
+
+test('codex adapter begin auth starts device login when not connected', async () => {
+  codexState.currentJob = null
+  codexState.startLogin.mockClear()
+  codexState.runtimeStatus.mockImplementationOnce(async () => {
+    return {
+      appServerReady: false,
+      cli: {loggedIn: false, method: null, ok: true, raw: 'not logged in'} as never,
+      codexBin: '/usr/local/bin/codex',
+      message: 'Codex not logged in.',
+    }
+  })
+  const {createCodexAdapter} = await loadCodexAdapter()
+  const adapter = createCodexAdapter(getCatalog('codex', 'Codex App'))
+  const result = await adapter.beginAuth?.({connection: null, providerKind: 'codex'})
+
+  expect(result?.status).toBe('pending')
+  expect(codexState.startLogin).toHaveBeenCalledTimes(1)
 })
