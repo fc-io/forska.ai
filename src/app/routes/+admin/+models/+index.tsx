@@ -4,6 +4,7 @@ import {createEffect, createSignal, For, onCleanup, Show} from 'solid-js'
 import {createStore} from 'solid-js/store'
 
 import {Button} from '../../../../components/ui/button.tsx'
+import {ProviderConnectionForm} from './providerConnectionForm.tsx'
 import {
   addManualProviderModel,
   type CodexDeviceLoginJob,
@@ -164,6 +165,22 @@ const AdminModels = () => {
         return entry.kind === connection?.providerKind
       }) ?? null
     )
+  }
+
+  const shouldShowConnectionApiKeyField = () => {
+    const connection = selectedConnection()
+
+    return Boolean(
+      connection
+      && (connection.hasSecret
+        || ['openai', 'anthropic', 'google', 'openrouter', 'sglang', 'vllm'].includes(connection.providerKind)),
+    )
+  }
+
+  const isOptionalConnectionApiKey = () => {
+    const connection = selectedConnection()
+
+    return Boolean(connection && ['sglang', 'vllm'].includes(connection.providerKind))
   }
 
   const getConnectionProviderLabel = (providerKind: string) => {
@@ -478,97 +495,35 @@ const AdminModels = () => {
                         </div>
 
                         <div class="space-y-4">
-                          <div>
-                            <label class="mb-2 block text-sm font-medium text-gray-700">Provider</label>
-                            <div class="rounded-md border border-gray-200 bg-gray-50 px-3 py-3 text-sm text-gray-700">
-                              {activeCatalogEntry()?.label ?? connection().providerKind}
-                            </div>
-                          </div>
-
-                          <div>
-                            <label class="mb-2 block text-sm font-medium text-gray-700">Connection Label</label>
-                            <input
-                              class="w-full rounded-md border border-gray-300 px-3 py-3 text-sm text-gray-900"
-                              onInput={(event) => {
-                                setConnectionForm('label', event.currentTarget.value)
-                              }}
-                              type="text"
-                              value={connectionForm.label}
-                            />
-                          </div>
-
-                          <Show when={connection().providerKind !== 'codex'}>
-                            <div>
-                              <label class="mb-2 block text-sm font-medium text-gray-700">Base URL</label>
-                              <input
-                                class="w-full rounded-md border border-gray-300 px-3 py-3 text-sm text-gray-900"
-                                onInput={(event) => {
-                                  setConnectionForm('baseURL', event.currentTarget.value)
-                                }}
-                                type="text"
-                                value={connectionForm.baseURL}
-                              />
-                            </div>
-                          </Show>
-
-                          <Show when={activeCatalogEntry()?.supportsWorkerUrls}>
-                            <div>
-                              <label class="mb-2 block text-sm font-medium text-gray-700">Worker URLs</label>
-                              <input
-                                class="w-full rounded-md border border-gray-300 px-3 py-3 text-sm text-gray-900"
-                                onInput={(event) => {
-                                  setConnectionForm('workerUrls', event.currentTarget.value)
-                                }}
-                                placeholder="http://127.0.0.1:30000, http://127.0.0.1:30001"
-                                type="text"
-                                value={connectionForm.workerUrls}
-                              />
-                            </div>
-                          </Show>
-
-                          <div class="rounded-lg border border-gray-200 bg-gray-50 p-4">
-                            <div class="flex items-center justify-between gap-3">
-                              <label class="text-sm font-medium text-gray-700">API Key</label>
-                              <span class="text-xs font-medium uppercase tracking-wide text-gray-500">
-                                {getProviderSecretStatus(connection())}
-                              </span>
-                            </div>
-                            <input
-                              class="mt-2 w-full rounded-md border border-gray-300 bg-white px-3 py-3 text-sm text-gray-900"
-                              onInput={(event) => {
-                                setConnectionForm('apiKey', event.currentTarget.value)
-                              }}
-                              placeholder={
-                                connection().hasSecret ? 'Enter a new key to replace the stored one' : 'Paste API key'
-                              }
-                              type="password"
-                              value={connectionForm.apiKey}
-                            />
-                            <Show when={connection().hasSecret}>
-                              <div class="mt-3 flex justify-end">
-                                <button
-                                  class="rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-white"
-                                  onClick={() => {
-                                    return void clearStoredSecret()
-                                  }}
-                                  type="button"
-                                >
-                                  Clear Stored Key
-                                </button>
-                              </div>
-                            </Show>
-                          </div>
-
-                          <label class="flex items-center gap-3 rounded-lg border border-gray-200 bg-gray-50 px-3 py-3 text-sm text-gray-700">
-                            <input
-                              checked={connectionForm.enabled}
-                              onChange={(event) => {
-                                setConnectionForm('enabled', event.currentTarget.checked)
-                              }}
-                              type="checkbox"
-                            />
-                            Enabled
-                          </label>
+                          <ProviderConnectionForm
+                            apiKeyOptional={isOptionalConnectionApiKey()}
+                            hasStoredSecret={connection().hasSecret}
+                            kind={connection().providerKind}
+                            onApiKeyChange={(value) => {
+                              setConnectionForm('apiKey', value)
+                            }}
+                            onBaseURLChange={(value) => {
+                              setConnectionForm('baseURL', value)
+                            }}
+                            onClearStoredSecret={() => {
+                              return void clearStoredSecret()
+                            }}
+                            onEnabledChange={(value) => {
+                              setConnectionForm('enabled', value)
+                            }}
+                            onLabelChange={(value) => {
+                              setConnectionForm('label', value)
+                            }}
+                            onWorkerUrlsChange={(value) => {
+                              setConnectionForm('workerUrls', value)
+                            }}
+                            providerLabel={activeCatalogEntry()?.label ?? connection().providerKind}
+                            secretStatus={getProviderSecretStatus(connection())}
+                            showApiKeyField={shouldShowConnectionApiKeyField()}
+                            showEnabledToggle={true}
+                            supportsWorkerUrls={Boolean(activeCatalogEntry()?.supportsWorkerUrls)}
+                            values={connectionForm}
+                          />
 
                           <div class="flex flex-wrap gap-3">
                             <button

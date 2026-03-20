@@ -4,6 +4,7 @@ import {createEffect, createSignal, For, onCleanup, Show} from 'solid-js'
 import {createStore} from 'solid-js/store'
 
 import {Button} from '../../../../components/ui/button.tsx'
+import {ProviderConnectionForm} from './providerConnectionForm.tsx'
 import {
   beginProviderAuthLifecycle,
   type CodexDeviceLoginJob,
@@ -12,14 +13,24 @@ import {
   fetchProviderConnections,
   finishProviderAuthLifecycle,
   getNullableTrimmedValue,
+  getRuntimeWorkerUrlsForProvider,
   getTrimmedValue,
   getWorkerUrlsFromInputValue,
   type ProviderAuthLifecyclePayload,
   type ProviderAuthLifecycleResult,
   type ProviderCatalogEntry,
+  supportsRuntimeWorkerUrls,
 } from './providerConnectionsClient.ts'
 
-type ConnectionFormState = {apiKey: string; baseURL: string; label: string; providerKind: string; workerUrls: string}
+type ConnectionFormState = {
+  apiKey: string
+  baseURL: string
+  enabled: boolean
+  label: string
+  manualWorkerUrls: string
+  providerKind: string
+  workerUrlMode: 'manual' | 'runtime'
+}
 
 type CodexAuthProviderState = Partial<CodexStatus> & {job?: CodexDeviceLoginJob | null}
 
@@ -27,9 +38,11 @@ const getConnectionFormState = (catalogEntry: ProviderCatalogEntry | null): Conn
   return {
     apiKey: '',
     baseURL: catalogEntry?.defaultBaseURL ?? '',
+    enabled: true,
     label: catalogEntry?.label ?? '',
+    manualWorkerUrls: '',
     providerKind: catalogEntry?.kind ?? 'openai',
-    workerUrls: '',
+    workerUrlMode: supportsRuntimeWorkerUrls(catalogEntry?.kind) ? 'runtime' : 'manual',
   }
 }
 
@@ -82,12 +95,20 @@ const AddProviderPage = () => {
     return providerConnectionsQuery.data?.connections ?? []
   }
 
+  const runtime = () => {
+    return providerConnectionsQuery.data?.runtime ?? null
+  }
+
   const activeCatalogEntry = () => {
     return (
       catalog().find((entry) => {
         return entry.kind === connectionForm.providerKind
       }) ?? null
     )
+  }
+
+  const activeRuntimeWorkerUrls = () => {
+    return getRuntimeWorkerUrlsForProvider({providerKind: connectionForm.providerKind, runtime: runtime()})
   }
 
   const existingCodexConnection = () => {
@@ -251,8 +272,9 @@ const AddProviderPage = () => {
         apiKey: authResult.payload?.secretValue ?? (getTrimmedValue(connectionForm.apiKey) || undefined),
         baseURL: getNullableTrimmedValue(connectionForm.baseURL),
         label: connectionForm.label,
+        manualWorkerUrls: getWorkerUrlsFromInputValue(connectionForm.manualWorkerUrls),
         providerKind: connectionForm.providerKind,
-        workerUrls: getWorkerUrlsFromInputValue(connectionForm.workerUrls),
+        workerUrlMode: connectionForm.workerUrlMode,
       })
     } catch (error) {
       setPageError(error instanceof Error ? error.message : 'Failed to create provider connection')
@@ -385,70 +407,32 @@ const AddProviderPage = () => {
                       </div>
                     </Show>
 
-                    <div>
-                      <label class="mb-2 block text-sm font-medium text-gray-700">Provider</label>
-                      <div class="rounded-md border border-gray-200 bg-gray-50 px-3 py-3 text-sm text-gray-700">
-                        {activeCatalogEntry()?.label ?? connectionForm.providerKind}
-                      </div>
-                    </div>
-
-                    <div>
-                      <label class="mb-2 block text-sm font-medium text-gray-700">Connection Label</label>
-                      <input
-                        class="w-full rounded-md border border-gray-300 px-3 py-3 text-sm text-gray-900"
-                        onInput={(event) => {
-                          setConnectionForm('label', event.currentTarget.value)
-                        }}
-                        type="text"
-                        value={connectionForm.label}
-                      />
-                    </div>
-
-                    <Show when={connectionForm.providerKind !== 'codex'}>
-                      <div>
-                        <label class="mb-2 block text-sm font-medium text-gray-700">Base URL</label>
-                        <input
-                          class="w-full rounded-md border border-gray-300 px-3 py-3 text-sm text-gray-900"
-                          onInput={(event) => {
-                            setConnectionForm('baseURL', event.currentTarget.value)
-                          }}
-                          type="text"
-                          value={connectionForm.baseURL}
-                        />
-                      </div>
-                    </Show>
-
-                    <Show when={activeCatalogEntry()?.supportsWorkerUrls}>
-                      <div>
-                        <label class="mb-2 block text-sm font-medium text-gray-700">Worker URLs</label>
-                        <input
-                          class="w-full rounded-md border border-gray-300 px-3 py-3 text-sm text-gray-900"
-                          onInput={(event) => {
-                            setConnectionForm('workerUrls', event.currentTarget.value)
-                          }}
-                          placeholder="http://127.0.0.1:30000, http://127.0.0.1:30001"
-                          type="text"
-                          value={connectionForm.workerUrls}
-                        />
-                      </div>
-                    </Show>
-
-                    <Show when={shouldShowApiKeyField()}>
-                      <div>
-                        <label class="mb-2 block text-sm font-medium text-gray-700">
-                          {apiKeyField()?.label ?? 'API Key'}
-                        </label>
-                        <input
-                          class="w-full rounded-md border border-gray-300 px-3 py-3 text-sm text-gray-900"
-                          onInput={(event) => {
-                            setConnectionForm('apiKey', event.currentTarget.value)
-                          }}
-                          placeholder={apiKeyField()?.optional ? 'Optional' : undefined}
-                          type="password"
-                          value={connectionForm.apiKey}
-                        />
-                      </div>
-                    </Show>
+                    <ProviderConnectionForm
+                      apiKeyLabel={apiKeyField()?.label}
+                      apiKeyOptional={apiKeyField()?.optional}
+                      kind={connectionForm.providerKind}
+                      onApiKeyChange={(value) => {
+                        setConnectionForm('apiKey', value)
+                      }}
+                      onBaseURLChange={(value) => {
+                        setConnectionForm('baseURL', value)
+                      }}
+                      onLabelChange={(value) => {
+                        setConnectionForm('label', value)
+                      }}
+                      onWorkerUrlModeChange={(value) => {
+                        setConnectionForm('workerUrlMode', value)
+                      }}
+                      onWorkerUrlsChange={(value) => {
+                        setConnectionForm('manualWorkerUrls', value)
+                      }}
+                      providerLabel={activeCatalogEntry()?.label ?? connectionForm.providerKind}
+                      runtimeWorkerUrls={activeRuntimeWorkerUrls()}
+                      showApiKeyField={shouldShowApiKeyField()}
+                      supportsRuntimeWorkerUrls={supportsRuntimeWorkerUrls(connectionForm.providerKind)}
+                      supportsWorkerUrls={Boolean(activeCatalogEntry()?.supportsWorkerUrls)}
+                      values={connectionForm}
+                    />
 
                     <Button
                       disabled={createConnectionMutation.isPending || isFinishingAuth() || isLoadingAuth()}
