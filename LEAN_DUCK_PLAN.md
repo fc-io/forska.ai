@@ -47,10 +47,25 @@
 
 - [ ] Audit every caller of `original_data`; split into must-keep vs nice-to-have.
 - [ ] List exact subfields actually used by UI, exports, imports, and cron paths.
+- [ ] Treat current runtime uses as four buckets: DOI lookup, full-text link fallback, journal title fallback, and preprint/source display.
+- [ ] Verify `app.article.doi` matches `original_data.doi` everywhere it exists.
+- [ ] Backfill `app.article.doi` from `original_data.doi` anywhere missing.
+- [ ] Add one normalization step so DOI values have one canonical format before comparing/backfilling.
+- [ ] Change Unpaywall/PDF fetch paths to read DOI from `app.article.doi`, not `original_data`.
+- [ ] Confirm import routes populate `doi` directly on write, especially PubMed.
+- [ ] Add/import one normalized hot source metadata field for current UX needs: `journalTitle`, `preprintSource`, `isPreprint`, and `fullTextLinks`.
+- [ ] Decide storage shape for normalized source metadata: one JSON field vs a few typed columns plus one JSON field for links.
+- [ ] Backfill normalized source metadata from legacy `original_data` for existing rows.
+- [ ] Change review APIs to return normalized source metadata instead of raw `originalData`.
+- [ ] Change admin PDF tooling to use normalized `fullTextLinks` instead of raw `originalData`.
+- [ ] Change export paths to use normalized `journalTitle` instead of raw `originalData`.
+- [ ] Stop client review tables from depending on raw `originalData`; use normalized source fields only.
 - [ ] Decide target: remove fully, move to cold sidecar DuckDB, or move to external JSON/blob store keyed by article id.
 - [ ] Backfill any hot typed fields we still need into normal columns before removal.
 - [ ] Stop writing large raw payloads into hot `app.article` for new imports.
+- [ ] Keep writing the normalized hot source metadata when new articles import.
 - [ ] Add one migration/script to move or purge historical `original_data`.
+- [ ] Only remove or cold-store `original_data` after review/admin/export/PDF fetch paths no longer read it.
 - [ ] Compact DB after removal/move.
 
 ## Phase 4 - Stop Storing Duplicated Article Metadata In Marts
