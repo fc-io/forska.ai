@@ -109,8 +109,6 @@ const processSinglePrompt = async (
       modelName: promptToProcess.modelName,
       baseURL: promptToProcess.modelBaseUrl,
       provider: promptToProcess.modelProvider,
-      secretRef: promptToProcess.modelSecretRef,
-      version: promptToProcess.modelVersion,
       workerUrls: promptToProcess.modelWorkerUrls,
     },
     modelContext,

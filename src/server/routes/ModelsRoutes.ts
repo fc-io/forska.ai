@@ -1,5 +1,29 @@
 import {Elysia, t} from 'elysia'
 
+import {resolveProviderRuntimeCredentials} from '../providers/providerAuthService.ts'
+import {getProviderConnectionAuthMode, getResolvedProviderBaseURL} from '../providers/providerConnectionHelpers.ts'
+import {
+  createProviderConnection,
+  deleteProviderConnection,
+  getFirstEnabledProviderConnection,
+  getProviderConnection,
+  listProviderConnections,
+  updateProviderConnection,
+} from '../providers/providerConnectionRepository.ts'
+import {testProviderConnectionHealth} from '../providers/providerHealthService.ts'
+import {
+  createProviderModel,
+  listSelectableProviderModels,
+  updateProviderModel,
+} from '../providers/providerModelRepository.ts'
+import {requireProviderRegistryEntry} from '../providers/providerRegistry.ts'
+import {deleteProviderSecret, storeProviderSecret} from '../providers/providerSecretStore.ts'
+import {syncProviderConnectionModels} from '../providers/providerSyncService.ts'
+import {
+  getCodexAppDeviceLoginJob,
+  getCodexAppRuntimeStatus,
+  startCodexAppDeviceLogin,
+} from '../providers/transports/codexAppTransport.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {
@@ -8,27 +32,7 @@ import {
   isCodexProvider,
   normalizeProviderKind,
 } from '../services/providerCatalog.ts'
-import {listProviderModels, testProviderConnection} from '../services/providerClientService.ts'
-import {
-  createProviderConnectionRecord,
-  createProviderModelRecord,
-  deleteProviderConnectionRecord,
-  getFirstEnabledProviderConnectionByKind,
-  getProviderConnectionAuthMode,
-  getProviderConnectionById,
-  getResolvedProviderBaseURL,
-  hasEnabledProviderConnection,
-  listProviderConnectionsForAdmin,
-  listSelectableModels,
-  setProviderConnectionCheckResult,
-  updateProviderConnectionRecord,
-  updateProviderModelRecord,
-  upsertDiscoveredProviderModels,
-} from '../services/providerConnectionQueryService.ts'
-import {deleteProviderSecretValue, storeProviderSecretValue} from '../services/providerSecretStore.ts'
-import {getCodexCliLoginStatus, getCodexDeviceAuthLoginJob, startCodexDeviceAuthLogin} from '../utils/codexCliAuth.ts'
 import {env} from '../utils/env.ts'
-import {getCodexAppServerClient, getCodexBinPath} from '../utils/getCodexAppServerClient.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
 const normalizeDisplayName = (value: string): string => {
@@ -75,7 +79,7 @@ const getPublicProviderConnection = <T extends {secretRef: string | null}>(conne
 }
 
 const getProviderConnectionsPayload = async () => {
-  const connections = await listProviderConnectionsForAdmin()
+  const connections = await listProviderConnections()
 
   return {
     catalog: getProviderCatalog(),
@@ -86,7 +90,7 @@ const getProviderConnectionsPayload = async () => {
 }
 
 const getCodexVirtualModelsFromStoredModels = async () => {
-  const storedModels = await listSelectableModels()
+  const storedModels = await listSelectableProviderModels()
 
   return storedModels
     .filter((model) => {
@@ -112,14 +116,16 @@ const getCodexVirtualModelsFromStoredModels = async () => {
 }
 
 const getCodexVirtualModelsFromServer = async () => {
-  const hasCodexConnection = await hasEnabledProviderConnection('codex')
+  const connection = await getFirstEnabledProviderConnection('codex')
 
-  if (!hasCodexConnection) {
+  if (!connection) {
     return []
   }
 
   try {
-    const discoveredModels = await listProviderModels({baseURL: null, providerKind: 'codex', secretRef: null})
+    const definition = requireProviderRegistryEntry(connection.providerKind)
+    const runtimeCredentials = await resolveProviderRuntimeCredentials(connection)
+    const discoveredModels = await definition.listModels({connection, runtimeCredentials})
 
     return discoveredModels.map((model) => {
       return {
@@ -142,7 +148,7 @@ const getCodexVirtualModelsFromServer = async () => {
 }
 
 const getSelectableModelsPayload = async () => {
-  const storedModels = await listSelectableModels()
+  const storedModels = await listSelectableProviderModels()
   const nonCodexModels = storedModels
     .filter((model) => {
       return model.provider !== 'codex'
@@ -169,11 +175,11 @@ const getSelectableModelsPayload = async () => {
 }
 
 const getCodexConnectionForEnsure = async () => {
-  const existing = await getFirstEnabledProviderConnectionByKind('codex')
+  const existing = await getFirstEnabledProviderConnection('codex')
 
   return existing
     ? existing
-    : createProviderConnectionRecord({
+    : createProviderConnection({
         authMode: 'codex-cli',
         baseURL: null,
         config: {workerUrls: []},
@@ -222,7 +228,7 @@ export const modelsRoutes = new Elysia()
             ? null
             : getResolvedProviderBaseURL({baseURL: getTrimmedValue(body.baseURL), providerKind})
           const label = getProviderConnectionLabel({label: body.label, providerKind})
-          const connection = await createProviderConnectionRecord({
+          const connection = await createProviderConnection({
             authMode: getProviderConnectionAuthMode({baseURL, providerKind, secretRef: null}),
             baseURL,
             config: getProviderConnectionConfig(body.workerUrls),
@@ -230,11 +236,9 @@ export const modelsRoutes = new Elysia()
             providerKind,
             secretRef: null,
           })
-          const secretRef = apiKey
-            ? await storeProviderSecretValue({connectionId: connection.id, secret: apiKey})
-            : null
+          const secretRef = apiKey ? await storeProviderSecret({connectionId: connection.id, secret: apiKey}) : null
           const savedConnection = secretRef
-            ? await updateProviderConnectionRecord({
+            ? await updateProviderConnection({
                 authMode: getProviderConnectionAuthMode({baseURL, providerKind, secretRef}),
                 baseURL,
                 config: getProviderConnectionConfig(body.workerUrls),
@@ -260,7 +264,7 @@ export const modelsRoutes = new Elysia()
       .patch(
         '/api/provider-connections/:id',
         async ({body, params, set}) => {
-          const existing = await getProviderConnectionById(params.id)
+          const existing = await getProviderConnection(params.id)
 
           if (!existing) {
             set.status = 404
@@ -281,13 +285,13 @@ export const modelsRoutes = new Elysia()
           const clearedSecretRef = body.clearSecret ? null : existing.secretRef
 
           if (body.clearSecret && existing.secretRef) {
-            await deleteProviderSecretValue(existing.secretRef)
+            await deleteProviderSecret(existing.secretRef)
           }
 
           const secretRef = getTrimmedValue(body.apiKey)
-            ? await storeProviderSecretValue({connectionId: existing.id, secret: body.apiKey as string})
+            ? await storeProviderSecret({connectionId: existing.id, secret: body.apiKey as string})
             : clearedSecretRef
-          const updated = await updateProviderConnectionRecord({
+          const updated = await updateProviderConnection({
             authMode: getProviderConnectionAuthMode({
               baseURL: nextBaseURL,
               providerKind: existing.providerKind,
@@ -318,17 +322,17 @@ export const modelsRoutes = new Elysia()
       .delete(
         '/api/provider-connections/:id',
         async ({params, set}) => {
-          const connection = await getProviderConnectionById(params.id)
+          const connection = await getProviderConnection(params.id)
 
           if (!connection) {
             set.status = 404
             return {data: null, error: 'Provider connection not found'}
           }
 
-          const result = await deleteProviderConnectionRecord(connection.id)
+          const result = await deleteProviderConnection(connection.id)
 
           if (connection.secretRef) {
-            await deleteProviderSecretValue(connection.secretRef).catch((error) => {
+            await deleteProviderSecret(connection.secretRef).catch((error) => {
               console.warn(
                 '[provider-connections] Failed to delete provider secret:',
                 error instanceof Error ? error.message : error,
@@ -343,34 +347,28 @@ export const modelsRoutes = new Elysia()
       .post(
         '/api/provider-connections/:id/test',
         async ({params, set}) => {
-          const connection = await getProviderConnectionById(params.id)
+          const connection = await getProviderConnection(params.id)
 
           if (!connection) {
             set.status = 404
             return {data: null, error: 'Provider connection not found'}
           }
 
-          try {
-            const result = await testProviderConnection({
-              baseURL: connection.baseURL,
-              providerKind: connection.providerKind,
-              secretRef: connection.secretRef,
-            })
-            await setProviderConnectionCheckResult({id: connection.id, lastError: null})
-            return {data: result, error: null}
-          } catch (error) {
-            const message = error instanceof Error ? error.message : 'Provider connection test failed'
-            await setProviderConnectionCheckResult({id: connection.id, lastError: message})
+          const result = await testProviderConnectionHealth(connection)
+
+          if (!result.ok) {
             set.status = 400
-            return {data: null, error: message}
+            return {data: null, error: result.message}
           }
+
+          return {data: {message: result.message, modelCount: result.modelCount}, error: null}
         },
         {params: t.Object({id: t.String()})},
       )
       .post(
         '/api/provider-connections/:id/sync-models',
         async ({params, set}) => {
-          const connection = await getProviderConnectionById(params.id)
+          const connection = await getProviderConnection(params.id)
 
           if (!connection) {
             set.status = 404
@@ -378,17 +376,11 @@ export const modelsRoutes = new Elysia()
           }
 
           try {
-            const discoveredModels = await listProviderModels({
-              baseURL: connection.baseURL,
-              providerKind: connection.providerKind,
-              secretRef: connection.secretRef,
-            })
-            const savedModels = await upsertDiscoveredProviderModels({connection, discoveredModels})
-            await setProviderConnectionCheckResult({id: connection.id, lastError: null})
-            return {data: {count: savedModels.length, models: savedModels}, error: null}
+            const result = await syncProviderConnectionModels(connection)
+
+            return {data: {count: result.savedModels.length, models: result.savedModels}, error: null}
           } catch (error) {
             const message = error instanceof Error ? error.message : 'Provider model sync failed'
-            await setProviderConnectionCheckResult({id: connection.id, lastError: message})
             set.status = 400
             return {data: null, error: message}
           }
@@ -398,7 +390,7 @@ export const modelsRoutes = new Elysia()
       .post(
         '/api/provider-connections/:id/models',
         async ({body, params, set}) => {
-          const connection = await getProviderConnectionById(params.id)
+          const connection = await getProviderConnection(params.id)
 
           if (!connection) {
             set.status = 404
@@ -426,7 +418,7 @@ export const modelsRoutes = new Elysia()
             return {data: {model: null, modelId: existing.id}, error: null}
           }
 
-          const model = await createProviderModelRecord({
+          const model = await createProviderModel({
             connection,
             displayName: getTrimmedValue(body.displayName) ?? remoteModelId,
             metadataJson: null,
@@ -458,7 +450,7 @@ export const modelsRoutes = new Elysia()
             return {data: null, error: 'displayName is required'}
           }
 
-          const model = await updateProviderModelRecord({
+          const model = await updateProviderModel({
             displayName,
             enabled: body.enabled,
             id: params.id,
@@ -473,43 +465,21 @@ export const modelsRoutes = new Elysia()
         },
       )
       .get('/api/models/codex/status', async () => {
-        const codexBin = getCodexBinPath()
-        const cli = await getCodexCliLoginStatus()
-        const appServerReady =
-          cli.ok && cli.loggedIn
-            ? await (async () => {
-                try {
-                  const client = getCodexAppServerClient()
-                  await client.modelList({limit: 1, includeHidden: false, cursor: null})
-                  return true
-                } catch (_error) {
-                  return false
-                }
-              })()
-            : false
-
-        const message = !cli.ok
-          ? 'Codex CLI not available. Install @openai/codex and configure the Codex binary in Settings if needed.'
-          : cli.loggedIn
-            ? appServerReady
-              ? 'Codex connected.'
-              : 'Codex logged in, but app-server is not responding.'
-            : 'Codex not logged in.'
-
-        return {data: {codexBin, cli, appServerReady, message}, error: null}
+        return {data: await getCodexAppRuntimeStatus(), error: null}
       })
       .post('/api/models/codex/login', async () => {
-        const cli = await getCodexCliLoginStatus()
+        const status = await getCodexAppRuntimeStatus()
+        const cli = status.cli
         if (cli.ok && cli.loggedIn) {
           return {data: {started: false, job: null, message: 'Already logged in.'}, error: null}
         }
-        const job = startCodexDeviceAuthLogin()
+        const job = startCodexAppDeviceLogin()
         return {data: {started: true, job, message: 'Started Codex device login.'}, error: null}
       })
       .get(
         '/api/models/codex/login/:jobId',
         async ({params, set}) => {
-          const job = getCodexDeviceAuthLoginJob(params.jobId)
+          const job = getCodexAppDeviceLoginJob(params.jobId)
           if (!job) {
             set.status = 404
             return {data: null, error: 'Login job not found'}
@@ -547,7 +517,7 @@ export const modelsRoutes = new Elysia()
             return {data: {modelId: existing.id}, error: null}
           }
 
-          const model = await createProviderModelRecord({
+          const model = await createProviderModel({
             connection,
             displayName: normalizeDisplayName(body.name),
             metadataJson: null,

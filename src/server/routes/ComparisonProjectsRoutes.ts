@@ -1,8 +1,8 @@
 import {Elysia, t} from 'elysia'
 
+import {assertSelectableProviderModelIds} from '../providers/providerModelRepository.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import * as appQueryHelpers from '../services/appQueryHelpers.ts'
-import {assertSelectableModelIds} from '../services/providerConnectionQueryService.ts'
 import {
   getJudgmentDisplayAnswer,
   getNormalizedJudgmentAnswerKey,
@@ -1501,7 +1501,7 @@ const getValidatedModelIds = async (db: AppQueryRunner, modelIds: string[]) => {
     return null
   }
 
-  return assertSelectableModelIds(db, {
+  return assertSelectableProviderModelIds(db, {
     errorMessage: 'One or more selected models do not exist or are disabled',
     modelIds,
   })

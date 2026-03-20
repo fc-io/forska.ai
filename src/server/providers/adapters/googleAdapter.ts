@@ -1,0 +1,66 @@
+import {type ProviderCatalogEntry} from '../../services/providerCatalog.ts'
+import {type ProviderDefinition} from '../providerTypes.ts'
+import {invokeGeminiGenerateContentModel, listGeminiModels} from '../transports/geminiGenerateContentTransport.ts'
+import {
+  getProviderConnectedMessage,
+  getProviderHealthFailure,
+  getProviderHealthSuccess,
+  resolveApiKeyRuntimeCredentials,
+} from './providerAdapterUtils.ts'
+
+export const createGoogleAdapter = (catalog: ProviderCatalogEntry): ProviderDefinition => {
+  const getHealth = async ({apiKey, baseURL}: {apiKey: string | null; baseURL: string | null}) => {
+    try {
+      const models = await listGeminiModels({apiKey, baseURL, providerLabel: catalog.label})
+
+      return getProviderHealthSuccess({
+        message: getProviderConnectedMessage({catalog, modelCount: models.length}),
+        modelCount: models.length,
+      })
+    } catch (error) {
+      return getProviderHealthFailure(error)
+    }
+  }
+
+  return {
+    beginAuth: async () => {
+      return {message: 'Google Gemini uses direct API-key configuration', payload: null, status: 'unsupported'}
+    },
+    catalog,
+    finishAuth: async () => {
+      return {message: 'Google Gemini uses direct API-key configuration', payload: null, status: 'unsupported'}
+    },
+    health: async ({runtimeCredentials}) => {
+      return getHealth(runtimeCredentials)
+    },
+    invoke: async ({model, request, runtimeCredentials}) => {
+      return invokeGeminiGenerateContentModel({
+        apiKey: runtimeCredentials.apiKey,
+        baseURL: runtimeCredentials.baseURL,
+        maxCompletionTokens: request.maxCompletionTokens,
+        modelName: model.modelName ?? model.remoteModelId ?? model.name,
+        prompt: request.prompt,
+        systemPrompt: request.systemPrompt,
+        temperature: request.temperature,
+      })
+    },
+    kind: catalog.kind,
+    listModels: async ({runtimeCredentials}) => {
+      return listGeminiModels({
+        apiKey: runtimeCredentials.apiKey,
+        baseURL: runtimeCredentials.baseURL,
+        providerLabel: catalog.label,
+      })
+    },
+    parseUsage: (usage) => {
+      return usage
+    },
+    resolveRuntimeCredentials: async ({connection}) => {
+      return resolveApiKeyRuntimeCredentials({baseURL: connection.baseURL, secretRef: connection.secretRef})
+    },
+    testConnection: async ({runtimeCredentials}) => {
+      return getHealth(runtimeCredentials)
+    },
+    transportFamily: 'gemini-generate-content',
+  }
+}

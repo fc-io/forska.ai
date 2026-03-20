@@ -1,9 +1,9 @@
 import {Elysia, t} from 'elysia'
 
+import {assertSelectableProviderModelId} from '../providers/providerModelRepository.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import * as appQueryHelpers from '../services/appQueryHelpers.ts'
 import {getDuckdbMartRefreshService} from '../services/getDuckdbMartRefreshService.ts'
-import {assertSelectableModelId} from '../services/providerConnectionQueryService.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
 import {hasMatchingJudgmentAnswer} from '../utils/judgmentAnswers.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
@@ -235,7 +235,7 @@ export const subprojectsRoutes = new Elysia()
   .post(
     '/api/subprojects',
     async ({body}) => {
-      await assertSelectableModelId(appDatabaseService, {
+      await assertSelectableProviderModelId(appDatabaseService, {
         errorMessage: 'Selected model does not exist or is disabled',
         modelId: body.modelId,
       })

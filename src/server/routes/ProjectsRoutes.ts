@@ -1,5 +1,6 @@
 import {Elysia, t} from 'elysia'
 
+import {assertSelectableProviderModelId} from '../providers/providerModelRepository.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {
   escapeSqlString,
@@ -9,7 +10,6 @@ import {
   getTimestampLiteral,
 } from '../services/appQueryHelpers.ts'
 import {getDuckdbMartRefreshService} from '../services/getDuckdbMartRefreshService.ts'
-import {assertSelectableModelId} from '../services/providerConnectionQueryService.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {assertProjectIsActive, getProjectAccess} from './projectsRoutes/projectAccessGuard.ts'
@@ -515,7 +515,7 @@ export const projectsRoutes = new Elysia()
         throw new Error('date_from must be on or before date_to')
       }
 
-      await assertSelectableModelId(getAppDatabaseService(), {
+      await assertSelectableProviderModelId(getAppDatabaseService(), {
         errorMessage: 'Selected model does not exist or is disabled',
         modelId: body.modelId,
       })
@@ -796,7 +796,7 @@ export const projectsRoutes = new Elysia()
         }
 
         if (body.modelId !== undefined) {
-          await assertSelectableModelId(tx, {
+          await assertSelectableProviderModelId(tx, {
             errorMessage: 'Selected model does not exist or is disabled',
             modelId: body.modelId,
           })
@@ -1175,7 +1175,7 @@ export const projectsRoutes = new Elysia()
       throw new Error('Project not found')
     }
 
-    await assertSelectableModelId(getAppDatabaseService(), {
+    await assertSelectableProviderModelId(getAppDatabaseService(), {
       errorMessage: 'Source project model does not exist or is disabled',
       modelId: sourceProject.modelId,
     })

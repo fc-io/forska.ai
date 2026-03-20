@@ -6,7 +6,7 @@ import {
   recordConnectionSuccess,
 } from '../server/cron/judgmentsJobs/connectionHealth.ts'
 import {withJudgmentRequest} from '../server/cron/judgmentsJobs/judgmentsRequestRuntime.ts'
-import {invokeProviderModel} from '../server/services/providerClientService.ts'
+import {invokeStoredProviderModel} from '../server/providers/providerInvocationService.ts'
 import {env} from '../server/utils/env.ts'
 import {rateLimitedLogger} from '../server/utils/rateLimitedLogger.ts'
 import {
@@ -36,8 +36,6 @@ type ModelConfigInput = {
   modelName: string
   baseURL: string
   provider: string | null
-  secretRef: string | null
-  version: string | null
   workerUrls: string[]
 }
 
@@ -343,24 +341,20 @@ type GeneratedPromptResponse = {
  */
 const generateSinglePromptResponse = async ({
   judgmentsJobId,
+  modelId,
   prompt,
   systemPrompt,
   baseURL,
-  modelName,
   provider,
-  secretRef,
-  version,
   workerUrls,
   outputSchema,
 }: {
   judgmentsJobId: string
+  modelId: string
   prompt: string
   systemPrompt: string
   baseURL: string
-  modelName: string
   provider: string | null
-  secretRef: string | null
-  version: string | null
   workerUrls: string[]
   outputSchema: unknown
 }): Promise<GeneratedPromptResponse> => {
@@ -368,17 +362,14 @@ const generateSinglePromptResponse = async ({
     {judgmentsJobId, provider, fallbackBaseURL: baseURL, workerUrls},
     async (requestBaseURL) => {
       try {
-        const result = await invokeProviderModel({
-          baseURL: requestBaseURL,
+        const result = await invokeStoredProviderModel({
+          baseURLOverride: requestBaseURL,
           maxCompletionTokens: MAX_COMPLETION_TOKENS,
-          modelName: normalizeModelName(modelName),
+          modelId,
           outputSchema,
           prompt,
-          providerKind: provider,
-          secretRef,
           systemPrompt,
           temperature: 0.2,
-          version,
         })
 
         return {...result, baseURL: requestBaseURL}
@@ -597,7 +588,7 @@ export const judgeSinglePrompt = async ({
   projectId: string
   contentSettings: ContentSettings
 }): Promise<void> => {
-  const {baseURL, modelName, modelId, provider, secretRef, version, workerUrls} = modelConfig
+  const {baseURL, modelName, modelId, provider, workerUrls} = modelConfig
 
   const tokenUse: JudgeTokenUsageEntry[] = []
   const startedAt = new Date().toISOString()
@@ -639,13 +630,11 @@ export const judgeSinglePrompt = async ({
       try {
         currentResponse = await generateSinglePromptResponse({
           judgmentsJobId,
+          modelId,
           prompt: userPrompt,
           systemPrompt,
           baseURL,
-          modelName,
           provider,
-          secretRef,
-          version,
           workerUrls,
           outputSchema: getSinglePromptOutputSchema(),
         })
@@ -855,13 +844,11 @@ export const judgeSinglePrompt = async ({
             try {
               currentResponse = await generateSinglePromptResponse({
                 judgmentsJobId,
+                modelId,
                 prompt: userPrompt,
                 systemPrompt: evidenceSystemPrompt,
                 baseURL,
-                modelName,
                 provider,
-                secretRef,
-                version,
                 workerUrls,
                 outputSchema: evidenceOutputSchema,
               })
@@ -1060,13 +1047,11 @@ export const judgeSinglePrompt = async ({
         try {
           currentResponse = await generateSinglePromptResponse({
             judgmentsJobId,
+            modelId,
             prompt: finalUserPrompt,
             systemPrompt,
             baseURL,
-            modelName,
             provider,
-            secretRef,
-            version,
             workerUrls,
             outputSchema: getSinglePromptOutputSchema(),
           })
