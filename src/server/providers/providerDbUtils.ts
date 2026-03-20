@@ -1,0 +1,173 @@
+import {type ModelSource} from '../../db/schemaTypes.ts'
+import {getDateValue, getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {normalizeProviderKind} from '../services/providerCatalog.ts'
+import {getProviderConnectionAuthMode, getResolvedProviderBaseURL} from './providerConnectionHelpers.ts'
+import {
+  type ProviderConnectionConfig,
+  type ProviderConnectionForAdmin,
+  type ProviderConnectionRecord,
+  type ProviderModelRecord,
+} from './providerTypes.ts'
+
+export type DatabaseRunner = {
+  queryJson: <T>(statement: string) => Promise<T[]>
+  run: (statement: string) => Promise<void>
+}
+export type DatabaseQueryRunner = Pick<DatabaseRunner, 'queryJson'>
+
+export type ProviderConnectionRow = {
+  authMode: string | null
+  baseURL: string | null
+  configJson: unknown
+  createdAt: unknown
+  enabled: boolean | null
+  id: string
+  label: string
+  lastCheckedAt: unknown
+  lastError: string | null
+  providerKind: string
+  secretRef: string | null
+  updatedAt: unknown
+}
+
+export type ProviderModelRow = {
+  baseURL: string | null
+  createdAt: unknown
+  displayName: string | null
+  enabled: boolean | null
+  id: string
+  metadataJson: unknown
+  modelName: string | null
+  name: string
+  provider: string | null
+  providerConnectionId: string | null
+  remoteModelId: string | null
+  source: string | null
+  updatedAt: unknown
+  variant: string | null
+  version: string | null
+}
+
+export const getTrimmedValue = (value: string | null | undefined): string | null => {
+  const normalized = String(value ?? '').trim()
+
+  return normalized === '' ? null : normalized
+}
+
+export const normalizeWorkerUrls = (workerUrls: string[] | null | undefined): string[] => {
+  return Array.from(
+    new Set(
+      (workerUrls ?? [])
+        .map((url) => {
+          return String(url).trim()
+        })
+        .filter((url) => {
+          return url.length > 0
+        }),
+    ),
+  )
+}
+
+export const getProviderConnectionConfigFromJson = (value: unknown): ProviderConnectionConfig => {
+  const parsed = getJsonValue(value)
+  const workerUrls =
+    typeof parsed === 'object' && parsed !== null && 'workerUrls' in parsed
+      ? normalizeWorkerUrls((parsed as {workerUrls?: unknown}).workerUrls as string[] | null | undefined)
+      : []
+
+  return {workerUrls}
+}
+
+export const getJsonSqlLiteral = (value: unknown): string => {
+  return value === null || value === undefined ? 'NULL' : `CAST(${getSqlLiteral(JSON.stringify(value))} AS JSON)`
+}
+
+export const getLegacySecretRef = (apiKeyVariable: string | null | undefined): string | null => {
+  const normalized = getTrimmedValue(apiKeyVariable)
+
+  return normalized ? `env:${normalized}` : null
+}
+
+export const getLegacyProviderConnectionConfig = (workerUrls: unknown): ProviderConnectionConfig => {
+  return {workerUrls: normalizeWorkerUrls(getJsonValue(workerUrls) as string[] | null)}
+}
+
+export const getProviderConnectionRecordFromRow = (row: ProviderConnectionRow): ProviderConnectionRecord => {
+  const providerKind = normalizeProviderKind(row.providerKind)
+  const baseURL = getResolvedProviderBaseURL({baseURL: row.baseURL, providerKind})
+  const secretRef = getTrimmedValue(row.secretRef)
+
+  return {
+    authMode: getTrimmedValue(row.authMode) ?? getProviderConnectionAuthMode({baseURL, providerKind, secretRef}),
+    baseURL,
+    config: getProviderConnectionConfigFromJson(row.configJson),
+    createdAt: getDateValue(row.createdAt),
+    enabled: row.enabled ?? true,
+    hasSecret: Boolean(secretRef),
+    id: row.id,
+    label: row.label,
+    lastCheckedAt: getDateValue(row.lastCheckedAt),
+    lastError: getTrimmedValue(row.lastError),
+    providerKind,
+    secretRef,
+    updatedAt: getDateValue(row.updatedAt),
+  }
+}
+
+export const getProviderModelRecordFromRow = (row: ProviderModelRow): ProviderModelRecord => {
+  return {
+    baseURL: getTrimmedValue(row.baseURL),
+    createdAt: getDateValue(row.createdAt),
+    displayName: getTrimmedValue(row.displayName),
+    enabled: row.enabled ?? true,
+    id: row.id,
+    metadataJson: getJsonValue(row.metadataJson),
+    modelName: getTrimmedValue(row.modelName),
+    name: row.name,
+    provider: normalizeProviderKind(row.provider),
+    providerConnectionId: getTrimmedValue(row.providerConnectionId),
+    remoteModelId: getTrimmedValue(row.remoteModelId),
+    source: (getTrimmedValue(row.source) as ModelSource | null) ?? null,
+    updatedAt: getDateValue(row.updatedAt),
+    variant: getTrimmedValue(row.variant),
+    version: getTrimmedValue(row.version),
+  }
+}
+
+export const attachModelsToConnections = ({
+  connections,
+  models,
+}: {
+  connections: ProviderConnectionRecord[]
+  models: ProviderModelRecord[]
+}): ProviderConnectionForAdmin[] => {
+  return connections.map((connection) => {
+    return {
+      ...connection,
+      models: models.filter((model) => {
+        return model.providerConnectionId === connection.id
+      }),
+    }
+  })
+}
+
+export const getProviderModelReturnQuery = (statement: string): string => {
+  return `${statement}
+    RETURNING
+      id,
+      provider_connection_id AS providerConnectionId,
+      name,
+      provider,
+      base_url AS baseURL,
+      model_name AS modelName,
+      remote_model_id AS remoteModelId,
+      display_name AS displayName,
+      version,
+      variant,
+      source,
+      enabled,
+      TO_JSON(metadata_json) AS metadataJson,
+      created_at AS createdAt,
+      updated_at AS updatedAt
+  `
+}
