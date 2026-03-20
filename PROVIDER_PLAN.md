@@ -44,24 +44,25 @@
 - [x] Backfill existing `app.model` rows into one seeded `app.provider_connection` row per existing model row.
 - [x] Seed new model inserts with matching `provider_connection_id`.
 - [x] Stop syncing env worker URLs into `app.model.worker_urls`.
-- [ ] Move runtime reads from model transport columns to provider connections.
+- [x] Move runtime reads from model transport columns to provider connections, with a few legacy fallback reads still pending removal.
 - [ ] Add `NOT NULL` + FK on `app.model.provider_connection_id` after runtime switch.
 - [ ] Drop old model-level transport/auth columns after phase 2.
 
 ### API
 
-- [ ] `GET /api/provider-connections` list connections + status snapshot.
-- [ ] `POST /api/provider-connections` create connection.
-- [ ] `PATCH /api/provider-connections/:id` edit label, enabled, base URL, config.
-- [ ] `POST /api/provider-connections/:id/test` test auth + reachability.
-- [ ] `POST /api/provider-connections/:id/sync-models` discover remote catalog.
-- [ ] `POST /api/provider-connections/:id/models` add manual model.
-- [ ] `PATCH /api/models/:id` edit display name, enabled, variant metadata.
-- [ ] Keep provider-specific auth routes only when transport needs it, e.g. Codex login/status.
+- [x] `GET /api/provider-connections` list connections + status snapshot.
+- [x] `POST /api/provider-connections` create connection.
+- [x] `PATCH /api/provider-connections/:id` edit label, enabled, base URL, config.
+- [x] `POST /api/provider-connections/:id/test` test auth + reachability.
+- [x] `POST /api/provider-connections/:id/sync-models` discover remote catalog.
+- [x] `POST /api/provider-connections/:id/models` add manual model.
+- [x] `PATCH /api/models/:id` edit display name, enabled, variant metadata.
+- [x] Keep provider-specific auth routes only when transport needs it, e.g. Codex login/status.
+- [x] Add generic provider auth lifecycle routes for onboarding.
 
 ## Secrets
 
-- Add a `ProviderSecretStore` abstraction.
+- [x] Add a `ProviderSecretStore` abstraction.
 - Best long term: secrets live in OS keychain / credential store; DuckDB stores only `secret_ref` + non-secret metadata.
 - If keychain support is missing on some platform, add encrypted-DB fallback behind the same interface.
 - Never keep provider API keys on `app.user_config` or duplicated per `app.model` row.
@@ -276,102 +277,120 @@
   - `Schedule` for retries, polling, health checks
   - `Scope` / `acquireRelease` if a provider needs managed client lifetime
 
+## Current Status
+
+- Done now:
+  - provider connections and model linkage schema
+  - provider registry, repositories, services, and transports
+  - explicit adapters for all first-pass providers
+  - generic auth lifecycle support with Codex-specific pending login behavior
+  - split provider routes (`ProviderConnectionsRoutes`, `ProviderModelsRoutes`)
+  - separate add-provider and manage-models UI
+  - provider-specific onboarding form extraction
+  - route/adaptor/auth focused test coverage
+- Still left:
+  - remove remaining legacy fallback reads from old model transport/auth columns
+  - add FK / `NOT NULL` on `app.model.provider_connection_id`
+  - drop obsolete model-level transport/auth columns
+  - add UI tests and end-to-end provider -> model -> project coverage
+  - optionally remove/minimize the compatibility shim in `src/server/services/providerClientService.ts`
+
 ## Adapter / Module Checklist
 
 ### Core modules
 
-- [ ] `src/server/providers/providerRegistry.ts`
+- [x] `src/server/providers/providerRegistry.ts`
   - register provider policies by `provider_kind`
   - expose one typed lookup point for auth, discovery, invoke, health, and usage
-- [ ] `src/server/providers/providerTypes.ts`
+- [x] `src/server/providers/providerTypes.ts`
   - canonical provider contracts and transport-family types
   - normalized request/response/usage/model metadata shapes
-- [ ] `src/server/providers/providerConnectionRepository.ts`
+- [x] `src/server/providers/providerConnectionRepository.ts`
   - load/save `app.provider_connection`
   - keep DB access separate from adapter logic
-- [ ] `src/server/providers/providerModelRepository.ts`
+- [x] `src/server/providers/providerModelRepository.ts`
   - load/save/sync `app.model`
   - own discovered-vs-manual model upsert rules
-- [ ] `src/server/providers/providerSecretStore.ts`
+- [x] `src/server/providers/providerSecretStore.ts`
   - OS keychain first
   - encrypted fallback later behind same interface
-- [ ] `src/server/providers/providerAuthService.ts`
+- [x] `src/server/providers/providerAuthService.ts`
   - shared begin/finish auth orchestration
   - provider-specific auth handoff hooks
-- [ ] `src/server/providers/providerSyncService.ts`
+- [x] `src/server/providers/providerSyncService.ts`
   - run discovery, normalize catalog rows, persist models
   - central place for sync-models jobs and retries
-- [ ] `src/server/providers/providerInvocationService.ts`
+- [x] `src/server/providers/providerInvocationService.ts`
   - resolve provider connection + model + runtime credentials
   - delegate to registry adapter and normalize failures
-- [ ] `src/server/providers/providerHealthService.ts`
+- [x] `src/server/providers/providerHealthService.ts`
   - standard health/test flow
   - persist `last_checked_at` / `last_error`
-- [ ] `src/server/providers/providerUsageService.ts`
+- [x] `src/server/providers/providerUsageService.ts`
   - parse provider usage into one internal shape
   - leave provider-specific usage fetching/parsing in adapters when needed
 
 ### Shared transport modules
 
-- [ ] `src/server/providers/transports/openaiResponsesTransport.ts`
+- [x] `src/server/providers/transports/openaiResponsesTransport.ts`
   - direct OpenAI Responses API execution
   - own OpenAI-specific request body, streaming, and usage parsing
-- [ ] `src/server/providers/transports/openaiChatTransport.ts`
+- [x] `src/server/providers/transports/openaiChatTransport.ts`
   - shared `/v1/chat/completions` execution for OpenAI-compatible providers
   - support base URL override, headers, and optional auth
-- [ ] `src/server/providers/transports/anthropicMessagesTransport.ts`
+- [x] `src/server/providers/transports/anthropicMessagesTransport.ts`
   - shared `POST /v1/messages` execution
   - own Anthropic message-block formatting and usage parsing
-- [ ] `src/server/providers/transports/geminiGenerateContentTransport.ts`
+- [x] `src/server/providers/transports/geminiGenerateContentTransport.ts`
   - shared Gemini `generateContent` execution
   - own `systemInstruction`, tools, and Gemini-specific usage parsing
-- [ ] `src/server/providers/transports/codexAppTransport.ts`
+- [x] `src/server/providers/transports/codexAppTransport.ts`
   - Codex app/CLI login-state checks
   - Codex app-server invocation and model listing
 
 ### Adapter modules
 
-- [ ] `src/server/providers/adapters/openaiAdapter.ts`
+- [x] `src/server/providers/adapters/openaiAdapter.ts`
   - auth: API key first
   - discovery: `GET /v1/models`
   - invoke: `openaiResponsesTransport`
   - health: direct OpenAI auth + endpoint reachability
-- [ ] `src/server/providers/adapters/codexAdapter.ts`
+- [x] `src/server/providers/adapters/codexAdapter.ts`
   - auth: OAuth / Codex app session
   - discovery: Codex app-server model list + reasoning variants
   - invoke: `codexAppTransport`
   - health: CLI installed, logged in, app-server ready
-- [ ] `src/server/providers/adapters/anthropicAdapter.ts`
+- [x] `src/server/providers/adapters/anthropicAdapter.ts`
   - auth: API key
   - discovery: `GET /v1/models`
   - invoke: `anthropicMessagesTransport`
   - health: auth + endpoint reachability
-- [ ] `src/server/providers/adapters/googleAdapter.ts`
+- [x] `src/server/providers/adapters/googleAdapter.ts`
   - auth: `GEMINI_API_KEY`
   - discovery: `GET /v1beta/models`
   - invoke: `geminiGenerateContentTransport`
   - health: auth + endpoint reachability
-- [ ] `src/server/providers/adapters/openrouterAdapter.ts`
+- [x] `src/server/providers/adapters/openrouterAdapter.ts`
   - auth: API key
   - discovery: `GET /api/v1/models`
   - invoke: `openaiChatTransport`
   - own OpenRouter routing metadata normalization
-- [ ] `src/server/providers/adapters/ollamaAdapter.ts`
+- [x] `src/server/providers/adapters/ollamaAdapter.ts`
   - auth: none by default
   - discovery: prefer `/api/tags`, fallback `/v1/models`
   - invoke: `openaiChatTransport`
   - health: daemon reachability + local model availability
-- [ ] `src/server/providers/adapters/llmstudioAdapter.ts`
+- [x] `src/server/providers/adapters/llmstudioAdapter.ts`
   - auth: none by default
   - discovery: `/v1/models` when available
   - invoke: `openaiChatTransport`
   - manual-model path stays first-class
-- [ ] `src/server/providers/adapters/sglangAdapter.ts`
+- [x] `src/server/providers/adapters/sglangAdapter.ts`
   - auth: optional bearer/API key
   - discovery: `/v1/models`
   - invoke: `openaiChatTransport`
   - health: endpoint + worker/runtime config checks
-- [ ] `src/server/providers/adapters/vllmAdapter.ts`
+- [x] `src/server/providers/adapters/vllmAdapter.ts`
   - auth: optional bearer/API key
   - discovery: `/v1/models`
   - invoke: `openaiChatTransport`
@@ -379,56 +398,56 @@
 
 ### Provider interaction checklist by provider
 
-- [ ] `openai`
+- [x] `openai`
   - add direct API-key connect flow
   - use direct OpenAI discovery
   - use Responses transport, not generic OpenAI-compatible by default
-- [ ] `codex`
+- [x] `codex`
   - add login-status + device-login + create-connection flow
   - split account/app connection from model add/sync
   - synthesize reasoning variants during discovery
-- [ ] `anthropic`
+- [x] `anthropic`
   - add API-key connect flow
   - support direct model discovery and messages execution
-- [ ] `google`
+- [x] `google`
   - add Gemini API-key connect flow
   - normalize preview model names so stored ids stay stable
-- [ ] `openrouter`
+- [x] `openrouter`
   - add API-key connect flow
   - support model discovery plus per-model routing metadata
-- [ ] `ollama`
+- [x] `ollama`
   - add local-daemon connect flow
   - prefer native discovery over generic `/v1/models`
-- [ ] `llmstudio`
+- [x] `llmstudio`
   - add local-endpoint connect flow
   - support discovery when exposed, manual add when not
-- [ ] `sglang`
+- [x] `sglang`
   - add endpoint + worker/runtime config flow
   - keep worker config on provider connection, never on model rows
-- [ ] `vllm`
+- [x] `vllm`
   - add endpoint + worker/runtime config flow
   - keep worker config on provider connection, never on model rows
 
 ### API / route modules
 
-- [ ] `src/server/routes/ProviderConnectionsRoutes.ts`
+- [x] `src/server/routes/ProviderConnectionsRoutes.ts`
   - list/create/edit/test/remove connections
-- [ ] `src/server/routes/ProviderModelsRoutes.ts`
+- [x] `src/server/routes/ProviderModelsRoutes.ts`
   - sync discovered models
   - add manual model rows
   - edit enable/display metadata
-- [ ] keep provider-specific routes only for auth flows that genuinely need them
+- [x] keep provider-specific routes only for auth flows that genuinely need them
   - Codex login/status is the first example
 
 ### UI modules
 
-- [ ] `src/app/routes/+admin/+models/+index.tsx`
+- [x] `src/app/routes/+admin/+models/+index.tsx`
   - provider management + model management for existing connections
-- [ ] `src/app/routes/+admin/+models/+add-provider.tsx`
+- [x] `src/app/routes/+admin/+models/+add-provider.tsx`
   - provider onboarding only
-- [ ] `src/app/routes/+admin/+models/providerConnectionsClient.ts`
+- [x] `src/app/routes/+admin/+models/providerConnectionsClient.ts`
   - shared client-side provider API helpers and catalog labels
-- [ ] provider-specific UI fragments under `src/app/routes/+admin/+models/`
+- [x] provider-specific UI fragments under `src/app/routes/+admin/+models/`
   - `openaiProviderForm.tsx`
   - `codexProviderForm.tsx`
   - `anthropicProviderForm.tsx`
@@ -437,20 +456,20 @@
 
 ### Tests
 
-- [ ] `src/server/providers/*.test.ts`
+- [x] `src/server/providers/*.test.ts`
   - transport-level success/error normalization
-- [ ] adapter tests per direct provider
+- [x] adapter tests per direct provider
   - `openaiAdapter.test.ts`
   - `codexAdapter.test.ts`
   - `anthropicAdapter.test.ts`
   - `googleAdapter.test.ts`
-- [ ] shared compatibility tests for local/proxy providers
+- [x] shared compatibility tests for local/proxy providers
   - `openrouterAdapter.test.ts`
   - `ollamaAdapter.test.ts`
   - `llmstudioAdapter.test.ts`
   - `sglangAdapter.test.ts`
   - `vllmAdapter.test.ts`
-- [ ] route tests for connect / sync / manual add / disable / remove
+- [x] route tests for connect / sync / manual add / disable / remove
 - [ ] UI tests for:
   - add-provider flow
   - Codex already-connected state
@@ -622,56 +641,56 @@
 
 ### Ticket 1 - Lock provider contracts
 
-- [ ] Add `providerTypes.ts`
-- [ ] Add `providerRegistry.ts`
-- [ ] Freeze normalized connection/model/invoke/usage shapes
+- [x] Add `providerTypes.ts`
+- [x] Add `providerRegistry.ts`
+- [x] Freeze normalized connection/model/invoke/usage shapes
 
 ### Ticket 2 - Extract provider infrastructure
 
-- [ ] Add provider connection/model repositories
-- [ ] Add secret/auth/health/sync/invocation/usage services
-- [ ] Route current provider DB access through these services
+- [x] Add provider connection/model repositories
+- [x] Add secret/auth/health/sync/invocation/usage services
+- [x] Route current provider DB access through these services
 
 ### Ticket 3 - Build shared transports
 
-- [ ] Add `openaiResponsesTransport.ts`
-- [ ] Add `openaiChatTransport.ts`
-- [ ] Add `anthropicMessagesTransport.ts`
-- [ ] Add `geminiGenerateContentTransport.ts`
-- [ ] Add `codexAppTransport.ts`
+- [x] Add `openaiResponsesTransport.ts`
+- [x] Add `openaiChatTransport.ts`
+- [x] Add `anthropicMessagesTransport.ts`
+- [x] Add `geminiGenerateContentTransport.ts`
+- [x] Add `codexAppTransport.ts`
 
 ### Ticket 4 - Finish direct-provider adapters
 
-- [ ] Implement `codexAdapter.ts`
-- [ ] Implement `openaiAdapter.ts`
-- [ ] Implement `anthropicAdapter.ts`
-- [ ] Implement `googleAdapter.ts`
+- [x] Implement `codexAdapter.ts`
+- [x] Implement `openaiAdapter.ts`
+- [x] Implement `anthropicAdapter.ts`
+- [x] Implement `googleAdapter.ts`
 
 ### Ticket 5 - Finish OpenAI-compatible adapters
 
-- [ ] Implement `openrouterAdapter.ts`
-- [ ] Implement `ollamaAdapter.ts`
-- [ ] Implement `llmstudioAdapter.ts`
-- [ ] Implement `sglangAdapter.ts`
-- [ ] Implement `vllmAdapter.ts`
+- [x] Implement `openrouterAdapter.ts`
+- [x] Implement `ollamaAdapter.ts`
+- [x] Implement `llmstudioAdapter.ts`
+- [x] Implement `sglangAdapter.ts`
+- [x] Implement `vllmAdapter.ts`
 
 ### Ticket 6 - Cut API routes to provider services
 
-- [ ] Add/finish provider connection routes
-- [ ] Add/finish provider model routes
-- [ ] Keep only truly provider-specific auth routes outside the generic surface
+- [x] Add/finish provider connection routes
+- [x] Add/finish provider model routes
+- [x] Keep only truly provider-specific auth routes outside the generic surface
 
 ### Ticket 7 - Cut runtime to provider registry
 
-- [ ] Route judgment execution through `providerInvocationService.ts`
-- [ ] Resolve runtime credentials from provider connection, not model row
-- [ ] Route health/usage reads through provider services
+- [x] Route judgment execution through `providerInvocationService.ts`
+- [x] Resolve runtime credentials from provider connection, not model row
+- [ ] Route health/usage reads through provider services everywhere, with a few remaining legacy fallback reads still to clean up.
 
 ### Ticket 8 - Finish admin UI split
 
-- [ ] Keep add-provider onboarding separate from model management
-- [ ] Add provider-specific form fragments
-- [ ] Make all existing provider/model actions use the new route surface only
+- [x] Keep add-provider onboarding separate from model management
+- [x] Add provider-specific form fragments
+- [x] Make all existing provider/model actions use the new route surface only
 
 ### Ticket 9 - Remove legacy assumptions
 
@@ -689,15 +708,16 @@
 
 ### Definition of done for Phase 2
 
-- [ ] Every supported provider resolves through the registry
-- [ ] Runtime no longer depends on legacy model transport/auth fields
-- [ ] Provider connect/test/sync/manual-add all run through shared services
-- [ ] Add-provider and model-management flows remain separate in UI and API
+- [x] Every supported provider resolves through the registry
+- [ ] Runtime no longer depends on legacy model transport/auth fields.
+- [x] Provider connect/test/sync/manual-add all run through shared services
+- [x] Add-provider and model-management flows remain separate in UI and API
 
 ## Models Page UX
 
 - Repurpose `src/app/routes/+admin/+models/+index.tsx` into a provider-first page.
-- Top section: provider catalog cards with `Connect` / `Add` actions.
+- Provider onboarding now lives on `src/app/routes/+admin/+models/+add-provider.tsx`.
+- `src/app/routes/+admin/+models/+index.tsx` is the management page for existing connections and their models.
 - Connected providers section:
   - label
   - provider kind
@@ -768,7 +788,7 @@
 
 ## Done When
 
-- A user can add any supported provider from the Models page.
+- A user can add any supported provider from the add-provider flow and then manage it from the Models page.
 - One provider connection can expose many models without duplicated auth/config.
 - Projects still pick one `app.model` row.
 - Provider auth/config is not stored on user config or repeated on models.
