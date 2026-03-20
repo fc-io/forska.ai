@@ -1,3 +1,4 @@
+import {getArticleSourceMetadata, getOriginalDoi} from '../../utils/articleSourceMetadata.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral} from './appQueryHelpers.ts'
 import {getDuckdbMartRefreshService} from './getDuckdbMartRefreshService.ts'
@@ -20,6 +21,7 @@ type ArticleImportStoreRow = {
   pubmedId?: string | null
   url?: string | null
   originalData?: unknown
+  sourceMetadata?: unknown
   fullText?: string | null
   fullTextHtml?: string | null
   fullTextPDF?: string | null
@@ -48,6 +50,7 @@ const articleColumnMap = {
   pubmedId: 'pubmed_id',
   url: 'url',
   originalData: 'original_data',
+  sourceMetadata: 'source_metadata',
   fullText: 'full_text',
   fullTextHtml: 'full_text_html',
   fullTextPDF: 'full_text_pdf',
@@ -73,6 +76,7 @@ const optionalArticleKeys = [
   'pubmedId',
   'url',
   'originalData',
+  'sourceMetadata',
   'fullText',
   'fullTextHtml',
   'fullTextPDF',
@@ -93,6 +97,19 @@ const getIncludedArticleKeys = (rows: ArticleImportStoreRow[]) => {
   })
 
   return [...requiredArticleKeys, ...includedOptionalKeys] as Array<keyof ArticleImportStoreRow>
+}
+
+const getNormalizedArticleImportRow = (row: ArticleImportStoreRow): ArticleImportStoreRow => {
+  const doi = row.doi ?? getOriginalDoi(row.originalData)
+  const sourceMetadata =
+    row.sourceMetadata
+    ?? getArticleSourceMetadata({
+      articleId: row.articleId,
+      importRoute: row.importRoute,
+      originalData: row.originalData,
+    })
+
+  return {...row, doi, sourceMetadata}
 }
 
 const getArticleInsertValues = (rows: ArticleImportStoreRow[], includedKeys: Array<keyof ArticleImportStoreRow>) => {
@@ -175,10 +192,13 @@ export const storeImportedArticles = async (rows: ArticleImportStoreRow[]) => {
     return
   }
 
-  const includedKeys = getIncludedArticleKeys(rows)
+  const normalizedRows = rows.map((row) => {
+    return getNormalizedArticleImportRow(row)
+  })
+  const includedKeys = getIncludedArticleKeys(normalizedRows)
   const routes = Array.from(
     new Set(
-      rows
+      normalizedRows
         .map((row) => {
           return row.importRoute
         })
@@ -194,17 +214,17 @@ export const storeImportedArticles = async (rows: ArticleImportStoreRow[]) => {
     }),
   ]
 
-  const importRefreshState = await getAppDatabaseService().transaction(async (tx) => {
+  const importRefreshState = (await getAppDatabaseService().transaction(async (tx) => {
     const upsertedArticles = await tx.queryJson<{id: string; articleId: string}>(`
       INSERT INTO app.article (${columnNames.join(', ')})
-      VALUES ${getArticleInsertValues(rows, includedKeys)}
+      VALUES ${getArticleInsertValues(normalizedRows, includedKeys)}
       ON CONFLICT(article_id) DO UPDATE SET ${getArticleUpdateAssignments(includedKeys)}
       RETURNING id, article_id AS articleId
     `)
 
     const routeIdMap = await ensureImportRoutes(tx, routes)
     const articleIdToRoute = new Map(
-      rows.map((row) => {
+      normalizedRows.map((row) => {
         return [row.articleId, row.importRoute]
       }),
     )
@@ -229,7 +249,7 @@ export const storeImportedArticles = async (rows: ArticleImportStoreRow[]) => {
     }
 
     return {importRouteIds: Array.from(routeIdMap.values())}
-  })
+  })) as {importRouteIds: string[]}
 
   if (importRefreshState.importRouteIds.length > 0) {
     await getDuckdbMartRefreshService().queueProjectRefreshesByImportRouteIds(

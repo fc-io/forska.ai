@@ -5,7 +5,11 @@ import {
 } from '../../server/routes/projectsRoutes/articlesReviewsFiltersNumeric.ts'
 import {isNumericType} from '../../server/routes/projectsRoutes/articlesReviewsFiltersUtils.ts'
 import {hasMatchingJudgmentAnswer} from '../../server/utils/judgmentAnswers.ts'
-import {getJournalTitleFromOriginalData} from '../../utils/getJournalTitleFromOriginalData.ts'
+import {
+  type ArticleSourceMetadata,
+  emptyArticleSourceMetadata,
+  getArticleSourceMetadataValue,
+} from '../../utils/articleSourceMetadata.ts'
 import {getDuckdbSqlBoolean, getDuckdbSqlString, getDuckdbSqlStringList, runDuckdbJsonQuery} from './duckdbRunner.ts'
 import type {
   ArticlesReviewsBothParams,
@@ -63,7 +67,7 @@ type ScopedArticleRow = {
   fullTextPDF: string | null
   fullTextFetchedAt: Date | null
   fullTextConversionStatus: string | null
-  originalData: unknown
+  sourceMetadata: ArticleSourceMetadata
 }
 
 type HumanAnswerRow = {articleId: string; promptId: string; answer: string | null; updatedAt: Date | null}
@@ -187,6 +191,10 @@ const getDuckdbJsonValue = (value: unknown) => {
   } catch {
     return value
   }
+}
+
+const getDuckdbArticleSourceMetadata = (sourceMetadata: unknown) => {
+  return getArticleSourceMetadataValue(getDuckdbJsonValue(sourceMetadata)) ?? emptyArticleSourceMetadata
 }
 
 const getDuckdbStringArrayValue = (value: unknown) => {
@@ -441,7 +449,7 @@ const getDuckdbRollupBaseWhereParts = (params: {
       ? `${params.rollupAlias}.article_created_at <= ${getDuckdbTimestampLiteral(effectiveToDate)}`
       : null,
     trimmedSearch
-      ? `LOWER(COALESCE(${params.rollupAlias}.article_title, '')) LIKE LOWER(${getDuckdbSqlString(`%${trimmedSearch}%`)})`
+      ? `LOWER(COALESCE(a.article_title, '')) LIKE LOWER(${getDuckdbSqlString(`%${trimmedSearch}%`)})`
       : null,
   ].filter((part): part is string => {
     return part !== null
@@ -516,7 +524,7 @@ const getDuckdbReviewPageWhereParts = (params: {
     effectiveFromDate ? `p.article_created_at >= ${getDuckdbTimestampLiteral(effectiveFromDate)}` : null,
     effectiveToDate ? `p.article_created_at <= ${getDuckdbTimestampLiteral(effectiveToDate)}` : null,
     trimmedSearch
-      ? `LOWER(COALESCE(p.article_title, '')) LIKE LOWER(${getDuckdbSqlString(`%${trimmedSearch}%`)})`
+      ? `LOWER(COALESCE(a.article_title, '')) LIKE LOWER(${getDuckdbSqlString(`%${trimmedSearch}%`)})`
       : null,
     decodedCursor ? getDuckdbReviewPageCursorWhereClause(decodedCursor) : null,
   ].filter((part): part is string => {
@@ -634,7 +642,7 @@ const getDuckdbCandidateWhereParts = (params: {
     effectiveFromDate ? `c.article_created_at >= ${getDuckdbTimestampLiteral(effectiveFromDate)}` : null,
     effectiveToDate ? `c.article_created_at <= ${getDuckdbTimestampLiteral(effectiveToDate)}` : null,
     trimmedSearch
-      ? `LOWER(COALESCE(c.article_title, '')) LIKE LOWER(${getDuckdbSqlString(`%${trimmedSearch}%`)})`
+      ? `LOWER(COALESCE(a.article_title, '')) LIKE LOWER(${getDuckdbSqlString(`%${trimmedSearch}%`)})`
       : null,
     decodedCursor
       ? `(
@@ -748,7 +756,7 @@ const getDuckdbCandidatePostingSelection = (scope: ProjectOlapScope, prompts?: R
   }
 }
 
-const getReviewedPageRowsFromCandidateDisplay = async (params: {
+const getReviewedPageRowsFromCandidateMart = async (params: {
   scope: ProjectOlapScope
   page: number
   limit: number
@@ -774,6 +782,7 @@ const getReviewedPageRowsFromCandidateDisplay = async (params: {
     fullTextConversionStatus: string | null
     fullTextFetchedAt: unknown
     fullTextPDF: string | null
+    sourceMetadata: unknown
     journalTitle: string | null
     url: string | null
   }>(`
@@ -781,10 +790,11 @@ const getReviewedPageRowsFromCandidateDisplay = async (params: {
       page_ids AS (
         SELECT
           c.article_id AS articleId,
-          c.article_title AS articleTitle,
+          a.article_title AS articleTitle,
           c.article_created_at AS articleCreatedAt,
           c.article_updated_at AS articleUpdatedAt
         FROM mart.review_article_candidate c
+        INNER JOIN app.article a ON a.id = c.article_id
         ${joinClause}
         WHERE ${whereParts.join(' AND ')}
         ORDER BY COALESCE(c.article_created_at, TIMESTAMPTZ '0001-01-01T00:00:00.000Z') DESC, c.article_id ASC
@@ -796,16 +806,15 @@ const getReviewedPageRowsFromCandidateDisplay = async (params: {
       page_ids.articleTitle AS articleTitle,
       page_ids.articleCreatedAt AS articleCreatedAt,
       page_ids.articleUpdatedAt AS articleUpdatedAt,
-      display.article_external_id AS articleExternalId,
-      display.url AS url,
-      display.full_text_pdf AS fullTextPDF,
-      display.full_text_fetched_at AS fullTextFetchedAt,
-      display.full_text_conversion_status AS fullTextConversionStatus,
-      display.journal_title AS journalTitle
+      article.article_id AS articleExternalId,
+      article.url AS url,
+      article.full_text_pdf AS fullTextPDF,
+      article.full_text_fetched_at AS fullTextFetchedAt,
+      article.full_text_conversion_status AS fullTextConversionStatus,
+      article.source_metadata AS sourceMetadata,
+      NULL AS journalTitle
     FROM page_ids
-    INNER JOIN mart.review_article_display display
-      ON display.project_id = ${getDuckdbSqlString(params.scope.projectId)}
-     AND display.article_id = page_ids.articleId
+    INNER JOIN app.article article ON article.id = page_ids.articleId
     ORDER BY COALESCE(page_ids.articleCreatedAt, TIMESTAMPTZ '0001-01-01T00:00:00.000Z') DESC, page_ids.articleId ASC
   `)
   const hasMore = rows.length > params.limit
@@ -821,6 +830,8 @@ const getReviewedPageRowsFromCandidateDisplay = async (params: {
           })
         : null,
     rows: pageRows.map((row) => {
+      const sourceMetadata = getDuckdbArticleSourceMetadata(row.sourceMetadata)
+
       return {
         articleCreatedAt: getDuckdbDateValue(row.articleCreatedAt),
         articleId: row.articleExternalId,
@@ -830,7 +841,8 @@ const getReviewedPageRowsFromCandidateDisplay = async (params: {
         fullTextFetchedAt: getDuckdbDateValue(row.fullTextFetchedAt),
         fullTextPDF: row.fullTextPDF,
         id: row.articleId,
-        journalTitle: row.journalTitle,
+        journalTitle: sourceMetadata.journalTitle,
+        sourceMetadata,
         url: row.url,
       }
     }),
@@ -854,6 +866,7 @@ const countReviewedCandidateRows = async (params: {
     ${withClause}
     SELECT COUNT(*) AS totalCount
     FROM mart.review_article_candidate c
+    INNER JOIN app.article a ON a.id = c.article_id
     ${joinClause}
     WHERE ${whereParts.join(' AND ')}
   `)
@@ -882,17 +895,25 @@ const getReviewedPageRowsFromPageMart = async (params: {
     fullTextConversionStatus: string | null
     fullTextFetchedAt: unknown
     fullTextPDF: string | null
+    sourceMetadata: unknown
     journalTitle: string | null
     url: string | null
   }>(`
     WITH page_rows AS (
       SELECT
         p.article_id AS articleId,
-        p.article_title AS articleTitle,
+        a.article_title AS articleTitle,
         p.article_created_at AS articleCreatedAt,
         p.article_updated_at AS articleUpdatedAt,
-        p.journal_title AS journalTitle
+        NULL AS journalTitle,
+        a.article_id AS articleExternalId,
+        a.url AS url,
+        a.full_text_pdf AS fullTextPDF,
+        a.full_text_fetched_at AS fullTextFetchedAt,
+        a.full_text_conversion_status AS fullTextConversionStatus,
+        a.source_metadata AS sourceMetadata
       FROM mart.review_article_page p
+      INNER JOIN app.article a ON a.id = p.article_id
       WHERE ${whereParts.join(' AND ')}
       ORDER BY ${getDuckdbReviewPageOrderClause()}
       LIMIT ${params.limit + 1}
@@ -904,13 +925,13 @@ const getReviewedPageRowsFromPageMart = async (params: {
       page_rows.articleCreatedAt AS articleCreatedAt,
       page_rows.articleUpdatedAt AS articleUpdatedAt,
       page_rows.journalTitle AS journalTitle,
-      article.article_id AS articleExternalId,
-      article.url AS url,
-      article.full_text_pdf AS fullTextPDF,
-      article.full_text_fetched_at AS fullTextFetchedAt,
-      article.full_text_conversion_status AS fullTextConversionStatus
+      page_rows.articleExternalId AS articleExternalId,
+      page_rows.url AS url,
+      page_rows.fullTextPDF AS fullTextPDF,
+      page_rows.fullTextFetchedAt AS fullTextFetchedAt,
+      page_rows.sourceMetadata AS sourceMetadata,
+      page_rows.fullTextConversionStatus AS fullTextConversionStatus
     FROM page_rows
-    INNER JOIN app.article article ON article.id = page_rows.articleId
     ORDER BY COALESCE(page_rows.articleCreatedAt, TIMESTAMPTZ '0001-01-01T00:00:00.000Z') DESC, page_rows.articleId ASC
   `)
   const hasMore = rows.length > params.limit
@@ -926,6 +947,8 @@ const getReviewedPageRowsFromPageMart = async (params: {
           })
         : null,
     rows: pageRows.map((row) => {
+      const sourceMetadata = getDuckdbArticleSourceMetadata(row.sourceMetadata)
+
       return {
         articleCreatedAt: getDuckdbDateValue(row.articleCreatedAt),
         articleId: row.articleExternalId,
@@ -935,7 +958,8 @@ const getReviewedPageRowsFromPageMart = async (params: {
         fullTextFetchedAt: getDuckdbDateValue(row.fullTextFetchedAt),
         fullTextPDF: row.fullTextPDF,
         id: row.articleId,
-        journalTitle: row.journalTitle,
+        journalTitle: sourceMetadata.journalTitle,
+        sourceMetadata,
         url: row.url,
       }
     }),
@@ -957,17 +981,6 @@ const getHasReviewArticleCandidateRows = async (projectId: string) => {
   const rows = await runDuckdbJsonQuery<{projectId: string}>(`
     SELECT project_id AS projectId
     FROM mart.review_article_candidate
-    WHERE project_id = ${getDuckdbSqlString(projectId)}
-    LIMIT 1
-  `)
-
-  return rows.length > 0
-}
-
-const getHasReviewArticleDisplayRows = async (projectId: string) => {
-  const rows = await runDuckdbJsonQuery<{projectId: string}>(`
-    SELECT project_id AS projectId
-    FROM mart.review_article_display
     WHERE project_id = ${getDuckdbSqlString(projectId)}
     LIMIT 1
   `)
@@ -1025,6 +1038,7 @@ const countReviewedPageRowsFromPageMart = async (params: {
   const rows = await runDuckdbJsonQuery<{totalCount: number}>(`
     SELECT COUNT(*) AS totalCount
     FROM mart.review_article_page p
+    INNER JOIN app.article a ON a.id = p.article_id
     WHERE ${whereParts.join(' AND ')}
   `)
 
@@ -1053,14 +1067,14 @@ const getDuckdbReviewedPageRowsFromRollup = async (params: {
     articleTitle: string
     articleCreatedAt: unknown
     articleUpdatedAt: unknown
-    originalData: unknown
+    sourceMetadata: unknown
   }>(`
     SELECT
       r.article_id AS id,
-      r.article_title AS articleTitle,
+      a.article_title AS articleTitle,
       r.article_created_at AS articleCreatedAt,
       r.article_updated_at AS articleUpdatedAt,
-      a.original_data AS originalData
+      a.source_metadata AS sourceMetadata
     FROM mart.review_article_rollup r
     INNER JOIN app.article a ON a.id = r.article_id
     WHERE ${whereParts.join(' AND ')}
@@ -1075,7 +1089,7 @@ const getDuckdbReviewedPageRowsFromRollup = async (params: {
       articleTitle: row.articleTitle,
       articleCreatedAt: getDuckdbDateValue(row.articleCreatedAt),
       articleUpdatedAt: getDuckdbDateValue(row.articleUpdatedAt),
-      originalData: getDuckdbJsonValue(row.originalData),
+      sourceMetadata: getDuckdbArticleSourceMetadata(row.sourceMetadata),
     }
   })
 }
@@ -1091,6 +1105,7 @@ const countDuckdbReviewedArticlesFromRollup = async (params: {
   const rows = await runDuckdbJsonQuery<{totalCount: number}>(`
     SELECT COUNT(*) AS totalCount
     FROM mart.review_article_rollup r
+    INNER JOIN app.article a ON a.id = r.article_id
     WHERE ${whereParts.join(' AND ')}
   `)
 
@@ -1186,15 +1201,16 @@ const getLlmJudgmentRowsFromReviewDetailMart = async (
       j.judgment_id AS id,
       j.created_at AS createdAt,
       j.article_id AS articleId,
-      j.article_title AS articleTitle,
+      article.article_title AS articleTitle,
       j.article_created_at AS articleCreatedAt,
       j.article_updated_at AS articleUpdatedAt,
-      j.article_import_route AS articleImportRoute,
+      article.import_route AS articleImportRoute,
       j.prompt_id AS promptId,
       j.model_id AS modelId,
       j.answered_original AS answeredOriginal,
       TO_JSON(j.answered_original_as_array) AS answeredOriginalAsArray
     FROM mart.review_article_judgment_detail j
+    INNER JOIN app.article article ON article.id = j.article_id
     WHERE j.project_id = ${getDuckdbSqlString(scope.projectId)}
       AND j.article_id IN (${getDuckdbSqlStringList(articleIds).join(', ')})
       AND j.prompt_id IN (${getDuckdbSqlStringList(scope.promptIds).join(', ')})
@@ -1232,6 +1248,7 @@ const getBothPageRowsFromRollup = async (params: {
   const countRows = await runDuckdbJsonQuery<{totalCount: number}>(`
     SELECT COUNT(*) AS totalCount
     FROM mart.review_article_rollup r
+    INNER JOIN app.article a ON a.id = r.article_id
     WHERE ${whereParts.join(' AND ')}
   `)
   const totalCount = Number(countRows[0]?.totalCount ?? 0)
@@ -1240,14 +1257,14 @@ const getBothPageRowsFromRollup = async (params: {
     articleTitle: string
     articleCreatedAt: unknown
     articleUpdatedAt: unknown
-    originalData: unknown
+    sourceMetadata: unknown
   }>(`
     SELECT
       r.article_id AS id,
-      r.article_title AS articleTitle,
+      a.article_title AS articleTitle,
       r.article_created_at AS articleCreatedAt,
       r.article_updated_at AS articleUpdatedAt,
-      a.original_data AS originalData
+      a.source_metadata AS sourceMetadata
     FROM mart.review_article_rollup r
     INNER JOIN app.article a ON a.id = r.article_id
     WHERE ${whereParts.join(' AND ')}
@@ -1263,7 +1280,7 @@ const getBothPageRowsFromRollup = async (params: {
         articleTitle: row.articleTitle,
         articleCreatedAt: getDuckdbDateValue(row.articleCreatedAt),
         articleUpdatedAt: getDuckdbDateValue(row.articleUpdatedAt),
-        originalData: getDuckdbJsonValue(row.originalData),
+        sourceMetadata: getDuckdbArticleSourceMetadata(row.sourceMetadata),
       }
     }),
     totalCount,
@@ -1282,6 +1299,7 @@ const getReviewedArticleIdsFromRollup = async (params: {
   const rows = await runDuckdbJsonQuery<{articleId: string}>(`
     SELECT r.article_id AS articleId
     FROM mart.review_article_rollup r
+    INNER JOIN app.article a ON a.id = r.article_id
     WHERE ${whereParts.join(' AND ')}
     ORDER BY ${getDuckdbRollupCreatedOrderClause()}
   `)
@@ -1301,6 +1319,7 @@ const getHumanReviewedArticleIdsFromRollup = async (params: {
   const rows = await runDuckdbJsonQuery<{articleId: string}>(`
     SELECT r.article_id AS articleId
     FROM mart.review_article_rollup r
+    INNER JOIN app.article a ON a.id = r.article_id
     WHERE ${whereParts.join(' AND ')}
     ORDER BY ${getDuckdbRollupCreatedOrderClause()}
   `)
@@ -1324,6 +1343,7 @@ const getUnassessedRowsFromRollup = async (params: {
   const countRows = await runDuckdbJsonQuery<{totalCount: number}>(`
     SELECT COUNT(*) AS totalCount
     FROM mart.review_article_rollup r
+    INNER JOIN app.article a ON a.id = r.article_id
     WHERE ${whereParts.join(' AND ')}
   `)
   const rows = await runDuckdbJsonQuery<{
@@ -1337,7 +1357,7 @@ const getUnassessedRowsFromRollup = async (params: {
     SELECT
       r.article_id AS id,
       a.article_id AS articleId,
-      r.article_title AS articleTitle,
+      a.article_title AS articleTitle,
       r.article_created_at AS articleCreatedAt,
       r.article_updated_at AS articleUpdatedAt,
       TO_JSON(r.llm_judged_prompt_ids) AS llmJudgedPromptIds
@@ -1383,6 +1403,7 @@ const getUnassessedCandidateRowsFromRollup = async (params: {
       r.article_updated_at AS articleUpdatedAt,
       TO_JSON(r.llm_judged_prompt_ids) AS llmJudgedPromptIds
     FROM mart.review_article_rollup r
+    INNER JOIN app.article a ON a.id = r.article_id
     WHERE ${[...whereParts, cursorClause]
       .filter((part): part is string => {
         return part !== null
@@ -1492,7 +1513,7 @@ const getDuckdbReviewedArticleRows = async (params: {
     articleTitle: string
     articleCreatedAt: unknown
     articleUpdatedAt: unknown
-    originalData: unknown
+    sourceMetadata: unknown
   }>(`
     WITH scope_article_ids AS (
       ${sections.scopeArticleIdsQuery}
@@ -1516,7 +1537,7 @@ const getDuckdbReviewedArticleRows = async (params: {
       a.article_title AS articleTitle,
       a.article_created_at AS articleCreatedAt,
       a.article_updated_at AS articleUpdatedAt,
-      a.original_data AS originalData
+      a.source_metadata AS sourceMetadata
     FROM reviewed_article_ids r
     INNER JOIN app.article a ON a.id = r.articleId
     ORDER BY a.article_created_at DESC NULLS LAST, a.id ASC
@@ -1530,7 +1551,7 @@ const getDuckdbReviewedArticleRows = async (params: {
       articleTitle: row.articleTitle,
       articleCreatedAt: getDuckdbDateValue(row.articleCreatedAt),
       articleUpdatedAt: getDuckdbDateValue(row.articleUpdatedAt),
-      originalData: getDuckdbJsonValue(row.originalData),
+      sourceMetadata: getDuckdbArticleSourceMetadata(row.sourceMetadata),
     }
   })
 }
@@ -1850,7 +1871,7 @@ const getScopedArticles = async (params: {
     fullTextPDF: string | null
     fullTextFetchedAt: unknown
     fullTextConversionStatus: string | null
-    originalData: unknown
+    sourceMetadata: unknown
   }>(`
     SELECT
       a.id AS id,
@@ -1865,7 +1886,7 @@ const getScopedArticles = async (params: {
       a.full_text_pdf AS fullTextPDF,
       a.full_text_fetched_at AS fullTextFetchedAt,
       a.full_text_conversion_status AS fullTextConversionStatus,
-      a.original_data AS originalData
+      a.source_metadata AS sourceMetadata
     FROM app.article a
     WHERE ${whereParts.join(' AND ')}
   `)
@@ -1884,7 +1905,7 @@ const getScopedArticles = async (params: {
       fullTextPDF: row.fullTextPDF,
       fullTextFetchedAt: getDuckdbDateValue(row.fullTextFetchedAt),
       fullTextConversionStatus: row.fullTextConversionStatus,
-      originalData: getDuckdbJsonValue(row.originalData),
+      sourceMetadata: getDuckdbArticleSourceMetadata(row.sourceMetadata),
     }
   })
 
@@ -2049,11 +2070,10 @@ export const queryArticlesReviewsFromDuckdb = async (
   const canUseServingV2 =
     scope.modelId
     && (await getHasReviewArticleCandidateRows(scope.projectId))
-    && (await getHasReviewArticleDisplayRows(scope.projectId))
     && (!hasPromptFilters || (await getHasReviewArticleFilterPostingRows(scope.projectId)))
 
   if (canUseServingV2) {
-    const pageResult = await getReviewedPageRowsFromCandidateDisplay({...params, scope})
+    const pageResult = await getReviewedPageRowsFromCandidateMart({...params, scope})
     const llmJudgmentRows = await getJudgmentRowsForReviews(
       scope,
       pageResult.rows.map((article) => {
@@ -2156,7 +2176,8 @@ export const queryArticlesReviewsFromDuckdb = async (
         judgments: judgmentsForArticle,
         judgedPromptIds: getJudgedPromptIds(judgmentsForArticle, scope.promptOrderMap),
         isFullyJudged: true,
-        journalTitle: getJournalTitleFromOriginalData(article.originalData),
+        journalTitle: article.sourceMetadata.journalTitle,
+        sourceMetadata: article.sourceMetadata,
       }
     })
 
@@ -2181,7 +2202,8 @@ export const queryArticlesReviewsFromDuckdb = async (
       judgments: judgmentsForArticle,
       judgedPromptIds: getJudgedPromptIds(judgmentsForArticle, scope.promptOrderMap),
       isFullyJudged: true,
-      journalTitle: getJournalTitleFromOriginalData(article.originalData),
+      journalTitle: article.sourceMetadata.journalTitle,
+      sourceMetadata: article.sourceMetadata,
     }
   })
 
@@ -2264,7 +2286,8 @@ export const queryArticlesReviewsBothFromDuckdb = async (
         judgments: getJudgmentRowsSorted(llmJudgmentsByArticle.get(article.id) ?? [], scope.promptOrderMap),
         humanAnswersByPrompt:
           getHumanAnswersByPrompt(scope.promptIds, humanRowsByArticle.get(article.id) ?? []) ?? undefined,
-        journalTitle: getJournalTitleFromOriginalData(article.originalData),
+        journalTitle: article.sourceMetadata.journalTitle,
+        sourceMetadata: article.sourceMetadata,
       }
     })
 
@@ -2309,7 +2332,8 @@ export const queryArticlesReviewsBothFromDuckdb = async (
       articleUpdatedAt: article.articleUpdatedAt,
       judgments: llmRows,
       humanAnswersByPrompt: getHumanAnswersByPrompt(scope.promptIds, humanRows) ?? undefined,
-      journalTitle: getJournalTitleFromOriginalData(article.originalData),
+      journalTitle: article.sourceMetadata.journalTitle,
+      sourceMetadata: article.sourceMetadata,
     }
   })
 
@@ -2373,12 +2397,12 @@ export const getDatabaseBasedFiltersFromDuckdb = async (
     return prompt.promptId
   })
   const whereParts = [
-    `project_id = ${getDuckdbSqlString(params.projectId)}`,
-    `prompt_id IN (${getDuckdbSqlStringList(promptIds).join(', ')})`,
-    params.fromDate ? `article_created_at >= ${getDuckdbTimestampLiteral(params.fromDate)}` : null,
-    params.toDate ? `article_created_at <= ${getDuckdbTimestampLiteral(params.toDate)}` : null,
+    `paf.project_id = ${getDuckdbSqlString(params.projectId)}`,
+    `paf.prompt_id IN (${getDuckdbSqlStringList(promptIds).join(', ')})`,
+    params.fromDate ? `paf.article_created_at >= ${getDuckdbTimestampLiteral(params.fromDate)}` : null,
+    params.toDate ? `paf.article_created_at <= ${getDuckdbTimestampLiteral(params.toDate)}` : null,
     params.searchTitle.trim()
-      ? `LOWER(COALESCE(article_title, '')) LIKE LOWER(${getDuckdbSqlString(`%${params.searchTitle.trim()}%`)})`
+      ? `LOWER(COALESCE(article.article_title, '')) LIKE LOWER(${getDuckdbSqlString(`%${params.searchTitle.trim()}%`)})`
       : null,
   ].filter((part): part is string => {
     return part !== null
@@ -2386,12 +2410,13 @@ export const getDatabaseBasedFiltersFromDuckdb = async (
   try {
     const rows = await runDuckdbJsonQuery<{promptId: string; answerValue: string}>(`
       SELECT
-        prompt_id AS promptId,
-        answer_value AS answerValue
-      FROM mart.prompt_answer_fact
+        paf.prompt_id AS promptId,
+        paf.answer_value AS answerValue
+      FROM mart.prompt_answer_fact paf
+      INNER JOIN app.article article ON article.id = paf.article_id
       WHERE ${whereParts.join(' AND ')}
-      GROUP BY prompt_id, answer_value
-      ORDER BY prompt_id ASC, answer_value ASC
+      GROUP BY paf.prompt_id, paf.answer_value
+      ORDER BY paf.prompt_id ASC, paf.answer_value ASC
     `)
     const valuesByPromptId = rows.reduce<Map<string, Set<string>>>((rowMap, row) => {
       const currentValues = rowMap.get(row.promptId) ?? new Set<string>()
@@ -2469,12 +2494,12 @@ export const getNumericFiltersFromDuckdb = async (params: DatabaseFilterParams):
     return prompt.promptId
   })
   const whereParts = [
-    `project_id = ${getDuckdbSqlString(params.projectId)}`,
-    `prompt_id IN (${getDuckdbSqlStringList(promptIds).join(', ')})`,
-    params.fromDate ? `article_created_at >= ${getDuckdbTimestampLiteral(params.fromDate)}` : null,
-    params.toDate ? `article_created_at <= ${getDuckdbTimestampLiteral(params.toDate)}` : null,
+    `paf.project_id = ${getDuckdbSqlString(params.projectId)}`,
+    `paf.prompt_id IN (${getDuckdbSqlStringList(promptIds).join(', ')})`,
+    params.fromDate ? `paf.article_created_at >= ${getDuckdbTimestampLiteral(params.fromDate)}` : null,
+    params.toDate ? `paf.article_created_at <= ${getDuckdbTimestampLiteral(params.toDate)}` : null,
     params.searchTitle.trim()
-      ? `LOWER(COALESCE(article_title, '')) LIKE LOWER(${getDuckdbSqlString(`%${params.searchTitle.trim()}%`)})`
+      ? `LOWER(COALESCE(article.article_title, '')) LIKE LOWER(${getDuckdbSqlString(`%${params.searchTitle.trim()}%`)})`
       : null,
   ].filter((part): part is string => {
     return part !== null
@@ -2482,9 +2507,10 @@ export const getNumericFiltersFromDuckdb = async (params: DatabaseFilterParams):
   try {
     const rows = await runDuckdbJsonQuery<{promptId: string; answerValue: string}>(`
       SELECT
-        prompt_id AS promptId,
-        answer_value AS answerValue
-      FROM mart.prompt_answer_fact
+        paf.prompt_id AS promptId,
+        paf.answer_value AS answerValue
+      FROM mart.prompt_answer_fact paf
+      INNER JOIN app.article article ON article.id = paf.article_id
       WHERE ${whereParts.join(' AND ')}
     `)
     const valuesByPromptId = rows.reduce<Map<string, Set<number>>>((rowMap, row) => {

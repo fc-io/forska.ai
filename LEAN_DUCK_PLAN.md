@@ -53,6 +53,7 @@
 - [ ] Add one normalization step so DOI values have one canonical format before comparing/backfilling.
 - [ ] Change Unpaywall/PDF fetch paths to read DOI from `app.article.doi`, not `original_data`.
 - [ ] Confirm import routes populate `doi` directly on write, especially PubMed.
+- [ ] Verify every data source import path still writes the right `doi`, `original_data`, and normalized source metadata after the import/update changes.
 - [ ] Add/import one normalized hot source metadata field for current UX needs: `journalTitle`, `preprintSource`, `isPreprint`, and `fullTextLinks`.
 - [ ] Decide storage shape for normalized source metadata: one JSON field vs a few typed columns plus one JSON field for links.
 - [ ] Backfill normalized source metadata from legacy `original_data` for existing rows.

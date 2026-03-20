@@ -1,15 +1,10 @@
 import {randomUUID} from 'node:crypto'
 
 import type {ArticleRecord} from '../../db/schemaTypes.ts'
+import {type ArticleSourceMetadata, getArticleSourceMetadataValue} from '../../utils/articleSourceMetadata.ts'
 import {fetchPdfForArticle} from '../cron/fullTextJobs/fetchPdfForArticle.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
-import {
-  escapeSqlString,
-  getJsonValue,
-  getQuotedStringList,
-  getSqlLiteral,
-  getTimestampLiteral,
-} from '../services/appQueryHelpers.ts'
+import {escapeSqlString, getQuotedStringList, getSqlLiteral, getTimestampLiteral} from '../services/appQueryHelpers.ts'
 
 type PdfFetchJobStatus = 'queued' | 'running' | 'completed' | 'failed'
 
@@ -120,11 +115,14 @@ const processAttemptError = (jobId: string, error: unknown) => {
   })
 }
 
-const fetchAndStoreForRow = async (
-  jobId: string,
-  row: Pick<ArticleRecord, 'id' | 'arxivId' | 'originalData'>,
-): Promise<void> => {
-  const result = await fetchPdfForArticle({arxivId: row.arxivId, originalData: row.originalData}).catch((error) => {
+type PdfFetchRow = Pick<ArticleRecord, 'id' | 'arxivId' | 'doi'> & {sourceMetadata: ArticleSourceMetadata | null}
+
+const fetchAndStoreForRow = async (jobId: string, row: PdfFetchRow): Promise<void> => {
+  const result = await fetchPdfForArticle({
+    arxivId: row.arxivId,
+    doi: row.doi,
+    sourceMetadata: row.sourceMetadata,
+  }).catch((error) => {
     return Promise.reject(error)
   })
 
@@ -152,10 +150,7 @@ const fetchAndStoreForRow = async (
   processAttemptResult(jobId, result)
 }
 
-const fetchAndStoreForRowSafe = async (
-  jobId: string,
-  row: Pick<ArticleRecord, 'id' | 'arxivId' | 'originalData'>,
-): Promise<void> => {
+const fetchAndStoreForRowSafe = async (jobId: string, row: PdfFetchRow): Promise<void> => {
   const run = async () => {
     await fetchAndStoreForRow(jobId, row)
   }
@@ -185,21 +180,23 @@ const processChunk = async (jobId: string, ids: string[], forceRefetch: boolean)
   const rows = await getAppDatabaseService().queryJson<{
     id: string
     arxivId: string | null
-    originalData: unknown
+    doi: string | null
+    sourceMetadata: unknown
     fullTextPDF: string | null
     fullTextSource: string | null
   }>(`
     SELECT
       id,
       arxiv_id AS arxivId,
-      TO_JSON(original_data) AS originalData,
+      doi,
+      TO_JSON(source_metadata) AS sourceMetadata,
       full_text_pdf AS fullTextPDF,
       full_text_source AS fullTextSource
     FROM app.article
     WHERE id IN (${getQuotedStringList(ids).join(', ')})
   `)
   const normalizedRows = rows.map((row) => {
-    return {...row, originalData: getJsonValue(row.originalData)}
+    return {...row, sourceMetadata: getArticleSourceMetadataValue(row.sourceMetadata)}
   })
 
   const foundIds = new Set(

@@ -1,11 +1,11 @@
 import {cron} from '@elysiajs/cron'
 import {Elysia} from 'elysia'
 
+import {getArticleSourceMetadataValue} from '../../utils/articleSourceMetadata.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {
   escapeSqlString,
   getDateValue,
-  getJsonValue,
   getQuotedStringList,
   getSqlLiteral,
   getTimestampLiteral,
@@ -19,7 +19,12 @@ import {attemptsToLegacyResult, type PdfFetchAttemptResult} from './fullTextJobs
 
 const NEW_ARTICLES_INTERVAL = '0 * * * * *'
 
-type ArticleResult = {id: string; arxivId: string | null; originalData: unknown}
+type ArticleResult = {
+  id: string
+  arxivId: string | null
+  doi: string | null
+  sourceMetadata: ReturnType<typeof getArticleSourceMetadataValue>
+}
 
 /**
  * Get articles without full text, prioritizing:
@@ -89,12 +94,14 @@ const getArticlesWithoutFullText = async (numberOfArticlesToFetch: number): Prom
       const articlesViaRoute = await getAppDatabaseService().queryJson<{
         id: string
         arxivId: string | null
-        originalData: unknown
+        doi: string | null
+        sourceMetadata: unknown
       }>(`
         SELECT
           a.id AS id,
           a.arxiv_id AS arxivId,
-          TO_JSON(a.original_data) AS originalData
+          a.doi AS doi,
+          TO_JSON(a.source_metadata) AS sourceMetadata
         FROM app.article a
         INNER JOIN app.article_import_route air ON air.article_id = a.id
         WHERE air.import_route_id IN (${getQuotedStringList(routeIds).join(', ')})
@@ -108,7 +115,7 @@ const getArticlesWithoutFullText = async (numberOfArticlesToFetch: number): Prom
       for (const article of articlesViaRoute) {
         if (!seenIds.has(article.id)) {
           seenIds.add(article.id)
-          collectedArticles.push({...article, originalData: getJsonValue(article.originalData)})
+          collectedArticles.push({...article, sourceMetadata: getArticleSourceMetadataValue(article.sourceMetadata)})
         }
       }
       continue
@@ -119,12 +126,14 @@ const getArticlesWithoutFullText = async (numberOfArticlesToFetch: number): Prom
     const articlesViaDirect = await getAppDatabaseService().queryJson<{
       id: string
       arxivId: string | null
-      originalData: unknown
+      doi: string | null
+      sourceMetadata: unknown
     }>(`
       SELECT
         a.id AS id,
         a.arxiv_id AS arxivId,
-        TO_JSON(a.original_data) AS originalData
+        a.doi AS doi,
+        TO_JSON(a.source_metadata) AS sourceMetadata
       FROM app.article a
       INNER JOIN app.project_article pa ON pa.article_id = a.id
       WHERE pa.project_id = '${escapeSqlString(projectId)}'
@@ -138,7 +147,7 @@ const getArticlesWithoutFullText = async (numberOfArticlesToFetch: number): Prom
     for (const article of articlesViaDirect) {
       if (!seenIds.has(article.id)) {
         seenIds.add(article.id)
-        collectedArticles.push({...article, originalData: getJsonValue(article.originalData)})
+        collectedArticles.push({...article, sourceMetadata: getArticleSourceMetadataValue(article.sourceMetadata)})
       }
     }
   }
@@ -151,12 +160,14 @@ const getArticlesWithoutFullText = async (numberOfArticlesToFetch: number): Prom
     const fallbackArticles = await getAppDatabaseService().queryJson<{
       id: string
       arxivId: string | null
-      originalData: unknown
+      doi: string | null
+      sourceMetadata: unknown
     }>(`
       SELECT
         id,
         arxiv_id AS arxivId,
-        TO_JSON(original_data) AS originalData
+        doi,
+        TO_JSON(source_metadata) AS sourceMetadata
       FROM app.article
       WHERE full_text_fetched_at IS NULL
       ORDER BY created_at DESC
@@ -168,7 +179,7 @@ const getArticlesWithoutFullText = async (numberOfArticlesToFetch: number): Prom
       if (collectedArticles.length >= numberOfArticlesToFetch) break
       if (!seenIds.has(article.id)) {
         seenIds.add(article.id)
-        collectedArticles.push({...article, originalData: getJsonValue(article.originalData)})
+        collectedArticles.push({...article, sourceMetadata: getArticleSourceMetadataValue(article.sourceMetadata)})
       }
     }
   }
@@ -183,7 +194,7 @@ const getArticlesWithoutFullText = async (numberOfArticlesToFetch: number): Prom
  * Fetch PDF for an article, trying all sources and collecting attempt results.
  * Returns the legacy format for backward compatibility with storeFullText.
  */
-const getFullTextForArticle = async (articleData: Pick<ArticleResult, 'arxivId' | 'originalData'>) => {
+const getFullTextForArticle = async (articleData: Pick<ArticleResult, 'arxivId' | 'doi' | 'sourceMetadata'>) => {
   const fetchSources = [
     fullTextArticleFetchFromOriginalUrls,
     fullTextArticleFetchFromUnpaywall,

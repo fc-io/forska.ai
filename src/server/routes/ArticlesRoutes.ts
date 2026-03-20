@@ -1,6 +1,7 @@
 import {Elysia, t} from 'elysia'
 
 import {selectArticleIdsByFilterOlap} from '../../services/olap/selectArticleIdsOlap.ts'
+import {getArticleSourceMetadata, getOriginalDoi} from '../../utils/articleSourceMetadata.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {
   escapeSqlString,
@@ -318,6 +319,16 @@ export const articlesRoutes = new Elysia()
     '/api/articles/batch-upsert',
     async ({body}) => {
       const {entries} = body
+      const normalizedEntries = entries.map((entry) => {
+        const doi = entry.doi ?? getOriginalDoi(entry.original_data)
+        const sourceMetadata = getArticleSourceMetadata({
+          articleId: entry.article_id,
+          importRoute: entry.import_route,
+          originalData: entry.original_data,
+        })
+
+        return {...entry, doi, sourceMetadata}
+      })
 
       await getAppDatabaseService().transaction(async (tx) => {
         const updatedAt = new Date()
@@ -332,12 +343,14 @@ export const articlesRoutes = new Elysia()
             article_created_at,
             article_version,
             arxiv_id,
+            doi,
             pubmed_id,
             import_route,
             original_data,
+            source_metadata,
             updated_at
           )
-          VALUES ${entries
+          VALUES ${normalizedEntries
             .map((entry) => {
               return `(${[
                 crypto.randomUUID(),
@@ -349,9 +362,11 @@ export const articlesRoutes = new Elysia()
                 new Date(entry.article_created_at),
                 Number.parseInt(entry.article_version, 10),
                 entry.arxiv_id ?? null,
+                entry.doi ?? null,
                 entry.pubmed_id ?? null,
                 entry.import_route,
                 entry.original_data ?? null,
+                entry.sourceMetadata,
                 updatedAt,
               ]
                 .map((value) => {
@@ -367,21 +382,23 @@ export const articlesRoutes = new Elysia()
             article_updated_at = EXCLUDED.article_updated_at,
             article_version = EXCLUDED.article_version,
             arxiv_id = EXCLUDED.arxiv_id,
+            doi = EXCLUDED.doi,
             pubmed_id = EXCLUDED.pubmed_id,
             import_route = EXCLUDED.import_route,
             original_data = EXCLUDED.original_data,
+            source_metadata = EXCLUDED.source_metadata,
             updated_at = ${getTimestampLiteral(updatedAt)}
           RETURNING id, article_id AS articleId
         `)
 
         const articleIdToRoute = new Map(
-          entries.map((entry) => {
+          normalizedEntries.map((entry) => {
             return [entry.article_id, entry.import_route]
           }),
         )
         const routeList = Array.from(
           new Set(
-            entries
+            normalizedEntries
               .map((entry) => {
                 return entry.import_route
               })
@@ -438,6 +455,7 @@ export const articlesRoutes = new Elysia()
             article_created_at: t.String(),
             article_version: t.String(),
             arxiv_id: t.Optional(t.String()),
+            doi: t.Optional(t.String()),
             pubmed_id: t.Optional(t.String()),
             import_route: t.String(),
             original_data: t.Optional(t.Any()),

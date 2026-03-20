@@ -1,3 +1,4 @@
+import {type ArticleSourceMetadata, getArticleSourceMetadataValue} from '../../utils/articleSourceMetadata.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 
 type ReviewHydrationRow = {
@@ -6,11 +7,12 @@ type ReviewHydrationRow = {
   articleCreatedAt: Date | null
   articleUpdatedAt: Date | null
   articleId: string | null
+  importRoute: string | null
   url: string | null
   fullTextPDF: string | null
   fullTextFetchedAt: Date | null
   fullTextConversionStatus: string | null
-  originalData: unknown
+  sourceMetadata: ArticleSourceMetadata | null
 }
 
 type FullArticleRow = {
@@ -43,7 +45,7 @@ type FullArticleRow = {
   fullTextCharCount: number | null
   contentHash: string | null
   importRoute: string | null
-  originalData: unknown
+  sourceMetadata: ArticleSourceMetadata | null
   publicationStatus: string | null
 }
 
@@ -103,11 +105,12 @@ const getReviewHydrationRows = async (articleIds: string[]): Promise<ReviewHydra
     articleCreatedAt: unknown
     articleUpdatedAt: unknown
     articleId: string | null
+    importRoute: string | null
     url: string | null
     fullTextPDF: string | null
     fullTextFetchedAt: unknown
     fullTextConversionStatus: string | null
-    originalData: unknown
+    sourceMetadata: unknown
   }>(`
     SELECT
       id,
@@ -115,11 +118,12 @@ const getReviewHydrationRows = async (articleIds: string[]): Promise<ReviewHydra
       article_created_at AS articleCreatedAt,
       article_updated_at AS articleUpdatedAt,
       article_id AS articleId,
+      import_route AS importRoute,
       url,
       full_text_pdf AS fullTextPDF,
       full_text_fetched_at AS fullTextFetchedAt,
       full_text_conversion_status AS fullTextConversionStatus,
-      TO_JSON(original_data) AS originalData
+      TO_JSON(source_metadata) AS sourceMetadata
     FROM app.article
     WHERE id IN (${getQuotedStringList(articleIds).join(', ')})
   `)
@@ -131,11 +135,12 @@ const getReviewHydrationRows = async (articleIds: string[]): Promise<ReviewHydra
       articleCreatedAt: getDateValue(row.articleCreatedAt),
       articleUpdatedAt: getDateValue(row.articleUpdatedAt),
       articleId: row.articleId,
+      importRoute: row.importRoute,
       url: row.url,
       fullTextPDF: row.fullTextPDF,
       fullTextFetchedAt: getDateValue(row.fullTextFetchedAt),
       fullTextConversionStatus: row.fullTextConversionStatus,
-      originalData: getJsonValue(row.originalData),
+      sourceMetadata: getArticleSourceMetadataValue(getJsonValue(row.sourceMetadata)),
     }
   })
 }
@@ -175,7 +180,7 @@ const getFullArticlesByIds = async (articleIds: string[]): Promise<FullArticleRo
     fullTextCharCount: number | null
     contentHash: string | null
     importRoute: string | null
-    originalData: unknown
+    sourceMetadata: unknown
     publicationStatus: string | null
   }>(`
     SELECT
@@ -208,7 +213,7 @@ const getFullArticlesByIds = async (articleIds: string[]): Promise<FullArticleRo
       full_text_char_count AS fullTextCharCount,
       content_hash AS contentHash,
       import_route AS importRoute,
-      TO_JSON(original_data) AS originalData,
+      TO_JSON(source_metadata) AS sourceMetadata,
       publication_status AS publicationStatus
     FROM app.article
     WHERE id IN (${getQuotedStringList(articleIds).join(', ')})
@@ -216,6 +221,7 @@ const getFullArticlesByIds = async (articleIds: string[]): Promise<FullArticleRo
 
   return rows.map((row) => {
     const articleAuthors = getJsonValue(row.articleAuthors)
+
     return {
       id: row.id,
       createdAt: getDateValue(row.createdAt),
@@ -250,7 +256,7 @@ const getFullArticlesByIds = async (articleIds: string[]): Promise<FullArticleRo
       fullTextCharCount: row.fullTextCharCount,
       contentHash: row.contentHash,
       importRoute: row.importRoute,
-      originalData: getJsonValue(row.originalData),
+      sourceMetadata: getArticleSourceMetadataValue(getJsonValue(row.sourceMetadata)),
       publicationStatus: row.publicationStatus,
     }
   })

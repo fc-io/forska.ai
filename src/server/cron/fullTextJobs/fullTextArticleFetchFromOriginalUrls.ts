@@ -2,51 +2,14 @@ import {mkdir, writeFile} from 'fs/promises'
 import path from 'path'
 
 import type {ArticleRecord} from '../../../db/schemaTypes.ts'
+import {
+  type ArticleSourceLink,
+  emptyArticleSourceMetadata,
+  getArticleSourceMetadataValue,
+} from '../../../utils/articleSourceMetadata.ts'
 import type {PdfFetchAttemptResult} from './pdfFetchTypes.ts'
 
 const SOURCE_NAME = 'OriginalUrls'
-
-type OriginalFullTextUrl = {
-  url: string
-  site: string | null
-  availability: string | null
-  documentStyle: string | null
-  availabilityCode: string | null
-}
-
-const isRecord = (value: unknown): value is Record<string, unknown> => {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-const getStringField = (value: Record<string, unknown>, key: string) => {
-  const candidate = value[key]
-  return typeof candidate === 'string' ? candidate : null
-}
-
-const getOriginalFullTextUrls = (originalData: unknown): OriginalFullTextUrl[] => {
-  const fullTextUrlList = isRecord(originalData) ? originalData.fullTextUrlList : null
-  const fullTextUrl = isRecord(fullTextUrlList) ? fullTextUrlList.fullTextUrl : null
-  const entries = Array.isArray(fullTextUrl) ? fullTextUrl : fullTextUrl ? [fullTextUrl] : []
-
-  return entries
-    .map((entry): OriginalFullTextUrl | null => {
-      const record = isRecord(entry) ? entry : null
-      const url = record ? getStringField(record, 'url') : null
-
-      return url
-        ? {
-            url,
-            site: record ? getStringField(record, 'site') : null,
-            availability: record ? getStringField(record, 'availability') : null,
-            documentStyle: record ? getStringField(record, 'documentStyle') : null,
-            availabilityCode: record ? getStringField(record, 'availabilityCode') : null,
-          }
-        : null
-    })
-    .filter((v): v is OriginalFullTextUrl => {
-      return v !== null
-    })
-}
 
 const toSafeFilename = (s: string) => {
   return s.replace(/[^a-zA-Z0-9._-]/g, '_')
@@ -73,16 +36,16 @@ const storePdfToAssets = async (key: string, response: Response): Promise<string
     : null
 }
 
-const isOpenAccess = (entry: OriginalFullTextUrl) => {
+const isOpenAccess = (entry: ArticleSourceLink) => {
   const availability = entry.availability?.toLowerCase() ?? ''
   return availability.includes('open') || entry.availabilityCode === 'OA'
 }
 
-const isPdfFormat = (entry: OriginalFullTextUrl) => {
+const isPdfFormat = (entry: ArticleSourceLink) => {
   return entry.documentStyle?.toLowerCase() === 'pdf'
 }
 
-const sortByPriority = (a: OriginalFullTextUrl, b: OriginalFullTextUrl) => {
+const sortByPriority = (a: ArticleSourceLink, b: ArticleSourceLink) => {
   const aOA = isOpenAccess(a) ? 1 : 0
   const bOA = isOpenAccess(b) ? 1 : 0
   const aPdf = isPdfFormat(a) ? 1 : 0
@@ -95,9 +58,10 @@ const sortByPriority = (a: OriginalFullTextUrl, b: OriginalFullTextUrl) => {
 }
 
 export const fullTextArticleFetchFromOriginalUrls = async ({
-  originalData,
-}: Pick<ArticleRecord, 'arxivId' | 'originalData'>): Promise<PdfFetchAttemptResult> => {
-  const urls = getOriginalFullTextUrls(originalData)
+  doi,
+  sourceMetadata,
+}: Pick<ArticleRecord, 'arxivId' | 'doi' | 'sourceMetadata'>): Promise<PdfFetchAttemptResult> => {
+  const urls = (getArticleSourceMetadataValue(sourceMetadata) ?? emptyArticleSourceMetadata).fullTextLinks
 
   if (urls.length === 0) {
     return {source: SOURCE_NAME, tried: false, success: false, reason: 'No fullTextUrlList in original data'}
@@ -149,7 +113,6 @@ export const fullTextArticleFetchFromOriginalUrls = async ({
       }
 
       // Generate a unique key for the file
-      const doi = isRecord(originalData) && typeof originalData.doi === 'string' ? originalData.doi : null
       const fileKey = doi ?? url
 
       const fullTextPDF = await storePdfToAssets(fileKey, response)

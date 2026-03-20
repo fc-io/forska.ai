@@ -15,7 +15,7 @@ type PdfFetchAttempt = {
   details?: string
 }
 
-type OriginalFullTextUrl = {
+type FullTextLink = {
   url: string
   site: string | null
   availability: string | null
@@ -347,19 +347,13 @@ export const ArticleAdminSection = (props: ArticleAdminSectionProps) => {
                         <Show
                           when={
                             !fetchPdfMutation.data?.fullTextPDF
-                            && (fetchPdfMutation.data as {originalFullTextUrls?: OriginalFullTextUrl[]})
-                              ?.originalFullTextUrls?.length
+                            && (fetchPdfMutation.data as {fullTextLinks?: FullTextLink[]})?.fullTextLinks?.length
                           }
                         >
                           <div class="bg-white/50 rounded p-2 mt-2">
-                            <div class="text-xs font-medium text-amber-800 mb-1.5">Original full-text URLs:</div>
+                            <div class="text-xs font-medium text-amber-800 mb-1.5">Full-text links:</div>
                             <div class="space-y-1.5">
-                              <For
-                                each={
-                                  (fetchPdfMutation.data as {originalFullTextUrls: OriginalFullTextUrl[]})
-                                    .originalFullTextUrls
-                                }
-                              >
+                              <For each={(fetchPdfMutation.data as {fullTextLinks: FullTextLink[]}).fullTextLinks}>
                                 {(link) => {
                                   return (
                                     <div class="text-xs p-1.5 rounded bg-gray-100 text-gray-700">

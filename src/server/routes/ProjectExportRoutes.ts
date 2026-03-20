@@ -1,6 +1,6 @@
 import {Elysia, t} from 'elysia'
 
-import {getJournalTitleFromOriginalData} from '../../utils/getJournalTitleFromOriginalData.ts'
+import {getArticleSourceMetadataValue} from '../../utils/articleSourceMetadata.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import * as appQueryHelpers from '../services/appQueryHelpers.ts'
 import {getAppQueryService} from '../services/getAppQueryService.ts'
@@ -97,6 +97,12 @@ const getArticleUrl = (articleId: string | null): string => {
 const formatArticleDate = (value: Date | string | null | undefined): string => {
   const dateValue = value ? (typeof value === 'string' ? new Date(value) : value) : null
   return dateValue ? dateValue.toISOString() : ''
+}
+
+const getExportJournalTitle = (params: {sourceMetadata: unknown}) => {
+  const sourceMetadata = getArticleSourceMetadataValue(params.sourceMetadata)
+
+  return sourceMetadata?.journalTitle ?? ''
 }
 
 const buildPromptInfoRows = (promptIds: string[], promptDetails: PromptDetails[]): PromptInfoRow[] => {
@@ -462,7 +468,7 @@ export const projectExportRoutes = new Elysia()
                   articleAuthors: unknown
                   articleCreatedAt: unknown
                   articleUpdatedAt: unknown
-                  articleOriginalData: unknown
+                  articleSourceMetadata: unknown
                   promptId: string
                   answeredOriginal: string | null
                   answeredOriginalAsArray: unknown
@@ -477,7 +483,7 @@ export const projectExportRoutes = new Elysia()
                     TO_JSON(a.article_authors) AS articleAuthors,
                     a.article_created_at AS articleCreatedAt,
                     a.article_updated_at AS articleUpdatedAt,
-                    ${includeJournal ? 'TO_JSON(a.original_data)' : 'NULL'} AS articleOriginalData,
+                    ${includeJournal ? 'TO_JSON(a.source_metadata)' : 'NULL'} AS articleSourceMetadata,
                     j.prompt_id AS promptId,
                     j.answered_original AS answeredOriginal,
                     TO_JSON(j.answered_original_as_array) AS answeredOriginalAsArray,
@@ -537,7 +543,7 @@ export const projectExportRoutes = new Elysia()
                       updatedAt: includeArticleUpdatedAt ? formatArticleDate(getDateValue(row.articleUpdatedAt)) : '',
                       summary: row.articleSummary || '',
                       journalTitle: includeJournal
-                        ? (getJournalTitleFromOriginalData(getJsonValue(row.articleOriginalData)) ?? '')
+                        ? getExportJournalTitle({sourceMetadata: getJsonValue(row.articleSourceMetadata)})
                         : '',
                       answers: new Map(),
                       explanations: new Map(),
@@ -627,7 +633,7 @@ export const projectExportRoutes = new Elysia()
                   articleAuthors: unknown
                   articleCreatedAt: unknown
                   articleUpdatedAt: unknown
-                  articleOriginalData: unknown
+                  articleSourceMetadata: unknown
                 }>(`
                   SELECT
                     a.id AS articleId,
@@ -637,7 +643,7 @@ export const projectExportRoutes = new Elysia()
                     TO_JSON(a.article_authors) AS articleAuthors,
                     a.article_created_at AS articleCreatedAt,
                     a.article_updated_at AS articleUpdatedAt,
-                    ${includeJournal ? 'TO_JSON(a.original_data)' : 'NULL'} AS articleOriginalData
+                    ${includeJournal ? 'TO_JSON(a.source_metadata)' : 'NULL'} AS articleSourceMetadata
                   FROM app.article a
                   WHERE ${finalScopeCondition}
                   ORDER BY a.id ASC
@@ -668,7 +674,7 @@ export const projectExportRoutes = new Elysia()
                   }
                   if (includeSummary) csvRow.push(row.articleSummary || '')
                   if (includeJournal) {
-                    csvRow.push(getJournalTitleFromOriginalData(getJsonValue(row.articleOriginalData)) ?? '')
+                    csvRow.push(getExportJournalTitle({sourceMetadata: getJsonValue(row.articleSourceMetadata)}))
                   }
                   if (includeArticleCreatedAt) csvRow.push(formatArticleDate(getDateValue(row.articleCreatedAt)))
                   if (includeArticleUpdatedAt) csvRow.push(formatArticleDate(getDateValue(row.articleUpdatedAt)))

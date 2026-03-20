@@ -49,3 +49,11 @@ test('does not show source for non-preprints without a journal', () => {
 
   expect(value).toBeNull()
 })
+
+test('uses normalized source metadata when present', () => {
+  const value = getJournalDisplayTitleForArticle({
+    sourceMetadata: {journalTitle: null, preprintSource: 'arxiv', isPreprint: true, fullTextLinks: []},
+  })
+
+  expect(value).toBe('(arxiv)')
+})

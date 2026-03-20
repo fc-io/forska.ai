@@ -54,7 +54,7 @@ const arxivRateLimit = (() => {
 
 export const fullTextArticleFetchFromArxiv = async ({
   arxivId,
-}: Pick<ArticleRecord, 'arxivId' | 'originalData'>): Promise<PdfFetchAttemptResult> => {
+}: Pick<ArticleRecord, 'arxivId'>): Promise<PdfFetchAttemptResult> => {
   // Check if arXiv ID is available
   if (!arxivId) {
     return {source: SOURCE_NAME, tried: false, success: false, reason: 'No arXiv ID found in article data'}

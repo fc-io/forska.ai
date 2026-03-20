@@ -148,7 +148,7 @@ const columns: ColumnDef<ArticleWithHumanJudgments, unknown>[] = [
           fullTextConversionStatus={
             (info.row.original as {fullTextConversionStatus?: unknown}).fullTextConversionStatus
           }
-          originalData={(info.row.original as {originalData?: unknown}).originalData}
+          sourceMetadata={(info.row.original as {sourceMetadata?: unknown}).sourceMetadata}
         />
       )
     },

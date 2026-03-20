@@ -7,6 +7,7 @@ const articlesReviewsBothOlapModulePath = new URL('../../../services/olap/articl
   .pathname
 const unassessedArticlesOlapModulePath = new URL('../../../services/olap/unassessedArticlesOlap.ts', import.meta.url)
   .pathname
+const projectAccessGuardModulePath = new URL('./projectAccessGuard.ts', import.meta.url).pathname
 
 const reviewHydrationRowsRef = {
   current: async (_articleIds: string[]): Promise<unknown[]> => {
@@ -92,6 +93,14 @@ void mock.module(unassessedArticlesOlapModulePath, () => {
   return {
     getUnassessedArticlesFromOlap: (params: unknown) => {
       return queryUnassessedRef.current(params)
+    },
+  }
+})
+
+void mock.module(projectAccessGuardModulePath, () => {
+  return {
+    assertProjectIsActive: async () => {
+      return {id: 'project-1', name: 'Project 1', archived: false}
     },
   }
 })
@@ -262,7 +271,7 @@ test('articles reviews route falls back to olap article fields when sqlite row i
     fullTextPDF: null,
     fullTextFetchedAt: null,
     fullTextConversionStatus: null,
-    originalData: null,
+    sourceMetadata: null,
   })
 })
 
@@ -326,7 +335,7 @@ test('articles reviews both route preserves page echo and missing-article fallba
     fullTextPDF: null,
     fullTextFetchedAt: null,
     fullTextConversionStatus: null,
-    originalData: null,
+    sourceMetadata: null,
     judgments: [
       {
         id: 'judgment-1',

@@ -38,7 +38,7 @@ export type ArticleWithJudgments = {
   fullTextPDF?: string | null
   fullTextFetchedAt?: Date | null
   fullTextConversionStatus?: string | null
-  originalData?: unknown
+  sourceMetadata?: unknown
   // Present for "Assessed by Both" view: per-prompt human answers from all qualifying humans
   humanAnswersByPrompt?: Record<string, string[]>
   // Judged status (from new API response)
@@ -204,7 +204,7 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
           fullTextConversionStatus={
             (info.row.original as {fullTextConversionStatus?: unknown}).fullTextConversionStatus
           }
-          originalData={(info.row.original as {originalData?: unknown}).originalData}
+          sourceMetadata={(info.row.original as {sourceMetadata?: unknown}).sourceMetadata}
         />
       )
     },

@@ -62,6 +62,7 @@ export type ArticleRecord = {
   contentHash: string | null
   importRoute: string | null
   originalData: unknown
+  sourceMetadata: unknown
   publicationStatus: PublicationStatus | null
 }
 

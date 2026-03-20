@@ -40,7 +40,7 @@ export type ArticleReviewResult = {
   fullTextPDF?: string | null
   fullTextFetchedAt?: Date | null
   fullTextConversionStatus?: string | null
-  originalData?: unknown
+  sourceMetadata?: unknown
   judgments: OlapJudgmentRow[]
   judgedPromptIds: string[]
   isFullyJudged: boolean
@@ -96,6 +96,12 @@ export type ArticleReviewsBothResult = {
   articleTitle: string | null
   articleCreatedAt: Date | null
   articleUpdatedAt: Date | null
+  articleId?: string | null
+  url?: string | null
+  fullTextPDF?: string | null
+  fullTextFetchedAt?: Date | null
+  fullTextConversionStatus?: string | null
+  sourceMetadata?: unknown
   judgments: ArticlesReviewsBothJudgmentRow[]
   humanAnswersByPrompt?: HumanAnswersByPrompt
   journalTitle: string | null

@@ -50,6 +50,7 @@ test('getAppQueryService reads native DuckDB app tables', async () => {
         content_hash VARCHAR,
         import_route VARCHAR,
         original_data JSON,
+        source_metadata JSON,
         publication_status VARCHAR
       );
       INSERT INTO app.project (id, model_id, date_from, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
@@ -57,8 +58,8 @@ test('getAppQueryService reads native DuckDB app tables', async () => {
       INSERT INTO app.prompt (id, original_text, prompt_heading, type) VALUES ('prompt-1', 'Prompt body', 'Prompt heading', 'string');
       INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled) VALUES ('pp-1', 'project-1', 'prompt-1', 2, TRUE);
       INSERT INTO app.project_import_route (id, project_id, import_route_id) VALUES ('pir-1', 'project-1', 'route-1');
-      INSERT INTO app.article (id, article_title, article_authors, article_created_at, article_id, full_text_pdf, original_data)
-      VALUES ('article-1', 'Article 1', ['Alice', 'Bob'], '2024-01-02T00:00:00Z', 'A-1', '/tmp/a.pdf', '{"journal":"J1"}');
+      INSERT INTO app.article (id, article_title, article_authors, article_created_at, article_id, full_text_pdf, original_data, source_metadata)
+      VALUES ('article-1', 'Article 1', ['Alice', 'Bob'], '2024-01-02T00:00:00Z', 'A-1', '/tmp/a.pdf', '{"journalInfo":{"title":"J1"}}', '{"journalTitle":"J1","preprintSource":null,"isPreprint":false,"fullTextLinks":[]}');
     `,
   ])
 
@@ -83,7 +84,10 @@ test('getAppQueryService reads native DuckDB app tables', async () => {
           await getAppDatabaseService().close()
         `,
       ],
-      {cwd: process.cwd(), env: {...process.env, DUCKDB_PATH: duckdbPath}},
+      {
+        cwd: process.cwd(),
+        env: {...process.env, API_SERVER_PORT: '39991', DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'writer'},
+      },
     )
 
     if (result.exitCode !== 0) {
@@ -104,7 +108,11 @@ test('getAppQueryService reads native DuckDB app tables', async () => {
         useFulltext: boolean
         useFulltextNoImages: boolean
       }
-      reviewHydrationRow: {articleId: string; fullTextPDF: string; originalData: {journal: string}}
+      reviewHydrationRow: {
+        articleId: string
+        fullTextPDF: string
+        sourceMetadata: {journalTitle: string; preprintSource: string | null; isPreprint: boolean; fullTextLinks: []}
+      }
       fullArticleRow: {articleAuthors: string[]}
     }
 
@@ -126,7 +134,12 @@ test('getAppQueryService reads native DuckDB app tables', async () => {
     })
     expect(parsed.reviewHydrationRow.articleId).toBe('A-1')
     expect(parsed.reviewHydrationRow.fullTextPDF).toBe('/tmp/a.pdf')
-    expect(parsed.reviewHydrationRow.originalData).toEqual({journal: 'J1'})
+    expect(parsed.reviewHydrationRow.sourceMetadata).toEqual({
+      journalTitle: 'J1',
+      preprintSource: null,
+      isPreprint: false,
+      fullTextLinks: [],
+    })
     expect(parsed.fullArticleRow.articleAuthors).toEqual(['Alice', 'Bob'])
   } finally {
     removeFileIfExists(duckdbPath)

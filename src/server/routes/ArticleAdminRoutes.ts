@@ -2,6 +2,7 @@ import {Elysia, t} from 'elysia'
 import {mkdir, writeFile} from 'fs/promises'
 import path from 'path'
 
+import {emptyArticleSourceMetadata, getArticleSourceMetadataValue} from '../../utils/articleSourceMetadata.ts'
 import {fetchPdfForArticle} from '../cron/fullTextJobs/fetchPdfForArticle.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {
@@ -13,49 +14,6 @@ import {
 } from '../services/appQueryHelpers.ts'
 import {ConversionError, convertPdfToText} from '../utils/convertPdfToText.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
-
-type OriginalFullTextUrl = {
-  url: string
-  site: string | null
-  availability: string | null
-  documentStyle: string | null
-  availabilityCode: string | null
-}
-
-const isRecord = (value: unknown): value is Record<string, unknown> => {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-const getStringField = (value: Record<string, unknown>, key: string) => {
-  const candidate = value[key]
-  return typeof candidate === 'string' ? candidate : null
-}
-
-const getOriginalFullTextUrls = (originalData: unknown): OriginalFullTextUrl[] => {
-  const fullTextUrlList = isRecord(originalData) ? originalData.fullTextUrlList : null
-  const fullTextUrl = isRecord(fullTextUrlList) ? fullTextUrlList.fullTextUrl : null
-  const entries = Array.isArray(fullTextUrl) ? fullTextUrl : fullTextUrl ? [fullTextUrl] : []
-
-  return entries
-    .map((entry): OriginalFullTextUrl | null => {
-      const record = isRecord(entry) ? entry : null
-      const url = record ? getStringField(record, 'url') : null
-
-      return url
-        ? {
-            url,
-            site: record ? getStringField(record, 'site') : null,
-            availability: record ? getStringField(record, 'availability') : null,
-            documentStyle: record ? getStringField(record, 'documentStyle') : null,
-            availabilityCode: record ? getStringField(record, 'availabilityCode') : null,
-          }
-        : null
-    })
-    .filter((v): v is OriginalFullTextUrl => {
-      return v !== null
-    })
-    .slice(0, 25)
-}
 
 /**
  * Store an uploaded PDF to the local assets folder.
@@ -124,13 +82,14 @@ export const articleAdminRoutes = new Elysia()
     async ({params}) => {
       const {id} = params
 
-      // Get the article to access arxivId and originalData
+      // Get the article to access arxivId and source metadata
       const [article] = await getAppDatabaseService().queryJson<{
         id: string
         arxivId: string | null
-        originalData: unknown
+        doi: string | null
+        sourceMetadata: unknown
       }>(`
-        SELECT id, arxiv_id AS arxivId, TO_JSON(original_data) AS originalData
+        SELECT id, arxiv_id AS arxivId, doi, TO_JSON(source_metadata) AS sourceMetadata
         FROM app.article
         WHERE id = '${escapeSqlString(id)}'
         LIMIT 1
@@ -141,9 +100,9 @@ export const articleAdminRoutes = new Elysia()
       }
 
       // Fetch the PDF using the same logic as the cron job
-      const originalData = getJsonValue(article.originalData)
-      const result = await fetchPdfForArticle({arxivId: article.arxivId, originalData})
-      const originalFullTextUrls = getOriginalFullTextUrls(originalData)
+      const sourceMetadata =
+        getArticleSourceMetadataValue(getJsonValue(article.sourceMetadata)) ?? emptyArticleSourceMetadata
+      const result = await fetchPdfForArticle({arxivId: article.arxivId, doi: article.doi, sourceMetadata})
 
       // Update the article with the fetched PDF info
       const updateData: Record<string, unknown> = {fullTextFetchedAt: new Date()}
@@ -187,7 +146,7 @@ export const articleAdminRoutes = new Elysia()
         fullTextPDF: result.fullTextPDF,
         fullTextSource: result.fullTextSource,
         attempts: result.attempts,
-        originalFullTextUrls,
+        fullTextLinks: sourceMetadata.fullTextLinks,
       }
     },
     {params: t.Object({id: t.String()})},

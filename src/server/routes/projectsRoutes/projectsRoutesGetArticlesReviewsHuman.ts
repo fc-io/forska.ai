@@ -195,6 +195,7 @@ export const projectsRoutesGetArticlesReviewsHuman = new Elysia().post(
           const bo = promptOrderMap[b.promptId] ?? Number.MAX_SAFE_INTEGER
           return ao - bo
         })
+
         return {...article, judgments: sorted}
       })
 

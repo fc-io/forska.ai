@@ -1,9 +1,14 @@
+import type {ArticleSourceMetadata} from '../../../utils/articleSourceMetadata.ts'
 import {fullTextArticleFetchFromArxiv} from './fullTextArticleFetchFromArxiv.ts'
 import {fullTextArticleFetchFromOriginalUrls} from './fullTextArticleFetchFromOriginalUrls.ts'
 import {fullTextArticleFetchFromUnpaywall} from './fullTextArticleFetchFromUnpaywall.ts'
 import {attemptsToLegacyResult, type PdfFetchAttemptResult} from './pdfFetchTypes.ts'
 
-export type PdfFetchArticleData = {arxivId: string | null; originalData: unknown}
+export type PdfFetchArticleData = {
+  arxivId: string | null
+  doi: string | null
+  sourceMetadata: ArticleSourceMetadata | null
+}
 
 export type FetchPdfForArticleResult = {
   attempts: PdfFetchAttemptResult[]

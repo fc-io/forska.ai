@@ -47,7 +47,7 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
         fullTextPDF: fullText?.fullTextPDF ?? null,
         fullTextFetchedAt: fullText?.fullTextFetchedAt ?? null,
         fullTextConversionStatus: fullText?.fullTextConversionStatus ?? null,
-        originalData: fullText?.originalData ?? null,
+        sourceMetadata: fullText?.sourceMetadata ?? (article as {sourceMetadata?: unknown}).sourceMetadata ?? null,
         judgments: article.judgments.map((j) => {
           return {
             id: j.id,

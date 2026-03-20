@@ -33,19 +33,12 @@ const storePdfToAssets = async (key: string, response: Response): Promise<string
 }
 
 export const fullTextArticleFetchFromUnpaywall = async ({
-  originalData,
-}: Pick<ArticleRecord, 'arxivId' | 'originalData'>): Promise<PdfFetchAttemptResult> => {
-  // Check if DOI is available
-  if (
-    !originalData
-    || typeof originalData !== 'object'
-    || !('doi' in originalData)
-    || typeof originalData.doi !== 'string'
-  ) {
+  doi,
+}: Pick<ArticleRecord, 'arxivId' | 'doi'>): Promise<PdfFetchAttemptResult> => {
+  if (!doi) {
     return {source: SOURCE_NAME, tried: false, success: false, reason: 'No DOI found in article data'}
   }
 
-  const doi = originalData.doi
   const unpaywallEmail = await getUserConfigQueryService().getUnpaywallEmail()
   console.log('Unpaywall doi: ', doi)
   const fullTextSource = 'http://unpaywall.org'

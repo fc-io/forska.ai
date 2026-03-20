@@ -1,7 +1,6 @@
 import {Elysia, t} from 'elysia'
 
 import {queryArticlesReviewsFromOlap} from '../../../services/olap/articlesReviewsOlap.ts'
-import {getJournalTitleFromOriginalData} from '../../../utils/getJournalTitleFromOriginalData.ts'
 import {getAppQueryService} from '../../services/getAppQueryService.ts'
 import {assertProjectIsActive} from './projectAccessGuard.ts'
 
@@ -61,15 +60,13 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
           articleTitle: fullText ? fullText.articleTitle : article.articleTitle,
           articleCreatedAt: fullText ? fullText.articleCreatedAt : article.articleCreatedAt,
           articleUpdatedAt: fullText ? fullText.articleUpdatedAt : article.articleUpdatedAt,
-          journalTitle: fullText?.originalData
-            ? getJournalTitleFromOriginalData(fullText.originalData)
-            : article.journalTitle,
+          journalTitle: fullText?.sourceMetadata?.journalTitle ?? article.journalTitle,
           articleId: fullText?.articleId ?? null,
           url: fullText?.url ?? null,
           fullTextPDF: fullText?.fullTextPDF ?? null,
           fullTextFetchedAt: fullText?.fullTextFetchedAt ?? null,
           fullTextConversionStatus: fullText?.fullTextConversionStatus ?? null,
-          originalData: fullText?.originalData ?? null,
+          sourceMetadata: fullText?.sourceMetadata ?? null,
         }
       })
 
