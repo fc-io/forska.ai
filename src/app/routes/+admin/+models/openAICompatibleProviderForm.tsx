@@ -52,7 +52,7 @@ export const OpenAICompatibleProviderForm = (props: OpenAICompatibleProviderForm
             }}
             value={props.value.workerUrlMode}
           >
-            <option value="runtime">Runtime-discovered</option>
+            <option value="runtime">Runtime-discovered only</option>
             <option value="manual">Saved manual URLs</option>
           </select>
           <div class="mt-3 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-600">
@@ -60,8 +60,11 @@ export const OpenAICompatibleProviderForm = (props: OpenAICompatibleProviderForm
             <div class="mt-1 break-words">
               {props.runtimeWorkerUrls && props.runtimeWorkerUrls.length > 0
                 ? props.runtimeWorkerUrls.join(', ')
-                : 'No active runtime detected'}
+                : 'No active runtime detected - runtime mode will not fall back to saved worker URLs'}
             </div>
+            <p class="mt-2 text-xs text-gray-500">
+              Runtime-only mode changes worker routing only. Forska still keeps the saved base URL as provider config.
+            </p>
           </div>
         </div>
       </Show>

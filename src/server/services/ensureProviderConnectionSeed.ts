@@ -43,7 +43,9 @@ const getProviderConnectionConfigJson = (workerUrls: string[] | null | undefined
     ),
   )
 
-  return normalizedWorkerUrls.length > 0 ? JSON.stringify({workerUrls: normalizedWorkerUrls}) : null
+  return normalizedWorkerUrls.length > 0
+    ? JSON.stringify({manualWorkerUrls: normalizedWorkerUrls, workerUrlMode: 'manual'})
+    : null
 }
 
 const getJsonSqlLiteral = (value: string | null): string => {

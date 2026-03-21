@@ -1,67 +1,71 @@
 # Run local dev build
 
-Goal: standalone local app; admin-free; single-user soon. See `../plans/REMOVE_ADMIN_AND_USERS.md`.
+Current local-first flow. Core product config lives in the app, not `.env.local`.
+
+Legacy note
+
+- Old Docker/Postgres docs/scripts still exist for repair/import work. Ignore them for normal app use.
 
 Prereqs
 
-- Bun installed
-- Docker
-- A GPU if you plan to run VLLM locally
-- The cloned repo on you machine
+- Bun
+- Optional: Docker for Docling
+- Optional: local/manual inference or a remote HPC runtime
 
-## 1) Install dependencies
+## 1) Install
 
 ```bash
-# cd into the project folder, then:
 bun install
 ```
 
-## 2) Configure env variables and validate
+## 2) Minimal `.env.local`
 
-Create `.env.local` (gitignored) and set required values. At minimum:
-
-```
-DB_NAME=postgres
-DB_USER=postgres
-DB_PASS=change-me
-VLLM_API_KEY=fake_key
-POSTGRES_PORT=5432
-# and some more that can be found in env.ts
+```bash
+API_SERVER_PORT=3000
+VITE_PORT=5173
+# Optional if you do not want the default app-data DuckDB path
+DUCKDB_PATH=~/forska/forska.duckdb
 ```
 
-Validate your Compose config (optional – shows no output if correct):
+No provider/model settings, worker URLs, binary overrides, or contact emails belong here.
 
-```
-docker compose --env-file .env.local config -q
-```
+## 3) Initialize + start
 
-## 3) Start Postgres
-
-Then start Postgres using `.env.local` for compose substitution:
-
-```
-docker compose --env-file .env.local up db
-```
-
-## 4) Start API and App in watch mode
-
-```
+```bash
+bun run db:mig
 bun run dev:server
 bun run dev:app
 ```
 
-Hit http://localhost:5173 in your browser for the web interface.
+Open `http://localhost:5173`.
 
-If you need the GPU-backed LLM locally, also start the `vllm` service via compose (see below).
+## 4) Configure the app in the UI
 
-## PDF conversion (Docling)
+- Add providers/models in `/admin/models`
+- Set user-facing app settings in Forska Settings
+- Keep core product behavior in the app, not env files
 
-Start Docling (optional):
+## 5) Optional remote inference
 
-`docker compose --env-file .env.local up docling`
+```bash
+bun run alvis:dev:server
+# or
+bun run mn5:dev:server
+```
 
-Enable + tune conversion throughput (in `.env.local`):
+Those launch helpers pass short-lived runtime metadata to the local API server. The provider/model still belongs in `/admin/models`.
 
-`RUN_SERVER_FULL_TEXT_CONVERSION_CRON=true`
-`FULL_TEXT_CONVERSION_BATCH_SIZE=5`
-`FULL_TEXT_CONVERSION_CONCURRENCY=2`
+## 6) Optional Docling
+
+```bash
+docker compose up docling
+```
+
+Optional env knobs:
+
+```bash
+DOCLING_SERVE_URL=http://localhost:5001
+RUN_SERVER_FULL_TEXT_CONVERSION_CRON=true
+FULL_TEXT_CONVERSION_BATCH_SIZE=5
+FULL_TEXT_CONVERSION_CONCURRENCY=2
+```

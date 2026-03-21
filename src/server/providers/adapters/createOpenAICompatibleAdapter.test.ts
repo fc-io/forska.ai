@@ -49,7 +49,7 @@ const getOllamaConnectionInput = () => {
     connection: {
       authMode: 'none' as const,
       baseURL: 'http://127.0.0.1:11434/v1',
-      config: {workerUrls: []},
+      config: {manualWorkerUrls: [], workerUrlMode: 'manual' as const},
       createdAt: null,
       enabled: true,
       hasSecret: false,

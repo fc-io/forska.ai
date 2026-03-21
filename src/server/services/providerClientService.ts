@@ -84,7 +84,7 @@ const getCompatibilityConnection = ({
   return {
     authMode: getCompatibilityAuthMode({baseURL: resolvedBaseURL, providerKind, secretRef}),
     baseURL: resolvedBaseURL,
-    config: {workerUrls: []},
+    config: {manualWorkerUrls: [], workerUrlMode: 'manual'},
     createdAt: null,
     enabled: true,
     hasSecret: Boolean(secretRef),

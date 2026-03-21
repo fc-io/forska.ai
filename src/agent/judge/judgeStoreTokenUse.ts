@@ -1,6 +1,6 @@
 import {markJudgmentRequestsPersisted} from '../../server/cron/judgmentsJobs/judgmentsRequestRuntime.ts'
 import {getTokenUseQueryService} from '../../server/services/tokenUseQueryService.ts'
-import {env} from '../../server/utils/env.ts'
+import {inferenceRuntimeConfig} from '../../server/utils/getInferenceRuntimeConfig.ts'
 import {apiClient} from '../../services/apiClient.ts'
 
 export type JudgeTokenUsageEntry = {
@@ -113,13 +113,13 @@ const storeTokenUseDirectly = async (
 ): Promise<void> => {
   const result = await getTokenUseQueryService().insertTokenUse({
     judgment_job_id: judgmentsJobId ?? null,
-    gpu_nnodes: env.GPU_NNODES,
-    gpu_gpus_per_node: env.GPU_GPUS_PER_NODE,
-    gpu_total_gpus: env.GPU_TOTAL_GPUS,
-    tp_size: env.TP_SIZE,
-    dp_size: env.DP_SIZE,
-    gpu_shape: env.GPU_SHAPE ?? null,
-    sglang_max_running_requests: env.SGLANG_MAX_RUNNING_REQUESTS,
+    gpu_nnodes: inferenceRuntimeConfig.gpuNnodes,
+    gpu_gpus_per_node: inferenceRuntimeConfig.gpuGpusPerNode,
+    gpu_total_gpus: inferenceRuntimeConfig.gpuTotalGpus,
+    tp_size: inferenceRuntimeConfig.tpSize,
+    dp_size: inferenceRuntimeConfig.dpSize,
+    gpu_shape: inferenceRuntimeConfig.gpuShape,
+    sglang_max_running_requests: inferenceRuntimeConfig.sglangMaxRunningRequests,
     sglang_model: totalTokenUse.modelName,
     requests: totalTokenUse.totalRequests,
     total_prompt_tokens: totalTokenUse.totalPromptTokens,
@@ -153,7 +153,7 @@ const storeTokenUseViaAPI = async (
 ): Promise<void> => {
   const response = await apiClient.api.tokens.usage.post({
     judgmentsJobId,
-    sglangModel: totalTokenUse.modelName,
+    sglangModel: totalTokenUse.modelName ?? undefined,
     requests: totalTokenUse.totalRequests,
     totalPromptTokens: totalTokenUse.totalPromptTokens,
     totalCompletionTokens: totalTokenUse.totalCompletionTokens,

@@ -1,3 +1,4 @@
+import {getWorkerUrlMode, normalizeWorkerUrls} from '../../providers/providerWorkerUtils.ts'
 import {getProviderCatalogEntry} from '../../services/providerCatalog.ts'
 
 export const getTrimmedValue = (value: string | null | undefined): string | null => {
@@ -16,15 +17,20 @@ export const getProviderConnectionLabel = ({
   return getTrimmedValue(label) ?? getProviderCatalogEntry(providerKind)?.label ?? 'Provider connection'
 }
 
-export const getProviderConnectionConfig = (workerUrls: string[] | null | undefined) => {
+export const getProviderConnectionConfig = ({
+  manualWorkerUrls,
+  providerKind,
+  workerUrlMode,
+}: {
+  manualWorkerUrls: string[] | null | undefined
+  providerKind: string
+  workerUrlMode?: string | null
+}) => {
+  const normalizedManualWorkerUrls = normalizeWorkerUrls(manualWorkerUrls)
+
   return {
-    workerUrls: (workerUrls ?? [])
-      .map((url) => {
-        return String(url).trim()
-      })
-      .filter((url) => {
-        return url.length > 0
-      }),
+    manualWorkerUrls: normalizedManualWorkerUrls,
+    workerUrlMode: getWorkerUrlMode({manualWorkerUrls: normalizedManualWorkerUrls, providerKind, workerUrlMode}),
   }
 }
 

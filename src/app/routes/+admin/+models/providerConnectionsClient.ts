@@ -13,6 +13,14 @@ export type ProviderCatalogEntry = {
   supportsWorkerUrls: boolean
 }
 
+export type ProviderRuntimeSummary = {providerKind: string | null; workerUrls: string[]}
+
+export type ProviderConnectionWorkerState = {
+  effectiveWorkerUrls: string[]
+  runtimeWorkerUrls: string[]
+  workerSource: 'legacy' | 'manual' | 'none' | 'runtime'
+}
+
 export type ProviderModel = {
   baseURL: string | null
   createdAt: string | Date | null
@@ -34,7 +42,7 @@ export type ProviderModel = {
 export type ProviderConnection = {
   authMode: string | null
   baseURL: string | null
-  config: {workerUrls: string[]}
+  config: {manualWorkerUrls: string[]; workerUrlMode: 'manual' | 'runtime'}
   createdAt: string | Date | null
   enabled: boolean
   hasSecret: boolean
@@ -45,9 +53,14 @@ export type ProviderConnection = {
   models: ProviderModel[]
   providerKind: string
   updatedAt: string | Date | null
+  workerState: ProviderConnectionWorkerState
 }
 
-type ProviderConnectionsPayload = {catalog: ProviderCatalogEntry[]; connections: ProviderConnection[]}
+type ProviderConnectionsPayload = {
+  catalog: ProviderCatalogEntry[]
+  connections: ProviderConnection[]
+  runtime: ProviderRuntimeSummary
+}
 type ProviderConnectionsResponse = {data: ProviderConnectionsPayload; error: null}
 type ProviderConnectionMutationResponse = {data: {connection: ProviderConnection}; error: null}
 type ProviderConnectionDeleteResponse = {
@@ -133,8 +146,9 @@ export const createProviderConnection = async (input: {
   apiKey?: string
   baseURL?: string | null
   label?: string
+  manualWorkerUrls?: string[]
   providerKind: string
-  workerUrls?: string[]
+  workerUrlMode?: 'manual' | 'runtime'
 }) => {
   const response = await apiClient.api['provider-connections'].post(input)
   const result = handleApiResponse<ProviderConnectionMutationResponse>(
@@ -152,7 +166,8 @@ export const updateProviderConnection = async (input: {
   enabled?: boolean
   id: string
   label?: string
-  workerUrls?: string[]
+  manualWorkerUrls?: string[]
+  workerUrlMode?: 'manual' | 'runtime'
 }) => {
   const response = await apiClient.api['provider-connections']({id: input.id}).patch({
     apiKey: input.apiKey,
@@ -160,7 +175,8 @@ export const updateProviderConnection = async (input: {
     clearSecret: input.clearSecret,
     enabled: input.enabled,
     label: input.label,
-    workerUrls: input.workerUrls,
+    manualWorkerUrls: input.manualWorkerUrls,
+    workerUrlMode: input.workerUrlMode,
   })
   const result = handleApiResponse<ProviderConnectionMutationResponse>(
     response as unknown as {data?: ProviderConnectionMutationResponse; error?: unknown; status?: number},
@@ -293,6 +309,81 @@ export const formatTimestamp = (value: string | Date | null) => {
 
 export const getWorkerUrlsInputValue = (workerUrls: string[] | null | undefined): string => {
   return workerUrls && workerUrls.length > 0 ? workerUrls.join(', ') : ''
+}
+
+export const supportsRuntimeWorkerUrls = (providerKind: string | null | undefined): boolean => {
+  const normalizedProviderKind = String(providerKind ?? '')
+    .trim()
+    .toLowerCase()
+
+  return normalizedProviderKind === 'sglang' || normalizedProviderKind === 'vllm'
+}
+
+export const getRuntimeWorkerUrlsForProvider = ({
+  providerKind,
+  runtime,
+}: {
+  providerKind: string | null | undefined
+  runtime: ProviderRuntimeSummary | null | undefined
+}): string[] => {
+  const normalizedProviderKind = String(providerKind ?? '')
+    .trim()
+    .toLowerCase()
+  const runtimeProviderKind = String(runtime?.providerKind ?? '')
+    .trim()
+    .toLowerCase()
+
+  return runtimeProviderKind === normalizedProviderKind ? (runtime?.workerUrls ?? []) : []
+}
+
+const getJsonRecord = (value: unknown): Record<string, unknown> | null => {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
+}
+
+const getPositiveInteger = (value: unknown): number | null => {
+  const numericValue = typeof value === 'number' ? value : Number(value)
+
+  return Number.isFinite(numericValue) && numericValue > 0 ? Math.trunc(numericValue) : null
+}
+
+export const getProviderModelContextLength = (metadataJson: unknown): number | null => {
+  const metadataRecord = getJsonRecord(metadataJson)
+  const discovery = getJsonRecord(metadataRecord?.discovery)
+  const contextWindow = getJsonRecord(discovery?.contextWindow)
+
+  return getPositiveInteger(contextWindow?.totalTokens) ?? getPositiveInteger(contextWindow?.inputTokens)
+}
+
+export const getProviderModelDiscoverySource = (metadataJson: unknown): string | null => {
+  const metadataRecord = getJsonRecord(metadataJson)
+  const discovery = getJsonRecord(metadataRecord?.discovery)
+
+  return typeof discovery?.source === 'string' ? discovery.source : null
+}
+
+export const getProviderModelReasoningEfforts = (metadataJson: unknown): string[] => {
+  const metadataRecord = getJsonRecord(metadataJson)
+  const discovery = getJsonRecord(metadataRecord?.discovery)
+  const capabilities = getJsonRecord(discovery?.capabilities)
+  const reasoningEfforts = Array.isArray(capabilities?.reasoningEfforts)
+    ? capabilities.reasoningEfforts.filter((entry): entry is string => {
+        return typeof entry === 'string' && entry.trim().length > 0
+      })
+    : []
+
+  return reasoningEfforts
+}
+
+export const getWorkerSourceLabel = (workerSource: ProviderConnectionWorkerState['workerSource']): string => {
+  return workerSource === 'runtime'
+    ? 'Runtime-discovered'
+    : workerSource === 'manual'
+      ? 'Saved manual'
+      : workerSource === 'legacy'
+        ? 'Legacy saved'
+        : 'None'
 }
 
 export const getWorkerUrlsFromInputValue = (value: string): string[] => {

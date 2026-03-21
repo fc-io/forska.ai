@@ -1,4 +1,4 @@
-import {env} from '../../utils/env.ts'
+import {inferenceRuntimeConfig} from '../../utils/getInferenceRuntimeConfig.ts'
 import {getWorkerCount} from './getWorkerCount.ts'
 
 export const getJudgmentsCapacity = (
@@ -15,24 +15,24 @@ export const getJudgmentsCapacity = (
   addToQueueMaxBatchSize: number
 } => {
   const workerCount = getWorkerCount()
-  const perWorkerMaxRunningRequests = Math.max(1, env.SGLANG_MAX_RUNNING_REQUESTS)
+  const perWorkerMaxRunningRequests = Math.max(1, inferenceRuntimeConfig.sglangMaxRunningRequests)
 
-  const inflightOverridePerWorker = Math.max(0, env.SGLANG_API_MAX_INFLIGHT_REQUESTS)
+  const inflightOverridePerWorker = Math.max(0, inferenceRuntimeConfig.sglangApiMaxInflightRequests)
   const perWorkerMaxInflightRequests =
     inflightOverridePerWorker > 0 ? inflightOverridePerWorker : perWorkerMaxRunningRequests
 
-  const burstOverridePerWorker = Math.max(0, env.SGLANG_API_MAX_BURST_REQUESTS)
+  const burstOverridePerWorker = Math.max(0, inferenceRuntimeConfig.sglangApiMaxBurstRequests)
   const perWorkerMaxBurstRequests = burstOverridePerWorker > 0 ? burstOverridePerWorker : perWorkerMaxRunningRequests
 
   const maxInflight = perWorkerMaxInflightRequests * workerCount
   const maxBurst = perWorkerMaxBurstRequests * workerCount
 
-  const readyTargetMultiplier = Math.max(1, env.JUDGMENTS_READY_TARGET_MULTIPLIER)
+  const readyTargetMultiplier = Math.max(1, inferenceRuntimeConfig.judgmentsReadyTargetMultiplier)
   const readyTargetTotal = maxInflight * readyTargetMultiplier
   const normalizedJobCount = Math.max(1, runningJobCount)
   const readyTargetPerJob = Math.max(1, Math.ceil(readyTargetTotal / normalizedJobCount))
 
-  const addToQueueMaxBatchSize = Math.max(1, env.JUDGMENTS_ADD_TO_QUEUE_MAX_BATCH_SIZE)
+  const addToQueueMaxBatchSize = Math.max(1, inferenceRuntimeConfig.judgmentsAddToQueueMaxBatchSize)
 
   return {
     workerCount,

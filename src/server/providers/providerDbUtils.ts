@@ -8,6 +8,7 @@ import {
   type ProviderConnectionRecord,
   type ProviderModelRecord,
 } from './providerTypes.ts'
+import {getDefaultWorkerUrlMode, getWorkerUrlMode, normalizeWorkerUrls} from './providerWorkerUtils.ts'
 
 export type DatabaseRunner = {
   queryJson: <T>(statement: string) => Promise<T[]>
@@ -54,28 +55,30 @@ export const getTrimmedValue = (value: string | null | undefined): string | null
   return normalized === '' ? null : normalized
 }
 
-export const normalizeWorkerUrls = (workerUrls: string[] | null | undefined): string[] => {
-  return Array.from(
-    new Set(
-      (workerUrls ?? [])
-        .map((url) => {
-          return String(url).trim()
-        })
-        .filter((url) => {
-          return url.length > 0
-        }),
-    ),
-  )
-}
-
-export const getProviderConnectionConfigFromJson = (value: unknown): ProviderConnectionConfig => {
+export const getProviderConnectionConfigFromJson = ({
+  providerKind,
+  value,
+}: {
+  providerKind: string | null | undefined
+  value: unknown
+}): ProviderConnectionConfig => {
   const parsed = getJsonValue(value)
-  const workerUrls =
-    typeof parsed === 'object' && parsed !== null && 'workerUrls' in parsed
-      ? normalizeWorkerUrls((parsed as {workerUrls?: unknown}).workerUrls as string[] | null | undefined)
-      : []
+  const manualWorkerUrls =
+    typeof parsed === 'object' && parsed !== null && 'manualWorkerUrls' in parsed
+      ? normalizeWorkerUrls((parsed as {manualWorkerUrls?: unknown}).manualWorkerUrls as string[] | null | undefined)
+      : typeof parsed === 'object' && parsed !== null && 'workerUrls' in parsed
+        ? normalizeWorkerUrls((parsed as {workerUrls?: unknown}).workerUrls as string[] | null | undefined)
+        : []
+  const workerUrlMode =
+    typeof parsed === 'object' && parsed !== null && 'workerUrlMode' in parsed
+      ? getWorkerUrlMode({
+          manualWorkerUrls,
+          providerKind,
+          workerUrlMode: getTrimmedValue((parsed as {workerUrlMode?: string | null}).workerUrlMode),
+        })
+      : getDefaultWorkerUrlMode({manualWorkerUrls, providerKind})
 
-  return {workerUrls}
+  return {manualWorkerUrls, workerUrlMode}
 }
 
 export const getJsonSqlLiteral = (value: unknown): string => {
@@ -89,7 +92,7 @@ export const getLegacySecretRef = (apiKeyVariable: string | null | undefined): s
 }
 
 export const getLegacyProviderConnectionConfig = (workerUrls: unknown): ProviderConnectionConfig => {
-  return {workerUrls: normalizeWorkerUrls(getJsonValue(workerUrls) as string[] | null)}
+  return {manualWorkerUrls: normalizeWorkerUrls(getJsonValue(workerUrls) as string[] | null), workerUrlMode: 'manual'}
 }
 
 export const getProviderConnectionRecordFromRow = (row: ProviderConnectionRow): ProviderConnectionRecord => {
@@ -100,7 +103,7 @@ export const getProviderConnectionRecordFromRow = (row: ProviderConnectionRow): 
   return {
     authMode: getTrimmedValue(row.authMode) ?? getProviderConnectionAuthMode({baseURL, providerKind, secretRef}),
     baseURL,
-    config: getProviderConnectionConfigFromJson(row.configJson),
+    config: getProviderConnectionConfigFromJson({providerKind, value: row.configJson}),
     createdAt: getDateValue(row.createdAt),
     enabled: row.enabled ?? true,
     hasSecret: Boolean(secretRef),

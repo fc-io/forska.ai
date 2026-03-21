@@ -1,4 +1,5 @@
 import {type ProviderCatalogEntry} from '../../services/providerCatalog.ts'
+import {getNormalizedProviderModelMetadata} from '../providerModelMetadata.ts'
 import {type ProviderDefinition} from '../providerTypes.ts'
 import {invokeAnthropicMessagesModel, listAnthropicMessageModels} from '../transports/anthropicMessagesTransport.ts'
 import {
@@ -11,9 +12,25 @@ import {
 } from './providerAdapterUtils.ts'
 
 export const createAnthropicAdapter = (catalog: ProviderCatalogEntry): ProviderDefinition => {
+  const listModels = async ({apiKey, baseURL}: {apiKey: string | null; baseURL: string | null}) => {
+    const models = await listAnthropicMessageModels({apiKey, baseURL, providerLabel: catalog.label})
+
+    return models.map((listedModel) => {
+      return {
+        ...listedModel,
+        metadataJson: getNormalizedProviderModelMetadata({
+          listedModel,
+          providerKind: catalog.kind,
+          rawMetadata: listedModel.metadataJson,
+          source: 'provider',
+        }),
+      }
+    })
+  }
+
   const getHealth = async ({apiKey, baseURL}: {apiKey: string | null; baseURL: string | null}) => {
     try {
-      const models = await listAnthropicMessageModels({apiKey, baseURL, providerLabel: catalog.label})
+      const models = await listModels({apiKey, baseURL})
 
       return getProviderHealthSuccess({
         message: getProviderConnectedMessage({catalog, modelCount: models.length}),
@@ -48,11 +65,7 @@ export const createAnthropicAdapter = (catalog: ProviderCatalogEntry): ProviderD
     },
     kind: catalog.kind,
     listModels: async ({runtimeCredentials}) => {
-      return listAnthropicMessageModels({
-        apiKey: runtimeCredentials.apiKey,
-        baseURL: runtimeCredentials.baseURL,
-        providerLabel: catalog.label,
-      })
+      return listModels({apiKey: runtimeCredentials.apiKey, baseURL: runtimeCredentials.baseURL})
     },
     parseUsage: (usage) => {
       return usage

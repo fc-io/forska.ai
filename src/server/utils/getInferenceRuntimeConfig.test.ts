@@ -23,6 +23,7 @@ test('getInferenceRuntimeConfig applies runtime defaults', () => {
   expect(runtimeConfig.judgeChunkMaxParallel).toBe(0)
   expect(runtimeConfig.remoteWorkerUrls).toEqual([])
   expect(runtimeConfig.displayWorkerUrls).toEqual([])
+  expect(runtimeConfig.providerKind).toBeNull()
   expect(runtimeConfig.sshJumpHost).toBeNull()
 })
 
@@ -34,6 +35,7 @@ test('getInferenceRuntimeConfig prioritizes launcher runtime metadata', () => {
       FORSKA_RUNTIME_GPU_GPUS_PER_NODE: '4',
       FORSKA_RUNTIME_GPU_NNODES: '2',
       FORSKA_RUNTIME_LOCAL_WORKER_URLS: 'http://localhost:30001',
+      FORSKA_RUNTIME_PROVIDER_KIND: 'sglang',
       FORSKA_RUNTIME_REMOTE_WORKER_URLS: 'http://10.0.0.1:30000, http://10.0.0.2:30000',
       FORSKA_RUNTIME_SGLANG_API_MAX_BURST_REQUESTS: '64',
       FORSKA_RUNTIME_SGLANG_API_MAX_INFLIGHT_REQUESTS: '48',
@@ -55,6 +57,7 @@ test('getInferenceRuntimeConfig prioritizes launcher runtime metadata', () => {
   expect(runtimeConfig.sglangApiMaxBurstRequests).toBe(64)
   expect(runtimeConfig.remoteWorkerUrls).toEqual(['http://10.0.0.1:30000', 'http://10.0.0.2:30000'])
   expect(runtimeConfig.displayWorkerUrls).toEqual(['http://localhost:30001', 'http://10.0.0.2:30000'])
+  expect(runtimeConfig.providerKind).toBe('sglang')
   expect(runtimeConfig.sshJumpHost).toBe('alvis2')
   expect(runtimeConfig.judgeFirstRequestLogFull).toBe(true)
 })

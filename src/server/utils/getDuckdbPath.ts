@@ -90,6 +90,15 @@ export const getDuckdbPath = ({
   return getResolvedDuckdbPath(pathModule, cwd, defaultDuckdbPath, homeDir, duckdbPath)
 }
 
+export const getConfiguredDuckdbPath = ({
+  cwd,
+  envValues = process.env,
+  homeDir,
+  platform,
+}: Omit<DuckdbPathOptions, 'duckdbPath'> = {}) => {
+  return getDuckdbPath({cwd, duckdbPath: envValues.DUCKDB_PATH, envValues, homeDir, platform})
+}
+
 export const ensureDuckdbPathDirectory = (duckdbPath: string) => {
   if (duckdbPath === ':memory:') {
     return duckdbPath

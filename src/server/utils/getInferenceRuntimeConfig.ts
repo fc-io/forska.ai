@@ -17,6 +17,7 @@ const inferenceRuntimeShape = arktype({
   judgmentsReadyTargetMultiplier: 'number | string.integer.parse',
   localWorkerUrls: 'string | null | undefined',
   ppSize: 'number | string.integer.parse',
+  providerKind: 'string | null | undefined',
   remoteWorkerUrls: 'string | null | undefined',
   sglangApiMaxBurstRequests: 'number | string.integer.parse',
   sglangApiMaxInflightRequests: 'number | string.integer.parse',
@@ -120,6 +121,7 @@ export const getInferenceRuntimeConfig = ({
       keys: ['FORSKA_RUNTIME_LOCAL_WORKER_URLS', 'NVIDIA_SMI_WORKER_URLS_LOCAL'],
     }),
     ppSize: getFirstConfiguredValue({envValues, fallback: '0', keys: ['FORSKA_RUNTIME_PP_SIZE', 'PP_SIZE']}),
+    providerKind: getFirstConfiguredValue({envValues, fallback: '', keys: ['FORSKA_RUNTIME_PROVIDER_KIND']}),
     remoteWorkerUrls: getFirstConfiguredValue({
       envValues,
       fallback: '',
@@ -166,6 +168,7 @@ export const getInferenceRuntimeConfig = ({
     judgmentsReadyTargetMultiplier: parsed.judgmentsReadyTargetMultiplier,
     localWorkerUrls,
     ppSize: parsed.ppSize,
+    providerKind: getTrimmedValue(parsed.providerKind),
     remoteWorkerUrls,
     sglangApiMaxBurstRequests: parsed.sglangApiMaxBurstRequests,
     sglangApiMaxInflightRequests: parsed.sglangApiMaxInflightRequests,

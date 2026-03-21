@@ -7,7 +7,7 @@ import {
 } from '../server/cron/judgmentsJobs/connectionHealth.ts'
 import {withJudgmentRequest} from '../server/cron/judgmentsJobs/judgmentsRequestRuntime.ts'
 import {invokeStoredProviderModel} from '../server/providers/providerInvocationService.ts'
-import {env} from '../server/utils/env.ts'
+import {inferenceRuntimeConfig} from '../server/utils/getInferenceRuntimeConfig.ts'
 import {rateLimitedLogger} from '../server/utils/rateLimitedLogger.ts'
 import {
   chunkArticleText,
@@ -56,7 +56,9 @@ const truncateForLog = (text: string, maxChars: number): {text: string; original
 }
 
 const getFirstRequestPreviewChars = (): number => {
-  return env.JUDGE_FIRST_REQUEST_PREVIEW_CHARS > 0 ? env.JUDGE_FIRST_REQUEST_PREVIEW_CHARS : 4000
+  return inferenceRuntimeConfig.judgeFirstRequestPreviewChars > 0
+    ? inferenceRuntimeConfig.judgeFirstRequestPreviewChars
+    : 4000
 }
 
 const logFirstJudgeRequest = ({
@@ -84,7 +86,7 @@ const logFirstJudgeRequest = ({
   const previewChars = getFirstRequestPreviewChars()
   const userPromptPreview = truncateForLog(userPrompt, previewChars)
   const systemPromptPreview = truncateForLog(systemPrompt, previewChars)
-  const shouldLogFullPrompt = env.JUDGE_FIRST_REQUEST_LOG_FULL
+  const shouldLogFullPrompt = inferenceRuntimeConfig.judgeFirstRequestLogFull
 
   const messages = {system: systemPromptPreview.text, user: userPromptPreview.text}
 
@@ -462,7 +464,7 @@ const getMaxUserPromptChars = ({
 }
 
 const getChunkParallelLimit = (chunkCount: number): number => {
-  const configured = env.JUDGE_CHUNK_MAX_PARALLEL > 0 ? env.JUDGE_CHUNK_MAX_PARALLEL : 4
+  const configured = inferenceRuntimeConfig.judgeChunkMaxParallel > 0 ? inferenceRuntimeConfig.judgeChunkMaxParallel : 4
   return Math.max(1, Math.min(chunkCount, configured))
 }
 

@@ -1,4 +1,5 @@
 import {type ProviderCatalogEntry} from '../../services/providerCatalog.ts'
+import {getNormalizedProviderModelMetadata} from '../providerModelMetadata.ts'
 import {type ProviderDefinition} from '../providerTypes.ts'
 import {
   getCodexAppDeviceLoginJob,
@@ -25,6 +26,22 @@ export const createCodexAdapter = (catalog: ProviderCatalogEntry): ProviderDefin
     return jobId ? getCodexAppDeviceLoginJob(jobId) : getCurrentCodexAppDeviceLoginJob()
   }
 
+  const listModels = async () => {
+    const models = await listCodexAppModels()
+
+    return models.map((listedModel) => {
+      return {
+        ...listedModel,
+        metadataJson: getNormalizedProviderModelMetadata({
+          listedModel,
+          providerKind: catalog.kind,
+          rawMetadata: listedModel.metadataJson,
+          source: 'provider',
+        }),
+      }
+    })
+  }
+
   const getHealth = async () => {
     const health = await getCodexAppHealthResult()
 
@@ -33,7 +50,7 @@ export const createCodexAdapter = (catalog: ProviderCatalogEntry): ProviderDefin
     }
 
     try {
-      const models = await listCodexAppModels()
+      const models = await listModels()
 
       return getProviderHealthSuccess({
         message: getProviderConnectedMessage({catalog, modelCount: models.length}),
@@ -134,7 +151,7 @@ export const createCodexAdapter = (catalog: ProviderCatalogEntry): ProviderDefin
     },
     kind: catalog.kind,
     listModels: async () => {
-      return listCodexAppModels()
+      return listModels()
     },
     parseUsage: (usage) => {
       return usage

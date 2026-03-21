@@ -5,6 +5,7 @@ import {Elysia} from 'elysia'
 
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {inferenceRuntimeConfig} from '../utils/getInferenceRuntimeConfig.ts'
 import {shouldCurrentServerRunWriterWork} from '../utils/serverRuntimeRole.ts'
 
 type NvidiaSmiSample = {
@@ -113,29 +114,14 @@ const parseNvidiaSmiCsv = (csv: string, ts: Date, instanceId: string): NvidiaSmi
     })
 }
 
-const _normalizeWorkerUrls = (urls: string[] | null | undefined): string[] => {
-  return Array.from(
-    new Set(
-      (urls ?? [])
-        .map((url) => {
-          return url.trim()
-        })
-        .filter((url) => {
-          return url.length > 0
-        }),
-    ),
-  )
-}
-
 // Extract host from worker URL (e.g., http://10.2.101.73:30000 -> 10.2.101.73)
 const extractHostFromUrl = (url: string): string | null => {
   const match = url.match(/https?:\/\/([^:/]+)/)
   return match?.[1] ?? null
 }
 
-// Get SSH jump host from env (optional, for remote HPC access)
 const getSSHJumpHost = (): string | null => {
-  return process.env.NVIDIA_SMI_SSH_JUMP_HOST?.trim() || null
+  return inferenceRuntimeConfig.sshJumpHost
 }
 
 const pollNvidiaSmiForWorker = async (
@@ -195,35 +181,14 @@ const pollNvidiaSmiForWorker = async (
   return parseNvidiaSmiCsv(result.stdout, ts, displayInstanceId)
 }
 
-// Parse worker URLs from NVIDIA_SMI_WORKER_URLS env (remote IPs, not localhost tunnels)
 const getNvidiaSmiWorkerUrls = (): string[] => {
-  const raw = process.env.NVIDIA_SMI_WORKER_URLS?.trim() || ''
-  if (!raw) return []
-  return raw
-    .split(',')
-    .map((url) => {
-      return url.trim()
-    })
-    .filter((url) => {
-      return url.length > 0
-    })
+  return inferenceRuntimeConfig.remoteWorkerUrls
 }
 
-// Parse local worker URLs for display (matching LLM metrics page)
 const getNvidiaSmiWorkerUrlsLocal = (): string[] => {
-  const raw = process.env.NVIDIA_SMI_WORKER_URLS_LOCAL?.trim() || ''
-  if (!raw) return []
-  return raw
-    .split(',')
-    .map((url) => {
-      return url.trim()
-    })
-    .filter((url) => {
-      return url.length > 0
-    })
+  return inferenceRuntimeConfig.displayWorkerUrls
 }
 
-// Build mapping from remote worker URL to local worker URL (1:1 positional mapping)
 const buildRemoteToLocalMapping = (): Map<string, string> => {
   const remoteUrls = getNvidiaSmiWorkerUrls()
   const localUrls = getNvidiaSmiWorkerUrlsLocal()

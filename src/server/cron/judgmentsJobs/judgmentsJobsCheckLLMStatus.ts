@@ -1,5 +1,7 @@
+import {getProviderConnectionConfigFromJson} from '../../providers/providerDbUtils.ts'
+import {getProviderConnectionWorkerState} from '../../providers/providerRuntimeState.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
-import {escapeSqlString, getDateValue, getJsonValue, getSqlLiteral} from '../../services/appQueryHelpers.ts'
+import {escapeSqlString, getDateValue, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
 import {getSGLangMetrics} from './judgmentsJobsAdjustBatchSize/getSGLangMetrics.ts'
 
@@ -61,32 +63,20 @@ const safetyTriggered = (waiting: number, running: number): boolean => {
   return waiting > 4 * thr
 }
 
-const normalizeWorkerUrls = (urls: string[] | null | undefined): string[] => {
-  return Array.from(
-    new Set(
-      (urls ?? [])
-        .map((url) => {
-          return url.trim()
-        })
-        .filter((url) => {
-          return url.length > 0
-        }),
-    ),
-  )
-}
-
 const mergeWorkerLists = (existing: string[], incoming: string[]): string[] => {
   return Array.from(new Set([...existing, ...incoming]))
 }
 
-const getProviderWorkerUrls = (providerConfigJson: unknown): string[] => {
-  const parsed = getJsonValue(providerConfigJson)
-  const workerUrls =
-    typeof parsed === 'object' && parsed !== null && 'workerUrls' in parsed
-      ? ((parsed as {workerUrls?: unknown}).workerUrls as string[] | null | undefined)
-      : []
+const getProviderWorkerUrls = ({
+  providerConfigJson,
+  providerKind,
+}: {
+  providerConfigJson: unknown
+  providerKind: string | null
+}): string[] => {
+  const config = getProviderConnectionConfigFromJson({providerKind, value: providerConfigJson})
 
-  return normalizeWorkerUrls(workerUrls)
+  return getProviderConnectionWorkerState({config, providerKind}).effectiveWorkerUrls
 }
 
 // Generic LLM status ingestion targeting the new llm_status table.
@@ -114,11 +104,15 @@ export const judgmentsJobsCheckLLMStatus = async () => {
       String(r.providerKind ?? '')
         .trim()
         .toLowerCase() === 'sglang'
-      && (!!r.baseURL || getProviderWorkerUrls(r.providerConfigJson).length > 0)
+      && (!!r.baseURL
+        || getProviderWorkerUrls({providerConfigJson: r.providerConfigJson, providerKind: r.providerKind}).length > 0)
     )
   })
   const baseUrlToConfig = validConfigs.reduce((acc, cfg) => {
-    const workerUrls = getProviderWorkerUrls(cfg.providerConfigJson)
+    const workerUrls = getProviderWorkerUrls({
+      providerConfigJson: cfg.providerConfigJson,
+      providerKind: cfg.providerKind,
+    })
     const baseURL = String(cfg.baseURL ?? (workerUrls[0] ? `${workerUrls[0].replace(/\/+$/, '')}/v1` : ''))
     const existing = acc.get(baseURL)
     const mergedWorkers = existing ? mergeWorkerLists(existing.workerUrls, workerUrls) : workerUrls

@@ -158,7 +158,7 @@ export const getProviderConnectionForStoredModel = async (
   const mapped = getProviderConnectionRecordFromRow(row)
   const secretRef = mapped.secretRef ?? getLegacySecretRef(row.legacyApiKeyVariable)
   const config =
-    mapped.config.workerUrls.length > 0 ? mapped.config : getLegacyProviderConnectionConfig(row.legacyWorkerUrls)
+    mapped.config.manualWorkerUrls.length > 0 ? mapped.config : getLegacyProviderConnectionConfig(row.legacyWorkerUrls)
 
   return {...mapped, config, hasSecret: Boolean(secretRef), secretRef}
 }

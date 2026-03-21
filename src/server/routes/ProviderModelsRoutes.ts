@@ -1,6 +1,7 @@
 import {Elysia, t} from 'elysia'
 
 import {getProviderConnection} from '../providers/providerConnectionRepository.ts'
+import {getManualProviderModelMetadata} from '../providers/providerModelMetadata.ts'
 import {createProviderModel, updateProviderModel} from '../providers/providerModelRepository.ts'
 import {syncProviderConnectionModels} from '../providers/providerSyncService.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
@@ -50,6 +51,7 @@ export const providerModelsRoutes = new Elysia()
       }
 
       const variant = getTrimmedValue(body.variant)
+      const displayName = getTrimmedValue(body.displayName) ?? remoteModelId
       const [existing] = await getAppDatabaseService().queryJson<{id: string}>(`
         SELECT id
         FROM app.model
@@ -65,8 +67,15 @@ export const providerModelsRoutes = new Elysia()
 
       const model = await createProviderModel({
         connection,
-        displayName: getTrimmedValue(body.displayName) ?? remoteModelId,
-        metadataJson: null,
+        displayName,
+        metadataJson: getManualProviderModelMetadata({
+          displayName,
+          modelName: remoteModelId,
+          providerKind: connection.providerKind,
+          remoteModelId,
+          variant,
+          version: variant,
+        }),
         modelName: remoteModelId,
         remoteModelId,
         source: 'manual',

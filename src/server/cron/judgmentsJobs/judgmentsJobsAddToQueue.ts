@@ -1,6 +1,6 @@
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
-import {env} from '../../utils/env.ts'
+import {inferenceRuntimeConfig} from '../../utils/getInferenceRuntimeConfig.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {getCodexMaxInflight} from './getCodexMaxInflight.ts'
 import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
@@ -22,11 +22,11 @@ const addToQueueLogger = createRateLimitedLogger({windowMs: 30_000})
 
 const getCodexQueueTargets = (runningJobCount: number) => {
   const maxInflight = getCodexMaxInflight()
-  const readyTargetMultiplier = Math.max(1, env.JUDGMENTS_READY_TARGET_MULTIPLIER)
+  const readyTargetMultiplier = Math.max(1, inferenceRuntimeConfig.judgmentsReadyTargetMultiplier)
   const readyTargetTotal = maxInflight * readyTargetMultiplier
   const normalizedJobCount = Math.max(1, runningJobCount)
   const readyTargetPerJob = Math.max(1, Math.ceil(readyTargetTotal / normalizedJobCount))
-  const envMaxBatch = Math.max(1, env.JUDGMENTS_ADD_TO_QUEUE_MAX_BATCH_SIZE)
+  const envMaxBatch = Math.max(1, inferenceRuntimeConfig.judgmentsAddToQueueMaxBatchSize)
   const addToQueueMaxBatchSize = Math.min(envMaxBatch, 2000)
   return {readyTargetPerJob, addToQueueMaxBatchSize}
 }

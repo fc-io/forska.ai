@@ -1,6 +1,8 @@
-# forska.ai - AI Agents for systematic reviews in healthcare
+# forska.ai - AI Agents for systematic reviews in healthcare
 
-Local-first deep research agent for systematic reviews.
+Local-first deep research app for systematic reviews.
+
+Core product config lives in the Forska UI and DuckDB. Env stays for startup wiring, machine-local paths, background-job toggles, and secrets.
 
 Goal: standalone single-user app (your own computer). No admin role. No hosted multi-tenant web app.
 
@@ -29,9 +31,9 @@ We also plan to release all the code for the system as open source.
 
 ## Resource Usage
 
-The system will store article metadata from supported import sources and a large amount of open access pdfs. These articles will then be connected to a client facing api and a app server on the same server. These will in turn be connected to our hpc resources where we do inference.
+The app stores article metadata and cached PDFs locally in DuckDB. The local API/app can call local/manual providers or tunnel to HPC-hosted inference.
 
-The system used docker with postgres, aws cli and bun.
+Current runtime: Bun, Elysia, Solid, DuckDB. Legacy Docker/Postgres docs/scripts remain only for old repair/import flows.
 
 Out plan is that the system will be efficiently run on a:
 ssc.large.highmem, 4 vCPU, 16 GB RAM with 4-8 TB of additional storage

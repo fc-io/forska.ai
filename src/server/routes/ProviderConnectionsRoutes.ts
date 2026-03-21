@@ -16,6 +16,7 @@ import {
 } from '../providers/providerConnectionRepository.ts'
 import {testProviderConnectionHealth} from '../providers/providerHealthService.ts'
 import {requireProviderRegistryEntry} from '../providers/providerRegistry.ts'
+import {getProviderConnectionWorkerState, getProviderRuntimeSummary} from '../providers/providerRuntimeState.ts'
 import {deleteProviderSecret, storeProviderSecret} from '../providers/providerSecretStore.ts'
 import {type ProviderAuthLifecyclePayload} from '../providers/providerTypes.ts'
 import {
@@ -32,14 +33,40 @@ import {
   getTrimmedValue,
 } from './providerRoutes/providerRoutesShared.ts'
 
+const getSubmittedManualWorkerUrls = ({
+  manualWorkerUrls,
+  workerUrls,
+}: {
+  manualWorkerUrls?: string[]
+  workerUrls?: string[]
+}) => {
+  return manualWorkerUrls ?? workerUrls
+}
+
+const getPublicProviderConnectionPayload = <
+  T extends {
+    config: {manualWorkerUrls: string[]; workerUrlMode: 'manual' | 'runtime'}
+    providerKind: string
+    secretRef: string | null
+  },
+>(
+  connection: T,
+) => {
+  return {
+    ...getPublicProviderConnection(connection),
+    workerState: getProviderConnectionWorkerState({config: connection.config, providerKind: connection.providerKind}),
+  }
+}
+
 const getProviderConnectionsPayload = async () => {
   const connections = await listProviderConnections()
 
   return {
     catalog: getProviderCatalog(),
     connections: connections.map((connection) => {
-      return getPublicProviderConnection(connection)
+      return getPublicProviderConnectionPayload(connection)
     }),
+    runtime: getProviderRuntimeSummary(),
   }
 }
 
@@ -120,7 +147,11 @@ export const providerConnectionsRoutes = new Elysia()
       const connection = await createProviderConnection({
         authMode: getProviderConnectionAuthMode({baseURL, providerKind, secretRef: null}),
         baseURL,
-        config: getProviderConnectionConfig(body.workerUrls),
+        config: getProviderConnectionConfig({
+          manualWorkerUrls: getSubmittedManualWorkerUrls(body),
+          providerKind,
+          workerUrlMode: getTrimmedValue(body.workerUrlMode),
+        }),
         label,
         providerKind,
         secretRef: null,
@@ -130,7 +161,11 @@ export const providerConnectionsRoutes = new Elysia()
         ? await updateProviderConnection({
             authMode: getProviderConnectionAuthMode({baseURL, providerKind, secretRef}),
             baseURL,
-            config: getProviderConnectionConfig(body.workerUrls),
+            config: getProviderConnectionConfig({
+              manualWorkerUrls: getSubmittedManualWorkerUrls(body),
+              providerKind,
+              workerUrlMode: getTrimmedValue(body.workerUrlMode),
+            }),
             enabled: connection.enabled,
             id: connection.id,
             label,
@@ -138,15 +173,17 @@ export const providerConnectionsRoutes = new Elysia()
           })
         : connection
 
-      return {data: {connection: getPublicProviderConnection({...savedConnection, models: []})}, error: null}
+      return {data: {connection: getPublicProviderConnectionPayload({...savedConnection, models: []})}, error: null}
     },
     {
       body: t.Object({
         apiKey: t.Optional(t.String()),
         baseURL: t.Optional(t.Union([t.String(), t.Null()])),
         label: t.Optional(t.String()),
+        manualWorkerUrls: t.Optional(t.Array(t.String())),
         providerKind: t.String(),
         workerUrls: t.Optional(t.Array(t.String())),
+        workerUrlMode: t.Optional(t.Union([t.Literal('manual'), t.Literal('runtime')])),
       }),
     },
   )
@@ -170,7 +207,11 @@ export const providerConnectionsRoutes = new Elysia()
         label: body.label !== undefined ? body.label : existing.label,
         providerKind: existing.providerKind,
       })
-      const nextConfig = getProviderConnectionConfig(body.workerUrls ?? existing.config.workerUrls)
+      const nextConfig = getProviderConnectionConfig({
+        manualWorkerUrls: getSubmittedManualWorkerUrls(body) ?? existing.config.manualWorkerUrls,
+        providerKind: existing.providerKind,
+        workerUrlMode: getTrimmedValue(body.workerUrlMode) ?? existing.config.workerUrlMode,
+      })
       const clearedSecretRef = body.clearSecret ? null : existing.secretRef
 
       if (body.clearSecret && existing.secretRef) {
@@ -190,7 +231,7 @@ export const providerConnectionsRoutes = new Elysia()
         secretRef,
       })
 
-      return {data: {connection: getPublicProviderConnection(updated)}, error: null}
+      return {data: {connection: getPublicProviderConnectionPayload(updated)}, error: null}
     },
     {
       body: t.Object({
@@ -199,7 +240,9 @@ export const providerConnectionsRoutes = new Elysia()
         clearSecret: t.Optional(t.Boolean()),
         enabled: t.Optional(t.Boolean()),
         label: t.Optional(t.String()),
+        manualWorkerUrls: t.Optional(t.Array(t.String())),
         workerUrls: t.Optional(t.Array(t.String())),
+        workerUrlMode: t.Optional(t.Union([t.Literal('manual'), t.Literal('runtime')])),
       }),
       params: t.Object({id: t.String()}),
     },

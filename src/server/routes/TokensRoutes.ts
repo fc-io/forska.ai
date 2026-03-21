@@ -2,7 +2,7 @@ import {Elysia, t} from 'elysia'
 
 import {getDateValue} from '../services/appQueryHelpers.ts'
 import {getTokenUseQueryService} from '../services/tokenUseQueryService.ts'
-import {env} from '../utils/env.ts'
+import {inferenceRuntimeConfig} from '../utils/getInferenceRuntimeConfig.ts'
 import {tokensRoutesGetFailedRequestById} from './tokensRoutes/tokensRoutesGetFailedRequestById.ts'
 import {tokensRoutesGetFailedRequests} from './tokensRoutes/tokensRoutesGetFailedRequests.ts'
 import {tokensRoutesGetTimeline} from './tokensRoutes/tokensRoutesGetTimeline.ts'
@@ -17,13 +17,13 @@ export const tokensRoutes = new Elysia()
       try {
         const result = await getTokenUseQueryService().insertTokenUse({
           judgment_job_id: body.judgmentsJobId ?? null,
-          gpu_nnodes: env.GPU_NNODES,
-          gpu_gpus_per_node: env.GPU_GPUS_PER_NODE,
-          gpu_total_gpus: env.GPU_TOTAL_GPUS,
-          tp_size: env.TP_SIZE,
-          dp_size: env.DP_SIZE,
-          gpu_shape: env.GPU_SHAPE ?? null,
-          sglang_max_running_requests: env.SGLANG_MAX_RUNNING_REQUESTS,
+          gpu_nnodes: inferenceRuntimeConfig.gpuNnodes,
+          gpu_gpus_per_node: inferenceRuntimeConfig.gpuGpusPerNode,
+          gpu_total_gpus: inferenceRuntimeConfig.gpuTotalGpus,
+          tp_size: inferenceRuntimeConfig.tpSize,
+          dp_size: inferenceRuntimeConfig.dpSize,
+          gpu_shape: inferenceRuntimeConfig.gpuShape,
+          sglang_max_running_requests: inferenceRuntimeConfig.sglangMaxRunningRequests,
           sglang_model: body.sglangModel ?? null,
           requests: body.requests,
           total_prompt_tokens: body.totalPromptTokens,

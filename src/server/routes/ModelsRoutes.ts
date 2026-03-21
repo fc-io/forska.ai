@@ -6,6 +6,7 @@ import {
   getFirstEnabledProviderConnection,
   listProviderConnections,
 } from '../providers/providerConnectionRepository.ts'
+import {getManualProviderModelMetadata} from '../providers/providerModelMetadata.ts'
 import {createProviderModel, listSelectableProviderModels} from '../providers/providerModelRepository.ts'
 import {requireProviderRegistryEntry} from '../providers/providerRegistry.ts'
 import {
@@ -121,7 +122,7 @@ const getCodexConnectionForEnsure = async () => {
     : createProviderConnection({
         authMode: 'codex-cli',
         baseURL: null,
-        config: {workerUrls: []},
+        config: {manualWorkerUrls: [], workerUrlMode: 'manual'},
         label: 'Codex',
         providerKind: 'codex',
         secretRef: null,
@@ -187,6 +188,7 @@ export const modelsRoutes = new Elysia()
       }
 
       const version = getTrimmedValue(body.version)
+      const displayName = normalizeDisplayName(body.name)
       const connection = await getCodexConnectionForEnsure()
       const [existing] = await getAppDatabaseService().queryJson<{id: string}>(`
         SELECT id
@@ -203,8 +205,15 @@ export const modelsRoutes = new Elysia()
 
       const model = await createProviderModel({
         connection,
-        displayName: normalizeDisplayName(body.name),
-        metadataJson: null,
+        displayName,
+        metadataJson: getManualProviderModelMetadata({
+          displayName,
+          modelName,
+          providerKind: connection.providerKind,
+          remoteModelId: modelName,
+          variant: version,
+          version,
+        }),
         modelName,
         remoteModelId: modelName,
         source: 'manual',

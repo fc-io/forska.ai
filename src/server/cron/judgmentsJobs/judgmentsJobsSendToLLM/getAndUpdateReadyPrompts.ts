@@ -1,3 +1,5 @@
+import {getProviderConnectionConfigFromJson} from '../../../providers/providerDbUtils.ts'
+import {getProviderConnectionWorkerState} from '../../../providers/providerRuntimeState.ts'
 import {getAppDatabaseService} from '../../../services/appDatabaseService.ts'
 import {escapeSqlString, getJsonValue, getQuotedStringList, getSqlLiteral} from '../../../services/appQueryHelpers.ts'
 
@@ -38,31 +40,20 @@ const getCodexPlaceholderBaseUrl = (): string => {
 
 const getModelWorkerUrls = ({
   legacyWorkerUrls,
+  providerKind,
   providerConfigJson,
 }: {
   legacyWorkerUrls: unknown
+  providerKind: string
   providerConfigJson: unknown
 }): string[] => {
-  const providerConfig = getJsonValue(providerConfigJson)
-  const providerWorkerUrls =
-    typeof providerConfig === 'object' && providerConfig !== null && 'workerUrls' in providerConfig
-      ? (providerConfig as {workerUrls?: unknown}).workerUrls
-      : null
-  const candidateUrls = Array.isArray(providerWorkerUrls)
-    ? providerWorkerUrls
-    : (getJsonValue(legacyWorkerUrls) as string[] | null)
+  const config = getProviderConnectionConfigFromJson({providerKind, value: providerConfigJson})
 
-  return Array.from(
-    new Set(
-      (candidateUrls ?? [])
-        .map((url) => {
-          return String(url).trim()
-        })
-        .filter((url) => {
-          return url.length > 0
-        }),
-    ),
-  )
+  return getProviderConnectionWorkerState({
+    config,
+    legacyWorkerUrls: getJsonValue(legacyWorkerUrls) as string[] | null,
+    providerKind,
+  }).effectiveWorkerUrls
 }
 
 const processReadyRows = async (
@@ -167,6 +158,7 @@ const processReadyRows = async (
       const provider = normalizeProvider(config.modelProvider)
       const workerUrls = getModelWorkerUrls({
         legacyWorkerUrls: config.legacyWorkerUrls,
+        providerKind: provider,
         providerConfigJson: config.providerConfigJson,
       })
       const fallbackBaseUrl = workerUrls[0] ? `${String(workerUrls[0]).replace(/\/+$/, '')}/v1` : null

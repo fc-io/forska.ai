@@ -22,12 +22,14 @@ curl http://localhost:30001/v1/models
 Optional local app flow
 
 ```bash
-# Local API server using the Alvis tunnel/runtime metadata
+# Local API server using the Alvis tunnel plus launcher-discovered runtime metadata
 bun run alvis:dev:server
 
 # Local app
 bun run dev:app
 ```
+
+Do not copy worker URLs or topology into `.env.local`. Those are short-lived launcher/runtime values.
 
 Use `--force` if you want a fresh Slurm job instead of reusing an existing one.
 
@@ -135,14 +137,14 @@ sbatch --nodes=1 --gpus-per-node=A100fat:1 --export=ALL,TP_SIZE=1,DP_SIZE=1 fors
 sbatch --export=ALL,SGLANG_ONE_WORKER_PER_GPU=1 forska-alvis.sbatch
 ```
 
-Default Alvis shape:
+Default Alvis sbatch runtime metadata:
 
-- `#SBATCH --nodes=1`
-- `#SBATCH --gpus-per-node=A100fat:2`
-- `SGLANG_MODEL=Qwen/Qwen3.5-35B-A3B`
-- `SGLANG_ONE_WORKER_PER_GPU=0`
-- `TP_SIZE=2`
-- `DP_SIZE=1`
+- nodes: `1`
+- gpus per node: `A100fat:2`
+- model: `Qwen/Qwen3.5-35B-A3B`
+- one worker per GPU: `0`
+- TP size: `2`
+- DP size: `1`
 
 Models download directly from Hugging Face into `$HF_HOME` on first use.
 
@@ -171,6 +173,7 @@ curl http://localhost:30001/v1/chat/completions \
 Optional local app flow:
 
 - `bun run alvis:dev:server` starts the local API server using the Alvis tunnel plus runtime metadata from the job log
+- configure the provider/model in Forska at `/admin/models` to point at the local tunnel/runtime
 - `bun run dev:app` starts the local app against that local API server
 
 ## Related Docs

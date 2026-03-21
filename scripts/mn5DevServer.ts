@@ -16,6 +16,8 @@
 
 import {$, spawn} from 'bun'
 
+import {getForskaRuntimeEnv} from './getForskaRuntimeEnv.ts'
+
 const MN5_ROOT = '/gpfs/projects/ehpc482/dev'
 const SSH_HOST = 'alog' // ACC login node for tunneling
 const GLOG = 'glog' // General login for squeue
@@ -571,25 +573,21 @@ const startDevServer = async (config: MN5Config): Promise<void> => {
 
   const env = {
     ...process.env,
-    // Enable server-side judging when running with MN5
     RUN_SERVER_JUDGING: 'true',
-    // Router mode flag
-    SGLANG_ENABLE_ROUTER: config.SGLANG_ENABLE_ROUTER,
-    // Pass GPU/topology info for the admin UI
-    GPU_TOTAL_GPUS: String(Number(config.NNODES) * Number(config.GPUS_PER_NODE)),
-    GPU_NNODES: config.NNODES,
-    GPU_GPUS_PER_NODE: config.GPUS_PER_NODE,
-    TP_SIZE: config.TP_SIZE,
-    DP_SIZE: config.DP_SIZE,
-    SGLANG_MAX_RUNNING_REQUESTS: config.SGLANG_MAX_RUNNING_REQUESTS,
-    SGLANG_API_MAX_INFLIGHT_REQUESTS: config.SGLANG_API_MAX_INFLIGHT_REQUESTS,
-    SGLANG_API_MAX_BURST_REQUESTS: config.SGLANG_API_MAX_BURST_REQUESTS,
     BUN_CONFIG_MAX_HTTP_REQUESTS: '2048',
-    // For nvidia-smi polling: use the remote worker URLs (actual IPs, not localhost tunnels)
-    // Also pass local URLs for display purposes (mapping remote -> local)
-    NVIDIA_SMI_WORKER_URLS: config.WORKER_URLS,
-    NVIDIA_SMI_WORKER_URLS_LOCAL: config.WORKER_URLS_LOCAL,
-    NVIDIA_SMI_SSH_JUMP_HOST: SSH_HOST,
+    ...getForskaRuntimeEnv({
+      dpSize: config.DP_SIZE,
+      gpuGpusPerNode: config.GPUS_PER_NODE,
+      gpuNnodes: config.NNODES,
+      localWorkerUrls: config.WORKER_URLS_LOCAL,
+      remoteWorkerUrls: config.WORKER_URLS,
+      providerKind: 'sglang',
+      sglangApiMaxBurstRequests: config.SGLANG_API_MAX_BURST_REQUESTS,
+      sglangApiMaxInflightRequests: config.SGLANG_API_MAX_INFLIGHT_REQUESTS,
+      sglangMaxRunningRequests: config.SGLANG_MAX_RUNNING_REQUESTS,
+      sshJumpHost: SSH_HOST,
+      tpSize: config.TP_SIZE,
+    }),
   }
 
   // Start the server (blocking, no watch mode for stability during long inference runs)

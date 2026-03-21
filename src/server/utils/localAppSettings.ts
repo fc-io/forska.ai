@@ -1,7 +1,7 @@
 import {existsSync, mkdirSync, readFileSync, writeFileSync} from 'fs'
 import {dirname, join} from 'path'
 
-import {getDuckdbPath} from './getDuckdbPath.ts'
+import {getConfiguredDuckdbPath, getDuckdbPath} from './getDuckdbPath.ts'
 
 export type LocalAppSettings = {codexBin: string | null; duckdbBin: string | null}
 
@@ -14,7 +14,7 @@ const getNullableTrimmedValue = (value: string | null | undefined): string | nul
 }
 
 const getLocalAppSettingsDatabasePath = (): string => {
-  const configuredPath = getDuckdbPath({duckdbPath: process.env.DUCKDB_PATH})
+  const configuredPath = getConfiguredDuckdbPath()
 
   return configuredPath === ':memory:' ? getDuckdbPath() : configuredPath
 }

@@ -1,7 +1,8 @@
 import {judgeSinglePrompt} from '../../../../agent/judge.ts'
 import type {ArticleRecord, PublicationStatus} from '../../../../db/schemaTypes.ts'
+import {getProviderModelMetadataContextLength} from '../../../providers/providerModelMetadata.ts'
 import {getAppDatabaseService} from '../../../services/appDatabaseService.ts'
-import {escapeSqlString, getJsonValue, getSqlLiteral} from '../../../services/appQueryHelpers.ts'
+import {escapeSqlString, getSqlLiteral} from '../../../services/appQueryHelpers.ts'
 import {getAppQueryService} from '../../../services/getAppQueryService.ts'
 import {ensureFullText} from '../../../utils/ensureFullText.ts'
 import {processFulltextForLLM} from '../../../utils/fulltextProcessing.ts'
@@ -38,58 +39,8 @@ const processPromptLogger = createRateLimitedLogger({windowMs: 30_000})
 
 const DEFAULT_MODEL_CONTEXT = 32768
 
-const modelContextMetadataKeys = [
-  'contextLength',
-  'context_length',
-  'contextWindow',
-  'context_window',
-  'maxInputTokens',
-  'max_input_tokens',
-  'inputTokenLimit',
-  'input_token_limit',
-  'maxSequenceLength',
-  'max_sequence_length',
-  'tokenLimit',
-  'token_limit',
-] as const
-
-const getPositiveInteger = (value: unknown): number | null => {
-  const numericValue = typeof value === 'number' ? value : Number(value)
-
-  return Number.isFinite(numericValue) && numericValue > 0 ? Math.trunc(numericValue) : null
-}
-
-const getJsonRecord = (value: unknown): Record<string, unknown> | null => {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null
-}
-
-const getContextLengthFromDirectMetadata = (record: Record<string, unknown>): number | null => {
-  return modelContextMetadataKeys.reduce<number | null>((resolved, key) => {
-    return resolved ?? getPositiveInteger(record[key])
-  }, null)
-}
-
-const getContextLengthFromMetadata = (value: unknown): number | null => {
-  const parsedValue = getJsonValue(value)
-  const arrayValue = Array.isArray(parsedValue) ? parsedValue : null
-  const recordValue = getJsonRecord(parsedValue)
-
-  return arrayValue
-    ? arrayValue.reduce<number | null>((resolved, entry) => {
-        return resolved ?? getContextLengthFromMetadata(entry)
-      }, null)
-    : recordValue
-      ? (getContextLengthFromDirectMetadata(recordValue)
-        ?? Object.values(recordValue).reduce<number | null>((resolved, entry) => {
-          return resolved ?? getContextLengthFromMetadata(entry)
-        }, null))
-      : getPositiveInteger(parsedValue)
-}
-
 const getModelContext = (metadataJson: unknown): number => {
-  return getContextLengthFromMetadata(metadataJson) ?? DEFAULT_MODEL_CONTEXT
+  return getProviderModelMetadataContextLength(metadataJson) ?? DEFAULT_MODEL_CONTEXT
 }
 
 const processSinglePrompt = async (
@@ -191,12 +142,12 @@ export const processPromptWithLLM = async (promptToProcess: PromptToProcess): Pr
 
   // Handle fulltext requirement for projects with useFulltext=true or useFulltextNoImages=true
   // Create a mutable article object that we can update with fulltext if needed
-  let articleWithFulltext: ArticleRecord = {
+  let articleWithFulltext = {
     ...article,
     createdAt: article.createdAt ?? new Date(0),
     updatedAt: article.updatedAt ?? new Date(0),
     publicationStatus: article.publicationStatus as PublicationStatus | null,
-  }
+  } as ArticleRecord
   const needsFulltext = promptToProcess.useFulltext || promptToProcess.useFulltextNoImages
   if (needsFulltext) {
     const result = await ensureFullText(articleWithFulltext, article.id)

@@ -5,12 +5,14 @@ This guide covers deploying SGLang to MareNostrum 5 (MN5) at Barcelona Supercomp
 ## Prerequisites
 
 ### Local Machine
+
 - Docker (for pulling/saving container images)
 - HuggingFace CLI (`pip install huggingface-hub[cli]`)
 - SSH configuration for BSC (see below)
 - ~60GB disk space for model + container
 
 ### MN5 Access
+
 - Active allocation on MN5 (project: `ehpc482`)
 - SSH keys configured for `alog` (compute) and `tlog` (transfer)
 
@@ -206,12 +208,13 @@ To run a different model:
 
 1. **Download locally**: `huggingface-cli download <model-id> --local-dir ./models/<model-name>`
 2. **Transfer to MN5**: `rsync -avzP ./models/<model-name>/ tlog:/gpfs/projects/ehpc482/dev/hf_cache/models--<org>--<model-name>/`
-3. **Update sbatch**: Change `SGLANG_MODEL` in `forska-mn5-sglang.sbatch`
+3. **Update sbatch**: Change the model/runtime settings in `forska-mn5-sglang.sbatch` (this is launcher metadata, not local app env)
 4. **Resubmit job**
 
 ### Model Path Format
 
 HuggingFace cache uses this naming convention:
+
 - Model ID: `Qwen/Qwen3-30B-A3B-Instruct-2507`
 - Cache path: `hf_cache/models--Qwen--Qwen3-30B-A3B-Instruct-2507/`
 
@@ -308,23 +311,24 @@ autossh -M 0 -N -L 30000:<compute-node>:30000 alog
 
 ## Integration with forska.ai
 
-Once the tunnel is established, update your local environment:
+Once the tunnel is established, start the local API server with runtime metadata if needed:
 
 ```bash
-# .env.local
-VITE_LLM_SERVER_URL=http://localhost:30000/v1
+bun run mn5:dev:server
 ```
 
-The existing forska.ai API server will route inference requests through the tunnel to MN5.
+Then configure the provider/model in Forska at `/admin/models` to use the tunnel endpoint, for example `http://localhost:30000/v1`.
+
+Do not add a global inference URL to `.env.local` for normal app use.
 
 ## Quick Reference
 
-| Task | Command |
-|------|---------|
-| Submit job | `ssh alog "cd /gpfs/projects/ehpc482/dev && sbatch --export=ALL forska-mn5-sglang.sbatch"` |
-| Check status | `ssh alog "squeue -u hrev337517"` |
-| Cancel job | `ssh alog "scancel <JOBID>"` |
-| View logs | `ssh alog "tail -f /gpfs/projects/ehpc482/dev/logs/<JOBID>/*.log"` |
-| Get node name | `ssh alog "squeue -u hrev337517 -h -o '%N'"` |
-| Establish tunnel | `ssh -N -L 30000:<node>:30000 alog` |
-| Test endpoint | `curl http://localhost:30000/v1/models` |
+| Task             | Command                                                                                    |
+| ---------------- | ------------------------------------------------------------------------------------------ |
+| Submit job       | `ssh alog "cd /gpfs/projects/ehpc482/dev && sbatch --export=ALL forska-mn5-sglang.sbatch"` |
+| Check status     | `ssh alog "squeue -u hrev337517"`                                                          |
+| Cancel job       | `ssh alog "scancel <JOBID>"`                                                               |
+| View logs        | `ssh alog "tail -f /gpfs/projects/ehpc482/dev/logs/<JOBID>/*.log"`                         |
+| Get node name    | `ssh alog "squeue -u hrev337517 -h -o '%N'"`                                               |
+| Establish tunnel | `ssh -N -L 30000:<node>:30000 alog`                                                        |
+| Test endpoint    | `curl http://localhost:30000/v1/models`                                                    |

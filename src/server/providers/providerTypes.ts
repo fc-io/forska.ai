@@ -9,7 +9,10 @@ export type ProviderTransportFamily =
   | 'openai-chat'
   | 'openai-responses'
 
-export type ProviderConnectionConfig = {workerUrls: string[]}
+export type ProviderWorkerUrlMode = 'manual' | 'runtime'
+export type ProviderWorkerSource = 'legacy' | 'manual' | 'none' | 'runtime'
+
+export type ProviderConnectionConfig = {manualWorkerUrls: string[]; workerUrlMode: ProviderWorkerUrlMode}
 
 export type ProviderConnectionRecord = {
   authMode: string | null

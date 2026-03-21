@@ -21,28 +21,6 @@ const envShape = arktype({
   RUN_SERVER_FULL_TEXT_CONVERSION_CRON: arktype('"true" | "false" | boolean').pipe((v) => {
     return typeof v === 'string' ? v.toLowerCase() === 'true' : v
   }),
-  GPU_NNODES: 'number | string.integer.parse',
-  GPU_GPUS_PER_NODE: 'number | string.integer.parse',
-  GPU_TOTAL_GPUS: 'number | string.integer.parse',
-  TP_SIZE: 'number | string.integer.parse',
-  PP_SIZE: 'number | string.integer.parse',
-  DP_SIZE: 'number | string.integer.parse',
-  GPU_SHAPE: 'string | null | undefined',
-  // Per SGLang worker/engine
-  SGLANG_MAX_RUNNING_REQUESTS: 'number | string.integer.parse',
-  // Per worker; 0 => use SGLANG_MAX_RUNNING_REQUESTS
-  SGLANG_API_MAX_INFLIGHT_REQUESTS: 'number | string.integer.parse',
-  // Per worker; 0 => use SGLANG_MAX_RUNNING_REQUESTS
-  SGLANG_API_MAX_BURST_REQUESTS: 'number | string.integer.parse',
-  // Judgments cron policy (not SGLang server config)
-  JUDGMENTS_READY_TARGET_MULTIPLIER: 'number | string.integer.parse',
-  JUDGMENTS_ADD_TO_QUEUE_MAX_BATCH_SIZE: 'number | string.integer.parse',
-  CODEX_MAX_INFLIGHT: 'number | string.integer.parse',
-  JUDGE_FIRST_REQUEST_PREVIEW_CHARS: 'number | string.integer.parse',
-  JUDGE_FIRST_REQUEST_LOG_FULL: arktype('"true" | "false" | boolean').pipe((v) => {
-    return typeof v === 'string' ? v.toLowerCase() === 'true' : v
-  }),
-  JUDGE_CHUNK_MAX_PARALLEL: 'number | string.integer.parse',
   DOCLING_SERVE_URL: 'string | null | undefined',
   FULL_TEXT_CONVERSION_BATCH_SIZE: 'number | string.integer.parse | null | undefined',
   FULL_TEXT_CONVERSION_CONCURRENCY: 'number | string.integer.parse | null | undefined',
@@ -95,51 +73,6 @@ const loadEnv = (): typeof envShape.infer => {
   // Default to false when not provided (prevents accidental background conversion)
   if (merged.RUN_SERVER_FULL_TEXT_CONVERSION_CRON == null || merged.RUN_SERVER_FULL_TEXT_CONVERSION_CRON === '') {
     ;(merged as Record<string, string>).RUN_SERVER_FULL_TEXT_CONVERSION_CRON = 'false'
-  }
-  // Ensure numeric GPU/env defaults exist to satisfy shape; use 0 when not provided
-  const numericKeys = [
-    'GPU_NNODES',
-    'GPU_GPUS_PER_NODE',
-    'GPU_TOTAL_GPUS',
-    'TP_SIZE',
-    'PP_SIZE',
-    'DP_SIZE',
-    'SGLANG_API_MAX_INFLIGHT_REQUESTS',
-    'SGLANG_API_MAX_BURST_REQUESTS',
-    'CODEX_MAX_INFLIGHT',
-    'JUDGE_FIRST_REQUEST_PREVIEW_CHARS',
-    'JUDGE_CHUNK_MAX_PARALLEL',
-  ]
-  numericKeys.forEach((k) => {
-    if (merged[k] == null || (merged as Record<string, string>)[k] === '') {
-      ;(merged as Record<string, string>)[k] = '0'
-    }
-  })
-  // Provide default for SGLANG_MAX_RUNNING_REQUESTS when not provided
-  if (
-    merged.SGLANG_MAX_RUNNING_REQUESTS == null
-    || (merged as Record<string, string>).SGLANG_MAX_RUNNING_REQUESTS === ''
-  ) {
-    ;(merged as Record<string, string>).SGLANG_MAX_RUNNING_REQUESTS = '0'
-  }
-  if (
-    merged.JUDGMENTS_READY_TARGET_MULTIPLIER == null
-    || (merged as Record<string, string>).JUDGMENTS_READY_TARGET_MULTIPLIER === ''
-  ) {
-    ;(merged as Record<string, string>).JUDGMENTS_READY_TARGET_MULTIPLIER = '10'
-  }
-  if (
-    merged.JUDGMENTS_ADD_TO_QUEUE_MAX_BATCH_SIZE == null
-    || (merged as Record<string, string>).JUDGMENTS_ADD_TO_QUEUE_MAX_BATCH_SIZE === ''
-  ) {
-    ;(merged as Record<string, string>).JUDGMENTS_ADD_TO_QUEUE_MAX_BATCH_SIZE = '10000'
-  }
-  if (merged.JUDGE_FIRST_REQUEST_LOG_FULL == null || merged.JUDGE_FIRST_REQUEST_LOG_FULL === '') {
-    ;(merged as Record<string, string>).JUDGE_FIRST_REQUEST_LOG_FULL = 'false'
-  }
-  // Provide a stable default when GPU_SHAPE is not provided
-  if (merged.GPU_SHAPE == null || String(merged.GPU_SHAPE).trim() === '') {
-    ;(merged as Record<string, string>).GPU_SHAPE = 'not set'
   }
   // Provide a stable default when DOCLING_SERVE_URL is not provided
   if (merged.DOCLING_SERVE_URL == null || String(merged.DOCLING_SERVE_URL).trim() === '') {

@@ -15,7 +15,7 @@ const state = {
   createProviderConnection: mock(async (input: unknown) => {
     return {
       ...(input as object),
-      config: {workerUrls: []},
+      config: {manualWorkerUrls: [], workerUrlMode: 'manual'},
       createdAt: null,
       enabled: true,
       hasSecret: false,
@@ -44,7 +44,7 @@ const state = {
       : {
           authMode: 'api-key',
           baseURL: 'https://api.example.com/v1',
-          config: {workerUrls: []},
+          config: {manualWorkerUrls: [], workerUrlMode: 'manual'},
           createdAt: null,
           enabled: true,
           hasSecret: true,
@@ -62,7 +62,7 @@ const state = {
       {
         authMode: 'api-key',
         baseURL: 'https://api.example.com/v1',
-        config: {workerUrls: []},
+        config: {manualWorkerUrls: [], workerUrlMode: 'manual'},
         createdAt: null,
         enabled: true,
         hasSecret: true,
@@ -82,7 +82,7 @@ const state = {
       connection: {
         authMode: 'api-key',
         baseURL: 'https://api.example.com/v1',
-        config: {workerUrls: []},
+        config: {manualWorkerUrls: [], workerUrlMode: 'manual'},
         createdAt: null,
         enabled: true,
         hasSecret: true,
@@ -114,7 +114,7 @@ const state = {
   updateProviderConnection: mock(async (input: unknown) => {
     return {
       ...(input as object),
-      config: {workerUrls: []},
+      config: {manualWorkerUrls: [], workerUrlMode: 'manual'},
       createdAt: null,
       hasSecret: true,
       lastCheckedAt: null,

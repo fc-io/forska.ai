@@ -1,6 +1,7 @@
 import {spawn} from 'bun'
 
 import {type AlvisConfig, getLatestAlvisJob, readAlvisConfigFromLog} from './alvisCommon.ts'
+import {getForskaRuntimeEnv} from './getForskaRuntimeEnv.ts'
 
 const log = (message: string): void => {
   console.log(`[alvis:dev] ${message}`)
@@ -10,20 +11,20 @@ const getDevServerEnv = (config: AlvisConfig) => {
   return {
     ...process.env,
     RUN_SERVER_JUDGING: 'true',
-    SGLANG_ENABLE_ROUTER: config.SGLANG_ENABLE_ROUTER,
-    GPU_TOTAL_GPUS: String(Number(config.NNODES) * Number(config.GPUS_PER_NODE)),
-    GPU_NNODES: config.NNODES,
-    GPU_GPUS_PER_NODE: config.GPUS_PER_NODE,
-    TP_SIZE: config.TP_SIZE,
-    DP_SIZE: config.DP_SIZE,
-    SGLANG_MAX_RUNNING_REQUESTS: config.SGLANG_MAX_RUNNING_REQUESTS,
-    SGLANG_API_MAX_INFLIGHT_REQUESTS: config.SGLANG_API_MAX_INFLIGHT_REQUESTS,
-    SGLANG_API_MAX_BURST_REQUESTS: config.SGLANG_API_MAX_BURST_REQUESTS,
-    SGLANG_CHUNKED_PREFILL_SIZE: config.SGLANG_CHUNKED_PREFILL_SIZE,
-    NVIDIA_SMI_WORKER_URLS: config.WORKER_URLS,
-    NVIDIA_SMI_WORKER_URLS_LOCAL: config.WORKER_URLS_LOCAL,
-    NVIDIA_SMI_SSH_JUMP_HOST: 'alvis2',
     BUN_CONFIG_MAX_HTTP_REQUESTS: '2048',
+    ...getForskaRuntimeEnv({
+      dpSize: config.DP_SIZE,
+      gpuGpusPerNode: config.GPUS_PER_NODE,
+      gpuNnodes: config.NNODES,
+      localWorkerUrls: config.WORKER_URLS_LOCAL,
+      remoteWorkerUrls: config.WORKER_URLS,
+      providerKind: 'sglang',
+      sglangApiMaxBurstRequests: config.SGLANG_API_MAX_BURST_REQUESTS,
+      sglangApiMaxInflightRequests: config.SGLANG_API_MAX_INFLIGHT_REQUESTS,
+      sglangMaxRunningRequests: config.SGLANG_MAX_RUNNING_REQUESTS,
+      sshJumpHost: 'alvis2',
+      tpSize: config.TP_SIZE,
+    }),
   }
 }
 

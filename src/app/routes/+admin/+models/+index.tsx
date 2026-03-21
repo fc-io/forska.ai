@@ -16,13 +16,19 @@ import {
   getFormDataString,
   getNullableTrimmedValue,
   getProviderCatalogLabel,
+  getProviderModelContextLength,
+  getProviderModelDiscoverySource,
+  getProviderModelReasoningEfforts,
   getProviderSecretStatus,
+  getRuntimeWorkerUrlsForProvider,
   getTrimmedValue,
+  getWorkerSourceLabel,
   getWorkerUrlsFromInputValue,
   getWorkerUrlsInputValue,
   type ProviderConnection,
   type ProviderModel,
   startCodexLogin,
+  supportsRuntimeWorkerUrls,
   syncProviderConnectionModels,
   testProviderConnectionApi,
   updateProviderConnection,
@@ -34,8 +40,9 @@ type ConnectionFormState = {
   baseURL: string
   enabled: boolean
   label: string
+  manualWorkerUrls: string
   providerKind: string
-  workerUrls: string
+  workerUrlMode: 'manual' | 'runtime'
 }
 
 type ManualModelFormState = {displayName: string; remoteModelId: string; variant: string}
@@ -46,8 +53,9 @@ const getConnectionFormState = (connection: ProviderConnection | null): Connecti
     baseURL: connection?.baseURL ?? '',
     enabled: connection?.enabled ?? true,
     label: connection?.label ?? '',
+    manualWorkerUrls: getWorkerUrlsInputValue(connection?.config.manualWorkerUrls ?? []),
     providerKind: connection?.providerKind ?? 'openai',
-    workerUrls: getWorkerUrlsInputValue(connection?.config.workerUrls ?? []),
+    workerUrlMode: connection?.config.workerUrlMode ?? 'manual',
   }
 }
 
@@ -149,6 +157,10 @@ const AdminModels = () => {
     return providerConnectionsQuery.data?.catalog ?? []
   }
 
+  const runtime = () => {
+    return providerConnectionsQuery.data?.runtime ?? null
+  }
+
   const selectedConnection = () => {
     return (
       connections().find((connection) => {
@@ -165,6 +177,10 @@ const AdminModels = () => {
         return entry.kind === connection?.providerKind
       }) ?? null
     )
+  }
+
+  const activeRuntimeWorkerUrls = () => {
+    return getRuntimeWorkerUrlsForProvider({providerKind: connectionForm.providerKind, runtime: runtime()})
   }
 
   const shouldShowConnectionApiKeyField = () => {
@@ -272,7 +288,8 @@ const AdminModels = () => {
         enabled: connectionForm.enabled,
         id: connection.id,
         label: connectionForm.label,
-        workerUrls: getWorkerUrlsFromInputValue(connectionForm.workerUrls),
+        manualWorkerUrls: getWorkerUrlsFromInputValue(connectionForm.manualWorkerUrls),
+        workerUrlMode: connectionForm.workerUrlMode,
       })
     } catch (error) {
       setPageError(error instanceof Error ? error.message : 'Failed to save provider connection')
@@ -296,7 +313,8 @@ const AdminModels = () => {
         enabled: connection.enabled,
         id: connection.id,
         label: connection.label,
-        workerUrls: connection.config.workerUrls,
+        manualWorkerUrls: connection.config.manualWorkerUrls,
+        workerUrlMode: connection.config.workerUrlMode,
       })
     } catch (error) {
       setPageError(error instanceof Error ? error.message : 'Failed to clear provider secret')
@@ -313,7 +331,8 @@ const AdminModels = () => {
         enabled: !connection.enabled,
         id: connection.id,
         label: connection.label,
-        workerUrls: connection.config.workerUrls,
+        manualWorkerUrls: connection.config.manualWorkerUrls,
+        workerUrlMode: connection.config.workerUrlMode,
       })
     } catch (error) {
       setPageError(error instanceof Error ? error.message : 'Failed to toggle provider connection')
@@ -514,16 +533,48 @@ const AdminModels = () => {
                             onLabelChange={(value) => {
                               setConnectionForm('label', value)
                             }}
+                            onWorkerUrlModeChange={(value) => {
+                              setConnectionForm('workerUrlMode', value)
+                            }}
                             onWorkerUrlsChange={(value) => {
-                              setConnectionForm('workerUrls', value)
+                              setConnectionForm('manualWorkerUrls', value)
                             }}
                             providerLabel={activeCatalogEntry()?.label ?? connection().providerKind}
+                            runtimeWorkerUrls={activeRuntimeWorkerUrls()}
                             secretStatus={getProviderSecretStatus(connection())}
                             showApiKeyField={shouldShowConnectionApiKeyField()}
                             showEnabledToggle={true}
+                            supportsRuntimeWorkerUrls={supportsRuntimeWorkerUrls(connection().providerKind)}
                             supportsWorkerUrls={Boolean(activeCatalogEntry()?.supportsWorkerUrls)}
                             values={connectionForm}
                           />
+
+                          <Show
+                            when={
+                              supportsRuntimeWorkerUrls(connection().providerKind)
+                              && connectionForm.workerUrlMode === 'runtime'
+                            }
+                          >
+                            <div
+                              class={`rounded-lg border px-4 py-3 text-sm ${activeRuntimeWorkerUrls().length > 0 ? 'border-blue-200 bg-blue-50 text-blue-900' : 'border-amber-200 bg-amber-50 text-amber-900'}`}
+                            >
+                              <p class="font-medium">Runtime-only worker routing</p>
+                              <p class="mt-1">
+                                This connection ignores saved manual worker URLs and uses only launcher-discovered
+                                runtime worker URLs for the current server session.
+                              </p>
+                              <p class="mt-1 break-words">
+                                Active runtime URLs:{' '}
+                                {activeRuntimeWorkerUrls().length > 0
+                                  ? activeRuntimeWorkerUrls().join(', ')
+                                  : 'none detected'}
+                              </p>
+                              <p class="mt-1 text-xs opacity-80">
+                                The saved base URL still stays in provider config; runtime-only affects worker routing
+                                only.
+                              </p>
+                            </div>
+                          </Show>
 
                           <div class="flex flex-wrap gap-3">
                             <button
@@ -771,10 +822,25 @@ const AdminModels = () => {
                                   </div>
                                   <div>
                                     <span class="font-medium text-gray-700">Worker URLs:</span>{' '}
-                                    {connection.config.workerUrls.length > 0
-                                      ? connection.config.workerUrls.join(', ')
+                                    {connection.workerState.effectiveWorkerUrls.length > 0
+                                      ? connection.workerState.effectiveWorkerUrls.join(', ')
                                       : '-'}
+                                    <span class="ml-2 text-xs text-gray-500">
+                                      ({getWorkerSourceLabel(connection.workerState.workerSource)})
+                                    </span>
                                   </div>
+                                  <Show when={supportsRuntimeWorkerUrls(connection.providerKind)}>
+                                    <div>
+                                      <span class="font-medium text-gray-700">Worker mode:</span>{' '}
+                                      {connection.config.workerUrlMode === 'runtime' ? 'Runtime-only' : 'Saved manual'}
+                                    </div>
+                                    <div>
+                                      <span class="font-medium text-gray-700">Active runtime:</span>{' '}
+                                      {connection.workerState.runtimeWorkerUrls.length > 0
+                                        ? connection.workerState.runtimeWorkerUrls.join(', ')
+                                        : 'None detected'}
+                                    </div>
+                                  </Show>
                                   <div>
                                     <span class="font-medium text-gray-700">Last check:</span>{' '}
                                     {formatTimestamp(connection.lastCheckedAt)}
@@ -867,6 +933,21 @@ const AdminModels = () => {
                                         <div class="mt-2 text-xs text-gray-500">
                                           {model.remoteModelId ?? model.modelName ?? '-'} • {model.source ?? 'manual'}
                                         </div>
+                                        <Show when={getProviderModelContextLength(model.metadataJson)}>
+                                          <div class="mt-1 text-xs text-gray-500">
+                                            Context {getProviderModelContextLength(model.metadataJson)} tokens
+                                          </div>
+                                        </Show>
+                                        <Show when={getProviderModelDiscoverySource(model.metadataJson)}>
+                                          <div class="mt-1 text-xs text-gray-500">
+                                            Discovery {getProviderModelDiscoverySource(model.metadataJson)}
+                                          </div>
+                                        </Show>
+                                        <Show when={getProviderModelReasoningEfforts(model.metadataJson).length > 0}>
+                                          <div class="mt-1 text-xs text-gray-500">
+                                            Reasoning {getProviderModelReasoningEfforts(model.metadataJson).join(', ')}
+                                          </div>
+                                        </Show>
                                       </div>
                                       <div>
                                         <label class="mb-2 block text-xs font-semibold uppercase tracking-wide text-gray-500">
