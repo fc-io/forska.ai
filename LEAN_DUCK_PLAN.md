@@ -15,7 +15,7 @@
   - duplicated article metadata in marts ~`85.6 GiB`
   - duplicated judgment payload in marts ~`31.2 GiB`
   - archived-project mart rows ~`68 GiB`
-- [x] Current live DB after purge + compact is ~`146.8 GiB`.
+- [x] Current live DB after purge + final compact is ~`127.6 GiB`.
 
 ## Phase 1 - Archived Out Of Marts
 
@@ -101,7 +101,7 @@
 - [x] Re-check if multi-column wide indexes are still needed once marts hold fewer text columns.
 - [x] Keep narrow indexes first: `project_id`, join ids, order timestamps, small boolean/order combos.
 - [x] Re-run slow page/query checks after each index drop.
-- [ ] Compact DB after index cleanup.
+- [x] Compact DB after index cleanup.
 
 ## Execution Order
 
