@@ -31,6 +31,22 @@ const asNonEmptyString = (value: unknown) => {
   return trimmed === '' ? null : trimmed
 }
 
+export const normalizeDoi = (value: unknown) => {
+  const raw = asNonEmptyString(value)
+
+  if (!raw) {
+    return null
+  }
+
+  const lower = raw.toLowerCase()
+  const prefixes = ['https://doi.org/', 'http://doi.org/', 'https://dx.doi.org/', 'http://dx.doi.org/', 'doi:']
+  const prefix = prefixes.find((candidate) => {
+    return lower.startsWith(candidate)
+  })
+
+  return prefix ? raw.slice(prefix.length).trim() : raw
+}
+
 const getValueAtPath = (value: unknown, path: string[]): unknown => {
   const [first, ...rest] = path
   return first === undefined ? value : getValueAtPath(isRecord(value) ? value[first] : null, rest)
@@ -178,7 +194,7 @@ const getSourceMetadataLinks = (value: unknown) => {
 }
 
 export const getOriginalDoi = (originalData: unknown) => {
-  return getStringAtPath(originalData, ['doi'])
+  return normalizeDoi(getStringAtPath(originalData, ['doi']))
 }
 
 export const getOriginalFullTextLinks = (originalData: unknown) => {

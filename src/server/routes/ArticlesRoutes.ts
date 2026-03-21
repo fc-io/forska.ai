@@ -1,7 +1,7 @@
 import {Elysia, t} from 'elysia'
 
 import {selectArticleIdsByFilterOlap} from '../../services/olap/selectArticleIdsOlap.ts'
-import {getArticleSourceMetadata, getOriginalDoi} from '../../utils/articleSourceMetadata.ts'
+import {getArticleSourceMetadata, getOriginalDoi, normalizeDoi} from '../../utils/articleSourceMetadata.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {
   escapeSqlString,
@@ -320,7 +320,7 @@ export const articlesRoutes = new Elysia()
     async ({body}) => {
       const {entries} = body
       const normalizedEntries = entries.map((entry) => {
-        const doi = entry.doi ?? getOriginalDoi(entry.original_data)
+        const doi = normalizeDoi(entry.doi) ?? getOriginalDoi(entry.original_data)
         const sourceMetadata = getArticleSourceMetadata({
           articleId: entry.article_id,
           importRoute: entry.import_route,

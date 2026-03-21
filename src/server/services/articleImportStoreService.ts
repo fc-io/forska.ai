@@ -1,4 +1,4 @@
-import {getArticleSourceMetadata, getOriginalDoi} from '../../utils/articleSourceMetadata.ts'
+import {getArticleSourceMetadata, getOriginalDoi, normalizeDoi} from '../../utils/articleSourceMetadata.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral} from './appQueryHelpers.ts'
 import {getDuckdbMartRefreshService} from './getDuckdbMartRefreshService.ts'
@@ -106,7 +106,7 @@ const getIncludedArticleKeys = (rows: ArticleImportStoreRow[]) => {
 }
 
 const getNormalizedArticleImportRow = (row: ArticleImportStoreRow): ArticleImportStoreRow => {
-  const doi = row.doi ?? getOriginalDoi(row.originalData)
+  const doi = normalizeDoi(row.doi) ?? getOriginalDoi(row.originalData)
   const sourceMetadata =
     row.sourceMetadata
     ?? getArticleSourceMetadata({
