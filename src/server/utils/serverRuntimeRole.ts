@@ -18,7 +18,7 @@ import {
   getEffectiveServerRole,
   isAutoServerRole,
 } from './serverRole.ts'
-import {recordUnresponsiveWriterWarning} from './writerWarnings.ts'
+import {clearUnresponsiveWriterWarnings, recordUnresponsiveWriterWarning} from './writerWarnings.ts'
 
 type ServerRuntimeState = {
   autoMonitorStarted: boolean
@@ -141,6 +141,7 @@ const promoteAutoServerToWriter = async (reason: string) => {
     serverRuntimeState.currentLease = currentLease
     setCurrentServerRole('writer')
     setLastKnownWriterUrl(getCurrentServerUrl())
+    clearUnresponsiveWriterWarnings()
     autoServerRoleLogger.force('server-role:writer', `[server] auto writer active (${reason})`, 'log', {
       apiServerPort: env.API_SERVER_PORT,
       reason,
@@ -165,6 +166,7 @@ const refreshAutoWriterLease = async () => {
     const nextLease = await Effect.runPromise(updateDuckdbOwnerLeaseHeartbeat(serverRuntimeState.currentLease))
     serverRuntimeState.currentLease = nextLease
     setLastKnownWriterUrl(getCurrentServerUrl())
+    clearUnresponsiveWriterWarnings()
   } catch (error) {
     serverRuntimeState.currentLease = null
     setCurrentServerRole('api')
@@ -197,6 +199,10 @@ const refreshAutoFollowerRole = async () => {
 
   setCurrentServerRole('api')
   setLastKnownWriterUrl(getDuckdbOwnerLeaseWriterUrl(currentLease))
+
+  if (await isWriterUrlResponsive(getDuckdbOwnerLeaseWriterUrl(currentLease))) {
+    clearUnresponsiveWriterWarnings()
+  }
 }
 
 const syncAutoServerRole = async () => {

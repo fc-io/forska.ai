@@ -75,6 +75,12 @@ export const clearWriterWriteFailure = () => {
   writerWarningsState.currentWriteFailure = null
 }
 
+export const clearUnresponsiveWriterWarnings = () => {
+  writerWarningsState.recentWarnings = writerWarningsState.recentWarnings.filter((warning) => {
+    return warning.kind !== 'unresponsive-writer'
+  })
+}
+
 export const getWriterWarnings = () => {
   const nowMs = Date.now()
 
