@@ -35,6 +35,18 @@
 - Move `worker_urls` off `app.model`; keep it in `app.provider_connection.config_json` for `sglang` / `vllm` if still needed.
 - Keep `app.project.model_id`. Good foreign key. Good history.
 
+## Lean Duck Alignment
+
+- Follow the same hot-DB rule as `LEAN_DUCK_PLAN.md`: keep ids, toggles, labels, small capability facts, and normalized config; do not keep large duplicated provider payloads in hot DuckDB without a proven need.
+- `app.provider_connection.config_json` should stay lean:
+  - keep only saved app config such as manual base URLs, manual worker URLs, and small provider-specific toggles
+  - do not persist runtime-discovered worker state, launcher metadata, auth device payloads, or large health/debug payloads
+- `app.model.metadata_json` should stay lean:
+  - keep only normalized capability metadata the UI/runtime genuinely needs when discovery is missing or expensive to repeat
+  - do not store full raw `/models` responses, Codex model payloads, or other provider catalog blobs by default
+- Prefer recomputing/discovering remote provider state on demand over persisting bulky response payloads in DuckDB.
+- If we later need cold debug/audit payload storage, keep it out of the hot live DuckDB path.
+
 ## Concrete Checklist
 
 ### Schema
@@ -45,6 +57,7 @@
 - [x] Seed new model inserts with matching `provider_connection_id`.
 - [x] Stop syncing env worker URLs into `app.model.worker_urls`.
 - [x] Move runtime reads from model transport columns to provider connections, with a few legacy fallback reads still pending removal.
+- [ ] Slim persisted provider/model metadata so `config_json` and `metadata_json` only hold normalized hot-path data, not raw provider payloads.
 - [ ] Add `NOT NULL` + FK on `app.model.provider_connection_id` after runtime switch.
 - [ ] Drop old model-level transport/auth columns after phase 2.
 
@@ -290,6 +303,7 @@
   - route/adaptor/auth focused test coverage
 - Still left:
   - remove remaining legacy fallback reads from old model transport/auth columns
+  - slim provider/model metadata persistence so it matches the lean-DB rule
   - add FK / `NOT NULL` on `app.model.provider_connection_id`
   - drop obsolete model-level transport/auth columns
   - add UI tests and end-to-end provider -> model -> project coverage
@@ -695,6 +709,7 @@
 ### Ticket 9 - Remove legacy assumptions
 
 - [ ] Remove remaining legacy model-level transport/auth reads
+- [ ] Replace raw provider/model metadata persistence with lean normalized fields only
 - [ ] Add FK / `NOT NULL` on `provider_connection_id`
 - [ ] Drop obsolete model-level transport/auth columns
 
@@ -710,6 +725,7 @@
 
 - [x] Every supported provider resolves through the registry
 - [ ] Runtime no longer depends on legacy model transport/auth fields.
+- [ ] Provider persistence follows the lean hot-DB rule: no raw provider catalog payloads or runtime-discovery blobs stored by default.
 - [x] Provider connect/test/sync/manual-add all run through shared services
 - [x] Add-provider and model-management flows remain separate in UI and API
 
