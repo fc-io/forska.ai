@@ -486,140 +486,22 @@ const getDuckdbRollupCreatedOrderClause = () => {
   return 'r.article_created_at DESC NULLS LAST, r.article_id ASC'
 }
 
-const getDuckdbReviewPageOrderClause = () => {
-  return `COALESCE(p.article_created_at, TIMESTAMPTZ '0001-01-01T00:00:00.000Z') DESC, p.article_id ASC`
+const getDuckdbReviewedRollupOrderClause = () => {
+  return `COALESCE(r.article_created_at, TIMESTAMPTZ '0001-01-01T00:00:00.000Z') DESC, r.article_id ASC`
 }
 
-const getDuckdbReviewPageCursorWhereClause = (cursor: ReviewPageCursor) => {
+const getDuckdbReviewedRollupCursorWhereClause = (cursor: ReviewPageCursor) => {
   const createdAtLiteral = cursor.articleCreatedAt
     ? getDuckdbTimestampLiteral(new Date(cursor.articleCreatedAt))
     : `TIMESTAMPTZ '0001-01-01T00:00:00.000Z'`
 
   return `(
-    COALESCE(p.article_created_at, TIMESTAMPTZ '0001-01-01T00:00:00.000Z') < ${createdAtLiteral}
+    COALESCE(r.article_created_at, TIMESTAMPTZ '0001-01-01T00:00:00.000Z') < ${createdAtLiteral}
     OR (
-      COALESCE(p.article_created_at, TIMESTAMPTZ '0001-01-01T00:00:00.000Z') = ${createdAtLiteral}
-      AND p.article_id > ${getDuckdbSqlString(cursor.articleId)}
+      COALESCE(r.article_created_at, TIMESTAMPTZ '0001-01-01T00:00:00.000Z') = ${createdAtLiteral}
+      AND r.article_id > ${getDuckdbSqlString(cursor.articleId)}
     )
   )`
-}
-
-const getDuckdbReviewPageWhereParts = (params: {
-  scope: ProjectOlapScope
-  from?: string | null
-  to?: string | null
-  search?: string | null
-  cursor?: string | null
-}) => {
-  const requestFromDate = parseDateFromInput(params.from, 'T00:00:00.000Z')
-  const requestToDate = parseDateFromInput(params.to, 'T23:59:59.999Z')
-  const effectiveFromDate = getEffectiveFromDate(params.scope.dateFrom, requestFromDate)
-  const effectiveToDate = getEffectiveToDate(params.scope.dateTo, requestToDate)
-  const trimmedSearch = params.search?.trim() ?? ''
-  const decodedCursor = decodeReviewPageCursor(params.cursor)
-
-  return [
-    `p.project_id = ${getDuckdbSqlString(params.scope.projectId)}`,
-    'p.has_all_llm_judgments = TRUE',
-    effectiveFromDate ? `p.article_created_at >= ${getDuckdbTimestampLiteral(effectiveFromDate)}` : null,
-    effectiveToDate ? `p.article_created_at <= ${getDuckdbTimestampLiteral(effectiveToDate)}` : null,
-    trimmedSearch
-      ? `LOWER(COALESCE(a.article_title, '')) LIKE LOWER(${getDuckdbSqlString(`%${trimmedSearch}%`)})`
-      : null,
-    decodedCursor ? getDuckdbReviewPageCursorWhereClause(decodedCursor) : null,
-  ].filter((part): part is string => {
-    return part !== null
-  })
-}
-
-const getDuckdbReviewPagePromptFilterExistsParts = (
-  scope: ProjectOlapScope,
-  prompts: Record<string, string[]> | undefined,
-) => {
-  const promptTypeById = getDuckdbPromptTypeById(scope)
-  const promptFilters = getPromptFilters(prompts)
-
-  return promptFilters.reduce<string[]>((whereParts, [promptId, answeredValues]) => {
-    const promptType = promptTypeById[promptId]
-    const isNumericPrompt = promptType ? isNumericType(promptType) : false
-
-    if (isNumericPrompt) {
-      const parsedFilters = answeredValues.reduce<{
-        binRanges: Array<{min: number; max: number}>
-        specialValues: string[]
-      }>(
-        (filters, value) => {
-          if (!value.startsWith('bin:')) {
-            return {...filters, specialValues: [...filters.specialValues, value]}
-          }
-
-          const [, minRaw = '', maxRaw = ''] = value.split(':')
-          const min = Number.parseInt(minRaw, 10)
-          const max = Number.parseInt(maxRaw, 10)
-
-          return Number.isNaN(min) || Number.isNaN(max)
-            ? filters
-            : {...filters, binRanges: [...filters.binRanges, {min, max}]}
-        },
-        {binRanges: [], specialValues: []},
-      )
-      const numericCondition =
-        parsedFilters.binRanges.length === 0
-          ? null
-          : `(${parsedFilters.binRanges
-              .map((range) => {
-                return `(f.numeric_answer_value >= ${range.min} AND f.numeric_answer_value <= ${range.max})`
-              })
-              .join(' OR ')})`
-      const specialCondition =
-        parsedFilters.specialValues.length === 0
-          ? null
-          : `f.answer_value IN (${getDuckdbSqlStringList(parsedFilters.specialValues).join(', ')})`
-      const answerCondition = [numericCondition, specialCondition].filter((part): part is string => {
-        return part !== null
-      })
-
-      return answerCondition.length === 0
-        ? whereParts
-        : [
-            ...whereParts,
-            `EXISTS (
-              SELECT 1
-              FROM mart.review_article_filter_row f
-              WHERE f.project_id = p.project_id
-                AND f.article_id = p.article_id
-                AND f.prompt_id = ${getDuckdbSqlString(promptId)}
-                AND (${answerCondition.join(' OR ')})
-            )`,
-          ]
-    }
-
-    return [
-      ...whereParts,
-      `EXISTS (
-        SELECT 1
-        FROM mart.review_article_filter_row f
-        WHERE f.project_id = p.project_id
-          AND f.article_id = p.article_id
-          AND f.prompt_id = ${getDuckdbSqlString(promptId)}
-          AND f.answer_value IN (${getDuckdbSqlStringList(answeredValues).join(', ')})
-      )`,
-    ]
-  }, [])
-}
-
-const getDuckdbReviewPageReviewedWhereParts = (params: {
-  scope: ProjectOlapScope
-  from?: string | null
-  to?: string | null
-  search?: string | null
-  cursor?: string | null
-  prompts?: Record<string, string[]>
-}) => {
-  return [
-    ...getDuckdbReviewPageWhereParts(params),
-    ...getDuckdbReviewPagePromptFilterExistsParts(params.scope, params.prompts),
-  ]
 }
 
 const getDuckdbCandidateWhereParts = (params: {
@@ -874,124 +756,10 @@ const countReviewedCandidateRows = async (params: {
   return Number(rows[0]?.totalCount ?? 0)
 }
 
-const getReviewedPageRowsFromPageMart = async (params: {
-  scope: ProjectOlapScope
-  page: number
-  limit: number
-  from?: string | null
-  to?: string | null
-  search?: string | null
-  cursor?: string | null
-  prompts?: Record<string, string[]>
-}) => {
-  const whereParts = getDuckdbReviewPageReviewedWhereParts(params)
-  const offset = params.cursor ? 0 : Math.max(params.page - 1, 0) * params.limit
-  const rows = await runDuckdbJsonQuery<{
-    articleCreatedAt: unknown
-    articleExternalId: string | null
-    articleId: string
-    articleTitle: string
-    articleUpdatedAt: unknown
-    fullTextConversionStatus: string | null
-    fullTextFetchedAt: unknown
-    fullTextPDF: string | null
-    sourceMetadata: unknown
-    journalTitle: string | null
-    url: string | null
-  }>(`
-    WITH page_rows AS (
-      SELECT
-        p.article_id AS articleId,
-        a.article_title AS articleTitle,
-        p.article_created_at AS articleCreatedAt,
-        p.article_updated_at AS articleUpdatedAt,
-        NULL AS journalTitle,
-        a.article_id AS articleExternalId,
-        a.url AS url,
-        a.full_text_pdf AS fullTextPDF,
-        a.full_text_fetched_at AS fullTextFetchedAt,
-        a.full_text_conversion_status AS fullTextConversionStatus,
-        a.source_metadata AS sourceMetadata
-      FROM mart.review_article_page p
-      INNER JOIN app.article a ON a.id = p.article_id
-      WHERE ${whereParts.join(' AND ')}
-      ORDER BY ${getDuckdbReviewPageOrderClause()}
-      LIMIT ${params.limit + 1}
-      OFFSET ${offset}
-    )
-    SELECT
-      page_rows.articleId AS articleId,
-      page_rows.articleTitle AS articleTitle,
-      page_rows.articleCreatedAt AS articleCreatedAt,
-      page_rows.articleUpdatedAt AS articleUpdatedAt,
-      page_rows.journalTitle AS journalTitle,
-      page_rows.articleExternalId AS articleExternalId,
-      page_rows.url AS url,
-      page_rows.fullTextPDF AS fullTextPDF,
-      page_rows.fullTextFetchedAt AS fullTextFetchedAt,
-      page_rows.sourceMetadata AS sourceMetadata,
-      page_rows.fullTextConversionStatus AS fullTextConversionStatus
-    FROM page_rows
-    ORDER BY COALESCE(page_rows.articleCreatedAt, TIMESTAMPTZ '0001-01-01T00:00:00.000Z') DESC, page_rows.articleId ASC
-  `)
-  const hasMore = rows.length > params.limit
-  const pageRows = rows.slice(0, params.limit)
-  const lastRow = pageRows[pageRows.length - 1]
-
-  return {
-    nextCursor:
-      hasMore && lastRow
-        ? encodeReviewPageCursor({
-            articleCreatedAt: getDuckdbDateValue(lastRow.articleCreatedAt)?.toISOString() ?? null,
-            articleId: lastRow.articleId,
-          })
-        : null,
-    rows: pageRows.map((row) => {
-      const sourceMetadata = getDuckdbArticleSourceMetadata(row.sourceMetadata)
-
-      return {
-        articleCreatedAt: getDuckdbDateValue(row.articleCreatedAt),
-        articleId: row.articleExternalId,
-        articleTitle: row.articleTitle,
-        articleUpdatedAt: getDuckdbDateValue(row.articleUpdatedAt),
-        fullTextConversionStatus: row.fullTextConversionStatus,
-        fullTextFetchedAt: getDuckdbDateValue(row.fullTextFetchedAt),
-        fullTextPDF: row.fullTextPDF,
-        id: row.articleId,
-        journalTitle: sourceMetadata.journalTitle,
-        sourceMetadata,
-        url: row.url,
-      }
-    }),
-  }
-}
-
-const getHasReviewArticlePageRows = async (projectId: string) => {
-  const rows = await runDuckdbJsonQuery<{projectId: string}>(`
-    SELECT project_id AS projectId
-    FROM mart.review_article_page
-    WHERE project_id = ${getDuckdbSqlString(projectId)}
-    LIMIT 1
-  `)
-
-  return rows.length > 0
-}
-
 const getHasReviewArticleCandidateRows = async (projectId: string) => {
   const rows = await runDuckdbJsonQuery<{projectId: string}>(`
     SELECT project_id AS projectId
     FROM mart.review_article_candidate
-    WHERE project_id = ${getDuckdbSqlString(projectId)}
-    LIMIT 1
-  `)
-
-  return rows.length > 0
-}
-
-const getHasReviewArticleFilterRows = async (projectId: string) => {
-  const rows = await runDuckdbJsonQuery<{projectId: string}>(`
-    SELECT project_id AS projectId
-    FROM mart.review_article_filter_row
     WHERE project_id = ${getDuckdbSqlString(projectId)}
     LIMIT 1
   `)
@@ -1027,24 +795,6 @@ const getJudgmentRowsForReviews = async (scope: ProjectOlapScope, articleIds: st
     : getLlmJudgmentRowsFromMart(scope, articleIds)
 }
 
-const countReviewedPageRowsFromPageMart = async (params: {
-  scope: ProjectOlapScope
-  from?: string | null
-  to?: string | null
-  search?: string | null
-  prompts?: Record<string, string[]>
-}) => {
-  const whereParts = getDuckdbReviewPageReviewedWhereParts({...params, cursor: null})
-  const rows = await runDuckdbJsonQuery<{totalCount: number}>(`
-    SELECT COUNT(*) AS totalCount
-    FROM mart.review_article_page p
-    INNER JOIN app.article a ON a.id = p.article_id
-    WHERE ${whereParts.join(' AND ')}
-  `)
-
-  return Number(rows[0]?.totalCount ?? 0)
-}
-
 const getDuckdbRollupActivityOrderClause = () => {
   return `COALESCE(r.article_updated_at, r.article_created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z') DESC, r.article_id DESC`
 }
@@ -1056,12 +806,20 @@ const getDuckdbReviewedPageRowsFromRollup = async (params: {
   from?: string | null
   to?: string | null
   search?: string | null
+  cursor?: string | null
   prompts?: Record<string, string[]>
   requireAllHumanAnswers?: boolean
   requireAllLlmJudgments?: boolean
 }) => {
-  const offset = Math.max(params.page - 1, 0) * params.limit
-  const whereParts = getDuckdbRollupReviewedWhereParts({...params, requireAllLlmJudgments: true})
+  const offset = params.cursor ? 0 : Math.max(params.page - 1, 0) * params.limit
+  const decodedCursor = decodeReviewPageCursor(params.cursor)
+  const cursorClause = decodedCursor ? getDuckdbReviewedRollupCursorWhereClause(decodedCursor) : null
+  const whereParts = [
+    ...getDuckdbRollupReviewedWhereParts({...params, requireAllLlmJudgments: true}),
+    cursorClause,
+  ].filter((part): part is string => {
+    return part !== null
+  })
   const rows = await runDuckdbJsonQuery<{
     id: string
     articleTitle: string
@@ -1078,20 +836,33 @@ const getDuckdbReviewedPageRowsFromRollup = async (params: {
     FROM mart.review_article_rollup r
     INNER JOIN app.article a ON a.id = r.article_id
     WHERE ${whereParts.join(' AND ')}
-    ORDER BY ${getDuckdbRollupCreatedOrderClause()}
-    LIMIT ${params.limit}
+    ORDER BY ${getDuckdbReviewedRollupOrderClause()}
+    LIMIT ${params.limit + 1}
     OFFSET ${offset}
   `)
 
-  return rows.map((row) => {
-    return {
-      id: row.id,
-      articleTitle: row.articleTitle,
-      articleCreatedAt: getDuckdbDateValue(row.articleCreatedAt),
-      articleUpdatedAt: getDuckdbDateValue(row.articleUpdatedAt),
-      sourceMetadata: getDuckdbArticleSourceMetadata(row.sourceMetadata),
-    }
-  })
+  const hasMore = rows.length > params.limit
+  const pageRows = rows.slice(0, params.limit)
+  const lastRow = pageRows[pageRows.length - 1]
+
+  return {
+    nextCursor:
+      hasMore && lastRow
+        ? encodeReviewPageCursor({
+            articleCreatedAt: getDuckdbDateValue(lastRow.articleCreatedAt)?.toISOString() ?? null,
+            articleId: lastRow.id,
+          })
+        : null,
+    rows: pageRows.map((row) => {
+      return {
+        id: row.id,
+        articleTitle: row.articleTitle,
+        articleCreatedAt: getDuckdbDateValue(row.articleCreatedAt),
+        articleUpdatedAt: getDuckdbDateValue(row.articleUpdatedAt),
+        sourceMetadata: getDuckdbArticleSourceMetadata(row.sourceMetadata),
+      }
+    }),
+  }
 }
 
 const countDuckdbReviewedArticlesFromRollup = async (params: {
@@ -2113,14 +1884,9 @@ export const queryArticlesReviewsFromDuckdb = async (
     }
   }
 
-  const canUsePageMart =
-    scope.modelId
-    && (await getHasReviewArticlePageRows(scope.projectId))
-    && (!hasPromptFilters || (await getHasReviewArticleFilterRows(scope.projectId)))
-
-  if (canUsePageMart) {
-    const pageResult = await getReviewedPageRowsFromPageMart({...params, scope})
-    const llmJudgmentRows = await getJudgmentRowsForReviews(
+  if (scope.modelId) {
+    const pageResult = await getDuckdbReviewedPageRowsFromRollup({...params, scope})
+    const llmJudgmentRows = await getLlmJudgmentRowsFromMart(
       scope,
       pageResult.rows.map((article) => {
         return article.id
@@ -2140,7 +1906,8 @@ export const queryArticlesReviewsFromDuckdb = async (
         judgments: judgmentsForArticle,
         judgedPromptIds: getJudgedPromptIds(judgmentsForArticle, scope.promptOrderMap),
         isFullyJudged: true,
-        journalTitle: article.journalTitle,
+        journalTitle: article.sourceMetadata.journalTitle,
+        sourceMetadata: article.sourceMetadata,
       }
     })
 
@@ -2152,36 +1919,6 @@ export const queryArticlesReviewsFromDuckdb = async (
       totalPages: null,
       nextCursor: pageResult.nextCursor,
     }
-  }
-
-  if (scope.modelId) {
-    const pageArticles = await getDuckdbReviewedPageRowsFromRollup({...params, scope})
-    const llmJudgmentRows = await getLlmJudgmentRowsFromMart(
-      scope,
-      pageArticles.map((article) => {
-        return article.id
-      }),
-    )
-    const llmJudgmentsByArticle = groupByArticleId(llmJudgmentRows)
-    const data = pageArticles.map((article) => {
-      const judgmentsForArticle = getJudgmentRowsSorted(
-        llmJudgmentsByArticle.get(article.id) ?? [],
-        scope.promptOrderMap,
-      )
-      return {
-        id: article.id,
-        articleTitle: article.articleTitle,
-        articleCreatedAt: article.articleCreatedAt,
-        articleUpdatedAt: article.articleUpdatedAt,
-        judgments: judgmentsForArticle,
-        judgedPromptIds: getJudgedPromptIds(judgmentsForArticle, scope.promptOrderMap),
-        isFullyJudged: true,
-        journalTitle: article.sourceMetadata.journalTitle,
-        sourceMetadata: article.sourceMetadata,
-      }
-    })
-
-    return {data, totalCount: null, page: params.page, limit: params.limit, totalPages: null, nextCursor: null}
   }
 
   const pageArticles = await getDuckdbReviewedArticleRows({...params, scope})
@@ -2227,16 +1964,6 @@ export const countArticlesReviewsFromDuckdb = async (
 
   if (canUseServingV2) {
     const totalCount = await countReviewedCandidateRows({...params, scope})
-    return {totalCount, totalPages: Math.ceil(totalCount / params.limit)}
-  }
-
-  const canUsePageMart =
-    scope.modelId
-    && (await getHasReviewArticlePageRows(scope.projectId))
-    && (!hasPromptFilters || (await getHasReviewArticleFilterRows(scope.projectId)))
-
-  if (canUsePageMart) {
-    const totalCount = await countReviewedPageRowsFromPageMart({...params, scope})
     return {totalCount, totalPages: Math.ceil(totalCount / params.limit)}
   }
 

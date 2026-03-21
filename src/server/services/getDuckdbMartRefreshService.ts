@@ -38,13 +38,8 @@ const getProjectRefreshSql = (projectId: string) => {
         article_id,
         in_curated_scope,
         in_route_scope,
-        matched_import_route_ids,
-        article_title,
         article_created_at,
-        article_updated_at,
-        article_import_route,
-        article_publication_status,
-        source_updated_at
+        article_updated_at
       )
       WITH route_scope AS (
         SELECT
@@ -77,8 +72,7 @@ const getProjectRefreshSql = (projectId: string) => {
           project_id,
           article_id,
           COALESCE(BOOL_OR(in_curated_scope), FALSE) AS in_curated_scope,
-          COALESCE(BOOL_OR(in_route_scope), FALSE) AS in_route_scope,
-          LIST(DISTINCT import_route_id) FILTER (WHERE import_route_id IS NOT NULL) AS matched_import_route_ids
+          COALESCE(BOOL_OR(in_route_scope), FALSE) AS in_route_scope
         FROM combined_scope
         GROUP BY project_id, article_id
       )
@@ -87,13 +81,8 @@ const getProjectRefreshSql = (projectId: string) => {
         aggregated_scope.article_id,
         aggregated_scope.in_curated_scope,
         aggregated_scope.in_route_scope,
-        aggregated_scope.matched_import_route_ids,
-        article.article_title,
         article.article_created_at,
-        article.article_updated_at,
-        article.import_route,
-        article.publication_status,
-        article.updated_at
+        article.article_updated_at
       FROM aggregated_scope
       INNER JOIN app.project project
         ON project.id = aggregated_scope.project_id
@@ -112,7 +101,6 @@ const getProjectRefreshSql = (projectId: string) => {
         model_id,
         answer_value,
         answered_original,
-        article_title,
         article_created_at,
         article_updated_at,
         judgment_created_at
@@ -126,7 +114,6 @@ const getProjectRefreshSql = (projectId: string) => {
           judgment_fact.model_id,
           judgment_fact.answered_original,
           judgment_fact.normalized_answers,
-          judgment_fact.article_title,
           judgment_fact.article_created_at,
           judgment_fact.article_updated_at,
           judgment_fact.created_at AS judgment_created_at
@@ -153,7 +140,6 @@ const getProjectRefreshSql = (projectId: string) => {
         eligible_project_judgment.model_id,
         TRIM(answer.answer_value) AS answer_value,
         eligible_project_judgment.answered_original,
-        eligible_project_judgment.article_title,
         eligible_project_judgment.article_created_at,
         eligible_project_judgment.article_updated_at,
         eligible_project_judgment.judgment_created_at
@@ -166,38 +152,6 @@ const getProjectRefreshSql = (projectId: string) => {
     `,
     `
       BEGIN TRANSACTION;
-      DELETE FROM mart.review_article_judgment_payload WHERE project_id = ${projectLiteral};
-      INSERT INTO mart.review_article_judgment_payload (
-        project_id,
-        judgment_id,
-        explanation,
-        quotes,
-        payload_updated_at
-      )
-      SELECT
-        scope_article.project_id,
-        judgment_fact.judgment_id,
-        judgment_fact.explanation,
-        judgment_fact.quotes,
-        current_timestamp
-      FROM mart.project_scope_article scope_article
-      INNER JOIN app.project project ON project.id = scope_article.project_id
-      INNER JOIN app.project_prompt project_prompt
-        ON project_prompt.project_id = scope_article.project_id
-       AND project_prompt.enabled = TRUE
-      INNER JOIN mart.judgment_fact judgment_fact
-        ON judgment_fact.article_id = scope_article.article_id
-       AND judgment_fact.prompt_id = project_prompt.prompt_id
-       AND judgment_fact.model_id = project.model_id
-       AND judgment_fact.use_title = project.use_title
-       AND judgment_fact.use_abstract = project.use_abstract
-       AND judgment_fact.use_fulltext = project.use_fulltext
-       AND judgment_fact.use_fulltext_no_images = project.use_fulltext_no_images
-      WHERE scope_article.project_id = ${projectLiteral};
-      COMMIT;
-    `,
-    `
-      BEGIN TRANSACTION;
       DELETE FROM mart.review_article_judgment_detail WHERE project_id = ${projectLiteral};
       INSERT INTO mart.review_article_judgment_detail (
         project_id,
@@ -206,10 +160,8 @@ const getProjectRefreshSql = (projectId: string) => {
         prompt_order,
         judgment_id,
         created_at,
-        article_title,
         article_created_at,
         article_updated_at,
-        article_import_route,
         model_id,
         answered_original,
         answered_original_as_array
@@ -221,10 +173,8 @@ const getProjectRefreshSql = (projectId: string) => {
         project_prompt.prompt_order,
         judgment_fact.judgment_id,
         judgment_fact.created_at,
-        judgment_fact.article_title,
         judgment_fact.article_created_at,
         judgment_fact.article_updated_at,
-        judgment_fact.article_import_route,
         judgment_fact.model_id,
         judgment_fact.answered_original,
         judgment_fact.answered_original_as_array
@@ -327,12 +277,8 @@ const getProjectRefreshSql = (projectId: string) => {
       INSERT INTO mart.review_article_rollup (
         project_id,
         article_id,
-        article_title,
         article_created_at,
         article_updated_at,
-        article_import_route,
-        article_publication_status,
-        matched_import_route_ids,
         enabled_prompt_count,
         llm_judged_prompt_count,
         human_answered_prompt_count,
@@ -439,12 +385,8 @@ const getProjectRefreshSql = (projectId: string) => {
       SELECT
         scope_article.project_id,
         scope_article.article_id,
-        scope_article.article_title,
         scope_article.article_created_at,
         scope_article.article_updated_at,
-        scope_article.article_import_route,
-        scope_article.article_publication_status,
-        scope_article.matched_import_route_ids,
         COALESCE(prompt_count.enabled_prompt_count, 0) AS enabled_prompt_count,
         COALESCE(llm_rollup.llm_judged_prompt_count, 0) AS llm_judged_prompt_count,
         COALESCE(human_rollup.human_answered_prompt_count, 0) AS human_answered_prompt_count,
@@ -503,7 +445,6 @@ const getProjectRefreshSql = (projectId: string) => {
         article_seq,
         article_created_at,
         article_updated_at,
-        article_title,
         has_all_llm_judgments,
         llm_judged_prompt_count,
         enabled_prompt_count,
@@ -515,7 +456,6 @@ const getProjectRefreshSql = (projectId: string) => {
         ordinal.article_seq,
         rollup.article_created_at,
         rollup.article_updated_at,
-        rollup.article_title,
         rollup.has_all_llm_judgments,
         rollup.llm_judged_prompt_count,
         rollup.enabled_prompt_count,
@@ -524,67 +464,6 @@ const getProjectRefreshSql = (projectId: string) => {
       INNER JOIN app.project_article_ordinal ordinal
         ON ordinal.project_id = rollup.project_id
        AND ordinal.article_id = rollup.article_id
-      WHERE rollup.project_id = ${projectLiteral};
-      COMMIT;
-    `,
-    `
-      BEGIN TRANSACTION;
-      DELETE FROM mart.review_article_display WHERE project_id = ${projectLiteral};
-      INSERT INTO mart.review_article_display (
-        project_id,
-        article_id,
-        article_external_id,
-        article_title,
-        journal_title,
-        url,
-        full_text_pdf,
-        full_text_fetched_at,
-        full_text_conversion_status,
-        display_updated_at
-      )
-      SELECT
-        rollup.project_id,
-        rollup.article_id,
-        article.article_id,
-        rollup.article_title,
-        NULL,
-        article.url,
-        article.full_text_pdf,
-        article.full_text_fetched_at,
-        article.full_text_conversion_status,
-        current_timestamp
-      FROM mart.review_article_rollup rollup
-      INNER JOIN app.article article ON article.id = rollup.article_id
-      WHERE rollup.project_id = ${projectLiteral};
-      COMMIT;
-    `,
-    `
-      BEGIN TRANSACTION;
-      DELETE FROM mart.review_article_page WHERE project_id = ${projectLiteral};
-      INSERT INTO mart.review_article_page (
-        project_id,
-        article_id,
-        article_created_at,
-        article_updated_at,
-        article_title,
-        journal_title,
-        has_all_llm_judgments,
-        llm_judged_prompt_count,
-        enabled_prompt_count,
-        page_updated_at
-      )
-      SELECT
-        rollup.project_id,
-        rollup.article_id,
-        rollup.article_created_at,
-        rollup.article_updated_at,
-        rollup.article_title,
-        NULL,
-        rollup.has_all_llm_judgments,
-        rollup.llm_judged_prompt_count,
-        rollup.enabled_prompt_count,
-        current_timestamp
-      FROM mart.review_article_rollup rollup
       WHERE rollup.project_id = ${projectLiteral};
       COMMIT;
     `,

@@ -87,7 +87,7 @@
 - [x] Make `mart.project_scope_article` a scope table only: ids, scope flags, matched routes, freshness marker.
 - [x] Make `mart.prompt_answer_fact` an answer fact only: ids, answer value, minimal time/order fields.
 - [x] Make `mart.review_article_rollup` a rollup only: ids, counts, booleans, latest timestamps, route-match ids.
-- [ ] Check if `mart.review_article_page` can be derived from `mart.review_article_rollup` + `app.article` instead of stored separately.
+- [x] Check if `mart.review_article_page` can be derived from `mart.review_article_rollup` + `app.article` instead of stored separately.
 - [x] Check if `mart.review_article_display` can be dropped and replaced by join-time projection.
 - [x] Check if `mart.review_article_candidate` should keep only ids, sequence, and judging completeness fields.
 - [x] Check if `mart.review_article_judgment_detail` should keep only ids/order plus small answer fields, with payload joined later.

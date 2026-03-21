@@ -5,7 +5,6 @@ import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAcces
 const projectScopedTables = [
   'mart.project_scope_article',
   'mart.prompt_answer_fact',
-  'mart.review_article_judgment_payload',
   'mart.review_article_judgment_detail',
   'app.review_answer_dictionary',
   'mart.review_article_filter_row',
@@ -13,8 +12,6 @@ const projectScopedTables = [
   'mart.review_article_rollup',
   'app.project_article_ordinal',
   'mart.review_article_candidate',
-  'mart.review_article_display',
-  'mart.review_article_page',
 ] as const
 
 type ProjectScopedTable = (typeof projectScopedTables)[number]

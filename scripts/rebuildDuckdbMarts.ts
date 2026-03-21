@@ -5,17 +5,14 @@ const judgmentFactBucketCount = 128
 const martStageOrder = [
   'project_scope_article',
   'judgment_fact',
-  'review_article_judgment_payload',
   'review_article_judgment_detail',
   'review_article_rollup',
   'project_article_ordinal',
   'review_article_candidate',
-  'review_article_display',
   'prompt_answer_fact',
   'review_answer_dictionary',
   'review_article_filter_row',
   'review_article_filter_posting',
-  'review_article_page',
 ] as const
 
 type MartStage = (typeof martStageOrder)[number]
@@ -73,15 +70,11 @@ const getMartCounts = async () => {
     UNION ALL
     SELECT 'mart.judgment_fact' AS table_name, COUNT(*) AS count FROM mart.judgment_fact
     UNION ALL
-    SELECT 'mart.review_article_judgment_payload' AS table_name, COUNT(*) AS count FROM mart.review_article_judgment_payload
-    UNION ALL
     SELECT 'mart.review_article_judgment_detail' AS table_name, COUNT(*) AS count FROM mart.review_article_judgment_detail
     UNION ALL
     SELECT 'app.project_article_ordinal' AS table_name, COUNT(*) AS count FROM app.project_article_ordinal
     UNION ALL
     SELECT 'mart.review_article_candidate' AS table_name, COUNT(*) AS count FROM mart.review_article_candidate
-    UNION ALL
-    SELECT 'mart.review_article_display' AS table_name, COUNT(*) AS count FROM mart.review_article_display
     UNION ALL
     SELECT 'mart.prompt_answer_fact' AS table_name, COUNT(*) AS count FROM mart.prompt_answer_fact
     UNION ALL
@@ -92,8 +85,6 @@ const getMartCounts = async () => {
     SELECT 'mart.review_article_filter_posting' AS table_name, COUNT(*) AS count FROM mart.review_article_filter_posting
     UNION ALL
     SELECT 'mart.review_article_rollup' AS table_name, COUNT(*) AS count FROM mart.review_article_rollup
-    UNION ALL
-    SELECT 'mart.review_article_page' AS table_name, COUNT(*) AS count FROM mart.review_article_page
   `)
 
   return rows
@@ -110,13 +101,8 @@ const getProjectScopeArticleSql = (projectId: string) => {
       article_id,
       in_curated_scope,
       in_route_scope,
-      matched_import_route_ids,
-      article_title,
       article_created_at,
-      article_updated_at,
-      article_import_route,
-      article_publication_status,
-      source_updated_at
+      article_updated_at
     )
     WITH route_scope AS (
       SELECT
@@ -149,8 +135,7 @@ const getProjectScopeArticleSql = (projectId: string) => {
         project_id,
         article_id,
         COALESCE(BOOL_OR(in_curated_scope), FALSE) AS in_curated_scope,
-        COALESCE(BOOL_OR(in_route_scope), FALSE) AS in_route_scope,
-        LIST(DISTINCT import_route_id) FILTER (WHERE import_route_id IS NOT NULL) AS matched_import_route_ids
+        COALESCE(BOOL_OR(in_route_scope), FALSE) AS in_route_scope
       FROM combined_scope
       GROUP BY project_id, article_id
     )
@@ -159,13 +144,8 @@ const getProjectScopeArticleSql = (projectId: string) => {
       aggregated_scope.article_id,
       aggregated_scope.in_curated_scope,
       aggregated_scope.in_route_scope,
-      aggregated_scope.matched_import_route_ids,
-      article.article_title,
       article.article_created_at,
-      article.article_updated_at,
-      article.import_route,
-      article.publication_status,
-      article.updated_at
+      article.article_updated_at
     FROM aggregated_scope
     INNER JOIN app.project project
       ON project.id = aggregated_scope.project_id
@@ -262,7 +242,6 @@ const getPromptAnswerFactSql = (projectId: string) => {
       model_id,
       answer_value,
       answered_original,
-      article_title,
       article_created_at,
       article_updated_at,
       judgment_created_at
@@ -276,7 +255,6 @@ const getPromptAnswerFactSql = (projectId: string) => {
         judgment_fact.model_id,
         judgment_fact.answered_original,
         judgment_fact.normalized_answers,
-        judgment_fact.article_title,
         judgment_fact.article_created_at,
         judgment_fact.article_updated_at,
         judgment_fact.created_at AS judgment_created_at
@@ -303,7 +281,6 @@ const getPromptAnswerFactSql = (projectId: string) => {
       eligible_project_judgment.model_id,
       TRIM(answer.answer_value) AS answer_value,
       eligible_project_judgment.answered_original,
-      eligible_project_judgment.article_title,
       eligible_project_judgment.article_created_at,
       eligible_project_judgment.article_updated_at,
       eligible_project_judgment.judgment_created_at
@@ -329,10 +306,8 @@ const getReviewArticleJudgmentDetailSql = (projectId: string) => {
       prompt_order,
       judgment_id,
       created_at,
-      article_title,
       article_created_at,
       article_updated_at,
-      article_import_route,
       model_id,
       answered_original,
       answered_original_as_array
@@ -344,50 +319,11 @@ const getReviewArticleJudgmentDetailSql = (projectId: string) => {
       project_prompt.prompt_order,
       judgment_fact.judgment_id,
       judgment_fact.created_at,
-      judgment_fact.article_title,
       judgment_fact.article_created_at,
       judgment_fact.article_updated_at,
-      judgment_fact.article_import_route,
       judgment_fact.model_id,
       judgment_fact.answered_original,
       judgment_fact.answered_original_as_array
-    FROM mart.project_scope_article scope_article
-    INNER JOIN app.project project ON project.id = scope_article.project_id
-    INNER JOIN app.project_prompt project_prompt
-      ON project_prompt.project_id = scope_article.project_id
-     AND project_prompt.enabled = TRUE
-    INNER JOIN mart.judgment_fact judgment_fact
-      ON judgment_fact.article_id = scope_article.article_id
-     AND judgment_fact.prompt_id = project_prompt.prompt_id
-     AND judgment_fact.model_id = project.model_id
-     AND judgment_fact.use_title = project.use_title
-     AND judgment_fact.use_abstract = project.use_abstract
-     AND judgment_fact.use_fulltext = project.use_fulltext
-     AND judgment_fact.use_fulltext_no_images = project.use_fulltext_no_images
-    WHERE scope_article.project_id = ${projectLiteral};
-    COMMIT;
-  `
-}
-
-const getReviewArticleJudgmentPayloadSql = (projectId: string) => {
-  const projectLiteral = quoteSqlString(projectId)
-
-  return `
-    BEGIN TRANSACTION;
-    DELETE FROM mart.review_article_judgment_payload WHERE project_id = ${projectLiteral};
-    INSERT INTO mart.review_article_judgment_payload (
-      project_id,
-      judgment_id,
-      explanation,
-      quotes,
-      payload_updated_at
-    )
-    SELECT
-      scope_article.project_id,
-      judgment_fact.judgment_id,
-      judgment_fact.explanation,
-      judgment_fact.quotes,
-      current_timestamp
     FROM mart.project_scope_article scope_article
     INNER JOIN app.project project ON project.id = scope_article.project_id
     INNER JOIN app.project_prompt project_prompt
@@ -441,7 +377,6 @@ const getReviewArticleCandidateSql = (projectId: string) => {
       article_seq,
       article_created_at,
       article_updated_at,
-      article_title,
       has_all_llm_judgments,
       llm_judged_prompt_count,
       enabled_prompt_count,
@@ -453,7 +388,6 @@ const getReviewArticleCandidateSql = (projectId: string) => {
       ordinal.article_seq,
       rollup.article_created_at,
       rollup.article_updated_at,
-      rollup.article_title,
       rollup.has_all_llm_judgments,
       rollup.llm_judged_prompt_count,
       rollup.enabled_prompt_count,
@@ -462,42 +396,6 @@ const getReviewArticleCandidateSql = (projectId: string) => {
     INNER JOIN app.project_article_ordinal ordinal
       ON ordinal.project_id = rollup.project_id
      AND ordinal.article_id = rollup.article_id
-    WHERE rollup.project_id = ${projectLiteral};
-    COMMIT;
-  `
-}
-
-const getReviewArticleDisplaySql = (projectId: string) => {
-  const projectLiteral = quoteSqlString(projectId)
-
-  return `
-    BEGIN TRANSACTION;
-    DELETE FROM mart.review_article_display WHERE project_id = ${projectLiteral};
-    INSERT INTO mart.review_article_display (
-      project_id,
-      article_id,
-      article_external_id,
-      article_title,
-      journal_title,
-      url,
-      full_text_pdf,
-      full_text_fetched_at,
-      full_text_conversion_status,
-      display_updated_at
-    )
-    SELECT
-      rollup.project_id,
-      rollup.article_id,
-      article.article_id,
-      rollup.article_title,
-      NULL,
-      article.url,
-      article.full_text_pdf,
-      article.full_text_fetched_at,
-      article.full_text_conversion_status,
-      current_timestamp
-    FROM mart.review_article_rollup rollup
-    INNER JOIN app.article article ON article.id = rollup.article_id
     WHERE rollup.project_id = ${projectLiteral};
     COMMIT;
   `
@@ -604,12 +502,8 @@ const getReviewArticleRollupSql = (projectId: string) => {
     INSERT INTO mart.review_article_rollup (
       project_id,
       article_id,
-      article_title,
       article_created_at,
       article_updated_at,
-      article_import_route,
-      article_publication_status,
-      matched_import_route_ids,
       enabled_prompt_count,
       llm_judged_prompt_count,
       human_answered_prompt_count,
@@ -716,12 +610,8 @@ const getReviewArticleRollupSql = (projectId: string) => {
     SELECT
       scope_article.project_id,
       scope_article.article_id,
-      scope_article.article_title,
       scope_article.article_created_at,
       scope_article.article_updated_at,
-      scope_article.article_import_route,
-      scope_article.article_publication_status,
-      scope_article.matched_import_route_ids,
       COALESCE(prompt_count.enabled_prompt_count, 0) AS enabled_prompt_count,
       COALESCE(llm_rollup.llm_judged_prompt_count, 0) AS llm_judged_prompt_count,
       COALESCE(human_rollup.human_answered_prompt_count, 0) AS human_answered_prompt_count,
@@ -751,41 +641,6 @@ const getReviewArticleRollupSql = (projectId: string) => {
       ON review_state.project_id = scope_article.project_id
      AND review_state.article_id = scope_article.article_id
     WHERE scope_article.project_id = ${projectLiteral};
-    COMMIT;
-  `
-}
-
-const getReviewArticlePageSql = (projectId: string) => {
-  const projectLiteral = quoteSqlString(projectId)
-
-  return `
-    BEGIN TRANSACTION;
-    DELETE FROM mart.review_article_page WHERE project_id = ${projectLiteral};
-    INSERT INTO mart.review_article_page (
-      project_id,
-      article_id,
-      article_created_at,
-      article_updated_at,
-      article_title,
-      journal_title,
-      has_all_llm_judgments,
-      llm_judged_prompt_count,
-      enabled_prompt_count,
-      page_updated_at
-    )
-    SELECT
-      rollup.project_id,
-      rollup.article_id,
-      rollup.article_created_at,
-      rollup.article_updated_at,
-      rollup.article_title,
-      NULL,
-      rollup.has_all_llm_judgments,
-      rollup.llm_judged_prompt_count,
-      rollup.enabled_prompt_count,
-      current_timestamp
-    FROM mart.review_article_rollup rollup
-    WHERE rollup.project_id = ${projectLiteral};
     COMMIT;
   `
 }
@@ -841,25 +696,6 @@ const rebuildPromptAnswerFactProjects = async (projectIds: string[], index = 0):
   return rebuildPromptAnswerFactProjects(projectIds, index + 1)
 }
 
-const rebuildReviewArticleJudgmentPayloadProjects = async (projectIds: string[], index = 0): Promise<void> => {
-  if (index >= projectIds.length) {
-    return
-  }
-
-  const projectId = projectIds[index]
-
-  if (!projectId) {
-    return rebuildReviewArticleJudgmentPayloadProjects(projectIds, index + 1)
-  }
-
-  if (index % 10 === 0) {
-    console.log(`rebuilding mart.review_article_judgment_payload project ${index + 1}/${projectIds.length}`)
-  }
-
-  await runSql(getReviewArticleJudgmentPayloadSql(projectId))
-  return rebuildReviewArticleJudgmentPayloadProjects(projectIds, index + 1)
-}
-
 const rebuildProjectArticleOrdinalProjects = async (projectIds: string[], index = 0): Promise<void> => {
   if (index >= projectIds.length) {
     return
@@ -896,25 +732,6 @@ const rebuildReviewArticleCandidateProjects = async (projectIds: string[], index
 
   await runSql(getReviewArticleCandidateSql(projectId))
   return rebuildReviewArticleCandidateProjects(projectIds, index + 1)
-}
-
-const rebuildReviewArticleDisplayProjects = async (projectIds: string[], index = 0): Promise<void> => {
-  if (index >= projectIds.length) {
-    return
-  }
-
-  const projectId = projectIds[index]
-
-  if (!projectId) {
-    return rebuildReviewArticleDisplayProjects(projectIds, index + 1)
-  }
-
-  if (index % 10 === 0) {
-    console.log(`rebuilding mart.review_article_display project ${index + 1}/${projectIds.length}`)
-  }
-
-  await runSql(getReviewArticleDisplaySql(projectId))
-  return rebuildReviewArticleDisplayProjects(projectIds, index + 1)
 }
 
 const rebuildReviewAnswerDictionaryProjects = async (projectIds: string[], index = 0): Promise<void> => {
@@ -1012,25 +829,6 @@ const rebuildReviewArticleRollupProjects = async (projectIds: string[], index = 
   return rebuildReviewArticleRollupProjects(projectIds, index + 1)
 }
 
-const rebuildReviewArticlePageProjects = async (projectIds: string[], index = 0): Promise<void> => {
-  if (index >= projectIds.length) {
-    return
-  }
-
-  const projectId = projectIds[index]
-
-  if (!projectId) {
-    return rebuildReviewArticlePageProjects(projectIds, index + 1)
-  }
-
-  if (index % 10 === 0) {
-    console.log(`rebuilding mart.review_article_page project ${index + 1}/${projectIds.length}`)
-  }
-
-  await runSql(getReviewArticlePageSql(projectId))
-  return rebuildReviewArticlePageProjects(projectIds, index + 1)
-}
-
 const rebuildDuckdbMarts = async (options: RebuildOptions) => {
   const projectIds = await getProjectIds(options.projectId, options.includeArchived)
 
@@ -1046,12 +844,6 @@ const rebuildDuckdbMarts = async (options: RebuildOptions) => {
   if (shouldRunStage(options, 'judgment_fact')) {
     console.log('starting mart.judgment_fact rebuild')
     await rebuildJudgmentFactBuckets()
-    console.log(JSON.stringify(await getMartCounts()))
-  }
-
-  if (shouldRunStage(options, 'review_article_judgment_payload')) {
-    console.log('starting mart.review_article_judgment_payload rebuild')
-    await rebuildReviewArticleJudgmentPayloadProjects(projectIds)
     console.log(JSON.stringify(await getMartCounts()))
   }
 
@@ -1079,12 +871,6 @@ const rebuildDuckdbMarts = async (options: RebuildOptions) => {
     console.log(JSON.stringify(await getMartCounts()))
   }
 
-  if (shouldRunStage(options, 'review_article_display')) {
-    console.log('starting mart.review_article_display rebuild')
-    await rebuildReviewArticleDisplayProjects(projectIds)
-    console.log(JSON.stringify(await getMartCounts()))
-  }
-
   if (shouldRunStage(options, 'prompt_answer_fact')) {
     console.log('starting mart.prompt_answer_fact rebuild')
     await rebuildPromptAnswerFactProjects(projectIds)
@@ -1106,12 +892,6 @@ const rebuildDuckdbMarts = async (options: RebuildOptions) => {
   if (shouldRunStage(options, 'review_article_filter_posting')) {
     console.log('starting mart.review_article_filter_posting rebuild')
     await rebuildReviewArticleFilterPostingProjects(projectIds)
-    console.log(JSON.stringify(await getMartCounts()))
-  }
-
-  if (shouldRunStage(options, 'review_article_page')) {
-    console.log('starting mart.review_article_page rebuild')
-    await rebuildReviewArticlePageProjects(projectIds)
     console.log(JSON.stringify(await getMartCounts()))
   }
 }
