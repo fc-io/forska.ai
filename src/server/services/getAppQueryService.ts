@@ -82,13 +82,13 @@ const getDateValue = (value: unknown) => {
   return parsedDate && !Number.isNaN(parsedDate.getTime()) ? parsedDate : null
 }
 
-const getJsonValue = (value: unknown) => {
+const getJsonValue = (value: unknown): unknown => {
   if (typeof value !== 'string') {
     return value
   }
 
   try {
-    return JSON.parse(value) as unknown
+    return getJsonValue(JSON.parse(value) as unknown)
   } catch {
     return value
   }
@@ -123,7 +123,7 @@ const getReviewHydrationRows = async (articleIds: string[]): Promise<ReviewHydra
       full_text_pdf AS fullTextPDF,
       full_text_fetched_at AS fullTextFetchedAt,
       full_text_conversion_status AS fullTextConversionStatus,
-      TO_JSON(source_metadata) AS sourceMetadata
+      source_metadata AS sourceMetadata
     FROM app.article
     WHERE id IN (${getQuotedStringList(articleIds).join(', ')})
   `)
@@ -213,7 +213,7 @@ const getFullArticlesByIds = async (articleIds: string[]): Promise<FullArticleRo
       full_text_char_count AS fullTextCharCount,
       content_hash AS contentHash,
       import_route AS importRoute,
-      TO_JSON(source_metadata) AS sourceMetadata,
+      source_metadata AS sourceMetadata,
       publication_status AS publicationStatus
     FROM app.article
     WHERE id IN (${getQuotedStringList(articleIds).join(', ')})

@@ -337,6 +337,12 @@ test('queryArticlesReviewsFromDuckdb uses candidate/display serving marts when t
         fullTextPDF: null,
         id: 'article-1',
         journalTitle: 'Journal 1',
+        sourceMetadata: {
+          journalTitle: null,
+          preprintSource: 'ppr',
+          preprintHostLabel: 'Research Square',
+          isPreprint: true,
+        },
         url: 'https://example.com/1',
       },
     ],
@@ -371,6 +377,13 @@ test('queryArticlesReviewsFromDuckdb uses candidate/display serving marts when t
     'INNER JOIN app.article article ON article.id = page_ids.articleId',
   )
   expect(duckdbRunnerMockRef.current.queries[6]).toContain('FROM mart.review_article_judgment_detail j')
+  expect(result.data[0]?.sourceMetadata).toEqual({
+    journalTitle: null,
+    preprintSource: 'ppr',
+    preprintHostLabel: 'Research Square',
+    isPreprint: true,
+    fullTextLinks: [],
+  })
 })
 
 test('queryArticlesReviewsFromDuckdb uses filter posting mart when available', async () => {

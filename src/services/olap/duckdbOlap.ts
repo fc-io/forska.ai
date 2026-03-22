@@ -176,18 +176,13 @@ const getDuckdbBooleanValue = (value: unknown, fallback: boolean) => {
       : fallback
 }
 
-const getDuckdbJsonValue = (value: unknown) => {
+const getDuckdbJsonValue = (value: unknown): unknown => {
   if (typeof value !== 'string') {
     return value
   }
 
-  const trimmedValue = value.trim()
-  if (!trimmedValue.startsWith('{') && !trimmedValue.startsWith('[')) {
-    return value
-  }
-
   try {
-    return JSON.parse(trimmedValue) as unknown
+    return getDuckdbJsonValue(JSON.parse(value) as unknown)
   } catch {
     return value
   }
@@ -1871,6 +1866,7 @@ export const queryArticlesReviewsFromDuckdb = async (
         judgedPromptIds: getJudgedPromptIds(judgmentsForArticle, scope.promptOrderMap),
         isFullyJudged: true,
         journalTitle: article.journalTitle,
+        sourceMetadata: article.sourceMetadata,
       }
     })
 

@@ -107,13 +107,13 @@ export const getDateValue = (value: unknown) => {
   return parsedDate && !Number.isNaN(parsedDate.getTime()) ? parsedDate : null
 }
 
-export const getJsonValue = (value: unknown) => {
+export const getJsonValue = (value: unknown): unknown => {
   if (typeof value !== 'string') {
     return value
   }
 
   try {
-    return JSON.parse(value) as unknown
+    return getJsonValue(JSON.parse(value) as unknown)
   } catch {
     return value
   }
