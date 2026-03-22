@@ -121,14 +121,15 @@ const postProviderAuthLifecycle = async ({
   providerKind: string
   stage: 'begin' | 'finish'
 }) => {
-  const response = await fetch(`/api/provider-auth/${encodeURIComponent(providerKind)}/${stage}`, {
-    body: JSON.stringify(body),
-    headers: {'content-type': 'application/json'},
-    method: 'POST',
-  })
-  const data = (await response.json()) as ProviderAuthLifecycleResponse
+  const response =
+    stage === 'begin'
+      ? await apiClient.api['provider-auth']({providerKind}).begin.post({connectionId: body.connectionId})
+      : await apiClient.api['provider-auth']({providerKind}).finish.post({
+          connectionId: body.connectionId,
+          payload: body.payload,
+        })
   const result = handleApiResponse<ProviderAuthLifecycleResponse>(
-    {data, error: response.ok ? undefined : data, status: response.status},
+    response as unknown as {data?: ProviderAuthLifecycleResponse; error?: unknown; status?: number},
     `Failed to ${stage} provider auth`,
   )
 
