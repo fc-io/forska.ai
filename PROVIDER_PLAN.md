@@ -56,10 +56,10 @@
 - [x] Backfill existing `app.model` rows into one seeded `app.provider_connection` row per existing model row.
 - [x] Seed new model inserts with matching `provider_connection_id`.
 - [x] Stop syncing env worker URLs into `app.model.worker_urls`.
-- [x] Move runtime reads from model transport columns to provider connections, with a few legacy fallback reads still pending removal.
-- [ ] Slim persisted provider/model metadata so `config_json` and `metadata_json` only hold normalized hot-path data, not raw provider payloads.
-- [ ] Add `NOT NULL` + FK on `app.model.provider_connection_id` after runtime switch.
-- [ ] Drop old model-level transport/auth columns after phase 2.
+- [x] Move runtime reads from model transport columns to provider connections.
+- [x] Slim persisted provider/model metadata so `config_json` and `metadata_json` only hold normalized hot-path data, not raw provider payloads.
+- [x] Add `NOT NULL` + FK on `app.model.provider_connection_id` after runtime switch.
+- [x] Drop old model-level transport/auth columns after phase 2.
 
 ### API
 
@@ -294,6 +294,8 @@
 
 - Done now:
   - provider connections and model linkage schema
+  - lean provider/model metadata persistence and cleanup script
+  - final `app.model` rebuild to provider-connection-only schema
   - provider registry, repositories, services, and transports
   - explicit adapters for all first-pass providers
   - generic auth lifecycle support with Codex-specific pending login behavior
@@ -301,13 +303,11 @@
   - separate add-provider and manage-models UI
   - provider-specific onboarding form extraction
   - route/adaptor/auth focused test coverage
+  - end-to-end provider -> model -> project test coverage
 - Still left:
-  - remove remaining legacy fallback reads from old model transport/auth columns
-  - slim provider/model metadata persistence so it matches the lean-DB rule
-  - add FK / `NOT NULL` on `app.model.provider_connection_id`
-  - drop obsolete model-level transport/auth columns
-  - add UI tests and end-to-end provider -> model -> project coverage
+  - add fuller rendered UI tests for add-provider/manage-models flows
   - optionally remove/minimize the compatibility shim in `src/server/services/providerClientService.ts`
+  - optional future `app.provider_auth_profile` work for rotation/failover
 
 ## Adapter / Module Checklist
 
@@ -698,7 +698,7 @@
 
 - [x] Route judgment execution through `providerInvocationService.ts`
 - [x] Resolve runtime credentials from provider connection, not model row
-- [ ] Route health/usage reads through provider services everywhere, with a few remaining legacy fallback reads still to clean up.
+- [x] Route health/usage reads through provider services everywhere for the current runtime path.
 
 ### Ticket 8 - Finish admin UI split
 
@@ -708,24 +708,24 @@
 
 ### Ticket 9 - Remove legacy assumptions
 
-- [ ] Remove remaining legacy model-level transport/auth reads
-- [ ] Replace raw provider/model metadata persistence with lean normalized fields only
-- [ ] Add FK / `NOT NULL` on `provider_connection_id`
-- [ ] Drop obsolete model-level transport/auth columns
+- [x] Remove remaining legacy model-level transport/auth reads
+- [x] Replace raw provider/model metadata persistence with lean normalized fields only
+- [x] Add FK / `NOT NULL` on `provider_connection_id`
+- [x] Drop obsolete model-level transport/auth columns
 
 ### Ticket 10 - Lock with tests
 
-- [ ] Transport tests
-- [ ] Adapter tests
-- [ ] Route tests
+- [x] Transport tests
+- [x] Adapter tests
+- [x] Route tests
 - [ ] UI tests
-- [ ] End-to-end provider -> model -> project test
+- [x] End-to-end provider -> model -> project test
 
 ### Definition of done for Phase 2
 
 - [x] Every supported provider resolves through the registry
-- [ ] Runtime no longer depends on legacy model transport/auth fields.
-- [ ] Provider persistence follows the lean hot-DB rule: no raw provider catalog payloads or runtime-discovery blobs stored by default.
+- [x] Runtime no longer depends on legacy model transport/auth fields.
+- [x] Provider persistence follows the lean hot-DB rule: no raw provider catalog payloads or runtime-discovery blobs stored by default.
 - [x] Provider connect/test/sync/manual-add all run through shared services
 - [x] Add-provider and model-management flows remain separate in UI and API
 
@@ -808,4 +808,4 @@
 - One provider connection can expose many models without duplicated auth/config.
 - Projects still pick one `app.model` row.
 - Provider auth/config is not stored on user config or repeated on models.
-- Provider logic is centralized behind Effect-powered adapters.
+- Provider logic is centralized behind provider adapters/services.
