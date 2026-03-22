@@ -306,7 +306,6 @@
   - end-to-end provider -> model -> project test coverage
 - Still left:
   - add fuller rendered UI tests for add-provider/manage-models flows
-  - optionally remove/minimize the compatibility shim in `src/server/services/providerClientService.ts`
   - optional future `app.provider_auth_profile` work for rotation/failover
 
 ## Adapter / Module Checklist
