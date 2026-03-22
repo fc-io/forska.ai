@@ -18,7 +18,7 @@ export type ProviderRuntimeSummary = {providerKind: string | null; workerUrls: s
 export type ProviderConnectionWorkerState = {
   effectiveWorkerUrls: string[]
   runtimeWorkerUrls: string[]
-  workerSource: 'legacy' | 'manual' | 'none' | 'runtime'
+  workerSource: 'manual' | 'none' | 'runtime'
 }
 
 export type ProviderModel = {
@@ -377,13 +377,7 @@ export const getProviderModelReasoningEfforts = (metadataJson: unknown): string[
 }
 
 export const getWorkerSourceLabel = (workerSource: ProviderConnectionWorkerState['workerSource']): string => {
-  return workerSource === 'runtime'
-    ? 'Runtime-discovered'
-    : workerSource === 'manual'
-      ? 'Saved manual'
-      : workerSource === 'legacy'
-        ? 'Legacy saved'
-        : 'None'
+  return workerSource === 'runtime' ? 'Runtime-discovered' : workerSource === 'manual' ? 'Saved manual' : 'None'
 }
 
 export const getWorkerUrlsFromInputValue = (value: string): string[] => {

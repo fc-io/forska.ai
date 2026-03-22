@@ -236,7 +236,7 @@ export const projectsRoutes = new Elysia()
         p.archived AS archived,
         p.created_at AS createdAt,
         p.updated_at AS updatedAt,
-        COALESCE(m.display_name, m.name, m.remote_model_id, m.model_name) AS modelName
+        COALESCE(m.display_name, m.name, m.remote_model_id) AS modelName
       FROM app.project p
       LEFT JOIN app.model m ON p.model_id = m.id
       WHERE p.archived = FALSE
@@ -292,7 +292,7 @@ export const projectsRoutes = new Elysia()
         p.archived AS archived,
         p.created_at AS createdAt,
         p.updated_at AS updatedAt,
-        COALESCE(m.display_name, m.name, m.remote_model_id, m.model_name) AS modelName
+        COALESCE(m.display_name, m.name, m.remote_model_id) AS modelName
       FROM app.project p
       LEFT JOIN app.model m ON p.model_id = m.id
       WHERE p.archived = TRUE
@@ -461,11 +461,11 @@ export const projectsRoutes = new Elysia()
         }>(`
         SELECT
           m.id AS id,
-          COALESCE(m.display_name, m.name, m.remote_model_id, m.model_name) AS name,
-          COALESCE(pc.provider_kind, m.provider) AS provider,
-          COALESCE(m.remote_model_id, m.model_name) AS modelName,
-          COALESCE(pc.base_url, m.base_url) AS baseURL,
-          COALESCE(m.variant, m.version) AS version
+          COALESCE(m.display_name, m.name, m.remote_model_id) AS name,
+          pc.provider_kind AS provider,
+          m.remote_model_id AS modelName,
+          pc.base_url AS baseURL,
+          m.variant AS version
         FROM app.model m
         LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
         WHERE m.id = '${escapeSqlString(project.modelId)}'

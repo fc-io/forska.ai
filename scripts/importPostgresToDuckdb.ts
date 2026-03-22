@@ -83,10 +83,45 @@ type ImportReport = {
 const importTableConfigs: TableConfig[] = [
   {
     batchSize: 5000,
+    extraColumns: {
+      auth_mode: `CASE
+        WHEN LOWER(COALESCE(source_row.provider, '')) = 'codex' THEN 'codex-cli'
+        WHEN NULLIF(TRIM(CAST(source_row.api_key_variable AS VARCHAR)), '') IS NOT NULL THEN 'api-key'
+        WHEN NULLIF(TRIM(CAST(source_row.base_url AS VARCHAR)), '') IS NOT NULL THEN 'none'
+        ELSE NULL
+      END`,
+      enabled: 'TRUE',
+      label: 'source_row.name',
+      provider_kind: `COALESCE(NULLIF(LOWER(TRIM(CAST(source_row.provider AS VARCHAR))), ''), 'unknown')`,
+      secret_ref: `CASE
+        WHEN NULLIF(TRIM(CAST(source_row.api_key_variable AS VARCHAR)), '') IS NOT NULL THEN 'env:' || TRIM(CAST(source_row.api_key_variable AS VARCHAR))
+        ELSE NULL
+      END`,
+    },
+    sourceTable: 'models',
+    targetSchema: 'app',
+    targetTable: 'provider_connection',
+    transforms: {
+      config_json: `CASE
+        WHEN __SOURCE__ IS NULL OR ARRAY_LENGTH(__SOURCE__) = 0 THEN NULL
+        ELSE json_object('manualWorkerUrls', __SOURCE__, 'workerUrlMode', 'manual')
+      END`,
+    },
+  },
+  {
+    batchSize: 5000,
+    extraColumns: {
+      display_name: 'source_row.name',
+      enabled: 'TRUE',
+      metadata_json: 'NULL',
+      provider_connection_id: 'source_row.id',
+      remote_model_id: 'source_row.model_name',
+      source: `'manual'`,
+      variant: 'source_row.version',
+    },
     sourceTable: 'models',
     targetSchema: 'app',
     targetTable: 'model',
-    transforms: {worker_urls: 'CAST(__SOURCE__ AS VARCHAR[])'},
   },
   {batchSize: 5000, sourceTable: 'datasource', targetSchema: 'app', targetTable: 'data_source'},
   {batchSize: 5000, sourceTable: 'import_route', targetSchema: 'app', targetTable: 'import_route'},

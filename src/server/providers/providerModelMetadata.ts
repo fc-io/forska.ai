@@ -27,7 +27,13 @@ type ProviderModelMetadata = {
     runtime: {baseURL: string | null; modelName: string | null; servedModelName: string | null} | null
     source: ProviderModelMetadataSource
   }
-  raw: unknown
+}
+
+const getNormalizedDiscoveryMetadata = (value: unknown): ProviderModelMetadata['discovery'] | null => {
+  const metadataRecord = getJsonRecord(value)
+  const discovery = getJsonRecord(metadataRecord?.discovery)
+
+  return discovery ? (discovery as ProviderModelMetadata['discovery']) : null
 }
 
 const contextWindowKeys = [
@@ -222,7 +228,7 @@ export const getProviderModelMetadataContextLength = (value: unknown): number | 
   const discoveryContextLength =
     getPositiveInteger(contextWindow?.totalTokens) ?? getPositiveInteger(contextWindow?.inputTokens)
 
-  return discoveryContextLength ?? getContextWindowFromMetadata(metadataRecord?.raw ?? value).totalTokens
+  return discoveryContextLength ?? getContextWindowFromMetadata(value).totalTokens
 }
 
 export const getProviderModelMetadataReasoningEfforts = (value: unknown): string[] => {
@@ -235,7 +241,7 @@ export const getProviderModelMetadataReasoningEfforts = (value: unknown): string
       })
     : []
 
-  return reasoningEfforts.length > 0 ? reasoningEfforts : getReasoningEffortsFromMetadata(metadataRecord?.raw ?? value)
+  return reasoningEfforts.length > 0 ? reasoningEfforts : getReasoningEffortsFromMetadata(value)
 }
 
 export const getProviderModelMetadataSource = (value: unknown): string | null => {
@@ -243,6 +249,24 @@ export const getProviderModelMetadataSource = (value: unknown): string | null =>
   const discovery = getJsonRecord(metadataRecord?.discovery)
 
   return getTrimmedValue(discovery?.source)
+}
+
+export const getPersistedProviderModelMetadata = ({
+  listedModel,
+  metadataJson,
+  providerKind,
+  source,
+}: {
+  listedModel: ProviderListedModel
+  metadataJson: unknown
+  providerKind: ProviderKind
+  source: ProviderModelMetadataSource
+}) => {
+  const discovery = getNormalizedDiscoveryMetadata(metadataJson)
+
+  return discovery
+    ? {discovery}
+    : getNormalizedProviderModelMetadata({listedModel, providerKind, rawMetadata: metadataJson, source})
 }
 
 export const getNormalizedProviderModelMetadata = ({
@@ -286,7 +310,6 @@ export const getNormalizedProviderModelMetadata = ({
         : null,
       source: getMetadataSource({runtimeMetadata: runtimeMetadata ?? null, source}),
     },
-    raw: rawMetadata,
   }
 }
 

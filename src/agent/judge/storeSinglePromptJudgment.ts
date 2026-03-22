@@ -48,8 +48,8 @@ export const storeSinglePromptJudgment = async ({
 
     const [modelRow] = await getAppDatabaseService().queryJson<{modelName: string | null; provider: string | null}>(`
       SELECT
-        COALESCE(m.display_name, m.name, m.remote_model_id, m.model_name) AS modelName,
-        COALESCE(pc.provider_kind, m.provider) AS provider
+        COALESCE(m.display_name, m.name, m.remote_model_id) AS modelName,
+        pc.provider_kind AS provider
       FROM app.model m
       LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
       WHERE m.id = '${escapeSqlString(modelId)}'

@@ -2,6 +2,7 @@ import {expect, test} from 'bun:test'
 
 import {
   getNormalizedProviderModelMetadata,
+  getPersistedProviderModelMetadata,
   getProviderModelMetadataContextLength,
   getProviderModelMetadataReasoningEfforts,
   getProviderModelMetadataSource,
@@ -50,4 +51,57 @@ test('normalized provider model metadata merges runtime metadata and reasoning e
   expect(getProviderModelMetadataContextLength(metadata)).toBe(65536)
   expect(getProviderModelMetadataReasoningEfforts(metadata)).toEqual(['medium', 'high'])
   expect(getProviderModelMetadataSource(metadata)).toBe('provider+runtime')
+})
+
+test('normalized provider model metadata does not keep raw provider payloads', () => {
+  const metadata = getNormalizedProviderModelMetadata({
+    listedModel: {
+      displayName: 'gpt-4.1',
+      metadataJson: null,
+      modelName: 'gpt-4.1',
+      remoteModelId: 'gpt-4.1',
+      variant: null,
+      version: null,
+    },
+    providerKind: 'openai',
+    rawMetadata: {id: 'gpt-4.1', owned_by: 'openai'},
+    source: 'provider',
+  })
+
+  expect('raw' in (metadata as Record<string, unknown>)).toBe(false)
+})
+
+test('persisted provider model metadata strips any extra top-level raw payload', () => {
+  const persisted = getPersistedProviderModelMetadata({
+    listedModel: {
+      displayName: 'gpt-4.1',
+      metadataJson: null,
+      modelName: 'gpt-4.1',
+      remoteModelId: 'gpt-4.1',
+      variant: null,
+      version: null,
+    },
+    metadataJson: {
+      discovery: {
+        capabilities: {reasoningEfforts: []},
+        contextWindow: {inputTokens: 128000, outputTokens: null, totalTokens: 128000},
+        identity: {
+          displayName: 'gpt-4.1',
+          modelName: 'gpt-4.1',
+          remoteModelId: 'gpt-4.1',
+          variant: null,
+          version: null,
+        },
+        providerKind: 'openai',
+        runtime: null,
+        source: 'provider',
+      },
+      raw: {large: true},
+    },
+    providerKind: 'openai',
+    source: 'provider',
+  })
+
+  expect('raw' in (persisted as Record<string, unknown>)).toBe(false)
+  expect(getProviderModelMetadataContextLength(persisted)).toBe(128000)
 })

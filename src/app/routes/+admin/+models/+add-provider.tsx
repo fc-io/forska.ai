@@ -21,6 +21,7 @@ import {
   type ProviderCatalogEntry,
   supportsRuntimeWorkerUrls,
 } from './providerConnectionsClient.ts'
+import {getCodexOnboardingUiState} from './providerUiState.ts'
 
 type ConnectionFormState = {
   apiKey: string
@@ -142,21 +143,19 @@ const AddProviderPage = () => {
   }
 
   const shouldHideCodexConnectCard = () => {
-    return (
-      connectionForm.providerKind === 'codex'
-      && Boolean(
-        existingCodexConnection() || codexProviderState()?.cli?.loggedIn || codexProviderState()?.appServerReady,
-      )
-    )
+    return getCodexOnboardingUiState({
+      existingCodexConnection: existingCodexConnection(),
+      providerAuth: providerAuth(),
+      providerKind: connectionForm.providerKind,
+    }).shouldHideConnectCard
   }
 
   const canCreateCodexProvider = () => {
-    return (
-      connectionForm.providerKind === 'codex'
-      && !existingCodexConnection()
-      && providerAuth()?.status === 'complete'
-      && Boolean(codexProviderState()?.cli?.loggedIn && codexProviderState()?.appServerReady)
-    )
+    return getCodexOnboardingUiState({
+      existingCodexConnection: existingCodexConnection(),
+      providerAuth: providerAuth(),
+      providerKind: connectionForm.providerKind,
+    }).canCreateProvider
   }
 
   const selectCatalogEntry = (entry: ProviderCatalogEntry) => {

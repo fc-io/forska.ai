@@ -81,18 +81,24 @@ export const getProviderConnectionConfigFromJson = ({
   return {manualWorkerUrls, workerUrlMode}
 }
 
+export const getPersistedProviderConnectionConfigValue = ({
+  config,
+  providerKind,
+}: {
+  config: ProviderConnectionConfig
+  providerKind: string | null | undefined
+}): ProviderConnectionConfig | null => {
+  const manualWorkerUrls = normalizeWorkerUrls(config.manualWorkerUrls)
+  const workerUrlMode = getWorkerUrlMode({manualWorkerUrls, providerKind, workerUrlMode: config.workerUrlMode})
+  const defaultWorkerUrlMode = getDefaultWorkerUrlMode({manualWorkerUrls, providerKind})
+
+  return manualWorkerUrls.length === 0 && workerUrlMode === defaultWorkerUrlMode && workerUrlMode === 'manual'
+    ? null
+    : {manualWorkerUrls, workerUrlMode}
+}
+
 export const getJsonSqlLiteral = (value: unknown): string => {
   return value === null || value === undefined ? 'NULL' : `CAST(${getSqlLiteral(JSON.stringify(value))} AS JSON)`
-}
-
-export const getLegacySecretRef = (apiKeyVariable: string | null | undefined): string | null => {
-  const normalized = getTrimmedValue(apiKeyVariable)
-
-  return normalized ? `env:${normalized}` : null
-}
-
-export const getLegacyProviderConnectionConfig = (workerUrls: unknown): ProviderConnectionConfig => {
-  return {manualWorkerUrls: normalizeWorkerUrls(getJsonValue(workerUrls) as string[] | null), workerUrlMode: 'manual'}
 }
 
 export const getProviderConnectionRecordFromRow = (row: ProviderConnectionRow): ProviderConnectionRecord => {
@@ -160,12 +166,12 @@ export const getProviderModelReturnQuery = (statement: string): string => {
       id,
       provider_connection_id AS providerConnectionId,
       name,
-      provider,
-      base_url AS baseURL,
-      model_name AS modelName,
+      NULL AS provider,
+      NULL AS baseURL,
+      remote_model_id AS modelName,
       remote_model_id AS remoteModelId,
       display_name AS displayName,
-      version,
+      variant AS version,
       variant,
       source,
       enabled,

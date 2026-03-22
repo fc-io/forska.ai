@@ -555,9 +555,9 @@ export const articlesRoutes = new Elysia()
           j.snapshot_project_model_name AS judgmentSnapshotProjectModelName,
           p.original_text AS promptOriginalText,
           p.prompt_heading AS promptHeading,
-          COALESCE(m.display_name, m.name, m.remote_model_id, m.model_name) AS modelName,
-          COALESCE(pc.provider_kind, m.provider) AS modelProvider,
-          COALESCE(m.variant, m.version) AS modelVersion
+          COALESCE(m.display_name, m.name, m.remote_model_id) AS modelName,
+          pc.provider_kind AS modelProvider,
+          m.variant AS modelVersion
         FROM app.judgment j
         INNER JOIN app.prompt p ON j.prompt_id = p.id
         LEFT JOIN app.model m ON j.model_id = m.id

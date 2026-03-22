@@ -328,9 +328,9 @@ const getModelInfoMap = async (modelIds: string[]) => {
   }>(`
     SELECT
       m.id AS id,
-      COALESCE(pc.provider_kind, m.provider) AS provider,
-      COALESCE(m.remote_model_id, m.model_name) AS modelName,
-      COALESCE(m.variant, m.version) AS version
+      pc.provider_kind AS provider,
+      m.remote_model_id AS modelName,
+      m.variant AS version
     FROM app.model m
     LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
     WHERE m.id IN (${getQuotedStringList(modelIds).join(', ')})

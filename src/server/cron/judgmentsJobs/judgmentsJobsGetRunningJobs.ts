@@ -10,8 +10,8 @@ export const judgmentsJobsGetRunningJobs = async () => {
     SELECT
       jj.id AS id,
       jj.project_id AS projectId,
-      COALESCE(pc.provider_kind, m.provider) AS modelProvider,
-      COALESCE(m.model_name, m.remote_model_id) AS modelName
+      pc.provider_kind AS modelProvider,
+      m.remote_model_id AS modelName
     FROM app.judgment_job jj
     INNER JOIN app.project p ON jj.project_id = p.id
     INNER JOIN app.model m ON p.model_id = m.id

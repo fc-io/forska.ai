@@ -70,20 +70,14 @@ export type ModelRecord = {
   id: string
   createdAt: Date
   updatedAt: Date
-  providerConnectionId: string | null
+  providerConnectionId: string
   name: string
-  provider: string | null
-  baseURL: string | null
-  modelName: string | null
   remoteModelId: string | null
   displayName: string | null
-  version: string | null
   variant: string | null
   source: ModelSource | null
   enabled: boolean
   metadataJson: unknown
-  apiKeyVariable: string | null
-  workerUrls: string[] | null
 }
 
 export type ProviderConnectionRecord = {

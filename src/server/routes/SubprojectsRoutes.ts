@@ -166,7 +166,7 @@ export const subprojectsRoutes = new Elysia()
           p.name AS name,
           p.description AS description,
           p.model_id AS modelId,
-          COALESCE(m.display_name, m.name, m.remote_model_id, m.model_name) AS modelName,
+          COALESCE(m.display_name, m.name, m.remote_model_id) AS modelName,
           p.use_title AS useTitle,
           p.use_abstract AS useAbstract,
           p.use_fulltext AS useFulltext,

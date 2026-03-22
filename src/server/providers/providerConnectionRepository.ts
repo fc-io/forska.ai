@@ -4,8 +4,7 @@ import {type ProviderKind} from '../services/providerCatalog.ts'
 import {
   attachModelsToConnections,
   getJsonSqlLiteral,
-  getLegacyProviderConnectionConfig,
-  getLegacySecretRef,
+  getPersistedProviderConnectionConfigValue,
   getProviderConnectionRecordFromRow,
   getProviderModelRecordFromRow,
   type ProviderConnectionRow,
@@ -53,12 +52,12 @@ const getProviderModelRows = async (): Promise<ProviderModelRecord[]> => {
       m.id,
       m.provider_connection_id AS providerConnectionId,
       m.name,
-      COALESCE(pc.provider_kind, m.provider) AS provider,
-      COALESCE(pc.base_url, m.base_url) AS baseURL,
-      COALESCE(m.model_name, m.remote_model_id) AS modelName,
+      pc.provider_kind AS provider,
+      pc.base_url AS baseURL,
+      m.remote_model_id AS modelName,
       m.remote_model_id AS remoteModelId,
       COALESCE(m.display_name, m.name) AS displayName,
-      m.version,
+      m.variant AS version,
       m.variant,
       m.source,
       COALESCE(m.enabled, TRUE) AS enabled,
@@ -66,7 +65,7 @@ const getProviderModelRows = async (): Promise<ProviderModelRecord[]> => {
       m.created_at AS createdAt,
       m.updated_at AS updatedAt
     FROM app.model m
-    LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
+    INNER JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
     ORDER BY COALESCE(pc.label, m.name) ASC, m.created_at ASC, m.name ASC
   `)
 
@@ -96,24 +95,6 @@ const getProviderConnectionRecordById = async (id: string): Promise<ProviderConn
   return row ? getProviderConnectionRecordFromRow(row) : null
 }
 
-const syncModelConnectionFields = async ({
-  baseURL,
-  providerConnectionId,
-  providerKind,
-}: {
-  baseURL: string | null
-  providerConnectionId: string
-  providerKind: ProviderKind
-}): Promise<void> => {
-  await getAppDatabaseService().run(`
-    UPDATE app.model
-    SET provider = ${getSqlLiteral(providerKind)},
-        base_url = ${getSqlLiteral(baseURL)},
-        updated_at = current_timestamp
-    WHERE provider_connection_id = ${getSqlLiteral(providerConnectionId)}
-  `)
-}
-
 export const listProviderConnections = async (): Promise<ProviderConnectionForAdmin[]> => {
   const [connections, models] = await Promise.all([getProviderConnectionRows(), getProviderModelRows()])
 
@@ -127,26 +108,22 @@ export const getProviderConnection = async (id: string): Promise<ProviderConnect
 export const getProviderConnectionForStoredModel = async (
   modelId: string,
 ): Promise<ProviderConnectionRecord | null> => {
-  const [row] = await getAppDatabaseService().queryJson<
-    ProviderConnectionRow & {legacyApiKeyVariable: string | null; legacyWorkerUrls: unknown}
-  >(`
+  const [row] = await getAppDatabaseService().queryJson<ProviderConnectionRow>(`
     SELECT
       pc.id,
-      COALESCE(pc.provider_kind, m.provider) AS providerKind,
-      COALESCE(pc.label, m.name) AS label,
-      COALESCE(pc.enabled, TRUE) AS enabled,
-      COALESCE(pc.auth_mode, CASE WHEN m.api_key_variable IS NOT NULL THEN 'api-key' ELSE NULL END) AS authMode,
-      COALESCE(pc.base_url, m.base_url) AS baseURL,
-      COALESCE(TO_JSON(pc.config_json), TO_JSON(CASE WHEN m.worker_urls IS NULL THEN NULL ELSE json_object('workerUrls', m.worker_urls) END)) AS configJson,
-      COALESCE(pc.secret_ref, ${getSqlLiteral(null)}) AS secretRef,
+      pc.provider_kind AS providerKind,
+      pc.label AS label,
+      pc.enabled AS enabled,
+      pc.auth_mode AS authMode,
+      pc.base_url AS baseURL,
+      TO_JSON(pc.config_json) AS configJson,
+      pc.secret_ref AS secretRef,
       pc.last_checked_at AS lastCheckedAt,
       pc.last_error AS lastError,
-      COALESCE(pc.created_at, m.created_at) AS createdAt,
-      COALESCE(pc.updated_at, m.updated_at) AS updatedAt,
-      m.api_key_variable AS legacyApiKeyVariable,
-      TO_JSON(m.worker_urls) AS legacyWorkerUrls
+      pc.created_at AS createdAt,
+      pc.updated_at AS updatedAt
     FROM app.model m
-    LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
+    INNER JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
     WHERE m.id = ${getSqlLiteral(modelId)}
     LIMIT 1
   `)
@@ -155,12 +132,7 @@ export const getProviderConnectionForStoredModel = async (
     return null
   }
 
-  const mapped = getProviderConnectionRecordFromRow(row)
-  const secretRef = mapped.secretRef ?? getLegacySecretRef(row.legacyApiKeyVariable)
-  const config =
-    mapped.config.manualWorkerUrls.length > 0 ? mapped.config : getLegacyProviderConnectionConfig(row.legacyWorkerUrls)
-
-  return {...mapped, config, hasSecret: Boolean(secretRef), secretRef}
+  return getProviderConnectionRecordFromRow(row)
 }
 
 export const getFirstEnabledProviderConnection = async (providerKind: ProviderKind) => {
@@ -203,6 +175,7 @@ export const createProviderConnection = async ({
   providerKind: ProviderKind
   secretRef: string | null
 }): Promise<ProviderConnectionRecord> => {
+  const persistedConfig = getPersistedProviderConnectionConfigValue({config, providerKind})
   const [created] = await getAppDatabaseService().queryJson<ProviderConnectionRow>(`
     INSERT INTO app.provider_connection (
       id,
@@ -221,7 +194,7 @@ export const createProviderConnection = async ({
       TRUE,
       ${getSqlLiteral(authMode)},
       ${getSqlLiteral(baseURL)},
-      ${getJsonSqlLiteral(config)},
+      ${getJsonSqlLiteral(persistedConfig)},
       ${getSqlLiteral(secretRef)}
     )
     RETURNING
@@ -269,6 +242,7 @@ export const updateProviderConnection = async ({
     throw new Error('Provider connection not found')
   }
 
+  const persistedConfig = getPersistedProviderConnectionConfigValue({config, providerKind: current.providerKind})
   const updated = (await getAppDatabaseService().transaction(async (tx) => {
     const [nextConnection] = await tx.queryJson<ProviderConnectionRow>(`
       UPDATE app.provider_connection
@@ -276,7 +250,7 @@ export const updateProviderConnection = async ({
           enabled = ${getSqlLiteral(enabled)},
           auth_mode = ${getSqlLiteral(authMode)},
           base_url = ${getSqlLiteral(baseURL)},
-          config_json = ${getJsonSqlLiteral(config)},
+          config_json = ${getJsonSqlLiteral(persistedConfig)},
           secret_ref = ${getSqlLiteral(secretRef)},
           updated_at = current_timestamp
       WHERE id = ${getSqlLiteral(id)}
@@ -301,12 +275,6 @@ export const updateProviderConnection = async ({
 
     return getProviderConnectionRecordFromRow(nextConnection)
   })) as ProviderConnectionRecord
-
-  await syncModelConnectionFields({
-    baseURL: updated.baseURL,
-    providerConnectionId: updated.id,
-    providerKind: updated.providerKind,
-  })
 
   return updated ?? current
 }

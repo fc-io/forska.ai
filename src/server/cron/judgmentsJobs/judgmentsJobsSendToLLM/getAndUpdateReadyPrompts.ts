@@ -1,7 +1,7 @@
 import {getProviderConnectionConfigFromJson} from '../../../providers/providerDbUtils.ts'
 import {getProviderConnectionWorkerState} from '../../../providers/providerRuntimeState.ts'
 import {getAppDatabaseService} from '../../../services/appDatabaseService.ts'
-import {escapeSqlString, getJsonValue, getQuotedStringList, getSqlLiteral} from '../../../services/appQueryHelpers.ts'
+import {escapeSqlString, getQuotedStringList, getSqlLiteral} from '../../../services/appQueryHelpers.ts'
 
 export type PromptToProcess = {
   jobId: string
@@ -39,21 +39,15 @@ const getCodexPlaceholderBaseUrl = (): string => {
 }
 
 const getModelWorkerUrls = ({
-  legacyWorkerUrls,
   providerKind,
   providerConfigJson,
 }: {
-  legacyWorkerUrls: unknown
   providerKind: string
   providerConfigJson: unknown
 }): string[] => {
   const config = getProviderConnectionConfigFromJson({providerKind, value: providerConfigJson})
 
-  return getProviderConnectionWorkerState({
-    config,
-    legacyWorkerUrls: getJsonValue(legacyWorkerUrls) as string[] | null,
-    providerKind,
-  }).effectiveWorkerUrls
+  return getProviderConnectionWorkerState({config, providerKind}).effectiveWorkerUrls
 }
 
 const processReadyRows = async (
@@ -102,7 +96,6 @@ const processReadyRows = async (
           modelVersion: string | null
           modelMetadataJson: unknown
           modelBaseUrl: string | null
-          legacyWorkerUrls: unknown
           providerConfigJson: unknown
           useTitle: boolean | null
           useAbstract: boolean | null
@@ -113,13 +106,12 @@ const processReadyRows = async (
             jj.id AS jobId,
             jj.project_id AS projectId,
             p.model_id AS modelId,
-            COALESCE(pc.secret_ref, CASE WHEN m.api_key_variable IS NOT NULL THEN 'env:' || m.api_key_variable ELSE NULL END) AS modelSecretRef,
-            COALESCE(pc.provider_kind, m.provider) AS modelProvider,
-            COALESCE(m.model_name, m.remote_model_id) AS modelName,
-            COALESCE(m.variant, m.version) AS modelVersion,
+            pc.secret_ref AS modelSecretRef,
+            pc.provider_kind AS modelProvider,
+            m.remote_model_id AS modelName,
+            m.variant AS modelVersion,
             TO_JSON(m.metadata_json) AS modelMetadataJson,
-            COALESCE(pc.base_url, m.base_url) AS modelBaseUrl,
-            TO_JSON(m.worker_urls) AS legacyWorkerUrls,
+            pc.base_url AS modelBaseUrl,
             TO_JSON(pc.config_json) AS providerConfigJson,
             p.use_title AS useTitle,
             p.use_abstract AS useAbstract,
@@ -128,7 +120,7 @@ const processReadyRows = async (
           FROM app.judgment_job jj
           LEFT JOIN app.project p ON p.id = jj.project_id
           LEFT JOIN app.model m ON m.id = p.model_id
-          LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
+          INNER JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
           WHERE jj.id IN (${getQuotedStringList(uniqueJobIds).join(', ')})
         `)
 
@@ -156,11 +148,7 @@ const processReadyRows = async (
       }
 
       const provider = normalizeProvider(config.modelProvider)
-      const workerUrls = getModelWorkerUrls({
-        legacyWorkerUrls: config.legacyWorkerUrls,
-        providerKind: provider,
-        providerConfigJson: config.providerConfigJson,
-      })
+      const workerUrls = getModelWorkerUrls({providerKind: provider, providerConfigJson: config.providerConfigJson})
       const fallbackBaseUrl = workerUrls[0] ? `${String(workerUrls[0]).replace(/\/+$/, '')}/v1` : null
       if (!isCodexProvider(provider) && !config.modelBaseUrl && !fallbackBaseUrl) {
         console.error('Prompt missing required model baseURL:', {

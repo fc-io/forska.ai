@@ -8,6 +8,7 @@ import {
   getProviderModelReturnQuery,
   type ProviderModelRow,
 } from './providerDbUtils.ts'
+import {getPersistedProviderModelMetadata} from './providerModelMetadata.ts'
 import {type ProviderConnectionRecord, type ProviderListedModel, type ProviderModelRecord} from './providerTypes.ts'
 
 const getProviderModelRows = async ({enabledOnly}: {enabledOnly: boolean}): Promise<ProviderModelRecord[]> => {
@@ -20,12 +21,12 @@ const getProviderModelRows = async ({enabledOnly}: {enabledOnly: boolean}): Prom
       m.id,
       m.provider_connection_id AS providerConnectionId,
       m.name,
-      COALESCE(pc.provider_kind, m.provider) AS provider,
-      COALESCE(pc.base_url, m.base_url) AS baseURL,
-      COALESCE(m.model_name, m.remote_model_id) AS modelName,
+      pc.provider_kind AS provider,
+      pc.base_url AS baseURL,
+      m.remote_model_id AS modelName,
       m.remote_model_id AS remoteModelId,
       COALESCE(m.display_name, m.name) AS displayName,
-      m.version,
+      m.variant AS version,
       m.variant,
       m.source,
       COALESCE(m.enabled, TRUE) AS enabled,
@@ -33,7 +34,7 @@ const getProviderModelRows = async ({enabledOnly}: {enabledOnly: boolean}): Prom
       m.created_at AS createdAt,
       m.updated_at AS updatedAt
     FROM app.model m
-    LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
+    INNER JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
     ${enabledClause}
     ORDER BY COALESCE(pc.label, m.name) ASC, m.created_at ASC, m.name ASC
   `)
@@ -84,24 +85,24 @@ const upsertDiscoveredProviderModelsRecursively = async ({
 
   const remoteModelId = currentModel.remoteModelId
   const displayName = currentModel.displayName
-  const modelName = currentModel.modelName
   const variant = currentModel.variant
-  const version = currentModel.version
+  const metadataJson = getPersistedProviderModelMetadata({
+    listedModel: currentModel,
+    metadataJson: currentModel.metadataJson,
+    providerKind: connection.providerKind,
+    source: 'provider',
+  })
   const existingId = await getExistingProviderModelId({providerConnectionId: connection.id, remoteModelId, variant})
   const [saved] = await getAppDatabaseService().queryJson<ProviderModelRow>(
     existingId
       ? getProviderModelReturnQuery(`
         UPDATE app.model
         SET name = ${getSqlLiteral(displayName)},
-            provider = ${getSqlLiteral(connection.providerKind)},
-            base_url = ${getSqlLiteral(connection.baseURL)},
-            model_name = ${getSqlLiteral(modelName)},
             remote_model_id = ${getSqlLiteral(remoteModelId)},
             display_name = ${getSqlLiteral(displayName)},
-            version = ${getSqlLiteral(version)},
             variant = ${getSqlLiteral(variant)},
             source = 'discovered',
-            metadata_json = ${getJsonSqlLiteral(currentModel.metadataJson)},
+            metadata_json = ${getJsonSqlLiteral(metadataJson)},
             updated_at = current_timestamp
         WHERE id = ${getSqlLiteral(existingId)}
       `)
@@ -110,12 +111,8 @@ const upsertDiscoveredProviderModelsRecursively = async ({
           id,
           provider_connection_id,
           name,
-          provider,
-          base_url,
-          model_name,
           remote_model_id,
           display_name,
-          version,
           variant,
           source,
           enabled,
@@ -125,16 +122,12 @@ const upsertDiscoveredProviderModelsRecursively = async ({
           ${getSqlLiteral(crypto.randomUUID())},
           ${getSqlLiteral(connection.id)},
           ${getSqlLiteral(displayName)},
-          ${getSqlLiteral(connection.providerKind)},
-          ${getSqlLiteral(connection.baseURL)},
-          ${getSqlLiteral(modelName)},
           ${getSqlLiteral(remoteModelId)},
           ${getSqlLiteral(displayName)},
-          ${getSqlLiteral(version)},
           ${getSqlLiteral(variant)},
           'discovered',
           TRUE,
-          ${getJsonSqlLiteral(currentModel.metadataJson)}
+          ${getJsonSqlLiteral(metadataJson)}
         )
       `),
   )
@@ -169,18 +162,20 @@ export const createProviderModel = async ({
   variant: string | null
   version: string | null
 }): Promise<ProviderModelRecord> => {
+  const persistedMetadataJson = getPersistedProviderModelMetadata({
+    listedModel: {displayName, metadataJson, modelName, remoteModelId, variant, version},
+    metadataJson,
+    providerKind: connection.providerKind,
+    source: source === 'manual' ? 'manual' : 'provider',
+  })
   const [created] = await getAppDatabaseService().queryJson<ProviderModelRow>(
     getProviderModelReturnQuery(`
       INSERT INTO app.model (
         id,
         provider_connection_id,
         name,
-        provider,
-        base_url,
-        model_name,
         remote_model_id,
         display_name,
-        version,
         variant,
         source,
         enabled,
@@ -190,16 +185,12 @@ export const createProviderModel = async ({
         ${getSqlLiteral(crypto.randomUUID())},
         ${getSqlLiteral(connection.id)},
         ${getSqlLiteral(displayName)},
-        ${getSqlLiteral(connection.providerKind)},
-        ${getSqlLiteral(connection.baseURL)},
-        ${getSqlLiteral(modelName)},
         ${getSqlLiteral(remoteModelId)},
         ${getSqlLiteral(displayName)},
-        ${getSqlLiteral(version)},
         ${getSqlLiteral(variant)},
         ${getSqlLiteral(source)},
         TRUE,
-        ${getJsonSqlLiteral(metadataJson)}
+        ${getJsonSqlLiteral(persistedMetadataJson)}
       )
     `),
   )
@@ -229,7 +220,6 @@ export const updateProviderModel = async ({
           display_name = ${getSqlLiteral(displayName)},
           enabled = ${getSqlLiteral(enabled)},
           variant = ${getSqlLiteral(variant)},
-          version = ${getSqlLiteral(variant)},
           updated_at = current_timestamp
       WHERE id = ${getSqlLiteral(id)}
     `),
@@ -264,12 +254,12 @@ export const getProviderModels = async (modelIds: string[]): Promise<Map<string,
       m.id,
       m.provider_connection_id AS providerConnectionId,
       m.name,
-      COALESCE(pc.provider_kind, m.provider) AS provider,
-      COALESCE(pc.base_url, m.base_url) AS baseURL,
-      COALESCE(m.model_name, m.remote_model_id) AS modelName,
+      pc.provider_kind AS provider,
+      pc.base_url AS baseURL,
+      m.remote_model_id AS modelName,
       m.remote_model_id AS remoteModelId,
       COALESCE(m.display_name, m.name) AS displayName,
-      m.version,
+      m.variant AS version,
       m.variant,
       m.source,
       COALESCE(m.enabled, TRUE) AS enabled,
@@ -277,7 +267,7 @@ export const getProviderModels = async (modelIds: string[]): Promise<Map<string,
       m.created_at AS createdAt,
       m.updated_at AS updatedAt
     FROM app.model m
-    LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
+    INNER JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
     WHERE m.id IN (${getQuotedStringList(modelIds).join(', ')})
   `)
 

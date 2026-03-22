@@ -7,7 +7,10 @@ import {env} from '../server/utils/env.ts'
 
 const migrationsFolder = resolve(import.meta.dir, 'duckdbMigrations')
 
-const nonTransactionalDuckdbMigrationFiles = new Set(['0013_rebuildArticleWithoutOpenalexId.sql'])
+const nonTransactionalDuckdbMigrationFiles = new Set([
+  '0013_rebuildArticleWithoutOpenalexId.sql',
+  '0021_rebuildModelWithProviderConnections.sql',
+])
 
 const getDuckdbMigrationFiles = (folder: string) => {
   return readdirSync(folder)

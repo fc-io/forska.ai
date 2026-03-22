@@ -34,6 +34,7 @@ import {
   updateProviderConnection,
   updateProviderModel,
 } from './providerConnectionsClient.ts'
+import {getConnectionApiKeyUiState} from './providerUiState.ts'
 
 type ConnectionFormState = {
   apiKey: string
@@ -186,17 +187,18 @@ const AdminModels = () => {
   const shouldShowConnectionApiKeyField = () => {
     const connection = selectedConnection()
 
-    return Boolean(
-      connection
-      && (connection.hasSecret
-        || ['openai', 'anthropic', 'google', 'openrouter', 'sglang', 'vllm'].includes(connection.providerKind)),
-    )
+    return connection
+      ? getConnectionApiKeyUiState({hasSecret: connection.hasSecret, providerKind: connection.providerKind})
+          .shouldShowField
+      : false
   }
 
   const isOptionalConnectionApiKey = () => {
     const connection = selectedConnection()
 
-    return Boolean(connection && ['sglang', 'vllm'].includes(connection.providerKind))
+    return connection
+      ? getConnectionApiKeyUiState({hasSecret: connection.hasSecret, providerKind: connection.providerKind}).isOptional
+      : false
   }
 
   const getConnectionProviderLabel = (providerKind: string) => {

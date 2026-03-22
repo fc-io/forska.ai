@@ -89,14 +89,14 @@ export const judgmentsJobsCheckLLMStatus = async () => {
     providerConfigJson: unknown
   }>(`
     SELECT
-      COALESCE(pc.provider_kind, m.provider) AS providerKind,
-      COALESCE(m.model_name, m.remote_model_id) AS modelName,
-      COALESCE(pc.base_url, m.base_url) AS baseURL,
-      COALESCE(TO_JSON(pc.config_json), TO_JSON(CASE WHEN m.worker_urls IS NULL THEN NULL ELSE json_object('workerUrls', m.worker_urls) END)) AS providerConfigJson
+      pc.provider_kind AS providerKind,
+      m.remote_model_id AS modelName,
+      pc.base_url AS baseURL,
+      TO_JSON(pc.config_json) AS providerConfigJson
     FROM app.judgment_job jj
     LEFT JOIN app.project p ON jj.project_id = p.id
     LEFT JOIN app.model m ON p.model_id = m.id
-    LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
+    INNER JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
     WHERE jj.status = 'running'
   `)
   const validConfigs = runningJobConfigs.filter((r) => {

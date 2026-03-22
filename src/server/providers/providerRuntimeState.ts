@@ -40,35 +40,28 @@ const getWorkerStateFromRuntimeMode = ({
 }
 
 const getWorkerStateFromManualMode = ({
-  legacyWorkerUrls,
   manualWorkerUrls,
   runtimeWorkerUrls,
 }: {
-  legacyWorkerUrls: string[]
   manualWorkerUrls: string[]
   runtimeWorkerUrls: string[]
 }): ProviderConnectionWorkerState => {
   return manualWorkerUrls.length > 0
     ? {effectiveWorkerUrls: manualWorkerUrls, runtimeWorkerUrls, workerSource: 'manual'}
-    : legacyWorkerUrls.length > 0
-      ? {effectiveWorkerUrls: legacyWorkerUrls, runtimeWorkerUrls, workerSource: 'legacy'}
-      : {effectiveWorkerUrls: [], runtimeWorkerUrls, workerSource: 'none'}
+    : {effectiveWorkerUrls: [], runtimeWorkerUrls, workerSource: 'none'}
 }
 
 export const getProviderConnectionWorkerState = ({
   config,
-  legacyWorkerUrls,
   providerKind,
 }: {
   config: ProviderConnectionConfig
-  legacyWorkerUrls?: string[] | null | undefined
   providerKind: string | null | undefined
 }): ProviderConnectionWorkerState => {
   const manualWorkerUrls = normalizeWorkerUrls(config.manualWorkerUrls)
-  const normalizedLegacyWorkerUrls = normalizeWorkerUrls(legacyWorkerUrls)
   const runtimeWorkerUrls = supportsRuntimeWorkerUrls(providerKind) ? getRuntimeWorkerUrlsForProvider(providerKind) : []
 
   return config.workerUrlMode === 'runtime'
     ? getWorkerStateFromRuntimeMode({runtimeWorkerUrls})
-    : getWorkerStateFromManualMode({legacyWorkerUrls: normalizedLegacyWorkerUrls, manualWorkerUrls, runtimeWorkerUrls})
+    : getWorkerStateFromManualMode({manualWorkerUrls, runtimeWorkerUrls})
 }

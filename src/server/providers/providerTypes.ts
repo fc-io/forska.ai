@@ -10,7 +10,7 @@ export type ProviderTransportFamily =
   | 'openai-responses'
 
 export type ProviderWorkerUrlMode = 'manual' | 'runtime'
-export type ProviderWorkerSource = 'legacy' | 'manual' | 'none' | 'runtime'
+export type ProviderWorkerSource = 'manual' | 'none' | 'runtime'
 
 export type ProviderConnectionConfig = {manualWorkerUrls: string[]; workerUrlMode: ProviderWorkerUrlMode}
 
