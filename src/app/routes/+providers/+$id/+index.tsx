@@ -1,6 +1,6 @@
 import {createMutation, useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
-import {createEffect, createSignal, For, onCleanup, Show} from 'solid-js'
+import {createEffect, createMemo, createSignal, For, onCleanup, Show} from 'solid-js'
 import {createStore} from 'solid-js/store'
 
 import {Button} from '../../../../components/ui/button.tsx'
@@ -15,7 +15,6 @@ import {
   fetchProviderConnectionDiscoveredModels,
   fetchProviderConnections,
   formatTimestamp,
-  getFormDataString,
   getNullableTrimmedValue,
   getProviderCatalogLabel,
   getProviderModelContextLength,
@@ -51,6 +50,7 @@ type ConnectionFormState = {
 type ManualModelFormState = {displayName: string; remoteModelId: string; variant: string}
 
 type ProviderPageModel = ProviderModel & {persistedId: string | null}
+type ProviderPageModelDraft = ProviderPageModel & {displayNameValue: string; variantValue: string}
 
 const getTrimmedModelValue = (value: string | null | undefined): string | null => {
   const normalized = String(value ?? '').trim()
@@ -159,6 +159,26 @@ const getProviderPageModels = ({
   return discoveredModels.length > 0 ? [...discoveredModels, ...storedOnlyModels] : storedOnlyModels
 }
 
+const getProviderPageModelDraft = (model: ProviderPageModel): ProviderPageModelDraft => {
+  return {...model, displayNameValue: model.displayName ?? model.name, variantValue: model.variant ?? ''}
+}
+
+const hasProviderPageModelDraftChanges = ({
+  draft,
+  source,
+}: {
+  draft: ProviderPageModelDraft
+  source: ProviderPageModel | undefined
+}) => {
+  return source
+    ? draft.provider === 'codex'
+      ? draft.enabled !== source.enabled
+      : draft.enabled !== source.enabled
+        || draft.displayNameValue !== (source.displayName ?? source.name)
+        || draft.variantValue !== (source.variant ?? '')
+    : false
+}
+
 const getConnectionFormState = (connection: ProviderConnection | null): ConnectionFormState => {
   return {
     apiKey: '',
@@ -195,6 +215,8 @@ const ProviderDetailPage = () => {
   const [manualModelForm, setManualModelForm] = createStore<ManualModelFormState>(getEmptyManualModelFormState())
   const [pageMessage, setPageMessage] = createSignal('')
   const [pageError, setPageError] = createSignal('')
+  const [modelDrafts, setModelDrafts] = createSignal<ProviderPageModelDraft[]>([])
+  const [loadedModelDraftKey, setLoadedModelDraftKey] = createSignal('')
   const [codexLoginJobId, setCodexLoginJobId] = createSignal<string | null>(null)
   const [codexLoginJob, setCodexLoginJob] = createSignal<CodexDeviceLoginJob | null>(null)
   const [isStartingCodexLogin, setIsStartingCodexLogin] = createSignal(false)
@@ -252,14 +274,7 @@ const ProviderDetailPage = () => {
     }
   })
   const updateModelMutation = createMutation(() => {
-    return {
-      mutationFn: updateProviderModel,
-      onSuccess: async (model: ProviderModel) => {
-        setPageError('')
-        setPageMessage(`Updated ${model.displayName ?? model.name}`)
-        await providerConnectionsQuery.refetch()
-      },
-    }
+    return {mutationFn: updateProviderModel}
   })
 
   const connections = () => {
@@ -514,34 +529,136 @@ const ProviderDetailPage = () => {
     }
   }
 
-  const submitModelForm = async (event: Event, model: ProviderPageModel) => {
+  const isCodexConnection = () => {
+    return selectedConnection()?.providerKind === 'codex'
+  }
+
+  const providerModels = () => {
+    return getProviderPageModels({
+      connection: selectedConnection(),
+      discoveredCodexModels: codexDiscoveredModelsQuery.data ?? [],
+    })
+  }
+
+  const providerModelSourceMap = createMemo(() => {
+    return new Map(
+      providerModels().map((model) => {
+        return [model.id, model]
+      }),
+    )
+  })
+
+  const hasModelDraftChanges = createMemo(() => {
+    const sourceMap = providerModelSourceMap()
+
+    return modelDrafts().some((draft) => {
+      return hasProviderPageModelDraftChanges({draft, source: sourceMap.get(draft.id)})
+    })
+  })
+
+  const allModelDraftsEnabled = createMemo(() => {
+    return (
+      modelDrafts().length > 0
+      && modelDrafts().every((draft) => {
+        return draft.enabled
+      })
+    )
+  })
+
+  const noModelDraftsEnabled = createMemo(() => {
+    return modelDrafts().every((draft) => {
+      return !draft.enabled
+    })
+  })
+
+  createEffect(() => {
+    const models = providerModels()
+    const draftKey = [
+      selectedConnection()?.id ?? 'none',
+      ...models.map((model) => {
+        return `${model.id}:${model.enabled}:${model.displayName ?? model.name}:${model.variant ?? ''}:${model.persistedId ?? ''}`
+      }),
+    ].join('|')
+
+    if (loadedModelDraftKey() === draftKey) {
+      return
+    }
+
+    setLoadedModelDraftKey(draftKey)
+    setModelDrafts(models.map(getProviderPageModelDraft))
+  })
+
+  const updateModelDraft = ({
+    id,
+    updates,
+  }: {
+    id: string
+    updates: Partial<Pick<ProviderPageModelDraft, 'displayNameValue' | 'enabled' | 'variantValue'>>
+  }) => {
+    setModelDrafts((drafts) => {
+      return drafts.map((draft) => {
+        return draft.id === id ? {...draft, ...updates} : draft
+      })
+    })
+  }
+
+  const setAllModelDraftsEnabled = (enabled: boolean) => {
+    setModelDrafts((drafts) => {
+      return drafts.map((draft) => {
+        return {...draft, enabled}
+      })
+    })
+  }
+
+  const submitModelsForm = async (event: Event) => {
     event.preventDefault()
     setPageError('')
     setPageMessage('')
-    const formData = new FormData(event.currentTarget as HTMLFormElement)
-    const isCodexModel = model.provider === 'codex'
+    const sourceMap = providerModelSourceMap()
+    const changedDrafts = modelDrafts().filter((draft) => {
+      return hasProviderPageModelDraftChanges({draft, source: sourceMap.get(draft.id)})
+    })
+
+    if (changedDrafts.length === 0) {
+      setPageMessage('No model changes to save')
+      return
+    }
 
     try {
-      const persistedModelId =
-        model.persistedId
-        ?? (isCodexModel
-          ? await ensureCodexProviderModel({
-              modelName: getTrimmedModelValue(model.remoteModelId ?? model.modelName) ?? model.name,
-              name: model.displayName ?? model.name,
-              version: getTrimmedModelValue(model.variant ?? model.version) ?? undefined,
-            })
-          : model.id)
+      await Promise.all(
+        changedDrafts.map(async (draft) => {
+          const persistedModelId =
+            draft.persistedId
+            ?? (draft.provider === 'codex'
+              ? await ensureCodexProviderModel({
+                  modelName: getTrimmedModelValue(draft.remoteModelId ?? draft.modelName) ?? draft.name,
+                  name: draft.displayNameValue,
+                  version: getTrimmedModelValue(draft.variant ?? draft.version) ?? undefined,
+                })
+              : draft.id)
 
-      await updateModelMutation.mutateAsync({
-        displayName: isCodexModel ? (model.displayName ?? model.name) : getFormDataString(formData, 'displayName'),
-        enabled: formData.get('enabled') === 'on',
-        id: persistedModelId,
-        variant: isCodexModel
-          ? (getTrimmedModelValue(model.variant ?? model.version) ?? undefined)
-          : getFormDataString(formData, 'variant'),
-      })
+          return updateModelMutation.mutateAsync({
+            displayName: draft.displayNameValue,
+            enabled: draft.enabled,
+            id: persistedModelId,
+            variant:
+              draft.provider === 'codex'
+                ? (getTrimmedModelValue(draft.variant ?? draft.version) ?? undefined)
+                : (getTrimmedModelValue(draft.variantValue) ?? undefined),
+          })
+        }),
+      )
+      await providerConnectionsQuery.refetch()
+
+      if (isCodexConnection()) {
+        await codexDiscoveredModelsQuery.refetch()
+      }
+
+      setPageMessage(
+        changedDrafts.length === 1 ? 'Saved 1 model change' : `Saved ${changedDrafts.length} model changes`,
+      )
     } catch (error) {
-      setPageError(error instanceof Error ? error.message : 'Failed to update model')
+      setPageError(error instanceof Error ? error.message : 'Failed to update models')
     }
   }
 
@@ -563,17 +680,6 @@ const ProviderDetailPage = () => {
     } finally {
       setIsStartingCodexLogin(false)
     }
-  }
-
-  const isCodexConnection = () => {
-    return selectedConnection()?.providerKind === 'codex'
-  }
-
-  const providerModels = () => {
-    return getProviderPageModels({
-      connection: selectedConnection(),
-      discoveredCodexModels: codexDiscoveredModelsQuery.data ?? [],
-    })
   }
 
   return (
@@ -907,7 +1013,7 @@ const ProviderDetailPage = () => {
                       </p>
                     </div>
                     <div class="text-xs font-medium uppercase tracking-wide text-gray-500">
-                      {providerModels().length} total
+                      {modelDrafts().length} total
                     </div>
                   </div>
 
@@ -928,7 +1034,7 @@ const ProviderDetailPage = () => {
                   </Show>
 
                   <Show
-                    when={providerModels().length > 0}
+                    when={modelDrafts().length > 0}
                     fallback={
                       <div class="rounded-lg border border-dashed border-gray-300 bg-gray-50 px-4 py-10 text-center text-sm text-gray-500">
                         {isCodexConnection()
@@ -937,101 +1043,204 @@ const ProviderDetailPage = () => {
                       </div>
                     }
                   >
-                    <div class="space-y-3">
-                      <For each={providerModels()}>
-                        {(model) => {
-                          return (
-                            <form
-                              class={`grid gap-3 rounded-lg border border-gray-200 bg-gray-50 p-4 ${isCodexConnection() ? 'lg:grid-cols-[minmax(0,1fr)_auto_auto]' : 'lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.9fr)_auto_auto]'}`}
-                              onSubmit={(event) => {
-                                return void submitModelForm(event, model)
-                              }}
-                            >
-                              <Show
-                                when={isCodexConnection()}
-                                fallback={
-                                  <>
-                                    <div>
-                                      <label class="mb-2 block text-xs font-semibold uppercase tracking-wide text-gray-500">
-                                        Display Name
-                                      </label>
-                                      <input
-                                        class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900"
-                                        name="displayName"
-                                        type="text"
-                                        value={model.displayName ?? model.name}
-                                      />
-                                      <div class="mt-2 text-xs text-gray-500">
-                                        {model.remoteModelId ?? model.modelName ?? '-'} • {model.source ?? 'manual'}
-                                      </div>
-                                      <Show when={getProviderModelContextLength(model.metadataJson)}>
-                                        <div class="mt-1 text-xs text-gray-500">
-                                          Context {getProviderModelContextLength(model.metadataJson)} tokens
+                    <form
+                      class="space-y-4"
+                      onSubmit={(event) => {
+                        return void submitModelsForm(event)
+                      }}
+                    >
+                      <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <p class="text-sm text-gray-500">
+                          {hasModelDraftChanges() ? 'You have unsaved model changes.' : 'No unsaved model changes.'}
+                        </p>
+                        <div class="flex flex-wrap gap-2">
+                          <button
+                            class="rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+                            disabled={modelDrafts().length === 0 || allModelDraftsEnabled()}
+                            onClick={() => {
+                              return setAllModelDraftsEnabled(true)
+                            }}
+                            type="button"
+                          >
+                            Select all
+                          </button>
+                          <button
+                            class="rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+                            disabled={modelDrafts().length === 0 || noModelDraftsEnabled()}
+                            onClick={() => {
+                              return setAllModelDraftsEnabled(false)
+                            }}
+                            type="button"
+                          >
+                            Deselect all
+                          </button>
+                          <button
+                            class="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                            disabled={updateModelMutation.isPending || !hasModelDraftChanges()}
+                            type="submit"
+                          >
+                            {updateModelMutation.isPending ? 'Saving...' : 'Save Models'}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div class="overflow-x-auto rounded-lg border border-gray-200">
+                        <Show
+                          when={isCodexConnection()}
+                          fallback={
+                            <table class="min-w-full divide-y divide-gray-200 text-sm">
+                              <thead class="bg-gray-50">
+                                <tr>
+                                  <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                                    Model
+                                  </th>
+                                  <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                                    Variant
+                                  </th>
+                                  <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                                    Enabled
+                                  </th>
+                                </tr>
+                              </thead>
+                              <tbody class="divide-y divide-gray-200 bg-white">
+                                <For each={modelDrafts()}>
+                                  {(model) => {
+                                    return (
+                                      <tr>
+                                        <td class="px-4 py-3 align-top">
+                                          <input
+                                            class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900"
+                                            onInput={(event) => {
+                                              return updateModelDraft({
+                                                id: model.id,
+                                                updates: {displayNameValue: event.currentTarget.value},
+                                              })
+                                            }}
+                                            type="text"
+                                            value={model.displayNameValue}
+                                          />
+                                          <div class="mt-2 text-xs text-gray-500">
+                                            {model.remoteModelId ?? model.modelName ?? '-'} • {model.source ?? 'manual'}
+                                          </div>
+                                          <Show when={getProviderModelContextLength(model.metadataJson)}>
+                                            <div class="mt-1 text-xs text-gray-500">
+                                              Context {getProviderModelContextLength(model.metadataJson)} tokens
+                                            </div>
+                                          </Show>
+                                          <Show when={getProviderModelDiscoverySource(model.metadataJson)}>
+                                            <div class="mt-1 text-xs text-gray-500">
+                                              Discovery {getProviderModelDiscoverySource(model.metadataJson)}
+                                            </div>
+                                          </Show>
+                                          <Show when={getProviderModelReasoningEfforts(model.metadataJson).length > 0}>
+                                            <div class="mt-1 text-xs text-gray-500">
+                                              Reasoning{' '}
+                                              {getProviderModelReasoningEfforts(model.metadataJson).join(', ')}
+                                            </div>
+                                          </Show>
+                                        </td>
+                                        <td class="px-4 py-3 align-top">
+                                          <input
+                                            class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900"
+                                            onInput={(event) => {
+                                              return updateModelDraft({
+                                                id: model.id,
+                                                updates: {variantValue: event.currentTarget.value},
+                                              })
+                                            }}
+                                            type="text"
+                                            value={model.variantValue}
+                                          />
+                                          <div class="mt-2 text-xs text-gray-500">
+                                            Created {formatTimestamp(model.createdAt)}
+                                          </div>
+                                        </td>
+                                        <td class="px-4 py-3 align-top">
+                                          <label class="inline-flex items-center gap-2 text-sm text-gray-700">
+                                            <input
+                                              checked={model.enabled}
+                                              onChange={(event) => {
+                                                return updateModelDraft({
+                                                  id: model.id,
+                                                  updates: {enabled: event.currentTarget.checked},
+                                                })
+                                              }}
+                                              type="checkbox"
+                                            />
+                                            Enabled
+                                          </label>
+                                        </td>
+                                      </tr>
+                                    )
+                                  }}
+                                </For>
+                              </tbody>
+                            </table>
+                          }
+                        >
+                          <table class="min-w-full divide-y divide-gray-200 text-sm">
+                            <thead class="bg-gray-50">
+                              <tr>
+                                <th class="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                                  Model
+                                </th>
+                                <th class="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                                  Thinking
+                                </th>
+                                <th class="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                                  Enabled
+                                </th>
+                              </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-200 bg-white">
+                              <For each={modelDrafts()}>
+                                {(model) => {
+                                  return (
+                                    <tr>
+                                      <td class="px-4 py-2 align-middle text-sm text-gray-900">
+                                        <div class="flex items-center gap-2">
+                                          <span
+                                            class="font-medium"
+                                            title={model.remoteModelId ?? model.modelName ?? model.name}
+                                          >
+                                            {getCodexModelDisplayName(model)}
+                                          </span>
+                                          <Show when={model.persistedId}>
+                                            <span class="rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-gray-500">
+                                              Saved
+                                            </span>
+                                          </Show>
                                         </div>
-                                      </Show>
-                                      <Show when={getProviderModelDiscoverySource(model.metadataJson)}>
-                                        <div class="mt-1 text-xs text-gray-500">
-                                          Discovery {getProviderModelDiscoverySource(model.metadataJson)}
-                                        </div>
-                                      </Show>
-                                      <Show when={getProviderModelReasoningEfforts(model.metadataJson).length > 0}>
-                                        <div class="mt-1 text-xs text-gray-500">
-                                          Reasoning {getProviderModelReasoningEfforts(model.metadataJson).join(', ')}
-                                        </div>
-                                      </Show>
-                                    </div>
-                                    <div>
-                                      <label class="mb-2 block text-xs font-semibold uppercase tracking-wide text-gray-500">
-                                        Variant
-                                      </label>
-                                      <input
-                                        class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900"
-                                        name="variant"
-                                        type="text"
-                                        value={model.variant ?? ''}
-                                      />
-                                      <div class="mt-2 text-xs text-gray-500">
-                                        Created {formatTimestamp(model.createdAt)}
-                                      </div>
-                                    </div>
-                                  </>
-                                }
-                              >
-                                <div>
-                                  <div class="text-sm font-semibold text-gray-900">
-                                    {getCodexModelDisplayName(model)}
-                                  </div>
-                                  <div class="mt-2 flex flex-wrap gap-2">
-                                    <span class="rounded-full border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] font-medium uppercase tracking-wide text-blue-700">
-                                      Thinking {getCodexModelVariantLabel(model)}
-                                    </span>
-                                    <Show when={model.persistedId}>
-                                      <span class="rounded-full border border-gray-200 bg-white px-2 py-1 text-[11px] font-medium uppercase tracking-wide text-gray-500">
-                                        Saved
-                                      </span>
-                                    </Show>
-                                  </div>
-                                  <div class="mt-2 text-xs text-gray-500">
-                                    {model.remoteModelId ?? model.modelName ?? '-'}
-                                  </div>
-                                </div>
-                              </Show>
-                              <label class="flex items-center gap-2 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700">
-                                <input checked={model.enabled} name="enabled" type="checkbox" />
-                                Enabled
-                              </label>
-                              <button
-                                class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60"
-                                disabled={updateModelMutation.isPending}
-                                type="submit"
-                              >
-                                {updateModelMutation.isPending ? 'Saving...' : 'Save Model'}
-                              </button>
-                            </form>
-                          )
-                        }}
-                      </For>
-                    </div>
+                                      </td>
+                                      <td class="px-4 py-2 align-middle">
+                                        <span class="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-blue-700">
+                                          {getCodexModelVariantLabel(model)}
+                                        </span>
+                                      </td>
+                                      <td class="px-4 py-2 align-middle">
+                                        <label class="inline-flex items-center gap-2 text-sm text-gray-700">
+                                          <input
+                                            checked={model.enabled}
+                                            onChange={(event) => {
+                                              return updateModelDraft({
+                                                id: model.id,
+                                                updates: {enabled: event.currentTarget.checked},
+                                              })
+                                            }}
+                                            type="checkbox"
+                                          />
+                                          Enabled
+                                        </label>
+                                      </td>
+                                    </tr>
+                                  )
+                                }}
+                              </For>
+                            </tbody>
+                          </table>
+                        </Show>
+                      </div>
+                    </form>
                   </Show>
                 </div>
               </div>
