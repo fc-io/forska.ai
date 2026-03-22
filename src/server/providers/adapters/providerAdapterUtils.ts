@@ -46,7 +46,18 @@ export const getProviderConnectedMessage = ({
   catalog: ProviderCatalogEntry
   modelCount: number
 }): string => {
-  return `${catalog.label} connected${modelCount > 0 ? ` (${modelCount} models)` : ''}`
+  const tested =
+    catalog.kind === 'codex'
+      ? 'checked CLI login, app-server readiness, and model listing'
+      : catalog.kind === 'openai'
+          || catalog.kind === 'anthropic'
+          || catalog.kind === 'google'
+          || catalog.kind === 'openrouter'
+        ? 'checked credentials and model listing'
+        : 'checked endpoint reachability and model listing'
+  const listing = modelCount === 1 ? 'listed 1 model' : `listed ${modelCount} models`
+
+  return `${catalog.label} test passed: ${tested}; ${listing}.`
 }
 
 export const resolveApiKeyRuntimeCredentials = async ({
