@@ -1,5 +1,5 @@
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
-import {getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {getQuotedStringList, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getProviderCatalogEntry, type ProviderKind} from '../services/providerCatalog.ts'
 import {
   attachModelsToConnections,
@@ -18,10 +18,18 @@ import {
 } from './providerTypes.ts'
 
 export type DeleteProviderConnectionResult = {
+  archived: boolean
   comparisonProjectCount: number
+  deleted: boolean
   deletedModelCount: number
   judgmentCount: number
   projectCount: number
+}
+
+type ProviderConnectionDeleteTarget = {connectionIds: string[]; providerKind: ProviderKind}
+
+const isArchivedProviderConnection = (connection: ProviderConnectionRecord): boolean => {
+  return connection.config.archived === true
 }
 
 const isSingletonProviderKind = (providerKind: ProviderKind): boolean => {
@@ -47,6 +55,12 @@ const getProviderConnectionRowsByKind = async (providerKind: ProviderKind): Prom
     WHERE provider_kind = ${getSqlLiteral(providerKind)}
     ORDER BY created_at ASC, label ASC
   `)
+}
+
+const getVisibleProviderConnections = (connections: ProviderConnectionRecord[]): ProviderConnectionRecord[] => {
+  return connections.filter((connection) => {
+    return !isArchivedProviderConnection(connection)
+  })
 }
 
 const getCollapsedProviderConnections = (connections: ProviderConnectionForAdmin[]): ProviderConnectionForAdmin[] => {
@@ -77,14 +91,81 @@ const getSingletonProviderConnection = async (providerKind: ProviderKind): Promi
     return null
   }
 
-  const rows = await getProviderConnectionRowsByKind(providerKind)
-  const canonicalRow = rows[0]
+  const canonicalConnection = getVisibleProviderConnections(
+    (await getProviderConnectionRowsByKind(providerKind)).map(getProviderConnectionRecordFromRow),
+  )[0]
 
-  if (!canonicalRow) {
+  if (!canonicalConnection) {
     return null
   }
 
-  return getProviderConnectionRecordFromRow(canonicalRow)
+  return canonicalConnection
+}
+
+const getProviderConnectionDeleteTarget = async (id: string): Promise<ProviderConnectionDeleteTarget> => {
+  const connection = await getProviderConnection(id)
+
+  if (!connection) {
+    throw new Error('Provider connection not found')
+  }
+
+  if (!isSingletonProviderKind(connection.providerKind)) {
+    return {connectionIds: [id], providerKind: connection.providerKind}
+  }
+
+  const visibleConnectionIds = getVisibleProviderConnections(
+    (await getProviderConnectionRowsByKind(connection.providerKind)).map(getProviderConnectionRecordFromRow),
+  ).map((row) => {
+    return row.id
+  })
+
+  return {
+    connectionIds: visibleConnectionIds.length > 0 ? visibleConnectionIds : [id],
+    providerKind: connection.providerKind,
+  }
+}
+
+const archiveProviderConnections = async ({
+  connectionIds,
+  providerKind,
+}: ProviderConnectionDeleteTarget): Promise<void> => {
+  const connections = await Promise.all(
+    connectionIds.map(async (connectionId) => {
+      const connection = await getProviderConnectionRecordById(connectionId)
+
+      if (!connection) {
+        throw new Error('Provider connection not found')
+      }
+
+      return connection
+    }),
+  )
+  const connectionIdsSql = getQuotedStringList(connectionIds).join(', ')
+  const configCaseSql = connections
+    .map((connection) => {
+      const persistedConfig = getPersistedProviderConnectionConfigValue({
+        config: {...connection.config, archived: true},
+        providerKind,
+      })
+
+      return `WHEN ${getSqlLiteral(connection.id)} THEN ${getJsonSqlLiteral(persistedConfig)}`
+    })
+    .join(' ')
+
+  await getAppDatabaseService().run(`
+    UPDATE app.model
+    SET enabled = FALSE,
+        updated_at = current_timestamp
+    WHERE provider_connection_id IN (${connectionIdsSql})
+  `)
+
+  await getAppDatabaseService().run(`
+    UPDATE app.provider_connection
+    SET enabled = FALSE,
+        config_json = CASE id ${configCaseSql} ELSE config_json END,
+        updated_at = current_timestamp
+    WHERE id IN (${connectionIdsSql})
+  `)
 }
 
 const getProviderConnectionRows = async (): Promise<ProviderConnectionRecord[]> => {
@@ -161,7 +242,9 @@ const getProviderConnectionRecordById = async (id: string): Promise<ProviderConn
 export const listProviderConnections = async (): Promise<ProviderConnectionForAdmin[]> => {
   const [connections, models] = await Promise.all([getProviderConnectionRows(), getProviderModelRows()])
 
-  return getCollapsedProviderConnections(attachModelsToConnections({connections, models}))
+  return getCollapsedProviderConnections(
+    attachModelsToConnections({connections: getVisibleProviderConnections(connections), models}),
+  )
 }
 
 export const getProviderConnection = async (id: string): Promise<ProviderConnectionRecord | null> => {
@@ -351,6 +434,8 @@ export const updateProviderConnection = async ({
 }
 
 export const deleteProviderConnection = async (id: string): Promise<DeleteProviderConnectionResult> => {
+  const deleteTarget = await getProviderConnectionDeleteTarget(id)
+  const connectionIdsSql = getQuotedStringList(deleteTarget.connectionIds).join(', ')
   const [usage] = await getAppDatabaseService().queryJson<{
     comparisonProjectCount: number
     judgmentCount: number
@@ -361,19 +446,19 @@ export const deleteProviderConnection = async (id: string): Promise<DeleteProvid
       (
         SELECT COUNT(*)
         FROM app.model m
-        WHERE m.provider_connection_id = ${getSqlLiteral(id)}
+        WHERE m.provider_connection_id IN (${connectionIdsSql})
       ) AS modelCount,
       (
         SELECT COUNT(*)
         FROM app.project p
         INNER JOIN app.model m ON p.model_id = m.id
-        WHERE m.provider_connection_id = ${getSqlLiteral(id)}
+        WHERE m.provider_connection_id IN (${connectionIdsSql})
       ) AS projectCount,
       (
         SELECT COUNT(*)
         FROM app.judgment j
         INNER JOIN app.model m ON j.model_id = m.id
-        WHERE m.provider_connection_id = ${getSqlLiteral(id)}
+        WHERE m.provider_connection_id IN (${connectionIdsSql})
       ) AS judgmentCount,
       (
         SELECT COUNT(*)
@@ -381,7 +466,7 @@ export const deleteProviderConnection = async (id: string): Promise<DeleteProvid
         WHERE EXISTS (
           SELECT 1
           FROM app.model m
-          WHERE m.provider_connection_id = ${getSqlLiteral(id)}
+          WHERE m.provider_connection_id IN (${connectionIdsSql})
             AND list_contains(cp.model_ids, m.id)
         )
       ) AS comparisonProjectCount
@@ -392,23 +477,42 @@ export const deleteProviderConnection = async (id: string): Promise<DeleteProvid
   }
 
   if (usage.projectCount > 0 || usage.judgmentCount > 0 || usage.comparisonProjectCount > 0) {
-    throw new Error(
-      `Cannot remove provider connection while it is referenced by ${usage.projectCount} projects, ${usage.comparisonProjectCount} comparison projects, or ${usage.judgmentCount} judgments.`,
-    )
+    await archiveProviderConnections(deleteTarget)
+
+    return {
+      archived: true,
+      comparisonProjectCount: usage.comparisonProjectCount,
+      deleted: false,
+      deletedModelCount: usage.modelCount,
+      judgmentCount: usage.judgmentCount,
+      projectCount: usage.projectCount,
+    }
   }
 
-  await getAppDatabaseService().run(`
-    DELETE FROM app.model
-    WHERE provider_connection_id = ${getSqlLiteral(id)}
-  `)
+  try {
+    await getAppDatabaseService().run(`
+      DELETE FROM app.model
+      WHERE provider_connection_id IN (${connectionIdsSql})
+    `)
 
-  await getAppDatabaseService().run(`
-    DELETE FROM app.provider_connection
-    WHERE id = ${getSqlLiteral(id)}
-  `)
+    await getAppDatabaseService().run(`
+      DELETE FROM app.provider_connection
+      WHERE id IN (${connectionIdsSql})
+    `)
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error)
+
+    throw errorMessage.includes('foreign key constraint')
+      ? new Error(
+          `Cannot remove ${isSingletonProviderKind(deleteTarget.providerKind) ? 'provider' : 'provider connection'} because one of its models is still referenced by a project, comparison project, or judgment.`,
+        )
+      : error
+  }
 
   return {
+    archived: false,
     comparisonProjectCount: usage.comparisonProjectCount,
+    deleted: true,
     deletedModelCount: usage.modelCount,
     judgmentCount: usage.judgmentCount,
     projectCount: usage.projectCount,

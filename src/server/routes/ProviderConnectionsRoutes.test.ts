@@ -35,7 +35,14 @@ const state = {
     }
   }),
   deleteProviderConnection: mock(async (_id: string) => {
-    return {comparisonProjectCount: 0, deletedModelCount: 2, judgmentCount: 0, projectCount: 0}
+    return {
+      archived: false,
+      comparisonProjectCount: 0,
+      deleted: true,
+      deletedModelCount: 2,
+      judgmentCount: 0,
+      projectCount: 0,
+    }
   }),
   deleteProviderSecret: mock(async (_secretRef: string | null | undefined) => {}),
   getProviderConnection: mock(async (id: string) => {
@@ -303,9 +310,10 @@ test('provider connections route removes a provider connection', async () => {
   const response = await app.handle(
     new Request('http://localhost/api/provider-connections/connection-1', {method: 'DELETE'}),
   )
-  const body = (await response.json()) as {data: {deleted: boolean; deletedModelCount: number}}
+  const body = (await response.json()) as {data: {archived: boolean; deleted: boolean; deletedModelCount: number}}
 
   expect(response.status).toBe(200)
+  expect(body.data.archived).toBe(false)
   expect(body.data.deleted).toBe(true)
   expect(body.data.deletedModelCount).toBe(2)
   expect(state.deleteProviderConnection).toHaveBeenCalledTimes(1)

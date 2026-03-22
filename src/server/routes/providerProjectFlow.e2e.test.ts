@@ -239,3 +239,78 @@ test('provider connections list consolidates duplicate codex connections', async
     }),
   ).toEqual(['codex-connection-1', 'codex-connection-2'])
 })
+
+test('singleton codex delete is blocked when any codex model is still referenced', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode)
+    VALUES
+      ('codex-delete-connection-1', 'codex', 'Codex low', TRUE, 'codex-cli'),
+      ('codex-delete-connection-2', 'codex', 'Codex high', TRUE, 'codex-cli')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES
+      ('codex-delete-model-1', 'codex-delete-connection-1', 'gpt-5.4 (thinking: low)', 'gpt-5.4', 'gpt-5.4 (thinking: low)', 'manual', TRUE),
+      ('codex-delete-model-2', 'codex-delete-connection-2', 'gpt-5.4 (thinking: high)', 'gpt-5.4', 'gpt-5.4 (thinking: high)', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id)
+    VALUES ('delete-project-1', 'Project using codex', 'codex-delete-model-2')
+  `)
+  const [visibleCodexModelCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.model m
+    INNER JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
+    WHERE pc.provider_kind = 'codex'
+      AND COALESCE(pc.enabled, TRUE) = TRUE
+  `)
+
+  const response = await app.handle(
+    new Request('http://localhost/api/provider-connections/codex-delete-connection-1', {method: 'DELETE'}),
+  )
+  const body = (await response.json()) as {data: {archived: boolean; deleted: boolean; deletedModelCount: number}}
+
+  expect(response.status).toBe(200)
+  expect(body.data.archived).toBe(true)
+  expect(body.data.deleted).toBe(false)
+  expect(body.data.deletedModelCount).toBe(visibleCodexModelCount?.count ?? 0)
+
+  const remainingConnections = await queryDatabase<{enabled: boolean; id: string}>(`
+    SELECT id, enabled
+    FROM app.provider_connection
+    WHERE provider_kind = 'codex'
+      AND id IN ('codex-delete-connection-1', 'codex-delete-connection-2')
+    ORDER BY id ASC
+  `)
+  const remainingModels = await queryDatabase<{enabled: boolean; id: string}>(`
+    SELECT id, enabled
+    FROM app.model
+    WHERE provider_connection_id IN ('codex-delete-connection-1', 'codex-delete-connection-2')
+    ORDER BY id ASC
+  `)
+
+  expect(
+    remainingConnections.map((row) => {
+      return row.id
+    }),
+  ).toEqual(['codex-delete-connection-1', 'codex-delete-connection-2'])
+  expect(
+    remainingConnections.map((row) => {
+      return row.enabled
+    }),
+  ).toEqual([false, false])
+  expect(
+    remainingModels.map((row) => {
+      return row.id
+    }),
+  ).toEqual(['codex-delete-model-1', 'codex-delete-model-2'])
+  expect(
+    remainingModels.map((row) => {
+      return row.enabled
+    }),
+  ).toEqual([false, false])
+})

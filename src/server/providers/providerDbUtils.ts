@@ -77,8 +77,12 @@ export const getProviderConnectionConfigFromJson = ({
           workerUrlMode: getTrimmedValue((parsed as {workerUrlMode?: string | null}).workerUrlMode),
         })
       : getDefaultWorkerUrlMode({manualWorkerUrls, providerKind})
+  const archived =
+    typeof parsed === 'object' && parsed !== null && 'archived' in parsed
+      ? Boolean((parsed as {archived?: unknown}).archived)
+      : false
 
-  return {manualWorkerUrls, workerUrlMode}
+  return {archived, manualWorkerUrls, workerUrlMode}
 }
 
 export const getPersistedProviderConnectionConfigValue = ({
@@ -91,10 +95,14 @@ export const getPersistedProviderConnectionConfigValue = ({
   const manualWorkerUrls = normalizeWorkerUrls(config.manualWorkerUrls)
   const workerUrlMode = getWorkerUrlMode({manualWorkerUrls, providerKind, workerUrlMode: config.workerUrlMode})
   const defaultWorkerUrlMode = getDefaultWorkerUrlMode({manualWorkerUrls, providerKind})
+  const archived = config.archived === true
 
-  return manualWorkerUrls.length === 0 && workerUrlMode === defaultWorkerUrlMode && workerUrlMode === 'manual'
+  return !archived
+    && manualWorkerUrls.length === 0
+    && workerUrlMode === defaultWorkerUrlMode
+    && workerUrlMode === 'manual'
     ? null
-    : {manualWorkerUrls, workerUrlMode}
+    : {archived, manualWorkerUrls, workerUrlMode}
 }
 
 export const getJsonSqlLiteral = (value: unknown): string => {

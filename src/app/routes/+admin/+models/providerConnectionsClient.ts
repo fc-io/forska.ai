@@ -75,6 +75,7 @@ type ProviderConnectionDiscoveredModelsResponse = {data: {models: ProviderListed
 type ProviderConnectionMutationResponse = {data: {connection: ProviderConnection}; error: null}
 type ProviderConnectionDeleteResponse = {
   data: {
+    archived: boolean
     comparisonProjectCount: number
     deleted: boolean
     deletedModelCount: number

@@ -12,7 +12,11 @@ export type ProviderTransportFamily =
 export type ProviderWorkerUrlMode = 'manual' | 'runtime'
 export type ProviderWorkerSource = 'manual' | 'none' | 'runtime'
 
-export type ProviderConnectionConfig = {manualWorkerUrls: string[]; workerUrlMode: ProviderWorkerUrlMode}
+export type ProviderConnectionConfig = {
+  archived?: boolean
+  manualWorkerUrls: string[]
+  workerUrlMode: ProviderWorkerUrlMode
+}
 
 export type ProviderConnectionRecord = {
   authMode: string | null

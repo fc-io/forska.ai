@@ -257,18 +257,23 @@ export const providerConnectionsRoutes = new Elysia()
         return {data: null, error: 'Provider connection not found'}
       }
 
-      const result = await deleteProviderConnection(connection.id)
+      try {
+        const result = await deleteProviderConnection(connection.id)
 
-      if (connection.secretRef) {
-        await deleteProviderSecret(connection.secretRef).catch((error) => {
-          console.warn(
-            '[provider-connections] Failed to delete provider secret:',
-            error instanceof Error ? error.message : error,
-          )
-        })
+        if (connection.secretRef) {
+          await deleteProviderSecret(connection.secretRef).catch((error) => {
+            console.warn(
+              '[provider-connections] Failed to delete provider secret:',
+              error instanceof Error ? error.message : error,
+            )
+          })
+        }
+
+        return {data: result, error: null}
+      } catch (error) {
+        set.status = 400
+        return {data: null, error: error instanceof Error ? error.message : 'Failed to remove provider connection'}
       }
-
-      return {data: {deleted: true, ...result}, error: null}
     },
     {params: t.Object({id: t.String()})},
   )

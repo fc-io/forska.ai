@@ -493,7 +493,7 @@ const ProviderDetailPage = () => {
     setPageMessage('')
 
     const confirmed = globalThis.confirm(
-      `Remove ${connection.label}? This deletes ${connection.models.length} provider models if they are not referenced by projects, comparison projects, or judgments.`,
+      `Remove ${connection.label}? Unreferenced models are deleted. If any models are still used by projects, comparison projects, or judgments, this provider is archived instead so old results remain reviewable.`,
     )
 
     if (!confirmed) {
