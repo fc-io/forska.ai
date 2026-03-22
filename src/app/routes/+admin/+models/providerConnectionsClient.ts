@@ -56,12 +56,22 @@ export type ProviderConnection = {
   workerState: ProviderConnectionWorkerState
 }
 
+export type ProviderListedModel = {
+  displayName: string
+  metadataJson: unknown
+  modelName: string
+  remoteModelId: string
+  variant: string | null
+  version: string | null
+}
+
 type ProviderConnectionsPayload = {
   catalog: ProviderCatalogEntry[]
   connections: ProviderConnection[]
   runtime: ProviderRuntimeSummary
 }
 type ProviderConnectionsResponse = {data: ProviderConnectionsPayload; error: null}
+type ProviderConnectionDiscoveredModelsResponse = {data: {models: ProviderListedModel[]}; error: null}
 type ProviderConnectionMutationResponse = {data: {connection: ProviderConnection}; error: null}
 type ProviderConnectionDeleteResponse = {
   data: {
@@ -77,6 +87,7 @@ type ProviderConnectionTestResponse = {data: {message: string; modelCount: numbe
 type ProviderConnectionSyncResponse = {data: {count: number; models: ProviderModel[]}; error: null}
 type ProviderConnectionManualModelResponse = {data: {model: ProviderModel | null; modelId: string}; error: null}
 type ProviderModelMutationResponse = {data: {model: ProviderModel}; error: null}
+type EnsureCodexModelResponse = {data: {modelId: string}; error: null}
 
 export type CodexCliStatus = {ok: boolean; loggedIn: boolean; method: 'chatgpt' | 'api-key' | null; raw: string}
 export type CodexStatus = {codexBin: string; cli: CodexCliStatus; appServerReady: boolean; message: string}
@@ -207,6 +218,16 @@ export const testProviderConnectionApi = async (id: string) => {
   return result.data
 }
 
+export const fetchProviderConnectionDiscoveredModels = async (id: string) => {
+  const response = await apiClient.api['provider-connections']({id})['discovered-models'].get()
+  const result = handleApiResponse<ProviderConnectionDiscoveredModelsResponse>(
+    response as unknown as {data?: ProviderConnectionDiscoveredModelsResponse; error?: unknown; status?: number},
+    'Failed to load discovered models',
+  )
+
+  return result.data.models
+}
+
 export const syncProviderConnectionModels = async (id: string) => {
   const response = await apiClient.api['provider-connections']({id})['sync-models'].post()
   const result = handleApiResponse<ProviderConnectionSyncResponse>(
@@ -251,6 +272,21 @@ export const updateProviderModel = async (input: {
   )
 
   return result.data.model
+}
+
+export const ensureCodexProviderModel = async (input: {modelName: string; name: string; version?: string}) => {
+  const response = await apiClient.api.models.ensure.post({
+    modelName: input.modelName,
+    name: input.name,
+    provider: 'codex',
+    version: input.version,
+  })
+  const result = handleApiResponse<EnsureCodexModelResponse>(
+    response as unknown as {data?: EnsureCodexModelResponse; error?: unknown; status?: number},
+    'Failed to ensure Codex model',
+  )
+
+  return result.data.modelId
 }
 
 export const fetchCodexStatus = async () => {

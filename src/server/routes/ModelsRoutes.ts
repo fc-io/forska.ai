@@ -9,6 +9,7 @@ import {
 import {getManualProviderModelMetadata} from '../providers/providerModelMetadata.ts'
 import {createProviderModel, listSelectableProviderModels} from '../providers/providerModelRepository.ts'
 import {requireProviderRegistryEntry} from '../providers/providerRegistry.ts'
+import {type ProviderModelRecord} from '../providers/providerTypes.ts'
 import {
   getCodexAppDeviceLoginJob,
   getCodexAppRuntimeStatus,
@@ -29,33 +30,78 @@ const toCodexVirtualId = (modelName: string, effort?: string | null): string => 
   return trimmedEffort.length > 0 ? `codex:${modelName}:${trimmedEffort}` : `codex:${modelName}`
 }
 
-const getCodexVirtualModelsFromStoredModels = async () => {
-  const storedModels = await listSelectableProviderModels()
+const getCodexStoredModels = async (): Promise<ProviderModelRecord[]> => {
+  const connections = await listProviderConnections()
 
+  return connections.flatMap((connection) => {
+    return connection.providerKind === 'codex' ? connection.models : []
+  })
+}
+
+const getCodexStoredModelKey = (model: {
+  modelName: string | null
+  remoteModelId: string | null
+  variant: string | null
+  version: string | null
+}) => {
+  const modelName = getTrimmedValue(model.remoteModelId) ?? getTrimmedValue(model.modelName) ?? 'codex'
+  const effort = getTrimmedValue(model.variant ?? model.version)
+
+  return toCodexVirtualId(modelName, effort)
+}
+
+const getSelectableCodexModel = ({
+  createdAt,
+  displayName,
+  modelName,
+  updatedAt,
+  version,
+}: {
+  createdAt: Date | null
+  displayName: string
+  modelName: string
+  updatedAt: Date | null
+  version: string | null
+}) => {
+  return {
+    apiKeyVariable: null,
+    baseURL: null,
+    createdAt,
+    id: toCodexVirtualId(modelName, version),
+    modelName,
+    name: displayName,
+    provider: 'codex',
+    updatedAt,
+    version,
+    workerUrls: null,
+  }
+}
+
+const getCodexVirtualModelsFromStoredModels = async (storedModels: ProviderModelRecord[]) => {
   return storedModels
     .filter((model) => {
-      return model.provider === 'codex' && typeof model.modelName === 'string' && model.modelName.trim().length > 0
+      return (
+        model.enabled
+        && model.provider === 'codex'
+        && typeof model.modelName === 'string'
+        && model.modelName.trim().length > 0
+      )
     })
     .map((model) => {
       const modelName = String(model.modelName).trim()
       const effort = getTrimmedValue(model.variant ?? model.version)
 
-      return {
-        apiKeyVariable: null,
-        baseURL: null,
+      return getSelectableCodexModel({
         createdAt: model.createdAt,
-        id: toCodexVirtualId(modelName, effort),
+        displayName: model.displayName ?? model.name,
         modelName,
-        name: model.displayName ?? model.name,
-        provider: 'codex',
         updatedAt: model.updatedAt,
         version: effort,
-        workerUrls: null,
-      }
+      })
     })
 }
 
-const getCodexVirtualModelsFromServer = async () => {
+const getCodexVirtualModelsFromServer = async (storedModels: ProviderModelRecord[]) => {
   const connection = await getFirstEnabledProviderConnection('codex')
 
   if (!connection) {
@@ -66,21 +112,45 @@ const getCodexVirtualModelsFromServer = async () => {
     const definition = requireProviderRegistryEntry(connection.providerKind)
     const runtimeCredentials = await resolveProviderRuntimeCredentials(connection)
     const discoveredModels = await definition.listModels({connection, runtimeCredentials})
+    const storedModelMap = new Map(
+      storedModels.map((model) => {
+        return [getCodexStoredModelKey(model), model]
+      }),
+    )
+    const discoveredIds = new Set<string>()
+    const mergedDiscoveredModels = discoveredModels
+      .filter((model) => {
+        const modelId = toCodexVirtualId(model.modelName, model.variant ?? model.version)
+        const storedModel = storedModelMap.get(modelId)
 
-    return discoveredModels.map((model) => {
-      return {
-        apiKeyVariable: null,
-        baseURL: null,
-        createdAt: null,
-        id: toCodexVirtualId(model.modelName, model.variant ?? model.version),
-        modelName: model.modelName,
-        name: model.displayName,
-        provider: 'codex',
-        updatedAt: null,
-        version: model.variant ?? model.version,
-        workerUrls: null,
-      }
-    })
+        discoveredIds.add(modelId)
+
+        return storedModel?.enabled ?? true
+      })
+      .map((model) => {
+        return getSelectableCodexModel({
+          createdAt: null,
+          displayName: model.displayName,
+          modelName: model.modelName,
+          updatedAt: null,
+          version: model.variant ?? model.version,
+        })
+      })
+    const missingStoredModels = storedModels
+      .filter((model) => {
+        return model.enabled && !discoveredIds.has(getCodexStoredModelKey(model))
+      })
+      .map((model) => {
+        return getSelectableCodexModel({
+          createdAt: model.createdAt,
+          displayName: model.displayName ?? model.name,
+          modelName: String(model.modelName ?? model.remoteModelId ?? model.name).trim(),
+          updatedAt: model.updatedAt,
+          version: getTrimmedValue(model.variant ?? model.version),
+        })
+      })
+
+    return [...mergedDiscoveredModels, ...missingStoredModels]
   } catch (error) {
     console.warn('[models] Failed to load Codex models:', error instanceof Error ? error.message : error)
     return []
@@ -89,6 +159,7 @@ const getCodexVirtualModelsFromServer = async () => {
 
 const getSelectableModelsPayload = async () => {
   const storedModels = await listSelectableProviderModels()
+  const storedCodexModels = await getCodexStoredModels()
   const nonCodexModels = storedModels
     .filter((model) => {
       return model.provider !== 'codex'
@@ -107,8 +178,8 @@ const getSelectableModelsPayload = async () => {
         workerUrls: null,
       }
     })
-  const codexVirtualFromServer = await getCodexVirtualModelsFromServer()
-  const codexVirtualFromDb = await getCodexVirtualModelsFromStoredModels()
+  const codexVirtualFromServer = await getCodexVirtualModelsFromServer(storedCodexModels)
+  const codexVirtualFromDb = await getCodexVirtualModelsFromStoredModels(storedCodexModels)
   const codexModels = codexVirtualFromServer.length > 0 ? codexVirtualFromServer : codexVirtualFromDb
 
   return [...nonCodexModels, ...codexModels]

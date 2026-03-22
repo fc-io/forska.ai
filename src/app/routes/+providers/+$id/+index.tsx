@@ -9,8 +9,10 @@ import {
   addManualProviderModel,
   type CodexDeviceLoginJob,
   deleteProviderConnection,
+  ensureCodexProviderModel,
   fetchCodexLoginJob,
   fetchCodexStatus,
+  fetchProviderConnectionDiscoveredModels,
   fetchProviderConnections,
   formatTimestamp,
   getFormDataString,
@@ -25,6 +27,7 @@ import {
   getWorkerUrlsFromInputValue,
   getWorkerUrlsInputValue,
   type ProviderConnection,
+  type ProviderListedModel,
   type ProviderModel,
   startCodexLogin,
   supportsRuntimeWorkerUrls,
@@ -46,6 +49,115 @@ type ConnectionFormState = {
 }
 
 type ManualModelFormState = {displayName: string; remoteModelId: string; variant: string}
+
+type ProviderPageModel = ProviderModel & {persistedId: string | null}
+
+const getTrimmedModelValue = (value: string | null | undefined): string | null => {
+  const normalized = String(value ?? '').trim()
+
+  return normalized === '' ? null : normalized
+}
+
+const getProviderPageModelKey = ({
+  modelName,
+  remoteModelId,
+  variant,
+  version,
+}: {
+  modelName: string | null
+  remoteModelId: string | null
+  variant: string | null
+  version: string | null
+}) => {
+  const normalizedModelName = getTrimmedModelValue(remoteModelId) ?? getTrimmedModelValue(modelName) ?? 'model'
+  const normalizedVariant = getTrimmedModelValue(variant ?? version) ?? 'auto'
+
+  return `${normalizedModelName}:${normalizedVariant}`
+}
+
+const stripCodexThinkingSuffix = (value: string | null | undefined): string => {
+  const normalized = String(value ?? '').trim()
+  const stripped = normalized.replace(/\s*\(thinking:[^)]+\)$/i, '').trim()
+
+  return stripped || normalized
+}
+
+const getCodexModelDisplayName = (model: {
+  displayName: string | null
+  modelName: string | null
+  name: string
+  remoteModelId: string | null
+}) => {
+  return stripCodexThinkingSuffix(
+    getTrimmedModelValue(model.remoteModelId)
+      ?? getTrimmedModelValue(model.modelName)
+      ?? getTrimmedModelValue(model.displayName)
+      ?? model.name,
+  )
+}
+
+const getCodexModelVariantLabel = (model: {variant: string | null; version: string | null}) => {
+  return getTrimmedModelValue(model.variant ?? model.version) ?? 'auto'
+}
+
+const getProviderPageModels = ({
+  connection,
+  discoveredCodexModels,
+}: {
+  connection: ProviderConnection | null
+  discoveredCodexModels: ProviderListedModel[]
+}): ProviderPageModel[] => {
+  if (!connection) {
+    return []
+  }
+
+  if (connection.providerKind !== 'codex') {
+    return connection.models.map((model) => {
+      return {...model, persistedId: model.id}
+    })
+  }
+
+  const storedModelMap = new Map(
+    connection.models.map((model) => {
+      return [getProviderPageModelKey(model), model]
+    }),
+  )
+  const discoveredKeys = new Set<string>()
+  const discoveredModels = discoveredCodexModels.map((model) => {
+    const modelKey = getProviderPageModelKey(model)
+    const storedModel = storedModelMap.get(modelKey)
+
+    discoveredKeys.add(modelKey)
+
+    return {
+      baseURL: storedModel?.baseURL ?? null,
+      createdAt: storedModel?.createdAt ?? null,
+      displayName: storedModel?.displayName ?? model.displayName,
+      enabled: storedModel?.enabled ?? true,
+      id: storedModel?.id ?? `codex:${modelKey}`,
+      metadataJson: storedModel?.metadataJson ?? model.metadataJson,
+      modelName: storedModel?.modelName ?? model.modelName,
+      name: storedModel?.name ?? model.displayName,
+      persistedId: storedModel?.id ?? null,
+      provider: 'codex',
+      providerConnectionId: storedModel?.providerConnectionId ?? connection.id,
+      remoteModelId: storedModel?.remoteModelId ?? model.remoteModelId,
+      source: storedModel?.source ?? 'discovered',
+      updatedAt: storedModel?.updatedAt ?? null,
+      variant: storedModel?.variant ?? model.variant,
+      version: storedModel?.version ?? model.version,
+    }
+  })
+  const storedOnlyModels = connection.models
+    .filter((model) => {
+      return !discoveredKeys.has(getProviderPageModelKey(model))
+    })
+    .map((model) => {
+      return {...model, persistedId: model.id}
+    })
+
+  return discoveredModels.length > 0 ? [...discoveredModels, ...storedOnlyModels] : storedOnlyModels
+}
 
 const getConnectionFormState = (connection: ProviderConnection | null): ConnectionFormState => {
   return {
@@ -210,6 +322,20 @@ const ProviderDetailPage = () => {
       enabled: selectedConnection()?.providerKind === 'codex',
       queryKey: ['codex-status', selectedConnection()?.id ?? 'none'],
       queryFn: fetchCodexStatus,
+      refetchOnWindowFocus: false,
+      staleTime: 60 * 1000,
+      suspense: false,
+    }
+  })
+  const codexDiscoveredModelsQuery = useQuery(() => {
+    return {
+      enabled: selectedConnection()?.providerKind === 'codex',
+      queryKey: ['provider-connection-discovered-models', selectedConnection()?.id ?? 'none'],
+      queryFn: async () => {
+        const connectionId = selectedConnection()?.id
+
+        return connectionId ? fetchProviderConnectionDiscoveredModels(connectionId) : []
+      },
       refetchOnWindowFocus: false,
       staleTime: 60 * 1000,
       suspense: false,
@@ -388,18 +514,31 @@ const ProviderDetailPage = () => {
     }
   }
 
-  const submitModelForm = async (event: Event, model: ProviderModel) => {
+  const submitModelForm = async (event: Event, model: ProviderPageModel) => {
     event.preventDefault()
     setPageError('')
     setPageMessage('')
     const formData = new FormData(event.currentTarget as HTMLFormElement)
+    const isCodexModel = model.provider === 'codex'
 
     try {
+      const persistedModelId =
+        model.persistedId
+        ?? (isCodexModel
+          ? await ensureCodexProviderModel({
+              modelName: getTrimmedModelValue(model.remoteModelId ?? model.modelName) ?? model.name,
+              name: model.displayName ?? model.name,
+              version: getTrimmedModelValue(model.variant ?? model.version) ?? undefined,
+            })
+          : model.id)
+
       await updateModelMutation.mutateAsync({
-        displayName: getFormDataString(formData, 'displayName'),
+        displayName: isCodexModel ? (model.displayName ?? model.name) : getFormDataString(formData, 'displayName'),
         enabled: formData.get('enabled') === 'on',
-        id: model.id,
-        variant: getFormDataString(formData, 'variant'),
+        id: persistedModelId,
+        variant: isCodexModel
+          ? (getTrimmedModelValue(model.variant ?? model.version) ?? undefined)
+          : getFormDataString(formData, 'variant'),
       })
     } catch (error) {
       setPageError(error instanceof Error ? error.message : 'Failed to update model')
@@ -424,6 +563,17 @@ const ProviderDetailPage = () => {
     } finally {
       setIsStartingCodexLogin(false)
     }
+  }
+
+  const isCodexConnection = () => {
+    return selectedConnection()?.providerKind === 'codex'
+  }
+
+  const providerModels = () => {
+    return getProviderPageModels({
+      connection: selectedConnection(),
+      discoveredCodexModels: codexDiscoveredModelsQuery.data ?? [],
+    })
   }
 
   return (
@@ -564,7 +714,8 @@ const ProviderDetailPage = () => {
                               : 'none detected'}
                           </p>
                           <p class="mt-1 text-xs opacity-80">
-                            The saved base URL still stays in provider config; runtime-only affects worker routing only.
+                            The saved base URL still stays in provider config, but runtime worker URLs become the active
+                            endpoint for requests, tests, and model discovery when available.
                           </p>
                         </div>
                       </Show>
@@ -687,60 +838,62 @@ const ProviderDetailPage = () => {
                     </div>
                   </Show>
 
-                  <div class="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-                    <h2 class="text-lg font-semibold text-gray-900">Add Model</h2>
-                    <p class="mt-1 text-sm text-gray-500">
-                      Adding models is separate from adding providers. Use this after the provider connection already
-                      exists.
-                    </p>
-                    <div class="mt-4 space-y-4">
-                      <div>
-                        <label class="mb-2 block text-sm font-medium text-gray-700">Remote Model ID</label>
-                        <input
-                          class="w-full rounded-md border border-gray-300 px-3 py-3 text-sm text-gray-900"
-                          onInput={(event) => {
-                            setManualModelForm('remoteModelId', event.currentTarget.value)
+                  <Show when={!isCodexConnection()}>
+                    <div class="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+                      <h2 class="text-lg font-semibold text-gray-900">Add Model</h2>
+                      <p class="mt-1 text-sm text-gray-500">
+                        Adding models is separate from adding providers. Use this after the provider connection already
+                        exists.
+                      </p>
+                      <div class="mt-4 space-y-4">
+                        <div>
+                          <label class="mb-2 block text-sm font-medium text-gray-700">Remote Model ID</label>
+                          <input
+                            class="w-full rounded-md border border-gray-300 px-3 py-3 text-sm text-gray-900"
+                            onInput={(event) => {
+                              setManualModelForm('remoteModelId', event.currentTarget.value)
+                            }}
+                            type="text"
+                            value={manualModelForm.remoteModelId}
+                          />
+                        </div>
+                        <div>
+                          <label class="mb-2 block text-sm font-medium text-gray-700">Display Name</label>
+                          <input
+                            class="w-full rounded-md border border-gray-300 px-3 py-3 text-sm text-gray-900"
+                            onInput={(event) => {
+                              setManualModelForm('displayName', event.currentTarget.value)
+                            }}
+                            placeholder="Optional"
+                            type="text"
+                            value={manualModelForm.displayName}
+                          />
+                        </div>
+                        <div>
+                          <label class="mb-2 block text-sm font-medium text-gray-700">Variant</label>
+                          <input
+                            class="w-full rounded-md border border-gray-300 px-3 py-3 text-sm text-gray-900"
+                            onInput={(event) => {
+                              setManualModelForm('variant', event.currentTarget.value)
+                            }}
+                            placeholder="Optional"
+                            type="text"
+                            value={manualModelForm.variant}
+                          />
+                        </div>
+                        <button
+                          class="rounded-md border border-gray-300 px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+                          disabled={addManualModelMutation.isPending}
+                          onClick={() => {
+                            return void submitManualModel()
                           }}
-                          type="text"
-                          value={manualModelForm.remoteModelId}
-                        />
+                          type="button"
+                        >
+                          {addManualModelMutation.isPending ? 'Adding...' : 'Add Model'}
+                        </button>
                       </div>
-                      <div>
-                        <label class="mb-2 block text-sm font-medium text-gray-700">Display Name</label>
-                        <input
-                          class="w-full rounded-md border border-gray-300 px-3 py-3 text-sm text-gray-900"
-                          onInput={(event) => {
-                            setManualModelForm('displayName', event.currentTarget.value)
-                          }}
-                          placeholder="Optional"
-                          type="text"
-                          value={manualModelForm.displayName}
-                        />
-                      </div>
-                      <div>
-                        <label class="mb-2 block text-sm font-medium text-gray-700">Variant</label>
-                        <input
-                          class="w-full rounded-md border border-gray-300 px-3 py-3 text-sm text-gray-900"
-                          onInput={(event) => {
-                            setManualModelForm('variant', event.currentTarget.value)
-                          }}
-                          placeholder="Optional"
-                          type="text"
-                          value={manualModelForm.variant}
-                        />
-                      </div>
-                      <button
-                        class="rounded-md border border-gray-300 px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
-                        disabled={addManualModelMutation.isPending}
-                        onClick={() => {
-                          return void submitManualModel()
-                        }}
-                        type="button"
-                      >
-                        {addManualModelMutation.isPending ? 'Adding...' : 'Add Model'}
-                      </button>
                     </div>
-                  </div>
+                  </Show>
                 </div>
 
                 <div class="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
@@ -748,73 +901,121 @@ const ProviderDetailPage = () => {
                     <div>
                       <h2 class="text-lg font-semibold text-gray-900">Models</h2>
                       <p class="text-sm text-gray-500">
-                        Enable, disable, and rename the models available on this provider.
+                        {isCodexConnection()
+                          ? 'Enable or disable the models and reasoning variants currently available from Codex App.'
+                          : 'Enable, disable, and rename the models available on this provider.'}
                       </p>
                     </div>
                     <div class="text-xs font-medium uppercase tracking-wide text-gray-500">
-                      {connection().models.length} total
+                      {providerModels().length} total
                     </div>
                   </div>
 
                   <Show
-                    when={connection().models.length > 0}
+                    when={isCodexConnection() && codexDiscoveredModelsQuery.isLoading && providerModels().length === 0}
+                  >
+                    <div class="mb-4 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-500">
+                      Loading Codex models...
+                    </div>
+                  </Show>
+
+                  <Show when={isCodexConnection() && codexDiscoveredModelsQuery.isError}>
+                    <div class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                      {codexDiscoveredModelsQuery.error instanceof Error
+                        ? codexDiscoveredModelsQuery.error.message
+                        : 'Failed to load the live Codex model catalog. Showing saved models only.'}
+                    </div>
+                  </Show>
+
+                  <Show
+                    when={providerModels().length > 0}
                     fallback={
                       <div class="rounded-lg border border-dashed border-gray-300 bg-gray-50 px-4 py-10 text-center text-sm text-gray-500">
-                        No models yet. Use sync or add a manual model for this provider.
+                        {isCodexConnection()
+                          ? 'No Codex models are available right now.'
+                          : 'No models yet. Use sync or add a manual model for this provider.'}
                       </div>
                     }
                   >
                     <div class="space-y-3">
-                      <For each={connection().models}>
+                      <For each={providerModels()}>
                         {(model) => {
                           return (
                             <form
-                              class="grid gap-3 rounded-lg border border-gray-200 bg-gray-50 p-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.9fr)_auto_auto]"
+                              class={`grid gap-3 rounded-lg border border-gray-200 bg-gray-50 p-4 ${isCodexConnection() ? 'lg:grid-cols-[minmax(0,1fr)_auto_auto]' : 'lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.9fr)_auto_auto]'}`}
                               onSubmit={(event) => {
                                 return void submitModelForm(event, model)
                               }}
                             >
-                              <div>
-                                <label class="mb-2 block text-xs font-semibold uppercase tracking-wide text-gray-500">
-                                  Display Name
-                                </label>
-                                <input
-                                  class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900"
-                                  name="displayName"
-                                  type="text"
-                                  value={model.displayName ?? model.name}
-                                />
-                                <div class="mt-2 text-xs text-gray-500">
-                                  {model.remoteModelId ?? model.modelName ?? '-'} • {model.source ?? 'manual'}
+                              <Show
+                                when={isCodexConnection()}
+                                fallback={
+                                  <>
+                                    <div>
+                                      <label class="mb-2 block text-xs font-semibold uppercase tracking-wide text-gray-500">
+                                        Display Name
+                                      </label>
+                                      <input
+                                        class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900"
+                                        name="displayName"
+                                        type="text"
+                                        value={model.displayName ?? model.name}
+                                      />
+                                      <div class="mt-2 text-xs text-gray-500">
+                                        {model.remoteModelId ?? model.modelName ?? '-'} • {model.source ?? 'manual'}
+                                      </div>
+                                      <Show when={getProviderModelContextLength(model.metadataJson)}>
+                                        <div class="mt-1 text-xs text-gray-500">
+                                          Context {getProviderModelContextLength(model.metadataJson)} tokens
+                                        </div>
+                                      </Show>
+                                      <Show when={getProviderModelDiscoverySource(model.metadataJson)}>
+                                        <div class="mt-1 text-xs text-gray-500">
+                                          Discovery {getProviderModelDiscoverySource(model.metadataJson)}
+                                        </div>
+                                      </Show>
+                                      <Show when={getProviderModelReasoningEfforts(model.metadataJson).length > 0}>
+                                        <div class="mt-1 text-xs text-gray-500">
+                                          Reasoning {getProviderModelReasoningEfforts(model.metadataJson).join(', ')}
+                                        </div>
+                                      </Show>
+                                    </div>
+                                    <div>
+                                      <label class="mb-2 block text-xs font-semibold uppercase tracking-wide text-gray-500">
+                                        Variant
+                                      </label>
+                                      <input
+                                        class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900"
+                                        name="variant"
+                                        type="text"
+                                        value={model.variant ?? ''}
+                                      />
+                                      <div class="mt-2 text-xs text-gray-500">
+                                        Created {formatTimestamp(model.createdAt)}
+                                      </div>
+                                    </div>
+                                  </>
+                                }
+                              >
+                                <div>
+                                  <div class="text-sm font-semibold text-gray-900">
+                                    {getCodexModelDisplayName(model)}
+                                  </div>
+                                  <div class="mt-2 flex flex-wrap gap-2">
+                                    <span class="rounded-full border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] font-medium uppercase tracking-wide text-blue-700">
+                                      Thinking {getCodexModelVariantLabel(model)}
+                                    </span>
+                                    <Show when={model.persistedId}>
+                                      <span class="rounded-full border border-gray-200 bg-white px-2 py-1 text-[11px] font-medium uppercase tracking-wide text-gray-500">
+                                        Saved
+                                      </span>
+                                    </Show>
+                                  </div>
+                                  <div class="mt-2 text-xs text-gray-500">
+                                    {model.remoteModelId ?? model.modelName ?? '-'}
+                                  </div>
                                 </div>
-                                <Show when={getProviderModelContextLength(model.metadataJson)}>
-                                  <div class="mt-1 text-xs text-gray-500">
-                                    Context {getProviderModelContextLength(model.metadataJson)} tokens
-                                  </div>
-                                </Show>
-                                <Show when={getProviderModelDiscoverySource(model.metadataJson)}>
-                                  <div class="mt-1 text-xs text-gray-500">
-                                    Discovery {getProviderModelDiscoverySource(model.metadataJson)}
-                                  </div>
-                                </Show>
-                                <Show when={getProviderModelReasoningEfforts(model.metadataJson).length > 0}>
-                                  <div class="mt-1 text-xs text-gray-500">
-                                    Reasoning {getProviderModelReasoningEfforts(model.metadataJson).join(', ')}
-                                  </div>
-                                </Show>
-                              </div>
-                              <div>
-                                <label class="mb-2 block text-xs font-semibold uppercase tracking-wide text-gray-500">
-                                  Variant
-                                </label>
-                                <input
-                                  class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900"
-                                  name="variant"
-                                  type="text"
-                                  value={model.variant ?? ''}
-                                />
-                                <div class="mt-2 text-xs text-gray-500">Created {formatTimestamp(model.createdAt)}</div>
-                              </div>
+                              </Show>
                               <label class="flex items-center gap-2 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700">
                                 <input checked={model.enabled} name="enabled" type="checkbox" />
                                 Enabled
