@@ -42,6 +42,11 @@ type DuckdbServiceState = {
   stdoutBuffer: string
 }
 
+type EffectFiberFailure = {
+  error?: {cause?: unknown; error?: unknown; message?: string}
+  failure?: {cause?: unknown; error?: unknown; message?: string}
+}
+
 declare global {
   var __forskaDuckdbServiceState: DuckdbServiceState | undefined
 }
@@ -128,6 +133,61 @@ const getDuckdbCommandText = (statement: string, token: string) => {
 const getDuckdbRowsFromOutput = (output: string): unknown[] => {
   const parsed = JSON.parse(output) as unknown
   return Array.isArray(parsed) ? parsed : [parsed]
+}
+
+const getErrorMessage = (value: unknown): string | null => {
+  if (typeof value === 'string') {
+    return value
+  }
+
+  if (value instanceof Error) {
+    return value.message
+  }
+
+  return typeof value === 'object' && value !== null && 'message' in value && typeof value.message === 'string'
+    ? value.message
+    : null
+}
+
+const getEffectFiberFailure = (value: unknown): EffectFiberFailure | null => {
+  if (typeof value !== 'object' || value === null) {
+    return null
+  }
+
+  const causeSymbol = Object.getOwnPropertySymbols(value).find((symbol) => {
+    return String(symbol) === 'Symbol(effect/Runtime/FiberFailure/Cause)'
+  })
+
+  return causeSymbol === undefined ? null : ((value as Record<PropertyKey, unknown>)[causeSymbol] as EffectFiberFailure)
+}
+
+const getEffectFailureMessage = (value: unknown): string | null => {
+  const fiberFailure = getEffectFiberFailure(value)
+  const failure = fiberFailure?.error ?? fiberFailure?.failure
+
+  return getErrorMessage(failure?.cause) ?? getErrorMessage(failure?.error) ?? getErrorMessage(failure?.message)
+}
+
+const getNormalizedDuckdbError = (error: unknown): Error => {
+  if (error instanceof Error) {
+    const effectFailureMessage = getEffectFailureMessage(error)
+    const combinedMessage =
+      effectFailureMessage !== null && effectFailureMessage !== error.message
+        ? `${error.message} -- ${effectFailureMessage}`
+        : error.message
+
+    return combinedMessage === error.message ? error : new Error(combinedMessage)
+  }
+
+  return new Error(getErrorMessage(error) ?? String(error))
+}
+
+const withNormalizedDuckdbError = async <T>(work: () => Promise<T>): Promise<T> => {
+  try {
+    return await work()
+  } catch (error) {
+    throw getNormalizedDuckdbError(error)
+  }
 }
 
 const getDuckdbMarkerToken = (line: string) => {
@@ -427,39 +487,45 @@ export const getDuckdbRuntimeConfig = () => {
 }
 
 export const runDuckdbJsonQuery = async <T>(statement: string): Promise<T[]> => {
-  return enqueueDuckdbWork(async () => {
-    await ensureStartedDuckdbProcess()
-    return runDuckdbCommand<T>(statement)
+  return withNormalizedDuckdbError(() => {
+    return enqueueDuckdbWork(async () => {
+      await ensureStartedDuckdbProcess()
+      return runDuckdbCommand<T>(statement)
+    })
   })
 }
 
 export const runDuckdbStatement = async (statement: string) => {
-  await enqueueDuckdbWork(async () => {
-    await ensureStartedDuckdbProcess()
-    await runDuckdbCommand(statement)
+  await withNormalizedDuckdbError(() => {
+    return enqueueDuckdbWork(async () => {
+      await ensureStartedDuckdbProcess()
+      await runDuckdbCommand(statement)
+    })
   })
 }
 
 export const runDuckdbTransaction = async <T>(work: (runner: DuckdbTransactionRunner) => Promise<T>): Promise<T> => {
-  return enqueueDuckdbWork(async () => {
-    await ensureStartedDuckdbProcess()
-    await runDuckdbCommand('BEGIN TRANSACTION')
+  return withNormalizedDuckdbError(() => {
+    return enqueueDuckdbWork(async () => {
+      await ensureStartedDuckdbProcess()
+      await runDuckdbCommand('BEGIN TRANSACTION')
 
-    try {
-      const result = await work({
-        queryJson: async <T>(statement: string) => {
-          return runDuckdbCommand<T>(statement)
-        },
-        run: async (statement: string) => {
-          await runDuckdbCommand(statement)
-        },
-      })
-      await runDuckdbCommand('COMMIT')
-      return result
-    } catch (error) {
-      await runDuckdbCommand('ROLLBACK')
-      throw error
-    }
+      try {
+        const result = await work({
+          queryJson: async <T>(statement: string) => {
+            return runDuckdbCommand<T>(statement)
+          },
+          run: async (statement: string) => {
+            await runDuckdbCommand(statement)
+          },
+        })
+        await runDuckdbCommand('COMMIT')
+        return result
+      } catch (error) {
+        await runDuckdbCommand('ROLLBACK')
+        throw error
+      }
+    })
   })
 }
 
@@ -517,24 +583,28 @@ const copyDuckdbSnapshot = (runtimeConfig: DuckdbRuntimeConfig): Effect.Effect<D
 }
 
 export const createDuckdbSnapshot = async (): Promise<DuckdbSnapshot> => {
-  return enqueueDuckdbWork(async () => {
-    await ensureStartedDuckdbProcess()
-    return Effect.runPromise(copyDuckdbSnapshot(getDuckdbRuntimeConfigValue()))
+  return withNormalizedDuckdbError(() => {
+    return enqueueDuckdbWork(async () => {
+      await ensureStartedDuckdbProcess()
+      return Effect.runPromise(copyDuckdbSnapshot(getDuckdbRuntimeConfigValue()))
+    })
   })
 }
 
 export const deleteDuckdbSnapshot = async (snapshotPath: string) => {
-  const snapshotWalPath = `${snapshotPath}.wal`
-  await Effect.runPromise(
-    Effect.gen(function* () {
-      yield* Effect.tryPromise(() => {
-        return rm(snapshotPath, {force: true})
-      })
-      yield* Effect.tryPromise(() => {
-        return rm(snapshotWalPath, {force: true})
-      })
-    }),
-  )
+  await withNormalizedDuckdbError(async () => {
+    const snapshotWalPath = `${snapshotPath}.wal`
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* Effect.tryPromise(() => {
+          return rm(snapshotPath, {force: true})
+        })
+        yield* Effect.tryPromise(() => {
+          return rm(snapshotWalPath, {force: true})
+        })
+      }),
+    )
+  })
 }
 
 export const closeDuckdbService = async () => {
