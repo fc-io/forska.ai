@@ -155,7 +155,7 @@ const AdminModels = () => {
       <div class="mx-auto max-w-7xl space-y-6">
         <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <h1 class="text-2xl font-bold text-gray-900">Provider</h1>
+            <h1 class="text-2xl font-bold text-gray-900">Providers</h1>
             <p class="text-sm text-gray-500">
               Add providers on a separate page, then open each provider to manage settings and enable or disable its
               models.

@@ -440,7 +440,7 @@ const ProviderDetailPage = () => {
             </p>
           </div>
           <Button as={Link} to={'/providers' as never} variant="outline">
-            Back to Provider
+            Back to Providers
           </Button>
         </div>
 
@@ -484,7 +484,7 @@ const ProviderDetailPage = () => {
                   This provider connection does not exist anymore or has been removed.
                 </p>
                 <Button as={Link} class="mt-4" to={'/providers' as never} variant="outline">
-                  Back to Provider
+                  Back to Providers
                 </Button>
               </div>
             </Show>

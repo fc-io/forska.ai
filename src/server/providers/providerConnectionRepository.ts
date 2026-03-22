@@ -49,30 +49,6 @@ const getProviderConnectionRowsByKind = async (providerKind: ProviderKind): Prom
   `)
 }
 
-const getSqlLiteralList = (values: string[]): string => {
-  return values
-    .map((value) => {
-      return getSqlLiteral(value)
-    })
-    .join(', ')
-}
-
-const cleanupOrphanSingletonProviderConnections = async (providerKind: ProviderKind): Promise<void> => {
-  if (!isSingletonProviderKind(providerKind)) {
-    return
-  }
-
-  await getAppDatabaseService().run(`
-    DELETE FROM app.provider_connection pc
-    WHERE pc.provider_kind = ${getSqlLiteral(providerKind)}
-      AND NOT EXISTS (
-        SELECT 1
-        FROM app.model m
-        WHERE m.provider_connection_id = pc.id
-      )
-  `)
-}
-
 const getCollapsedProviderConnections = (connections: ProviderConnectionForAdmin[]): ProviderConnectionForAdmin[] => {
   return connections
     .filter((connection, _index, connectionList) => {
@@ -85,48 +61,30 @@ const getCollapsedProviderConnections = (connections: ProviderConnectionForAdmin
     })
     .map((connection) => {
       return isSingletonProviderKind(connection.providerKind)
-        ? {...connection, label: getProviderCatalogEntry(connection.providerKind)?.label ?? connection.label}
+        ? {
+            ...connection,
+            label: getProviderCatalogEntry(connection.providerKind)?.label ?? connection.label,
+            models: connections.flatMap((candidate) => {
+              return candidate.providerKind === connection.providerKind ? candidate.models : []
+            }),
+          }
         : connection
     })
 }
 
-const consolidateSingletonProviderConnections = async (
-  providerKind: ProviderKind,
-): Promise<ProviderConnectionRecord | null> => {
+const getSingletonProviderConnection = async (providerKind: ProviderKind): Promise<ProviderConnectionRecord | null> => {
   if (!isSingletonProviderKind(providerKind)) {
     return null
   }
 
-  await cleanupOrphanSingletonProviderConnections(providerKind)
-
   const rows = await getProviderConnectionRowsByKind(providerKind)
   const canonicalRow = rows[0]
-  const duplicateRows = rows.slice(1)
 
   if (!canonicalRow) {
     return null
   }
 
-  if (duplicateRows.length === 0) {
-    return getProviderConnectionRecordFromRow(canonicalRow)
-  }
-
-  const canonicalConnection = getProviderConnectionRecordFromRow(canonicalRow)
-  const duplicateIds = duplicateRows.map((row) => {
-    return row.id
-  })
-
-  await getAppDatabaseService().run(`
-    UPDATE app.model
-    SET provider_connection_id = ${getSqlLiteral(canonicalConnection.id)}
-    WHERE provider_connection_id IN (${getSqlLiteralList(duplicateIds)})
-  `)
-
-  return canonicalConnection
-}
-
-const ensureProviderConnectionInvariants = async (): Promise<void> => {
-  await consolidateSingletonProviderConnections('codex')
+  return getProviderConnectionRecordFromRow(canonicalRow)
 }
 
 const getProviderConnectionRows = async (): Promise<ProviderConnectionRecord[]> => {
@@ -201,7 +159,6 @@ const getProviderConnectionRecordById = async (id: string): Promise<ProviderConn
 }
 
 export const listProviderConnections = async (): Promise<ProviderConnectionForAdmin[]> => {
-  await ensureProviderConnectionInvariants()
   const [connections, models] = await Promise.all([getProviderConnectionRows(), getProviderModelRows()])
 
   return getCollapsedProviderConnections(attachModelsToConnections({connections, models}))
@@ -282,7 +239,7 @@ export const createProviderConnection = async ({
   secretRef: string | null
 }): Promise<ProviderConnectionRecord> => {
   const singletonConnection = isSingletonProviderKind(providerKind)
-    ? await consolidateSingletonProviderConnections(providerKind)
+    ? await getSingletonProviderConnection(providerKind)
     : null
 
   if (singletonConnection) {

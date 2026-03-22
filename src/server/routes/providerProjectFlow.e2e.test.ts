@@ -144,7 +144,6 @@ test('provider connections list consolidates duplicate codex connections', async
     return connection.providerKind === 'codex'
   })
   const consolidatedConnection = codexConnections[0]
-  const consolidatedConnectionId = consolidatedConnection?.id ?? null
 
   expect(codexConnections).toHaveLength(1)
   expect(consolidatedConnection?.label).toBe('Codex App')
@@ -178,10 +177,10 @@ test('provider connections list consolidates duplicate codex connections', async
     storedConnectionsWithModels.map((row) => {
       return row.modelId
     }),
-  ).toEqual(consolidatedConnectionId ? [consolidatedConnectionId] : [])
+  ).toEqual(['codex-connection-1', 'codex-connection-2'])
   expect(
     storedModels.map((row) => {
       return row.modelId
     }),
-  ).toEqual(consolidatedConnectionId ? [consolidatedConnectionId, consolidatedConnectionId] : [])
+  ).toEqual(['codex-connection-1', 'codex-connection-2'])
 })

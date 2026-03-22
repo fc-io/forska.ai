@@ -301,11 +301,11 @@ const AddProviderPage = () => {
           <div>
             <h1 class="text-2xl font-bold text-gray-900">Add Provider</h1>
             <p class="text-sm text-gray-500">
-              Create a provider connection here. Models are added later from the main Provider page.
+              Create a provider connection here. Models are added later from the main Providers page.
             </p>
           </div>
           <Button as={Link} to={'/providers' as never} variant="outline">
-            Back to Provider
+            Back to Providers
           </Button>
         </div>
 
@@ -477,7 +477,7 @@ const AddProviderPage = () => {
 
                     <Show when={existingCodexConnection()}>
                       <div class="rounded-md border border-green-200 bg-green-50 p-4 text-sm text-green-800">
-                        Codex App is already added. Manage it on the Provider page.
+                        Codex App is already added. Manage it on the Providers page.
                       </div>
                     </Show>
 
