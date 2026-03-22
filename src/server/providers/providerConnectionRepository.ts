@@ -397,17 +397,15 @@ export const deleteProviderConnection = async (id: string): Promise<DeleteProvid
     )
   }
 
-  await getAppDatabaseService().transaction(async (tx) => {
-    await tx.run(`
-      DELETE FROM app.model
-      WHERE provider_connection_id = ${getSqlLiteral(id)}
-    `)
+  await getAppDatabaseService().run(`
+    DELETE FROM app.model
+    WHERE provider_connection_id = ${getSqlLiteral(id)}
+  `)
 
-    await tx.run(`
-      DELETE FROM app.provider_connection
-      WHERE id = ${getSqlLiteral(id)}
-    `)
-  })
+  await getAppDatabaseService().run(`
+    DELETE FROM app.provider_connection
+    WHERE id = ${getSqlLiteral(id)}
+  `)
 
   return {
     comparisonProjectCount: usage.comparisonProjectCount,

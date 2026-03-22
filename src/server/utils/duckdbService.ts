@@ -182,6 +182,26 @@ const getNormalizedDuckdbError = (error: unknown): Error => {
   return new Error(getErrorMessage(error) ?? String(error))
 }
 
+const getChainedDuckdbError = (error: unknown, nextError: unknown, context: string): Error => {
+  const normalizedError = getNormalizedDuckdbError(error)
+  const normalizedNextError = getNormalizedDuckdbError(nextError)
+  const combinedMessage =
+    normalizedNextError.message === normalizedError.message
+      ? normalizedError.message
+      : `${normalizedError.message} -- ${context}: ${normalizedNextError.message}`
+
+  return combinedMessage === normalizedError.message ? normalizedError : new Error(combinedMessage)
+}
+
+const getDuckdbRollbackError = async (): Promise<Error | null> => {
+  try {
+    await runDuckdbCommand('ROLLBACK')
+    return null
+  } catch (error) {
+    return getNormalizedDuckdbError(error)
+  }
+}
+
 const withNormalizedDuckdbError = async <T>(work: () => Promise<T>): Promise<T> => {
   try {
     return await work()
@@ -522,8 +542,9 @@ export const runDuckdbTransaction = async <T>(work: (runner: DuckdbTransactionRu
         await runDuckdbCommand('COMMIT')
         return result
       } catch (error) {
-        await runDuckdbCommand('ROLLBACK')
-        throw error
+        const rollbackError = await getDuckdbRollbackError()
+
+        throw rollbackError === null ? error : getChainedDuckdbError(error, rollbackError, 'rollback failed')
       }
     })
   })

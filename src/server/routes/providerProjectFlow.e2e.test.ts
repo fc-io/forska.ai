@@ -25,7 +25,7 @@ void mock.module(martRefreshServiceModulePath, () => {
 
 let app: {handle: (request: Request) => Promise<Response>} | null = null
 let closeDatabase: (() => Promise<void>) | null = null
-let queryDatabase: ((statement: string) => Promise<Array<{modelId: string}>>) | null = null
+let queryDatabase: (<T>(statement: string) => Promise<T[]>) | null = null
 let runDatabase: ((statement: string) => Promise<void>) | null = null
 
 beforeAll(async () => {
@@ -105,7 +105,7 @@ test('provider to model to project flow works through routes', async () => {
   expect(createProjectResponse.status).toBe(200)
   expect(createProjectBody.data.modelId).toBe(modelId)
 
-  const [storedProject] = await queryDatabase(`
+  const [storedProject] = await queryDatabase<{modelId: string}>(`
     SELECT model_id AS modelId
     FROM app.project
     WHERE id = '${createProjectBody.data.id}'
@@ -113,6 +113,61 @@ test('provider to model to project flow works through routes', async () => {
   `)
 
   expect(storedProject?.modelId).toBe(modelId)
+})
+
+test('provider connection delete removes an unreferenced connection and its models', async () => {
+  if (!app || !queryDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const createConnectionResponse = await app.handle(
+    new Request('http://localhost/api/provider-connections', {
+      body: JSON.stringify({baseURL: 'http://127.0.0.1:1234/v1', label: 'Delete Me', providerKind: 'llmstudio'}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const createConnectionBody = (await createConnectionResponse.json()) as {data: {connection: {id: string}}}
+
+  expect(createConnectionResponse.status).toBe(200)
+
+  const connectionId = createConnectionBody.data.connection.id
+  const addModelResponse = await app.handle(
+    new Request(`http://localhost/api/provider-connections/${connectionId}/models`, {
+      body: JSON.stringify({displayName: 'Delete Model', remoteModelId: 'delete-model'}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+
+  expect(addModelResponse.status).toBe(200)
+
+  const deleteConnectionResponse = await app.handle(
+    new Request(`http://localhost/api/provider-connections/${connectionId}`, {method: 'DELETE'}),
+  )
+  const deleteConnectionBody = (await deleteConnectionResponse.json()) as {
+    data: {deleted: boolean; deletedModelCount: number}
+  }
+
+  expect(deleteConnectionResponse.status).toBe(200)
+  expect(deleteConnectionBody.data.deleted).toBe(true)
+  expect(deleteConnectionBody.data.deletedModelCount).toBe(1)
+
+  const [storedConnection] = await queryDatabase<{id: string}>(`
+    SELECT id
+    FROM app.provider_connection
+    WHERE id = '${connectionId}'
+    LIMIT 1
+  `)
+  const [storedModel] = await queryDatabase<{id: string}>(`
+    SELECT id
+    FROM app.model
+    WHERE provider_connection_id = '${connectionId}'
+    LIMIT 1
+  `)
+
+  expect(storedConnection).toBeUndefined()
+  expect(storedModel).toBeUndefined()
 })
 
 test('provider connections list consolidates duplicate codex connections', async () => {
@@ -155,7 +210,7 @@ test('provider connections list consolidates duplicate codex connections', async
       .sort(),
   ).toEqual(['codex-model-1', 'codex-model-2'])
 
-  const storedConnectionsWithModels = await queryDatabase(`
+  const storedConnectionsWithModels = await queryDatabase<{modelId: string}>(`
     SELECT id AS modelId
     FROM app.provider_connection
     WHERE provider_kind = 'codex'
@@ -166,7 +221,7 @@ test('provider connections list consolidates duplicate codex connections', async
       )
     ORDER BY id ASC
   `)
-  const storedModels = await queryDatabase(`
+  const storedModels = await queryDatabase<{modelId: string}>(`
     SELECT provider_connection_id AS modelId
     FROM app.model
     WHERE id IN ('codex-model-1', 'codex-model-2')
