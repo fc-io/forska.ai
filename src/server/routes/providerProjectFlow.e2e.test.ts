@@ -26,6 +26,7 @@ void mock.module(martRefreshServiceModulePath, () => {
 let app: {handle: (request: Request) => Promise<Response>} | null = null
 let closeDatabase: (() => Promise<void>) | null = null
 let queryDatabase: ((statement: string) => Promise<Array<{modelId: string}>>) | null = null
+let runDatabase: ((statement: string) => Promise<void>) | null = null
 
 beforeAll(async () => {
   const [
@@ -51,6 +52,9 @@ beforeAll(async () => {
   }
   queryDatabase = (statement: string) => {
     return database.queryJson(statement)
+  }
+  runDatabase = (statement: string) => {
+    return database.run(statement)
   }
   app = new Elysia().use(providerConnectionsRoutes).use(providerModelsRoutes).use(projectsRoutes)
 })
@@ -109,4 +113,75 @@ test('provider to model to project flow works through routes', async () => {
   `)
 
   expect(storedProject?.modelId).toBe(modelId)
+})
+
+test('provider connections list consolidates duplicate codex connections', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode)
+    VALUES
+      ('codex-connection-1', 'codex', 'GPT-5.3-Codex-Spark (thinking: low)', TRUE, 'codex-cli'),
+      ('codex-connection-2', 'codex', 'GPT-5.3-Codex-Spark (thinking: high)', TRUE, 'codex-cli')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES
+      ('codex-model-1', 'codex-connection-1', 'GPT-5.3-Codex-Spark (thinking: low)', 'gpt-5.3-codex-spark', 'GPT-5.3-Codex-Spark (thinking: low)', 'manual', TRUE),
+      ('codex-model-2', 'codex-connection-2', 'GPT-5.3-Codex-Spark (thinking: high)', 'gpt-5.3-codex-spark', 'GPT-5.3-Codex-Spark (thinking: high)', 'manual', TRUE)
+  `)
+
+  const response = await app.handle(new Request('http://localhost/api/provider-connections'))
+  const body = (await response.json()) as {
+    data: {connections: Array<{id: string; label: string; models: Array<{id: string}>; providerKind: string}>}
+  }
+
+  expect(response.status).toBe(200)
+
+  const codexConnections = body.data.connections.filter((connection) => {
+    return connection.providerKind === 'codex'
+  })
+  const consolidatedConnection = codexConnections[0]
+  const consolidatedConnectionId = consolidatedConnection?.id ?? null
+
+  expect(codexConnections).toHaveLength(1)
+  expect(consolidatedConnection?.label).toBe('Codex App')
+  expect(
+    consolidatedConnection?.models
+      .map((model) => {
+        return model.id
+      })
+      .sort(),
+  ).toEqual(['codex-model-1', 'codex-model-2'])
+
+  const storedConnectionsWithModels = await queryDatabase(`
+    SELECT id AS modelId
+    FROM app.provider_connection
+    WHERE provider_kind = 'codex'
+      AND EXISTS (
+        SELECT 1
+        FROM app.model m
+        WHERE m.provider_connection_id = app.provider_connection.id
+      )
+    ORDER BY id ASC
+  `)
+  const storedModels = await queryDatabase(`
+    SELECT provider_connection_id AS modelId
+    FROM app.model
+    WHERE id IN ('codex-model-1', 'codex-model-2')
+    ORDER BY id ASC
+  `)
+
+  expect(
+    storedConnectionsWithModels.map((row) => {
+      return row.modelId
+    }),
+  ).toEqual(consolidatedConnectionId ? [consolidatedConnectionId] : [])
+  expect(
+    storedModels.map((row) => {
+      return row.modelId
+    }),
+  ).toEqual(consolidatedConnectionId ? [consolidatedConnectionId, consolidatedConnectionId] : [])
 })

@@ -1,6 +1,6 @@
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
-import {type ProviderKind} from '../services/providerCatalog.ts'
+import {getProviderCatalogEntry, type ProviderKind} from '../services/providerCatalog.ts'
 import {
   attachModelsToConnections,
   getJsonSqlLiteral,
@@ -22,6 +22,111 @@ export type DeleteProviderConnectionResult = {
   deletedModelCount: number
   judgmentCount: number
   projectCount: number
+}
+
+const isSingletonProviderKind = (providerKind: ProviderKind): boolean => {
+  return providerKind === 'codex'
+}
+
+const getProviderConnectionRowsByKind = async (providerKind: ProviderKind): Promise<ProviderConnectionRow[]> => {
+  return getAppDatabaseService().queryJson<ProviderConnectionRow>(`
+    SELECT
+      id,
+      provider_kind AS providerKind,
+      label,
+      enabled,
+      auth_mode AS authMode,
+      base_url AS baseURL,
+      TO_JSON(config_json) AS configJson,
+      secret_ref AS secretRef,
+      last_checked_at AS lastCheckedAt,
+      last_error AS lastError,
+      created_at AS createdAt,
+      updated_at AS updatedAt
+    FROM app.provider_connection
+    WHERE provider_kind = ${getSqlLiteral(providerKind)}
+    ORDER BY created_at ASC, label ASC
+  `)
+}
+
+const getSqlLiteralList = (values: string[]): string => {
+  return values
+    .map((value) => {
+      return getSqlLiteral(value)
+    })
+    .join(', ')
+}
+
+const cleanupOrphanSingletonProviderConnections = async (providerKind: ProviderKind): Promise<void> => {
+  if (!isSingletonProviderKind(providerKind)) {
+    return
+  }
+
+  await getAppDatabaseService().run(`
+    DELETE FROM app.provider_connection pc
+    WHERE pc.provider_kind = ${getSqlLiteral(providerKind)}
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.model m
+        WHERE m.provider_connection_id = pc.id
+      )
+  `)
+}
+
+const getCollapsedProviderConnections = (connections: ProviderConnectionForAdmin[]): ProviderConnectionForAdmin[] => {
+  return connections
+    .filter((connection, _index, connectionList) => {
+      return (
+        !isSingletonProviderKind(connection.providerKind)
+        || connectionList.find((candidate) => {
+          return candidate.providerKind === connection.providerKind
+        })?.id === connection.id
+      )
+    })
+    .map((connection) => {
+      return isSingletonProviderKind(connection.providerKind)
+        ? {...connection, label: getProviderCatalogEntry(connection.providerKind)?.label ?? connection.label}
+        : connection
+    })
+}
+
+const consolidateSingletonProviderConnections = async (
+  providerKind: ProviderKind,
+): Promise<ProviderConnectionRecord | null> => {
+  if (!isSingletonProviderKind(providerKind)) {
+    return null
+  }
+
+  await cleanupOrphanSingletonProviderConnections(providerKind)
+
+  const rows = await getProviderConnectionRowsByKind(providerKind)
+  const canonicalRow = rows[0]
+  const duplicateRows = rows.slice(1)
+
+  if (!canonicalRow) {
+    return null
+  }
+
+  if (duplicateRows.length === 0) {
+    return getProviderConnectionRecordFromRow(canonicalRow)
+  }
+
+  const canonicalConnection = getProviderConnectionRecordFromRow(canonicalRow)
+  const duplicateIds = duplicateRows.map((row) => {
+    return row.id
+  })
+
+  await getAppDatabaseService().run(`
+    UPDATE app.model
+    SET provider_connection_id = ${getSqlLiteral(canonicalConnection.id)}
+    WHERE provider_connection_id IN (${getSqlLiteralList(duplicateIds)})
+  `)
+
+  return canonicalConnection
+}
+
+const ensureProviderConnectionInvariants = async (): Promise<void> => {
+  await consolidateSingletonProviderConnections('codex')
 }
 
 const getProviderConnectionRows = async (): Promise<ProviderConnectionRecord[]> => {
@@ -96,9 +201,10 @@ const getProviderConnectionRecordById = async (id: string): Promise<ProviderConn
 }
 
 export const listProviderConnections = async (): Promise<ProviderConnectionForAdmin[]> => {
+  await ensureProviderConnectionInvariants()
   const [connections, models] = await Promise.all([getProviderConnectionRows(), getProviderModelRows()])
 
-  return attachModelsToConnections({connections, models})
+  return getCollapsedProviderConnections(attachModelsToConnections({connections, models}))
 }
 
 export const getProviderConnection = async (id: string): Promise<ProviderConnectionRecord | null> => {
@@ -175,6 +281,14 @@ export const createProviderConnection = async ({
   providerKind: ProviderKind
   secretRef: string | null
 }): Promise<ProviderConnectionRecord> => {
+  const singletonConnection = isSingletonProviderKind(providerKind)
+    ? await consolidateSingletonProviderConnections(providerKind)
+    : null
+
+  if (singletonConnection) {
+    return singletonConnection
+  }
+
   const persistedConfig = getPersistedProviderConnectionConfigValue({config, providerKind})
   const [created] = await getAppDatabaseService().queryJson<ProviderConnectionRow>(`
     INSERT INTO app.provider_connection (

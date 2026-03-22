@@ -17,12 +17,6 @@ import {
   updateProviderConnection,
 } from '../+admin/+models/providerConnectionsClient.ts'
 
-const getEnabledModelCount = (connection: ProviderConnection) => {
-  return connection.models.filter((model) => {
-    return model.enabled
-  }).length
-}
-
 const AdminModels = () => {
   const providerConnectionsQuery = useQuery(() => {
     return {
@@ -250,10 +244,6 @@ const AdminModels = () => {
                               <div>
                                 <span class="font-medium text-gray-700">Secret:</span>{' '}
                                 {getProviderSecretStatus(connection)}
-                              </div>
-                              <div>
-                                <span class="font-medium text-gray-700">Models:</span> {connection.models.length} total
-                                / {getEnabledModelCount(connection)} enabled
                               </div>
                               <div>
                                 <span class="font-medium text-gray-700">Worker URLs:</span>{' '}

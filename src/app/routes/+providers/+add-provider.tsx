@@ -477,8 +477,7 @@ const AddProviderPage = () => {
 
                     <Show when={existingCodexConnection()}>
                       <div class="rounded-md border border-green-200 bg-green-50 p-4 text-sm text-green-800">
-                        Codex App is already added as `{existingCodexConnection()?.label}`. Manage it on the Provider
-                        page.
+                        Codex App is already added. Manage it on the Provider page.
                       </div>
                     </Show>
 
