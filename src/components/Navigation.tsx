@@ -104,7 +104,11 @@ export const Navigation = () => {
   })
 
   const writerWarning = createMemo(() => {
-    return writerConnectionsQuery.data?.warnings[0] ?? null
+    return (
+      writerConnectionsQuery.data?.warnings.find((warning) => {
+        return warning.kind !== 'write-failure'
+      }) ?? null
+    )
   })
 
   const writerWarningClass = createMemo(() => {

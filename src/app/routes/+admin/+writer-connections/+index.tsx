@@ -50,7 +50,7 @@ const getWriterWarningClass = (warning: WriterWarningRow) => {
 
 const getWriterWarningLabel = (warning: WriterWarningRow) => {
   return warning.kind === 'write-failure'
-    ? 'Write failure'
+    ? 'Operation error'
     : warning.kind === 'writer-disabled'
       ? 'Writer disabled'
       : 'Writer unavailable'
