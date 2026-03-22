@@ -3,8 +3,8 @@ import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
 import {createEffect, createSignal, For, onCleanup, Show} from 'solid-js'
 import {createStore} from 'solid-js/store'
 
-import {Button} from '../../../../components/ui/button.tsx'
-import {ProviderConnectionForm} from './providerConnectionForm.tsx'
+import {Button} from '../../../components/ui/button.tsx'
+import {ProviderConnectionForm} from '../+admin/+models/providerConnectionForm.tsx'
 import {
   beginProviderAuthLifecycle,
   type CodexDeviceLoginJob,
@@ -20,8 +20,8 @@ import {
   type ProviderAuthLifecycleResult,
   type ProviderCatalogEntry,
   supportsRuntimeWorkerUrls,
-} from './providerConnectionsClient.ts'
-import {getCodexOnboardingUiState} from './providerUiState.ts'
+} from '../+admin/+models/providerConnectionsClient.ts'
+import {getCodexOnboardingUiState} from '../+admin/+models/providerUiState.ts'
 
 type ConnectionFormState = {
   apiKey: string
@@ -83,7 +83,7 @@ const AddProviderPage = () => {
     return {
       mutationFn: createProviderConnection,
       onSuccess: () => {
-        void navigate({to: '/admin/models/' as never})
+        void navigate({to: '/providers/' as never})
       },
     }
   })
@@ -301,11 +301,11 @@ const AddProviderPage = () => {
           <div>
             <h1 class="text-2xl font-bold text-gray-900">Add Provider</h1>
             <p class="text-sm text-gray-500">
-              Create a provider connection here. Models are added later from the main Providers and Models page.
+              Create a provider connection here. Models are added later from the main Provider page.
             </p>
           </div>
-          <Button as={Link} to="/admin/models" variant="outline">
-            Back to Providers and Models
+          <Button as={Link} to={'/providers' as never} variant="outline">
+            Back to Provider
           </Button>
         </div>
 
@@ -477,7 +477,8 @@ const AddProviderPage = () => {
 
                     <Show when={existingCodexConnection()}>
                       <div class="rounded-md border border-green-200 bg-green-50 p-4 text-sm text-green-800">
-                        Codex App is already added. Manage it on the Providers and Models page.
+                        Codex App is already added as `{existingCodexConnection()?.label}`. Manage it on the Provider
+                        page.
                       </div>
                     </Show>
 
@@ -546,4 +547,4 @@ const AddProviderPage = () => {
   )
 }
 
-export const Route = createFileRoute('/admin/models/add-provider' as never)({component: AddProviderPage})
+export const Route = createFileRoute('/providers/add-provider' as never)({component: AddProviderPage})

@@ -344,11 +344,11 @@ export const Navigation = () => {
                       Data Sources
                     </Link>
                     <Link
-                      to="/admin/models"
+                      to={'/providers' as never}
                       class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
                       onClick={closeAdminMenu}
                     >
-                      Models
+                      Provider
                     </Link>
                     <Link
                       to="/admin/writer-connections"

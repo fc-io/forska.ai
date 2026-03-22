@@ -10,11 +10,13 @@
 
 import { Route as rootRouteImport } from './routes/+__root'
 import { Route as IndexRouteImport } from './routes/+index'
+import { Route as ProvidersAddProviderRouteImport } from './routes/+providers/+add-provider'
 import { Route as ProjectsCreateSubprojectRouteImport } from './routes/+projects/+create-subproject'
 import { Route as ProjectsCreateRouteImport } from './routes/+projects/+create'
 import { Route as CompareJudgmentsCreateFromProjectRouteImport } from './routes/+compare-judgments/+create-from-project'
 import { Route as CompareJudgmentsCreateRouteImport } from './routes/+compare-judgments/+create'
 import { Route as SettingsIndexRouteImport } from './routes/+settings/+index'
+import { Route as ProvidersIndexRouteImport } from './routes/+providers/+index'
 import { Route as PromptsIndexRouteImport } from './routes/+prompts/+index'
 import { Route as ProjectsIndexRouteImport } from './routes/+projects/+index'
 import { Route as LoginIndexRouteImport } from './routes/+login/+index'
@@ -26,8 +28,8 @@ import { Route as ProjectsIdEditRouteImport } from './routes/+projects/+$id/+edi
 import { Route as CompareJudgmentsIdEditRouteImport } from './routes/+compare-judgments/+$id/+edit'
 import { Route as ArticlesIdFulltextRouteImport } from './routes/+articles/+$id/+fulltext'
 import { Route as AdminPromptsDeduplicateRouteImport } from './routes/+admin/+prompts/+deduplicate'
-import { Route as AdminModelsAddProviderRouteImport } from './routes/+admin/+models/+add-provider'
 import { Route as AdminDatasourcesCreateRouteImport } from './routes/+admin/+datasources/+create'
+import { Route as ProvidersIdIndexRouteImport } from './routes/+providers/+$id/+index'
 import { Route as PromptsArchivedIndexRouteImport } from './routes/+prompts/+archived/+index'
 import { Route as ProjectsArchivedIndexRouteImport } from './routes/+projects/+archived/+index'
 import { Route as ProjectsIdIndexRouteImport } from './routes/+projects/+$id/+index'
@@ -39,7 +41,6 @@ import { Route as AdminUnexpectedAnswersIndexRouteImport } from './routes/+admin
 import { Route as AdminSetup_statsIndexRouteImport } from './routes/+admin/+setup_stats/+index'
 import { Route as AdminPdfResetIndexRouteImport } from './routes/+admin/+pdf-reset/+index'
 import { Route as AdminPdfConversionsIndexRouteImport } from './routes/+admin/+pdf-conversions/+index'
-import { Route as AdminModelsIndexRouteImport } from './routes/+admin/+models/+index'
 import { Route as AdminLlmIndexRouteImport } from './routes/+admin/+llm/+index'
 import { Route as AdminJobsIndexRouteImport } from './routes/+admin/+jobs/+index'
 import { Route as AdminGpuIndexRouteImport } from './routes/+admin/+gpu/+index'
@@ -69,6 +70,11 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ProvidersAddProviderRoute = ProvidersAddProviderRouteImport.update({
+  id: '/providers/add-provider',
+  path: '/providers/add-provider',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ProjectsCreateSubprojectRoute =
   ProjectsCreateSubprojectRouteImport.update({
     id: '/projects/create-subproject',
@@ -94,6 +100,11 @@ const CompareJudgmentsCreateRoute = CompareJudgmentsCreateRouteImport.update({
 const SettingsIndexRoute = SettingsIndexRouteImport.update({
   id: '/settings/',
   path: '/settings/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProvidersIndexRoute = ProvidersIndexRouteImport.update({
+  id: '/providers/',
+  path: '/providers/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PromptsIndexRoute = PromptsIndexRouteImport.update({
@@ -152,14 +163,14 @@ const AdminPromptsDeduplicateRoute = AdminPromptsDeduplicateRouteImport.update({
   path: '/admin/prompts/deduplicate',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AdminModelsAddProviderRoute = AdminModelsAddProviderRouteImport.update({
-  id: '/admin/models/add-provider',
-  path: '/admin/models/add-provider',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const AdminDatasourcesCreateRoute = AdminDatasourcesCreateRouteImport.update({
   id: '/admin/datasources/create',
   path: '/admin/datasources/create',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProvidersIdIndexRoute = ProvidersIdIndexRouteImport.update({
+  id: '/providers/$id/',
+  path: '/providers/$id/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PromptsArchivedIndexRoute = PromptsArchivedIndexRouteImport.update({
@@ -221,11 +232,6 @@ const AdminPdfConversionsIndexRoute =
     path: '/admin/pdf-conversions/',
     getParentRoute: () => rootRouteImport,
   } as any)
-const AdminModelsIndexRoute = AdminModelsIndexRouteImport.update({
-  id: '/admin/models/',
-  path: '/admin/models/',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const AdminLlmIndexRoute = AdminLlmIndexRouteImport.update({
   id: '/admin/llm/',
   path: '/admin/llm/',
@@ -364,18 +370,19 @@ export interface FileRoutesByFullPath {
   '/login/': typeof LoginIndexRoute
   '/projects/': typeof ProjectsIndexRoute
   '/prompts/': typeof PromptsIndexRoute
+  '/providers/': typeof ProvidersIndexRoute
   '/settings/': typeof SettingsIndexRoute
   '/compare-judgments/create': typeof CompareJudgmentsCreateRoute
   '/compare-judgments/create-from-project': typeof CompareJudgmentsCreateFromProjectRoute
   '/projects/create': typeof ProjectsCreateRoute
   '/projects/create-subproject': typeof ProjectsCreateSubprojectRoute
+  '/providers/add-provider': typeof ProvidersAddProviderRoute
   '/admin/assessments/': typeof AdminAssessmentsIndexRoute
   '/admin/datasources/': typeof AdminDatasourcesIndexRoute
   '/admin/failed_requests/': typeof AdminFailed_requestsIndexRoute
   '/admin/gpu/': typeof AdminGpuIndexRoute
   '/admin/jobs/': typeof AdminJobsIndexRoute
   '/admin/llm/': typeof AdminLlmIndexRoute
-  '/admin/models/': typeof AdminModelsIndexRoute
   '/admin/pdf-conversions/': typeof AdminPdfConversionsIndexRoute
   '/admin/pdf-reset/': typeof AdminPdfResetIndexRoute
   '/admin/setup_stats/': typeof AdminSetup_statsIndexRoute
@@ -387,8 +394,8 @@ export interface FileRoutesByFullPath {
   '/projects/$id/': typeof ProjectsIdIndexRoute
   '/projects/archived/': typeof ProjectsArchivedIndexRoute
   '/prompts/archived/': typeof PromptsArchivedIndexRoute
+  '/providers/$id/': typeof ProvidersIdIndexRoute
   '/admin/datasources/create': typeof AdminDatasourcesCreateRoute
-  '/admin/models/add-provider': typeof AdminModelsAddProviderRoute
   '/admin/prompts/deduplicate': typeof AdminPromptsDeduplicateRoute
   '/articles/$id/fulltext': typeof ArticlesIdFulltextRoute
   '/compare-judgments/$id/edit': typeof CompareJudgmentsIdEditRoute
@@ -420,18 +427,19 @@ export interface FileRoutesByTo {
   '/login': typeof LoginIndexRoute
   '/projects': typeof ProjectsIndexRoute
   '/prompts': typeof PromptsIndexRoute
+  '/providers': typeof ProvidersIndexRoute
   '/settings': typeof SettingsIndexRoute
   '/compare-judgments/create': typeof CompareJudgmentsCreateRoute
   '/compare-judgments/create-from-project': typeof CompareJudgmentsCreateFromProjectRoute
   '/projects/create': typeof ProjectsCreateRoute
   '/projects/create-subproject': typeof ProjectsCreateSubprojectRoute
+  '/providers/add-provider': typeof ProvidersAddProviderRoute
   '/admin/assessments': typeof AdminAssessmentsIndexRoute
   '/admin/datasources': typeof AdminDatasourcesIndexRoute
   '/admin/failed_requests': typeof AdminFailed_requestsIndexRoute
   '/admin/gpu': typeof AdminGpuIndexRoute
   '/admin/jobs': typeof AdminJobsIndexRoute
   '/admin/llm': typeof AdminLlmIndexRoute
-  '/admin/models': typeof AdminModelsIndexRoute
   '/admin/pdf-conversions': typeof AdminPdfConversionsIndexRoute
   '/admin/pdf-reset': typeof AdminPdfResetIndexRoute
   '/admin/setup_stats': typeof AdminSetup_statsIndexRoute
@@ -443,8 +451,8 @@ export interface FileRoutesByTo {
   '/projects/$id': typeof ProjectsIdIndexRoute
   '/projects/archived': typeof ProjectsArchivedIndexRoute
   '/prompts/archived': typeof PromptsArchivedIndexRoute
+  '/providers/$id': typeof ProvidersIdIndexRoute
   '/admin/datasources/create': typeof AdminDatasourcesCreateRoute
-  '/admin/models/add-provider': typeof AdminModelsAddProviderRoute
   '/admin/prompts/deduplicate': typeof AdminPromptsDeduplicateRoute
   '/articles/$id/fulltext': typeof ArticlesIdFulltextRoute
   '/compare-judgments/$id/edit': typeof CompareJudgmentsIdEditRoute
@@ -477,18 +485,19 @@ export interface FileRoutesById {
   '/login/': typeof LoginIndexRoute
   '/projects/': typeof ProjectsIndexRoute
   '/prompts/': typeof PromptsIndexRoute
+  '/providers/': typeof ProvidersIndexRoute
   '/settings/': typeof SettingsIndexRoute
   '/compare-judgments/create': typeof CompareJudgmentsCreateRoute
   '/compare-judgments/create-from-project': typeof CompareJudgmentsCreateFromProjectRoute
   '/projects/create': typeof ProjectsCreateRoute
   '/projects/create-subproject': typeof ProjectsCreateSubprojectRoute
+  '/providers/add-provider': typeof ProvidersAddProviderRoute
   '/admin/assessments/': typeof AdminAssessmentsIndexRoute
   '/admin/datasources/': typeof AdminDatasourcesIndexRoute
   '/admin/failed_requests/': typeof AdminFailed_requestsIndexRoute
   '/admin/gpu/': typeof AdminGpuIndexRoute
   '/admin/jobs/': typeof AdminJobsIndexRoute
   '/admin/llm/': typeof AdminLlmIndexRoute
-  '/admin/models/': typeof AdminModelsIndexRoute
   '/admin/pdf-conversions/': typeof AdminPdfConversionsIndexRoute
   '/admin/pdf-reset/': typeof AdminPdfResetIndexRoute
   '/admin/setup_stats/': typeof AdminSetup_statsIndexRoute
@@ -500,8 +509,8 @@ export interface FileRoutesById {
   '/projects/$id/': typeof ProjectsIdIndexRoute
   '/projects/archived/': typeof ProjectsArchivedIndexRoute
   '/prompts/archived/': typeof PromptsArchivedIndexRoute
+  '/providers/$id/': typeof ProvidersIdIndexRoute
   '/admin/datasources/create': typeof AdminDatasourcesCreateRoute
-  '/admin/models/add-provider': typeof AdminModelsAddProviderRoute
   '/admin/prompts/deduplicate': typeof AdminPromptsDeduplicateRoute
   '/articles/$id/fulltext': typeof ArticlesIdFulltextRoute
   '/compare-judgments/$id/edit': typeof CompareJudgmentsIdEditRoute
@@ -535,18 +544,19 @@ export interface FileRouteTypes {
     | '/login/'
     | '/projects/'
     | '/prompts/'
+    | '/providers/'
     | '/settings/'
     | '/compare-judgments/create'
     | '/compare-judgments/create-from-project'
     | '/projects/create'
     | '/projects/create-subproject'
+    | '/providers/add-provider'
     | '/admin/assessments/'
     | '/admin/datasources/'
     | '/admin/failed_requests/'
     | '/admin/gpu/'
     | '/admin/jobs/'
     | '/admin/llm/'
-    | '/admin/models/'
     | '/admin/pdf-conversions/'
     | '/admin/pdf-reset/'
     | '/admin/setup_stats/'
@@ -558,8 +568,8 @@ export interface FileRouteTypes {
     | '/projects/$id/'
     | '/projects/archived/'
     | '/prompts/archived/'
+    | '/providers/$id/'
     | '/admin/datasources/create'
-    | '/admin/models/add-provider'
     | '/admin/prompts/deduplicate'
     | '/articles/$id/fulltext'
     | '/compare-judgments/$id/edit'
@@ -591,18 +601,19 @@ export interface FileRouteTypes {
     | '/login'
     | '/projects'
     | '/prompts'
+    | '/providers'
     | '/settings'
     | '/compare-judgments/create'
     | '/compare-judgments/create-from-project'
     | '/projects/create'
     | '/projects/create-subproject'
+    | '/providers/add-provider'
     | '/admin/assessments'
     | '/admin/datasources'
     | '/admin/failed_requests'
     | '/admin/gpu'
     | '/admin/jobs'
     | '/admin/llm'
-    | '/admin/models'
     | '/admin/pdf-conversions'
     | '/admin/pdf-reset'
     | '/admin/setup_stats'
@@ -614,8 +625,8 @@ export interface FileRouteTypes {
     | '/projects/$id'
     | '/projects/archived'
     | '/prompts/archived'
+    | '/providers/$id'
     | '/admin/datasources/create'
-    | '/admin/models/add-provider'
     | '/admin/prompts/deduplicate'
     | '/articles/$id/fulltext'
     | '/compare-judgments/$id/edit'
@@ -647,18 +658,19 @@ export interface FileRouteTypes {
     | '/login/'
     | '/projects/'
     | '/prompts/'
+    | '/providers/'
     | '/settings/'
     | '/compare-judgments/create'
     | '/compare-judgments/create-from-project'
     | '/projects/create'
     | '/projects/create-subproject'
+    | '/providers/add-provider'
     | '/admin/assessments/'
     | '/admin/datasources/'
     | '/admin/failed_requests/'
     | '/admin/gpu/'
     | '/admin/jobs/'
     | '/admin/llm/'
-    | '/admin/models/'
     | '/admin/pdf-conversions/'
     | '/admin/pdf-reset/'
     | '/admin/setup_stats/'
@@ -670,8 +682,8 @@ export interface FileRouteTypes {
     | '/projects/$id/'
     | '/projects/archived/'
     | '/prompts/archived/'
+    | '/providers/$id/'
     | '/admin/datasources/create'
-    | '/admin/models/add-provider'
     | '/admin/prompts/deduplicate'
     | '/articles/$id/fulltext'
     | '/compare-judgments/$id/edit'
@@ -704,18 +716,19 @@ export interface RootRouteChildren {
   LoginIndexRoute: typeof LoginIndexRoute
   ProjectsIndexRoute: typeof ProjectsIndexRoute
   PromptsIndexRoute: typeof PromptsIndexRoute
+  ProvidersIndexRoute: typeof ProvidersIndexRoute
   SettingsIndexRoute: typeof SettingsIndexRoute
   CompareJudgmentsCreateRoute: typeof CompareJudgmentsCreateRoute
   CompareJudgmentsCreateFromProjectRoute: typeof CompareJudgmentsCreateFromProjectRoute
   ProjectsCreateRoute: typeof ProjectsCreateRoute
   ProjectsCreateSubprojectRoute: typeof ProjectsCreateSubprojectRoute
+  ProvidersAddProviderRoute: typeof ProvidersAddProviderRoute
   AdminAssessmentsIndexRoute: typeof AdminAssessmentsIndexRoute
   AdminDatasourcesIndexRoute: typeof AdminDatasourcesIndexRoute
   AdminFailed_requestsIndexRoute: typeof AdminFailed_requestsIndexRoute
   AdminGpuIndexRoute: typeof AdminGpuIndexRoute
   AdminJobsIndexRoute: typeof AdminJobsIndexRoute
   AdminLlmIndexRoute: typeof AdminLlmIndexRoute
-  AdminModelsIndexRoute: typeof AdminModelsIndexRoute
   AdminPdfConversionsIndexRoute: typeof AdminPdfConversionsIndexRoute
   AdminPdfResetIndexRoute: typeof AdminPdfResetIndexRoute
   AdminSetup_statsIndexRoute: typeof AdminSetup_statsIndexRoute
@@ -727,8 +740,8 @@ export interface RootRouteChildren {
   ProjectsIdIndexRoute: typeof ProjectsIdIndexRoute
   ProjectsArchivedIndexRoute: typeof ProjectsArchivedIndexRoute
   PromptsArchivedIndexRoute: typeof PromptsArchivedIndexRoute
+  ProvidersIdIndexRoute: typeof ProvidersIdIndexRoute
   AdminDatasourcesCreateRoute: typeof AdminDatasourcesCreateRoute
-  AdminModelsAddProviderRoute: typeof AdminModelsAddProviderRoute
   AdminPromptsDeduplicateRoute: typeof AdminPromptsDeduplicateRoute
   ArticlesIdFulltextRoute: typeof ArticlesIdFulltextRoute
   CompareJudgmentsIdEditRoute: typeof CompareJudgmentsIdEditRoute
@@ -761,6 +774,13 @@ declare module '@tanstack/solid-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/providers/add-provider': {
+      id: '/providers/add-provider'
+      path: '/providers/add-provider'
+      fullPath: '/providers/add-provider'
+      preLoaderRoute: typeof ProvidersAddProviderRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/projects/create-subproject': {
@@ -796,6 +816,13 @@ declare module '@tanstack/solid-router' {
       path: '/settings'
       fullPath: '/settings/'
       preLoaderRoute: typeof SettingsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/providers/': {
+      id: '/providers/'
+      path: '/providers'
+      fullPath: '/providers/'
+      preLoaderRoute: typeof ProvidersIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/prompts/': {
@@ -875,18 +902,18 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof AdminPromptsDeduplicateRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/admin/models/add-provider': {
-      id: '/admin/models/add-provider'
-      path: '/admin/models/add-provider'
-      fullPath: '/admin/models/add-provider'
-      preLoaderRoute: typeof AdminModelsAddProviderRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/admin/datasources/create': {
       id: '/admin/datasources/create'
       path: '/admin/datasources/create'
       fullPath: '/admin/datasources/create'
       preLoaderRoute: typeof AdminDatasourcesCreateRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/providers/$id/': {
+      id: '/providers/$id/'
+      path: '/providers/$id'
+      fullPath: '/providers/$id/'
+      preLoaderRoute: typeof ProvidersIdIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/prompts/archived/': {
@@ -964,13 +991,6 @@ declare module '@tanstack/solid-router' {
       path: '/admin/pdf-conversions'
       fullPath: '/admin/pdf-conversions/'
       preLoaderRoute: typeof AdminPdfConversionsIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/admin/models/': {
-      id: '/admin/models/'
-      path: '/admin/models'
-      fullPath: '/admin/models/'
-      preLoaderRoute: typeof AdminModelsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/llm/': {
@@ -1144,19 +1164,20 @@ const rootRouteChildren: RootRouteChildren = {
   LoginIndexRoute: LoginIndexRoute,
   ProjectsIndexRoute: ProjectsIndexRoute,
   PromptsIndexRoute: PromptsIndexRoute,
+  ProvidersIndexRoute: ProvidersIndexRoute,
   SettingsIndexRoute: SettingsIndexRoute,
   CompareJudgmentsCreateRoute: CompareJudgmentsCreateRoute,
   CompareJudgmentsCreateFromProjectRoute:
     CompareJudgmentsCreateFromProjectRoute,
   ProjectsCreateRoute: ProjectsCreateRoute,
   ProjectsCreateSubprojectRoute: ProjectsCreateSubprojectRoute,
+  ProvidersAddProviderRoute: ProvidersAddProviderRoute,
   AdminAssessmentsIndexRoute: AdminAssessmentsIndexRoute,
   AdminDatasourcesIndexRoute: AdminDatasourcesIndexRoute,
   AdminFailed_requestsIndexRoute: AdminFailed_requestsIndexRoute,
   AdminGpuIndexRoute: AdminGpuIndexRoute,
   AdminJobsIndexRoute: AdminJobsIndexRoute,
   AdminLlmIndexRoute: AdminLlmIndexRoute,
-  AdminModelsIndexRoute: AdminModelsIndexRoute,
   AdminPdfConversionsIndexRoute: AdminPdfConversionsIndexRoute,
   AdminPdfResetIndexRoute: AdminPdfResetIndexRoute,
   AdminSetup_statsIndexRoute: AdminSetup_statsIndexRoute,
@@ -1168,8 +1189,8 @@ const rootRouteChildren: RootRouteChildren = {
   ProjectsIdIndexRoute: ProjectsIdIndexRoute,
   ProjectsArchivedIndexRoute: ProjectsArchivedIndexRoute,
   PromptsArchivedIndexRoute: PromptsArchivedIndexRoute,
+  ProvidersIdIndexRoute: ProvidersIdIndexRoute,
   AdminDatasourcesCreateRoute: AdminDatasourcesCreateRoute,
-  AdminModelsAddProviderRoute: AdminModelsAddProviderRoute,
   AdminPromptsDeduplicateRoute: AdminPromptsDeduplicateRoute,
   ArticlesIdFulltextRoute: ArticlesIdFulltextRoute,
   CompareJudgmentsIdEditRoute: CompareJudgmentsIdEditRoute,
