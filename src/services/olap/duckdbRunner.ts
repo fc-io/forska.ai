@@ -1,11 +1,7 @@
 import {getAppDatabaseService} from '../../server/services/appDatabaseService.ts'
+import {getDuckdbBinary} from '../../server/utils/duckdbBinary.ts'
 import {env} from '../../server/utils/env.ts'
 import {getDuckdbPath} from '../../server/utils/getDuckdbPath.ts'
-import {readLocalAppSettings} from '../../server/utils/localAppSettings.ts'
-
-const getDuckdbBin = () => {
-  return readLocalAppSettings().duckdbBin ?? 'duckdb'
-}
 
 export const getDuckdbSqlString = (value: string) => {
   return `'${value.replaceAll("'", "''")}'`
@@ -37,7 +33,7 @@ const getDuckdbPrelude = () => {
 }
 
 const runDuckdbJsonQueryFromSpawn = async <T>(query: string, duckdbPath: string): Promise<T[]> => {
-  const process = globalThis.Bun.spawn([getDuckdbBin(), '-json', duckdbPath, `${getDuckdbPrelude()} ${query}`], {
+  const process = globalThis.Bun.spawn([getDuckdbBinary(), '-json', duckdbPath, `${getDuckdbPrelude()} ${query}`], {
     stdout: 'pipe',
     stderr: 'pipe',
   })
