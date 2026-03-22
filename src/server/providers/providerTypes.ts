@@ -14,6 +14,7 @@ export type ProviderWorkerSource = 'manual' | 'none' | 'runtime'
 
 export type ProviderConnectionConfig = {
   archived?: boolean
+  disabledModelIds?: string[]
   manualWorkerUrls: string[]
   workerUrlMode: ProviderWorkerUrlMode
 }

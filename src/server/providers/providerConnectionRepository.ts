@@ -198,6 +198,8 @@ const getProviderModelRows = async (): Promise<ProviderModelRecord[]> => {
       m.name,
       pc.provider_kind AS provider,
       pc.base_url AS baseURL,
+      TO_JSON(pc.config_json) AS connectionConfigJson,
+      pc.enabled AS providerConnectionEnabled,
       m.remote_model_id AS modelName,
       m.remote_model_id AS remoteModelId,
       COALESCE(m.display_name, m.name) AS displayName,
@@ -502,11 +504,20 @@ export const deleteProviderConnection = async (id: string): Promise<DeleteProvid
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error)
 
-    throw errorMessage.includes('foreign key constraint')
-      ? new Error(
-          `Cannot remove ${isSingletonProviderKind(deleteTarget.providerKind) ? 'provider' : 'provider connection'} because one of its models is still referenced by a project, comparison project, or judgment.`,
-        )
-      : error
+    if (errorMessage.toLowerCase().includes('foreign key constraint')) {
+      await archiveProviderConnections(deleteTarget)
+
+      return {
+        archived: true,
+        comparisonProjectCount: usage.comparisonProjectCount,
+        deleted: false,
+        deletedModelCount: usage.modelCount,
+        judgmentCount: usage.judgmentCount,
+        projectCount: usage.projectCount,
+      }
+    }
+
+    throw error
   }
 
   return {

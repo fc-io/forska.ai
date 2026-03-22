@@ -4,6 +4,7 @@ import {getQuotedStringList, getSqlLiteral} from '../services/appQueryHelpers.ts
 import {
   type DatabaseQueryRunner,
   getJsonSqlLiteral,
+  getProviderConnectionConfigFromJson,
   getProviderModelRecordFromRow,
   getProviderModelReturnQuery,
   type ProviderModelRow,
@@ -12,10 +13,7 @@ import {getPersistedProviderModelMetadata} from './providerModelMetadata.ts'
 import {type ProviderConnectionRecord, type ProviderListedModel, type ProviderModelRecord} from './providerTypes.ts'
 
 const getProviderModelRows = async ({enabledOnly}: {enabledOnly: boolean}): Promise<ProviderModelRecord[]> => {
-  const enabledClause = enabledOnly
-    ? `WHERE COALESCE(m.enabled, TRUE) = TRUE
-       AND COALESCE(pc.enabled, TRUE) = TRUE`
-    : ''
+  const enabledClause = enabledOnly ? `WHERE COALESCE(pc.enabled, TRUE) = TRUE` : ''
   const rows = await getAppDatabaseService().queryJson<ProviderModelRow>(`
     SELECT
       m.id,
@@ -23,6 +21,8 @@ const getProviderModelRows = async ({enabledOnly}: {enabledOnly: boolean}): Prom
       m.name,
       pc.provider_kind AS provider,
       pc.base_url AS baseURL,
+      TO_JSON(pc.config_json) AS connectionConfigJson,
+      pc.enabled AS providerConnectionEnabled,
       m.remote_model_id AS modelName,
       m.remote_model_id AS remoteModelId,
       COALESCE(m.display_name, m.name) AS displayName,
@@ -39,7 +39,9 @@ const getProviderModelRows = async ({enabledOnly}: {enabledOnly: boolean}): Prom
     ORDER BY COALESCE(pc.label, m.name) ASC, m.created_at ASC, m.name ASC
   `)
 
-  return rows.map(getProviderModelRecordFromRow)
+  return rows.map(getProviderModelRecordFromRow).filter((model) => {
+    return enabledOnly ? model.enabled : true
+  })
 }
 
 const getExistingProviderModelId = async ({
@@ -61,6 +63,64 @@ const getExistingProviderModelId = async ({
   `)
 
   return existing?.id ?? null
+}
+
+const getProviderModelRowById = async (id: string): Promise<ProviderModelRow | null> => {
+  const [row] = await getAppDatabaseService().queryJson<ProviderModelRow>(`
+    SELECT
+      m.id,
+      m.provider_connection_id AS providerConnectionId,
+      m.name,
+      pc.provider_kind AS provider,
+      pc.base_url AS baseURL,
+      TO_JSON(pc.config_json) AS connectionConfigJson,
+      pc.enabled AS providerConnectionEnabled,
+      m.remote_model_id AS modelName,
+      m.remote_model_id AS remoteModelId,
+      COALESCE(m.display_name, m.name) AS displayName,
+      m.variant AS version,
+      m.variant,
+      m.source,
+      COALESCE(m.enabled, TRUE) AS enabled,
+      TO_JSON(m.metadata_json) AS metadataJson,
+      m.created_at AS createdAt,
+      m.updated_at AS updatedAt
+    FROM app.model m
+    INNER JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
+    WHERE m.id = ${getSqlLiteral(id)}
+    LIMIT 1
+  `)
+
+  return row ?? null
+}
+
+const updateProviderConnectionDisabledModelIds = async ({
+  connectionConfigJson,
+  enabled,
+  id,
+  providerConnectionId,
+  providerKind,
+}: {
+  connectionConfigJson: unknown
+  enabled: boolean
+  id: string
+  providerConnectionId: string
+  providerKind: string | null
+}): Promise<void> => {
+  const currentConfig = getProviderConnectionConfigFromJson({providerKind, value: connectionConfigJson})
+  const currentDisabledModelIds = currentConfig.disabledModelIds ?? []
+  const nextDisabledModelIds = enabled
+    ? currentDisabledModelIds.filter((modelId) => {
+        return modelId !== id
+      })
+    : Array.from(new Set([...currentDisabledModelIds, id]))
+
+  await getAppDatabaseService().run(`
+    UPDATE app.provider_connection
+    SET config_json = ${getJsonSqlLiteral({...currentConfig, disabledModelIds: nextDisabledModelIds})},
+        updated_at = current_timestamp
+    WHERE id = ${getSqlLiteral(providerConnectionId)}
+  `)
 }
 
 const upsertDiscoveredProviderModelsRecursively = async ({
@@ -213,6 +273,41 @@ export const updateProviderModel = async ({
   id: string
   variant: string | null
 }): Promise<ProviderModelRecord> => {
+  const currentRow = await getProviderModelRowById(id)
+
+  if (!currentRow) {
+    throw new Error('Provider model not found')
+  }
+
+  const currentModel = getProviderModelRecordFromRow(currentRow)
+  const displayNameChanged = displayName !== (currentModel.displayName ?? currentModel.name)
+  const variantChanged = variant !== currentModel.variant
+  const enabledChanged = enabled !== currentModel.enabled
+
+  if (enabledChanged && currentRow.providerConnectionId) {
+    await updateProviderConnectionDisabledModelIds({
+      connectionConfigJson: currentRow.connectionConfigJson,
+      enabled,
+      id,
+      providerConnectionId: currentRow.providerConnectionId,
+      providerKind: currentRow.provider,
+    })
+
+    if (!displayNameChanged && !variantChanged) {
+      const refreshedRow = await getProviderModelRowById(id)
+
+      if (!refreshedRow) {
+        throw new Error('Provider model not found')
+      }
+
+      return getProviderModelRecordFromRow(refreshedRow)
+    }
+  }
+
+  if (!enabledChanged && !displayNameChanged && !variantChanged) {
+    return currentModel
+  }
+
   const [updated] = await getAppDatabaseService().queryJson<ProviderModelRow>(
     getProviderModelReturnQuery(`
       UPDATE app.model
@@ -229,7 +324,9 @@ export const updateProviderModel = async ({
     throw new Error('Provider model not found')
   }
 
-  return getProviderModelRecordFromRow(updated)
+  const refreshedRow = await getProviderModelRowById(updated.id)
+
+  return refreshedRow ? getProviderModelRecordFromRow(refreshedRow) : getProviderModelRecordFromRow(updated)
 }
 
 export const upsertDiscoveredModels = async ({
@@ -256,6 +353,8 @@ export const getProviderModels = async (modelIds: string[]): Promise<Map<string,
       m.name,
       pc.provider_kind AS provider,
       pc.base_url AS baseURL,
+      TO_JSON(pc.config_json) AS connectionConfigJson,
+      pc.enabled AS providerConnectionEnabled,
       m.remote_model_id AS modelName,
       m.remote_model_id AS remoteModelId,
       COALESCE(m.display_name, m.name) AS displayName,
@@ -286,16 +385,48 @@ export const assertSelectableProviderModelIds = async (
     return modelIds
   }
 
-  const rows = await databaseRunner.queryJson<{id: string}>(`
-    SELECT m.id AS id
+  const rows = await databaseRunner.queryJson<{
+    connectionConfigJson: unknown
+    enabled: boolean | null
+    id: string
+    provider: string | null
+    providerConnectionEnabled: boolean | null
+  }>(`
+    SELECT
+      m.id AS id,
+      TO_JSON(pc.config_json) AS connectionConfigJson,
+      COALESCE(m.enabled, TRUE) AS enabled,
+      pc.provider_kind AS provider,
+      COALESCE(pc.enabled, TRUE) AS providerConnectionEnabled
     FROM app.model m
     LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
     WHERE m.id IN (${getQuotedStringList(modelIds).join(', ')})
-      AND COALESCE(m.enabled, TRUE) = TRUE
       AND COALESCE(pc.enabled, TRUE) = TRUE
   `)
 
-  if (rows.length !== modelIds.length) {
+  const selectableRows = rows.filter((row) => {
+    return getProviderModelRecordFromRow({
+      baseURL: null,
+      connectionConfigJson: row.connectionConfigJson,
+      createdAt: null,
+      displayName: null,
+      enabled: row.enabled,
+      id: row.id,
+      metadataJson: null,
+      modelName: null,
+      name: row.id,
+      provider: row.provider,
+      providerConnectionEnabled: row.providerConnectionEnabled,
+      providerConnectionId: null,
+      remoteModelId: null,
+      source: null,
+      updatedAt: null,
+      variant: null,
+      version: null,
+    }).enabled
+  })
+
+  if (selectableRows.length !== modelIds.length) {
     throw new Error(errorMessage)
   }
 

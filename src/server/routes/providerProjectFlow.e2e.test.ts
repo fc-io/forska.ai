@@ -314,3 +314,59 @@ test('singleton codex delete is blocked when any codex model is still referenced
     }),
   ).toEqual([false, false])
 })
+
+test('referenced codex model can be deselected without mutating the model row', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode)
+    VALUES ('codex-model-toggle-connection', 'codex', 'Codex toggle', TRUE, 'codex-cli')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled, variant)
+    VALUES (
+      'codex-model-toggle-model',
+      'codex-model-toggle-connection',
+      'gpt-5.1-codex-max',
+      'gpt-5.1-codex-max',
+      'gpt-5.1-codex-max',
+      'manual',
+      TRUE,
+      NULL
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id)
+    VALUES ('codex-model-toggle-project', 'Project using codex model', 'codex-model-toggle-model')
+  `)
+
+  const response = await app.handle(
+    new Request('http://localhost/api/models/codex-model-toggle-model', {
+      body: JSON.stringify({displayName: 'gpt-5.1-codex-max', enabled: false}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = (await response.json()) as {data: {model: {enabled: boolean}}}
+
+  expect(response.status).toBe(200)
+  expect(body.data.model.enabled).toBe(false)
+
+  const [storedModel] = await queryDatabase<{enabled: boolean}>(`
+    SELECT enabled
+    FROM app.model
+    WHERE id = 'codex-model-toggle-model'
+    LIMIT 1
+  `)
+  const [storedConnectionConfig] = await queryDatabase<{configJson: string | null}>(`
+    SELECT CAST(config_json AS VARCHAR) AS configJson
+    FROM app.provider_connection
+    WHERE id = 'codex-model-toggle-connection'
+    LIMIT 1
+  `)
+
+  expect(storedModel?.enabled).toBe(true)
+  expect(storedConnectionConfig?.configJson).toContain('codex-model-toggle-model')
+})

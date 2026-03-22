@@ -33,6 +33,7 @@ export type ProviderConnectionRow = {
 
 export type ProviderModelRow = {
   baseURL: string | null
+  connectionConfigJson?: unknown
   createdAt: unknown
   displayName: string | null
   enabled: boolean | null
@@ -41,6 +42,7 @@ export type ProviderModelRow = {
   modelName: string | null
   name: string
   provider: string | null
+  providerConnectionEnabled?: boolean | null
   providerConnectionId: string | null
   remoteModelId: string | null
   source: string | null
@@ -53,6 +55,20 @@ export const getTrimmedValue = (value: string | null | undefined): string | null
   const normalized = String(value ?? '').trim()
 
   return normalized === '' ? null : normalized
+}
+
+const normalizeModelIds = (value: unknown): string[] => {
+  return Array.isArray(value)
+    ? Array.from(
+        new Set(
+          value.flatMap((entry) => {
+            const normalized = getTrimmedValue(typeof entry === 'string' ? entry : null)
+
+            return normalized ? [normalized] : []
+          }),
+        ),
+      )
+    : []
 }
 
 export const getProviderConnectionConfigFromJson = ({
@@ -81,8 +97,12 @@ export const getProviderConnectionConfigFromJson = ({
     typeof parsed === 'object' && parsed !== null && 'archived' in parsed
       ? Boolean((parsed as {archived?: unknown}).archived)
       : false
+  const disabledModelIds =
+    typeof parsed === 'object' && parsed !== null && 'disabledModelIds' in parsed
+      ? normalizeModelIds((parsed as {disabledModelIds?: unknown}).disabledModelIds)
+      : []
 
-  return {archived, manualWorkerUrls, workerUrlMode}
+  return {archived, disabledModelIds, manualWorkerUrls, workerUrlMode}
 }
 
 export const getPersistedProviderConnectionConfigValue = ({
@@ -96,13 +116,15 @@ export const getPersistedProviderConnectionConfigValue = ({
   const workerUrlMode = getWorkerUrlMode({manualWorkerUrls, providerKind, workerUrlMode: config.workerUrlMode})
   const defaultWorkerUrlMode = getDefaultWorkerUrlMode({manualWorkerUrls, providerKind})
   const archived = config.archived === true
+  const disabledModelIds = normalizeModelIds(config.disabledModelIds)
 
   return !archived
+    && disabledModelIds.length === 0
     && manualWorkerUrls.length === 0
     && workerUrlMode === defaultWorkerUrlMode
     && workerUrlMode === 'manual'
     ? null
-    : {archived, manualWorkerUrls, workerUrlMode}
+    : {archived, disabledModelIds, manualWorkerUrls, workerUrlMode}
 }
 
 export const getJsonSqlLiteral = (value: unknown): string => {
@@ -132,16 +154,25 @@ export const getProviderConnectionRecordFromRow = (row: ProviderConnectionRow): 
 }
 
 export const getProviderModelRecordFromRow = (row: ProviderModelRow): ProviderModelRecord => {
+  const providerKind = normalizeProviderKind(row.provider)
+  const connectionConfig = getProviderConnectionConfigFromJson({providerKind, value: row.connectionConfigJson})
+  const rawEnabled = row.enabled ?? true
+  const providerConnectionEnabled = row.providerConnectionEnabled ?? true
+
   return {
     baseURL: getTrimmedValue(row.baseURL),
     createdAt: getDateValue(row.createdAt),
     displayName: getTrimmedValue(row.displayName),
-    enabled: row.enabled ?? true,
+    enabled:
+      rawEnabled
+      && providerConnectionEnabled
+      && !connectionConfig.archived
+      && !connectionConfig.disabledModelIds?.includes(row.id),
     id: row.id,
     metadataJson: getJsonValue(row.metadataJson),
     modelName: getTrimmedValue(row.modelName),
     name: row.name,
-    provider: normalizeProviderKind(row.provider),
+    provider: providerKind,
     providerConnectionId: getTrimmedValue(row.providerConnectionId),
     remoteModelId: getTrimmedValue(row.remoteModelId),
     source: (getTrimmedValue(row.source) as ModelSource | null) ?? null,
