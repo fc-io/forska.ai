@@ -21,15 +21,10 @@ test('returns journal title from original data when field is missing', () => {
 test('returns source in parentheses for europe pmc src:ppr preprints', () => {
   const value = getJournalDisplayTitleForArticle({
     articleId: 'ppr:PPR1083296',
-    originalData: {
-      source: 'PPR',
-      pubTypeList: {pubType: ['Preprint']},
-      bookOrReportDetails: {publisher: 'arXiv'},
-      fullTextUrlList: {fullTextUrl: [{site: 'arXiv'}]},
-    },
+    originalData: {source: 'PPR', pubTypeList: {pubType: ['Preprint']}, bookOrReportDetails: {publisher: 'EcoEvoRxiv'}},
   })
 
-  expect(value).toBe('(arxiv)')
+  expect(value).toBe('(EcoEvoRxiv)')
 })
 
 test('falls back to ppr when src:ppr has no provider source', () => {
@@ -52,8 +47,28 @@ test('does not show source for non-preprints without a journal', () => {
 
 test('uses normalized source metadata when present', () => {
   const value = getJournalDisplayTitleForArticle({
-    sourceMetadata: {journalTitle: null, preprintSource: 'arxiv', isPreprint: true, fullTextLinks: []},
+    sourceMetadata: {
+      journalTitle: null,
+      preprintSource: 'arxiv',
+      preprintHostLabel: null,
+      isPreprint: true,
+      fullTextLinks: [],
+    },
   })
 
-  expect(value).toBe('(arxiv)')
+  expect(value).toBe('(arXiv)')
+})
+
+test('prefers stored preprint host label when present', () => {
+  const value = getJournalDisplayTitleForArticle({
+    sourceMetadata: {
+      journalTitle: null,
+      preprintSource: 'ppr',
+      preprintHostLabel: 'SciELO Preprints',
+      isPreprint: true,
+      fullTextLinks: [],
+    },
+  })
+
+  expect(value).toBe('(SciELO Preprints)')
 })

@@ -11,6 +11,7 @@ export type ArticleSourceLink = {
 export type ArticleSourceMetadata = {
   journalTitle: string | null
   preprintSource: string | null
+  preprintHostLabel: string | null
   isPreprint: boolean
   fullTextLinks: ArticleSourceLink[]
 }
@@ -18,6 +19,7 @@ export type ArticleSourceMetadata = {
 export const emptyArticleSourceMetadata: ArticleSourceMetadata = {
   journalTitle: null,
   preprintSource: null,
+  preprintHostLabel: null,
   isPreprint: false,
   fullTextLinks: [],
 }
@@ -92,6 +94,30 @@ const normalizeSourceLabel = (value: string) => {
   return aliases[compact] ?? compact
 }
 
+const preprintSourceDisplayLabels: Record<string, string> = {arxiv: 'arXiv', biorxiv: 'bioRxiv', medrxiv: 'medRxiv'}
+const genericPreprintHostLabels = ['ppr', 'doi', 'doi.org', 'europe pmc', 'europepmc']
+
+const getCanonicalPreprintHostLabel = (value: unknown) => {
+  const normalizedValue = asNonEmptyString(value)
+  const normalizedLabel = normalizedValue ? normalizeSourceLabel(normalizedValue) : null
+
+  return normalizedLabel ? (preprintSourceDisplayLabels[normalizedLabel] ?? null) : null
+}
+
+const getPreprintHostLabelCandidate = (value: unknown) => {
+  const rawValue = asNonEmptyString(value)
+
+  if (!rawValue) {
+    return null
+  }
+
+  const normalizedLabel = normalizeSourceLabel(rawValue)
+
+  return genericPreprintHostLabels.includes(normalizedLabel)
+    ? null
+    : (getCanonicalPreprintHostLabel(rawValue) ?? rawValue)
+}
+
 const getPreprintSourceFromArticleId = (articleId: unknown) => {
   const value = asNonEmptyString(articleId)?.toLowerCase() ?? ''
   const fromOai = value.startsWith('oai:arxiv.org:') ? 'arxiv' : null
@@ -134,6 +160,43 @@ const getPreprintSourceFromOriginalData = (originalData: unknown) => {
     })
     .filter((candidate): candidate is string => {
       return candidate !== null && knownSources.includes(candidate)
+    })
+    .find((candidate): candidate is string => {
+      return Boolean(candidate)
+    })
+
+  return first ?? null
+}
+
+const getPreprintHostLabelFromDoi = (value: unknown) => {
+  const doi = normalizeDoi(value)?.toLowerCase() ?? ''
+  const matches = [
+    doi.startsWith('10.20944/preprints') ? 'Preprints.org' : null,
+    doi.startsWith('10.21203/rs.') ? 'Research Square' : null,
+    doi.startsWith('10.2139/ssrn.') ? 'SSRN' : null,
+  ]
+
+  const first = matches.find((match): match is string => {
+    return Boolean(match)
+  })
+
+  return first ?? null
+}
+
+const getPreprintHostLabelFromOriginalData = (originalData: unknown) => {
+  const candidates = [
+    getStringAtPath(originalData, ['bookOrReportDetails', 'publisher']),
+    getStringAtPath(originalData, ['server']),
+    getFirstStringFromArrayObjectField(originalData, ['fullTextUrlList', 'fullTextUrl'], 'site'),
+    getFirstStringFromArrayObjectField(originalData, ['fullTextUrlList', 'fullTextUrl'], 'documentStyle'),
+    getStringAtPath(originalData, ['source']),
+    getStringAtPath(originalData, ['src']),
+    getPreprintHostLabelFromDoi(getStringAtPath(originalData, ['doi'])),
+  ]
+
+  const first = candidates
+    .map((candidate) => {
+      return getPreprintHostLabelCandidate(candidate)
     })
     .find((candidate): candidate is string => {
       return Boolean(candidate)
@@ -211,8 +274,17 @@ export const getOriginalFullTextLinks = (originalData: unknown) => {
     .slice(0, 25)
 }
 
+export const getPreprintDisplayLabel = (params: {preprintHostLabel?: unknown; preprintSource?: unknown}) => {
+  const preprintHostLabel = getPreprintHostLabelCandidate(params.preprintHostLabel)
+  const canonicalSourceLabel = getCanonicalPreprintHostLabel(params.preprintSource)
+  const rawPreprintSource = asNonEmptyString(params.preprintSource)
+
+  return preprintHostLabel ?? canonicalSourceLabel ?? rawPreprintSource
+}
+
 export const getArticleSourceMetadata = (params: {
   articleId?: unknown
+  doi?: unknown
   importRoute?: unknown
   journalTitle?: unknown
   originalData?: unknown
@@ -222,10 +294,14 @@ export const getArticleSourceMetadata = (params: {
     getPreprintSourceFromOriginalData(params.originalData)
     ?? getPreprintSourceFromArticleId(params.articleId)
     ?? getPreprintSourceFromImportRoute(params.importRoute)
+  const preprintHostLabel =
+    getPreprintHostLabelFromOriginalData(params.originalData)
+    ?? getPreprintHostLabelFromDoi(params.doi)
+    ?? getCanonicalPreprintHostLabel(preprintSource)
   const isPreprint = Boolean(preprintSource || isPreprintInOriginalData(params.originalData))
   const fullTextLinks = getOriginalFullTextLinks(params.originalData)
 
-  return {journalTitle, preprintSource, isPreprint, fullTextLinks}
+  return {journalTitle, preprintSource, preprintHostLabel, isPreprint, fullTextLinks}
 }
 
 export const getArticleSourceMetadataValue = (value: unknown) => {
@@ -238,11 +314,16 @@ export const getArticleSourceMetadataValue = (value: unknown) => {
   const metadata = {
     journalTitle: asNonEmptyString(record.journalTitle),
     preprintSource: asNonEmptyString(record.preprintSource),
+    preprintHostLabel: getPreprintHostLabelCandidate(record.preprintHostLabel),
     isPreprint: Boolean(record.isPreprint),
     fullTextLinks: getSourceMetadataLinks(record.fullTextLinks),
   } satisfies ArticleSourceMetadata
 
-  return metadata.journalTitle || metadata.preprintSource || metadata.isPreprint || metadata.fullTextLinks.length > 0
+  return metadata.journalTitle
+    || metadata.preprintSource
+    || metadata.preprintHostLabel
+    || metadata.isPreprint
+    || metadata.fullTextLinks.length > 0
     ? metadata
     : null
 }

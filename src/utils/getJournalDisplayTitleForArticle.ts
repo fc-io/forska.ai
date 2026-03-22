@@ -1,4 +1,8 @@
-import {getArticleSourceMetadata, getArticleSourceMetadataValue} from './articleSourceMetadata.ts'
+import {
+  getArticleSourceMetadata,
+  getArticleSourceMetadataValue,
+  getPreprintDisplayLabel,
+} from './articleSourceMetadata.ts'
 
 type JournalDisplayArticle = {
   journalTitle?: unknown
@@ -24,10 +28,10 @@ export const getJournalDisplayTitleForArticle = (article: JournalDisplayArticle)
       originalData: article.originalData,
     })
   const journalTitle = fromField ?? sourceMetadata.journalTitle
+  const preprintLabel = getPreprintDisplayLabel({
+    preprintHostLabel: sourceMetadata.preprintHostLabel,
+    preprintSource: sourceMetadata.preprintSource,
+  })
 
-  return journalTitle
-    ? journalTitle
-    : sourceMetadata.isPreprint && sourceMetadata.preprintSource
-      ? `(${sourceMetadata.preprintSource})`
-      : null
+  return journalTitle ? journalTitle : sourceMetadata.isPreprint && preprintLabel ? `(${preprintLabel})` : null
 }

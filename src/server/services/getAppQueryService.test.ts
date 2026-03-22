@@ -59,7 +59,7 @@ test('getAppQueryService reads native DuckDB app tables', async () => {
       INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled) VALUES ('pp-1', 'project-1', 'prompt-1', 2, TRUE);
       INSERT INTO app.project_import_route (id, project_id, import_route_id) VALUES ('pir-1', 'project-1', 'route-1');
       INSERT INTO app.article (id, article_title, article_authors, article_created_at, article_id, full_text_pdf, original_data, source_metadata)
-      VALUES ('article-1', 'Article 1', ['Alice', 'Bob'], '2024-01-02T00:00:00Z', 'A-1', '/tmp/a.pdf', '{"journalInfo":{"title":"J1"}}', '{"journalTitle":"J1","preprintSource":null,"isPreprint":false,"fullTextLinks":[]}');
+      VALUES ('article-1', 'Article 1', ['Alice', 'Bob'], '2024-01-02T00:00:00Z', 'A-1', '/tmp/a.pdf', '{"journalInfo":{"title":"J1"}}', '{"journalTitle":"J1","preprintSource":null,"preprintHostLabel":null,"isPreprint":false,"fullTextLinks":[]}');
     `,
   ])
 
@@ -111,7 +111,13 @@ test('getAppQueryService reads native DuckDB app tables', async () => {
       reviewHydrationRow: {
         articleId: string
         fullTextPDF: string
-        sourceMetadata: {journalTitle: string; preprintSource: string | null; isPreprint: boolean; fullTextLinks: []}
+        sourceMetadata: {
+          journalTitle: string
+          preprintSource: string | null
+          preprintHostLabel: string | null
+          isPreprint: boolean
+          fullTextLinks: []
+        }
       }
       fullArticleRow: {articleAuthors: string[]}
     }
@@ -137,6 +143,7 @@ test('getAppQueryService reads native DuckDB app tables', async () => {
     expect(parsed.reviewHydrationRow.sourceMetadata).toEqual({
       journalTitle: 'J1',
       preprintSource: null,
+      preprintHostLabel: null,
       isPreprint: false,
       fullTextLinks: [],
     })

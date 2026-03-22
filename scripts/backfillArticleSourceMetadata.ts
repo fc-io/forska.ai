@@ -51,6 +51,31 @@ const preprintSourceSql = `coalesce(
   END
 )`
 
+const getPreprintHostLabelSql = (expression: string) => {
+  return `CASE
+    WHEN lower(trim(coalesce(${expression}, ''))) IN ('arxiv', 'arxiv.org') THEN 'arXiv'
+    WHEN lower(trim(coalesce(${expression}, ''))) IN ('medrxiv', 'medrxiv.org') THEN 'medRxiv'
+    WHEN lower(trim(coalesce(${expression}, ''))) IN ('biorxiv', 'biorxiv.org') THEN 'bioRxiv'
+    WHEN lower(trim(coalesce(${expression}, ''))) IN ('ppr', 'doi', 'doi.org', 'europe pmc', 'europepmc') THEN NULL
+    ELSE nullif(trim(coalesce(${expression}, '')), '')
+  END`
+}
+
+const preprintHostLabelSql = `coalesce(
+  ${getPreprintHostLabelSql("json_extract_string(original_data, '$.bookOrReportDetails.publisher')")},
+  ${getPreprintHostLabelSql("json_extract_string(original_data, '$.server')")},
+  ${getPreprintHostLabelSql(getFirstFullTextUrlFieldSql('site'))},
+  ${getPreprintHostLabelSql(getFirstFullTextUrlFieldSql('documentStyle'))},
+  ${getPreprintHostLabelSql("json_extract_string(original_data, '$.source')")},
+  ${getPreprintHostLabelSql("json_extract_string(original_data, '$.src')")},
+  CASE
+    WHEN ${preprintSourceSql} = 'arxiv' THEN 'arXiv'
+    WHEN ${preprintSourceSql} = 'medrxiv' THEN 'medRxiv'
+    WHEN ${preprintSourceSql} = 'biorxiv' THEN 'bioRxiv'
+    ELSE NULL
+  END
+)`
+
 const isPreprintSql = `(
   ${preprintSourceSql} IS NOT NULL
   OR lower(trim(coalesce(json_extract_string(original_data, '$.source'), ''))) = 'ppr'
@@ -80,6 +105,7 @@ const getBackfillBucketSql = (bucketIndex: number) => {
         json_object(
           'journalTitle', ${journalTitleSql},
           'preprintSource', ${preprintSourceSql},
+          'preprintHostLabel', ${preprintHostLabelSql},
           'isPreprint', ${isPreprintSql},
           'fullTextLinks', ${fullTextLinksSql}
         ) AS source_metadata_json

@@ -12,6 +12,10 @@ const EuropePmcAuthor = type({
   'collectiveName?': 'string',
 })
 const EuropePmcAuthorList = type({'author?': EuropePmcAuthor.or(EuropePmcAuthor.array())})
+const EuropePmcPubTypeList = type({'pubType?': 'string | string[]'})
+const EuropePmcBookOrReportDetails = type({'publisher?': 'string', 'yearOfPublication?': 'string | number'})
+const EuropePmcVersion = type({'pubTypeList?': EuropePmcPubTypeList})
+const EuropePmcVersionList = type({'version?': EuropePmcVersion.or(EuropePmcVersion.array())})
 
 const EuropePmcFullTextUrl = type({
   'availability?': 'string',
@@ -30,6 +34,9 @@ const EuropePmcItem = type({
   'authorString?': 'string',
   'authorList?': EuropePmcAuthorList,
   'abstractText?': 'string',
+  'pubTypeList?': EuropePmcPubTypeList,
+  'bookOrReportDetails?': EuropePmcBookOrReportDetails,
+  'versionList?': EuropePmcVersionList,
   'firstPublicationDate?': 'string',
   'dateOfCreation?': 'string',
   'pubYear?': 'string | number',

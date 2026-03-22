@@ -39,6 +39,7 @@
     "db:duck:rebuild-marts": "bun --env-file=.env.local scripts/rebuildDuckdbMarts.ts",
     "db:duck:purge-archived-marts": "bun --env-file=.env.local scripts/purgeArchivedProjectMarts.ts",
     "db:duck:backfill-source-metadata": "bun --env-file=.env.local scripts/backfillArticleSourceMetadata.ts",
+    "db:duck:backfill-ppr-host-labels": "bun --env-file=.env.local scripts/backfillPprHostLabels.ts",
     "db:studio": "bun scripts/dbStudio.ts",
     "db:r:p": "bun scripts/dbPush.ts --force --no-restore",
     "db:r:pull": "bun scripts/dbRemotePull.ts",
