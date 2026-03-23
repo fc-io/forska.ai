@@ -1095,6 +1095,23 @@ const getHumanReviewedArticleIdsFromRollup = async (params: {
   })
 }
 
+const countUnassessedRowsFromRollup = async (params: {
+  scope: ProjectOlapScope
+  from?: string | null
+  to?: string | null
+  search?: string | null
+}) => {
+  const whereParts = getDuckdbRollupReviewedWhereParts({...params, requireIncompleteLlm: true})
+  const rows = await runDuckdbJsonQuery<{totalCount: number}>(`
+    SELECT COUNT(*) AS totalCount
+    FROM mart.review_article_rollup r
+    INNER JOIN app.article a ON a.id = r.article_id
+    WHERE ${whereParts.join(' AND ')}
+  `)
+
+  return Number(rows[0]?.totalCount ?? 0)
+}
+
 const getUnassessedRowsFromRollup = async (params: {
   scope: ProjectOlapScope
   limit?: number
@@ -1103,15 +1120,10 @@ const getUnassessedRowsFromRollup = async (params: {
   to?: string | null
   search?: string | null
 }) => {
+  const totalCount = await countUnassessedRowsFromRollup(params)
   const whereParts = getDuckdbRollupReviewedWhereParts({...params, requireIncompleteLlm: true})
   const limitClause = params.limit == null ? '' : `LIMIT ${params.limit}`
   const offsetClause = params.offset == null ? '' : `OFFSET ${params.offset}`
-  const countRows = await runDuckdbJsonQuery<{totalCount: number}>(`
-    SELECT COUNT(*) AS totalCount
-    FROM mart.review_article_rollup r
-    INNER JOIN app.article a ON a.id = r.article_id
-    WHERE ${whereParts.join(' AND ')}
-  `)
   const rows = await runDuckdbJsonQuery<{
     articleCreatedAt: unknown
     articleId: string | null
@@ -1146,7 +1158,7 @@ const getUnassessedRowsFromRollup = async (params: {
         llmJudgedPromptIds: getDuckdbStringArrayValue(row.llmJudgedPromptIds),
       }
     }),
-    totalCount: Number(countRows[0]?.totalCount ?? 0),
+    totalCount,
   }
 }
 
@@ -2269,12 +2281,11 @@ export const getUnassessedCountFromDuckdb = async (params: UnassessedCountParams
     return 0
   }
 
-  const {totalCount} = await getUnassessedRowsFromRollup({
+  return countUnassessedRowsFromRollup({
     scope,
     from: params.projectDateFrom ? params.projectDateFrom.toISOString().slice(0, 10) : null,
     to: params.projectDateTo ? params.projectDateTo.toISOString().slice(0, 10) : null,
   })
-  return totalCount
 }
 
 export const getUnassessedArticlesFromDuckdb = async (

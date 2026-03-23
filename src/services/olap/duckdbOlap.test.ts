@@ -449,6 +449,34 @@ test('countArticlesReviewsFromDuckdb counts rows when project modelId is null', 
   expect(duckdbRunnerMockRef.current.queries[3]).not.toContain('j.model_id =')
 })
 
+test('getUnassessedCountFromDuckdb uses a count-only rollup query', async () => {
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRows(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [{totalCount: 3}],
+  ])
+
+  const {getUnassessedCountFromDuckdb} = await loadDuckdbOlap()
+  const result = await getUnassessedCountFromDuckdb({
+    projectId: 'project-1',
+    projectModelId: 'model-1',
+    projectDateFrom: null,
+    projectDateTo: null,
+    importRouteIds: ['route-1'],
+    useTitle: true,
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+  })
+
+  expect(result).toBe(3)
+  expect(duckdbRunnerMockRef.current.queries).toHaveLength(4)
+  expect(duckdbRunnerMockRef.current.queries[3]).toContain('SELECT COUNT(*) AS totalCount')
+  expect(duckdbRunnerMockRef.current.queries[3]).toContain('FROM mart.review_article_rollup r')
+  expect(duckdbRunnerMockRef.current.queries[3]).not.toContain('TO_JSON(r.llm_judged_prompt_ids)')
+})
+
 test('getDatabaseBasedFiltersFromDuckdb returns values when project modelId is null', async () => {
   duckdbRunnerMockRef.current = createDuckdbRunnerMock([
     getPromptRows(),
