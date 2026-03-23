@@ -6,7 +6,7 @@ import {Elysia} from 'elysia'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {inferenceRuntimeConfig} from '../utils/getInferenceRuntimeConfig.ts'
-import {shouldCurrentServerRunWriterWork} from '../utils/serverRuntimeRole.ts'
+import {isExpectedWriterRoleLossError, shouldCurrentServerRunWriterWork} from '../utils/serverRuntimeRole.ts'
 
 type NvidiaSmiSample = {
   ts: Date
@@ -235,7 +235,7 @@ const pollNvidiaSmi = async (): Promise<void> => {
     allSamples.push(...samples)
   }
 
-  if (allSamples.length === 0) return
+  if (allSamples.length === 0 || !shouldCurrentServerRunWriterWork()) return
 
   await getAppDatabaseService()
     .run(
@@ -285,7 +285,9 @@ const pollNvidiaSmi = async (): Promise<void> => {
     `,
     )
     .catch((error) => {
-      console.error('[nvidia-smi] db insert failed', error)
+      if (!isExpectedWriterRoleLossError(error)) {
+        console.error('[nvidia-smi] db insert failed', error)
+      }
     })
 }
 

@@ -11,7 +11,7 @@ import {
   getTimestampLiteral,
 } from '../services/appQueryHelpers.ts'
 import {env} from '../utils/env.ts'
-import {shouldCurrentServerRunWriterWork} from '../utils/serverRuntimeRole.ts'
+import {isExpectedWriterRoleLossError, shouldCurrentServerRunWriterWork} from '../utils/serverRuntimeRole.ts'
 import {fullTextArticleFetchFromArxiv} from './fullTextJobs/fullTextArticleFetchFromArxiv.ts'
 import {fullTextArticleFetchFromOriginalUrls} from './fullTextJobs/fullTextArticleFetchFromOriginalUrls.ts'
 import {fullTextArticleFetchFromUnpaywall} from './fullTextJobs/fullTextArticleFetchFromUnpaywall.ts'
@@ -229,16 +229,26 @@ const storeFullText = async (id: string, fullText: NonNullable<Awaited<ReturnTyp
 
 const fetchFullTextForArticles = async () => {
   if (!env.RUN_SERVER_FULL_TEXT_FETCHING || !shouldCurrentServerRunWriterWork()) return
-  const minutesInADay = 24 * 60
-  const unpaywallArticlesPerDayLimit = 100_000
-  const numberOfArticlesToFetch = Math.floor(unpaywallArticlesPerDayLimit / minutesInADay)
-  const articlesWithoutFullText = await getArticlesWithoutFullText(numberOfArticlesToFetch)
-  await Promise.all(
-    articlesWithoutFullText.map(async (articleData) => {
-      const fullTextData = await getFullTextForArticle(articleData)
-      await storeFullText(articleData.id, fullTextData)
-    }),
-  )
+  try {
+    const minutesInADay = 24 * 60
+    const unpaywallArticlesPerDayLimit = 100_000
+    const numberOfArticlesToFetch = Math.floor(unpaywallArticlesPerDayLimit / minutesInADay)
+    const articlesWithoutFullText = await getArticlesWithoutFullText(numberOfArticlesToFetch)
+
+    if (!shouldCurrentServerRunWriterWork()) return
+
+    await Promise.all(
+      articlesWithoutFullText.map(async (articleData) => {
+        const fullTextData = await getFullTextForArticle(articleData)
+        if (!shouldCurrentServerRunWriterWork()) return
+        await storeFullText(articleData.id, fullTextData)
+      }),
+    )
+  } catch (error) {
+    if (!isExpectedWriterRoleLossError(error)) {
+      throw error
+    }
+  }
 }
 
 export const fullTextJobsCron = new Elysia().use(

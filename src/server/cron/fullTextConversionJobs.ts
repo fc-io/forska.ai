@@ -13,7 +13,7 @@ import {
 import {getUserConfigQueryService} from '../services/userConfigQueryService.ts'
 import {ConversionError, convertPdfToText} from '../utils/convertPdfToText.ts'
 import {env} from '../utils/env.ts'
-import {shouldCurrentServerRunWriterWork} from '../utils/serverRuntimeRole.ts'
+import {isExpectedWriterRoleLossError, shouldCurrentServerRunWriterWork} from '../utils/serverRuntimeRole.ts'
 
 const CONVERSION_INTERVAL = '0 */2 * * * *' // Every 2 minutes
 const DOCLING_CONVERSION_TIMEOUT_MS = 600_000 // 10 minutes
@@ -317,6 +317,8 @@ const runConversionBatch = async () => {
     const concurrency = getConversionConcurrency(batchSize)
     const runtimeConfig = await getUserConfigQueryService().getFullTextConversionModelConfig()
 
+    if (!shouldCurrentServerRunWriterWork()) return
+
     if (!runtimeConfig) {
       console.log('[fullTextConversion] No PDF conversion model configured, skipping batch')
       return
@@ -334,6 +336,10 @@ const runConversionBatch = async () => {
     }
 
     await convertArticles({articles, concurrency, runtimeConfig})
+  } catch (error) {
+    if (!isExpectedWriterRoleLossError(error)) {
+      throw error
+    }
   } finally {
     runningBatches--
   }

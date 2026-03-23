@@ -34,6 +34,7 @@ declare global {
 
 const autoServerRolePollIntervalMs = 5_000
 const autoServerRoleLogger = createRateLimitedLogger({windowMs: 30_000})
+const duckdbRoleErrorFragments = ['cannot own DuckDB', 'DuckDB writer lease is no longer owned by this process']
 
 const getServerRuntimeState = () => {
   globalThis.__forskaServerRuntimeState ??= {
@@ -290,6 +291,19 @@ export const shouldCurrentServerRunWriterWork = () => {
 
 export const shouldCurrentServerProxyApiToWriter = () => {
   return getCurrentServerRole() === 'api'
+}
+
+export const isExpectedWriterRoleLossError = (error: unknown) => {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'object' && error !== null && 'message' in error && typeof error.message === 'string'
+        ? error.message
+        : String(error)
+
+  return duckdbRoleErrorFragments.some((fragment) => {
+    return message.includes(fragment)
+  })
 }
 
 export const isCurrentServerWriterDisabled = () => {

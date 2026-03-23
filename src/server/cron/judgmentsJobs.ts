@@ -5,7 +5,7 @@ import {Elysia} from 'elysia'
 
 import {env} from '../utils/env.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
-import {shouldCurrentServerRunWriterWork} from '../utils/serverRuntimeRole.ts'
+import {isExpectedWriterRoleLossError, shouldCurrentServerRunWriterWork} from '../utils/serverRuntimeRole.ts'
 import {judgmentsJobsAddToQueue} from './judgmentsJobs/judgmentsJobsAddToQueue.ts'
 import {judgmentsJobsCheckLLMStatus} from './judgmentsJobs/judgmentsJobsCheckLLMStatus.ts'
 import {judgmentsJobsCleanupStale} from './judgmentsJobs/judgmentsJobsCleanupStale.ts'
@@ -21,6 +21,12 @@ const buildDefaultServerJobId = (): string => {
 const serverJobId = buildDefaultServerJobId()
 
 const cronLogger = createRateLimitedLogger({windowMs: 30_000})
+
+const logJudgingCronError = (label: string, error: unknown) => {
+  if (!isExpectedWriterRoleLossError(error)) {
+    console.error(label, error instanceof Error ? error.message : error)
+  }
+}
 
 const shouldRunJudgingCron = (): boolean => {
   return env.RUN_SERVER_JUDGING && shouldCurrentServerRunWriterWork()
@@ -52,7 +58,7 @@ const runAddToQueue = async (): Promise<void> => {
   try {
     await judgmentsJobsAddToQueue(serverJobId)
   } catch (err) {
-    console.error('[cron] runAddToQueue error:', err instanceof Error ? err.message : err)
+    logJudgingCronError('[cron] runAddToQueue error:', err)
   } finally {
     isAddingToQueue = false
     addToQueueStartedAtMs = null
@@ -63,9 +69,10 @@ const sendToLLM = async (): Promise<void> => {
   if (!shouldRunJudgingCron()) return
   try {
     const runningJobs = await judgmentsJobsGetRunningJobs()
+    if (!shouldRunJudgingCron()) return
     await judgmentsJobsSendToLLM(runningJobs, serverJobId)
   } catch (err) {
-    console.error('[cron] sendToLLM error:', err instanceof Error ? err.message : err)
+    logJudgingCronError('[cron] sendToLLM error:', err)
   }
 }
 
@@ -74,7 +81,7 @@ const checkLLMStatusCron = async (): Promise<void> => {
   try {
     await judgmentsJobsCheckLLMStatus()
   } catch (err) {
-    console.error('[cron] checkLLMStatusCron error:', err instanceof Error ? err.message : err)
+    logJudgingCronError('[cron] checkLLMStatusCron error:', err)
   }
 }
 
@@ -83,7 +90,7 @@ const cleanupStaleQueueCron = async (): Promise<void> => {
   try {
     await judgmentsJobsCleanupStale()
   } catch (err) {
-    console.error('[cron] cleanupStaleQueueCron error:', err instanceof Error ? err.message : err)
+    logJudgingCronError('[cron] cleanupStaleQueueCron error:', err)
   }
 }
 
