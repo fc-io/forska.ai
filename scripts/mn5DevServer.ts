@@ -573,7 +573,6 @@ const startDevServer = async (config: MN5Config): Promise<void> => {
 
   const env = {
     ...process.env,
-    RUN_SERVER_JUDGING: 'true',
     BUN_CONFIG_MAX_HTTP_REQUESTS: '2048',
     ...getForskaRuntimeEnv({
       activeModelNames: config.SGLANG_MODEL,

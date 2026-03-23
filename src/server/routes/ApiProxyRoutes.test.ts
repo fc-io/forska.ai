@@ -90,7 +90,6 @@ test('api role proxies API requests to writer server', async () => {
     DUCKDB_PATH: duckdbPath,
     RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
     RUN_SERVER_FULL_TEXT_FETCHING: 'false',
-    RUN_SERVER_JUDGING: 'false',
     SERVER_ROLE: 'writer',
     VITE_PORT: '4311',
   })
@@ -99,7 +98,6 @@ test('api role proxies API requests to writer server', async () => {
     DUCKDB_PATH: duckdbPath,
     RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
     RUN_SERVER_FULL_TEXT_FETCHING: 'false',
-    RUN_SERVER_JUDGING: 'false',
     SERVER_ROLE: 'api',
     SERVER_WRITER_URL: `http://127.0.0.1:${writerPort}`,
     VITE_PORT: '4312',
@@ -136,7 +134,6 @@ test('writer connections endpoint lists follower api processes', async () => {
     DUCKDB_PATH: duckdbPath,
     RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
     RUN_SERVER_FULL_TEXT_FETCHING: 'false',
-    RUN_SERVER_JUDGING: 'false',
     SERVER_ROLE: 'writer',
     VITE_PORT: '4313',
   })
@@ -145,7 +142,6 @@ test('writer connections endpoint lists follower api processes', async () => {
     DUCKDB_PATH: duckdbPath,
     RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
     RUN_SERVER_FULL_TEXT_FETCHING: 'false',
-    RUN_SERVER_JUDGING: 'false',
     SERVER_ROLE: 'api',
     SERVER_WRITER_URL: `http://127.0.0.1:${writerPort}`,
     VITE_PORT: '4314',
@@ -192,7 +188,6 @@ test('api server without writer reports writer disabled warning', async () => {
     DUCKDB_PATH: duckdbPath,
     RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
     RUN_SERVER_FULL_TEXT_FETCHING: 'false',
-    RUN_SERVER_JUDGING: 'false',
     SERVER_ROLE: 'api',
     SERVER_WRITER_URL: '',
     VITE_PORT: '4319',
@@ -230,7 +225,6 @@ test('auto role elects one writer and follower takes over after writer exit', as
     DUCKDB_PATH: duckdbPath,
     RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
     RUN_SERVER_FULL_TEXT_FETCHING: 'false',
-    RUN_SERVER_JUDGING: 'false',
     SERVER_ROLE: 'auto',
     VITE_PORT: '4315',
   })
@@ -243,7 +237,6 @@ test('auto role elects one writer and follower takes over after writer exit', as
       DUCKDB_PATH: duckdbPath,
       RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
       RUN_SERVER_FULL_TEXT_FETCHING: 'false',
-      RUN_SERVER_JUDGING: 'false',
       SERVER_ROLE: 'auto',
       VITE_PORT: '4316',
     })
@@ -305,7 +298,6 @@ test('auto follower does not take over from a responsive writer with a stale hea
     DUCKDB_PATH: duckdbPath,
     RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
     RUN_SERVER_FULL_TEXT_FETCHING: 'false',
-    RUN_SERVER_JUDGING: 'false',
     SERVER_ROLE: 'writer',
     VITE_PORT: '4317',
   })
@@ -325,7 +317,6 @@ test('auto follower does not take over from a responsive writer with a stale hea
       DUCKDB_PATH: duckdbPath,
       RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
       RUN_SERVER_FULL_TEXT_FETCHING: 'false',
-      RUN_SERVER_JUDGING: 'false',
       SERVER_ROLE: 'auto',
       VITE_PORT: '4318',
     })
@@ -394,7 +385,6 @@ test('auto role takes over a stale unreachable legacy writer lease on startup', 
     DUCKDB_PATH: duckdbPath,
     RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
     RUN_SERVER_FULL_TEXT_FETCHING: 'false',
-    RUN_SERVER_JUDGING: 'false',
     SERVER_ROLE: 'auto',
     VITE_PORT: '4319',
   })

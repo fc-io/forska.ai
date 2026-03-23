@@ -15,9 +15,6 @@ const envShape = arktype({
   RUN_SERVER_FULL_TEXT_FETCHING: arktype('"true" | "false" | boolean').pipe((v) => {
     return typeof v === 'string' ? v.toLowerCase() === 'true' : v
   }),
-  RUN_SERVER_JUDGING: arktype('"true" | "false" | boolean').pipe((v) => {
-    return typeof v === 'string' ? v.toLowerCase() === 'true' : v
-  }),
   RUN_SERVER_FULL_TEXT_CONVERSION_CRON: arktype('"true" | "false" | boolean').pipe((v) => {
     return typeof v === 'string' ? v.toLowerCase() === 'true' : v
   }),
@@ -45,11 +42,6 @@ const getEnvWithFileFallback = (): Record<string, string | undefined> => {
 
 const loadEnv = (): typeof envShape.infer => {
   const merged = getEnvWithFileFallback()
-  // Default to true when not provided
-  if (merged.RUN_SERVER_JUDGING == null || merged.RUN_SERVER_JUDGING === '') {
-    // string form to satisfy shape before parsing to boolean via pipe
-    ;(merged as Record<string, string>).RUN_SERVER_JUDGING = 'true'
-  }
   if (merged.SERVER_ROLE == null || String(merged.SERVER_ROLE).trim() === '') {
     ;(merged as Record<string, string>).SERVER_ROLE = 'auto'
   }

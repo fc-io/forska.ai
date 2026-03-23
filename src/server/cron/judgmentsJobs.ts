@@ -29,7 +29,7 @@ const logJudgingCronError = (label: string, error: unknown) => {
 }
 
 const shouldRunJudgingCron = (): boolean => {
-  return env.RUN_SERVER_JUDGING && shouldCurrentServerRunWriterWork()
+  return shouldCurrentServerRunWriterWork()
 }
 
 const NEW_ARTICLES_INTERVAL = '*/1 * * * * *'

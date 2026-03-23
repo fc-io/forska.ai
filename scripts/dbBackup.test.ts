@@ -71,7 +71,6 @@ test('db backup script creates a DuckDB backup while the writer server is runnin
     DUCKDB_PATH: duckdbPath,
     RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
     RUN_SERVER_FULL_TEXT_FETCHING: 'false',
-    RUN_SERVER_JUDGING: 'false',
     SERVER_ROLE: 'writer',
     VITE_PORT: String(writerPort + 1000),
   })
@@ -89,7 +88,6 @@ test('db backup script creates a DuckDB backup while the writer server is runnin
         DUCKDB_PATH: duckdbPath,
         RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
         RUN_SERVER_FULL_TEXT_FETCHING: 'false',
-        RUN_SERVER_JUDGING: 'false',
         VITE_PORT: String(backupPort + 1000),
       },
     })

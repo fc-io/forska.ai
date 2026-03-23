@@ -19,7 +19,6 @@ const getEnvSnapshot = () => {
     DUCKDB_TEMP_DIRECTORY: process.env.DUCKDB_TEMP_DIRECTORY,
     RUN_SERVER_FULL_TEXT_CONVERSION_CRON: process.env.RUN_SERVER_FULL_TEXT_CONVERSION_CRON,
     RUN_SERVER_FULL_TEXT_FETCHING: process.env.RUN_SERVER_FULL_TEXT_FETCHING,
-    RUN_SERVER_JUDGING: process.env.RUN_SERVER_JUDGING,
     SERVER_ROLE: process.env.SERVER_ROLE,
     SERVER_WRITER_URL: process.env.SERVER_WRITER_URL,
     VITE_PORT: process.env.VITE_PORT,
@@ -33,7 +32,6 @@ const restoreEnvSnapshot = (snapshot: ReturnType<typeof getEnvSnapshot>) => {
   process.env.DUCKDB_TEMP_DIRECTORY = snapshot.DUCKDB_TEMP_DIRECTORY
   process.env.RUN_SERVER_FULL_TEXT_CONVERSION_CRON = snapshot.RUN_SERVER_FULL_TEXT_CONVERSION_CRON
   process.env.RUN_SERVER_FULL_TEXT_FETCHING = snapshot.RUN_SERVER_FULL_TEXT_FETCHING
-  process.env.RUN_SERVER_JUDGING = snapshot.RUN_SERVER_JUDGING
   process.env.SERVER_ROLE = snapshot.SERVER_ROLE
   process.env.SERVER_WRITER_URL = snapshot.SERVER_WRITER_URL
   process.env.VITE_PORT = snapshot.VITE_PORT
@@ -95,7 +93,6 @@ test('duckdb transaction keeps the original error when rollback fails', async ()
   process.env.DUCKDB_TEMP_DIRECTORY = '/tmp/f1-duckdb-transaction-rollback-test-temp'
   process.env.RUN_SERVER_FULL_TEXT_CONVERSION_CRON = 'false'
   process.env.RUN_SERVER_FULL_TEXT_FETCHING = 'false'
-  process.env.RUN_SERVER_JUDGING = 'false'
   process.env.SERVER_ROLE = 'writer'
   process.env.SERVER_WRITER_URL = ''
   process.env.VITE_PORT = '3000'
