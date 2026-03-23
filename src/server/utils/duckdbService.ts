@@ -32,6 +32,7 @@ type PendingDuckdbQuery = {
 }
 
 type DuckdbMarkerRow = {__duckdb_done__?: string}
+type DuckdbShutdownSignal = 'SIGTERM' | 'SIGKILL'
 type DuckdbServiceState = {
   currentPendingDuckdbQuery: PendingDuckdbQuery | null
   duckdbProcess: ChildProcessWithoutNullStreams | null
@@ -67,6 +68,7 @@ const getDuckdbServiceState = () => {
 
 const duckdbServiceState = getDuckdbServiceState()
 const duckdbSnapshotDirectory = join(tmpdir(), 'forska-duckdb-studio')
+const duckdbShutdownGracePeriodMs = 1_000
 
 const getTrimmedValue = (value: string | null | undefined) => {
   const normalized = String(value ?? '').trim()
@@ -310,14 +312,68 @@ const waitForDuckdbProcessExit = (activeProcess: ChildProcessWithoutNullStreams)
   })
 }
 
+const waitForTimeout = (timeoutMs: number) => {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, timeoutMs)
+  })
+}
+
+const waitForDuckdbProcessExitWithTimeout = async (
+  activeProcess: ChildProcessWithoutNullStreams,
+  timeoutMs: number,
+): Promise<boolean> => {
+  return Promise.race([
+    waitForDuckdbProcessExit(activeProcess).then(() => {
+      return true
+    }),
+    waitForTimeout(timeoutMs).then(() => {
+      return false
+    }),
+  ])
+}
+
+const isDuckdbProcessRunning = (activeProcess: ChildProcessWithoutNullStreams) => {
+  return activeProcess.exitCode === null && !activeProcess.killed
+}
+
+const sendDuckdbProcessSignal = (activeProcess: ChildProcessWithoutNullStreams, signal: DuckdbShutdownSignal) => {
+  if (isDuckdbProcessRunning(activeProcess)) {
+    activeProcess.kill(signal)
+  }
+}
+
 const closeDuckdbProcessDirect = async (activeProcess: ChildProcessWithoutNullStreams) => {
-  if (activeProcess.exitCode !== null || activeProcess.killed) {
+  if (!isDuckdbProcessRunning(activeProcess)) {
     return
   }
 
-  const processExit = waitForDuckdbProcessExit(activeProcess)
-  activeProcess.stdin.end('.quit\n')
-  await processExit
+  if (activeProcess.stdin.writable && !activeProcess.stdin.destroyed) {
+    activeProcess.stdin.end('.quit\n')
+  }
+
+  if (await waitForDuckdbProcessExitWithTimeout(activeProcess, duckdbShutdownGracePeriodMs)) {
+    return
+  }
+
+  sendDuckdbProcessSignal(activeProcess, 'SIGTERM')
+
+  if (await waitForDuckdbProcessExitWithTimeout(activeProcess, duckdbShutdownGracePeriodMs)) {
+    return
+  }
+
+  sendDuckdbProcessSignal(activeProcess, 'SIGKILL')
+  await waitForDuckdbProcessExitWithTimeout(activeProcess, duckdbShutdownGracePeriodMs)
+}
+
+const closeDuckdbServiceDirect = async () => {
+  if (duckdbServiceState.duckdbProcess === null) {
+    await releaseCurrentDuckdbOwnerLease()
+    return
+  }
+
+  const activeProcess = duckdbServiceState.duckdbProcess
+  await closeDuckdbProcessDirect(activeProcess)
+  await releaseCurrentDuckdbOwnerLease()
 }
 
 const registerDuckdbShutdownHooks = () => {
@@ -328,7 +384,7 @@ const registerDuckdbShutdownHooks = () => {
   duckdbServiceState.shutdownHooksRegistered = true
   ;(['SIGINT', 'SIGTERM'] as const).map((signal) => {
     process.once(signal, () => {
-      void closeDuckdbService().then(
+      void closeDuckdbServiceDirect().then(
         () => {
           process.exit(0)
         },
@@ -626,14 +682,7 @@ export const deleteDuckdbSnapshot = async (snapshotPath: string) => {
 
 export const closeDuckdbService = async () => {
   await enqueueDuckdbWork(async () => {
-    if (duckdbServiceState.duckdbProcess === null) {
-      await releaseCurrentDuckdbOwnerLease()
-      return
-    }
-
-    const activeProcess = duckdbServiceState.duckdbProcess
-    await closeDuckdbProcessDirect(activeProcess)
-    await releaseCurrentDuckdbOwnerLease()
+    await closeDuckdbServiceDirect()
   })
 }
 
