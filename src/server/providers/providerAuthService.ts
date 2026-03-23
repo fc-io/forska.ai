@@ -2,6 +2,7 @@ import {type ProviderKind} from '../services/providerCatalog.ts'
 import {getProviderConnectionAuthMode} from './providerConnectionHelpers.ts'
 import {getProviderConnection, updateProviderConnection} from './providerConnectionRepository.ts'
 import {requireProviderRegistryEntry} from './providerRegistry.ts'
+import {getProviderConnectionEffectiveBaseURL} from './providerRuntimeState.ts'
 import {deleteProviderSecret, storeProviderSecret} from './providerSecretStore.ts'
 import {
   type ProviderAuthLifecyclePayload,
@@ -107,8 +108,14 @@ export const resolveProviderRuntimeCredentials = async (
   connection: ProviderConnectionRecord,
 ): Promise<ProviderRuntimeCredentials> => {
   const definition = requireProviderRegistryEntry(connection.providerKind)
+  const runtimeCredentials = await definition.resolveRuntimeCredentials({catalog: definition.catalog, connection})
+  const baseURL = getProviderConnectionEffectiveBaseURL({
+    baseURL: runtimeCredentials.baseURL ?? connection.baseURL,
+    config: connection.config,
+    providerKind: connection.providerKind,
+  })
 
-  return definition.resolveRuntimeCredentials({catalog: definition.catalog, connection})
+  return {...runtimeCredentials, baseURL}
 }
 
 export const getProviderAuthService = () => {

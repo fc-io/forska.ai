@@ -1,5 +1,8 @@
 import {getProviderConnectionConfigFromJson} from '../../../providers/providerDbUtils.ts'
-import {getProviderConnectionWorkerState} from '../../../providers/providerRuntimeState.ts'
+import {
+  getProviderConnectionEffectiveBaseURL,
+  getProviderConnectionWorkerState,
+} from '../../../providers/providerRuntimeState.ts'
 import {getAppDatabaseService} from '../../../services/appDatabaseService.ts'
 import {escapeSqlString, getQuotedStringList, getSqlLiteral} from '../../../services/appQueryHelpers.ts'
 
@@ -38,16 +41,22 @@ const getCodexPlaceholderBaseUrl = (): string => {
   return 'codex://app-server'
 }
 
-const getModelWorkerUrls = ({
+const getModelRuntime = ({
+  baseURL,
   providerKind,
   providerConfigJson,
 }: {
+  baseURL: string | null
   providerKind: string
   providerConfigJson: unknown
-}): string[] => {
+}): {baseURL: string | null; workerUrls: string[]} => {
   const config = getProviderConnectionConfigFromJson({providerKind, value: providerConfigJson})
+  const workerState = getProviderConnectionWorkerState({config, providerKind})
 
-  return getProviderConnectionWorkerState({config, providerKind}).effectiveWorkerUrls
+  return {
+    baseURL: getProviderConnectionEffectiveBaseURL({baseURL, config, providerKind}),
+    workerUrls: workerState.effectiveWorkerUrls,
+  }
 }
 
 const processReadyRows = async (
@@ -148,9 +157,12 @@ const processReadyRows = async (
       }
 
       const provider = normalizeProvider(config.modelProvider)
-      const workerUrls = getModelWorkerUrls({providerKind: provider, providerConfigJson: config.providerConfigJson})
-      const fallbackBaseUrl = workerUrls[0] ? `${String(workerUrls[0]).replace(/\/+$/, '')}/v1` : null
-      if (!isCodexProvider(provider) && !config.modelBaseUrl && !fallbackBaseUrl) {
+      const runtime = getModelRuntime({
+        baseURL: config.modelBaseUrl,
+        providerConfigJson: config.providerConfigJson,
+        providerKind: provider,
+      })
+      if (!isCodexProvider(provider) && !runtime.baseURL) {
         console.error('Prompt missing required model baseURL:', {
           articleId: prompt.articleId,
           promptId: prompt.promptId,
@@ -161,9 +173,7 @@ const processReadyRows = async (
         return null
       }
 
-      const baseUrl = isCodexProvider(provider)
-        ? getCodexPlaceholderBaseUrl()
-        : String(config.modelBaseUrl ?? fallbackBaseUrl)
+      const baseUrl = isCodexProvider(provider) ? getCodexPlaceholderBaseUrl() : String(runtime.baseURL)
 
       return {
         ...prompt,
@@ -175,7 +185,7 @@ const processReadyRows = async (
         modelName: config.modelName,
         modelVersion: config.modelVersion ?? null,
         modelBaseUrl: baseUrl,
-        modelWorkerUrls: workerUrls,
+        modelWorkerUrls: runtime.workerUrls,
         useTitle: config.useTitle ?? true,
         useAbstract: config.useAbstract ?? true,
         useFulltext: config.useFulltext ?? false,

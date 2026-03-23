@@ -1,5 +1,8 @@
 import {getProviderConnectionConfigFromJson} from '../../providers/providerDbUtils.ts'
-import {getProviderConnectionWorkerState} from '../../providers/providerRuntimeState.ts'
+import {
+  getProviderConnectionEffectiveBaseURL,
+  getProviderConnectionWorkerState,
+} from '../../providers/providerRuntimeState.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getDateValue, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
@@ -67,16 +70,22 @@ const mergeWorkerLists = (existing: string[], incoming: string[]): string[] => {
   return Array.from(new Set([...existing, ...incoming]))
 }
 
-const getProviderWorkerUrls = ({
+const getProviderRuntime = ({
+  baseURL,
   providerConfigJson,
   providerKind,
 }: {
+  baseURL: string | null
   providerConfigJson: unknown
   providerKind: string | null
-}): string[] => {
+}): {baseURL: string | null; workerUrls: string[]} => {
   const config = getProviderConnectionConfigFromJson({providerKind, value: providerConfigJson})
+  const workerState = getProviderConnectionWorkerState({config, providerKind})
 
-  return getProviderConnectionWorkerState({config, providerKind}).effectiveWorkerUrls
+  return {
+    baseURL: getProviderConnectionEffectiveBaseURL({baseURL, config, providerKind}),
+    workerUrls: workerState.effectiveWorkerUrls,
+  }
 }
 
 // Generic LLM status ingestion targeting the new llm_status table.
@@ -104,18 +113,22 @@ export const judgmentsJobsCheckLLMStatus = async () => {
       String(r.providerKind ?? '')
         .trim()
         .toLowerCase() === 'sglang'
-      && (!!r.baseURL
-        || getProviderWorkerUrls({providerConfigJson: r.providerConfigJson, providerKind: r.providerKind}).length > 0)
+      && !!getProviderRuntime({
+        baseURL: r.baseURL,
+        providerConfigJson: r.providerConfigJson,
+        providerKind: r.providerKind,
+      }).baseURL
     )
   })
   const baseUrlToConfig = validConfigs.reduce((acc, cfg) => {
-    const workerUrls = getProviderWorkerUrls({
+    const runtime = getProviderRuntime({
+      baseURL: cfg.baseURL,
       providerConfigJson: cfg.providerConfigJson,
       providerKind: cfg.providerKind,
     })
-    const baseURL = String(cfg.baseURL ?? (workerUrls[0] ? `${workerUrls[0].replace(/\/+$/, '')}/v1` : ''))
+    const baseURL = String(runtime.baseURL)
     const existing = acc.get(baseURL)
-    const mergedWorkers = existing ? mergeWorkerLists(existing.workerUrls, workerUrls) : workerUrls
+    const mergedWorkers = existing ? mergeWorkerLists(existing.workerUrls, runtime.workerUrls) : runtime.workerUrls
     const modelName = existing?.modelName ?? cfg.modelName ?? 'unknown'
     acc.set(baseURL, {modelName, workerUrls: mergedWorkers})
     return acc
