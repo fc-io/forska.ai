@@ -173,7 +173,7 @@ const upsertProjectPromptTx = async (
       prompt_order = EXCLUDED.prompt_order,
       archived = EXCLUDED.archived,
       enabled = EXCLUDED.enabled,
-      updated_at = current_timestamp
+      updated_at = now()
   `)
 }
 

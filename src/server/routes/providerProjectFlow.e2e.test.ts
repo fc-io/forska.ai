@@ -95,7 +95,7 @@ test('provider to model to project flow works through routes', async () => {
   const modelId = addModelBody.data.modelId
   const createProjectResponse = await app.handle(
     new Request('http://localhost/api/projects', {
-      body: JSON.stringify({modelId, name: 'Provider Flow Project'}),
+      body: JSON.stringify({modelId, name: 'Provider Flow Project', prompts: ['Screen for relevance']}),
       headers: {'content-type': 'application/json'},
       method: 'POST',
     }),
@@ -111,8 +111,16 @@ test('provider to model to project flow works through routes', async () => {
     WHERE id = '${createProjectBody.data.id}'
     LIMIT 1
   `)
+  const [storedProjectPrompt] = await queryDatabase<{originalText: string}>(`
+    SELECT p.original_text AS originalText
+    FROM app.project_prompt pp
+    INNER JOIN app.prompt p ON p.id = pp.prompt_id
+    WHERE pp.project_id = '${createProjectBody.data.id}'
+    LIMIT 1
+  `)
 
   expect(storedProject?.modelId).toBe(modelId)
+  expect(storedProjectPrompt?.originalText).toBe('Screen for relevance')
 })
 
 test('provider connection delete removes an unreferenced connection and its models', async () => {
