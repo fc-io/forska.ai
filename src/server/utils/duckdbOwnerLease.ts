@@ -1,6 +1,7 @@
-import {randomUUID} from 'node:crypto'
+import {spawnSync} from 'node:child_process'
+import {createHash, randomUUID} from 'node:crypto'
 import {mkdir, readFile, unlink, writeFile} from 'node:fs/promises'
-import {hostname} from 'node:os'
+import {hostname, networkInterfaces} from 'node:os'
 import {dirname} from 'node:path'
 
 import {Effect} from 'effect'
@@ -16,6 +17,7 @@ export type DuckdbOwnerLeaseMetadata = {
   databasePath: string
   heartbeatAt: string
   hostname: string
+  machineFingerprint?: string
   leaseId: string
   pid: number
   serverRole: ServerRole
@@ -35,6 +37,69 @@ export type DuckdbOwnerLeaseHistoryEntry = {
 }
 
 const duckdbOwnerLeaseHistoryLimit = 50
+
+const normalizeHostname = (value: string) => {
+  return value.trim().toLowerCase()
+}
+
+const isNonEmptyString = (value: string | null | undefined): value is string => {
+  return value !== null && value !== undefined && value !== ''
+}
+
+const getDarwinLocalHostname = () => {
+  if (process.platform !== 'darwin') {
+    return null
+  }
+
+  const result = spawnSync('scutil', ['--get', 'LocalHostName'], {encoding: 'utf8'})
+  const localHostname = normalizeHostname(result.stdout)
+
+  return result.status === 0 && localHostname !== '' ? localHostname : null
+}
+
+const getCurrentHostnameAliases = () => {
+  const currentHostname = normalizeHostname(hostname())
+  const darwinLocalHostname = getDarwinLocalHostname()
+  const aliases = [
+    currentHostname,
+    currentHostname.split('.')[0],
+    darwinLocalHostname,
+    darwinLocalHostname === null ? null : `${darwinLocalHostname}.local`,
+  ].filter(isNonEmptyString)
+
+  return Array.from(new Set(aliases))
+}
+
+const getCurrentMachineFingerprintSource = () => {
+  const macAddresses = Array.from(
+    new Set(
+      Object.values(networkInterfaces())
+        .flatMap((addresses) => {
+          return (addresses ?? []).map((address) => {
+            return address.mac.trim().toLowerCase()
+          })
+        })
+        .filter((macAddress) => {
+          return macAddress !== '' && macAddress !== '00:00:00:00:00:00'
+        }),
+    ),
+  ).sort()
+
+  return macAddresses.length > 0 ? macAddresses.join('|') : normalizeHostname(hostname())
+}
+
+const currentMachineFingerprint = createHash('sha256').update(getCurrentMachineFingerprintSource()).digest('hex')
+const currentHostnameAliases = getCurrentHostnameAliases()
+
+const hasMachineFingerprint = (machineFingerprint: string | null | undefined) => {
+  return typeof machineFingerprint === 'string' && machineFingerprint.length > 0
+}
+
+const isLeaseOwnedByCurrentMachine = (metadata: DuckdbOwnerLeaseMetadata) => {
+  return hasMachineFingerprint(metadata.machineFingerprint)
+    ? metadata.machineFingerprint === currentMachineFingerprint
+    : currentHostnameAliases.includes(normalizeHostname(metadata.hostname))
+}
 
 const getDuckdbOwnerLeasePath = (databasePath: string) => {
   return databasePath === ':memory:' ? null : `${databasePath}.writer.lock`
@@ -75,6 +140,10 @@ const normalizeDuckdbOwnerLeaseMetadata = (
 ): DuckdbOwnerLeaseMetadata => {
   const acquiredAt = typeof value.acquiredAt === 'string' ? value.acquiredAt : new Date().toISOString()
   const hostnameValue = typeof value.hostname === 'string' ? value.hostname : hostname()
+  const machineFingerprintValue =
+    typeof value.machineFingerprint === 'string' && value.machineFingerprint.length > 0
+      ? value.machineFingerprint
+      : undefined
   const pidValue = typeof value.pid === 'number' ? value.pid : 0
 
   return {
@@ -83,6 +152,7 @@ const normalizeDuckdbOwnerLeaseMetadata = (
     databasePath,
     heartbeatAt: typeof value.heartbeatAt === 'string' ? value.heartbeatAt : acquiredAt,
     hostname: hostnameValue,
+    machineFingerprint: machineFingerprintValue,
     leaseId:
       typeof value.leaseId === 'string' && value.leaseId.length > 0
         ? value.leaseId
@@ -188,11 +258,11 @@ const removeLeasePath = (leasePath: string) => {
 }
 
 const isDuckdbOwnerLeaseOwnedByCurrentProcess = (metadata: DuckdbOwnerLeaseMetadata) => {
-  return metadata.hostname === hostname() && metadata.pid === process.pid
+  return isLeaseOwnedByCurrentMachine(metadata) && metadata.pid === process.pid
 }
 
 const canRemoveStaleLease = (metadata: DuckdbOwnerLeaseMetadata) => {
-  return metadata.hostname === hostname() && (!isProcessAlive(metadata.pid) || isDuckdbOwnerLeaseStale(metadata))
+  return isLeaseOwnedByCurrentMachine(metadata) && (!isProcessAlive(metadata.pid) || isDuckdbOwnerLeaseStale(metadata))
 }
 
 const appendUnexpectedLeaseReleaseHistory = (metadata: DuckdbOwnerLeaseMetadata) => {
@@ -234,7 +304,7 @@ const failForActiveLease = (metadata: DuckdbOwnerLeaseMetadata) => {
 }
 
 export const isDuckdbOwnerLeaseProcessAlive = (metadata: DuckdbOwnerLeaseMetadata) => {
-  return metadata.hostname === hostname() ? isProcessAlive(metadata.pid) : true
+  return isLeaseOwnedByCurrentMachine(metadata) ? isProcessAlive(metadata.pid) : true
 }
 
 export const isDuckdbOwnerLeaseStale = (metadata: DuckdbOwnerLeaseMetadata, nowMs = Date.now()) => {
@@ -263,6 +333,7 @@ export const acquireDuckdbOwnerLease = (params: {
     databasePath: params.databasePath,
     heartbeatAt: acquiredAt,
     hostname: hostname(),
+    machineFingerprint: currentMachineFingerprint,
     leaseId: randomUUID(),
     pid: process.pid,
     serverRole: params.serverRole,
@@ -288,7 +359,10 @@ export const acquireDuckdbOwnerLease = (params: {
               return currentLease === null
                 ? acquireDuckdbOwnerLease(params)
                 : isDuckdbOwnerLeaseOwnedByCurrentProcess(currentLease)
-                  ? Effect.succeed({leasePath, metadata: currentLease})
+                  ? Effect.succeed({
+                      leasePath,
+                      metadata: {...currentLease, machineFingerprint: currentMachineFingerprint},
+                    })
                   : canRemoveStaleLease(currentLease)
                     ? appendUnexpectedLeaseReleaseHistory(currentLease).pipe(
                         Effect.flatMap(() => {
