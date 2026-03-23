@@ -1,6 +1,7 @@
 import {cron} from '@elysiajs/cron'
 import {Elysia} from 'elysia'
 
+import {getJsonSqlLiteral} from '../providers/providerDbUtils.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {
   escapeSqlString,
@@ -9,6 +10,7 @@ import {
   getSqlLiteral,
   getTimestampLiteral,
 } from '../services/appQueryHelpers.ts'
+import {getUserConfigQueryService} from '../services/userConfigQueryService.ts'
 import {ConversionError, convertPdfToText} from '../utils/convertPdfToText.ts'
 import {env} from '../utils/env.ts'
 import {shouldCurrentServerRunWriterWork} from '../utils/serverRuntimeRole.ts'
@@ -37,6 +39,7 @@ const getConversionConcurrency = (batchSize: number): number => {
 }
 
 type ArticleForConversion = {id: string; fullTextPDF: string; fullTextConversionAttempts: number | null}
+type FullTextConversionRuntimeConfig = {baseURL: string; modelId: string; modelName: string; providerKind: string}
 
 /**
  * Get articles with PDFs that need conversion, prioritizing:
@@ -182,20 +185,34 @@ const getArticlesNeedingConversion = async (batchSize: number): Promise<ArticleF
   return collectedArticles
 }
 
-const runConversionWorker = async (queue: ArticleForConversion[]): Promise<void> => {
+const runConversionWorker = async ({
+  queue,
+  runtimeConfig,
+}: {
+  queue: ArticleForConversion[]
+  runtimeConfig: FullTextConversionRuntimeConfig
+}): Promise<void> => {
   const article = queue.pop()
   if (!article) return
-  await convertArticle(article)
-  return runConversionWorker(queue)
+  await convertArticle({article, runtimeConfig})
+  return runConversionWorker({queue, runtimeConfig})
 }
 
-const convertArticles = async (articles: ArticleForConversion[], concurrency: number): Promise<void> => {
+const convertArticles = async ({
+  articles,
+  concurrency,
+  runtimeConfig,
+}: {
+  articles: ArticleForConversion[]
+  concurrency: number
+  runtimeConfig: FullTextConversionRuntimeConfig
+}): Promise<void> => {
   const workerCount = Math.min(concurrency, articles.length)
   const queue = articles.slice()
 
   const results = await Promise.allSettled(
     Array.from({length: workerCount}, () => {
-      return runConversionWorker(queue)
+      return runConversionWorker({queue, runtimeConfig})
     }),
   )
 
@@ -208,12 +225,22 @@ const convertArticles = async (articles: ArticleForConversion[], concurrency: nu
   }
 }
 
-const convertArticle = async (article: ArticleForConversion): Promise<void> => {
+const convertArticle = async ({
+  article,
+  runtimeConfig,
+}: {
+  article: ArticleForConversion
+  runtimeConfig: FullTextConversionRuntimeConfig
+}): Promise<void> => {
   const startTime = Date.now()
-  console.log(`[fullTextConversion] Converting article ${article.id}`)
+  console.log(`[fullTextConversion] Converting article ${article.id} with ${runtimeConfig.modelName}`)
 
   try {
-    const {md, html} = await convertPdfToText(article.fullTextPDF, DOCLING_CONVERSION_TIMEOUT_MS)
+    const {md, html} = await convertPdfToText({
+      baseURL: runtimeConfig.baseURL,
+      localPath: article.fullTextPDF,
+      timeoutMs: DOCLING_CONVERSION_TIMEOUT_MS,
+    })
 
     await getAppDatabaseService().run(`
       UPDATE app.article
@@ -221,6 +248,13 @@ const convertArticle = async (article: ArticleForConversion): Promise<void> => {
           full_text_html = ${getSqlLiteral(html)},
           full_text_conversion_status = 'success',
           full_text_conversion_error = NULL,
+          full_text_conversion_model_id = ${getSqlLiteral(runtimeConfig.modelId)},
+          full_text_conversion_metadata = ${getJsonSqlLiteral({
+            baseURL: runtimeConfig.baseURL,
+            modelId: runtimeConfig.modelId,
+            modelName: runtimeConfig.modelName,
+            providerKind: runtimeConfig.providerKind,
+          })},
           full_text_char_count = ${md.length},
           full_text_conversion_attempts = ${(article.fullTextConversionAttempts ?? 0) + 1},
           updated_at = current_timestamp
@@ -247,6 +281,13 @@ const convertArticle = async (article: ArticleForConversion): Promise<void> => {
       UPDATE app.article
       SET full_text_conversion_status = ${isFinalFailure ? `'failed'` : 'NULL'},
           full_text_conversion_error = ${getSqlLiteral(errorMessage)},
+          full_text_conversion_model_id = ${getSqlLiteral(runtimeConfig.modelId)},
+          full_text_conversion_metadata = ${getJsonSqlLiteral({
+            baseURL: runtimeConfig.baseURL,
+            modelId: runtimeConfig.modelId,
+            modelName: runtimeConfig.modelName,
+            providerKind: runtimeConfig.providerKind,
+          })},
           full_text_conversion_attempts = ${attempts},
           updated_at = current_timestamp
       WHERE id = '${escapeSqlString(article.id)}'
@@ -274,9 +315,15 @@ const runConversionBatch = async () => {
   try {
     const batchSize = getConversionBatchSize()
     const concurrency = getConversionConcurrency(batchSize)
+    const runtimeConfig = await getUserConfigQueryService().getFullTextConversionModelConfig()
+
+    if (!runtimeConfig) {
+      console.log('[fullTextConversion] No PDF conversion model configured, skipping batch')
+      return
+    }
 
     console.log(
-      `[fullTextConversion] Starting batch #${batchNumber} (size=${batchSize}, concurrency=${concurrency}, running=${runningBatches}/${MAX_CONCURRENT_BATCHES})`,
+      `[fullTextConversion] Starting batch #${batchNumber} (size=${batchSize}, concurrency=${concurrency}, model=${runtimeConfig.modelName}, running=${runningBatches}/${MAX_CONCURRENT_BATCHES})`,
     )
 
     const articles = await getArticlesNeedingConversion(batchSize)
@@ -286,7 +333,7 @@ const runConversionBatch = async () => {
       return
     }
 
-    await convertArticles(articles, concurrency)
+    await convertArticles({articles, concurrency, runtimeConfig})
   } finally {
     runningBatches--
   }

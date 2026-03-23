@@ -30,6 +30,7 @@
 - [x] Remove raw `process.env` reads in judgment scheduling/runtime code.
 - [x] Move `DUCKDB_BIN` and `CODEX_BIN` out of env; treat them as advanced user settings.
 - [x] Treat provider base URLs/auth refs/worker URLs for local-manual providers as product config in DuckDB, not machine env.
+- [x] Replace `DOCLING_SERVE_URL` with provider/model-backed PDF conversion config.
 - [x] Decide which inference/runtime values are product config vs machine/operator metadata.
 - [ ] After the inference move, do docs cleanup and a minimal-env startup check.
 
@@ -67,7 +68,7 @@
 - [x] Keep DuckDB bootstrap config in env: `DUCKDB_PATH`, `DUCKDB_MEMORY_LIMIT`, `DUCKDB_TEMP_DIRECTORY`.
 - [x] Keep server/process wiring in env: `API_SERVER_PORT`, `VITE_PORT`, and similar launch-only values.
 - [x] Keep background cron enable flags in env unless we intentionally build a runtime admin control surface for them.
-- [x] Treat local provider endpoints as product settings in DuckDB; keep only true deployment-wiring endpoints in env.
+- [x] Treat local provider endpoints as product settings in DuckDB; remove `DOCLING_SERVE_URL` from env.
 
 ## Cleanup Direct Env Usage
 
@@ -81,6 +82,7 @@
 - [x] Add migrations for provider connection/model config tables used to replace env-backed provider settings.
 - [x] Add migrations for the persisted Unpaywall email field and any cleanup needed after removing OpenAlex-specific config.
 - [x] Add local persisted settings storage for advanced binary overrides without reintroducing env config.
+- [x] Add schema support for a DB-selected PDF conversion model instead of relying on `DOCLING_SERVE_URL`.
 - [ ] Optional: add a bootstrap path for any remaining legacy env-backed contact values we still care to preserve.
 - [x] Update docs to say that core app behavior is configured in the app, not by editing env files.
 - [x] Remove stale env examples and old no-auth wording that still points users at env for app features.

@@ -61,10 +61,11 @@ Those launch helpers pass short-lived runtime metadata to the local API server. 
 docker compose up docling
 ```
 
-Optional env knobs:
+Then add a `Docling Serve` provider in `/providers`, add a manual model for it, and select that model in `/settings` as the PDF conversion model.
+
+Optional runtime knobs:
 
 ```bash
-DOCLING_SERVE_URL=http://localhost:5001
 RUN_SERVER_FULL_TEXT_CONVERSION_CRON=true
 FULL_TEXT_CONVERSION_BATCH_SIZE=5
 FULL_TEXT_CONVERSION_CONCURRENCY=2

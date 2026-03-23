@@ -4,6 +4,7 @@ import {type ProviderCatalogEntry, type ProviderKind} from '../services/provider
 export type ProviderTransportFamily =
   | 'anthropic-messages'
   | 'codex-app'
+  | 'docling-convert'
   | 'gemini-generate-content'
   | 'ollama-native-discovery'
   | 'openai-chat'

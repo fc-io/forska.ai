@@ -1,6 +1,7 @@
 export type ProviderKind =
   | 'openai'
   | 'codex'
+  | 'docling'
   | 'anthropic'
   | 'google'
   | 'openrouter'
@@ -37,6 +38,15 @@ const providerCatalogEntries: ProviderCatalogEntry[] = [
     label: 'Codex App',
     requiresApiKey: false,
     supportsDiscovery: true,
+    supportsWorkerUrls: false,
+  },
+  {
+    defaultBaseURL: 'http://127.0.0.1:5001',
+    description: 'Docling Serve PDF conversion endpoint',
+    kind: 'docling',
+    label: 'Docling Serve',
+    requiresApiKey: false,
+    supportsDiscovery: false,
     supportsWorkerUrls: false,
   },
   {

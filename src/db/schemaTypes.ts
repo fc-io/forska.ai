@@ -27,6 +27,7 @@ export type UserRecord = {
   email: string
   role: string | null
   unpaywallEmail: string | null
+  fullTextConversionModelId: string | null
   createdAt: Date
   updatedAt: Date
 }
@@ -58,6 +59,8 @@ export type ArticleRecord = {
   fullTextConversionStatus: string | null
   fullTextConversionError: string | null
   fullTextConversionAttempts: number | null
+  fullTextConversionModelId: string | null
+  fullTextConversionMetadata: unknown
   fullTextCharCount: number | null
   contentHash: string | null
   importRoute: string | null

@@ -21,7 +21,6 @@ const envShape = arktype({
   RUN_SERVER_FULL_TEXT_CONVERSION_CRON: arktype('"true" | "false" | boolean').pipe((v) => {
     return typeof v === 'string' ? v.toLowerCase() === 'true' : v
   }),
-  DOCLING_SERVE_URL: 'string | null | undefined',
   FULL_TEXT_CONVERSION_BATCH_SIZE: 'number | string.integer.parse | null | undefined',
   FULL_TEXT_CONVERSION_CONCURRENCY: 'number | string.integer.parse | null | undefined',
 })
@@ -73,10 +72,6 @@ const loadEnv = (): typeof envShape.infer => {
   // Default to false when not provided (prevents accidental background conversion)
   if (merged.RUN_SERVER_FULL_TEXT_CONVERSION_CRON == null || merged.RUN_SERVER_FULL_TEXT_CONVERSION_CRON === '') {
     ;(merged as Record<string, string>).RUN_SERVER_FULL_TEXT_CONVERSION_CRON = 'false'
-  }
-  // Provide a stable default when DOCLING_SERVE_URL is not provided
-  if (merged.DOCLING_SERVE_URL == null || String(merged.DOCLING_SERVE_URL).trim() === '') {
-    ;(merged as Record<string, string>).DOCLING_SERVE_URL = 'http://localhost:5001'
   }
   if (merged.FULL_TEXT_CONVERSION_BATCH_SIZE == null || String(merged.FULL_TEXT_CONVERSION_BATCH_SIZE).trim() === '') {
     ;(merged as Record<string, string>).FULL_TEXT_CONVERSION_BATCH_SIZE = '5'

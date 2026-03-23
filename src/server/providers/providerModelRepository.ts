@@ -405,25 +405,28 @@ export const assertSelectableProviderModelIds = async (
   `)
 
   const selectableRows = rows.filter((row) => {
-    return getProviderModelRecordFromRow({
-      baseURL: null,
-      connectionConfigJson: row.connectionConfigJson,
-      createdAt: null,
-      displayName: null,
-      enabled: row.enabled,
-      id: row.id,
-      metadataJson: null,
-      modelName: null,
-      name: row.id,
-      provider: row.provider,
-      providerConnectionEnabled: row.providerConnectionEnabled,
-      providerConnectionId: null,
-      remoteModelId: null,
-      source: null,
-      updatedAt: null,
-      variant: null,
-      version: null,
-    }).enabled
+    return (
+      row.provider !== 'docling'
+      && getProviderModelRecordFromRow({
+        baseURL: null,
+        connectionConfigJson: row.connectionConfigJson,
+        createdAt: null,
+        displayName: null,
+        enabled: row.enabled,
+        id: row.id,
+        metadataJson: null,
+        modelName: null,
+        name: row.id,
+        provider: row.provider,
+        providerConnectionEnabled: row.providerConnectionEnabled,
+        providerConnectionId: null,
+        remoteModelId: null,
+        source: null,
+        updatedAt: null,
+        variant: null,
+        version: null,
+      }).enabled
+    )
   })
 
   if (selectableRows.length !== modelIds.length) {

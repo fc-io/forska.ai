@@ -162,7 +162,7 @@ const getSelectableModelsPayload = async () => {
   const storedCodexModels = await getCodexStoredModels()
   const nonCodexModels = storedModels
     .filter((model) => {
-      return model.provider !== 'codex'
+      return model.provider !== 'codex' && model.provider !== 'docling'
     })
     .map((model) => {
       return {

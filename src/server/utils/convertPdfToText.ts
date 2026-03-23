@@ -1,7 +1,5 @@
 import path from 'path'
 
-import {env} from './env.ts'
-
 // Bun global type declaration for environments where Bun types aren't available
 declare const Bun: {file: (path: string) => {exists: () => Promise<boolean>; arrayBuffer: () => Promise<ArrayBuffer>}}
 
@@ -100,10 +98,15 @@ export class ConversionError extends Error {
  * @returns The converted Markdown text
  * @throws ConversionError if conversion fails
  */
-export const convertPdfToText = async (
-  localPath: string,
+export const convertPdfToText = async ({
+  baseURL,
+  localPath,
   timeoutMs = 60_000,
-): Promise<{md: string; html: string | null}> => {
+}: {
+  baseURL: string
+  localPath: string
+  timeoutMs?: number
+}): Promise<{md: string; html: string | null}> => {
   const startTime = Date.now()
 
   // Use absolute path for safety
@@ -128,7 +131,7 @@ export const convertPdfToText = async (
   }, timeoutMs)
 
   try {
-    const res = await fetch(`${env.DOCLING_SERVE_URL}/v1/convert/source`, {
+    const res = await fetch(`${baseURL.replace(/\/+$/, '')}/v1/convert/source`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({

@@ -42,6 +42,8 @@ type FullArticleRow = {
   fullTextConversionStatus: string | null
   fullTextConversionError: string | null
   fullTextConversionAttempts: number | null
+  fullTextConversionModelId: string | null
+  fullTextConversionMetadata: unknown
   fullTextCharCount: number | null
   contentHash: string | null
   importRoute: string | null
@@ -177,6 +179,8 @@ const getFullArticlesByIds = async (articleIds: string[]): Promise<FullArticleRo
     fullTextConversionStatus: string | null
     fullTextConversionError: string | null
     fullTextConversionAttempts: number | null
+    fullTextConversionModelId: string | null
+    fullTextConversionMetadata: unknown
     fullTextCharCount: number | null
     contentHash: string | null
     importRoute: string | null
@@ -210,6 +214,8 @@ const getFullArticlesByIds = async (articleIds: string[]): Promise<FullArticleRo
       full_text_conversion_status AS fullTextConversionStatus,
       full_text_conversion_error AS fullTextConversionError,
       full_text_conversion_attempts AS fullTextConversionAttempts,
+      full_text_conversion_model_id AS fullTextConversionModelId,
+      full_text_conversion_metadata AS fullTextConversionMetadata,
       full_text_char_count AS fullTextCharCount,
       content_hash AS contentHash,
       import_route AS importRoute,
@@ -253,6 +259,8 @@ const getFullArticlesByIds = async (articleIds: string[]): Promise<FullArticleRo
       fullTextConversionStatus: row.fullTextConversionStatus,
       fullTextConversionError: row.fullTextConversionError,
       fullTextConversionAttempts: row.fullTextConversionAttempts,
+      fullTextConversionModelId: row.fullTextConversionModelId,
+      fullTextConversionMetadata: getJsonValue(row.fullTextConversionMetadata),
       fullTextCharCount: row.fullTextCharCount,
       contentHash: row.contentHash,
       importRoute: row.importRoute,

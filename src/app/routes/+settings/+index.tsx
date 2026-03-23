@@ -1,6 +1,6 @@
 import {createMutation, useQuery} from '@tanstack/solid-query'
 import {createFileRoute} from '@tanstack/solid-router'
-import {createEffect, createSignal, Show} from 'solid-js'
+import {createEffect, createSignal, For, Show} from 'solid-js'
 
 import {apiClient} from '../../../services/apiClient'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse'
@@ -10,18 +10,35 @@ type LocalUser = {
   name: string
   email: string
   role?: string | null
+  fullTextConversionModelId?: string | null
   unpaywallEmail?: string | null
   duckdbBin?: string | null
   codexBin?: string | null
 }
 type UsersResponse = {data: LocalUser[]}
-type UpdateLocalUserInput = {email: string; name: string; unpaywallEmail: string; duckdbBin: string; codexBin: string}
+type StoredModel = {displayName?: string | null; enabled: boolean; id: string; name: string; provider: string}
+type UpdateLocalUserInput = {
+  email: string
+  name: string
+  fullTextConversionModelId: string
+  unpaywallEmail: string
+  duckdbBin: string
+  codexBin: string
+}
 type UpdateUserResponse = {data: LocalUser}
+type StoredModelsResponse = {data: StoredModel[]}
 
 const fetchLocalUser = async (): Promise<LocalUser | null> => {
   const response = await apiClient.api.users.get()
   const result = handleApiResponse<UsersResponse>(response, 'Failed to load local user')
   return result.data?.[0] ?? null
+}
+
+const fetchStoredModels = async (): Promise<StoredModel[]> => {
+  const response = await apiClient.api.models.stored.get()
+  const result = handleApiResponse<StoredModelsResponse>(response, 'Failed to load stored models')
+
+  return result.data ?? []
 }
 
 const getNullableString = (value: string): string | null => {
@@ -35,6 +52,7 @@ const updateLocalUser = async (input: UpdateLocalUserInput): Promise<LocalUser> 
     codexBin: getNullableString(input.codexBin),
     duckdbBin: getNullableString(input.duckdbBin),
     email: input.email,
+    fullTextConversionModelId: getNullableString(input.fullTextConversionModelId),
     name: input.name,
     unpaywallEmail: getNullableString(input.unpaywallEmail),
   })
@@ -46,11 +64,20 @@ const updateLocalUser = async (input: UpdateLocalUserInput): Promise<LocalUser> 
 const Settings = () => {
   const [displayName, setDisplayName] = createSignal('')
   const [profileEmail, setProfileEmail] = createSignal('')
+  const [fullTextConversionModelId, setFullTextConversionModelId] = createSignal('')
   const [unpaywallEmail, setUnpaywallEmail] = createSignal('')
   const [duckdbBin, setDuckdbBin] = createSignal('')
   const [codexBin, setCodexBin] = createSignal('')
   const localUserQuery = useQuery(() => {
     return {queryKey: ['local-user'], queryFn: fetchLocalUser, staleTime: 5 * 60 * 1000, refetchOnWindowFocus: false}
+  })
+  const storedModelsQuery = useQuery(() => {
+    return {
+      queryKey: ['stored-models'],
+      queryFn: fetchStoredModels,
+      staleTime: 5 * 60 * 1000,
+      refetchOnWindowFocus: false,
+    }
   })
   const updateLocalUserMutation = createMutation(() => {
     return {
@@ -58,6 +85,7 @@ const Settings = () => {
       onSuccess: (user: LocalUser) => {
         setDisplayName(user.name)
         setProfileEmail(user.email)
+        setFullTextConversionModelId(user.fullTextConversionModelId ?? '')
         setUnpaywallEmail(user.unpaywallEmail ?? '')
         setDuckdbBin(user.duckdbBin ?? '')
         setCodexBin(user.codexBin ?? '')
@@ -69,15 +97,23 @@ const Settings = () => {
   createEffect(() => {
     setDisplayName(localUserQuery.data?.name ?? '')
     setProfileEmail(localUserQuery.data?.email ?? '')
+    setFullTextConversionModelId(localUserQuery.data?.fullTextConversionModelId ?? '')
     setUnpaywallEmail(localUserQuery.data?.unpaywallEmail ?? '')
     setDuckdbBin(localUserQuery.data?.duckdbBin ?? '')
     setCodexBin(localUserQuery.data?.codexBin ?? '')
   })
 
+  const fullTextConversionModels = () => {
+    return (storedModelsQuery.data ?? []).filter((model) => {
+      return model.enabled && model.provider === 'docling'
+    })
+  }
+
   const isProfileDirty = () => {
     return (
       displayName().trim() !== (localUserQuery.data?.name ?? '').trim()
       || profileEmail().trim() !== (localUserQuery.data?.email ?? '').trim()
+      || fullTextConversionModelId().trim() !== (localUserQuery.data?.fullTextConversionModelId ?? '').trim()
       || unpaywallEmail().trim() !== (localUserQuery.data?.unpaywallEmail ?? '').trim()
       || duckdbBin().trim() !== (localUserQuery.data?.duckdbBin ?? '').trim()
       || codexBin().trim() !== (localUserQuery.data?.codexBin ?? '').trim()
@@ -122,6 +158,26 @@ const Settings = () => {
                   }}
                   class="w-full px-3 py-3 border border-gray-300 rounded-md bg-white text-gray-900 sm:text-sm"
                 />
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">PDF Conversion Model</label>
+                <select
+                  value={fullTextConversionModelId()}
+                  onInput={(event) => {
+                    setFullTextConversionModelId(event.currentTarget.value)
+                  }}
+                  class="w-full px-3 py-3 border border-gray-300 rounded-md bg-white text-gray-900 sm:text-sm"
+                >
+                  <option value="">No PDF conversion model selected</option>
+                  <For each={fullTextConversionModels()}>
+                    {(model) => {
+                      return <option value={model.id}>{model.displayName ?? model.name}</option>
+                    }}
+                  </For>
+                </select>
+                <p class="mt-2 text-xs text-gray-500">
+                  Choose a Docling provider model for PDF conversion. Manage endpoints and models on the Providers page.
+                </p>
               </div>
               <div>
                 <label class="block text-sm font-medium text-gray-700 mb-2">Unpaywall Email</label>
@@ -189,6 +245,7 @@ const Settings = () => {
                     codexBin: codexBin(),
                     duckdbBin: duckdbBin(),
                     email: profileEmail(),
+                    fullTextConversionModelId: fullTextConversionModelId(),
                     name: displayName(),
                     unpaywallEmail: unpaywallEmail(),
                   })

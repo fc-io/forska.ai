@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS app.user_config (
   email VARCHAR NOT NULL,
   role VARCHAR,
   unpaywall_email VARCHAR,
+  full_text_conversion_model_id VARCHAR,
   created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
 );
@@ -136,6 +137,8 @@ CREATE TABLE IF NOT EXISTS app.article (
   full_text_conversion_status VARCHAR,
   full_text_conversion_error VARCHAR,
   full_text_conversion_attempts INTEGER,
+  full_text_conversion_model_id VARCHAR,
+  full_text_conversion_metadata JSON,
   full_text_char_count BIGINT,
   content_hash VARCHAR,
   import_route VARCHAR,

@@ -8,10 +8,13 @@ export const localUserRole = null
 
 export const localUserUnpaywallEmail = null
 
+export const localUserFullTextConversionModelId = null
+
 export const localUserDefaults = {
   id: localUserId,
   name: localUserName,
   email: localUserEmail,
   role: localUserRole,
+  fullTextConversionModelId: localUserFullTextConversionModelId,
   unpaywallEmail: localUserUnpaywallEmail,
 }

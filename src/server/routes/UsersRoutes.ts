@@ -31,6 +31,7 @@ export const usersRoutes = new Elysia()
       })
       const userConfig = await getUserConfigQueryService().updateUserConfig({
         email: body.email,
+        fullTextConversionModelId: getNullableString(body.fullTextConversionModelId),
         name: body.name,
         unpaywallEmail: getNullableString(body.unpaywallEmail),
       })
@@ -42,6 +43,7 @@ export const usersRoutes = new Elysia()
         codexBin: t.Union([t.String(), t.Null()]),
         duckdbBin: t.Union([t.String(), t.Null()]),
         email: t.String(),
+        fullTextConversionModelId: t.Union([t.String(), t.Null()]),
         name: t.String(),
         unpaywallEmail: t.Union([t.String(), t.Null()]),
       }),
