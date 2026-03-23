@@ -364,3 +364,60 @@ test('auto follower does not take over from a responsive writer with a stale hea
     removeFileIfExists(`${duckdbPath}.writer.history.json`)
   }
 })
+
+test('auto role takes over a stale unreachable legacy writer lease on startup', async () => {
+  const serverPort = 34999
+  const duckdbPath = `/tmp/f1-auto-stale-legacy-${Date.now()}.duckdb`
+  const leasePath = `${duckdbPath}.writer.lock`
+
+  writeFileSync(
+    leasePath,
+    `${JSON.stringify(
+      {
+        acquiredAt: '2026-03-01T00:00:00.000Z',
+        apiServerPort: serverPort,
+        databasePath: duckdbPath,
+        heartbeatAt: '2026-03-01T00:00:00.000Z',
+        hostname: 'fredriks-mbp.ki.se',
+        machineFingerprint: 'legacy-machine-fingerprint',
+        leaseId: 'stale-legacy-lease-id',
+        pid: 79362,
+        serverRole: 'writer',
+      },
+      null,
+      2,
+    )}\n`,
+  )
+
+  const server = startServer({
+    API_SERVER_PORT: String(serverPort),
+    DUCKDB_PATH: duckdbPath,
+    RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+    RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+    RUN_SERVER_JUDGING: 'false',
+    SERVER_ROLE: 'auto',
+    VITE_PORT: '4319',
+  })
+
+  try {
+    await waitForServer(serverPort, 10_000)
+
+    const response = await fetch(`http://127.0.0.1:${serverPort}/api/writer_connections`)
+    const body = (await response.json()) as {
+      data: {history: Array<{apiServerPort: number; event: 'acquired' | 'released'}>; writer: {apiServerPort: number}}
+    }
+
+    expect(response.ok).toBe(true)
+    expect(body.data.writer.apiServerPort).toBe(serverPort)
+    expect(
+      body.data.history.some((event) => {
+        return event.apiServerPort === serverPort && event.event === 'acquired'
+      }),
+    ).toBe(true)
+  } finally {
+    await stopServer(server)
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(leasePath)
+    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+  }
+})

@@ -46,23 +46,41 @@ const isNonEmptyString = (value: string | null | undefined): value is string => 
   return value !== null && value !== undefined && value !== ''
 }
 
+const getCommandOutput = (command: string, args: string[]) => {
+  const result = spawnSync(command, args, {encoding: 'utf8'})
+  const output = normalizeHostname(result.stdout)
+
+  return result.status === 0 && output !== '' ? output : null
+}
+
 const getDarwinLocalHostname = () => {
+  return process.platform === 'darwin' ? getCommandOutput('scutil', ['--get', 'LocalHostName']) : null
+}
+
+const getDarwinPlatformUuid = () => {
   if (process.platform !== 'darwin') {
     return null
   }
 
-  const result = spawnSync('scutil', ['--get', 'LocalHostName'], {encoding: 'utf8'})
-  const localHostname = normalizeHostname(result.stdout)
+  const result = spawnSync('ioreg', ['-rd1', '-c', 'IOPlatformExpertDevice'], {encoding: 'utf8'})
+  const platformUuid = /"IOPlatformUUID" = "([^"]+)"/.exec(result.stdout)?.[1]
 
-  return result.status === 0 && localHostname !== '' ? localHostname : null
+  return result.status === 0 && platformUuid !== undefined ? normalizeHostname(platformUuid) : null
+}
+
+const getShellHostname = () => {
+  return getCommandOutput('hostname', [])
 }
 
 const getCurrentHostnameAliases = () => {
   const currentHostname = normalizeHostname(hostname())
   const darwinLocalHostname = getDarwinLocalHostname()
+  const shellHostname = getShellHostname()
   const aliases = [
     currentHostname,
     currentHostname.split('.')[0],
+    shellHostname,
+    shellHostname === null ? null : shellHostname.split('.')[0],
     darwinLocalHostname,
     darwinLocalHostname === null ? null : `${darwinLocalHostname}.local`,
   ].filter(isNonEmptyString)
@@ -71,6 +89,12 @@ const getCurrentHostnameAliases = () => {
 }
 
 const getCurrentMachineFingerprintSource = () => {
+  const darwinPlatformUuid = getDarwinPlatformUuid()
+
+  if (darwinPlatformUuid !== null) {
+    return darwinPlatformUuid
+  }
+
   const macAddresses = Array.from(
     new Set(
       Object.values(networkInterfaces())
@@ -91,14 +115,10 @@ const getCurrentMachineFingerprintSource = () => {
 const currentMachineFingerprint = createHash('sha256').update(getCurrentMachineFingerprintSource()).digest('hex')
 const currentHostnameAliases = getCurrentHostnameAliases()
 
-const hasMachineFingerprint = (machineFingerprint: string | null | undefined) => {
-  return typeof machineFingerprint === 'string' && machineFingerprint.length > 0
-}
-
 const isLeaseOwnedByCurrentMachine = (metadata: DuckdbOwnerLeaseMetadata) => {
-  return hasMachineFingerprint(metadata.machineFingerprint)
-    ? metadata.machineFingerprint === currentMachineFingerprint
-    : currentHostnameAliases.includes(normalizeHostname(metadata.hostname))
+  const matchesCurrentHostname = currentHostnameAliases.includes(normalizeHostname(metadata.hostname))
+
+  return matchesCurrentHostname || metadata.machineFingerprint === currentMachineFingerprint
 }
 
 const getDuckdbOwnerLeasePath = (databasePath: string) => {
@@ -265,6 +285,10 @@ const canRemoveStaleLease = (metadata: DuckdbOwnerLeaseMetadata) => {
   return isLeaseOwnedByCurrentMachine(metadata) && (!isProcessAlive(metadata.pid) || isDuckdbOwnerLeaseStale(metadata))
 }
 
+const canTakeOverStaleLease = (metadata: DuckdbOwnerLeaseMetadata, takeoverLeaseId: string | undefined) => {
+  return takeoverLeaseId !== undefined && metadata.leaseId === takeoverLeaseId && isDuckdbOwnerLeaseStale(metadata)
+}
+
 const appendUnexpectedLeaseReleaseHistory = (metadata: DuckdbOwnerLeaseMetadata) => {
   return appendDuckdbOwnerLeaseHistory(metadata.databasePath, {
     apiServerPort: metadata.apiServerPort,
@@ -315,6 +339,7 @@ export const acquireDuckdbOwnerLease = (params: {
   apiServerPort: number
   databasePath: string
   serverRole: ServerRole
+  takeoverLeaseId?: string
 }): Effect.Effect<DuckdbOwnerLease | null, unknown> => {
   const leasePath = getDuckdbOwnerLeasePath(params.databasePath)
 
@@ -363,7 +388,7 @@ export const acquireDuckdbOwnerLease = (params: {
                       leasePath,
                       metadata: {...currentLease, machineFingerprint: currentMachineFingerprint},
                     })
-                  : canRemoveStaleLease(currentLease)
+                  : canRemoveStaleLease(currentLease) || canTakeOverStaleLease(currentLease, params.takeoverLeaseId)
                     ? appendUnexpectedLeaseReleaseHistory(currentLease).pipe(
                         Effect.flatMap(() => {
                           return removeLeasePath(leasePath)

@@ -53,9 +53,33 @@ const getCurrentServerUrl = () => {
   return `http://127.0.0.1:${env.API_SERVER_PORT}`
 }
 
+const getCurrentServerLocalhostUrl = () => {
+  return `http://localhost:${env.API_SERVER_PORT}`
+}
+
 const getNormalizedWriterUrl = (value: string | null | undefined) => {
   const raw = String(value ?? '').trim()
   return raw === '' ? null : raw.endsWith('/') ? raw.slice(0, -1) : raw
+}
+
+const isCurrentServerUrl = (writerUrl: string | null | undefined) => {
+  const normalizedWriterUrl = getNormalizedWriterUrl(writerUrl)
+
+  return normalizedWriterUrl === getCurrentServerUrl() || normalizedWriterUrl === getCurrentServerLocalhostUrl()
+}
+
+const exitForDuplicateLocalServer = (reason: string, writerUrl: string | null) => {
+  if (!isCurrentServerUrl(writerUrl)) {
+    return false
+  }
+
+  autoServerRoleLogger.force(
+    'server-role:duplicate-local-server',
+    `[server] duplicate local API server detected; exiting (${reason})`,
+    'warn',
+    {apiServerPort: env.API_SERVER_PORT, pid: process.pid, writerUrl},
+  )
+  process.exit(0)
 }
 
 const getManualWriterUrl = () => {
@@ -128,13 +152,14 @@ const readWriterUrlFromLease = async () => {
   return writerUrl
 }
 
-const promoteAutoServerToWriter = async (reason: string) => {
+const promoteAutoServerToWriter = async (reason: string, takeoverLeaseId?: string) => {
   try {
     const currentLease = await Effect.runPromise(
       acquireDuckdbOwnerLease({
         apiServerPort: env.API_SERVER_PORT,
         databasePath: env.DUCKDB_PATH,
         serverRole: 'writer',
+        takeoverLeaseId,
       }),
     )
 
@@ -152,6 +177,9 @@ const promoteAutoServerToWriter = async (reason: string) => {
 
     setCurrentServerRole('api')
     autoServerRoleLogger.log('server-role:api', '[server] auto follower active', {error, writerUrl})
+    if (exitForDuplicateLocalServer(reason, writerUrl)) {
+      return false
+    }
     return false
   }
 }
@@ -193,12 +221,16 @@ const refreshAutoFollowerRole = async () => {
       recordWriterUnavailableWarning({reason, writerUrl: getDuckdbOwnerLeaseWriterUrl(currentLease)})
     }
 
-    await promoteAutoServerToWriter(reason)
+    await promoteAutoServerToWriter(reason, currentLease?.leaseId)
     return
   }
 
   setCurrentServerRole('api')
   setLastKnownWriterUrl(getDuckdbOwnerLeaseWriterUrl(currentLease))
+
+  if (exitForDuplicateLocalServer('writer-already-active-on-local-port', getDuckdbOwnerLeaseWriterUrl(currentLease))) {
+    return
+  }
 
   if (await isWriterUrlResponsive(getDuckdbOwnerLeaseWriterUrl(currentLease))) {
     clearUnresponsiveWriterWarnings()
