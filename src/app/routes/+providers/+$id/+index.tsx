@@ -4,6 +4,11 @@ import {createEffect, createMemo, createSignal, For, onCleanup, Show} from 'soli
 import {createStore} from 'solid-js/store'
 
 import {Button} from '../../../../components/ui/button.tsx'
+import {
+  getComparableModelNames,
+  getRuntimeModelNamesForProvider,
+  hasRuntimeModelMatch,
+} from '../../../../utils/providerRuntimeModelMatch.ts'
 import {ProviderConnectionForm} from '../../+admin/+models/providerConnectionForm.tsx'
 import {
   addManualProviderModel,
@@ -56,6 +61,12 @@ const getTrimmedModelValue = (value: string | null | undefined): string | null =
   const normalized = String(value ?? '').trim()
 
   return normalized === '' ? null : normalized
+}
+
+const getNormalizedProviderKind = (value: string | null | undefined): string => {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
 }
 
 const getProviderPageModelKey = ({
@@ -571,6 +582,63 @@ const ProviderDetailPage = () => {
     })
   })
 
+  const selectedConnectionRuntimeModelNames = createMemo(() => {
+    return getRuntimeModelNamesForProvider({providerKind: selectedConnection()?.providerKind, runtime: runtime()})
+  })
+
+  const selectedConnectionUsesActiveRuntime = createMemo(() => {
+    return (
+      getNormalizedProviderKind(selectedConnection()?.providerKind)
+      === getNormalizedProviderKind(runtime()?.providerKind)
+    )
+  })
+
+  const currentEnabledModelNames = createMemo(() => {
+    const sourceModels = modelDrafts().length > 0 ? modelDrafts() : providerModels()
+
+    return getComparableModelNames(
+      sourceModels
+        .filter((draft) => {
+          return draft.enabled
+        })
+        .flatMap((draft) => {
+          return [draft.remoteModelId, draft.modelName]
+        }),
+    )
+  })
+
+  const selectedConnectionRuntimeBanner = createMemo(() => {
+    const connection = selectedConnection()
+    const runtimeModelNames = selectedConnectionRuntimeModelNames()
+    const runtimeLabel = runtimeModelNames.join(', ')
+
+    if (!connection || connection.providerKind !== 'sglang' || !selectedConnectionUsesActiveRuntime()) {
+      return null
+    }
+
+    if (runtimeModelNames.length === 0) {
+      return {
+        className: 'mb-4 rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900',
+        message:
+          'Launcher runtime is active for this SGLang connection, but its model name is unavailable. Job start still checks the live runtime before running.',
+      }
+    }
+
+    return hasRuntimeModelMatch({
+      candidateModelNames: currentEnabledModelNames(),
+      providerKind: connection.providerKind,
+      runtime: runtime(),
+    })
+      ? {
+          className: 'mb-4 rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900',
+          message: `Active SGLang runtime model: ${runtimeLabel}.`,
+        }
+      : {
+          className: 'mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900',
+          message: `Active SGLang runtime model: ${runtimeLabel}. None of this connection's enabled models match, so project runs will be blocked until they do.`,
+        }
+  })
+
   createEffect(() => {
     const models = providerModels()
     const draftKey = [
@@ -1031,6 +1099,12 @@ const ProviderDetailPage = () => {
                         ? codexDiscoveredModelsQuery.error.message
                         : 'Failed to load the live Codex model catalog. Showing saved models only.'}
                     </div>
+                  </Show>
+
+                  <Show when={selectedConnectionRuntimeBanner()}>
+                    {(banner) => {
+                      return <div class={banner().className}>{banner().message}</div>
+                    }}
                   </Show>
 
                   <Show

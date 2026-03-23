@@ -4,10 +4,13 @@ import type {JSX} from 'solid-js'
 import {createEffect, createMemo, createSignal, For, Show, Suspense} from 'solid-js'
 import {createStore} from 'solid-js/store'
 
+import {RuntimeModelNotice} from '../../../../components/main/runtimeModelNotice.tsx'
 import {Button} from '../../../../components/ui/button'
 import {apiClient} from '../../../../services/apiClient'
 import {fetchProjectWithPrompts} from '../../../../services/projectsService'
 import {handleApiResponse} from '../../../../services/utils/handleApiResponse'
+import {getSglangRuntimeModelNotice} from '../../../../utils/getSglangRuntimeModelNotice.ts'
+import {fetchProviderConnections} from '../../+admin/+models/providerConnectionsClient.ts'
 import {useArchivedProjectRedirect, useProjectAccessQuery} from '../projectAccessGuard'
 
 type PromptItem = {
@@ -342,6 +345,15 @@ const EditProject = (): JSX.Element => {
     }
   })
 
+  const providerConnectionsQuery = useQuery(() => {
+    return {
+      queryKey: ['provider-connections', 'project-edit', projectId],
+      queryFn: fetchProviderConnections,
+      staleTime: 60 * 1000,
+      suspense: false,
+    }
+  })
+
   const importRoutesQuery = useQuery(() => {
     return {
       queryKey: ['importroutes'],
@@ -383,6 +395,34 @@ const EditProject = (): JSX.Element => {
 
     return [...hpcSorted, ...codexInApiOrder]
   }
+
+  const selectedProviderModel = createMemo(() => {
+    const selectedId = selectedModelId()
+
+    return (
+      providerConnectionsQuery.data?.connections
+        .flatMap((connection) => {
+          return connection.models
+        })
+        .find((model) => {
+          return model.id === selectedId
+        }) ?? null
+    )
+  })
+
+  const selectedModelRuntimeWarning = createMemo(() => {
+    const selectedModel = selectedProviderModel()
+    return !selectedModel
+      ? null
+      : getSglangRuntimeModelNotice({
+          candidateModelNames: [selectedModel.remoteModelId, selectedModel.modelName],
+          getMismatchMessage: (runtimeLabel) => {
+            return `Active SGLang runtime model: ${runtimeLabel}. Starting a job will be blocked until it matches the selected project model.`
+          },
+          providerKind: selectedModel.provider,
+          runtime: providerConnectionsQuery.data?.runtime ?? null,
+        })
+  })
 
   const availableImportRoutes = () => {
     return importRoutesQuery.data ?? []
@@ -773,6 +813,7 @@ const EditProject = (): JSX.Element => {
                       </For>
                     </select>
                   </Show>
+                  <RuntimeModelNotice class="mt-3" notice={selectedModelRuntimeWarning()} />
                   <Show when={!modelsQuery.isLoading && !modelsQuery.isError && availableModels().length === 0}>
                     <div class="flex items-center justify-between gap-3">
                       <p class="text-sm text-muted-foreground">No models available.</p>

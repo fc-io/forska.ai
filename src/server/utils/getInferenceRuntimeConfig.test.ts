@@ -8,6 +8,7 @@ test('getInferenceRuntimeConfig applies runtime defaults', () => {
   expect(runtimeConfig.gpuNnodes).toBe(0)
   expect(runtimeConfig.gpuGpusPerNode).toBe(0)
   expect(runtimeConfig.gpuTotalGpus).toBe(0)
+  expect(runtimeConfig.activeModelNames).toEqual([])
   expect(runtimeConfig.tpSize).toBe(0)
   expect(runtimeConfig.ppSize).toBe(0)
   expect(runtimeConfig.dpSize).toBe(0)
@@ -32,6 +33,7 @@ test('getInferenceRuntimeConfig prioritizes launcher runtime metadata', () => {
     envValues: {
       DP_SIZE: '9',
       FORSKA_RUNTIME_DP_SIZE: '1',
+      FORSKA_RUNTIME_ACTIVE_MODEL_NAMES: 'Qwen/Qwen3.5-122B-A10B',
       FORSKA_RUNTIME_GPU_GPUS_PER_NODE: '4',
       FORSKA_RUNTIME_GPU_NNODES: '2',
       FORSKA_RUNTIME_LOCAL_WORKER_URLS: 'http://localhost:30001',
@@ -50,6 +52,7 @@ test('getInferenceRuntimeConfig prioritizes launcher runtime metadata', () => {
   expect(runtimeConfig.gpuNnodes).toBe(2)
   expect(runtimeConfig.gpuGpusPerNode).toBe(4)
   expect(runtimeConfig.gpuTotalGpus).toBe(8)
+  expect(runtimeConfig.activeModelNames).toEqual(['Qwen/Qwen3.5-122B-A10B'])
   expect(runtimeConfig.tpSize).toBe(8)
   expect(runtimeConfig.dpSize).toBe(1)
   expect(runtimeConfig.sglangMaxRunningRequests).toBe(32)

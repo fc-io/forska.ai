@@ -576,6 +576,7 @@ const startDevServer = async (config: MN5Config): Promise<void> => {
     RUN_SERVER_JUDGING: 'true',
     BUN_CONFIG_MAX_HTTP_REQUESTS: '2048',
     ...getForskaRuntimeEnv({
+      activeModelNames: config.SGLANG_MODEL,
       dpSize: config.DP_SIZE,
       gpuGpusPerNode: config.GPUS_PER_NODE,
       gpuNnodes: config.NNODES,

@@ -1,0 +1,140 @@
+import {afterAll, afterEach, beforeAll, expect, mock, test} from 'bun:test'
+import {Elysia} from 'elysia'
+import {rmSync} from 'fs'
+
+import {HttpError} from '../utils/httpError.ts'
+
+const tempDbPath = `/tmp/f1-judgments-jobs-routes-${process.pid}-${Date.now()}.duckdb`
+
+process.env.SERVER_ROLE = 'dev-single'
+process.env.DUCKDB_PATH = tempDbPath
+process.env.API_SERVER_PORT = process.env.API_SERVER_PORT ?? '3001'
+process.env.VITE_PORT = process.env.VITE_PORT ?? '3000'
+
+const providerRuntimeModelGuardModulePath = new URL('../providers/providerRuntimeModelGuard.ts', import.meta.url)
+  .pathname
+
+const state = {assertStoredProviderModelRuntimeMatch: mock(async (_input: {modelId: string}) => {})}
+
+void mock.module(providerRuntimeModelGuardModulePath, () => {
+  return {assertStoredProviderModelRuntimeMatch: state.assertStoredProviderModelRuntimeMatch}
+})
+
+let app: {handle: (request: Request) => Promise<Response>} | null = null
+let closeDatabase: (() => Promise<void>) | null = null
+let runDatabase: ((statement: string) => Promise<void>) | null = null
+
+beforeAll(async () => {
+  const [{migrateDuckdb}, {getAppDatabaseService}, {judgmentsJobsRoutes}] = await Promise.all([
+    import('../../db/migrateDuckdb.ts'),
+    import('../services/appDatabaseService.ts'),
+    import('./JudgmentsJobsRoutes.ts'),
+  ])
+
+  await migrateDuckdb()
+
+  const database = getAppDatabaseService()
+
+  closeDatabase = () => {
+    return database.close()
+  }
+  runDatabase = (statement: string) => {
+    return database.run(statement)
+  }
+  app = new Elysia().use(judgmentsJobsRoutes)
+})
+
+afterAll(async () => {
+  await closeDatabase?.()
+  rmSync(tempDbPath, {force: true})
+})
+
+afterEach(() => {
+  state.assertStoredProviderModelRuntimeMatch.mockImplementation(async (_input: {modelId: string}) => {})
+})
+
+const insertProjectFixture = async ({
+  connectionId,
+  modelId,
+  projectId,
+}: {
+  connectionId: string
+  modelId: string
+  projectId: string
+}) => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-122B-A10B', 'Qwen/Qwen3.5-122B-A10B', 'Qwen 122B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id)
+    VALUES ('${projectId}', 'Runtime Match Project', '${modelId}')
+  `)
+}
+
+test('creating a judgments job fails when the runtime model check fails', async () => {
+  if (!app) {
+    throw new Error('Test app not initialized')
+  }
+
+  const projectId = `runtime-mismatch-project-${Date.now()}`
+  const modelId = `runtime-mismatch-model-${Date.now()}`
+  const connectionId = `runtime-mismatch-connection-${Date.now()}`
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  state.assertStoredProviderModelRuntimeMatch.mockImplementationOnce(async () => {
+    throw new HttpError(400, 'Project model Qwen/Qwen3.5-122B-A10B does not match the active SGLang runtime.')
+  })
+
+  const response = await app.handle(
+    new Request('http://localhost/api/judgmentsjobs', {
+      body: JSON.stringify({projectId}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const body = await response.text()
+
+  expect(response.status).toBe(400)
+  expect(body).toContain('does not match the active SGLang runtime')
+})
+
+test('starting an existing judgments job fails when the runtime model check fails', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const projectId = `runtime-restart-project-${Date.now()}`
+  const modelId = `runtime-restart-model-${Date.now()}`
+  const connectionId = `runtime-restart-connection-${Date.now()}`
+  const jobId = `runtime-restart-job-${Date.now()}`
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'paused')
+  `)
+  state.assertStoredProviderModelRuntimeMatch.mockImplementationOnce(async () => {
+    throw new HttpError(400, 'Project model Qwen/Qwen3.5-122B-A10B does not match the active SGLang runtime.')
+  })
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs/${jobId}`, {
+      body: JSON.stringify({status: 'running'}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = await response.text()
+
+  expect(response.status).toBe(400)
+  expect(body).toContain('does not match the active SGLang runtime')
+})

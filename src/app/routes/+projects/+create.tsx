@@ -3,9 +3,12 @@ import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
 import {createEffect, createMemo, createSignal, For, Show, Suspense} from 'solid-js'
 import {createStore} from 'solid-js/store'
 
+import {RuntimeModelNotice} from '../../../components/main/runtimeModelNotice.tsx'
 import {Button} from '../../../components/ui/button'
 import {apiClient} from '../../../services/apiClient'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse'
+import {getSglangRuntimeModelNotice} from '../../../utils/getSglangRuntimeModelNotice.ts'
+import {fetchProviderConnections} from '../+admin/+models/providerConnectionsClient.ts'
 
 type PromptItem = {id: string; content: string; promptHeading: string; type: string}
 
@@ -83,6 +86,14 @@ const CreateProject = () => {
       staleTime: 1000 * 60 * 5,
     }
   })
+  const providerConnectionsQuery = useQuery(() => {
+    return {
+      queryKey: ['provider-connections', 'project-create'],
+      queryFn: fetchProviderConnections,
+      staleTime: 60 * 1000,
+      suspense: false,
+    }
+  })
   const existingPromptsQuery = useQuery(() => {
     return {
       queryKey: ['prompts'],
@@ -144,6 +155,34 @@ const CreateProject = () => {
 
     return [...hpcSorted, ...codexInApiOrder]
   }
+
+  const selectedProviderModel = createMemo(() => {
+    const selectedId = selectedModelId()
+
+    return (
+      providerConnectionsQuery.data?.connections
+        .flatMap((connection) => {
+          return connection.models
+        })
+        .find((model) => {
+          return model.id === selectedId
+        }) ?? null
+    )
+  })
+
+  const selectedModelRuntimeWarning = createMemo(() => {
+    const selectedModel = selectedProviderModel()
+    return !selectedModel
+      ? null
+      : getSglangRuntimeModelNotice({
+          candidateModelNames: [selectedModel.remoteModelId, selectedModel.modelName],
+          getMismatchMessage: (runtimeLabel) => {
+            return `Active SGLang runtime model: ${runtimeLabel}. Starting a job will be blocked until it matches the selected project model.`
+          },
+          providerKind: selectedModel.provider,
+          runtime: providerConnectionsQuery.data?.runtime ?? null,
+        })
+  })
 
   createEffect(() => {
     const models = availableModels()
@@ -394,6 +433,7 @@ const CreateProject = () => {
                   </For>
                 </select>
               </Show>
+              <RuntimeModelNotice class="mt-3" notice={selectedModelRuntimeWarning()} />
               <Show when={!modelsQuery.isLoading && !modelsQuery.isError && availableModels().length === 0}>
                 <div class="flex items-center justify-between gap-3">
                   <p class="text-sm text-muted-foreground">No models available.</p>

@@ -13,7 +13,7 @@ export type ProviderCatalogEntry = {
   supportsWorkerUrls: boolean
 }
 
-export type ProviderRuntimeSummary = {providerKind: string | null; workerUrls: string[]}
+export type ProviderRuntimeSummary = {activeModelNames: string[]; providerKind: string | null; workerUrls: string[]}
 
 export type ProviderConnectionWorkerState = {
   effectiveWorkerUrls: string[]

@@ -8,6 +8,8 @@ import {ProjectDetailsInformation} from '../../../../components/main/projectDeta
 import {ProjectDetailsPrompts} from '../../../../components/main/projects/projectDetailsPrompts'
 import {Button} from '../../../../components/ui/button'
 import {archiveProject, fetchProjectWithPrompts} from '../../../../services/projectsService'
+import {getSglangRuntimeModelNotice} from '../../../../utils/getSglangRuntimeModelNotice.ts'
+import {fetchProviderConnections} from '../../+admin/+models/providerConnectionsClient.ts'
 import {useArchivedProjectRedirect, useProjectAccessQuery} from '../projectAccessGuard'
 
 const ProjectDetail = () => {
@@ -31,6 +33,14 @@ const ProjectDetail = () => {
       enabled: projectAccessQuery.data !== undefined && !projectAccessQuery.data.archived,
       refetchOnWindowFocus: false,
       staleTime: 5 * 60 * 1000,
+    }
+  })
+  const providerConnectionsQuery = useQuery(() => {
+    return {
+      queryKey: ['provider-connections', 'project-detail', projectId],
+      queryFn: fetchProviderConnections,
+      staleTime: 60 * 1000,
+      suspense: false,
     }
   })
 
@@ -121,6 +131,25 @@ const ProjectDetail = () => {
           {(data) => {
             const result = data()
             const {project, prompts: rawPrompts, model} = result
+            const providerModel = model?.id
+              ? (providerConnectionsQuery.data?.connections
+                  .flatMap((connection) => {
+                    return connection.models
+                  })
+                  .find((candidate) => {
+                    return candidate.id === model.id
+                  }) ?? null)
+              : null
+            const modelRuntimeNotice = providerModel
+              ? getSglangRuntimeModelNotice({
+                  candidateModelNames: [providerModel.remoteModelId, providerModel.modelName],
+                  getMismatchMessage: (runtimeLabel) => {
+                    return `Active SGLang runtime model: ${runtimeLabel}. Starting a job will be blocked until it matches this project's model.`
+                  },
+                  providerKind: providerModel.provider,
+                  runtime: providerConnectionsQuery.data?.runtime ?? null,
+                })
+              : null
             const importRoutes = Array.isArray((result as {importRoutes?: unknown}).importRoutes)
               ? (result as {importRoutes: string[]}).importRoutes
               : []
@@ -188,6 +217,7 @@ const ProjectDetail = () => {
                     importRoutes={importRoutes}
                     importRouteNamesByRoute={importRouteNamesByRoute}
                     model={model}
+                    modelRuntimeNotice={modelRuntimeNotice}
                   />
                 </Suspense>
 

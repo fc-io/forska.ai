@@ -3,12 +3,18 @@ import {inferenceRuntimeConfig} from '../utils/getInferenceRuntimeConfig.ts'
 import {type ProviderConnectionConfig, type ProviderWorkerSource} from './providerTypes.ts'
 import {normalizeWorkerUrls, supportsRuntimeWorkerUrls} from './providerWorkerUtils.ts'
 
-export type ProviderRuntimeSummary = {providerKind: string | null; workerUrls: string[]}
+export type ProviderRuntimeSummary = {activeModelNames: string[]; providerKind: string | null; workerUrls: string[]}
 
 export type ProviderConnectionWorkerState = {
   effectiveWorkerUrls: string[]
   runtimeWorkerUrls: string[]
   workerSource: ProviderWorkerSource
+}
+
+const getTrimmedValue = (value: string | null | undefined): string | null => {
+  const normalized = String(value ?? '').trim()
+
+  return normalized === '' ? null : normalized
 }
 
 const getRuntimeProviderKind = (): string | null => {
@@ -20,13 +26,21 @@ const getRuntimeProviderKind = (): string | null => {
 export const getProviderRuntimeSummary = (): ProviderRuntimeSummary => {
   const workerUrls = normalizeWorkerUrls(inferenceRuntimeConfig.displayWorkerUrls)
 
-  return {providerKind: getRuntimeProviderKind(), workerUrls}
+  return {activeModelNames: inferenceRuntimeConfig.activeModelNames, providerKind: getRuntimeProviderKind(), workerUrls}
 }
 
-const getRuntimeWorkerUrlsForProvider = (providerKind: string | null | undefined): string[] => {
-  const runtimeSummary = getProviderRuntimeSummary()
+const getRuntimeWorkerUrlsForProvider = ({
+  providerKind,
+  runtimeSummary,
+}: {
+  providerKind: string | null | undefined
+  runtimeSummary?: ProviderRuntimeSummary
+}): string[] => {
+  const activeRuntimeSummary = runtimeSummary ?? getProviderRuntimeSummary()
 
-  return runtimeSummary.providerKind === normalizeProviderKind(providerKind) ? runtimeSummary.workerUrls : []
+  return activeRuntimeSummary.providerKind === normalizeProviderKind(providerKind)
+    ? activeRuntimeSummary.workerUrls
+    : []
 }
 
 const getWorkerStateFromRuntimeMode = ({
@@ -54,14 +68,42 @@ const getWorkerStateFromManualMode = ({
 export const getProviderConnectionWorkerState = ({
   config,
   providerKind,
+  runtimeSummary,
 }: {
   config: ProviderConnectionConfig
   providerKind: string | null | undefined
+  runtimeSummary?: ProviderRuntimeSummary
 }): ProviderConnectionWorkerState => {
   const manualWorkerUrls = normalizeWorkerUrls(config.manualWorkerUrls)
-  const runtimeWorkerUrls = supportsRuntimeWorkerUrls(providerKind) ? getRuntimeWorkerUrlsForProvider(providerKind) : []
+  const runtimeWorkerUrls = supportsRuntimeWorkerUrls(providerKind)
+    ? getRuntimeWorkerUrlsForProvider({providerKind, runtimeSummary})
+    : []
 
   return config.workerUrlMode === 'runtime'
     ? getWorkerStateFromRuntimeMode({runtimeWorkerUrls})
     : getWorkerStateFromManualMode({manualWorkerUrls, runtimeWorkerUrls})
+}
+
+const getBaseURLFromWorkerUrl = (workerUrl: string | null | undefined): string | null => {
+  const normalizedWorkerUrl = getTrimmedValue(workerUrl)
+  const strippedWorkerUrl = normalizedWorkerUrl?.replace(/\/+$/, '') ?? null
+
+  return strippedWorkerUrl ? (strippedWorkerUrl.endsWith('/v1') ? strippedWorkerUrl : `${strippedWorkerUrl}/v1`) : null
+}
+
+export const getProviderConnectionEffectiveBaseURL = ({
+  baseURL,
+  config,
+  providerKind,
+  runtimeSummary,
+}: {
+  baseURL: string | null | undefined
+  config: ProviderConnectionConfig
+  providerKind: string | null | undefined
+  runtimeSummary?: ProviderRuntimeSummary
+}): string | null => {
+  const workerState = getProviderConnectionWorkerState({config, providerKind, runtimeSummary})
+  const workerBaseURL = getBaseURLFromWorkerUrl(workerState.effectiveWorkerUrls[0])
+
+  return workerBaseURL ?? getTrimmedValue(baseURL)
 }

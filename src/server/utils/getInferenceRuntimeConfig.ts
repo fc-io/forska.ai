@@ -1,6 +1,7 @@
 import {type as arktype} from 'arktype'
 
 const inferenceRuntimeShape = arktype({
+  activeModelNames: 'string | null | undefined',
   bunConfigMaxHttpRequests: 'string | null | undefined',
   codexMaxInflight: 'number | string.integer.parse',
   dpSize: 'number | string.integer.parse',
@@ -79,6 +80,7 @@ export const getInferenceRuntimeConfig = ({
     keys: ['FORSKA_RUNTIME_GPU_GPUS_PER_NODE', 'GPU_GPUS_PER_NODE'],
   })
   const parsed = inferenceRuntimeShape.assert({
+    activeModelNames: getFirstConfiguredValue({envValues, fallback: '', keys: ['FORSKA_RUNTIME_ACTIVE_MODEL_NAMES']}),
     bunConfigMaxHttpRequests: getTrimmedValue(envValues.BUN_CONFIG_MAX_HTTP_REQUESTS),
     codexMaxInflight: getFirstConfiguredValue({envValues, fallback: '0', keys: ['CODEX_MAX_INFLIGHT']}),
     dpSize: getFirstConfiguredValue({envValues, fallback: '0', keys: ['FORSKA_RUNTIME_DP_SIZE', 'DP_SIZE']}),
@@ -153,6 +155,7 @@ export const getInferenceRuntimeConfig = ({
   const localWorkerUrls = splitCsvValue(parsed.localWorkerUrls)
 
   return {
+    activeModelNames: splitCsvValue(parsed.activeModelNames),
     bunConfigMaxHttpRequests: getTrimmedValue(parsed.bunConfigMaxHttpRequests),
     codexMaxInflight: parsed.codexMaxInflight,
     displayWorkerUrls: getDisplayWorkerUrls(remoteWorkerUrls, localWorkerUrls),

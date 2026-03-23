@@ -3,6 +3,7 @@ import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
 import {formatDate} from 'date-fns'
 import {createSignal, For, Show, Suspense} from 'solid-js'
 
+import {RuntimeModelNotice} from '../../../../../components/main/runtimeModelNotice.tsx'
 import {TokenUsageTimeline} from '../../../../../components/TokenUsageTimeline'
 import {apiClient} from '../../../../../services/apiClient.ts'
 import {
@@ -11,7 +12,14 @@ import {
   pauseJudgmentsJob,
   startJudgmentsJob,
 } from '../../../../../services/judgmentsJobsService'
+import {fetchProjectWithPrompts} from '../../../../../services/projectsService'
 import {handleApiResponse} from '../../../../../services/utils/handleApiResponse'
+import {getSglangRuntimeModelNotice} from '../../../../../utils/getSglangRuntimeModelNotice.ts'
+import {fetchProviderConnections} from '../../../+admin/+models/providerConnectionsClient.ts'
+
+const getActionErrorMessage = (error: unknown, fallback: string) => {
+  return error instanceof Error && error.message.trim().length > 0 ? error.message : fallback
+}
 
 const getStatusColor = (status: string | null) => {
   switch (status) {
@@ -94,6 +102,8 @@ const AdminJudgmentJobDetail = () => {
   const params = Route.useParams()
   const navigate = useNavigate()
   const [isDeleting, setIsDeleting] = createSignal(false)
+  const [isStarting, setIsStarting] = createSignal(false)
+  const [actionError, setActionError] = createSignal('')
 
   const id = () => {
     return params().id
@@ -116,6 +126,27 @@ const AdminJudgmentJobDetail = () => {
       suspense: false,
     }
   })
+  const projectDetailsQuery = useQuery(() => {
+    const projectId = job.data?.projectId ?? ''
+
+    return {
+      queryKey: ['project', projectId, 'with-prompts', 'job-detail'],
+      queryFn: () => {
+        return fetchProjectWithPrompts(projectId)
+      },
+      enabled: projectId.length > 0,
+      staleTime: 5 * 60 * 1000,
+      suspense: false,
+    }
+  })
+  const providerConnectionsQuery = useQuery(() => {
+    return {
+      queryKey: ['provider-connections', 'job-detail', id()],
+      queryFn: fetchProviderConnections,
+      staleTime: 60 * 1000,
+      suspense: false,
+    }
+  })
   const unassessedCountQuery = useQuery(() => {
     return {
       queryKey: ['judgments-job-unassessed-count', id()],
@@ -130,6 +161,19 @@ const AdminJudgmentJobDetail = () => {
       },
     }
   })
+  const handleStartJob = async (jobId: string) => {
+    setActionError('')
+    setIsStarting(true)
+
+    try {
+      await startJudgmentsJob(jobId)
+      await job.refetch()
+    } catch (error) {
+      setActionError(getActionErrorMessage(error, 'Failed to start job'))
+    } finally {
+      setIsStarting(false)
+    }
+  }
   // console.log('job.data:', job.data?.unassessedArticlesCount)
   // console.log('job.data type:', typeof job, Array.isArray(job))
 
@@ -194,6 +238,33 @@ const AdminJudgmentJobDetail = () => {
             const shouldShowFulltextSkipped = () => {
               return shouldShowFulltextSkippedFromJob(data())
             }
+            const projectModel = () => {
+              const modelId = projectDetailsQuery.data?.model?.id
+
+              return modelId
+                ? (providerConnectionsQuery.data?.connections
+                    .flatMap((connection) => {
+                      return connection.models
+                    })
+                    .find((candidate) => {
+                      return candidate.id === modelId
+                    }) ?? null)
+                : null
+            }
+            const runtimeModelNotice = () => {
+              const providerModel = projectModel()
+
+              return providerModel
+                ? getSglangRuntimeModelNotice({
+                    candidateModelNames: [providerModel.remoteModelId, providerModel.modelName],
+                    getMismatchMessage: (runtimeLabel) => {
+                      return `Active SGLang runtime model: ${runtimeLabel}. Starting this job will be blocked until it matches the project's model.`
+                    },
+                    providerKind: providerModel.provider,
+                    runtime: providerConnectionsQuery.data?.runtime ?? null,
+                  })
+                : null
+            }
             const jobQueueGridClass = () => {
               return `grid gap-4 ${shouldShowFulltextSkipped() ? 'grid-cols-4' : 'grid-cols-3'}`
             }
@@ -253,6 +324,7 @@ const AdminJudgmentJobDetail = () => {
                       </p>
                     </div>
                   </div>
+                  <RuntimeModelNotice class="mt-4" notice={runtimeModelNotice()} />
 
                   <div class="mt-6 pt-6 border-t border-gray-200">
                     <h3 class="text-sm font-medium text-gray-900 mb-3">Project</h3>
@@ -366,60 +438,71 @@ const AdminJudgmentJobDetail = () => {
 
                 <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
                   <h2 class="text-lg font-semibold mb-4">Actions</h2>
-                  <div class="flex gap-3">
-                    <Show when={data()?.status === 'running'}>
+                  <div class="flex flex-col gap-3">
+                    <div class="flex gap-3">
+                      <Show when={data()?.status === 'running'}>
+                        <button
+                          class="px-4 py-2 bg-yellow-600 text-white rounded-md hover:bg-yellow-700"
+                          onClick={() => {
+                            const jobId = data()?.id
+                            if (jobId) {
+                              void pauseJudgmentsJob(jobId).then(() => {
+                                return job.refetch()
+                              })
+                            }
+                          }}
+                        >
+                          Pause Job
+                        </button>
+                      </Show>
+                      <Show when={data()?.status === 'paused'}>
+                        <button
+                          class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                          disabled={isStarting()}
+                          onClick={() => {
+                            const jobId = data()?.id
+                            if (jobId) {
+                              return void handleStartJob(jobId)
+                            }
+                          }}
+                        >
+                          {isStarting() ? 'Starting...' : 'Start Job'}
+                        </button>
+                      </Show>
+                      <Show when={data()?.status === 'failed'}>
+                        <button class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">Retry Job</button>
+                      </Show>
                       <button
-                        class="px-4 py-2 bg-yellow-600 text-white rounded-md hover:bg-yellow-700"
+                        class="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled={isDeleting()}
                         onClick={() => {
                           const jobId = data()?.id
-                          if (jobId) {
-                            void pauseJudgmentsJob(jobId).then(() => {
-                              return job.refetch()
+                          if (!jobId) return
+                          if (!confirm('Are you sure you want to delete this job? This action cannot be undone.'))
+                            return
+                          setIsDeleting(true)
+                          deleteJudgmentsJob(jobId)
+                            .then(() => {
+                              void navigate({to: '/admin/jobs'})
                             })
-                          }
+                            .catch((error) => {
+                              console.error('Failed to delete job:', error)
+                              setIsDeleting(false)
+                            })
                         }}
                       >
-                        Pause Job
+                        {isDeleting() ? 'Deleting...' : 'Delete Job'}
                       </button>
-                    </Show>
-                    <Show when={data()?.status === 'paused'}>
-                      <button
-                        class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
-                        onClick={() => {
-                          const jobId = data()?.id
-                          if (jobId) {
-                            void startJudgmentsJob(jobId).then(() => {
-                              return job.refetch()
-                            })
-                          }
-                        }}
-                      >
-                        Start Job
-                      </button>
-                    </Show>
-                    <Show when={data()?.status === 'failed'}>
-                      <button class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">Retry Job</button>
-                    </Show>
-                    <button
-                      class="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                      disabled={isDeleting()}
-                      onClick={() => {
-                        const jobId = data()?.id
-                        if (!jobId) return
-                        if (!confirm('Are you sure you want to delete this job? This action cannot be undone.')) return
-                        setIsDeleting(true)
-                        deleteJudgmentsJob(jobId)
-                          .then(() => {
-                            void navigate({to: '/admin/jobs'})
-                          })
-                          .catch((error) => {
-                            console.error('Failed to delete job:', error)
-                            setIsDeleting(false)
-                          })
+                    </div>
+                    <Show when={actionError()}>
+                      {(message) => {
+                        return (
+                          <div class="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                            {message()}
+                          </div>
+                        )
                       }}
-                    >
-                      {isDeleting() ? 'Deleting...' : 'Delete Job'}
-                    </button>
+                    </Show>
                   </div>
                 </div>
               </>

@@ -2,6 +2,7 @@ import {Elysia, t} from 'elysia'
 
 import {getUnassessedArticlesFromOlap, getUnassessedCountFromOlap} from '../../services/olap/unassessedArticlesOlap.ts'
 import {getJudgmentRequestStats} from '../cron/judgmentsJobs/judgmentsRequestRuntime.ts'
+import {assertStoredProviderModelRuntimeMatch} from '../providers/providerRuntimeModelGuard.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {
   escapeSqlString,
@@ -10,6 +11,7 @@ import {
   getQuotedStringList,
   getSqlLiteral,
 } from '../services/appQueryHelpers.ts'
+import {HttpError} from '../utils/httpError.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
 type TokenUsageDaySummary = {
@@ -195,6 +197,27 @@ const getJobContext = async ({
   }
 }
 
+const getProjectModelId = async (projectId: string): Promise<string> => {
+  const [project] = await getAppDatabaseService().queryJson<{modelId: string | null}>(`
+    SELECT model_id AS modelId
+    FROM app.project
+    WHERE id = ${getSqlLiteral(projectId)}
+    LIMIT 1
+  `)
+
+  if (!project?.modelId) {
+    throw new HttpError(400, 'Project model ID not found')
+  }
+
+  return project.modelId
+}
+
+const assertProjectRuntimeModelMatch = async (projectId: string): Promise<void> => {
+  const projectModelId = await getProjectModelId(projectId)
+
+  return assertStoredProviderModelRuntimeMatch({modelId: projectModelId})
+}
+
 export const judgmentsJobsRoutes = new Elysia()
   .use(withErrorHandler())
   .post(
@@ -213,6 +236,8 @@ export const judgmentsJobsRoutes = new Elysia()
       if (existingJob.length > 0) {
         return {error: 'A job already exists for this project', data: null}
       }
+
+      await assertProjectRuntimeModelMatch(body.projectId)
 
       const [job] = await getAppDatabaseService().queryJson<{
         id: string
@@ -466,6 +491,12 @@ export const judgmentsJobsRoutes = new Elysia()
   .patch(
     '/api/judgmentsjobs/:id',
     async ({params, body}) => {
+      if (body.status === 'running') {
+        const {projectModelId} = await getJobContext({jobId: params.id})
+
+        await assertStoredProviderModelRuntimeMatch({modelId: projectModelId})
+      }
+
       const [updatedJob] = await getAppDatabaseService().queryJson<{
         id: string
         status: string

@@ -1,4 +1,5 @@
 type ForskaRuntimeEnvOptions = {
+  activeModelNames?: string | null
   dpSize: string
   gpuGpusPerNode: string
   gpuNnodes: string
@@ -31,6 +32,7 @@ const getGpuTotalGpus = ({gpuGpusPerNode, gpuNnodes}: {gpuGpusPerNode: string; g
 }
 
 export const getForskaRuntimeEnv = ({
+  activeModelNames,
   dpSize,
   gpuGpusPerNode,
   gpuNnodes,
@@ -49,6 +51,7 @@ export const getForskaRuntimeEnv = ({
   const normalizedGpuGpusPerNode = getIntegerString(gpuGpusPerNode, '0')
 
   return {
+    FORSKA_RUNTIME_ACTIVE_MODEL_NAMES: getTrimmedValue(activeModelNames) ?? '',
     FORSKA_RUNTIME_DP_SIZE: getIntegerString(dpSize, '0'),
     FORSKA_RUNTIME_GPU_GPUS_PER_NODE: normalizedGpuGpusPerNode,
     FORSKA_RUNTIME_GPU_NNODES: normalizedGpuNnodes,
