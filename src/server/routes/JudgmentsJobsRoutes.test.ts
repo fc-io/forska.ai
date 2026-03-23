@@ -80,6 +80,35 @@ const insertProjectFixture = async ({
   `)
 }
 
+const insertQueuedPromptFixture = async ({
+  articleId,
+  jobId,
+  promptId,
+  queuedPromptId,
+}: {
+  articleId: string
+  jobId: string
+  promptId: string
+  queuedPromptId: string
+}) => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  await runDatabase(`
+    INSERT INTO app.prompt (id, original_text, content_hash)
+    VALUES ('${promptId}', 'Assess this article', '${promptId}-hash')
+  `)
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title)
+    VALUES ('${articleId}', 'Test article')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job_prompt (id, job_id, article_id, prompt_id, status)
+    VALUES ('${queuedPromptId}', '${jobId}', '${articleId}', '${promptId}', 'ready')
+  `)
+}
+
 test('creating a judgments job fails when the runtime model check fails', async () => {
   if (!app) {
     throw new Error('Test app not initialized')
@@ -137,4 +166,72 @@ test('starting an existing judgments job fails when the runtime model check fail
 
   expect(response.status).toBe(400)
   expect(body).toContain('does not match the active SGLang runtime')
+})
+
+test('pausing an existing judgments job succeeds when queued prompts reference the job', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const projectId = `pause-project-${Date.now()}`
+  const modelId = `pause-model-${Date.now()}`
+  const connectionId = `pause-connection-${Date.now()}`
+  const jobId = `pause-job-${Date.now()}`
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+  await insertQueuedPromptFixture({
+    articleId: `pause-article-${Date.now()}`,
+    jobId,
+    promptId: `pause-prompt-${Date.now()}`,
+    queuedPromptId: `pause-queue-${Date.now()}`,
+  })
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs/${jobId}`, {
+      body: JSON.stringify({status: 'paused'}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = await response.text()
+
+  expect(response.status).toBe(200)
+  expect(body).toContain('paused')
+})
+
+test('deleting an existing judgments job succeeds when prompts and token usage reference the job', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const projectId = `delete-project-${Date.now()}`
+  const modelId = `delete-model-${Date.now()}`
+  const connectionId = `delete-connection-${Date.now()}`
+  const jobId = `delete-job-${Date.now()}`
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'paused')
+  `)
+  await insertQueuedPromptFixture({
+    articleId: `delete-article-${Date.now()}`,
+    jobId,
+    promptId: `delete-prompt-${Date.now()}`,
+    queuedPromptId: `delete-queue-${Date.now()}`,
+  })
+  await runDatabase(`
+    INSERT INTO app.token_use (id, judgment_job_id, requests, total_prompt_tokens, total_completion_tokens, total_tokens)
+    VALUES ('delete-token-${Date.now()}', '${jobId}', 1, 10, 5, 15)
+  `)
+
+  const response = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}`, {method: 'DELETE'}))
+  const body = await response.text()
+
+  expect(response.status).toBe(200)
+  expect(body).toContain(jobId)
 })

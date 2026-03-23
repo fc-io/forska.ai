@@ -22,6 +22,9 @@ type TokenUsageDaySummary = {
   requests: number
 }
 
+type JudgmentJobMutationState = {error: unknown; id: string; status: string; updatedAt: unknown}
+type JudgmentJobMutationQueryRunner = {queryJson: <T>(statement: string) => Promise<T[]>}
+
 type UnassessedCountCacheValue = {value: number; expiresAt: number}
 const unassessedCountTTLms = 10_000
 const unassessedCountCache = new Map<string, UnassessedCountCacheValue>()
@@ -216,6 +219,20 @@ const assertProjectRuntimeModelMatch = async (projectId: string): Promise<void> 
   const projectModelId = await getProjectModelId(projectId)
 
   return assertStoredProviderModelRuntimeMatch({modelId: projectModelId})
+}
+
+const getJudgmentJobMutationState = async (
+  db: JudgmentJobMutationQueryRunner,
+  jobId: string,
+): Promise<JudgmentJobMutationState | null> => {
+  const [job] = await db.queryJson<JudgmentJobMutationState>(`
+    SELECT id, status, updated_at AS updatedAt, TO_JSON(error) AS error
+    FROM app.judgment_job
+    WHERE id = '${escapeSqlString(jobId)}'
+    LIMIT 1
+  `)
+
+  return job ?? null
 }
 
 export const judgmentsJobsRoutes = new Elysia()
@@ -497,39 +514,37 @@ export const judgmentsJobsRoutes = new Elysia()
         await assertStoredProviderModelRuntimeMatch({modelId: projectModelId})
       }
 
-      const [updatedJob] = await getAppDatabaseService().queryJson<{
-        id: string
-        status: string
-        updatedAt: unknown
-        error: unknown
-      }>(`
-        UPDATE app.judgment_job
-        SET status = ${getSqlLiteral(body.status)},
-            error = ${getSqlLiteral(body.error ?? null)},
-            updated_at = current_timestamp
-        WHERE id = '${escapeSqlString(params.id)}'
-        RETURNING id, status, updated_at AS updatedAt, TO_JSON(error) AS error
-      `)
+      const updatedJob = (await getAppDatabaseService().transaction(async (tx) => {
+        await tx.run(`
+          UPDATE app.judgment_job
+          SET status = ${getSqlLiteral(body.status)},
+              error = ${getSqlLiteral(body.error ?? null)},
+              updated_at = current_timestamp
+          WHERE id = '${escapeSqlString(params.id)}'
+        `)
+
+        const shouldClearQueue = body.status === 'paused'
+
+        if (shouldClearQueue) {
+          await tx.run(`
+            DELETE FROM app.judgment_job_prompt
+            WHERE job_id = '${escapeSqlString(params.id)}'
+          `)
+
+          await tx.run(`
+            UPDATE app.judgment_job
+            SET cursor_last_created_at = NULL,
+                cursor_last_article_id = NULL,
+                updated_at = current_timestamp
+            WHERE id = '${escapeSqlString(params.id)}'
+          `)
+        }
+
+        return getJudgmentJobMutationState(tx, params.id)
+      })) as JudgmentJobMutationState | null
 
       if (!updatedJob) {
         throw new Error('Job not found')
-      }
-
-      const shouldClearQueue = body.status === 'paused'
-
-      if (shouldClearQueue) {
-        await getAppDatabaseService().run(`
-          DELETE FROM app.judgment_job_prompt
-          WHERE job_id = '${escapeSqlString(updatedJob.id)}'
-        `)
-
-        await getAppDatabaseService().run(`
-          UPDATE app.judgment_job
-          SET cursor_last_created_at = NULL,
-              cursor_last_article_id = NULL,
-              updated_at = current_timestamp
-          WHERE id = '${escapeSqlString(updatedJob.id)}'
-        `)
       }
 
       return {
@@ -564,17 +579,33 @@ export const judgmentsJobsRoutes = new Elysia()
   .delete(
     '/api/judgmentsjobs/:id',
     async ({params}) => {
-      const [deletedJob] = await getAppDatabaseService().queryJson<{id: string}>(`
-        DELETE FROM app.judgment_job
+      const [existingJob] = await getAppDatabaseService().queryJson<{id: string}>(`
+        SELECT id
+        FROM app.judgment_job
         WHERE id = '${escapeSqlString(params.id)}'
-        RETURNING id
+        LIMIT 1
       `)
 
-      if (!deletedJob) {
+      if (!existingJob) {
         throw new Error('Job not found')
       }
 
-      return {data: {jobId: deletedJob.id}, error: null}
+      await getAppDatabaseService().run(`
+        DELETE FROM app.judgment_job_prompt
+        WHERE job_id = '${escapeSqlString(params.id)}'
+      `)
+
+      await getAppDatabaseService().run(`
+        DELETE FROM app.token_use
+        WHERE judgment_job_id = '${escapeSqlString(params.id)}'
+      `)
+
+      await getAppDatabaseService().run(`
+        DELETE FROM app.judgment_job
+        WHERE id = '${escapeSqlString(params.id)}'
+      `)
+
+      return {data: {jobId: existingJob.id}, error: null}
     },
     {params: t.Object({id: t.String()})},
   )
