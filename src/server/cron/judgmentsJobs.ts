@@ -1,25 +1,18 @@
-import {hostname} from 'node:os'
-
 import {cron} from '@elysiajs/cron'
 import {Elysia} from 'elysia'
 
-import {env} from '../utils/env.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 import {isExpectedWriterRoleLossError, shouldCurrentServerRunWriterWork} from '../utils/serverRuntimeRole.ts'
+import {getDefaultJudgmentServerJobId} from './judgmentsJobs/judgmentJobServerIdentity.ts'
 import {importJudgmentJobSqliteOutboxBatch} from './judgmentsJobs/judgmentJobSqliteOutboxImport.ts'
+import {getJudgmentJobSqliteService} from './judgmentsJobs/judgmentJobSqliteService.ts'
 import {judgmentsJobsAddToQueue} from './judgmentsJobs/judgmentsJobsAddToQueue.ts'
 import {judgmentsJobsCheckLLMStatus} from './judgmentsJobs/judgmentsJobsCheckLLMStatus.ts'
 import {judgmentsJobsCleanupStale} from './judgmentsJobs/judgmentsJobsCleanupStale.ts'
 import {judgmentsJobsGetRunningJobs} from './judgmentsJobs/judgmentsJobsGetRunningJobs.ts'
 import {judgmentsJobsSendToLLM} from './judgmentsJobs/judgmentsJobsSendToLLM.ts'
 
-const buildDefaultServerJobId = (): string => {
-  const normalizedHostname = hostname().trim() || 'unknown-host'
-  const port = String(env.API_SERVER_PORT)
-  return `server-job-${normalizedHostname}-${port}-${process.pid}`
-}
-
-const serverJobId = buildDefaultServerJobId()
+const serverJobId = getDefaultJudgmentServerJobId()
 
 const cronLogger = createRateLimitedLogger({windowMs: 30_000})
 
@@ -29,6 +22,8 @@ const logJudgingCronError = (label: string, error: unknown) => {
   }
 }
 
+// Per-job SQLite leases currently protect single-job exclusivity only. The
+// judging cron still runs on the current DuckDB writer process.
 const shouldRunJudgingCron = (): boolean => {
   return shouldCurrentServerRunWriterWork()
 }
@@ -72,6 +67,11 @@ const sendToLLM = async (): Promise<void> => {
   if (!shouldRunJudgingCron()) return
   try {
     const runningJobs = await judgmentsJobsGetRunningJobs()
+    await getJudgmentJobSqliteService().syncOwnedLeases(
+      runningJobs.map((job) => {
+        return job.id
+      }),
+    )
     if (!shouldRunJudgingCron()) return
     await judgmentsJobsSendToLLM(runningJobs, serverJobId)
   } catch (err) {

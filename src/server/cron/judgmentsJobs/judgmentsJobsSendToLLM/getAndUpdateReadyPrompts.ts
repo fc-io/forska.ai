@@ -5,7 +5,7 @@ import {
 } from '../../../providers/providerRuntimeState.ts'
 import {getAppDatabaseService} from '../../../services/appDatabaseService.ts'
 import {escapeSqlString, getQuotedStringList, getSqlLiteral} from '../../../services/appQueryHelpers.ts'
-import {getJudgmentJobSqliteService} from '../judgmentJobSqliteService.ts'
+import {getJudgmentJobSqliteService, JudgmentJobLeaseError} from '../judgmentJobSqliteService.ts'
 
 export type PromptToProcess = {
   jobId: string
@@ -209,6 +209,17 @@ const processReadyRows = async (serverJobId: string, readyRows: ReadyRow[]): Pro
 
 const getSqliteReadyRows = async (serverJobId: string, jobId: string, limit: number): Promise<PromptToProcess[]> => {
   const sqliteService = getJudgmentJobSqliteService()
+
+  try {
+    await sqliteService.ensureOwnedLease(jobId, serverJobId)
+  } catch (error) {
+    if (error instanceof JudgmentJobLeaseError) {
+      return []
+    }
+
+    throw error
+  }
+
   const jobInfo = await sqliteService.getJobInfo(jobId)
 
   if (!jobInfo) {

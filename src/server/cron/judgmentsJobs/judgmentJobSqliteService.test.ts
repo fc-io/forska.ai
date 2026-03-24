@@ -37,7 +37,7 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
-  sqliteService?.().closeAll()
+  await sqliteService?.().closeAll()
   await closeDatabase?.()
   rmSync(tempDbPath, {force: true})
   rmSync(`${tempDbPath}.writer.history.json`, {force: true})

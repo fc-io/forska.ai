@@ -1,6 +1,6 @@
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral, getTimestampLiteral} from '../../services/appQueryHelpers.ts'
-import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
+import {getJudgmentJobSqliteService, JudgmentJobLeaseError} from './judgmentJobSqliteService.ts'
 
 const abandonedSentPromptGraceMs = 30_000
 
@@ -23,8 +23,17 @@ export const requeueAbandonedSentPrompts = async ({
 
   const cutoff = new Date(Date.now() - abandonedSentPromptGraceMs)
   const sqliteRequeuedCounts = await Promise.all(
-    sqliteJobIds.map((jobId) => {
-      return sqliteService.requeueAbandonedSentPrompts({jobId, serverJobId, staleBefore: cutoff})
+    sqliteJobIds.map(async (jobId) => {
+      try {
+        await sqliteService.ensureOwnedLease(jobId, serverJobId)
+        return sqliteService.requeueAbandonedSentPrompts({jobId, serverJobId, staleBefore: cutoff})
+      } catch (error) {
+        if (error instanceof JudgmentJobLeaseError) {
+          return 0
+        }
+
+        throw error
+      }
     }),
   )
   const rows =

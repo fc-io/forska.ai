@@ -4,7 +4,7 @@
 
 - [ ] Move only the hot judgment queue path (`ready -> sent -> judged`) off live DuckDB.
 - [ ] Keep final analytics, marts, and review-serving queries in DuckDB.
-- [ ] Use `job_id` as the write-ownership boundary: one active writer per job, many writers overall.
+- [ ] Use `job_id` as the write-ownership boundary: one active owner per job, with phase 1 focused on exclusivity rather than distributed scheduling.
 - [ ] Make final judgments durable on local disk before DuckDB import.
 - [ ] Store the successful parsed judgment response in SQLite first, then batch-materialize it into DuckDB `app.judgment`.
 - [ ] Prevent duplicate sends for the same `(job_id, article_id, prompt_id)`.
@@ -12,6 +12,8 @@
 ## Scope
 
 - [ ] Phase 1 moves only the operational replacement for `app.judgment_job_prompt`.
+- [ ] Phase 1 lease goal is exclusivity only: at most one server/process may own a given SQLite job at a time.
+- [ ] Cross-server job distribution is explicitly out of scope for this phase; preventing split-brain on one job is enough for now.
 - [ ] Keep `app.judgment_job`, project metadata, token usage, `llm_status`, and all `mart.*` tables in DuckDB for now.
 - [ ] Keep current OLAP selection logic for finding new prompt/article pairs; only the hot queue state changes first.
 - [ ] Represent retries as `sent -> ready`.
@@ -63,10 +65,11 @@
 ## Ownership And Leases
 
 - [ ] A process must acquire the `job_id` lease before it can top up, claim, requeue, or finalize prompts for that job.
+- [ ] For now, leases are same-host/local-disk only and exist to guarantee one owner per `job_id`, not to distribute jobs across many servers.
 - [ ] Lease metadata should include `leaseId`, `hostname`, `pid`, `port`, `heartbeatAt`.
 - [ ] Stale takeover is allowed only after heartbeat timeout plus owner health failure.
 - [ ] Duplicate processing is prevented by a combination of one active job owner plus the SQLite unique key on `(job_id, article_id, prompt_id)`.
-- [ ] Different jobs may run on different writers at the same time.
+- [ ] Allowing different jobs to run on different writers can come later; it is not required for the first lease-enforcement cut.
 
 ## Write Path
 

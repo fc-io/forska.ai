@@ -5,7 +5,7 @@ import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {getCodexMaxInflight} from './getCodexMaxInflight.ts'
 import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
 import {clearJobCursor, setJobCursor} from './jobCursorStore.ts'
-import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
+import {getJudgmentJobSqliteService, JudgmentJobLeaseError} from './judgmentJobSqliteService.ts'
 import {judgmentsJobsCronGetPrompts} from './judgmentsJobsCronGetPrompts.ts'
 import {judgmentsJobsGetRunningJobs} from './judgmentsJobsGetRunningJobs.ts'
 
@@ -201,6 +201,22 @@ const hasSqliteExhaustedCooldown = (exhaustedAt: Date | null) => {
 const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void> => {
   const {job, readyTargetPerJob, addToQueueMaxBatchSize, serverJobId} = params
   const sqliteService = getJudgmentJobSqliteService()
+
+  try {
+    await sqliteService.ensureOwnedLease(job.id, serverJobId)
+  } catch (error) {
+    if (error instanceof JudgmentJobLeaseError) {
+      addToQueueLogger.log(
+        `addToQueue:lease:${job.id}`,
+        '[addToQueue] skipped SQLite job because this process does not own the job lease',
+        {jobId: job.id},
+      )
+      return
+    }
+
+    throw error
+  }
+
   const countOfReadyPrompts = await sqliteService.getReadyCount(job.id)
   const promptsToFetchCount = getPromptsToFetchCount(countOfReadyPrompts, readyTargetPerJob, addToQueueMaxBatchSize)
 
@@ -388,6 +404,11 @@ const addToQueueForJob = async (params: AddToQueueJobParams): Promise<void> => {
 
 export const judgmentsJobsAddToQueue = async (serverJobId: string): Promise<void> => {
   const runningJobs = await judgmentsJobsGetRunningJobs()
+  await getJudgmentJobSqliteService().syncOwnedLeases(
+    runningJobs.map((job) => {
+      return job.id
+    }),
+  )
   const codexJobs = runningJobs.filter(isCodexJob)
   const nonCodexJobs = runningJobs.filter((job) => {
     return !isCodexJob(job)

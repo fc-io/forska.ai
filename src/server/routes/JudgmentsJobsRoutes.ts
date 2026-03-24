@@ -591,6 +591,10 @@ export const judgmentsJobsRoutes = new Elysia()
         await sqliteService.clearActiveQueue(params.id)
       }
 
+      if (hasSqliteJob && body.status && body.status !== 'running') {
+        await sqliteService.releaseOwnedLease(params.id)
+      }
+
       if (!updatedJob) {
         throw new Error('Job not found')
       }

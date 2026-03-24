@@ -1,14 +1,20 @@
 import {randomUUID} from 'node:crypto'
-import {existsSync, mkdirSync, readdirSync, rmSync, writeFileSync} from 'node:fs'
-import {tmpdir} from 'node:os'
-import {dirname, join} from 'node:path'
+import {existsSync, rmSync} from 'node:fs'
 
 import {Database} from 'bun:sqlite'
 
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getDateValue} from '../../services/appQueryHelpers.ts'
-import {env} from '../../utils/env.ts'
+import {registerWriterDemotionHandler} from '../../utils/serverRuntimeRole.ts'
 import type {JobCursor} from './jobCursorStore.ts'
+import {
+  acquireJudgmentJobLease,
+  type JudgmentJobLease,
+  releaseJudgmentJobLease,
+  updateJudgmentJobLeaseHeartbeat,
+} from './judgmentJobLease.ts'
+import {getJudgmentJobLeasePath, getJudgmentJobSqliteJobIds, getJudgmentJobSqlitePath} from './judgmentJobPaths.ts'
+import {getDefaultJudgmentServerJobId} from './judgmentJobServerIdentity.ts'
 
 type JobInfoRow = {
   createdAt: unknown
@@ -137,25 +143,67 @@ type ScanStateRow = {cursorLastArticleId: string | null; cursorLastDate: string 
 type JobScanState = {cursor: JobCursor | null; exhaustedAt: Date | null}
 
 const openDatabases = new Map<string, Database>()
+const ownedJobLeases = new Map<string, JudgmentJobLease>()
+const judgmentJobLeaseHeartbeatIntervalMs = 5_000
+let judgmentJobLeaseHeartbeatStarted = false
 
-const getJudgmentJobsRootDirectory = () => {
-  return env.DUCKDB_PATH === ':memory:'
-    ? join(tmpdir(), 'forska', 'judgment-jobs')
-    : join(dirname(env.DUCKDB_PATH), 'judgment-jobs')
+export class JudgmentJobLeaseError extends Error {
+  constructor(message: string, options?: {cause?: unknown}) {
+    super(message, options)
+    this.name = 'JudgmentJobLeaseError'
+  }
 }
 
-const ensureJudgmentJobsRootDirectory = () => {
-  const rootDirectory = getJudgmentJobsRootDirectory()
-  mkdirSync(rootDirectory, {recursive: true})
-  return rootDirectory
+const closeOpenDatabase = (jobId: string) => {
+  const database = openDatabases.get(jobId)
+
+  if (!database) {
+    return
+  }
+
+  database.close(false)
+  openDatabases.delete(jobId)
 }
 
-export const getJudgmentJobSqlitePath = (jobId: string) => {
-  return join(ensureJudgmentJobsRootDirectory(), `${jobId}.sqlite`)
+const releaseOwnedJobLeaseState = (jobId: string) => {
+  ownedJobLeases.delete(jobId)
+  closeOpenDatabase(jobId)
 }
 
-export const getJudgmentJobLeasePath = (jobId: string) => {
-  return join(ensureJudgmentJobsRootDirectory(), `${jobId}.lease.json`)
+const heartbeatOwnedJobLease = async (jobId: string) => {
+  const currentLease = ownedJobLeases.get(jobId)
+
+  if (!currentLease) {
+    return
+  }
+
+  try {
+    const nextLease = await updateJudgmentJobLeaseHeartbeat(currentLease)
+    ownedJobLeases.set(jobId, nextLease)
+  } catch (error) {
+    releaseOwnedJobLeaseState(jobId)
+    console.warn('[judgments] lost SQLite job lease heartbeat', {
+      error: error instanceof Error ? error.message : String(error),
+      jobId,
+    })
+  }
+}
+
+const startOwnedJobLeaseHeartbeatMonitor = () => {
+  if (judgmentJobLeaseHeartbeatStarted) {
+    return
+  }
+
+  judgmentJobLeaseHeartbeatStarted = true
+  const interval = setInterval(() => {
+    return void Promise.all(
+      Array.from(ownedJobLeases.keys()).map((jobId) => {
+        return heartbeatOwnedJobLease(jobId)
+      }),
+    )
+  }, judgmentJobLeaseHeartbeatIntervalMs)
+
+  interval.unref()
 }
 
 const getOpenDatabase = (jobId: string, createIfMissing: boolean): Database | null => {
@@ -348,31 +396,70 @@ const getJobInfoForInitialization = async (jobId: string): Promise<JudgmentJobSq
   }
 }
 
-const writeLeaseMetadata = (jobId: string) => {
-  writeFileSync(
-    getJudgmentJobLeasePath(jobId),
-    JSON.stringify(
-      {
-        heartbeatAt: new Date().toISOString(),
-        hostname: process.env.HOSTNAME ?? 'unknown-host',
-        leaseId: randomUUID(),
-        pid: process.pid,
-      },
-      null,
-      2,
-    ),
-    'utf8',
-  )
+// This service currently enforces exclusive local ownership of a SQLite job.
+// It does not try to distribute one job across multiple servers yet.
+const ensureOwnedJobLease = async (jobId: string, serverJobId = getDefaultJudgmentServerJobId()) => {
+  startOwnedJobLeaseHeartbeatMonitor()
+
+  const currentLease = ownedJobLeases.get(jobId)
+
+  if (currentLease) {
+    try {
+      const nextLease = await updateJudgmentJobLeaseHeartbeat(currentLease)
+      ownedJobLeases.set(jobId, nextLease)
+      return nextLease
+    } catch (error) {
+      releaseOwnedJobLeaseState(jobId)
+      throw new JudgmentJobLeaseError(`Failed to refresh SQLite job lease for ${jobId}`, {cause: error})
+    }
+  }
+
+  try {
+    const nextLease = await acquireJudgmentJobLease({
+      apiServerPort: Number(process.env.API_SERVER_PORT ?? 0),
+      jobId,
+      serverJobId,
+    })
+    ownedJobLeases.set(jobId, nextLease)
+    return nextLease
+  } catch (error) {
+    throw new JudgmentJobLeaseError(`Failed to acquire SQLite job lease for ${jobId}`, {cause: error})
+  }
+}
+
+const withOwnedJobDatabase = async <T>(
+  jobId: string,
+  createIfMissing: boolean,
+  operation: (database: Database) => T,
+  serverJobId?: string,
+): Promise<T | null> => {
+  await ensureOwnedJobLease(jobId, serverJobId)
+  return withJobDatabase(jobId, createIfMissing, operation)
+}
+
+const releaseOwnedJobLease = async (jobId: string) => {
+  const currentLease = ownedJobLeases.get(jobId)
+
+  releaseOwnedJobLeaseState(jobId)
+
+  if (!currentLease) {
+    return
+  }
+
+  await releaseJudgmentJobLease(currentLease)
 }
 
 const sqliteService = {
   addReadyPrompts: async (jobId: string, promptEntries: QueuePromptInsert[], serverJobId: string) => {
-    return withJobDatabase(jobId, false, (database) => {
-      if (promptEntries.length === 0) {
-        return
-      }
+    return withOwnedJobDatabase(
+      jobId,
+      false,
+      (database) => {
+        if (promptEntries.length === 0) {
+          return
+        }
 
-      const insert = database.query(`
+        const insert = database.query(`
         INSERT OR IGNORE INTO queue_prompt (
           id,
           job_id,
@@ -384,25 +471,30 @@ const sqliteService = {
           updated_at
         ) VALUES (?, ?, ?, ?, 'ready', ?, ?, ?)
       `)
-      const now = new Date().toISOString()
+        const now = new Date().toISOString()
 
-      database.transaction((entries: QueuePromptInsert[]) => {
-        entries.forEach((entry) => {
-          insert.run(randomUUID(), jobId, entry.articleId, entry.promptId, serverJobId, now, now)
-        })
-      })(promptEntries)
-    })
+        database.transaction((entries: QueuePromptInsert[]) => {
+          entries.forEach((entry) => {
+            insert.run(randomUUID(), jobId, entry.articleId, entry.promptId, serverJobId, now, now)
+          })
+        })(promptEntries)
+      },
+      serverJobId,
+    )
   },
   claimReadyPrompts: async (jobId: string, serverJobId: string, limit: number): Promise<QueuePromptClaim[]> => {
-    const claimed = withJobDatabase(jobId, false, (database) => {
-      const selectReady = database.query(`
+    const claimed = await withOwnedJobDatabase(
+      jobId,
+      false,
+      (database) => {
+        const selectReady = database.query(`
         SELECT id, article_id AS articleId, prompt_id AS promptId
         FROM queue_prompt
         WHERE status = 'ready'
         ORDER BY created_at ASC, id ASC
         LIMIT ?
       `)
-      const markSent = database.query(`
+        const markSent = database.query(`
         UPDATE queue_prompt
         SET status = 'sent',
             sent_at = ?,
@@ -413,25 +505,27 @@ const sqliteService = {
           AND status = 'ready'
       `)
 
-      return database.transaction((requestedLimit: number) => {
-        const now = new Date().toISOString()
-        const readyRows = selectReady.all(requestedLimit) as QueuePromptRow[]
+        return database.transaction((requestedLimit: number) => {
+          const now = new Date().toISOString()
+          const readyRows = selectReady.all(requestedLimit) as QueuePromptRow[]
 
-        return readyRows.flatMap((row) => {
-          const claimId = randomUUID()
-          const result = markSent.run(now, now, serverJobId, claimId, row.id) as {changes?: number}
+          return readyRows.flatMap((row) => {
+            const claimId = randomUUID()
+            const result = markSent.run(now, now, serverJobId, claimId, row.id) as {changes?: number}
 
-          return result.changes === 1
-            ? [{articleId: row.articleId, jobId, promptId: row.promptId, recordId: row.id}]
-            : []
-        })
-      })(limit)
-    })
+            return result.changes === 1
+              ? [{articleId: row.articleId, jobId, promptId: row.promptId, recordId: row.id}]
+              : []
+          })
+        })(limit)
+      },
+      serverJobId,
+    )
 
     return claimed ?? []
   },
   clearActiveQueue: async (jobId: string) => {
-    return withJobDatabase(jobId, false, (database) => {
+    return withOwnedJobDatabase(jobId, false, (database) => {
       const now = new Date().toISOString()
 
       database.transaction(() => {
@@ -451,19 +545,19 @@ const sqliteService = {
       })()
     })
   },
-  closeAll: () => {
-    openDatabases.forEach((database) => {
-      database.close(false)
+  closeAll: async () => {
+    await Promise.all(
+      Array.from(ownedJobLeases.keys()).map((jobId) => {
+        return releaseOwnedJobLease(jobId)
+      }),
+    )
+    openDatabases.forEach((_database, jobId) => {
+      closeOpenDatabase(jobId)
     })
-    openDatabases.clear()
   },
   deleteJob: async (jobId: string) => {
-    const database = openDatabases.get(jobId)
-
-    if (database) {
-      database.close(false)
-      openDatabases.delete(jobId)
-    }
+    await ensureOwnedJobLease(jobId)
+    await releaseOwnedJobLease(jobId)
 
     rmSync(getJudgmentJobSqlitePath(jobId), {force: true})
     rmSync(getJudgmentJobLeasePath(jobId), {force: true})
@@ -554,9 +648,9 @@ const sqliteService = {
         })
       : getJudgmentJobSqliteJobIds()
 
-    const initialState = {bytes: 0, rows: [] as JudgmentJobSqliteOutboxEntry[]}
+    const initialState: {bytes: number; rows: JudgmentJobSqliteOutboxEntry[]} = {bytes: 0, rows: []}
 
-    return jobIds.reduce((state, currentJobId) => {
+    return jobIds.reduce<{bytes: number; rows: JudgmentJobSqliteOutboxEntry[]}>((state, currentJobId) => {
       if (state.rows.length >= maxRows || state.bytes >= maxBytes) {
         return state
       }
@@ -726,7 +820,7 @@ const sqliteService = {
   initializeJob: async (jobId: string) => {
     const jobInfo = await getJobInfoForInitialization(jobId)
 
-    return withJobDatabase(jobId, true, (database) => {
+    return withOwnedJobDatabase(jobId, true, (database) => {
       const createdAt = jobInfo.createdAt.toISOString()
       database.transaction(() => {
         database
@@ -782,11 +876,31 @@ const sqliteService = {
           )
           .run(jobId, createdAt)
       })()
-      writeLeaseMetadata(jobId)
     })
   },
   listJobIds: () => {
     return getJudgmentJobSqliteJobIds()
+  },
+  hasOwnedLease: (jobId: string) => {
+    return ownedJobLeases.has(jobId)
+  },
+  ensureOwnedLease: async (jobId: string, serverJobId?: string) => {
+    return ensureOwnedJobLease(jobId, serverJobId)
+  },
+  releaseOwnedLease: async (jobId: string) => {
+    await releaseOwnedJobLease(jobId)
+  },
+  syncOwnedLeases: async (jobIds: string[]) => {
+    const activeJobIds = new Set(jobIds)
+    await Promise.all(
+      Array.from(ownedJobLeases.keys())
+        .filter((jobId) => {
+          return !activeJobIds.has(jobId)
+        })
+        .map((jobId) => {
+          return releaseOwnedJobLease(jobId)
+        }),
+    )
   },
   markOutboxExported: async (entries: Array<{jobId: string; outboxSeq: number}>) => {
     const grouped = entries.reduce((map, entry) => {
@@ -795,26 +909,28 @@ const sqliteService = {
       return map
     }, new Map<string, number[]>())
 
-    return Array.from(grouped.entries()).map(([jobId, outboxSeqs]) => {
-      return withJobDatabase(jobId, false, (database) => {
-        const placeholders = outboxSeqs.map(() => {
-          return '?'
-        })
-        const now = new Date().toISOString()
+    return Promise.all(
+      Array.from(grouped.entries()).map(([jobId, outboxSeqs]) => {
+        return withOwnedJobDatabase(jobId, false, (database) => {
+          const placeholders = outboxSeqs.map(() => {
+            return '?'
+          })
+          const now = new Date().toISOString()
 
-        database
-          .query(
-            `
+          database
+            .query(
+              `
           UPDATE judgment_outbox
           SET exported_at = ?,
               export_attempts = export_attempts + 1,
               last_error = NULL
           WHERE outbox_seq IN (${placeholders.join(', ')})
         `,
-          )
-          .run(now, ...outboxSeqs)
-      })
-    })
+            )
+            .run(now, ...outboxSeqs)
+        })
+      }),
+    )
   },
   markOutboxExportFailed: async (entries: Array<{jobId: string; outboxSeq: number}>, errorMessage: string) => {
     const grouped = entries.reduce((map, entry) => {
@@ -823,27 +939,29 @@ const sqliteService = {
       return map
     }, new Map<string, number[]>())
 
-    return Array.from(grouped.entries()).map(([jobId, outboxSeqs]) => {
-      return withJobDatabase(jobId, false, (database) => {
-        const placeholders = outboxSeqs.map(() => {
-          return '?'
-        })
+    return Promise.all(
+      Array.from(grouped.entries()).map(([jobId, outboxSeqs]) => {
+        return withOwnedJobDatabase(jobId, false, (database) => {
+          const placeholders = outboxSeqs.map(() => {
+            return '?'
+          })
 
-        database
-          .query(
-            `
+          database
+            .query(
+              `
           UPDATE judgment_outbox
           SET export_attempts = export_attempts + 1,
               last_error = ?
           WHERE outbox_seq IN (${placeholders.join(', ')})
         `,
-          )
-          .run(errorMessage, ...outboxSeqs)
-      })
-    })
+            )
+            .run(errorMessage, ...outboxSeqs)
+        })
+      }),
+    )
   },
   markPromptAsJudged: async (jobId: string, recordId: string) => {
-    return withJobDatabase(jobId, false, (database) => {
+    return withOwnedJobDatabase(jobId, false, (database) => {
       const now = new Date().toISOString()
       database
         .query(
@@ -861,7 +979,7 @@ const sqliteService = {
     })
   },
   markPromptAsRetry: async (jobId: string, recordId: string) => {
-    return withJobDatabase(jobId, false, (database) => {
+    return withOwnedJobDatabase(jobId, false, (database) => {
       const now = new Date().toISOString()
       database
         .query(
@@ -882,7 +1000,7 @@ const sqliteService = {
     recordId: string,
     skipReason: 'conversion_failed' | 'fulltext_too_large' | 'no_fulltext',
   ) => {
-    return withJobDatabase(jobId, false, (database) => {
+    return withOwnedJobDatabase(jobId, false, (database) => {
       const now = new Date().toISOString()
       database
         .query(
@@ -900,7 +1018,7 @@ const sqliteService = {
     })
   },
   recordJudgmentSuccess: async (jobId: string, outboxInsert: QueuePromptOutboxInsert) => {
-    return withJobDatabase(jobId, false, (database) => {
+    return withOwnedJobDatabase(jobId, false, (database) => {
       database.transaction((input: QueuePromptOutboxInsert) => {
         database
           .query(
@@ -983,10 +1101,13 @@ const sqliteService = {
     staleBefore: Date
   }): Promise<number> => {
     return (
-      withJobDatabase(jobId, false, (database) => {
-        const result = database
-          .query(
-            `
+      (await withOwnedJobDatabase(
+        jobId,
+        false,
+        (database) => {
+          const result = database
+            .query(
+              `
           UPDATE queue_prompt
           SET status = 'ready',
               sent_at = NULL,
@@ -997,15 +1118,17 @@ const sqliteService = {
             AND COALESCE(server_id, '') <> ?
             AND sent_at <= ?
         `,
-          )
-          .run(new Date().toISOString(), serverJobId, serverJobId, staleBefore.toISOString()) as {changes?: number}
+            )
+            .run(new Date().toISOString(), serverJobId, serverJobId, staleBefore.toISOString()) as {changes?: number}
 
-        return Number(result.changes ?? 0)
-      }) ?? 0
+          return Number(result.changes ?? 0)
+        },
+        serverJobId,
+      )) ?? 0
     )
   },
   setExhaustedAt: async (jobId: string, exhaustedAt: Date | null) => {
-    return withJobDatabase(jobId, false, (database) => {
+    return withOwnedJobDatabase(jobId, false, (database) => {
       const now = new Date().toISOString()
       database
         .query(
@@ -1020,7 +1143,7 @@ const sqliteService = {
     })
   },
   setScanState: async (jobId: string, state: JobScanState) => {
-    return withJobDatabase(jobId, false, (database) => {
+    return withOwnedJobDatabase(jobId, false, (database) => {
       const now = new Date().toISOString()
       database
         .query(
@@ -1044,17 +1167,9 @@ const sqliteService = {
   },
 }
 
-const getJudgmentJobSqliteJobIds = () => {
-  return existsSync(getJudgmentJobsRootDirectory())
-    ? readdirSync(getJudgmentJobsRootDirectory())
-        .filter((entry) => {
-          return entry.endsWith('.sqlite')
-        })
-        .map((entry) => {
-          return entry.slice(0, -'.sqlite'.length)
-        })
-    : []
-}
+registerWriterDemotionHandler(async () => {
+  await sqliteService.closeAll()
+})
 
 export const getJudgmentJobSqliteService = () => {
   return sqliteService
