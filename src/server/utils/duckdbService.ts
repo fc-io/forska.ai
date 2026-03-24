@@ -324,6 +324,7 @@ const getCombinedCloseError = (errors: Array<Error | null>): Error | null => {
 const getAppendConnectionCloseErrors = (appendConnections: DuckDBConnection[]): Array<Error | null> => {
   return appendConnections.map((appendConnection) => {
     return getCloseSyncError(() => {
+      appendConnection.interrupt()
       appendConnection.closeSync()
     })
   })
@@ -370,6 +371,10 @@ const closeDuckdbServiceDirect = async () => {
   return withDuckdbAppendBarrier(closeDuckdbServiceWithoutBarrier)
 }
 
+const closeDuckdbServiceForSignal = async () => {
+  return closeDuckdbServiceWithoutBarrier()
+}
+
 const registerDuckdbShutdownHooks = () => {
   if (duckdbServiceState.shutdownHooksRegistered) {
     return
@@ -378,7 +383,7 @@ const registerDuckdbShutdownHooks = () => {
   duckdbServiceState.shutdownHooksRegistered = true
   ;(['SIGINT', 'SIGTERM'] as const).map((signal) => {
     process.once(signal, () => {
-      void closeDuckdbServiceDirect().then(
+      void closeDuckdbServiceForSignal().then(
         () => {
           process.exit(0)
         },
