@@ -23,22 +23,23 @@ const writeLeaseMetadata = (leasePath: string, metadata: DuckdbOwnerLeaseMetadat
   writeFileSync(leasePath, `${JSON.stringify(metadata, null, 2)}\n`)
 }
 
+const getNormalizedCommandOutput = (command: string, args: string[]) => {
+  const result = spawnSync(command, args, {encoding: 'utf8'})
+  const output = typeof result.stdout === 'string' ? result.stdout.trim() : ''
+
+  return result.status === 0 && output !== '' ? output : null
+}
+
 const getDarwinLocalHostname = () => {
   if (process.platform !== 'darwin') {
     return null
   }
 
-  const result = spawnSync('scutil', ['--get', 'LocalHostName'], {encoding: 'utf8'})
-  const localHostname = result.stdout.trim()
-
-  return result.status === 0 && localHostname !== '' ? localHostname : null
+  return getNormalizedCommandOutput('scutil', ['--get', 'LocalHostName'])
 }
 
 const getShellHostname = () => {
-  const result = spawnSync('hostname', [], {encoding: 'utf8'})
-  const shellHostname = result.stdout.trim()
-
-  return result.status === 0 && shellHostname !== '' ? shellHostname : null
+  return getNormalizedCommandOutput('hostname', [])
 }
 
 test('writer reclaims stale local lease for shell hostname alias', async () => {
