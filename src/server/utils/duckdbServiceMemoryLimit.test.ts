@@ -1,5 +1,6 @@
-import {expect, test} from 'bun:test'
 import {existsSync, rmSync} from 'node:fs'
+
+import {expect, test} from 'bun:test'
 
 const removeFileIfExists = (filePath: string) => {
   if (existsSync(filePath)) {

@@ -1,3 +1,4 @@
+import {DuckDBInstance} from '@duckdb/node-api'
 import {expect, test} from 'bun:test'
 import {existsSync, unlinkSync} from 'fs'
 
@@ -7,20 +8,14 @@ const removeFileIfExists = (filePath: string) => {
   }
 }
 
-test('duckdb service reuses the same child process across module reloads', async () => {
+test('duckdb service reuses the same embedded runtime across module reloads', async () => {
   const duckdbPath = `/tmp/f1-duckdb-service-reload-${Date.now()}.duckdb`
-  const init = globalThis.Bun.spawnSync([
-    'duckdb',
-    '-json',
-    duckdbPath,
-    'CREATE SCHEMA app; CREATE TABLE app.sample (id VARCHAR PRIMARY KEY, value INTEGER NOT NULL);',
-  ])
+  const duckdbInstance = await DuckDBInstance.create(duckdbPath)
+  const connection = await duckdbInstance.connect()
 
-  if (init.exitCode !== 0) {
-    throw new Error(
-      init.stderr.toString() || init.stdout.toString() || 'Failed to initialize DuckDB reload test database',
-    )
-  }
+  await connection.run('CREATE SCHEMA app; CREATE TABLE app.sample (id VARCHAR PRIMARY KEY, value INTEGER NOT NULL);')
+  connection.closeSync()
+  duckdbInstance.closeSync()
 
   try {
     const result = globalThis.Bun.spawnSync(
@@ -36,7 +31,7 @@ test('duckdb service reuses the same child process across module reloads', async
           await second.closeDuckdbService()
         `,
       ],
-      {cwd: process.cwd(), env: {...process.env, DUCKDB_PATH: duckdbPath}},
+      {cwd: process.cwd(), env: {...process.env, DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'writer'}},
     )
 
     if (result.exitCode !== 0) {

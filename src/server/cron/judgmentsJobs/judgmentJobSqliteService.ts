@@ -138,9 +138,15 @@ export type JudgmentJobSqliteOutboxEntry = {
   useTitle: boolean
 }
 
+export type JudgmentJobSqliteOutboxClaim = {claimId: string; jobId: string; rowCount: number}
+
 type ScanStateRow = {cursorLastArticleId: string | null; cursorLastDate: string | null; exhaustedAt: string | null}
 
 type JobScanState = {cursor: JobCursor | null; exhaustedAt: Date | null}
+
+type SqliteTableInfoRow = {name: string}
+
+type JudgmentJobSqliteClaimedOutboxBatch = {claim: JudgmentJobSqliteOutboxClaim; rows: JudgmentJobSqliteOutboxEntry[]}
 
 const openDatabases = new Map<string, Database>()
 const ownedJobLeases = new Map<string, JudgmentJobLease>()
@@ -294,12 +300,17 @@ const getOpenDatabase = (jobId: string, createIfMissing: boolean): Database | nu
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       exported_at TEXT,
+      export_claim_id TEXT,
+      export_claimed_at TEXT,
+      export_claimed_by TEXT,
       export_attempts INTEGER NOT NULL DEFAULT 0,
       last_error TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_judgment_outbox_exported
       ON judgment_outbox(exported_at, outbox_seq);
   `)
+
+  ensureOutboxClaimSchema(database)
 
   openDatabases.set(jobId, database)
   return database
@@ -337,6 +348,104 @@ const parseStringArrayText = (value: string | null) => {
         return typeof entry === 'string'
       })
     : []
+}
+
+const outboxClaimColumns = [
+  {name: 'export_claim_id', sql: 'TEXT'},
+  {name: 'export_claimed_at', sql: 'TEXT'},
+  {name: 'export_claimed_by', sql: 'TEXT'},
+] as const
+
+const addMissingOutboxClaimColumns = (
+  database: Database,
+  columns: ReadonlyArray<(typeof outboxClaimColumns)[number]>,
+): void => {
+  const [currentColumn] = columns
+
+  if (!currentColumn) {
+    return
+  }
+
+  database.exec(`ALTER TABLE judgment_outbox ADD COLUMN ${currentColumn.name} ${currentColumn.sql}`)
+  return addMissingOutboxClaimColumns(database, columns.slice(1))
+}
+
+const ensureOutboxClaimSchema = (database: Database) => {
+  const existingColumnNames = new Set(
+    (database.query(`PRAGMA table_info('judgment_outbox')`).all() as SqliteTableInfoRow[]).map((row) => {
+      return row.name
+    }),
+  )
+  const missingColumns = outboxClaimColumns.filter((column) => {
+    return !existingColumnNames.has(column.name)
+  })
+
+  addMissingOutboxClaimColumns(database, missingColumns)
+  database.exec(`
+    CREATE INDEX IF NOT EXISTS idx_judgment_outbox_claim
+      ON judgment_outbox(exported_at, export_claimed_at, outbox_seq)
+  `)
+}
+
+const getExistingOutboxJobIds = (jobId?: string) => {
+  return jobId
+    ? [jobId].filter((value) => {
+        return existsSync(getJudgmentJobSqlitePath(value))
+      })
+    : getJudgmentJobSqliteJobIds()
+}
+
+const getOutboxEntry = (row: OutboxRow) => {
+  return {
+    answeredOriginal: row.answeredOriginal,
+    answeredOriginalAsArray: parseStringArrayText(row.answeredOriginalAsArray),
+    articleId: row.articleId,
+    chunkingStrategy: row.chunkingStrategy,
+    confidenceOriginal: Number(row.confidenceOriginal ?? 0),
+    createdAt: getDateValue(row.createdAt) ?? new Date(0),
+    explanation: row.explanation,
+    isAnswered: true,
+    jobId: row.jobId,
+    judgmentId: row.judgmentId,
+    modelId: row.modelId,
+    outboxSeq: Number(row.outboxSeq),
+    projectId: row.projectId,
+    promptId: row.promptId,
+    queuePromptId: row.queuePromptId,
+    quotes: parseJsonText(row.quotesJson),
+    rawResponseJson: parseJsonText(row.rawResponseJson),
+    snapshotProjectId: row.snapshotProjectId,
+    snapshotProjectModelName: row.snapshotProjectModelName,
+    updatedAt: getDateValue(row.updatedAt) ?? new Date(0),
+    useAbstract: toBoolean(row.useAbstract),
+    useFulltext: toBoolean(row.useFulltext),
+    useFulltextNoImages: toBoolean(row.useFulltextNoImages),
+    useTitle: toBoolean(row.useTitle),
+  } satisfies JudgmentJobSqliteOutboxEntry
+}
+
+const getBoundedOutboxBatch = ({
+  initialBytes,
+  maxBytes,
+  maxRows,
+  rows,
+}: {
+  initialBytes: number
+  maxBytes: number
+  maxRows: number
+  rows: OutboxRow[]
+}) => {
+  return rows.reduce(
+    (state, row) => {
+      const nextRow = getOutboxEntry(row)
+      const nextBytes = state.bytes + JSON.stringify(nextRow).length
+
+      return state.rows.length >= maxRows || (state.bytes > 0 && nextBytes > maxBytes)
+        ? state
+        : {bytes: nextBytes, rows: [...state.rows, nextRow]}
+    },
+    {bytes: initialBytes, rows: [] as JudgmentJobSqliteOutboxEntry[]},
+  )
 }
 
 const getJobInfoForInitialization = async (jobId: string): Promise<JudgmentJobSqliteInfo> => {
@@ -447,6 +556,138 @@ const releaseOwnedJobLease = async (jobId: string) => {
   }
 
   await releaseJudgmentJobLease(currentLease)
+}
+
+const getClaimableOutboxRows = (database: Database, limit: number) => {
+  return database
+    .query(
+      `
+        SELECT
+          outbox_seq AS outboxSeq,
+          job_id AS jobId,
+          queue_prompt_id AS queuePromptId,
+          judgment_id AS judgmentId,
+          article_id AS articleId,
+          prompt_id AS promptId,
+          model_id AS modelId,
+          project_id AS projectId,
+          snapshot_project_id AS snapshotProjectId,
+          snapshot_project_model_name AS snapshotProjectModelName,
+          use_title AS useTitle,
+          use_abstract AS useAbstract,
+          use_fulltext AS useFulltext,
+          use_fulltext_no_images AS useFulltextNoImages,
+          chunking_strategy AS chunkingStrategy,
+          answered_original AS answeredOriginal,
+          answered_original_as_array AS answeredOriginalAsArray,
+          confidence_original AS confidenceOriginal,
+          explanation,
+          quotes_json AS quotesJson,
+          raw_response_json AS rawResponseJson,
+          created_at AS createdAt,
+          updated_at AS updatedAt
+        FROM judgment_outbox
+        WHERE exported_at IS NULL
+          AND export_claim_id IS NULL
+        ORDER BY outbox_seq ASC
+        LIMIT ?
+      `,
+    )
+    .all(limit) as OutboxRow[]
+}
+
+const getOutboxPlaceholders = (outboxSeqs: number[]) => {
+  return outboxSeqs.map(() => {
+    return '?'
+  })
+}
+
+const claimOutboxRows = ({
+  claimedBy,
+  database,
+  jobId,
+  rows,
+}: {
+  claimedBy: string
+  database: Database
+  jobId: string
+  rows: JudgmentJobSqliteOutboxEntry[]
+}): JudgmentJobSqliteClaimedOutboxBatch | null => {
+  const claimId = randomUUID()
+  const now = new Date().toISOString()
+  const outboxSeqs = rows.map((row) => {
+    return row.outboxSeq
+  })
+  const placeholders = getOutboxPlaceholders(outboxSeqs)
+  const result = database
+    .query(
+      `
+        UPDATE judgment_outbox
+        SET export_claim_id = ?,
+            export_claimed_at = ?,
+            export_claimed_by = ?,
+            export_attempts = export_attempts + 1,
+            last_error = NULL
+        WHERE outbox_seq IN (${placeholders.join(', ')})
+          AND exported_at IS NULL
+          AND export_claim_id IS NULL
+      `,
+    )
+    .run(claimId, now, claimedBy, ...outboxSeqs) as {changes?: number}
+
+  return Number(result.changes ?? 0) === rows.length ? {claim: {claimId, jobId, rowCount: rows.length}, rows} : null
+}
+
+const claimPendingOutboxBatchForJob = async ({
+  claimedBy,
+  jobId,
+  maxBytes,
+  maxRows,
+}: {
+  claimedBy: string
+  jobId: string
+  maxBytes: number
+  maxRows: number
+}): Promise<JudgmentJobSqliteClaimedOutboxBatch | null> => {
+  return withOwnedJobDatabase(
+    jobId,
+    false,
+    (database) => {
+      return database.transaction(() => {
+        const rows = getBoundedOutboxBatch({
+          initialBytes: 0,
+          maxBytes,
+          maxRows,
+          rows: getClaimableOutboxRows(database, maxRows),
+        }).rows
+
+        return rows.length === 0 ? null : claimOutboxRows({claimedBy, database, jobId, rows})
+      })()
+    },
+    claimedBy,
+  )
+}
+
+const claimPendingOutboxBatchForJobIds = async ({
+  claimedBy,
+  jobIds,
+  maxBytes,
+  maxRows,
+}: {
+  claimedBy: string
+  jobIds: string[]
+  maxBytes: number
+  maxRows: number
+}): Promise<JudgmentJobSqliteClaimedOutboxBatch | null> => {
+  const [currentJobId = ''] = jobIds
+
+  if (!currentJobId) {
+    return null
+  }
+
+  const claimedBatch = await claimPendingOutboxBatchForJob({claimedBy, jobId: currentJobId, maxBytes, maxRows})
+
+  return claimedBatch ?? claimPendingOutboxBatchForJobIds({claimedBy, jobIds: jobIds.slice(1), maxBytes, maxRows})
 }
 
 const sqliteService = {
@@ -642,15 +883,9 @@ const sqliteService = {
     )
   },
   getPendingOutboxBatch: async ({jobId, maxBytes, maxRows}: {jobId?: string; maxBytes: number; maxRows: number}) => {
-    const jobIds = jobId
-      ? [jobId].filter((value) => {
-          return existsSync(getJudgmentJobSqlitePath(value))
-        })
-      : getJudgmentJobSqliteJobIds()
+    const initialState = {bytes: 0, rows: [] as JudgmentJobSqliteOutboxEntry[]}
 
-    const initialState: {bytes: number; rows: JudgmentJobSqliteOutboxEntry[]} = {bytes: 0, rows: []}
-
-    return jobIds.reduce<{bytes: number; rows: JudgmentJobSqliteOutboxEntry[]}>((state, currentJobId) => {
+    return getExistingOutboxJobIds(jobId).reduce((state, currentJobId) => {
       if (state.rows.length >= maxRows || state.bytes >= maxBytes) {
         return state
       }
@@ -658,78 +893,25 @@ const sqliteService = {
       const remainingRows = Math.max(1, maxRows - state.rows.length)
       const rawRows =
         withJobDatabase(currentJobId, false, (database) => {
-          return database
-            .query(
-              `
-            SELECT
-              outbox_seq AS outboxSeq,
-              job_id AS jobId,
-              queue_prompt_id AS queuePromptId,
-              judgment_id AS judgmentId,
-              article_id AS articleId,
-              prompt_id AS promptId,
-              model_id AS modelId,
-              project_id AS projectId,
-              snapshot_project_id AS snapshotProjectId,
-              snapshot_project_model_name AS snapshotProjectModelName,
-              use_title AS useTitle,
-              use_abstract AS useAbstract,
-              use_fulltext AS useFulltext,
-              use_fulltext_no_images AS useFulltextNoImages,
-              chunking_strategy AS chunkingStrategy,
-              answered_original AS answeredOriginal,
-              answered_original_as_array AS answeredOriginalAsArray,
-              confidence_original AS confidenceOriginal,
-              explanation,
-              quotes_json AS quotesJson,
-              raw_response_json AS rawResponseJson,
-              created_at AS createdAt,
-              updated_at AS updatedAt
-            FROM judgment_outbox
-            WHERE exported_at IS NULL
-            ORDER BY outbox_seq ASC
-            LIMIT ?
-          `,
-            )
-            .all(remainingRows) as OutboxRow[]
+          return getClaimableOutboxRows(database, remainingRows)
         }) ?? []
+      const nextBatch = getBoundedOutboxBatch({initialBytes: state.bytes, maxBytes, maxRows, rows: rawRows})
 
-      const nextState = rawRows.reduce((acc, row) => {
-        const nextRow = {
-          answeredOriginal: row.answeredOriginal,
-          answeredOriginalAsArray: parseStringArrayText(row.answeredOriginalAsArray),
-          articleId: row.articleId,
-          chunkingStrategy: row.chunkingStrategy,
-          confidenceOriginal: Number(row.confidenceOriginal ?? 0),
-          createdAt: getDateValue(row.createdAt) ?? new Date(0),
-          explanation: row.explanation,
-          isAnswered: true,
-          jobId: row.jobId,
-          judgmentId: row.judgmentId,
-          modelId: row.modelId,
-          outboxSeq: Number(row.outboxSeq),
-          projectId: row.projectId,
-          promptId: row.promptId,
-          queuePromptId: row.queuePromptId,
-          quotes: parseJsonText(row.quotesJson),
-          rawResponseJson: parseJsonText(row.rawResponseJson),
-          snapshotProjectId: row.snapshotProjectId,
-          snapshotProjectModelName: row.snapshotProjectModelName,
-          updatedAt: getDateValue(row.updatedAt) ?? new Date(0),
-          useAbstract: toBoolean(row.useAbstract),
-          useFulltext: toBoolean(row.useFulltext),
-          useFulltextNoImages: toBoolean(row.useFulltextNoImages),
-          useTitle: toBoolean(row.useTitle),
-        } satisfies JudgmentJobSqliteOutboxEntry
-        const nextBytes = acc.bytes + JSON.stringify(nextRow).length
-
-        return acc.rows.length >= maxRows || (acc.bytes > 0 && nextBytes > maxBytes)
-          ? acc
-          : {bytes: nextBytes, rows: [...acc.rows, nextRow]}
-      }, state)
-
-      return nextState
+      return {bytes: nextBatch.bytes, rows: [...state.rows, ...nextBatch.rows]}
     }, initialState).rows
+  },
+  claimPendingOutboxBatch: async ({
+    claimedBy,
+    jobId,
+    maxBytes,
+    maxRows,
+  }: {
+    claimedBy: string
+    jobId?: string
+    maxBytes: number
+    maxRows: number
+  }) => {
+    return claimPendingOutboxBatchForJobIds({claimedBy, jobIds: getExistingOutboxJobIds(jobId), maxBytes, maxRows})
   },
   getPromptStatusCounts: async (jobId: string): Promise<QueueCountRow[]> => {
     return (
@@ -901,6 +1083,91 @@ const sqliteService = {
           return releaseOwnedJobLease(jobId)
         }),
     )
+  },
+  completeOutboxClaim: async ({claimId, jobId}: {claimId: string; jobId: string}) => {
+    return (
+      (await withOwnedJobDatabase(jobId, false, (database) => {
+        const now = new Date().toISOString()
+        const result = database
+          .query(
+            `
+              UPDATE judgment_outbox
+              SET exported_at = ?,
+                  export_claim_id = NULL,
+                  export_claimed_at = NULL,
+                  export_claimed_by = NULL,
+                  last_error = NULL
+              WHERE export_claim_id = ?
+                AND exported_at IS NULL
+            `,
+          )
+          .run(now, claimId) as {changes?: number}
+
+        return Number(result.changes ?? 0)
+      })) ?? 0
+    )
+  },
+  releaseOutboxClaim: async ({
+    claimId,
+    errorMessage,
+    jobId,
+  }: {
+    claimId: string
+    errorMessage: string | null
+    jobId: string
+  }) => {
+    return (
+      (await withOwnedJobDatabase(jobId, false, (database) => {
+        const result = database
+          .query(
+            `
+              UPDATE judgment_outbox
+              SET export_claim_id = NULL,
+                  export_claimed_at = NULL,
+                  export_claimed_by = NULL,
+                  last_error = ?
+              WHERE export_claim_id = ?
+                AND exported_at IS NULL
+            `,
+          )
+          .run(errorMessage, claimId) as {changes?: number}
+
+        return Number(result.changes ?? 0)
+      })) ?? 0
+    )
+  },
+  reapStaleOutboxClaims: async ({jobId, staleBefore}: {jobId?: string; staleBefore: Date}) => {
+    const reapedCounts = await Promise.all(
+      getExistingOutboxJobIds(jobId).map((currentJobId) => {
+        return withOwnedJobDatabase(currentJobId, false, (database) => {
+          const result = database
+            .query(
+              `
+                UPDATE judgment_outbox
+                SET export_claim_id = NULL,
+                    export_claimed_at = NULL,
+                    export_claimed_by = NULL,
+                    last_error = COALESCE(last_error, 'stale claim reaped')
+                WHERE exported_at IS NULL
+                  AND export_claim_id IS NOT NULL
+                  AND export_claimed_at IS NOT NULL
+                  AND export_claimed_at <= ?
+              `,
+            )
+            .run(staleBefore.toISOString()) as {changes?: number}
+
+          return Number(result.changes ?? 0)
+        })
+      }),
+    )
+
+    return reapedCounts
+      .map((count) => {
+        return Number(count ?? 0)
+      })
+      .reduce((totalCount, currentCount) => {
+        return totalCount + currentCount
+      }, 0)
   },
   markOutboxExported: async (entries: Array<{jobId: string; outboxSeq: number}>) => {
     const grouped = entries.reduce((map, entry) => {

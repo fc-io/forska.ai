@@ -1,6 +1,7 @@
 import {Elysia, t} from 'elysia'
 
 import {getUnassessedArticlesFromOlap, getUnassessedCountFromOlap} from '../../services/olap/unassessedArticlesOlap.ts'
+import {getDefaultJudgmentServerJobId} from '../cron/judgmentsJobs/judgmentJobServerIdentity.ts'
 import {flushJudgmentJobSqliteOutbox} from '../cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts'
 import {getJudgmentJobSqliteService} from '../cron/judgmentsJobs/judgmentJobSqliteService.ts'
 import {getJudgmentRequestStats} from '../cron/judgmentsJobs/judgmentsRequestRuntime.ts'
@@ -24,6 +25,8 @@ type TokenUsageDaySummary = {
   dailyCompletionTokens: number
   requests: number
 }
+
+const judgmentJobServerId = getDefaultJudgmentServerJobId()
 
 type JudgmentJobMutationState = {error: unknown; id: string; status: string; updatedAt: unknown}
 type JudgmentJobMutationQueryRunner = {queryJson: <T>(statement: string) => Promise<T[]>}
@@ -645,7 +648,7 @@ export const judgmentsJobsRoutes = new Elysia()
       }
 
       if (hasSqliteJob) {
-        await flushJudgmentJobSqliteOutbox({jobId: params.id})
+        await flushJudgmentJobSqliteOutbox({claimedBy: judgmentJobServerId, jobId: params.id})
         await sqliteService.deleteJob(params.id)
       } else {
         await getAppDatabaseService().run(`

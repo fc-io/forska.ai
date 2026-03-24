@@ -7,6 +7,7 @@ import {getDuckdbPath} from './getDuckdbPath.ts'
 const envShape = arktype({
   DUCKDB_PATH: 'string',
   DUCKDB_MEMORY_LIMIT: 'string',
+  DUCKDB_APPEND_LANE_COUNT: 'number | string.integer.parse | null | undefined',
   DUCKDB_TEMP_DIRECTORY: 'string | null | undefined',
   SERVER_ROLE: arktype('"auto" | "writer" | "api" | "worker" | "dev-single"'),
   SERVER_WRITER_URL: 'string | null | undefined',
@@ -59,6 +60,9 @@ export const loadEnv = ({
   ;(merged as Record<string, string>).DUCKDB_PATH = getDuckdbPath({duckdbPath: merged.DUCKDB_PATH})
   if (merged.DUCKDB_MEMORY_LIMIT == null || String(merged.DUCKDB_MEMORY_LIMIT).trim() === '') {
     ;(merged as Record<string, string>).DUCKDB_MEMORY_LIMIT = '20GB'
+  }
+  if (merged.DUCKDB_APPEND_LANE_COUNT == null || String(merged.DUCKDB_APPEND_LANE_COUNT).trim() === '') {
+    ;(merged as Record<string, string>).DUCKDB_APPEND_LANE_COUNT = '2'
   }
   if (merged.DUCKDB_TEMP_DIRECTORY == null || String(merged.DUCKDB_TEMP_DIRECTORY).trim() === '') {
     const duckdbPath = String(merged.DUCKDB_PATH ?? '')

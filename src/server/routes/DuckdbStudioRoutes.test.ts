@@ -1,5 +1,6 @@
 import {existsSync, rmSync} from 'node:fs'
 
+import {DuckDBInstance} from '@duckdb/node-api'
 import {expect, test} from 'bun:test'
 
 const removeFileIfExists = (filePath: string) => {
@@ -8,7 +9,7 @@ const removeFileIfExists = (filePath: string) => {
   }
 }
 
-test('duckdb studio route creates a readable snapshot', () => {
+test('duckdb studio route creates a readable snapshot', async () => {
   const duckdbPath = `/tmp/f1-duckdb-studio-route-${Date.now()}.duckdb`
   const runRoute = globalThis.Bun.spawnSync(
     [
@@ -37,22 +38,17 @@ test('duckdb studio route creates a readable snapshot', () => {
 
   const responseBody = JSON.parse(runRoute.stdout.toString()) as {data: {snapshotPath: string; createdAt: string}}
   const snapshotPath = responseBody.data.snapshotPath
-  const query = globalThis.Bun.spawnSync([
-    'duckdb',
-    '-readonly',
-    '-json',
-    snapshotPath,
-    'SELECT value FROM app.sample LIMIT 1',
-  ])
 
   try {
-    if (query.exitCode !== 0) {
-      throw new Error(query.stderr.toString() || query.stdout.toString() || 'Failed to read DuckDB snapshot')
-    }
+    const duckdbInstance = await DuckDBInstance.create(snapshotPath, {access_mode: 'READ_ONLY'})
+    const connection = await duckdbInstance.connect()
+    const reader = await connection.runAndReadAll('SELECT value FROM app.sample LIMIT 1')
 
     expect(responseBody.data.createdAt).toContain('T')
     expect(existsSync(snapshotPath)).toBe(true)
-    expect(JSON.parse(query.stdout.toString())).toEqual([{value: 42}])
+    expect(reader.getRowObjectsJson()).toEqual([{value: 42}])
+    connection.closeSync()
+    duckdbInstance.closeSync()
   } finally {
     removeFileIfExists(snapshotPath)
     removeFileIfExists(`${snapshotPath}.wal`)

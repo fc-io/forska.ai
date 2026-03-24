@@ -1,3 +1,4 @@
+import {DuckDBInstance} from '@duckdb/node-api'
 import {Effect} from 'effect'
 
 import {type AppDatabaseSnapshot, getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
@@ -35,20 +36,33 @@ const deleteSnapshot = (snapshot: AppDatabaseSnapshot) => {
   )
 }
 
-const runSnapshotQuery = (snapshot: AppDatabaseSnapshot, sql: string) => {
+const getSnapshotQueryRuntime = async (snapshotPath: string) => {
+  const duckdbInstance = await DuckDBInstance.create(snapshotPath, {access_mode: 'READ_ONLY'})
+  const connection = await duckdbInstance.connect()
+
+  return {connection, duckdbInstance}
+}
+
+const closeSnapshotQueryRuntime = (runtime: Awaited<ReturnType<typeof getSnapshotQueryRuntime>>) => {
   return Effect.sync(() => {
-    const result = globalThis.Bun.spawnSync(['duckdb', '-readonly', '-json', snapshot.snapshotPath, sql], {
-      stdin: 'inherit',
-      stdout: 'pipe',
-      stderr: 'inherit',
-    })
+    runtime.connection.closeSync()
+    runtime.duckdbInstance.closeSync()
+  })
+}
 
-    if (result.exitCode !== 0) {
-      throw new Error(`DuckDB snapshot query failed with exit code ${result.exitCode}`)
-    }
-
-    return result.stdout.toString()
-  }).pipe(
+const runSnapshotQuery = (snapshot: AppDatabaseSnapshot, sql: string) => {
+  return Effect.acquireRelease(
+    Effect.tryPromise(() => {
+      return getSnapshotQueryRuntime(snapshot.snapshotPath)
+    }),
+    closeSnapshotQueryRuntime,
+  ).pipe(
+    Effect.flatMap((runtime) => {
+      return Effect.tryPromise(async () => {
+        const reader = await runtime.connection.runAndReadAll(sql)
+        return JSON.stringify(reader.getRowObjectsJson())
+      })
+    }),
     Effect.tap((output) => {
       return Effect.sync(() => {
         console.log(output.trim())

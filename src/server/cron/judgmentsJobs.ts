@@ -85,7 +85,7 @@ const importJudgmentsCron = async (): Promise<void> => {
   isImportingJudgments = true
 
   try {
-    await importJudgmentJobSqliteOutboxBatch()
+    await importJudgmentJobSqliteOutboxBatch({claimedBy: serverJobId})
   } catch (err) {
     logJudgingCronError('[cron] importJudgmentsCron error:', err)
   } finally {

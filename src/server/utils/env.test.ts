@@ -7,4 +7,5 @@ test('uses local dev port defaults without env files', () => {
 
   expect(resolvedEnv.VITE_PORT).toBe(3000)
   expect(resolvedEnv.API_SERVER_PORT).toBe(3001)
+  expect(resolvedEnv.DUCKDB_APPEND_LANE_COUNT).toBe(2)
 })

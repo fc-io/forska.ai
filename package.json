@@ -13,6 +13,7 @@
     "build:docker:sglang": "bun scripts/buildDockerSglang.ts",
     "alvis:sglang:pull": "bun scripts/alvisSglangPull.ts",
     "bench:articlesreviews": "bun scripts/benchmarkArticlesReviews.ts",
+    "bench:duckdb-append-lanes": "bun scripts/benchmarkDuckdbAppendLanes.ts",
     "preview": "bunx --bun vite preview",
     "test": "bun test",
     "lint": "bunx eslint src",
@@ -74,6 +75,7 @@
   "dependencies": {
     "@ai-sdk/openai": "^3.0.41",
     "@ark-ui/solid": "^5.34.1",
+    "@duckdb/node-api": "^1.5.1-r.1",
     "@elysiajs/cors": "^1.4.1",
     "@elysiajs/cron": "^1.4.1",
     "@elysiajs/eden": "^1.4.8",

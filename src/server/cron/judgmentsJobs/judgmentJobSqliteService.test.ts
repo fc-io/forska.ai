@@ -102,3 +102,108 @@ test('claims and requeues prompts from the per-job SQLite queue', async () => {
   expect(await service.getReadyCount(jobId)).toBe(2)
   expect(await service.getInFlightCount(jobId)).toBe(0)
 })
+
+test('claims, reaps, releases, and completes outbox batches', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-outbox-${Date.now()}`
+  const modelId = `model-outbox-${Date.now()}`
+  const projectId = `project-outbox-${Date.now()}`
+  const jobId = `job-outbox-${Date.now()}`
+  const promptId = `prompt-outbox-${Date.now()}`
+  const articleId = `article-outbox-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Outbox Claim Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.addReadyPrompts(jobId, [{articleId, promptId}], 'server-a')
+
+  const [claimedPrompt] = await service.claimReadyPrompts(jobId, 'server-a', 1)
+
+  if (!claimedPrompt) {
+    throw new Error('Failed to claim SQLite queue prompt')
+  }
+
+  await service.recordJudgmentSuccess(jobId, {
+    answeredOriginal: 'yes',
+    answeredOriginalAsArray: ['yes'],
+    articleId,
+    chunkingStrategy: null,
+    confidenceOriginal: 50,
+    createdAt: new Date(),
+    explanation: 'because',
+    isAnswered: true,
+    judgmentId: `judgment-outbox-${Date.now()}`,
+    modelId,
+    projectId,
+    promptId,
+    queuePromptId: claimedPrompt.recordId,
+    quotes: ['quote'],
+    rawResponseJson: {answer: 'yes'},
+    snapshotProjectId: projectId,
+    snapshotProjectModelName: 'Qwen 35B',
+    updatedAt: new Date(),
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  })
+
+  const firstClaim = await service.claimPendingOutboxBatch({
+    claimedBy: 'server-a',
+    jobId,
+    maxBytes: 1024 * 1024,
+    maxRows: 10,
+  })
+
+  expect(firstClaim?.rows).toHaveLength(1)
+  expect(
+    await service.claimPendingOutboxBatch({claimedBy: 'server-b', jobId, maxBytes: 1024 * 1024, maxRows: 10}),
+  ).toBeNull()
+  expect(await service.reapStaleOutboxClaims({jobId, staleBefore: new Date(Date.now() + 1000)})).toBe(1)
+
+  const secondClaim = await service.claimPendingOutboxBatch({
+    claimedBy: 'server-b',
+    jobId,
+    maxBytes: 1024 * 1024,
+    maxRows: 10,
+  })
+
+  expect(secondClaim?.rows).toHaveLength(1)
+  expect(
+    await service.releaseOutboxClaim({
+      claimId: secondClaim?.claim.claimId ?? '',
+      errorMessage: 'temporary failure',
+      jobId,
+    }),
+  ).toBe(1)
+
+  const thirdClaim = await service.claimPendingOutboxBatch({
+    claimedBy: 'server-c',
+    jobId,
+    maxBytes: 1024 * 1024,
+    maxRows: 10,
+  })
+
+  expect(thirdClaim?.rows).toHaveLength(1)
+  expect(await service.completeOutboxClaim({claimId: thirdClaim?.claim.claimId ?? '', jobId})).toBe(1)
+  expect(await service.getUnexportedOutboxCount(jobId)).toBe(0)
+})

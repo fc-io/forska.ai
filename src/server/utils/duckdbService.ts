@@ -1,13 +1,12 @@
-import {type ChildProcessWithoutNullStreams, spawn} from 'node:child_process'
 import {randomUUID} from 'node:crypto'
 import {mkdirSync} from 'node:fs'
 import {access, copyFile, mkdir, rm} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {basename, join} from 'node:path'
 
+import {DuckDBConnection, DuckDBInstance} from '@duckdb/node-api'
 import {Effect} from 'effect'
 
-import {getDuckdbBinary} from './duckdbBinary.ts'
 import {env} from './env.ts'
 import {ensureDuckdbPathDirectory} from './getDuckdbPath.ts'
 import {
@@ -16,31 +15,48 @@ import {
   releaseCurrentDuckdbOwnerLease,
 } from './serverRuntimeRole.ts'
 
-type DuckdbRuntimeConfig = {binary: string; databasePath: string; memoryLimit: string; tempDirectory: string | null}
+type DuckdbRuntimeConfig = {
+  appendLaneCount: number
+  binary: string
+  databasePath: string
+  memoryLimit: string
+  tempDirectory: string | null
+}
 export type DuckdbSnapshot = {createdAt: string; snapshotPath: string}
+export type DuckdbAppendRuntimeMetrics = {
+  batchesCompleted: number
+  batchesStarted: number
+  laneCount: number
+  lastDurationMs: number | null
+  maxQueueDepth: number
+  maxQueueDepthByLane: number[]
+  queueDepth: number
+  queueDepthByLane: number[]
+  totalDurationMs: number
+}
 type DuckdbTransactionRunner = {
   queryJson: <T>(statement: string) => Promise<T[]>
   run: (statement: string) => Promise<void>
 }
+type DuckdbAppendBarrier = {promise: Promise<void>; resolve: () => void}
 
-type PendingDuckdbQuery = {
-  reject: (error: Error) => void
-  resolve: (rows: unknown[]) => void
-  stderrLines: string[]
-  stdoutLines: string[]
-  token: string
-}
-
-type DuckdbMarkerRow = {__duckdb_done__?: string}
-type DuckdbShutdownSignal = 'SIGTERM' | 'SIGKILL'
 type DuckdbServiceState = {
-  currentPendingDuckdbQuery: PendingDuckdbQuery | null
-  duckdbProcess: ChildProcessWithoutNullStreams | null
+  appendBarrier: DuckdbAppendBarrier | null
+  appendConnections: DuckDBConnection[]
+  appendLastDurationMs: number | null
+  appendMaxQueueDepthByLane: number[]
+  appendPendingCountByLane: number[]
+  appendQueues: Promise<void>[]
+  appendTotalBatchesCompleted: number
+  appendTotalBatchesStarted: number
+  appendTotalDurationMs: number
+  controlConnection: DuckDBConnection | null
+  duckdbInstance: DuckDBInstance | null
   duckdbQueue: Promise<void>
   duckdbRuntimeConfig: DuckdbRuntimeConfig | null
+  nextAppendLaneIndex: number
   shutdownHooksRegistered: boolean
-  stderrBuffer: string
-  stdoutBuffer: string
+  startupPromise: Promise<DuckDBConnection> | null
 }
 
 type EffectFiberFailure = {
@@ -52,23 +68,47 @@ declare global {
   var __forskaDuckdbServiceState: DuckdbServiceState | undefined
 }
 
+const duckdbSnapshotDirectory = join(tmpdir(), 'forska-duckdb-studio')
+const getDuckdbAppendLaneCountValue = () => {
+  return Math.max(1, Number(env.DUCKDB_APPEND_LANE_COUNT ?? 2))
+}
+
+const getInitialDuckdbAppendQueues = (appendLaneCount: number) => {
+  return Array.from({length: appendLaneCount}, () => {
+    return Promise.resolve()
+  })
+}
+
+const getInitialDuckdbAppendLaneMetrics = (appendLaneCount: number) => {
+  return Array.from({length: appendLaneCount}, () => {
+    return 0
+  })
+}
+
 const getDuckdbServiceState = () => {
   globalThis.__forskaDuckdbServiceState ??= {
-    currentPendingDuckdbQuery: null,
-    duckdbProcess: null,
+    appendBarrier: null,
+    appendConnections: [],
+    appendLastDurationMs: null,
+    appendMaxQueueDepthByLane: getInitialDuckdbAppendLaneMetrics(getDuckdbAppendLaneCountValue()),
+    appendPendingCountByLane: getInitialDuckdbAppendLaneMetrics(getDuckdbAppendLaneCountValue()),
+    appendQueues: getInitialDuckdbAppendQueues(getDuckdbAppendLaneCountValue()),
+    appendTotalBatchesCompleted: 0,
+    appendTotalBatchesStarted: 0,
+    appendTotalDurationMs: 0,
+    controlConnection: null,
+    duckdbInstance: null,
     duckdbQueue: Promise.resolve(),
     duckdbRuntimeConfig: null,
+    nextAppendLaneIndex: 0,
     shutdownHooksRegistered: false,
-    stderrBuffer: '',
-    stdoutBuffer: '',
+    startupPromise: null,
   }
 
   return globalThis.__forskaDuckdbServiceState
 }
 
 const duckdbServiceState = getDuckdbServiceState()
-const duckdbSnapshotDirectory = join(tmpdir(), 'forska-duckdb-studio')
-const duckdbShutdownGracePeriodMs = 1_000
 
 const getTrimmedValue = (value: string | null | undefined) => {
   const normalized = String(value ?? '').trim()
@@ -81,7 +121,8 @@ const getDuckdbRuntimeConfigValue = () => {
   }
 
   duckdbServiceState.duckdbRuntimeConfig = {
-    binary: getDuckdbBinary(),
+    appendLaneCount: getDuckdbAppendLaneCountValue(),
+    binary: '@duckdb/node-api',
     databasePath: env.DUCKDB_PATH,
     memoryLimit: env.DUCKDB_MEMORY_LIMIT,
     tempDirectory: getTrimmedValue(env.DUCKDB_TEMP_DIRECTORY),
@@ -100,37 +141,10 @@ const createDuckdbTempDirectory = (runtimeConfig: DuckdbRuntimeConfig) => {
   return runtimeConfig
 }
 
-const escapeDuckdbString = (value: string) => {
-  return value.replaceAll("'", "''")
-}
-
-const getDuckdbStartupStatements = (runtimeConfig: DuckdbRuntimeConfig) => {
-  const tempDirectoryStatement = runtimeConfig.tempDirectory
-    ? `SET temp_directory = '${escapeDuckdbString(runtimeConfig.tempDirectory)}'`
-    : null
-
-  return [`SET memory_limit = '${escapeDuckdbString(runtimeConfig.memoryLimit)}'`, tempDirectoryStatement].filter(
-    (statement): statement is string => {
-      return statement !== null
-    },
-  )
-}
-
-const getNormalizedDuckdbStatement = (statement: string) => {
-  return statement.trim().replace(/;+$/u, '')
-}
-
-const getDuckdbMarkerStatement = (token: string) => {
-  return `SELECT '${token}' AS __duckdb_done__`
-}
-
-const getDuckdbCommandText = (statement: string, token: string) => {
-  return `${getNormalizedDuckdbStatement(statement)};\n${getDuckdbMarkerStatement(token)};\n`
-}
-
-const getDuckdbRowsFromOutput = (output: string): unknown[] => {
-  const parsed = JSON.parse(output) as unknown
-  return Array.isArray(parsed) ? parsed : [parsed]
+const getDuckdbInstanceOptions = (runtimeConfig: DuckdbRuntimeConfig): Record<string, string> => {
+  return runtimeConfig.tempDirectory === null
+    ? {memory_limit: runtimeConfig.memoryLimit}
+    : {memory_limit: runtimeConfig.memoryLimit, temp_directory: runtimeConfig.tempDirectory}
 }
 
 const getErrorMessage = (value: unknown): string | null => {
@@ -191,15 +205,6 @@ const getChainedDuckdbError = (error: unknown, nextError: unknown, context: stri
   return combinedMessage === normalizedError.message ? normalizedError : new Error(combinedMessage)
 }
 
-const getDuckdbRollbackError = async (): Promise<Error | null> => {
-  try {
-    await runDuckdbCommand('ROLLBACK')
-    return null
-  } catch (error) {
-    return getNormalizedDuckdbError(error)
-  }
-}
-
 const withNormalizedDuckdbError = async <T>(work: () => Promise<T>): Promise<T> => {
   try {
     return await work()
@@ -208,164 +213,158 @@ const withNormalizedDuckdbError = async <T>(work: () => Promise<T>): Promise<T> 
   }
 }
 
-const getDuckdbMarkerToken = (line: string) => {
+const resetDuckdbRuntimeState = () => {
+  const appendLaneCount = getDuckdbRuntimeConfigValue().appendLaneCount
+
+  duckdbServiceState.appendBarrier = null
+  duckdbServiceState.appendConnections = []
+  duckdbServiceState.appendLastDurationMs = null
+  duckdbServiceState.appendMaxQueueDepthByLane = getInitialDuckdbAppendLaneMetrics(appendLaneCount)
+  duckdbServiceState.appendPendingCountByLane = getInitialDuckdbAppendLaneMetrics(appendLaneCount)
+  duckdbServiceState.appendQueues = getInitialDuckdbAppendQueues(appendLaneCount)
+  duckdbServiceState.appendTotalBatchesCompleted = 0
+  duckdbServiceState.appendTotalBatchesStarted = 0
+  duckdbServiceState.appendTotalDurationMs = 0
+  duckdbServiceState.controlConnection = null
+  duckdbServiceState.duckdbInstance = null
+  duckdbServiceState.duckdbQueue = Promise.resolve()
+  duckdbServiceState.nextAppendLaneIndex = 0
+  duckdbServiceState.startupPromise = null
+}
+
+const getDuckdbConnection = () => {
+  if (duckdbServiceState.controlConnection === null) {
+    throw new Error('DuckDB connection not started')
+  }
+
+  return duckdbServiceState.controlConnection
+}
+
+const getDuckdbAppendConnection = (laneIndex: number) => {
+  const appendConnection = duckdbServiceState.appendConnections[laneIndex]
+
+  if (appendConnection === undefined) {
+    throw new Error(`DuckDB append lane ${laneIndex} not started`)
+  }
+
+  return appendConnection
+}
+
+const createDuckdbAppendBarrier = (): DuckdbAppendBarrier => {
+  let resolve: DuckdbAppendBarrier['resolve'] = () => {
+    return undefined
+  }
+  const promise = new Promise<void>((nextResolve) => {
+    resolve = nextResolve
+  })
+
+  return {promise, resolve}
+}
+
+const waitForDuckdbAppendBarrier = async (): Promise<void> => {
+  const currentBarrier = duckdbServiceState.appendBarrier
+
+  return currentBarrier === null
+    ? undefined
+    : currentBarrier.promise.then(() => {
+        return waitForDuckdbAppendBarrier()
+      })
+}
+
+const getDuckdbAppendQueueSnapshot = () => {
+  return [...duckdbServiceState.appendQueues]
+}
+
+const waitForDuckdbAppendQueues = async (): Promise<void> => {
+  await Promise.all(getDuckdbAppendQueueSnapshot())
+}
+
+const withDuckdbAppendBarrier = async <T>(work: () => Promise<T>): Promise<T> => {
+  const appendBarrier = createDuckdbAppendBarrier()
+  duckdbServiceState.appendBarrier = appendBarrier
+
   try {
-    const [firstRow] = getDuckdbRowsFromOutput(line) as DuckdbMarkerRow[]
-    return typeof firstRow?.__duckdb_done__ === 'string' ? firstRow.__duckdb_done__ : null
-  } catch {
+    await waitForDuckdbAppendQueues()
+    return await work()
+  } finally {
+    duckdbServiceState.appendBarrier =
+      duckdbServiceState.appendBarrier === appendBarrier ? null : duckdbServiceState.appendBarrier
+    appendBarrier.resolve()
+  }
+}
+
+const getCloseSyncError = (close: (() => void) | null) => {
+  if (close === null) {
     return null
   }
-}
 
-const getDuckdbResultRows = (lines: string[]) => {
-  const output = lines.join('\n').trim()
-  return output === '' ? [] : getDuckdbRowsFromOutput(output)
-}
-
-const rejectPendingDuckdbQuery = (error: Error) => {
-  if (duckdbServiceState.currentPendingDuckdbQuery) {
-    duckdbServiceState.currentPendingDuckdbQuery.reject(error)
-    duckdbServiceState.currentPendingDuckdbQuery = null
+  try {
+    close()
+    return null
+  } catch (error) {
+    return getNormalizedDuckdbError(error)
   }
 }
 
-const resolvePendingDuckdbQuery = () => {
-  if (duckdbServiceState.currentPendingDuckdbQuery) {
-    const stderrOutput = duckdbServiceState.currentPendingDuckdbQuery.stderrLines.join('\n').trim()
-    const pendingQuery = duckdbServiceState.currentPendingDuckdbQuery
-    duckdbServiceState.currentPendingDuckdbQuery = null
-    return stderrOutput === ''
-      ? pendingQuery.resolve(getDuckdbResultRows(pendingQuery.stdoutLines))
-      : pendingQuery.reject(new Error(stderrOutput))
-  }
+const getCombinedCloseError = (errors: Array<Error | null>): Error | null => {
+  const [firstError, secondError, ...remainingErrors] = errors.filter((error): error is Error => {
+    return error !== null
+  })
+
+  return firstError === undefined
+    ? null
+    : secondError === undefined
+      ? firstError
+      : getCombinedCloseError([getChainedDuckdbError(firstError, secondError, 'close failed'), ...remainingErrors])
 }
 
-const appendPendingDuckdbStdoutLine = (line: string) => {
-  if (duckdbServiceState.currentPendingDuckdbQuery) {
-    duckdbServiceState.currentPendingDuckdbQuery.stdoutLines = [
-      ...duckdbServiceState.currentPendingDuckdbQuery.stdoutLines,
-      line,
-    ]
-  }
-}
-
-const appendPendingDuckdbStderrLine = (line: string) => {
-  if (duckdbServiceState.currentPendingDuckdbQuery) {
-    duckdbServiceState.currentPendingDuckdbQuery.stderrLines = [
-      ...duckdbServiceState.currentPendingDuckdbQuery.stderrLines,
-      line,
-    ]
-  }
-}
-
-const handleDuckdbStdoutLine = (line: string) => {
-  const trimmedLine = line.trim()
-
-  if (trimmedLine === '' || duckdbServiceState.currentPendingDuckdbQuery === null) {
-    return
-  }
-
-  return getDuckdbMarkerToken(trimmedLine) === duckdbServiceState.currentPendingDuckdbQuery.token
-    ? resolvePendingDuckdbQuery()
-    : appendPendingDuckdbStdoutLine(trimmedLine)
-}
-
-const handleDuckdbStderrLine = (line: string) => {
-  const trimmedLine = line.trim()
-
-  if (trimmedLine !== '') {
-    appendPendingDuckdbStderrLine(trimmedLine)
-  }
-}
-
-const flushDuckdbStdout = (chunk: string) => {
-  const lines = `${duckdbServiceState.stdoutBuffer}${chunk}`.split('\n')
-  duckdbServiceState.stdoutBuffer = lines.pop() ?? ''
-  lines.map(handleDuckdbStdoutLine)
-}
-
-const flushDuckdbStderr = (chunk: string) => {
-  const lines = `${duckdbServiceState.stderrBuffer}${chunk}`.split('\n')
-  duckdbServiceState.stderrBuffer = lines.pop() ?? ''
-  lines.map(handleDuckdbStderrLine)
-}
-
-const resetDuckdbRuntimeState = () => {
-  duckdbServiceState.duckdbProcess = null
-  duckdbServiceState.stdoutBuffer = ''
-  duckdbServiceState.stderrBuffer = ''
-}
-
-const waitForDuckdbProcessExit = (activeProcess: ChildProcessWithoutNullStreams) => {
-  return new Promise<void>((resolve) => {
-    activeProcess.once('exit', () => {
-      resolve()
+const getAppendConnectionCloseErrors = (appendConnections: DuckDBConnection[]): Array<Error | null> => {
+  return appendConnections.map((appendConnection) => {
+    return getCloseSyncError(() => {
+      appendConnection.closeSync()
     })
   })
 }
 
-const waitForTimeout = (timeoutMs: number) => {
-  return new Promise<void>((resolve) => {
-    setTimeout(resolve, timeoutMs)
-  })
-}
+const closeDuckdbServiceWithoutBarrier = async () => {
+  const activeConnection = duckdbServiceState.controlConnection
+  const activeAppendConnections = [...duckdbServiceState.appendConnections]
+  const activeInstance = duckdbServiceState.duckdbInstance
 
-const waitForDuckdbProcessExitWithTimeout = async (
-  activeProcess: ChildProcessWithoutNullStreams,
-  timeoutMs: number,
-): Promise<boolean> => {
-  return Promise.race([
-    waitForDuckdbProcessExit(activeProcess).then(() => {
-      return true
-    }),
-    waitForTimeout(timeoutMs).then(() => {
-      return false
-    }),
+  resetDuckdbRuntimeState()
+
+  const closeError = getCombinedCloseError([
+    getCloseSyncError(
+      activeConnection === null
+        ? null
+        : () => {
+            activeConnection.interrupt()
+            activeConnection.closeSync()
+          },
+    ),
+    ...getAppendConnectionCloseErrors(activeAppendConnections),
+    getCloseSyncError(
+      activeInstance === null
+        ? null
+        : () => {
+            activeInstance.closeSync()
+          },
+    ),
   ])
-}
 
-const isDuckdbProcessRunning = (activeProcess: ChildProcessWithoutNullStreams) => {
-  return activeProcess.exitCode === null && !activeProcess.killed
-}
-
-const sendDuckdbProcessSignal = (activeProcess: ChildProcessWithoutNullStreams, signal: DuckdbShutdownSignal) => {
-  if (isDuckdbProcessRunning(activeProcess)) {
-    activeProcess.kill(signal)
-  }
-}
-
-const closeDuckdbProcessDirect = async (activeProcess: ChildProcessWithoutNullStreams) => {
-  if (!isDuckdbProcessRunning(activeProcess)) {
-    return
+  try {
+    await releaseCurrentDuckdbOwnerLease()
+  } catch (error) {
+    throw closeError === null ? error : getChainedDuckdbError(closeError, error, 'lease release failed')
   }
 
-  if (activeProcess.stdin.writable && !activeProcess.stdin.destroyed) {
-    activeProcess.stdin.end('.quit\n')
+  if (closeError !== null) {
+    throw closeError
   }
-
-  if (await waitForDuckdbProcessExitWithTimeout(activeProcess, duckdbShutdownGracePeriodMs)) {
-    return
-  }
-
-  sendDuckdbProcessSignal(activeProcess, 'SIGTERM')
-
-  if (await waitForDuckdbProcessExitWithTimeout(activeProcess, duckdbShutdownGracePeriodMs)) {
-    return
-  }
-
-  sendDuckdbProcessSignal(activeProcess, 'SIGKILL')
-  await waitForDuckdbProcessExitWithTimeout(activeProcess, duckdbShutdownGracePeriodMs)
 }
 
 const closeDuckdbServiceDirect = async () => {
-  if (duckdbServiceState.duckdbProcess === null) {
-    await releaseCurrentDuckdbOwnerLease()
-    return
-  }
-
-  const activeProcess = duckdbServiceState.duckdbProcess
-  await closeDuckdbProcessDirect(activeProcess)
-  await releaseCurrentDuckdbOwnerLease()
+  return withDuckdbAppendBarrier(closeDuckdbServiceWithoutBarrier)
 }
 
 const registerDuckdbShutdownHooks = () => {
@@ -389,146 +388,135 @@ const registerDuckdbShutdownHooks = () => {
   })
 }
 
-const getDuckdbExitError = (code: number | null, signal: string | null) => {
-  const stderrOutput = duckdbServiceState.currentPendingDuckdbQuery?.stderrLines.join('\n').trim() ?? ''
-  const exitReason = signal ? `signal ${signal}` : `code ${String(code ?? 'unknown')}`
-  return new Error(stderrOutput === '' ? `DuckDB process exited with ${exitReason}` : stderrOutput)
+const createDuckdbInstance = async (runtimeConfig: DuckdbRuntimeConfig) => {
+  return DuckDBInstance.fromCache(runtimeConfig.databasePath, getDuckdbInstanceOptions(runtimeConfig))
 }
 
-const handleDuckdbProcessExit = (code: number | null, signal: string | null) => {
-  const error = getDuckdbExitError(code, signal)
-  const shouldLogUnexpectedExit = code !== 0 || signal !== null || duckdbServiceState.currentPendingDuckdbQuery !== null
+const cleanupFailedDuckdbStart = async (params: {
+  appendConnections: DuckDBConnection[]
+  controlConnection: DuckDBConnection | null
+  duckdbInstance: DuckDBInstance | null
+}) => {
+  const closeError = getCombinedCloseError([
+    getCloseSyncError(
+      params.controlConnection === null
+        ? null
+        : () => {
+            const controlConnection = params.controlConnection
 
-  if (shouldLogUnexpectedExit) {
-    console.error('[duckdb] process exited unexpectedly', {code, error: error.message, signal})
+            if (controlConnection === null) {
+              return
+            }
+
+            controlConnection.closeSync()
+          },
+    ),
+    ...getAppendConnectionCloseErrors(params.appendConnections),
+    getCloseSyncError(
+      params.duckdbInstance === null
+        ? null
+        : () => {
+            const duckdbInstance = params.duckdbInstance
+
+            if (duckdbInstance === null) {
+              return
+            }
+
+            duckdbInstance.closeSync()
+          },
+    ),
+  ])
+
+  if (closeError !== null) {
+    console.error('[duckdb] failed to clean up embedded runtime', closeError)
   }
 
-  rejectPendingDuckdbQuery(error)
+  try {
+    await releaseCurrentDuckdbOwnerLease()
+  } catch (error) {
+    resetDuckdbRuntimeState()
+    return closeError === null
+      ? getNormalizedDuckdbError(error)
+      : getChainedDuckdbError(closeError, error, 'lease release failed')
+  }
+
   resetDuckdbRuntimeState()
+  return closeError
 }
 
-const handleDuckdbProcessError = (error: Error) => {
-  console.error('[duckdb] process emitted error', {error: error.message})
-  rejectPendingDuckdbQuery(error)
-  resetDuckdbRuntimeState()
-}
+const startDuckdbProcess = async (): Promise<DuckDBConnection> => {
+  const appendLaneCount = getDuckdbRuntimeConfigValue().appendLaneCount
 
-const createDuckdbProcess = (runtimeConfig: DuckdbRuntimeConfig) => {
-  const nextProcess = spawn(runtimeConfig.binary, ['-json', runtimeConfig.databasePath], {stdio: 'pipe'})
-  nextProcess.stdout.setEncoding('utf8')
-  nextProcess.stderr.setEncoding('utf8')
-  nextProcess.stdout.on('data', flushDuckdbStdout)
-  nextProcess.stderr.on('data', flushDuckdbStderr)
-  nextProcess.on('exit', handleDuckdbProcessExit)
-  nextProcess.on('error', handleDuckdbProcessError)
-  nextProcess.stdin.write('.bail on\n')
-  return nextProcess
-}
+  if (
+    duckdbServiceState.controlConnection
+    && duckdbServiceState.duckdbInstance
+    && duckdbServiceState.appendConnections.length === appendLaneCount
+  ) {
+    return duckdbServiceState.controlConnection
+  }
 
-const getDuckdbCommandError = (error: Error | null | undefined) => {
-  const stderrOutput = duckdbServiceState.currentPendingDuckdbQuery?.stderrLines.join('\n').trim() ?? ''
-  return error ?? new Error(stderrOutput === '' ? 'DuckDB command failed' : stderrOutput)
-}
+  const runtimeConfig = ensureDuckdbRuntimeDirectories(getDuckdbRuntimeConfigValue())
+  let appendConnections: DuckDBConnection[] = []
+  let controlConnection: DuckDBConnection | null = null
+  let duckdbInstance: DuckDBInstance | null = null
 
-const writeDuckdbCommand = (statement: string, token: string) => {
-  return new Promise<void>((resolve, reject) => {
-    const activeProcess = duckdbServiceState.duckdbProcess
-
-    if (activeProcess === null) {
-      reject(new Error('DuckDB process not started'))
+  const createAppendConnections = async (remainingCount: number): Promise<void> => {
+    if (remainingCount === 0) {
       return
     }
 
-    activeProcess.stdin.write(getDuckdbCommandText(statement, token), (error) => {
-      return error ? reject(getDuckdbCommandError(error)) : resolve()
-    })
-  })
-}
-
-const runDuckdbCommand = async <T>(statement: string): Promise<T[]> => {
-  const token = randomUUID()
-  return new Promise<T[]>((resolve, reject) => {
-    duckdbServiceState.currentPendingDuckdbQuery = {
-      token,
-      stdoutLines: [],
-      stderrLines: [],
-      resolve: (rows) => {
-        resolve(rows as T[])
-      },
-      reject,
+    if (duckdbInstance === null) {
+      throw new Error('DuckDB instance not started')
     }
-    void writeDuckdbCommand(statement, token).catch((error) => {
-      rejectPendingDuckdbQuery(getDuckdbCommandError(error instanceof Error ? error : undefined))
-    })
-  })
-}
 
-const runDuckdbStartupStatements = async (statements: string[]): Promise<void> => {
-  if (statements.length === 0) {
-    return
+    const nextAppendConnection = await duckdbInstance.connect()
+    appendConnections = [...appendConnections, nextAppendConnection]
+    return createAppendConnections(remainingCount - 1)
   }
 
-  const [currentStatement = ''] = statements
-  await runDuckdbCommand(currentStatement)
-  return runDuckdbStartupStatements(statements.slice(1))
-}
+  await ensureCurrentDuckdbOwnerLease()
 
-const cleanupFailedDuckdbStart = (activeProcess: ChildProcessWithoutNullStreams) => {
-  return Effect.gen(function* () {
-    yield* Effect.tryPromise(() => {
-      return closeDuckdbProcessDirect(activeProcess)
-    }).pipe(
-      Effect.catchAll(() => {
-        return Effect.void
-      }),
-    )
+  try {
+    duckdbInstance = await createDuckdbInstance(runtimeConfig)
+    controlConnection = await duckdbInstance.connect()
+    await createAppendConnections(appendLaneCount)
 
-    yield* Effect.sync(() => {
-      if (duckdbServiceState.duckdbProcess === activeProcess) {
-        resetDuckdbRuntimeState()
-      }
-    })
-  })
-}
+    duckdbServiceState.appendConnections = appendConnections
+    duckdbServiceState.appendQueues = getInitialDuckdbAppendQueues(appendLaneCount)
+    duckdbServiceState.appendPendingCountByLane = getInitialDuckdbAppendLaneMetrics(appendLaneCount)
+    duckdbServiceState.appendMaxQueueDepthByLane = getInitialDuckdbAppendLaneMetrics(appendLaneCount)
+    duckdbServiceState.controlConnection = controlConnection
+    duckdbServiceState.duckdbInstance = duckdbInstance
+    duckdbServiceState.nextAppendLaneIndex = 0
+    registerDuckdbShutdownHooks()
 
-const ensureStartedDuckdbProcessEffect = () => {
-  return Effect.gen(function* () {
-    if (duckdbServiceState.duckdbProcess) {
-      return duckdbServiceState.duckdbProcess
-    }
-
-    const runtimeConfig = yield* Effect.sync(() => {
-      return ensureDuckdbRuntimeDirectories(getDuckdbRuntimeConfigValue())
-    })
-    yield* Effect.tryPromise(() => {
-      return ensureCurrentDuckdbOwnerLease()
-    })
-    const nextProcess = yield* Effect.sync(() => {
-      return createDuckdbProcess(runtimeConfig)
-    })
-
-    yield* Effect.sync(() => {
-      duckdbServiceState.duckdbProcess = nextProcess
-    })
-
-    yield* Effect.tryPromise(() => {
-      return runDuckdbStartupStatements(getDuckdbStartupStatements(runtimeConfig))
-    }).pipe(
-      Effect.catchAll((error) => {
-        return Effect.zipRight(cleanupFailedDuckdbStart(nextProcess), Effect.fail(error))
-      }),
-    )
-
-    yield* Effect.sync(() => {
-      registerDuckdbShutdownHooks()
-    })
-
-    return nextProcess
-  })
+    return controlConnection
+  } catch (error) {
+    const cleanupError = await cleanupFailedDuckdbStart({appendConnections, controlConnection, duckdbInstance})
+    throw cleanupError === null ? error : getChainedDuckdbError(error, cleanupError, 'startup cleanup failed')
+  }
 }
 
 const ensureStartedDuckdbProcess = async () => {
-  return Effect.runPromise(ensureStartedDuckdbProcessEffect())
+  const appendLaneCount = getDuckdbRuntimeConfigValue().appendLaneCount
+
+  if (
+    duckdbServiceState.controlConnection
+    && duckdbServiceState.duckdbInstance
+    && duckdbServiceState.appendConnections.length === appendLaneCount
+  ) {
+    return duckdbServiceState.controlConnection
+  }
+
+  if (duckdbServiceState.startupPromise !== null) {
+    return duckdbServiceState.startupPromise
+  }
+
+  duckdbServiceState.startupPromise = startDuckdbProcess().finally(() => {
+    duckdbServiceState.startupPromise = null
+  })
+
+  return duckdbServiceState.startupPromise
 }
 
 const enqueueDuckdbWork = async <T>(work: () => Promise<T>): Promise<T> => {
@@ -544,15 +532,231 @@ const enqueueDuckdbWork = async <T>(work: () => Promise<T>): Promise<T> => {
   return queuedWork
 }
 
+const getDuckdbAppendQueueDepth = () => {
+  return duckdbServiceState.appendPendingCountByLane.reduce((totalCount, currentCount) => {
+    return totalCount + currentCount
+  }, 0)
+}
+
+const incrementDuckdbAppendQueueDepth = (laneIndex: number) => {
+  const nextQueueDepthByLane = duckdbServiceState.appendPendingCountByLane.map((currentCount, currentLaneIndex) => {
+    return currentLaneIndex === laneIndex ? currentCount + 1 : currentCount
+  })
+
+  duckdbServiceState.appendPendingCountByLane = nextQueueDepthByLane
+  duckdbServiceState.appendMaxQueueDepthByLane = duckdbServiceState.appendMaxQueueDepthByLane.map(
+    (currentCount, currentLaneIndex) => {
+      const nextLaneCount = nextQueueDepthByLane[currentLaneIndex] ?? 0
+      return currentCount > nextLaneCount ? currentCount : nextLaneCount
+    },
+  )
+}
+
+const decrementDuckdbAppendQueueDepth = (laneIndex: number) => {
+  duckdbServiceState.appendPendingCountByLane = duckdbServiceState.appendPendingCountByLane.map(
+    (currentCount, currentLaneIndex) => {
+      return currentLaneIndex === laneIndex ? Math.max(0, currentCount - 1) : currentCount
+    },
+  )
+}
+
+const recordDuckdbAppendBatchStart = () => {
+  duckdbServiceState.appendTotalBatchesStarted += 1
+}
+
+const recordDuckdbAppendBatchCompletion = (durationMs: number) => {
+  duckdbServiceState.appendLastDurationMs = durationMs
+  duckdbServiceState.appendTotalBatchesCompleted += 1
+  duckdbServiceState.appendTotalDurationMs += durationMs
+}
+
+const getNextDuckdbAppendLaneIndex = () => {
+  const appendLaneCount = duckdbServiceState.appendConnections.length
+
+  if (appendLaneCount === 0) {
+    throw new Error('DuckDB append lanes not started')
+  }
+
+  const nextLaneIndex = duckdbServiceState.nextAppendLaneIndex % appendLaneCount
+  duckdbServiceState.nextAppendLaneIndex = (nextLaneIndex + 1) % appendLaneCount
+  return nextLaneIndex
+}
+
+const enqueueDuckdbAppendLaneWork = async <T>(
+  laneIndex: number,
+  work: (appendConnection: DuckDBConnection) => Promise<T>,
+): Promise<T> => {
+  incrementDuckdbAppendQueueDepth(laneIndex)
+  const appendQueue = duckdbServiceState.appendQueues[laneIndex] ?? Promise.resolve()
+  const queuedWork = appendQueue.then(async () => {
+    const startedAtMs = Date.now()
+
+    recordDuckdbAppendBatchStart()
+
+    try {
+      return await work(getDuckdbAppendConnection(laneIndex))
+    } finally {
+      recordDuckdbAppendBatchCompletion(Date.now() - startedAtMs)
+    }
+  })
+
+  duckdbServiceState.appendQueues[laneIndex] = queuedWork.then(
+    () => {
+      decrementDuckdbAppendQueueDepth(laneIndex)
+      return undefined
+    },
+    () => {
+      decrementDuckdbAppendQueueDepth(laneIndex)
+      return undefined
+    },
+  )
+
+  return queuedWork
+}
+
+type DuckdbStatementSplitState = {buffer: string; inDouble: boolean; inSingle: boolean; statements: string[]}
+
+const appendDuckdbStatementBuffer = (state: DuckdbStatementSplitState, value: string): DuckdbStatementSplitState => {
+  return {...state, buffer: `${state.buffer}${value}`}
+}
+
+const flushDuckdbStatementBuffer = (state: DuckdbStatementSplitState): DuckdbStatementSplitState => {
+  const trimmedStatement = state.buffer.trim()
+
+  return trimmedStatement === ''
+    ? {...state, buffer: ''}
+    : {...state, buffer: '', statements: [...state.statements, trimmedStatement]}
+}
+
+const splitDuckdbStatementsStep = (
+  sql: string,
+  index: number,
+  state: DuckdbStatementSplitState,
+): DuckdbStatementSplitState => {
+  if (index >= sql.length) {
+    return flushDuckdbStatementBuffer(state)
+  }
+
+  const currentCharacter = sql[index] ?? ''
+  const nextCharacter = sql[index + 1] ?? ''
+
+  if (currentCharacter === "'" && state.inSingle && nextCharacter === "'") {
+    return splitDuckdbStatementsStep(sql, index + 2, appendDuckdbStatementBuffer(state, "''"))
+  }
+
+  if (currentCharacter === '"' && state.inDouble && nextCharacter === '"') {
+    return splitDuckdbStatementsStep(sql, index + 2, appendDuckdbStatementBuffer(state, '""'))
+  }
+
+  if (currentCharacter === "'" && !state.inDouble) {
+    return splitDuckdbStatementsStep(sql, index + 1, {
+      ...appendDuckdbStatementBuffer(state, currentCharacter),
+      inSingle: !state.inSingle,
+    })
+  }
+
+  if (currentCharacter === '"' && !state.inSingle) {
+    return splitDuckdbStatementsStep(sql, index + 1, {
+      ...appendDuckdbStatementBuffer(state, currentCharacter),
+      inDouble: !state.inDouble,
+    })
+  }
+
+  return currentCharacter === ';' && !state.inSingle && !state.inDouble
+    ? splitDuckdbStatementsStep(sql, index + 1, flushDuckdbStatementBuffer(state))
+    : splitDuckdbStatementsStep(sql, index + 1, appendDuckdbStatementBuffer(state, currentCharacter))
+}
+
+const splitDuckdbStatements = (statement: string) => {
+  return splitDuckdbStatementsStep(statement, 0, {buffer: '', inDouble: false, inSingle: false, statements: []})
+    .statements
+}
+
+const runDuckdbSingleStatement = async (duckdbConnection: DuckDBConnection, statement: string) => {
+  await duckdbConnection.run(statement)
+}
+
+const runDuckdbSingleStatementAndReadAll = async <T>(
+  duckdbConnection: DuckDBConnection,
+  statement: string,
+): Promise<T[]> => {
+  const reader = await duckdbConnection.runAndReadAll(statement)
+  return reader.getRowObjectsJson() as T[]
+}
+
+const runDuckdbStatementsDirect = async (duckdbConnection: DuckDBConnection, statements: string[]): Promise<void> => {
+  const [currentStatement = ''] = statements
+
+  if (!currentStatement) {
+    return
+  }
+
+  await runDuckdbSingleStatement(duckdbConnection, currentStatement)
+  return runDuckdbStatementsDirect(duckdbConnection, statements.slice(1))
+}
+
+const runDuckdbStatementsAndReadLastDirect = async <T>(
+  duckdbConnection: DuckDBConnection,
+  statements: string[],
+): Promise<T[]> => {
+  const [currentStatement = ''] = statements
+
+  if (!currentStatement) {
+    return []
+  }
+
+  return statements.length === 1
+    ? runDuckdbSingleStatementAndReadAll<T>(duckdbConnection, currentStatement)
+    : runDuckdbSingleStatement(duckdbConnection, currentStatement).then(() => {
+        return runDuckdbStatementsAndReadLastDirect<T>(duckdbConnection, statements.slice(1))
+      })
+}
+
+const runDuckdbJsonQueryDirect = async <T>(statement: string): Promise<T[]> => {
+  return runDuckdbStatementsAndReadLastDirect<T>(getDuckdbConnection(), splitDuckdbStatements(statement))
+}
+
+const runDuckdbStatementDirect = async (statement: string) => {
+  await runDuckdbStatementsDirect(getDuckdbConnection(), splitDuckdbStatements(statement))
+}
+
+const getDuckdbRollbackError = async (): Promise<Error | null> => {
+  try {
+    await runDuckdbStatementDirect('ROLLBACK')
+    return null
+  } catch (error) {
+    return getNormalizedDuckdbError(error)
+  }
+}
+
 export const getDuckdbRuntimeConfig = () => {
   return {...getDuckdbRuntimeConfigValue()}
+}
+
+export const getDuckdbAppendRuntimeMetrics = (): DuckdbAppendRuntimeMetrics => {
+  const queueDepthByLane = [...duckdbServiceState.appendPendingCountByLane]
+  const maxQueueDepthByLane = [...duckdbServiceState.appendMaxQueueDepthByLane]
+
+  return {
+    batchesCompleted: duckdbServiceState.appendTotalBatchesCompleted,
+    batchesStarted: duckdbServiceState.appendTotalBatchesStarted,
+    laneCount: getDuckdbRuntimeConfigValue().appendLaneCount,
+    lastDurationMs: duckdbServiceState.appendLastDurationMs,
+    maxQueueDepth: maxQueueDepthByLane.reduce((maxCount, currentCount) => {
+      return maxCount > currentCount ? maxCount : currentCount
+    }, 0),
+    maxQueueDepthByLane,
+    queueDepth: getDuckdbAppendQueueDepth(),
+    queueDepthByLane,
+    totalDurationMs: duckdbServiceState.appendTotalDurationMs,
+  }
 }
 
 export const runDuckdbJsonQuery = async <T>(statement: string): Promise<T[]> => {
   return withNormalizedDuckdbError(() => {
     return enqueueDuckdbWork(async () => {
       await ensureStartedDuckdbProcess()
-      return runDuckdbCommand<T>(statement)
+      return runDuckdbJsonQueryDirect<T>(statement)
     })
   })
 }
@@ -561,7 +765,19 @@ export const runDuckdbStatement = async (statement: string) => {
   await withNormalizedDuckdbError(() => {
     return enqueueDuckdbWork(async () => {
       await ensureStartedDuckdbProcess()
-      await runDuckdbCommand(statement)
+      await runDuckdbStatementDirect(statement)
+    })
+  })
+}
+
+export const runDuckdbAppendJsonQuery = async <T>(statement: string): Promise<T[]> => {
+  return withNormalizedDuckdbError(async () => {
+    await ensureStartedDuckdbProcess()
+    await waitForDuckdbAppendBarrier()
+    const appendLaneIndex = getNextDuckdbAppendLaneIndex()
+
+    return enqueueDuckdbAppendLaneWork(appendLaneIndex, (appendConnection) => {
+      return runDuckdbStatementsAndReadLastDirect<T>(appendConnection, splitDuckdbStatements(statement))
     })
   })
 }
@@ -570,18 +786,19 @@ export const runDuckdbTransaction = async <T>(work: (runner: DuckdbTransactionRu
   return withNormalizedDuckdbError(() => {
     return enqueueDuckdbWork(async () => {
       await ensureStartedDuckdbProcess()
-      await runDuckdbCommand('BEGIN TRANSACTION')
+      await runDuckdbStatementDirect('BEGIN TRANSACTION')
 
       try {
         const result = await work({
           queryJson: async <T>(statement: string) => {
-            return runDuckdbCommand<T>(statement)
+            return runDuckdbJsonQueryDirect<T>(statement)
           },
           run: async (statement: string) => {
-            await runDuckdbCommand(statement)
+            await runDuckdbStatementDirect(statement)
           },
         })
-        await runDuckdbCommand('COMMIT')
+
+        await runDuckdbStatementDirect('COMMIT')
         return result
       } catch (error) {
         const rollbackError = await getDuckdbRollbackError()
@@ -594,7 +811,14 @@ export const runDuckdbTransaction = async <T>(work: (runner: DuckdbTransactionRu
 
 export const runDuckdbMaintenance = async (command: 'checkpoint' | 'force_checkpoint') => {
   const statement = command === 'checkpoint' ? 'CHECKPOINT' : 'PRAGMA force_checkpoint'
-  await runDuckdbStatement(statement)
+  await withNormalizedDuckdbError(() => {
+    return enqueueDuckdbWork(async () => {
+      await ensureStartedDuckdbProcess()
+      await withDuckdbAppendBarrier(async () => {
+        await runDuckdbStatementDirect(statement)
+      })
+    })
+  })
 }
 
 const hasDuckdbSnapshotWal = (snapshotWalPath: string) => {
@@ -617,7 +841,7 @@ const copyDuckdbSnapshot = (runtimeConfig: DuckdbRuntimeConfig): Effect.Effect<D
     }
 
     yield* Effect.tryPromise(() => {
-      return runDuckdbCommand('CHECKPOINT')
+      return runDuckdbStatementDirect('CHECKPOINT')
     })
 
     const createdAt = new Date().toISOString()
@@ -649,7 +873,9 @@ export const createDuckdbSnapshot = async (): Promise<DuckdbSnapshot> => {
   return withNormalizedDuckdbError(() => {
     return enqueueDuckdbWork(async () => {
       await ensureStartedDuckdbProcess()
-      return Effect.runPromise(copyDuckdbSnapshot(getDuckdbRuntimeConfigValue()))
+      return withDuckdbAppendBarrier(() => {
+        return Effect.runPromise(copyDuckdbSnapshot(getDuckdbRuntimeConfigValue()))
+      })
     })
   })
 }
@@ -677,7 +903,7 @@ export const closeDuckdbService = async () => {
 }
 
 registerWriterDemotionHandler(async () => {
-  if (duckdbServiceState.duckdbProcess !== null) {
+  if (duckdbServiceState.controlConnection !== null || duckdbServiceState.duckdbInstance !== null) {
     await closeDuckdbService()
   }
 })

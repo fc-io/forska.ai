@@ -9,6 +9,7 @@ type MartRefreshTaskRow = {
   articleId: string | null
   id: string
   projectId: string | null
+  refreshGeneration: number
   refreshScope: MartRefreshScope
 }
 
@@ -23,8 +24,10 @@ let martRefreshDrainPromise: Promise<void> | null = null
 let martRefreshDrainTimer: ReturnType<typeof setTimeout> | null = null
 
 const martRefreshBatchLimit = 4
+const martRefreshDrainBudgetMs = 100
 const martRefreshRetryDelayMs = 5000
 const martRefreshScheduleDelayMs = 250
+const martRefreshYieldDelayMs = 0
 
 const getProjectRefreshSql = (projectId: string) => {
   const projectLiteral = getSqlLiteral(projectId)
@@ -239,36 +242,6 @@ const getProjectRefreshSql = (projectId: string) => {
         current_timestamp
       FROM mart.prompt_answer_fact
       WHERE project_id = ${projectLiteral};
-      COMMIT;
-    `,
-    `
-      BEGIN TRANSACTION;
-      DELETE FROM mart.review_article_filter_posting WHERE project_id = ${projectLiteral};
-      INSERT INTO mart.review_article_filter_posting (
-        project_id,
-        prompt_id,
-        answer_id,
-        article_seq_list,
-        article_count,
-        posting_updated_at
-      )
-      SELECT
-        fact.project_id,
-        fact.prompt_id,
-        dict.answer_id,
-        LIST(ordinal.article_seq ORDER BY ordinal.article_seq ASC) AS article_seq_list,
-        COUNT(*) AS article_count,
-        current_timestamp
-      FROM mart.prompt_answer_fact fact
-      INNER JOIN app.review_answer_dictionary dict
-        ON dict.project_id = fact.project_id
-       AND dict.prompt_id = fact.prompt_id
-       AND dict.answer_value = fact.answer_value
-      INNER JOIN app.project_article_ordinal ordinal
-        ON ordinal.project_id = fact.project_id
-       AND ordinal.article_id = fact.article_id
-      WHERE fact.project_id = ${projectLiteral}
-      GROUP BY fact.project_id, fact.prompt_id, dict.answer_id;
       COMMIT;
     `,
     `
@@ -581,7 +554,8 @@ const getQueuedTasks = async () => {
       id,
       refresh_scope AS refreshScope,
       project_id AS projectId,
-      article_id AS articleId
+      article_id AS articleId,
+      COALESCE(refresh_generation, 0) AS refreshGeneration
     FROM app.mart_refresh_queue
     ORDER BY created_at ASC, id ASC
     LIMIT ${martRefreshBatchLimit}
@@ -597,14 +571,18 @@ const getHasQueuedTasks = async () => {
   return Number(rows[0]?.count ?? 0) > 0
 }
 
-const deleteQueuedTasks = async (taskIds: string[]) => {
-  if (taskIds.length === 0) {
+const deleteQueuedTasks = async (tasks: MartRefreshTaskRow[]) => {
+  if (tasks.length === 0) {
     return
   }
 
   await getAppDatabaseService().run(`
     DELETE FROM app.mart_refresh_queue
-    WHERE id IN (${getQuotedStringList(taskIds).join(', ')})
+    WHERE ${tasks
+      .map((task) => {
+        return `(id = ${getSqlLiteral(task.id)} AND COALESCE(refresh_generation, 0) = ${task.refreshGeneration})`
+      })
+      .join(' OR ')}
   `)
 }
 
@@ -666,16 +644,39 @@ const refreshJudgmentArticle = async (articleId: string) => {
   await getAppDatabaseService().run(getJudgmentArticleRefreshSql(articleId))
 }
 
-const processQueuedMartRefreshes = async (): Promise<void> => {
-  const queuedTasks = await getQueuedTasks()
+const collectImpactedProjectIds = async (articleIds: string[], projectIds: Set<string>): Promise<Set<string>> => {
+  const [currentArticleId = ''] = articleIds
 
-  if (queuedTasks.length === 0) {
+  if (!currentArticleId) {
+    return projectIds
+  }
+
+  await refreshJudgmentArticle(currentArticleId)
+
+  return collectImpactedProjectIds(
+    articleIds.slice(1),
+    new Set([...projectIds, ...(await getImpactedProjectIdsForArticle(currentArticleId))]),
+  )
+}
+
+const refreshProjects = async (projectIds: string[]): Promise<void> => {
+  const [currentProjectId = ''] = projectIds
+
+  if (!currentProjectId) {
     return
   }
 
-  const taskIds = queuedTasks.map((task) => {
-    return task.id
-  })
+  await refreshProject(currentProjectId)
+  return refreshProjects(projectIds.slice(1))
+}
+
+const processQueuedMartRefreshPass = async (): Promise<boolean> => {
+  const queuedTasks = await getQueuedTasks()
+
+  if (queuedTasks.length === 0) {
+    return false
+  }
+
   const articleIds = getUniqueValues(
     queuedTasks
       .filter((task) => {
@@ -685,30 +686,52 @@ const processQueuedMartRefreshes = async (): Promise<void> => {
         return task.articleId
       }),
   )
-  const projectIds = new Set(
-    getUniqueValues(
-      queuedTasks
-        .filter((task) => {
-          return task.refreshScope === 'project'
-        })
-        .map((task) => {
-          return task.projectId
-        }),
+  const projectIds = await collectImpactedProjectIds(
+    articleIds,
+    new Set(
+      getUniqueValues(
+        queuedTasks
+          .filter((task) => {
+            return task.refreshScope === 'project'
+          })
+          .map((task) => {
+            return task.projectId
+          }),
+      ),
     ),
   )
 
-  for (const articleId of articleIds) {
-    await refreshJudgmentArticle(articleId)
-    for (const projectId of await getImpactedProjectIdsForArticle(articleId)) {
-      projectIds.add(projectId)
-    }
+  await refreshProjects(Array.from(projectIds))
+  await deleteQueuedTasks(queuedTasks)
+
+  return getHasQueuedTasks()
+}
+
+const yieldToEventLoop = async (): Promise<void> => {
+  await new Promise((resolve) => {
+    setTimeout(resolve, martRefreshYieldDelayMs)
+  })
+}
+
+const continueQueuedMartRefreshesAfterYield = async (): Promise<void> => {
+  await yieldToEventLoop()
+  return processQueuedMartRefreshesWithinBudget(Date.now() + martRefreshDrainBudgetMs)
+}
+
+const processQueuedMartRefreshesWithinBudget = async (deadlineMs: number): Promise<void> => {
+  const hasMoreQueuedTasks = await processQueuedMartRefreshPass()
+
+  if (!hasMoreQueuedTasks) {
+    return
   }
 
-  for (const projectId of projectIds) {
-    await refreshProject(projectId)
-  }
+  return Date.now() >= deadlineMs
+    ? continueQueuedMartRefreshesAfterYield()
+    : processQueuedMartRefreshesWithinBudget(deadlineMs)
+}
 
-  await deleteQueuedTasks(taskIds)
+const processQueuedMartRefreshes = async (): Promise<void> => {
+  return processQueuedMartRefreshesWithinBudget(Date.now() + martRefreshDrainBudgetMs)
 }
 
 const scheduleQueuedMartRefreshes = (delayMs = martRefreshScheduleDelayMs) => {
@@ -750,6 +773,7 @@ const queueMartRefreshTasks = async (tasks: QueueMartRefreshTask[]) => {
       })
       .join(', ')}
     ON CONFLICT(refresh_scope, project_key, article_key) DO UPDATE SET
+      refresh_generation = app.mart_refresh_queue.refresh_generation + 1,
       reason = excluded.reason,
       updated_at = NOW()
   `)
