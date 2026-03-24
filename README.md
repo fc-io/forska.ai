@@ -2,14 +2,11 @@
 
 Local-first deep research app for systematic reviews.
 
-Core product config lives in the Forska UI and DuckDB. Avoid `.env` setup for normal local dev. Use shell env only for one-off machine-local overrides, background jobs, or secrets.
+Core product config lives in the Forska UI and the local databases. Avoid `.env` setup for normal local dev. Use shell env only for one-off machine-local overrides, background jobs, or secrets.
 
 Goal: standalone single-user app (your own computer). No admin role. No hosted multi-tenant web app.
 
-Current: Bun/Elysia API, SolidJS/Vite client, and a DuckDB-only runtime with no legacy analytics or Better Auth runtime.
-Roadmap: finish DuckDB-native cleanup, remove old Postgres/bootstrap assumptions after import, and simplify leftover legacy naming/docs.
-
-Plans: `plans/old/DUCKDB2_PLAN.md`, `plans/old/NATIVE_DUCK_PLAN.md`.
+Current: Bun/Elysia API, SolidJS/Vite client, DuckDB for local app/query data, and SQLite for local job/state storage.
 
 ## Abstract
 
@@ -20,7 +17,7 @@ We have built and tested our system on a local workstation, but to scale up to h
 Background:
 Creating high quality systematic reviews is an arduous process – formulating an exhaustive search strategy, screening many thousands of abstracts, resolving ambiguous inclusion decisions, extracting heterogeneous data, assessing bias, synthesizing and presenting findings. Keeping up with evolving evidence and tools makes the whole endeavor complex and highly time-consuming. AI has shown promise in streamlining this process, but current deep research offerings, including those aimed at the scientific community, suffer from poor search and screening implementations. The cause is the inherited fundamentals of todays AI models and RAG systems. This has led to an increase in low quality review papers.
 
-With this project we will propose a human-centered, human-in-the-loop workflow that accelerates searching and screening while preserving accountability at every step. Reviewers define the question and criteria; assistive agents help expand search terms, filter and organize results, de-duplicate records, and surface likely inclusions. Every decision is transparent, logged, and revisitable. Rather than replacing expert judgment, the system enhances it. The platform supports calibration on small sets, structured reasons for inclusion or exclusion, disagreement resolution, and iterative refinement of search strategies as gaps are discovered. The system also allows for blinded comparison of AI and human decisions and output.
+With this project we will propose a human-in-the-loop workflow that accelerates searching and screening while preserving accountability at every step. Reviewers define the question and criteria; assistive agents help expand search terms, filter and organize results, de-duplicate records, and surface likely inclusions. Every decision is transparent, logged, and revisitable. Rather than replacing expert judgment, the system enhances it. The platform supports calibration on small sets, structured reasons for inclusion or exclusion, disagreement resolution, and iterative refinement of search strategies as gaps are discovered. The system also allows for blinded comparison of AI and human decisions and output.
 
 Goal and outcomes:
 The goal is to both publish review papers in the healthcare domain and papers on the technical aspects and quality of the system.
@@ -31,9 +28,7 @@ We also plan to release all the code for the system as open source.
 
 ## Resource Usage
 
-The app stores article metadata and cached PDFs locally in DuckDB. The local API/app can call local/manual providers or tunnel to HPC-hosted inference.
-
-Current runtime: Bun, Elysia, Solid, DuckDB. Legacy Docker/Postgres docs/scripts remain only for old repair/import flows.
+The app stores article metadata and cached PDFs locally with DuckDB and SQLite. The local API/app can call local/manual providers or tunnel to HPC-hosted inference.
 
 Out plan is that the system will be efficiently run on a:
 ssc.large.highmem, 4 vCPU, 16 GB RAM with 4-8 TB of additional storage
@@ -71,7 +66,6 @@ More local runtime notes: [RUN LOCAL](./docs/README_RUN_LOCAL.md)
 
 ## Alvis Quick Start
 
-- Build or refresh the SGLang image for Alvis: `bun run build:docker:sglang`
 - Sync the image to Alvis: `bun run alvis:sglang:pull`
 - Launch the default Alvis shape: `bun run alvis:launch:a100:fat`
 - Or launch the 4x non-fat A100 shape: `bun run alvis:launch:a100:4`
