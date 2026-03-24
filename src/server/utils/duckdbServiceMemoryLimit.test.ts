@@ -86,3 +86,35 @@ test('duckdb service applies the configured memory limit on startup', () => {
     removeDuckdbFiles(duckdbPath)
   }
 })
+
+test('duckdb service treats empty interactive json output as an empty row set', () => {
+  const duckdbPath = `/tmp/f1-duckdb-service-empty-result-${Date.now()}.duckdb`
+
+  try {
+    const stdout = getSpawnOutput(
+      globalThis.Bun.spawnSync(
+        [
+          'bun',
+          '-e',
+          `
+            const {closeDuckdbService, runDuckdbJsonQuery, runDuckdbStatement} = await import('./src/server/utils/duckdbService.ts')
+            await runDuckdbStatement('CREATE TABLE sample(value INTEGER)')
+            const rows = await runDuckdbJsonQuery('SELECT value FROM sample ORDER BY value')
+            console.log(JSON.stringify(rows))
+            await closeDuckdbService()
+          `,
+        ],
+        {
+          cwd: process.cwd(),
+          env: {...process.env, DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'writer'},
+        },
+      ),
+    )
+
+    const rows = JSON.parse(stdout) as unknown[]
+
+    expect(rows).toEqual([])
+  } finally {
+    removeDuckdbFiles(duckdbPath)
+  }
+})
