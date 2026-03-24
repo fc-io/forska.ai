@@ -150,6 +150,7 @@ type JudgmentJobSqliteClaimedOutboxBatch = {claim: JudgmentJobSqliteOutboxClaim;
 
 const openDatabases = new Map<string, Database>()
 const ownedJobLeases = new Map<string, JudgmentJobLease>()
+const ownedJobLeaseOperationCounts = new Map<string, number>()
 const judgmentJobLeaseHeartbeatIntervalMs = 5_000
 let judgmentJobLeaseHeartbeatStarted = false
 
@@ -174,6 +175,26 @@ const closeOpenDatabase = (jobId: string) => {
 const releaseOwnedJobLeaseState = (jobId: string) => {
   ownedJobLeases.delete(jobId)
   closeOpenDatabase(jobId)
+}
+
+const getOwnedJobLeaseOperationCount = (jobId: string) => {
+  return ownedJobLeaseOperationCounts.get(jobId) ?? 0
+}
+
+const startOwnedJobLeaseOperation = (jobId: string) => {
+  ownedJobLeaseOperationCounts.set(jobId, getOwnedJobLeaseOperationCount(jobId) + 1)
+}
+
+const finishOwnedJobLeaseOperation = (jobId: string) => {
+  const nextCount = Math.max(0, getOwnedJobLeaseOperationCount(jobId) - 1)
+
+  return nextCount === 0
+    ? ownedJobLeaseOperationCounts.delete(jobId)
+    : ownedJobLeaseOperationCounts.set(jobId, nextCount)
+}
+
+const hasOwnedJobLeaseOperation = (jobId: string) => {
+  return getOwnedJobLeaseOperationCount(jobId) > 0
 }
 
 const heartbeatOwnedJobLease = async (jobId: string) => {
@@ -542,8 +563,14 @@ const withOwnedJobDatabase = async <T>(
   operation: (database: Database) => T,
   serverJobId?: string,
 ): Promise<T | null> => {
-  await ensureOwnedJobLease(jobId, serverJobId)
-  return withJobDatabase(jobId, createIfMissing, operation)
+  startOwnedJobLeaseOperation(jobId)
+
+  try {
+    await ensureOwnedJobLease(jobId, serverJobId)
+    return withJobDatabase(jobId, createIfMissing, operation)
+  } finally {
+    finishOwnedJobLeaseOperation(jobId)
+  }
 }
 
 const releaseOwnedJobLease = async (jobId: string) => {
@@ -1077,7 +1104,7 @@ const sqliteService = {
     await Promise.all(
       Array.from(ownedJobLeases.keys())
         .filter((jobId) => {
-          return !activeJobIds.has(jobId)
+          return !activeJobIds.has(jobId) && !hasOwnedJobLeaseOperation(jobId)
         })
         .map((jobId) => {
           return releaseOwnedJobLease(jobId)
@@ -1106,6 +1133,39 @@ const sqliteService = {
         return Number(result.changes ?? 0)
       })) ?? 0
     )
+  },
+  completeClaimedOutboxRows: async ({
+    claimId,
+    jobId,
+    rows,
+  }: {
+    claimId: string
+    jobId: string
+    rows: Array<{errorMessage: string | null; outboxSeq: number}>
+  }) => {
+    return rows.length === 0
+      ? 0
+      : ((await withOwnedJobDatabase(jobId, false, (database) => {
+          const now = new Date().toISOString()
+          const update = database.query(`
+            UPDATE judgment_outbox
+            SET exported_at = ?,
+                export_claim_id = NULL,
+                export_claimed_at = NULL,
+                export_claimed_by = NULL,
+                last_error = ?
+            WHERE outbox_seq = ?
+              AND export_claim_id = ?
+              AND exported_at IS NULL
+          `)
+
+          return database.transaction((claimedRows: Array<{errorMessage: string | null; outboxSeq: number}>) => {
+            return claimedRows.reduce((count, row) => {
+              const result = update.run(now, row.errorMessage, row.outboxSeq, claimId) as {changes?: number}
+              return count + Number(result.changes ?? 0)
+            }, 0)
+          })(rows)
+        })) ?? 0)
   },
   releaseOutboxClaim: async ({
     claimId,
