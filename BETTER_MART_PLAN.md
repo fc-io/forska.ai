@@ -65,8 +65,8 @@
 - `bun test`
 - `bun run build`
 - `bun run dev:server`
-- `bun run db:query:snapshot -- --sql "SELECT COUNT(*) FROM app.mart_refresh_queue"`
-- `bun run db:query:snapshot -- --sql "SELECT COUNT(*) FROM app.judgment"`
+- `bun run db:query:snapshot -- --sql="SELECT COUNT(*) FROM app.mart_refresh_queue"`
+- `bun run db:query:snapshot -- --sql="SELECT COUNT(*) FROM app.judgment"`
 
 ## Detailed plan
 
