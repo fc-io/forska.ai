@@ -38,8 +38,8 @@ export type DuckdbOwnerLeaseHistoryEntry = {
 
 const duckdbOwnerLeaseHistoryLimit = 50
 
-const normalizeHostname = (value: string) => {
-  return value.trim().toLowerCase()
+const normalizeHostname = (value: string | null | undefined) => {
+  return typeof value === 'string' ? value.trim().toLowerCase() : ''
 }
 
 const isNonEmptyString = (value: string | null | undefined): value is string => {
