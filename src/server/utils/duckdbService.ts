@@ -296,14 +296,6 @@ const resetDuckdbRuntimeState = () => {
   duckdbServiceState.stderrBuffer = ''
 }
 
-const safeReleaseCurrentDuckdbOwnerLease = async () => {
-  try {
-    await releaseCurrentDuckdbOwnerLease()
-  } catch (error) {
-    console.error('[duckdb] failed to release writer lease', error)
-  }
-}
-
 const waitForDuckdbProcessExit = (activeProcess: ChildProcessWithoutNullStreams) => {
   return new Promise<void>((resolve) => {
     activeProcess.once('exit', () => {
@@ -404,15 +396,21 @@ const getDuckdbExitError = (code: number | null, signal: string | null) => {
 }
 
 const handleDuckdbProcessExit = (code: number | null, signal: string | null) => {
-  rejectPendingDuckdbQuery(getDuckdbExitError(code, signal))
+  const error = getDuckdbExitError(code, signal)
+  const shouldLogUnexpectedExit = code !== 0 || signal !== null || duckdbServiceState.currentPendingDuckdbQuery !== null
+
+  if (shouldLogUnexpectedExit) {
+    console.error('[duckdb] process exited unexpectedly', {code, error: error.message, signal})
+  }
+
+  rejectPendingDuckdbQuery(error)
   resetDuckdbRuntimeState()
-  void safeReleaseCurrentDuckdbOwnerLease()
 }
 
 const handleDuckdbProcessError = (error: Error) => {
+  console.error('[duckdb] process emitted error', {error: error.message})
   rejectPendingDuckdbQuery(error)
   resetDuckdbRuntimeState()
-  void safeReleaseCurrentDuckdbOwnerLease()
 }
 
 const createDuckdbProcess = (runtimeConfig: DuckdbRuntimeConfig) => {
@@ -479,14 +477,6 @@ const cleanupFailedDuckdbStart = (activeProcess: ChildProcessWithoutNullStreams)
   return Effect.gen(function* () {
     yield* Effect.tryPromise(() => {
       return closeDuckdbProcessDirect(activeProcess)
-    }).pipe(
-      Effect.catchAll(() => {
-        return Effect.void
-      }),
-    )
-
-    yield* Effect.tryPromise(() => {
-      return safeReleaseCurrentDuckdbOwnerLease()
     }).pipe(
       Effect.catchAll(() => {
         return Effect.void

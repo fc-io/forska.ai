@@ -4,9 +4,11 @@ import {rateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {ConnectionError} from './connectionHealth.ts'
 import {getCodexMaxInflight} from './getCodexMaxInflight.ts'
 import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
+import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
 import type {judgmentsJobsGetRunningJobs} from './judgmentsJobsGetRunningJobs.ts'
 import {getAndUpdateReadyPrompts, type PromptToProcess} from './judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts'
 import {processPromptWithLLM} from './judgmentsJobsSendToLLM/processPromptWithLLM.ts'
+import {requeueAbandonedSentPrompts} from './requeueAbandonedSentPrompts.ts'
 
 const shuffle = <T>(items: T[]): T[] => {
   return items
@@ -36,18 +38,67 @@ const getReadyCountsByJob = async (jobIds: string[]): Promise<Map<string, number
   const hasJobs = jobIds.length > 0
   if (!hasJobs) return new Map()
 
-  const readyCounts = await getAppDatabaseService().queryJson<{jobId: string; ready: number}>(`
-    SELECT job_id AS jobId, COUNT(*) AS ready
-    FROM app.judgment_job_prompt
-    WHERE status = 'ready'
-      AND job_id IN (${getQuotedStringList(jobIds).join(', ')})
-    GROUP BY job_id
-  `)
+  const sqliteService = getJudgmentJobSqliteService()
+  const sqliteJobIds = jobIds.filter((jobId) => {
+    return sqliteService.hasJob(jobId)
+  })
+  const duckdbJobIds = jobIds.filter((jobId) => {
+    return !sqliteService.hasJob(jobId)
+  })
+
+  const sqlitePairs = await Promise.all(
+    sqliteJobIds.map(async (jobId) => {
+      return [jobId, await sqliteService.getReadyCount(jobId)] as const
+    }),
+  )
+
+  const readyCounts =
+    duckdbJobIds.length === 0
+      ? []
+      : await getAppDatabaseService().queryJson<{jobId: string; ready: number}>(`
+          SELECT job_id AS jobId, COUNT(*) AS ready
+          FROM app.judgment_job_prompt
+          WHERE status = 'ready'
+            AND job_id IN (${getQuotedStringList(duckdbJobIds).join(', ')})
+          GROUP BY job_id
+        `)
 
   const pairs = readyCounts.map((row) => {
     return [row.jobId, Number(row.ready)] as const
   })
-  return new Map(pairs)
+  return new Map([...pairs, ...sqlitePairs])
+}
+
+const requeueRejectedPrompts = async (prompts: PromptToProcess[]) => {
+  const sqliteService = getJudgmentJobSqliteService()
+  const sqlitePrompts = prompts.filter((prompt) => {
+    return sqliteService.hasJob(prompt.jobId)
+  })
+  const duckdbPrompts = prompts.filter((prompt) => {
+    return !sqliteService.hasJob(prompt.jobId)
+  })
+
+  await Promise.all(
+    sqlitePrompts.map((prompt) => {
+      return sqliteService.markPromptAsRetry(prompt.jobId, prompt.recordId)
+    }),
+  )
+
+  const rejectedRecordIds = duckdbPrompts.map((prompt) => {
+    return prompt.recordId
+  })
+
+  if (rejectedRecordIds.length === 0) {
+    return
+  }
+
+  await getAppDatabaseService().run(`
+    UPDATE app.judgment_job_prompt
+    SET status = 'ready',
+        sent_at = NULL,
+        updated_at = current_timestamp
+    WHERE id IN (${getQuotedStringList(rejectedRecordIds).join(', ')})
+  `)
 }
 
 const getRequestsToSendByJob = <T extends {id: string}>(
@@ -134,13 +185,22 @@ const processPrompts = async (prompts: PromptToProcess[]): Promise<{connectionEr
   const rejected = results.filter((r) => {
     return r.status === 'rejected'
   })
+  const rejectedPrompts = results.flatMap((result, index) => {
+    return result.status === 'rejected'
+      ? [prompts[index]].filter((prompt): prompt is PromptToProcess => {
+          return Boolean(prompt)
+        })
+      : []
+  })
 
-  // Count connection errors specifically
   const connectionErrors = rejected.filter((r) => {
     return r.reason instanceof ConnectionError
   }).length
+  const rejectedErrorSamples = rejected.slice(0, 3).map((result) => {
+    const reason: unknown = result.reason
+    return reason instanceof Error ? reason.message : String(reason)
+  })
 
-  // Always log batch completion stats
   console.log('[llm] Batch complete:', {
     claimedPrompts: prompts.length,
     fulfilled: fulfilled.length,
@@ -151,8 +211,26 @@ const processPrompts = async (prompts: PromptToProcess[]): Promise<{connectionEr
   if (rejected.length > 0) {
     rateLimitedLogger.error(
       'llm:processing-errors',
-      `send to LLM: processing errors ${JSON.stringify({rejected: rejected.length, connectionErrors, total: results.length})}`,
+      `send to LLM: processing errors ${JSON.stringify({rejected: rejected.length, connectionErrors, total: results.length, rejectedErrorSamples})}`,
     )
+
+    const rejectedRecordIds = rejectedPrompts.map((prompt) => {
+      return prompt.recordId
+    })
+
+    if (rejectedRecordIds.length > 0) {
+      await requeueRejectedPrompts(rejectedPrompts).catch((error: unknown) => {
+        const safeError =
+          error instanceof Error
+            ? {name: error.name, message: error.message, stack: error.stack}
+            : {message: String(error)}
+
+        console.error('[llm] Failed to requeue rejected prompts', {
+          error: safeError,
+          rejectedRecordCount: rejectedRecordIds.length,
+        })
+      })
+    }
   }
 
   return {connectionErrors}
@@ -160,14 +238,37 @@ const processPrompts = async (prompts: PromptToProcess[]): Promise<{connectionEr
 
 const getNumberOfPromptsInFlight = async (jobIds: string[]): Promise<number> => {
   if (jobIds.length === 0) return 0
-  const result = await getAppDatabaseService().queryJson<{count: number}>(`
-    SELECT COUNT(*) AS count
-    FROM app.judgment_job_prompt
-    WHERE status = 'sent'
-      AND job_id IN (${getQuotedStringList(jobIds).join(', ')})
-  `)
 
-  return result[0]?.count || 0
+  const sqliteService = getJudgmentJobSqliteService()
+  const sqliteJobIds = jobIds.filter((jobId) => {
+    return sqliteService.hasJob(jobId)
+  })
+  const duckdbJobIds = jobIds.filter((jobId) => {
+    return !sqliteService.hasJob(jobId)
+  })
+  const sqliteCounts = await Promise.all(
+    sqliteJobIds.map((jobId) => {
+      return sqliteService.getInFlightCount(jobId)
+    }),
+  )
+  const sqliteCount = sqliteCounts.reduce((sum, count) => {
+    return sum + count
+  }, 0)
+  const duckdbCount =
+    duckdbJobIds.length === 0
+      ? 0
+      : Number(
+          (
+            await getAppDatabaseService().queryJson<{count: number}>(`
+              SELECT COUNT(*) AS count
+              FROM app.judgment_job_prompt
+              WHERE status = 'sent'
+                AND job_id IN (${getQuotedStringList(duckdbJobIds).join(', ')})
+            `)
+          )[0]?.count || 0,
+        )
+
+  return sqliteCount + duckdbCount
 }
 
 let isRunningJudgmentsJobsSendToLLM = false
@@ -212,19 +313,36 @@ const sendToLLMForJobs = async (
     }),
   )
 
-  const promptsToProcess = await Promise.allSettled(
+  const promptClaimResults = await Promise.allSettled(
     requestsToSendByJob.map(({job, limit}) => {
       return getAndUpdateReadyPrompts(serverJobId, job.id, limit)
     }),
-  ).then((results) => {
-    return results
-      .filter((result) => {
-        return result.status === 'fulfilled'
+  )
+
+  promptClaimResults.forEach((result, index) => {
+    if (result.status === 'rejected') {
+      const request = requestsToSendByJob[index]
+      const reason: unknown = result.reason
+      const safeError =
+        reason instanceof Error
+          ? {name: reason.name, message: reason.message, stack: reason.stack}
+          : {message: String(reason)}
+
+      console.error(`[capacity:${label}] failed to claim prompts`, {
+        error: safeError,
+        jobId: request?.job.id,
+        requested: request?.limit,
       })
-      .map((result) => {
-        return result.value
-      })
+    }
   })
+
+  const promptsToProcess = promptClaimResults
+    .filter((result) => {
+      return result.status === 'fulfilled'
+    })
+    .map((result) => {
+      return result.value
+    })
 
   const totalPromptsFetched = promptsToProcess.reduce((sum, arr) => {
     return sum + arr.length
@@ -256,6 +374,13 @@ export const judgmentsJobsSendToLLM = async (
   isRunningJudgmentsJobsSendToLLM = true
 
   try {
+    await requeueAbandonedSentPrompts({
+      jobIds: allJobs.map((job) => {
+        return job.id
+      }),
+      serverJobId,
+    })
+
     const codexJobs = allJobs.filter(isCodexJob)
     const nonCodexJobs = allJobs.filter((job) => {
       return !isCodexJob(job)

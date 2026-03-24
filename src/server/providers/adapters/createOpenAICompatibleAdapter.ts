@@ -205,6 +205,7 @@ export const createOpenAICompatibleAdapter = (
         baseURL: runtimeCredentials.baseURL,
         maxCompletionTokens: request.maxCompletionTokens,
         modelName: getProviderModelName(model),
+        outputSchema: request.outputSchema,
         prompt: request.prompt,
         systemPrompt: request.systemPrompt,
         temperature: request.temperature,

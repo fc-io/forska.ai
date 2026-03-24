@@ -22,7 +22,7 @@ type QueueMartRefreshTask = {
 let martRefreshDrainPromise: Promise<void> | null = null
 let martRefreshDrainTimer: ReturnType<typeof setTimeout> | null = null
 
-const martRefreshBatchLimit = 256
+const martRefreshBatchLimit = 4
 const martRefreshRetryDelayMs = 5000
 const martRefreshScheduleDelayMs = 250
 
@@ -709,8 +709,6 @@ const processQueuedMartRefreshes = async (): Promise<void> => {
   }
 
   await deleteQueuedTasks(taskIds)
-
-  return processQueuedMartRefreshes()
 }
 
 const scheduleQueuedMartRefreshes = (delayMs = martRefreshScheduleDelayMs) => {

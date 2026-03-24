@@ -511,9 +511,9 @@ fi
 
 WORKER_WAIT_PID="${SGLANG_PID:-${SGLANG_SRUN_PID:-}}"
 if [[ "${SGLANG_ONE_WORKER_PER_GPU}" == "1" ]]; then
-  wait_for_http "SGLang worker[0]" "http://localhost:${SGLANG_WORKER_PORT_BASE}/v1/models" 1200 "$WORKER_WAIT_PID" || true
+  wait_for_http "SGLang worker[0]" "http://localhost:${SGLANG_WORKER_PORT_BASE}/v1/models" 1200 "$WORKER_WAIT_PID"
 else
-  wait_for_http "SGLang worker" "http://localhost:${SGLANG_WORKER_PORT}/v1/models" 1200 "$WORKER_WAIT_PID" || true
+  wait_for_http "SGLang worker" "http://localhost:${SGLANG_WORKER_PORT}/v1/models" 1200 "$WORKER_WAIT_PID"
 fi
 
 if [[ "${SGLANG_ENABLE_ROUTER}" == "1" ]]; then
@@ -537,7 +537,7 @@ if [[ "${SGLANG_ENABLE_ROUTER}" == "1" ]]; then
       --worker-urls "${ROUTER_WORKERS[@]}" \
     >"$LOG_DIR/sglang-router.log" 2>&1 &
   SGLANG_ROUTER_PID=$!
-  wait_for_http "SGLang router" "http://localhost:${SGLANG_PORT}/v1/models" 600 "$SGLANG_ROUTER_PID" || true
+  wait_for_http "SGLang router" "http://localhost:${SGLANG_PORT}/v1/models" 600 "$SGLANG_ROUTER_PID"
 else
   echo "[forska] router disabled; worker is serving directly on :$SGLANG_PORT"
 fi

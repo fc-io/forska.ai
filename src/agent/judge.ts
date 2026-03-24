@@ -574,6 +574,7 @@ const fitChunkedFinalPromptToBudget = ({
 export const judgeSinglePrompt = async ({
   article,
   prompt,
+  queueRecordId,
   sessionId,
   judgmentsJobId,
   modelConfig,
@@ -583,6 +584,7 @@ export const judgeSinglePrompt = async ({
 }: {
   article: ArticlesType[number]
   prompt: SinglePromptInput
+  queueRecordId: string
   sessionId: string | null
   judgmentsJobId: string
   modelConfig: ModelConfigInput
@@ -645,7 +647,9 @@ export const judgeSinglePrompt = async ({
 
         await storeSinglePromptJudgment({
           article,
+          judgmentsJobId,
           promptId: prompt.id,
+          queueRecordId,
           modelId,
           projectId,
           judgment,
@@ -1099,7 +1103,9 @@ export const judgeSinglePrompt = async ({
 
           await storeSinglePromptJudgment({
             article,
+            judgmentsJobId,
             promptId: prompt.id,
+            queueRecordId,
             modelId,
             projectId,
             judgment: judgmentToStore,

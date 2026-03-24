@@ -32,6 +32,7 @@ export const judgmentsJobsCronGetPrompts = async (
   projectId: string,
   jobId: string,
   numberOfPromptsToGet: number,
+  cursorOverride?: JobCursor | null,
 ): Promise<QueuePromptsResult> => {
   const [projectResult, enabledPromptCount] = await Promise.all([
     getAppDatabaseService().queryJson<{id: string; archived: boolean}>(`
@@ -83,7 +84,7 @@ export const judgmentsJobsCronGetPrompts = async (
     return {promptEntries: [], nextCursor: null}
   }
 
-  const cursor = await getStoredJobCursor(jobId)
+  const cursor = cursorOverride === undefined ? await getStoredJobCursor(jobId) : cursorOverride
   const cursorSummary = cursor
     ? {lastDate: cursor.lastDate.toISOString(), lastArticleId: cursor.lastArticleId.slice(0, 8)}
     : null

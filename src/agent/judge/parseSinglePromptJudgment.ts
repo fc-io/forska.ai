@@ -75,6 +75,36 @@ export type ParseAttemptResult =
       sanitizedResponse: string | null
     }
 
+const getLikelyJsonPayload = (response: string): string | null => {
+  const fencedMatch = response.match(/```(?:json)?\s*([\s\S]*?)\s*```/i)
+  const fencedPayload = fencedMatch?.[1]?.trim() ?? ''
+
+  if (fencedPayload.startsWith('{') || fencedPayload.startsWith('[')) {
+    return fencedPayload
+  }
+
+  const objectStart = response.indexOf('{')
+  const arrayStart = response.indexOf('[')
+  const candidateStart = [objectStart, arrayStart]
+    .filter((index) => {
+      return index >= 0
+    })
+    .sort((left, right) => {
+      return left - right
+    })[0]
+
+  if (candidateStart === undefined) {
+    return null
+  }
+
+  const candidate = response.slice(candidateStart).trim()
+  const objectEnd = candidate.lastIndexOf('}')
+  const arrayEnd = candidate.lastIndexOf(']')
+  const candidateEnd = Math.max(objectEnd, arrayEnd)
+
+  return candidateEnd >= 0 ? candidate.slice(0, candidateEnd + 1) : null
+}
+
 /**
  * Attempts to parse JSON, falling back to sanitization if needed.
  * Returns detailed info about what was attempted for error tracking.
@@ -86,6 +116,20 @@ export const tryParseJsonWithSanitization = (response: string): ParseAttemptResu
     return {success: true, data, sanitizationUsed: false, sanitizedResponse: null}
   } catch (originalErr) {
     const originalError = originalErr instanceof Error ? originalErr.message : String(originalErr)
+    const extractedPayload = getLikelyJsonPayload(response)
+
+    if (extractedPayload !== null && extractedPayload !== response) {
+      const extractedParseResult = tryParseJsonWithSanitization(extractedPayload)
+
+      if (extractedParseResult.success) {
+        return {
+          data: extractedParseResult.data,
+          sanitizedResponse: extractedPayload,
+          sanitizationUsed: true,
+          success: true,
+        }
+      }
+    }
 
     // Try sanitizing invalid escape sequences
     const sanitized = sanitizeJsonEscapes(response)

@@ -70,6 +70,7 @@ type JobData = {
   totalTokenUsage?: {totalTokens?: number; totalPromptTokens?: number; totalCompletionTokens?: number}
   promptStats?: {ready?: number; sent?: number; judged?: number; skipped?: number}
   requestStats?: {inFlight?: number; attempts?: number}
+  judgingRuntime?: {enabled?: boolean; reason?: string | null}
   error?: string[]
 }
 
@@ -265,6 +266,10 @@ const AdminJudgmentJobDetail = () => {
                   })
                 : null
             }
+            const judgingRuntimeWarning = () => {
+              const runtime = data()?.judgingRuntime
+              return runtime?.enabled === false ? (runtime.reason ?? 'Judging is disabled for this server.') : null
+            }
             const jobQueueGridClass = () => {
               return `grid gap-4 ${shouldShowFulltextSkipped() ? 'grid-cols-4' : 'grid-cols-3'}`
             }
@@ -325,6 +330,15 @@ const AdminJudgmentJobDetail = () => {
                     </div>
                   </div>
                   <RuntimeModelNotice class="mt-4" notice={runtimeModelNotice()} />
+                  <Show when={judgingRuntimeWarning()}>
+                    {(warning) => {
+                      return (
+                        <div class="mt-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                          {warning()}
+                        </div>
+                      )
+                    }}
+                  </Show>
 
                   <div class="mt-6 pt-6 border-t border-gray-200">
                     <h3 class="text-sm font-medium text-gray-900 mb-3">Project</h3>
@@ -335,9 +349,9 @@ const AdminJudgmentJobDetail = () => {
                           when={shouldLinkToUnassessedArticles()}
                           fallback={<p class="font-medium">{formattedUnassessedArticlesCount()}</p>}
                         >
-                          <Link to={unassessedArticlesLink()} class="font-medium text-blue-600 hover:text-blue-800">
+                          <a href={unassessedArticlesLink()} class="font-medium text-blue-600 hover:text-blue-800">
                             {formattedUnassessedArticlesCount()}
-                          </Link>
+                          </a>
                         </Show>
                       </Show>
                     </div>

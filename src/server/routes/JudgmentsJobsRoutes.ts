@@ -1,6 +1,8 @@
 import {Elysia, t} from 'elysia'
 
 import {getUnassessedArticlesFromOlap, getUnassessedCountFromOlap} from '../../services/olap/unassessedArticlesOlap.ts'
+import {flushJudgmentJobSqliteOutbox} from '../cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts'
+import {getJudgmentJobSqliteService} from '../cron/judgmentsJobs/judgmentJobSqliteService.ts'
 import {getJudgmentRequestStats} from '../cron/judgmentsJobs/judgmentsRequestRuntime.ts'
 import {assertStoredProviderModelRuntimeMatch} from '../providers/providerRuntimeModelGuard.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
@@ -13,6 +15,7 @@ import {
 } from '../services/appQueryHelpers.ts'
 import {HttpError} from '../utils/httpError.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
+import {shouldCurrentServerRunWriterWork} from '../utils/serverRuntimeRole.ts'
 
 type TokenUsageDaySummary = {
   date: string
@@ -221,6 +224,25 @@ const assertProjectRuntimeModelMatch = async (projectId: string): Promise<void> 
   return assertStoredProviderModelRuntimeMatch({modelId: projectModelId})
 }
 
+const getJudgingRuntimeReason = (): string | null => {
+  return !shouldCurrentServerRunWriterWork()
+    ? 'This server is not the active writer, so it cannot process queued prompts.'
+    : null
+}
+
+const getJudgingRuntime = (): {enabled: boolean; reason: string | null} => {
+  const reason = getJudgingRuntimeReason()
+  return {enabled: reason === null, reason}
+}
+
+const assertJudgingRuntimeCanRun = (): void => {
+  const reason = getJudgingRuntimeReason()
+
+  if (reason) {
+    throw new HttpError(400, reason)
+  }
+}
+
 const getJudgmentJobMutationState = async (
   db: JudgmentJobMutationQueryRunner,
   jobId: string,
@@ -254,6 +276,7 @@ export const judgmentsJobsRoutes = new Elysia()
         return {error: 'A job already exists for this project', data: null}
       }
 
+      assertJudgingRuntimeCanRun()
       await assertProjectRuntimeModelMatch(body.projectId)
 
       const [job] = await getAppDatabaseService().queryJson<{
@@ -271,6 +294,16 @@ export const judgmentsJobsRoutes = new Elysia()
         throw new Error('Failed to create judgments job')
       }
 
+      try {
+        await getJudgmentJobSqliteService().initializeJob(job.id)
+      } catch (error) {
+        await getAppDatabaseService().run(`
+          DELETE FROM app.judgment_job
+          WHERE id = '${escapeSqlString(job.id)}'
+        `)
+        throw error
+      }
+
       return {
         data: {jobId: job.id, status: job.status, createdAt: job.createdAt, projectId: job.projectId},
         error: null,
@@ -282,14 +315,18 @@ export const judgmentsJobsRoutes = new Elysia()
     '/api/judgmentsjobs/:id',
     async ({params}) => {
       const {job} = await getJobContext({jobId: params.id})
+      const sqliteService = getJudgmentJobSqliteService()
+      const promptStatsPromise = sqliteService.hasJob(job.id)
+        ? sqliteService.getPromptStatusCounts(job.id)
+        : getAppDatabaseService().queryJson<{status: string; count: number}>(`
+            SELECT status, COUNT(*) AS count
+            FROM app.judgment_job_prompt
+            WHERE job_id = '${escapeSqlString(job.id)}'
+            GROUP BY status
+          `)
 
       const [promptStats, totalTokenUsage, tokenUsageRows] = await Promise.all([
-        getAppDatabaseService().queryJson<{status: string; count: number}>(`
-          SELECT status, COUNT(*) AS count
-          FROM app.judgment_job_prompt
-          WHERE job_id = '${escapeSqlString(job.id)}'
-          GROUP BY status
-        `),
+        promptStatsPromise,
         getAppDatabaseService().queryJson<{
           totalTokens: number | null
           totalPromptTokens: number | null
@@ -349,6 +386,7 @@ export const judgmentsJobsRoutes = new Elysia()
       return {
         ...job,
         promptStats: stats,
+        judgingRuntime: getJudgingRuntime(),
         totalTokenUsage: {
           totalTokens: Number(totalTokenUsage[0]?.totalTokens || 0),
           totalPromptTokens: Number(totalTokenUsage[0]?.totalPromptTokens || 0),
@@ -508,7 +546,11 @@ export const judgmentsJobsRoutes = new Elysia()
   .patch(
     '/api/judgmentsjobs/:id',
     async ({params, body}) => {
+      const sqliteService = getJudgmentJobSqliteService()
+      const hasSqliteJob = sqliteService.hasJob(params.id)
+
       if (body.status === 'running') {
+        assertJudgingRuntimeCanRun()
         const {projectModelId} = await getJobContext({jobId: params.id})
 
         await assertStoredProviderModelRuntimeMatch({modelId: projectModelId})
@@ -525,12 +567,14 @@ export const judgmentsJobsRoutes = new Elysia()
 
         const shouldClearQueue = body.status === 'paused'
 
-        if (shouldClearQueue) {
+        if (shouldClearQueue && !hasSqliteJob) {
           await tx.run(`
             DELETE FROM app.judgment_job_prompt
             WHERE job_id = '${escapeSqlString(params.id)}'
           `)
+        }
 
+        if (shouldClearQueue) {
           await tx.run(`
             UPDATE app.judgment_job
             SET cursor_last_created_at = NULL,
@@ -542,6 +586,10 @@ export const judgmentsJobsRoutes = new Elysia()
 
         return getJudgmentJobMutationState(tx, params.id)
       })) as JudgmentJobMutationState | null
+
+      if (body.status === 'paused' && hasSqliteJob) {
+        await sqliteService.clearActiveQueue(params.id)
+      }
 
       if (!updatedJob) {
         throw new Error('Job not found')
@@ -579,6 +627,8 @@ export const judgmentsJobsRoutes = new Elysia()
   .delete(
     '/api/judgmentsjobs/:id',
     async ({params}) => {
+      const sqliteService = getJudgmentJobSqliteService()
+      const hasSqliteJob = sqliteService.hasJob(params.id)
       const [existingJob] = await getAppDatabaseService().queryJson<{id: string}>(`
         SELECT id
         FROM app.judgment_job
@@ -590,10 +640,15 @@ export const judgmentsJobsRoutes = new Elysia()
         throw new Error('Job not found')
       }
 
-      await getAppDatabaseService().run(`
-        DELETE FROM app.judgment_job_prompt
-        WHERE job_id = '${escapeSqlString(params.id)}'
-      `)
+      if (hasSqliteJob) {
+        await flushJudgmentJobSqliteOutbox({jobId: params.id})
+        await sqliteService.deleteJob(params.id)
+      } else {
+        await getAppDatabaseService().run(`
+          DELETE FROM app.judgment_job_prompt
+          WHERE job_id = '${escapeSqlString(params.id)}'
+        `)
+      }
 
       await getAppDatabaseService().run(`
         DELETE FROM app.token_use

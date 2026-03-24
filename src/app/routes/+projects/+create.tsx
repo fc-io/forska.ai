@@ -1,4 +1,4 @@
-import {useQuery} from '@tanstack/solid-query'
+import {type QueryClient, useQuery, useQueryClient} from '@tanstack/solid-query'
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
 import {createEffect, createMemo, createSignal, For, Show, Suspense} from 'solid-js'
 import {createStore} from 'solid-js/store'
@@ -6,6 +6,7 @@ import {createStore} from 'solid-js/store'
 import {RuntimeModelNotice} from '../../../components/main/runtimeModelNotice.tsx'
 import {Button} from '../../../components/ui/button'
 import {apiClient} from '../../../services/apiClient'
+import type {fetchProjects} from '../../../services/projectsService.ts'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse'
 import {getSglangRuntimeModelNotice} from '../../../utils/getSglangRuntimeModelNotice.ts'
 import {fetchProviderConnections} from '../+admin/+models/providerConnectionsClient.ts'
@@ -41,8 +42,50 @@ type ModelOption = {id: string; name: string; provider: string | null; modelName
 type ModelsResponse = {data: ModelOption[]}
 
 type EnsureModelResponse = {data: {modelId: string}; error: null}
+type ProjectListItem = Awaited<ReturnType<typeof fetchProjects>>[number]
+type CreatedProject = Omit<ProjectListItem, 'modelName'>
 
 const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/
+
+const buildCreatedProjectListItem = (createdProject: CreatedProject, modelName: string): ProjectListItem => {
+  return {...createdProject, modelName}
+}
+
+const getProjectsCacheValue = (value: unknown): ProjectListItem[] | null => {
+  return Array.isArray(value) ? (value as ProjectListItem[]) : null
+}
+
+const sortProjectsByName = (projects: ProjectListItem[]): ProjectListItem[] => {
+  return [...projects].sort((left, right) => {
+    return left.name.localeCompare(right.name)
+  })
+}
+
+const upsertCreatedProject = (projects: ProjectListItem[], createdProject: ProjectListItem): ProjectListItem[] => {
+  return sortProjectsByName([
+    createdProject,
+    ...projects.filter((project) => {
+      return project.id !== createdProject.id
+    }),
+  ])
+}
+
+const syncCreatedProjectCaches = (
+  queryClient: QueryClient,
+  createdProject: CreatedProject,
+  modelName: string,
+): void => {
+  queryClient.setQueryData(['projects'], (previous: unknown) => {
+    const projects = getProjectsCacheValue(previous)
+
+    return projects === null
+      ? previous
+      : upsertCreatedProject(projects, buildCreatedProjectListItem(createdProject, modelName))
+  })
+
+  void queryClient.invalidateQueries({queryKey: ['projects']})
+  void queryClient.invalidateQueries({queryKey: ['projects', 'archived']})
+}
 
 const parseDateInput = (value: string): ParsedDateResult => {
   const trimmedValue = value.trim()
@@ -110,6 +153,7 @@ const CreateProject = () => {
     await modelsQuery.refetch()
   }
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const [projectName, setProjectName] = createSignal('')
   const [description, setDescription] = createSignal('')
   const [selectedModelId, setSelectedModelId] = createSignal('')
@@ -269,7 +313,7 @@ const CreateProject = () => {
     importRoutes: string[],
     startDate?: string,
     endDate?: string,
-  ) => {
+  ): Promise<CreatedProject> => {
     // Filter valid new prompts
     const validPrompts = promptItems
       .filter((prompt) => {
@@ -364,7 +408,7 @@ const CreateProject = () => {
             })()
           : selected.id
 
-      await createProject(
+      const createdProject = await createProject(
         projectName(),
         description(),
         ensuredModelId,
@@ -374,7 +418,8 @@ const CreateProject = () => {
         startDateResult.normalized ?? undefined,
         endDateResult.normalized ?? undefined,
       )
-      // Navigate back to projects page on success
+
+      syncCreatedProjectCaches(queryClient, createdProject, selected.name)
       void navigate({to: '/projects'})
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'An unexpected error occurred'

@@ -1,0 +1,1061 @@
+import {randomUUID} from 'node:crypto'
+import {existsSync, mkdirSync, readdirSync, rmSync, writeFileSync} from 'node:fs'
+import {tmpdir} from 'node:os'
+import {dirname, join} from 'node:path'
+
+import {Database} from 'bun:sqlite'
+
+import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
+import {escapeSqlString, getDateValue} from '../../services/appQueryHelpers.ts'
+import {env} from '../../utils/env.ts'
+import type {JobCursor} from './jobCursorStore.ts'
+
+type JobInfoRow = {
+  createdAt: unknown
+  jobId: string
+  modelBaseUrl: string | null
+  modelId: string | null
+  modelMetadataJson: unknown
+  modelName: string | null
+  modelProvider: string | null
+  modelSecretRef: string | null
+  modelVersion: string | null
+  projectId: string | null
+  providerConfigJson: unknown
+  useAbstract: boolean | null
+  useFulltext: boolean | null
+  useFulltextNoImages: boolean | null
+  useTitle: boolean | null
+}
+
+export type JudgmentJobSqliteInfo = {
+  createdAt: Date
+  jobId: string
+  modelBaseUrl: string | null
+  modelId: string
+  modelMetadataJson: unknown
+  modelName: string
+  modelProvider: string
+  modelSecretRef: string | null
+  modelVersion: string | null
+  projectId: string
+  providerConfigJson: unknown
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  useTitle: boolean
+}
+
+type QueueCountRow = {count: number; status: string}
+
+type QueuePromptRow = {articleId: string; id: string; promptId: string}
+
+type QueuePromptInsert = {articleId: string; promptId: string}
+
+type QueuePromptClaim = {articleId: string; jobId: string; promptId: string; recordId: string}
+
+type QueuePromptOutboxInsert = {
+  answeredOriginal: string | null
+  answeredOriginalAsArray: string[]
+  articleId: string
+  chunkingStrategy: string | null
+  confidenceOriginal: number
+  createdAt: Date
+  explanation: string | null
+  isAnswered: boolean
+  judgmentId: string
+  modelId: string
+  projectId: string | null
+  promptId: string
+  queuePromptId: string
+  quotes: unknown
+  rawResponseJson: unknown
+  snapshotProjectId: string | null
+  snapshotProjectModelName: string | null
+  updatedAt: Date
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  useTitle: boolean
+}
+
+type OutboxRow = {
+  answeredOriginal: string | null
+  answeredOriginalAsArray: string | null
+  articleId: string
+  chunkingStrategy: string | null
+  confidenceOriginal: number
+  createdAt: string
+  explanation: string | null
+  jobId: string
+  judgmentId: string
+  modelId: string
+  outboxSeq: number
+  projectId: string | null
+  promptId: string
+  queuePromptId: string
+  quotesJson: string | null
+  rawResponseJson: string | null
+  snapshotProjectId: string | null
+  snapshotProjectModelName: string | null
+  updatedAt: string
+  useAbstract: number
+  useFulltext: number
+  useFulltextNoImages: number
+  useTitle: number
+}
+
+export type JudgmentJobSqliteOutboxEntry = {
+  answeredOriginal: string | null
+  answeredOriginalAsArray: string[]
+  articleId: string
+  chunkingStrategy: string | null
+  confidenceOriginal: number
+  createdAt: Date
+  explanation: string | null
+  isAnswered: boolean
+  jobId: string
+  judgmentId: string
+  modelId: string
+  outboxSeq: number
+  projectId: string | null
+  promptId: string
+  queuePromptId: string
+  quotes: unknown
+  rawResponseJson: unknown
+  snapshotProjectId: string | null
+  snapshotProjectModelName: string | null
+  updatedAt: Date
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  useTitle: boolean
+}
+
+type ScanStateRow = {cursorLastArticleId: string | null; cursorLastDate: string | null; exhaustedAt: string | null}
+
+type JobScanState = {cursor: JobCursor | null; exhaustedAt: Date | null}
+
+const openDatabases = new Map<string, Database>()
+
+const getJudgmentJobsRootDirectory = () => {
+  return env.DUCKDB_PATH === ':memory:'
+    ? join(tmpdir(), 'forska', 'judgment-jobs')
+    : join(dirname(env.DUCKDB_PATH), 'judgment-jobs')
+}
+
+const ensureJudgmentJobsRootDirectory = () => {
+  const rootDirectory = getJudgmentJobsRootDirectory()
+  mkdirSync(rootDirectory, {recursive: true})
+  return rootDirectory
+}
+
+export const getJudgmentJobSqlitePath = (jobId: string) => {
+  return join(ensureJudgmentJobsRootDirectory(), `${jobId}.sqlite`)
+}
+
+export const getJudgmentJobLeasePath = (jobId: string) => {
+  return join(ensureJudgmentJobsRootDirectory(), `${jobId}.lease.json`)
+}
+
+const getOpenDatabase = (jobId: string, createIfMissing: boolean): Database | null => {
+  const cached = openDatabases.get(jobId)
+
+  if (cached) {
+    return cached
+  }
+
+  const sqlitePath = getJudgmentJobSqlitePath(jobId)
+
+  if (!createIfMissing && !existsSync(sqlitePath)) {
+    return null
+  }
+
+  const database = new Database(sqlitePath, {create: true})
+
+  database.exec(`
+    PRAGMA journal_mode = WAL;
+    PRAGMA foreign_keys = ON;
+    PRAGMA synchronous = FULL;
+    PRAGMA busy_timeout = 5000;
+    CREATE TABLE IF NOT EXISTS job_info (
+      job_id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      model_id TEXT NOT NULL,
+      model_name TEXT NOT NULL,
+      model_provider TEXT NOT NULL,
+      model_version TEXT,
+      model_base_url TEXT,
+      model_secret_ref TEXT,
+      model_metadata_json TEXT,
+      provider_config_json TEXT,
+      use_title INTEGER NOT NULL,
+      use_abstract INTEGER NOT NULL,
+      use_fulltext INTEGER NOT NULL,
+      use_fulltext_no_images INTEGER NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS job_scan_state (
+      job_id TEXT PRIMARY KEY,
+      cursor_last_date TEXT,
+      cursor_last_article_id TEXT,
+      exhausted_at TEXT,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS queue_prompt (
+      id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL,
+      article_id TEXT NOT NULL,
+      prompt_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      terminal_kind TEXT,
+      skip_reason TEXT,
+      server_id TEXT,
+      claim_id TEXT,
+      sent_at TEXT,
+      judged_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(job_id, article_id, prompt_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_queue_prompt_status_created
+      ON queue_prompt(status, created_at, article_id);
+    CREATE TABLE IF NOT EXISTS judgment_outbox (
+      outbox_seq INTEGER PRIMARY KEY AUTOINCREMENT,
+      job_id TEXT NOT NULL,
+      queue_prompt_id TEXT NOT NULL UNIQUE,
+      judgment_id TEXT NOT NULL UNIQUE,
+      article_id TEXT NOT NULL,
+      prompt_id TEXT NOT NULL,
+      model_id TEXT NOT NULL,
+      project_id TEXT,
+      snapshot_project_id TEXT,
+      snapshot_project_model_name TEXT,
+      use_title INTEGER NOT NULL,
+      use_abstract INTEGER NOT NULL,
+      use_fulltext INTEGER NOT NULL,
+      use_fulltext_no_images INTEGER NOT NULL,
+      chunking_strategy TEXT,
+      is_answered INTEGER NOT NULL,
+      answered_original TEXT,
+      answered_original_as_array TEXT,
+      confidence_original INTEGER NOT NULL,
+      explanation TEXT,
+      quotes_json TEXT,
+      raw_response_json TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      exported_at TEXT,
+      export_attempts INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_judgment_outbox_exported
+      ON judgment_outbox(exported_at, outbox_seq);
+  `)
+
+  openDatabases.set(jobId, database)
+  return database
+}
+
+const withJobDatabase = <T>(
+  jobId: string,
+  createIfMissing: boolean,
+  operation: (database: Database) => T,
+): T | null => {
+  const database = getOpenDatabase(jobId, createIfMissing)
+  return database ? operation(database) : null
+}
+
+const toBoolean = (value: number | boolean | null | undefined) => {
+  return value === true || value === 1
+}
+
+const parseJsonText = (value: string | null) => {
+  if (value == null || value === '') {
+    return null
+  }
+
+  try {
+    return JSON.parse(value) as unknown
+  } catch {
+    return value
+  }
+}
+
+const parseStringArrayText = (value: string | null) => {
+  const parsed = parseJsonText(value)
+  return Array.isArray(parsed)
+    ? parsed.filter((entry): entry is string => {
+        return typeof entry === 'string'
+      })
+    : []
+}
+
+const getJobInfoForInitialization = async (jobId: string): Promise<JudgmentJobSqliteInfo> => {
+  const [row] = await getAppDatabaseService().queryJson<JobInfoRow>(`
+    SELECT
+      jj.id AS jobId,
+      jj.project_id AS projectId,
+      jj.created_at AS createdAt,
+      p.model_id AS modelId,
+      pc.secret_ref AS modelSecretRef,
+      COALESCE(pc.provider_kind, 'unknown') AS modelProvider,
+      COALESCE(m.remote_model_id, m.name, m.display_name) AS modelName,
+      m.variant AS modelVersion,
+      TO_JSON(m.metadata_json) AS modelMetadataJson,
+      pc.base_url AS modelBaseUrl,
+      TO_JSON(pc.config_json) AS providerConfigJson,
+      p.use_title AS useTitle,
+      p.use_abstract AS useAbstract,
+      p.use_fulltext AS useFulltext,
+      p.use_fulltext_no_images AS useFulltextNoImages
+    FROM app.judgment_job jj
+    INNER JOIN app.project p ON p.id = jj.project_id
+    INNER JOIN app.model m ON m.id = p.model_id
+    LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
+    WHERE jj.id = '${escapeSqlString(jobId)}'
+    LIMIT 1
+  `)
+
+  const createdAt = getDateValue(row?.createdAt)
+
+  if (!row?.projectId || !row.modelId || !row.modelName || !createdAt) {
+    throw new Error(`Failed to initialize SQLite judgments job state for ${jobId}`)
+  }
+
+  return {
+    createdAt,
+    jobId: row.jobId,
+    modelBaseUrl: row.modelBaseUrl ?? null,
+    modelId: row.modelId,
+    modelMetadataJson:
+      parseJsonText(
+        typeof row.modelMetadataJson === 'string' ? row.modelMetadataJson : JSON.stringify(row.modelMetadataJson),
+      ) ?? null,
+    modelName: row.modelName,
+    modelProvider: row.modelProvider ?? 'unknown',
+    modelSecretRef: row.modelSecretRef ?? null,
+    modelVersion: row.modelVersion ?? null,
+    projectId: row.projectId,
+    providerConfigJson:
+      parseJsonText(
+        typeof row.providerConfigJson === 'string' ? row.providerConfigJson : JSON.stringify(row.providerConfigJson),
+      ) ?? null,
+    useAbstract: row.useAbstract ?? true,
+    useFulltext: row.useFulltext ?? false,
+    useFulltextNoImages: row.useFulltextNoImages ?? false,
+    useTitle: row.useTitle ?? true,
+  }
+}
+
+const writeLeaseMetadata = (jobId: string) => {
+  writeFileSync(
+    getJudgmentJobLeasePath(jobId),
+    JSON.stringify(
+      {
+        heartbeatAt: new Date().toISOString(),
+        hostname: process.env.HOSTNAME ?? 'unknown-host',
+        leaseId: randomUUID(),
+        pid: process.pid,
+      },
+      null,
+      2,
+    ),
+    'utf8',
+  )
+}
+
+const sqliteService = {
+  addReadyPrompts: async (jobId: string, promptEntries: QueuePromptInsert[], serverJobId: string) => {
+    return withJobDatabase(jobId, false, (database) => {
+      if (promptEntries.length === 0) {
+        return
+      }
+
+      const insert = database.query(`
+        INSERT OR IGNORE INTO queue_prompt (
+          id,
+          job_id,
+          article_id,
+          prompt_id,
+          status,
+          server_id,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, 'ready', ?, ?, ?)
+      `)
+      const now = new Date().toISOString()
+
+      database.transaction((entries: QueuePromptInsert[]) => {
+        entries.forEach((entry) => {
+          insert.run(randomUUID(), jobId, entry.articleId, entry.promptId, serverJobId, now, now)
+        })
+      })(promptEntries)
+    })
+  },
+  claimReadyPrompts: async (jobId: string, serverJobId: string, limit: number): Promise<QueuePromptClaim[]> => {
+    const claimed = withJobDatabase(jobId, false, (database) => {
+      const selectReady = database.query(`
+        SELECT id, article_id AS articleId, prompt_id AS promptId
+        FROM queue_prompt
+        WHERE status = 'ready'
+        ORDER BY created_at ASC, id ASC
+        LIMIT ?
+      `)
+      const markSent = database.query(`
+        UPDATE queue_prompt
+        SET status = 'sent',
+            sent_at = ?,
+            updated_at = ?,
+            server_id = ?,
+            claim_id = ?
+        WHERE id = ?
+          AND status = 'ready'
+      `)
+
+      return database.transaction((requestedLimit: number) => {
+        const now = new Date().toISOString()
+        const readyRows = selectReady.all(requestedLimit) as QueuePromptRow[]
+
+        return readyRows.flatMap((row) => {
+          const claimId = randomUUID()
+          const result = markSent.run(now, now, serverJobId, claimId, row.id) as {changes?: number}
+
+          return result.changes === 1
+            ? [{articleId: row.articleId, jobId, promptId: row.promptId, recordId: row.id}]
+            : []
+        })
+      })(limit)
+    })
+
+    return claimed ?? []
+  },
+  clearActiveQueue: async (jobId: string) => {
+    return withJobDatabase(jobId, false, (database) => {
+      const now = new Date().toISOString()
+
+      database.transaction(() => {
+        database.query(`DELETE FROM queue_prompt WHERE status = 'ready'`).run()
+        database
+          .query(
+            `
+          UPDATE job_scan_state
+          SET cursor_last_date = NULL,
+              cursor_last_article_id = NULL,
+              exhausted_at = NULL,
+              updated_at = ?
+          WHERE job_id = ?
+        `,
+          )
+          .run(now, jobId)
+      })()
+    })
+  },
+  closeAll: () => {
+    openDatabases.forEach((database) => {
+      database.close(false)
+    })
+    openDatabases.clear()
+  },
+  deleteJob: async (jobId: string) => {
+    const database = openDatabases.get(jobId)
+
+    if (database) {
+      database.close(false)
+      openDatabases.delete(jobId)
+    }
+
+    rmSync(getJudgmentJobSqlitePath(jobId), {force: true})
+    rmSync(getJudgmentJobLeasePath(jobId), {force: true})
+  },
+  getInFlightCount: async (jobId: string): Promise<number> => {
+    return (
+      withJobDatabase(jobId, false, (database) => {
+        const row = database.query(`SELECT COUNT(*) AS count FROM queue_prompt WHERE status = 'sent'`).get() as {
+          count: number
+        } | null
+
+        return Number(row?.count ?? 0)
+      }) ?? 0
+    )
+  },
+  getJobInfo: async (jobId: string): Promise<JudgmentJobSqliteInfo | null> => {
+    return (
+      withJobDatabase(jobId, false, (database) => {
+        const row = database
+          .query(
+            `
+          SELECT
+            job_id AS jobId,
+            project_id AS projectId,
+            model_id AS modelId,
+            model_name AS modelName,
+            model_provider AS modelProvider,
+            model_version AS modelVersion,
+            model_base_url AS modelBaseUrl,
+            model_secret_ref AS modelSecretRef,
+            model_metadata_json AS modelMetadataJson,
+            provider_config_json AS providerConfigJson,
+            use_title AS useTitle,
+            use_abstract AS useAbstract,
+            use_fulltext AS useFulltext,
+            use_fulltext_no_images AS useFulltextNoImages,
+            created_at AS createdAt
+          FROM job_info
+          WHERE job_id = ?
+          LIMIT 1
+        `,
+          )
+          .get(jobId) as {
+          createdAt: string
+          jobId: string
+          modelBaseUrl: string | null
+          modelId: string
+          modelMetadataJson: string | null
+          modelName: string
+          modelProvider: string
+          modelSecretRef: string | null
+          modelVersion: string | null
+          projectId: string
+          providerConfigJson: string | null
+          useAbstract: number
+          useFulltext: number
+          useFulltextNoImages: number
+          useTitle: number
+        } | null
+        const createdAt = getDateValue(row?.createdAt)
+
+        return row && createdAt
+          ? {
+              createdAt,
+              jobId: row.jobId,
+              modelBaseUrl: row.modelBaseUrl,
+              modelId: row.modelId,
+              modelMetadataJson: parseJsonText(row.modelMetadataJson),
+              modelName: row.modelName,
+              modelProvider: row.modelProvider,
+              modelSecretRef: row.modelSecretRef,
+              modelVersion: row.modelVersion,
+              projectId: row.projectId,
+              providerConfigJson: parseJsonText(row.providerConfigJson),
+              useAbstract: toBoolean(row.useAbstract),
+              useFulltext: toBoolean(row.useFulltext),
+              useFulltextNoImages: toBoolean(row.useFulltextNoImages),
+              useTitle: toBoolean(row.useTitle),
+            }
+          : null
+      }) ?? null
+    )
+  },
+  getPendingOutboxBatch: async ({jobId, maxBytes, maxRows}: {jobId?: string; maxBytes: number; maxRows: number}) => {
+    const jobIds = jobId
+      ? [jobId].filter((value) => {
+          return existsSync(getJudgmentJobSqlitePath(value))
+        })
+      : getJudgmentJobSqliteJobIds()
+
+    const initialState = {bytes: 0, rows: [] as JudgmentJobSqliteOutboxEntry[]}
+
+    return jobIds.reduce((state, currentJobId) => {
+      if (state.rows.length >= maxRows || state.bytes >= maxBytes) {
+        return state
+      }
+
+      const remainingRows = Math.max(1, maxRows - state.rows.length)
+      const rawRows =
+        withJobDatabase(currentJobId, false, (database) => {
+          return database
+            .query(
+              `
+            SELECT
+              outbox_seq AS outboxSeq,
+              job_id AS jobId,
+              queue_prompt_id AS queuePromptId,
+              judgment_id AS judgmentId,
+              article_id AS articleId,
+              prompt_id AS promptId,
+              model_id AS modelId,
+              project_id AS projectId,
+              snapshot_project_id AS snapshotProjectId,
+              snapshot_project_model_name AS snapshotProjectModelName,
+              use_title AS useTitle,
+              use_abstract AS useAbstract,
+              use_fulltext AS useFulltext,
+              use_fulltext_no_images AS useFulltextNoImages,
+              chunking_strategy AS chunkingStrategy,
+              answered_original AS answeredOriginal,
+              answered_original_as_array AS answeredOriginalAsArray,
+              confidence_original AS confidenceOriginal,
+              explanation,
+              quotes_json AS quotesJson,
+              raw_response_json AS rawResponseJson,
+              created_at AS createdAt,
+              updated_at AS updatedAt
+            FROM judgment_outbox
+            WHERE exported_at IS NULL
+            ORDER BY outbox_seq ASC
+            LIMIT ?
+          `,
+            )
+            .all(remainingRows) as OutboxRow[]
+        }) ?? []
+
+      const nextState = rawRows.reduce((acc, row) => {
+        const nextRow = {
+          answeredOriginal: row.answeredOriginal,
+          answeredOriginalAsArray: parseStringArrayText(row.answeredOriginalAsArray),
+          articleId: row.articleId,
+          chunkingStrategy: row.chunkingStrategy,
+          confidenceOriginal: Number(row.confidenceOriginal ?? 0),
+          createdAt: getDateValue(row.createdAt) ?? new Date(0),
+          explanation: row.explanation,
+          isAnswered: true,
+          jobId: row.jobId,
+          judgmentId: row.judgmentId,
+          modelId: row.modelId,
+          outboxSeq: Number(row.outboxSeq),
+          projectId: row.projectId,
+          promptId: row.promptId,
+          queuePromptId: row.queuePromptId,
+          quotes: parseJsonText(row.quotesJson),
+          rawResponseJson: parseJsonText(row.rawResponseJson),
+          snapshotProjectId: row.snapshotProjectId,
+          snapshotProjectModelName: row.snapshotProjectModelName,
+          updatedAt: getDateValue(row.updatedAt) ?? new Date(0),
+          useAbstract: toBoolean(row.useAbstract),
+          useFulltext: toBoolean(row.useFulltext),
+          useFulltextNoImages: toBoolean(row.useFulltextNoImages),
+          useTitle: toBoolean(row.useTitle),
+        } satisfies JudgmentJobSqliteOutboxEntry
+        const nextBytes = acc.bytes + JSON.stringify(nextRow).length
+
+        return acc.rows.length >= maxRows || (acc.bytes > 0 && nextBytes > maxBytes)
+          ? acc
+          : {bytes: nextBytes, rows: [...acc.rows, nextRow]}
+      }, state)
+
+      return nextState
+    }, initialState).rows
+  },
+  getPromptStatusCounts: async (jobId: string): Promise<QueueCountRow[]> => {
+    return (
+      withJobDatabase(jobId, false, (database) => {
+        return database
+          .query(
+            `
+          SELECT status, COUNT(*) AS count
+          FROM queue_prompt
+          GROUP BY status
+        `,
+          )
+          .all() as QueueCountRow[]
+      }) ?? []
+    )
+  },
+  getReadyCount: async (jobId: string): Promise<number> => {
+    return (
+      withJobDatabase(jobId, false, (database) => {
+        const row = database.query(`SELECT COUNT(*) AS count FROM queue_prompt WHERE status = 'ready'`).get() as {
+          count: number
+        } | null
+
+        return Number(row?.count ?? 0)
+      }) ?? 0
+    )
+  },
+  getScanState: async (jobId: string): Promise<JobScanState> => {
+    return (
+      withJobDatabase(jobId, false, (database) => {
+        const row = database
+          .query(
+            `
+          SELECT
+            cursor_last_date AS cursorLastDate,
+            cursor_last_article_id AS cursorLastArticleId,
+            exhausted_at AS exhaustedAt
+          FROM job_scan_state
+          WHERE job_id = ?
+          LIMIT 1
+        `,
+          )
+          .get(jobId) as ScanStateRow | null
+        const lastDate = getDateValue(row?.cursorLastDate)
+        const exhaustedAt = getDateValue(row?.exhaustedAt)
+
+        return {
+          cursor: lastDate && row?.cursorLastArticleId ? {lastArticleId: row.cursorLastArticleId, lastDate} : null,
+          exhaustedAt,
+        }
+      }) ?? {cursor: null, exhaustedAt: null}
+    )
+  },
+  getUnexportedOutboxCount: async (jobId: string): Promise<number> => {
+    return (
+      withJobDatabase(jobId, false, (database) => {
+        const row = database.query(`SELECT COUNT(*) AS count FROM judgment_outbox WHERE exported_at IS NULL`).get() as {
+          count: number
+        } | null
+
+        return Number(row?.count ?? 0)
+      }) ?? 0
+    )
+  },
+  hasJob: (jobId: string) => {
+    return existsSync(getJudgmentJobSqlitePath(jobId))
+  },
+  hasLocalJudgment: async (jobId: string, articleId: string, promptId: string): Promise<boolean> => {
+    return (
+      withJobDatabase(jobId, false, (database) => {
+        const row = database
+          .query(
+            `
+          SELECT id
+          FROM queue_prompt
+          WHERE article_id = ?
+            AND prompt_id = ?
+            AND status = 'judged'
+          LIMIT 1
+        `,
+          )
+          .get(articleId, promptId) as {id: string} | null
+
+        return Boolean(row)
+      }) ?? false
+    )
+  },
+  initializeJob: async (jobId: string) => {
+    const jobInfo = await getJobInfoForInitialization(jobId)
+
+    return withJobDatabase(jobId, true, (database) => {
+      const createdAt = jobInfo.createdAt.toISOString()
+      database.transaction(() => {
+        database
+          .query(
+            `
+          INSERT OR IGNORE INTO job_info (
+            job_id,
+            project_id,
+            model_id,
+            model_name,
+            model_provider,
+            model_version,
+            model_base_url,
+            model_secret_ref,
+            model_metadata_json,
+            provider_config_json,
+            use_title,
+            use_abstract,
+            use_fulltext,
+            use_fulltext_no_images,
+            created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+          )
+          .run(
+            jobInfo.jobId,
+            jobInfo.projectId,
+            jobInfo.modelId,
+            jobInfo.modelName,
+            jobInfo.modelProvider,
+            jobInfo.modelVersion,
+            jobInfo.modelBaseUrl,
+            jobInfo.modelSecretRef,
+            JSON.stringify(jobInfo.modelMetadataJson),
+            JSON.stringify(jobInfo.providerConfigJson),
+            Number(jobInfo.useTitle),
+            Number(jobInfo.useAbstract),
+            Number(jobInfo.useFulltext),
+            Number(jobInfo.useFulltextNoImages),
+            createdAt,
+          )
+        database
+          .query(
+            `
+          INSERT OR IGNORE INTO job_scan_state (
+            job_id,
+            cursor_last_date,
+            cursor_last_article_id,
+            exhausted_at,
+            updated_at
+          ) VALUES (?, NULL, NULL, NULL, ?)
+        `,
+          )
+          .run(jobId, createdAt)
+      })()
+      writeLeaseMetadata(jobId)
+    })
+  },
+  listJobIds: () => {
+    return getJudgmentJobSqliteJobIds()
+  },
+  markOutboxExported: async (entries: Array<{jobId: string; outboxSeq: number}>) => {
+    const grouped = entries.reduce((map, entry) => {
+      const current = map.get(entry.jobId) ?? []
+      map.set(entry.jobId, [...current, entry.outboxSeq])
+      return map
+    }, new Map<string, number[]>())
+
+    return Array.from(grouped.entries()).map(([jobId, outboxSeqs]) => {
+      return withJobDatabase(jobId, false, (database) => {
+        const placeholders = outboxSeqs.map(() => {
+          return '?'
+        })
+        const now = new Date().toISOString()
+
+        database
+          .query(
+            `
+          UPDATE judgment_outbox
+          SET exported_at = ?,
+              export_attempts = export_attempts + 1,
+              last_error = NULL
+          WHERE outbox_seq IN (${placeholders.join(', ')})
+        `,
+          )
+          .run(now, ...outboxSeqs)
+      })
+    })
+  },
+  markOutboxExportFailed: async (entries: Array<{jobId: string; outboxSeq: number}>, errorMessage: string) => {
+    const grouped = entries.reduce((map, entry) => {
+      const current = map.get(entry.jobId) ?? []
+      map.set(entry.jobId, [...current, entry.outboxSeq])
+      return map
+    }, new Map<string, number[]>())
+
+    return Array.from(grouped.entries()).map(([jobId, outboxSeqs]) => {
+      return withJobDatabase(jobId, false, (database) => {
+        const placeholders = outboxSeqs.map(() => {
+          return '?'
+        })
+
+        database
+          .query(
+            `
+          UPDATE judgment_outbox
+          SET export_attempts = export_attempts + 1,
+              last_error = ?
+          WHERE outbox_seq IN (${placeholders.join(', ')})
+        `,
+          )
+          .run(errorMessage, ...outboxSeqs)
+      })
+    })
+  },
+  markPromptAsJudged: async (jobId: string, recordId: string) => {
+    return withJobDatabase(jobId, false, (database) => {
+      const now = new Date().toISOString()
+      database
+        .query(
+          `
+        UPDATE queue_prompt
+        SET status = 'judged',
+            terminal_kind = NULL,
+            skip_reason = NULL,
+            judged_at = ?,
+            updated_at = ?
+        WHERE id = ?
+      `,
+        )
+        .run(now, now, recordId)
+    })
+  },
+  markPromptAsRetry: async (jobId: string, recordId: string) => {
+    return withJobDatabase(jobId, false, (database) => {
+      const now = new Date().toISOString()
+      database
+        .query(
+          `
+        UPDATE queue_prompt
+        SET status = 'ready',
+            sent_at = NULL,
+            updated_at = ?,
+            claim_id = NULL
+        WHERE id = ?
+      `,
+        )
+        .run(now, recordId)
+    })
+  },
+  markPromptAsSkipped: async (
+    jobId: string,
+    recordId: string,
+    skipReason: 'conversion_failed' | 'fulltext_too_large' | 'no_fulltext',
+  ) => {
+    return withJobDatabase(jobId, false, (database) => {
+      const now = new Date().toISOString()
+      database
+        .query(
+          `
+        UPDATE queue_prompt
+        SET status = 'judged',
+            terminal_kind = 'skipped',
+            skip_reason = ?,
+            judged_at = ?,
+            updated_at = ?
+        WHERE id = ?
+      `,
+        )
+        .run(skipReason, now, now, recordId)
+    })
+  },
+  recordJudgmentSuccess: async (jobId: string, outboxInsert: QueuePromptOutboxInsert) => {
+    return withJobDatabase(jobId, false, (database) => {
+      database.transaction((input: QueuePromptOutboxInsert) => {
+        database
+          .query(
+            `
+          INSERT OR IGNORE INTO judgment_outbox (
+            job_id,
+            queue_prompt_id,
+            judgment_id,
+            article_id,
+            prompt_id,
+            model_id,
+            project_id,
+            snapshot_project_id,
+            snapshot_project_model_name,
+            use_title,
+            use_abstract,
+            use_fulltext,
+            use_fulltext_no_images,
+            chunking_strategy,
+            is_answered,
+            answered_original,
+            answered_original_as_array,
+            confidence_original,
+            explanation,
+            quotes_json,
+            raw_response_json,
+            created_at,
+            updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+          )
+          .run(
+            jobId,
+            input.queuePromptId,
+            input.judgmentId,
+            input.articleId,
+            input.promptId,
+            input.modelId,
+            input.projectId,
+            input.snapshotProjectId,
+            input.snapshotProjectModelName,
+            Number(input.useTitle),
+            Number(input.useAbstract),
+            Number(input.useFulltext),
+            Number(input.useFulltextNoImages),
+            input.chunkingStrategy,
+            Number(input.isAnswered),
+            input.answeredOriginal,
+            JSON.stringify(input.answeredOriginalAsArray),
+            input.confidenceOriginal,
+            input.explanation,
+            JSON.stringify(input.quotes),
+            JSON.stringify(input.rawResponseJson),
+            input.createdAt.toISOString(),
+            input.updatedAt.toISOString(),
+          )
+        database
+          .query(
+            `
+          UPDATE queue_prompt
+          SET status = 'judged',
+              terminal_kind = NULL,
+              skip_reason = NULL,
+              judged_at = ?,
+              updated_at = ?
+          WHERE id = ?
+        `,
+          )
+          .run(input.updatedAt.toISOString(), input.updatedAt.toISOString(), input.queuePromptId)
+      })(outboxInsert)
+    })
+  },
+  requeueAbandonedSentPrompts: async ({
+    jobId,
+    serverJobId,
+    staleBefore,
+  }: {
+    jobId: string
+    serverJobId: string
+    staleBefore: Date
+  }): Promise<number> => {
+    return (
+      withJobDatabase(jobId, false, (database) => {
+        const result = database
+          .query(
+            `
+          UPDATE queue_prompt
+          SET status = 'ready',
+              sent_at = NULL,
+              updated_at = ?,
+              server_id = ?,
+              claim_id = NULL
+          WHERE status = 'sent'
+            AND COALESCE(server_id, '') <> ?
+            AND sent_at <= ?
+        `,
+          )
+          .run(new Date().toISOString(), serverJobId, serverJobId, staleBefore.toISOString()) as {changes?: number}
+
+        return Number(result.changes ?? 0)
+      }) ?? 0
+    )
+  },
+  setExhaustedAt: async (jobId: string, exhaustedAt: Date | null) => {
+    return withJobDatabase(jobId, false, (database) => {
+      const now = new Date().toISOString()
+      database
+        .query(
+          `
+        UPDATE job_scan_state
+        SET exhausted_at = ?,
+            updated_at = ?
+        WHERE job_id = ?
+      `,
+        )
+        .run(exhaustedAt?.toISOString() ?? null, now, jobId)
+    })
+  },
+  setScanState: async (jobId: string, state: JobScanState) => {
+    return withJobDatabase(jobId, false, (database) => {
+      const now = new Date().toISOString()
+      database
+        .query(
+          `
+        UPDATE job_scan_state
+        SET cursor_last_date = ?,
+            cursor_last_article_id = ?,
+            exhausted_at = ?,
+            updated_at = ?
+        WHERE job_id = ?
+      `,
+        )
+        .run(
+          state.cursor?.lastDate.toISOString() ?? null,
+          state.cursor?.lastArticleId ?? null,
+          state.exhaustedAt?.toISOString() ?? null,
+          now,
+          jobId,
+        )
+    })
+  },
+}
+
+const getJudgmentJobSqliteJobIds = () => {
+  return existsSync(getJudgmentJobsRootDirectory())
+    ? readdirSync(getJudgmentJobsRootDirectory())
+        .filter((entry) => {
+          return entry.endsWith('.sqlite')
+        })
+        .map((entry) => {
+          return entry.slice(0, -'.sqlite'.length)
+        })
+    : []
+}
+
+export const getJudgmentJobSqliteService = () => {
+  return sqliteService
+}

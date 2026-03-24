@@ -15,3 +15,14 @@ test('chunked mode schemas: evidence + final parse', () => {
   expect(judgment.explanation).toBe('because')
   expect(judgment.quotes).toEqual(['verbatim quote'])
 })
+
+test('single prompt parser extracts JSON after thinking preamble', () => {
+  const judgment = parseSinglePromptJudgment(
+    'Thinking Process:\n\nI should answer with JSON.\n\n{"answer":"yes","explanation":"because","quotes":null}',
+    null,
+  )
+
+  expect(judgment.answer).toBe('yes')
+  expect(judgment.explanation).toBe('because')
+  expect(judgment.quotes).toBeNull()
+})

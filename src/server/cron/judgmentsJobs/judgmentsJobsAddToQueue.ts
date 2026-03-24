@@ -5,6 +5,7 @@ import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {getCodexMaxInflight} from './getCodexMaxInflight.ts'
 import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
 import {clearJobCursor, setJobCursor} from './jobCursorStore.ts'
+import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
 import {judgmentsJobsCronGetPrompts} from './judgmentsJobsCronGetPrompts.ts'
 import {judgmentsJobsGetRunningJobs} from './judgmentsJobsGetRunningJobs.ts'
 
@@ -19,6 +20,9 @@ type JobConfig = {
 }
 
 const addToQueueLogger = createRateLimitedLogger({windowMs: 30_000})
+const sqliteScanOverscanMultiplier = 5
+const sqliteScanMaxWindowsPerTick = 5
+const sqliteScanExhaustedCooldownMs = 60_000
 
 const getCodexQueueTargets = (runningJobCount: number) => {
   const maxInflight = getCodexMaxInflight()
@@ -42,6 +46,12 @@ const isCodexJob = (job: Job): boolean => {
 
 /** Counts the number of prompts in 'ready' status for a given job */
 const getCountOfReadyPrompts = async (jobId: string): Promise<number> => {
+  const sqliteService = getJudgmentJobSqliteService()
+
+  if (sqliteService.hasJob(jobId)) {
+    return sqliteService.getReadyCount(jobId)
+  }
+
   const result = await getAppDatabaseService().queryJson<{count: number}>(`
     SELECT COUNT(*) AS count
     FROM app.judgment_job_prompt
@@ -127,6 +137,13 @@ const addPromptsToQueue = async (
 ): Promise<void> => {
   if (promptEntries.length === 0) return
 
+  const sqliteService = getJudgmentJobSqliteService()
+
+  if (sqliteService.hasJob(jobId)) {
+    await sqliteService.addReadyPrompts(jobId, promptEntries, serverJobId)
+    return
+  }
+
   // Chunk the entries to keep insert statements bounded
   // Use onConflictDoNothing because queued entries may race with newly written judgments.
   for (let i = 0; i < promptEntries.length; i += BATCH_INSERT_SIZE) {
@@ -170,6 +187,97 @@ const getNewPromptsForJob = async (job: Job, readyTargetPerJob: number, addToQue
   }
 }
 
+const getSqliteWindowSize = (readyDeficit: number, addToQueueMaxBatchSize: number) => {
+  return Math.min(
+    addToQueueMaxBatchSize * sqliteScanOverscanMultiplier,
+    Math.max(readyDeficit, readyDeficit * sqliteScanOverscanMultiplier),
+  )
+}
+
+const hasSqliteExhaustedCooldown = (exhaustedAt: Date | null) => {
+  return exhaustedAt ? Date.now() - exhaustedAt.getTime() < sqliteScanExhaustedCooldownMs : false
+}
+
+const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void> => {
+  const {job, readyTargetPerJob, addToQueueMaxBatchSize, serverJobId} = params
+  const sqliteService = getJudgmentJobSqliteService()
+  const countOfReadyPrompts = await sqliteService.getReadyCount(job.id)
+  const promptsToFetchCount = getPromptsToFetchCount(countOfReadyPrompts, readyTargetPerJob, addToQueueMaxBatchSize)
+
+  if (promptsToFetchCount === 0) {
+    return
+  }
+
+  const jobConfig = await getJobConfig(job.id)
+
+  if (!jobConfig) {
+    console.error('[addToQueue] Job config not found for jobId:', job.id)
+    return
+  }
+
+  const scanState = await sqliteService.getScanState(job.id)
+
+  if (hasSqliteExhaustedCooldown(scanState.exhaustedAt)) {
+    return
+  }
+
+  const baseCursor = scanState.exhaustedAt ? null : scanState.cursor
+  const initializeScanState = scanState.exhaustedAt
+    ? sqliteService.setScanState(job.id, {cursor: null, exhaustedAt: null})
+    : Promise.resolve()
+
+  await initializeScanState
+
+  const scanWindow = async ({
+    cursor,
+    readyCount,
+    windowsLeft,
+  }: {
+    cursor: Awaited<ReturnType<typeof sqliteService.getScanState>>['cursor']
+    readyCount: number
+    windowsLeft: number
+  }): Promise<void> => {
+    if (readyCount >= readyTargetPerJob || windowsLeft <= 0) {
+      return
+    }
+
+    const readyDeficit = Math.max(0, readyTargetPerJob - readyCount)
+    const requestedWindowSize = getSqliteWindowSize(readyDeficit, addToQueueMaxBatchSize)
+    const promptData = await judgmentsJobsCronGetPrompts(job.projectId, job.id, requestedWindowSize, cursor)
+    const filteredEntries = await filterAlreadyJudged(promptData.promptEntries, jobConfig)
+
+    await sqliteService.addReadyPrompts(job.id, filteredEntries, serverJobId)
+
+    const nextReadyCount = await sqliteService.getReadyCount(job.id)
+    const nextScanState = promptData.nextCursor
+      ? {cursor: promptData.nextCursor, exhaustedAt: null}
+      : {cursor: null, exhaustedAt: new Date()}
+
+    await sqliteService.setScanState(job.id, nextScanState)
+
+    return promptData.nextCursor
+      ? scanWindow({cursor: promptData.nextCursor, readyCount: nextReadyCount, windowsLeft: windowsLeft - 1})
+      : undefined
+  }
+
+  const getNewStartMs = Date.now()
+
+  await scanWindow({cursor: baseCursor, readyCount: countOfReadyPrompts, windowsLeft: sqliteScanMaxWindowsPerTick})
+
+  const getNewMs = Date.now() - getNewStartMs
+  const finalReadyCount = await sqliteService.getReadyCount(job.id)
+
+  addToQueueLogger.log(`addToQueue:job:${job.id}`, '[addToQueue] sqlite top-up check', {
+    fetchedNeeded: promptsToFetchCount,
+    jobId: job.id,
+    ms: getNewMs,
+    projectId: job.projectId,
+    ready: countOfReadyPrompts,
+    readyAfter: finalReadyCount,
+    readyTargetPerJob,
+  })
+}
+
 const getJobConfig = async (jobId: string): Promise<JobConfig | null> => {
   const [config] = await getAppDatabaseService().queryJson<JobConfig>(`
     SELECT
@@ -192,6 +300,13 @@ type AddToQueueJobParams = {job: Job; readyTargetPerJob: number; addToQueueMaxBa
 
 const addToQueueForJob = async (params: AddToQueueJobParams): Promise<void> => {
   const {job, readyTargetPerJob, addToQueueMaxBatchSize, serverJobId} = params
+  const sqliteService = getJudgmentJobSqliteService()
+
+  if (sqliteService.hasJob(job.id)) {
+    await topUpSqliteQueueForJob({job, readyTargetPerJob, addToQueueMaxBatchSize, serverJobId})
+    return
+  }
+
   const getNewStartMs = Date.now()
   const {countOfReadyPrompts, didFetch, nextCursor, promptEntries, promptsToFetchCount} = await getNewPromptsForJob(
     job,

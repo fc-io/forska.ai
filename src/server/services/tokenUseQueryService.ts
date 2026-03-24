@@ -121,9 +121,16 @@ const tokenUseSelectClause = `
   total_failed_tokens AS totalFailedTokens
 `
 
+const getInsertTokenUseValues = (values: Record<string, unknown>) => {
+  const existingId = typeof values.id === 'string' ? values.id.trim() : ''
+
+  return existingId.length > 0 ? values : {...values, id: crypto.randomUUID()}
+}
+
 const insertTokenUse = async (values: Record<string, unknown>) => {
-  const columns = Object.keys(values)
-  const rowValues = Object.values(values)
+  const insertValues = getInsertTokenUseValues(values)
+  const columns = Object.keys(insertValues)
+  const rowValues = Object.values(insertValues)
   const [row] = await getAppDatabaseService().queryJson<TokenUseRow>(`
     INSERT INTO app.token_use (${columns.join(', ')})
     VALUES (${rowValues

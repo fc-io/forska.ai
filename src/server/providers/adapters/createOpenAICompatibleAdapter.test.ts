@@ -115,3 +115,48 @@ test('OpenAI-compatible adapter falls back to chat discovery when native Ollama 
   expect(transportState.listNativeOllama).toHaveBeenCalledTimes(1)
   expect(transportState.listChat).toHaveBeenCalledTimes(1)
 })
+
+test('OpenAI-compatible adapter passes output schema to chat invocation', async () => {
+  transportState.invoke.mockClear()
+  const {createOpenAICompatibleAdapter} = await loadFactory()
+  const adapter = createOpenAICompatibleAdapter(
+    {
+      defaultBaseURL: 'http://127.0.0.1:11434/v1',
+      description: 'Local Ollama',
+      kind: 'ollama',
+      label: 'Ollama',
+      requiresApiKey: false,
+      supportsDiscovery: true,
+      supportsWorkerUrls: true,
+    },
+    {transportFamily: 'ollama-native-discovery', useNativeOllamaDiscovery: true},
+  )
+
+  const outputSchema = {type: 'object', properties: {answer: {type: 'string'}}, required: ['answer']}
+
+  await adapter.invoke({
+    connection: getOllamaConnectionInput().connection,
+    model: {
+      baseURL: null,
+      createdAt: null,
+      displayName: 'chat-model',
+      enabled: true,
+      id: 'model-1',
+      metadataJson: null,
+      modelName: 'chat-model',
+      name: 'chat-model',
+      provider: 'ollama',
+      providerConnectionId: 'ollama-1',
+      remoteModelId: 'chat-model',
+      source: 'manual',
+      updatedAt: null,
+      variant: null,
+      version: null,
+    },
+    request: {maxCompletionTokens: 32, outputSchema, prompt: 'Say hi', systemPrompt: 'Return JSON', temperature: 0.1},
+    runtimeCredentials: getOllamaConnectionInput().runtimeCredentials,
+  })
+
+  expect(transportState.invoke).toHaveBeenCalledTimes(1)
+  expect(transportState.invoke.mock.calls[0]?.[0]).toMatchObject({outputSchema})
+})

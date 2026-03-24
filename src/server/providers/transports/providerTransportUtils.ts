@@ -109,6 +109,10 @@ export const getOpenAICompatibleUsage = (
   }
 }
 
+export const getJsonSchemaResponseFormat = (outputSchema: unknown) => {
+  return {json_schema: {name: 'structured_output', schema: outputSchema, strict: true}, type: 'json_schema'} as const
+}
+
 export const getJsonSchemaTextFormat = (outputSchema: unknown) => {
   return {format: {name: 'structured_output', schema: outputSchema, strict: true, type: 'json_schema'}} as const
 }

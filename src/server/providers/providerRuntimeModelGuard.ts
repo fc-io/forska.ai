@@ -6,6 +6,12 @@ import {requireProviderRegistryEntry} from './providerRegistry.ts'
 import {discoverOpenAICompatibleRuntimeModel} from './providerRuntimeDiscovery.ts'
 import {type ProviderListedModel, type ProviderModelRecord} from './providerTypes.ts'
 
+type StoredProviderModelRuntimeMatch = {message: string | null; ok: boolean}
+
+const runtimeMatchCacheMs = 10_000
+
+const runtimeMatchCache = new Map<string, {result: StoredProviderModelRuntimeMatch; timestamp: number}>()
+
 const getTrimmedValue = (value: string | null | undefined): string | null => {
   const normalized = String(value ?? '').trim()
 
@@ -114,7 +120,11 @@ const getStoredProviderRuntimeContext = async (
   return {connectionId, model}
 }
 
-export const assertStoredProviderModelRuntimeMatch = async ({modelId}: {modelId: string}): Promise<void> => {
+const getStoredProviderModelRuntimeMatchUncached = async ({
+  modelId,
+}: {
+  modelId: string
+}): Promise<StoredProviderModelRuntimeMatch> => {
   const {connectionId, model} = await getStoredProviderRuntimeContext(modelId)
   const connection = await getProviderConnectionForStoredModel(modelId)
 
@@ -123,13 +133,13 @@ export const assertStoredProviderModelRuntimeMatch = async ({modelId}: {modelId:
   }
 
   if (connection.providerKind !== 'sglang') {
-    return
+    return {message: null, ok: true}
   }
 
   const storedModelNames = getStoredModelNames(model)
 
   if (storedModelNames.length === 0) {
-    throw new HttpError(400, getMissingStoredModelNamesMessage())
+    return {message: getMissingStoredModelNamesMessage(), ok: false}
   }
 
   try {
@@ -144,21 +154,44 @@ export const assertStoredProviderModelRuntimeMatch = async ({modelId}: {modelId:
     ])
     const runtimeModelNames = getRuntimeModelNames({listedModels, runtimeMetadata})
 
-    if (runtimeModelNames.length === 0) {
-      throw new HttpError(400, getMissingRuntimeModelNamesMessage(runtimeCredentials.baseURL, storedModelNames))
-    }
-
-    if (!hasRuntimeModelMatch({runtimeModelNames, storedModelNames})) {
-      throw new HttpError(
-        400,
-        getRuntimeMismatchMessage({baseURL: runtimeCredentials.baseURL, runtimeModelNames, storedModelNames}),
-      )
-    }
+    return runtimeModelNames.length === 0
+      ? {message: getMissingRuntimeModelNamesMessage(runtimeCredentials.baseURL, storedModelNames), ok: false}
+      : hasRuntimeModelMatch({runtimeModelNames, storedModelNames})
+        ? {message: null, ok: true}
+        : {
+            message: getRuntimeMismatchMessage({
+              baseURL: runtimeCredentials.baseURL,
+              runtimeModelNames,
+              storedModelNames,
+            }),
+            ok: false,
+          }
   } catch (error) {
-    if (error instanceof HttpError) {
-      throw error
-    }
+    return {message: getRuntimeVerificationFailureMessage(connection.baseURL, error), ok: false}
+  }
+}
 
-    throw new HttpError(400, getRuntimeVerificationFailureMessage(connection.baseURL, error), {cause: error})
+export const getStoredProviderModelRuntimeMatch = async ({
+  modelId,
+}: {
+  modelId: string
+}): Promise<StoredProviderModelRuntimeMatch> => {
+  const cacheKey = modelId
+  const existing = runtimeMatchCache.get(cacheKey)
+
+  if (existing && Date.now() - existing.timestamp < runtimeMatchCacheMs) {
+    return existing.result
+  }
+
+  const result = await getStoredProviderModelRuntimeMatchUncached({modelId})
+  runtimeMatchCache.set(cacheKey, {result, timestamp: Date.now()})
+  return result
+}
+
+export const assertStoredProviderModelRuntimeMatch = async ({modelId}: {modelId: string}): Promise<void> => {
+  const result = await getStoredProviderModelRuntimeMatch({modelId})
+
+  if (!result.ok) {
+    throw new HttpError(400, result.message ?? 'Failed to verify the active SGLang model')
   }
 }

@@ -6,12 +6,14 @@ import {
   BarElement,
   CategoryScale,
   Chart,
+  type ChartData,
+  type ChartOptions,
   Legend,
   LinearScale,
   Tooltip,
+  type TooltipItem,
 } from 'chart.js'
 import {format} from 'date-fns'
-import {Bar} from 'solid-chartjs'
 import {type Accessor, createEffect, createMemo, createSignal, onCleanup, onMount, Show} from 'solid-js'
 
 import {apiClient} from '../services/apiClient.ts'
@@ -114,8 +116,9 @@ const TokenUsageTimelineStats = (props: TokenUsageTimelineStatsProps) => {
 export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
   const [selectedInterval, setSelectedInterval] = createSignal<TimeInterval>('1min')
   const [customRange, setCustomRange] = createSignal<TokenUsageTimelineDateRange | null>(null)
-  // Keep chart readiness local to this component instance
   const [chartReady, setChartReady] = createSignal(false)
+  const [chartCanvas, setChartCanvas] = createSignal<HTMLCanvasElement | null>(null)
+  const [chartInstance, setChartInstance] = createSignal<Chart<'bar'> | null>(null)
   const [pendingPickerValues, setPendingPickerValues] = createSignal<DateValue[] | undefined>(undefined)
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
   const hasCustomRange = createMemo(() => {
@@ -406,7 +409,7 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
     return {start: bucketStart, end: bucketEnd}
   }
 
-  const chartData = createMemo(() => {
+  const chartData = createMemo<ChartData<'bar'> | null>(() => {
     const data = filteredTimelineData()
     if (data.length === 0) {
       return null
@@ -496,7 +499,7 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
     }
   })
 
-  const chartOptions = {
+  const chartOptions: ChartOptions<'bar'> = {
     responsive: true,
     maintainAspectRatio: false,
     interaction: {mode: 'index' as const, intersect: false},
@@ -536,15 +539,15 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
         labels: {boxWidth: 12, padding: 10, font: {size: 11}},
       },
       tooltip: {
-        filter: (tooltipItem: {dataset: {label?: string}; parsed: {y: number}}) => {
+        filter: (tooltipItem: TooltipItem<'bar'>) => {
           const rawLabel = tooltipItem.dataset.label || ''
-          if (rawLabel.startsWith('Failed') && tooltipItem.parsed.y <= 0) {
+          if (rawLabel.startsWith('Failed') && (tooltipItem.parsed.y ?? 0) <= 0) {
             return false
           }
           return true
         },
         callbacks: {
-          title: (tooltipItems: {dataIndex: number}[]) => {
+          title: (tooltipItems: TooltipItem<'bar'>[]) => {
             const idx = tooltipItems?.[0]?.dataIndex
             const data = filteredTimelineData()
             if (idx == null || !data[idx]) return ''
@@ -559,19 +562,19 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
             const endStr = format(range.end, 'MMM d HH:mm')
             return `${startStr} – ${endStr}`
           },
-          label: (context: {dataset: {label?: string}; parsed: {y: number}}): string => {
+          label: (context: TooltipItem<'bar'>): string => {
             const label = (context.dataset.label || '').replace(' Tokens', '')
-            const value = context.parsed.y.toLocaleString()
+            const value = (context.parsed.y ?? 0).toLocaleString()
             return `${label}: ${value}`
           },
-          footer: (tooltipItems: {dataIndex: number; parsed: {y: number}}[]) => {
+          footer: (tooltipItems: TooltipItem<'bar'>[]) => {
             const idx = tooltipItems?.[0]?.dataIndex
             const data = filteredTimelineData()
             if (idx == null || !data[idx]) return ''
             const total =
               data[idx].totalTokens
               ?? tooltipItems.reduce((sum, item) => {
-                return sum + item.parsed.y
+                return sum + (item.parsed.y ?? 0)
               }, 0)
             const requests = data[idx].totalRequests ?? 0
             return `Total: ${total.toLocaleString()}\nPrompts Judged: ${requests.toLocaleString()}`
@@ -585,8 +588,8 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
         beginAtZero: true,
         grid: {color: 'rgba(0, 0, 0, 0.05)'},
         ticks: {
-          callback: (value: number) => {
-            return value.toLocaleString()
+          callback: (value) => {
+            return Number(value).toLocaleString()
           },
         },
         stacked: true,
@@ -594,9 +597,55 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
     },
   }
 
+  const destroyChart = () => {
+    const existingChart = chartInstance()
+    if (!existingChart) {
+      return
+    }
+    existingChart.destroy()
+    setChartInstance(null)
+  }
+
+  createEffect(() => {
+    const canvas = chartCanvas()
+    const data = chartData()
+    const ownerWindow = canvas?.ownerDocument?.defaultView
+
+    if (!canvas || !chartReady() || !data || tokenData.isLoading || tokenData.isError || !ownerWindow) {
+      destroyChart()
+      return
+    }
+
+    const context = canvas.getContext('2d')
+    if (!context) {
+      destroyChart()
+      return
+    }
+
+    const existingChart = chartInstance()
+    if (!existingChart) {
+      setChartInstance(new Chart(context, {type: 'bar', data, options: chartOptions}))
+      return
+    }
+
+    existingChart.data = data
+    existingChart.options = chartOptions
+    existingChart.update()
+  })
+
   onMount(() => {
     Chart.register(BarController, BarElement, CategoryScale, LinearScale, Tooltip, Legend)
-    setChartReady(true)
+    const frameId = requestAnimationFrame(() => {
+      setChartReady(true)
+    })
+
+    onCleanup(() => {
+      cancelAnimationFrame(frameId)
+    })
+  })
+
+  onCleanup(() => {
+    destroyChart()
   })
 
   return (
@@ -681,7 +730,7 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
 
       <Show when={!tokenData.isLoading && !tokenData.isError && chartReady() && chartData()}>
         <div class="h-64">
-          <Bar data={chartData() || {labels: [], datasets: []}} options={chartOptions} />
+          <canvas ref={setChartCanvas} class="h-full w-full" />
         </div>
       </Show>
 

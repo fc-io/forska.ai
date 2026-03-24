@@ -1,26 +1,34 @@
 import {randomUUID} from 'crypto'
 
 import type {ArticleRecord, JudgmentChunkingStrategy} from '../../db/schemaTypes.ts'
+import {getJudgmentJobSqliteService} from '../../server/cron/judgmentsJobs/judgmentJobSqliteService.ts'
 import {getAppDatabaseService} from '../../server/services/appDatabaseService.ts'
 import {escapeSqlString, getSqlLiteral} from '../../server/services/appQueryHelpers.ts'
 import {getDuckdbMartRefreshService} from '../../server/services/getDuckdbMartRefreshService.ts'
 import {judgeStoreJudgmentGetStringAsArrayOfStrings} from './judgeStoreJudgment/judgeStoreJudgmentGetStringAsArrayOfStrings.ts'
 import type {SinglePromptJudgmentResult} from './parseSinglePromptJudgment.ts'
 
-/**
- * Stores a judgment for a single prompt.
- * Simplified version of judgeStoreJudgment for single-prompt processing.
- */
+export class JudgmentPersistenceError extends Error {
+  constructor(message: string, options?: {cause?: unknown}) {
+    super(message, options)
+    this.name = 'JudgmentPersistenceError'
+  }
+}
+
 export const storeSinglePromptJudgment = async ({
   article,
+  judgmentsJobId,
   promptId,
+  queueRecordId,
   modelId,
   projectId,
   judgment,
   chunkingStrategy,
 }: {
   article: ArticleRecord
+  judgmentsJobId: string
   promptId: string
+  queueRecordId: string
   modelId: string
   projectId: string
   judgment: SinglePromptJudgmentResult
@@ -102,56 +110,98 @@ export const storeSinglePromptJudgment = async ({
       return
     }
 
+    const sqliteService = getJudgmentJobSqliteService()
+
+    if (sqliteService.hasJob(judgmentsJobId)) {
+      try {
+        await sqliteService.recordJudgmentSuccess(judgmentsJobId, {
+          answeredOriginal,
+          answeredOriginalAsArray: answeredOriginalAsArray ?? [],
+          articleId: article.id,
+          chunkingStrategy,
+          confidenceOriginal: 50,
+          createdAt: new Date(),
+          explanation: answeredExplanation || null,
+          isAnswered: true,
+          judgmentId: randomUUID(),
+          modelId,
+          projectId,
+          promptId,
+          queuePromptId: queueRecordId,
+          quotes: answeredQuotes,
+          rawResponseJson: judgment,
+          snapshotProjectId: snapshotValues.snapshotProjectId,
+          snapshotProjectModelName: snapshotValues.snapshotProjectModelName,
+          updatedAt: new Date(),
+          useAbstract,
+          useFulltext,
+          useFulltextNoImages,
+          useTitle,
+        })
+        return
+      } catch (error) {
+        throw new JudgmentPersistenceError(`Failed to persist SQLite judgment for ${article.id}:${promptId}`, {
+          cause: error,
+        })
+      }
+    }
+
     const id = randomUUID()
     const createdAt = new Date()
 
-    await getAppDatabaseService().run(`
-      INSERT INTO app.judgment (
-        id,
-        created_at,
-        updated_at,
-        article_id,
-        model_id,
-        prompt_id,
-        project_id,
-        is_answered,
-        answered_original,
-        answered_original_as_array,
-        confidence_original,
-        explanation,
-        quotes,
-        use_title,
-        use_abstract,
-        use_fulltext,
-        use_fulltext_no_images,
-        chunking_strategy,
-        snapshot_project_id,
-        snapshot_project_model_name
-      )
-      VALUES (
-        '${escapeSqlString(id)}',
-        ${getSqlLiteral(createdAt)},
-        ${getSqlLiteral(createdAt)},
-        '${escapeSqlString(article.id)}',
-        '${escapeSqlString(modelId)}',
-        '${escapeSqlString(promptId)}',
-        '${escapeSqlString(projectId)}',
-        TRUE,
-        ${getSqlLiteral(answeredOriginal)},
-        ${getSqlLiteral(answeredOriginalAsArray)},
-        50,
-        ${getSqlLiteral(answeredExplanation || null)},
-        ${getSqlLiteral(answeredQuotes)},
-        ${useTitle ? 'TRUE' : 'FALSE'},
-        ${useAbstract ? 'TRUE' : 'FALSE'},
-        ${useFulltext ? 'TRUE' : 'FALSE'},
-        ${useFulltextNoImages ? 'TRUE' : 'FALSE'},
-        ${getSqlLiteral(chunkingStrategy)},
-        ${getSqlLiteral(snapshotValues.snapshotProjectId)},
-        ${getSqlLiteral(snapshotValues.snapshotProjectModelName)}
-      )
-    `)
-    await getDuckdbMartRefreshService().queueJudgmentArticleRefresh(article.id, 'storeSinglePromptJudgment')
+    try {
+      await getAppDatabaseService().run(`
+        INSERT INTO app.judgment (
+          id,
+          created_at,
+          updated_at,
+          article_id,
+          model_id,
+          prompt_id,
+          project_id,
+          is_answered,
+          answered_original,
+          answered_original_as_array,
+          confidence_original,
+          explanation,
+          quotes,
+          use_title,
+          use_abstract,
+          use_fulltext,
+          use_fulltext_no_images,
+          chunking_strategy,
+          snapshot_project_id,
+          snapshot_project_model_name
+        )
+        VALUES (
+          '${escapeSqlString(id)}',
+          ${getSqlLiteral(createdAt)},
+          ${getSqlLiteral(createdAt)},
+          '${escapeSqlString(article.id)}',
+          '${escapeSqlString(modelId)}',
+          '${escapeSqlString(promptId)}',
+          '${escapeSqlString(projectId)}',
+          TRUE,
+          ${getSqlLiteral(answeredOriginal)},
+          ${getSqlLiteral(answeredOriginalAsArray)},
+          50,
+          ${getSqlLiteral(answeredExplanation || null)},
+          ${getSqlLiteral(answeredQuotes)},
+          ${useTitle ? 'TRUE' : 'FALSE'},
+          ${useAbstract ? 'TRUE' : 'FALSE'},
+          ${useFulltext ? 'TRUE' : 'FALSE'},
+          ${useFulltextNoImages ? 'TRUE' : 'FALSE'},
+          ${getSqlLiteral(chunkingStrategy)},
+          ${getSqlLiteral(snapshotValues.snapshotProjectId)},
+          ${getSqlLiteral(snapshotValues.snapshotProjectModelName)}
+        )
+      `)
+      await getDuckdbMartRefreshService().queueJudgmentArticleRefresh(article.id, 'storeSinglePromptJudgment')
+    } catch (error) {
+      throw new JudgmentPersistenceError(`Failed to persist DuckDB judgment for ${article.id}:${promptId}`, {
+        cause: error,
+      })
+    }
   } catch (error) {
     console.error(
       `${article.id} | Failed to store judgment for prompt ${promptId}`,

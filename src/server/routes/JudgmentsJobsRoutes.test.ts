@@ -14,10 +14,18 @@ process.env.VITE_PORT = process.env.VITE_PORT ?? '3000'
 const providerRuntimeModelGuardModulePath = new URL('../providers/providerRuntimeModelGuard.ts', import.meta.url)
   .pathname
 
-const state = {assertStoredProviderModelRuntimeMatch: mock(async (_input: {modelId: string}) => {})}
+const state = {
+  assertStoredProviderModelRuntimeMatch: mock(async (_input: {modelId: string}) => {}),
+  getStoredProviderModelRuntimeMatch: mock(async (_input: {modelId: string}) => {
+    return {message: null, ok: true}
+  }),
+}
 
 void mock.module(providerRuntimeModelGuardModulePath, () => {
-  return {assertStoredProviderModelRuntimeMatch: state.assertStoredProviderModelRuntimeMatch}
+  return {
+    assertStoredProviderModelRuntimeMatch: state.assertStoredProviderModelRuntimeMatch,
+    getStoredProviderModelRuntimeMatch: state.getStoredProviderModelRuntimeMatch,
+  }
 })
 
 let app: {handle: (request: Request) => Promise<Response>} | null = null
@@ -51,6 +59,9 @@ afterAll(async () => {
 
 afterEach(() => {
   state.assertStoredProviderModelRuntimeMatch.mockImplementation(async (_input: {modelId: string}) => {})
+  state.getStoredProviderModelRuntimeMatch.mockImplementation(async (_input: {modelId: string}) => {
+    return {message: null, ok: true}
+  })
 })
 
 const insertProjectFixture = async ({

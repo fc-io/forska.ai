@@ -64,6 +64,10 @@ type ProjectReviewConfig = {
 
 type ProjectPromptRow = {id: string; promptHeading: string | null; originalText: string; type: string | null}
 
+type GetFullArticlesOptions = {includeFullText?: boolean}
+
+const appTableColumnNameCache = new Map<string, Promise<Set<string>>>()
+
 const escapeSqlString = (value: string) => {
   return value.replaceAll("'", "''")
 }
@@ -72,6 +76,46 @@ const getQuotedStringList = (values: string[]) => {
   return values.map((value) => {
     return `'${escapeSqlString(value)}'`
   })
+}
+
+const getAppTableColumnNames = async (tableName: string): Promise<Set<string>> => {
+  const existing = appTableColumnNameCache.get(tableName)
+
+  if (existing) {
+    return existing
+  }
+
+  const pending = getAppDatabaseService()
+    .queryJson<{columnName: string}>(
+      `
+      SELECT column_name AS columnName
+      FROM information_schema.columns
+      WHERE table_schema = 'app'
+        AND table_name = '${escapeSqlString(tableName)}'
+    `,
+    )
+    .then((rows) => {
+      return new Set(
+        rows.map((row) => {
+          return row.columnName
+        }),
+      )
+    })
+
+  appTableColumnNameCache.set(tableName, pending)
+  return pending
+}
+
+const getOptionalColumnSelect = ({
+  alias,
+  columnName,
+  columnNames,
+}: {
+  alias: string
+  columnName: string
+  columnNames: Set<string>
+}) => {
+  return `${columnNames.has(columnName) ? columnName : 'NULL'} AS ${alias}`
 }
 
 const getDateValue = (value: unknown) => {
@@ -147,10 +191,15 @@ const getReviewHydrationRows = async (articleIds: string[]): Promise<ReviewHydra
   })
 }
 
-const getFullArticlesByIds = async (articleIds: string[]): Promise<FullArticleRow[]> => {
+const getFullArticlesByIds = async (
+  articleIds: string[],
+  {includeFullText = true}: GetFullArticlesOptions = {},
+): Promise<FullArticleRow[]> => {
   if (articleIds.length === 0) {
     return []
   }
+
+  const columnNames = await getAppTableColumnNames('article')
 
   const rows = await getAppDatabaseService().queryJson<{
     id: string
@@ -205,8 +254,8 @@ const getFullArticlesByIds = async (articleIds: string[]): Promise<FullArticleRo
       pubmed_id AS pubmedId,
       url,
       full_text_fetched_at AS fullTextFetchedAt,
-      full_text AS fullText,
-      full_text_html AS fullTextHtml,
+      ${includeFullText ? 'full_text' : 'NULL'} AS fullText,
+      ${includeFullText ? 'full_text_html' : 'NULL'} AS fullTextHtml,
       full_text_source AS fullTextSource,
       full_text_original_format AS fullTextOriginalFormat,
       full_text_pdf AS fullTextPDF,
@@ -214,8 +263,8 @@ const getFullArticlesByIds = async (articleIds: string[]): Promise<FullArticleRo
       full_text_conversion_status AS fullTextConversionStatus,
       full_text_conversion_error AS fullTextConversionError,
       full_text_conversion_attempts AS fullTextConversionAttempts,
-      full_text_conversion_model_id AS fullTextConversionModelId,
-      full_text_conversion_metadata AS fullTextConversionMetadata,
+      ${getOptionalColumnSelect({alias: 'fullTextConversionModelId', columnName: 'full_text_conversion_model_id', columnNames})},
+      ${getOptionalColumnSelect({alias: 'fullTextConversionMetadata', columnName: 'full_text_conversion_metadata', columnNames})},
       full_text_char_count AS fullTextCharCount,
       content_hash AS contentHash,
       import_route AS importRoute,

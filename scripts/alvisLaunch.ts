@@ -241,6 +241,14 @@ const interpretExitCode = (code: number): string => {
   return exitCodes[code] || `Unknown exit code ${code}`
 }
 
+const exitIfJobNoLongerRunning = async (jobId: string): Promise<void> => {
+  const status = await getJobStatus(jobId)
+  if (status.state === 'RUNNING') return
+
+  console.error(`[alvis] Job ${jobId} is ${status.state}; check ${ALVIS_ROOT}/${ALVIS_JOB_NAME}-${jobId}.log`)
+  process.exit(1)
+}
+
 const spawnTunnelProcess = (worker: WorkerTunnel): ReturnType<typeof spawn> => {
   return spawn(
     [
@@ -376,6 +384,10 @@ const startWorkerTunnels = async (config: AlvisConfig, jobId: string, restartCou
   const readyCount = tunnelStatuses.filter((status) => {
     return status.apiReady
   }).length
+
+  if (connectedCount < workers.length || readyCount < workers.length) {
+    await exitIfJobNoLongerRunning(jobId)
+  }
 
   if (connectedCount === workers.length && readyCount === workers.length) {
     log(`All ${workers.length} tunnel(s) connected and SGLang is responding`)

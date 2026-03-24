@@ -6,6 +6,7 @@ import {Elysia} from 'elysia'
 import {env} from '../utils/env.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 import {isExpectedWriterRoleLossError, shouldCurrentServerRunWriterWork} from '../utils/serverRuntimeRole.ts'
+import {importJudgmentJobSqliteOutboxBatch} from './judgmentsJobs/judgmentJobSqliteOutboxImport.ts'
 import {judgmentsJobsAddToQueue} from './judgmentsJobs/judgmentsJobsAddToQueue.ts'
 import {judgmentsJobsCheckLLMStatus} from './judgmentsJobs/judgmentsJobsCheckLLMStatus.ts'
 import {judgmentsJobsCleanupStale} from './judgmentsJobs/judgmentsJobsCleanupStale.ts'
@@ -34,12 +35,14 @@ const shouldRunJudgingCron = (): boolean => {
 
 const NEW_ARTICLES_INTERVAL = '*/1 * * * * *'
 const LLM_PROCESSING_INTERVAL = '*/1 * * * * *'
+const IMPORT_JUDGMENTS_INTERVAL = '*/1 * * * * *'
 const CHECK_LLM_STATUS = '*/30 * * * * *'
 const CLEANUP_STALE_REQUESTS = '0 */1 * * * *'
 const START_DELAY_MS = 1000
 
 let isAddingToQueue = false
 let addToQueueStartedAtMs: number | null = null
+let isImportingJudgments = false
 
 const runAddToQueue = async (): Promise<void> => {
   if (!shouldRunJudgingCron()) return
@@ -76,6 +79,20 @@ const sendToLLM = async (): Promise<void> => {
   }
 }
 
+const importJudgmentsCron = async (): Promise<void> => {
+  if (!shouldRunJudgingCron() || isImportingJudgments) return
+
+  isImportingJudgments = true
+
+  try {
+    await importJudgmentJobSqliteOutboxBatch()
+  } catch (err) {
+    logJudgingCronError('[cron] importJudgmentsCron error:', err)
+  } finally {
+    isImportingJudgments = false
+  }
+}
+
 const checkLLMStatusCron = async (): Promise<void> => {
   if (!shouldRunJudgingCron()) return
   try {
@@ -109,6 +126,14 @@ export const judgmentsJobsCron = new Elysia()
       pattern: LLM_PROCESSING_INTERVAL,
       startAt: new Date(Date.now() + START_DELAY_MS),
       run: sendToLLM,
+    }),
+  )
+  .use(
+    cron({
+      name: 'judgments-jobs-import-judgments',
+      pattern: IMPORT_JUDGMENTS_INTERVAL,
+      startAt: new Date(Date.now() + START_DELAY_MS),
+      run: importJudgmentsCron,
     }),
   )
   .use(

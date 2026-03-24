@@ -6,21 +6,9 @@
   "provider": "NAISS / Chalmers University",
 
   "hardware": {
-    "node": {
-      "cpuModel": "AMD EPYC",
-      "memoryGb": 512
-    },
-    "gpu": {
-      "model": "NVIDIA A100",
-      "memoryGb": 80,
-      "memoryType": "HBM2e",
-      "gpusPerNode": 4,
-      "variant": "A100fat"
-    },
-    "network": {
-      "type": "InfiniBand",
-      "model": "HDR"
-    }
+    "node": {"cpuModel": "AMD EPYC", "memoryGb": 512},
+    "gpu": {"model": "NVIDIA A100", "memoryGb": 80, "memoryType": "HBM2e", "gpusPerNode": 4, "variant": "A100fat"},
+    "network": {"type": "InfiniBand", "model": "HDR"}
   },
 
   "defaults": {
@@ -31,11 +19,11 @@
     "DP_SIZE": 1,
     "GPU_SHAPE": "A100:3",
     "SGLANG_MAX_RUNNING_REQUESTS": 400,
-    "SGLANG_MODEL": "Qwen/Qwen3-30B-A3B-Instruct-2507"
+    "SGLANG_MODEL": "Qwen/Qwen3.5-122B-A10B"
   },
 
   "sglang": {
-    "model": "Qwen/Qwen3-30B-A3B-Instruct-2507",
+    "model": "Qwen/Qwen3.5-122B-A10B",
     "port": 30000,
     "tensorParallelSize": 1,
     "dataParallelSize": 1,
@@ -47,9 +35,7 @@
   },
 
   "connection": {
-    "sshConfigHosts": {
-      "login": "alvis2"
-    },
+    "sshConfigHosts": {"login": "alvis2"},
     "storageRoot": "/mimer/NOBACKUP/groups/clin-agent-bench/dev",
     "slurmAccount": "NAISS2025-22-715",
     "slurmPartition": "alvis"

@@ -1,5 +1,6 @@
 import {type ProviderInvocationResult, type ProviderListedModel} from '../providerTypes.ts'
 import {
+  getJsonSchemaResponseFormat,
   getOpenAIClient,
   getOpenAICompatibleUsage,
   getOpenAIMessageText,
@@ -39,6 +40,7 @@ export const invokeOpenAIChatModel = async ({
   baseURL,
   maxCompletionTokens,
   modelName,
+  outputSchema,
   prompt,
   systemPrompt,
   temperature,
@@ -47,6 +49,7 @@ export const invokeOpenAIChatModel = async ({
   baseURL: string | null
   maxCompletionTokens: number
   modelName: string
+  outputSchema: unknown
   prompt: string
   systemPrompt: string
   temperature: number
@@ -60,8 +63,9 @@ export const invokeOpenAIChatModel = async ({
       {content: prompt, role: 'user'},
     ],
     model: modelName,
+    response_format: getJsonSchemaResponseFormat(outputSchema),
     temperature,
-  })
+  } as never)
   const message = response.choices[0]?.message
 
   if (!message) {
