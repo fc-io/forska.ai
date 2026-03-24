@@ -48,13 +48,18 @@ const isNonEmptyString = (value: string | null | undefined): value is string => 
 
 const getCommandOutput = (command: string, args: string[]) => {
   const result = spawnSync(command, args, {encoding: 'utf8'})
+
+  if (result.error) {
+    return null
+  }
+
   const output = normalizeHostname(result.stdout)
 
   return result.status === 0 && output !== '' ? output : null
 }
 
 const getDarwinLocalHostname = () => {
-  return process.platform === 'darwin' ? getCommandOutput('scutil', ['--get', 'LocalHostName']) : null
+  return process.platform === 'darwin' ? getCommandOutput('/usr/sbin/scutil', ['--get', 'LocalHostName']) : null
 }
 
 const getDarwinPlatformUuid = () => {
@@ -62,8 +67,13 @@ const getDarwinPlatformUuid = () => {
     return null
   }
 
-  const result = spawnSync('ioreg', ['-rd1', '-c', 'IOPlatformExpertDevice'], {encoding: 'utf8'})
-  const platformUuid = /"IOPlatformUUID" = "([^"]+)"/.exec(result.stdout)?.[1]
+  const result = spawnSync('/usr/sbin/ioreg', ['-rd1', '-c', 'IOPlatformExpertDevice'], {encoding: 'utf8'})
+
+  if (result.error) {
+    return null
+  }
+
+  const platformUuid = /"IOPlatformUUID" = "([^"]+)"/.exec(String(result.stdout ?? ''))?.[1]
 
   return result.status === 0 && platformUuid !== undefined ? normalizeHostname(platformUuid) : null
 }
