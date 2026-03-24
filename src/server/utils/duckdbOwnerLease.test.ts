@@ -35,7 +35,7 @@ const getDarwinLocalHostname = () => {
     return null
   }
 
-  return getNormalizedCommandOutput('scutil', ['--get', 'LocalHostName'])
+  return getNormalizedCommandOutput('/usr/sbin/scutil', ['--get', 'LocalHostName'])
 }
 
 const getShellHostname = () => {
@@ -145,6 +145,67 @@ test('writer reclaims stale local lease after hostname change when machine finge
     expect(nextLease.metadata.hostname).toBe(hostname())
     expect(nextLease.metadata.leaseId).not.toBe(initialLease.metadata.leaseId)
     expect(readLeaseMetadata(leasePath).machineFingerprint).toBe(initialLease.metadata.machineFingerprint)
+  } finally {
+    rmSync(tempDirectory, {force: true, recursive: true})
+  }
+})
+
+test('writer reclaims stale macOS local-hostname lease in a reduced PATH environment', () => {
+  const darwinLocalHostname = getDarwinLocalHostname()
+
+  if (darwinLocalHostname === null) {
+    return
+  }
+
+  const {duckdbPath, leasePath, tempDirectory} = createLeasePaths()
+
+  try {
+    writeLeaseMetadata(leasePath, {
+      acquiredAt: '2026-03-01T00:00:00.000Z',
+      apiServerPort: 3999,
+      databasePath: duckdbPath,
+      heartbeatAt: '2026-03-01T00:00:00.000Z',
+      hostname: `${darwinLocalHostname}.local`,
+      leaseId: 'legacy-local-reduced-path-lease-id',
+      pid: 999_999,
+      serverRole: 'writer',
+    })
+
+    const result = globalThis.Bun.spawnSync(
+      [
+        process.execPath,
+        '-e',
+        `
+          import {Effect} from 'effect'
+          import {acquireDuckdbOwnerLease} from './src/server/utils/duckdbOwnerLease.ts'
+
+          const nextLease = await Effect.runPromise(
+            acquireDuckdbOwnerLease({apiServerPort: 3999, databasePath: ${JSON.stringify(duckdbPath)}, serverRole: 'writer'}),
+          )
+
+          console.log(JSON.stringify(nextLease))
+        `,
+      ],
+      {
+        cwd: process.cwd(),
+        env: {...process.env, PATH: '/usr/bin:/bin'},
+        stderr: 'pipe',
+        stdout: 'pipe',
+      },
+    )
+
+    const stdout = Buffer.from(result.stdout ?? []).toString().trim()
+    const stderr = Buffer.from(result.stderr ?? []).toString().trim()
+
+    if (result.exitCode !== 0) {
+      throw new Error(stderr || stdout || 'Expected reduced-PATH lease reclaim subprocess to succeed')
+    }
+
+    const nextLease = JSON.parse(stdout) as {metadata: DuckdbOwnerLeaseMetadata} | null
+
+    expect(nextLease).not.toBeNull()
+    expect(nextLease?.metadata.hostname).toBe(hostname())
+    expect(nextLease?.metadata.machineFingerprint).toBeDefined()
   } finally {
     rmSync(tempDirectory, {force: true, recursive: true})
   }
