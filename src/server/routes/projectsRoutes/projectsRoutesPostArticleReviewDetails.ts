@@ -7,7 +7,13 @@ import type {
   PromptRecord,
 } from '../../../db/schemaTypes.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
-import {escapeSqlString, getDateValue, getJsonValue, getQuotedStringList} from '../../services/appQueryHelpers.ts'
+import {
+  escapeSqlString,
+  getDateValue,
+  getJsonValue,
+  getQuotedStringList,
+  getSqlLiteral,
+} from '../../services/appQueryHelpers.ts'
 import {getAppQueryService} from '../../services/getAppQueryService.ts'
 import {getSystemActor} from '../../utils/getSystemActor.ts'
 import {assertProjectIsActive} from './projectAccessGuard.ts'
@@ -37,11 +43,7 @@ type PlaceholderJudgment = {
 
 type ReviewJudgment = JudgmentWithPromptAndAssessments | PlaceholderJudgment
 
-const getPromptValue = (row: {promptOriginalText: string; promptHeading: string | null}) => {
-  return {originalText: row.promptOriginalText, promptHeading: row.promptHeading}
-}
-
-const getJudgmentValue = (row: {
+type ArticleJudgmentRow = {
   judgmentId: string
   judgmentCreatedAt: unknown
   judgmentUpdatedAt: unknown
@@ -63,7 +65,125 @@ const getJudgmentValue = (row: {
   judgmentQuotes: unknown
   judgmentSnapshotProjectId: string | null
   judgmentSnapshotProjectModelName: string | null
-}): JudgmentRecord => {
+  promptOriginalText: string
+  promptHeading: string | null
+  modelName: string | null
+  modelProvider: string | null
+  modelVersion: string | null
+}
+
+type ProjectReviewConfig = {
+  modelId: string | null
+  useTitle: boolean
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+}
+
+const getPromptValue = (row: {promptOriginalText: string; promptHeading: string | null}) => {
+  return {originalText: row.promptOriginalText, promptHeading: row.promptHeading}
+}
+
+const getProjectJudgmentModelClause = (params: {judgmentAlias: string; projectReviewConfig: ProjectReviewConfig}) => {
+  return params.projectReviewConfig.modelId === null
+    ? `${params.judgmentAlias}.model_id IS NULL`
+    : `${params.judgmentAlias}.model_id = ${getSqlLiteral(params.projectReviewConfig.modelId)}`
+}
+
+const getProjectJudgmentConfigWhereParts = (params: {
+  judgmentAlias: string
+  projectReviewConfig: ProjectReviewConfig
+}) => {
+  return [
+    getProjectJudgmentModelClause(params),
+    `${params.judgmentAlias}.use_title = ${getSqlLiteral(params.projectReviewConfig.useTitle)}`,
+    `${params.judgmentAlias}.use_abstract = ${getSqlLiteral(params.projectReviewConfig.useAbstract)}`,
+    `${params.judgmentAlias}.use_fulltext = ${getSqlLiteral(params.projectReviewConfig.useFulltext)}`,
+    `${params.judgmentAlias}.use_fulltext_no_images = ${getSqlLiteral(params.projectReviewConfig.useFulltextNoImages)}`,
+  ]
+}
+
+const getProjectReviewDetailJudgmentIds = async (params: {projectId: string; articleId: string}): Promise<string[]> => {
+  const rows = await getAppDatabaseService().queryJson<{judgmentId: string}>(`
+    SELECT judgment_id AS judgmentId
+    FROM mart.review_article_judgment_detail
+    WHERE project_id = '${escapeSqlString(params.projectId)}'
+      AND article_id = '${escapeSqlString(params.articleId)}'
+    ORDER BY prompt_order ASC NULLS LAST, created_at DESC NULLS LAST, judgment_id ASC
+  `)
+
+  return rows.map((row) => {
+    return row.judgmentId
+  })
+}
+
+const getProjectScopedArticleJudgmentIds = async (params: {
+  articleId: string
+  promptIds: string[]
+  projectReviewConfig: ProjectReviewConfig
+}): Promise<string[]> => {
+  if (params.promptIds.length === 0) {
+    return []
+  }
+
+  const rows = await getAppDatabaseService().queryJson<{judgmentId: string}>(`
+    SELECT j.id AS judgmentId
+    FROM app.judgment j
+    WHERE j.article_id = '${escapeSqlString(params.articleId)}'
+      AND j.prompt_id IN (${getQuotedStringList(params.promptIds).join(', ')})
+      AND j.deleted_at IS NULL
+      AND ${getProjectJudgmentConfigWhereParts({
+        judgmentAlias: 'j',
+        projectReviewConfig: params.projectReviewConfig,
+      }).join('\n      AND ')}
+    ORDER BY j.created_at DESC NULLS LAST, j.id ASC
+  `)
+
+  return rows.map((row) => {
+    return row.judgmentId
+  })
+}
+
+const getArticleJudgmentRows = async (articleId: string): Promise<ArticleJudgmentRow[]> => {
+  return getAppDatabaseService().queryJson<ArticleJudgmentRow>(`
+    SELECT
+      j.id AS judgmentId,
+      j.created_at AS judgmentCreatedAt,
+      j.updated_at AS judgmentUpdatedAt,
+      j.deleted_at AS judgmentDeletedAt,
+      j.article_id AS judgmentArticleId,
+      j.model_id AS judgmentModelId,
+      j.prompt_id AS judgmentPromptId,
+      j.project_id AS judgmentProjectId,
+      j.use_title AS judgmentUseTitle,
+      j.use_abstract AS judgmentUseAbstract,
+      j.use_fulltext AS judgmentUseFulltext,
+      j.use_fulltext_no_images AS judgmentUseFulltextNoImages,
+      j.chunking_strategy AS judgmentChunkingStrategy,
+      j.is_answered AS judgmentIsAnswered,
+      j.answered_original AS judgmentAnsweredOriginal,
+      TO_JSON(j.answered_original_as_array) AS judgmentAnsweredOriginalAsArray,
+      j.confidence_original AS judgmentConfidenceOriginal,
+      j.explanation AS judgmentExplanation,
+      TO_JSON(j.quotes) AS judgmentQuotes,
+      j.snapshot_project_id AS judgmentSnapshotProjectId,
+      j.snapshot_project_model_name AS judgmentSnapshotProjectModelName,
+      p.original_text AS promptOriginalText,
+      p.prompt_heading AS promptHeading,
+      COALESCE(m.display_name, m.name, m.remote_model_id) AS modelName,
+      pc.provider_kind AS modelProvider,
+      m.variant AS modelVersion
+    FROM app.judgment j
+    INNER JOIN app.prompt p ON j.prompt_id = p.id
+    LEFT JOIN app.model m ON j.model_id = m.id
+    LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
+    WHERE j.article_id = '${escapeSqlString(articleId)}'
+      AND j.deleted_at IS NULL
+    ORDER BY j.created_at DESC NULLS LAST, j.id ASC
+  `)
+}
+
+const getJudgmentValue = (row: ArticleJudgmentRow): JudgmentRecord => {
   const answeredOriginalAsArray = getJsonValue(row.judgmentAnsweredOriginalAsArray)
   const quotes = getJsonValue(row.judgmentQuotes)
   return {
@@ -127,101 +247,62 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         throw new Error('Article not found')
       }
 
-      const projectPromptRows = await getAppDatabaseService().queryJson<{
-        id: string
-        originalText: string
-        promptHeading: string | null
-        order: number | null
-        type: string | null
-        enabled: boolean | null
-        originProjectId: string | null
-      }>(`
-        SELECT
-          p.id AS id,
-          p.original_text AS originalText,
-          p.prompt_heading AS promptHeading,
-          pp.prompt_order AS "order",
-          p.type AS type,
-          pp.enabled AS enabled,
-          pp.origin_project_id AS originProjectId
-        FROM app.project_prompt pp
-        INNER JOIN app.prompt p ON p.id = pp.prompt_id
-        WHERE pp.project_id = '${escapeSqlString(projectId)}'
-        ORDER BY pp.prompt_order ASC NULLS LAST, p.created_at ASC
-      `)
+      const [projectPromptRows, projectReviewConfig, allArticleJudgments] = await Promise.all([
+        getAppDatabaseService().queryJson<{
+          id: string
+          originalText: string
+          promptHeading: string | null
+          order: number | null
+          type: string | null
+          enabled: boolean | null
+          originProjectId: string | null
+        }>(`
+          SELECT
+            p.id AS id,
+            p.original_text AS originalText,
+            p.prompt_heading AS promptHeading,
+            pp.prompt_order AS "order",
+            p.type AS type,
+            pp.enabled AS enabled,
+            pp.origin_project_id AS originProjectId
+          FROM app.project_prompt pp
+          INNER JOIN app.prompt p ON p.id = pp.prompt_id
+          WHERE pp.project_id = '${escapeSqlString(projectId)}'
+          ORDER BY pp.prompt_order ASC NULLS LAST, p.created_at ASC
+        `),
+        getAppQueryService().getProjectReviewConfig(projectId),
+        getArticleJudgmentRows(articleId),
+      ])
 
-      // Get all judgments for this article that belong to prompts from this project
+      if (!projectReviewConfig) {
+        throw new Error('Project not found')
+      }
+
       const promptIds = projectPromptRows.map((p) => {
         return p.id
       })
-      const articleJudgments =
-        promptIds.length > 0
-          ? await getAppDatabaseService().queryJson<{
-              judgmentId: string
-              judgmentCreatedAt: unknown
-              judgmentUpdatedAt: unknown
-              judgmentDeletedAt: unknown
-              judgmentArticleId: string
-              judgmentModelId: string
-              judgmentPromptId: string
-              judgmentProjectId: string | null
-              judgmentUseTitle: boolean | null
-              judgmentUseAbstract: boolean | null
-              judgmentUseFulltext: boolean | null
-              judgmentUseFulltextNoImages: boolean | null
-              judgmentChunkingStrategy: string | null
-              judgmentIsAnswered: boolean | null
-              judgmentAnsweredOriginal: string | null
-              judgmentAnsweredOriginalAsArray: unknown
-              judgmentConfidenceOriginal: number | null
-              judgmentExplanation: string | null
-              judgmentQuotes: unknown
-              judgmentSnapshotProjectId: string | null
-              judgmentSnapshotProjectModelName: string | null
-              promptOriginalText: string
-              promptHeading: string | null
-              modelName: string | null
-              modelProvider: string | null
-              modelVersion: string | null
-            }>(`
-              SELECT
-                j.id AS judgmentId,
-                j.created_at AS judgmentCreatedAt,
-                j.updated_at AS judgmentUpdatedAt,
-                j.deleted_at AS judgmentDeletedAt,
-                j.article_id AS judgmentArticleId,
-                j.model_id AS judgmentModelId,
-                j.prompt_id AS judgmentPromptId,
-                j.project_id AS judgmentProjectId,
-                j.use_title AS judgmentUseTitle,
-                j.use_abstract AS judgmentUseAbstract,
-                j.use_fulltext AS judgmentUseFulltext,
-                j.use_fulltext_no_images AS judgmentUseFulltextNoImages,
-                j.chunking_strategy AS judgmentChunkingStrategy,
-                j.is_answered AS judgmentIsAnswered,
-                j.answered_original AS judgmentAnsweredOriginal,
-                TO_JSON(j.answered_original_as_array) AS judgmentAnsweredOriginalAsArray,
-                j.confidence_original AS judgmentConfidenceOriginal,
-                j.explanation AS judgmentExplanation,
-                TO_JSON(j.quotes) AS judgmentQuotes,
-                j.snapshot_project_id AS judgmentSnapshotProjectId,
-                j.snapshot_project_model_name AS judgmentSnapshotProjectModelName,
-                p.original_text AS promptOriginalText,
-                p.prompt_heading AS promptHeading,
-                COALESCE(m.display_name, m.name, m.remote_model_id) AS modelName,
-                pc.provider_kind AS modelProvider,
-                m.variant AS modelVersion
-              FROM app.judgment j
-              INNER JOIN app.prompt p ON j.prompt_id = p.id
-              INNER JOIN app.project_prompt pp ON pp.prompt_id = p.id
-              LEFT JOIN app.model m ON j.model_id = m.id
-              LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
-              WHERE j.article_id = '${escapeSqlString(articleId)}'
-                AND pp.project_id = '${escapeSqlString(projectId)}'
-                AND pp.enabled = TRUE
-              ORDER BY pp.prompt_order ASC NULLS LAST, j.created_at DESC NULLS LAST, j.id ASC
-            `)
-          : []
+      const enabledPromptRows = projectPromptRows.filter((p) => {
+        return p.enabled === true
+      })
+      const enabledPromptIds = enabledPromptRows.map((p) => {
+        return p.id
+      })
+      const promptOrderMap = projectPromptRows.reduce(
+        (acc, p, idx) => {
+          const ord = p.order ?? idx
+          acc[p.id] = ord
+          return acc
+        },
+        {} as Record<string, number>,
+      )
+      const [martJudgmentIds, queryJudgmentIds] = await Promise.all([
+        getProjectReviewDetailJudgmentIds({projectId, articleId}),
+        getProjectScopedArticleJudgmentIds({articleId, promptIds: enabledPromptIds, projectReviewConfig}),
+      ])
+      const articleJudgmentCandidateIdSet = new Set([...martJudgmentIds, ...queryJudgmentIds])
+      const articleJudgments = allArticleJudgments.filter((row) => {
+        return articleJudgmentCandidateIdSet.has(row.judgmentId)
+      })
 
       const judgmentIds = articleJudgments.map((j) => {
         return j.judgmentId
@@ -251,7 +332,6 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         return getAssessmentValue(assessment)
       })
 
-      // Group assessments by judgment ID
       const assessmentsByJudgment = normalizedAssessments.reduce<Record<string, Array<JudgmentAssessmentRecord>>>(
         (acc, assessment) => {
           const judgmentAssessments = acc[assessment.judgmentId] ?? []
@@ -260,7 +340,6 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         {},
       )
 
-      // Combine judgments with their assessments and prompts (limited to this project's ENABLED prompts)
       const judgmentsWithDetails: ReviewJudgment[] = articleJudgments.map((row) => {
         const judgment = getJudgmentValue(row)
         const judgmentAssessments = assessmentsByJudgment[judgment.id] ?? []
@@ -274,23 +353,10 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         }
       })
 
-      // Add placeholders for enabled prompts with no LLM judgment yet
-      // If there are judgments for a prompt, do NOT add a placeholder for that prompt
-      const enabledPromptRows = projectPromptRows.filter((p) => {
-        return p.enabled === true
-      })
       const presentPromptIds = new Set(
         articleJudgments.map((judgment) => {
           return judgment.judgmentPromptId
         }),
-      )
-      const promptOrderMap = projectPromptRows.reduce(
-        (acc, p, idx) => {
-          const ord = p.order ?? idx
-          acc[p.id] = ord
-          return acc
-        },
-        {} as Record<string, number>,
       )
 
       const placeholders: PlaceholderJudgment[] = enabledPromptRows
@@ -313,95 +379,29 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
 
       const judgmentsWithPlaceholders: ReviewJudgment[] = [...judgmentsWithDetails, ...placeholders]
 
-      // Ensure stable ordering by project prompt order
       judgmentsWithPlaceholders.sort((a, b) => {
         const ao = promptOrderMap[a.promptId] ?? Number.MAX_SAFE_INTEGER
         const bo = promptOrderMap[b.promptId] ?? Number.MAX_SAFE_INTEGER
         if (ao !== bo) return ao - bo
-        // Secondary: newer first if timestamps exist
         const at = a.createdAt ? new Date(a.createdAt).getTime() : 0
         const bt = b.createdAt ? new Date(b.createdAt).getTime() : 0
         return bt - at
       })
 
-      const allArticleJudgments = await getAppDatabaseService().queryJson<{
-        judgmentId: string
-        judgmentCreatedAt: unknown
-        judgmentUpdatedAt: unknown
-        judgmentDeletedAt: unknown
-        judgmentArticleId: string
-        judgmentModelId: string
-        judgmentPromptId: string
-        judgmentProjectId: string | null
-        judgmentUseTitle: boolean | null
-        judgmentUseAbstract: boolean | null
-        judgmentUseFulltext: boolean | null
-        judgmentUseFulltextNoImages: boolean | null
-        judgmentChunkingStrategy: string | null
-        judgmentIsAnswered: boolean | null
-        judgmentAnsweredOriginal: string | null
-        judgmentAnsweredOriginalAsArray: unknown
-        judgmentConfidenceOriginal: number | null
-        judgmentExplanation: string | null
-        judgmentQuotes: unknown
-        judgmentSnapshotProjectId: string | null
-        judgmentSnapshotProjectModelName: string | null
-        promptOriginalText: string
-        promptHeading: string | null
-        modelName: string | null
-        modelProvider: string | null
-        modelVersion: string | null
-      }>(`
-        SELECT
-          j.id AS judgmentId,
-          j.created_at AS judgmentCreatedAt,
-          j.updated_at AS judgmentUpdatedAt,
-          j.deleted_at AS judgmentDeletedAt,
-          j.article_id AS judgmentArticleId,
-          j.model_id AS judgmentModelId,
-          j.prompt_id AS judgmentPromptId,
-          j.project_id AS judgmentProjectId,
-          j.use_title AS judgmentUseTitle,
-          j.use_abstract AS judgmentUseAbstract,
-          j.use_fulltext AS judgmentUseFulltext,
-          j.use_fulltext_no_images AS judgmentUseFulltextNoImages,
-          j.chunking_strategy AS judgmentChunkingStrategy,
-          j.is_answered AS judgmentIsAnswered,
-          j.answered_original AS judgmentAnsweredOriginal,
-          TO_JSON(j.answered_original_as_array) AS judgmentAnsweredOriginalAsArray,
-          j.confidence_original AS judgmentConfidenceOriginal,
-          j.explanation AS judgmentExplanation,
-          TO_JSON(j.quotes) AS judgmentQuotes,
-          j.snapshot_project_id AS judgmentSnapshotProjectId,
-          j.snapshot_project_model_name AS judgmentSnapshotProjectModelName,
-          p.original_text AS promptOriginalText,
-          p.prompt_heading AS promptHeading,
-          COALESCE(m.display_name, m.name, m.remote_model_id) AS modelName,
-          pc.provider_kind AS modelProvider,
-          m.variant AS modelVersion
-        FROM app.judgment j
-        INNER JOIN app.prompt p ON j.prompt_id = p.id
-        LEFT JOIN app.project_prompt pp
-          ON pp.prompt_id = p.id
-         AND pp.project_id = '${escapeSqlString(projectId)}'
-        LEFT JOIN app.model m ON j.model_id = m.id
-        LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
-        WHERE j.article_id = '${escapeSqlString(articleId)}'
-          AND (
-            pp.id IS NULL
-            OR (pp.enabled = FALSE AND pp.origin_project_id IS NULL)
-          )
-      `)
-
-      const allJudgments = allArticleJudgments.map((row) => {
-        return {
-          ...getJudgmentValue(row),
-          prompt: getPromptValue(row),
-          modelName: row.modelName,
-          modelProvider: row.modelProvider,
-          modelVersion: row.modelVersion,
-        }
-      })
+      const judgmentIdSet = new Set(judgmentIds)
+      const allJudgments = allArticleJudgments
+        .filter((row) => {
+          return !judgmentIdSet.has(row.judgmentId)
+        })
+        .map((row) => {
+          return {
+            ...getJudgmentValue(row),
+            prompt: getPromptValue(row),
+            modelName: row.modelName,
+            modelProvider: row.modelProvider,
+            modelVersion: row.modelVersion,
+          }
+        })
 
       // Resolve project names for snapshotProjectId when present
       const snapshotProjectIds = Array.from(
