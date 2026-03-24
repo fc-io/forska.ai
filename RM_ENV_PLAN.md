@@ -32,7 +32,7 @@
 - [x] Treat provider base URLs/auth refs/worker URLs for local-manual providers as product config in DuckDB, not machine env.
 - [x] Replace `DOCLING_SERVE_URL` with provider/model-backed PDF conversion config.
 - [x] Decide which inference/runtime values are product config vs machine/operator metadata.
-- [ ] After the inference move, do docs cleanup and a minimal-env startup check.
+- [x] After the inference move, do docs cleanup and a minimal-env startup check.
 
 ## User Config Move
 
@@ -86,12 +86,12 @@
 - [ ] Optional: add a bootstrap path for any remaining legacy env-backed contact values we still care to preserve.
 - [x] Update docs to say that core app behavior is configured in the app, not by editing env files.
 - [x] Remove stale env examples and old no-auth wording that still points users at env for app features.
-- [ ] Verify the app still works after restart with only minimal env set.
+- [x] Verify the app still works after restart with only minimal env set.
 
 ## Done When
 
-- [ ] A normal user can install and run Forska without editing shell env for core product features.
+- [x] A normal user can install and run Forska without editing shell env for core product features.
 - [x] Unpaywall contact email and persisted local provider/model config live in DuckDB and the UI/API.
 - [x] Remote sbatch/Slurm worker URLs are runtime-discovered rather than stored as app config.
 - [x] `OPENALEX_MAILTO` and the OpenAlex article import flow are gone.
-- [ ] The remaining env surface is small, explicit, and operational rather than product-facing.
+- [x] The remaining env surface is small, explicit, and operational rather than product-facing.

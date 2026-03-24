@@ -48,6 +48,12 @@ If you need a machine-local override, pass it inline:
 DUCKDB_PATH=~/forska/forska.duckdb bun run dev:server
 ```
 
+Optional direct-origin frontend override:
+
+```bash
+VITE_SERVER_API=http://localhost:3004 bun run dev:app
+```
+
 ## 4) Configure the app in the UI
 
 - Add providers/models in `/admin/models`

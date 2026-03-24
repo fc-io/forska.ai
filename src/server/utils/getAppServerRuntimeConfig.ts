@@ -1,5 +1,7 @@
 import {type as arktype} from 'arktype'
 
+import {DEFAULT_API_SERVER_PORT, DEFAULT_APP_SERVER_PORT} from '../../utils/runtimePortDefaults.ts'
+
 const appServerRuntimeShape = arktype({
   APP_SERVER_API_HOST: 'string',
   APP_SERVER_API_PORT: 'number | string.integer.parse',
@@ -41,7 +43,7 @@ export const getAppServerRuntimeConfig = ({
     }),
     APP_SERVER_API_PORT: getFirstConfiguredValue({
       envValues,
-      fallback: '3000',
+      fallback: String(DEFAULT_API_SERVER_PORT),
       keys: ['APP_SERVER_API_PORT', 'API_SERVER_PORT'],
     }),
     APP_SERVER_API_SCHEME: getFirstConfiguredValue({
@@ -54,7 +56,11 @@ export const getAppServerRuntimeConfig = ({
       fallback: '',
       keys: ['APP_SERVER_DIST_DIR', 'APP_DIST_DIR', 'DIST_DIR', 'PUBLIC_DIR'],
     }),
-    APP_SERVER_PORT: getFirstConfiguredValue({envValues, fallback: '8080', keys: ['APP_SERVER_PORT', 'PROD_SERVER']}),
+    APP_SERVER_PORT: getFirstConfiguredValue({
+      envValues,
+      fallback: String(DEFAULT_APP_SERVER_PORT),
+      keys: ['APP_SERVER_PORT', 'PROD_SERVER'],
+    }),
   })
 
   return {

@@ -1,10 +1,15 @@
+import path from 'path'
+
 import tailwindcss from '@tailwindcss/vite'
 import {tanstackRouter} from '@tanstack/router-plugin/vite'
-import path from 'path'
 import {defineConfig} from 'vite'
 import solid from 'vite-plugin-solid'
 
 import {env} from './src/server/utils/env.ts'
+import {getAppServerRuntimeConfig} from './src/server/utils/getAppServerRuntimeConfig.ts'
+
+const appServerRuntimeConfig = getAppServerRuntimeConfig()
+const apiProxyTarget = `${appServerRuntimeConfig.apiScheme}://${appServerRuntimeConfig.apiHost}:${appServerRuntimeConfig.apiPort}`
 
 // eslint-disable-next-line import/no-default-export
 export default defineConfig({
@@ -20,6 +25,6 @@ export default defineConfig({
     tailwindcss(),
   ],
   resolve: {alias: {'~': path.resolve(__dirname, './src')}},
-  server: {port: env.VITE_PORT, strictPort: false},
+  server: {port: env.VITE_PORT, strictPort: false, proxy: {'/api': {target: apiProxyTarget, changeOrigin: true}}},
   build: {target: 'esnext'},
 })

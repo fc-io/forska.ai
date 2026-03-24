@@ -1,7 +1,9 @@
-import {type as arktype} from 'arktype'
 import {existsSync, readFileSync} from 'fs'
 import {dirname, resolve} from 'path'
 
+import {type as arktype} from 'arktype'
+
+import {DEFAULT_API_SERVER_PORT, DEFAULT_VITE_PORT} from '../../utils/runtimePortDefaults.ts'
 import {getDuckdbPath} from './getDuckdbPath.ts'
 
 const envShape = arktype({
@@ -52,10 +54,10 @@ export const loadEnv = ({
     ;(merged as Record<string, string>).SERVER_WRITER_URL = ''
   }
   if (merged.VITE_PORT == null || String(merged.VITE_PORT).trim() === '') {
-    ;(merged as Record<string, string>).VITE_PORT = '3000'
+    ;(merged as Record<string, string>).VITE_PORT = String(DEFAULT_VITE_PORT)
   }
   if (merged.API_SERVER_PORT == null || String(merged.API_SERVER_PORT).trim() === '') {
-    ;(merged as Record<string, string>).API_SERVER_PORT = '3001'
+    ;(merged as Record<string, string>).API_SERVER_PORT = String(DEFAULT_API_SERVER_PORT)
   }
   ;(merged as Record<string, string>).DUCKDB_PATH = getDuckdbPath({duckdbPath: merged.DUCKDB_PATH})
   if (merged.DUCKDB_MEMORY_LIMIT == null || String(merged.DUCKDB_MEMORY_LIMIT).trim() === '') {
