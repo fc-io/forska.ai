@@ -22,12 +22,35 @@ type QueueMartRefreshTask = {
 
 let martRefreshDrainPromise: Promise<void> | null = null
 let martRefreshDrainTimer: ReturnType<typeof setTimeout> | null = null
+let martRefreshQueueGenerationColumnReady: Promise<void> | null = null
 
 const martRefreshBatchLimit = 4
 const martRefreshDrainBudgetMs = 100
 const martRefreshRetryDelayMs = 5000
 const martRefreshScheduleDelayMs = 250
 const martRefreshYieldDelayMs = 0
+
+const ensureMartRefreshQueueGenerationColumn = async (): Promise<void> => {
+  if (martRefreshQueueGenerationColumnReady) {
+    return martRefreshQueueGenerationColumnReady
+  }
+
+  martRefreshQueueGenerationColumnReady = getAppDatabaseService()
+    .run(
+      `
+      ALTER TABLE app.mart_refresh_queue ADD COLUMN IF NOT EXISTS refresh_generation BIGINT DEFAULT 0;
+      UPDATE app.mart_refresh_queue
+      SET refresh_generation = 0
+      WHERE refresh_generation IS NULL;
+    `,
+    )
+    .catch((error) => {
+      martRefreshQueueGenerationColumnReady = null
+      return Promise.reject(error)
+    })
+
+  return martRefreshQueueGenerationColumnReady
+}
 
 const getProjectRefreshSql = (projectId: string) => {
   const projectLiteral = getSqlLiteral(projectId)
@@ -549,6 +572,8 @@ const getJudgmentArticleRefreshSql = (articleId: string) => {
 }
 
 const getQueuedTasks = async () => {
+  await ensureMartRefreshQueueGenerationColumn()
+
   return getAppDatabaseService().queryJson<MartRefreshTaskRow>(`
     SELECT
       id,
@@ -575,6 +600,8 @@ const deleteQueuedTasks = async (tasks: MartRefreshTaskRow[]) => {
   if (tasks.length === 0) {
     return
   }
+
+  await ensureMartRefreshQueueGenerationColumn()
 
   await getAppDatabaseService().run(`
     DELETE FROM app.mart_refresh_queue
@@ -752,6 +779,8 @@ const queueMartRefreshTasks = async (tasks: QueueMartRefreshTask[]) => {
   if (tasks.length === 0) {
     return
   }
+
+  await ensureMartRefreshQueueGenerationColumn()
 
   await getAppDatabaseService().run(`
     INSERT INTO app.mart_refresh_queue (
