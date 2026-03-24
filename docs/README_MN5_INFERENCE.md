@@ -195,7 +195,7 @@ bun run mn5:dev:server
 
 Then configure the provider/model in Forska at `/admin/models` to use the tunnel endpoint, for example `http://localhost:30000/v1`.
 
-Do not add a global inference URL to `.env.local` for normal app use.
+Do not add a global inference URL to env files for normal app use.
 
 ### OpenAI-Compatible API
 

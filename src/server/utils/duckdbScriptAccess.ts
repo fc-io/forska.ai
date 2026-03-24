@@ -71,7 +71,7 @@ const isWriterResponsive = async (writerUrl: string) => {
 
 const getActiveWriterGuardError = (params: {taskName: string; writerUrl: string}) => {
   return new Error(
-    `${params.taskName} requires exclusive DuckDB maintenance access, but the live writer is active at ${params.writerUrl}. Stop the dev/server process first, or use snapshot tools like \`bun run db:studio\` or \`bun run db:query:snapshot -- --sql "SELECT ..."\`.`,
+    `${params.taskName} requires exclusive DuckDB maintenance access, but the live writer is active at ${params.writerUrl}. Stop the dev/server process first, or use snapshot tools like \`bun run db:studio\` or \`bun run db:query:snapshot -- --sql="SELECT ..."\`.`,
   )
 }
 

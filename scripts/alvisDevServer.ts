@@ -34,7 +34,7 @@ const startDevServer = async (config: AlvisConfig): Promise<void> => {
   log(`SGLANG_MAX_RUNNING_REQUESTS: ${config.SGLANG_MAX_RUNNING_REQUESTS}`)
   log(`SGLANG_CONTEXT_LENGTH: ${config.SGLANG_CONTEXT_LENGTH}`)
 
-  const proc = spawn(['bun', '--env-file=.env.local', 'run', 'src/server/index.ts'], {
+  const proc = spawn(['bun', 'run', 'src/server/index.ts'], {
     cwd: process.cwd(),
     env: getDevServerEnv(config),
     stdout: 'inherit',

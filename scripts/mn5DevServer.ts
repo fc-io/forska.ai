@@ -591,7 +591,7 @@ const startDevServer = async (config: MN5Config): Promise<void> => {
   }
 
   // Start the server (blocking, no watch mode for stability during long inference runs)
-  const proc = spawn(['bun', '--env-file=.env.local', 'run', 'src/server/index.ts'], {
+  const proc = spawn(['bun', 'run', 'src/server/index.ts'], {
     cwd: process.cwd(),
     env,
     stdout: 'inherit',

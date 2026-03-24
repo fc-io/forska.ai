@@ -4,7 +4,7 @@ import {$} from 'bun'
 const requireEnv = (k: string): string => {
   const v = process.env[k]
   if (!v) {
-    console.error(`[dbBackfillPromptHash] Missing env var ${k}. Ensure .env.local is loaded.`)
+    console.error(`[dbBackfillPromptHash] Missing env var ${k}. Pass it in the shell before running the script.`)
     process.exit(1)
   }
   return v
@@ -92,7 +92,7 @@ FOR EACH ROW EXECUTE FUNCTION public.set_prompt_hash_on_insert();
 `
 
 const main = async (): Promise<void> => {
-  // Load env from .env.local if running via package script; Bun respects --env-file in npm script not set here, so require vars
+  // Require shell env explicitly for this legacy Postgres helper
   const db = requireEnv('DB_NAME')
 
   await assertLocalDbRunning()

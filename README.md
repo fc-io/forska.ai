@@ -2,7 +2,7 @@
 
 Local-first deep research app for systematic reviews.
 
-Core product config lives in the Forska UI and DuckDB. Env stays for startup wiring, machine-local paths, background-job toggles, and secrets.
+Core product config lives in the Forska UI and DuckDB. Avoid `.env` setup for normal local dev. Use shell env only for one-off machine-local overrides, background jobs, or secrets.
 
 Goal: standalone single-user app (your own computer). No admin role. No hosted multi-tenant web app.
 
@@ -40,9 +40,30 @@ ssc.large.highmem, 4 vCPU, 16 GB RAM with 4-8 TB of additional storage
 
 The imported article datasets can be very large. For our use case we will dynamically store only what is needed. We don't have an exact number, but rough guess based on our current test set would indicate about ~30-60GB. Then above this we would like to cache a large number of pdfs (~1m), which could add a few additional terabytes.
 
-## Run locally
+## Local dev
 
-[RUN LOCAL ](./docs/README_RUN_LOCAL.md)
+```bash
+bun install
+bun run db:mig
+```
+
+Terminal 1:
+
+```bash
+bun run dev:server
+```
+
+Terminal 2:
+
+```bash
+bun run dev:app
+```
+
+Open the local URL printed by Vite. Default local dev ports: app `3000`, API `3001`.
+
+Do not create or edit `.env` files for normal local dev. Configure providers/models in the UI. For one-off machine-local overrides, pass shell env inline with the command.
+
+More local runtime notes: [RUN LOCAL](./docs/README_RUN_LOCAL.md)
 
 ## Run remotely on HPC:
 

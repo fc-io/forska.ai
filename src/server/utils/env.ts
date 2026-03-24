@@ -22,17 +22,17 @@ const envShape = arktype({
   FULL_TEXT_CONVERSION_CONCURRENCY: 'number | string.integer.parse | null | undefined',
 })
 
-const readFromFileVar = (key: string): string | undefined => {
+const readFromFileVar = (envValues: Record<string, string | undefined>, key: string): string | undefined => {
   const fileVar = `${key}_FILE`
-  const filePath = process.env[fileVar]
+  const filePath = envValues[fileVar]
   return filePath && existsSync(filePath) ? readFileSync(filePath, 'utf8').trim() : undefined
 }
 
-const getEnvWithFileFallback = (): Record<string, string | undefined> => {
-  const source = {...process.env}
+const getEnvWithFileFallback = (envValues: Record<string, string | undefined>): Record<string, string | undefined> => {
+  const source = {...envValues}
   const withFile = (k: string): void => {
     if (!source[k]) {
-      const v = readFromFileVar(k)
+      const v = readFromFileVar(envValues, k)
       if (v) source[k] = v
     }
   }
@@ -40,13 +40,21 @@ const getEnvWithFileFallback = (): Record<string, string | undefined> => {
   return source
 }
 
-const loadEnv = (): typeof envShape.infer => {
-  const merged = getEnvWithFileFallback()
+export const loadEnv = ({
+  envValues = process.env,
+}: {envValues?: Record<string, string | undefined>} = {}): typeof envShape.infer => {
+  const merged = getEnvWithFileFallback(envValues)
   if (merged.SERVER_ROLE == null || String(merged.SERVER_ROLE).trim() === '') {
     ;(merged as Record<string, string>).SERVER_ROLE = 'auto'
   }
   if (merged.SERVER_WRITER_URL == null || String(merged.SERVER_WRITER_URL).trim() === '') {
     ;(merged as Record<string, string>).SERVER_WRITER_URL = ''
+  }
+  if (merged.VITE_PORT == null || String(merged.VITE_PORT).trim() === '') {
+    ;(merged as Record<string, string>).VITE_PORT = '3000'
+  }
+  if (merged.API_SERVER_PORT == null || String(merged.API_SERVER_PORT).trim() === '') {
+    ;(merged as Record<string, string>).API_SERVER_PORT = '3001'
   }
   ;(merged as Record<string, string>).DUCKDB_PATH = getDuckdbPath({duckdbPath: merged.DUCKDB_PATH})
   if (merged.DUCKDB_MEMORY_LIMIT == null || String(merged.DUCKDB_MEMORY_LIMIT).trim() === '') {

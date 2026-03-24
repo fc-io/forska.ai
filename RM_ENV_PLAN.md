@@ -2,14 +2,14 @@
 
 ## Goal
 
-- [ ] Make Forska behave like an app, like OpenClaw, rather than a SaaS product that depends on env vars for core product behavior.
-- [ ] Make persisted app settings live in DuckDB and the app UI/API, not in `.env.local`.
-- [ ] Keep env vars only for true process/bootstrap/runtime wiring, machine-local paths, and secrets.
+- [ ] Make Forska behave like an app, like OpenClaw, rather than a SaaS product that depends on shell env for core product behavior.
+- [ ] Make persisted app settings live in DuckDB and the app UI/API, not in env files.
+- [ ] Keep shell env only for true process/bootstrap/runtime wiring, machine-local paths, and secrets.
 
 ## Rules
 
-- [ ] Adopt one rule: if a setting should survive restart and a normal user may reasonably change it, it should not live in env.
-- [ ] Adopt one rule: env is allowed only for bootstrap, ports, local file paths, background-job toggles, machine-specific endpoints, and secrets.
+- [ ] Adopt one rule: if a setting should survive restart and a normal user may reasonably change it, it should not live in shell env.
+- [ ] Adopt one rule: shell env is allowed only for bootstrap, ports, local file paths, background-job toggles, machine-specific endpoints, and secrets.
 - [x] Route all remaining env reads through one typed boundary; remove scattered direct `process.env` reads from app runtime code.
 
 ## Current Env Audit
@@ -90,7 +90,7 @@
 
 ## Done When
 
-- [ ] A normal user can install and run Forska without editing env vars for core product features.
+- [ ] A normal user can install and run Forska without editing shell env for core product features.
 - [x] Unpaywall contact email and persisted local provider/model config live in DuckDB and the UI/API.
 - [x] Remote sbatch/Slurm worker URLs are runtime-discovered rather than stored as app config.
 - [x] `OPENALEX_MAILTO` and the OpenAlex article import flow are gone.

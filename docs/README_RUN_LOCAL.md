@@ -1,6 +1,6 @@
 # Run local dev build
 
-Current local-first flow. Core product config lives in the app, not `.env.local`.
+Current local-first flow. Core product config lives in the app.
 
 Legacy note
 
@@ -18,26 +18,35 @@ Prereqs
 bun install
 ```
 
-## 2) Minimal `.env.local`
-
-```bash
-API_SERVER_PORT=3000
-VITE_PORT=5173
-# Optional if you do not want the default app-data DuckDB path
-DUCKDB_PATH=~/forska/forska.duckdb
-```
-
-No provider/model settings, worker URLs, binary overrides, or contact emails belong here.
-
-## 3) Initialize + start
+## 2) Initialize DB
 
 ```bash
 bun run db:mig
+```
+
+## 3) Start dev servers
+
+Terminal 1:
+
+```bash
 bun run dev:server
+```
+
+Terminal 2:
+
+```bash
 bun run dev:app
 ```
 
-Open `http://localhost:5173`.
+Open the local URL printed by Vite. Default local dev ports: app `3000`, API `3001`.
+
+Do not create or edit `.env` files for normal local dev.
+
+If you need a machine-local override, pass it inline:
+
+```bash
+DUCKDB_PATH=~/forska/forska.duckdb bun run dev:server
+```
 
 ## 4) Configure the app in the UI
 
@@ -63,10 +72,8 @@ docker compose up docling
 
 Then add a `Docling Serve` provider in `/providers`, add a manual model for it, and select that model in `/settings` as the PDF conversion model.
 
-Optional runtime knobs:
+Optional runtime knobs. Pass inline, do not store in `.env`:
 
 ```bash
-RUN_SERVER_FULL_TEXT_CONVERSION_CRON=true
-FULL_TEXT_CONVERSION_BATCH_SIZE=5
-FULL_TEXT_CONVERSION_CONCURRENCY=2
+RUN_SERVER_FULL_TEXT_CONVERSION_CRON=true FULL_TEXT_CONVERSION_BATCH_SIZE=5 FULL_TEXT_CONVERSION_CONCURRENCY=2 bun run dev:server
 ```

@@ -205,9 +205,9 @@ test('description', () => {
 
 ## Environment
 
-- Secrets in `.env.local` (never commit)
+- Do not rely on `.env` files for normal dev; pass shell env only when needed
 - Use `process.env` (not Bun's `env`) for Node compatibility
-- Bun auto-loads `.env` files
+- Keep shell env use limited to runtime wiring, machine-local paths, and secrets
 
 ---
 

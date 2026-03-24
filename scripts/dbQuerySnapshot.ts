@@ -16,7 +16,7 @@ const ensureSqlArg = () => {
 
   if (sql === '') {
     throw new Error(
-      'Missing --sql argument. Example: bun run db:query:snapshot -- --sql "SELECT COUNT(*) FROM app.article"',
+      'Missing --sql argument. Example: bun run db:query:snapshot -- --sql="SELECT COUNT(*) FROM app.article"',
     )
   }
 

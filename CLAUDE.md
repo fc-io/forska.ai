@@ -25,12 +25,12 @@ See `plans/old/LOCAL_FIRST_PLAN.md`.
 IMPORTANT: Avoid branching. If something can be done without, please do without. For example have an type ArrayThatWillLop = array and initalize with an empty array, instead of type LopIfArray = [] | null.
 IMPORTANT: If there is only one export in a file, then the filename should match the name of the exported function
 IMPORTANT: On the server – prefer the shared DuckDB service/query helpers over ad hoc DB access
-IMPORTANT: For local DuckDB work, never open the live DB file directly. Use `bun run db:studio`, `bun run db:query:snapshot -- --sql "..."`, or maintenance scripts with no running writer.
+IMPORTANT: For local DuckDB work, never open the live DB file directly. Use `bun run db:studio`, `bun run db:query:snapshot -- --sql="..."`, or maintenance scripts with no running writer.
 IMPORTANT: On the client/app – use import {useQuery} from '@tanstack/solid-query' over createQuery
-IMPORTANT: only have secrets and values we need to change from outside the app in the .env files.
+IMPORTANT: only have secrets and values we need to change from outside the app in shell env or secret files.
 IMPORTANT: Keep filenames camelCase, even for TSX/JSX React components.
 IMPORTANT: Never run DuckDB without an explicit memory cap. Use `SET memory_limit = '20GB'` as the default for direct DuckDB CLI/manual work unless a smaller limit is needed.
-There is an .env.local file in the project; you just can't read it because of security concerns. Always assume the .env files are correct unless the env.ts file throws an error. Use process.env instead of Bun's env functionality to stay compatible with ordinary Node.
+Do not rely on `.env` files for normal dev. Pass shell env inline/exported when needed. Use process.env instead of Bun's env functionality to stay compatible with ordinary Node.
 
 ## File structure
 
@@ -204,7 +204,7 @@ Default to using Bun instead of Node.js.
 - Use `bun build <file.html|file.ts|file.css>` instead of `webpack` or `esbuild`
 - Use `bun install` instead of `npm install` or `yarn install` or `pnpm install`
 - Use `bun run <script>` instead of `npm run <script>` or `yarn run <script>` or `pnpm run <script>`
-- Bun automatically loads .env, so don't use dotenv.
+- Do not add dotenv.
 
 ## Linting/formatting
 

@@ -7,7 +7,7 @@
 - [x] Default shared SQLite path: macOS `~/Library/Application Support/Forska/forska.sqlite`; Linux `${XDG_DATA_HOME:-~/.local/share}/forska/forska.sqlite`; Windows `%LOCALAPPDATA%\\Forska\\forska.sqlite`.
 - [ ] Analytics: DuckDB only; query final SQLite shape; no legacy analytics runtime.
 - [ ] No Better Auth. Single local `user` row only; no sessions, no roles, no owner/ownerId.
-- [ ] Move user/app config now in `.env.local` into SQLite `user`; keep env for secrets + external/runtime values only.
+- [ ] Move user/app config now in env files into SQLite `user`; keep shell env for secrets + external/runtime values only.
 - [x] Keep `SQLITE_PATH` override for bootstrap/runtime; no hardcoded repo-relative DB path.
 - [ ] Store user-chosen non-bootstrap custom filesystem paths on SQLite `user` config.
 - [ ] No bridge. No dual-write. No shadow Postgres. No shadow legacy analytics store.
@@ -19,7 +19,7 @@
 - [x] SQLite types: ids=`text`; timestamps=`integer` unix ms; booleans=`integer`; enums=`text`; json/arrays=`text` JSON.
 - [x] `fullTextSource` contract: manual iff `user_upload`; fetched iff non-null and != `user_upload`.
 - [x] Server/client contract drops `ownerId`, `userId`, `sessionId`, `reviewerId`, `assessedBy`.
-- [x] Config contract: SQLite `user` table is source of truth for local user config; `.env.local` is not.
+- [x] Config contract: SQLite `user` table is source of truth for local user config; env files are not.
 - [x] SQLite path contract: compatible worktrees may share one DB file only by pointing to same path; schema-divergent worktrees use separate `SQLITE_PATH`.
 - [x] Bootstrap path contract: DB path resolved before DB open; keep it runtime/env, not inside SQLite `user`.
 - [ ] Human/review single-user contract: no per-user rows at runtime; importer resolves collisions deterministically and reports them.
@@ -32,7 +32,7 @@
 - [x] Add `SQLITE_PATH`; local-first code reads it; keep `DATABASE_URL` for old stack until final cleanup.
 - [x] Replace repo-relative SQLite fallback with cross-platform OS app-data default path resolver.
 - [x] Create parent dir cross-platform; no macOS-only or slash-only path assumptions.
-- [x] Local-first path reads user config from SQLite `user`; env keeps secrets + external/runtime values only.
+- [x] Local-first path reads user config from SQLite `user`; shell env keeps secrets + external/runtime values only.
 - [x] Switch app DB wiring from Postgres/SQLite bridges to the DuckDB-native service boundary.
 - [x] Use standalone DuckDB SQL migrations; do not reuse old Postgres/SQLite migration lineage.
 - [x] Stop merging `auth-schema.ts` into DB bootstrap.
@@ -40,7 +40,7 @@
 ## Step 1B - Schema rewrite (`src/db/schemaTypes.ts`, old auth schema, migrations)
 
 - [x] Rewrite `pgTable`/`pgEnum`/`pgView` to SQLite schema.
-- [x] Rewrite `user` into single-user config table; move `.env.local` user/app config into columns here.
+- [x] Rewrite `user` into single-user config table; move env-file user/app config into columns here.
 - [x] Drop tables: `session`, `account`, `verification`, `datasource_access`, `model_access`.
 - [x] Drop columns: `models.ownerId`, `dataSource.ownerId`, `projects.ownerId`, `comparisonProject.ownerId`, `prompts.ownerId`.
 - [x] Drop columns: `articles.importedBy`, `articles.fullTextPdfUploadedBy`, `tokenUse.userId`, `tokenUse.sessionId`, `reviews.reviewerId`, `judgmentAssessments.assessedBy`.
@@ -100,7 +100,7 @@
 - [x] Add one-shot importer: current Postgres -> final SQLite schema.
 - [x] Import current Postgres core app data into SQLite final shape: `articles`, `judgments`, `projects`, `projectArticles`, `projectPrompts`, `prompts`, `models`, `dataSource`, `comparisonProject`, related link tables, reviews/human-assessment data, and required job tables.
 - [x] Preserve ids and foreign-key relationships during import so existing project/article/judgment references still work after cutover.
-- [x] Add one-shot config bootstrap: current `.env.local` user/app config -> SQLite `user` row.
+- [x] Add one-shot config bootstrap: current env-file user/app config -> SQLite `user` row.
 - [x] Import into final shape only; no compatibility columns, no runtime bridge.
 - [x] Importer resolves single-user collisions deterministically and emits a report.
 - [x] Import lean by default: no optional secondary indexes during import; add deferred parity indexes only after real need/profiling.

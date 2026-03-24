@@ -48,9 +48,9 @@ bun run bench:articlesreviews
 - Override examples:
 
 ```bash
-bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --iterations=3 --warmup-runs=1
-bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --project-id=<id> --limit=10
-bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --filter-prompt-id=<promptId> --filter-answer=<value>
+bun scripts/benchmarkArticlesReviews.ts --iterations=3 --warmup-runs=1
+bun scripts/benchmarkArticlesReviews.ts --project-id=<id> --limit=10
+bun scripts/benchmarkArticlesReviews.ts --filter-prompt-id=<promptId> --filter-answer=<value>
 ```
 
 ## Baseline before new `/api/articlesreviews` optimizations
@@ -68,7 +68,7 @@ bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --filter-prompt-id
   - filtered average: `39016ms`
   - filtered min/max: `38555ms` / `39477ms`
 - Deep-page baseline before cursor/serving-mart changes:
-  - benchmark command: `bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --page=1000 --iterations=1 --warmup-runs=0`
+  - benchmark command: `bun scripts/benchmarkArticlesReviews.ts --page=1000 --iterations=1 --warmup-runs=0`
   - unfiltered page 1000: `16215ms`
   - filtered page 1000: `38331ms`
 
@@ -402,8 +402,8 @@ bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --filter-prompt-id
 - Benchmark command:
 
 ```bash
-bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --mode=unfiltered --iterations=3 --warmup-runs=2
-bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --mode=unfiltered --page=1000 --iterations=1 --warmup-runs=0
+bun scripts/benchmarkArticlesReviews.ts --mode=unfiltered --iterations=3 --warmup-runs=2
+bun scripts/benchmarkArticlesReviews.ts --mode=unfiltered --page=1000 --iterations=1 --warmup-runs=0
 ```
 
 - Results after change:
@@ -430,7 +430,7 @@ bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --mode=unfiltered 
 
 ```bash
 bun run bench:articlesreviews
-bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --mode=unfiltered --cursor-steps=5 --iterations=1 --warmup-runs=0
+bun scripts/benchmarkArticlesReviews.ts --mode=unfiltered --cursor-steps=5 --iterations=1 --warmup-runs=0
 ```
 
 - Results after change:
@@ -456,9 +456,9 @@ bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --mode=unfiltered 
 - Benchmark command:
 
 ```bash
-bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --mode=unfiltered --iterations=3 --warmup-runs=2
-bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --mode=filtered --iterations=2 --warmup-runs=1
-bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --mode=unfiltered --cursor-steps=5 --iterations=1 --warmup-runs=0
+bun scripts/benchmarkArticlesReviews.ts --mode=unfiltered --iterations=3 --warmup-runs=2
+bun scripts/benchmarkArticlesReviews.ts --mode=filtered --iterations=2 --warmup-runs=1
+bun scripts/benchmarkArticlesReviews.ts --mode=unfiltered --cursor-steps=5 --iterations=1 --warmup-runs=0
 ```
 
 - Results after change:
@@ -486,7 +486,7 @@ bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --mode=unfiltered 
 
 ```bash
 bun run bench:articlesreviews
-bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --mode=unfiltered --cursor-steps=5 --iterations=1 --warmup-runs=0
+bun scripts/benchmarkArticlesReviews.ts --mode=unfiltered --cursor-steps=5 --iterations=1 --warmup-runs=0
 ```
 
 - Results after change:
@@ -516,7 +516,7 @@ bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --mode=unfiltered 
 
 ```bash
 bun run bench:articlesreviews
-bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --mode=unfiltered --cursor-steps=5 --iterations=1 --warmup-runs=0
+bun scripts/benchmarkArticlesReviews.ts --mode=unfiltered --cursor-steps=5 --iterations=1 --warmup-runs=0
 ```
 
 - Results after change:
@@ -550,7 +550,7 @@ bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --mode=unfiltered 
 
 ```bash
 bun run bench:articlesreviews
-bun --env-file=.env.local scripts/benchmarkArticlesReviews.ts --mode=unfiltered --cursor-steps=5 --iterations=1 --warmup-runs=0
+bun scripts/benchmarkArticlesReviews.ts --mode=unfiltered --cursor-steps=5 --iterations=1 --warmup-runs=0
 ```
 
 - Results after rollout:

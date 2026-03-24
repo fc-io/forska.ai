@@ -29,7 +29,7 @@ bun run alvis:dev:server
 bun run dev:app
 ```
 
-Do not copy worker URLs or topology into `.env.local`. Those are short-lived launcher/runtime values.
+Do not copy worker URLs or topology into env files. Those are short-lived launcher/runtime values.
 
 Use `--force` if you want a fresh Slurm job instead of reusing an existing one.
 
