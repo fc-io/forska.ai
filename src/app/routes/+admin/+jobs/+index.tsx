@@ -469,6 +469,12 @@ const AdminJobs = () => {
     <div class="min-h-screen bg-gray-50 p-6 mx-auto">
       <div class="flex justify-between items-center mb-6">
         <h1 class="text-2xl font-bold">Judgment Jobs</h1>
+        <Link
+          to="/admin/duckdb-append"
+          class="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-100"
+        >
+          DuckDB Append Metrics
+        </Link>
       </div>
 
       <div class="mb-6">

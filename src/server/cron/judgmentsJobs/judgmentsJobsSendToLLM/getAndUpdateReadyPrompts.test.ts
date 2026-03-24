@@ -17,11 +17,22 @@ let getAndUpdateReadyPrompts:
   | null = null
 
 beforeAll(async () => {
-  const [{migrateDuckdb}, {getAppDatabaseService}, readyPromptsModule] = await Promise.all([
+  const [
+    {migrateDuckdb},
+    {getAppDatabaseService},
+    {resetDuckdbServiceForTests},
+    {resetServerRuntimeRoleForTests},
+    readyPromptsModule,
+  ] = await Promise.all([
     import('../../../../db/migrateDuckdb.ts'),
     import('../../../services/appDatabaseService.ts'),
+    import('../../../utils/duckdbService.ts'),
+    import('../../../utils/serverRuntimeRole.ts'),
     import('./getAndUpdateReadyPrompts.ts'),
   ])
+
+  resetDuckdbServiceForTests()
+  resetServerRuntimeRoleForTests()
 
   await migrateDuckdb()
 

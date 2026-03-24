@@ -67,14 +67,24 @@ const rebuildMartRefreshQueueWithoutGeneration = async () => {
 }
 
 beforeAll(async () => {
-  const [{migrateDuckdb}, {getAppDatabaseService}, {getDuckdbMartRefreshService}, {projectsRoutes}] = await Promise.all(
-    [
-      import('../../db/migrateDuckdb.ts'),
-      import('../services/appDatabaseService.ts'),
-      import('../services/getDuckdbMartRefreshService.ts'),
-      import('./ProjectsRoutes.ts'),
-    ],
-  )
+  const [
+    {migrateDuckdb},
+    {getAppDatabaseService},
+    {resetDuckdbServiceForTests},
+    {resetServerRuntimeRoleForTests},
+    {getDuckdbMartRefreshService},
+    {projectsRoutes},
+  ] = await Promise.all([
+    import('../../db/migrateDuckdb.ts'),
+    import('../services/appDatabaseService.ts'),
+    import('../utils/duckdbService.ts'),
+    import('../utils/serverRuntimeRole.ts'),
+    import('../services/getDuckdbMartRefreshService.ts'),
+    import('./ProjectsRoutes.ts'),
+  ])
+
+  resetDuckdbServiceForTests()
+  resetServerRuntimeRoleForTests()
 
   await migrateDuckdb()
 

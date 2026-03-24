@@ -7,7 +7,7 @@ import {basename, join} from 'node:path'
 import {DuckDBConnection, DuckDBInstance} from '@duckdb/node-api'
 import {Effect} from 'effect'
 
-import {env} from './env.ts'
+import {getEnv} from './env.ts'
 import {ensureDuckdbPathDirectory} from './getDuckdbPath.ts'
 import {
   ensureCurrentDuckdbOwnerLease,
@@ -70,7 +70,7 @@ declare global {
 
 const duckdbSnapshotDirectory = join(tmpdir(), 'forska-duckdb-studio')
 const getDuckdbAppendLaneCountValue = () => {
-  return Math.max(1, Number(env.DUCKDB_APPEND_LANE_COUNT ?? 2))
+  return Math.max(1, Number(getEnv().DUCKDB_APPEND_LANE_COUNT ?? 2))
 }
 
 const getInitialDuckdbAppendQueues = (appendLaneCount: number) => {
@@ -119,6 +119,8 @@ const getDuckdbRuntimeConfigValue = () => {
   if (duckdbServiceState.duckdbRuntimeConfig) {
     return duckdbServiceState.duckdbRuntimeConfig
   }
+
+  const env = getEnv()
 
   duckdbServiceState.duckdbRuntimeConfig = {
     appendLaneCount: getDuckdbAppendLaneCountValue(),
@@ -228,6 +230,7 @@ const resetDuckdbRuntimeState = () => {
   duckdbServiceState.controlConnection = null
   duckdbServiceState.duckdbInstance = null
   duckdbServiceState.duckdbQueue = Promise.resolve()
+  duckdbServiceState.duckdbRuntimeConfig = null
   duckdbServiceState.nextAppendLaneIndex = 0
   duckdbServiceState.startupPromise = null
 }
@@ -731,6 +734,32 @@ const getDuckdbRollbackError = async (): Promise<Error | null> => {
 
 export const getDuckdbRuntimeConfig = () => {
   return {...getDuckdbRuntimeConfigValue()}
+}
+
+export const resetDuckdbServiceForTests = () => {
+  const closeError = getCombinedCloseError([
+    getCloseSyncError(
+      duckdbServiceState.controlConnection === null
+        ? null
+        : () => {
+            duckdbServiceState.controlConnection?.closeSync()
+          },
+    ),
+    ...getAppendConnectionCloseErrors(duckdbServiceState.appendConnections),
+    getCloseSyncError(
+      duckdbServiceState.duckdbInstance === null
+        ? null
+        : () => {
+            duckdbServiceState.duckdbInstance?.closeSync()
+          },
+    ),
+  ])
+
+  resetDuckdbRuntimeState()
+
+  if (closeError) {
+    throw closeError
+  }
 }
 
 export const getDuckdbAppendRuntimeMetrics = (): DuckdbAppendRuntimeMetrics => {

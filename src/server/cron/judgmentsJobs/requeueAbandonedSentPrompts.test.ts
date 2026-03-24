@@ -15,11 +15,22 @@ let runDatabase: ((statement: string) => Promise<void>) | null = null
 let requeueAbandonedSentPrompts: ((input: {jobIds: string[]; serverJobId: string}) => Promise<number>) | null = null
 
 beforeAll(async () => {
-  const [{migrateDuckdb}, {getAppDatabaseService}, requeueModule] = await Promise.all([
+  const [
+    {migrateDuckdb},
+    {getAppDatabaseService},
+    {resetDuckdbServiceForTests},
+    {resetServerRuntimeRoleForTests},
+    requeueModule,
+  ] = await Promise.all([
     import('../../../db/migrateDuckdb.ts'),
     import('../../services/appDatabaseService.ts'),
+    import('../../utils/duckdbService.ts'),
+    import('../../utils/serverRuntimeRole.ts'),
     import('./requeueAbandonedSentPrompts.ts'),
   ])
+
+  resetDuckdbServiceForTests()
+  resetServerRuntimeRoleForTests()
 
   await migrateDuckdb()
 

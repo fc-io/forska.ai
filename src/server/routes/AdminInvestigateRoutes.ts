@@ -453,6 +453,9 @@ const runAutoSyncAllAsync = async (projectId: string | null) => {
 
 export const adminInvestigateRoutes = new Elysia()
   .use(withErrorHandler())
+  .get('/api/admin/duckdb-append-metrics', async () => {
+    return appDatabaseService.getAppendMetrics()
+  })
   .get('/api/admin/list-prompts-with-types', async () => {
     const promptsList = await getTypedPrompts()
     const filtered = promptsList.filter((prompt) => {

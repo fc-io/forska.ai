@@ -21,10 +21,16 @@ let queryDatabase: (<T>(statement: string) => Promise<T[]>) | null = null
 let runDatabase: ((statement: string) => Promise<void>) | null = null
 
 beforeAll(async () => {
-  const [{migrateDuckdb}, {getAppDatabaseService}] = await Promise.all([
-    import('../../db/migrateDuckdb.ts'),
-    import('./appDatabaseService.ts'),
-  ])
+  const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] =
+    await Promise.all([
+      import('../../db/migrateDuckdb.ts'),
+      import('./appDatabaseService.ts'),
+      import('../utils/duckdbService.ts'),
+      import('../utils/serverRuntimeRole.ts'),
+    ])
+
+  resetDuckdbServiceForTests()
+  resetServerRuntimeRoleForTests()
 
   await migrateDuckdb()
 

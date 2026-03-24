@@ -1,4 +1,4 @@
-import {afterAll, beforeAll, expect, mock, test} from 'bun:test'
+import {afterAll, beforeAll, expect, test} from 'bun:test'
 import {Elysia} from 'elysia'
 import {rmSync} from 'fs'
 
@@ -9,20 +9,6 @@ process.env.DUCKDB_PATH = tempDbPath
 process.env.API_SERVER_PORT = process.env.API_SERVER_PORT ?? '3001'
 process.env.VITE_PORT = process.env.VITE_PORT ?? '3000'
 
-const martRefreshServiceModulePath = new URL('../services/getDuckdbMartRefreshService.ts', import.meta.url).pathname
-
-void mock.module(martRefreshServiceModulePath, () => {
-  return {
-    getDuckdbMartRefreshService: () => {
-      return {
-        queueProjectRefresh: async (_projectId: string, _source: string) => {
-          return undefined
-        },
-      }
-    },
-  }
-})
-
 let app: {handle: (request: Request) => Promise<Response>} | null = null
 let closeDatabase: (() => Promise<void>) | null = null
 let queryDatabase: (<T>(statement: string) => Promise<T[]>) | null = null
@@ -32,16 +18,23 @@ beforeAll(async () => {
   const [
     {migrateDuckdb},
     {getAppDatabaseService},
+    {resetDuckdbServiceForTests},
+    {resetServerRuntimeRoleForTests},
     {providerConnectionsRoutes},
     {providerModelsRoutes},
     {projectsRoutes},
   ] = await Promise.all([
     import('../../db/migrateDuckdb.ts'),
     import('../services/appDatabaseService.ts'),
+    import('../utils/duckdbService.ts'),
+    import('../utils/serverRuntimeRole.ts'),
     import('./ProviderConnectionsRoutes.ts'),
     import('./ProviderModelsRoutes.ts'),
     import('./ProjectsRoutes.ts'),
   ])
+
+  resetDuckdbServiceForTests()
+  resetServerRuntimeRoleForTests()
 
   await migrateDuckdb()
 
@@ -159,7 +152,7 @@ test('provider connection delete removes an unreferenced connection and its mode
 
   expect(deleteConnectionResponse.status).toBe(200)
   expect(deleteConnectionBody.data.deleted).toBe(true)
-  expect(deleteConnectionBody.data.deletedModelCount).toBe(1)
+  expect(Number(deleteConnectionBody.data.deletedModelCount)).toBe(1)
 
   const [storedConnection] = await queryDatabase<{id: string}>(`
     SELECT id

@@ -3,7 +3,7 @@ import {resolve} from 'path'
 
 import {getAppDatabaseService} from '../server/services/appDatabaseService.ts'
 import {withDuckdbMaintenanceAccess} from '../server/utils/duckdbScriptAccess.ts'
-import {env} from '../server/utils/env.ts'
+import {getEnv} from '../server/utils/env.ts'
 
 const migrationsFolder = resolve(import.meta.dir, 'duckdbMigrations')
 
@@ -97,6 +97,7 @@ const applyDuckdbMigrationFiles = async (fileNames: string[], appliedNames: Set<
 
 export const migrateDuckdb = async (): Promise<void> => {
   const migrationFiles = getDuckdbMigrationFiles(migrationsFolder)
+  const env = getEnv()
 
   console.log(`[db:duck:mig] duckdb path: ${env.DUCKDB_PATH}`)
   console.log(`[db:duck:mig] migrations folder: ${migrationsFolder}`)

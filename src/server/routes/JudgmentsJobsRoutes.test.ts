@@ -33,11 +33,22 @@ let closeDatabase: (() => Promise<void>) | null = null
 let runDatabase: ((statement: string) => Promise<void>) | null = null
 
 beforeAll(async () => {
-  const [{migrateDuckdb}, {getAppDatabaseService}, {judgmentsJobsRoutes}] = await Promise.all([
+  const [
+    {migrateDuckdb},
+    {getAppDatabaseService},
+    {resetDuckdbServiceForTests},
+    {resetServerRuntimeRoleForTests},
+    {judgmentsJobsRoutes},
+  ] = await Promise.all([
     import('../../db/migrateDuckdb.ts'),
     import('../services/appDatabaseService.ts'),
+    import('../utils/duckdbService.ts'),
+    import('../utils/serverRuntimeRole.ts'),
     import('./JudgmentsJobsRoutes.ts'),
   ])
+
+  resetDuckdbServiceForTests()
+  resetServerRuntimeRoleForTests()
 
   await migrateDuckdb()
 

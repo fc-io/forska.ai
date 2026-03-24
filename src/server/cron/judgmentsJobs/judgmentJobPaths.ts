@@ -2,9 +2,11 @@ import {existsSync, mkdirSync, readdirSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {dirname, join} from 'node:path'
 
-import {env} from '../../utils/env.ts'
+import {getEnv} from '../../utils/env.ts'
 
 export const getJudgmentJobsRootDirectory = () => {
+  const env = getEnv()
+
   return env.DUCKDB_PATH === ':memory:'
     ? join(tmpdir(), 'forska', 'judgment-jobs')
     : join(dirname(env.DUCKDB_PATH), 'judgment-jobs')

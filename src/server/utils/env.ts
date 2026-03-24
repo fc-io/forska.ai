@@ -1,7 +1,6 @@
+import {type as arktype} from 'arktype'
 import {existsSync, readFileSync} from 'fs'
 import {dirname, resolve} from 'path'
-
-import {type as arktype} from 'arktype'
 
 import {DEFAULT_API_SERVER_PORT, DEFAULT_VITE_PORT} from '../../utils/runtimePortDefaults.ts'
 import {getDuckdbPath} from './getDuckdbPath.ts'
@@ -89,6 +88,10 @@ export const loadEnv = ({
     ;(merged as Record<string, string>).FULL_TEXT_CONVERSION_CONCURRENCY = '1'
   }
   return envShape.assert(merged)
+}
+
+export const getEnv = () => {
+  return loadEnv()
 }
 
 export const env = loadEnv()

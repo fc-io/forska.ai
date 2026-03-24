@@ -17,11 +17,22 @@ let runDatabase: ((statement: string) => Promise<void>) | null = null
 let sqliteService: Awaited<typeof import('./judgmentJobSqliteService.ts')>['getJudgmentJobSqliteService'] | null = null
 
 beforeAll(async () => {
-  const [{migrateDuckdb}, {getAppDatabaseService}, sqliteModule] = await Promise.all([
+  const [
+    {migrateDuckdb},
+    {getAppDatabaseService},
+    {resetDuckdbServiceForTests},
+    {resetServerRuntimeRoleForTests},
+    sqliteModule,
+  ] = await Promise.all([
     import('../../../db/migrateDuckdb.ts'),
     import('../../services/appDatabaseService.ts'),
+    import('../../utils/duckdbService.ts'),
+    import('../../utils/serverRuntimeRole.ts'),
     import('./judgmentJobSqliteService.ts'),
   ])
+
+  resetDuckdbServiceForTests()
+  resetServerRuntimeRoleForTests()
 
   await migrateDuckdb()
 

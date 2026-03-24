@@ -45,6 +45,7 @@ import { Route as AdminLlmIndexRouteImport } from './routes/+admin/+llm/+index'
 import { Route as AdminJobsIndexRouteImport } from './routes/+admin/+jobs/+index'
 import { Route as AdminGpuIndexRouteImport } from './routes/+admin/+gpu/+index'
 import { Route as AdminFailed_requestsIndexRouteImport } from './routes/+admin/+failed_requests/+index'
+import { Route as AdminDuckdbAppendIndexRouteImport } from './routes/+admin/+duckdb-append/+index'
 import { Route as AdminDatasourcesIndexRouteImport } from './routes/+admin/+datasources/+index'
 import { Route as AdminAssessmentsIndexRouteImport } from './routes/+admin/+assessments/+index'
 import { Route as AdminJobsIdUnassessed_articlesRouteImport } from './routes/+admin/+jobs/+$id/+unassessed_articles'
@@ -253,6 +254,11 @@ const AdminFailed_requestsIndexRoute =
     path: '/admin/failed_requests/',
     getParentRoute: () => rootRouteImport,
   } as any)
+const AdminDuckdbAppendIndexRoute = AdminDuckdbAppendIndexRouteImport.update({
+  id: '/admin/duckdb-append/',
+  path: '/admin/duckdb-append/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AdminDatasourcesIndexRoute = AdminDatasourcesIndexRouteImport.update({
   id: '/admin/datasources/',
   path: '/admin/datasources/',
@@ -379,6 +385,7 @@ export interface FileRoutesByFullPath {
   '/providers/add-provider': typeof ProvidersAddProviderRoute
   '/admin/assessments/': typeof AdminAssessmentsIndexRoute
   '/admin/datasources/': typeof AdminDatasourcesIndexRoute
+  '/admin/duckdb-append/': typeof AdminDuckdbAppendIndexRoute
   '/admin/failed_requests/': typeof AdminFailed_requestsIndexRoute
   '/admin/gpu/': typeof AdminGpuIndexRoute
   '/admin/jobs/': typeof AdminJobsIndexRoute
@@ -436,6 +443,7 @@ export interface FileRoutesByTo {
   '/providers/add-provider': typeof ProvidersAddProviderRoute
   '/admin/assessments': typeof AdminAssessmentsIndexRoute
   '/admin/datasources': typeof AdminDatasourcesIndexRoute
+  '/admin/duckdb-append': typeof AdminDuckdbAppendIndexRoute
   '/admin/failed_requests': typeof AdminFailed_requestsIndexRoute
   '/admin/gpu': typeof AdminGpuIndexRoute
   '/admin/jobs': typeof AdminJobsIndexRoute
@@ -494,6 +502,7 @@ export interface FileRoutesById {
   '/providers/add-provider': typeof ProvidersAddProviderRoute
   '/admin/assessments/': typeof AdminAssessmentsIndexRoute
   '/admin/datasources/': typeof AdminDatasourcesIndexRoute
+  '/admin/duckdb-append/': typeof AdminDuckdbAppendIndexRoute
   '/admin/failed_requests/': typeof AdminFailed_requestsIndexRoute
   '/admin/gpu/': typeof AdminGpuIndexRoute
   '/admin/jobs/': typeof AdminJobsIndexRoute
@@ -553,6 +562,7 @@ export interface FileRouteTypes {
     | '/providers/add-provider'
     | '/admin/assessments/'
     | '/admin/datasources/'
+    | '/admin/duckdb-append/'
     | '/admin/failed_requests/'
     | '/admin/gpu/'
     | '/admin/jobs/'
@@ -610,6 +620,7 @@ export interface FileRouteTypes {
     | '/providers/add-provider'
     | '/admin/assessments'
     | '/admin/datasources'
+    | '/admin/duckdb-append'
     | '/admin/failed_requests'
     | '/admin/gpu'
     | '/admin/jobs'
@@ -667,6 +678,7 @@ export interface FileRouteTypes {
     | '/providers/add-provider'
     | '/admin/assessments/'
     | '/admin/datasources/'
+    | '/admin/duckdb-append/'
     | '/admin/failed_requests/'
     | '/admin/gpu/'
     | '/admin/jobs/'
@@ -725,6 +737,7 @@ export interface RootRouteChildren {
   ProvidersAddProviderRoute: typeof ProvidersAddProviderRoute
   AdminAssessmentsIndexRoute: typeof AdminAssessmentsIndexRoute
   AdminDatasourcesIndexRoute: typeof AdminDatasourcesIndexRoute
+  AdminDuckdbAppendIndexRoute: typeof AdminDuckdbAppendIndexRoute
   AdminFailed_requestsIndexRoute: typeof AdminFailed_requestsIndexRoute
   AdminGpuIndexRoute: typeof AdminGpuIndexRoute
   AdminJobsIndexRoute: typeof AdminJobsIndexRoute
@@ -1021,6 +1034,13 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof AdminFailed_requestsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/duckdb-append/': {
+      id: '/admin/duckdb-append/'
+      path: '/admin/duckdb-append'
+      fullPath: '/admin/duckdb-append/'
+      preLoaderRoute: typeof AdminDuckdbAppendIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/admin/datasources/': {
       id: '/admin/datasources/'
       path: '/admin/datasources'
@@ -1174,6 +1194,7 @@ const rootRouteChildren: RootRouteChildren = {
   ProvidersAddProviderRoute: ProvidersAddProviderRoute,
   AdminAssessmentsIndexRoute: AdminAssessmentsIndexRoute,
   AdminDatasourcesIndexRoute: AdminDatasourcesIndexRoute,
+  AdminDuckdbAppendIndexRoute: AdminDuckdbAppendIndexRoute,
   AdminFailed_requestsIndexRoute: AdminFailed_requestsIndexRoute,
   AdminGpuIndexRoute: AdminGpuIndexRoute,
   AdminJobsIndexRoute: AdminJobsIndexRoute,

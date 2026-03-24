@@ -10,7 +10,7 @@ import {
   releaseDuckdbOwnerLease,
   updateDuckdbOwnerLeaseHeartbeat,
 } from './duckdbOwnerLease.ts'
-import {env} from './env.ts'
+import {getEnv} from './env.ts'
 import {createRateLimitedLogger} from './rateLimitedLogger.ts'
 import {
   canServerRoleOwnDuckdb,
@@ -35,12 +35,15 @@ declare global {
 const autoServerRolePollIntervalMs = 5_000
 const autoServerRoleLogger = createRateLimitedLogger({windowMs: 30_000})
 const duckdbRoleErrorFragments = ['cannot own DuckDB', 'DuckDB writer lease is no longer owned by this process']
+const getRuntimeEnv = () => {
+  return getEnv()
+}
 
 const getServerRuntimeState = () => {
   globalThis.__forskaServerRuntimeState ??= {
     autoMonitorStarted: false,
     currentLease: null,
-    currentRole: getEffectiveServerRole(env.SERVER_ROLE),
+    currentRole: getEffectiveServerRole(getRuntimeEnv().SERVER_ROLE),
     lastKnownWriterUrl: null,
     writerDemotionHandlers: [],
   }
@@ -51,11 +54,11 @@ const getServerRuntimeState = () => {
 const serverRuntimeState = getServerRuntimeState()
 
 const getCurrentServerUrl = () => {
-  return `http://127.0.0.1:${env.API_SERVER_PORT}`
+  return `http://127.0.0.1:${getRuntimeEnv().API_SERVER_PORT}`
 }
 
 const getCurrentServerLocalhostUrl = () => {
-  return `http://localhost:${env.API_SERVER_PORT}`
+  return `http://localhost:${getRuntimeEnv().API_SERVER_PORT}`
 }
 
 const getNormalizedWriterUrl = (value: string | null | undefined) => {
@@ -78,17 +81,19 @@ const exitForDuplicateLocalServer = (reason: string, writerUrl: string | null) =
     'server-role:duplicate-local-server',
     `[server] duplicate local API server detected; exiting (${reason})`,
     'warn',
-    {apiServerPort: env.API_SERVER_PORT, pid: process.pid, writerUrl},
+    {apiServerPort: getRuntimeEnv().API_SERVER_PORT, pid: process.pid, writerUrl},
   )
   process.exit(0)
 }
 
 const getManualWriterUrl = () => {
-  return getNormalizedWriterUrl(env.SERVER_WRITER_URL)
+  return getNormalizedWriterUrl(getRuntimeEnv().SERVER_WRITER_URL)
 }
 
 const isWriterDisabledByConfig = () => {
-  return !isAutoServerRole(env.SERVER_ROLE) && getCurrentServerRole() === 'api' && getManualWriterUrl() === null
+  return (
+    !isAutoServerRole(getRuntimeEnv().SERVER_ROLE) && getCurrentServerRole() === 'api' && getManualWriterUrl() === null
+  )
 }
 
 const setCurrentServerRole = (nextRole: EffectiveServerRole) => {
@@ -146,7 +151,7 @@ const recordWriterUnavailableWarning = (params: {
 }
 
 const readWriterUrlFromLease = async () => {
-  const metadata = await Effect.runPromise(readDuckdbOwnerLease(env.DUCKDB_PATH))
+  const metadata = await Effect.runPromise(readDuckdbOwnerLease(getRuntimeEnv().DUCKDB_PATH))
   const writerUrl = metadata === null ? null : getDuckdbOwnerLeaseWriterUrl(metadata)
 
   setLastKnownWriterUrl(writerUrl)
@@ -157,8 +162,8 @@ const promoteAutoServerToWriter = async (reason: string, takeoverLeaseId?: strin
   try {
     const currentLease = await Effect.runPromise(
       acquireDuckdbOwnerLease({
-        apiServerPort: env.API_SERVER_PORT,
-        databasePath: env.DUCKDB_PATH,
+        apiServerPort: getRuntimeEnv().API_SERVER_PORT,
+        databasePath: getRuntimeEnv().DUCKDB_PATH,
         serverRole: 'writer',
         takeoverLeaseId,
       }),
@@ -169,7 +174,7 @@ const promoteAutoServerToWriter = async (reason: string, takeoverLeaseId?: strin
     setLastKnownWriterUrl(getCurrentServerUrl())
     clearUnresponsiveWriterWarnings()
     autoServerRoleLogger.force('server-role:writer', `[server] auto writer active (${reason})`, 'log', {
-      apiServerPort: env.API_SERVER_PORT,
+      apiServerPort: getRuntimeEnv().API_SERVER_PORT,
       reason,
     })
     return true
@@ -206,7 +211,7 @@ const refreshAutoWriterLease = async () => {
 }
 
 const refreshAutoFollowerRole = async () => {
-  const currentLease = await Effect.runPromise(readDuckdbOwnerLease(env.DUCKDB_PATH))
+  const currentLease = await Effect.runPromise(readDuckdbOwnerLease(getRuntimeEnv().DUCKDB_PATH))
   const shouldPromoteForDeadWriter = currentLease !== null && !isDuckdbOwnerLeaseProcessAlive(currentLease)
   const shouldPromoteForStaleWriter = currentLease !== null && (await shouldPromoteForStaleWriterLease(currentLease))
 
@@ -239,7 +244,7 @@ const refreshAutoFollowerRole = async () => {
 }
 
 const syncAutoServerRole = async () => {
-  if (!isAutoServerRole(env.SERVER_ROLE)) {
+  if (!isAutoServerRole(getRuntimeEnv().SERVER_ROLE)) {
     return
   }
 
@@ -252,17 +257,19 @@ const syncAutoServerRole = async () => {
 }
 
 export const initializeServerRuntimeRole = async () => {
-  if (isAutoServerRole(env.SERVER_ROLE)) {
+  if (isAutoServerRole(getRuntimeEnv().SERVER_ROLE)) {
     await syncAutoServerRole()
     return
   }
+
+  const env = getRuntimeEnv()
 
   setCurrentServerRole(getEffectiveServerRole(env.SERVER_ROLE))
   setLastKnownWriterUrl(canServerRoleOwnDuckdb(env.SERVER_ROLE) ? getCurrentServerUrl() : getManualWriterUrl())
 }
 
 export const startServerRuntimeRoleMonitor = () => {
-  if (!isAutoServerRole(env.SERVER_ROLE) || serverRuntimeState.autoMonitorStarted) {
+  if (!isAutoServerRole(getRuntimeEnv().SERVER_ROLE) || serverRuntimeState.autoMonitorStarted) {
     return
   }
 
@@ -319,7 +326,7 @@ export const getCurrentServerWriterUrl = async () => {
     return null
   }
 
-  if (!isAutoServerRole(env.SERVER_ROLE)) {
+  if (!isAutoServerRole(getRuntimeEnv().SERVER_ROLE)) {
     const manualWriterUrl = getManualWriterUrl()
 
     setLastKnownWriterUrl(manualWriterUrl)
@@ -345,8 +352,8 @@ export const ensureCurrentDuckdbOwnerLease = async () => {
 
   const nextLease = await Effect.runPromise(
     acquireDuckdbOwnerLease({
-      apiServerPort: env.API_SERVER_PORT,
-      databasePath: env.DUCKDB_PATH,
+      apiServerPort: getRuntimeEnv().API_SERVER_PORT,
+      databasePath: getRuntimeEnv().DUCKDB_PATH,
       serverRole: getCurrentServerRole(),
     }),
   )
@@ -369,6 +376,16 @@ export const releaseCurrentDuckdbOwnerLease = async () => {
 
 export const registerWriterDemotionHandler = (handler: (reason: string) => Promise<void> | void) => {
   serverRuntimeState.writerDemotionHandlers = [...serverRuntimeState.writerDemotionHandlers, handler]
+}
+
+export const resetServerRuntimeRoleForTests = () => {
+  const env = getRuntimeEnv()
+
+  serverRuntimeState.autoMonitorStarted = false
+  serverRuntimeState.currentLease = null
+  serverRuntimeState.currentRole = getEffectiveServerRole(env.SERVER_ROLE)
+  serverRuntimeState.lastKnownWriterUrl = null
+  serverRuntimeState.writerDemotionHandlers = []
 }
 
 export const withCurrentServerRoleOverride = async <_T>(nextRole: EffectiveServerRole, work: () => Promise<_T>) => {

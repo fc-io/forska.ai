@@ -24,13 +24,26 @@ let storeSinglePromptJudgment:
   | null = null
 
 beforeAll(async () => {
-  const [{migrateDuckdb}, {getAppDatabaseService}, sqliteModule, importModule, storeModule] = await Promise.all([
+  const [
+    {migrateDuckdb},
+    {getAppDatabaseService},
+    {resetDuckdbServiceForTests},
+    {resetServerRuntimeRoleForTests},
+    sqliteModule,
+    importModule,
+    storeModule,
+  ] = await Promise.all([
     import('../../../db/migrateDuckdb.ts'),
     import('../../services/appDatabaseService.ts'),
+    import('../../utils/duckdbService.ts'),
+    import('../../utils/serverRuntimeRole.ts'),
     import('./judgmentJobSqliteService.ts'),
     import('./judgmentJobSqliteOutboxImport.ts'),
     import('../../../agent/judge/storeSinglePromptJudgment.ts'),
   ])
+
+  resetDuckdbServiceForTests()
+  resetServerRuntimeRoleForTests()
 
   await migrateDuckdb()
 

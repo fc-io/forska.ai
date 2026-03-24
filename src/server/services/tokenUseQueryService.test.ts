@@ -13,11 +13,22 @@ let closeDatabase: (() => Promise<void>) | null = null
 let tokenUseQueryService: Awaited<typeof import('./tokenUseQueryService.ts')>['tokenUseQueryService'] | null = null
 
 beforeAll(async () => {
-  const [{migrateDuckdb}, {getAppDatabaseService}, tokenUseQueryServiceModule] = await Promise.all([
+  const [
+    {migrateDuckdb},
+    {getAppDatabaseService},
+    {resetDuckdbServiceForTests},
+    {resetServerRuntimeRoleForTests},
+    tokenUseQueryServiceModule,
+  ] = await Promise.all([
     import('../../db/migrateDuckdb.ts'),
     import('./appDatabaseService.ts'),
+    import('../utils/duckdbService.ts'),
+    import('../utils/serverRuntimeRole.ts'),
     import('./tokenUseQueryService.ts'),
   ])
+
+  resetDuckdbServiceForTests()
+  resetServerRuntimeRoleForTests()
 
   await migrateDuckdb()
 
@@ -52,5 +63,5 @@ test('insertTokenUse generates an id when one is not provided', async () => {
   expect(row).not.toBeNull()
   expect(row?.id.length ?? 0).toBeGreaterThan(0)
   expect(row?.requests).toBe(1)
-  expect(row?.totalTokens).toBe(15)
+  expect(Number(row?.totalTokens ?? 0)).toBe(15)
 })
