@@ -1,4 +1,6 @@
 import {rmSync} from 'node:fs'
+import {writeFile} from 'node:fs/promises'
+import {hostname} from 'node:os'
 import {dirname, join} from 'node:path'
 
 import {afterAll, beforeAll, expect, test} from 'bun:test'
@@ -223,4 +225,105 @@ test('drops orphaned SQLite-backed judgments when the article no longer exists',
   `)
 
   expect(rows).toHaveLength(0)
+})
+
+test('skips lease-blocked SQLite jobs and imports the next available outbox batch', async () => {
+  if (!runDatabase || !queryDatabase || !sqliteService || !importOutboxBatch || !storeSinglePromptJudgment) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-lease-skip-${Date.now()}`
+  const modelId = `model-lease-skip-${Date.now()}`
+  const blockedProjectId = `project-lease-skip-a-${Date.now()}`
+  const blockedJobId = `job-a-lease-skip-${Date.now()}`
+  const importableProjectId = `project-lease-skip-z-${Date.now()}`
+  const importableJobId = `job-z-lease-skip-${Date.now()}`
+  const promptId = `prompt-lease-skip-${Date.now()}`
+  const articleId = `article-lease-skip-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${blockedProjectId}', 'SQLite Import Lease Skip Blocked', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${importableProjectId}', 'SQLite Import Lease Skip Importable', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${blockedJobId}', '${blockedProjectId}', 'running')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${importableJobId}', '${importableProjectId}', 'running')
+  `)
+  await runDatabase(`
+    INSERT INTO app.prompt (id, original_text, content_hash)
+    VALUES ('${promptId}', 'Prompt', '${promptId}-hash')
+  `)
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title)
+    VALUES ('${articleId}', 'Article')
+  `)
+
+  await service.initializeJob(blockedJobId)
+  await service.initializeJob(importableJobId)
+  await writeFile(
+    join(tempJobDir, `${blockedJobId}.lease.json`),
+    JSON.stringify(
+      {
+        acquiredAt: new Date().toISOString(),
+        apiServerPort: 3002,
+        heartbeatAt: new Date().toISOString(),
+        hostname: hostname(),
+        jobId: blockedJobId,
+        leaseId: crypto.randomUUID(),
+        pid: process.ppid,
+        serverJobId: 'other-process',
+      },
+      null,
+      2,
+    ),
+    'utf8',
+  )
+  await service.addReadyPrompts(importableJobId, [{articleId, promptId}], 'server-a')
+
+  const [claimed] = await service.claimReadyPrompts(importableJobId, 'server-a', 1)
+
+  if (!claimed) {
+    throw new Error('Failed to claim SQLite queue prompt')
+  }
+
+  await storeSinglePromptJudgment({
+    article: {id: articleId} as ArticleRecord,
+    judgmentsJobId: importableJobId,
+    promptId,
+    queueRecordId: claimed.recordId,
+    modelId,
+    projectId: importableProjectId,
+    judgment: {answer: 'yes', explanation: 'because', quotes: ['quote']},
+    chunkingStrategy: null,
+  })
+
+  expect(await importOutboxBatch()).toBe(1)
+
+  const rows = await queryDatabase<{id: string}>(`
+    SELECT id
+    FROM app.judgment
+    WHERE article_id = '${articleId}'
+      AND prompt_id = '${promptId}'
+      AND model_id = '${modelId}'
+  `)
+
+  expect(rows).toHaveLength(1)
+  expect((await service.getPendingOutboxBatch({maxBytes: 1024 * 1024, maxRows: 10})).length).toBe(0)
 })

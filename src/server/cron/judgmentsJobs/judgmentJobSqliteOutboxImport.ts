@@ -1,13 +1,20 @@
 import {getAppDatabaseService, type JudgmentInsertRow} from '../../services/appDatabaseService.ts'
 import {getQuotedStringList} from '../../services/appQueryHelpers.ts'
 import {getDuckdbMartRefreshService} from '../../services/getDuckdbMartRefreshService.ts'
+import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {getDefaultJudgmentServerJobId} from './judgmentJobServerIdentity.ts'
-import {getJudgmentJobSqliteService, type JudgmentJobSqliteOutboxEntry} from './judgmentJobSqliteService.ts'
+import {
+  getJudgmentJobSqliteService,
+  JudgmentJobLeaseError,
+  type JudgmentJobSqliteOutboxEntry,
+} from './judgmentJobSqliteService.ts'
 
 const judgmentOutboxBatchMaxRows = 100
 const judgmentOutboxBatchMaxBytes = 4 * 1024 * 1024
+const judgmentOutboxImportLogger = createRateLimitedLogger({windowMs: 30_000})
 
 type JudgmentOutboxDiscardedEntry = {entry: JudgmentJobSqliteOutboxEntry; errorMessage: string}
+type ClaimedOutboxBatch = Awaited<ReturnType<ReturnType<typeof getJudgmentJobSqliteService>['claimPendingOutboxBatch']>>
 
 type JudgmentOutboxForeignKeys = {
   articleIds: Set<string>
@@ -157,17 +164,57 @@ const queueRefreshesForEntries = async (entries: JudgmentJobSqliteOutboxEntry[])
   await getDuckdbMartRefreshService().queueJudgmentArticleRefreshes(articleIds, 'sqliteJudgmentOutboxImport')
 }
 
+const claimPendingOutboxBatchForJobIds = async ({
+  claimedBy,
+  jobIds,
+}: {
+  claimedBy: string
+  jobIds: string[]
+}): Promise<ClaimedOutboxBatch> => {
+  const sqliteService = getJudgmentJobSqliteService()
+  const [currentJobId = ''] = jobIds
+
+  if (!currentJobId) {
+    return null
+  }
+
+  try {
+    const claimedBatch = await sqliteService.claimPendingOutboxBatch({
+      claimedBy,
+      jobId: currentJobId,
+      maxBytes: judgmentOutboxBatchMaxBytes,
+      maxRows: judgmentOutboxBatchMaxRows,
+    })
+
+    return claimedBatch ?? claimPendingOutboxBatchForJobIds({claimedBy, jobIds: jobIds.slice(1)})
+  } catch (error) {
+    if (error instanceof JudgmentJobLeaseError) {
+      judgmentOutboxImportLogger.log(
+        `importJudgments:lease:${currentJobId}`,
+        '[importJudgments] skipped SQLite job because this process does not own the job lease',
+        {jobId: currentJobId},
+      )
+
+      return claimPendingOutboxBatchForJobIds({claimedBy, jobIds: jobIds.slice(1)})
+    }
+
+    throw error
+  }
+}
+
 export const importJudgmentJobSqliteOutboxBatch = async ({
   claimedBy = getDefaultJudgmentServerJobId(),
   jobId,
 }: {claimedBy?: string; jobId?: string} = {}): Promise<number> => {
   const sqliteService = getJudgmentJobSqliteService()
-  const claimedBatch = await sqliteService.claimPendingOutboxBatch({
-    claimedBy,
-    jobId,
-    maxBytes: judgmentOutboxBatchMaxBytes,
-    maxRows: judgmentOutboxBatchMaxRows,
-  })
+  const claimedBatch = jobId
+    ? await sqliteService.claimPendingOutboxBatch({
+        claimedBy,
+        jobId,
+        maxBytes: judgmentOutboxBatchMaxBytes,
+        maxRows: judgmentOutboxBatchMaxRows,
+      })
+    : await claimPendingOutboxBatchForJobIds({claimedBy, jobIds: sqliteService.listJobIds().sort()})
 
   if (!claimedBatch) {
     return 0
