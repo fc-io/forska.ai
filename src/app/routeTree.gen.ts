@@ -28,6 +28,7 @@ import { Route as ProjectsIdEditRouteImport } from './routes/+projects/+$id/+edi
 import { Route as CompareJudgmentsIdEditRouteImport } from './routes/+compare-judgments/+$id/+edit'
 import { Route as ArticlesIdFulltextRouteImport } from './routes/+articles/+$id/+fulltext'
 import { Route as AdminPromptsDeduplicateRouteImport } from './routes/+admin/+prompts/+deduplicate'
+import { Route as AdminDatasourcesStructuredFileImportRouteImport } from './routes/+admin/+datasources/+structured-file-import'
 import { Route as AdminDatasourcesCreateRouteImport } from './routes/+admin/+datasources/+create'
 import { Route as ProvidersIdIndexRouteImport } from './routes/+providers/+$id/+index'
 import { Route as PromptsArchivedIndexRouteImport } from './routes/+prompts/+archived/+index'
@@ -164,6 +165,12 @@ const AdminPromptsDeduplicateRoute = AdminPromptsDeduplicateRouteImport.update({
   path: '/admin/prompts/deduplicate',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminDatasourcesStructuredFileImportRoute =
+  AdminDatasourcesStructuredFileImportRouteImport.update({
+    id: '/admin/datasources/structured-file-import',
+    path: '/admin/datasources/structured-file-import',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const AdminDatasourcesCreateRoute = AdminDatasourcesCreateRouteImport.update({
   id: '/admin/datasources/create',
   path: '/admin/datasources/create',
@@ -403,6 +410,7 @@ export interface FileRoutesByFullPath {
   '/prompts/archived/': typeof PromptsArchivedIndexRoute
   '/providers/$id/': typeof ProvidersIdIndexRoute
   '/admin/datasources/create': typeof AdminDatasourcesCreateRoute
+  '/admin/datasources/structured-file-import': typeof AdminDatasourcesStructuredFileImportRoute
   '/admin/prompts/deduplicate': typeof AdminPromptsDeduplicateRoute
   '/articles/$id/fulltext': typeof ArticlesIdFulltextRoute
   '/compare-judgments/$id/edit': typeof CompareJudgmentsIdEditRoute
@@ -461,6 +469,7 @@ export interface FileRoutesByTo {
   '/prompts/archived': typeof PromptsArchivedIndexRoute
   '/providers/$id': typeof ProvidersIdIndexRoute
   '/admin/datasources/create': typeof AdminDatasourcesCreateRoute
+  '/admin/datasources/structured-file-import': typeof AdminDatasourcesStructuredFileImportRoute
   '/admin/prompts/deduplicate': typeof AdminPromptsDeduplicateRoute
   '/articles/$id/fulltext': typeof ArticlesIdFulltextRoute
   '/compare-judgments/$id/edit': typeof CompareJudgmentsIdEditRoute
@@ -520,6 +529,7 @@ export interface FileRoutesById {
   '/prompts/archived/': typeof PromptsArchivedIndexRoute
   '/providers/$id/': typeof ProvidersIdIndexRoute
   '/admin/datasources/create': typeof AdminDatasourcesCreateRoute
+  '/admin/datasources/structured-file-import': typeof AdminDatasourcesStructuredFileImportRoute
   '/admin/prompts/deduplicate': typeof AdminPromptsDeduplicateRoute
   '/articles/$id/fulltext': typeof ArticlesIdFulltextRoute
   '/compare-judgments/$id/edit': typeof CompareJudgmentsIdEditRoute
@@ -580,6 +590,7 @@ export interface FileRouteTypes {
     | '/prompts/archived/'
     | '/providers/$id/'
     | '/admin/datasources/create'
+    | '/admin/datasources/structured-file-import'
     | '/admin/prompts/deduplicate'
     | '/articles/$id/fulltext'
     | '/compare-judgments/$id/edit'
@@ -638,6 +649,7 @@ export interface FileRouteTypes {
     | '/prompts/archived'
     | '/providers/$id'
     | '/admin/datasources/create'
+    | '/admin/datasources/structured-file-import'
     | '/admin/prompts/deduplicate'
     | '/articles/$id/fulltext'
     | '/compare-judgments/$id/edit'
@@ -696,6 +708,7 @@ export interface FileRouteTypes {
     | '/prompts/archived/'
     | '/providers/$id/'
     | '/admin/datasources/create'
+    | '/admin/datasources/structured-file-import'
     | '/admin/prompts/deduplicate'
     | '/articles/$id/fulltext'
     | '/compare-judgments/$id/edit'
@@ -755,6 +768,7 @@ export interface RootRouteChildren {
   PromptsArchivedIndexRoute: typeof PromptsArchivedIndexRoute
   ProvidersIdIndexRoute: typeof ProvidersIdIndexRoute
   AdminDatasourcesCreateRoute: typeof AdminDatasourcesCreateRoute
+  AdminDatasourcesStructuredFileImportRoute: typeof AdminDatasourcesStructuredFileImportRoute
   AdminPromptsDeduplicateRoute: typeof AdminPromptsDeduplicateRoute
   ArticlesIdFulltextRoute: typeof ArticlesIdFulltextRoute
   CompareJudgmentsIdEditRoute: typeof CompareJudgmentsIdEditRoute
@@ -913,6 +927,13 @@ declare module '@tanstack/solid-router' {
       path: '/admin/prompts/deduplicate'
       fullPath: '/admin/prompts/deduplicate'
       preLoaderRoute: typeof AdminPromptsDeduplicateRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/datasources/structured-file-import': {
+      id: '/admin/datasources/structured-file-import'
+      path: '/admin/datasources/structured-file-import'
+      fullPath: '/admin/datasources/structured-file-import'
+      preLoaderRoute: typeof AdminDatasourcesStructuredFileImportRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/datasources/create': {
@@ -1212,6 +1233,8 @@ const rootRouteChildren: RootRouteChildren = {
   PromptsArchivedIndexRoute: PromptsArchivedIndexRoute,
   ProvidersIdIndexRoute: ProvidersIdIndexRoute,
   AdminDatasourcesCreateRoute: AdminDatasourcesCreateRoute,
+  AdminDatasourcesStructuredFileImportRoute:
+    AdminDatasourcesStructuredFileImportRoute,
   AdminPromptsDeduplicateRoute: AdminPromptsDeduplicateRoute,
   ArticlesIdFulltextRoute: ArticlesIdFulltextRoute,
   CompareJudgmentsIdEditRoute: CompareJudgmentsIdEditRoute,

@@ -2,6 +2,7 @@ import {Elysia, t} from 'elysia'
 
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {escapeSqlString, getDateValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {getStructuredFileImportConfig} from '../services/structuredFileImportService.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
 type AppDatabaseService = ReturnType<typeof getAppDatabaseService>
@@ -12,6 +13,7 @@ type DataSourceRow = {
   title: string
   description: string | null
   importRoute: string | null
+  cursor: string | null
   lastImportAt: unknown
   itemsAfterLastImport: number | null
   createdAt: unknown
@@ -39,6 +41,18 @@ const parseOptionalDate = (value?: string | null) => {
   return parsedDate
 }
 
+const getSafeStructuredFileImportConfig = (cursorValue: unknown) => {
+  if (typeof cursorValue !== 'string') {
+    return null
+  }
+
+  try {
+    return getStructuredFileImportConfig(cursorValue)
+  } catch {
+    return null
+  }
+}
+
 const normalizeDataSourceRow = <TRow extends Record<string, unknown>>(row: TRow) => {
   return {
     ...row,
@@ -47,6 +61,7 @@ const normalizeDataSourceRow = <TRow extends Record<string, unknown>>(row: TRow)
     dateFrom: getDateValue(row['dateFrom']),
     dateTo: getDateValue(row['dateTo']),
     lastImportAt: getDateValue(row['lastImportAt']),
+    structuredFileConfig: getSafeStructuredFileImportConfig(row['cursor']),
   }
 }
 
@@ -57,6 +72,7 @@ const getDataSourceRowSql = (dataSourceId: string) => {
       title,
       description,
       import_route AS importRoute,
+      cursor,
       last_import_at AS lastImportAt,
       items_after_last_import AS itemsAfterLastImport,
       created_at AS createdAt,
@@ -99,6 +115,7 @@ export const dataSourcesRoutes = new Elysia()
       lastImportAt: unknown
       itemsAfterLastImport: number | null
       importRoute: string | null
+      cursor: string | null
     }>(`
       SELECT
         id,
@@ -110,7 +127,8 @@ export const dataSourcesRoutes = new Elysia()
         date_to AS dateTo,
         last_import_at AS lastImportAt,
         items_after_last_import AS itemsAfterLastImport,
-        import_route AS importRoute
+        import_route AS importRoute,
+        cursor
       FROM app.data_source
       WHERE archived = FALSE
       ORDER BY created_at DESC
@@ -129,6 +147,7 @@ export const dataSourcesRoutes = new Elysia()
       lastImportAt: unknown
       itemsAfterLastImport: number | null
       importRoute: string | null
+      cursor: string | null
     }>(`
       SELECT
         id,
@@ -140,7 +159,8 @@ export const dataSourcesRoutes = new Elysia()
         date_to AS dateTo,
         last_import_at AS lastImportAt,
         items_after_last_import AS itemsAfterLastImport,
-        import_route AS importRoute
+        import_route AS importRoute,
+        cursor
       FROM app.data_source
       WHERE archived = TRUE
       ORDER BY created_at DESC
@@ -153,6 +173,7 @@ export const dataSourcesRoutes = new Elysia()
       title: string
       description: string | null
       importRoute: string | null
+      cursor: string | null
       lastImportAt: unknown
       itemsAfterLastImport: number | null
       createdAt: unknown
@@ -165,6 +186,7 @@ export const dataSourcesRoutes = new Elysia()
         title,
         description,
         import_route AS importRoute,
+        cursor,
         last_import_at AS lastImportAt,
         items_after_last_import AS itemsAfterLastImport,
         created_at AS createdAt,
@@ -281,7 +303,7 @@ export const dataSourcesRoutes = new Elysia()
     },
   )
   .delete('/api/datasources/:id', async ({params}) => {
-    const archived = await getAppDatabaseService().transaction(async (tx) => {
+    const archived: DataSourceRow | null = await getAppDatabaseService().transaction(async (tx) => {
       return updateDataSourceTx(tx, {
         dataSourceId: params.id,
         updateParts: ['archived = TRUE', 'updated_at = current_timestamp'],

@@ -7,6 +7,9 @@ import {dataSourcesImportRoutesPostEuropePmcPpr} from './DataSourcesImportRoutes
 import {dataSourcesImportRoutesPostFhirEhrPatients} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostFhirEhrPatients.ts'
 import {dataSourcesImportRoutesPostMedrxiv} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostMedrxiv.ts'
 import {dataSourcesImportRoutesPostPubmed} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostPubmed.ts'
+import {dataSourcesImportRoutesPostStructuredFile} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostStructuredFile.ts'
+import {dataSourcesImportRoutesPostStructuredFileAnalyze} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostStructuredFileAnalyze.ts'
+import {dataSourcesImportRoutesPostStructuredFileCreate} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostStructuredFileCreate.ts'
 
 export const dataSourcesImportRoutes = new Elysia()
   .use(withErrorHandler())
@@ -49,6 +52,37 @@ export const dataSourcesImportRoutes = new Elysia()
     '/api/datasources/import/fhir-ehr-patients',
     async ({body, set}) => {
       return await dataSourcesImportRoutesPostFhirEhrPatients({body, set})
+    },
+    {body: t.Object({id: t.String()})},
+  )
+  .post(
+    '/api/datasources/import/structured-file-analyze',
+    async ({body, set}) => {
+      return await dataSourcesImportRoutesPostStructuredFileAnalyze({body, set})
+    },
+    {body: t.Object({file: t.File()})},
+  )
+  .post(
+    '/api/datasources/import/structured-file-create',
+    async ({body}) => {
+      return await dataSourcesImportRoutesPostStructuredFileCreate(body)
+    },
+    {
+      body: t.Object({
+        title: t.String(),
+        description: t.Optional(t.String()),
+        assetPath: t.String(),
+        sourceFileName: t.String(),
+        format: t.Union([t.Literal('json'), t.Literal('xml')]),
+        boundaryPointer: t.String(),
+        boundaryDisplayPath: t.String(),
+      }),
+    },
+  )
+  .post(
+    '/api/datasources/import/structured-file',
+    async ({body, set}) => {
+      return await dataSourcesImportRoutesPostStructuredFile({body, set})
     },
     {body: t.Object({id: t.String()})},
   )
