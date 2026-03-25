@@ -5,6 +5,8 @@ export type ReviewsWarningsData = {
   enabledPromptCount: number
   indexing: {
     oldestQueuedAt: string | null
+    pendingArticleRefreshCount: number
+    pendingProjectRefreshCount: number
     pendingRefreshCount: number
     status: 'not-needed' | 'ready' | 'refreshing' | 'stale'
   }

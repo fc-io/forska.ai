@@ -135,11 +135,17 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
     const warningsData = warningsQuery.data
 
     return warningsData?.indexing.status === 'refreshing' && warningsData.scope.hasAnyArticlesInScope
-      ? {
-          description:
-            'This project has scoped articles, but the review index is still updating. Articles with judgments may appear here soon.',
-          title: 'Review indexing in progress',
-        }
+      ? warningsData.indexing.pendingArticleRefreshCount > 0 && warningsData.indexing.pendingProjectRefreshCount === 0
+        ? {
+            description:
+              'New judgments are still being folded into this project. Articles and counts here may change as the backlog clears.',
+            title: 'New judgments are still being incorporated',
+          }
+        : {
+            description:
+              'This project has scoped articles, but the review index is still updating. Articles with judgments may appear here soon.',
+            title: 'Review indexing in progress',
+          }
       : warningsData?.indexing.status === 'stale' && warningsData.scope.hasAnyArticlesInScope
         ? {
             description:

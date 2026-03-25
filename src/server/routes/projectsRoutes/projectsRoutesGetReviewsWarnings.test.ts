@@ -13,7 +13,13 @@ process.env.VITE_PORT = process.env.VITE_PORT ?? '3000'
 type ReviewsWarningsResponse = {
   data: {
     enabledPromptCount: number
-    indexing: {oldestQueuedAt: string | null; pendingRefreshCount: number; status: string}
+    indexing: {
+      oldestQueuedAt: string | null
+      pendingArticleRefreshCount: number
+      pendingProjectRefreshCount: number
+      pendingRefreshCount: number
+      status: string
+    }
     projectId: string
     scope: {hasAnyArticlesInScope: boolean}
   }
@@ -130,6 +136,31 @@ test('reviews warnings report refreshing when a project refresh is queued', asyn
   expect(response.status).toBe(200)
   expect(body.data.scope.hasAnyArticlesInScope).toBe(true)
   expect(body.data.enabledPromptCount).toBe(1)
+  expect(body.data.indexing.pendingProjectRefreshCount).toBe(1)
+  expect(body.data.indexing.pendingArticleRefreshCount).toBe(0)
+  expect(body.data.indexing.pendingRefreshCount).toBe(1)
+  expect(body.data.indexing.status).toBe('refreshing')
+})
+
+test('reviews warnings report refreshing when article judgment refreshes are queued for scoped articles', async () => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  const projectId = 'project-article-refresh-warning'
+
+  await insertProjectFixture(projectId)
+  await runDatabase(`
+    INSERT INTO app.mart_refresh_queue (id, refresh_scope, project_id, article_id, project_key, article_key, reason)
+    VALUES ('queue-${projectId}', 'judgment_article', NULL, 'article-${projectId}', '', 'article-${projectId}', 'test-article-refreshing')
+  `)
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.scope.hasAnyArticlesInScope).toBe(true)
+  expect(body.data.indexing.pendingProjectRefreshCount).toBe(0)
+  expect(body.data.indexing.pendingArticleRefreshCount).toBe(1)
   expect(body.data.indexing.pendingRefreshCount).toBe(1)
   expect(body.data.indexing.status).toBe('refreshing')
 })
